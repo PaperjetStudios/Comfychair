@@ -3308,8 +3308,31 @@ function wireTextPopup() {
     s.dispatchEvent(new Event('change', { bubbles: true }));
     s.dispatchEvent(new Event('grow'));
   };
+  // Undo: chips change the text from code, which the keyboard's own undo can't reverse, so keep
+  // snapshots: one before each chip, one per burst of typing.
+  let undo = [], lastTyped = -Infinity, prev = null;
+  const state = () => ({ v: ta.value, a: ta.selectionStart, b: ta.selectionEnd });
+  const undoBtn = h('button', { type: 'button', class: 'btn small', disabled: true, onmousedown: (ev) => ev.preventDefault(), onclick: () => {
+    const u = undo.pop();
+    if (!u) return;
+    ta.value = u.v; ta.focus(); ta.setSelectionRange(u.a, u.b);
+    ta.dispatchEvent(new Event('input'));
+    undoBtn.disabled = !undo.length;
+  } }, '↶ Undo');
+  const snap = (st = state()) => {
+    undo.push(st);
+    if (undo.length > 100) undo.shift();
+    undoBtn.disabled = false;
+  };
+  ta.addEventListener('input', (e) => {   // only real typing has an inputType; chips and undo don't
+    if (e.inputType) {
+      if (prev && performance.now() - lastTyped > 1500) snap(prev);
+      lastTyped = performance.now();
+    }
+    prev = state();
+  });
   const box = h('div', { class: 'text-pop hidden', role: 'dialog', 'aria-modal': 'true' },
-    h('div', { class: 'text-pop-bar' }, title,
+    h('div', { class: 'text-pop-bar' }, title, undoBtn,
       h('button', { type: 'button', class: 'btn small primary', onclick: close }, 'Done')),
     h('div', { class: 'text-pop-body' }, ta, tags));
   document.body.append(box);
@@ -3332,11 +3355,12 @@ function wireTextPopup() {
       || t.closest('.field')?.querySelector('.lbl')?.firstChild?.textContent || 'Text';
     ta.value = t.value;
     ta.placeholder = t.placeholder || '';
+    undo = []; lastTyped = -Infinity; undoBtn.disabled = true; prev = { v: ta.value, a: ta.value.length, b: ta.value.length };
     // the prompt's tag chips (<Picture 1>, <Subject 1>…) move in here; on touch screens the panel hides them
     const list = [...(t.closest('.prompt-field')?.querySelectorAll('.tag-chips .chip') || [])].map((c) => c.textContent);
     const chip = (label, text = label) => h('button', { type: 'button', class: 'chip',
       title: typeof text === 'string' ? text.replace(/[§¶↵]/g, '') : label,
-      onmousedown: (ev) => ev.preventDefault(), onclick: () => insertPhrase(ta, text) }, label);
+      onmousedown: (ev) => ev.preventDefault(), onclick: () => { snap(); lastTyped = -Infinity; insertPhrase(ta, text); } }, label);
     const phrases = S.tpl?.tag_style === 'h3' && t.closest('.prompt-field') ? H3_PHRASES : [];
     // phrase groups fold: tap a heading to open or close it (remembered)
     const open = store.get('deck.phraseGroups', { Structure: true });
