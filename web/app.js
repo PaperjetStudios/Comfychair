@@ -3156,6 +3156,66 @@ function wireSplitters() {
   });
 }
 
+// Common phrases for MiniMax H3 prompts, after ComfyUI's H3 prompt guide (docs.comfy.org): shots
+// start with [Shot N] and later ones cut at a timestamp; ambience and sound effects go in
+// overall_soundscape, background score in non_diegetic_music (N/A for none); speech goes in <d></d>.
+// § marks where the cursor lands; ¶ puts the phrase on a new line at the end (the audio fields).
+const H3_PHRASES = [
+  ['Structure', [
+    ['[Shot 1]', '[Shot 1] '],
+    ['Cut at…', '\n[Shot 2] At 00:03.000, the camera cuts to §'],
+    ['Soundscape:', '¶overall_soundscape: '],
+    ['Score:', '¶non_diegetic_music: '],
+  ]],
+  ['Sound', [
+    ['No score', '¶non_diegetic_music: N/A'],
+    ['Silent', '¶overall_soundscape: N/A'],
+    ['Says <d>', 'says: <d>§</d>'],
+    ['Voice-over', 'says in an off-screen voiceover: <d>§</d>'],
+    ['Music in scene', 'music playing from a source within the scene: §'],
+    ['Room tone', 'quiet room tone'],
+    ['Breath & cloth', 'subtle room air, clothing movement, and controlled breathing'],
+    ['Ambience', 'ambient sound of §'],
+    ['No voices', 'No voice.'],
+  ]],
+  ['Camera', [
+    ['Static', 'locked-off static shot'],
+    ['Handheld', 'subtle handheld shake'],
+    ['Push in', 'the camera slowly pushes in'],
+    ['Pull back', 'the camera pulls back to a medium shot'],
+    ['Rack focus', 'rack focus'],
+    ['Close-up', 'close-up'],
+    ['Extreme CU', 'extreme close-up'],
+    ['Wide shot', 'wide shot'],
+    ['Overhead', 'high-angle overhead shot'],
+    ['Eye level', 'eye-level shot'],
+    ['Dissolve to', 'the shot dissolves to §'],
+  ]],
+  ['Clean-up', [
+    ['One take', 'One continuous shot, no cuts.'],
+    ['No subtitles', 'No subtitles, on-screen text or watermarks.'],
+  ]],
+];
+
+// Insert a phrase at the cursor; "§" in it marks where the cursor goes, else after the phrase.
+// A leading "¶" adds it as a new last line instead.
+function insertPhrase(ta, text) {
+  if (text.startsWith('¶')) {
+    ta.value = ta.value.replace(/\s+$/, '');
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    text = (ta.value ? '\n' : '') + text.slice(1);
+  }
+  const a = ta.selectionStart ?? ta.value.length, b = ta.selectionEnd ?? a;
+  const before = ta.value.slice(0, a), after = ta.value.slice(b);
+  const at = text.indexOf('§'), clean = text.replace('§', '');
+  const pad = before && !/\s$/.test(before) && !clean.startsWith('\n') ? ' ' : '';
+  const tail = after && !/^\s/.test(after) ? ' ' : '';
+  ta.value = before + pad + clean + tail + after;
+  const pos = before.length + pad.length + (at >= 0 ? at : clean.length + tail.length);
+  ta.focus(); ta.setSelectionRange(pos, pos);
+  ta.dispatchEvent(new Event('input'));
+}
+
 // Touch screens: tapping a text box in a settings panel opens it in a popup at the top, sized to
 // the space above the on-screen keyboard. Typing goes straight through to the original box (as
 // input events), so everything listening to it keeps working.
@@ -3200,9 +3260,13 @@ function wireTextPopup() {
     ta.placeholder = t.placeholder || '';
     // the prompt's tag chips (<Picture 1>, Subject 1…) move in here; on touch screens the panel hides them
     const list = [...(t.closest('.prompt-field')?.querySelectorAll('.tag-chips .chip') || [])].map((c) => c.textContent);
-    tags.replaceChildren(...list.map((x) => h('button', { type: 'button', class: 'chip',
-      onmousedown: (ev) => ev.preventDefault(), onclick: () => insertAtCursor(ta, x) }, x)));
-    tags.classList.toggle('hidden', !list.length);
+    const chip = (label, text = label) => h('button', { type: 'button', class: 'chip', title: text.replace('§', '…'),
+      onmousedown: (ev) => ev.preventDefault(), onclick: () => insertPhrase(ta, text) }, label);
+    const phrases = S.tpl?.tag_style === 'h3' && t.closest('.prompt-field') ? H3_PHRASES : [];
+    tags.replaceChildren(...list.map((x) => chip(x)),
+      ...phrases.flatMap(([group, items]) => [h('div', { class: 'text-pop-head' }, group), ...items.map(([l, x]) => chip(l, x))]));
+    tags.classList.toggle('hidden', !list.length && !phrases.length);
+    tags.classList.toggle('wide', phrases.length > 0);
     t.blur();
     box.classList.remove('hidden');
     fit();

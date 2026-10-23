@@ -463,9 +463,11 @@ details.desc summary { cursor: pointer; color: var(--muted); }
 .text-pop textarea { height: 100%; min-height: 0; resize: none; font-size: 18px; line-height: 1.5; }
 .text-pop-body { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; min-height: 0; }
 .text-pop-tags { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; width: 118px; }
+.text-pop-tags.wide { width: 150px; }
+.text-pop-head { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-top: 6px; }
 /* touch screens get the tag chips in the text popup instead */
 @media (pointer: coarse) { .prompt-field .tag-chips { display: none; } }
-.text-pop-tags .chip { border: 1px solid var(--line); background: var(--surface-2); color: var(--text); border-radius: 10px; cursor: pointer; padding: 10px 6px; font: 13px ui-monospace, monospace; white-space: nowrap; }
+.text-pop-tags .chip { border: 1px solid var(--line); background: var(--surface-2); color: var(--text); border-radius: 10px; cursor: pointer; padding: 10px 6px; font: 13px ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; }
 
 /* ---- video preview full screen ---- */
 #tab-video .stage:fullscreen, #tab-video .stage.pseudo-fs { background: #000; padding: 8px; grid-template-rows: minmax(0, 1fr) auto; }
