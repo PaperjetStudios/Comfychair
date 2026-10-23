@@ -464,7 +464,14 @@ details.desc summary { cursor: pointer; color: var(--muted); }
 .text-pop-body { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; min-height: 0; }
 .text-pop-tags { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; width: 118px; }
 .text-pop-tags.wide { width: 150px; }
-.text-pop-head { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-top: 6px; }
+.text-pop-head {
+  flex: none; display: flex; justify-content: space-between; align-items: center; margin-top: 6px; padding: 6px 4px;
+  border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--muted); cursor: pointer;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+}
+.text-pop-head::after { content: "▸"; }
+.text-pop-head.open::after { content: "▾"; }
+.text-pop-group { display: flex; flex-direction: column; gap: 6px; }
 /* touch screens get the tag chips in the text popup instead */
 @media (pointer: coarse) { .prompt-field .tag-chips { display: none; } }
 .text-pop-tags .chip { border: 1px solid var(--line); background: var(--surface-2); color: var(--text); border-radius: 10px; cursor: pointer; padding: 10px 6px; font: 13px ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; }

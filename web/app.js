@@ -3159,13 +3159,66 @@ function wireSplitters() {
 // Common phrases for MiniMax H3 prompts, after ComfyUI's H3 prompt guide (docs.comfy.org): shots
 // start with [Shot N] and later ones cut at a timestamp; ambience and sound effects go in
 // overall_soundscape, background score in non_diegetic_music (N/A for none); speech goes in <d></d>.
-// § marks where the cursor lands; ¶ puts the phrase on a new line at the end (the audio fields).
+// § marks where the cursor lands; ¶ puts the phrase on a new last line (the audio fields); ↵ on a
+// new line before the audio fields (shots). A function gets the prompt and returns the phrase.
 const H3_PHRASES = [
   ['Structure', [
-    ['[Shot 1]', '[Shot 1] '],
-    ['Cut at…', '\n[Shot 2] At 00:03.000, the camera cuts to §'],
+    ['Next shot', nextShot],
     ['Soundscape:', '¶overall_soundscape: '],
     ['Score:', '¶non_diegetic_music: '],
+    ['Dissolve to', 'the shot dissolves to §'],
+    ['Fade to black', 'the shot fades to black'],
+  ]],
+  ['Shots', [
+    ['Establishing', 'a wide establishing shot of §'],
+    ['Wide', 'a wide shot of §'],
+    ['Full body', 'a full shot of § from head to toe'],
+    ['Medium', 'a medium shot of §'],
+    ['Close-up', 'a close-up of §'],
+    ['Extreme CU', 'an extreme close-up of §'],
+    ['Two-shot', 'a two-shot of § and '],
+    ['Over shoulder', 'an over-the-shoulder shot from behind §, looking at '],
+    ['Reaction', 'a reaction close-up of §'],
+    ['Insert', 'an insert shot of § in detail'],
+    ['POV', 'a first-person POV shot through the eyes of §'],
+    ['Low angle', 'a low-angle shot looking up at §'],
+    ['High angle', 'a high-angle shot looking down at §'],
+    ['Overhead', 'a top-down overhead shot of §'],
+    ['Dutch angle', 'a tilted Dutch-angle shot of §'],
+    ['Profile', 'a side profile shot of §'],
+    ['From behind', 'a shot from behind § as '],
+    ['Silhouette', '§ silhouetted against the light'],
+  ]],
+  ['Camera', [
+    ['Static', 'locked-off static camera'],
+    ['Handheld', 'subtle handheld shake'],
+    ['Push in', 'the camera slowly pushes in'],
+    ['Pull back', 'the camera slowly pulls back'],
+    ['Pan left', 'the camera pans left'],
+    ['Pan right', 'the camera pans right'],
+    ['Tilt up', 'the camera tilts up'],
+    ['Tilt down', 'the camera tilts down'],
+    ['Truck left', 'the camera trucks left alongside §'],
+    ['Truck right', 'the camera trucks right alongside §'],
+    ['Crane up', 'the camera cranes up to reveal §'],
+    ['Crane down', 'the camera cranes down to §'],
+    ['Orbit', 'the camera orbits slowly around §'],
+    ['Follow', 'the camera follows § from behind'],
+    ['Lead', 'the camera moves backwards ahead of § as they walk toward it'],
+    ['Zoom in', 'a slow zoom in on §'],
+    ['Zoom out', 'a slow zoom out'],
+    ['Whip pan', 'a fast whip pan to §'],
+    ['Dolly zoom', 'a dolly zoom: the background stretches while § stays the same size'],
+    ['Rack focus', 'rack focus from § to '],
+    ['Drone', 'an aerial drone shot sweeping over §'],
+    ['Slow motion', 'in slow motion'],
+  ]],
+  ['Lens', [
+    ['Shallow DOF', 'shallow depth of field, soft blurred background'],
+    ['Deep focus', 'deep focus, everything sharp'],
+    ['Wide lens', 'wide-angle lens with strong perspective'],
+    ['Telephoto', 'telephoto lens, compressed background'],
+    ['Eye level', 'at eye level'],
   ]],
   ['Sound', [
     ['No score', '¶non_diegetic_music: N/A'],
@@ -3178,37 +3231,49 @@ const H3_PHRASES = [
     ['Ambience', 'ambient sound of §'],
     ['No voices', 'No voice.'],
   ]],
-  ['Camera', [
-    ['Static', 'locked-off static shot'],
-    ['Handheld', 'subtle handheld shake'],
-    ['Push in', 'the camera slowly pushes in'],
-    ['Pull back', 'the camera pulls back to a medium shot'],
-    ['Rack focus', 'rack focus'],
-    ['Close-up', 'close-up'],
-    ['Extreme CU', 'extreme close-up'],
-    ['Wide shot', 'wide shot'],
-    ['Overhead', 'high-angle overhead shot'],
-    ['Eye level', 'eye-level shot'],
-    ['Dissolve to', 'the shot dissolves to §'],
-  ]],
   ['Clean-up', [
     ['One take', 'One continuous shot, no cuts.'],
     ['No subtitles', 'No subtitles, on-screen text or watermarks.'],
   ]],
 ];
 
+// The next "[Shot N] At mm:ss.mmm, the camera cuts to", 3 s after the last cut (or [Shot 1] first)
+function nextShot(text) {
+  const nums = [...text.matchAll(/\[Shot (\d+)\]/g)].map((m) => Number(m[1]));
+  if (!nums.length) return '↵[Shot 1] §';
+  const times = [...text.matchAll(/\bAt (\d+):(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]) * 60 + Number(m[2]));
+  const n = Math.max(...nums) + 1;
+  const t = (times.length ? times[times.length - 1] : 0) + 3;
+  const stamp = `${String(Math.floor(t / 60)).padStart(2, '0')}:${(t % 60).toFixed(3).padStart(6, '0')}`;
+  return `↵[Shot ${n}] At ${stamp}, the camera cuts to §`;
+}
+
 // Insert a phrase at the cursor; "§" in it marks where the cursor goes, else after the phrase.
-// A leading "¶" adds it as a new last line instead.
+// A leading "¶" adds it as a new last line instead, "↵" as a new line above the audio fields.
 function insertPhrase(ta, text) {
+  if (typeof text === 'function') text = text(ta.value);
+  if (text.startsWith('↵')) {   // a new line, above the audio fields if there are any
+    const m = ta.value.search(/\n\s*(overall_soundscape|non_diegetic_music)\s*:/);
+    const at = m >= 0 ? m : ta.value.replace(/\s+$/, '').length;
+    ta.value = ta.value.slice(0, at).replace(/\s+$/, '') + ta.value.slice(at);
+    const pos = ta.value.slice(0, at).replace(/\s+$/, '').length;
+    ta.setSelectionRange(pos, pos);
+    text = (pos ? '\n' : '') + text.slice(1);
+  }
   if (text.startsWith('¶')) {
     ta.value = ta.value.replace(/\s+$/, '');
     ta.setSelectionRange(ta.value.length, ta.value.length);
     text = (ta.value ? '\n' : '') + text.slice(1);
   }
   const a = ta.selectionStart ?? ta.value.length, b = ta.selectionEnd ?? a;
-  const before = ta.value.slice(0, a), after = ta.value.slice(b);
+  let before = ta.value.slice(0, a);
+  const after = ta.value.slice(b);
   const at = text.indexOf('§'), clean = text.replace('§', '');
-  const pad = before && !/\s$/.test(before) && !clean.startsWith('\n') ? ' ' : '';
+  // continuing a sentence ("…her face" + "the camera pans left") gets a comma; after "of", "the"… a space
+  const comma = !clean.startsWith('\n') && /[\w)]\s*$/.test(before) && /^[a-z]/.test(clean)
+    && !/\b(says|of|and|to|the|a|an|at|in|on|by|with|from|as)\s*$/i.test(before);
+  if (comma) before = before.replace(/\s+$/, '');
+  const pad = comma ? ', ' : before && !/\s$/.test(before) && !clean.startsWith('\n') ? ' ' : '';
   const tail = after && !/^\s/.test(after) ? ' ' : '';
   ta.value = before + pad + clean + tail + after;
   const pos = before.length + pad.length + (at >= 0 ? at : clean.length + tail.length);
@@ -3260,11 +3325,22 @@ function wireTextPopup() {
     ta.placeholder = t.placeholder || '';
     // the prompt's tag chips (<Picture 1>, Subject 1…) move in here; on touch screens the panel hides them
     const list = [...(t.closest('.prompt-field')?.querySelectorAll('.tag-chips .chip') || [])].map((c) => c.textContent);
-    const chip = (label, text = label) => h('button', { type: 'button', class: 'chip', title: text.replace('§', '…'),
+    const chip = (label, text = label) => h('button', { type: 'button', class: 'chip',
+      title: typeof text === 'string' ? text.replace(/[§¶↵]/g, '') : label,
       onmousedown: (ev) => ev.preventDefault(), onclick: () => insertPhrase(ta, text) }, label);
     const phrases = S.tpl?.tag_style === 'h3' && t.closest('.prompt-field') ? H3_PHRASES : [];
-    tags.replaceChildren(...list.map((x) => chip(x)),
-      ...phrases.flatMap(([group, items]) => [h('div', { class: 'text-pop-head' }, group), ...items.map(([l, x]) => chip(l, x))]));
+    // phrase groups fold: tap a heading to open or close it (remembered)
+    const open = store.get('deck.phraseGroups', { Structure: true });
+    const group = ([name, items]) => {
+      const body = h('div', { class: 'text-pop-group' + (open[name] ? '' : ' hidden') }, items.map(([l, x]) => chip(l, x)));
+      const head = h('button', { type: 'button', class: 'text-pop-head', onmousedown: (ev) => ev.preventDefault(), onclick: () => {
+        open[name] = !open[name]; store.set('deck.phraseGroups', open);
+        body.classList.toggle('hidden', !open[name]); head.classList.toggle('open', !!open[name]);
+      } }, name);
+      head.classList.toggle('open', !!open[name]);
+      return [head, body];
+    };
+    tags.replaceChildren(...list.map((x) => chip(x)), ...phrases.flatMap(group));
     tags.classList.toggle('hidden', !list.length && !phrases.length);
     tags.classList.toggle('wide', phrases.length > 0);
     t.blur();
