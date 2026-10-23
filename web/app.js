@@ -450,7 +450,7 @@ function promptTags() {
   const boxes = Math.max(1, ...fs.filter((x) => x.kind === 'boxes').map((x) => (S.values[x.key] || []).length));
   const n = (k, from = 1) => Array.from({ length: k }, (_, i) => i + from);
   switch (S.tpl?.tag_style) {
-    case 'h3': return [...n(images).map((i) => `<Picture ${i}>`), ...n(3).map((i) => `Subject ${i}`)];
+    case 'h3': return [...n(images).map((i) => `<Picture ${i}>`), ...n(3).map(subjectTag)];
     case 'klein': return [...n(images, 0).map((i) => `<ref_image_${i}>`), ...n(boxes).map((i) => `<obj_${i}>`)];
     case 'qwen': return n(images).map((i) => `Picture ${i}`);
     default: return [];
@@ -477,14 +477,23 @@ function pictureTag(n) {
   }
 }
 
-// "Subject 1: …" labels are added here, so saved characters stay label-free and fit any slot.
-const stripSubjectLabel = (t) => String(t || '').replace(/^\s*subject\s*\d+\s*[:.\-–]\s*/i, '');
+// How a prompt names subject N. MiniMax H3's reference guide labels them <Subject N> and defines each
+// once ("<Subject 1> is the young woman in <Picture 1>, …"); other models get a plain "Subject N".
+const subjectTag = (i) => (S.tpl?.tag_style === 'h3' ? `<Subject ${i}>` : `Subject ${i}`);
+
+// Labels are added here, so saved characters stay label-free and fit any slot.
+const stripSubjectLabel = (t) => String(t || '').replace(/^\s*<?subject\s*\d+>?\s*(?:[:.\-–]|is\b)\s*/i, '');
 
 function subjectLines(subjects) {
   return subjects.map((x, i) => {
     const text = stripSubjectLabel(x.text).trim().replace(/[.\s]+$/, '');
     if (!text) return '';
     const tag = x.pic ? pictureTag(x.pic) : null;
+    if (S.tpl?.tag_style === 'h3') {   // "<Subject 1> is a woman in a red coat, as shown in <Picture 1>."
+      const desc = /^[A-Z][a-z\s]/.test(text) && !/^I\b/.test(text) ? text[0].toLowerCase() + text.slice(1) : text;
+      const pic = tag && !text.includes(tag) ? `, as shown in ${tag}` : '';
+      return `${subjectTag(i + 1)} is ${desc}${pic}.`;
+    }
     return `Subject ${i + 1}: ${text}${tag ? ` (as in ${tag})` : ''}.`;
   }).filter(Boolean);
 }
@@ -568,9 +577,9 @@ function promptField(f) {
   let lastTA = null;
   const chipsRow = h('div', { class: 'chips tag-chips' });
   const drawChips = () => {
-    const tags = promptTags().filter((t) => !/^Subject \d+$/.test(t));
+    const tags = promptTags().filter((t) => !/^<?Subject \d+>?$/.test(t));
     const n = st.on ? Math.max(1, st.subjects.length) : (S.tpl?.tag_style === 'h3' ? 3 : 0);
-    for (let i = 1; i <= n; i++) tags.push(`Subject ${i}`);
+    for (let i = 1; i <= n; i++) tags.push(subjectTag(i));
     chipsRow.replaceChildren(...tags.map((t) => h('button', { type: 'button', class: 'chip', onmousedown: (e) => e.preventDefault(),
       onclick: () => { if (lastTA) insertAtCursor(lastTA, t); else toast('Tap into a text box first'); } }, t)));
     chipsRow.classList.toggle('hidden', !tags.length);
@@ -704,7 +713,7 @@ function promptField(f) {
 }
 
 const PART_HINTS = {
-  Subject: 'Who or what: Subject 1: a woman in her 30s, short red hair, green raincoat…',
+  Subject: 'Who or what: a woman in her 30s, short red hair, green raincoat…',
   Action: 'What happens, in order: she turns to the camera and laughs…',
   Camera: 'Shot and movement: slow dolly-in, 35mm, shallow depth of field…',
   Style: 'Look: 1990s camcorder, film grain, muted colours…',
@@ -3323,7 +3332,7 @@ function wireTextPopup() {
       || t.closest('.field')?.querySelector('.lbl')?.firstChild?.textContent || 'Text';
     ta.value = t.value;
     ta.placeholder = t.placeholder || '';
-    // the prompt's tag chips (<Picture 1>, Subject 1…) move in here; on touch screens the panel hides them
+    // the prompt's tag chips (<Picture 1>, <Subject 1>…) move in here; on touch screens the panel hides them
     const list = [...(t.closest('.prompt-field')?.querySelectorAll('.tag-chips .chip') || [])].map((c) => c.textContent);
     const chip = (label, text = label) => h('button', { type: 'button', class: 'chip',
       title: typeof text === 'string' ? text.replace(/[§¶↵]/g, '') : label,
