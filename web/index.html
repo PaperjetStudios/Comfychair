@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1115">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <title>ComfyDeck</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Comfy<b>Deck</b></div>
+    <select id="projectSel" aria-label="Project"></select>
+    <nav class="tabs" role="tablist">
+      <button data-tab="generate" class="active" role="tab">Generate</button>
+      <button data-tab="editor" role="tab">Editor</button>
+      <button data-tab="video" role="tab">Video</button>
+      <button data-tab="board" role="tab">Board</button>
+      <button data-tab="history" role="tab">History</button>
+    </nav>
+    <div class="status">
+      <button id="jobsBtn" class="btn small queue-btn" title="Queue and run times">Queue<span id="queueInfo" class="queue-info"></span></button>
+      <button id="fsBtn" class="icon-btn" title="Full screen" aria-label="Full screen">⛶</button>
+      <button id="debugBtn" class="icon-btn" title="Websocket log" aria-label="Websocket log">⋯</button>
+      <span id="connDot" class="dot" title="ComfyUI connection"></span>
+    </div>
+  </header>
+
+  <main>
+    <section id="tab-generate" class="tab active">
+      <div class="stage">
+        <div class="viewer" id="viewer">
+          <div id="zoomLayer" class="zoom-layer">
+            <canvas id="previewCanvas" class="hidden"></canvas>
+            <div id="viewerMedia" class="viewer-media"><div class="placeholder">Output and live previews appear here</div></div>
+          </div>
+          <div class="zoom-ctl">
+            <button id="zoomOut" class="icon-btn" aria-label="Zoom out">−</button>
+            <button id="zoomReset" class="icon-btn" aria-label="Reset zoom">1:1</button>
+            <button id="zoomIn" class="icon-btn" aria-label="Zoom in">+</button>
+          </div>
+          <div class="viewer-badge hidden" id="viewerBadge">LIVE</div>
+        </div>
+        <div class="progress"><div class="bar" id="progBar"></div><span id="progText"></span></div>
+        <div class="stages hidden" id="stageBar"></div>
+        <div class="strip" id="outStrip"></div>
+      </div>
+<div class="splitter" role="separator" aria-label="Drag to resize preview and settings" title="Drag to resize · double-tap to reset"></div>
+      <aside class="panel">
+        <div class="tpl-row">
+          <select id="tplSel" aria-label="Template"></select>
+          <button id="reloadTpl" class="icon-btn" title="Reload templates and model lists" aria-label="Reload templates">↻</button>
+        </div>
+        <div id="tplNotes"></div>
+        <form id="fields" onsubmit="return false"></form>
+      </aside>
+    </section>
+
+    <section id="tab-editor" class="tab">
+      <div class="stage editor-stage">
+        <div class="viewer">
+          <canvas id="editorCanvas" class="hidden"></canvas>
+          <div id="editorEmpty" class="placeholder">Add images to crop and join them</div>
+        </div>
+        <div class="progress"><span id="editorSize"></span></div>
+      </div>
+<div class="splitter" role="separator" aria-label="Drag to resize preview and settings" title="Drag to resize · double-tap to reset"></div>
+      <aside class="panel" id="editorPanel"></aside>
+    </section>
+
+    <section id="tab-video" class="tab">
+      <div class="stage editor-stage">
+        <div class="viewer">
+          <canvas id="vidCanvas"></canvas>
+          <div id="vidEmpty" class="placeholder">Add clips, images or sound to the timeline</div>
+        </div>
+        <div class="transport">
+          <button id="vidStart" class="icon-btn" aria-label="Go to start" title="Go to start (Home)">⇤</button>
+          <button id="vidPrev" class="icon-btn" aria-label="Back one frame" title="Back one frame (←)">⏮</button>
+          <button id="vidPlay" class="btn small primary" title="Play / pause (Space)">▶ Play</button>
+          <button id="vidNext" class="icon-btn" aria-label="Forward one frame" title="Forward one frame (→)">⏭</button>
+          <button id="vidLoop" class="btn small toggle-btn" aria-pressed="false">⟲ Loop</button>
+          <button id="vidSnap" class="btn small" title="Save this frame as an image">📷 Frame</button>
+          <button id="vidFull" class="icon-btn" aria-label="Full screen" title="Full screen (F)">⛶</button>
+          <span id="vidLoad" class="hint"></span>
+          <span id="vidTime" class="timecode"></span>
+        </div>
+      </div>
+<div class="splitter" role="separator" aria-label="Drag to resize preview and settings" title="Drag to resize · double-tap to reset"></div>
+      <aside class="panel" id="videoPanel"></aside>
+      <div class="timeline-wrap">
+        <div class="tl-tools" id="tlTools"></div>
+        <div class="timeline" id="timeline"></div>
+      </div>
+    </section>
+
+    <section id="tab-board" class="tab">
+      <div class="board-bar" id="boardBar"></div>
+      <div class="board" id="board"></div>
+    </section>
+
+    <section id="tab-history" class="tab">
+      <div class="grid" id="historyGrid"></div>
+      <button id="moreHistory" class="btn ghost more hidden">Load more</button>
+    </section>
+  </main>
+
+  <footer class="actionbar">
+    <div class="stepper batch" title="Batch count">
+      <button id="batchMinus" aria-label="Fewer">−</button><span id="batchVal">1</span><button id="batchPlus" aria-label="More">+</button>
+    </div>
+    <button id="stopBtn" class="btn ghost">Stop</button>
+    <button id="genBtn" class="btn primary">Generate</button>
+  </footer>
+
+  <div id="sheetBackdrop" class="backdrop hidden"></div>
+  <div id="sheet" class="sheet hidden" role="dialog" aria-modal="true"></div>
+  <div id="toast" class="toast hidden" role="status"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+#!/bin/sh
+# wait-for-models EXTRA_MODEL_PATHS_YAML [SECONDS]
+# Finds the drives ComfyUI's extra model folders live on (each base_path in the YAML, matched to
+# its /etc/fstab mount point) and waits for them, asking systemd to retry each mount every 10 s.
+# Always exits 0: a missing drive should leave you with a running ComfyUI (minus those models).
+yaml="${1:?path to extra_model_paths.yaml}"; secs="${2:-90}"
+[ -f "$yaml" ] || { echo "no $yaml, nothing to wait for"; exit 0; }
+
+mounts=""
+for p in $(sed -n 's/^[[:space:]]*base_path:[[:space:]]*//p' "$yaml" | sed 's/[[:space:]]#.*//; s/["'\'']//g'); do
+    # longest fstab mount point that contains this path (skipping / and /home, mounted long before)
+    m=$(awk '!/^[[:space:]]*#/ && $2 ~ /^\// {print $2}' /etc/fstab | while read -r mp; do
+            case "$p/" in "$mp"/*) echo "${#mp} $mp" ;; esac
+        done | sort -rn | head -n 1 | cut -d' ' -f2)
+    case "$m" in ""|/|/home) ;; *) case " $mounts " in *" $m "*) ;; *) mounts="$mounts $m" ;; esac ;; esac
+done
+[ -n "$mounts" ] || { echo "model folders are on always-mounted drives"; exit 0; }
+
+i=0
+while [ "$i" -lt "$secs" ]; do
+    missing=""
+    for m in $mounts; do mountpoint -q "$m" || missing="$missing $m"; done
+    [ -z "$missing" ] && { echo "model drives mounted:$mounts"; exit 0; }
+    if [ $((i % 10)) -eq 0 ]; then
+        for m in $missing; do systemctl start --no-block "$(systemd-escape -p --suffix=mount "$m")" 2>/dev/null; done
+    fi
+    sleep 1; i=$((i + 1))
+done
+echo "WARNING: still not mounted after ${secs}s:$missing -- starting ComfyUI without the models on them" >&2
+exit 0

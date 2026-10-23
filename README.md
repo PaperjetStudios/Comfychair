@@ -1,0 +1,196 @@
+# ComfyDeck
+
+A touch-first front end for ComfyUI. ComfyUI runs headless on your Linux box; ComfyDeck serves a
+tablet-friendly page on your LAN and drives ComfyUI through its API.
+
+```
+tablet ──http/ws──▶ ComfyDeck :8190 ──http/ws──▶ ComfyUI :8188 (can stay on 127.0.0.1)
+```
+
+**v1 (this scaffold):** template system, generate screen with live (animated) sampler previews,
+LoRA stacks, image upload with megapixel cap, projects, history with full lineage, reuse settings,
+send any output (or a video's first/last frame) back in as an input. **Editor** tab: crop images and
+join them side by side, stacked or in a grid, then save the result as an input. Any image field
+has **Draw**: a full-screen sketch pad with pen pressure and palm rejection (once a pen touches it,
+finger touches are ignored), e.g. to sketch the source for the `-i2i` templates. **Video** tab: trim
+generated clips, order them and export one video (ffmpeg); the result lands in History. **Board**:
+every image and video in the project as a pin board, with pins, filters and a tile-size slider.
+The preview pinch/wheel-zooms, the picker has a camera button, and ⛶ goes full screen.
+
+**Next:** crop/compose tool (character sheets) → scenes/shots/takes → editor tab → extend/bridge shots.
+
+---
+
+## Setup
+
+```bash
+sudo apt install python3-venv ffmpeg      # ffmpeg is used to grab frames from videos
+cd ~/comfydeck
+./run.sh                                  # first run creates .venv and installs deps
+```
+
+Open `http://<linux-box-ip>:8190` on the tablet, then "Add to Home screen" for fullscreen.
+
+ComfyUI no longer needs `--listen`: ComfyDeck proxies everything, so ComfyUI can stay on
+localhost. Keep `--listen` if you still want the normal ComfyUI UI from other machines.
+
+**Previews:** ComfyDeck asks ComfyUI for live previews on every run, so no launch flag is needed.
+Images use TAESD when a decoder for the model is in `models/vae_approx` (`taef2_decoder` for
+Flux2/MOSS/Klein, `taeh3-comfy` for MiniMax H3), otherwise latent2rgb. Video runs default to
+VideoHelperSuite's animated preview (low-res, shows motion); **Advanced → Live preview** switches
+to one sharp TAE frame per step. Change the defaults with `DECK_PREVIEW` / `DECK_VIDEO_PREVIEW`.
+Krea2 (Wan latent) and Qwen Image 2.1 (RGBA TAE) currently crash ComfyUI's TAESD previewer, so
+don't put `lighttaew2_1` or `taeqi2_1_decoder` in `vae_approx`.
+
+**Run on boot (terminal-only mode):** `deploy/` has the systemd units. The "ComfyUI" GRUB entry
+boots `comfyui.target`: no desktop, ComfyUI plus ComfyDeck. Install or update them with:
+
+```bash
+sudo bash deploy/install-services.sh        # backs up the old units, installs, reloads systemd
+journalctl -u comfyui -u comfydeck -f        # logs
+```
+
+Before starting, ComfyUI waits up to 90 s for the drive(s) its extra model folders are on. It reads
+the `base_path`s in `extra_model_paths.yaml` and matches them to `/etc/fstab`, so moving the models
+again needs no change here. It retries the mount, then starts anyway, so a missing drive only costs
+you the models on it. The models are on NTFS (`/mnt/data`): if Windows ever runs on that disk, turn
+off Fast Startup there, or ntfs-3g can refuse to mount it. ComfyDeck reconnects to ComfyUI on
+its own, so the start order between them doesn't matter.
+
+**HTTPS (optional):** browsers only allow screen wake-lock and full PWA install over HTTPS.
+With [mkcert](https://github.com/FiloSottile/mkcert):
+
+```bash
+mkcert -install && mkdir -p certs
+mkcert -cert-file certs/deck.pem -key-file certs/deck-key.pem 192.168.1.50 localhost
+SSL_CERT=certs/deck.pem SSL_KEY=certs/deck-key.pem ./run.sh
+```
+
+Then install mkcert's root CA on the tablet (`mkcert -CAROOT` shows where it is).
+
+> There's no login. Only run it on a network you trust.
+
+---
+
+## Making templates
+
+1. Build the workflow in desktop ComfyUI and check that it runs.
+2. Rename (double-click the title) each node you want on the tablet so it starts with `@`.
+3. **Workflow → Export (API)** and save the JSON into `templates/`. The filename becomes the
+   template name (`wan_i2v_480p.json` → "wan i2v 480p").
+4. Tap ↻ on the tablet. No restart needed.
+
+| Node title | What the tablet shows |
+|---|---|
+| `@Prompt` | every widget on that node (types, ranges and dropdowns come from ComfyUI) |
+| `@Sampler [seed,steps,cfg]` | only the listed inputs |
+| `@1 Prompt` | a leading number sets the group's position |
+| `@LoRAs` on a **LoraLoader** or **LoraLoaderModelOnly** | a LoRA stack: add/remove/disable, strength sliders. At run time the node is chained N times, or bypassed if the stack is empty |
+| `@Start frame` on a **LoadImage** | image picker: a gallery of input images and generated outputs, plus upload (with megapixel cap). Left empty, the node is removed and whatever it fed is unplugged, so it works for optional inputs (reference images, first/last frames) |
+| the same `@References` title on several nodes | one group; the fields are numbered (Image 1, Image 2…) |
+
+A **Primitive** node (`PrimitiveInt`, `PrimitiveFloat`…) shows as one number labelled with its title, e.g.
+`@3 Length (seconds)` feeding a math node that converts seconds to frames (see `templates/deck-h3-i2v.json`).
+
+A node's `width` + `height` pair shows as one size picker: an aspect preset (1:1, 16:9, 9:16, 4:3…)
+plus megapixels, or a custom width/height. Sides snap to the node's own step (8, 16 or 32).
+
+`@Boxes` on a **CreateBoundingBoxes** node gives a layout-box editor (draw boxes over the canvas or the
+image being edited; each is an object with a description, or a text with its words). Used by
+`deck-moss-layout` and `deck-klein3-edit`; in Klein prompts refer to box 1 as `<obj_1>`. On templates with
+a **ReferenceMultiLatent** (Klein), a box can also carry a reference image: it's added as the next
+reference and the box's description gets "matching <ref_image_N>". MOSS ignores reference images.
+
+A LoRA group titled with "Turbo" (`@5 Turbo LoRA`) only lists speed-up LoRAs and starts off.
+Every LoRA row has an **i** button with its Civitai page, trigger words (tap to add to the prompt)
+and examples, looked up by file hash through rgthree-comfy.
+
+The main prompt has **Build from parts**: Subject / Action / Camera / Style / Lighting / Sound
+(video) or Subject / Setting / Style / Lighting / Camera (images), joined into the prompt. Each part
+has saved snippets (💾 save, ◀ ▶ cycle, 🗑 delete), stored on the server so every device and template
+shares them. The builder is one shared state for all templates (subjects carry over when you switch
+workflow), and **Prompt set** saves/cycles the whole thing (all subjects and parts) by name. Subjects are separate slots (+ Add subject), each cycling the same library of saved
+characters; the prompt gets "Subject 1: …", "Subject 2: …" labels added for you, and a slot can be tied
+to a reference picture ("(as in <Picture 2>)"). Tag chips above the prompt insert the model's reference tags at the cursor: H3
+`<Picture N>` (+ "Subject N" labels), Klein `<ref_image_N>` / `<obj_N>`, Qwen edit `Picture N`.
+
+**Saved settings** sit at the top of each settings group (Seed, Sampler, LoRAs, Turbo LoRA, size…):
+◀ ▶ cycle, 💾 save over the one shown, ＋ save new, 🗑 delete. The first entry is always the template's
+default. A save is for this workflow, this model, or everywhere; model and everywhere saves match by
+node type + input, so a KSampler or LoRA-stack save also turns up in other templates using them.
+
+While a run is going, the strip under the progress bar shows its stages (loading models, preparing
+images, encoding prompt, sampling, decoding, saving) with step counts and times. Drag the bar between
+the preview and the settings to resize them (double-tap resets).
+
+**Queue** (top bar): running and waiting jobs with elapsed time and an ETA from recent runs of the
+same template, Stop/Cancel, and recent run times. History shows how long each run took; **Replay &
+edit** loads a run's settings (prompt and builder parts, fixed seed, images, LoRAs) into Generate,
+and **Run again** re-queues it unchanged.
+
+Every template gets an **Advanced** group: attention backend (sage from the launch flag, Comfy
+Kitchen INT8, or plain PyTorch), live preview type for video, and Veda sparse attention for H3.
+These are inserted in front of the sampler at run time; templates don't need extra nodes.
+
+Seeds get Random / Fixed / +1 modes automatically (any `seed` or `noise_seed` input).
+Without an explicit order number, groups are ordered prompts → images → LoRAs → sampler →
+size → model loaders.
+
+**A typical image-to-video template** might tag:
+`@1 Prompt`, `@2 Negative`, `@3 Start frame` (LoadImage), `@4 LoRAs` (LoraLoaderModelOnly after the
+UNet loader), `@5 Sampler [seed,steps,cfg]`, `@6 Video [width,height,length]` (the image-to-video
+latent node), and maybe `@9 Model` on the UNet loader if you switch high/low-noise models.
+
+If a template looks wrong, open a generation in History → **Workflow JSON** and drag it into
+desktop ComfyUI. It's the exact graph that ran, with LoRAs expanded.
+
+---
+
+## Layout
+
+```
+app/main.py        API routes, websocket fan-out, saving outputs, reconcile loop
+app/comfy.py       ComfyUI HTTP + websocket client
+app/templates.py   @-tag parsing, field typing from /object_info, LoRA chain splicing
+app/imageprep.py   crop, megapixel cap, snap to multiple-of-N, video/gif frame grabs
+app/db.py          SQLite: projects + generations (params, exact workflow, parent lineage)
+web/               the tablet UI (vanilla JS, no build step)
+templates/         your workflow templates
+data/              database, projects/ (saved outputs), local copies of inputs (git-ignored)
+dev/mock_comfy.py  fake ComfyUI for UI work without a GPU
+```
+
+Every output is copied into `data/projects/<project name>/<generation id>_<file>`, so each project
+is one folder you can browse, and history survives clearing ComfyUI's output folder. ComfyUI's own
+copy goes to `output/comfydeck/<project name>/`. Generations made without a project land in
+`Unsorted/`. Older installs that used `data/generations/<id>/` are moved over on startup.
+
+Images you upload, edit or draw are remembered with the project that was open, so the image picker
+shows that project's own images and generations first.
+
+### Working on the UI without the GPU
+
+```bash
+.venv/bin/python dev/mock_comfy.py --port 8199 --animated
+COMFY_URL=http://127.0.0.1:8199 DECK_DATA=/tmp/deckdev ./run.sh
+```
+
+### Debugging the websocket
+
+The ⋯ button shows message counts plus any messages ComfyDeck doesn't handle. Use it to see
+what a custom node sends. Binary previews are decoded by finding the JPEG/PNG/WebP header in
+the payload, so differently framed preview messages still work.
+
+---
+
+## API (for scripting)
+
+| | |
+|---|---|
+| `GET /api/templates` | templates with their fields |
+| `POST /api/generate` | `{template, values: {"<node>.<input>": v}, batch, project_id, parent}`. A seed of `-1` means random |
+| `GET /api/generations?project_id=` | history |
+| `POST /api/generations/{id}/to-input` | `{index, frame: "first"\|"last", mp, multiple}` → ComfyUI input name |
+| `POST /api/upload` | multipart `file`, `mp`, `multiple`, `crop` (`{"x","y","w","h"}` as fractions) |
+| `POST /api/interrupt` | stop the current run |
+| `WS /ws` | ComfyUI's own messages plus `deck_generation` updates; binary = previews |

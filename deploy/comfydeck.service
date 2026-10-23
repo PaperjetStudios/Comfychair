@@ -1,0 +1,15 @@
+[Unit]
+Description=ComfyDeck (tablet front end for ComfyUI)
+Wants=network-online.target
+After=network-online.target comfyui.service
+RequiresMountsFor=/home
+
+[Service]
+User=kb
+Group=kb
+WorkingDirectory=/home/kb/Programs/comfydeck
+Environment=COMFY_URL=http://127.0.0.1:8188
+# ComfyDeck waits for ComfyUI by itself (it reconnects), so no hard dependency on it.
+ExecStart=/home/kb/Programs/comfydeck/run.sh
+Restart=on-failure
+RestartSec=5

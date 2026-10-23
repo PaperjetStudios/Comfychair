@@ -1,0 +1,59 @@
+{
+  "4": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": { "ckpt_name": "sd_xl_base_1.0.safetensors" },
+    "_meta": { "title": "@6 Model" }
+  },
+  "10": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": ["4", 0],
+      "clip": ["4", 1],
+      "lora_name": "none.safetensors",
+      "strength_model": 1.0,
+      "strength_clip": 1.0
+    },
+    "_meta": { "title": "@3 LoRAs" }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": { "text": "a cinematic photo of a lighthouse at dusk, volumetric fog", "clip": ["10", 1] },
+    "_meta": { "title": "@1 Prompt" }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": { "text": "blurry, low quality, watermark", "clip": ["10", 1] },
+    "_meta": { "title": "@2 Negative" }
+  },
+  "5": {
+    "class_type": "EmptyLatentImage",
+    "inputs": { "width": 1024, "height": 1024, "batch_size": 1 },
+    "_meta": { "title": "@5 Size" }
+  },
+  "3": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 0,
+      "steps": 25,
+      "cfg": 6.5,
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "denoise": 1.0,
+      "model": ["10", 0],
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "latent_image": ["5", 0]
+    },
+    "_meta": { "title": "@4 Sampler" }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": { "samples": ["3", 0], "vae": ["4", 2] },
+    "_meta": { "title": "VAE Decode" }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": { "filename_prefix": "comfydeck/img", "images": ["8", 0] },
+    "_meta": { "title": "Save Image" }
+  }
+}

@@ -1,0 +1,7 @@
+[Unit]
+Description=Terminal-only boot with ComfyUI and ComfyDeck
+Requires=multi-user.target
+Wants=comfyui.service comfydeck.service
+Conflicts=graphical.target
+After=multi-user.target
+AllowIsolate=yes

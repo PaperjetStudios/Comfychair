@@ -1,0 +1,17 @@
+[Unit]
+Description=ComfyUI (LAN, terminal-only boot)
+Wants=network-online.target
+After=network-online.target local-fs.target
+
+[Service]
+User=kb
+Group=kb
+WorkingDirectory=/home/kb/Programs/ComfyUI
+# Most models live on another drive (whatever extra_model_paths.yaml points at, now /mnt/data).
+# Wait for it and retry the mount if it was slow, but start ComfyUI anyway if it never appears:
+# with RequiresMountsFor= a missing drive stopped ComfyUI from starting at all.
+ExecStartPre=+/usr/local/lib/comfydeck/wait-for-models /home/kb/Programs/ComfyUI/extra_model_paths.yaml 90
+ExecStart=/home/kb/Programs/ComfyUI/start-comfyui-lan.sh
+TimeoutStartSec=180
+Restart=on-failure
+RestartSec=5

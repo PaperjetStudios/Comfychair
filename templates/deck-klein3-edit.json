@@ -1,0 +1,223 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "flux3-image-klein-int8-convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "@9 Model [unet_name]"
+    }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_4b_int8_convrot.safetensors",
+      "type": "flux3",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    },
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "4": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "lora_name": "none",
+      "strength_model": 1.0
+    },
+    "_meta": {
+      "title": "@5 LoRAs"
+    }
+  },
+  "6": {
+    "class_type": "CreateBoundingBoxes",
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "editor_state": {
+        "__value__": []
+      },
+      "last_incoming": {
+        "__value__": []
+      }
+    },
+    "_meta": {
+      "title": "@4 Boxes"
+    }
+  },
+  "7": {
+    "class_type": "Flux3LayoutPrompt",
+    "inputs": {
+      "element": [
+        "6",
+        2
+      ],
+      "prompt": "In <ref_image_0>, change the jacket to a deep red leather jacket. Keep the face, pose, lighting and background unchanged."
+    },
+    "_meta": {
+      "title": "@1 Edit [prompt]"
+    }
+  },
+  "8": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "2",
+        0
+      ],
+      "text": [
+        "7",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Encode"
+    }
+  },
+  "9": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": [
+        "8",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Negative (zeroed)"
+    }
+  },
+  "10": {
+    "class_type": "ReferenceMultiLatent",
+    "inputs": {
+      "positive": [
+        "8",
+        0
+      ],
+      "negative": [
+        "9",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ],
+      "resolution": "resize",
+      "resolution.megapixels": 1.0,
+      "images.image0": [
+        "20",
+        0
+      ],
+      "images.image1": [
+        "21",
+        0
+      ],
+      "images.image2": [
+        "22",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "References"
+    }
+  },
+  "11": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 0,
+      "steps": 16,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0,
+      "model": [
+        "4",
+        0
+      ],
+      "positive": [
+        "10",
+        0
+      ],
+      "negative": [
+        "10",
+        1
+      ],
+      "latent_image": [
+        "10",
+        2
+      ]
+    },
+    "_meta": {
+      "title": "@6 Sampler [seed,steps]"
+    }
+  },
+  "12": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "11",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "13": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "klein3_edit",
+      "images": [
+        "12",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "20": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": ""
+    },
+    "_meta": {
+      "title": "@2 Image to edit"
+    }
+  },
+  "21": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": ""
+    },
+    "_meta": {
+      "title": "@3 More references"
+    }
+  },
+  "22": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": ""
+    },
+    "_meta": {
+      "title": "@3 More references"
+    }
+  }
+}

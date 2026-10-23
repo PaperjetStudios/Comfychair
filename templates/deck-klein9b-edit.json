@@ -1,0 +1,288 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "flux-2-klein-9b-fp8.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "@9 Model [unet_name]"
+    }
+  },
+  "2": {
+    "class_type": "CLIPLoaderGGUF",
+    "inputs": {
+      "clip_name": "Qwen3-8B-Q8_0.gguf",
+      "type": "flux2"
+    },
+    "_meta": {
+      "title": "Load CLIP (GGUF)"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    },
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "4": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "lora_name": "none",
+      "strength_model": 1.0
+    },
+    "_meta": {
+      "title": "@4 LoRAs"
+    }
+  },
+  "8": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "2",
+        0
+      ],
+      "text": "Change the jacket to a deep red leather jacket. Keep the face, pose, lighting and background unchanged."
+    },
+    "_meta": {
+      "title": "@1 Edit"
+    }
+  },
+  "9": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": [
+        "8",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Negative (zeroed)"
+    }
+  },
+  "10": {
+    "class_type": "ReferenceMultiLatent",
+    "inputs": {
+      "positive": [
+        "8",
+        0
+      ],
+      "negative": [
+        "9",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ],
+      "resolution": "resize",
+      "resolution.megapixels": 1.0,
+      "images.image0": [
+        "20",
+        0
+      ],
+      "images.image1": [
+        "21",
+        0
+      ],
+      "images.image2": [
+        "22",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "References"
+    }
+  },
+  "14": {
+    "class_type": "ImageScaleToTotalPixels",
+    "inputs": {
+      "image": [
+        "20",
+        0
+      ],
+      "upscale_method": "lanczos",
+      "megapixels": 1.0,
+      "resolution_steps": 16
+    },
+    "_meta": {
+      "title": "Size from image 1"
+    }
+  },
+  "15": {
+    "class_type": "GetImageSize",
+    "inputs": {
+      "image": [
+        "14",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Image size"
+    }
+  },
+  "16": {
+    "class_type": "Flux2Scheduler",
+    "inputs": {
+      "steps": 4,
+      "width": [
+        "15",
+        0
+      ],
+      "height": [
+        "15",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "@6 Steps [steps]"
+    }
+  },
+  "17": {
+    "class_type": "EmptyFlux2LatentImage",
+    "inputs": {
+      "width": [
+        "15",
+        0
+      ],
+      "height": [
+        "15",
+        1
+      ],
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "Latent"
+    }
+  },
+  "18": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 0
+    },
+    "_meta": {
+      "title": "@5 Seed"
+    }
+  },
+  "19": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "_meta": {
+      "title": "Sampler select"
+    }
+  },
+  "24": {
+    "class_type": "CFGGuider",
+    "inputs": {
+      "model": [
+        "4",
+        0
+      ],
+      "positive": [
+        "10",
+        0
+      ],
+      "negative": [
+        "10",
+        1
+      ],
+      "cfg": 1.0
+    },
+    "_meta": {
+      "title": "CFG Guider"
+    }
+  },
+  "25": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "noise": [
+        "18",
+        0
+      ],
+      "guider": [
+        "24",
+        0
+      ],
+      "sampler": [
+        "19",
+        0
+      ],
+      "sigmas": [
+        "16",
+        0
+      ],
+      "latent_image": [
+        "17",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Sampler"
+    }
+  },
+  "12": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "25",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "13": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "klein9b_edit",
+      "images": [
+        "12",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "20": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": ""
+    },
+    "_meta": {
+      "title": "@2 Image to edit"
+    }
+  },
+  "21": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": ""
+    },
+    "_meta": {
+      "title": "@3 More references"
+    }
+  },
+  "22": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": ""
+    },
+    "_meta": {
+      "title": "@3 More references"
+    }
+  }
+}
