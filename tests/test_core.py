@@ -124,6 +124,35 @@ class EditSize(unittest.TestCase):
         self.assertEqual((out[scale]["inputs"]["width"], out[scale]["inputs"]["height"]), (768, 512))
 
 
+def wf_upscale():
+    return {
+        "1": {"class_type": "LoadImage", "_meta": {"title": "@1 Image"}, "inputs": {"image": ""}},
+        "2": {"class_type": "SeedVR2Preprocess", "inputs": {"resized_images": ["1", 0]}},
+        "3": {"class_type": "VHS_LoadVideoPath", "_meta": {"title": "@2 Video [video]"},
+              "inputs": {"video": "", "frame_load_cap": 0}},
+        "4": {"class_type": "Sink", "inputs": {"images": ["3", 0]}},
+    }
+
+
+class VideoAndUpscale(unittest.TestCase):
+    def test_video_field_and_full_size_images(self):
+        d = tpl.describe(tpl.Template(id="u", name="u", path=None, workflow=wf_upscale()), None)
+        kinds = {f["key"]: f for f in d["fields"]}
+        self.assertEqual(kinds["3.video"]["kind"], "video")
+        self.assertNotIn("3.frame_load_cap", kinds)  # [video] limits the group to that input
+        self.assertEqual(kinds["1.image"]["mp"], 0)
+        self.assertNotIn(editsize.WIDTH, kinds)  # upscalers get no crop-to-size picker
+
+    def test_empty_video_drops_the_loader(self):
+        wf = tpl.apply(wf_upscale(), {"3.video": None})
+        self.assertNotIn("3", wf)
+        self.assertNotIn("images", wf["4"]["inputs"])
+
+    def test_picked_video_is_kept(self):
+        wf = tpl.apply(wf_upscale(), {"3.video": "/x/clip.mp4"})
+        self.assertEqual(wf["3"]["inputs"]["video"], "/x/clip.mp4")
+
+
 class Housekeeping(unittest.TestCase):
     def setUp(self):
         self.ours = Path(os.environ["DECK_DATA"]) / "ours.png"

@@ -18,6 +18,8 @@ every image and video in the project as a pin board, with pins, filters and a ti
 **☑ Select** (or long-press a tile) picks several: **New edit** puts the images in the Editor as a
 fresh layout (Undo brings the old one back), **To video** adds them to the timeline, **Delete**
 removes their generations (it asks first).
+**3D** tab: block out a shot with soft mannequins, boxes and a room, keyframe them and the camera, and
+render it as a depth video for `deck-h3-ctrl2v` (see below).
 The preview pinch/wheel-zooms, the picker has a camera button, and ⛶ goes full screen.
 
 **Next:** crop/compose tool (character sheets) → scenes/shots/takes → editor tab → extend/bridge shots.
@@ -106,6 +108,36 @@ result it missed.
 A **Primitive** node (`PrimitiveInt`, `PrimitiveFloat`…) shows as one number labelled with its title, e.g.
 `@3 Length (seconds)` feeding a math node that converts seconds to frames (see `templates/deck-h3-i2v.json`).
 
+**Character sheets** (`deck-h3-charsheet`): give it a picture of a character as Reference 1 and it
+makes a 12 s portrait clip: a 6 s orbit on a grey studio backdrop, then cuts at 6, 7.5, 9 and 10.5 s to
+close-ups (face front, three-quarter, profile, waist up). It saves the clip plus a sheet: frames
+`4,54,96,120` (front, side, back, other side: H3 eases into the orbit, so these aren't evenly spaced) and
+one from each close-up (`162,198,234,270`), 4 per row.
+Pick the sheet as a reference in `deck-h3-ref2v` for the next video. With a fixed seed the same
+character gives the same sheet; if the orbit runs fast or slow, change **Sheet frames** (frame = seconds × 24).
+The length is fixed, so changing the shot timestamps in the prompt also means changing the frames.
+`deck-h3-objectsheet` is the same for props and other objects: the close-ups are front, three-quarter,
+the top (high angle) and a small detail.
+
+**Blocking a shot** (`deck-h3-ctrl2v` + the **3D** tab): ref2v plus H3's Fun ControlNet, driven by a
+control video. In the 3D tab, add people (soft, featureless mannequins), boxes, balls and walls, set the
+room size, and frame the shot: the view is the camera. Drag an object to move it along the floor; drag
+anywhere else to orbit, two fingers to pan and zoom. **◆ Key** keyframes the selected object (or the
+camera) at the playhead; once something has keys, moving it writes a key where the playhead is.
+**Render depth video** puts the clip in History (near = white, far = black, the range fixed over the
+clip), and **Use in H3 control** opens `deck-h3-ctrl2v` with it, the size and the length set. Strength 1
+with End 0.4 keeps the layout and camera move but lets H3 draw real people and furniture; ending later
+copies the blockout's shapes (and overrides the references), lower strength loses the camera. Keep the
+walls about where the real ones should be: H3 sizes the room from them. **Soften edges** blurs the
+depth so the shapes are followed less literally. **📷 Save frame** saves a lit clay frame as an input.
+The control video is fitted to the output's size (centre crop) and length (the last frame is held).
+
+**Upscaling:** `deck-upscale-image` / `deck-upscale-video` use SeedVR2 7B (sharp, int8) in one step,
+`deck-upscale-video-fast` the 3B, `deck-upscale-image-fast` a 4× GAN model (4x-UltraSharp) then a
+resize (0.5 = 2× overall). Videos are split into chunks that fit in VRAM and keep their sound and fps.
+A `@Video` title on a **VHS_LoadVideoPath** node gives a video picker (this project's video outputs
+and the Video tab's uploaded clips); left empty, the node is removed like an empty image.
+
 A node's `width` + `height` pair shows as one size picker: an aspect preset (1:1, 16:9, 9:16, 4:3…)
 plus megapixels, or a custom width/height. Sides snap to the node's own step (8, 16 or 32).
 
@@ -135,8 +167,13 @@ back the wildcards, **Run again** repeats the same picks. On a tablet the text p
 **{ }** starts a group (or wraps the selected text as its first option), **|** adds an option, and
 **}→** jumps past the end of the group.
 
-**Saved settings** sit at the top of each settings group (Seed, Sampler, LoRAs, Turbo LoRA, size…):
-◀ ▶ cycle, 💾 save over the one shown, ＋ save new, 🗑 delete. The first entry is always the template's
+**Shots** (the bar above the groups) save the whole template: the prompt and its builder parts, the
+images and crops, LoRAs and every setting. ◀ ▶ load the previous/next shot (Undo brings back what you
+had), 💾 saves over the loaded one, ＋ saves a new one, 🗑 deletes it. They're per workflow and stored on
+the server.
+
+**Presets** sit at the top of each settings group (Seed, Sampler, LoRAs, Turbo LoRA, size…) and keep
+only that group's numbers and choices, not prompts or images: ◀ ▶ cycle, 💾 save over the one shown, ＋ save new, 🗑 delete. The first entry is always the template's
 default. A save is for this workflow, this model, or everywhere; model and everywhere saves match by
 node type + input, so a KSampler or LoRA-stack save also turns up in other templates using them.
 

@@ -1,0 +1,236 @@
+{
+  "1": {
+    "class_type": "VHS_LoadVideoPath",
+    "inputs": {
+      "video": "",
+      "force_rate": 0,
+      "custom_width": 0,
+      "custom_height": 0,
+      "frame_load_cap": 0,
+      "skip_first_frames": 0,
+      "select_every_nth": 1
+    },
+    "_meta": {
+      "title": "@1 Video [video]"
+    }
+  },
+  "2": {
+    "class_type": "ImageScaleBy",
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ],
+      "upscale_method": "lanczos",
+      "scale_by": 2.0
+    },
+    "_meta": {
+      "title": "@2 Upscale [scale_by]"
+    }
+  },
+  "3": {
+    "class_type": "SeedVR2Preprocess",
+    "inputs": {
+      "resized_images": [
+        "2",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Pad"
+    }
+  },
+  "4": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "seedvr2_ema_vae_fp16.safetensors"
+    },
+    "_meta": {
+      "title": "Load SeedVR2 VAE"
+    }
+  },
+  "5": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "seedvr2_7b_sharp_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "@9 Model [unet_name]"
+    }
+  },
+  "6": {
+    "class_type": "VAEEncodeTiled",
+    "inputs": {
+      "pixels": [
+        "3",
+        0
+      ],
+      "vae": [
+        "4",
+        0
+      ],
+      "tile_size": 512,
+      "overlap": 128,
+      "temporal_size": 64,
+      "temporal_overlap": 8
+    },
+    "_meta": {
+      "title": "Encode"
+    }
+  },
+  "7": {
+    "class_type": "SeedVR2TemporalChunk",
+    "inputs": {
+      "latent": [
+        "6",
+        0
+      ],
+      "temporal_overlap": 2,
+      "chunking_mode": "auto"
+    },
+    "_meta": {
+      "title": "Split into chunks"
+    }
+  },
+  "8": {
+    "class_type": "SeedVR2TemporalMerge",
+    "inputs": {
+      "latents": [
+        "10",
+        0
+      ],
+      "temporal_overlap": [
+        "7",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "Merge chunks"
+    }
+  },
+  "9": {
+    "class_type": "SeedVR2Conditioning",
+    "inputs": {
+      "model": [
+        "5",
+        0
+      ],
+      "vae_conditioning": [
+        "7",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Conditioning"
+    }
+  },
+  "10": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "5",
+        0
+      ],
+      "positive": [
+        "9",
+        0
+      ],
+      "negative": [
+        "9",
+        1
+      ],
+      "latent_image": [
+        "7",
+        0
+      ],
+      "seed": 42,
+      "steps": 1,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "@4 Seed [seed]"
+    }
+  },
+  "11": {
+    "class_type": "VAEDecodeTiled",
+    "inputs": {
+      "samples": [
+        "8",
+        0
+      ],
+      "vae": [
+        "4",
+        0
+      ],
+      "tile_size": 512,
+      "overlap": 128,
+      "temporal_size": 64,
+      "temporal_overlap": 8
+    },
+    "_meta": {
+      "title": "Decode"
+    }
+  },
+  "12": {
+    "class_type": "SeedVR2PostProcessing",
+    "inputs": {
+      "images": [
+        "11",
+        0
+      ],
+      "original_resized_images": [
+        "2",
+        0
+      ],
+      "color_correction_method": "lab"
+    },
+    "_meta": {
+      "title": "@3 Colour [color_correction_method]"
+    }
+  },
+  "20": {
+    "class_type": "VHS_VideoInfoLoaded",
+    "inputs": {
+      "video_info": [
+        "1",
+        3
+      ]
+    },
+    "_meta": {
+      "title": "Video info"
+    }
+  },
+  "21": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": [
+        "12",
+        0
+      ],
+      "audio": [
+        "1",
+        2
+      ],
+      "frame_rate": [
+        "20",
+        0
+      ],
+      "loop_count": 0,
+      "filename_prefix": "upscale",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 17,
+      "save_metadata": true,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true
+    },
+    "_meta": {
+      "title": "Save video"
+    }
+  }
+}

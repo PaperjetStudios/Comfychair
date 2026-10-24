@@ -21,6 +21,7 @@
       <button data-tab="generate" class="active" role="tab">Generate</button>
       <button data-tab="editor" role="tab">Editor</button>
       <button data-tab="video" role="tab">Video</button>
+      <button data-tab="scene" role="tab">3D</button>
       <button data-tab="board" role="tab">Board</button>
       <button data-tab="history" role="tab">History</button>
     </nav>
@@ -98,6 +99,15 @@
         <div class="tl-tools" id="tlTools"></div>
         <div class="timeline" id="timeline"></div>
       </div>
+    </section>
+
+    <section id="tab-scene" class="tab">
+      <div class="stage editor-stage">
+        <div class="viewer" id="sceneViewer"><canvas id="sceneCanvas"></canvas></div>
+        <div class="transport scene-transport" id="sceneTransport"></div>
+      </div>
+<div class="splitter" role="separator" aria-label="Drag to resize preview and settings" title="Drag to resize · double-tap to reset"></div>
+      <aside class="panel" id="scenePanel"></aside>
     </section>
 
     <section id="tab-board" class="tab">

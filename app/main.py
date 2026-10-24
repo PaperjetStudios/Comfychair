@@ -6,6 +6,7 @@ import logging
 import random
 import re
 import shutil
+import subprocess
 import tempfile
 import time
 import uuid
@@ -427,7 +428,16 @@ async def generate(body: dict = Body(...)):
                 except (TypeError, ValueError):
                     raise HTTPException(400, f"{f['group']} · {f['label']}: {v!r} isn't a number")
             resolved[key] = v
-        wf = editsize.inject(accel.inject(tpl.apply(t.workflow, resolved), resolved), resolved, list(fields.values()))
+        run = dict(resolved)
+        for key, f in fields.items():  # a picked video: params keep the source, ComfyUI gets the path
+            if f["kind"] == "video" and resolved.get(key) and not isinstance(resolved[key], dict):
+                raise HTTPException(400, f"{f['group']} · {f['label']}: pick the video again")
+            if f["kind"] == "video" and isinstance(resolved.get(key), dict):
+                path, kind = await _timeline_path(resolved[key], None)
+                if kind != "video":
+                    raise HTTPException(400, f"{f['group']} · {f['label']}: that isn't a video")
+                run[key] = str(path)
+        wf = editsize.inject(accel.inject(tpl.apply(t.workflow, run), run), run, list(fields.values()))
         folder = db.project_folder(project_id)
         for node in wf.values():  # ComfyUI's own copy goes to output/comfydeck/<project>/ too
             fp = node["inputs"].get("filename_prefix")
@@ -721,6 +731,43 @@ async def video_render(body: dict = Body(...)):
     db.update_generation(gid, status="done", finished=time.time(),
                          outputs=[{"filename": out.name, "path": rel, "kind": "video", "node": "edit",
                                    "duration": round(info["duration"], 2)}])
+    await push_gen(gid)
+    return db.get_generation(gid)
+
+
+@app.post("/api/scene/render")
+async def scene_render(frames: list[UploadFile] = File(...), fps: float = Form(24), blur: float = Form(0),
+                       scene: str = Form("{}"), project_id: str = Form("")):
+    """The 3D tab's depth frames (PNGs, in order) as a control video in History. The scene goes in
+    the params so the 3D tab can open it again; blur softens the edges so H3 follows less literally."""
+    if not imageprep.ffmpeg_available():
+        raise HTTPException(400, "ffmpeg isn't installed (sudo apt install ffmpeg)")
+    if not 2 <= len(frames) <= 1000:
+        raise HTTPException(400, "A scene needs 2 to 1000 frames")
+    try:
+        scene_data = json.loads(scene)
+    except ValueError:
+        raise HTTPException(400, "Bad scene")
+    params = {"frames": len(frames), "fps": fps, "blur": blur, "scene": scene_data}
+    gid = db.create_generation(_project(project_id), "3d scene", params, {}, f"scene-{uuid.uuid4().hex}", None)
+    db.update_generation(gid, status="running")
+    await push_gen(gid)
+    out, rel = new_output(db.get_generation(gid), "depth.mp4")
+    with tempfile.TemporaryDirectory() as td:
+        for i, f in enumerate(frames):
+            (Path(td) / f"f{i:05d}.png").write_bytes(await f.read())
+        vf = (f"gblur=sigma={blur:g}," if blur > 0 else "") + "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p"
+        cmd = ["ffmpeg", "-y", "-loglevel", "error", "-framerate", f"{fps:g}", "-i", str(Path(td) / "f%05d.png"),
+               "-vf", vf, "-c:v", "libx264", "-crf", "12", "-movflags", "+faststart", str(out)]
+        r = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
+    if r.returncode:
+        out.unlink(missing_ok=True)
+        db.update_generation(gid, status="error", error=r.stderr[-500:], finished=time.time())
+        await push_gen(gid)
+        raise HTTPException(400, r.stderr[-500:] or "ffmpeg failed")
+    db.update_generation(gid, status="done", finished=time.time(),
+                         outputs=[{"filename": out.name, "path": rel, "kind": "video", "node": "scene",
+                                   "duration": round(len(frames) / fps, 2)}])
     await push_gen(gid)
     return db.get_generation(gid)
 

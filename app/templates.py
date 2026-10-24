@@ -34,6 +34,8 @@ REF_CLASSES = {"ReferenceMultiLatent"}  # reference images numbered from images.
 BOX_GRID = 1024
 LAYOUT_SIZED = {"MOSSImageLayoutPrompt"}
 IMAGE_CLASSES = {"LoadImage", "LoadImageMask", "LoadImageOutput"}
+# a video picker: the tablet sends {"generation", "index"} or {"media"}, main.generate swaps in the file's path
+VIDEO_CLASSES = {"VHS_LoadVideoPath"}
 SEED_NAMES = {"seed", "noise_seed"}
 SAFE_ID = re.compile(r"^[\w\-. ]+$")
 TURBO_RE = re.compile(r"turbo|lightning|lightx2v|distill|\d+[-_ ]?steps?\b|lcm", re.I)
@@ -148,6 +150,8 @@ def _field(node_id, cls, name, value, ispec):
 
     if cls in IMAGE_CLASSES and name in ("image",) or opts.get("image_upload"):
         f.update(kind="image", options=opts.get("options", []))
+    elif cls in VIDEO_CLASSES and name == "video":
+        f.update(kind="video", value=None)
     # Primitive nodes carry control_after_generate too, but they're plain numbers (e.g. a duration)
     elif t == "INT" and (name in SEED_NAMES or opts.get("control_after_generate") and not cls.startswith("Primitive")):
         f.update(kind="seed", min=opts.get("min", 0), max=opts.get("max"))
@@ -253,6 +257,10 @@ def describe(t: Template, object_info: dict | None) -> dict:
     fields.sort(key=lambda f: rank.get(f["group"], 999))
     for g in groups:
         g.pop("order")
+    if any(n.get("class_type") in editsize.UPSCALE_CLASSES for n in t.workflow.values()):
+        for f in fields:  # an upscaler wants the picked image at full size, not capped to 1 MP
+            if f["kind"] == "image":
+                f["mp"] = 0
     if t.workflow:  # edit models size their output from Image 1: offer a size for it
         fields += editsize.fields(t.workflow, fields)
     adv = accel.fields(t.workflow, object_info) if t.workflow else []
@@ -279,7 +287,8 @@ def apply(workflow: dict, values: dict) -> dict:
             lora_ops.append((node_id, val))
         elif inp == "__boxes":
             box_ops.append((node_id, val))
-        elif inp == "image" and wf[node_id]["class_type"] in IMAGE_CLASSES and not val:
+        elif (inp == "image" and wf[node_id]["class_type"] in IMAGE_CLASSES
+              or inp == "video" and wf[node_id]["class_type"] in VIDEO_CLASSES) and not val:
             empty_images.append(node_id)
         else:
             wf[node_id]["inputs"][inp] = val

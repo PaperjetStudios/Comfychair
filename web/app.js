@@ -53,9 +53,10 @@ async function api(path, { method = 'GET', body, form, timeout = form ? 300000 :
 let toastTimer;
 function toast(msg, err = false, action = null) {
   const t = $('#toast');
-  t.replaceChildren(h('span', {}, msg), action ? h('button', { type: 'button', class: 'btn small toast-act', onclick: () => {
+  // replaceChildren() would turn a null into the text "null", so only pass the button when there is one
+  t.replaceChildren(h('span', {}, msg), ...(action ? [h('button', { type: 'button', class: 'btn small toast-act', onclick: () => {
     t.classList.add('hidden'); action.fn();
-  } }, action.label) : null);
+  } }, action.label)] : []));
   t.className = 'toast' + (err ? ' err' : '');
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), err ? 7000 : action ? 6000 : 2500);
 }
@@ -182,11 +183,96 @@ function renderFields() {
     det.addEventListener('toggle', () => { const o = store.get('deck.groupsOpen', {}); o[key] = det.open; store.set('deck.groupsOpen', o); });
     groups.push(det);
   }
-  $('#fields').replaceChildren(...groups);
+  $('#fields').replaceChildren(shotBar(), ...groups);
   if (!S.snippets) loadSnippets().then(() => renderFields());
 }
 
 function setVal(key, v) { S.values[key] = v; persist(); }
+
+// ---------------------------------------------------------------------------
+// saved shots: the whole template at once (prompt and its builder parts, images and crops, every
+// setting, seed modes), for this workflow. ◀ ▶ load the previous/next shot (with an Undo),
+// 💾 saves over the loaded one, ＋ saves a new one. Stored with the snippets, so every device sees them.
+// ---------------------------------------------------------------------------
+const SHOT_CATEGORY = 'Saved shot';
+const clone = (x) => JSON.parse(JSON.stringify(x ?? null));
+
+function captureShot() {
+  const pb = builderState();
+  return { workflow: S.tpl.id, values: clone(S.values), seedMode: clone(S.seedMode), sizeMode: clone(S.sizeMode),
+    imageCrop: clone(S.imageCrop), imageMp: clone(S.imageMp), builder: pb.on ? clone(pb) : null };
+}
+
+function applyShot(p) {
+  for (const f of S.tpl.fields) {
+    if (!(f.key in p.values)) continue;
+    const v = p.values[f.key];
+    if (f.kind === 'choice' && f.options.length && !f.options.includes(v)) continue;  // model or option gone
+    S.values[f.key] = v;
+  }
+  S.seedMode = p.seedMode || {}; S.sizeMode = p.sizeMode || {}; S.imageCrop = p.imageCrop || {}; S.imageMp = p.imageMp || {};
+  const pb = builderState();
+  if (p.builder) S.pb = { ...clone(p.builder), on: true };
+  else pb.on = false;  // the prompt was written as plain text: show it that way
+  saveBuilder(); persist(); renderFields();
+}
+
+function shotBar() {
+  const stateKey2 = `deck.shot.${S.tpl.id}`;
+  const entries = () => (S.snippets || []).filter((x) => x.category === SHOT_CATEGORY)
+    .map((x) => { try { return { ...x, p: JSON.parse(x.text) }; } catch { return null; } })
+    .filter((x) => x && x.p.workflow === S.tpl.id)
+    .sort((a, b) => a.created - b.created);
+  const curId = () => String(store.get(stateKey2, ''));
+  const l = entries(), i = l.findIndex((x) => String(x.id) === curId());
+  const go = (d) => {
+    const list = entries();
+    if (!list.length) return toast('No saved shots yet: ＋ saves this one');
+    const at = list.findIndex((x) => String(x.id) === curId());
+    const x = list[at < 0 ? (d > 0 ? 0 : list.length - 1) : (at + d + list.length) % list.length];
+    const before = captureShot(), beforeId = curId();
+    store.set(stateKey2, String(x.id));
+    applyShot(x.p);
+    undoToast(`Loaded shot "${x.name}"`, () => { store.set(stateKey2, beforeId); applyShot(before); });
+  };
+  const saveNew = () => {
+    const name = h('input', { type: 'text', placeholder: 'Name, e.g. "Market walk – wide"' });
+    openSheet(h('h3', {}, 'Save shot'),
+      h('div', { class: 'hint', style: 'margin-bottom:8px' }, `Saves everything in ${S.tpl.name}: the prompt (and its parts), images, LoRAs and every setting.`),
+      name,
+      h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: async () => {
+        try {
+          const r = await api('/api/snippets', { method: 'POST', body: { category: SHOT_CATEGORY, name: name.value.trim() || `Shot ${entries().length + 1}`,
+            text: JSON.stringify(captureShot()) } });
+          store.set(stateKey2, String(r.id));
+          await loadSnippets(true); closeSheet(); renderFields(); toast(`Saved shot "${r.name}"`);
+        } catch (e) { toast(e.message, true); }
+      } }, 'Save')));
+    setTimeout(() => name.focus(), 50);
+  };
+  const saveOver = async () => {
+    const x = entries().find((y) => String(y.id) === curId());
+    if (!x) return saveNew();
+    try {
+      await api('/api/snippets', { method: 'POST', body: { id: x.id, category: SHOT_CATEGORY, name: x.name, text: JSON.stringify(captureShot()) } });
+      await loadSnippets(true); renderFields(); toast(`Saved over "${x.name}"`);
+    } catch (e) { toast(e.message, true); }
+  };
+  const del = async () => {
+    const x = entries().find((y) => String(y.id) === curId());
+    if (!x) return toast('No saved shot loaded');
+    store.set(stateKey2, '');
+    try { await deleteSnippet(x, `Deleted shot "${x.name}"`, renderFields); } catch (e) { toast(e.message, true); }
+  };
+  return h('div', { class: 'part-head saved-bar shot-bar' }, h('b', {}, 'Shots'),
+    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Previous saved shot', onclick: () => go(-1) }, '◀'),
+    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Next saved shot', onclick: () => go(1) }, '▶'),
+    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Save over this shot', title: 'Save over this one', onclick: saveOver }, '💾'),
+    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Save as a new shot', title: 'Save as new', onclick: saveNew }, '＋'),
+    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Delete this saved shot', onclick: del }, '🗑'),
+    h('span', { class: 'snip-pos' }, !l.length ? 'No saved shots · ＋ saves everything here'
+      : i < 0 ? `${l.length} saved · none loaded` : `${i + 1}/${l.length} · ${l[i].name}`));
+}
 
 // ---------------------------------------------------------------------------
 // saved settings per group (Seed, Sampler, LoRAs, Turbo LoRA…): ◀ ▶ cycle, 💾 save over, ＋ save new.
@@ -294,7 +380,7 @@ function groupPresetBar(g, fs) {
     catch (e) { toast(e.message, true); }
   };
   show();
-  return h('div', { class: 'part-head saved-bar' }, h('b', {}, 'Saved'),
+  return h('div', { class: 'part-head saved-bar' }, h('b', {}, 'Presets'),
     h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Previous saved ${g.label}`, onclick: () => go(-1) }, '◀'),
     h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Next saved ${g.label}`, onclick: () => go(1) }, '▶'),
     h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Save over this ${g.label}`, title: 'Save over this one', onclick: saveOver }, '💾'),
@@ -814,7 +900,7 @@ function cropPreview(src, c) {
 
 function imageField(f) {
   const v = S.values[f.key];
-  if (S.imageMp[f.key] == null) S.imageMp[f.key] = 1;
+  if (S.imageMp[f.key] == null) S.imageMp[f.key] = f.mp ?? 1;
   const pick = () => openImagePicker({
     title: `${f.group} · ${f.label}`, mp: () => S.imageMp[f.key],
     onPick: (name, info) => {
@@ -855,6 +941,82 @@ function imageField(f) {
             v ? 'Draw on' : 'Draw'),
           v ? h('button', { type: 'button', class: 'btn small', onclick: () => { setVal(f.key, ''); renderFields(); } }, 'Clear') : null),
         mpInput(() => S.imageMp[f.key], (n) => { S.imageMp[f.key] = n; persist(); }))));
+}
+
+// A video input (VHS_LoadVideoPath): the value is the clip's source, {generation, index} for an
+// output or {media} for a file uploaded in the Video tab; the server turns it into the file's path.
+function videoSource(v) {
+  if (v && v.generation != null) {
+    const g = S.history.get(v.generation), o = g && g.outputs[v.index || 0];
+    return o ? { o, label: `#${g.id} ${g.template}` } : { o: null, label: `#${v.generation} (not loaded)` };
+  }
+  if (v && v.media) return { o: { kind: 'video', url: `/files/media/${encodeURIComponent(v.media)}` }, label: v.media.split('_').slice(1).join('_') || v.media };
+  return null;
+}
+
+function videoField(f) {
+  const v = S.values[f.key];
+  const src = videoSource(v);
+  const pick = () => openVideoPicker({
+    title: `${f.group} · ${f.label}`,
+    onPick: (val) => {
+      setVal(f.key, val);
+      if (val.generation != null) S.pendingParent = { generation: val.generation, index: val.index };
+      renderFields();
+    },
+  });
+  const thumb = h('button', { type: 'button', class: 'thumb', onclick: pick, 'aria-label': 'Choose video' },
+    src && src.o ? mediaEl(src.o, { thumb: true }) : h('span', { class: 'hint' }, '+ video'));
+  return h('div', { class: 'field', 'data-key': f.key },
+    h('label', { class: 'lbl' }, h('span', {}, f.label), h('span', {}, src ? src.label : 'empty')),
+    h('div', { class: 'imgfield' }, thumb,
+      h('div', { class: 'actions' },
+        h('div', { class: 'row' },
+          h('button', { type: 'button', class: 'btn small', onclick: pick }, 'Choose…'),
+          v ? h('button', { type: 'button', class: 'btn small', onclick: () => { setVal(f.key, null); renderFields(); } }, 'Clear') : null))));
+}
+
+// this project's video outputs, newest first, plus the Video tab's uploaded clips
+async function openVideoPicker({ title, onPick }) {
+  const grid = h('div', { class: 'grid gallery' });
+  const file = h('input', { type: 'file', accept: 'video/*', class: 'hidden' });
+  const picked = (val) => { closeSheet(); onPick(val); };
+  const card = (o, label, val) => {
+    const c = h('button', { class: 'card' }, h('div', { class: 'media' }, mediaEl(o, { thumb: true })),
+      h('div', { class: 'meta' }, h('span', { class: 'name' }, label)));
+    c.addEventListener('click', () => picked(val));
+    return c;
+  };
+  const draw = async () => {
+    grid.replaceChildren(h('div', { class: 'placeholder' }, 'Loading…'));
+    if (!S.history.size) await loadHistory();
+    let media = [];
+    try { media = (await api('/api/media')).filter((m) => m.kind === 'video'); } catch { /* the outputs still show */ }
+    const items = [];
+    for (const g of S.history.values()) {
+      if (g.project_id !== S.project || g.status !== 'done') continue;
+      g.outputs.forEach((o, i) => {
+        if (o.kind === 'video') items.push({ t: g.finished || g.created, el: () => card(o, `#${g.id} ${g.template}`, { generation: g.id, index: i }) });
+      });
+    }
+    for (const m of media) items.push({ t: m.created, el: () => card(m, m.label, { media: m.name }) });
+    items.sort((x, y) => y.t - x.t);
+    grid.replaceChildren(...(items.length ? items.slice(0, 300).map((x) => x.el())
+      : [h('div', { class: 'placeholder' }, 'No videos in this project yet. Generate one or upload a clip.')]));
+  };
+  file.addEventListener('change', async () => {
+    const fl = file.files[0]; file.value = '';
+    if (!fl) return;
+    toast(`Uploading ${fl.name}…`);
+    const form = new FormData(); form.append('file', fl);
+    try { const m = await api('/api/media', { method: 'POST', form }); picked({ media: m.name }); }
+    catch (e) { toast('Upload failed: ' + e.message, true); }
+  });
+  openSheet(h('h3', {}, title),
+    h('div', { class: 'picker-bar' },
+      h('button', { type: 'button', class: 'btn small primary', onclick: () => file.click() }, 'Upload…')),
+    grid, file);
+  draw();
 }
 
 // ---------------------------------------------------------------------------
@@ -907,7 +1069,7 @@ async function openImagePicker({ title, mp = () => 0, onPick, multi = false, ext
   const drawProject = async () => {
     if (!await loadInputs()) return;
     if (!S.history.size) await loadHistory();
-    const SOURCE = { upload: 'upload', editor: 'edit', drawing: 'drawing', crop: 'crop', snapshot: 'frame' };
+    const SOURCE = { upload: 'upload', editor: 'edit', drawing: 'drawing', crop: 'crop', snapshot: 'frame', scene: '3d' };
     const items = inputs.project.filter((r) => r.source !== 'generation')
       .map((r) => ({ t: r.created, el: () => inputCard(r.name, SOURCE[r.source] || null) }));
     for (const g of S.history.values()) {
@@ -1049,6 +1211,7 @@ function fieldEl(f) {
     case 'choice': return choiceField(f);
     case 'bool': return boolField(f);
     case 'image': return imageField(f);
+    case 'video': return videoField(f);
     case 'loras': return loraField(f);
     case 'boxes': return boxesField(f);
     default: return h('div', { class: 'hint' }, `${f.label}: unsupported`);
@@ -1710,8 +1873,14 @@ function openGeneration(id) {
     : Array.isArray(v) ? v.filter((l) => l.name && l.enabled !== false).map((l) => `${l.name} @ ${l.strength}`).join('\n') || '—'
     : typeof v === 'string' ? v : JSON.stringify(v);
   const cur = () => g.outputs[idx];
-  const isEdit = g.template === 'video edit';  // made in the Video tab: no template, no workflow
-  const actions = isEdit ? [] : [
+  const isScene = g.template === '3d scene';  // a depth video from the 3D tab, with its scene in the params
+  const isEdit = g.template === 'video edit' || isScene;  // made in the Video or 3D tab: no template, no workflow
+  const actions = isScene ? [
+    h('button', { class: 'btn small primary', onclick: async () => {
+      closeSheet(); switchTab('scene'); (await sceneModule()).open(g.params.scene);
+    } }, 'Open in 3D'),
+    h('button', { class: 'btn small', onclick: () => { closeSheet(); useControlVideo(g, g.params.scene || {}); } }, 'Use in H3 control'),
+  ] : isEdit ? [] : [
     h('button', { class: 'btn small primary', onclick: () => { reuse(g); closeSheet(); } }, 'Replay & edit'),
     h('button', { class: 'btn small', onclick: () => runAgain(g) }, 'Run again'),
   ];
@@ -1734,9 +1903,37 @@ function openGeneration(id) {
     h('div', { class: 'actions' }, actions),
     g.error ? h('div', { class: 'note err' }, g.error) : null,
     g.parent ? h('div', { class: 'hint' }, `Made from #${g.parent.generation}${g.parent.frame ? ` (${g.parent.frame} frame)` : ''}`) : null,
-    h('table', { class: 'params' }, Object.entries(g.params).filter(([k]) => !k.startsWith('__')).map(([k, v]) =>
+    h('table', { class: 'params' }, Object.entries(g.params).filter(([k]) => !k.startsWith('__') && !(isScene && k === 'scene')).map(([k, v]) =>
       h('tr', {}, h('td', {}, labelFor(k)), h('td', { style: 'white-space:pre-wrap' }, fmt(v))))));
   S.sheetGen = g.id;
+}
+
+// The 3D tab (web/scene.js, with three.js) loads the first time it's needed.
+let sceneMod = null;
+async function sceneModule() {
+  if (!sceneMod) {
+    sceneMod = await import('./scene.js');
+    sceneMod.init({ h, $, api, toast, store, S, uploadImage, useControlVideo });
+  }
+  return sceneMod;
+}
+
+// A depth video from the 3D tab into deck-h3-ctrl2v: its control video, size and length.
+async function useControlVideo(g, sc) {
+  if (!S.templates.find((t) => t.id === 'deck-h3-ctrl2v')) return toast('Template deck-h3-ctrl2v is missing', true);
+  S.history.set(g.id, S.history.get(g.id) || g);
+  switchTab('generate');
+  if (S.tpl?.id !== 'deck-h3-ctrl2v') selectTemplate('deck-h3-ctrl2v');
+  const fs = S.tpl.fields;
+  const video = fs.find((f) => f.kind === 'video');
+  if (video) setVal(video.key, { generation: g.id, index: 0 });
+  const int = (re) => fs.find((f) => f.kind === 'int' && re.test(f.input === 'value' ? f.label : f.input));
+  if (sc.width && int(/^width$/)) setVal(int(/^width$/).key, sc.width);
+  if (sc.height && int(/^height$/)) setVal(int(/^height$/).key, sc.height);
+  if (sc.seconds && int(/length/i)) setVal(int(/length/i).key, sc.seconds);
+  S.pendingParent = { generation: g.id, index: 0 };
+  renderFields();
+  toast(`Control video #${g.id} set: add references and a prompt`);
 }
 
 // Load a past generation's settings into Generate to edit: prompt (and its builder parts), seed,
@@ -3973,6 +4170,7 @@ $('#projectSel').addEventListener('change', async (e) => {
   S.historyDone = false; loadHistory();
   B.sel.clear();
   if ($('#tab-board').classList.contains('active')) renderBoard();
+  if (sceneMod) sceneMod.projectChanged();
 });
 
 function switchTab(name) {
@@ -3982,7 +4180,9 @@ function switchTab(name) {
   if (name === 'editor') renderEditor();
   if (name === 'video') renderVideo(); else vidPause();
   if (name === 'board') renderBoard(); else pauseBoard();
-  $('.actionbar').classList.toggle('hidden', ['editor', 'video', 'board'].includes(name));
+  if (name === 'scene') sceneModule().then((m) => m.show()).catch((e) => toast(`3D view: ${e.message}`, true));
+  else if (sceneMod) sceneMod.hide();
+  $('.actionbar').classList.toggle('hidden', ['editor', 'video', 'board', 'scene'].includes(name));
 }
 document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
 

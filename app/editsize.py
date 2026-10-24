@@ -8,10 +8,14 @@ and the nodes that would resize it again are told to keep it.
 from .accel import _is_link
 
 WIDTH, HEIGHT = "__deck.width", "__deck.height"
+# upscalers size their output from the input on purpose: no picker, no crop
+UPSCALE_CLASSES = {"SeedVR2Preprocess", "ImageUpscaleWithModel", "ImageUpscaleWithModelBatched"}
 
 
 def fields(workflow: dict, template_fields: list[dict]) -> list[dict]:
     if any(f["kind"] == "int" and f.get("input") in ("width", "height") for f in template_fields):
+        return []
+    if any(n.get("class_type") in UPSCALE_CLASSES for n in workflow.values()):
         return []
     first = next((f for f in template_fields if f["kind"] == "image"), None)
     if not first:
