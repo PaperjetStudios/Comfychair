@@ -15,6 +15,9 @@ has **Draw**: a full-screen sketch pad with pen pressure and palm rejection (onc
 finger touches are ignored), e.g. to sketch the source for the `-i2i` templates. **Video** tab: trim
 generated clips, order them and export one video (ffmpeg); the result lands in History. **Board**:
 every image and video in the project as a pin board, with pins, filters and a tile-size slider.
+**☑ Select** (or long-press a tile) picks several: **New edit** puts the images in the Editor as a
+fresh layout (Undo brings the old one back), **To video** adds them to the timeline, **Delete**
+removes their generations (it asks first).
 The preview pinch/wheel-zooms, the picker has a camera button, and ⛶ goes full screen.
 
 **Next:** crop/compose tool (character sheets) → scenes/shots/takes → editor tab → extend/bridge shots.

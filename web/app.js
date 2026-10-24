@@ -1588,7 +1588,9 @@ function onMessage(m) {
       break;
     case 'deck_generation': onGeneration(d); break;
     case 'deck_generation_deleted':
-      S.history.delete(d.id); removeCard(d.id); break;
+      S.history.delete(d.id); removeCard(d.id);
+      document.querySelectorAll(`#board .tile[data-gen="${d.id}"]`).forEach((t) => { B.sel.delete(t.dataset.key); t.remove(); });
+      break;
     case 'progress_state': case 'executed': case 'execution_success': break;
     default: logDebug(`${m.type} ${JSON.stringify(d).slice(0, 300)}`);
   }
@@ -3627,7 +3629,8 @@ function addToPrompt(text) {
 // board: every output in the project as a pin board. Pin favourites, filter, resize the tiles.
 // Videos play (muted) while on screen.
 // ---------------------------------------------------------------------------
-const B = { filter: store.get('deck.board.filter', 'all'), size: store.get('deck.board.size', 240), loadedFor: undefined };
+const B = { filter: store.get('deck.board.filter', 'all'), size: store.get('deck.board.size', 240), loadedFor: undefined,
+  selecting: false, sel: new Set(), longPressed: false };   // sel: "<generation id>:<output index>"
 const boardVideos = new IntersectionObserver((entries) => {
   for (const e of entries) {
     if (e.isIntersecting) e.target.play().catch(() => {}); else e.target.pause();
@@ -3652,7 +3655,9 @@ async function renderBoard() {
   const size = h('input', { type: 'range', min: 120, max: 520, step: 10, value: B.size, 'aria-label': 'Tile size' });
   size.addEventListener('input', () => { B.size = Number(size.value); store.set('deck.board.size', B.size); $('#board').style.setProperty('--tile', `${B.size}px`); });
   const count = h('span', { class: 'hint' });
-  bar.replaceChildren(seg, h('label', { class: 'board-size' }, 'Size', size), count);
+  const selBtn = h('button', { type: 'button', class: 'btn small toggle-btn' + (B.selecting ? ' on' : ''),
+    onclick: () => setBoardSelecting(!B.selecting) }, B.selecting ? 'Done' : '☑ Select');
+  bar.replaceChildren(seg, h('label', { class: 'board-size' }, 'Size', size), selBtn, count, boardSelBar());
   $('#board').style.setProperty('--tile', `${B.size}px`);
 
   if (B.loadedFor !== S.project) {
@@ -3686,8 +3691,118 @@ function boardTile(g, o, i) {
       try { const r = await api(`/api/generations/${g.id}/pin`, { method: 'POST', body: { pinned: !g.pinned } }); S.history.set(r.id, r); }
       catch (err) { toast(err.message, true); }
     } }, g.pinned ? '★' : '☆');
-  return h('div', { class: 'tile', 'data-gen': g.id, onclick: () => openGeneration(g.id) }, media, pin,
+  const key = `${g.id}:${i}`;
+  const tile = h('div', { class: 'tile' + (B.sel.has(key) ? ' sel' : ''), 'data-gen': g.id, 'data-key': key,
+    onclick: () => {
+      if (B.longPressed) { B.longPressed = false; return; }   // the long press already selected it
+      if (B.selecting) toggleBoardSel(key, tile); else openGeneration(g.id);
+    } }, media, pin, h('span', { class: 'tick', 'aria-hidden': 'true' }, '✓'),
     h('div', { class: 'tile-meta' }, `#${g.id} ${g.template}${o.kind === 'video' ? ' ▶' : ''}`));
+  // long press: start selecting with this tile
+  let timer = 0;
+  tile.addEventListener('pointerdown', (e) => {
+    B.longPressed = false;
+    if (e.target.closest('.pin')) return;
+    timer = setTimeout(() => {
+      B.longPressed = true;
+      if (!B.selecting) setBoardSelecting(true);
+      if (!B.sel.has(key)) toggleBoardSel(key, $(`#board .tile[data-key="${key}"]`));
+      try { navigator.vibrate?.(20); } catch { /* not supported */ }
+    }, 500);
+  });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave', 'pointermove']) {
+    tile.addEventListener(ev, (e) => { if (ev !== 'pointermove' || Math.abs(e.movementX) + Math.abs(e.movementY) > 6) clearTimeout(timer); });
+  }
+  tile.addEventListener('contextmenu', (e) => e.preventDefault());   // no image menu on long press
+  return tile;
+}
+
+// ---- board selection: pick tiles, then make a new edit from them, put them on the timeline, or delete
+function setBoardSelecting(on) {
+  B.selecting = on;
+  if (!on) B.sel.clear();
+  $('#board').classList.toggle('selecting', on);
+  renderBoard();
+}
+function toggleBoardSel(key, tile) {
+  if (B.sel.has(key)) B.sel.delete(key); else B.sel.add(key);
+  tile?.classList.toggle('sel', B.sel.has(key));
+  const bar = $('#boardBar .board-sel');
+  if (bar) bar.replaceWith(boardSelBar());
+}
+function boardSelected() {   // [{g, o, i}] in board order
+  return [...B.sel].map((k) => { const [id, i] = k.split(':').map(Number); const g = S.history.get(id); return g && g.outputs[i] ? { g, o: g.outputs[i], i } : null; })
+    .filter(Boolean).sort((a, b) => b.g.id - a.g.id || a.i - b.i);
+}
+function boardSelBar() {
+  if (!B.selecting) return h('span', { class: 'board-sel hidden' });
+  const n = B.sel.size, items = boardSelected(), images = items.filter((x) => x.o.kind === 'image').length;
+  const visibleKeys = () => [...$('#board').querySelectorAll('.tile[data-key]')].map((t) => t.dataset.key);
+  return h('div', { class: 'board-sel' },
+    h('b', {}, n ? `${n} selected` : 'Tap tiles to select'),
+    h('button', { type: 'button', class: 'btn small', onclick: () => { visibleKeys().forEach((k) => B.sel.add(k)); renderBoard(); } }, 'All'),
+    n ? h('button', { type: 'button', class: 'btn small', onclick: () => { B.sel.clear(); renderBoard(); } }, 'None') : null,
+    h('button', { type: 'button', class: 'btn small primary', disabled: !images, onclick: boardToEditor }, `New edit${images ? ` (${images})` : ''}`),
+    h('button', { type: 'button', class: 'btn small', disabled: !n, onclick: boardToVideo }, 'To video'),
+    h('button', { type: 'button', class: 'btn small danger', disabled: !n, onclick: boardDelete }, 'Delete'));
+}
+
+// The selected images as a fresh Editor layout (side by side, or a grid for more than 3).
+// Whatever was in the Editor can be brought back with Undo.
+async function boardToEditor() {
+  const items = boardSelected().filter((x) => x.o.kind === 'image');
+  if (!items.length) return toast('Select some images first', true);
+  toast(`Preparing ${items.length} image${items.length > 1 ? 's' : ''}…`);
+  const names = [];
+  for (const { g, i } of items) {
+    try {
+      const r = await api(`/api/generations/${g.id}/to-input`, { method: 'POST', body: { index: i, frame: 'first', mp: 0, multiple: 1 } });
+      names.push(r.name);
+    } catch (e) { toast(`#${g.id}: ${e.message}`, true); }
+  }
+  if (!names.length) return;
+  const before = { layers: E.layers, arrange: E.arrange, size: E.size };
+  E.layers = names.reverse().map((name) => ({ name, crop: { ...FULL }, scale: 1, hidden: false }));  // first selected on top of the list
+  E.sel = null; E.cropping = false; E.size = null;
+  E.arrange = names.length > 3 ? 'grid' : 'row';
+  E.cols = names.length > 3 ? Math.ceil(Math.sqrt(names.length)) : E.cols;
+  persistEditor();
+  setBoardSelecting(false);
+  switchTab('editor');
+  if (before.layers.length) undoToast(`New edit with ${names.length} image${names.length > 1 ? 's' : ''}`, () => {
+    Object.assign(E, before); persistEditor(); renderEditor();
+  });
+}
+
+// The selection onto the Video timeline, oldest first, after what's already there
+async function boardToVideo() {
+  const items = boardSelected().reverse();
+  if (!items.length) return;
+  for (const { g, o, i } of items) {
+    await addToTimeline({ kind: o.kind, src: { generation: g.id, index: i }, url: o.url, label: `#${g.id} ${g.template}`, dur: o.duration || 0 });
+  }
+  setBoardSelecting(false);
+  switchTab('video');
+  toast(`Added ${items.length} to the timeline`);
+}
+
+// Deletes whole generations (with all their files), so say when that takes outputs that weren't picked
+async function boardDelete() {
+  const items = boardSelected();
+  const gens = [...new Map(items.map((x) => [x.g.id, x.g])).values()];
+  if (!gens.length) return;
+  const extra = gens.reduce((a, g) => a + g.outputs.filter((o, i) => !B.sel.has(`${g.id}:${i}`)).length, 0);
+  const pinned = gens.filter((g) => g.pinned).length;
+  if (!confirm(`Delete ${gens.length} generation${gens.length > 1 ? 's' : ''} and their files? This can't be undone.`
+    + (extra ? `\n\nThat also deletes ${extra} other output${extra > 1 ? 's' : ''} of those generations.` : '')
+    + (pinned ? `\n\n${pinned} of them ${pinned > 1 ? 'are' : 'is'} pinned.` : ''))) return;
+  let done = 0;
+  for (const g of gens) {
+    try { await api(`/api/generations/${g.id}`, { method: 'DELETE' }); S.history.delete(g.id); done++; }
+    catch (e) { toast(`#${g.id}: ${e.message}`, true); }
+  }
+  setBoardSelecting(false);
+  toast(`Deleted ${done} generation${done === 1 ? '' : 's'}`);
 }
 
 function boardChanged(g) {
@@ -3853,6 +3968,7 @@ $('#projectSel').addEventListener('change', async (e) => {
   } else S.project = Number(e.target.value);
   store.set('deck.project', S.project);
   S.historyDone = false; loadHistory();
+  B.sel.clear();
   if ($('#tab-board').classList.contains('active')) renderBoard();
 });
 
