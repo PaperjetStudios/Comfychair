@@ -33,12 +33,35 @@ button, select, input, textarea { font: inherit; color: inherit; }
 }
 .brand { font-weight: 500; letter-spacing: .02em; white-space: nowrap; }
 .brand b { color: var(--accent); font-weight: 700; }
-.tabs { display: flex; gap: 4px; margin-left: auto; }
+.tabs { display: flex; gap: 2px; margin-left: auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
 .tabs button {
-  min-height: 40px; padding: 0 14px; border-radius: 10px; border: 0;
-  background: transparent; color: var(--muted); cursor: pointer;
+  position: relative; flex: none; display: flex; align-items: center; gap: 7px;
+  min-height: 40px; padding: 0 12px; border-radius: 10px; border: 0; overflow: hidden;
+  background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; white-space: nowrap;
+  transition: background .15s, color .15s;
 }
-.tabs button.active { background: var(--surface-2); color: var(--text); }
+.tabs button svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.tabs button:hover { color: var(--text); }
+.tabs button.active { background: var(--surface-2); color: var(--text); font-weight: 600; }
+.tabs button.active svg { color: var(--accent); }
+.tabs button.active::before { content: ''; position: absolute; left: 12px; right: 12px; bottom: 0; height: 2px; border-radius: 2px; background: var(--accent); }
+/* a run in progress, seen from the other tabs: a chip on Generate and a line filling along its bottom */
+.tab-chip { min-width: 22px; padding: 1px 6px; border-radius: 999px; font-size: 11px; font-weight: 700; line-height: 16px; text-align: center;
+  background: var(--accent); color: var(--accent-ink); font-variant-numeric: tabular-nums; }
+.tab-chip.spin { width: 16px; height: 16px; min-width: 16px; padding: 0; border-radius: 50%; color: transparent;
+  background: conic-gradient(var(--accent) 0 25%, color-mix(in srgb, var(--accent) 25%, transparent) 0);
+  -webkit-mask: radial-gradient(circle, transparent 4px, #000 4.5px); mask: radial-gradient(circle, transparent 4px, #000 4.5px); animation: spin .8s linear infinite; }
+.tab-chip.other { background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
+.tab-chip.done { background: var(--ok); color: #062512; }
+.tab-chip.fail { background: var(--bad); color: #2a0606; }
+.tabs button.active .tab-chip { display: none; }
+.tabs button[data-tab=generate]::after { content: ''; position: absolute; left: 0; bottom: 0; height: 3px; width: var(--run, 0%); background: var(--accent); transition: width .3s; }
+.tabs button.active[data-tab=generate]::after { display: none; }
+@media (max-width: 1100px) {
+  .tabs button:not(.active) .tab-label { display: none; }   /* icons only, except the open tab */
+  .tabs button { padding: 0 10px; }
+}
 .status { display: flex; align-items: center; gap: 8px; }
 .queue-info { color: var(--muted); font-size: 14px; white-space: nowrap; }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); flex: none; }
@@ -375,6 +398,7 @@ details.desc summary { cursor: pointer; color: var(--muted); }
 /* ---- board ---- */
 .board-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
 .board-bar .seg { margin-top: 0; min-width: 300px; }
+.board-bar .seg button { white-space: nowrap; }
 .board-size { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
 .board-size input { width: 160px; margin: 0; }
 .board { column-width: var(--tile, 240px); column-gap: 10px; }
@@ -564,3 +588,47 @@ details.desc summary { cursor: pointer; color: var(--muted); }
 .scene-toolbar button:disabled { opacity: .4; cursor: default; }
 .scene-toolbar [data-depth].on { background: var(--surface-2); color: var(--text); }
 .layer-row .scene-icon { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 8px; background: var(--surface-2); font-size: 22px; }
+
+/* ---- board: marked for deletion + full-screen gallery ---- */
+.tile .mark { position: absolute; top: 6px; left: 6px; width: 34px; height: 34px; border-radius: 50%; display: none; place-items: center; background: var(--bad); font-size: 16px; }
+.tile.marked .mark { display: grid; }
+.tile.marked img, .tile.marked video { opacity: .45; }
+.board.selecting .tile .mark { display: none; }
+.gal-view {
+  position: fixed; inset: 0; z-index: 39; background: #000; color: var(--text);
+  display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+.gal-top { display: flex; align-items: center; gap: 12px; padding: 8px 12px; }
+.gal-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gal-count { margin-right: auto; }
+.gal-stage { position: relative; min-height: 0; overflow: hidden; }
+.gal-main { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; touch-action: none; -webkit-user-select: none; user-select: none; }
+.gal-main img, .gal-main video { max-width: 100%; max-height: 100%; min-width: 0; min-height: 0; object-fit: contain; display: block; -webkit-user-drag: none; }
+.gal-view.no-strip .gal-strip { display: none; }
+.gal-main.marked img, .gal-main.marked video { opacity: .5; outline: 3px solid var(--bad); outline-offset: -3px; }
+.gal-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 48px; height: 72px; border: 0; border-radius: 10px; background: #0007; color: #fff; font-size: 36px; cursor: pointer; }
+.gal-nav.prev { left: 8px; } .gal-nav.next { right: 8px; }
+.gal-nav:disabled { opacity: 0; pointer-events: none; }
+@media (pointer: coarse) { .gal-nav { display: none; } }
+.gal-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; padding: 8px 12px; }
+.gal-actions .btn.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.gal-actions .btn.danger.on { background: var(--bad); color: #fff; border-color: var(--bad); }
+.gal-strip { display: flex; gap: 6px; overflow-x: auto; padding: 6px 12px 10px; scroll-snap-type: x proximity; scrollbar-width: thin; }
+.gal-thumb { position: relative; flex: 0 0 auto; height: 84px; padding: 0; border: 2px solid transparent; border-radius: 8px; overflow: hidden; background: var(--surface); cursor: pointer; scroll-snap-align: center; }
+.gal-thumb img, .gal-thumb video { height: 100%; width: auto; min-width: 48px; max-width: 160px; object-fit: cover; display: block; pointer-events: none; }
+.gal-thumb.sel { border-color: var(--accent); }
+.gal-thumb.marked img, .gal-thumb.marked video { opacity: .4; }
+.gal-badges { position: absolute; right: 3px; bottom: 2px; font-size: 12px; color: var(--accent); text-shadow: 0 0 3px #000; pointer-events: none; }
+
+/* ---- busy bar (slow server work) + spinner on the button that started it ---- */
+.busy { position: fixed; z-index: 60; top: 0; left: 0; right: 0; pointer-events: none; display: flex; flex-direction: column; align-items: center; }
+.busy-track { width: 100%; height: 4px; background: color-mix(in srgb, var(--accent) 20%, transparent); overflow: hidden; }
+.busy-fill { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.busy.indet .busy-fill { width: 30%; animation: busy-slide 1.1s ease-in-out infinite; }
+@keyframes busy-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+.busy-label { margin-top: 6px; padding: 4px 12px; border-radius: 999px; font-size: 13px; background: var(--surface-2); border: 1px solid var(--line); box-shadow: 0 4px 16px #0008; }
+.working { position: relative; pointer-events: none; opacity: .75; }
+.working::after { content: ''; display: inline-block; width: 12px; height: 12px; margin-left: 8px; vertical-align: -1px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .busy.indet .busy-fill { animation: none; width: 100%; opacity: .5; } .working::after { animation: none; } }

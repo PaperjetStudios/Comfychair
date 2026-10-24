@@ -448,7 +448,7 @@ let busy = false;
 async function renderDepthVideo() {
   if (busy) return;
   busy = true; stopPlay(); renderPanel();
-  const keep = R.f, W = SC.width, H = SC.height;
+  const keep = R.f, W = SC.width, H = SC.height, bar = C.busy('Rendering depth frames…');
   try {
     setRange(measureRange());
     const rt = new THREE.WebGLRenderTarget(W, H, { colorSpace: THREE.NoColorSpace });
@@ -460,6 +460,7 @@ async function renderDepthVideo() {
       renderer.setRenderTarget(rt); renderer.render(scene, camera); renderer.setRenderTarget(null);
       form.append('frames', await targetToBlob(rt, W, H, true), `f${String(f).padStart(5, '0')}.png`);
       if (f % 12 === 0) setStatus(`Rendering ${f + 1}/${frames()}…`);
+      bar.set(null, (f + 1) / frames());
     }
     rt.dispose();
     form.append('fps', FPS); form.append('blur', SC.blur); form.append('scene', JSON.stringify(SC));
@@ -471,6 +472,7 @@ async function renderDepthVideo() {
   } catch (e) {
     setStatus(''); C.toast(e.message, true);
   } finally {
+    bar.done();
     busy = false; R.f = keep; fit(); refresh(); renderPanel();
   }
 }

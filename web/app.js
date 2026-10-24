@@ -26,7 +26,11 @@ const store = {
 
 // timeout: give up (and say so) instead of hanging when the server or the Wi-Fi is gone. Uploads and
 // slow lookups pass a longer one. An error's .data holds the server's detail when it's an object.
-async function api(path, { method = 'GET', body, form, timeout = form ? 300000 : 30000 } = {}) {
+// busy: what the progress bar says while it runs (default: a guess from the path for anything that
+// isn't a GET; false for none). Uploads go through XHR so the bar can show how much has been sent.
+async function api(path, { method = 'GET', body, form, timeout = form ? 300000 : 30000, busy: label } = {}) {
+  if (label === undefined) label = method === 'GET' ? false : busyLabel(method, path);
+  const b = label ? busy(label) : null;
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeout);
   const opts = { method, headers: {}, signal: ctl.signal };
@@ -34,11 +38,11 @@ async function api(path, { method = 'GET', body, form, timeout = form ? 300000 :
   else if (body !== undefined) { opts.body = JSON.stringify(body); opts.headers['Content-Type'] = 'application/json'; }
   let r, text;
   try {
-    r = await fetch(path, opts);
+    r = form ? await xhrSend(path, method, form, ctl.signal, b) : await fetch(path, opts);
     text = await r.text();
   } catch (e) {
     throw new Error(e.name === 'AbortError' ? 'ComfyDeck didn\'t answer in time (is the server running?)' : 'Can\'t reach ComfyDeck (is the server running and on this network?)');
-  } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer); b?.done(); }
   let data; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
   if (!r.ok) {
     const d = data && data.detail;
@@ -47,6 +51,60 @@ async function api(path, { method = 'GET', body, form, timeout = form ? 300000 :
     throw err;
   }
   return data;
+}
+
+// fetch() can't report upload progress; this answers like a fetch Response (ok, status, text())
+function xhrSend(path, method, form, signal, b) {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open(method, path);
+    x.upload.onprogress = (e) => { if (e.lengthComputable) b?.set(null, e.loaded / e.total); };
+    x.upload.onload = () => b?.set('Processing…', null);
+    x.onload = () => resolve({ ok: x.status >= 200 && x.status < 300, status: x.status, statusText: x.statusText, text: async () => x.responseText });
+    x.onerror = () => reject(new TypeError('network'));
+    x.onabort = () => reject(new DOMException('aborted', 'AbortError'));
+    signal.addEventListener('abort', () => x.abort());
+    x.send(form);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// busy bar: a progress bar along the top saying what's happening while something slow runs, and a
+// spinner on the button that was tapped to start it. It shows after 150 ms so quick calls don't flash.
+// busy(label) → { set(label, frac), done() }; frac 0–1, or null when there's no telling how long.
+// ---------------------------------------------------------------------------
+const BUSY = new Set();
+let busyTimer = 0, lastTap = { el: null, t: 0 };
+document.addEventListener('click', (e) => { lastTap = { el: e.target.closest?.('button, .btn') || null, t: Date.now() }; }, true);
+function busy(label) {
+  const t = { label, frac: null, btn: null,
+    set(l, f = null) { if (l) t.label = l; t.frac = f; drawBusy(); },
+    done() { if (!BUSY.delete(t)) return; if (t.btn && ![...BUSY].some((o) => o.btn === t.btn)) t.btn.classList.remove('working'); drawBusy(); } };
+  if (lastTap.el?.isConnected && Date.now() - lastTap.t < 1000) {
+    t.btn = lastTap.el;
+    setTimeout(() => { if (BUSY.has(t)) t.btn.classList.add('working'); }, 150);
+  }
+  BUSY.add(t); drawBusy();
+  return t;
+}
+function drawBusy() {
+  const el = $('#busy');
+  if (!BUSY.size) { clearTimeout(busyTimer); busyTimer = 0; el.classList.add('hidden'); return; }
+  if (el.classList.contains('hidden')) {
+    if (!busyTimer) busyTimer = setTimeout(() => { busyTimer = 0; if (BUSY.size) { el.classList.remove('hidden'); drawBusy(); } }, 150);
+    return;
+  }
+  const t = [...BUSY].at(-1), pct = t.frac == null ? null : Math.round(t.frac * 100);
+  el.classList.toggle('indet', pct == null);
+  el.querySelector('.busy-fill').style.width = pct == null ? '' : `${pct}%`;
+  el.querySelector('.busy-label').textContent = pct == null ? t.label : `${t.label} ${pct}%`;
+}
+const BUSY_LABELS = [[/\/to-input$/, 'Preparing image…'], [/\/inputs\/crop$/, 'Cropping…'], [/\/(upload|media)$/, 'Uploading…'],
+  [/\/video\/render$/, 'Rendering video…'], [/\/scene\/render$/, 'Sending depth video…'], [/\/generate$/, 'Sending to ComfyUI…']];
+function busyLabel(method, path) {
+  if (method === 'DELETE') return 'Deleting…';
+  const p = path.split('?')[0];
+  return (BUSY_LABELS.find(([re]) => re.test(p)) || [null, 'Working…'])[1];
 }
 
 // action: { label, fn } adds a button (e.g. Undo) and keeps the toast up a little longer
@@ -1498,6 +1556,22 @@ function showOutput(g, index = 0) {
 function setProgress(value, max, text) {
   $('#progBar').style.width = max ? `${(100 * value) / max}%` : '0';
   $('#progText').textContent = text || '';
+  runChip(value, max, text || '');
+}
+
+// The same progress on the Generate tab, for when another tab is open: a chip with the percentage
+// (a spinner before the steps start), then ✓ or ! when it ends. CSS hides it on the Generate tab itself.
+function runChip(value, max, text) {
+  const chip = $('#runChip'), tab = chip.parentElement;
+  const state = !text ? null : /^Finished/.test(text) ? 'done' : /^(Stopped|Failed)/.test(text) ? 'fail'
+    : /another device/.test(text) ? 'other' : 'run';
+  // a ✓ or ! stays until the Generate tab is opened, so it's still there after a long time away
+  if (!state && /\b(done|fail)\b/.test(chip.className) && !tab.classList.contains('active')) return;
+  const pct = max ? Math.round((100 * value) / max) : null;
+  chip.className = 'tab-chip' + (state ? ` ${state}` : ' hidden') + ((state === 'run' || state === 'other') && pct == null ? ' spin' : '');
+  chip.textContent = state === 'done' ? '✓' : state === 'fail' ? '!' : pct != null ? `${pct}%` : '';
+  tab.style.setProperty('--run', state === 'run' && pct != null ? `${pct}%` : '0%');
+  tab.title = state ? `Generate · ${text}` : 'Generate';
 }
 
 // ---------------------------------------------------------------------------
@@ -1760,6 +1834,7 @@ function onMessage(m) {
     case 'deck_generation_deleted':
       S.history.delete(d.id); removeCard(d.id);
       document.querySelectorAll(`#board .tile[data-gen="${d.id}"]`).forEach((t) => { B.sel.delete(t.dataset.key); t.remove(); });
+      if (GAL.el) galleryRefresh();
       break;
     case 'progress_state': case 'executed': case 'execution_success': break;
     default: logDebug(`${m.type} ${JSON.stringify(d).slice(0, 300)}`);
@@ -1920,7 +1995,7 @@ let sceneMod = null;
 async function sceneModule() {
   if (!sceneMod) {
     sceneMod = await import('./scene.js');
-    sceneMod.init({ h, $, api, toast, undoToast, store, S, uploadImage, useControlVideo, openSheet, closeSheet, iconBtn, propNum, propsTitle, layerRowsEl });
+    sceneMod.init({ h, $, api, busy, toast, undoToast, store, S, uploadImage, useControlVideo, openSheet, closeSheet, iconBtn, propNum, propsTitle, layerRowsEl });
   }
   return sceneMod;
 }
@@ -2708,12 +2783,14 @@ function editorBlob() {
 }
 
 async function saveEditor() {
-  const blob = await editorBlob();
-  if (!blob) return toast('Add some images first', true);
+  const b = busy('Putting the image together…');   // big layers take a moment to draw and encode
   try {
+    const blob = await editorBlob();
+    if (!blob) return toast('Add some images first', true);
     const r = await uploadImage(blob, { mp: E.mp, source: 'editor', filename: 'editor.png' });
     useInGenerate(r.name, `Saved ${r.width}×${r.height}`);
   } catch (e) { toast('Save failed: ' + e.message, true); }
+  finally { b.done(); }
 }
 
 async function downloadEditor() {
@@ -3851,10 +3928,11 @@ function addToPrompt(text) {
 // Videos play (muted) while on screen.
 // ---------------------------------------------------------------------------
 const B = { filter: store.get('deck.board.filter', 'all'), size: store.get('deck.board.size', 240), loadedFor: undefined,
-  selecting: false, sel: new Set(), longPressed: false };   // sel: "<generation id>:<output index>"
+  selecting: false, sel: new Set(), longPressed: false,   // sel: "<generation id>:<output index>"
+  marked: new Set(store.get('deck.board.marked', [])) };  // generation ids marked for deletion
 const boardVideos = new IntersectionObserver((entries) => {
   for (const e of entries) {
-    if (e.isIntersecting) e.target.play().catch(() => {}); else e.target.pause();
+    if (e.isIntersecting && !GAL.el) e.target.play().catch(() => {}); else e.target.pause();
   }
 }, { threshold: 0.25 });
 
@@ -3871,53 +3949,77 @@ async function loadAllProjectGenerations() {
 
 async function renderBoard() {
   const bar = $('#boardBar');
-  const seg = h('div', { class: 'seg' }, [['all', 'All'], ['image', 'Images'], ['video', 'Videos'], ['pinned', '★ Pinned']].map(([k, l]) =>
+  if (B.filter === 'marked' && !B.marked.size) B.filter = 'all';
+  const filters = [['all', 'All'], ['image', 'Images'], ['video', 'Videos'], ['pinned', '★ Pinned'], ...(B.marked.size ? [['marked', '🗑 Marked']] : [])];
+  const seg = h('div', { class: 'seg' }, filters.map(([k, l]) =>
     h('button', { type: 'button', class: B.filter === k ? 'on' : '', onclick: () => { B.filter = k; store.set('deck.board.filter', k); renderBoard(); } }, l)));
   const size = h('input', { type: 'range', min: 120, max: 520, step: 10, value: B.size, 'aria-label': 'Tile size' });
   size.addEventListener('input', () => { B.size = Number(size.value); store.set('deck.board.size', B.size); $('#board').style.setProperty('--tile', `${B.size}px`); });
   const count = h('span', { class: 'hint' });
   const selBtn = h('button', { type: 'button', class: 'btn small toggle-btn' + (B.selecting ? ' on' : ''),
     onclick: () => setBoardSelecting(!B.selecting) }, B.selecting ? 'Done' : '☑ Select');
-  bar.replaceChildren(seg, h('label', { class: 'board-size' }, 'Size', size), selBtn, count, boardSelBar());
+  const delMarked = h('span', { class: 'hidden' });   // filled in once the project's generations are loaded
+  bar.replaceChildren(seg, h('label', { class: 'board-size' }, 'Size', size), selBtn, delMarked, count, boardSelBar());
   $('#board').style.setProperty('--tile', `${B.size}px`);
 
   if (B.loadedFor !== S.project) {
     $('#board').replaceChildren(h('div', { class: 'placeholder' }, 'Loading…'));
     try { await loadAllProjectGenerations(); } catch (e) { toast(e.message, true); }
   }
-  const tiles = [];
+  const tiles = boardItems().map(({ g, o, i }) => boardTile(g, o, i));
+  pauseBoard();
+  $('#board').replaceChildren(...(tiles.length ? tiles : [h('div', { class: 'placeholder' },
+    B.filter === 'pinned' ? 'Nothing pinned yet. Tap ☆ on any tile.'
+      : B.filter === 'marked' ? 'Nothing marked. Mark things for deletion in the gallery (tap a tile).'
+        : 'Nothing generated in this project yet.')]));
+  $('#board').querySelectorAll('video').forEach((v) => boardVideos.observe(v));
+  count.textContent = `${tiles.length} item${tiles.length === 1 ? '' : 's'}`;
+  const nMarked = markedGens().length;
+  if (nMarked) delMarked.replaceWith(h('button', { type: 'button', class: 'btn small danger', onclick: deleteMarked }, `Delete ${nMarked} marked`));
+}
+
+// what the board shows with the current filter, newest first: [{g, o, i, key}]
+function boardItems() {
+  const items = [];
   const gens = [...S.history.values()].filter((g) => g.project_id === S.project && g.status === 'done').sort((a, b) => b.id - a.id);
   for (const g of gens) {
     if (B.filter === 'pinned' && !g.pinned) continue;
+    if (B.filter === 'marked' && !B.marked.has(g.id)) continue;
     g.outputs.forEach((o, i) => {
       if (o.kind !== 'image' && o.kind !== 'video') return;
       if ((B.filter === 'image' || B.filter === 'video') && o.kind !== B.filter) return;
-      tiles.push(boardTile(g, o, i));
+      items.push({ g, o, i, key: `${g.id}:${i}` });
     });
   }
-  pauseBoard();
-  $('#board').replaceChildren(...(tiles.length ? tiles : [h('div', { class: 'placeholder' },
-    B.filter === 'pinned' ? 'Nothing pinned yet. Tap ☆ on any tile.' : 'Nothing generated in this project yet.')]));
-  $('#board').querySelectorAll('video').forEach((v) => boardVideos.observe(v));
-  count.textContent = `${tiles.length} item${tiles.length === 1 ? '' : 's'}`;
+  return items;
 }
+
+async function togglePin(g) {
+  try { const r = await api(`/api/generations/${g.id}/pin`, { method: 'POST', body: { pinned: !g.pinned } }); S.history.set(r.id, r); boardChanged(r); }
+  catch (err) { toast(err.message, true); }
+}
+
+// Marks are per generation (deleting takes the whole generation) and live in this browser only
+function toggleMarked(id) {
+  if (B.marked.has(id)) B.marked.delete(id); else B.marked.add(id);
+  saveMarked();
+}
+function saveMarked() { store.set('deck.board.marked', [...B.marked]); }
+function markedGens() { return [...B.marked].map((id) => S.history.get(id)).filter((g) => g && g.project_id === S.project); }
 
 function boardTile(g, o, i) {
   const media = o.kind === 'video'
     ? h('video', { src: o.url, muted: true, loop: true, playsInline: true, preload: 'metadata' })
     : h('img', { src: o.url, loading: 'lazy', alt: '', draggable: false });
   const pin = h('button', { type: 'button', class: 'pin' + (g.pinned ? ' on' : ''), 'aria-label': g.pinned ? 'Unpin' : 'Pin',
-    onclick: async (e) => {
-      e.stopPropagation();
-      try { const r = await api(`/api/generations/${g.id}/pin`, { method: 'POST', body: { pinned: !g.pinned } }); S.history.set(r.id, r); }
-      catch (err) { toast(err.message, true); }
-    } }, g.pinned ? '★' : '☆');
+    onclick: (e) => { e.stopPropagation(); togglePin(S.history.get(g.id) || g); } }, g.pinned ? '★' : '☆');
   const key = `${g.id}:${i}`;
-  const tile = h('div', { class: 'tile' + (B.sel.has(key) ? ' sel' : ''), 'data-gen': g.id, 'data-key': key,
+  const tile = h('div', { class: 'tile' + (B.sel.has(key) ? ' sel' : '') + (B.marked.has(g.id) ? ' marked' : ''), 'data-gen': g.id, 'data-key': key,
     onclick: () => {
       if (B.longPressed) { B.longPressed = false; return; }   // the long press already selected it
-      if (B.selecting) toggleBoardSel(key, tile); else openGeneration(g.id);
+      if (B.selecting) toggleBoardSel(key, tile); else openGallery(key);
     } }, media, pin, h('span', { class: 'tick', 'aria-hidden': 'true' }, '✓'),
+    h('span', { class: 'mark', 'aria-hidden': 'true' }, '🗑'),
     h('div', { class: 'tile-meta' }, `#${g.id} ${g.template}${o.kind === 'video' ? ' ▶' : ''}`));
   // long press: start selecting with this tile
   let timer = 0, start = null;
@@ -3973,8 +4075,9 @@ function boardSelBar() {
 
 // The selected images as a fresh Editor layout (side by side, or a grid for more than 3).
 // Whatever was in the Editor can be brought back with Undo.
-async function boardToEditor() {
-  const items = boardSelected().filter((x) => x.o.kind === 'image');
+async function boardToEditor() { return itemsToEditor(boardSelected()); }
+async function itemsToEditor(all) {
+  const items = all.filter((x) => x.o.kind === 'image');
   if (!items.length) return toast('Select some images first', true);
   toast(`Preparing ${items.length} image${items.length > 1 ? 's' : ''}…`);
   const names = [];
@@ -4014,26 +4117,249 @@ async function boardToVideo() {
 async function boardDelete() {
   const items = boardSelected();
   const gens = [...new Map(items.map((x) => [x.g.id, x.g])).values()];
-  if (!gens.length) return;
   const extra = gens.reduce((a, g) => a + g.outputs.filter((o, i) => !B.sel.has(`${g.id}:${i}`)).length, 0);
+  if (!await deleteGenerations(gens, extra ? `\n\nThat also deletes ${extra} other output${extra > 1 ? 's' : ''} of those generations.` : '')) return;
+  setBoardSelecting(false);
+}
+
+async function deleteMarked() {
+  if (await deleteGenerations(markedGens())) renderBoard();
+}
+
+// Asks first; returns false if nothing was deleted
+async function deleteGenerations(gens, note = '') {
+  if (!gens.length) return false;
   const pinned = gens.filter((g) => g.pinned).length;
-  if (!confirm(`Delete ${gens.length} generation${gens.length > 1 ? 's' : ''} and their files? This can't be undone.`
-    + (extra ? `\n\nThat also deletes ${extra} other output${extra > 1 ? 's' : ''} of those generations.` : '')
-    + (pinned ? `\n\n${pinned} of them ${pinned > 1 ? 'are' : 'is'} pinned.` : ''))) return;
+  if (!confirm(`Delete ${gens.length} generation${gens.length > 1 ? 's' : ''} and their files? This can't be undone.` + note
+    + (pinned ? `\n\n${pinned} of them ${pinned > 1 ? 'are' : 'is'} pinned.` : ''))) return false;
   let done = 0;
   for (const g of gens) {
-    try { await api(`/api/generations/${g.id}`, { method: 'DELETE' }); S.history.delete(g.id); done++; }
+    try { await api(`/api/generations/${g.id}`, { method: 'DELETE' }); S.history.delete(g.id); B.marked.delete(g.id); done++; }
     catch (e) { toast(`#${g.id}: ${e.message}`, true); }
   }
-  setBoardSelecting(false);
+  saveMarked();
+  if (GAL.el) galleryRefresh();
   toast(`Deleted ${done} generation${done === 1 ? '' : 's'}`);
+  return done > 0;
 }
 
 function boardChanged(g) {
+  if (GAL.el) return galleryRefresh();   // the board catches up when the gallery closes
   const tiles = $('#board').querySelectorAll(`.tile[data-gen="${g.id}"]`);
-  if (!tiles.length || (B.filter === 'pinned' && !g.pinned)) return renderBoard();
-  tiles.forEach((t) => { const p = t.querySelector('.pin'); p.classList.toggle('on', !!g.pinned); p.textContent = g.pinned ? '★' : '☆'; });
+  if (!tiles.length || (B.filter === 'pinned' && !g.pinned) || (B.filter === 'marked' && !B.marked.has(g.id))) return renderBoard();
+  tiles.forEach((t) => {
+    const p = t.querySelector('.pin'); p.classList.toggle('on', !!g.pinned); p.textContent = g.pinned ? '★' : '☆';
+    t.classList.toggle('marked', B.marked.has(g.id));
+  });
 }
+
+// ---- board gallery: full screen, one big preview with a sliding row of thumbnails under it.
+// Swipe (or ← →) to move through what the board is showing; pin, mark for deletion, edit.
+const GAL = { el: null, items: [], idx: 0, key: null };
+const galThumbs = new IntersectionObserver((entries) => {   // video thumbnails load their first frame once scrolled to
+  for (const e of entries) if (e.isIntersecting) { e.target.preload = 'metadata'; galThumbs.unobserve(e.target); }
+}, { rootMargin: '0px 400px' });
+
+function openGallery(key) {
+  GAL.items = boardItems();
+  GAL.idx = Math.max(0, GAL.items.findIndex((x) => x.key === key));
+  if (!GAL.items.length) return;
+  pauseBoard();
+  const main = h('div', { class: 'gal-main' });
+  const el = h('div', { class: 'gal-view', role: 'dialog', 'aria-modal': 'true' },
+    h('div', { class: 'gal-top' }, h('span', { class: 'gal-title' }), h('span', { class: 'gal-count hint' }),
+      h('button', { type: 'button', class: 'btn small toggle-btn gal-strip-btn', title: 'Show or hide the thumbnails (T)', onclick: () => galleryStrip() }, 'Thumbnails'),
+      h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Close', onclick: () => closeGallery() }, '✕')),
+    h('div', { class: 'gal-stage' }, main,
+      h('button', { type: 'button', class: 'gal-nav prev', 'aria-label': 'Previous', onclick: () => galleryGo(-1) }, '‹'),
+      h('button', { type: 'button', class: 'gal-nav next', 'aria-label': 'Next', onclick: () => galleryGo(1) }, '›')),
+    h('div', { class: 'gal-actions' }),
+    h('div', { class: 'gal-strip' }));
+  GAL.el = el;
+  document.body.append(el);
+  galleryStrip(store.get('deck.gallery.strip', true));
+  wireGallerySwipe(main);
+  galleryRender(true);
+  overlayOpened(galleryBack);
+}
+const galleryBack = () => closeGallery(true);
+// The thumbnail row can be hidden to give the preview the whole height (tall videos); remembered
+function galleryStrip(on = GAL.el.classList.contains('no-strip')) {
+  GAL.el.classList.toggle('no-strip', !on);
+  GAL.el.querySelector('.gal-strip-btn').classList.toggle('on', on);
+  store.set('deck.gallery.strip', on);
+  if (on) GAL.el.querySelector('.gal-thumb.sel')?.scrollIntoView({ inline: 'center', block: 'nearest' });
+}
+function closeGallery(viaBack = false) {
+  if (!GAL.el) return;
+  const key = GAL.items[GAL.idx]?.key;
+  GAL.el.querySelectorAll('video').forEach((v) => v.pause());
+  GAL.el.remove(); GAL.el = null; galThumbs.disconnect();
+  if (viaBack !== true) overlayClosed(galleryBack);
+  if ($('#tab-board').classList.contains('active')) {
+    renderBoard().then(() => $(`#board .tile[data-key="${key}"]`)?.scrollIntoView({ block: 'center' }));
+  }
+}
+
+// After pins / marks / deletes: rebuild the list, staying on the same item (or its neighbour if it went)
+function galleryRefresh() {
+  const key = GAL.items[GAL.idx]?.key;
+  GAL.items = boardItems();
+  if (!GAL.items.length) return closeGallery();
+  const at = GAL.items.findIndex((x) => x.key === key);
+  const same = at >= 0;
+  GAL.idx = same ? at : Math.min(GAL.idx, GAL.items.length - 1);
+  galleryRender(!same);
+}
+
+function galleryGo(d) {
+  const n = Math.max(0, Math.min(GAL.items.length - 1, GAL.idx + d));
+  if (n === GAL.idx) return;
+  GAL.idx = n; galleryRender(true);
+}
+
+function galleryRender(newMedia = false) {
+  const el = GAL.el, cur = GAL.items[GAL.idx];
+  if (!el || !cur) return;
+  const g = S.history.get(cur.g.id) || cur.g, { o, i } = cur;
+  const marked = B.marked.has(g.id);
+  el.querySelector('.gal-title').textContent = `#${g.id} ${g.template}`;
+  el.querySelector('.gal-count').textContent = `${GAL.idx + 1} / ${GAL.items.length}`;
+  el.querySelector('.gal-nav.prev').disabled = GAL.idx === 0;
+  el.querySelector('.gal-nav.next').disabled = GAL.idx === GAL.items.length - 1;
+  const main = el.querySelector('.gal-main');
+  main.classList.toggle('marked', marked);
+  if (newMedia || GAL.key !== cur.key) {
+    main.querySelectorAll('video').forEach((v) => v.pause());
+    galleryZoom(1);
+    main.replaceChildren(o.kind === 'video'
+      ? h('video', { src: o.url, muted: true, loop: true, playsInline: true, autoplay: true, controls: true })
+      : h('img', { src: o.url, alt: o.filename, draggable: false }));
+    for (const d of [-1, 1]) {   // warm the cache for the neighbours
+      const nb = GAL.items[GAL.idx + d];
+      if (nb && nb.o.kind === 'image') new Image().src = nb.o.url;
+    }
+  }
+  GAL.key = cur.key;
+
+  el.querySelector('.gal-actions').replaceChildren(...[
+    h('button', { type: 'button', class: 'btn small' + (g.pinned ? ' on' : ''), onclick: () => togglePin(g) }, g.pinned ? '★ Pinned' : '☆ Pin'),
+    h('button', { type: 'button', class: 'btn small' + (marked ? ' danger on' : ''), title: 'D',
+      onclick: () => { toggleMarked(g.id); boardChanged(g); } }, marked ? '🗑 Marked' : '🗑 Mark'),
+    o.kind === 'image' ? h('button', { type: 'button', class: 'btn small', onclick: () => { closeGallery(); itemsToEditor([cur]); } }, '✎ Edit') : null,
+    h('button', { type: 'button', class: 'btn small', onclick: () => { closeGallery(); sendToInput(g, i, 'first'); } }, 'Use as input'),
+    h('button', { type: 'button', class: 'btn small', onclick: () => openGeneration(g.id) }, 'Details'),
+    h('a', { class: 'btn small', href: o.url, download: o.filename, style: 'display:grid;place-items:center;text-decoration:none' }, 'Download'),
+    markedGens().length ? h('button', { type: 'button', class: 'btn small danger', onclick: deleteMarked }, `Delete ${markedGens().length} marked`) : null,
+  ].filter(Boolean));
+
+  const strip = el.querySelector('.gal-strip');
+  if (strip.childElementCount !== GAL.items.length || newMedia) {
+    galThumbs.disconnect();
+    strip.replaceChildren(...GAL.items.map((x, n) => h('button', { type: 'button', class: 'gal-thumb', 'data-n': n, onclick: () => { GAL.idx = n; galleryRender(true); } },
+      x.o.kind === 'video' ? h('video', { src: `${x.o.url}#t=0.1`, muted: true, playsInline: true, preload: 'none' })
+        : h('img', { src: x.o.url, loading: 'lazy', alt: '', draggable: false }),
+      h('span', { class: 'gal-badges' }))));
+    strip.querySelectorAll('video').forEach((v) => galThumbs.observe(v));
+  }
+  strip.querySelectorAll('.gal-thumb').forEach((t, n) => {
+    const x = GAL.items[n], xg = S.history.get(x.g.id) || x.g;
+    t.classList.toggle('sel', n === GAL.idx);
+    t.classList.toggle('marked', B.marked.has(xg.id));
+    t.querySelector('.gal-badges').textContent = `${xg.pinned ? '★' : ''}${B.marked.has(xg.id) ? '🗑' : ''}${x.o.kind === 'video' ? '▶' : ''}`;
+  });
+  strip.querySelector('.gal-thumb.sel')?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: newMedia ? 'smooth' : 'auto' });
+}
+
+// Swipe sideways on the big preview to move; the picture follows the finger. Pinch, the wheel or
+// a double-tap zooms (images and videos); while zoomed one finger pans instead of swiping.
+const GZ = { s: 1, x: 0, y: 0 };
+function galleryZoom(s, x, y) {
+  if (s <= 1.01) { s = 1; x = 0; y = 0; }
+  Object.assign(GZ, { s, x, y });
+  const m = GAL.el?.querySelector('.gal-main > *');
+  if (m) m.style.transform = s === 1 ? '' : `translate(${x}px, ${y}px) scale(${s})`;
+  GAL.el?.classList.toggle('zoomed', s !== 1);
+}
+function wireGallerySwipe(main) {
+  const zoomAt = (f, cx, cy) => {   // keep the point under (cx, cy) where it is
+    const r = main.getBoundingClientRect(), qx = cx - (r.left + r.width / 2), qy = cy - (r.top + r.height / 2);
+    const s = Math.max(1, Math.min(8, GZ.s * f)); f = s / GZ.s;
+    galleryZoom(s, qx - f * (qx - GZ.x), qy - f * (qy - GZ.y));
+  };
+  const pts = new Map();
+  let start = null, pinch = null, lastTap = 0;
+  const mid = () => { const [a, b] = [...pts.values()]; return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y) }; };
+  main.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 2) {   // second finger: pinch, and forget any swipe the first one started
+      start = null; main.style.transform = '';
+      pinch = mid();
+      for (const id of pts.keys()) { try { main.setPointerCapture(id); } catch { /* synthetic */ } }
+      return;
+    }
+    if (pts.size > 2) return;
+    const m = main.firstElementChild;
+    // leave the bottom of an unzoomed video to its own controls (scrubbing)
+    if (GZ.s === 1 && m?.tagName === 'VIDEO' && e.clientY > m.getBoundingClientRect().bottom - 50) return;
+    start = { x: e.clientX, y: e.clientY, id: e.pointerId, horiz: null, pan: GZ.s > 1, zx: GZ.x, zy: GZ.y, moved: false };
+    if (start.pan) { try { main.setPointerCapture(e.pointerId); } catch { /* synthetic */ } }
+  });
+  main.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && pts.size === 2) {
+      const now = mid();
+      if (pinch.d > 0) zoomAt(now.d / pinch.d, now.x, now.y);
+      galleryZoom(GZ.s, GZ.x + now.x - pinch.x, GZ.y + now.y - pinch.y);
+      pinch = now;
+      return;
+    }
+    if (!start || e.pointerId !== start.id) return;
+    const dx = e.clientX - start.x, dy = e.clientY - start.y;
+    if (Math.hypot(dx, dy) > 10) start.moved = true;
+    if (start.pan) return galleryZoom(GZ.s, start.zx + dx, start.zy + dy);
+    if (start.horiz == null && start.moved) {
+      start.horiz = Math.abs(dx) > Math.abs(dy);
+      if (start.horiz) { try { main.setPointerCapture(e.pointerId); } catch { /* synthetic */ } }
+    }
+    if (start.horiz) main.style.transform = `translateX(${dx}px)`;
+  });
+  const end = (e) => {
+    if (!pts.delete(e.pointerId)) return;
+    if (pinch) { if (!pts.size) pinch = null; return; }   // the rest of a pinch isn't a swipe or a tap
+    if (!start || e.pointerId !== start.id) return;
+    const dx = e.clientX - start.x, { horiz, pan, moved } = start;
+    start = null;
+    if (!pan && horiz) {
+      main.style.transition = 'transform .15s'; main.style.transform = '';
+      setTimeout(() => { main.style.transition = ''; }, 160);
+      if (Math.abs(dx) > Math.min(80, main.clientWidth / 6)) galleryGo(dx < 0 ? 1 : -1);
+    }
+    if (!moved && e.type === 'pointerup') {   // double-tap: zoom in there, or back out
+      if (Date.now() - lastTap < 300) { lastTap = 0; if (GZ.s > 1) galleryZoom(1); else zoomAt(2.5, e.clientX, e.clientY); }
+      else lastTap = Date.now();
+    }
+  };
+  main.addEventListener('pointerup', end); main.addEventListener('pointercancel', end);
+  main.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(Math.exp(-e.deltaY * 0.0025), e.clientX, e.clientY); }, { passive: false });
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!GAL.el || !$('#sheet').classList.contains('hidden') || e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey) return;
+  const cur = GAL.items[GAL.idx];
+  const keys = {
+    ArrowLeft: () => galleryGo(-1), ArrowRight: () => galleryGo(1),
+    Home: () => galleryGo(-GAL.items.length), End: () => galleryGo(GAL.items.length),
+    Escape: () => closeGallery(),
+    t: () => galleryStrip(),
+    p: () => togglePin(S.history.get(cur.g.id) || cur.g),
+    d: () => { toggleMarked(cur.g.id); boardChanged(cur.g); },
+    e: () => { if (cur.o.kind === 'image') { closeGallery(); itemsToEditor([cur]); } },
+  };
+  if (keys[e.key]) { e.preventDefault(); keys[e.key](); }
+});
 
 function pauseBoard() { document.querySelectorAll('#board video').forEach((v) => { boardVideos.unobserve(v); v.pause(); }); }
 
@@ -4198,12 +4524,16 @@ $('#projectSel').addEventListener('change', async (e) => {
 });
 
 function switchTab(name) {
-  document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tabs button').forEach((b) => {
+    b.classList.toggle('active', b.dataset.tab === name); b.setAttribute('aria-selected', b.dataset.tab === name);
+    if (b.dataset.tab === name) b.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  });
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${name}`));
+  if (name === 'generate' && !RUN.pid) runChip(0, 0, $('#progText').textContent);   // lets go of a finished ✓ / !
   if (name === 'history') loadHistory();
   if (name === 'editor') renderEditor();
   if (name === 'video') renderVideo(); else vidPause();
-  if (name === 'board') renderBoard(); else pauseBoard();
+  if (name === 'board') renderBoard(); else { closeGallery(); pauseBoard(); }
   if (name === 'scene') sceneModule().then((m) => m.show()).catch((e) => toast(`3D view: ${e.message}`, true));
   else if (sceneMod) sceneMod.hide();
   $('.actionbar').classList.toggle('hidden', ['editor', 'video', 'board', 'scene'].includes(name));
