@@ -120,10 +120,13 @@ The length is fixed, so changing the shot timestamps in the prompt also means ch
 the top (high angle) and a small detail.
 
 **Blocking a shot** (`deck-h3-ctrl2v` + the **3D** tab): ref2v plus H3's Fun ControlNet, driven by a
-control video. In the 3D tab, add people (soft, featureless mannequins), boxes, balls and walls, set the
-room size, and frame the shot: the view is the camera. Drag an object to move it along the floor; drag
-anywhere else to orbit, two fingers to pan and zoom. **◆ Key** keyframes the selected object (or the
-camera) at the playhead; once something has keys, moving it writes a key where the playhead is.
+control video. The 3D tab works like the Editor: **+ Add** people (soft, featureless mannequins), boxes,
+balls, cylinders, walls or a room; the layer list holds the Camera, the Room and the objects (◉ hides
+one), and under it are the selected layer's settings. Everything but the camera can be deleted (with
+Undo). Tap an object to select it and get a gizmo; tap it again (or W / E / R, or the toolbar) to switch
+between Move, Rotate and Scale. Tap empty space to go back to the camera: the view is the camera, so
+drag to orbit, two fingers to pan and zoom. **◆ Key** keyframes the selected object (or the camera) at
+the playhead; once something has keys, changing it writes a key where the playhead is.
 **Render depth video** puts the clip in History (near = white, far = black, the range fixed over the
 clip), and **Use in H3 control** opens `deck-h3-ctrl2v` with it, the size and the length set. Strength 1
 with End 0.4 keeps the layout and camera move but lets H3 draw real people and furniture; ending later
@@ -169,8 +172,9 @@ back the wildcards, **Run again** repeats the same picks. On a tablet the text p
 
 **Shots** (the bar above the groups) save the whole template: the prompt and its builder parts, the
 images and crops, LoRAs and every setting. ◀ ▶ load the previous/next shot (Undo brings back what you
-had), 💾 saves over the loaded one, ＋ saves a new one, 🗑 deletes it. They're per workflow and stored on
-the server.
+had), 💾 saves over the loaded one, ＋ saves a new one, 🗑 deletes it, ↺ goes back to the template's own
+prompt and settings (the tablet otherwise keeps what you last typed, even after the template file
+changes). They're per workflow and stored on the server.
 
 **Presets** sit at the top of each settings group (Seed, Sampler, LoRAs, Turbo LoRA, size…) and keep
 only that group's numbers and choices, not prompts or images: ◀ ▶ cycle, 💾 save over the one shown, ＋ save new, 🗑 delete. The first entry is always the template's

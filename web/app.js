@@ -270,6 +270,13 @@ function shotBar() {
     h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Save over this shot', title: 'Save over this one', onclick: saveOver }, '💾'),
     h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Save as a new shot', title: 'Save as new', onclick: saveNew }, '＋'),
     h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Delete this saved shot', onclick: del }, '🗑'),
+    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Back to the template defaults', title: 'Template defaults: the prompt and settings as the template file has them',
+      onclick: () => {
+        const before = captureShot(), beforeId = curId();
+        store.set(stateKey2, '');
+        applyShot({ values: Object.fromEntries(S.tpl.fields.map((f) => [f.key, f.value])) });
+        undoToast('Back to the template defaults', () => { store.set(stateKey2, beforeId); applyShot(before); });
+      } }, '↺'),
     h('span', { class: 'snip-pos' }, !l.length ? 'No saved shots · ＋ saves everything here'
       : i < 0 ? `${l.length} saved · none loaded` : `${i + 1}/${l.length} · ${l[i].name}`));
 }
@@ -1913,7 +1920,7 @@ let sceneMod = null;
 async function sceneModule() {
   if (!sceneMod) {
     sceneMod = await import('./scene.js');
-    sceneMod.init({ h, $, api, toast, store, S, uploadImage, useControlVideo });
+    sceneMod.init({ h, $, api, toast, undoToast, store, S, uploadImage, useControlVideo, openSheet, closeSheet, iconBtn, propNum, propsTitle, layerRowsEl });
   }
   return sceneMod;
 }
@@ -2538,17 +2545,33 @@ function renderEditor() {
   drawEditorCanvas();
 }
 
-const editorIcon = (label, text, fn, extra = {}) => h('button', { type: 'button', class: 'icon-btn', 'aria-label': label, title: label,
+// Layer-panel pieces shared by the Editor and the 3D tab: icon buttons, number fields, the props
+// title and the layer list.
+const iconBtn = (label, text, fn, extra = {}) => h('button', { type: 'button', class: 'icon-btn', 'aria-label': label, title: label,
   ...extra, onclick: (e) => { e.stopPropagation(); fn(); } }, text);
 
-function editorNum(label, value, set, { min = -1e6, max = 1e6, step = 1 } = {}) {
-  const input = h('input', { type: 'number', inputMode: 'numeric', min, max, step, value });
+// after() runs once the value is set (save and redraw)
+function propNum(label, value, set, after, { min = -1e6, max = 1e6, step = 1 } = {}) {
+  const input = h('input', { type: 'number', inputMode: 'decimal', min, max, step, value });
   input.addEventListener('change', () => {
     set(Math.min(max, Math.max(min, parseFloat(input.value) || 0)));
-    persistEditor(); renderEditor();
+    after();
   });
   return h('label', { class: 'field' }, h('span', { class: 'lbl' }, label), input);
 }
+
+const propsTitle = (title, onDone) => h('div', { class: 'props-title' }, h('span', {}, title),
+  onDone ? h('button', { type: 'button', class: 'btn small ghost', onclick: onDone }, 'Done') : null);
+
+// rows: [{ thumb (element), name, hint, sel, off, onclick, buttons: [elements] }]
+const layerRowsEl = (rows) => h('div', { class: 'layers' }, rows.map((r) =>
+  h('div', { class: 'layer-row' + (r.sel ? ' sel' : '') + (r.off ? ' off' : ''), onclick: r.onclick },
+    h('span', { class: 'thumb' }, r.thumb),
+    h('div', { class: 'layer-name' }, h('span', {}, r.name), h('span', { class: 'hint' }, r.hint || '')),
+    h('div', { class: 'layer-btns' }, r.buttons || []))));
+
+const editorIcon = iconBtn;
+const editorNum = (label, value, set, opts) => propNum(label, value, set, () => { persistEditor(); renderEditor(); }, opts);
 
 // Top of the list is drawn on top; tap a row to select that layer
 function layerList() {
@@ -2559,24 +2582,25 @@ function layerList() {
     [E.layers[i], E.layers[j]] = [E.layers[j], E.layers[i]];
     persistEditor(); renderEditor();
   };
-  return h('div', { class: 'layers' }, [...E.layers].reverse().map((l) => {
+  return layerRowsEl([...E.layers].reverse().map((l) => {
     const r = ready(l) ? layerRect(l) : null, cropped = l.crop.w < 0.999 || l.crop.h < 0.999;
-    return h('div', { class: 'layer-row' + (l === E.sel ? ' sel' : '') + (l.hidden || l.broken ? ' off' : ''),
-      onclick: () => { E.sel = l === E.sel ? null : l; E.cropping = false; renderEditor(); } },
-      h('span', { class: 'thumb' }, h('img', { src: thumbUrl(l.name, 160), alt: '' })),
-      h('div', { class: 'layer-name' }, h('span', {}, l.name.split('/').pop()),
-        h('span', { class: 'hint' }, l.broken ? 'could not load' : !r ? 'loading…'
-          : `${Math.round(r.w)}×${Math.round(r.h)}${cropped ? ' · cropped' : ''}${l.hidden ? ' · hidden' : ''}`)),
-      h('div', { class: 'layer-btns' },
+    return {
+      sel: l === E.sel, off: l.hidden || l.broken,
+      onclick: () => { E.sel = l === E.sel ? null : l; E.cropping = false; renderEditor(); },
+      thumb: h('img', { src: thumbUrl(l.name, 160), alt: '' }),
+      name: l.name.split('/').pop(),
+      hint: l.broken ? 'could not load' : !r ? 'loading…'
+        : `${Math.round(r.w)}×${Math.round(r.h)}${cropped ? ' · cropped' : ''}${l.hidden ? ' · hidden' : ''}`,
+      buttons: [
         editorIcon(l.hidden ? 'Show' : 'Hide', l.hidden ? '◌' : '◉', () => { l.hidden = !l.hidden; persistEditor(); renderEditor(); }),
         editorIcon('Bring forward', '↑', () => move(l, 1)),
-        editorIcon('Send backward', '↓', () => move(l, -1))));
+        editorIcon('Send backward', '↓', () => move(l, -1))],
+    };
   }));
 }
 
 function layerProps(l) {
-  const title = h('div', { class: 'props-title' }, h('span', {}, E.cropping ? 'Crop' : 'Layer'),
-    h('button', { type: 'button', class: 'btn small ghost', onclick: () => { if (E.cropping) E.cropping = false; else E.sel = null; renderEditor(); } }, 'Done'));
+  const title = propsTitle(E.cropping ? 'Crop' : 'Layer', () => { if (E.cropping) E.cropping = false; else E.sel = null; renderEditor(); });
   if (!ready(l)) {
     return h('div', { class: 'props' }, title,
       h('button', { type: 'button', class: 'btn small danger', onclick: () => { removeLayer(l); renderEditor(); } }, 'Delete layer'));
@@ -2655,7 +2679,7 @@ function canvasProps() {
   const bg = h('input', { type: 'color', value: E.bg });
   bg.addEventListener('input', () => { E.bg = bg.value; persistEditor(); drawEditorCanvas(); });
   return h('div', { class: 'props' },
-    h('div', { class: 'props-title' }, h('span', {}, 'Canvas')),
+    propsTitle('Canvas'),
     h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Size'), sizeSeg),
     E.size ? h('div', { class: 'row' },
       editorNum('Width', E.size.w, (v) => { E.size.w = v; }, { min: 1, max: 16384 }),

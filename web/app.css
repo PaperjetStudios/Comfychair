@@ -560,3 +560,7 @@ details.desc summary { cursor: pointer; color: var(--muted); }
 .scene-keybar > * { flex: none; }
 .shot-bar { margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--line); }
 .shot-bar b { font-size: 14px; color: var(--text); }
+.scene-toolbar { top: 8px; left: 8px; }
+.scene-toolbar button:disabled { opacity: .4; cursor: default; }
+.scene-toolbar [data-depth].on { background: var(--surface-2); color: var(--text); }
+.layer-row .scene-icon { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 8px; background: var(--surface-2); font-size: 22px; }
