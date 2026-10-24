@@ -858,4 +858,28 @@ async def input_image(name: str, thumb: int = 0):
 app.mount("/files/projects", StaticFiles(directory=config.PROJECTS_DIR), name="projects")
 app.mount("/files/media", StaticFiles(directory=config.MEDIA_DIR), name="media")
 app.mount("/files/generations", StaticFiles(directory=config.GEN_DIR), name="generations")
-app.mount("/", StaticFiles(directory=config.WEB_DIR, html=True), name="web")
+
+
+class AppFiles(StaticFiles):
+    """The UI's own files: the browser must check back every time (a cheap 304 when nothing
+    changed). Without this, tablets keep an old app.js for hours after an update."""
+
+    async def get_response(self, path, scope):
+        r = await super().get_response(path, scope)
+        r.headers["Cache-Control"] = "no-cache"
+        return r
+
+
+@app.get("/", include_in_schema=False)
+@app.get("/index.html", include_in_schema=False)
+async def index():
+    """index.html with app.js / app.css links that change whenever those files do, so a copy cached
+    by an older version can't be reused."""
+    html = (config.WEB_DIR / "index.html").read_text(encoding="utf-8")
+    for name in ("app.js", "app.css"):
+        v = int((config.WEB_DIR / name).stat().st_mtime)
+        html = html.replace(f'"{name}"', f'"{name}?v={v}"')
+    return Response(html, media_type="text/html", headers={"Cache-Control": "no-cache"})
+
+
+app.mount("/", AppFiles(directory=config.WEB_DIR, html=True), name="web")

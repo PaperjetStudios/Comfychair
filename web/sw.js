@@ -23,7 +23,7 @@ self.addEventListener('fetch', (e) => {
       caches.open(CACHE).then((c) => c.put(e.request, copy));
     }
     return r;
-  }).catch(() => caches.match(e.request).then((m) => m || caches.match('/'))));
+  }).catch(() => caches.match(e.request, { ignoreSearch: true }).then((m) => m || caches.match('/'))));  // app.js?v=…
 });
 
 // tapping a "done" notification brings the app forward
