@@ -70,6 +70,9 @@ class Comfy:
         self.connected = False
         self._object_info = None
         self._task = None
+        self._ws = None
+        self._last_msg = 0.0  # loop time of the last websocket message
+        self._checks = set()
 
     # ---- lifecycle -------------------------------------------------------
     async def start(self):
@@ -90,10 +93,12 @@ class Comfy:
         while True:
             try:
                 async with websockets.connect(ws_url, max_size=None, ping_interval=20) as ws:
+                    self._ws = ws
                     self.connected = True
                     log.info("Connected to ComfyUI websocket at %s", ws_url)
                     await self._emit("text", {"type": "deck_comfy_status", "data": {"connected": True}})
                     async for msg in ws:
+                        self._last_msg = asyncio.get_running_loop().time()
                         if isinstance(msg, (bytes, bytearray)):
                             await self._emit("binary", bytes(msg))
                         else:
@@ -114,6 +119,18 @@ class Comfy:
             else:
                 self.connected = False
                 await asyncio.sleep(1)
+            finally:
+                self._ws = None
+
+    async def _check_listening(self, since: float):
+        """ComfyUI forgets a client id when any socket using it closes (e.g. a second ComfyDeck run on
+        the same data dir), leaving ours open and answering pings but sent nothing: no progress, no
+        previews. Queueing always broadcasts a status message, so if none arrives, reconnect."""
+        await asyncio.sleep(5)
+        ws = self._ws
+        if ws is not None and self._last_msg < since:
+            log.warning("ComfyUI websocket went quiet after queueing; reconnecting")
+            await ws.close()
 
     async def _emit(self, kind, payload):
         for cb in list(self.listeners):
@@ -161,7 +178,12 @@ class Comfy:
                      "extra_pnginfo": {"workflow": {"extra": {"VHS_latentpreview": True}}}}
         else:
             extra = {"preview_method": config.PREVIEW_METHOD}
+        since = asyncio.get_running_loop().time()
         r = await self.http.post("/prompt", json={"prompt": workflow, "client_id": self.client_id, "extra_data": extra})
+        if r.status_code < 400:
+            task = asyncio.create_task(self._check_listening(since))
+            self._checks.add(task)
+            task.add_done_callback(self._checks.discard)
         if r.status_code >= 400:
             try:
                 payload = r.json()

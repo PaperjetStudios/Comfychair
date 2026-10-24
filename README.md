@@ -114,6 +114,13 @@ characters; the prompt gets "Subject 1: …", "Subject 2: …" labels added for 
 to a reference picture ("(as in <Picture 2>)"). Tag chips above the prompt insert the model's reference tags at the cursor: H3
 `<Picture N>` (+ "Subject N" labels), Klein `<ref_image_N>` / `<obj_N>`, Qwen edit `Picture N`.
 
+**Wildcards:** `{red|green|blue}` in any text field picks one option at random for every run, so a
+batch of 4 gets 4 different picks. Options can be empty (`{rainy |}`) and nest (`{a {big|small} dog|a cat}`);
+braces without a `|` are left as they are. History shows the prompt that actually ran; **Edit** brings
+back the wildcards, **Run again** repeats the same picks. On a tablet the text popup has keys for them:
+**{ }** starts a group (or wraps the selected text as its first option), **|** adds an option, and
+**}→** jumps past the end of the group.
+
 **Saved settings** sit at the top of each settings group (Seed, Sampler, LoRAs, Turbo LoRA, size…):
 ◀ ▶ cycle, 💾 save over the one shown, ＋ save new, 🗑 delete. The first entry is always the template's
 default. A save is for this workflow, this model, or everywhere; model and everywhere saves match by

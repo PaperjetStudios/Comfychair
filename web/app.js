@@ -1003,6 +1003,8 @@ async function generate(parent = null) {
     if (f.kind === 'seed') v = (S.seedMode[f.key] || 'random') === 'random' ? -1 : Number(v);
     values[f.key] = v;
   }
+  const odd = S.tpl.fields.filter((f) => f.kind === 'text' && unmatchedBraces(values[f.key]));
+  if (odd.length && !confirm(`${odd.map((f) => f.label).join(', ')}: the { } don't match, so some wildcard text would go to the model as written. Generate anyway?`)) return;
   const btn = $('#genBtn'); btn.disabled = true;
   try {
     for (const f of S.tpl.fields) if (f.kind === 'image') values[f.key] = await cropForRun(f, values[f.key]);
@@ -1022,6 +1024,17 @@ async function generate(parent = null) {
   } catch (e) {
     toast(e.message, true);
   } finally { btn.disabled = false; }
+}
+
+// Wildcard prompts ({a|b}) with a missing or extra brace: count of braces with no partner.
+function unmatchedBraces(v) {
+  if (typeof v !== 'string' || !v.includes('|') || !/[{}]/.test(v)) return 0;
+  let depth = 0, extra = 0;
+  for (const ch of v) {
+    if (ch === '{') depth++;
+    else if (ch === '}') { if (depth) depth--; else extra++; }
+  }
+  return depth + extra;
 }
 
 // An image field's crop is applied per run: the server makes (or reuses) a copy named after the
@@ -1426,16 +1439,16 @@ function reuse(g) {
     if (!S.pb.subjects.length) S.pb.subjects = [{ text: '', pic: null }];
     saveBuilder();
   } else if (S.pb) { S.pb.on = false; saveBuilder(); }  // written as plain text: show it that way
-  selectTemplate(g.template, g.params);
+  selectTemplate(g.template, { ...g.params, ...g.params.__wildcards });  // prompts with their {a|b} wildcards, not this run's picks
   switchTab('generate');
   if (g.outputs.length) showOutput(g);
-  toast(`Loaded #${g.id}'s settings (seed fixed). Edit and Generate.`);
+  toast(`Loaded #${g.id}'s settings (seed fixed${g.params.__wildcards ? ', wildcards re-roll' : ''}). Edit and Generate.`);
 }
 
 // Queue the exact same settings again (same seed), without leaving where you are.
 async function runAgain(g) {
   try {
-    const values = Object.fromEntries(Object.entries(g.params).filter(([k]) => k !== '__builder'));
+    const values = Object.fromEntries(Object.entries(g.params).filter(([k]) => !k.startsWith('__')));
     const gens = await api('/api/generate', { method: 'POST', body: { template: g.template, values, batch: 1, project_id: g.project_id,
       parent: g.parent, builder: g.params.__builder || null } });
     for (const n of gens) { S.myPrompts.add(n.prompt_id); S.history.set(n.id, n); }
@@ -1599,162 +1612,538 @@ function templateAspect() {
 }
 
 // ---------------------------------------------------------------------------
-// editor: crop images and join them into one (character sheets, side-by-side refs).
-// Everything is drawn client-side on a canvas, then uploaded as a new input image.
+// editor: a simple Photoshop-style layer stack for cropping images and putting them together
+// (character sheets, side-by-side refs). Each layer is an input image with a crop, a position and
+// a scale. Everything is drawn client-side on a canvas, then uploaded as a new input image.
 // ---------------------------------------------------------------------------
 const FULL = { x: 0, y: 0, w: 1, h: 1 };
-const E = {
-  layers: [],   // { name, crop: {x,y,w,h} as fractions, img }
-  layout: 'row', cols: 2, gap: 0, bg: '#000000', mp: 0,
-  ...store.get('deck.editor', {}),
-};
-E.layers = (E.layers || []).map((l) => ({ name: l.name, crop: l.crop || { ...FULL }, scale: l.scale || null }));
+const E = (() => {
+  const saved = store.get('deck.editor', {});
+  const e = { size: null, cols: 2, gap: 0, bg: '#000000', mp: 0, snap: true, ...saved, arrange: saved.arrange || null };
+  // layers: { name, crop: {x,y,w,h} as fractions, x, y (canvas px), scale, hidden, img }; the last
+  // one is drawn on top. size: a fixed {w,h} canvas, or null to fit around the layers.
+  e.layers = (saved.layers || []).map((l) => ({ name: l.name, crop: l.crop || { ...FULL },
+    x: l.x, y: l.y, scale: l.x == null ? 1 : l.scale, hidden: !!l.hidden }));
+  // The old auto-layout editor kept no positions: lay its images out once they load, in the same
+  // order (its first image was leftmost, so it goes to the top of the list).
+  if (saved.v !== 2 && e.layers.length) { e.arrange = saved.layout || 'row'; e.layers.reverse(); }
+  delete e.layout;
+  return e;
+})();
+E.sel = null; E.cropping = false; E.aspect = null; E.guides = [];   // guides: snap lines {x} or {y} while dragging
 
 function persistEditor() {
-  store.set('deck.editor', { layout: E.layout, cols: E.cols, gap: E.gap, bg: E.bg, mp: E.mp,
-    layers: E.layers.map((l) => ({ name: l.name, crop: l.crop, scale: l.scale })) });
+  store.set('deck.editor', { v: 2, size: E.size, cols: E.cols, gap: E.gap, bg: E.bg, mp: E.mp, snap: E.snap, arrange: E.arrange,
+    layers: E.layers.map((l) => ({ name: l.name, crop: l.crop, x: l.x, y: l.y, scale: l.scale, hidden: l.hidden })) });
 }
+
+const layerLoaded = (l) => !!(l.img && l.img.naturalWidth);
+const ready = (l) => !l.broken && layerLoaded(l) && l.x != null;
 
 function loadLayerImage(l) {
   if (l.img) return;
+  const settle = () => {
+    if (E.arrange) { if (E.layers.every((o) => o.broken || layerLoaded(o))) arrangeLayers(E.arrange); }
+    else if (layerLoaded(l) && l.x == null) placeLayer(l);
+    renderEditor();
+  };
   l.img = new Image();
-  l.img.onload = () => drawEditorCanvas();
-  l.img.onerror = () => { l.broken = true; renderEditor(); };
+  l.img.onload = settle;
+  l.img.onerror = () => { l.broken = true; settle(); };
   l.img.src = `/api/input?name=${encodeURIComponent(l.name)}`;
 }
 
-// Layout: images go into rows of `cols`. Images left on "match" share one height in a row (the
-// smallest of them, so nothing is upscaled); "column" stacks them at a shared width instead. An
-// image with its own scale keeps its proportions at that fraction of its (cropped) pixels, e.g. to
-// keep a detailed reference sharp. Rows and stacked images are centred on the background.
+// the kept part of a layer in canvas px, and the whole image behind it (shown while cropping)
+function layerRect(l) {
+  const c = l.crop;
+  return { x: l.x, y: l.y, w: c.w * l.img.naturalWidth * l.scale, h: c.h * l.img.naturalHeight * l.scale };
+}
+function imageRect(l) {
+  const w = l.img.naturalWidth * l.scale, hh = l.img.naturalHeight * l.scale;
+  return { x: l.x - l.crop.x * w, y: l.y - l.crop.y * hh, w, h: hh };
+}
+function unionRect(rs) {
+  const x = Math.min(...rs.map((r) => r.x)), y = Math.min(...rs.map((r) => r.y));
+  return { x, y, w: Math.max(...rs.map((r) => r.x + r.w)) - x, h: Math.max(...rs.map((r) => r.y + r.h)) - y };
+}
+const visibleLayers = () => E.layers.filter((l) => ready(l) && !l.hidden);
+const inside = (p, r) => p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+
+// The output area: the fixed size, or just big enough for every visible layer
+function editorFrame() {
+  if (E.size) return { x: 0, y: 0, w: E.size.w, h: E.size.h };
+  const vis = visibleLayers();
+  if (!vis.length) return null;
+  const b = unionRect(vis.map(layerRect)), x = Math.floor(b.x), y = Math.floor(b.y);
+  return { x, y, w: Math.max(1, Math.ceil(b.x + b.w) - x), h: Math.max(1, Math.ceil(b.y + b.h) - y) };
+}
+
+function drawLayer(ctx, l) {
+  const W = l.img.naturalWidth, H = l.img.naturalHeight, c = l.crop, r = layerRect(l);
+  ctx.drawImage(l.img, c.x * W, c.y * H, Math.max(1, c.w * W), Math.max(1, c.h * H), r.x, r.y, r.w, r.h);
+}
+
 function composeEditor(target) {
-  const src = E.layers.filter((l) => l.img && l.img.naturalWidth).map((l) => {
-    const W = l.img.naturalWidth, H = l.img.naturalHeight, c = l.crop;
-    return { img: l.img, sx: c.x * W, sy: c.y * H, sw: Math.max(1, c.w * W), sh: Math.max(1, c.h * H), scale: l.scale };
-  });
-  if (!src.length) return false;
-  const gap = Math.max(0, E.gap | 0);
-  const matched = src.filter((s) => !s.scale);
-  const ref = matched.length ? matched : src;
-  const own = (s) => ({ w: Math.max(1, Math.round(s.sw * s.scale)), h: Math.max(1, Math.round(s.sh * s.scale)) });
+  const f = editorFrame(), vis = visibleLayers();
+  if (!f || !vis.length) return false;
+  target.width = f.w; target.height = f.h;
   const ctx2 = target.getContext('2d');
-  if (E.layout === 'column') {
-    const w = Math.round(Math.min(...ref.map((s) => s.sw)));
-    const sizes = src.map((s) => (s.scale ? own(s) : { w, h: Math.round((s.sh * w) / s.sw) }));
-    target.width = Math.max(...sizes.map((z) => z.w));
-    target.height = sizes.reduce((a, z) => a + z.h, 0) + gap * (src.length - 1);
-    ctx2.fillStyle = E.bg; ctx2.fillRect(0, 0, target.width, target.height);
-    let y = 0;
-    src.forEach((s, i) => {
-      const z = sizes[i];
-      ctx2.drawImage(s.img, s.sx, s.sy, s.sw, s.sh, Math.round((target.width - z.w) / 2), y, z.w, z.h);
-      y += z.h + gap;
-    });
-    return true;
-  }
-  const cols = E.layout === 'row' ? src.length : Math.max(1, E.cols | 0);
-  const rowH = Math.round(Math.min(...ref.map((s) => s.sh)));
-  const sizes = src.map((s) => (s.scale ? own(s) : { w: Math.round((s.sw * rowH) / s.sh), h: rowH }));
-  const rows = [];
-  for (let i = 0; i < src.length; i += cols) rows.push(src.slice(i, i + cols).map((s, k) => ({ s, z: sizes[i + k] })));
-  const rowHs = rows.map((r) => Math.max(...r.map((e) => e.z.h)));
-  const rowW = rows.map((r) => r.reduce((a, e) => a + e.z.w, 0) + gap * (r.length - 1));
-  target.width = Math.max(...rowW);
-  target.height = rowHs.reduce((a, b) => a + b, 0) + gap * (rows.length - 1);
-  ctx2.fillStyle = E.bg; ctx2.fillRect(0, 0, target.width, target.height);
-  let y = 0;
-  rows.forEach((r, ri) => {
-    let x = Math.round((target.width - rowW[ri]) / 2);
-    for (const { s, z } of r) {
-      ctx2.drawImage(s.img, s.sx, s.sy, s.sw, s.sh, x, y + Math.round((rowHs[ri] - z.h) / 2), z.w, z.h);
-      x += z.w + gap;
-    }
-    y += rowHs[ri] + gap;
-  });
+  ctx2.imageSmoothingQuality = 'high';
+  ctx2.fillStyle = E.bg; ctx2.fillRect(0, 0, f.w, f.h);
+  ctx2.translate(-f.x, -f.y);
+  vis.forEach((l) => drawLayer(ctx2, l));
   return true;
 }
 
+// One-off layouts: matching heights side by side (or in a grid), matching widths when stacked,
+// rows centred. The top of the list goes first.
+function arrangeLayers(layout) {
+  E.arrange = null;
+  const src = [...E.layers].reverse().filter((l) => !l.broken && layerLoaded(l)).map((l) =>
+    ({ l, sw: Math.max(1, l.crop.w * l.img.naturalWidth), sh: Math.max(1, l.crop.h * l.img.naturalHeight) }));
+  if (!src.length) return;
+  const gap = Math.max(0, E.gap | 0);
+  const put = (s, x, y, scale) => Object.assign(s.l, { x: Math.round(x), y: Math.round(y), scale });
+  if (layout === 'column') {
+    const w = Math.round(Math.min(...src.map((s) => s.sw)));
+    let y = 0;
+    for (const s of src) { put(s, 0, y, w / s.sw); y += Math.round((s.sh * w) / s.sw) + gap; }
+  } else {
+    const cols = layout === 'row' ? src.length : Math.max(1, E.cols | 0);
+    const rowH = Math.round(Math.min(...src.map((s) => s.sh)));
+    const rows = [];
+    for (let i = 0; i < src.length; i += cols) rows.push(src.slice(i, i + cols));
+    const rowW = rows.map((r) => r.reduce((a, s) => a + Math.round((s.sw * rowH) / s.sh), 0) + gap * (r.length - 1));
+    const maxW = Math.max(...rowW);
+    rows.forEach((r, ri) => {
+      let x = (maxW - rowW[ri]) / 2;
+      for (const s of r) { put(s, x, ri * (rowH + gap), rowH / s.sh); x += Math.round((s.sw * rowH) / s.sh) + gap; }
+    });
+  }
+  if (E.size) {   // a fixed canvas: scale the arrangement to fit it, centred
+    const b = unionRect(src.map((s) => layerRect(s.l)));
+    const k = Math.min(E.size.w / b.w, E.size.h / b.h);
+    const dx = (E.size.w - b.w * k) / 2, dy = (E.size.h - b.h * k) / 2;
+    for (const { l } of src) Object.assign(l, { x: Math.round(dx + (l.x - b.x) * k), y: Math.round(dy + (l.y - b.y) * k), scale: l.scale * k });
+  }
+  persistEditor();
+}
+
+// A new image goes in the middle of what's already there, shrunk to fit inside it
+function placeLayer(l) {
+  const w = l.crop.w * l.img.naturalWidth, hh = l.crop.h * l.img.naturalHeight;
+  const others = visibleLayers().filter((o) => o !== l);
+  const f = E.size ? editorFrame() : others.length ? unionRect(others.map(layerRect)) : null;
+  l.scale = f ? Math.min(1, f.w / w, f.h / hh) : 1;
+  l.x = f ? Math.round(f.x + (f.w - w * l.scale) / 2) : 0;
+  l.y = f ? Math.round(f.y + (f.h - hh * l.scale) / 2) : 0;
+  E.sel = l; E.cropping = false;
+  persistEditor();
+}
+
+// What a layer lines up with: the canvas (when it fits the layers, the other layers' bounds),
+// or nothing when it's the only layer
+function alignFrame(l) {
+  const others = visibleLayers().filter((o) => o !== l).map(layerRect);
+  return E.size ? editorFrame() : others.length ? unionRect(others) : null;
+}
+
+// Snap targets: the edges and centres of the align frame and of every other visible layer
+const SNAP = 8;   // screen px
+function snapTargets(l) {
+  const rs = visibleLayers().filter((o) => o !== l).map(layerRect), f = alignFrame(l);
+  if (f) rs.push(f);
+  return { xs: rs.flatMap((r) => [r.x, r.x + r.w / 2, r.x + r.w]), ys: rs.flatMap((r) => [r.y, r.y + r.h / 2, r.y + r.h]) };
+}
+// the smallest shift (d) that puts one of vals on a target within thr, and that target (at)
+function snapNearest(vals, targets, thr) {
+  let best = null;
+  for (const v of vals) for (const t of targets) {
+    const d = t - v;
+    if (Math.abs(d) <= thr && (!best || Math.abs(d) < Math.abs(best.d))) best = { d, at: t };
+  }
+  return best;
+}
+
+// Set a layer's crop without moving the image under it
+function setLayerCrop(l, c, ir = imageRect(l)) {
+  l.crop = c;
+  l.x = ir.x + c.x * ir.w; l.y = ir.y + c.y * ir.h;
+}
+
+// view: canvas px → screen px in the viewer (s = zoom, ox/oy = offset). It's refitted on every
+// redraw, except while dragging, so the canvas doesn't jump around under the finger.
+let EV = null, EVheld = false;
+function fitView(w, hh) {
+  if (EVheld && EV) return;
+  const f = editorFrame(), rs = f ? [f] : [];
+  if (E.size) rs.push(...visibleLayers().map(layerRect));   // show layers hanging off a fixed canvas too
+  if (E.cropping && E.sel && ready(E.sel)) rs.push(imageRect(E.sel));
+  if (!rs.length) { EV = null; return; }
+  const b = unionRect(rs), pad = 28, top = 72;   // room above for the layer toolbar
+  const s = Math.max(1e-3, Math.min((w - 2 * pad) / b.w, (hh - pad - top) / b.h));
+  EV = { s, ox: (w - b.w * s) / 2 - b.x * s, oy: top + (hh - pad - top - b.h * s) / 2 - b.y * s };
+}
+
+const HANDLE = 22;   // touch radius of a corner handle, screen px
+function drawBox(ctx, r, accent) {
+  ctx.strokeStyle = accent; ctx.lineWidth = 2;
+  ctx.strokeRect(r.x, r.y, r.w, r.h);
+  ctx.fillStyle = accent; ctx.strokeStyle = '#000';
+  for (const [x, y] of [[r.x, r.y], [r.x + r.w, r.y], [r.x, r.y + r.h], [r.x + r.w, r.y + r.h]]) {
+    ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
+}
+
 function drawEditorCanvas() {
+  const cv = $('#editorCanvas'), any = E.layers.some(ready);
+  $('#editorToolbar').classList.add('hidden');
+  cv.classList.toggle('hidden', !any);
+  $('#editorEmpty').classList.toggle('hidden', any);
+  const f = editorFrame();
+  $('#editorSize').textContent = any && f ? `${f.w}×${f.h} · ${(f.w * f.h / 1e6).toFixed(2)} MP` : '';
+  const dpr = devicePixelRatio || 1, w = cv.clientWidth, hh = cv.clientHeight;
+  if (!any || !w || !hh) return;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(hh * dpr);
+  fitView(w, hh);
+  if (!EV) return;
+  const { s, ox, oy } = EV, ctx = cv.getContext('2d');
+  const scr = (r) => ({ x: ox + r.x * s, y: oy + r.y * s, w: r.w * s, h: r.h * s });
+  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#fff';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingQuality = 'high';
+  ctx.fillStyle = '#14161c'; ctx.fillRect(0, 0, w, hh);
+  ctx.save(); ctx.translate(ox, oy); ctx.scale(s, s);
+  if (f) { ctx.fillStyle = E.bg; ctx.fillRect(f.x, f.y, f.w, f.h); }
+  visibleLayers().forEach((l) => drawLayer(ctx, l));
+  ctx.restore();
+  if (E.size && f) {   // shade whatever hangs off a fixed-size canvas
+    const fr = scr(f);
+    ctx.fillStyle = '#000a'; ctx.beginPath(); ctx.rect(0, 0, w, hh); ctx.rect(fr.x, fr.y, fr.w, fr.h); ctx.fill('evenodd');
+  }
+  const sel = E.sel && ready(E.sel) ? E.sel : null;
+  if (!sel) return;
+  if (E.cropping) {   // the whole image dimmed, the kept part on top of it
+    const ir = scr(imageRect(sel));
+    ctx.fillStyle = '#000a'; ctx.fillRect(0, 0, w, hh);
+    ctx.globalAlpha = 0.35; ctx.drawImage(sel.img, ir.x, ir.y, ir.w, ir.h); ctx.globalAlpha = 1;
+    ctx.save(); ctx.translate(ox, oy); ctx.scale(s, s); drawLayer(ctx, sel); ctx.restore();
+    ctx.strokeStyle = '#fff6'; ctx.lineWidth = 1; ctx.strokeRect(ir.x, ir.y, ir.w, ir.h);
+  }
+  drawBox(ctx, scr(layerRect(sel)), accent);
+  ctx.strokeStyle = '#ff3df2'; ctx.lineWidth = 1;
+  for (const g of E.guides) {
+    ctx.beginPath();
+    if (g.x != null) { const x = Math.round(ox + g.x * s) + 0.5; ctx.moveTo(x, 0); ctx.lineTo(x, hh); }
+    else { const y = Math.round(oy + g.y * s) + 0.5; ctx.moveTo(0, y); ctx.lineTo(w, y); }
+    ctx.stroke();
+  }
+  placeEditorToolbar(scr(E.cropping ? imageRect(sel) : layerRect(sel)), w, hh);
+}
+
+// The Transform / Crop switch floats above the selected layer (below it, or inside, when there's no room)
+function placeEditorToolbar(r, w, hh) {
+  const bar = $('#editorToolbar');
+  bar.classList.remove('hidden');
+  for (const b of bar.querySelectorAll('[data-mode]')) b.classList.toggle('on', (b.dataset.mode === 'crop') === E.cropping);
+  bar.querySelector('[data-snap]').classList.toggle('on', E.snap);
+  const bw = bar.offsetWidth, bh = bar.offsetHeight, m = 6, clear = 18;   // clear the corner handles
+  let top = r.y - bh - clear;
+  if (top < m) top = r.y + r.h + clear;
+  bar.style.left = `${Math.min(w - bw - m, Math.max(m, r.x + r.w / 2 - bw / 2))}px`;
+  bar.style.top = `${Math.min(hh - bh - m, Math.max(m, top))}px`;
+}
+
+function setEditorMode(crop) {
+  if (!E.sel || E.cropping === crop) return;
+  E.cropping = crop;
+  if (crop) E.aspect = null;
+  renderEditor();
+}
+
+// Drag on the canvas: a layer to move it, a corner of the selected one to resize it, and while
+// cropping the crop box (or a new one inside the image). Double-tap a layer to crop it.
+function wireEditor() {
   const cv = $('#editorCanvas');
-  const ok = composeEditor(cv);
-  cv.classList.toggle('hidden', !ok);
-  $('#editorEmpty').classList.toggle('hidden', ok);
-  $('#editorSize').textContent = ok ? `${cv.width}×${cv.height} · ${(cv.width * cv.height / 1e6).toFixed(2)} MP` : '';
+  const clamp01 = (v) => Math.min(1, Math.max(0, v));
+  const point = (e) => {
+    const r = cv.getBoundingClientRect();
+    return { x: (e.clientX - r.left - EV.ox) / EV.s, y: (e.clientY - r.top - EV.oy) / EV.s };
+  };
+  const corner = (p, r) => {
+    for (const k of ['nw', 'ne', 'sw', 'se']) {
+      const x = k.includes('w') ? r.x : r.x + r.w, y = k.includes('n') ? r.y : r.y + r.h;
+      if (Math.hypot(x - p.x, y - p.y) * EV.s < HANDLE) return k;
+    }
+    return null;
+  };
+  let drag = null, lastTap = { t: 0, l: null };
+  cv.addEventListener('pointerdown', (e) => {
+    if (!EV) return;
+    e.preventDefault(); cv.setPointerCapture(e.pointerId);
+    const p = point(e), sel = E.sel && ready(E.sel) ? E.sel : null;
+    drag = null; EVheld = true;
+    if (sel && E.cropping) {
+      const ir = imageRect(sel), c = sel.crop, k = corner(p, layerRect(sel));
+      const q = { x: clamp01((p.x - ir.x) / ir.w), y: clamp01((p.y - ir.y) / ir.h) };
+      if (k) drag = { crop: true, ir, fx: k.includes('w') ? c.x + c.w : c.x, fy: k.includes('n') ? c.y + c.h : c.y };
+      else if (inside(p, layerRect(sel))) drag = { crop: true, ir, move: true, q0: q, c0: { ...c } };
+      else if (inside(p, ir)) drag = { crop: true, ir, fx: q.x, fy: q.y };
+      else { EVheld = false; E.cropping = false; renderEditor(); }   // tapping outside the image finishes the crop
+      return;
+    }
+    const k = sel && corner(p, layerRect(sel));
+    if (k) {
+      const r = layerRect(sel);
+      drag = { resize: true, l: sel, ax: k.includes('w') ? r.x + r.w : r.x, ay: k.includes('n') ? r.y + r.h : r.y,
+        cw: r.w / sel.scale, ch: r.h / sel.scale };
+      return;
+    }
+    const hit = visibleLayers().reverse().find((l) => inside(p, layerRect(l)));
+    if (!hit) { EVheld = false; if (E.sel) { E.sel = null; renderEditor(); } return; }
+    const now = performance.now();
+    if (hit === lastTap.l && now - lastTap.t < 350) {
+      lastTap = { t: 0, l: null }; EVheld = false;
+      E.sel = hit; E.cropping = true; E.aspect = null; renderEditor();
+      return;
+    }
+    lastTap = { t: now, l: hit };
+    drag = { l: hit, p0: p, x0: hit.x, y0: hit.y };
+    if (E.sel !== hit) { E.sel = hit; renderEditor(); }
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const p = point(e);
+    if (drag.crop) {
+      const l = E.sel, ir = drag.ir, W = l.img.naturalWidth, H = l.img.naturalHeight;
+      const q = { x: clamp01((p.x - ir.x) / ir.w), y: clamp01((p.y - ir.y) / ir.h) };
+      const c = drag.move
+        ? { ...drag.c0, x: Math.min(1 - drag.c0.w, Math.max(0, drag.c0.x + q.x - drag.q0.x)),
+          y: Math.min(1 - drag.c0.h, Math.max(0, drag.c0.y + q.y - drag.q0.y)) }
+        : cropSpan(W, H, E.aspect, drag.fx, drag.fy, q.x, q.y);
+      setLayerCrop(l, c, ir);
+    } else if (drag.resize) {
+      const l = drag.l, left = p.x < drag.ax, up = p.y < drag.ay;
+      l.scale = Math.max(0.01, Math.abs(p.x - drag.ax) / drag.cw, Math.abs(p.y - drag.ay) / drag.ch);
+      E.guides = [];
+      if (E.snap && !e.altKey) {   // the dragged corner snaps on whichever axis is closer
+        const t = snapTargets(l), thr = SNAP / EV.s;
+        const ex = drag.ax + (left ? -1 : 1) * drag.cw * l.scale, ey = drag.ay + (up ? -1 : 1) * drag.ch * l.scale;
+        const sx = snapNearest([ex], t.xs, thr), sy = snapNearest([ey], t.ys, thr);
+        const g = sx && (!sy || Math.abs(sx.d) <= Math.abs(sy.d)) ? { x: sx.at } : sy ? { y: sy.at } : null;
+        if (g) {
+          l.scale = Math.max(0.01, g.x != null ? Math.abs(g.x - drag.ax) / drag.cw : Math.abs(g.y - drag.ay) / drag.ch);
+          E.guides.push(g);
+        }
+      }
+      l.x = Math.round(left ? drag.ax - drag.cw * l.scale : drag.ax);
+      l.y = Math.round(up ? drag.ay - drag.ch * l.scale : drag.ay);
+    } else {
+      const l = drag.l;
+      l.x = Math.round(drag.x0 + p.x - drag.p0.x);
+      l.y = Math.round(drag.y0 + p.y - drag.p0.y);
+      E.guides = [];
+      if (E.snap && !e.altKey) {   // edges and centre snap to the canvas and the other layers
+        const t = snapTargets(l), thr = SNAP / EV.s, r = layerRect(l);
+        const sx = snapNearest([r.x, r.x + r.w / 2, r.x + r.w], t.xs, thr);
+        const sy = snapNearest([r.y, r.y + r.h / 2, r.y + r.h], t.ys, thr);
+        if (sx) { l.x = Math.round(l.x + sx.d); E.guides.push({ x: sx.at }); }
+        if (sy) { l.y = Math.round(l.y + sy.d); E.guides.push({ y: sy.at }); }
+      }
+    }
+    drag.moved = true;
+    drawEditorCanvas();
+  });
+  const end = () => {
+    const moved = drag && drag.moved;
+    drag = null; EVheld = false; E.guides = [];
+    if (moved) { lastTap = { t: 0, l: null }; persistEditor(); }
+    renderEditor();
+  };
+  cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
+  cv.parentElement.append(h('div', { id: 'editorToolbar', class: 'layer-toolbar hidden', role: 'toolbar', 'aria-label': 'Layer tool' },
+    h('button', { type: 'button', 'data-mode': 'transform', title: 'Move and resize (V)', onclick: () => setEditorMode(false) }, '✥ Transform'),
+    h('button', { type: 'button', 'data-mode': 'crop', title: 'Crop (C)', onclick: () => setEditorMode(true) }, '⛶ Crop'),
+    h('span', { class: 'sep' }),
+    h('button', { type: 'button', 'data-snap': '', title: 'Snap to the canvas and other layers (hold Alt to skip)',
+      onclick: () => { E.snap = !E.snap; persistEditor(); drawEditorCanvas(); } }, '⌖ Snap')));
+  new ResizeObserver(() => { if (!EVheld) drawEditorCanvas(); }).observe(cv.parentElement);
+
+  // V / C switch tool, Esc finishes a crop / deselects, Delete removes the selected layer, arrows nudge it
+  document.addEventListener('keydown', (e) => {
+    if (!$('#tab-editor').classList.contains('active') || !$('#sheet').classList.contains('hidden')
+      || e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey || !E.sel) return;
+    const l = E.sel, n = e.shiftKey ? 10 : 1;
+    const nudge = (dx, dy) => { if (E.cropping || !ready(l)) return; l.x += dx; l.y += dy; persistEditor(); };
+    const keys = {
+      Escape: () => { if (E.cropping) E.cropping = false; else E.sel = null; },
+      v: () => { E.cropping = false; }, c: () => { E.cropping = true; E.aspect = null; },
+      Enter: () => { E.cropping = false; },
+      Delete: () => removeLayer(l), Backspace: () => removeLayer(l),
+      ArrowLeft: () => nudge(-n, 0), ArrowRight: () => nudge(n, 0), ArrowUp: () => nudge(0, -n), ArrowDown: () => nudge(0, n),
+    };
+    if (!keys[e.key]) return;
+    e.preventDefault(); keys[e.key](); renderEditor();
+  });
+}
+
+function removeLayer(l) {
+  E.layers = E.layers.filter((o) => o !== l);
+  if (E.sel === l) { E.sel = null; E.cropping = false; }
+  persistEditor();
 }
 
 function renderEditor() {
   E.layers.forEach(loadLayerImage);
-  const move = (i, d) => {
-    const j = i + d;
-    if (j < 0 || j >= E.layers.length) return;
-    [E.layers[i], E.layers[j]] = [E.layers[j], E.layers[i]];
-    persistEditor(); renderEditor();
-  };
-  const layerRows = E.layers.map((l, i) => {
-    const cropped = l.crop.w < 0.999 || l.crop.h < 0.999;
-    return h('div', { class: 'layer-row' + (l.broken ? ' off' : '') },
-      h('button', { type: 'button', class: 'thumb', onclick: () => cropLayer(l) }, h('img', { src: thumbUrl(l.name, 160), alt: '' })),
-      h('div', { class: 'layer-name' }, h('span', {}, l.name.split('/').pop()),
-        h('span', { class: 'hint' }, l.broken ? 'could not load' : cropped ? 'cropped' : 'full image')),
-      h('div', { class: 'layer-btns' },
-        h('button', { type: 'button', class: 'btn small', onclick: () => cropLayer(l) }, 'Crop'),
-        h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Move earlier', onclick: () => move(i, -1) }, '↑'),
-        h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Move later', onclick: () => move(i, 1) }, '↓'),
-        h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Remove', onclick: () => { E.layers.splice(i, 1); persistEditor(); renderEditor(); } }, '✕')),
-      layerSize(l));
-  });
-
-  const seg = h('div', { class: 'seg' });
-  for (const [m, label] of [['row', 'Side by side'], ['column', 'Stacked'], ['grid', 'Grid']]) {
-    seg.append(h('button', { type: 'button', class: E.layout === m ? 'on' : '',
-      onclick: () => { E.layout = m; persistEditor(); renderEditor(); } }, label));
-  }
-  const num = (label, key, min, max, step = 1) => {
-    const input = h('input', { type: 'number', inputMode: 'numeric', min, max, step, value: E[key] });
-    input.addEventListener('change', () => {
-      E[key] = Math.min(max, Math.max(min, parseFloat(input.value) || 0)); input.value = E[key];
-      persistEditor(); drawEditorCanvas();
-    });
-    return h('label', { class: 'field' }, h('span', { class: 'lbl' }, label), input);
-  };
-  const bg = h('input', { type: 'color', value: E.bg });
-  bg.addEventListener('input', () => { E.bg = bg.value; persistEditor(); drawEditorCanvas(); });
-
+  if (E.sel && !E.layers.includes(E.sel)) E.sel = null;
+  if (!E.sel || !ready(E.sel)) E.cropping = false;
   $('#editorPanel').replaceChildren(
     h('div', { class: 'group-body flat' },
       h('div', { class: 'row' },
         h('button', { type: 'button', class: 'btn primary', onclick: addEditorImages }, '+ Add images'),
         E.layers.length ? h('button', { type: 'button', class: 'btn ghost', style: 'flex:none',
-          onclick: () => { E.layers = []; persistEditor(); renderEditor(); } }, 'Clear all') : null),
-      layerRows.length ? h('div', { class: 'layers' }, layerRows)
-        : h('div', { class: 'hint' }, 'Add images from your inputs, generations or device. Tap one to crop it.'),
-      h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Layout'), seg),
-      h('div', { class: 'row', style: 'align-items:end' },
-        E.layout === 'grid' ? num('Columns', 'cols', 1, 12) : null,
-        num('Gap (px)', 'gap', 0, 400),
-        h('label', { class: 'field', style: 'flex:none' }, h('span', { class: 'lbl' }, 'Background'), bg)),
-      h('div', { class: 'field' }, mpInput(() => E.mp, (n) => { E.mp = n; persistEditor(); })),
-      h('div', { class: 'row' },
-        h('button', { type: 'button', class: 'btn primary', onclick: saveEditor }, 'Save as input'),
-        h('button', { type: 'button', class: 'btn', onclick: downloadEditor }, 'Download'))));
+          onclick: () => { E.layers = []; E.sel = null; E.arrange = null; persistEditor(); renderEditor(); } }, 'Clear all') : null),
+      layerList(),
+      E.sel ? layerProps(E.sel) : canvasProps()));
   drawEditorCanvas();
 }
 
-// Per image: match the others' height (width when stacked), or keep a fraction of its own pixels
-const LAYER_SCALES = [[null, 'Match others'], [0.25, '25%'], [0.5, '50%'], [0.75, '75%'], [1, '100% (original)'], [1.5, '150%'], [2, '200%']];
-function layerSize(l) {
-  const sel = h('select', { 'aria-label': 'Size' }, LAYER_SCALES.map(([v, label]) =>
-    h('option', { value: v ?? '', selected: (l.scale || null) === v }, label)));
-  const W = l.img && l.img.naturalWidth, H = l.img && l.img.naturalHeight;
-  const px = W && l.scale ? `${Math.round(W * l.crop.w * l.scale)}×${Math.round(H * l.crop.h * l.scale)} px`
-    : E.layout === 'column' ? 'same width as the others' : 'same height as the others';
-  sel.addEventListener('change', () => { l.scale = sel.value ? Number(sel.value) : null; persistEditor(); renderEditor(); });
-  return h('label', { class: 'layer-size' }, h('span', { class: 'hint' }, 'Size'), sel, h('span', { class: 'hint' }, px));
+const editorIcon = (label, text, fn, extra = {}) => h('button', { type: 'button', class: 'icon-btn', 'aria-label': label, title: label,
+  ...extra, onclick: (e) => { e.stopPropagation(); fn(); } }, text);
+
+function editorNum(label, value, set, { min = -1e6, max = 1e6, step = 1 } = {}) {
+  const input = h('input', { type: 'number', inputMode: 'numeric', min, max, step, value });
+  input.addEventListener('change', () => {
+    set(Math.min(max, Math.max(min, parseFloat(input.value) || 0)));
+    persistEditor(); renderEditor();
+  });
+  return h('label', { class: 'field' }, h('span', { class: 'lbl' }, label), input);
+}
+
+// Top of the list is drawn on top; tap a row to select that layer
+function layerList() {
+  if (!E.layers.length) return h('div', { class: 'hint' }, 'Add images from your inputs, generations or device, then tap one on the canvas to move, resize or crop it.');
+  const move = (l, d) => {
+    const i = E.layers.indexOf(l), j = i + d;
+    if (j < 0 || j >= E.layers.length) return;
+    [E.layers[i], E.layers[j]] = [E.layers[j], E.layers[i]];
+    persistEditor(); renderEditor();
+  };
+  return h('div', { class: 'layers' }, [...E.layers].reverse().map((l) => {
+    const r = ready(l) ? layerRect(l) : null, cropped = l.crop.w < 0.999 || l.crop.h < 0.999;
+    return h('div', { class: 'layer-row' + (l === E.sel ? ' sel' : '') + (l.hidden || l.broken ? ' off' : ''),
+      onclick: () => { E.sel = l === E.sel ? null : l; E.cropping = false; renderEditor(); } },
+      h('span', { class: 'thumb' }, h('img', { src: thumbUrl(l.name, 160), alt: '' })),
+      h('div', { class: 'layer-name' }, h('span', {}, l.name.split('/').pop()),
+        h('span', { class: 'hint' }, l.broken ? 'could not load' : !r ? 'loading…'
+          : `${Math.round(r.w)}×${Math.round(r.h)}${cropped ? ' · cropped' : ''}${l.hidden ? ' · hidden' : ''}`)),
+      h('div', { class: 'layer-btns' },
+        editorIcon(l.hidden ? 'Show' : 'Hide', l.hidden ? '◌' : '◉', () => { l.hidden = !l.hidden; persistEditor(); renderEditor(); }),
+        editorIcon('Bring forward', '↑', () => move(l, 1)),
+        editorIcon('Send backward', '↓', () => move(l, -1))));
+  }));
+}
+
+function layerProps(l) {
+  const title = h('div', { class: 'props-title' }, h('span', {}, E.cropping ? 'Crop' : 'Layer'),
+    h('button', { type: 'button', class: 'btn small ghost', onclick: () => { if (E.cropping) E.cropping = false; else E.sel = null; renderEditor(); } }, 'Done'));
+  if (!ready(l)) {
+    return h('div', { class: 'props' }, title,
+      h('button', { type: 'button', class: 'btn small danger', onclick: () => { removeLayer(l); renderEditor(); } }, 'Delete layer'));
+  }
+  const W = l.img.naturalWidth, H = l.img.naturalHeight, c = l.crop;
+  if (E.cropping) {
+    const aspSeg = h('div', { class: 'seg wrap' }, ASPECTS.map(([label, a]) =>
+      h('button', { type: 'button', class: E.aspect === a ? 'on' : '', onclick: () => {
+        E.aspect = a;
+        if (a) setLayerCrop(l, aspectCrop(W, H, a));
+        persistEditor(); renderEditor();
+      } }, label)));
+    return h('div', { class: 'props' }, title,
+      h('div', { class: 'hint' }, 'Drag the box or its corners on the canvas. Switch back to Transform, or tap outside the image, when you\'re done.'),
+      h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Aspect'), aspSeg),
+      h('div', { class: 'hint' }, `Keeping ${Math.round(c.w * W)}×${Math.round(c.h * H)} of ${W}×${H} px`),
+      h('div', { class: 'row' },
+        h('button', { type: 'button', class: 'btn small primary', onclick: () => { E.cropping = false; renderEditor(); } }, 'Finish crop'),
+        h('button', { type: 'button', class: 'btn small', onclick: () => {
+          E.aspect = null; setLayerCrop(l, { ...FULL }); persistEditor(); renderEditor();
+        } }, 'Reset crop')));
+  }
+  const r = layerRect(l), cropped = c.w < 0.999 || c.h < 0.999;
+  // scale around the layer's centre
+  const setScale = (s) => {
+    const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+    l.scale = s;
+    const n = layerRect(l);
+    l.x = Math.round(cx - n.w / 2); l.y = Math.round(cy - n.h / 2);
+  };
+  return h('div', { class: 'props' }, title,
+    h('div', { class: 'hint layer-title' }, l.name.split('/').pop()),
+    h('div', { class: 'row' },
+      editorNum('X', Math.round(l.x), (v) => { l.x = v; }),
+      editorNum('Y', Math.round(l.y), (v) => { l.y = v; }),
+      editorNum('Scale %', Math.round(l.scale * 1000) / 10, (v) => setScale(v / 100), { min: 1, max: 1000, step: 'any' })),
+    h('div', { class: 'hint' }, `${Math.round(r.w)}×${Math.round(r.h)} px on the canvas · ${Math.round(c.w * W)}×${Math.round(c.h * H)} px of the image`),
+    h('div', { class: 'row' },
+      h('button', { type: 'button', class: 'btn small', onclick: () => { E.cropping = true; E.aspect = null; renderEditor(); } }, 'Crop'),
+      cropped ? h('button', { type: 'button', class: 'btn small', onclick: () => { setLayerCrop(l, { ...FULL }); persistEditor(); renderEditor(); } }, 'Reset crop') : null,
+      h('button', { type: 'button', class: 'btn small', onclick: () => { setScale(1); persistEditor(); renderEditor(); } }, '100%')),
+    alignControls(l),
+    h('button', { type: 'button', class: 'btn small danger', onclick: () => { removeLayer(l); renderEditor(); } }, 'Delete layer'),
+    h('div', { class: 'hint' }, 'Drag it on the canvas to move it, or a corner to resize; it snaps to the canvas and other layers (hold Alt, or turn off Snap, to place it freely). Switch to Crop in the toolbar above it (or double-tap).'));
+}
+
+// Align buttons: 0 / 0.5 / 1 = start / centre / end of the align frame, per axis
+function alignControls(l) {
+  const f = alignFrame(l);
+  const align = (axis, k) => {
+    const r = layerRect(l);
+    if (axis === 'x') l.x = Math.round(f.x + (f.w - r.w) * k); else l.y = Math.round(f.y + (f.h - r.h) * k);
+    persistEditor(); renderEditor();
+  };
+  const seg = (axis, items) => h('div', { class: 'seg' }, items.map(([k, label, title]) =>
+    h('button', { type: 'button', title, disabled: !f, onclick: () => align(axis, k) }, label)));
+  return h('div', { class: 'field' },
+    h('span', { class: 'lbl' }, E.size ? 'Align to canvas' : 'Align to the other layers'),
+    seg('x', [[0, '⇤ Left', 'Align left edges'], [0.5, '↔ Centre', 'Centre horizontally'], [1, 'Right ⇥', 'Align right edges']]),
+    seg('y', [[0, '⤒ Top', 'Align top edges'], [0.5, '↕ Middle', 'Centre vertically'], [1, 'Bottom ⤓', 'Align bottom edges']]));
+}
+
+function canvasProps() {
+  const f = editorFrame();
+  const sizeSeg = h('div', { class: 'seg' },
+    h('button', { type: 'button', class: E.size ? '' : 'on', onclick: () => { E.size = null; persistEditor(); renderEditor(); } }, 'Fit layers'),
+    h('button', { type: 'button', class: E.size ? 'on' : '', onclick: () => {
+      if (E.size) return;
+      // start from what the layers cover now, moved so it begins at 0,0
+      if (f) for (const l of E.layers) if (l.x != null) { l.x -= f.x; l.y -= f.y; }
+      E.size = f ? { w: f.w, h: f.h } : { w: 1024, h: 1024 };
+      persistEditor(); renderEditor();
+    } }, 'Fixed size'));
+  const arrSeg = h('div', { class: 'seg' }, [['row', 'Side by side'], ['column', 'Stacked'], ['grid', 'Grid']].map(([m, label]) =>
+    h('button', { type: 'button', disabled: !E.layers.length, onclick: () => { arrangeLayers(m); renderEditor(); } }, label)));
+  const bg = h('input', { type: 'color', value: E.bg });
+  bg.addEventListener('input', () => { E.bg = bg.value; persistEditor(); drawEditorCanvas(); });
+  return h('div', { class: 'props' },
+    h('div', { class: 'props-title' }, h('span', {}, 'Canvas')),
+    h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Size'), sizeSeg),
+    E.size ? h('div', { class: 'row' },
+      editorNum('Width', E.size.w, (v) => { E.size.w = v; }, { min: 1, max: 16384 }),
+      editorNum('Height', E.size.h, (v) => { E.size.h = v; }, { min: 1, max: 16384 })) : null,
+    h('label', { class: 'field', style: 'display:grid;justify-items:start' }, h('span', { class: 'lbl' }, 'Background'), bg),
+    h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Arrange layers'), arrSeg),
+    h('div', { class: 'row', style: 'align-items:end' },
+      editorNum('Grid columns', E.cols, (v) => { E.cols = v; }, { min: 1, max: 12 }),
+      editorNum('Gap (px)', E.gap, (v) => { E.gap = v; }, { min: 0, max: 400 })),
+    h('div', { class: 'field' }, mpInput(() => E.mp, (n) => { E.mp = n; persistEditor(); })),
+    h('div', { class: 'row' },
+      h('button', { type: 'button', class: 'btn primary', onclick: saveEditor }, 'Save as input'),
+      h('button', { type: 'button', class: 'btn', onclick: downloadEditor }, 'Download')));
 }
 
 function addEditorImages() {
   openImagePicker({ title: 'Add images', multi: true, mp: () => 0, onPick: (name) => {
-    E.layers.push({ name, crop: { ...FULL } }); persistEditor(); renderEditor();
+    E.layers.push({ name, crop: { ...FULL }, scale: 1, hidden: false }); persistEditor(); renderEditor();
   } });
 }
 
@@ -1797,9 +2186,25 @@ function useInGenerate(name, msg) {
 
 const ASPECTS = [['Free', null], ['1:1', 1], ['2:3', 2 / 3], ['3:2', 3 / 2], ['3:4', 3 / 4], ['4:3', 4 / 3], ['9:16', 9 / 16], ['16:9', 16 / 9]];
 
-function cropLayer(layer) {
-  if (!layer.img || !layer.img.naturalWidth) return toast('Image still loading', true);
-  openCrop({ img: layer.img, crop: layer.crop, onApply: (c) => { layer.crop = c; persistEditor(); renderEditor(); } });
+// Crop rectangle (fractions of a W×H image) from a fixed corner (fx,fy) to the pointer, respecting
+// the aspect lock (width/height in pixels, null = free) and the image bounds
+function cropSpan(W, H, aspect, fx, fy, px, py) {
+  let w = Math.abs(px - fx), hh = Math.abs(py - fy);
+  if (aspect) {
+    const maxW = px < fx ? fx : 1 - fx, maxH = py < fy ? fy : 1 - fy;
+    hh = (w * W) / (aspect * H);
+    if (hh > maxH) { hh = maxH; w = (hh * aspect * H) / W; }
+    if (w > maxW) { w = maxW; hh = (w * W) / (aspect * H); }
+  }
+  w = Math.max(w, 0.02); hh = Math.max(hh, 0.02);
+  return { x: px < fx ? fx - w : fx, y: py < fy ? fy - hh : fy, w, h: hh };
+}
+
+// the largest centred crop with that aspect
+function aspectCrop(W, H, a) {
+  let w = 1, hh = W / (a * H);
+  if (hh > 1) { hh = 1; w = (a * H) / W; }
+  return { x: (1 - w) / 2, y: (1 - hh) / 2, w, h: hh };
 }
 
 // Crop popup for a loaded image; onApply gets {x,y,w,h} as fractions of it.
@@ -1815,25 +2220,10 @@ function openCrop({ img, crop = FULL, onApply }) {
     Object.assign(box.style, { left: `${c.x * 100}%`, top: `${c.y * 100}%`, width: `${c.w * 100}%`, height: `${c.h * 100}%` });
     info.textContent = `${Math.round(c.w * W)}×${Math.round(c.h * H)} px`;
   };
-  // rectangle from a fixed corner (fx,fy) to the pointer, respecting the aspect lock and image bounds
-  const span = (fx, fy, px, py) => {
-    let w = Math.abs(px - fx), hh = Math.abs(py - fy);
-    if (aspect) {
-      const maxW = px < fx ? fx : 1 - fx, maxH = py < fy ? fy : 1 - fy;
-      hh = (w * W) / (aspect * H);
-      if (hh > maxH) { hh = maxH; w = (hh * aspect * H) / W; }
-      if (w > maxW) { w = maxW; hh = (w * W) / (aspect * H); }
-    }
-    w = Math.max(w, 0.02); hh = Math.max(hh, 0.02);
-    return { x: px < fx ? fx - w : fx, y: py < fy ? fy - hh : fy, w, h: hh };
-  };
+  const span = (fx, fy, px, py) => cropSpan(W, H, aspect, fx, fy, px, py);
   const setAspect = (a) => {
     aspect = a;
-    if (a) {   // largest centred box with that aspect
-      let w = 1, hh = W / (a * H);
-      if (hh > 1) { hh = 1; w = (a * H) / W; }
-      c = { x: (1 - w) / 2, y: (1 - hh) / 2, w, h: hh };
-    }
+    if (a) c = aspectCrop(W, H, a);
     [...aspSeg.children].forEach((b) => b.classList.toggle('on', b.dataset.a === String(a)));
     draw();
   };
@@ -1869,6 +2259,8 @@ function openCrop({ img, crop = FULL, onApply }) {
       h('button', { class: 'btn small ghost', onclick: closeSheet }, 'Cancel'), info));
   draw();
 }
+
+wireEditor();
 
 // ---------------------------------------------------------------------------
 // video: a Premiere-style timeline. Video tracks stack (V2 draws over V1), audio tracks mix, and
@@ -3319,6 +3711,21 @@ function wireTextPopup() {
     ta.dispatchEvent(new Event('input'));
     undoBtn.disabled = !undo.length;
   } }, '↶ Undo');
+  // wildcard keys, since { | } are a few keyboard pages deep. { } wraps a selection as the first option.
+  const typeRaw = (fn) => {
+    snap(); lastTyped = -Infinity;
+    const a = ta.selectionStart, b = ta.selectionEnd;
+    const [text, caret] = fn(ta.value.slice(a, b), ta.value.slice(b));
+    ta.focus(); ta.setRangeText(text, a, b, 'end');
+    ta.setSelectionRange(a + caret, a + caret);
+    ta.dispatchEvent(new Event('input'));
+  };
+  const key = (label, title, fn) => h('button', { type: 'button', class: 'btn small key', title,
+    onmousedown: (ev) => ev.preventDefault(), onclick: () => typeRaw(fn) }, label);
+  const keys = h('div', { class: 'text-pop-keys' },
+    key('{ }', 'Wildcard group: one option is picked at random each run', (sel) => sel ? [`{${sel}|}`, sel.length + 2] : ['{}', 1]),
+    key('|', 'Next option', () => ['|', 1]),
+    key('}→', 'Jump past the end of this group', (sel, after) => { const i = after.indexOf('}'); return [sel, sel.length + (i >= 0 ? i + 1 : 0)]; }));
   const snap = (st = state()) => {
     undo.push(st);
     if (undo.length > 100) undo.shift();
@@ -3332,7 +3739,7 @@ function wireTextPopup() {
     prev = state();
   });
   const box = h('div', { class: 'text-pop hidden', role: 'dialog', 'aria-modal': 'true' },
-    h('div', { class: 'text-pop-bar' }, title, undoBtn,
+    h('div', { class: 'text-pop-bar' }, title, keys, undoBtn,
       h('button', { type: 'button', class: 'btn small primary', onclick: close }, 'Done')),
     h('div', { class: 'text-pop-body' }, ta, tags));
   document.body.append(box);

@@ -230,15 +230,30 @@ a.btn { color: var(--text); }
 /* ---- editor ---- */
 .group-body.flat { padding: 0; }
 .layers { display: grid; gap: 8px; }
-.layer-row { display: grid; grid-template-columns: 64px 1fr; gap: 6px 10px; align-items: center; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
-.layer-row .thumb { width: 64px; height: 64px; grid-row: span 2; }
-.layer-row.off { opacity: .5; }
+.layers { gap: 4px; }
+.layer-row { display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: center; padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); cursor: pointer; }
+.layer-row .thumb { width: 44px; height: 44px; }
+.layer-row.sel { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
+.layer-row.off .thumb, .layer-row.off .layer-name { opacity: .5; }
 .layer-name { display: grid; min-width: 0; font-size: 14px; }
 .layer-name span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.layer-btns { display: flex; gap: 6px; }
-.layer-size { grid-column: 1 / -1; display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; }
-.layer-size select { min-height: 38px; }
-.layer-btns .btn { flex: 1; }
+.layer-btns { display: flex; gap: 4px; }
+.props { display: grid; gap: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
+.props-title { display: flex; justify-content: space-between; align-items: center; font-weight: 600; }
+.props .layer-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: -8px; }
+.props .row .field { min-width: 0; }
+#editorCanvas { touch-action: none; }
+.layer-toolbar {
+  position: absolute; z-index: 2; display: flex; gap: 2px; padding: 3px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 4px 16px #0008;
+}
+.layer-toolbar button {
+  min-height: 36px; padding: 0 12px; border: 0; border-radius: 7px; background: transparent;
+  color: var(--muted); cursor: pointer; font-size: 14px; white-space: nowrap;
+}
+.layer-toolbar button.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.layer-toolbar .sep { width: 1px; margin: 4px 3px; background: var(--line); }
+.layer-toolbar [data-snap].on { background: var(--surface-2); color: var(--text); }
 input[type=color] { width: 64px; height: var(--tap); border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); padding: 4px; }
 .seg.wrap { flex-wrap: wrap; }
 .seg.wrap button { min-width: 64px; }
@@ -460,6 +475,8 @@ details.desc summary { cursor: pointer; color: var(--muted); }
 }
 .text-pop-bar { display: flex; align-items: center; gap: 8px; }
 .text-pop-bar b { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.text-pop-keys { display: flex; gap: 6px; }
+.text-pop-keys .key { min-width: 48px; font: 16px ui-monospace, monospace; }
 .text-pop textarea { height: 100%; min-height: 0; resize: none; font-size: 18px; line-height: 1.5; }
 .text-pop-body { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; min-height: 0; }
 .text-pop-tags { display: flex; flex-direction: column; gap: 6px; overflow-y: auto; width: 118px; }

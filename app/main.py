@@ -18,7 +18,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFil
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import accel, config, db, editsize, imageprep, stages, videoedit
+from . import accel, config, db, editsize, imageprep, stages, videoedit, wildcards
 from . import templates as tpl
 from .comfy import Comfy, ComfyError
 
@@ -301,10 +301,13 @@ async def generate(body: dict = Body(...)):
 
     created = []
     for i in range(batch):
-        resolved = {}
+        resolved, raw = {}, {}
         for key, f in fields.items():
             v = values.get(key, f["value"])
-            if f["kind"] == "seed":
+            if f["kind"] == "text" and wildcards.has(v):  # {a|b|c}: a fresh pick for every run
+                raw[key] = v
+                v = wildcards.expand(v)
+            elif f["kind"] == "seed":
                 v = int(v) if v not in (None, "") else -1
                 v = random.randint(0, SEED_MAX) if v < 0 else v + i  # batches of a fixed seed step +1
             elif f["kind"] == "int" and v not in (None, ""):
@@ -324,6 +327,8 @@ async def generate(body: dict = Body(...)):
             raise HTTPException(400, str(e))
         if body.get("builder"):  # the prompt builder's parts, so History can restore them for editing
             resolved["__builder"] = body["builder"]
+        if raw:  # the prompts as written, so Edit restores the wildcards (Run again keeps this run's picks)
+            resolved["__wildcards"] = raw
         gid = db.create_generation(project_id, t.id, resolved, wf, res["prompt_id"], parent)
         created.append(db.get_generation(gid))
         await push_gen(gid)
