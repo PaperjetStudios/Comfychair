@@ -11,7 +11,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote
 
 import httpx
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
@@ -29,6 +29,7 @@ comfy = Comfy(config.COMFY_URL)
 clients: set[WebSocket] = set()
 finalizing: set[str] = set()
 SEED_MAX = 2**48  # stays exact in JavaScript numbers
+MAX_IMAGE_UPLOAD = 200 << 20  # a phone photo is ~5-20 MB; this only stops runaway uploads
 
 
 # ---------------------------------------------------------------------------
@@ -209,23 +210,57 @@ async def finalize(pid: str):
 
 
 async def reconcile_loop():
-    """Safety net for missed websocket events (e.g. ComfyDeck restarted mid-run)."""
+    """Safety net for missed websocket events (e.g. ComfyDeck restarted mid-run). A run that ComfyUI
+    has neither queued nor finished was lost (ComfyUI restarted mid-run), so it's marked interrupted
+    instead of showing as running forever."""
+    lost_since: dict[str, float] = {}
     while True:
         await asyncio.sleep(10)
         if not comfy.connected:
             continue
         try:
-            for g in db.pending_generations():
-                if time.time() - g["created"] > 5:
-                    if (await comfy.history(g["prompt_id"])).get(g["prompt_id"]):
-                        await finalize(g["prompt_id"])
+            pending = [g for g in db.pending_generations() if time.time() - g["created"] > 5
+                       and not g["prompt_id"].startswith("edit-")]
+            if not pending:
+                lost_since.clear()
+                continue
+            q = await comfy.queue_state()
+            known = {it[1] for it in q.get("queue_running", []) + q.get("queue_pending", [])}
+            for g in pending:
+                pid = g["prompt_id"]
+                if (await comfy.history(pid)).get(pid):
+                    lost_since.pop(pid, None)
+                    await finalize(pid)
+                elif pid in known:
+                    lost_since.pop(pid, None)
+                elif time.time() - lost_since.setdefault(pid, time.time()) > 25:  # two passes, so no race with finishing
+                    lost_since.pop(pid, None)
+                    db.update_generation(g["id"], status="interrupted", error="Lost: ComfyUI restarted or dropped the run",
+                                         finished=time.time())
+                    await push_gen(g["id"])
+                    log.info("marked #%s as lost (not in ComfyUI's queue or history)", g["id"])
         except Exception:
             log.debug("reconcile pass failed", exc_info=True)
+
+
+def prune_thumbs(max_age_days=30):
+    """Thumbnails are cheap to remake, so drop the ones nobody has asked for in a month."""
+    cutoff = time.time() - max_age_days * 86400
+    for p in config.THUMB_DIR.glob("*.jpg"):
+        try:
+            if p.stat().st_mtime < cutoff:
+                p.unlink()
+        except OSError:
+            pass
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await asyncio.to_thread(migrate_outputs)
+    await asyncio.to_thread(prune_thumbs)
+    for g in db.pending_generations():  # Video-tab renders run inside a request: a restart ends them
+        if g["prompt_id"].startswith("edit-"):
+            db.update_generation(g["id"], status="error", error="ComfyDeck restarted during the render", finished=time.time())
     comfy.listeners.add(on_comfy)
     await comfy.start()
     task = asyncio.create_task(reconcile_loop())
@@ -236,6 +271,40 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="ComfyDeck", lifespan=lifespan)
+
+
+class TokenGate:
+    """With DECK_TOKEN set, every request (pages, files, API, websocket) needs the deck_token cookie.
+    Opening any page with ?token=<token> sets it and redirects to the same page without it."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    async def __call__(self, scope, receive, send):
+        if not config.TOKEN or scope["type"] not in ("http", "websocket"):
+            return await self.inner(scope, receive, send)
+        cookies = {}
+        for k, v in scope.get("headers", []):
+            if k == b"cookie":
+                for part in v.decode("latin-1").split(";"):
+                    name, _, val = part.strip().partition("=")
+                    cookies[name] = val
+        if cookies.get("deck_token") == config.TOKEN:
+            return await self.inner(scope, receive, send)
+        query = parse_qs(scope.get("query_string", b"").decode("latin-1"))
+        if scope["type"] == "http" and query.get("token", [""])[0] == config.TOKEN:
+            await send({"type": "http.response.start", "status": 303, "headers": [
+                (b"location", (scope.get("path") or "/").encode()),
+                (b"set-cookie", f"deck_token={config.TOKEN}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly".encode())]})
+            return await send({"type": "http.response.body", "body": b""})
+        if scope["type"] == "websocket":
+            return await send({"type": "websocket.close", "code": 4401})
+        body = b"ComfyDeck needs its access link: open http://<this box>:8190/?token=<DECK_TOKEN> once on this device."
+        await send({"type": "http.response.start", "status": 401, "headers": [(b"content-type", b"text/plain; charset=utf-8")]})
+        await send({"type": "http.response.body", "body": body})
+
+
+app.add_middleware(TokenGate)
 
 
 @app.exception_handler(httpx.HTTPError)
@@ -310,10 +379,11 @@ async def generate(body: dict = Body(...)):
             elif f["kind"] == "seed":
                 v = int(v) if v not in (None, "") else -1
                 v = random.randint(0, SEED_MAX) if v < 0 else v + i  # batches of a fixed seed step +1
-            elif f["kind"] == "int" and v not in (None, ""):
-                v = int(v)
-            elif f["kind"] == "float" and v not in (None, ""):
-                v = float(v)
+            elif f["kind"] in ("int", "float") and v not in (None, ""):
+                try:
+                    v = int(v) if f["kind"] == "int" else float(v)
+                except (TypeError, ValueError):
+                    raise HTTPException(400, f"{f['group']} · {f['label']}: {v!r} isn't a number")
             resolved[key] = v
         wf = editsize.inject(accel.inject(tpl.apply(t.workflow, resolved), resolved), resolved, list(fields.values()))
         folder = db.project_folder(project_id)
@@ -324,6 +394,8 @@ async def generate(body: dict = Body(...)):
         try:
             res = await comfy.queue(wf, preview=resolved.get(accel.PREVIEW))
         except ComfyError as e:
+            if created:  # earlier runs of the batch are queued: say so, so the tablet can follow them
+                raise HTTPException(400, {"message": f"Run {i + 1} of {batch} failed: {e}", "created": created})
             raise HTTPException(400, str(e))
         if body.get("builder"):  # the prompt builder's parts, so History can restore them for editing
             resolved["__builder"] = body["builder"]
@@ -336,9 +408,25 @@ async def generate(body: dict = Body(...)):
 
 
 @app.post("/api/interrupt")
-async def interrupt():
-    await comfy.interrupt()
-    return {"ok": True}
+async def interrupt(body: dict = Body(default={})):
+    """Stop a run. With a prompt_id, only that run: interrupted if it's running, taken out of the
+    queue if it's waiting, left alone if it's already over (so a late tap can't stop someone else's)."""
+    pid = (body or {}).get("prompt_id")
+    if not pid:
+        await comfy.interrupt()
+        return {"ok": True, "stopped": "current"}
+    q = await comfy.queue_state()
+    if pid in {it[1] for it in q.get("queue_running", [])}:
+        await comfy.interrupt()
+        return {"ok": True, "stopped": "running"}
+    if pid in {it[1] for it in q.get("queue_pending", [])}:
+        await comfy.delete_queued([pid])
+        g = db.get_by_prompt(pid)
+        if g and g["status"] == "queued":
+            db.update_generation(g["id"], status="interrupted", error="Cancelled", finished=time.time())
+            await push_gen(g["id"])
+        return {"ok": True, "stopped": "queued"}
+    return {"ok": True, "stopped": None}
 
 
 @app.get("/api/queue")
@@ -423,7 +511,9 @@ def _project(v):
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...), mp: float = Form(0), multiple: int = Form(8), crop: str = Form(""),
                  project_id: str = Form(""), source: str = Form("upload")):
-    data = await file.read()
+    data = await file.read(MAX_IMAGE_UPLOAD + 1)
+    if len(data) > MAX_IMAGE_UPLOAD:
+        raise HTTPException(413, f"That image is over {MAX_IMAGE_UPLOAD >> 20} MB")
     crop_box = json.loads(crop) if crop else None
     try:
         png, w, h = await asyncio.to_thread(imageprep.prep, data, mp, multiple, crop_box)
@@ -634,7 +724,9 @@ async def jobs():
         running = g["status"] == "running" or (pos == 0 and bool(q.get("queue_running")))
         active.append({**g, "status": "running" if running else "queued", "position": pos,
                        "elapsed": now - (g.get("started") or g["created"]) if running else None,
-                       "waiting": now - g["created"], "typical": avg(g["template"])})
+                       "waiting": now - g["created"], "typical": avg(g["template"]),
+                       # so a tablet that reconnects mid-run can redraw its stage strip
+                       "stages": stages.stages_in(_workflow_for(pid)) if running else None})
     # rough ETA: what's left of the running job plus the typical time of everything ahead
     t = 0.0
     for j in active:

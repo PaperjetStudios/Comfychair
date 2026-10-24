@@ -26,6 +26,10 @@ history: dict[str, dict] = {}
 files: dict[tuple[str, str, str], bytes] = {}
 queue: asyncio.Queue = asyncio.Queue()
 interrupted = {"flag": False}
+pending: dict[str, int] = {}  # prompt_id -> queue number, for GET /queue
+cancelled: set[str] = set()
+running = {"pid": None}
+counter = {"n": 0}
 ANIMATED = {"on": False}
 
 OBJECT_INFO = {
@@ -93,6 +97,12 @@ async def broadcast_status():
 async def worker():
     while True:
         pid, prompt, cid = await queue.get()
+        if pid in cancelled:  # deleted from the queue while waiting
+            cancelled.discard(pid)
+            pending.pop(pid, None)
+            continue
+        pending.pop(pid, None)
+        running["pid"] = pid
         interrupted["flag"] = False
         await send(cid, {"type": "execution_start", "data": {"prompt_id": pid}})
         sampler = next((k for k, v in prompt.items() if v["class_type"] == "KSampler"), None)
@@ -126,6 +136,7 @@ async def worker():
             history[pid] = {"status": {"status_str": "success", "completed": True, "messages": []}, "outputs": {"9": out}}
             await send(cid, {"type": "executed", "data": {"node": "9", "output": out, "prompt_id": pid}})
             await send(cid, {"type": "execution_success", "data": {"prompt_id": pid}})
+        running["pid"] = None
         await send(cid, {"type": "executing", "data": {"node": None, "prompt_id": pid}})
         await broadcast_status()
 
@@ -149,6 +160,8 @@ async def prompt(body: dict):
         return Response(json.dumps({"error": {"message": "Prompt outputs failed validation"}, "node_errors": errors}),
                         status_code=400, media_type="application/json")
     pid = str(uuid.uuid4())
+    counter["n"] += 1
+    pending[pid] = counter["n"]
     await queue.put((pid, p, body.get("client_id")))
     await broadcast_status()
     return {"prompt_id": pid, "number": queue.qsize(), "node_errors": {}}
@@ -180,12 +193,18 @@ async def interrupt():
 
 
 @app.get("/queue")
-async def get_queue():
-    return {"queue_running": [], "queue_pending": [], "size": queue.qsize()}
+async def get_queue():  # same shape as ComfyUI: [number, prompt_id, ...]
+    run = [[0, running["pid"], {}, {}, []]] if running["pid"] else []
+    return {"queue_running": run, "queue_pending": [[n, pid, {}, {}, []] for pid, n in pending.items()]}
 
 
 @app.post("/queue")
 async def post_queue(body: dict):
+    for pid in body.get("delete", []):
+        if pid in pending:
+            cancelled.add(pid)
+            pending.pop(pid, None)
+    await broadcast_status()
     return {}
 
 

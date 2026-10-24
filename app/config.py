@@ -22,6 +22,10 @@ INPUT_DIR = DATA_DIR / "inputs"      # local copies of every image sent to Comfy
 THUMB_DIR = DATA_DIR / "thumbs"      # cached JPEG thumbnails for the input gallery
 MEDIA_DIR = DATA_DIR / "media"       # music, voice-overs and outside clips uploaded for the Video tab
 
+# Optional access token. When set, every page, file and API call needs it: open
+# http://<box>:8190/?token=<token> once on each device and a cookie remembers it.
+TOKEN = os.environ.get("DECK_TOKEN", "")
+
 # Subfolder inside ComfyUI's input/ directory that ComfyDeck uploads into.
 COMFY_INPUT_SUBFOLDER = os.environ.get("DECK_COMFY_SUBFOLDER", "comfydeck")
 

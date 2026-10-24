@@ -57,18 +57,29 @@ you the models on it. The models are on NTFS (`/mnt/data`): if Windows ever runs
 off Fast Startup there, or ntfs-3g can refuse to mount it. ComfyDeck reconnects to ComfyUI on
 its own, so the start order between them doesn't matter.
 
-**HTTPS (optional):** browsers only allow screen wake-lock and full PWA install over HTTPS.
-With [mkcert](https://github.com/FiloSottile/mkcert):
+**HTTPS (optional, recommended):** over HTTPS the tablet can use the real screen wake-lock, show
+"done" notifications, and install ComfyDeck as an app (with an offline page when the box is off).
+Over plain http ComfyDeck keeps the screen on during runs with a tiny silent video instead, and
+signals a finished run with a chime and a ✓ in the tab title. To make a certificate with openssl:
 
 ```bash
-mkcert -install && mkdir -p certs
-mkcert -cert-file certs/deck.pem -key-file certs/deck-key.pem 192.168.1.50 localhost
+deploy/make-cert.sh                       # makes certs/comfydeck-ca.crt + the server certificate
 SSL_CERT=certs/deck.pem SSL_KEY=certs/deck-key.pem ./run.sh
 ```
 
-Then install mkcert's root CA on the tablet (`mkcert -CAROOT` shows where it is).
+Install `certs/comfydeck-ca.crt` on each tablet once (the script prints how). Re-run the script if
+the box's IP changes; the CA stays the same, so the tablets don't need it again.
 
-> There's no login. Only run it on a network you trust.
+**Access token (optional):** with `DECK_TOKEN=<something long>` set (e.g. `Environment=DECK_TOKEN=…`
+in the service), every page, file and API call needs it. Open `http://<box>:8190/?token=<it>` once on
+each device and a cookie remembers it for a year. Without it there's no login, so only run it on a
+network you trust.
+
+**Several devices:** every device sees the queue, but only the device that started a run gets its
+live preview and result in the viewer; the others say "busy with another device's run". Stop only
+stops your own run (it asks first once a run has gone 30 s); stop other runs from the Queue. A
+tablet that slept, reloaded or lost Wi-Fi picks a running job's progress back up and shows any
+result it missed.
 
 ---
 
@@ -165,6 +176,7 @@ web/               the tablet UI (vanilla JS, no build step)
 templates/         your workflow templates
 data/              database, projects/ (saved outputs), local copies of inputs (git-ignored)
 dev/mock_comfy.py  fake ComfyUI for UI work without a GPU
+tests/             unit tests for the workflow functions: .venv/bin/python -m unittest discover tests
 ```
 
 Every output is copied into `data/projects/<project name>/<generation id>_<file>`, so each project
@@ -181,6 +193,9 @@ shows that project's own images and generations first.
 .venv/bin/python dev/mock_comfy.py --port 8199 --animated
 COMFY_URL=http://127.0.0.1:8199 DECK_DATA=/tmp/deckdev ./run.sh
 ```
+
+The mock can run beside the real ComfyDeck: use another port and data folder (e.g.
+`--port 8191`, `DECK_DATA=/tmp/deckdev`) and nothing touches the live one.
 
 ### Debugging the websocket
 
@@ -199,5 +214,6 @@ the payload, so differently framed preview messages still work.
 | `GET /api/generations?project_id=` | history |
 | `POST /api/generations/{id}/to-input` | `{index, frame: "first"\|"last", mp, multiple}` → ComfyUI input name |
 | `POST /api/upload` | multipart `file`, `mp`, `multiple`, `crop` (`{"x","y","w","h"}` as fractions) |
-| `POST /api/interrupt` | stop the current run |
+| `POST /api/interrupt` | `{prompt_id}` stops that run (interrupts it if running, removes it if waiting, else nothing); without it, whatever is running |
+| `GET /api/jobs` | running and waiting jobs with timings (the running one with its stages), plus recent runs |
 | `WS /ws` | ComfyUI's own messages plus `deck_generation` updates; binary = previews |

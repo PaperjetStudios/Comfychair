@@ -24,23 +24,74 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode etc. */ } },
 };
 
-async function api(path, { method = 'GET', body, form } = {}) {
-  const opts = { method, headers: {} };
+// timeout: give up (and say so) instead of hanging when the server or the Wi-Fi is gone. Uploads and
+// slow lookups pass a longer one. An error's .data holds the server's detail when it's an object.
+async function api(path, { method = 'GET', body, form, timeout = form ? 300000 : 30000 } = {}) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeout);
+  const opts = { method, headers: {}, signal: ctl.signal };
   if (form) opts.body = form;
   else if (body !== undefined) { opts.body = JSON.stringify(body); opts.headers['Content-Type'] = 'application/json'; }
-  const r = await fetch(path, opts);
-  const text = await r.text();
+  let r, text;
+  try {
+    r = await fetch(path, opts);
+    text = await r.text();
+  } catch (e) {
+    throw new Error(e.name === 'AbortError' ? 'ComfyDeck didn\'t answer in time (is the server running?)' : 'Can\'t reach ComfyDeck (is the server running and on this network?)');
+  } finally { clearTimeout(timer); }
   let data; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-  if (!r.ok) throw new Error((data && data.detail) || text || r.statusText);
+  if (!r.ok) {
+    const d = data && data.detail;
+    const err = new Error((d && typeof d === 'object' ? d.message : d) || text || r.statusText);
+    if (d && typeof d === 'object') err.data = d;
+    throw err;
+  }
   return data;
 }
 
+// action: { label, fn } adds a button (e.g. Undo) and keeps the toast up a little longer
 let toastTimer;
-function toast(msg, err = false) {
+function toast(msg, err = false, action = null) {
   const t = $('#toast');
-  t.textContent = msg; t.className = 'toast' + (err ? ' err' : '');
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), err ? 7000 : 2500);
+  t.replaceChildren(h('span', {}, msg), action ? h('button', { type: 'button', class: 'btn small toast-act', onclick: () => {
+    t.classList.add('hidden'); action.fn();
+  } }, action.label) : null);
+  t.className = 'toast' + (err ? ' err' : '');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), err ? 7000 : action ? 6000 : 2500);
 }
+const undoToast = (msg, fn) => toast(msg, false, { label: '↶ Undo', fn });
+
+// Deleting a saved snippet (settings, prompt part, prompt set) with an Undo that saves it again
+async function deleteSnippet(sn, msg, after) {
+  await api(`/api/snippets/${sn.id}`, { method: 'DELETE' });
+  await loadSnippets(true); after();
+  undoToast(msg, async () => {
+    try {
+      await api('/api/snippets', { method: 'POST', body: { category: sn.category, name: sn.name, text: sn.text } });
+      await loadSnippets(true); after(); toast('Restored');
+    } catch (e) { toast(e.message, true); }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// overlays and the back button: each sheet / full-screen editor adds a history entry, so Android's
+// back gesture (and the browser's back) closes the top overlay instead of leaving the app.
+// close(true) is called when it was closed by going back.
+// ---------------------------------------------------------------------------
+const OV = [];
+let popSkip = 0;
+function overlayOpened(close) { OV.push(close); history.pushState({ deckOverlay: OV.length }, ''); }
+function overlayClosed(close) {
+  const i = OV.lastIndexOf(close);
+  if (i < 0) return;
+  OV.splice(i, 1);
+  popSkip++; history.back();
+}
+addEventListener('popstate', () => {
+  if (popSkip) { popSkip--; return; }
+  const close = OV.pop();
+  if (close && close(true) === false) { OV.push(close); history.pushState({ deckOverlay: OV.length }, ''); }  // it said no (unsaved work)
+});
 
 // ---------------------------------------------------------------------------
 // state
@@ -51,9 +102,17 @@ const S = {
   projects: [], project: store.get('deck.project', null),
   batch: 1, connected: false, queueRemaining: 0,
   history: new Map(), historyDone: false,
-  myPrompts: new Set(), viewing: null,   // generation currently in the viewer
+  // runs queued from this device (kept across reloads), so only their previews and results take over
+  // the viewer; other tablets' runs just show as "busy"
+  myPrompts: new Set(store.get('deck.myPrompts', [])), viewing: null,   // generation currently in the viewer
+  activePid: null,   // what ComfyUI is running right now, whoever queued it
   executingNode: null, debug: [], debugCounts: {},
 };
+function addMine(pid) {
+  S.myPrompts.add(pid);
+  store.set('deck.myPrompts', [...S.myPrompts].slice(-300));
+}
+const isMine = (pid) => !!pid && S.myPrompts.has(pid);
 
 // ---------------------------------------------------------------------------
 // templates + fields
@@ -65,13 +124,16 @@ function persist() {
 }
 
 async function loadTemplates(refresh = false) {
+  let failed = null;
   try {
     S.templates = await api('/api/templates' + (refresh ? '?refresh=1' : ''));
-  } catch (e) { toast('Could not load templates: ' + e.message, true); S.templates = []; }
+  } catch (e) { failed = e; S.templates = []; }
   const sel = $('#tplSel');
   sel.replaceChildren(...S.templates.map((t) => h('option', { value: t.id }, t.name + (t.error ? ' (error)' : ''))));
   if (!S.templates.length) {
-    $('#fields').replaceChildren(h('div', { class: 'note warn' }, 'No templates yet. Export a workflow from ComfyUI with Workflow → Export (API), tag nodes with @, and put it in the templates/ folder.'));
+    $('#fields').replaceChildren(failed
+      ? h('div', { class: 'note err' }, `Couldn't load templates: ${failed.message}. They load by themselves once ComfyDeck answers.`)
+      : h('div', { class: 'note warn' }, 'No templates yet. Export a workflow from ComfyUI with Workflow → Export (API), tag nodes with @, and put it in the templates/ folder.'));
     return;
   }
   const want = (S.tpl && S.tpl.id) || store.get('deck.tplId', null);
@@ -227,7 +289,8 @@ function groupPresetBar(g, fs) {
   const del = async () => {
     const x = entries().find((y) => String(y.id) === curId());
     if (!x || !x.p) return toast('The template default can\'t be deleted');
-    try { await api(`/api/snippets/${x.id}`, { method: 'DELETE' }); store.set(stateKey2, ''); await loadSnippets(true); renderFields(); toast(`Deleted "${x.name}"`); }
+    store.set(stateKey2, '');
+    try { await deleteSnippet(x, `Deleted "${x.name}"`, renderFields); }
     catch (e) { toast(e.message, true); }
   };
   show();
@@ -514,7 +577,7 @@ function snippetEditor({ cat, label, get, set, placeholder, extra = [], below = 
   const del = h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Delete this saved ${cat.toLowerCase()}`, onclick: async () => {
     const sn = lib()[idx()];
     if (!sn) return;
-    try { await api(`/api/snippets/${sn.id}`, { method: 'DELETE' }); await loadSnippets(true); showPos(); toast('Deleted from saved'); }
+    try { await deleteSnippet(sn, `Deleted "${sn.name}" from saved`, showPos); }
     catch (e) { toast(e.message, true); }
   } }, '🗑');
   const showPos = () => {
@@ -668,7 +731,7 @@ function promptField(f) {
     const del = async () => {
       const sn = sets()[cur()];
       if (!sn) return toast('Load a saved set first');
-      try { await api(`/api/snippets/${sn.id}`, { method: 'DELETE' }); await loadSnippets(true); show(); toast('Set deleted'); }
+      try { await deleteSnippet(sn, `Deleted set "${sn.name}"`, show); }
       catch (e) { toast(e.message, true); }
     };
     show();
@@ -1006,12 +1069,20 @@ async function generate(parent = null) {
   const odd = S.tpl.fields.filter((f) => f.kind === 'text' && unmatchedBraces(values[f.key]));
   if (odd.length && !confirm(`${odd.map((f) => f.label).join(', ')}: the { } don't match, so some wildcard text would go to the model as written. Generate anyway?`)) return;
   const btn = $('#genBtn'); btn.disabled = true;
+  notifyPrepare();  // inside the tap: browsers only allow sound and notification prompts from a gesture
+  keepAwake(true);
   try {
     for (const f of S.tpl.fields) if (f.kind === 'image') values[f.key] = await cropForRun(f, values[f.key]);
     const pf = S.tpl.fields.find(isMainPrompt);
     const builder = pf && builderState().on ? { parts: S.pb.parts, subjects: S.pb.subjects } : null;
-    const gens = await api('/api/generate', { method: 'POST', body: { template: S.tpl.id, values, batch: S.batch, project_id: S.project, parent, builder } });
-    for (const g of gens) { S.myPrompts.add(g.prompt_id); S.history.set(g.id, g); }
+    let gens;
+    try {
+      gens = await api('/api/generate', { method: 'POST', timeout: 120000, body: { template: S.tpl.id, values, batch: S.batch, project_id: S.project, parent, builder } });
+    } catch (e) {  // part of a batch may already be queued: follow those, then report the failure
+      for (const g of e.data?.created || []) { addMine(g.prompt_id); S.history.set(g.id, g); }
+      throw e;
+    }
+    adoptGenerations(gens);
     const lastGen = gens[gens.length - 1];
     for (const f of S.tpl.fields) {
       if (f.kind !== 'seed') continue;
@@ -1020,10 +1091,25 @@ async function generate(parent = null) {
     }
     persist(); refreshSeedLabels();
     toast(gens.length > 1 ? `Queued ${gens.length}` : 'Queued');
-    keepAwake(true);
   } catch (e) {
+    if (parent && !S.pendingParent && !e.data?.created) S.pendingParent = parent;  // nothing ran: keep the lineage for the retry
+    if (!S.queueRemaining && !RUN.pid) keepAwake(false);
     toast(e.message, true);
   } finally { btn.disabled = false; }
+}
+
+// Runs just queued from here. With an idle queue ComfyUI can start (or even finish) one before the
+// queue reply arrives, so its websocket messages were taken for another device's: catch up then.
+function adoptGenerations(gens) {
+  let missed = false;
+  for (const g of gens) {
+    addMine(g.prompt_id);
+    const seen = S.history.get(g.id);
+    if (!seen) S.history.set(g.id, g);   // never overwrite a newer status that came over the socket
+    else if (seen.status === 'done' || seen.status === 'error') { S.history.delete(g.id); onGeneration(seen); }  // show it now
+    if (g.prompt_id === S.activePid && RUN.pid !== S.activePid) missed = true;
+  }
+  if (missed) syncWithServer();
 }
 
 // Wildcard prompts ({a|b}) with a missing or extra brace: count of braces with no partner.
@@ -1056,19 +1142,87 @@ function refreshSeedLabels() {
   }
 }
 
-async function stop() {
-  try { await api('/api/interrupt', { method: 'POST' }); toast('Stopping current run'); }
-  catch (e) { toast(e.message, true); }
+// Stop this device's run. It names the run, so a late tap can't stop the next one or another
+// tablet's. Long runs ask first: Stop sits right next to Generate.
+async function stop(pid = RUN.pid, { ask = true } = {}) {
+  if (!pid) {
+    if (S.activePid) { toast('That run is from another device: stop it from the Queue'); openJobs(); }
+    else toast('Nothing of yours is running');
+    return;
+  }
+  const secs = RUN.pid === pid ? (Date.now() - RUN.t0) / 1000 : 0;
+  if (ask && secs > 30 && !confirm(`Stop this run? It has been going for ${fmtDur(secs)}.`)) return;
+  try {
+    const r = await api('/api/interrupt', { method: 'POST', body: { prompt_id: pid } });
+    toast(r.stopped === 'queued' ? 'Taken out of the queue' : r.stopped ? 'Stopping…' : 'That run had already finished');
+  } catch (e) { toast(e.message, true); }
 }
 
-let wakeLock = null;
+// Keep the screen on while runs are going, so the tablet doesn't sleep and drop the connection. The
+// Wake Lock API needs HTTPS; over plain http a tiny silent looping video does the same job on most
+// tablets (it has to be started from a tap, which Generate is).
+let wakeLock = null, wakeVideo = null;
 async function keepAwake(on) {
-  try {
-    if (on && !wakeLock && navigator.wakeLock) {
-      wakeLock = await navigator.wakeLock.request('screen');
-      wakeLock.addEventListener('release', () => { wakeLock = null; });
-    } else if (!on && wakeLock) { await wakeLock.release(); wakeLock = null; }
-  } catch { /* needs HTTPS on most browsers; harmless if unavailable */ }
+  if (on && navigator.wakeLock && isSecureContext) {
+    try {
+      if (!wakeLock) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      }
+      return;
+    } catch { /* fall back to the video */ }
+  }
+  if (on) {
+    if (!wakeVideo) {
+      wakeVideo = h('video', { src: 'keepawake.mp4', muted: true, loop: true, playsInline: true, class: 'keep-awake', 'aria-hidden': 'true' });
+      wakeVideo.setAttribute('playsinline', '');
+      document.body.append(wakeVideo);
+    }
+    wakeVideo.play().catch(() => { /* not from a tap; the next Generate tries again */ });
+  } else {
+    try { if (wakeLock) await wakeLock.release(); } catch { /* already gone */ }
+    wakeLock = null;
+    if (wakeVideo) wakeVideo.pause();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// "it's done": a chime, ✓ in the tab title, and a system notification where allowed (HTTPS)
+// ---------------------------------------------------------------------------
+let audioCtx = null;
+function notifyPrepare() {
+  try { audioCtx ||= new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch { /* no audio */ }
+  if (window.Notification && isSecureContext && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
+}
+function chime(ok = true) {
+  if (!audioCtx || store.get('deck.chime', true) === false) return;
+  const t = audioCtx.currentTime;
+  (ok ? [660, 880] : [440, 330]).forEach((f, i) => {
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.frequency.value = f; o.type = 'sine';
+    g.gain.setValueAtTime(0.0001, t + i * 0.16);
+    g.gain.exponentialRampToValueAtTime(0.25, t + i * 0.16 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.16 + 0.3);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(t + i * 0.16); o.stop(t + i * 0.16 + 0.32);
+  });
+}
+const BASE_TITLE = document.title;
+function notifyDone(g) {
+  const ok = g.status === 'done';
+  const took = runTime(g);
+  if (took == null || took > 15 || document.hidden) chime(ok);  // quick image runs stay quiet while you watch
+  try { navigator.vibrate?.(ok ? 60 : [80, 60, 80]); } catch { /* not supported */ }
+  if (document.hidden) {
+    document.title = `${ok ? '✓ Done' : '✕ Failed'} · ${BASE_TITLE}`;
+    if (window.Notification && Notification.permission === 'granted') {
+      const title = ok ? `#${g.id} is done` : `#${g.id} failed`;
+      const opts = { body: ok ? `${g.template}${took ? ` · ${fmtDur(took)}` : ''}` : (g.error || ''), tag: 'comfydeck', icon: 'icon-192.png' };
+      // Android only shows notifications through the service worker
+      (navigator.serviceWorker?.controller ? navigator.serviceWorker.ready.then((r) => r.showNotification(title, opts))
+        : Promise.resolve().then(() => new Notification(title, opts))).catch(() => { /* not allowed here */ });
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1090,6 +1244,7 @@ function findImageStart(u8) {
 }
 
 async function onBinary(buf) {
+  if (!isMine(S.activePid)) return;  // another device's run: its previews are its own
   const u8 = new Uint8Array(buf);
   const evType = u8.length >= 4 ? new DataView(buf).getUint32(0) : -1;
   const [off, mime] = findImageStart(u8);
@@ -1119,7 +1274,9 @@ function showLive() {
 }
 
 function tick(t) {
-  P.raf = requestAnimationFrame(tick);
+  // a still preview is drawn once, then the loop sleeps until the next frame arrives (showLive
+  // wakes it); only an animated preview keeps it running
+  P.raf = P.frames.length > 1 ? requestAnimationFrame(tick) : 0;
   if (!P.frames.length) return;
   const fps = (P.anim && P.anim.rate) || 8;
   if (P.frames.length > 1 && t - P.last < 1000 / fps) return;
@@ -1178,8 +1335,10 @@ function setProgress(value, max, text) {
 // ---------------------------------------------------------------------------
 const RUN = { pid: null, stages: [], current: null, title: '', step: null, t0: 0, stageT0: 0, done: new Set(), timer: 0 };
 
-function runStart(pid) {
-  Object.assign(RUN, { pid, stages: [], current: null, title: '', step: null, t0: Date.now(), stageT0: Date.now(), done: new Set() });
+// elapsed / stages: picking up a run that was already going (after a reload or a dropped connection)
+function runStart(pid, { elapsed = 0, stages = [] } = {}) {
+  const t0 = Date.now() - elapsed * 1000;
+  Object.assign(RUN, { pid, stages, current: null, title: '', step: null, t0, stageT0: Date.now(), done: new Set(), endedAt: 0 });
   clearInterval(RUN.timer);
   RUN.timer = setInterval(runText, 1000);
   drawStages(); runText();
@@ -1201,15 +1360,27 @@ function runStage(d) {
   RUN.title = d.title;
   drawStages(); runText();
 }
-function runEnd() {
+// outcome: 'done' (the result follows as a deck_generation), 'stopped' or 'failed' (nothing follows,
+// so the live preview goes now)
+function runEnd(outcome = 'done') {
   if (!RUN.pid) return;
   clearInterval(RUN.timer);
   if (RUN.current) RUN.done.add(RUN.current);
   RUN.current = null; drawStages();
   const took = fmtDur((Date.now() - RUN.t0) / 1000);
-  RUN.pid = null;
-  setProgress(0, 0, `Finished in ${took}`);
+  RUN.pid = null; RUN.endedAt = Date.now();
+  setProgress(0, 0, outcome === 'done' ? `Finished in ${took}` : outcome === 'stopped' ? `Stopped after ${took}` : `Failed after ${took}`);
+  if (outcome !== 'done') restoreViewer();
+  // safety net: if the result never shows up (missed message), don't leave the LIVE frame up
+  else setTimeout(() => { if (!RUN.pid && $('#viewer').classList.contains('live')) restoreViewer(); }, 15000);
   setTimeout(() => { if (!RUN.pid) { $('#stageBar').classList.add('hidden'); setProgress(0, 0, ''); } }, 6000);
+}
+
+// Drop the live preview and show the last result again
+function restoreViewer() {
+  clearLive();
+  const g = S.viewing != null && S.history.get(S.viewing);
+  if (g && g.outputs.length && !$('#viewerMedia').childElementCount) showOutput(g);
 }
 
 function runText() {
@@ -1239,7 +1410,7 @@ function drawStages() {
 // websocket
 // ---------------------------------------------------------------------------
 function nodeName(id) {
-  for (const t of S.templates) if (t.node_titles && t.node_titles[id]) return t.node_titles[id].replace(/^@\s*\d*\s*/, '');
+  for (const t of [S.tpl, ...S.templates]) if (t?.node_titles?.[id]) return t.node_titles[id].replace(/^@\s*\d*\s*/, '');
   return id;
 }
 
@@ -1248,37 +1419,137 @@ function logDebug(line) {
   if (S.debug.length > 300) S.debug.shift();
 }
 
+// One socket at a time. When it drops (the tablet slept, Wi-Fi blipped, the server restarted) it
+// reconnects with a growing delay, and every (re)connect resyncs with the server, since anything
+// sent while it was down is lost.
+const WS = { sock: null, ping: 0, retry: 0, timer: 0, everOpen: false };
 function connectWS() {
+  clearTimeout(WS.timer);
+  if (WS.sock && WS.sock.readyState <= 1) return;   // connecting or open already
   const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+  WS.sock = ws;
   ws.binaryType = 'arraybuffer';
+  ws.onopen = () => {
+    WS.retry = 0; WS.everOpen = true;
+    setServer(true);
+    syncWithServer();
+  };
   ws.onmessage = (e) => {
     if (typeof e.data !== 'string') { onBinary(e.data); return; }
     let m; try { m = JSON.parse(e.data); } catch { return; }
     onMessage(m);
   };
-  ws.onclose = () => { setConn(false); setTimeout(connectWS, 2000); };
-  setInterval(() => { if (ws.readyState === 1) ws.send('ping'); }, 25000);
+  ws.onclose = () => {
+    if (WS.sock !== ws) return;
+    clearInterval(WS.ping);
+    WS.sock = null;
+    setServer(false);
+    WS.timer = setTimeout(connectWS, Math.min(10000, 1000 * 2 ** WS.retry++));
+  };
+  clearInterval(WS.ping);
+  WS.ping = setInterval(() => { if (ws.readyState === 1) ws.send('ping'); }, 25000);
 }
 
-function setConn(on) {
-  S.connected = on;
-  $('#connDot').classList.toggle('on', on);
-  $('#connDot').title = on ? 'ComfyUI connected' : 'ComfyUI not connected';
+// Coming back to the tab (tablet woke up): the socket may be dead without knowing it yet, so open a
+// fresh one if it isn't plainly open, and catch up either way.
+function onResume() {
+  document.title = BASE_TITLE;
+  if (!WS.sock || WS.sock.readyState !== 1) { WS.retry = 0; if (WS.sock) { const s = WS.sock; WS.sock = null; try { s.close(); } catch { /* gone */ } } connectWS(); }
+  else syncWithServer();
+}
+
+// Two separate things can be down: ComfyDeck itself (no socket) or ComfyUI behind it.
+function setServer(on) { S.serverUp = on; showConn(); }
+function setConn(on) { S.connected = on; showConn(); }
+function showConn() {
+  const server = S.serverUp !== false, comfy = S.connected;
+  $('#connDot').classList.toggle('on', server && comfy);
+  $('#connDot').title = !server ? 'Can\'t reach ComfyDeck' : comfy ? 'ComfyUI connected' : 'ComfyUI not connected';
+  const banner = $('#connBanner');
+  // a blip while reconnecting isn't worth a banner; only say something once it lasts
+  clearTimeout(showConn.t);
+  const text = !server ? 'Can\'t reach ComfyDeck. Reconnecting… (is the server running and the tablet on the same Wi-Fi?)'
+    : !comfy ? 'ComfyDeck is up, but ComfyUI isn\'t connected. It reconnects by itself once ComfyUI is running.' : '';
+  if (!text) { banner.classList.add('hidden'); return; }
+  showConn.t = setTimeout(() => { banner.textContent = text; banner.classList.remove('hidden'); }, WS.everOpen || !server ? 2500 : 0);
+}
+
+// Catch up after a reload, a dropped socket or the tablet waking: what's running now (pick its
+// progress back up if it's ours), and any results that landed while we weren't listening.
+let syncing = null;
+function syncWithServer() {
+  syncing ||= (async () => {
+    try {
+      if (!S.projects.length) await loadProjects();
+      if (!S.templates.length) await loadTemplates();
+      try { const s = await api('/api/status'); setConn(s.comfy_connected); } catch { /* the socket says the rest */ }
+      const jobs = await api('/api/jobs');
+      const running = jobs.active.find((j) => j.status === 'running');
+      S.activePid = running ? running.prompt_id : null;
+      S.queueRemaining = jobs.active.length;
+      $('#queueInfo').textContent = jobs.active.length ? ` · ${jobs.active.length}` : '';
+      const wasRunning = RUN.pid;
+      if (running && isMine(running.prompt_id)) {
+        if (RUN.pid !== running.prompt_id) {
+          runStart(running.prompt_id, { elapsed: running.elapsed || 0, stages: running.stages || [] });
+          $('#viewerMedia').replaceChildren(); $('#outStrip').replaceChildren();
+        }
+        keepAwake(true);
+      } else if (RUN.pid) runEnd();   // it ended while we weren't listening; the result is fetched below
+      showBusy();
+      // results we missed: fetch them, and show ours if it's newer than what's in the viewer
+      const fresh = await api(`/api/generations?limit=30${S.project != null ? `&project_id=${S.project}` : ''}`);
+      let newest = null;
+      for (const g of fresh) {
+        const old = S.history.get(g.id);
+        S.history.set(g.id, g);
+        if (old && old.status === g.status) continue;
+        if (isMine(g.prompt_id) && (g.status === 'done' || g.status === 'error') && (!old || old.status === 'queued' || old.status === 'running')) {
+          if (!newest || g.id > newest.id) newest = g;
+        }
+      }
+      if (newest && (!S.viewing || newest.id > S.viewing) && !RUN.pid) {
+        if (newest.status === 'done') showOutput(newest);
+        else { clearLive(); $('#viewerMedia').replaceChildren(h('div', { class: 'placeholder' }, `Error: ${newest.error || ''}`)); }
+        if (wasRunning || document.hidden) notifyDone(newest);
+      } else if (!RUN.pid && $('#viewer').classList.contains('live')) restoreViewer();
+      if (!jobs.active.length) keepAwake(false);
+      if ($('#tab-history').classList.contains('active')) renderHistory();
+    } catch (e) {
+      logDebug(`sync failed: ${e.message}`);
+    } finally { syncing = null; }
+  })();
+  return syncing;
+}
+
+// While another device's run is going, say so (its previews aren't shown here)
+function showBusy() {
+  if (RUN.pid || !S.activePid || isMine(S.activePid)) return;
+  if (Date.now() - (RUN.endedAt || 0) < 6000) return;
+  setProgress(0, 0, 'ComfyUI is busy with a run from another device');
 }
 
 function onMessage(m) {
   const d = m.data || {};
   S.debugCounts[m.type] = (S.debugCounts[m.type] || 0) + 1;
+  // most run messages only matter here if the run is ours; other devices' runs show as "busy"
+  const mine = d.prompt_id ? isMine(d.prompt_id) : isMine(S.activePid);
   switch (m.type) {
     case 'deck_comfy_status': setConn(d.connected); break;
     case 'status': {
       const q = d.status?.exec_info?.queue_remaining ?? 0;
       S.queueRemaining = q;
       $('#queueInfo').textContent = q ? ` · ${q}` : '';
-      if (!q) { keepAwake(false); setProgress(0, 0, ''); }
+      if (!q) {
+        S.activePid = null;
+        keepAwake(false);
+        if (!RUN.pid && Date.now() - (RUN.endedAt || 0) > 6000) setProgress(0, 0, '');  // keep "Finished in …" up a while
+      }
       break;
     }
     case 'execution_start':
+      S.activePid = d.prompt_id;
+      if (!mine) { showBusy(); break; }
       clearLive(); showLive(); setProgress(0, 0, 'Starting…');
       runStart(d.prompt_id);
       $('#viewerMedia').replaceChildren();
@@ -1287,48 +1558,60 @@ function onMessage(m) {
     case 'execution_cached': break;
     case 'executing':
       S.executingNode = d.node;
-      if (!d.node) runEnd();
-      else if (!RUN.pid) setProgress(0, 0, nodeName(d.node));  // no stage info (e.g. an older server)
+      if (!d.node) { if (mine) runEnd(); S.activePid = null; }
+      else if (!RUN.pid && mine) setProgress(0, 0, nodeName(d.node));  // no stage info (e.g. an older server)
       break;
     case 'deck_stages': runStages(d); break;
     case 'deck_stage': runStage(d); break;
     case 'deck_cached': runCached(d); break;
     case 'progress':
+      if (!mine) {
+        if (!RUN.pid) setProgress(d.value, d.max, `ComfyUI is busy with another device's run · ${d.value}/${d.max}`);
+        break;
+      }
       RUN.step = [d.value, d.max];
       if (RUN.pid) runText(); else setProgress(d.value, d.max, `${nodeName(d.node || S.executingNode)} · ${d.value}/${d.max}`);
       break;
     case 'VHS_latentpreview': // VideoHelperSuite animated sampler preview metadata
-      P.anim = { length: d.length || 1, rate: d.rate || 8 };
+      if (mine) P.anim = { length: d.length || 1, rate: d.rate || 8 };
       logDebug(`VHS_latentpreview ${JSON.stringify(d)}`);
       break;
-    case 'execution_interrupted': runEnd(); break;
+    case 'execution_interrupted':
+      if (mine) runEnd('stopped');
+      S.activePid = null;
+      break;
     case 'execution_error':
-      runEnd();
+      S.activePid = null;
+      if (!mine) break;
+      runEnd('failed');
       toast(`Error in ${d.node_type || 'node'}: ${d.exception_message || ''}`, true);
       break;
     case 'deck_generation': onGeneration(d); break;
     case 'deck_generation_deleted':
-      S.history.delete(d.id); renderHistory(); break;
+      S.history.delete(d.id); removeCard(d.id); break;
     case 'progress_state': case 'executed': case 'execution_success': break;
     default: logDebug(`${m.type} ${JSON.stringify(d).slice(0, 300)}`);
   }
 }
 
 function onGeneration(g) {
+  const old = S.history.get(g.id);
   S.history.set(g.id, g);
-  // a result that lands while another run is already previewing mustn't take over the viewer
-  const busy = RUN.pid && RUN.pid !== g.prompt_id;
-  if (g.status === 'done' && S.myPrompts.has(g.prompt_id)) {
-    if (busy) toast(`#${g.id} finished (see History)`);
-    else { showOutput(g); setProgress(0, 0, ''); }
-    try { navigator.vibrate?.(60); } catch { /* not supported */ }
+  const finished = (g.status === 'done' || g.status === 'error') && (!old || old.status !== g.status);
+  if (finished && isMine(g.prompt_id)) {
+    // a result that lands while another of our runs is already previewing mustn't take over the viewer
+    const busy = RUN.pid && RUN.pid !== g.prompt_id;
+    if (g.status === 'done') {
+      if (busy) toast(`#${g.id} finished (see History)`);
+      else { showOutput(g); if (!RUN.pid && Date.now() - (RUN.endedAt || 0) > 6000) setProgress(0, 0, ''); }
+    } else if (busy) toast(`#${g.id} failed: ${g.error || ''}`, true);
+    else {
+      clearLive();
+      $('#viewerMedia').replaceChildren(h('div', { class: 'placeholder' }, `Error: ${g.error || ''}`));
+    }
+    notifyDone(g);
   }
-  if (g.status === 'error' && S.myPrompts.has(g.prompt_id) && busy) toast(`#${g.id} failed: ${g.error || ''}`, true);
-  else if (g.status === 'error' && S.myPrompts.has(g.prompt_id)) {
-    clearLive();
-    $('#viewerMedia').replaceChildren(h('div', { class: 'placeholder' }, `Error: ${g.error || ''}`));
-  }
-  if ($('#tab-history').classList.contains('active')) renderHistory();
+  if ($('#tab-history').classList.contains('active')) updateCard(g);
   if ($('#tab-board').classList.contains('active') && (g.status === 'done' || 'pinned' in g)) boardChanged(g);
   if (S.sheetGen === g.id && !$('#sheet').classList.contains('hidden')) openGeneration(g.id);
 }
@@ -1353,9 +1636,26 @@ function renderHistory() {
   $('#moreHistory').classList.toggle('hidden', S.historyDone || !items.length);
 }
 
+// One generation changed: swap just its card (redrawing the grid reloads every video thumbnail)
+function updateCard(g) {
+  const grid = $('#historyGrid');
+  const el = grid.querySelector(`.card[data-gen="${g.id}"]`);
+  if (g.project_id !== S.project) { if (el) el.remove(); return; }
+  if (el) { el.replaceWith(cardEl(g)); return; }
+  const cards = [...grid.querySelectorAll('.card[data-gen]')];
+  if (!cards.length) return renderHistory();
+  const after = cards.find((c) => Number(c.dataset.gen) < g.id);
+  if (after) after.before(cardEl(g));
+  else if (S.historyDone) grid.append(cardEl(g));  // older than everything shown: only add if the list is complete
+}
+function removeCard(id) {
+  const el = $('#historyGrid').querySelector(`.card[data-gen="${id}"]`);
+  if (el) el.remove();
+}
+
 function cardEl(g) {
   const o = g.outputs[0];
-  return h('button', { class: 'card', onclick: () => openGeneration(g.id) },
+  return h('button', { class: 'card', 'data-gen': g.id, onclick: () => openGeneration(g.id) },
     h('div', { class: 'media' },
       o ? mediaEl(o, { thumb: true }) : h('span', { class: 'hint' }, g.status),
       o && o.kind === 'video' ? h('span', { class: 'play' }, '▶ video') : null,
@@ -1364,18 +1664,27 @@ function cardEl(g) {
       h('span', { class: `badge ${g.status}` }, g.status === 'done' && runTime(g) != null ? fmtDur(runTime(g)) : g.status)));
 }
 
+// S.sheetSeq counts sheets opened, so a slow lookup can tell whether its sheet is still the one showing
 function openSheet(...content) {
   S.sheetGen = null;
+  S.sheetSeq = (S.sheetSeq || 0) + 1;
+  const wasOpen = !$('#sheet').classList.contains('hidden');
   $('#sheet').replaceChildren(
-    h('button', { class: 'icon-btn close', onclick: closeSheet, 'aria-label': 'Close' }, '✕'),
+    h('button', { class: 'icon-btn close', onclick: () => closeSheet(), 'aria-label': 'Close' }, '✕'),
     ...content.flat().filter((c) => c != null && c !== false));
   $('#sheet').classList.remove('hidden'); $('#sheetBackdrop').classList.remove('hidden');
+  if (!wasOpen) overlayOpened(sheetBack);
+  return S.sheetSeq;
 }
-function closeSheet() {
+const sheetBack = () => closeSheet(true);
+function closeSheet(viaBack = false) {
+  if ($('#sheet').classList.contains('hidden')) return;
   S.sheetGen = null;
   $('#sheet').querySelectorAll('video').forEach((v) => v.pause());
   $('#sheet').classList.add('hidden'); $('#sheetBackdrop').classList.add('hidden');
+  if (viaBack !== true) overlayClosed(sheetBack);  // (used as a click handler too, so viaBack may be an event)
 }
+const sheetStillOpen = (seq) => seq === S.sheetSeq && !$('#sheet').classList.contains('hidden');
 
 function openGeneration(id) {
   const g = S.history.get(id);
@@ -1451,8 +1760,10 @@ async function runAgain(g) {
     const values = Object.fromEntries(Object.entries(g.params).filter(([k]) => !k.startsWith('__')));
     const gens = await api('/api/generate', { method: 'POST', body: { template: g.template, values, batch: 1, project_id: g.project_id,
       parent: g.parent, builder: g.params.__builder || null } });
-    for (const n of gens) { S.myPrompts.add(n.prompt_id); S.history.set(n.id, n); }
-    toast(`Queued again as #${gens[0].id}`);
+    adoptGenerations(gens);
+    notifyPrepare(); keepAwake(true);
+    const other = g.project_id !== S.project ? ` in ${(S.projects.find((p) => p.id === g.project_id) || {}).name || 'its own project'}` : '';
+    toast(`Queued again as #${gens[0].id}${other}`);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -1579,19 +1890,33 @@ function openSketch({ base = null, aspect = 1, onDone }) {
       h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Redo', onclick: () => restore(st.redo, st.undo) }, '↷'),
       h('button', { type: 'button', class: 'btn small', onclick: () => { snapshot(); ctx2.fillStyle = st.bg; ctx2.fillRect(0, 0, cv.width, cv.height); } }, 'Clear'),
       h('div', { class: 'spacer' }),
-      h('button', { type: 'button', class: 'btn small ghost', onclick: () => overlay.remove() }, 'Cancel'),
+      h('button', { type: 'button', class: 'btn small ghost', onclick: () => close() }, 'Cancel'),
       h('button', { type: 'button', class: 'btn small primary', onclick: async (e) => {
         e.target.disabled = true;
         const blob = await new Promise((res) => cv.toBlob(res, 'image/png'));
         try {
           const r = await uploadImage(blob, { source: 'drawing', filename: 'drawing.png' });
-          overlay.remove(); onDone(r.name, r);
+          close(false, true); onDone(r.name, r);
         } catch (err) { toast('Save failed: ' + err.message, true); e.target.disabled = false; }
       } }, 'Use drawing')),
     stage,
     h('div', { class: 'sketch-foot' }, h('span', { class: 'hint' }, 'Canvas'), aspSeg, sizeInfo));
   document.body.append(overlay);
-  new ResizeObserver(fit).observe(stage);
+  const ro = new ResizeObserver(fit);
+  ro.observe(stage);
+  // Cancel, back gesture or leaving the page with strokes on the canvas asks first
+  const unsaved = () => st.undo.length > 0;
+  const guard = (e) => { if (unsaved()) { e.preventDefault(); e.returnValue = ''; } };
+  addEventListener('beforeunload', guard);
+  const close = (viaBack = false, saved = false) => {
+    if (!saved && unsaved() && !confirm('Throw away this drawing?')) return false;
+    ro.disconnect(); removeEventListener('beforeunload', guard);
+    overlay.remove();
+    if (!viaBack) overlayClosed(back);
+    return true;
+  };
+  const back = () => close(true);
+  overlayOpened(back);
 
   resize(aspect);
   if (base) {  // draw over an existing image: canvas takes its aspect
@@ -1988,9 +2313,11 @@ function wireEditor() {
 }
 
 function removeLayer(l) {
+  const before = E.layers;
   E.layers = E.layers.filter((o) => o !== l);
   if (E.sel === l) { E.sel = null; E.cropping = false; }
   persistEditor();
+  undoToast('Layer removed', () => { E.layers = before; E.sel = l; persistEditor(); renderEditor(); });
 }
 
 function renderEditor() {
@@ -2002,7 +2329,11 @@ function renderEditor() {
       h('div', { class: 'row' },
         h('button', { type: 'button', class: 'btn primary', onclick: addEditorImages }, '+ Add images'),
         E.layers.length ? h('button', { type: 'button', class: 'btn ghost', style: 'flex:none',
-          onclick: () => { E.layers = []; E.sel = null; E.arrange = null; persistEditor(); renderEditor(); } }, 'Clear all') : null),
+          onclick: () => {
+            const before = E.layers;
+            E.layers = []; E.sel = null; E.arrange = null; persistEditor(); renderEditor();
+            undoToast(`Cleared ${before.length} layer${before.length > 1 ? 's' : ''}`, () => { E.layers = before; persistEditor(); renderEditor(); });
+          } }, 'Clear all') : null),
       layerList(),
       E.sel ? layerProps(E.sel) : canvasProps()));
   drawEditorCanvas();
@@ -2341,9 +2672,13 @@ function fadeGain(it, t, audio) {
 // ---- playback: one media element per clip, kept in step with the timeline clock ----
 // Preloading: each video/sound on the timeline is downloaded whole into memory (a blob: URL), so
 // playback never waits on the network to start or seek. Until then clips stream from the server.
-const blobs = new Map();   // url -> { state: 'loading' | 'ready' | 'failed', src }
+// Past BLOB_CAP in memory the rest stream instead: tablets (iPad Safari above all) kill pages that
+// hold too much.
+const blobs = new Map();   // url -> { state: 'loading' | 'ready' | 'failed' | 'stream', src, size }
 let preloadQueue = [], preloading = 0;
+const BLOB_CAP = 400e6;
 const srcFor = (it) => (blobs.get(it.url)?.state === 'ready' ? blobs.get(it.url).src : it.url);
+const blobBytes = () => [...blobs.values()].reduce((a, b) => a + (b.size || 0), 0);
 
 function preloadMedia() {
   const urls = new Set(V.items.filter((it) => it.kind !== 'image').map((it) => it.url));
@@ -2355,9 +2690,10 @@ function preloadMedia() {
   for (const url of urls) if (!blobs.has(url)) { blobs.set(url, { state: 'loading' }); preloadQueue.push(url); }
   while (preloading < 2 && preloadQueue.length) {
     const url = preloadQueue.shift();
+    if (blobBytes() > BLOB_CAP) { blobs.set(url, { state: 'stream' }); continue; }
     preloading++;
     fetch(url).then((r) => { if (!r.ok) throw new Error(r.statusText); return r.blob(); })
-      .then((b) => { if (blobs.has(url)) blobs.set(url, { state: 'ready', src: URL.createObjectURL(b) }); })
+      .then((b) => { if (blobs.has(url)) blobs.set(url, { state: 'ready', src: URL.createObjectURL(b), size: b.size }); })
       .catch(() => { if (blobs.has(url)) blobs.set(url, { state: 'failed' }); })
       .finally(() => { preloading--; preloadMedia(); showPreload(); if (!V.playing) { syncMedia(); requestDraw(); } });
   }
@@ -2795,9 +3131,11 @@ function splitAtPlayhead() {
 function deleteSelected() {
   const it = selItem();
   if (!it) return;
+  const before = V.items;
   V.items = V.items.filter((i) => i !== it);
   V.sel = null;
   timelineChanged();
+  undoToast('Clip deleted', () => { V.items = before; V.sel = it.id; timelineChanged(); });
 }
 
 // Overlap this clip with the one before it on its track (moving it and everything after it on
@@ -3039,7 +3377,8 @@ async function snapshotFrame() {
   drawFrame();
   const blob = await new Promise((res) => cv.toBlob(res, 'image/png'));
   if (!blob) return toast('Could not grab the frame', true);
-  const url = URL.createObjectURL(blob), name = `frame_${tc(V.t).replace(/:/g, '-')}.png`;
+  if (snapshotFrame.url) URL.revokeObjectURL(snapshotFrame.url);   // the previous frame's
+  const url = snapshotFrame.url = URL.createObjectURL(blob), name = `frame_${tc(V.t).replace(/:/g, '-')}.png`;
   openSheet(h('h3', {}, `Frame at ${tc(V.t)}`),
     h('div', { class: 'media-big' }, h('img', { src: url, alt: '' })),
     h('div', { class: 'hint', style: 'margin-top:8px' }, `${cv.width}×${cv.height}`),
@@ -3218,15 +3557,28 @@ function openBoxEditor(f) {
       h('span', { class: 'hint' }, f.refs ? 'Object boxes: describe what goes there, optionally with a reference image. Text boxes: the words, then how they look.'
         : 'Object boxes: describe what goes there. Text boxes: the words, then how they look.'),
       h('div', { class: 'spacer' }),
-      h('button', { type: 'button', class: 'btn small ghost', onclick: () => overlay.remove() }, 'Cancel'),
+      h('button', { type: 'button', class: 'btn small ghost', onclick: () => close() }, 'Cancel'),
       h('button', { type: 'button', class: 'btn small primary', onclick: () => {
-        setVal(f.key, boxes.map(({ x, y, w, h: hh, type, desc, text, ref }) =>
-          ({ x, y, w, h: hh, type: type || 'obj', desc: desc || '', text: text || '', ...(ref && type !== 'text' ? { ref } : {}) })));
-        overlay.remove(); renderFields();
+        setVal(f.key, clean());
+        close(false, true); renderFields();
       } }, 'Done')),
     h('div', { class: 'box-body' }, stage, list));
   document.body.append(overlay);
-  new ResizeObserver(fit).observe(stage);
+  const ro = new ResizeObserver(fit);
+  ro.observe(stage);
+  const tidy = (bs) => bs.map(({ x, y, w, h: hh, type, desc, text, ref }) =>
+    ({ x, y, w, h: hh, type: type || 'obj', desc: desc || '', text: text || '', ...(ref && type !== 'text' ? { ref } : {}) }));
+  const clean = () => tidy(boxes);
+  const start = JSON.stringify(tidy(S.values[f.key] || []));
+  const close = (viaBack = false, saved = false) => {
+    // Cancel or the back gesture with changes: ask, rather than lose them
+    if (!saved && JSON.stringify(clean()) !== start && !confirm('Throw away your changes to the boxes?')) return false;
+    ro.disconnect(); overlay.remove();
+    if (!viaBack) overlayClosed(back);
+    return true;
+  };
+  const back = () => close(true);
+  overlayOpened(back);
   draw();
 }
 
@@ -3234,12 +3586,14 @@ function openBoxEditor(f) {
 // LoRA info from Civitai (looked up by the file's hash through rgthree-comfy)
 // ---------------------------------------------------------------------------
 async function openLoraInfo(name) {
-  openSheet(h('h3', {}, name.split('/').pop()),
+  const seq = openSheet(h('h3', {}, name.split('/').pop()),
     h('div', { class: 'placeholder' }, 'Looking it up on Civitai… The first lookup hashes the file, which can take a little while.'));
   let r;
-  try { r = await api(`/api/lora-info?name=${encodeURIComponent(name)}`); } catch (e) {
-    openSheet(h('h3', {}, name.split('/').pop()), h('div', { class: 'note err' }, e.message)); return;
+  try { r = await api(`/api/lora-info?name=${encodeURIComponent(name)}`, { timeout: 240000 }); } catch (e) {
+    if (sheetStillOpen(seq)) openSheet(h('h3', {}, name.split('/').pop()), h('div', { class: 'note err' }, e.message));
+    return;
   }
+  if (!sheetStillOpen(seq)) return;  // closed, or something else opened, while it was looking
   const textOf = (html) => new DOMParser().parseFromString(html || '', 'text/html').body.textContent.trim();
   const words = r.trained_words.map((w) => h('button', { type: 'button', class: 'chip', title: 'Add to prompt',
     onclick: (e) => { addToPrompt(w); e.target.classList.add('added'); } }, w));
@@ -3368,6 +3722,13 @@ function wireZoom() {
   $('#zoomIn').addEventListener('click', () => centre(1.5));
   $('#zoomOut').addEventListener('click', () => centre(1 / 1.5));
   $('#zoomReset').addEventListener('click', () => { Z.s = 1; Z.x = 0; Z.y = 0; apply(); });
+  // rotating the tablet changes the viewer's size, so old pan offsets could leave the image off-screen
+  let lastSize = '';
+  new ResizeObserver(() => {
+    const r = viewer.getBoundingClientRect(), size = `${Math.round(r.width)}x${Math.round(r.height)}`;
+    if (lastSize && size !== lastSize && Z.s !== 1) { Z.s = 1; Z.x = 0; Z.y = 0; apply(); }
+    lastSize = size;
+  }).observe(viewer);
   viewer.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(Math.exp(-e.deltaY * 0.0025), e.clientX, e.clientY); }, { passive: false });
 
   const pts = new Map();
@@ -3448,7 +3809,12 @@ async function openJobs() {
         ? `running ${fmtDur(j.elapsed)}${j.typical ? ` of ~${fmtDur(j.typical)}` : ''}`
         : `waiting ${fmtDur(j.waiting)} · ${j.eta != null ? `starts in ~${fmtDur(j.eta - (j.typical || 0))}, done in ~${fmtDur(j.eta)}` : 'no timing yet for this template'}`,
       j.status === 'running'
-        ? h('button', { type: 'button', class: 'btn small', onclick: async (e) => { e.stopPropagation(); await stop(); refresh(); } }, 'Stop')
+        ? h('button', { type: 'button', class: 'btn small', onclick: async (e) => {
+            e.stopPropagation();
+            const who = isMine(j.prompt_id) ? '' : ' It was started from another device.';
+            if (!confirm(`Stop ${j.id ? `#${j.id}` : 'this run'}?${who}`)) return;
+            await stop(j.prompt_id, { ask: false }); refresh();
+          } }, 'Stop')
         : h('button', { type: 'button', class: 'btn small', onclick: async (e) => {
             e.stopPropagation();
             try { await api('/api/queue/cancel', { method: 'POST', body: { prompt_id: j.prompt_id } }); refresh(); } catch (err) { toast(err.message, true); }
@@ -3470,7 +3836,7 @@ async function openJobs() {
 // projects, tabs, wiring
 // ---------------------------------------------------------------------------
 async function loadProjects() {
-  try { S.projects = await api('/api/projects'); } catch (e) { toast(e.message, true); return; }
+  try { S.projects = await api('/api/projects'); } catch (e) { toast(e.message, true); return; }  // syncWithServer retries on reconnect
   if (!S.projects.find((p) => p.id === S.project)) S.project = S.projects[0]?.id ?? null;
   const sel = $('#projectSel');
   sel.replaceChildren(...S.projects.map((p) => h('option', { value: p.id }, p.name)), h('option', { value: '__new' }, '+ New project…'));
@@ -3487,6 +3853,7 @@ $('#projectSel').addEventListener('change', async (e) => {
   } else S.project = Number(e.target.value);
   store.set('deck.project', S.project);
   S.historyDone = false; loadHistory();
+  if ($('#tab-board').classList.contains('active')) renderBoard();
 });
 
 function switchTab(name) {
@@ -3503,7 +3870,7 @@ document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('cli
 $('#tplSel').addEventListener('change', (e) => selectTemplate(e.target.value));
 $('#reloadTpl').addEventListener('click', async () => { await loadTemplates(true); toast('Templates and model lists reloaded'); });
 $('#genBtn').addEventListener('click', () => { const p = S.pendingParent; S.pendingParent = null; generate(p); });
-$('#stopBtn').addEventListener('click', stop);
+$('#stopBtn').addEventListener('click', () => stop());
 $('#jobsBtn').addEventListener('click', openJobs);
 $('#sheetBackdrop').addEventListener('click', closeSheet);
 $('#moreHistory').addEventListener('click', () => loadHistory(true));
@@ -3516,7 +3883,18 @@ $('#debugBtn').addEventListener('click', () => {
     h('div', { class: 'hint', style: 'margin-bottom:6px' }, 'Message counts, then unhandled messages. Useful for checking what a custom node sends.'),
     h('div', { class: 'log' }, counts + '\n\n' + (S.debug.slice().reverse().join('\n') || '(nothing unhandled yet)')));
 });
-document.addEventListener('visibilitychange', () => { if (!document.hidden && S.queueRemaining) keepAwake(true); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) onResume(); });
+addEventListener('pageshow', (e) => { if (e.persisted) onResume(); });   // restored from the back/forward cache
+addEventListener('online', onResume);
+
+// Two tabs (or the PWA and a browser tab) share these settings: when the other one changes them,
+// pick the change up here instead of quietly writing the old values back over it.
+addEventListener('storage', (e) => {
+  if (!S.tpl || !e.key) return;
+  if (e.key === stateKey(S.tpl.id)) selectTemplate(S.tpl.id);
+  else if (e.key === 'deck.builder') { S.pb = null; renderFields(); }
+  else if (e.key === 'deck.myPrompts') S.myPrompts = new Set(store.get('deck.myPrompts', []));
+});
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeSheet();
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') $('#genBtn').click();
@@ -3691,7 +4069,7 @@ function wireTextPopup() {
   const ta = h('textarea', { spellcheck: true });
   const title = h('b');
   const tags = h('div', { class: 'text-pop-tags' });   // the prompt's tag chips, beside the text
-  const close = () => {
+  const close = (viaBack = false) => {
     if (!src) return;
     const s = src;
     src = null;
@@ -3699,7 +4077,9 @@ function wireTextPopup() {
     ta.blur();
     s.dispatchEvent(new Event('change', { bubbles: true }));
     s.dispatchEvent(new Event('grow'));
+    if (viaBack !== true) overlayClosed(back);
   };
+  const back = () => close(true);
   // Undo: chips change the text from code, which the keyboard's own undo can't reverse, so keep
   // snapshots: one before each chip, one per burst of typing.
   let undo = [], lastTyped = -Infinity, prev = null;
@@ -3757,6 +4137,7 @@ function wireTextPopup() {
   document.addEventListener('focusin', (e) => {
     const t = e.target;
     if (t === ta || t.tagName !== 'TEXTAREA' || t.readOnly || !t.closest('.panel')) return;
+    if (!src) overlayOpened(back);
     src = t;
     title.textContent = t.closest('.prompt-part')?.querySelector('.part-head b')?.textContent
       || t.closest('.field')?.querySelector('.lbl')?.firstChild?.textContent || 'Text';
@@ -3798,9 +4179,11 @@ function wireTextPopup() {
   wireVideoTransport();
   wireZoom();
   wireFullscreen();
-  connectWS();
-  try { const s = await api('/api/status'); setConn(s.comfy_connected); } catch { /* server down */ }
+  try { const s = await api('/api/status', { timeout: 8000 }); setConn(s.comfy_connected); } catch { /* server down: the socket keeps retrying */ }
   await loadProjects();
   await loadTemplates();
   loadHistory();
+  connectWS();   // its first open runs syncWithServer: picks up a run that's already going
+  // The service worker (HTTPS only) keeps an offline page and lets Android show "done" notifications
+  if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();
