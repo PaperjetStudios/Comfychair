@@ -190,14 +190,15 @@ async def finalize(pid: str):
             return
         saved, used = [], set()
         for it in _collect_outputs(entry.get("outputs")):
-            data, _ = await comfy.view(it["filename"], it.get("subfolder", ""), it.get("type", "output"))
             name = re.sub(r"[^\w.\-]", "_", Path(it["filename"]).name)
             while name in used:
                 name = f"{Path(name).stem}_1{Path(name).suffix}"
             used.add(name)
             path, rel = new_output(g, name)
-            path.write_bytes(data)
-            saved.append({"filename": name, "path": rel, "kind": imageprep.kind_of(name), "node": it["node"]})
+            src = {"filename": it["filename"], "subfolder": it.get("subfolder", ""), "type": it.get("type", "output")}
+            await comfy.download(src["filename"], src["subfolder"], src["type"], path)
+            # "comfy": where ComfyUI keeps its own copy, so deleting the generation can remove that too
+            saved.append({"filename": name, "path": rel, "kind": imageprep.kind_of(name), "node": it["node"], "comfy": src})
         db.update_generation(gid, status="done", outputs=saved, finished=time.time())
     except Exception as e:
         log.exception("finalize failed for %s", pid)
@@ -243,6 +244,46 @@ async def reconcile_loop():
             log.debug("reconcile pass failed", exc_info=True)
 
 
+def comfy_copy(g: dict, o: dict, ours: Path) -> Path | None:
+    """ComfyUI's own copy of an output (in its output folder), if it's on this machine. Newer outputs
+    record where it is; for older ones it's looked up by name. Either way it only counts if it's
+    the same size as ComfyDeck's copy, so a different file that happens to share the name is kept."""
+    out = config.COMFY_OUTPUT_DIR
+    if not out or not ours.is_file():
+        return None
+    c = o.get("comfy")
+    if c:
+        if c.get("type") != "output":
+            return None
+        cands = [out / c.get("subfolder", "") / c["filename"]]
+    else:
+        sub = config.COMFY_INPUT_SUBFOLDER
+        cands = [out / sub / db.project_folder(g["project_id"]) / o["filename"], out / sub / o["filename"]]
+    size = ours.stat().st_size
+    for p in cands:
+        try:
+            p = p.resolve()
+            if p.is_relative_to(out) and p.is_file() and p.stat().st_size == size:
+                return p
+        except OSError:
+            continue
+    return None
+
+
+def prune_crops(max_age_days=30):
+    """Crops are made per run (crop_<hash>.png in ComfyUI's input folder) and remade when needed, so
+    clear the ones not used for a month."""
+    if not config.COMFY_INPUT_DIR:
+        return
+    cutoff = time.time() - max_age_days * 86400
+    for p in (config.COMFY_INPUT_DIR / config.COMFY_INPUT_SUBFOLDER).glob("crop_*.png"):
+        try:
+            if p.stat().st_mtime < cutoff:
+                p.unlink()
+        except OSError:
+            pass
+
+
 def prune_thumbs(max_age_days=30):
     """Thumbnails are cheap to remake, so drop the ones nobody has asked for in a month."""
     cutoff = time.time() - max_age_days * 86400
@@ -258,6 +299,7 @@ def prune_thumbs(max_age_days=30):
 async def lifespan(app: FastAPI):
     await asyncio.to_thread(migrate_outputs)
     await asyncio.to_thread(prune_thumbs)
+    await asyncio.to_thread(prune_crops)
     for g in db.pending_generations():  # Video-tab renders run inside a request: a restart ends them
         if g["prompt_id"].startswith("edit-"):
             db.update_generation(g["id"], status="error", error="ComfyDeck restarted during the render", finished=time.time())
@@ -489,7 +531,11 @@ async def delete_generation(gid: int):
         raise HTTPException(404)
     db.delete_generation(gid)
     for o in g["outputs"]:
-        output_file(g, o).unlink(missing_ok=True)
+        ours = output_file(g, o)
+        theirs = comfy_copy(g, o, ours)
+        if theirs:
+            theirs.unlink(missing_ok=True)
+        ours.unlink(missing_ok=True)
     shutil.rmtree(config.GEN_DIR / str(gid), ignore_errors=True)
     await broadcast({"type": "deck_generation_deleted", "data": {"id": gid}})
     return {"ok": True}

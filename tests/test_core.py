@@ -5,8 +5,15 @@ import tempfile
 import unittest
 
 os.environ.setdefault("DECK_DATA", tempfile.mkdtemp(prefix="deck-test-"))  # before app.config makes its folders
+COMFY = tempfile.mkdtemp(prefix="deck-test-comfy-")  # a stand-in ComfyUI folder
+for d in ("output/comfydeck/Sandbox", "input/comfydeck"):
+    os.makedirs(os.path.join(COMFY, d))
+os.environ["DECK_COMFY_DIR"] = COMFY
 
-from app import accel, editsize, wildcards  # noqa: E402
+import time  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from app import accel, editsize, main, wildcards  # noqa: E402
 from app import templates as tpl  # noqa: E402
 
 
@@ -115,6 +122,46 @@ class EditSize(unittest.TestCase):
         scale = next(k for k, n in out.items() if n["class_type"] == "ImageScale")
         self.assertEqual(out["3"]["inputs"]["pixels"], [scale, 0])  # the ~1 MP rescale is skipped
         self.assertEqual((out[scale]["inputs"]["width"], out[scale]["inputs"]["height"]), (768, 512))
+
+
+class Housekeeping(unittest.TestCase):
+    def setUp(self):
+        self.ours = Path(os.environ["DECK_DATA"]) / "ours.png"
+        self.ours.write_bytes(b"x" * 100)
+        self.g = {"id": 1, "project_id": 1}  # project 1 is the default "Sandbox"
+
+    def test_recorded_copy_found_when_same_size(self):
+        theirs = Path(COMFY) / "output/comfydeck/Sandbox/a_00001_.png"
+        theirs.write_bytes(b"y" * 100)
+        o = {"filename": "a_00001_.png", "comfy": {"filename": "a_00001_.png", "subfolder": "comfydeck/Sandbox", "type": "output"}}
+        self.assertEqual(main.comfy_copy(self.g, o, self.ours), theirs.resolve())
+
+    def test_different_size_is_left_alone(self):
+        (Path(COMFY) / "output/comfydeck/Sandbox/b.png").write_bytes(b"y" * 99)
+        o = {"filename": "b.png", "comfy": {"filename": "b.png", "subfolder": "comfydeck/Sandbox", "type": "output"}}
+        self.assertIsNone(main.comfy_copy(self.g, o, self.ours))
+
+    def test_old_outputs_found_by_name(self):
+        theirs = Path(COMFY) / "output/comfydeck/c.mp4"  # the old flat layout
+        theirs.write_bytes(b"z" * 100)
+        self.assertEqual(main.comfy_copy(self.g, {"filename": "c.mp4"}, self.ours), theirs.resolve())
+
+    def test_never_outside_the_output_folder(self):
+        o = {"filename": "x", "comfy": {"filename": "../../etc/passwd", "subfolder": "", "type": "output"}}
+        self.assertIsNone(main.comfy_copy(self.g, o, self.ours))
+        self.assertIsNone(main.comfy_copy(self.g, {**o, "comfy": {**o["comfy"], "type": "temp"}}, self.ours))
+
+    def test_old_crops_pruned(self):
+        old, new = Path(COMFY) / "input/comfydeck/crop_old.png", Path(COMFY) / "input/comfydeck/crop_new.png"
+        keep = Path(COMFY) / "input/comfydeck/upload.png"
+        for p in (old, new, keep):
+            p.write_bytes(b"1")
+        past = time.time() - 40 * 86400
+        os.utime(old, (past, past)); os.utime(keep, (past, past))
+        main.prune_crops()
+        self.assertFalse(old.exists())
+        self.assertTrue(new.exists())
+        self.assertTrue(keep.exists())  # only crop_ files
 
 
 if __name__ == "__main__":

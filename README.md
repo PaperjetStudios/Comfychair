@@ -184,6 +184,11 @@ is one folder you can browse, and history survives clearing ComfyUI's output fol
 copy goes to `output/comfydeck/<project name>/`. Generations made without a project land in
 `Unsorted/`. Older installs that used `data/generations/<id>/` are moved over on startup.
 
+When ComfyUI's folder is on the same machine (`../ComfyUI` by default, or `DECK_COMFY_DIR`),
+deleting a generation also deletes ComfyUI's copy (only if it's the same size as ComfyDeck's), and
+one-off crop files unused for 30 days are cleared from its input folder. `DECK_COMFY_DIR=""` turns
+that off.
+
 Images you upload, edit or draw are remembered with the project that was open, so the image picker
 shows that project's own images and generations first.
 

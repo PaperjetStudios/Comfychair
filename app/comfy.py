@@ -213,6 +213,15 @@ class Comfy:
         j = r.json()
         return f"{j['subfolder']}/{j['name']}" if j.get("subfolder") else j["name"]
 
+    async def download(self, filename: str, subfolder: str, type_: str, dest):
+        """Save a file from ComfyUI straight to disk, in chunks (videos can be big)."""
+        params = {"filename": filename, "subfolder": subfolder, "type": type_}
+        async with self.http.stream("GET", "/view", params=params) as r:
+            r.raise_for_status()
+            with open(dest, "wb") as f:
+                async for chunk in r.aiter_bytes(1 << 20):
+                    f.write(chunk)
+
     async def interrupt(self):
         r = await self.http.post("/interrupt")
         r.raise_for_status()

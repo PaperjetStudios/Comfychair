@@ -63,7 +63,7 @@ Server and setup
   does and supports deleting from it.
 
 ## Verified
-- Unit tests: 13 pass.
+- Unit tests: 18 pass.
 - API against the mock on :8191: scoped stop of running, queued and finished runs; lost-run marking
   after a simulated ComfyUI restart (about 36 s); token gate for http and the websocket; 400 on bad
   numbers.
@@ -73,9 +73,31 @@ Server and setup
   card without redrawing; your own Stop; the banner when the server goes down and comes back; Undo
   for Editor Clear all. No JS errors.
 
+Housekeeping (second pass)
+- **Deleting a generation also deletes ComfyUI's copy** in `ComfyUI/output/`. New outputs record
+  where ComfyUI put them; older ones are found by name. Either way the file is only deleted if it's
+  the same size as ComfyDeck's copy, and never outside the output folder.
+- **Old crop files are cleared**: `crop_*.png` in `ComfyUI/input/comfydeck/` that haven't been used
+  for 30 days are removed at startup. Replaying a cropped run older than that needs the crop redone.
+- **Outputs are streamed to disk** while saving (`comfy.download`) instead of held in memory.
+- ComfyUI's folder defaults to `../ComfyUI` next to ComfyDeck; `DECK_COMFY_DIR` overrides it, and
+  `DECK_COMFY_DIR=""` turns this housekeeping off (the test stack runs that way).
+
 ## Still open
 - **Not tried on a real tablet**: whether the keep-awake video holds the screen on your device,
   notifications (need HTTPS and the CA installed), and the feel of the bigger touch targets.
-- **ComfyUI's own output copy** (`output/comfydeck/<project>/`) isn't deleted with a generation:
-  ComfyDeck doesn't know ComfyUI's output path. `crop_*.png` in ComfyUI's input folder also builds up.
-- **`comfy.view` holds whole videos in memory** while saving outputs. This is fine at current sizes.
+
+## Restarting the live server (:8190) remotely, without sudo
+`comfydeck.service` has `Restart=on-failure`. A plain `kill` (SIGTERM) counts as a clean exit, so
+systemd leaves it **stopped**. A SIGKILL counts as a failure, so systemd starts it again after
+`RestartSec=5`:
+
+```bash
+kill -9 $(systemctl show comfydeck -p MainPID --value)   # restarts in ~5 s
+sleep 8; systemctl show comfydeck -p MainPID -p ActiveState; curl -s localhost:8190/api/status
+```
+
+If it doesn't come back (`ActiveState` isn't `active`), start it by hand without sudo:
+`setsid nohup ./run.sh >> /tmp/comfydeck.log 2>&1 < /dev/null &` from the repo folder. The service
+will then fail to start until that process is stopped, so stop it before the next
+`systemctl start`. Restart after any `app/*.py` change; `web/` changes are live on reload.
