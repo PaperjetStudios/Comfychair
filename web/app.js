@@ -3684,7 +3684,7 @@ async function renderBoard() {
 function boardTile(g, o, i) {
   const media = o.kind === 'video'
     ? h('video', { src: o.url, muted: true, loop: true, playsInline: true, preload: 'metadata' })
-    : h('img', { src: o.url, loading: 'lazy', alt: '' });
+    : h('img', { src: o.url, loading: 'lazy', alt: '', draggable: false });
   const pin = h('button', { type: 'button', class: 'pin' + (g.pinned ? ' on' : ''), 'aria-label': g.pinned ? 'Unpin' : 'Pin',
     onclick: async (e) => {
       e.stopPropagation();
@@ -3699,10 +3699,11 @@ function boardTile(g, o, i) {
     } }, media, pin, h('span', { class: 'tick', 'aria-hidden': 'true' }, '✓'),
     h('div', { class: 'tile-meta' }, `#${g.id} ${g.template}${o.kind === 'video' ? ' ▶' : ''}`));
   // long press: start selecting with this tile
-  let timer = 0;
+  let timer = 0, start = null;
   tile.addEventListener('pointerdown', (e) => {
     B.longPressed = false;
     if (e.target.closest('.pin')) return;
+    start = { x: e.clientX, y: e.clientY };
     timer = setTimeout(() => {
       B.longPressed = true;
       if (!B.selecting) setBoardSelecting(true);
@@ -3710,10 +3711,12 @@ function boardTile(g, o, i) {
       try { navigator.vibrate?.(20); } catch { /* not supported */ }
     }, 500);
   });
-  for (const ev of ['pointerup', 'pointercancel', 'pointerleave', 'pointermove']) {
-    tile.addEventListener(ev, (e) => { if (ev !== 'pointermove' || Math.abs(e.movementX) + Math.abs(e.movementY) > 6) clearTimeout(timer); });
-  }
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) tile.addEventListener(ev, () => clearTimeout(timer));
+  tile.addEventListener('pointermove', (e) => {   // a finger that moves is scrolling, not pressing
+    if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) clearTimeout(timer);
+  });
   tile.addEventListener('contextmenu', (e) => e.preventDefault());   // no image menu on long press
+  tile.addEventListener('dragstart', (e) => e.preventDefault());     // nor the browser's own image drag, which cancels the press
   return tile;
 }
 
