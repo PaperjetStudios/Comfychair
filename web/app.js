@@ -7,7 +7,8 @@ import {
   $, h, store, api, toast, overlayOpened, overlayClosed, openSheet, closeSheet, button, hint,
 } from './ui.js';
 import { S, loadProjects, setSwitchTab, emitProject } from './core.js';
-import { generate, loadTemplates, renderFields, selectTemplate, stateKey, stop, wireZoom } from './generate.js';
+import { generate, loadTemplates, selectTemplate, stop, wireZoom } from './generate.js';
+import './gentabs.js';   // Generate tabs + presets: plugs into generate.js through its hooks
 import { RUN, checkUiVersion, connectWS, loadHistory, onResume, openJobs, runChip, sceneMod, sceneModule, setConn } from './run.js';
 import { renderEditor } from './editor.js';
 import { renderVideo, vidPause, wireVideoTransport } from './video.js';
@@ -89,9 +90,8 @@ addEventListener('online', onResume);
 // pick the change up here instead of quietly writing the old values back over it.
 addEventListener('storage', (e) => {
   if (!S.tpl || !e.key) return;
-  if (e.key === stateKey(S.tpl.id)) selectTemplate(S.tpl.id);
-  else if (e.key === 'deck.builder') { S.pb = null; renderFields(); }
-  else if (e.key === 'deck.myPrompts') S.myPrompts = new Set(store.get('deck.myPrompts', []));
+  // (the settings and prompt builder now live in the Generate tab, which other devices and windows pick up from the server)
+  if (e.key === 'deck.myPrompts') S.myPrompts = new Set(store.get('deck.myPrompts', []));
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeSheet();

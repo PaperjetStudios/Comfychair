@@ -11,9 +11,15 @@ import { FULL, openCrop, openSketch, templateAspect } from './editor.js';
 // templates + fields
 // ---------------------------------------------------------------------------
 export function stateKey(id) { return `deck.tpl.${id}`; }
+// gentabs.js plugs in here (it imports this file, so this file can't import it): edited() after every
+// edit, flush() before a run, decorate() after fields are drawn, pick() for a template change,
+// templatesLoaded() once the template list is in, openShot() for "open as new tab"
+export const hooks = {};
+// The old per-template localStorage copy is still written: it is the starting point of a project's first tab
 export function persist() {
   if (!S.tpl) return;
   store.set(stateKey(S.tpl.id), { values: S.values, seedMode: S.seedMode, imageMp: S.imageMp, imageCrop: S.imageCrop, sizeMode: S.sizeMode, loraFolder: S.loraFolder, builder: S.builder });
+  hooks.edited?.();
 }
 
 export async function loadTemplates(refresh = false) {
@@ -30,10 +36,12 @@ export async function loadTemplates(refresh = false) {
     return;
   }
   const want = (S.tpl && S.tpl.id) || store.get('deck.tplId', null);
-  selectTemplate(S.templates.find((t) => t.id === want) ? want : S.templates[0].id);
+  const id = S.templates.find((t) => t.id === want) ? want : S.templates[0].id;
+  if (hooks.templatesLoaded) hooks.templatesLoaded(id); else selectTemplate(id);
 }
 
 export function selectTemplate(id, overrideValues = null) {
+  if (hooks.pick) return hooks.pick(id, overrideValues);   // the tab decides what a template change means
   const t = S.templates.find((x) => x.id === id);
   if (!t) return;
   S.tpl = t;
@@ -76,7 +84,18 @@ export function renderFields() {
     groups.push(det);
   }
   $('#fields').replaceChildren(shotBar(), ...groups);
+  hooks.decorate?.();
   if (!S.snippets) loadSnippets().then(() => renderFields());
+}
+
+// Show a template with a ready state (what a tab holds): values already in S.values; the rest here
+export function installState(t, st) {
+  S.tpl = t;
+  $('#tplSel').value = t.id;
+  store.set('deck.tplId', t.id);
+  S.seedMode = st.seedMode || {}; S.imageMp = st.imageMp || {}; S.imageCrop = st.imageCrop || {}; S.sizeMode = st.sizeMode || {};
+  S.loraFolder = st.loraFolder || {}; S.builder = st.builder || {};
+  renderFields();
 }
 
 export function setVal(key, v) { S.values[key] = v; persist(); }
@@ -150,6 +169,7 @@ function shotBar() {
   const defaults = () => switchTo('', { values: Object.fromEntries(S.tpl.fields.map((f) => [f.key, f.value])) }, 'Back to the template defaults');
   return cycleBar({ title: 'Shots', what: 'saved shot', prev: () => go(-1), next: () => go(1), cls: 'saved-bar shot-bar',
     buttons: [iconBtn('Save over this shot', '💾', saveOver), iconBtn('Save as a new shot', '＋', saveNew),
+      iconBtn('Open this shot in a new tab', '⧉', () => { const x = loaded(); if (!x) return toast('No saved shot loaded'); hooks.openShot?.(x.p, x.name); }),
       iconBtn('Delete this saved shot', '🗑', del), iconBtn('Back to the template defaults', '↺', defaults)],
     pos: h('span', { class: 'snip-pos' }, !l.length ? 'No saved shots · ＋ saves everything here'
       : i < 0 ? `${l.length} saved · none loaded` : `${i + 1}/${l.length} · ${l[i].name}`) });
@@ -263,7 +283,7 @@ function groupFieldEls(fs) {
   for (const f of fs) {
     if (f.kind === 'int' && f.input === 'width') {
       const fh = fs.find((x) => x.node === f.node && x.input === 'height' && x.kind === 'int');
-      if (fh) { out.push(sizeField(f, fh)); continue; }
+      if (fh) { const el = sizeField(f, fh); el.dataset.key = f.key; out.push(el); continue; }
     }
     if (f.kind === 'int' && f.input === 'height' && fs.some((x) => x.node === f.node && x.input === 'width' && x.kind === 'int')) continue;
     out.push(fieldEl(f));
@@ -458,10 +478,13 @@ const PARTS = {
   image: ['Subject', 'Setting', 'Style', 'Lighting', 'Camera', 'Other'],
 };
 
+// the key of a template's main prompt: its first multiline text that isn't a negative prompt
+export function mainPromptKey(t) {
+  return (t?.fields || []).find((x) => x.kind === 'text' && x.multiline && !/negative/i.test(x.input + ' ' + x.group))?.key;
+}
 function isMainPrompt(f) {
   if (f.kind !== 'text' || !f.multiline || /negative/i.test(f.input + ' ' + f.group)) return false;
-  const first = (S.tpl?.fields || []).find((x) => x.kind === 'text' && x.multiline && !/negative/i.test(x.input + ' ' + x.group));
-  return first && first.key === f.key;
+  return mainPromptKey(S.tpl) === f.key;
 }
 
 // Reference tags for this model, numbered from what the template has (image slots, boxes).
@@ -582,7 +605,7 @@ export function builderState() {
   }
   return S.pb;
 }
-export const saveBuilder = () => store.set('deck.builder', S.pb);
+export const saveBuilder = () => { store.set('deck.builder', S.pb); hooks.edited?.(); };
 const SET_CATEGORY = 'Prompt set';
 
 function promptField(f) {
@@ -900,6 +923,11 @@ function loraField(f) {
 }
 
 function fieldEl(f) {
+  const el = fieldBody(f);
+  if (el.dataset && !el.dataset.key) el.dataset.key = f.key;   // gentabs marks overridden fields by it
+  return el;
+}
+function fieldBody(f) {
   switch (f.kind) {
     case 'text': return textField(f);
     case 'int': return numberField(f, false);
@@ -929,6 +957,7 @@ export async function generate(parent = null) {
   const odd = S.tpl.fields.filter((f) => f.kind === 'text' && unmatchedBraces(values[f.key]));
   if (odd.length && !confirm(`${odd.map((f) => f.label).join(', ')}: the { } don't match, so some wildcard text would go to the model as written. Generate anyway?`)) return;
   const btn = $('#genBtn'); btn.disabled = true;
+  if (hooks.flush && !(await hooks.flush())) toast("Couldn't save this tab yet; running anyway");   // the saved tab should match what runs
   notifyPrepare();  // inside the tap: browsers only allow sound and notification prompts from a gesture
   keepAwake(true);
   try {

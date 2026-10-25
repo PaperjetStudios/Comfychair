@@ -735,3 +735,14 @@ details.desc[open] summary { margin-bottom: 6px; }
 .tabs-state.conflict { background: var(--warn-bg); border-radius: var(--r-sm); cursor: pointer; }
 .tab-menu { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 @media (hover: hover) { .tabchip:hover:not(.on) { border-color: var(--line-2); background: var(--surface-3); } }
+
+/* generate tabs */
+.gen-tabs { margin-bottom: 8px; }
+.preset-btn { flex: 0 1 44%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preset-btn.on { border-color: var(--accent); }
+.preset-list { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+.preset-row { display: flex; align-items: center; gap: 4px; }
+.preset-pick { flex: 1; min-width: 0; min-height: var(--tap); text-align: left; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface-2); color: inherit; font: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preset-row.on .preset-pick { border-color: var(--accent); font-weight: 600; }
+.field.ovr { box-shadow: inset 3px 0 0 var(--accent); padding-left: 8px; }
+.ovr-btn { border: 0; background: transparent; color: var(--accent); font-size: var(--fs-xs); padding: 2px 4px; cursor: pointer; }
