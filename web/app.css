@@ -746,3 +746,8 @@ details.desc[open] summary { margin-bottom: 6px; }
 .preset-row.on .preset-pick { border-color: var(--accent); font-weight: 600; }
 .field.ovr { box-shadow: inset 3px 0 0 var(--accent); padding-left: 8px; }
 .ovr-btn { border: 0; background: transparent; color: var(--accent); font-size: var(--fs-xs); padding: 2px 4px; cursor: pointer; }
+
+/* editor tabs */
+.editor-tabs { margin-bottom: 10px; }
+.frame-bar { align-items: center; justify-content: space-between; }
+.frame-bar .hint { margin: 0; }
