@@ -253,7 +253,7 @@ function setup() {
     if (!e.value) { save(); renderKeys(); renderPanel(); }
   });
   gizmo.addEventListener('objectChange', () => {
-    const o = selItem(), m = gizmo.object;
+    const o = selItem(), m = o && R.meshes.get(o.id);
     if (!o || !m) return;
     if (R.joint) return jointChanged(o);
     const p = pivot;
