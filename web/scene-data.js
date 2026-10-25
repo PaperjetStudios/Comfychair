@@ -1,5 +1,6 @@
 import * as FIGURE from './figure.js';
 import { toast, uid } from './ui.js';
+import { easeAt } from './scene-keyops.js';
 
 export let C;  // app state and actions handed over by app.js (see sceneModule there)
 export const FPS = 24;
@@ -39,7 +40,7 @@ export const pivotOf = (o) => (pivotsFor(o).some(([k]) => k === o.pivot) || (o.t
 
 // ---- scene data ------------------------------------------------------------
 export let SC;   // the scene (persisted per project)
-export const R = { modeKey: null, free: false, f: 0, sel: null, joint: null, figTab: 'pose', poseCat: 'stand', mask: 'all', sym: false, speed: 1, inPlace: false, renders: {}, promptOff: new Set(), promptNames: false, mode: 'translate', playing: false, depth: false, autoKey: true, meshes: new Map(), room: [], applying: false, lastRender: null };
+export const R = { modeKey: null, free: false, f: 0, sel: null, joint: null, figTab: 'pose', poseCat: 'stand', mask: 'all', sym: false, speed: 1, inPlace: false, renders: {}, promptOff: new Set(), promptNames: false, mode: 'translate', playing: false, real: false, depth: false, autoKey: true, meshes: new Map(), room: [], applying: false, lastRender: null };
 
 export const newRoom = () => ({ w: 8, d: 8, h: 2.8, walls: true, ceiling: true, hidden: false });
 export function defaultScene() {
@@ -62,9 +63,10 @@ export function newObject(type, at = {}, others = SC.objects) {
 // scenes saved before rotation on all axes, hiding and a deletable room
 export function upgrade(sc) {
   for (const o of sc.objects) {
-    o.base = { rx: 0, rz: 0, ...o.base }; o.hidden = !!o.hidden;
+    o.base = { rx: 0, rz: 0, ...o.base }; o.hidden = !!o.hidden; o.mute = !!o.mute;
     if (o.type === 'figure' && o.ground == null) o.ground = false;  // planted on the floor: older figures kept their own height
   }
+  if (sc.camera) sc.camera.mute = !!sc.camera.mute;  // muted layers ignore their keys on screen (not in renders)
   if (sc.room) sc.room = { ceiling: false, hidden: false, ...sc.room };
   return sc;
 }
@@ -100,7 +102,6 @@ export function save() { remember(); hooks.persist(); }
 
 
 export const frames = () => framesFor(SC.seconds);
-const ease = (t) => t * t * (3 - 2 * t);
 const pick = (o, names) => Object.fromEntries(names.map((n) => [n, o[n]]));
 
 // an item's values at frame f: its keys eased in between, held before the first and after the last
@@ -113,7 +114,7 @@ export function sample(item, names, f) {
   let i = 0;
   while (k[i + 1].f <= f) i++;
   const a = { ...item.base, ...k[i] }, b = { ...item.base, ...k[i + 1] };
-  const t = (f - a.f) / (b.f - a.f), e = (k[i].ease || item.ease) === 'linear' ? t : ease(t);  // a key can set its own ease
+  const t = (f - a.f) / (b.f - a.f), e = easeAt(k[i].ease || item.ease, t);  // a key can set its own ease (smooth, linear, in, out, const)
   return Object.fromEntries(names.map((n) => [n, n === 'j' ? FIGURE.slerpPose(a.j, b.j, e) : n === 'm' ? FIGURE.lerpParams(a.m, b.m, e)
     : n === 'pn' ? (e < 0.5 ? a.pn : b.pn) : a[n] + (b[n] - a[n]) * e]));
 }
@@ -121,14 +122,26 @@ export function sample(item, names, f) {
 // With auto key off, a change to an animated item isn't saved: it's held here (by item, for the
 // frame it was made on) until the playhead moves, and ◆ Key keeps it.
 export const TEMP = new Map();
+// Mute (item.mute, saved): a muted layer ignores its keys on screen. It stays where the user last put
+// it (held here, not saved; first the look at the playhead when muted) and moving it writes no keys.
+// Renders set R.real and use the real keys.
+export const MUTED = new Map();
+const allNames = (item) => (item === SC.camera ? CAM : namesFor(item));
+const heldOf = (item) => { let v = MUTED.get(item); if (!v) MUTED.set(item, v = sample(item, allNames(item), R.f)); return v; };
+export function setMute(item, on) {
+  if (on) MUTED.set(item, { ...current(item, allNames(item), R.f) }); else MUTED.delete(item);
+  item.mute = !!on;
+}
 // an item's values at frame f, with a held change on top
 export function current(item, names, f = R.f) {
+  if (item.mute && !R.real) return pick(heldOf(item), names);
   const t = item.keys.length ? TEMP.get(item) : null;
   return t && t.f === f ? pick(t.v, names) : sample(item, names, f);
 }
 
 // write values: into the key at the playhead when the item is animated, else into its base
 export function write(item, names, vals) {
+  if (item.mute && !R.real) { Object.assign(heldOf(item), vals); return; }
   if (!item.keys.length) { Object.assign(item.base, vals); return; }
   if (!R.autoKey) { TEMP.set(item, { f: R.f, v: { ...current(item, names), ...vals } }); return; }
   let k = item.keys.find((x) => x.f === R.f);

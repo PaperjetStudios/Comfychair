@@ -140,3 +140,14 @@ If it doesn't come back (`ActiveState` isn't `active`), start it by hand without
 `setsid nohup ./run.sh >> /tmp/comfydeck.log 2>&1 < /dev/null &` from the repo folder. The service
 will then fail to start until that process is stopped, so stop it before the next
 `systemctl start`. Restart after any `app/*.py` change; `web/` changes are live on reload.
+
+### 3D key sheet (scene-keys.js, scene-keyops.js)
+- `scene-keyops.js` is the DOM-free key maths (move, scale around a frame, copy/paste, ease, snapshot/restore);
+  `scene-keys.js` is the sheet (dope sheet, graph, selection, gestures, maximize, sheet height) and the
+  bound API (`selectKeys, moveKeys, scaleKeys, copyKeys, pasteKeys, duplicateKeys, deleteKeys, setKeyEase`).
+  A drag moves keys live from a snapshot and saves once on letting go: one undo step per gesture.
+- A key's `ease` may now be `smooth | linear | in | out | const` (unknown names read as smooth); old files are unchanged.
+- **Mute** (`item.mute`, saved, `upgrade()` defaults it off): `current()`/`write()` in scene-data.js use values held
+  in `MUTED` (not saved) instead of the keys, so a muted layer stays put and moving it writes no keys. Renders set
+  `R.real` and use the real keys; Save frame is the picture on screen.
+- Tests: `tests/keys.mjs` (run by `tests/test_keys.py`).

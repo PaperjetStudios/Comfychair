@@ -5,7 +5,7 @@ import {
   section, seg, sheetOpen, store, uid, undoToast
 } from './ui.js';
 import {
-  C, CAM, FPS, HIST, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, addKey, current, defaultScene, frames, hooks, keyTarget,
+  C, CAM, HIST, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, frames, hooks, keyTarget,
   namesFor, pivotOf, pivotsFor, sameTab, save, selItem, setSC, write
 } from './scene-data.js';
 import { FIG_TABS, adjustTab, jointsTab, movesTab, partsTab, posesTab, promptProps } from './scene-pose.js';
@@ -14,6 +14,7 @@ import {
   removeSelected, select, selectJoint, setFree, setMode, syncMeshes, viewer
 } from './scene-view.js';
 import { busy, play, renderDepthVideo, renderPoseVideo, saveFrame, seek, stopPlay } from './scene-export.js';
+import { maxBar, renderKeys, renderTransport, wireSheetKeys } from './scene-keys.js';
 import { hasMode, modeDef, modeList, modeOf, modeSections } from './scene-modes.js';
 
 // ---- UI ----------------------------------------------------------------------
@@ -33,102 +34,8 @@ export function renderToolbar() {
   tb.querySelector('[data-redo]').disabled = !HIST.redo.length;
 }
 
-export function renderTime() {
-  const t = $('#sceneTime');
-  if (t) t.textContent = `${(R.f / FPS).toFixed(2)} s · ${R.f + 1}/${frames()}`;
-  const ph = $('#scenePlayhead');
-  if (ph) ph.style.left = lanePos(R.f);
-}
-
-// ---- key sheet: a row per layer (the camera, then the objects) with its keys on it. Drag a key
-// along its row to retime it; tap or drag anywhere else on a row (or the ruler) to scrub.
-const PAD = 8;  // px at each end of a row, so the first and last keys aren't cut off
-const lanePos = (f) => `calc(${PAD}px + (100% - ${2 * PAD}px) * ${f / Math.max(1, frames() - 1)})`;
-const tracks = () => [[SC.camera, null, '🎥 Camera'], ...(modeOf().lanes === 'camera' ? [] : SC.objects.map((o) => [o, o.id, `${TYPES[o.type].icon} ${o.name}`]))];
-
-function frameAt(e) {
-  const r = $('#sceneLanes').getBoundingClientRect();
-  return Math.round(Math.max(0, Math.min(1, (e.clientX - r.left - PAD) / (r.width - 2 * PAD))) * (frames() - 1));
-}
-
-let drag = null;
-function laneDown(e) {
-  if (e.button > 0 || busy) return;
-  e.preventDefault();
-  stopPlay();
-  const lane = e.target.closest('[data-track]'), keyEl = e.target.closest('[data-key]');
-  const [item, id] = lane ? tracks()[+lane.dataset.track] : [];
-  e.currentTarget.setPointerCapture(e.pointerId);
-  drag = keyEl ? { item, key: item.keys[+keyEl.dataset.key], x: e.clientX, moved: false } : { scrub: true };
-  if (lane && id !== R.sel) select(id);
-  if (!keyEl) seek(frameAt(e));
-}
-function laneMove(e) {
-  if (!drag) return;
-  const f = frameAt(e);
-  if (drag.scrub) { if (f !== R.f) seek(f); return; }
-  if (!drag.moved && Math.abs(e.clientX - drag.x) < 4) return;
-  drag.moved = true;
-  const { item, key } = drag;
-  if (f === key.f || item.keys.some((k) => k !== key && k.f === f)) return;  // one key per frame
-  key.f = f; item.keys.sort((a, b) => a.f - b.f); seek(f);
-}
-function laneUp() {
-  const d = drag; drag = null;
-  if (d && d.key) { if (d.moved) changed(); else seek(d.key.f); }
-}
-
-export function renderKeys() {
-  const lanes = $('#sceneLanes');
-  if (!lanes) return;
-  const n = Math.max(1, frames() - 1), ts = tracks();
-  const ticks = [];
-  for (let s = 0; s * FPS <= n; s++) ticks.push(h('span', { class: 'tick', style: `left:${lanePos(s * FPS)}` }, s));
-  $('#sceneNames').replaceChildren(h('div', { class: 'sheet-head' }),
-    ...ts.map(([it, id, label]) => h('button', { type: 'button', class: 'sheet-name' + (id === R.sel ? ' sel' : '') + (it.hidden ? ' off' : ''),
-      title: label, onclick: () => select(id) }, label)));
-  lanes.replaceChildren(h('div', { class: 'sheet-ruler' }, ...ticks),
-    ...ts.map(([it, id], i) => h('div', { class: 'sheet-lane' + (id === R.sel ? ' sel' : ''), 'data-track': i },
-      it.keys.length > 1 ? h('span', { class: 'span', style: `left:${lanePos(it.keys[0].f)};`
-        + `width:calc((100% - ${2 * PAD}px) * ${(it.keys[it.keys.length - 1].f - it.keys[0].f) / n})` }) : null,
-      ...it.keys.map((k, j) => h('span', { class: 'key' + (k.f === R.f ? ' on' : ''), 'data-key': j, style: `left:${lanePos(k.f)}`,
-        title: `Key at ${(k.f / FPS).toFixed(2)} s · drag to move` })))),
-    h('div', { id: 'scenePlayhead', class: 'playhead', style: `left:${lanePos(R.f)}` }));
-  const [item] = keyTarget();
-  const add = $('#sceneAddKey'), del = $('#sceneDelKey');
-  if (add) add.disabled = !item;
-  if (del) del.disabled = !item || !item.keys.some((k) => k.f === R.f);
-  if (add) add.classList.toggle('pending', !!item && TEMP.has(item));  // a held change to keep
-  const lbl = $('#sceneKeyFor');
-  if (lbl) lbl.textContent = selItem() ? selItem().name : R.sel === ROOM ? 'Room (not animated)' : 'Camera';
-}
-
-export function renderTransport() {
-  const lanes = h('div', { id: 'sceneLanes', class: 'sheet-lanes' });
-  lanes.addEventListener('pointerdown', laneDown);
-  lanes.addEventListener('pointermove', laneMove);
-  lanes.addEventListener('pointerup', laneUp);
-  lanes.addEventListener('pointercancel', laneUp);
-  $('#sceneTransport').replaceChildren(
-    h('div', { class: 'row scene-keybar' },
-      button(R.playing ? '❚❚ Pause' : '▶ Play', play, { cls: 'small primary', title: 'Play / pause (Space)' }),
-      h('span', { id: 'sceneTime', class: 'timecode' }),
-      h('span', { class: 'grow' }),
-      button('● Auto key', () => setAutoKey(!R.autoKey), { id: 'sceneAutoKey', cls: 'small autokey' + (R.autoKey ? ' on' : ''), 'aria-pressed': R.autoKey,
-        title: 'Auto key (K): on, a change to something animated sets a key at the playhead. Off, it shifts the whole animation (or edits the key under the playhead).' }),
-      h('span', { class: 'hint' }, 'Key: ', h('b', { id: 'sceneKeyFor' })),
-      button('◆ Key', () => {
-        const [item, names] = keyTarget(); if (!item) return;
-        addKey(item, names); changed();
-      }, { id: 'sceneAddKey', title: 'Keyframe at the playhead' }),
-      button('✕ Key', () => {
-        const [item] = keyTarget(); if (!item) return;
-        item.keys = item.keys.filter((k) => k.f !== R.f); changed();
-      }, { id: 'sceneDelKey', title: 'Remove the key at the playhead' })),
-    h('div', { class: 'scene-sheet' }, h('div', { id: 'sceneNames', class: 'sheet-names' }), lanes));
-  $('#sceneTransport').classList.toggle('hidden', modeOf().lanes === 'none');
-  renderTime(); renderKeys();
-}
+// the key sheet (dope sheet, graph, selection and key edits) is scene-keys.js
+export { renderKeys, renderTime, renderTransport } from './scene-keys.js';
 
 // a slider: the view follows while dragging, the change is saved on letting go
 export const slider = (label, get, set, opts) => rangeField(label, get, set,
@@ -191,7 +98,7 @@ function placeProps(o, cur) {
     hint('Drag the gizmo to move it; tap the object again (or W / E / R) for Rotate and Scale. With keys, a change sets a key at the playhead; with Auto key off it is held until ◆ Key (or until the playhead moves).')];
 }
 
-function setAutoKey(on) {
+export function setAutoKey(on) {
   R.autoKey = on; store.set('deck.scene.autokey', on);
   const b = $('#sceneAutoKey');
   if (b) { b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
@@ -359,9 +266,11 @@ export function buildToolbar() {
     h('span', { class: 'sep' }),
     h('button', { type: 'button', 'data-undo': '', title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo', onclick: () => undo() }, '↶'),
     h('button', { type: 'button', 'data-redo': '', title: 'Redo (Ctrl+Shift+Z)', 'aria-label': 'Redo', onclick: () => undo(false) }, '↷')));
+  viewer.append(maxBar());
 }
 
 export function wireKeys() {
+  wireSheetKeys();
   document.addEventListener('keydown', (e) => {
     if (!$('#tab-scene').classList.contains('active') || sheetOpen()
       || e.target.closest('input, textarea, select')) return;
