@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import accel, config, db, editsize, imageprep, stages, videoedit, wildcards
+from . import store
 from . import templates as tpl
 from .comfy import Comfy, ComfyError
 
@@ -314,6 +315,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="ComfyDeck", lifespan=lifespan)
+store.notify = broadcast  # the JSON document store (tabs, presets, objects...) tells every device when it saves
+app.include_router(store.router)
 
 
 class TokenGate:
