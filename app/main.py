@@ -19,7 +19,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFil
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import accel, config, db, editsize, imageprep, stages, videoedit, wildcards
+from . import accel, config, db, editsize, imageprep, stages, tracking, videoedit, wildcards
 from . import store
 from . import sceneasset
 from . import templates as tpl
@@ -319,6 +319,7 @@ app = FastAPI(title="ComfyDeck", lifespan=lifespan)
 store.notify = broadcast  # the JSON document store (tabs, presets, objects...) tells every device when it saves
 app.include_router(store.router)
 app.include_router(sceneasset.router)
+app.include_router(tracking.router)
 
 
 class TokenGate:
@@ -703,6 +704,9 @@ async def _timeline_path(src: dict, tmp: Path) -> tuple[Path, str]:
             raise HTTPException(400, f"{src['media']} is gone")
         return path, MEDIA_KINDS.get(path.suffix.lower(), "video")
     raise HTTPException(400, "Unknown clip source")
+
+
+tracking.resolve_src = _timeline_path  # motion tracking finds its clip the way the Video tab does
 
 
 @app.post("/api/video/render")

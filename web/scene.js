@@ -19,6 +19,7 @@ import { registerBuiltins } from './scene-builtin.js';
 import { initModel } from './scene-model.js';
 import { registerCamera } from './scene-camera.js';
 import { registerImport } from './scene-import.js';
+import './scene-track.js';   // the footage and track-point layers a motion track makes
 export { addModeSection, registerMode } from './scene-modes.js';
 export { addPhoto } from './scene-view.js';
 
@@ -93,12 +94,12 @@ async function newTab(payload, name) {
 }
 
 // open the scene saved with a "3d scene" generation, in a tab of its own
-export async function open(scene, from = null) {
+export async function open(scene, from = null, name = null) {
   if (!scene || scene.v !== 1) return toast('That scene is from another version', true);
   boot(); await ensureTabs();
   if (!tabs.active || !(await tabs.leave())) return;
   try {
-    const name = from ? `Scene from #${from}` : tabs.freeName((n) => `Scene ${n}`);
+    name ||= from ? `Scene from #${from}` : tabs.freeName((n) => `Scene ${n}`);
     tabs.open(await tabs.create1({ name, payload: upgrade(clone(scene)), order: tabs.active.order + 0.5 }));
   } catch (e) { toast(e.message, true); }
 }
