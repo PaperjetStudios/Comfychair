@@ -528,6 +528,25 @@ function syncMeshes() {
   } else gizmo.detach();
 }
 
+// a figure's walk or run steps along with how far it has moved (unless set by hand), so its feet
+// don't slide: the step phase is the distance covered over the stride length
+const PATHS = new Map();  // figure: { sig, d: metres covered by each frame }
+function travelled(o, f) {
+  const sig = o.ease + o.keys.map((k) => `${k.f},${k.x},${k.z},${k.ease || ''}`).join('|');
+  let p = PATHS.get(o);
+  if (!p || p.sig !== sig || p.d.length < frames()) {
+    const d = [0];
+    let prev = sample(o, OBJ, 0);
+    for (let i = 1; i < frames(); i++) { const v = sample(o, OBJ, i); d.push(d[i - 1] + Math.hypot(v.x - prev.x, v.z - prev.z)); prev = v; }
+    p = { sig, d }; PATHS.set(o, p);
+  }
+  return p.d[Math.min(f, p.d.length - 1)] || 0;
+}
+function stepped(o, m, f) {
+  if (!m || !(m.walk || m.run) || o.stepsFollow === false) return m;
+  return { ...m, phase: travelled(o, f) / (FIGURE.strideLength(m) * current(o, OBJ, f).sy) };
+}
+
 // put every object and the camera where they are at frame f
 function pose(f) {
   const r = THREE.MathUtils.degToRad;
@@ -539,7 +558,7 @@ function pose(f) {
     m.rotation.set(r(v.rx), r(v.ry), r(v.rz));
     if (EVEN.has(o.type)) m.scale.setScalar(Math.max(0.01, v.sy));
     else m.scale.set(Math.max(0.01, v.sx), Math.max(0.01, v.sy), Math.max(0.01, v.sz));
-    if (m.userData.rig) FIGURE.applyPose(m.userData.rig, v.j, v.m, o.ground);
+    if (m.userData.rig) FIGURE.applyPose(m.userData.rig, v.j, stepped(o, v.m, f), o.ground);
   }
   if (gizmo.object === ikTarget && !gizmo.dragging) placeIkTarget();
   if (gizmo.object === pivot && !gizmo.dragging) placePivot();
@@ -1096,13 +1115,14 @@ function posesTab(o, cur) {
 
 // parameters: tap one on, slide it; tap it again for off
 function adjustTab(o, cur) {
-  const groups = [...new Set(Object.values(FIGURE.PARAMS).map((p) => p.group))];
+  const groups = [...new Set(Object.values(FIGURE.PARAMS).map((p) => p.group))].filter(Boolean);
   const setM = (m) => write(o, FIG, { m });
   return [
     ...groups.map((g) => {
-      const keys = Object.entries(FIGURE.PARAMS).filter(([, p]) => p.group === g);
+      const keys = Object.entries(FIGURE.PARAMS).filter(([, p]) => p.group === g);  // (the step phase has no chip)
       const on = keys.filter(([k]) => cur().m?.[k]);
       return field(g,
+        g === 'Cycle' ? hint('A walk or run in place: move the figure with keys and its steps follow, or set the step by hand.') : null,
         h('div', { class: 'chips' }, keys.map(([k, p]) => h('button', { type: 'button', class: 'chip' + (cur().m?.[k] ? ' on' : ''), 'aria-pressed': !!cur().m?.[k],
           onclick: () => {
             const m = { ...cur().m };
@@ -1110,7 +1130,13 @@ function adjustTab(o, cur) {
             setM(m); changed();
           } }, p.label))),
         on.map(([k, p]) => slider(p.label, () => cur().m?.[k] || 0, (v) => setM({ ...cur().m, [k]: v || 0.001 }),
-          { min: p.min, max: p.max, step: 1, fmt: (v) => `${Math.round(v)}°` })));
+          { min: p.min, max: p.max, step: 1, fmt: (v) => `${Math.round(v)}${p.unit || '°'}` })),
+        g === 'Cycle' && on.length ? [
+          h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: o.stepsFollow !== false,
+            onchange: (e) => { o.stepsFollow = e.target.checked; changed(); } }), 'Steps follow movement (feet don\'t slide)'),
+          o.stepsFollow === false ? slider('Step', () => cur().m?.phase || 0, (v) => setM({ ...cur().m, phase: v }),
+            { min: 0, max: 8, step: 0.01, fmt: (v) => `${v.toFixed(2)} strides` }) : null,
+          o.stepsFollow === false ? hint('Key Step 0 here and 6 later for six strides on the spot.') : null] : null);
     }),
     h('div', { class: 'row wrap' }, Object.keys(cur().m || {}).length ? button('All off', () => { setM({}); changed(); }) : null),
     hint('These sit on top of the pose, so a new pose keeps them. With keys they are keyed with the pose and blend between keys.'),

@@ -173,13 +173,53 @@ export const PARAMS = {
     rot: (v) => ({ lhip: [-v / 2, 0, 0], lknee: [v, 0, 0], lfoot: [-v / 2, 0, 0], rhip: [-v / 2, 0, 0], rknee: [v, 0, 0], rfoot: [-v / 2, 0, 0] }) },
   step: { label: 'Left foot forward', group: 'Legs', min: -45, max: 45, on: 20, rot: (v) => ({ lhip: [-v, 0, 0], rhip: [v, 0, 0] }) },
   tiptoe: { label: 'Tiptoe', group: 'Legs', min: 0, max: 70, on: 30, rot: (v) => ({ lfoot: [v, 0, 0], rfoot: [v, 0, 0] }) },
+  // cycles: how much of a walk or run (they mix), at the step phase (0 to 1 is one stride, left and right)
+  walk: { label: 'Walk', group: 'Cycle', min: 0, max: 100, on: 100, unit: '%', rot: (v, m) => gait(WALK, v / 100, m.phase || 0) },
+  run: { label: 'Run', group: 'Cycle', min: 0, max: 100, on: 100, unit: '%', rot: (v, m) => gait(RUN, v / 100, m.phase || 0) },
+  phase: { label: 'Step', group: null, min: 0, max: 8, rot: () => ({}) },
+  // blends: part of the way into a pose
+  squatB: { label: 'Squat', group: 'Blend', min: 0, max: 100, on: 50, unit: '%', rot: (v) => part('squat', v) },
+  sitB: { label: 'Sit', group: 'Blend', min: 0, max: 100, on: 50, unit: '%', rot: (v) => part('sit', v) },
+  kneelB: { label: 'Kneel', group: 'Blend', min: 0, max: 100, on: 50, unit: '%', rot: (v) => part('kneel', v) },
+  crouchB: { label: 'Crouch', group: 'Blend', min: 0, max: 100, on: 50, unit: '%', rot: (v) => part('crouch', v) },
+  bowB: { label: 'Bow', group: 'Blend', min: 0, max: 100, on: 50, unit: '%', rot: (v) => part('bow', v) },
 };
+// a preset's turns, v% of the way
+function part(key, v) {
+  return Object.fromEntries(Object.entries(PRESETS[key].j).map(([n, r]) => [n, r.map((x) => x * v / 100)]));
+}
+// a stride as curves of the phase (t: 0 to 1, the left foot lands at 0 and the right at 0.5): degrees,
+// scaled by how much of it there is (a). Arms swing against the legs; the body bobs on its own when planted.
+const WALK = { hip: 20, back: 2, knee: 50, stance: 8, toe: 14, arm: 16, elbow: 15, twist: 6, lean: 2, len: 1.5 };
+const RUN = { hip: 42, back: 12, knee: 95, stance: 25, toe: 25, arm: 38, elbow: 80, twist: 12, lean: 10, len: 2.6 };
+export const strideLength = (m = {}) => {  // metres per stride (two steps) at scale 1, for the mix of walk and run
+  const w = (m.walk || 0) / 100, r = (m.run || 0) / 100;
+  return w + r ? (WALK.len * w + RUN.len * r) / (w + r) : WALK.len;
+};
+function gait(g, a, phase) {
+  const out = {};
+  for (const [side, off, sgn] of [['l', 0, 1], ['r', 0.5, -1]]) {
+    const th = 2 * Math.PI * (phase + off), c = Math.cos(th), sn = Math.sin(th);
+    const swing = Math.max(0, -sn);  // the foot is off the ground for the second half of its cycle
+    out[`${side}hip`] = [a * (-g.hip * c + g.back), 0, 0];
+    out[`${side}knee`] = [a * (g.stance * Math.max(0, sn) + g.knee * swing ** 1.5), 0, 0];
+    out[`${side}foot`] = [a * (g.toe * Math.max(0, -Math.sin(th + 0.6)) - g.toe * 0.5 * Math.max(0, c)), 0, 0];
+    out[`${side}sho`] = [a * g.arm * c, 0, 0];
+    out[`${side}elb`] = [-a * (g.elbow + g.elbow * 0.3 * (1 - c)), 0, 0];
+    if (side === 'l') {
+      out.chest = [a * g.lean / 2, a * g.twist * c * sgn, 0];
+      out.spine = [a * g.lean / 2, 0, 0];
+      out.hips = [0, -a * g.twist * 0.6 * c, 0];
+    }
+  }
+  return out;
+}
 // the turns all the parameters in m add up to, per joint (degrees)
 function paramRot(m = {}) {
   const out = {};
   for (const [k, v] of Object.entries(m)) {
     if (!v || !PARAMS[k]) continue;
-    for (const [n, r] of Object.entries(PARAMS[k].rot(v))) { const o = (out[n] ||= [0, 0, 0]); o[0] += r[0]; o[1] += r[1]; o[2] += r[2]; }
+    for (const [n, r] of Object.entries(PARAMS[k].rot(v, m))) { const o = (out[n] ||= [0, 0, 0]); o[0] += r[0]; o[1] += r[1]; o[2] += r[2]; }
   }
   return out;
 }
@@ -193,7 +233,7 @@ export function lerpParams(a = {}, b = {}, t) {
 }
 // mirrored parameters: the ones with a side change sign
 const SIDED = new Set(['side', 'twist', 'sway', 'turn', 'tilt', 'step']);
-export const mirrorParams = (m = {}) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, SIDED.has(k) ? -v : v]));
+export const mirrorParams = (m = {}) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, SIDED.has(k) ? -v : k === 'phase' ? v + 0.5 : v]));
 
 // turn a bone by a world-space rotation q
 function rotateWorld(bone, q) {
@@ -495,7 +535,8 @@ const SAY_PARAM = { lean: ['leaning forward', 'leaning back'], side: ['leaning t
   fold: ['bent at the hips', 'arching back'], sway: ['hips swayed', 'hips swayed'], turn: ['head turned left', 'head turned right'],
   tilt: ['head tilted', 'head tilted'], nod: ['looking down', 'looking up'], armsOut: ['arms out', 'arms in'], armsFwd: ['arms forward', 'arms back'],
   elbows: ['elbows bent', ''], legsApart: ['legs apart', 'legs together'], knees: ['knees bent', ''], step: ['one foot forward', 'one foot forward'],
-  tiptoe: ['on tiptoe', ''] };
+  tiptoe: ['on tiptoe', ''], walk: ['walking', ''], run: ['running', ''], squatB: ['squatting', ''], sitB: ['sitting down', ''],
+  kneelB: ['kneeling down', ''], crouchB: ['crouching', ''], bowB: ['bowing', ''] };
 export const say = (key) => SAY[key] || '';
 export const pairSay = (key) => SAY[key === 'carry' ? 'carryPair' : key] || '';
 // the parameters worth a word: big enough to see
