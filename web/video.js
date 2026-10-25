@@ -1,6 +1,6 @@
 import {
   $, h, store, uid, api, toast, undoToast, clamp, openSheet, closeSheet, button, iconBtn, linkBtn, actions, fileButton, seg,
-  field, section, hint, note, placeholder, rangeField, propNum, mediaCard, panelTop,
+  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, panelTop,
 } from './ui.js';
 import { S, fmtT, inputUrl, thumbUrl } from './core.js';
 import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, uploadImage, uploadMedia } from './media.js';
@@ -8,6 +8,7 @@ import { openGeneration } from './run.js';
 import { useInGenerate } from './editor.js';
 import { TabSet } from './tabs.js';
 import * as COMP from './scene-comp.js';
+import { maximizable } from './layout.js';
 import { snap, snapOn, snapStep, normDeg, Weight, WEIGHT, DEAD_PX, deadzone, snapBar } from './gizmo.js';
 
 // ---------------------------------------------------------------------------
@@ -924,7 +925,7 @@ const addCard = (o, label, media) => mediaCard(cardMedia(o), label, async (c) =>
 
 function addFromHistory() {
   pickerSheet('Add from this project', [
-    hint('Tap to add in order. Videos and images go on the selected video track, sound on the audio track.', 'grow'),
+    help('Tap to add in order. Videos and images go on the selected video track, sound on the audio track.', 'grow'),
     button('Done', closeSheet)], async () => {
     const items = await projectOutputs(['video', 'image', 'audio']);
     return items.length ? items.map(({ g, o, i }) => addCard(o, genLabel(g),
@@ -938,7 +939,7 @@ function addScene() {
   let look = 'color';
   pickerSheet('Add a 3D scene', [
     seg(COMP_LOOKS, look, (k) => { look = k; }),
-    hint('Tap a scene to add it with this look. It stays linked: edits in the 3D tab show up here.', 'grow'),
+    help('Tap a scene to add it with this look. It stays linked: edits in the 3D tab show up here.', 'grow'),
     button('Done', closeSheet)], async () => {
     const rows = await COMP.listScenes();
     return rows.length ? rows.map((r) => mediaCard(h('div', { class: 'scene-thumb' }, '3D'), r.name, async (c) => {
@@ -990,7 +991,7 @@ function addMediaFiles() {
       toast(files.length > 1 ? `Added ${files.length} files` : 'Added');
       reload();
     }, { accept: 'audio/*,video/*,image/*', multiple: true, cls: 'small primary' }),
-    hint('Music, voice-overs, or videos and images from elsewhere.', 'grow'),
+    help('Music, voice-overs, or videos and images from elsewhere.', 'grow'),
     button('Done', closeSheet)], async () => {
     const list = await api('/api/media');
     return list.length ? list.map((m) => addCard(m, m.label, media(m))) : placeholder('No files yet. Upload music, a voice-over or a video.');
@@ -1014,7 +1015,7 @@ function sceneFields(it) {
   return [
     field('Look', seg(COMP_LOOKS, it.src.look || 'color', (k) => { it.src = { ...it.src, look: k }; timelineChanged(); })),
     d?.state === 'missing' ? note('This 3D scene was deleted from the 3D tab. The clip stays; pick another scene or delete it.', 'err')
-      : hint(`Live from the 3D tab “${d?.name || it.label}”: changes there show here and in every video tab using it. Exports render it at the export size.`),
+      : help(`Live from the 3D tab “${d?.name || it.label}”: changes there show here and in every video tab using it. Exports render it at the export size.`),
   ];
 }
 
@@ -1076,9 +1077,9 @@ function renderVideoPanel() {
       button('+ Images', addImages),
       button('+ Sound / files', addMediaFiles),
       button('+ 3D scene…', addScene, { title: 'A 3D tab as a live clip' })),
-    clip || hint(V.items.length
-      ? 'Tap a clip to edit it. Drag clips to move them (also onto other tracks), drag their ends to trim, and overlap two clips on a track to cross-fade. Higher video tracks draw on top.'
-      : 'Add generated clips, images or sound. They line up on V1 / A1; drag them onto V2 to layer them over V1.'),
+    clip || (V.items.length
+      ? help('Tap a clip to edit it. Drag clips to move them (also onto other tracks), drag their ends to trim, and overlap two clips on a track to cross-fade. Higher video tracks draw on top.')
+      : hint('Add generated clips, images or sound. They line up on V1 / A1; drag them onto V2 to layer them over V1.')),
     section('Sequence', null,
       hint(`${seqSize().join('×')} · ${V.fps || 'auto'} fps · ${fmtT(seqEnd())}`, 'section-sub'),
       h('div', { class: 'grid-2' }, field('Frame size', sizeSel), field('Frame rate', fpsSel)),
@@ -1086,7 +1087,7 @@ function renderVideoPanel() {
         if (!confirm('Remove every clip from the timeline?')) return;
         V.items = []; V.sel = null; vidSeek(0); timelineChanged();
       }) : null,
-      V.items.length ? hint('The export lands in History.') : null)));
+      V.items.length ? help('The export lands in History.') : null)));
 }
 
 async function exportVideo(btn) {
@@ -1118,34 +1119,12 @@ async function exportVideo(btn) {
   finally { btn.disabled = false; btn.textContent = 'Export video'; }
 }
 
-// Full screen for the preview and its controls. Browsers without element full screen (older
-// iPads) get the same look by pinning the stage over the page.
+// Full screen for the preview and its controls: the shared maximize button (layout.js)
 const vidStage = () => $('#tab-video .stage');
-const vidFullscreen = () => (document.fullscreenElement || document.webkitFullscreenElement) === vidStage()
-  || vidStage().classList.contains('pseudo-fs');
-
-function exitVideoFullscreen() {
-  const stage = vidStage();
-  stage.classList.remove('pseudo-fs');
-  if ((document.fullscreenElement || document.webkitFullscreenElement) === stage) {
-    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-  }
-}
-
-function toggleVideoFullscreen() {
-  if (vidFullscreen()) return exitVideoFullscreen();
-  const stage = vidStage(), req = stage.requestFullscreen || stage.webkitRequestFullscreen;
-  const fallback = () => { stage.classList.add('pseudo-fs'); showFullscreenState(); };
-  if (!req) return fallback();
-  try { Promise.resolve(req.call(stage)).catch(fallback); } catch { fallback(); }
-}
-
-function showFullscreenState() {
-  const on = vidFullscreen();
-  $('#vidFull').textContent = on ? '✕' : '⛶';
-  $('#vidFull').setAttribute('aria-label', on ? 'Exit full screen' : 'Full screen');
-  requestDraw();
-}
+let vidMax = null;
+const vidFullscreen = () => !!vidMax?.on();
+const exitVideoFullscreen = () => vidMax?.exit();
+const toggleVideoFullscreen = () => vidMax?.toggle();
 
 // The frame under the playhead at the sequence's full size: save it as an input or download it
 async function snapshotFrame() {
@@ -1198,9 +1177,7 @@ export function wireVideoTransport() {
   $('#vidNext').addEventListener('click', () => step(1 / fpsNow()));
   $('#vidPlay').addEventListener('click', () => (V.playing ? vidPause() : vidPlay()));
   $('#vidSnap').addEventListener('click', snapshotFrame);
-  $('#vidFull').addEventListener('click', toggleVideoFullscreen);
-  document.addEventListener('fullscreenchange', showFullscreenState);
-  document.addEventListener('webkitfullscreenchange', showFullscreenState);
+  vidMax = maximizable(vidStage(), $('#tab-video .viewer'), { onChange: () => requestDraw() });
   const loopBtn = $('#vidLoop');
   const showLoop = () => { loopBtn.classList.toggle('on', V.loop); loopBtn.setAttribute('aria-pressed', String(V.loop)); };
   loopBtn.addEventListener('click', () => { V.loop = !V.loop; store.set('deck.video.loop', V.loop); showLoop(); });
@@ -1208,7 +1185,7 @@ export function wireVideoTransport() {
   $('#tlTools').replaceChildren(
     button('✂ Split', splitAtPlayhead, { title: 'Split at playhead (S)' }),
     button('🗑 Delete', deleteSelected, { title: 'Delete selected clip (Del)' }),
-    h('span', { class: 'hint tl-tip' }, 'Drag clips to move · drag ends to trim · overlap to cross-fade'),
+    h('span', { class: 'tl-tip' }, info('Drag clips to move · drag ends to trim · overlap to cross-fade')),
     iconBtn('Zoom out', '−', () => zoomTimeline(V.pps / 1.5)),
     button('Fit', fitTimeline),
     iconBtn('Zoom in', '+', () => zoomTimeline(V.pps * 1.5)));
@@ -1224,7 +1201,6 @@ export function wireVideoTransport() {
       Home: () => { vidPause(); vidSeek(0); },
       End: () => { vidPause(); vidSeek(seqEnd()); },
       s: splitAtPlayhead, c: splitAtPlayhead, f: toggleVideoFullscreen,
-      Escape: () => { if (vidStage().classList.contains('pseudo-fs')) { exitVideoFullscreen(); showFullscreenState(); } },
       Delete: deleteSelected, Backspace: deleteSelected,
       '=': () => zoomTimeline(V.pps * 1.5), '+': () => zoomTimeline(V.pps * 1.5), '-': () => zoomTimeline(V.pps / 1.5),
     };

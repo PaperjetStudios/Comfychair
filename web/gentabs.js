@@ -8,7 +8,7 @@
 //   effective = { ...template defaults, ...preset.values, ...tab.overrides }
 // S.values stays the working copy every field edits; persist() calls hooks.edited(), which re-derives
 // the overrides from it (so an edit back to the inherited value drops the override) and saves the tab.
-import { $, h, api, toast, undoToast, openSheet, closeSheet, nameSheet, sheetOpen, button, hint, actions, store, uid, clone } from './ui.js';
+import { $, h, api, toast, undoToast, openSheet, closeSheet, nameSheet, sheetOpen, button, actions, store, uid, clone , help } from './ui.js';
 import { S, onServer, onProject } from './core.js';
 import { TabSet } from './tabs.js';
 import { hooks, installState, mainPromptKey, persist, renderFields, stateKey } from './generate.js';
@@ -214,7 +214,7 @@ function presetSheet() {
     id ? h('button', { type: 'button', class: 'icon-btn', title: 'Rename', 'aria-label': `Rename ${name}`, onclick: () => renamePreset(id) }, '✎') : null,
     id ? h('button', { type: 'button', class: 'icon-btn', title: 'Delete', 'aria-label': `Delete ${name}`, onclick: () => deletePreset(id) }, '🗑') : null);
   openSheet(h('h3', {}, `Presets · ${S.tpl.name}`),
-    hint('A tab inherits its settings from one preset and remembers only what you change. Change the preset and every tab that hasn\'t changed that setting follows. The prompt, seed and images stay with the tab.', 'sheet-hint'),
+    help('A tab inherits its settings from one preset and remembers only what you change. Change the preset and every tab that hasn\'t changed that setting follows. The prompt, seed and images stay with the tab.'),
     h('div', { class: 'preset-list' }, row(null, 'No preset'), ...list.map((p) => row(p.id, p.name))),
     actions(
       n && pr ? button(`Save ${n} change${n > 1 ? 's' : ''} into "${pr.name}"`, () => { closeSheet(); saveIntoPreset(); }, { cls: 'primary' }) : null,

@@ -1,6 +1,6 @@
 import {
   $, h, store, api, clamp01, busy, toast, undoToast, openOverlay, sheetOpen, openSheet, closeSheet, button, iconBtn, actions,
-  seg, field, section, hint, propNum, layerRowsEl, panelTop,
+  seg, field, section, hint, propNum, layerRowsEl, panelTop, help
 } from './ui.js';
 import { ASPECT_PRESETS, S, inputUrl, switchTab, thumbUrl } from './core.js';
 import { openImagePicker, registerPickerSource, uploadImage } from './media.js';
@@ -660,7 +660,7 @@ function layerProps(l) {
   const W = l.img.naturalWidth, H = l.img.naturalHeight, c = l.crop;
   if (E.cropping) {
     return section('Crop', done,
-      hint('Drag the box or its corners on the canvas. Switch back to Transform, or tap outside the image, when you\'re done.'),
+      help('Drag the box or its corners on the canvas. Switch back to Transform, or tap outside the image, when you\'re done.'),
       field('Aspect', seg(ASPECTS.map(([label, a]) => [a, label]), E.aspect, (a) => {
         E.aspect = a;
         if (a) setLayerCrop(l, aspectCrop(W, H, a));
@@ -693,7 +693,7 @@ function layerProps(l) {
       button('100%', () => { setScale(1); editorChanged(); })),
     alignControls(l),
     del,
-    hint('Drag it on the canvas to move it, or a corner to resize; it snaps to the canvas and other layers (hold Alt, or turn off Snap, to place it freely). Switch to Crop in the toolbar above it (or double-tap).'));
+    help('Drag it on the canvas to move it, or a corner to resize; it snaps to the canvas and other layers (hold Alt, or turn off Snap, to place it freely). Switch to Crop in the toolbar above it (or double-tap).'));
 }
 
 // Align buttons: 0 / 0.5 / 1 = start / centre / end of the align frame, per axis

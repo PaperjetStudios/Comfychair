@@ -5,6 +5,7 @@ import { S, switchTab } from './core.js';
 import { openGeneration, sendToInput } from './run.js';
 import { E, FULL, editorTabsReady, persistEditor, renderEditor } from './editor.js';
 import { addToTimeline } from './video.js';
+import { maximizable } from './layout.js';
 
 // ---------------------------------------------------------------------------
 // board: every output in the project as a pin board. Pin favourites, filter, resize the tiles.
@@ -261,6 +262,7 @@ function openGallery(key) {
     h('div', { class: 'gal-strip' }));
   GAL.el = el;
   document.body.append(el);
+  GAL.max = maximizable(el, el.querySelector('.gal-stage'), { title: 'Full screen the picture' });   // hides the bars: just the picture
   galleryStrip(store.get('deck.gallery.strip', true));
   wireGallerySwipe(main);
   galleryRender(true);
@@ -277,6 +279,7 @@ function galleryStrip(on = GAL.el.classList.contains('no-strip')) {
 export function closeGallery(viaBack = false) {
   if (!GAL.el) return;
   const key = GAL.items[GAL.idx]?.key;
+  GAL.max?.exit(); GAL.max = null;
   GAL.el.querySelectorAll('video').forEach((v) => v.pause());
   GAL.el.remove(); GAL.el = null; galThumbs.disconnect();
   if (viaBack !== true) overlayClosed(galleryBack);

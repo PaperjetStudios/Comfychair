@@ -430,11 +430,11 @@ details.desc[open] summary { margin-bottom: 6px; }
 #vidCanvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
 .transport { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
-.timeline-wrap { grid-column: 1 / -1; display: grid; grid-template-rows: auto auto; border-top: 1px solid var(--line); background: var(--surface); min-width: 0; }
+.timeline-wrap { grid-column: 1 / -1; display: grid; grid-template-rows: auto auto auto; border-top: 1px solid var(--line); background: var(--surface); min-width: 0; }
 .tl-tools { display: flex; gap: 6px; align-items: center; padding: 6px 8px; }
 .tl-tools .btn { flex: none; }
 .tl-tip { flex: 1; text-align: center; font-size: var(--fs-xs); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.timeline { overflow: auto; max-height: 36dvh; overscroll-behavior: contain; }
+.timeline { overflow: auto; max-height: var(--tl-h, 36dvh); height: var(--tl-h, auto); overscroll-behavior: contain; }
 .tl-inner { position: relative; min-width: 100%; }
 .tl-row { display: flex; height: 52px; }
 .tl-ruler-row { height: 28px; position: sticky; top: 0; z-index: 3; }
@@ -479,12 +479,6 @@ details.desc[open] summary { margin-bottom: 6px; }
 .tl-clip.sel .tl-trim { background: color-mix(in srgb, var(--accent) 75%, transparent); }
 .tl-playhead { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #ff4d4d; pointer-events: none; z-index: 5; }
 .tl-playhead::before { content: ""; position: absolute; top: 0; left: -6px; border: 7px solid transparent; border-top-color: #ff4d4d; }
-
-/* video preview full screen */
-#tab-video .stage:fullscreen, #tab-video .stage.pseudo-fs { background: #000; padding: 8px; grid-template-rows: minmax(0, 1fr) auto; }
-#tab-video .stage:-webkit-full-screen { background: #000; padding: 8px; grid-template-rows: minmax(0, 1fr) auto; width: 100%; height: 100%; }
-#tab-video .stage.pseudo-fs { position: fixed; inset: 0; z-index: 55; padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom)); }
-#tab-video .stage:fullscreen .viewer, #tab-video .stage.pseudo-fs .viewer { background: #000; border-radius: 0; }
 
 /* ---- full-screen editors: sketch pad, layout boxes ---- */
 .sketch { position: fixed; inset: 0; z-index: 30; background: var(--bg); display: grid; grid-template-rows: auto 1fr auto; }
@@ -681,7 +675,7 @@ details.desc[open] summary { margin-bottom: 6px; }
   .stage { padding: 8px; }
   #projectSel { max-width: 130px; }
   .brand { display: none; }
-  .timeline { max-height: 30dvh; }
+  .timeline { max-height: var(--tl-h, 30dvh); }
   .tl-tip { display: none; }
   .boxes-editor .box-body { grid-template-columns: 1fr; grid-template-rows: 1fr 40%; }
   .box-list { border-left: 0; border-top: 1px solid var(--line); }
@@ -835,9 +829,6 @@ details.desc[open] summary { margin-bottom: 6px; }
 .sheet-lanes .key.e-in, .sheet-lanes .key.e-out { border-radius: 50%; transform: none; }
 .sheet-lanes .key.e-linear { transform: rotate(45deg) scale(.8); }
 .sel-box { position: absolute; z-index: 4; border: 1px dashed var(--accent); background: var(--accent-soft); pointer-events: none; }
-.scene-maxbar { top: 8px; right: 8px; }
-#tab-scene .stage.scene-max { position: fixed; inset: 0; z-index: 55; background: var(--bg); padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom)); grid-template-rows: minmax(0, 1fr) auto; }
-#tab-scene .stage:fullscreen { background: var(--bg); padding: 8px; grid-template-rows: minmax(0, 1fr) auto; }
 @media (pointer: coarse) {
   .sheet-grip { height: 24px; }
   .mute-btn { width: 40px; font-size: 16px; }
@@ -886,3 +877,79 @@ details.desc[open] summary { margin-bottom: 6px; }
 .vf-num { display: grid; gap: 2px; font-size: var(--fs-xs); color: var(--muted); }
 .vf-num input { width: 92px; }
 .vf-info.warn { color: var(--warn, #e0a030); }
+/* ---- ⓘ help: explanations sit behind a button, never inline ---- */
+.info-i {
+  flex: none; display: inline-grid; place-items: center; min-width: 28px; min-height: 28px; margin: -4px 0; padding: 0;
+  border: 0; border-radius: 50%; background: transparent; color: var(--muted); font-size: 16px; line-height: 1; cursor: help;
+}
+.info-i[aria-expanded=true] { color: var(--accent); }
+@media (hover: hover) { .info-i:hover { color: var(--accent); } }
+@media (pointer: coarse) { .info-i { min-width: 36px; min-height: 36px; margin: -6px -4px; } }
+.lbl > .info-i { margin-right: auto; margin-left: -4px; }
+.section-title > .info-i { margin-right: auto; margin-left: -4px; }
+.sheet h3 .info-i { margin: 0; }
+.help-note { display: inline-flex; align-items: center; gap: 2px; color: var(--muted); font-size: var(--fs-sm); }
+.help-note .info-i { margin-left: -4px; }
+.info-pop {
+  position: fixed; z-index: 90; max-width: min(340px, calc(100vw - 16px)); padding: 10px 12px; border-radius: var(--r);
+  background: var(--surface-3); border: 1px solid var(--line-2); box-shadow: var(--shadow); color: var(--text);
+  font-size: var(--fs-sm); line-height: 1.45; white-space: pre-wrap; pointer-events: none;
+}
+.mp .info-i { margin: 0; }
+
+/* ---- sidebar icon tabs (Blender's Properties editor): navigation only, not file tabs ---- */
+.panel.has-nav { display: grid; grid-template-columns: 40px minmax(0, 1fr); column-gap: 8px; align-content: start; grid-auto-rows: max-content; }
+.panel.has-nav > * { grid-column: 2; min-width: 0; }
+.panel.has-nav > .side-nav { grid-column: 1; grid-row: 1 / span 99; }
+.side-nav {
+  position: sticky; top: 0; align-self: start; z-index: 4; display: flex; flex-direction: column; gap: 2px; padding: 3px;
+  margin: calc(-1 * var(--gap)) 0 0 calc(-1 * var(--gap)); padding-top: calc(var(--gap) + 3px);
+  background: var(--bg); border-right: 1px solid var(--line); max-height: 100dvh; overflow-y: auto; scrollbar-width: none;
+}
+.side-tab {
+  position: relative; display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 0; border-radius: var(--r-sm);
+  background: transparent; color: var(--muted); cursor: pointer; flex: none; transition: background .15s, color .15s;
+}
+.side-tab svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.side-tab .nav-letter { font-weight: 700; font-size: 14px; }
+.side-tab.on { background: var(--surface-2); color: var(--accent); }
+.side-tab.on::before { content: ''; position: absolute; left: -3px; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--accent); }
+@media (hover: hover) { .side-tab:hover:not(.on) { background: var(--surface-2); color: var(--text); } }
+@media (pointer: coarse) { .side-tab { width: 40px; height: 40px; } }
+.nav-off { display: none !important; }
+.panel.has-nav > .scene-head, .panel.has-nav > .vid-tabs { margin-left: 0; }
+
+/* ---- maximize: one ⛶ on every viewer; the stage is pinned over the page (and goes real full screen) ---- */
+.max-btn {
+  position: absolute; top: 8px; right: 8px; z-index: 6; width: 38px; height: 38px; display: grid; place-items: center; padding: 0;
+  border: 1px solid var(--line-2); border-radius: var(--r); background: color-mix(in srgb, var(--surface) 80%, transparent); color: var(--text);
+  font-size: 18px; cursor: pointer; opacity: .8; transition: opacity .15s, background .15s;
+}
+.max-btn.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); opacity: 1; }
+@media (hover: hover) { .max-btn:hover { opacity: 1; background: var(--surface-3); } .max-btn.on:hover { background: var(--accent); } }
+@media (pointer: coarse) { .max-btn { width: 42px; height: 42px; } }
+.stage.maxed {
+  position: fixed; inset: 0; z-index: 55; background: var(--bg); gap: 8px; grid-template-rows: minmax(0, 1fr); grid-auto-rows: auto;
+  padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+}
+.stage.maxed .viewer { border-radius: 0; }
+#tab-video .stage.maxed .viewer, #tab-generate .stage.maxed .viewer { background: #000; }
+.gal-view.maxed .gal-top, .gal-view.maxed .gal-actions, .gal-view.maxed .gal-strip { display: none; }
+.gal-view .max-btn { z-index: 6; }
+
+/* ---- bottom areas: a grip above them resizes them ---- */
+.hsplit { height: 14px; margin-bottom: -2px; cursor: row-resize; touch-action: none; display: grid; place-items: center; border-bottom: 1px solid var(--line); background: var(--surface); }
+.hsplit::after { content: ''; width: 56px; height: 4px; border-radius: 2px; background: var(--muted); opacity: .5; }
+.hsplit:hover::after, .hsplit.dragging::after { background: var(--accent); opacity: 1; }
+@media (pointer: coarse) { .hsplit { height: 24px; } }
+.splitter:focus-visible { outline-offset: -2px; }
+.tl-tip { display: inline-flex; justify-content: center; }
+
+/* ---- phone: nav on a row of its own, so every tab, the project and the queue stay reachable ---- */
+@media (max-width: 640px) {
+  .topbar { flex-wrap: wrap; row-gap: 4px; padding: 6px 8px; gap: 8px; }
+  #projectSel { flex: 1 1 0; max-width: none; min-width: 0; }
+  .status { margin-left: auto; gap: 6px; }
+  .tabs { order: 3; flex: 1 0 100%; margin-left: 0; }
+  .tabs button { flex: 1 0 auto; justify-content: center; padding: 0 8px; }
+}

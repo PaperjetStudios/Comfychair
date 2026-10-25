@@ -6,7 +6,7 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as MG from './model-geom.js';
 import {
-  $, actions, api, button, closeSheet, field, h, hint, iconBtn, openSheet, section, seg, toast, uid, undoToast
+  $, actions, api, button, closeSheet, field, h, hint, iconBtn, openSheet, section, seg, toast, uid, undoToast, help
 } from './ui.js';
 import { R, SC, TYPES, makers, newObject, save } from './scene-data.js';
 import { modeOf, registerMode } from './scene-modes.js';
@@ -166,7 +166,7 @@ function saveSheet(after) {
   };
   openSheet(h('h3', {}, 'Save object'), field('Name', name),
     field('Keep it in', seg([['project', 'This project'], ['global', 'All projects']], scope, (v) => { scope = v; })),
-    hint('This project: saved in the project folder. All projects: in the library every project can use.', 'sheet-hint'),
+    help('This project: saved in the project folder. All projects: in the library every project can use.'),
     actions(button('Save', () => go(false), { cls: 'primary' }),
       ED.doc ? button('Save as a copy', () => go(true)) : null));
   setTimeout(() => name.focus(), 50);
@@ -434,7 +434,7 @@ function lathePanel() {
   return [
     section('Profile', null,
       profileEditor(),
-      hint('Tap to add a point, drag a point to move it. Round points curve smoothly; square ones are corners. The dashed line is the axis: the other side is its mirror.'),
+      help('Tap to add a point, drag a point to move it. Round points curve smoothly; square ones are corners. The dashed line is the axis: the other side is its mirror.'),
       h('div', { class: 'row wrap' },
         button(p && p[2] ? '◼ Make it a corner' : '● Make it smooth', () => { edit(() => { p[2] = p[2] ? 0 : 1; }); renderCreate(); rebuildView(); }, { disabled: !p }),
         button('Delete point', () => { edit(() => { P.splice(ED.pt, 1); ED.pt = -1; }); renderCreate(); rebuildView(); }, { cls: 'small danger', disabled: !p || P.length <= 2 }),
@@ -473,12 +473,12 @@ function meshPanel() {
         : 'Tap a face of the shape to select it. Drag empty space to look around.'),
       ED.tool === 'extrude' ? [
         amount('Distance (m)', () => ED.ext, (v) => { ED.ext = rnd(v); rebuildView(); }, { min: -2, max: 3, step: snap.grid ? stepM() : 0.01 }),
-        hint('Drag the pink ball along the line, or type a number. Negative pushes in.'),
+        help('Drag the pink ball along the line, or type a number. Negative pushes in.'),
         snapBar(['grid'], renderCreate), snap.grid ? hint(`Snaps to ${snap.gridPct} cm.`) : null,
         button('Extrude', applyPreview, { cls: 'primary', disabled: !n || Math.abs(ED.ext) < 1e-6 })] : null,
       ED.tool === 'inset' ? [
         amount('Amount (m)', () => Math.min(ED.ins, maxIns), (v) => { ED.ins = rnd(v); rebuildView(); }, { min: 0, max: rnd(Math.max(0.01, maxIns)), step: snap.grid ? stepM() : 0.005 }),
-        hint('Shrinks the selected faces into a smaller face with a border around it. Extrude it next for a step or a panel.'),
+        help('Shrinks the selected faces into a smaller face with a border around it. Extrude it next for a step or a panel.'),
         snapBar(['grid'], renderCreate),
         button('Inset', applyPreview, { cls: 'primary', disabled: !n || ED.ins < 1e-6 })] : null,
       ED.tool === 'select' ? button('Delete selected faces', () => { edit(() => { const r = MG.deleteFaces(m, ED.sel); d.mesh = r.mesh; ED.sel = []; }); renderCreate(); rebuildView(); }, { cls: 'small danger', disabled: !n }) : null),
@@ -497,7 +497,7 @@ function paramSheet(kind) {
     return field(label, i);
   });
   openSheet(h('h3', {}, `New ${prim.label.toLowerCase()}`), h('div', { class: 'mdl-params' }, inputs),
-    hint('More segments give you more faces to pick, extrude and inset.', 'sheet-hint'),
+    help('More segments give you more faces to pick, extrude and inset.'),
     actions(button('Start', () => { closeSheet(); startPrim(kind, vals); }, { cls: 'primary' })));
 }
 async function openEntry(e) {
@@ -527,7 +527,7 @@ function libraryPanel() {
     LIB[scope].length ? h('div', { class: 'mdl-grid' }, LIB[scope].map((e) => card({ ...e, scope }))) : hint(LIB.loaded ? empty : 'Loading…'));
   return [
     section('Create object', null,
-      hint('Simple shapes: spin an outline into a vase or a bottle, or start from a box and pull faces out. Saved objects can go in any scene.'),
+      help('Simple shapes: spin an outline into a vase or a bottle, or start from a box and pull faces out. Saved objects can go in any scene.'),
       h('div', { class: 'chips mdl-new' },
         chip('🏺 Lathe', () => begin(MG.vase(), 'Vase'), false, 'Draw an outline and spin it'),
         ...Object.entries(PRIMS).map(([k, p]) => chip(`${p.icon} ${p.label}`, () => paramSheet(k), false, `Start from a ${p.label.toLowerCase()}`)))),
