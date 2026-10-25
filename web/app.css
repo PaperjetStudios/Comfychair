@@ -765,3 +765,10 @@ details.desc[open] summary { margin-bottom: 6px; }
 .scene-head { position: sticky; top: 0; z-index: 3; display: grid; gap: 6px; background: var(--surface); padding: 6px 8px 6px; margin: calc(-1 * var(--gap)) calc(-1 * var(--gap)) var(--gap); border-bottom: 1px solid var(--line); }
 .scene-modes .seg button { min-height: 48px; }
 #sceneBody { min-width: 0; }
+
+/* generate button as a progress bar */
+#genBtn.running { background: linear-gradient(90deg, color-mix(in srgb, var(--accent-ink) 24%, var(--accent)) var(--gen, 0%), var(--accent) var(--gen, 0%)); }
+#genBtn.indet { background: repeating-linear-gradient(-45deg, transparent 0 12px, color-mix(in srgb, var(--accent-ink) 16%, transparent) 12px 24px) var(--accent);
+  background-size: 34px 34px; animation: gen-indet 1s linear infinite; }
+@keyframes gen-indet { to { background-position: 34px 0; } }
+@media (prefers-reduced-motion: reduce) { #genBtn.indet { animation: none; } }

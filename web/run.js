@@ -144,6 +144,11 @@ function outputThumbs(strip, g, sel, onPick) {
 function setProgress(value, max, text) {
   $('#progBar').style.width = max ? `${(100 * value) / max}%` : '0';
   $('#progText').textContent = text || '';
+  // the Generate button fills up too (stripes before the steps start); it stays tappable to queue more
+  const gb = $('#genBtn');
+  gb.classList.toggle('running', !!RUN.pid);
+  gb.classList.toggle('indet', !!RUN.pid && !max);
+  gb.style.setProperty('--gen', max ? `${(100 * value) / max}%` : '0%');
   runChip(value, max, text || '');
 }
 
