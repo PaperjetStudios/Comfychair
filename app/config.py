@@ -18,6 +18,7 @@ WEB_DIR = BASE_DIR / "web"
 
 GEN_DIR = DATA_DIR / "generations"   # old layout (one folder per generation), migrated into PROJECTS_DIR
 PROJECTS_DIR = DATA_DIR / "projects"  # saved outputs: projects/<project name>/<generation id>_<file>
+LIBRARY_DIR = DATA_DIR / "library"   # global (all projects) documents: library/<kind>/<id>.json, see store.py
 INPUT_DIR = DATA_DIR / "inputs"      # local copies of every image sent to ComfyUI
 THUMB_DIR = DATA_DIR / "thumbs"      # cached JPEG thumbnails for the input gallery
 MEDIA_DIR = DATA_DIR / "media"       # music, voice-overs and outside clips uploaded for the Video tab
@@ -37,5 +38,5 @@ COMFY_DIR = Path(_comfy_dir).resolve() if _comfy_dir and Path(_comfy_dir).is_dir
 COMFY_OUTPUT_DIR = COMFY_DIR / "output" if COMFY_DIR and (COMFY_DIR / "output").is_dir() else None
 COMFY_INPUT_DIR = COMFY_DIR / "input" if COMFY_DIR and (COMFY_DIR / "input").is_dir() else None
 
-for d in (DATA_DIR, TEMPLATES_DIR, GEN_DIR, PROJECTS_DIR, INPUT_DIR, THUMB_DIR, MEDIA_DIR):
+for d in (DATA_DIR, TEMPLATES_DIR, GEN_DIR, PROJECTS_DIR, LIBRARY_DIR, INPUT_DIR, THUMB_DIR, MEDIA_DIR):
     d.mkdir(parents=True, exist_ok=True)

@@ -40,6 +40,9 @@ if "pinned" not in _cols:
     _conn.execute("ALTER TABLE generations ADD COLUMN pinned INTEGER DEFAULT 0")
 if "started" not in _cols:  # when ComfyUI began running it; finished - started = run time
     _conn.execute("ALTER TABLE generations ADD COLUMN started REAL")
+_cols = [r[1] for r in _conn.execute("PRAGMA table_info(projects)")]
+if "folder" not in _cols:  # output folder name, frozen the first time it's needed so it never moves
+    _conn.execute("ALTER TABLE projects ADD COLUMN folder TEXT")
 if not _conn.execute("SELECT 1 FROM projects LIMIT 1").fetchone():
     _conn.execute("INSERT INTO projects(name, created) VALUES (?, ?)", ("Sandbox", time.time()))
 _conn.commit()
@@ -74,20 +77,27 @@ def list_projects():
 
 def project_folder(project_id) -> str:
     """Folder name for a project's outputs: its name, made filesystem-safe (plus the id if two
-    projects would share a folder). Generations without a project go to "Unsorted"."""
+    projects would share a folder). Worked out once, then stored in the project row so later
+    projects or renames can't move it. Generations without a project go to "Unsorted"."""
     rows = list_projects()
-    safe = lambda n: re.sub(r"[^\w\- .]", "_", n).strip(" .") or "project"
     p = next((r for r in rows if r["id"] == project_id), None)
     if not p:
         return "Unsorted"
+    if p.get("folder"):
+        return p["folder"]
+    safe = lambda n: re.sub(r"[^\w\- .]", "_", n).strip(" .") or "project"
     name = safe(p["name"])
-    if sum(1 for r in rows if safe(r["name"]).lower() == name.lower()) > 1 or name.lower() == "unsorted":
+    taken = {(r["folder"] or "").lower() for r in rows if r["id"] != p["id"]}
+    if (sum(1 for r in rows if safe(r["name"]).lower() == name.lower()) > 1 or name.lower() == "unsorted"
+            or name.lower() in taken):
         name = f"{name} ({p['id']})"
+    _q("UPDATE projects SET folder=? WHERE id=?", (name, p["id"]))
     return name
 
 
 def create_project(name: str) -> dict:
     cur = _q("INSERT INTO projects(name, created) VALUES (?, ?)", (name, time.time()))
+    project_folder(cur.lastrowid)  # freeze its folder now
     return dict(_q("SELECT * FROM projects WHERE id=?", (cur.lastrowid,)).fetchone())
 
 
