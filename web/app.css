@@ -765,3 +765,51 @@ details.desc[open] summary { margin-bottom: 6px; }
 .scene-head { position: sticky; top: 0; z-index: 3; display: grid; gap: 6px; background: var(--surface); padding: 6px 8px 6px; margin: calc(-1 * var(--gap)) calc(-1 * var(--gap)) var(--gap); border-bottom: 1px solid var(--line); }
 .scene-modes .seg button { min-height: 48px; }
 #sceneBody { min-width: 0; }
+
+/* 3d keys */
+.scene-keytools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.scene-keytools > * { flex: none; }
+.scene-keytools .sep { width: 1px; align-self: stretch; margin: 4px 2px; background: var(--line); }
+.scene-keytools select { min-height: var(--tap-sm); border: 1px solid var(--line); border-radius: var(--r); background: var(--surface-2); color: var(--text); font: inherit; font-size: 14px; padding: 0 8px; }
+.scene-keytools select:disabled { opacity: .45; }
+.keynum { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs); color: var(--muted); }
+.keynum input { min-height: var(--tap-sm); border: 1px solid var(--line); border-radius: var(--r); background: var(--surface-2); color: var(--text); font: inherit; font-size: 14px; padding: 0 6px; text-align: right; }
+.keyinfo { min-width: 90px; font-variant-numeric: tabular-nums; }
+.sheet-grip { flex: none; height: 14px; margin: -2px 0; cursor: row-resize; touch-action: none; display: grid; place-items: center; }
+.sheet-grip::after { content: ''; width: 56px; height: 4px; border-radius: 2px; background: var(--muted); opacity: .5; }
+.sheet-grip:hover::after, .sheet-grip.dragging::after { background: var(--accent); opacity: 1; }
+.scene-sheet.graph { height: 230px; max-height: none; overflow: hidden; }
+.scene-sheet.graph .sheet-names { overflow-y: auto; }
+.sheet-lanes { overflow: hidden; cursor: default; }
+.sheet-name-row { display: flex; align-items: stretch; border-top: 1px solid var(--line); }
+.sheet-name-row .sheet-name { border-top: 0; flex: 1; min-width: 0; width: auto; }
+.mute-btn { flex: none; width: 28px; padding: 0; border: 0; background: none; cursor: pointer; font-size: 13px; line-height: 1; opacity: .6; }
+.mute-btn.on { opacity: 1; background: color-mix(in srgb, var(--bad) 22%, transparent); }
+.sheet-head { display: flex; align-items: stretch; }
+.sheet-head select { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: var(--fs-xs); }
+.sheet-lane.muted .key, .sheet-lane.muted .span { opacity: .3; }
+.sheet-lane.muted { background: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--bad) 8%, transparent) 6px 12px); }
+.graph-plot { position: absolute; left: 0; right: 0; top: 26px; bottom: 0; }
+.graph-plot.muted { opacity: .4; }
+.graph-cv { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.graph-plot .key { position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px; background: var(--text); transform: rotate(45deg); cursor: grab; }
+.graph-plot .key::after { content: ''; position: absolute; inset: -8px; }
+.sheet-lanes .key.sel { background: #fff; outline: 2px solid var(--accent); outline-offset: 1px; z-index: 1; }
+.sheet-lane.sel .key.sel, .sheet-lane .key.sel.on { background: #fff; }
+.sheet-lanes .key.e-const { transform: none; }
+.sheet-lanes .key.e-in, .sheet-lanes .key.e-out { border-radius: 50%; transform: none; }
+.sheet-lanes .key.e-linear { transform: rotate(45deg) scale(.8); }
+.sel-box { position: absolute; z-index: 4; border: 1px dashed var(--accent); background: var(--accent-soft); pointer-events: none; }
+.scene-maxbar { top: 8px; right: 8px; }
+#tab-scene .stage.scene-max { position: fixed; inset: 0; z-index: 55; background: var(--bg); padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom)); grid-template-rows: minmax(0, 1fr) auto; }
+#tab-scene .stage:fullscreen { background: var(--bg); padding: 8px; grid-template-rows: minmax(0, 1fr) auto; }
+@media (pointer: coarse) {
+  .sheet-grip { height: 24px; }
+  .mute-btn { width: 40px; font-size: 16px; }
+  .graph-plot { top: 34px; }
+  .graph-plot .key { width: 16px; height: 16px; margin: -8px 0 0 -8px; }
+  .scene-sheet.graph { height: 280px; }
+  .keynum input { min-height: 40px; }
+}
+#tab-scene .stage, .scene-transport, .scene-sheet { min-width: 0; }
+.scene-keytools select { width: auto; }

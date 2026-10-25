@@ -89,7 +89,7 @@ function canRender() {
 
 export async function renderDepthVideo() {
   if (busy || !canRender()) return;
-  busy = true; stopPlay(); TEMP.clear(); renderPanel();  // only what's keyed goes in the render
+  busy = true; R.real = true; stopPlay(); TEMP.clear(); renderPanel();  // only what's keyed goes in the render (mute is ignored)
   const keep = R.f, W = SC.width, H = SC.height, bar = busyBar('Rendering depth frames…');
   try {
     setRange(measureRange());
@@ -110,7 +110,7 @@ export async function renderDepthVideo() {
     setStatus(''); toast(e.message, true);
   } finally {
     bar.done();
-    busy = false; R.f = keep; fit(); refresh(); renderPanel();
+    busy = false; R.real = false; R.f = keep; fit(); refresh(); renderPanel();
   }
 }
 
@@ -129,7 +129,7 @@ async function sendVideo(form, kind, blur) {
 export async function renderPoseVideo() {
   const figs = SC.objects.filter((o) => o.type === 'figure' && !o.hidden);
   if (busy || !figs.length || !canRender()) return;
-  busy = true; stopPlay(); TEMP.clear(); renderPanel();
+  busy = true; R.real = true; stopPlay(); TEMP.clear(); renderPanel();
   const keep = R.f, W = SC.width, H = SC.height, bar = busyBar('Rendering pose frames…');
   try {
     const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
@@ -153,7 +153,7 @@ export async function renderPoseVideo() {
     setStatus(''); toast(e.message, true);
   } finally {
     bar.done();
-    busy = false; R.f = keep; fit(); refresh(); renderPanel();
+    busy = false; R.real = false; R.f = keep; fit(); refresh(); renderPanel();
   }
 }
 

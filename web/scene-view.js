@@ -376,7 +376,7 @@ function travelled(o, f) {
   return p.d[Math.min(f, p.d.length - 1)] || 0;
 }
 function stepped(o, m, f) {
-  if (!m || !(m.walk || m.run) || o.stepsFollow === false) return m;
+  if (!m || !(m.walk || m.run) || o.stepsFollow === false || (o.mute && !R.real)) return m;
   return { ...m, phase: travelled(o, f) / (FIGURE.strideLength(m) * current(o, OBJ, f).sy) };
 }
 
