@@ -391,7 +391,7 @@ export function pose(f) {
     m.rotation.set(r(v.rx), r(v.ry), r(v.rz));
     if (EVEN.has(o.type)) m.scale.setScalar(Math.max(0.01, v.sy));
     else m.scale.set(Math.max(0.01, v.sx), Math.max(0.01, v.sy), Math.max(0.01, v.sz));
-    if (m.userData.rig) FIGURE.applyPose(m.userData.rig, v.j, stepped(o, v.m, f), o.ground);
+    if (m.userData.rig) { FIGURE.applyPose(m.userData.rig, v.j, stepped(o, v.m, f), o.ground); FIGURE.setHidden(m.userData.rig, o.hide); }
   }
   if (gizmo.object === ikTarget && !gizmo.dragging) placeIkTarget();
   if (gizmo.object === pivot && !gizmo.dragging) placePivot();
@@ -446,7 +446,7 @@ function hitAt(e) {
   const r = canvas.getBoundingClientRect();
   ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
   // the room and photos only block: tapping them deselects (pick them in the layer list)
-  const hit = ray.intersectObjects(visibleMeshes(), true)[0];
+  const hit = ray.intersectObjects(visibleMeshes(), true).find((x) => x.object.visible);  // raycasts ignore .visible: hidden figure parts can't be picked
   return hit && hit.object.userData.id !== ROOM && !hit.object.userData.photo ? hit.object.userData.id : null;
 }
 // the selected figure's joint dot under the pointer (within a finger's reach). Where dots overlap,
@@ -467,7 +467,7 @@ function jointAt(e) {
   }
   if (!best) return null;
   ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
-  const front = ray.intersectObjects(visibleMeshes().filter((m) => m !== rig.root), true)[0];
+  const front = ray.intersectObjects(visibleMeshes().filter((m) => m !== rig.root), true).find((x) => x.object.visible);
   return front && front.distance < best.depth ? null : best.joint;
 }
 

@@ -772,3 +772,6 @@ details.desc[open] summary { margin-bottom: 6px; }
   background-size: 34px 34px; animation: gen-indet 1s linear infinite; }
 @keyframes gen-indet { to { background-position: 34px 0; } }
 @media (prefers-reduced-motion: reduce) { #genBtn.indet { animation: none; } }
+
+/* figure parts */
+.body-map button.part.gone { background: transparent; color: var(--muted); text-decoration: line-through; border-style: dashed; }

@@ -13,7 +13,7 @@ function liftTo(o, v, j, m) {
 }
 
 // ---- a figure's pose tabs ----------------------------------------------------------------
-export const FIG_TABS = [['pose', '🧍 Poses'], ['adjust', '🎚 Adjust'], ['move', '🎬 Moves'], ['joint', '🦴 Joints'], ['place', '📐 Place']];
+export const FIG_TABS = [['pose', '🧍 Poses'], ['adjust', '🎚 Adjust'], ['move', '🎬 Moves'], ['joint', '🦴 Joints'], ['parts', '👁 Parts'], ['place', '📐 Place']];
 const SPEEDS = [[1.5, 'Slow'], [1, 'Normal'], [0.7, 'Fast']];
 const UPPER = new Set(['spine', 'chest', 'neck', 'head', 'lsho', 'lelb', 'lhand', 'rsho', 'relb', 'rhand']);
 const MINE = 'deck.figure.poses';  // poses saved by hand, in every project
@@ -225,6 +225,32 @@ export function jointsTab(o, cur) {
       button('Pivot here', () => { o.pivot = n; changed(); }, { title: 'The gizmo turns the whole figure around this joint' }),
       button('Done', () => selectJoint(null))),
     hint(`${FIGURE.IK[n] ? 'Move drags the limb (the elbow or knee follows), Rotate turns it.' : 'Rotate turns it.'} Tap the body (or Esc) for the whole figure.`),
+  ];
+}
+
+// hide parts of the figure (display only: the pose and the floor plant keep using the whole body)
+const PART_LABEL = { lsho: 'Upper arm', lelb: 'Forearm', rsho: 'Upper arm', relb: 'Forearm', lhip: 'Thigh', rhip: 'Thigh', lknee: 'Shin', rknee: 'Shin', spine: 'Waist', hips: 'Pelvis' };
+const ALL_PARTS = Object.keys(FIGURE.JOINTS);
+export function partsTab(o) {
+  const off = () => new Set(o.hide || []);
+  const put = (set) => { if (set.size) o.hide = ALL_PARTS.filter((p) => set.has(p)); else delete o.hide; changed(); };
+  const toggle = (ids) => { const s = off(), all = ids.every((p) => s.has(p)); for (const p of ids) { if (all) s.delete(p); else s.add(p); } put(s); };
+  const s = off();
+  const map = h('div', { class: 'body-map' },
+    h('span', { class: 'side', style: 'grid-area:1/1' }, 'Right'), h('span', { class: 'side', style: 'grid-area:1/5' }, 'Left'),
+    BODY.map(([k, r, c, l]) => h('button', { type: 'button', class: 'part' + (s.has(k) ? ' gone' : ' on'), 'aria-pressed': !s.has(k), style: `grid-area:${r}/${c}`,
+      title: `${s.has(k) ? 'Show' : 'Hide'} ${PART_LABEL[k] || l}`, onclick: () => toggle([k]) }, PART_LABEL[k] || l)));
+  const only = (keep) => put(new Set(ALL_PARTS.filter((p) => !keep(p))));
+  return [
+    map,
+    field('Parts', h('div', { class: 'chips' }, FIGURE.PART_GROUPS.map(([k, l, ids]) => h('button', { type: 'button', class: 'chip' + (ids.every((p) => s.has(p)) ? '' : ' on'),
+      'aria-pressed': !ids.every((p) => s.has(p)), onclick: () => toggle(ids) }, l)))),
+    h('div', { class: 'row wrap' },
+      button('Show all', () => put(new Set()), { disabled: !s.size }),
+      button('Upper only', () => only((p) => UPPER.has(p)), { title: 'Hide the pelvis, legs and feet' }),
+      button('Lower only', () => only((p) => !UPPER.has(p)), { title: 'Hide the head, torso and arms' }),
+      button('Hide arms', () => put(new Set([...s, 'lsho', 'lelb', 'lhand', 'rsho', 'relb', 'rhand'])))),
+    hint('Hidden parts are left out of the view, the depth and clay renders and the pose video. The pose is unchanged, and the figure stays planted as if whole.'),
   ];
 }
 

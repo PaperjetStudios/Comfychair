@@ -70,7 +70,7 @@ export function buildFigure(material, dotMaterial) {
     b.position.fromArray(at);
     (parent ? bones[parent] : root).add(b);
     bones[name] = b;
-    for (const geo of PARTS[name]) { const m = new THREE.Mesh(geo, material); b.add(m); meshes.push(m); }
+    for (const geo of PARTS[name]) { const m = new THREE.Mesh(geo, material); m.userData.part = name; b.add(m); meshes.push(m); }
     const d = new THREE.Mesh(dotGeo, dotMaterial);
     d.userData.joint = name; d.renderOrder = 10; d.layers.set(1);
     b.add(d); dots.push(d);
@@ -82,6 +82,18 @@ export function buildFigure(material, dotMaterial) {
     marks[k] = new THREE.Object3D(); marks[k].position.fromArray(p); bones.head.add(marks[k]);
   }
   return { root, bones, meshes, dots, marks };
+}
+
+// ---- hiding parts (display only): a part is a joint's own meshes, so its id is the joint name -------
+// groups for the quick toggles: [id, label, its parts]
+export const PART_GROUPS = [['head', 'Head', ['head']], ['torso', 'Torso', ['neck', 'chest', 'spine']], ['hips', 'Pelvis', ['hips']],
+  ['armL', 'L arm', ['lsho', 'lelb']], ['armR', 'R arm', ['rsho', 'relb']], ['handL', 'L hand', ['lhand']], ['handR', 'R hand', ['rhand']],
+  ['legL', 'L leg', ['lhip', 'lknee']], ['legR', 'R leg', ['rhip', 'rknee']], ['footL', 'L foot', ['lfoot']], ['footR', 'R foot', ['rfoot']]];
+// hide is a list of part ids (absent = all shown). The meshes go invisible but stay in rig.meshes, so
+// lowest() (the floor plant) still sees the whole body and hiding legs doesn't drop the figure.
+export function setHidden(rig, hide) {
+  const off = new Set(hide || []);
+  for (const m of rig.meshes) m.visible = !off.has(m.userData.part);
 }
 
 // a pose is { joint: [x, y, z, w] } (local rotations; missing = rest), with parameters m on top
@@ -614,13 +626,24 @@ const COLORS = [[255, 0, 0], [255, 85, 0], [255, 170, 0], [255, 255, 0], [170, 2
   [0, 255, 255], [0, 170, 255], [0, 85, 255], [0, 0, 255], [85, 0, 255], [170, 0, 255], [255, 0, 255], [255, 0, 85], [255, 0, 0]];
 
 // the 18 keypoints in world space (the neck is between the shoulders, like OpenPose's)
-export function keypoints(rig) {
+// a hidden part's points are null (drawPose skips them and their limbs): a point stays while any part
+// that meets it is shown (the elbow, for one, ends the upper arm and starts the forearm)
+const KP_PARTS = { nose: ['head'], reye: ['head'], leye: ['head'], rear: ['head'], lear: ['head'], neck: ['neck', 'chest'],
+  lsho: ['lsho'], lelb: ['lsho', 'lelb'], lhand: ['lelb', 'lhand'], rsho: ['rsho'], relb: ['rsho', 'relb'], rhand: ['relb', 'rhand'],
+  lhip: ['lhip', 'hips'], lknee: ['lhip', 'lknee'], lfoot: ['lknee', 'lfoot'], rhip: ['rhip', 'hips'], rknee: ['rhip', 'rknee'], rfoot: ['rknee', 'rfoot'] };
+// and a limb goes when none of its parts is shown (the shin, with the thigh and foot still there): the
+// result's .cut holds those limb indexes, for drawPose
+const LIMB_PARTS = [['rsho'], ['lsho'], ['rsho'], ['relb'], ['lsho'], ['lelb'], ['chest', 'spine', 'hips'], ['rhip'], ['rknee'], ['chest', 'spine', 'hips'],
+  ['lhip'], ['lknee'], ['neck', 'head'], ['head'], ['head'], ['head'], ['head']];
+export function keypoints(rig, hide = []) {
   rig.root.updateMatrixWorld(true);
   const at = (o) => o.getWorldPosition(new THREE.Vector3());
   const p = {};
   for (const n of KP) p[n] = n === 'neck' ? null : at(rig.marks[n] || rig.bones[n]);
   p.neck = p.lsho.clone().add(p.rsho).multiplyScalar(0.5);
-  return KP.map((n) => p[n]);
+  const pts = KP.map((n) => (KP_PARTS[n].every((x) => hide.includes(x)) ? null : p[n]));
+  pts.cut = new Set(LIMB_PARTS.flatMap((l, i) => (l.every((x) => hide.includes(x)) ? [i] : [])));
+  return pts;
 }
 
 // draw figures' keypoints (already projected to pixels; null = behind the camera) like OpenPose
@@ -630,7 +653,7 @@ export function drawPose(ctx, people, W, H) {
   for (const pts of people) {
     LIMBS.forEach(([a, b], i) => {
       const p = pts[a - 1], q = pts[b - 1];
-      if (!p || !q) return;
+      if (!p || !q || pts.cut?.has(i)) return;
       const [r, g, bl] = COLORS[i];
       const len = Math.hypot(q[0] - p[0], q[1] - p[1]);
       ctx.save();

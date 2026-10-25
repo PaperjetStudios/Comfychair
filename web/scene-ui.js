@@ -8,7 +8,7 @@ import {
   C, CAM, FPS, HIST, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, addKey, current, defaultScene, frames, hooks, keyTarget,
   namesFor, pivotOf, pivotsFor, sameTab, save, selItem, setSC, write
 } from './scene-data.js';
-import { FIG_TABS, adjustTab, jointsTab, movesTab, posesTab, promptProps } from './scene-pose.js';
+import { FIG_TABS, adjustTab, jointsTab, movesTab, partsTab, posesTab, promptProps } from './scene-pose.js';
 import {
   addObject, cameraFromView, changed, draw, fit, jointMode, lookThrough, makePhoto, pose, rebuildRoom, refresh,
   removeSelected, select, selectJoint, setFree, setMode, syncMeshes, viewer
@@ -148,7 +148,7 @@ function objectProps(o) {
   const tab = FIG_TABS.some(([k]) => k === R.figTab) ? R.figTab : 'pose';
   return section(o.name, () => select(null),
     seg(FIG_TABS, tab, (v) => { R.figTab = v; store.set('deck.scene.figtab', v); renderPanel(); }, { wrap: true }),
-    { pose: posesTab, adjust: adjustTab, move: movesTab, joint: jointsTab, place: placeProps }[tab](o, cur));
+    { pose: posesTab, adjust: adjustTab, move: movesTab, joint: jointsTab, parts: partsTab, place: placeProps }[tab](o, cur));
 }
 
 // where it is, how big, its pivot; duplicate and delete
