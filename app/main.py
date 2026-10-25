@@ -692,6 +692,11 @@ async def _timeline_path(src: dict, tmp: Path) -> tuple[Path, str]:
         path = tmp / f"{uuid.uuid4().hex[:8]}.png"
         path.write_bytes(await input_bytes(src["input"]))
         return path, "image"
+    if src.get("clip"):  # a 3D composition the browser rendered for this export (POST /api/scene/clip)
+        path = config.SCENE_CLIP_DIR / Path(str(src["clip"])).name
+        if not path.is_file():
+            raise HTTPException(400, "A 3D scene clip wasn't rendered: export again")
+        return path, "video"
     if src.get("media"):
         path = config.MEDIA_DIR / Path(src["media"]).name
         if not path.is_file():
@@ -708,7 +713,7 @@ async def video_render(body: dict = Body(...)):
     tracks = {t["id"]: t for t in body.get("tracks") or []}
     z_of = {tid: i for i, tid in enumerate(t["id"] for t in body.get("tracks") or [] if t.get("kind") == "video")}
     with tempfile.TemporaryDirectory() as td:
-        items, sources = [], []
+        items, sources, scenes = [], [], []
         for it in body.get("items") or []:
             tr = tracks.get(it.get("track"))
             if not tr:
@@ -721,6 +726,8 @@ async def video_render(body: dict = Body(...)):
                                                     "anchor_x", "anchor_y")},
                           "path": str(path), "kind": kind, "track": tr["id"], "z": z_of.get(tr["id"], 0),
                           "hidden": bool(tr.get("hidden")), "muted": bool(tr.get("muted"))})
+            if (it.get("src") or {}).get("clip"):
+                scenes.append({k: (it.get("scene") or {}).get(k) for k in ("id", "name", "look", "rev")})
             if (it.get("src") or {}).get("generation") is not None:
                 sources.append({"generation": it["src"]["generation"], "index": it["src"].get("index", 0),
                                 "start": it.get("in"), "end": it.get("out")})
@@ -729,6 +736,8 @@ async def video_render(body: dict = Body(...)):
         size = f"{body['width']}×{body['height']}" if body.get("width") else "first clip's size"
         params = {"timeline": f"{len(items)} clips on {len(tracks)} tracks", "frame": size,
                   "fps": body.get("fps") or "first clip's", "clips": sources}
+        if scenes:  # 3D compositions in it (live-linked scenes, rendered at export)
+            params["scenes"] = scenes
         if isinstance(body.get("tab"), dict):  # which saved video edit (a video-tabs document) this came from
             params["edit_tab"] = {"id": str(body["tab"].get("id") or "")[:64], "name": str(body["tab"].get("name") or "")[:120]}
         parent = {"generation": sources[0]["generation"], "index": sources[0]["index"], "frame": None} if sources else None
@@ -787,6 +796,56 @@ async def scene_render(frames: list[UploadFile] = File(...), fps: float = Form(2
                                    "duration": round(len(frames) / fps, 2)}])
     await push_gen(gid)
     return db.get_generation(gid)
+
+
+SCENE_CLIP_TTL = 24 * 3600
+CLIP_TOKEN = re.compile(r"[0-9a-f]{8,32}")
+
+
+def _sweep_scene_clips():
+    """Drop finished clips and unfinished uploads older than a day."""
+    for p in config.SCENE_CLIP_DIR.iterdir():
+        try:
+            if time.time() - p.stat().st_mtime > SCENE_CLIP_TTL:
+                shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+@app.post("/api/scene/clip")
+async def scene_clip(frames: list[UploadFile] = File(...), token: str = Form(...), start: int = Form(0),
+                     fps: float = Form(24), done: bool = Form(False)):
+    """A 3D composition's frames (PNGs) for a video export, sent in batches under one token: `start` is
+    the index of the batch's first frame. With done=true the frames so far become a temporary mp4 that
+    /api/video/render takes as a clip source ({"clip": name}). Nothing goes to History."""
+    if not imageprep.ffmpeg_available():
+        raise HTTPException(400, "ffmpeg isn't installed (sudo apt install ffmpeg)")
+    if not CLIP_TOKEN.fullmatch(token) or start < 0 or not 0 < fps <= 120 or len(frames) > 500:
+        raise HTTPException(400, "Bad scene clip request")
+    work = config.SCENE_CLIP_DIR / f"{token}.frames"
+    work.mkdir(exist_ok=True)
+    for i, f in enumerate(frames):
+        data = await f.read()
+        if not data.startswith(b"\x89PNG"):
+            raise HTTPException(400, "Frames must be PNGs")
+        (work / f"f{start + i:05d}.png").write_bytes(data)
+    if not done:
+        return {"frames": len(list(work.glob("f*.png")))}
+    n = len(list(work.glob("f*.png")))
+    if n < 1 or not (work / f"f{n - 1:05d}.png").exists():
+        shutil.rmtree(work, ignore_errors=True)
+        raise HTTPException(400, "Missing frames: send them in order")
+    out = config.SCENE_CLIP_DIR / f"{token}.mp4"
+    vf = "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p"
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-framerate", f"{fps:g}", "-i", str(work / "f%05d.png"),
+           "-vf", vf, "-c:v", "libx264", "-crf", "12", "-movflags", "+faststart", str(out)]
+    r = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
+    shutil.rmtree(work, ignore_errors=True)
+    if r.returncode:
+        out.unlink(missing_ok=True)
+        raise HTTPException(400, r.stderr[-500:] or "ffmpeg failed")
+    await asyncio.to_thread(_sweep_scene_clips)
+    return {"clip": out.name, "frames": n, "duration": round(n / fps, 3)}
 
 
 @app.post("/api/scene/photo")

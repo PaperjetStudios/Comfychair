@@ -19,7 +19,7 @@ const PERSON_PROFILE = [[0, 0], [0.27, 0], [0.29, 0.02], [0.25, 0.08], [0.28, 0.
   [0.33, 0.63], [0.44, 0.73], [0.5, 0.8], [0.4, 0.83], [0.11, 0.855], [0.12, 0.875], [0.18, 0.91], [0.185, 0.95],
   [0.13, 0.99], [0, 1]];
 let GEO;
-function geometries() {
+export function geometries() {
   if (GEO) return GEO;
   const curve = new THREE.SplineCurve(PERSON_PROFILE.map(([r, y]) => new THREE.Vector2(r, y)));
   GEO = {
@@ -60,7 +60,7 @@ void main() {
   #include <skinning_vertex>
   vec4 mv = modelViewMatrix * vec4(transformed, 1.0); vz = -mv.z; gl_Position = projectionMatrix * mv;
 }`;
-const depthMat = new THREE.ShaderMaterial({
+export const depthMat = new THREE.ShaderMaterial({
   uniforms: { near: { value: 0.5 }, far: { value: 20 } }, side: THREE.DoubleSide, vertexShader: VERT,
   fragmentShader: 'uniform float near; uniform float far; varying float vz;'
     + 'void main() { float d = (1.0 / max(vz, 1e-3) - 1.0 / far) / (1.0 / near - 1.0 / far);'

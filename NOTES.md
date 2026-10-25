@@ -151,3 +151,14 @@ will then fail to start until that process is stopped, so stop it before the nex
   in `MUTED` (not saved) instead of the keys, so a muted layer stays put and moving it writes no keys. Renders set
   `R.real` and use the real keys; Save frame is the picture on screen.
 - Tests: `tests/keys.mjs` (run by `tests/test_keys.py`).
+
+### Compositions: 3D scenes as video clips (scene-comp.js, scene-offscreen.js)
+- A video clip `{ kind: 'scene', src: { scene: <scene-tabs id>, look: color|clay|depth|pose }, nat: [w, h], dur }` is only a
+  link: the scene is read from the store (`scene-comp.js`) and rebuilt when a `store` event for `scene-tabs` arrives (debounced
+  300 ms; while the Video tab is hidden it catches up on show). A deleted scene shows a placeholder and a warning on the clip.
+  The clip's length follows the scene's unless trimmed; scene time = clip time - at + in.
+- `scene-offscreen.js` `Stage(payload)`: its own THREE.Scene, one WebGL renderer shared by all stages. Layers are built by the
+  panel's own code (`makers`, `LOADERS`, figure.js); those take an optional context `x = { mine, draw, lib }` for a scene built
+  elsewhere. Depth range is measured once per stage. Loaded lazily (three.js) on the first scene clip.
+- Export: each scene clip's frames are drawn at export size and rate and uploaded in batches to `POST /api/scene/clip`
+  (temp mp4 in `data/tmp/sceneclips`, swept after a day); the render takes it as `src: { clip }`.

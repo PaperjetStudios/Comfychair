@@ -52,28 +52,28 @@ export function fetchObject(scope, id) {
 // ---- the object layer in a scene ----
 const selMat = new THREE.MeshStandardMaterial({ color: 0xe9b44c, roughness: 0.8, side: THREE.DoubleSide });
 const MISSING = new THREE.BoxGeometry(0.4, 0.4, 0.4).translate(0, 0.2, 0);
-function fill(o, m) {
-  const ref = o.ref;
+function fill(o, m, x = {}) {   // (x: { mine(o, m), draw() } for a scene built elsewhere, as in scene-import.js)
+  const ref = o.ref, alive = x.mine || ((a, b) => R.meshes.get(a.id) === b), redraw = x.draw || draw;
   if (!ref) return;
   fetchObject(ref.scope, ref.id).then((d) => {
-    if (R.meshes.get(o.id) !== m) return;   // gone, or built again meanwhile
+    if (!alive(o, m)) return;   // gone, or built again meanwhile
     if (!d.built) throw new Error('nothing to show');
     ref.rev = d.rev;
     m.geometry = d.built.geo; m.userData.height = d.built.size[1];
     m.userData.own.color.set(d.data.color || MG.DEFAULT_COLOR);
-    draw();
+    redraw();
   }).catch((e) => {
-    if (R.meshes.get(o.id) !== m) return;
-    m.geometry = MISSING; m.userData.own.color.set(0x8a4a4a); draw();
+    if (!alive(o, m)) return;
+    m.geometry = MISSING; m.userData.own.color.set(0x8a4a4a); redraw();
     toast(`${o.name}: ${e.status === 404 || /not found/i.test(e.message) ? 'that object is gone from the library' : e.message}`, true);
   });
 }
-makers.object = (o) => {
+makers.object = (o, x) => {
   const own = new THREE.MeshStandardMaterial({ color: MG.DEFAULT_COLOR, roughness: 0.85, side: THREE.DoubleSide });
   const m = new THREE.Mesh(new THREE.BufferGeometry(), own);
   m.userData.own = own;
   m.userData.paint = (on) => { m.material = on ? selMat : own; };   // (scene-view's paint calls this)
-  queueMicrotask(() => fill(o, m));   // (makeObject registers the mesh right after this returns)
+  queueMicrotask(() => fill(o, m, x));   // (makeObject registers the mesh right after this returns)
   return m;
 };
 // the library changed (here or on another device): objects in the open scene look again
