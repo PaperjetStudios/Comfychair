@@ -1,4 +1,5 @@
 import * as FIGURE from './figure.js';
+import { maximizable } from './layout.js';
 import { $, button, h, sheetOpen, store, toast } from './ui.js';
 import {
   CAM, FPS, R, ROOM, SC, TEMP, TYPES, addKey, frames, keyTarget, namesFor, sample, selItem, setMute
@@ -574,28 +575,10 @@ export function renderTransport() {
   renderTime(); renderKeys();
 }
 
-// ---- the 3D viewport, full screen (a toggle on the viewer, kept per device) ---------------------------
+// ---- the 3D viewport, full screen: the shared maximize button (layout.js) ---------------------------
 const stage = () => $('#tab-scene .stage');
-let nativeFs = false;
-function setMax(on, native = true) {
-  const st = stage();
-  if (!st) return;
-  st.classList.toggle('scene-max', on);
-  store.set('deck.scene.max', on);
-  const b = $('#sceneMaxBtn');
-  if (b) { b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); b.title = on ? 'Leave full screen (Esc)' : 'Full screen the 3D view'; }
-  try {  // the real fullscreen where the browser has it; the fixed layout is the fallback (and what is remembered)
-    if (on && native && st.requestFullscreen) { nativeFs = true; st.requestFullscreen().catch(() => { nativeFs = false; }); }
-    else if (!on && document.fullscreenElement) document.exitFullscreen();
-  } catch { nativeFs = false; }
-}
-export const maxBar = () => {
-  document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && nativeFs) { nativeFs = false; setMax(false); } });
-  const bar = h('div', { class: 'layer-toolbar scene-maxbar', role: 'toolbar' },
-    h('button', { type: 'button', id: 'sceneMaxBtn', 'aria-label': 'Full screen', onclick: () => setMax(!stage().classList.contains('scene-max')) }, '⛶'));
-  if (store.get('deck.scene.max', false)) queueMicrotask(() => setMax(true, false));
-  return bar;
-};
+let sceneMax = null;
+export const maxBar = () => (sceneMax ||= maximizable($('#tab-scene .stage'), $('#sceneViewer'), { title: 'Full screen the 3D view' })).btn;
 
 // ---- the keyboard (the sheet, when it was the last thing touched) ---------------------------------
 let focus = false;
@@ -604,7 +587,6 @@ export function wireSheetKeys() {
   document.addEventListener('keydown', (e) => {
     if (!$('#tab-scene').classList.contains('active') || sheetOpen() || e.target.closest('input, textarea, select')) return;
     const k = e.key.toLowerCase(), eat = () => { e.preventDefault(); e.stopImmediatePropagation(); };
-    if (k === 'escape' && stage().classList.contains('scene-max')) { eat(); setMax(false); return; }
     if (!focus) return;
     if (e.ctrlKey || e.metaKey) {
       if (k === 'c') { eat(); copyKeys(); } else if (k === 'v') { eat(); pasteKeys(); } else if (k === 'd') { eat(); duplicateKeys(); } else if (k === 'a') { eat(); selectAll(); }

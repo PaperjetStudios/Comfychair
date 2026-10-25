@@ -1,8 +1,8 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import {
-  $, button, clone, closeSheet, field, h, hint, iconBtn, layerRowsEl, openSheet, panelTop, propNum, rangeField,
-  section, seg, sheetOpen, store, uid, undoToast
+  $, button, clone, closeSheet, field, h, iconBtn, layerRowsEl, openSheet, panelTop, propNum, rangeField,
+  section, seg, sheetOpen, store, uid, undoToast, help
 } from './ui.js';
 import {
   C, CAM, EVEN, HIST, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, frames, hooks, keyTarget,
@@ -85,7 +85,7 @@ function placeProps(o, cur) {
       })] : null,
     o.type === 'photo' ? [
       button('🎥 Camera to the photo\'s view', () => { lookThrough(o); changed(); }),
-      hint('The picture as a 3D mesh (MoGe). Keep camera moves small: nothing is behind what the picture shows. Render depth video, then use it with this picture as a reference.')] : null,
+      help('The picture as a 3D mesh (MoGe). Keep camera moves small: nothing is behind what the picture shows. Render depth video, then use it with this picture as a reference.')] : null,
     easeSeg(o),
     h('div', { class: 'row wrap' },
       button('Duplicate', () => {
@@ -95,7 +95,7 @@ function placeProps(o, cur) {
       }),
       clearKeys(o, names),
       button('Delete', removeSelected, { cls: 'small danger' })),
-    hint('Drag the gizmo to move it; tap the object again (or W / E / R) for Rotate and Scale. With keys, a change sets a key at the playhead; with Auto key off it is held until ◆ Key (or until the playhead moves).')];
+    help('Drag the gizmo to move it; tap the object again (or W / E / R) for Rotate and Scale. With keys, a change sets a key at the playhead; with Auto key off it is held until ◆ Key (or until the playhead moves).')];
 }
 
 export function setAutoKey(on) {
@@ -132,7 +132,7 @@ function roomProps() {
       num('Height (m)', () => rm.h, (v) => { rm.h = Math.max(1, v); }, { min: 1, max: 10, after: re })),
     field('Shape', seg([['room', 'Walls + ceiling'], ['walls', 'Walls'], ['floor', 'Floor only']], rm.walls ? (rm.ceiling ? 'room' : 'walls') : 'floor',
       (v) => { rm.walls = v !== 'floor'; rm.ceiling = v === 'room'; rebuildRoom(); changed(); })),
-    hint('Keep the walls about where the real ones should be: H3 sizes the room from them. Hide it (◉) for an open space.'),
+    help('Keep the walls about where the real ones should be: H3 sizes the room from them. Hide it (◉) for an open space.'),
     button('Delete room', removeSelected, { cls: 'small danger' }));
 }
 
@@ -159,7 +159,7 @@ function cameraProps() {
     h('div', { class: 'row wrap' },
       clearKeys(cam, CAM),
       button('Reset view', () => { write(cam, CAM, { ...defaultScene().camera.base }); changed(); })),
-    hint('The view is the camera: drag empty space to orbit, two fingers to pan and zoom. With keys and Auto key on, each move sets a key at the playhead; with Auto key off it is only a look around until ◆ Key.'));
+    help('The view is the camera: drag empty space to orbit, two fingers to pan and zoom. With keys and Auto key on, each move sets a key at the playhead; with Auto key off it is only a look around until ◆ Key.'));
 }
 
 function renderProps() {
@@ -167,7 +167,7 @@ function renderProps() {
   const use = (g, what) => button(`Use ${what} #${g.id} in H3 control`, () => C.useControlVideo(g, SC));
   return section('Render', null,
     slider('Soften edges', () => SC.blur, (v) => { SC.blur = v; }, { min: 0, max: 12, step: 0.5, fmt: (v) => (v ? `${v} px` : 'off') }),
-    hint('Blurs the depth so H3 copies the shapes less literally. Use with deck-h3-ctrl2v (strength 1, end 0.4).'),
+    help('Blurs the depth so H3 copies the shapes less literally. Use with deck-h3-ctrl2v (strength 1, end 0.4).'),
     h('div', { class: 'row wrap' },
       button('Render depth video', renderDepthVideo, { cls: 'small primary', disabled: busy }),
       figs ? button('Render pose video', renderPoseVideo, { disabled: busy, title: 'The posable people as OpenPose stick figures' }) : null,
@@ -249,9 +249,9 @@ export function cameraPanel() {
   return [
     section('View', null,
       seg([['shot', '🎥 Through the camera'], ['free', '🧭 Director view']], R.free ? 'free' : 'shot', (v) => { setFree(v === 'free'); renderPanel(); }),
-      R.free ? [hint('Look around freely: the camera is drawn as a frustum and orbiting here leaves it alone. Set the camera from what you see when it is framed.'),
+      R.free ? [help('Look around freely: the camera is drawn as a frustum and orbiting here leaves it alone. Set the camera from what you see when it is framed.'),
         button('🎥 Camera to this view', () => { cameraFromView(); changed(); })]
-        : hint('You see what the camera sees: drag empty space to orbit it, two fingers to pan and zoom.')),
+        : help('You see what the camera sees: drag empty space to orbit it, two fingers to pan and zoom.')),
     cameraProps(), renderProps()];
 }
 

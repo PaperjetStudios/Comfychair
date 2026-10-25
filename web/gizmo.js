@@ -1,6 +1,6 @@
 // Shared by every transform gizmo (2D handles on the video preview now, the 3D poser through smoothGizmo): the
 // weighted feel of a handle, the snapping settings (remembered per device) and the toggles for them.
-import { h, store, openSheet, closeSheet, seg, field, hint, button, actions } from './ui.js';
+import { h, store, openSheet, closeSheet, seg, field, button, actions , help } from './ui.js';
 
 // ---- snapping settings: one set for all gizmos, saved on this device ----
 const DEFAULTS = { grid: false, gridPct: 5, edges: true, rot: false, rotStep: 15, scale: false, scaleStep: 5 };
@@ -174,7 +174,7 @@ function settingsSheet(parts, after) {
     parts.includes('grid') ? row('gridPct', 'Grid size (% of the frame width)', [1, 2.5, 5, 10, 12.5], (v) => `${v}%`) : null,
     parts.includes('rot') ? row('rotStep', 'Rotate in steps of', [5, 15, 30, 45, 90], (v) => `${v}°`) : null,
     parts.includes('scale') ? row('scaleStep', 'Scale in steps of', [1, 5, 10, 25], (v) => `${v}%`) : null,
-    hint('Each snap has its own on/off chip on the preview. On a desktop, hold Alt while dragging to drag freely.', 'sheet-hint'),
+    help('Each snap has its own on/off chip on the preview. On a desktop, hold Alt while dragging to drag freely.'),
     actions(button('Done', closeSheet, { cls: 'small primary' })));
 }
 
@@ -190,7 +190,7 @@ const S3 = {
       row('gridM', 'Grid size', [0.05, 0.1, 0.25, 0.5, 1], (v) => `${v} m`),
       row('rotStep', 'Rotate in steps of', [5, 15, 30, 45, 90], (v) => `${v}°`),
       row('scaleStep', 'Scale in steps of (m, or × for a figure or photo)', [0.01, 0.05, 0.1, 0.25, 0.5], (v) => `${v}`),
-      hint('Each snap has its own on/off chip on the stage. On a desktop, hold Alt while dragging to drag freely.', 'sheet-hint'),
+      help('Each snap has its own on/off chip on the stage. On a desktop, hold Alt while dragging to drag freely.'),
       actions(button('Done', closeSheet, { cls: 'small primary' })));
   },
 };

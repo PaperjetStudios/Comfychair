@@ -7,7 +7,7 @@
 // folder (POST /api/scene/asset); the layer only holds its URL.
 import * as THREE from './vendor/three.module.min.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
-import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast } from './ui.js';
+import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help } from './ui.js';
 import { C, R, SC, newObject, namesFor, save, selItem, write } from './scene-data.js';
 import { addModeSection } from './scene-modes.js';
 import { LOADERS, controls, changed, draw, passHooks, renderer, scene, select } from './scene-view.js';
@@ -206,7 +206,7 @@ async function openTemplates() {
   const mine = h('div', { class: 'chips' }, hint('Loading…'));
   const chip = (label, fn, title) => h('button', { type: 'button', class: 'chip', title, onclick: fn }, label);
   openSheet(h('h3', {}, 'New scene from a template'),
-    hint('Opens a new 3D tab. Your current scene is not changed.'),
+    help('Opens a new 3D tab. Your current scene is not changed.'),
     h('div', { class: 'chips' }, ...LIBRARY.map((t) => chip(t.name, () => start(t.name, t.build()), t.hint))),
     h('h3', {}, 'Your templates'), mine,
     actions(button('Save this scene as a template…', saveAsTemplate)));
@@ -243,7 +243,7 @@ function sourcesSection() {
     h('div', { class: 'row wrap' },
       fileButton('📦 Import model or splat…', importFiles, { accept: ACCEPT, multiple: true, cls: 'small primary' }),
       button('🏠 New scene from template…', openTemplates)),
-    hint('Models: glb, gltf, fbx, obj (pick its .mtl and textures too). Splats: ply, splat, ksplat, spz. Files are kept in this project\'s folder.'));
+    help('Models: glb, gltf, fbx, obj (pick its .mtl and textures too). Splats: ply, splat, ksplat, spz. Files are kept in this project\'s folder.'));
 }
 
 function itemSection(o) {
@@ -255,7 +255,7 @@ function itemSection(o) {
     o.type === 'splat' ? h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: !!o.flip,
       onchange: (e) => { set('flip', e.target.checked); R.meshes.get(o.id)?.userData.splat?.fit(); draw(); } }), 'Upside down (turn it over: many splat files are y-down)') : null,
     button('Back to fitted size', () => { const f = o.fit || 1; write(o, namesFor(o), { sx: f, sy: f, sz: f }); changed(); }),
-    o.type === 'splat' ? hint('Splats can\'t be drawn as depth: renders (and the ◐ Depth view) use a box the size of the splat in its place.') : null);
+    o.type === 'splat' ? help('Splats can\'t be drawn as depth: renders (and the ◐ Depth view) use a box the size of the splat in its place.') : null);
 }
 
 export function registerImport({ newTab }) {

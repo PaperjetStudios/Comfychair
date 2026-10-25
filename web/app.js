@@ -4,7 +4,7 @@
 // the pickers and core.js the shared state. The 3D tab (scene.js) loads on demand.
 
 import {
-  $, h, store, api, toast, overlayOpened, overlayClosed, openSheet, closeSheet, button, hint,
+  $, h, store, api, toast, overlayOpened, overlayClosed, openSheet, closeSheet, button, help,
 } from './ui.js';
 import { S, loadProjects, setSwitchTab, emitProject } from './core.js';
 import { generate, loadTemplates, selectTemplate, stop, wireZoom } from './generate.js';
@@ -13,6 +13,7 @@ import { RUN, checkUiVersion, connectWS, loadHistory, onResume, openJobs, runChi
 import { renderEditor } from './editor.js';
 import { renderVideo, vidPause, wireVideoTransport } from './video.js';
 import { B, closeGallery, pauseBoard, renderBoard } from './board.js';
+import { maximizable, sideNav, wireSplitters } from './layout.js';
 
 // ---------------------------------------------------------------------------
 // full screen (hides the browser bars on the tablet)
@@ -79,7 +80,7 @@ $('#batchPlus').addEventListener('click', () => setBatch(S.batch + 1));
 $('#debugBtn').addEventListener('click', () => {
   const counts = Object.entries(S.debugCounts).map(([k, v]) => `${k}: ${v}`).join('\n');
   openSheet(h('h3', {}, 'Websocket log'),
-    hint('Message counts, then unhandled messages. Useful for checking what a custom node sends.', 'sheet-hint'),
+    help('Message counts, then unhandled messages. Useful for checking what a custom node sends.'),
     h('div', { class: 'log' }, counts + '\n\n' + (S.debug.slice().reverse().join('\n') || '(nothing unhandled yet)')));
 });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) onResume(); });
@@ -98,40 +99,23 @@ document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') $('#genBtn').click();
 });
 
-// Drag the bar between preview and settings: sideways in landscape, up/down in portrait.
-// The size is remembered per orientation; double-tap puts it back.
-function wireSplitters() {
-  const root = document.documentElement;
-  const portrait = () => matchMedia('(max-width: 900px), (orientation: portrait)').matches;
-  const restore = () => {
-    const w = store.get('deck.split.panelW', null), hh = store.get('deck.split.stageH', null);
-    if (w) root.style.setProperty('--panel-w', `${w}px`); else root.style.removeProperty('--panel-w');
-    if (hh) root.style.setProperty('--stage-h', `${hh}px`); else root.style.removeProperty('--stage-h');
-  };
-  restore();
-  document.querySelectorAll('.splitter').forEach((sp) => {
-    let lastTap = 0;
-    sp.addEventListener('pointerdown', (e) => {
-      if (Date.now() - lastTap < 300) { store.set('deck.split.panelW', null); store.set('deck.split.stageH', null); restore(); return; }
-      lastTap = Date.now();
-      e.preventDefault();
-      try { sp.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
-      sp.classList.add('dragging');
-      const tab = sp.closest('.tab').getBoundingClientRect();
-      const move = (ev) => {
-        if (portrait()) {
-          const v = Math.round(Math.min(tab.height - 160, Math.max(140, ev.clientY - tab.top - 8)));
-          root.style.setProperty('--stage-h', `${v}px`); store.set('deck.split.stageH', v);
-        } else {
-          const v = Math.round(Math.min(tab.width - 240, Math.max(300, tab.right - ev.clientX - 8)));
-          root.style.setProperty('--panel-w', `${v}px`); store.set('deck.split.panelW', v);
-        }
-      };
-      const up = () => { sp.classList.remove('dragging'); sp.removeEventListener('pointermove', move); sp.removeEventListener('pointerup', up); sp.removeEventListener('pointercancel', up); };
-      sp.addEventListener('pointermove', move); sp.addEventListener('pointerup', up); sp.addEventListener('pointercancel', up);
-    });
-  });
+// The other panels' layout lives in layout.js: splitters, icon tabs, maximize
+function wireLayout() {
+  wireSplitters();
+  for (const id of ['generate', 'editor']) {
+    const tab = $(`#tab-${id}`);
+    maximizable(tab.querySelector('.stage'), tab.querySelector('.viewer'));
+  }
+  sideNav($('#tab-generate .panel'), 'generate', () => [...document.querySelectorAll('#fields > details.group')]
+    .map((el) => ({ el, label: el.querySelector(':scope > summary')?.textContent || '' })));
+  sideNav($('#editorPanel'), 'editor', sectionTargets($('#editorPanel')));
+  sideNav($('#videoPanel'), 'video', sectionTargets($('#videoPanel')));
+  sideNav($('#scenePanel'), 'scene', sectionTargets($('#scenePanel')));
 }
+// the .section blocks that sit directly in a panel's body (not ones nested inside another)
+const sectionTargets = (panel) => () => [...panel.querySelectorAll('.section')]
+  .filter((el) => !el.parentElement.closest('.section') && el.querySelector(':scope > .section-title > span'))
+  .map((el) => ({ el, label: el.querySelector(':scope > .section-title > span').textContent }));
 
 // Common phrases for MiniMax H3 prompts, after ComfyUI's H3 prompt guide (docs.comfy.org): shots
 // start with [Shot N] and later ones cut at a timestamp; ambience and sound effects go in
@@ -372,7 +356,7 @@ function wireTextPopup() {
 }
 
 (async function init() {
-  wireSplitters();
+  wireLayout();
   wireTextPopup();
   wireVideoTransport();
   wireZoom();

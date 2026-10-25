@@ -227,9 +227,12 @@ export function openSheet(...content) {
   SHEET.gen = null;
   SHEET.seq++;
   const wasOpen = sheetOpen();
+  const [rest, infos] = splitHelp(content);
+  const head = rest.find((c) => c.tagName === 'H3');
+  if (head && infos.length) head.append(...infos);   // help(text) in a sheet becomes an ⓘ in its title
   sheetEl().replaceChildren(
     h('button', { type: 'button', class: 'icon-btn close', onclick: () => closeSheet(), 'aria-label': 'Close' }, '✕'),
-    ...content.flat().filter((c) => c != null && c !== false));
+    ...(head && infos.length ? rest : content.flat(Infinity).filter((c) => c != null && c !== false)));
   sheetEl().classList.remove('hidden'); $('#sheetBackdrop').classList.remove('hidden');
   if (!wasOpen) overlayOpened(sheetBack);
   return SHEET.seq;
@@ -247,7 +250,7 @@ export const sheetStillOpen = (seq) => seq === SHEET.seq && sheetOpen();
 // A sheet that asks for a name and saves: save(name) may throw (shown as a toast) and closes it on success
 export function nameSheet({ title, hint = null, placeholder = '', extra = null, saveLabel = 'Save', save }) {
   const name = h('input', { type: 'text', placeholder });
-  openSheet(h('h3', {}, title), hint ? h('p', { class: 'hint sheet-hint' }, hint) : null, name, extra,
+  openSheet(h('h3', {}, title), hint ? help(hint) : null, name, extra,
     actions(button(saveLabel, async () => {
       try { await save(name.value.trim()); closeSheet(); } catch (e) { toast(e.message, true); }
     }, { cls: 'primary' })));
@@ -290,37 +293,100 @@ export function seg(options, cur, onPick, { wrap = false, action = false, disabl
   return el;
 }
 
-// A labelled setting: the label on the left, an optional note on the right (label: [text, note])
-export function field(label, ...kids) {
-  const [text, note] = Array.isArray(label) ? label : [label, null];
-  return h('div', { class: 'field' }, h('div', { class: 'lbl' }, h('span', {}, text), note), kids);
+// Explanations live behind an ⓘ, never inline. info(text) is the button: hover it with a pen or
+// mouse, or tap it, for a popover (one at a time; tap outside or Esc closes it).
+let pop = null, popBtn = null, popPinned = false;
+const hidePop = () => {
+  if (!pop) return;
+  pop.classList.add('hidden');
+  popBtn?.setAttribute('aria-expanded', 'false');
+  popBtn = null; popPinned = false;
+};
+function showPop(btn, text, pinned) {
+  if (!pop) {
+    pop = h('div', { class: 'info-pop hidden', role: 'tooltip' });
+    document.body.append(pop);
+    document.addEventListener('pointerdown', (e) => { if (popPinned && !e.target.closest('.info-pop, .info-i')) hidePop(); }, true);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && popBtn) { hidePop(); e.stopImmediatePropagation(); } }, true);
+    addEventListener('scroll', hidePop, true);   // it would drift from its button
+  }
+  popBtn?.setAttribute('aria-expanded', 'false');
+  popBtn = btn; popPinned = pinned;
+  btn.setAttribute('aria-expanded', 'true');
+  pop.textContent = text;
+  pop.classList.remove('hidden');
+  const r = btn.getBoundingClientRect(), w = pop.offsetWidth, ph = pop.offsetHeight, vw = innerWidth, vh = innerHeight;
+  pop.style.left = `${clamp(r.left + r.width / 2 - w / 2, 8, vw - w - 8)}px`;
+  pop.style.top = `${r.bottom + 6 + ph > vh - 8 && r.top - 6 - ph > 8 ? r.top - 6 - ph : Math.min(r.bottom + 6, vh - ph - 8)}px`;
+}
+export function info(text, label = 'About this') {
+  const b = h('button', { type: 'button', class: 'info-i', 'aria-label': label, 'aria-expanded': 'false' }, 'ⓘ');
+  b.addEventListener('click', (e) => {   // (also inside a <label>: it must not toggle the box)
+    e.preventDefault(); e.stopPropagation();
+    if (popBtn === b && popPinned) hidePop(); else showPop(b, text, true);
+  });
+  b.addEventListener('pointerenter', (e) => { if (e.pointerType !== 'touch' && !popPinned) showPop(b, text, false); });
+  b.addEventListener('pointerleave', () => { if (popBtn === b && !popPinned) hidePop(); });
+  return b;
+}
+// help(text): a "How it works" note. field(), section() and openSheet() lift it next to their label or
+// title as a bare ⓘ; anywhere else it stands alone as ⓘ Help.
+export function help(text, cls = '') {
+  const el = h('div', { class: `help-note ${cls}`.trim() }, info(text), h('span', {}, 'Help'));
+  el._help = text;
+  return el;
+}
+const splitHelp = (kids) => {
+  const flat = kids.flat(Infinity).filter((k) => k != null && k !== false);
+  const notes = flat.filter((k) => k.classList?.contains('help-note'));
+  return [flat.filter((k) => !notes.includes(k)), notes.map((n) => info(n._help))];
+};
+// Adds an ⓘ to a field that is already built (a slider, a number box…)
+export function withHelp(el, text) {
+  const lbl = el.querySelector(':scope > .lbl');
+  if (lbl) lbl.children[0].after(info(text)); else el.append(info(text));
+  return el;
 }
 
-// A titled group of settings, the same look in every panel. onDone adds a Done button to the title.
-export const section = (title, onDone, ...kids) => h('section', { class: 'section' },
-  title != null ? h('div', { class: 'section-title' }, h('span', {}, title), onDone ? button('Done', onDone, { cls: 'small ghost' }) : null) : null, kids);
+// A labelled setting: the label on the left, an optional note on the right (label: [text, note]).
+// A help(text) among the kids becomes an ⓘ after the label.
+export function field(label, ...kids) {
+  const [text, note] = Array.isArray(label) ? label : [label, null];
+  const [rest, infos] = splitHelp(kids);
+  return h('div', { class: 'field' }, h('div', { class: 'lbl' }, h('span', {}, text), infos, note), rest);
+}
+
+// A titled group of settings, the same look in every panel. onDone adds a Done button to the title;
+// a help(text) among the kids becomes an ⓘ after the title.
+export function section(title, onDone, ...kids) {
+  const [rest, infos] = title != null ? splitHelp(kids) : [kids, []];
+  return h('section', { class: 'section' },
+    title != null ? h('div', { class: 'section-title' }, h('span', {}, title), infos, onDone ? button('Done', onDone, { cls: 'small ghost' }) : null) : null, rest);
+}
 
 export const hint = (text, cls = '') => h('p', { class: `hint ${cls}`.trim() }, text);
 export const placeholder = (text) => h('div', { class: 'placeholder' }, text);
 export const note = (text, kind = 'warn') => h('div', { class: `note ${kind}` }, text);
 
 // A slider with its value shown beside the label. onInput runs while dragging, onChange on letting go.
-export function rangeField(label, get, set, { min, max, step, fmt = (v) => v.toFixed(2), onInput = null, onChange = null }) {
+export function rangeField(label, get, set, { min, max, step, fmt = (v) => v.toFixed(2), onInput = null, onChange = null, help: tip = null }) {
   const val = h('span', {}, fmt(get()));
   const r = h('input', { type: 'range', min, max, step, value: get() });
   r.addEventListener('input', () => { set(parseFloat(r.value)); val.textContent = fmt(get()); onInput?.(); });
   if (onChange) r.addEventListener('change', onChange);
-  return field([label, val], r);
+  const el = field([label, val], r);
+  return tip ? withHelp(el, tip) : el;
 }
 
 // A number box (drag it sideways like a slider). after() runs once the value is set (save and
 // redraw); live is called while the box is dragged (after set), for a preview that doesn't rebuild the panel
-export function propNum(label, value, set, after, { min = -1e6, max = 1e6, step = 1, live = null } = {}) {
+export function propNum(label, value, set, after, { min = -1e6, max = 1e6, step = 1, live = null, help: tip = null } = {}) {
   const input = h('input', { type: 'number', inputMode: 'decimal', min, max, step, value });
   const read = () => clamp(parseFloat(input.value) || 0, min, max);
   input.addEventListener('change', () => { set(read()); after(); });
   if (live) input.addEventListener('input', () => { if (input.dataset.scrubbing) { set(read()); live(); } });
-  return field(label, input);
+  const el = field(label, input);
+  return tip ? withHelp(el, tip) : el;
 }
 
 // A gallery card: a picture or clip, a badge over it, a caption (or meta: nodes for the caption row)

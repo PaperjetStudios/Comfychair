@@ -1,6 +1,6 @@
 import {
   $, h, store, clamp, clamp01, clone, cycleIndex, api, toast, undoToast, openOverlay, openSheet, sheetStillOpen, nameSheet,
-  button, iconBtn, seg, field, hint, placeholder, note, cycleBar,
+  button, iconBtn, seg, field, hint, placeholder, note, cycleBar, help, info
 } from './ui.js';
 import { ASPECT_PRESETS, S, addMine, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
 import { mediaEl, openImagePicker, openVideoPicker } from './media.js';
@@ -269,7 +269,7 @@ function groupPresetBar(g, fs) {
     let scope = 'workflow';
     nameSheet({ title: `Save ${g.label}`, placeholder: `Name, e.g. "${g.label} – fast"`, hint: `Saves: ${fs.map((f) => f.label).join(', ')}.`,
       extra: [seg(SCOPES, scope, (k) => { scope = k; }),
-        hint(`This workflow: ${S.tpl.name}. This model: ${currentModel() || '(no model setting here)'}. Everywhere: any template with the same kind of node.`, 'sheet-hint')],
+        help(`This workflow: ${S.tpl.name}. This model: ${currentModel() || '(no model setting here)'}. Everywhere: any template with the same kind of node.`)],
       save: async (name) => {
         if (scope === 'model' && !currentModel()) throw new Error('This template has no model setting');
         const r = await saveSnippet({ category: PRESET_CATEGORY, name: name || g.label, text: JSON.stringify(captureGroup(fs, scope, g.label)) });
@@ -788,8 +788,7 @@ export function mpInput(get, set) {
     const n = clamp(parseFloat(input.value) || 0, 0, 16);
     input.value = n; set(n);
   });
-  return h('label', { class: 'mp' }, h('span', {}, 'Max MP'), input,
-    h('span', { class: 'hint' }, '0 = keep size'));
+  return h('label', { class: 'mp' }, h('span', {}, 'Max MP'), input, info('0 = keep size'));
 }
 
 // the whole image greyed out, with the cropped part in colour on top
@@ -1202,7 +1201,7 @@ function openBoxEditor(f) {
 
   const overlay = h('div', { class: 'sketch boxes-editor' },
     h('div', { class: 'sketch-bar' }, h('b', {}, f.label),
-      h('span', { class: 'hint' }, f.refs ? 'Object boxes: describe what goes there, optionally with a reference image. Text boxes: the words, then how they look.'
+      info(f.refs ? 'Object boxes: describe what goes there, optionally with a reference image. Text boxes: the words, then how they look.'
         : 'Object boxes: describe what goes there. Text boxes: the words, then how they look.'),
       h('div', { class: 'spacer' }),
       button('Cancel', () => close(), { cls: 'small ghost' }),

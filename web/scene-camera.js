@@ -3,7 +3,7 @@
 // a start key (the camera as it is) and an end key (the camera moved), the start key carrying the
 // easing; a shake writes a key every few frames. Plugged into the Camera mode's panel with addModeSection.
 import * as THREE from './vendor/three.module.min.js';
-import { button, clone, field, h, hint, propNum, section, seg, toast } from './ui.js';
+import { button, clone, field, h, propNum, section, seg, toast , help } from './ui.js';
 import { CAM, FPS, OBJ, R, SC, TEMP, current, frames, sample, selItem } from './scene-data.js';
 import { changed, draw, pose } from './scene-view.js';
 import { renderKeys, renderPanel, renderTime, renderTransport } from './scene-ui.js';
@@ -225,7 +225,7 @@ function build() {
     field('Easing', seg(EASE_OPTS, ST.ease, (v) => { ST.ease = v; })),
     h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: ST.fromHead, onchange: (e) => { ST.fromHead = e.target.checked; } }), 'From the playhead (off: from the start of the scene)'),
     h('div', { class: 'row wrap' }, button('Add move', add, { cls: 'small primary' }), button('▶ Preview', preview)),
-    hint('A move writes a key where it starts (the camera as it is now) and where it ends; undo takes it back. Keys in between are replaced. A shake writes a key every few frames.'));
+    help('A move writes a key where it starts (the camera as it is now) and where it ends; undo takes it back. Keys in between are replaced. A shake writes a key every few frames.'));
 }
 
 export function registerCamera() { addModeSection('camera', build); }

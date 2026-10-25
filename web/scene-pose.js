@@ -1,7 +1,7 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import { C, FIG, FPS, OBJ, R, SC, addKey, current, frames, newObject, sameTab, save, write } from './scene-data.js';
-import { button, clone, field, h, hint, iconBtn, nameSheet, section, seg, store, toast, uid, undoToast } from './ui.js';
+import { button, clone, field, h, hint, iconBtn, nameSheet, section, seg, store, toast, uid, undoToast , help } from './ui.js';
 import { changed, selectJoint } from './scene-view.js';
 import { renderPanel, slider } from './scene-ui.js';
 import { seek } from './scene-export.js';
@@ -96,7 +96,7 @@ export function posesTab(o, cur) {
   return [
     h('div', { class: 'cat-row' }, cats.map(([k, l]) => h('button', { type: 'button', class: 'chip' + (k === cat ? ' on' : ''),
       onclick: () => { R.poseCat = k; store.set('deck.scene.posecat', k); renderPanel(); } }, l))),
-    cat === 'pairs' ? hint('Poses this figure and the nearest other posable person together (adds one if there is none).')
+    cat === 'pairs' ? help('Poses this figure and the nearest other posable person together (adds one if there is none).')
       : field('Apply to', seg([['all', 'Whole body'], ['upper', 'Upper'], ['lower', 'Lower']], R.mask, (v) => { R.mask = v; })),
     h('div', { class: 'pose-grid' }, tiles),
     h('div', { class: 'row wrap' },
@@ -116,7 +116,7 @@ export function adjustTab(o, cur) {
       const keys = Object.entries(FIGURE.PARAMS).filter(([, p]) => p.group === g);  // (the step phase has no chip)
       const on = keys.filter(([k]) => cur().m?.[k]);
       return field(g,
-        g === 'Cycle' ? hint('A walk or run in place: move the figure with keys and its steps follow, or set the step by hand.') : null,
+        g === 'Cycle' ? help('A walk or run in place: move the figure with keys and its steps follow, or set the step by hand.') : null,
         h('div', { class: 'chips' }, keys.map(([k, p]) => h('button', { type: 'button', class: 'chip' + (cur().m?.[k] ? ' on' : ''), 'aria-pressed': !!cur().m?.[k],
           onclick: () => {
             const m = { ...cur().m };
@@ -130,10 +130,10 @@ export function adjustTab(o, cur) {
             onchange: (e) => { o.stepsFollow = e.target.checked; changed(); } }), 'Steps follow movement (feet don\'t slide)'),
           o.stepsFollow === false ? slider('Step', () => cur().m?.phase || 0, (v) => setM({ ...cur().m, phase: v }),
             { min: 0, max: 8, step: 0.01, fmt: (v) => `${v.toFixed(2)} strides` }) : null,
-          o.stepsFollow === false ? hint('Key Step 0 here and 6 later for six strides on the spot.') : null] : null);
+          o.stepsFollow === false ? help('Key Step 0 here and 6 later for six strides on the spot.') : null] : null);
     }),
     h('div', { class: 'row wrap' }, Object.keys(cur().m || {}).length ? button('All off', () => { setM({}); changed(); }) : null),
-    hint('These sit on top of the pose, so a new pose keeps them. With keys they are keyed with the pose and blend between keys.'),
+    help('These sit on top of the pose, so a new pose keeps them. With keys they are keyed with the pose and blend between keys.'),
   ];
 }
 
@@ -187,7 +187,7 @@ export function movesTab(o, cur) {
       field('Speed', seg(SPEEDS, R.speed, (v) => { R.speed = v; })),
       field('Walk and run', seg([[false, 'Go forward'], [true, 'On the spot']], R.inPlace, (v) => { R.inPlace = v; }))),
     h('div', { class: 'pose-grid moves' }, FIGURE.moveList().map(([k, l, icon]) => tile(l, h('span', { class: 'move-icon' }, icon), () => runMove(o, k)))),
-    hint('A move starts at the playhead from the pose the figure is in, and replaces the keys it covers. Undo takes it back.'),
+    help('A move starts at the playhead from the pose the figure is in, and replaces the keys it covers. Undo takes it back.'),
   ];
 }
 
@@ -224,7 +224,7 @@ export function jointsTab(o, cur) {
       opp ? button('Copy to other side', () => { const j = { ...cur().j }; if (j[n]) j[opp] = FIGURE.mirrorQ(j[n]); else delete j[opp]; write(o, FIG, { j }); changed(); }) : null,
       button('Pivot here', () => { o.pivot = n; changed(); }, { title: 'The gizmo turns the whole figure around this joint' }),
       button('Done', () => selectJoint(null))),
-    hint(`${FIGURE.IK[n] ? 'Move drags the limb (the elbow or knee follows), Rotate turns it.' : 'Rotate turns it.'} Tap the body (or Esc) for the whole figure.`),
+    help(`${FIGURE.IK[n] ? 'Move drags the limb (the elbow or knee follows), Rotate turns it.' : 'Rotate turns it.'} Tap the body (or Esc) for the whole figure.`),
   ];
 }
 
@@ -250,7 +250,7 @@ export function partsTab(o) {
       button('Upper only', () => only((p) => UPPER.has(p)), { title: 'Hide the pelvis, legs and feet' }),
       button('Lower only', () => only((p) => !UPPER.has(p)), { title: 'Hide the head, torso and arms' }),
       button('Hide arms', () => put(new Set([...s, 'lsho', 'lelb', 'lhand', 'rsho', 'relb', 'rhand'])))),
-    hint('Hidden parts are left out of the view, the depth and clay renders and the pose video. The pose is unchanged, and the figure stays planted as if whole.'),
+    help('Hidden parts are left out of the view, the depth and clay renders and the pose video. The pose is unchanged, and the figure stays planted as if whole.'),
   ];
 }
 
@@ -312,5 +312,5 @@ export function promptProps() {
         try { await navigator.clipboard.writeText(text); toast('Prompt copied'); } catch { toast('Copying isn\'t allowed here: select the text instead', true); }
       }, { disabled: !text }),
       C.addToPrompt ? button('Add to Generate prompt', () => C.addToPrompt(text), { disabled: !text }) : null),
-    hint('Tap a pose to leave it out. Keys remember the pose picked from the library or a move, so the order follows the clip.'));
+    help('Tap a pose to leave it out. Keys remember the pose picked from the library or a move, so the order follows the clip.'));
 }
