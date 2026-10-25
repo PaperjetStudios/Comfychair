@@ -234,17 +234,17 @@ async def reorder(kind: str, body: dict = Body(...), project_id: int | None = No
 
 
 # ---- stills: a picture of a document (an edit tab's composite), for pickers ----
-# Lives beside the doc as <id>.png and is served by the /files/projects mount. Writing one never bumps the
+# Lives beside the doc as <id>.png and is served by the /files/projects (or, for global documents, /files/library) mount. Writing one never bumps the
 # doc's rev (it isn't content), so it can't make another device's save conflict.
 def _still_url(path, rev):
+    if path.is_relative_to(config.LIBRARY_DIR):  # a global document's: served by the /files/library mount
+        return f"/files/library/{quote(path.relative_to(config.LIBRARY_DIR).as_posix())}?v={rev}"
     rel = path.relative_to(config.PROJECTS_DIR).as_posix()
     return f"/files/projects/{quote(rel)}?v={rev}"
 
 
 @router.put("/{kind}/{did}/still")
 async def put_still(kind: str, did: str, request: Request, project_id: int | None = None, scope: str | None = None):
-    if scope == "global":
-        raise HTTPException(400, "Stills are for project documents")
     d = _dir(kind, project_id, scope)
     _check_id(did)
     data = b""

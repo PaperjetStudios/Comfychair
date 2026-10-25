@@ -956,6 +956,7 @@ async def input_image(name: str, thumb: int = 0):
 
 # ---- static -----------------------------------------------------------------
 app.mount("/files/projects", StaticFiles(directory=config.PROJECTS_DIR), name="projects")
+app.mount("/files/library", StaticFiles(directory=config.LIBRARY_DIR), name="library")
 app.mount("/files/media", StaticFiles(directory=config.MEDIA_DIR), name="media")
 app.mount("/files/generations", StaticFiles(directory=config.GEN_DIR), name="generations")
 
