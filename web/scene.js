@@ -10,7 +10,7 @@ import { TransformControls } from './vendor/TransformControls.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import * as FIGURE from './figure.js';
 import { $, h, store, uid, clone, api, busy as busyBar, toast, undoToast, openSheet, closeSheet, sheetOpen, button, iconBtn, seg, field,
-  section, hint, rangeField, propNum, layerRowsEl, panelTop } from './ui.js';
+  section, hint, rangeField, propNum, layerRowsEl, panelTop, nameSheet } from './ui.js';
 
 let C;  // app state and actions handed over by app.js (see sceneModule there)
 const FPS = 24;
@@ -32,7 +32,7 @@ const TYPES = {
 };
 const EVEN = new Set(['figure', 'photo']);
 // what's keyed: a figure's keys also hold its pose (j: joint rotations, m: parameters on top)
-const FIG = [...OBJ, 'j', 'm'];
+const FIG = [...OBJ, 'j', 'm', 'pn'];  // pn: the pose's name, for a prompt
 const namesFor = (o) => (o.type === 'figure' ? FIG : OBJ);
 const MODES = [['translate', '✥ Move', 'w'], ['rotate', '⟳ Rotate', 'e'], ['scale', '⤢ Scale', 'r']];
 const ROOM = 'room';  // R.sel for the room; null is the camera
@@ -48,7 +48,7 @@ const pivotOf = (o) => (pivotsFor(o).some(([k]) => k === o.pivot) || (o.type ===
 
 // ---- scene data ------------------------------------------------------------
 let SC;   // the scene (persisted per project)
-const R = { f: 0, sel: null, joint: null, mode: 'translate', playing: false, depth: false, autoKey: true, meshes: new Map(), room: [], applying: false, lastRender: null };
+const R = { f: 0, sel: null, joint: null, figTab: 'pose', poseCat: 'stand', mask: 'all', sym: false, mode: 'translate', playing: false, depth: false, autoKey: true, meshes: new Map(), room: [], applying: false, lastRender: null };
 
 const newRoom = () => ({ w: 8, d: 8, h: 2.8, walls: true, ceiling: true, hidden: false });
 function defaultScene() {
@@ -132,7 +132,7 @@ function sample(item, names, f) {
   const a = { ...item.base, ...k[i] }, b = { ...item.base, ...k[i + 1] };
   const t = (f - a.f) / (b.f - a.f), e = (k[i].ease || item.ease) === 'linear' ? t : ease(t);  // a key can set its own ease
   return Object.fromEntries(names.map((n) => [n, n === 'j' ? FIGURE.slerpPose(a.j, b.j, e) : n === 'm' ? FIGURE.lerpParams(a.m, b.m, e)
-    : a[n] + (b[n] - a[n]) * e]));
+    : n === 'pn' ? (e < 0.5 ? a.pn : b.pn) : a[n] + (b[n] - a[n]) * e]));
 }
 
 // With auto key off, a change to an animated item isn't saved: it's held here (by item, for the
@@ -457,6 +457,7 @@ const jointMode = () => (FIGURE.IK[R.joint] && R.mode === 'translate' ? 'transla
 const selRig = () => R.meshes.get(R.sel)?.userData.rig || null;
 function selectJoint(name) {
   R.joint = name;
+  if (name) R.figTab = 'joint';
   if (name) R.mode = FIGURE.IK[name] ? 'translate' : 'rotate';
   refresh(); renderToolbar(); renderPanel();
 }
@@ -495,6 +496,12 @@ function jointChanged(o) {
   const names = gizmo.object === ikTarget ? FIGURE.solveIK(rig, R.joint, ikTarget.position) : [R.joint];
   const j = { ...current(o, FIG).j };
   for (const n of names) j[n] = FIGURE.readJoint(rig, n);
+  if (R.sym) {  // the other side follows, mirrored
+    for (const n of names) {
+      const opp = FIGURE.opposite(n);
+      if (opp && !names.includes(opp)) { j[opp] = FIGURE.mirrorQ(j[n]); FIGURE.setJoint(rig, opp, j[opp]); }
+    }
+  }
   write(o, FIG, { j });
 }
 
@@ -940,23 +947,39 @@ const clearKeys = (item, names) => (item.keys.length ? button('Clear keys', () =
 function objectProps(o) {
   const names = namesFor(o);
   const cur = () => current(o, names);
+  if (o.type !== 'figure') return section(TYPES[o.type].label, () => select(null), placeProps(o, cur));
+  // a figure: its pose tools in tabs, big enough for fingers
+  const tab = FIG_TABS.some(([k]) => k === R.figTab) ? R.figTab : 'pose';
+  return section(o.name, () => select(null),
+    seg(FIG_TABS, tab, (v) => { R.figTab = v; store.set('deck.scene.figtab', v); renderPanel(); }, { wrap: true }),
+    { pose: posesTab, adjust: adjustTab, joint: jointsTab, place: placeProps }[tab](o, cur));
+}
+
+// where it is, how big, its pivot; duplicate and delete
+function placeProps(o, cur) {
+  const names = namesFor(o);
   const set = (k) => (v) => write(o, names, { [k]: v });
   const even = (v) => write(o, names, { sx: v, sy: v, sz: v });
   const name = h('input', { type: 'text', value: o.name });
   name.addEventListener('change', () => { o.name = name.value.trim() || o.name; changed(); });
   const xyz = (label, ks, opts) => field(label,
     h('div', { class: 'row' }, ...ks.map(([k, l, o2]) => num(l, () => cur()[k], set(k), { ...opts, ...o2 }))));
-  return section(TYPES[o.type].label, () => select(null),
+  return [
     field('Name', name),
     xyz('Position (m)', [['x', 'X'], ['y', 'Up', { min: -5, max: 10 }], ['z', 'Z']], { min: -20, max: 20 }),
     xyz('Rotation (°)', [['rx', 'X'], ['ry', 'Y'], ['rz', 'Z']], { digits: 0, min: -180, max: 180, step: 1 }),
     o.type === 'figure' ? num('Height (m)', () => cur().sy * FIGURE.HEIGHT, (v) => even(Math.max(0.3, v) / FIGURE.HEIGHT), { min: 0.3, max: 2.5 })
       : o.type === 'photo' ? num('Scale', () => cur().sy, (v) => even(Math.max(0.05, v)), { min: 0.05, max: 20 })
       : xyz('Size (m)', [['sx', 'Width'], ['sy', 'Height'], ['sz', 'Depth']], { min: 0.05, max: 20 }),
-    field('Pivot', seg(pivotsFor(o), pivotOf(o), (v) => { o.pivot = v; changed(); }, { wrap: true })),
-    o.type === 'figure' ? h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: !!o.ground,
-      onchange: (e) => { o.ground = e.target.checked; changed(); } }), 'Planted on the floor (Up lifts it off)') : null,
-    o.type === 'figure' ? figureProps(o, cur) : null,
+    field('Pivot (where the gizmo turns it)', seg(pivotsFor(o), pivotsFor(o).some(([k]) => k === pivotOf(o)) ? pivotOf(o) : null,
+      (v) => { o.pivot = v; changed(); }, { wrap: true })),
+    o.type === 'figure' ? [
+      h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: !!o.ground,
+        onchange: (e) => { o.ground = e.target.checked; changed(); } }), 'Planted on the floor (Up lifts it off)'),
+      button('🎥 Face the camera', () => {
+        const v = cur(), c = current(SC.camera, CAM);
+        write(o, names, { ry: Math.round(THREE.MathUtils.radToDeg(Math.atan2(c.px - v.x, c.pz - v.z))) }); changed();
+      })] : null,
     o.type === 'photo' ? [
       button('🎥 Camera to the photo\'s view', () => { lookThrough(o); changed(); }),
       hint('The picture as a 3D mesh (MoGe). Keep camera moves small: nothing is behind what the picture shows. Render depth video, then use it with this picture as a reference.')] : null,
@@ -969,7 +992,7 @@ function objectProps(o) {
       }),
       clearKeys(o, names),
       button('Delete', removeSelected, { cls: 'small danger' })),
-    hint('Drag the gizmo to move it; tap the object again (or W / E / R) for Rotate and Scale. With keys, a change sets a key at the playhead; with Auto key off it is held until ◆ Key (or until the playhead moves).'));
+    hint('Drag the gizmo to move it; tap the object again (or W / E / R) for Rotate and Scale. With keys, a change sets a key at the playhead; with Auto key off it is held until ◆ Key (or until the playhead moves).')];
 }
 
 // a figure that isn't planted on the floor keeps its feet (or seat) where they were for a new pose
@@ -978,21 +1001,157 @@ function liftTo(o, v, j, m) {
   return { y: v.y + (FIGURE.liftFor(j, m) - FIGURE.liftFor(v.j, v.m)) * v.sy };
 }
 
-// pose: presets, mirror, and the joint picked with a dot on the figure
-function figureProps(o, cur) {
-  const setPose = (j, extra = {}) => { write(o, FIG, { j, ...extra }); changed(); };
-  const label = R.joint && FIGURE.JOINTS[R.joint][2];
-  return field('Pose',
-    h('div', { class: 'chips' }, ...FIGURE.presetList().map(([k, l]) => h('button', { type: 'button', class: 'chip', onclick: () => {
-      const p = FIGURE.preset(k); setPose(p.j, liftTo(o, cur(), p.j, cur().m));
-    } }, l))),
+// ---- a figure's pose tabs ----------------------------------------------------------------
+const FIG_TABS = [['pose', '🧍 Poses'], ['adjust', '🎚 Adjust'], ['joint', '🦴 Joints'], ['place', '📐 Place']];
+const UPPER = new Set(['spine', 'chest', 'neck', 'head', 'lsho', 'lelb', 'lhand', 'rsho', 'relb', 'rhand']);
+const MINE = 'deck.figure.poses';  // poses saved by hand, in every project
+let clip = null;  // a copied pose
+
+// a stick-figure picture of a pose (or two people), kept once drawn
+const THUMBS = new Map();
+function thumb(key, people) {
+  if (!THUMBS.has(key)) {
+    const c = document.createElement('canvas'); c.width = c.height = 160;
+    THUMBS.set(key, FIGURE.drawThumb(c, people).toDataURL());
+  }
+  return h('img', { src: THUMBS.get(key), alt: '', draggable: false });
+}
+const tile = (label, img, onclick, extra = null) => h('button', { type: 'button', class: 'pose-tile', title: label, onclick }, img, h('span', {}, label), extra);
+
+// a new pose for the figure, only the upper or lower body when asked; name is what it's called in a prompt
+function takePose(o, j, { m = undefined, name = null, mask = R.mask } = {}) {
+  const v = current(o, FIG);
+  let nj = j;
+  if (mask !== 'all') {
+    nj = { ...v.j };
+    for (const n of Object.keys(FIGURE.JOINTS)) if (UPPER.has(n) === (mask === 'upper')) { if (j[n]) nj[n] = j[n]; else delete nj[n]; }
+  }
+  const nm = m === undefined ? v.m : m;
+  write(o, FIG, { j: nj, m: nm, pn: name, ...liftTo(o, v, nj, nm) });
+  changed();
+}
+
+// two people: this figure and the nearest other one (a new one when there's none), placed together
+function takePair(o, key) {
+  const p = FIGURE.pair(key), v = current(o, FIG), s = v.sy, r = THREE.MathUtils.degToRad(v.ry);
+  const others = SC.objects.filter((x) => x.type === 'figure' && x !== o && !x.hidden);
+  const dist = (x) => { const w = current(x, OBJ); return Math.hypot(w.x - v.x, w.z - v.z); };
+  let b = others.sort((x, y) => dist(x) - dist(y))[0];
+  if (!b) { b = newObject('figure'); SC.objects.push(b); }
+  write(o, FIG, { j: p.a, m: {}, pn: `pair:${key}`, ...liftTo(o, v, p.a, {}) });
+  const floor = o.ground ? current(o, FIG).y : current(o, FIG).y - FIGURE.liftFor(p.a) * s;  // where a's floor is
+  const bs = current(b, FIG).sy;
+  const dx = p.at.x * s, dz = p.at.z * s;
+  write(b, FIG, { j: p.b, m: {}, pn: `pair:${key}:b`, rx: 0, rz: 0, ry: v.ry + p.at.ry,
+    x: v.x + dx * Math.cos(r) + dz * Math.sin(r), z: v.z - dx * Math.sin(r) + dz * Math.cos(r),
+    y: floor + p.at.y * s + (b.ground ? 0 : FIGURE.liftFor(p.b) * bs) });
+  changed();
+  toast(`${o.name} and ${b.name} together`);
+}
+
+function posesTab(o, cur) {
+  const cat = R.poseCat;
+  const cats = [...FIGURE.categories(), ['pairs', '👥 Pairs'], ['mine', '★ Mine']];
+  let tiles;
+  if (cat === 'pairs') {
+    tiles = FIGURE.pairList().map(([k, l]) => {
+      const p = FIGURE.pair(k);
+      return tile(l, thumb(`pair:${k}`, [{ j: p.a }, { j: p.b, at: p.at }]), () => takePair(o, k));
+    });
+  } else if (cat === 'mine') {
+    // saved poses: this project's (kept with its scene) and everyone's (in every project)
+    const lists = [['project', 'This project', () => SC.poses || [], (l) => { SC.poses = l; save(); }],
+      ['all', 'All projects', () => store.get(MINE, []), (l) => store.set(MINE, l)]];
+    const mineTile = ([, , get, put], p) => tile(p.name, thumb(`mine:${p.id}`, [{ j: p.j, m: p.m }]), () => takePose(o, p.j, { m: p.m, name: `mine:${p.name}` }),
+      iconBtn(`Delete ${p.name}`, '✕', () => {
+        put(get().filter((x) => x.id !== p.id)); renderPanel();
+        undoToast(`${p.name} deleted`, () => { put([...get(), p]); renderPanel(); });
+      }, { class: 'icon-btn del' }));
+    let where = 'project';
+    tiles = [
+      tile('Save this pose', h('span', { class: 'pose-add' }, '+'), () => nameSheet({ title: 'Save this pose', placeholder: 'Name',
+        extra: field('Keep it in', seg([['project', 'This project'], ['all', 'All projects']], where, (v) => { where = v; })),
+        save: (name) => {
+          if (!name) throw new Error('Give it a name');
+          const v = cur(), [, , get, put] = lists.find(([k]) => k === where);
+          put([...get(), { id: uid(), name, j: v.j, m: v.m || {} }]); renderPanel();
+        } })),
+      ...lists.flatMap((l) => (l[2]().length ? [h('div', { class: 'grid-label' }, l[1]), ...l[2]().map((p) => mineTile(l, p))] : []))];
+  } else {
+    tiles = FIGURE.presetList(cat).map(([k, l]) => tile(l, thumb(k, [{ j: FIGURE.preset(k).j }]), () => takePose(o, FIGURE.preset(k).j, { name: k })));
+  }
+  return [
+    h('div', { class: 'cat-row' }, cats.map(([k, l]) => h('button', { type: 'button', class: 'chip' + (k === cat ? ' on' : ''),
+      onclick: () => { R.poseCat = k; store.set('deck.scene.posecat', k); renderPanel(); } }, l))),
+    cat === 'pairs' ? hint('Poses this figure and the nearest other posable person together (adds one if there is none).')
+      : field('Apply to', seg([['all', 'Whole body'], ['upper', 'Upper'], ['lower', 'Lower']], R.mask, (v) => { R.mask = v; })),
+    h('div', { class: 'pose-grid' }, tiles),
     h('div', { class: 'row wrap' },
-      button('⇋ Mirror', () => setPose(FIGURE.mirrorPose(cur().j), { m: FIGURE.mirrorParams(cur().m) }), { title: 'Swap left and right' }),
-      R.joint ? button(`Reset ${label.toLowerCase()}`, () => { const j = { ...cur().j }; delete j[R.joint]; setPose(j); }) : null,
-      R.joint ? button('Done', () => selectJoint(null)) : null),
-    hint(R.joint
-      ? `${label}: ${FIGURE.IK[R.joint] ? 'Move drags the limb (the elbow or knee follows), Rotate turns it.' : 'Rotate turns it.'} Tap the body (or Esc) for the whole figure.`
-      : 'Tap a blue dot to pose that joint; drag a hand or foot and the arm or leg follows. Render pose video for an OpenPose control video.'));
+      button('⇋ Mirror', () => takePose(o, FIGURE.mirrorPose(cur().j), { m: FIGURE.mirrorParams(cur().m), name: cur().pn, mask: 'all' }), { title: 'Swap left and right' }),
+      button('Copy pose', () => { const v = cur(); clip = { j: v.j, m: v.m, pn: v.pn }; toast('Pose copied: paste it on any figure'); renderPanel(); }),
+      clip ? button('Paste pose', () => takePose(o, clip.j, { m: clip.m, name: clip.pn })) : null,
+      button('Reset', () => takePose(o, FIGURE.preset('stand').j, { m: {}, name: 'stand', mask: 'all' }))),
+  ];
+}
+
+// parameters: tap one on, slide it; tap it again for off
+function adjustTab(o, cur) {
+  const groups = [...new Set(Object.values(FIGURE.PARAMS).map((p) => p.group))];
+  const setM = (m) => write(o, FIG, { m });
+  return [
+    ...groups.map((g) => {
+      const keys = Object.entries(FIGURE.PARAMS).filter(([, p]) => p.group === g);
+      const on = keys.filter(([k]) => cur().m?.[k]);
+      return field(g,
+        h('div', { class: 'chips' }, keys.map(([k, p]) => h('button', { type: 'button', class: 'chip' + (cur().m?.[k] ? ' on' : ''), 'aria-pressed': !!cur().m?.[k],
+          onclick: () => {
+            const m = { ...cur().m };
+            if (m[k]) delete m[k]; else m[k] = p.on;
+            setM(m); changed();
+          } }, p.label))),
+        on.map(([k, p]) => slider(p.label, () => cur().m?.[k] || 0, (v) => setM({ ...cur().m, [k]: v || 0.001 }),
+          { min: p.min, max: p.max, step: 1, fmt: (v) => `${Math.round(v)}°` })));
+    }),
+    h('div', { class: 'row wrap' }, Object.keys(cur().m || {}).length ? button('All off', () => { setM({}); changed(); }) : null),
+    hint('These sit on top of the pose, so a new pose keeps them. With keys they are keyed with the pose and blend between keys.'),
+  ];
+}
+
+// the joints as a body map (seen from the front), and the picked joint's turns as sliders
+const BODY = [['head', 1, 3, 'Head'], ['neck', 2, 3, 'Neck'], ['chest', 3, 3, 'Chest'], ['spine', 4, 3, 'Waist'], ['hips', 5, 3, 'Hips'],
+  ['rsho', 2, 1, 'Shoulder'], ['relb', 3, 1, 'Elbow'], ['rhand', 4, 1, 'Hand'], ['lsho', 2, 5, 'Shoulder'], ['lelb', 3, 5, 'Elbow'], ['lhand', 4, 5, 'Hand'],
+  ['rhip', 5, 2, 'Hip'], ['rknee', 6, 2, 'Knee'], ['rfoot', 7, 2, 'Foot'], ['lhip', 5, 4, 'Hip'], ['lknee', 6, 4, 'Knee'], ['lfoot', 7, 4, 'Foot']];
+function jointsTab(o, cur) {
+  const n = R.joint, label = n && FIGURE.JOINTS[n][2];
+  const order = Object.keys(FIGURE.JOINTS);
+  const map = h('div', { class: 'body-map' },
+    h('span', { class: 'side', style: 'grid-area:1/1' }, 'Right'), h('span', { class: 'side', style: 'grid-area:1/5' }, 'Left'),
+    BODY.map(([k, r, c, l]) => h('button', { type: 'button', class: k === n ? 'on' : '', style: `grid-area:${r}/${c}`, title: FIGURE.JOINTS[k][2],
+      onclick: () => selectJoint(k === n ? null : k) }, l)));
+  if (!n) return [map, hint('Pick a joint here or tap a blue dot on the figure. Drag a hand or foot and the arm or leg follows.')];
+  const e = () => new THREE.Euler().setFromQuaternion(new THREE.Quaternion().fromArray(cur().j[n] || [0, 0, 0, 1]));
+  const opp = FIGURE.opposite(n);
+  const setTurn = (i) => (deg) => {
+    const a = e().toArray().slice(0, 3);
+    a[i] = THREE.MathUtils.degToRad(deg);
+    const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(...a)).toArray(), j = { ...cur().j, [n]: q };
+    if (R.sym && opp) j[opp] = FIGURE.mirrorQ(q);
+    write(o, FIG, { j });
+  };
+  const turn = (l, i) => slider(l, () => THREE.MathUtils.radToDeg(e().toArray()[i]), setTurn(i), { min: -180, max: 180, step: 1, fmt: (v) => `${Math.round(v)}°` });
+  const step = (d) => selectJoint(order[(order.indexOf(n) + d + order.length) % order.length]);
+  return [
+    map,
+    h('div', { class: 'row joint-head' }, iconBtn('Previous joint', '◀', () => step(-1)), h('b', { class: 'grow' }, label), iconBtn('Next joint', '▶', () => step(1))),
+    turn('Bend', 0), turn('Twist', 1), turn('Side', 2),
+    h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: R.sym, onchange: (ev) => { R.sym = ev.target.checked; } }), 'Mirror edits to the other side'),
+    h('div', { class: 'row wrap' },
+      button('Reset joint', () => { const j = { ...cur().j }; delete j[n]; if (R.sym && opp) delete j[opp]; write(o, FIG, { j }); changed(); }),
+      opp ? button('Copy to other side', () => { const j = { ...cur().j }; if (j[n]) j[opp] = FIGURE.mirrorQ(j[n]); else delete j[opp]; write(o, FIG, { j }); changed(); }) : null,
+      button('Pivot here', () => { o.pivot = n; changed(); }, { title: 'The gizmo turns the whole figure around this joint' }),
+      button('Done', () => selectJoint(null))),
+    hint(`${FIGURE.IK[n] ? 'Move drags the limb (the elbow or knee follows), Rotate turns it.' : 'Rotate turns it.'} Tap the body (or Esc) for the whole figure.`),
+  ];
 }
 
 function roomProps() {
@@ -1074,7 +1233,10 @@ function renderPanel() {
 
 // ---- entry points (called from app.js) ------------------------------------------------
 let ready = false;
-export function init(helpers) { C = helpers; R.autoKey = store.get('deck.scene.autokey', true) !== false; }
+export function init(helpers) {
+  C = helpers; R.autoKey = store.get('deck.scene.autokey', true) !== false;
+  R.figTab = store.get('deck.scene.figtab', 'pose'); R.poseCat = store.get('deck.scene.posecat', 'stand');
+}
 
 function showAll() { rebuildRoom(); refresh(); renderToolbar(); renderTransport(); renderPanel(); fit(); }
 
