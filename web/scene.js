@@ -16,10 +16,12 @@ import { buildToolbar, renderToolbar, showAll, syncMode, wireKeys } from './scen
 import { setup } from './scene-view.js';
 import { stopPlay } from './scene-export.js';
 import { registerBuiltins } from './scene-builtin.js';
+import { initModel } from './scene-model.js';
 export { addModeSection, registerMode } from './scene-modes.js';
 export { addPhoto } from './scene-view.js';
 
 registerBuiltins();   // (the dependencies have run by now; a mode registered later goes after them)
+initModel();          // Create object's tools replace the placeholder panel
 
 // ---- tabs: each 3D scene is a document in the project folder ----
 let ready = false, tabs = null, tabsReady = null;

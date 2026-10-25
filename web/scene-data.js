@@ -20,6 +20,8 @@ export const TYPES = {
   photo: { label: 'Photo', icon: '🖼', size: [1, 1, 1] },
 };
 export const EVEN = new Set(['figure', 'photo']);
+// how a layer type that lives in its own module builds its three.js object: makers[type](layer) (scene-model.js: object)
+export const makers = {};
 // what's keyed: a figure's keys also hold its pose (j: joint rotations, m: parameters on top)
 export const FIG = [...OBJ, 'j', 'm', 'pn'];  // pn: the pose's name, for a prompt
 export const namesFor = (o) => (o.type === 'figure' ? FIG : OBJ);

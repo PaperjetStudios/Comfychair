@@ -304,7 +304,21 @@ class StoreStill(unittest.TestCase):
         self.assertEqual(self.c.put(self.url("s2"), content=self.PNG + b"\0" * store.MAX_STILL).status_code, 413)
         self.assertEqual(self.c.put(self.url("bad.id"), content=self.PNG).status_code, 400)
         self.assertEqual(self.c.put(self.url("s2", kind="nope"), content=self.PNG).status_code, 400)
-        self.assertEqual(self.c.put(f"/api/store/edit-tabs/s2/still?scope=global", content=self.PNG).status_code, 400)
+        self.assertEqual(self.c.put("/api/store/edit-tabs/nope-g/still?scope=global", content=self.PNG).status_code, 404)
+
+    def test_objects_still_project_and_global(self):
+        # created 3D objects keep a thumbnail in either scope (global ones are served by /files/library)
+        self.assertEqual(self.c.put(self.url("o1", "", kind="objects"), json={"name": "Vase", "payload": {"k": 1}, "rev": 0}).status_code, 200)
+        st = self.c.put(self.url("o1", kind="objects"), content=self.PNG).json()
+        self.assertTrue(st["url"].startswith("/files/projects/"))
+        self.assertEqual(self.c.get(st["url"]).content, self.PNG)
+        did = f"og{time_ns()}"
+        self.assertEqual(self.c.put(f"/api/store/objects/{did}?scope=global", json={"name": "Ball", "payload": {"k": 2}, "rev": 0}).status_code, 200)
+        gs = self.c.put(f"/api/store/objects/{did}/still?scope=global", content=self.PNG).json()
+        self.assertTrue(gs["url"].startswith("/files/library/objects/"), gs["url"])
+        self.assertEqual(self.c.get(gs["url"]).content, self.PNG)
+        self.assertEqual(next(x for x in self.c.get("/api/store/objects?scope=global").json() if x["id"] == did)["still"]["rev"], 1)
+        self.assertEqual(self.c.delete(f"/api/store/objects/{did}?scope=global").status_code, 200)  # tidy (the still goes to the trash)
 
     def test_delete_still(self):
         self.doc("s3")

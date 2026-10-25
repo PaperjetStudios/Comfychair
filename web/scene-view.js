@@ -5,7 +5,7 @@ import { TransformControls } from './vendor/TransformControls.js';
 import * as FIGURE from './figure.js';
 import { $, api, busy as busyBar, clone, closeSheet, toast, undoToast } from './ui.js';
 import {
-  C, CAM, EVEN, FIG, MODES, OBJ, R, ROOM, SC, TYPES, current, frames, hooks, namesFor, newObject, newRoom, pivotOf, sample,
+  C, CAM, EVEN, FIG, MODES, OBJ, R, ROOM, SC, TYPES, current, frames, hooks, makers, namesFor, newObject, newRoom, pivotOf, sample,
   sameTab, save, selItem, setSC, write
 } from './scene-data.js';
 import { modeOf } from './scene-modes.js';
@@ -200,11 +200,13 @@ function makeObject(o) {
     for (const p of rig.meshes) p.userData.id = o.id;
   } else if (o.type === 'photo') {
     m = new THREE.Group(); loadPhoto(o, m);
-  } else m = new THREE.Mesh(geometries()[TYPES[o.type].geo || o.type], clay);
+  } else if (makers[o.type]) m = makers[o.type](o);
+  else m = new THREE.Mesh(geometries()[TYPES[o.type].geo || o.type], clay);
   m.userData.id = o.id; scene.add(m); R.meshes.set(o.id, m);
   return m;
 }
 export function paint(m, on) {  // a photo keeps its picture
+  if (m.userData.paint) return m.userData.paint(on);   // (an object layer keeps its own colour)
   if (m.userData.rig) for (const p of m.userData.rig.meshes) p.material = on ? figSel : figClay;
   else if (m.isMesh) m.material = on ? claySel : clay;
 }
@@ -313,7 +315,7 @@ function pivotPoint(o, m) {
     const box = new THREE.Box3().setFromObject(m);
     return k === 'center' && !box.isEmpty() ? m.worldToLocal(box.getCenter(new THREE.Vector3())) : new THREE.Vector3();
   }
-  return new THREE.Vector3(0, { base: 0, center: 0.5, top: 1 }[k], 0);  // the shapes are 1 tall, base at 0
+  return new THREE.Vector3(0, { base: 0, center: 0.5, top: 1 }[k] * (m.userData.height ?? 1), 0);  // the shapes are 1 tall, base at 0 (an object layer says its own height)
 }
 function placePivot() {
   const o = selItem(), m = o && R.meshes.get(o.id);
@@ -424,6 +426,9 @@ export function draw(forRender = false) {
     renderer.render(scene, R.free ? viewCam : camera);
   }
 }
+
+// the camera that's on show (the shot camera, or the free view's)
+export const activeCamera = () => (R.free ? viewCam : camera);
 
 export function refresh() { syncMeshes(); pose(R.f); draw(); }
 

@@ -274,7 +274,7 @@ function renderProps() {
 function openAdd() {
   const chip = (label, fn, title) => h('button', { type: 'button', class: 'chip', title, onclick: fn }, label);
   openSheet(h('h3', {}, 'Add to the scene'),
-    h('div', { class: 'chips' }, ...Object.entries(TYPES).filter(([t]) => t !== 'photo').map(([t, d]) => chip(`${d.icon} ${d.label}`, () => addObject(t))),
+    h('div', { class: 'chips' }, ...Object.entries(TYPES).filter(([t, d]) => t !== 'photo' && !d.hide).map(([t, d]) => chip(`${d.icon} ${d.label}`, () => addObject(t))),
       SC.room ? null : chip('⌂ Room', () => addObject(ROOM)),
       chip('🖼 Photo in 3D…', () => {
         closeSheet(); C.openImagePicker({ title: 'Picture to turn into 3D', onPick: (name) => makePhoto(name) });
