@@ -16,9 +16,11 @@ import { buildToolbar, renderToolbar, showAll, syncMode, wireKeys } from './scen
 import { setup } from './scene-view.js';
 import { stopPlay } from './scene-export.js';
 import { registerBuiltins } from './scene-builtin.js';
+import { registerCamera } from './scene-camera.js';
 export { addModeSection, registerMode } from './scene-modes.js';
 export { addPhoto } from './scene-view.js';
 
+registerCamera();     // camera moves (a section of Camera mode)
 registerBuiltins();   // (the dependencies have run by now; a mode registered later goes after them)
 
 // ---- tabs: each 3D scene is a document in the project folder ----

@@ -99,6 +99,8 @@ export function save() { remember(); hooks.persist(); }
 
 export const frames = () => framesFor(SC.seconds);
 const ease = (t) => t * t * (3 - 2 * t);
+// a key's ease (or the item's): 'smooth' is the default; in / out are the camera moves' slow start and slow stop
+export const EASES = { linear: (t) => t, in: (t) => t * t * t, out: (t) => 1 - (1 - t) ** 3, smooth: ease };
 const pick = (o, names) => Object.fromEntries(names.map((n) => [n, o[n]]));
 
 // an item's values at frame f: its keys eased in between, held before the first and after the last
@@ -111,7 +113,7 @@ export function sample(item, names, f) {
   let i = 0;
   while (k[i + 1].f <= f) i++;
   const a = { ...item.base, ...k[i] }, b = { ...item.base, ...k[i + 1] };
-  const t = (f - a.f) / (b.f - a.f), e = (k[i].ease || item.ease) === 'linear' ? t : ease(t);  // a key can set its own ease
+  const t = (f - a.f) / (b.f - a.f), e = (EASES[k[i].ease || item.ease] || ease)(t);  // a key can set its own ease
   return Object.fromEntries(names.map((n) => [n, n === 'j' ? FIGURE.slerpPose(a.j, b.j, e) : n === 'm' ? FIGURE.lerpParams(a.m, b.m, e)
     : n === 'pn' ? (e < 0.5 ? a.pn : b.pn) : a[n] + (b[n] - a[n]) * e]));
 }

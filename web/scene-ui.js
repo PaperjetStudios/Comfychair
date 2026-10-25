@@ -10,7 +10,7 @@ import {
 } from './scene-data.js';
 import { FIG_TABS, adjustTab, jointsTab, movesTab, posesTab, promptProps } from './scene-pose.js';
 import {
-  addObject, cameraFromView, changed, draw, fit, jointMode, lookThrough, makePhoto, pose, rebuildRoom, refresh,
+  addObject, camGizmo, cameraFromView, changed, draw, fit, jointMode, lookThrough, makePhoto, pose, rebuildRoom, refresh,
   removeSelected, select, selectJoint, setFree, setMode, syncMeshes, viewer
 } from './scene-view.js';
 import { busy, play, renderDepthVideo, renderPoseVideo, saveFrame, seek, stopPlay } from './scene-export.js';
@@ -23,9 +23,9 @@ export function setStatus(t) { statusText = t; const s = $('#sceneStatus'); if (
 export function renderToolbar() {
   const tb = $('#sceneToolbar');
   if (!tb) return;
-  const can = !!selItem();
+  const cam = camGizmo(), can = !!selItem() || cam;   // (the director view's camera has Move and Rotate)
   // a joint turns (Rotate); a hand or foot can also be dragged (Move, with IK)
-  const ok = (m) => can && (!R.joint || m === 'rotate' || (m === 'translate' && !!FIGURE.IK[R.joint]));
+  const ok = (m) => can && !(cam && m === 'scale') && (!R.joint || m === 'rotate' || (m === 'translate' && !!FIGURE.IK[R.joint]));
   const mode = R.joint ? jointMode() : R.mode;
   tb.querySelectorAll('[data-mode]').forEach((b) => { b.classList.toggle('on', ok(b.dataset.mode) && b.dataset.mode === mode); b.disabled = !ok(b.dataset.mode); });
   tb.querySelector('[data-depth]').classList.toggle('on', R.depth);
