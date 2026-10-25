@@ -362,7 +362,14 @@ export class TabSet {
       on ? h('span', { class: 'tab-dot' + (this.dirty ? ' on' : '') }) : null,
       on ? h('button', { type: 'button', class: 'tab-more', 'aria-label': 'Tab options', onclick: (e) => { e.stopPropagation(); this.menu(); } }, '⋯') : null);
     }));
-    this.row.querySelector('.tabchip.on')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+    // keep the open tab in view by scrolling the strip itself: scrollIntoView also scrolls every scrolling
+    // ancestor, which threw the settings panel back to the top after each save
+    const on = this.row.querySelector('.tabchip.on');
+    if (on) {
+      const r = this.row, left = on.offsetLeft;
+      if (left < r.scrollLeft) r.scrollLeft = left;
+      else if (left + on.offsetWidth > r.scrollLeft + r.clientWidth) r.scrollLeft = left + on.offsetWidth - r.clientWidth;
+    }
     this.showState();
   }
 

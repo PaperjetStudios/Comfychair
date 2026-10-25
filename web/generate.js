@@ -83,8 +83,21 @@ export function renderFields() {
     det.addEventListener('toggle', () => { const o = store.get('deck.groupsOpen', {}); o[key] = det.open; store.set('deck.groupsOpen', o); });
     groups.push(det);
   }
-  $('#fields').replaceChildren(shotBar(), ...groups);
+  // A full redraw must not move the user: keep the panel's scroll and the focused control
+  const root = $('#fields'), panel = root.closest('.panel'), y = panel ? panel.scrollTop : 0;
+  const ae = document.activeElement, fe = ae && root.contains(ae) ? ae.closest('.field[data-key]') : null;
+  const at = fe ? { key: fe.dataset.key, i: [...fe.querySelectorAll(ae.tagName)].indexOf(ae), s: ae.selectionStart, e: ae.selectionEnd } : null;
+  root.replaceChildren(shotBar(), ...groups);
   hooks.decorate?.();
+  if (panel) panel.scrollTop = y;
+  if (at && at.i >= 0) {
+    const el = [...root.querySelectorAll('.field[data-key]')].find((x) => x.dataset.key === at.key)?.querySelectorAll(ae.tagName)[at.i];
+    if (el) {
+      el.focus({ preventScroll: true });
+      if (at.s != null) { try { el.setSelectionRange(at.s, at.e); } catch { /* number inputs have no selection */ } }
+      if (panel) panel.scrollTop = y;
+    }
+  }
   if (!S.snippets) loadSnippets().then(() => renderFields());
 }
 
