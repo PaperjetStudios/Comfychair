@@ -60,7 +60,7 @@ export function openVideoPicker({ title, onPick }) {
 // pick:   frame is a PNG Blob when the user chose a frame (pickFrame below), else null (use the still).
 //         Returns what onPick gets: { name, ... } where name is an image in ComfyUI's input folder, normally
 //         from uploadImage(blob, { mp, source: 'edit-tab' }). Throw to show a toast.
-// Example, for saved video edits (video.js):
+// Example (the real one for saved video edits is at the end of video.js; it takes the frame from the tab's newest render):
 //   registerPickerSource({ key: 'video-tabs', label: 'Saved video edits',
 //     list: async (pid) => (await api(`/api/store/video-tabs?project_id=${pid}`)).map((d) =>
 //       ({ id: d.id, title: d.name, thumb: d.still?.url, still: !!d.still, video: d.render?.url })),
@@ -126,7 +126,7 @@ export function openImagePicker(opts) {
   };
 
   // This project: its uploads, editor saves and drawings plus everything it generated, newest first
-  const SOURCE = { upload: 'upload', editor: 'edit', drawing: 'drawing', crop: 'crop', snapshot: 'frame', scene: '3d', 'edit-tab': 'edit tab' };
+  const SOURCE = { upload: 'upload', editor: 'edit', drawing: 'drawing', crop: 'crop', snapshot: 'frame', scene: '3d', 'edit-tab': 'edit tab', 'video-tab': 'video edit' };
   const projectCards = async () => {
     const items = inputs.project.filter((r) => r.source !== 'generation')
       .map((r) => ({ t: r.created, el: () => inputCard(r.name, SOURCE[r.source] || null) }));

@@ -3,7 +3,7 @@ import {
   field, section, hint, placeholder, rangeField, propNum, mediaCard, panelTop,
 } from './ui.js';
 import { S, fmtT, inputUrl, thumbUrl } from './core.js';
-import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, uploadImage, uploadMedia } from './media.js';
+import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, uploadImage, uploadMedia } from './media.js';
 import { openGeneration } from './run.js';
 import { useInGenerate } from './editor.js';
 import { TabSet } from './tabs.js';
@@ -1152,6 +1152,25 @@ export function wireVideoTransport() {
     if (fn) { e.preventDefault(); fn(); }
   });
 }
+
+// Saved video edits as a source in every image picker (media.js registerPickerSource): a tab's video is its
+// newest finished render in History (params.edit_tab.id); one never exported has nothing to take a frame from yet.
+registerPickerSource({ key: 'video-tabs', label: 'Saved video edits',
+  async list(pid) {
+    const q = pid != null ? `project_id=${pid}&` : '';
+    const rows = await api(`/api/store/video-tabs${pid != null ? `?project_id=${pid}` : ''}`);
+    return Promise.all(rows.map(async (d) => {
+      const [g] = await api(`/api/generations?${q}edit_tab=${encodeURIComponent(d.id)}&status=done&limit=1`).catch(() => []);
+      const o = g?.outputs.find((x) => x.kind === 'video');
+      return { id: d.id, title: d.name, thumb: d.still?.url, still: !!d.still, video: o?.url, badge: o ? null : 'export first', gen: g?.id };
+    }));
+  },
+  async pick(it, { mp, frame }) {
+    if (!frame && !it.still) throw new Error('Export it first: this edit has no video yet');
+    const blob = frame || await (await fetch(it.thumb)).blob();
+    const r = await uploadImage(blob, { mp, source: 'video-tab', filename: 'video-edit.png' });
+    return { ...r, from: { source: 'video-tab', id: it.id, generation: it.gen } };
+  } });
 
 // for the headless UI checks (dev/): the live state
 export const videoDebug = () => ({ V, G, tabs, geom, gview, gizmoClip, snap, drawFrame, selItem });

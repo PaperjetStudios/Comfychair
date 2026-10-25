@@ -125,8 +125,14 @@ def get_workflow(gid: int):
     return json.loads(row["workflow"]) if row else None
 
 
-def list_generations(project_id=None, limit=100, before=None):
+def list_generations(project_id=None, limit=100, before=None, edit_tab=None, status=None):
     sql, args = "SELECT * FROM generations WHERE 1=1", []
+    if edit_tab is not None:  # renders of one saved video edit (params.edit_tab.id)
+        sql += " AND json_extract(params, '$.edit_tab.id')=?"
+        args.append(edit_tab)
+    if status is not None:
+        sql += " AND status=?"
+        args.append(status)
     if project_id is not None:
         sql += " AND project_id=?"
         args.append(project_id)

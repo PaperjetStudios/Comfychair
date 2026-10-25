@@ -521,8 +521,9 @@ async def new_project(body: dict = Body(...)):
 
 
 @app.get("/api/generations")
-async def generations(project_id: int | None = None, limit: int = 60, before: int | None = None):
-    return db.list_generations(project_id, min(limit, 200), before)
+async def generations(project_id: int | None = None, limit: int = 60, before: int | None = None,
+                      edit_tab: str | None = None, status: str | None = None):
+    return db.list_generations(project_id, min(limit, 200), before, edit_tab, status)
 
 
 @app.get("/api/generations/{gid}")

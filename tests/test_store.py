@@ -248,6 +248,24 @@ class ProjectFolders(unittest.TestCase):
         self.assertEqual(db.project_folder(None), "Unsorted")
 
 
+class GenerationsFilter(unittest.TestCase):
+    def test_edit_tab_and_status(self):
+        c = TestClient(main.app)
+        pid = db.create_project(f"Gens {time_ns()}")["id"]
+        ids = {}
+        for name, tab, st in (("a1", "A", "done"), ("a2", "A", "error"), ("b1", "B", "done"), ("a3", "A", "done")):
+            g = db.create_generation(pid, "video edit", {"edit_tab": {"id": tab, "name": tab}}, {}, f"p-{name}-{time_ns()}")
+            db.update_generation(g, status=st)
+            ids[name] = g
+        db.create_generation(pid, "video edit", {}, {}, f"p-none-{time_ns()}")  # no edit_tab at all
+        got = c.get(f"/api/generations?project_id={pid}&edit_tab=A&status=done&limit=1").json()
+        self.assertEqual([g["id"] for g in got], [ids["a3"]])  # newest done render of tab A
+        got = c.get(f"/api/generations?project_id={pid}&edit_tab=A").json()
+        self.assertEqual({g["id"] for g in got}, {ids["a1"], ids["a2"], ids["a3"]})
+        self.assertEqual(c.get(f"/api/generations?project_id={pid}&edit_tab=nope").json(), [])
+        self.assertEqual(len(c.get(f"/api/generations?project_id={pid}").json()), 5)
+
+
 class StoreStill(unittest.TestCase):
     PNG = (b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + (30).to_bytes(4, "big") + (20).to_bytes(4, "big")
            + b"\x08\x02\x00\x00\x00" + b"\0" * 20)

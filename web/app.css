@@ -752,7 +752,7 @@ details.desc[open] summary { margin-bottom: 6px; }
 .frame-bar { align-items: center; justify-content: space-between; }
 .frame-bar .hint { margin: 0; }
 /* video tabs */
-.vid-tabs { position: sticky; top: 0; z-index: 3; background: var(--surface); padding: 6px 8px 4px; border-bottom: 1px solid var(--line); }
+.vid-tabs { position: sticky; top: 0; z-index: 3; background: var(--surface); padding: 2px 0 6px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
 .viewer .gizmo { touch-action: none; z-index: 2; }
 .gz-bar { position: absolute; left: 8px; top: 8px; z-index: 3; display: flex; gap: 4px; flex-wrap: wrap; max-width: calc(100% - 16px); }
 .gz-chip {
