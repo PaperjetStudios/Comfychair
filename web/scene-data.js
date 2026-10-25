@@ -5,7 +5,7 @@ import { easeAt } from './scene-keyops.js';
 export let C;  // app state and actions handed over by app.js (see sceneModule there)
 export const FPS = 24;
 // the same length as the H3 templates' "Seconds to frames (24 fps, 17k+5 grid)" node
-const framesFor = (sec) => { const n = Math.max(5, Math.round(sec * FPS)); return n + (((5 - n % 17) % 17) + 17) % 17; };
+export const framesFor = (sec) => { const n = Math.max(5, Math.round(sec * FPS)); return n + (((5 - n % 17) % 17) + 17) % 17; };
 export const OBJ = ['x', 'y', 'z', 'rx', 'ry', 'rz', 'sx', 'sy', 'sz'];
 export const CAM = ['px', 'py', 'pz', 'tx', 'ty', 'tz', 'fov'];
 export const SIZES = [[768, 448], [448, 768], [1024, 576], [576, 1024], [832, 480], [480, 832], [1280, 720], [720, 1280], [768, 768]];

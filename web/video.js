@@ -1,12 +1,13 @@
 import {
   $, h, store, uid, api, toast, undoToast, clamp, openSheet, closeSheet, button, iconBtn, linkBtn, actions, fileButton, seg,
-  field, section, hint, placeholder, rangeField, propNum, mediaCard, panelTop,
+  field, section, hint, note, placeholder, rangeField, propNum, mediaCard, panelTop,
 } from './ui.js';
 import { S, fmtT, inputUrl, thumbUrl } from './core.js';
 import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, uploadImage, uploadMedia } from './media.js';
 import { openGeneration } from './run.js';
 import { useInGenerate } from './editor.js';
 import { TabSet } from './tabs.js';
+import * as COMP from './scene-comp.js';
 import { snap, snapOn, snapStep, normDeg, Weight, WEIGHT, DEAD_PX, deadzone, snapBar } from './gizmo.js';
 
 // ---------------------------------------------------------------------------
@@ -14,6 +15,7 @@ import { snap, snapOn, snapStep, normDeg, Weight, WEIGHT, DEAD_PX, deadzone, sna
 // clips that overlap on one track cross-fade. The preview composites the clips on a canvas;
 // Export sends the same timeline to the server, which renders it with ffmpeg into History.
 // ---------------------------------------------------------------------------
+const COMP_LOOKS = [['color', 'Color'], ['clay', 'Clay'], ['depth', 'Depth'], ['pose', 'Pose']];   // how a scene clip can be drawn (scene-offscreen.js LOOKS)
 const HEAD_W = 84;    // track header column (px)
 const LANE_H = 52;
 const MIN_LEN = 0.1;
@@ -23,8 +25,9 @@ const V = {
   els: new Map(), posters: new Map(), waves: new Map(),
 };
 
-function newItem({ kind, src, url, label, thumb = null, dur = 0 }, track) {
-  return { id: uid(), track, kind, src, url, label, thumb, dur, at: 0, in: 0, out: kind === 'image' ? 3 : dur || null,
+// kind 'scene': a 3D tab live-linked as a clip (scene-comp.js); src { scene, look }, nat its natural size, dur the scene's length
+function newItem({ kind, src, url = null, label, thumb = null, dur = 0, nat = null }, track) {
+  return { id: uid(), track, kind, src, url, label, thumb, dur, ...(nat ? { nat } : {}), at: 0, in: 0, out: kind === 'image' ? 3 : dur || null,
     x: 0, y: 0, scale: 1, fit: 'fit', opacity: 1, volume: 1, fadeIn: 0, fadeOut: 0 };
 }
 
@@ -66,7 +69,7 @@ const tracksOf = (kind) => V.tracks.filter((t) => t.kind === kind);   // video: 
 const trackName = (t) => `${t.kind === 'video' ? 'V' : 'A'}${tracksOf(t.kind).indexOf(t) + 1}`;
 const zOf = (it) => tracksOf('video').findIndex((t) => t.id === it.track);
 const seqEnd = () => V.items.reduce((m, it) => Math.max(m, itEnd(it)), 0);
-const isVisual = (it) => it.kind === 'video' || it.kind === 'image';
+const isVisual = (it) => it.kind === 'video' || it.kind === 'image' || it.kind === 'scene';
 const selItem = () => V.items.find((i) => i.id === V.sel) || null;
 const fpsNow = () => V.fps || 24;
 const tc = (t) => {
@@ -107,7 +110,7 @@ const srcFor = (it) => (blobs.get(it.url)?.state === 'ready' ? blobs.get(it.url)
 const blobBytes = () => [...blobs.values()].reduce((a, b) => a + (b.size || 0), 0);
 
 function preloadMedia() {
-  const urls = new Set(V.items.filter((it) => it.kind !== 'image').map((it) => it.url));
+  const urls = new Set(V.items.filter((it) => it.kind !== 'image' && it.url).map((it) => it.url));
   for (const [url, b] of blobs) {   // free what's no longer on the timeline
     if (urls.has(url)) continue;
     if (b.src) URL.revokeObjectURL(b.src);
@@ -132,7 +135,17 @@ function showPreload() {
   if (el) el.textContent = done < all.length ? `Loading ${done}/${all.length}…` : '';
 }
 
+// a scene clip's picture at the playhead, drawn at the size it shows at (a canvas that stands in for a media element)
+function sceneEl(it) {
+  const [nw, nh] = COMP.natOf(it), [W, H] = seqSize();
+  const s = (it.fit === 'fill' ? Math.max : Math.min)(W / nw, H / nh) * (it.scale || 1);
+  const el = COMP.frame(it, V.t, nw * s, nh * s);
+  V.els.set(it.id, { el, url: null, src: null });
+  return el;
+}
+
 function mediaFor(it) {
+  if (it.kind === 'scene') return sceneEl(it);
   const m = V.els.get(it.id), src = srcFor(it);
   // switch to the downloaded copy only while stopped, so it can't flicker mid-playback
   if (m && (m.src === src || (V.playing && m.url === it.url))) return m.el;
@@ -165,10 +178,12 @@ function pruneEls() {
     m.el.removeAttribute('src');
     V.els.delete(id);
   }
+  COMP.forget(new Set(V.items.map((i) => i.id)));
 }
 
 function syncMedia() {
   for (const it of V.items) {
+    if (it.kind === 'scene') { if (!V.els.has(it.id)) V.els.set(it.id, { el: COMP.canvasFor(it), url: null, src: null }); continue; }   // (drawn only when it's on show: drawFrame)
     if (it.kind === 'image') { mediaFor(it); continue; }
     const el = mediaFor(it), tr = trackOf(it);
     if (V.t < it.at || V.t >= itEnd(it)) {
@@ -208,7 +223,7 @@ function startMedia(el, want) {
 // so the clips that start later are allowed to play with sound.
 function unlockMedia() {
   for (const it of V.items) {
-    if (it.kind === 'image') continue;
+    if (it.kind === 'image' || it.kind === 'scene') continue;
     const el = mediaFor(it);
     if (!el.paused || starting.get(el) === 'pending') continue;
     if (starting.get(el) === 'muted') starting.delete(el);
@@ -246,7 +261,7 @@ function drawFrame() {
   // rather than flashing black (or the track underneath).
   const ready = (it) => {
     const el = mediaFor(it);
-    return it.kind === 'image' ? el.complete && el.naturalWidth > 0 : el.readyState >= 2 && !el.seeking;
+    return it.kind === 'scene' ? true : it.kind === 'image' ? el.complete && el.naturalWidth > 0 : el.readyState >= 2 && !el.seeking;
   };
   if (!layers.flat().every(ready)) {
     V.holdSince = V.holdSince || performance.now();
@@ -576,7 +591,7 @@ export function vidPause() {
 // While a clip is playing smoothly the timeline follows it (the "master"), so it never has to be
 // corrected by seeking; the wall clock covers gaps, stills and clips that are still starting.
 function masterTime() {
-  const ok = (it) => it && it.kind !== 'image' && V.t >= it.at && V.t < itEnd(it) && V.els.has(it.id)
+  const ok = (it) => it && it.kind !== 'image' && it.kind !== 'scene' && V.t >= it.at && V.t < itEnd(it) && V.els.has(it.id)
     && (({ el }) => !el.paused && !el.seeking && el.readyState >= 3)(V.els.get(it.id));
   let m = V.items.find((it) => it.id === V.master);
   if (!ok(m)) { m = V.items.find(ok); V.master = m ? m.id : null; }
@@ -670,10 +685,12 @@ function clipEl(it) {
   const { xin } = xfades(it);
   const fi = Math.max(it.fadeIn || 0, xin);
   const bg = it.kind === 'video' ? posterFor(it) : it.kind === 'image' ? it.thumb || it.url : null;
-  return h('div', { class: `tl-clip ${it.kind}` + (V.sel === it.id ? ' sel' : ''), 'data-id': it.id,
+  const gone = it.kind === 'scene' && COMP.sceneOf(it.src.scene)?.state === 'missing';
+  return h('div', { class: `tl-clip ${it.kind}` + (V.sel === it.id ? ' sel' : '') + (gone ? ' gone' : ''), 'data-id': it.id,
+    title: gone ? 'This 3D scene was deleted from the 3D tab' : null,
     style: `left:${it.at * V.pps}px;width:${Math.max(6, itLen(it) * V.pps)}px` + (bg ? `;background-image:url("${bg}")` : '') },
     it.kind === 'audio' ? h('canvas', { class: 'wave' }) : null,
-    h('span', { class: 'tl-label' }, it.label),
+    h('span', { class: 'tl-label' }, (gone ? '⚠ ' : '') + it.label),
     fi ? h('span', { class: 'tl-fade in', style: `width:${fi * V.pps}px` }) : null,
     it.fadeOut ? h('span', { class: 'tl-fade out', style: `width:${it.fadeOut * V.pps}px` }) : null,
     h('span', { class: 'tl-trim l' }), h('span', { class: 'tl-trim r' }));
@@ -729,7 +746,7 @@ function timelineChanged() {
   persistTimeline(); renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw();
 }
 
-export function renderVideo() { renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw(); ensureTabs(); }
+export function renderVideo() { renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw(); ensureTabs(); COMP.refresh(); }
 
 // ---- timeline gestures: drag clips to move (also between tracks), drag their ends to trim ----
 const timeAt = (e) => (e.clientX - $('#timeline .tl-inner').getBoundingClientRect().left - HEAD_W) / V.pps;
@@ -916,6 +933,45 @@ function addFromHistory() {
   });
 }
 
+// a 3D tab as a clip: live-linked (scene-comp.js), not baked; its length is the scene's
+function addScene() {
+  let look = 'color';
+  pickerSheet('Add a 3D scene', [
+    seg(COMP_LOOKS, look, (k) => { look = k; }),
+    hint('Tap a scene to add it with this look. It stays linked: edits in the 3D tab show up here.', 'grow'),
+    button('Done', closeSheet)], async () => {
+    const rows = await COMP.listScenes();
+    return rows.length ? rows.map((r) => mediaCard(h('div', { class: 'scene-thumb' }, '3D'), r.name, async (c) => {
+      c.classList.add('picked');
+      const d = await COMP.load(r.id);
+      if (!d || d.state !== 'ok') return toast('Couldn\'t open that 3D scene', true);
+      await addToTimeline({ kind: 'scene', src: { scene: r.id, look }, label: d.name, dur: d.dur, nat: d.nat });
+      toast('Added');
+    })) : placeholder('This project has no 3D tabs yet. Make a scene in the 3D tab first.');
+  });
+}
+
+// a store event, or a first load, changed a scene: what the clips remember of it follows, and the preview redraws
+function sceneChanged(id) {
+  const d = COMP.sceneOf(id);
+  let saved = false;
+  for (const it of V.items) {
+    if (it.kind !== 'scene' || it.src.scene !== id || !d || d.state !== 'ok') continue;
+    const was = it.dur;
+    if (Math.abs(was - d.dur) > 0.001) {   // a clip that played the whole scene keeps doing so; a trimmed one stays inside it
+      it.dur = d.dur;
+      if (it.out == null || Math.abs(it.out - was) < 0.001) it.out = d.dur; else it.out = Math.min(it.out, d.dur);
+      it.in = Math.max(0, Math.min(it.in, d.dur - MIN_LEN));
+      saved = true;
+    }
+    if (d.name && d.name !== it.label) { it.label = d.name; saved = true; }
+    if (!it.nat || it.nat[0] !== d.nat[0] || it.nat[1] !== d.nat[1]) { it.nat = d.nat; saved = true; }
+  }
+  if (saved) persistTimeline();
+  renderTimeline(); if (saved) renderVideoPanel();
+  requestDraw();
+}
+
 function addImages() {
   openImagePicker({ title: 'Add images', multi: true, mp: () => 0, onPick: (name) => addToTimeline({
     kind: 'image', src: { input: name }, url: inputUrl(name),
@@ -952,6 +1008,16 @@ const clipRange = (label, get, set, opts) => rangeField(label, get, set,
 const SIZES = [['Match first clip', null], ['1280×720', [1280, 720]], ['1920×1080', [1920, 1080]], ['720×1280', [720, 1280]],
   ['1080×1920', [1080, 1920]], ['1024×1024', [1024, 1024]], ['832×480', [832, 480]], ['480×832', [480, 832]]];
 
+// a scene clip: which look it is drawn in, and where it comes from
+function sceneFields(it) {
+  const d = COMP.sceneOf(it.src.scene);
+  return [
+    field('Look', seg(COMP_LOOKS, it.src.look || 'color', (k) => { it.src = { ...it.src, look: k }; timelineChanged(); })),
+    d?.state === 'missing' ? note('This 3D scene was deleted from the 3D tab. The clip stays; pick another scene or delete it.', 'err')
+      : hint(`Live from the 3D tab “${d?.name || it.label}”: changes there show here and in every video tab using it. Exports render it at the export size.`),
+  ];
+}
+
 // framing: the same numbers the handles on the preview change (and that follow them while dragging)
 function xformFields(it) {
   const pct = (v) => `${Math.round(v * 100)}%`, g = geom(it);
@@ -986,7 +1052,8 @@ function renderVideoPanel() {
       h('div', { class: 'grid-2' }, fields),
       isVisual(it) ? [h('div', { id: 'vidXform' }, xformFields(it)),
         clipRange('Opacity', () => it.opacity ?? 1, (v) => { it.opacity = v; }, { min: 0, max: 1, step: 0.01, fmt: pct })] : null,
-      it.kind !== 'image' ? clipRange('Volume', () => it.volume ?? 1, (v) => { it.volume = v; }, { min: 0, max: 2, step: 0.01,
+      it.kind === 'scene' ? sceneFields(it) : null,
+      it.kind !== 'image' && it.kind !== 'scene' ? clipRange('Volume', () => it.volume ?? 1, (v) => { it.volume = v; }, { min: 0, max: 2, step: 0.01,
         fmt: (v) => pct(v) + (v > 1 ? ' (preview plays at 100%)' : '') }) : null,
       h('div', { class: 'row wrap' },
         button('✂ Split at playhead', splitAtPlayhead, { title: 'S' }),
@@ -1007,7 +1074,8 @@ function renderVideoPanel() {
     h('div', { class: 'row wrap' },
       button('+ Clips', addFromHistory, { cls: 'small primary' }),
       button('+ Images', addImages),
-      button('+ Sound / files', addMediaFiles)),
+      button('+ Sound / files', addMediaFiles),
+      button('+ 3D scene…', addScene, { title: 'A 3D tab as a live clip' })),
     clip || hint(V.items.length
       ? 'Tap a clip to edit it. Drag clips to move them (also onto other tracks), drag their ends to trim, and overlap two clips on a track to cross-fade. Higher video tracks draw on top.'
       : 'Add generated clips, images or sound. They line up on V1 / A1; drag them onto V2 to layer them over V1.'),
@@ -1027,10 +1095,20 @@ async function exportVideo(btn) {
   try {
     G.settling?.w.finish();
     await tabs?.flush();   // the saved edit is what this render came from
+    // 3D scene clips first: their frames are drawn here at the export size and rate, and the server renders them as ordinary clips
+    const scenes = V.items.filter((it) => it.kind === 'scene'), made = new Map();
+    const [W, H] = seqSize();
+    for (const [i, it] of scenes.entries()) {
+      made.set(it, await COMP.exportClip(it, { W, H, fps: V.fps || 24, len: itLen(it),
+        progress: (k, n) => { btn.textContent = `3D scene ${i + 1}/${scenes.length} · frame ${k}/${n}`; } }));
+    }
+    btn.textContent = 'Rendering…';
     const g = await api('/api/video/render', { method: 'POST', body: {
-      project_id: S.project, tab: tabs?.active && { id: tabs.active.id, name: tabs.active.name }, width: V.size && V.size[0], height: V.size && V.size[1], fps: V.fps || null,
+      project_id: S.project, tab: tabs?.active && { id: tabs.active.id, name: tabs.active.name },
+      width: scenes.length ? W : V.size && V.size[0], height: scenes.length ? H : V.size && V.size[1], fps: V.fps || null,
       tracks: V.tracks.map(({ id, kind, hidden, muted }) => ({ id, kind, hidden, muted })),
-      items: V.items.map((it) => ({ track: it.track, src: it.src, at: it.at, in: it.in, out: it.out ?? it.dur,
+      items: V.items.map((it) => ({ track: it.track, at: it.at, ...(made.has(it)   // (a scene's clip is already cut to what's used)
+        ? { src: { clip: made.get(it).clip }, scene: made.get(it).scene, in: 0, out: itLen(it) } : { src: it.src, in: it.in, out: it.out ?? it.dur }),
         x: it.x, y: it.y, scale: it.scale, fit: it.fit, rotation: it.rotation || 0, anchor_x: it.anchor?.x, anchor_y: it.anchor?.y,
         opacity: it.opacity, volume: it.volume,
         fade_in: it.fadeIn, fade_out: it.fadeOut })) } });
@@ -1102,7 +1180,7 @@ const editAdapter = {
   load(p) {
     vidPause();
     Object.assign(V, { tracks: p.tracks, items: p.items, size: p.size, fps: p.fps, sel: null, t: 0, master: null, holdSince: 0 });
-    renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw();
+    renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw(); COMP.refresh();
   },
 };
 
@@ -1112,6 +1190,8 @@ export function wireVideoTransport() {
   tabs = new TabSet({ kind: 'video-tabs', mount, scope: 'project', newName: (n) => `Edit ${n}`, adapter: editAdapter, seed: legacyTimeline,
     onSwitch: () => store.set('deck.video.seeded', true) });
   wireGizmo();
+  COMP.wire({ ids: () => V.items.filter((i) => i.kind === 'scene').map((i) => i.src.scene), onChange: sceneChanged,
+    visible: () => $('#tab-video').classList.contains('active') });
   const step = (d) => { vidPause(); vidSeek(V.t + d); };
   $('#vidStart').addEventListener('click', () => { vidPause(); vidSeek(0); });
   $('#vidPrev').addEventListener('click', () => step(-1 / fpsNow()));

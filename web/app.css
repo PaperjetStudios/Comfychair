@@ -462,6 +462,9 @@ details.desc[open] summary { margin-bottom: 6px; }
 }
 .tl-clip.image { background-color: #5a3d7a; }
 .tl-clip.audio { background-color: #24533a; }
+.tl-clip.scene { background-color: #2f6a6a; }
+.tl-clip.scene.gone { background: repeating-linear-gradient(45deg, #7a2f2f 0 8px, #5a2323 8px 16px); }
+.scene-thumb { display: grid; place-items: center; aspect-ratio: 16 / 9; font-weight: 600; background: #2f6a6a; color: #fff; }
 .tl-clip.sel { outline: 2px solid var(--accent); z-index: 1; }
 .tl-label {
   position: absolute; left: 4px; top: 2px; max-width: calc(100% - 8px); font-size: 11px; line-height: 16px; padding: 0 4px;

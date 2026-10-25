@@ -18,7 +18,7 @@ const SPLATS = new Set(['ply', 'splat', 'ksplat', 'spz']);
 const EXTRAS = new Set(['mtl', 'bin', 'png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tga']);  // what a model refers to
 const ACCEPT = [...MODELS, ...SPLATS, ...EXTRAS].map((e) => `.${e}`).join(',');
 const extOf = (name) => (String(name).split(/[?#]/)[0].match(/\.(\w+)$/) || [])[1]?.toLowerCase() || '';
-const clayMat = new THREE.MeshStandardMaterial({ color: 0xb4b4b4, roughness: 0.9, side: THREE.DoubleSide });
+export const clayMat = new THREE.MeshStandardMaterial({ color: 0xb4b4b4, roughness: 0.9, side: THREE.DoubleSide });
 
 // ---- loading ----------------------------------------------------------------------------
 // A layer's file as three.js objects, in the file's own units. (Libraries load when first needed.)
@@ -47,7 +47,7 @@ function stand(obj) {
   obj.traverse((c) => { if (c.isMesh) { c.userData.orig = c.material; if (c.isSkinnedMesh) c.frustumCulled = false; } });
   return { wrap, size: box.getSize(new THREE.Vector3()) };
 }
-function applyClay(group, on) {
+export function applyClay(group, on) {
   group.traverse((c) => { if (c.isMesh && c.userData.orig) c.material = on ? clayMat : c.userData.orig; });
 }
 
@@ -55,13 +55,15 @@ const loaded = new Map();  // layer id: what the import already loaded (so it is
 const mine = (o, group) => R.meshes.get(o.id) === group;
 function tagPicks(o, group) { group.traverse((c) => { if (c.isMesh) c.userData.id = o.id; }); }
 
-LOADERS.model = (o, group) => {
-  const ready = loaded.get(o.id);
-  loaded.delete(o.id);
+// (x: an optional context { mine(o, group), draw(), lib() } for a scene built elsewhere: the video tab's compositions)
+LOADERS.model = (o, group, x = {}) => {
+  const alive = x.mine || mine, redraw = x.draw || draw;
+  const ready = x.mine ? null : loaded.get(o.id);
+  if (!x.mine) loaded.delete(o.id);
   (ready ? Promise.resolve(ready) : loadModel(o).then((obj) => stand(obj).wrap)).then((wrap) => {
-    if (!mine(o, group)) return;
+    if (!alive(o, group)) return;
     group.add(wrap); tagPicks(o, group); applyClay(group, !!o.clay);
-    group.userData.model = true; draw();
+    group.userData.model = true; redraw();
   }).catch((e) => toast(`${o.name}: ${e.message}`, true));
 };
 
@@ -73,8 +75,8 @@ async function sparkOf() {
   if (!spark) { spark = new lib.SparkRenderer({ renderer }); scene.add(spark); }
   return lib;
 }
-async function loadSplat(o) {
-  const lib = await sparkOf();
+async function loadSplat(o, x = {}) {
+  const lib = x.lib ? await x.lib() : await sparkOf();
   const mesh = new lib.SplatMesh({ url: o.url, fileName: o.file || undefined });
   await mesh.initialized;
   mesh.raycast = () => {};  // picking uses the box (the splats are far too many to ray-test)
@@ -91,11 +93,12 @@ function splatBox(mesh) {
 // splat files from capture tools are usually y-down: flipped by default, except spz (made y-up)
 const flipFor = (ext) => ext !== 'spz';
 
-LOADERS.splat = (o, group) => {
-  const ready = loaded.get(o.id);
-  loaded.delete(o.id);
-  (ready ? Promise.resolve(ready) : loadSplat(o)).then((mesh) => {
-    if (!mine(o, group)) return;
+LOADERS.splat = (o, group, x = {}) => {
+  const alive = x.mine || mine, redraw = x.draw || draw;
+  const ready = x.mine ? null : loaded.get(o.id);
+  if (!x.mine) loaded.delete(o.id);
+  (ready ? Promise.resolve(ready) : loadSplat(o, x)).then((mesh) => {
+    if (!alive(o, group)) return;
     const holder = new THREE.Group();   // turned over if the file is y-down
     holder.add(mesh);
     // the depth render can't use splats: a box of the same size stands in (see passHooks below)
@@ -114,7 +117,7 @@ LOADERS.splat = (o, group) => {
     group.add(holder, proxy);
     group.userData.splat = { fit, proxy };
     group.userData.dispose = () => { holder.remove(mesh); mesh.dispose(); };  // (the layer is gone: free its buffers)
-    tagPicks(o, group); draw();
+    tagPicks(o, group); redraw();
   }).catch((e) => toast(`${o.name}: ${e.message}`, true));
 };
 

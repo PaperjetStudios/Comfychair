@@ -22,6 +22,7 @@ LIBRARY_DIR = DATA_DIR / "library"   # global (all projects) documents: library/
 INPUT_DIR = DATA_DIR / "inputs"      # local copies of every image sent to ComfyUI
 THUMB_DIR = DATA_DIR / "thumbs"      # cached JPEG thumbnails for the input gallery
 MEDIA_DIR = DATA_DIR / "media"       # music, voice-overs and outside clips uploaded for the Video tab
+SCENE_CLIP_DIR = DATA_DIR / "tmp" / "sceneclips"  # 3D compositions rendered for a video export (temporary, see main.py)
 
 # Optional access token. When set, every page, file and API call needs it: open
 # http://<box>:8190/?token=<token> once on each device and a cookie remembers it.
@@ -38,5 +39,5 @@ COMFY_DIR = Path(_comfy_dir).resolve() if _comfy_dir and Path(_comfy_dir).is_dir
 COMFY_OUTPUT_DIR = COMFY_DIR / "output" if COMFY_DIR and (COMFY_DIR / "output").is_dir() else None
 COMFY_INPUT_DIR = COMFY_DIR / "input" if COMFY_DIR and (COMFY_DIR / "input").is_dir() else None
 
-for d in (DATA_DIR, TEMPLATES_DIR, GEN_DIR, PROJECTS_DIR, LIBRARY_DIR, INPUT_DIR, THUMB_DIR, MEDIA_DIR):
+for d in (DATA_DIR, TEMPLATES_DIR, GEN_DIR, PROJECTS_DIR, LIBRARY_DIR, INPUT_DIR, THUMB_DIR, MEDIA_DIR, SCENE_CLIP_DIR):
     d.mkdir(parents=True, exist_ok=True)
