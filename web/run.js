@@ -6,6 +6,7 @@ import { S, fmtT, isMine, loadProjects, switchTab, emitServer } from './core.js'
 import { genLabel, mediaEl, openImagePicker, uploadImage } from './media.js';
 import { addToPrompt, adoptGenerations, builderState, keepAwake, loadTemplates, persist, renderFields, saveBuilder, selectTemplate, setVal, stop } from './generate.js';
 import { B, GAL, boardChanged, galleryRefresh } from './board.js';
+import { openTrack } from './track.js';
 
 // ---------------------------------------------------------------------------
 // "it's done": a chime, ✓ in the tab title, and a system notification where allowed (HTTPS)
@@ -553,6 +554,7 @@ export function openGeneration(id) {
     btns.push(button('Use as input', () => sendToInput(g, idx, 'first')),
       button('Use last frame', () => sendToInput(g, idx, 'last'), { title: 'For videos: grab the final frame, e.g. to extend the shot' }));
   }
+  if (cur()?.kind === 'video') btns.push(button('Track motion', () => openTrack({ src: { generation: g.id, index: idx }, url: cur().url, label: genLabel(g) }), { title: 'Follow the picture\'s movement and make a 3D camera from it' }));
   if (!isEdit) btns.push(linkBtn('Workflow JSON', `/api/generations/${g.id}/workflow`));
   if (cur()) btns.push(linkBtn('Download', cur().url, { download: cur().filename }));
   btns.push(button('Delete', async () => {

@@ -69,7 +69,7 @@ export class Stage {
       photoScene(o.url).then((src) => { if (x.mine(o, m)) m.add(src.clone()); }).catch(() => {}).finally(() => this.loaded(o.id));
     } else if (makers[o.type]) {
       m = makers[o.type](o, x);
-      if (o.ref) this.waiting.add(o.id);   // (an object layer fills itself in once its library entry arrives)
+      if (o.ref || o.type === 'backdrop') this.waiting.add(o.id);   // (an object layer fills itself in once its library entry arrives)
     } else if (LOADERS[o.type]) {
       m = new THREE.Group(); this.waiting.add(o.id); LOADERS[o.type](o, m, x);
     } else m = new THREE.Mesh(geometries()[TYPES[o.type].geo || o.type], clay);
@@ -110,6 +110,7 @@ export class Stage {
     for (const o of this.sc.objects) {
       const m = this.meshes.get(o.id);
       if (!m) continue;
+      if (m.userData.colorOnly) m.visible = look === 'color' && !o.hidden;   // footage and track points: colour only
       if (m.userData.model) applyClay(m, look === 'clay' || !!o.clay);
       if (m.userData.own) m.material = look === 'clay' ? clay : m.userData.own;   // an object layer keeps its colour except in clay
       const sp = m.userData.splat;
@@ -132,6 +133,7 @@ export class Stage {
       if (EVEN.has(o.type)) m.scale.setScalar(Math.max(0.01, v.sy));
       else m.scale.set(Math.max(0.01, v.sx), Math.max(0.01, v.sy), Math.max(0.01, v.sz));
       if (m.userData.rig) { FIGURE.applyPose(m.userData.rig, v.j, this.stepped(o, v.m, f), o.ground); FIGURE.setHidden(m.userData.rig, o.hide); }
+      m.userData.atFrame?.(f);
     }
     const c = sample(this.sc.camera, CAM, f);
     this.camera.position.set(c.px, c.py, c.pz);

@@ -19,7 +19,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFil
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import accel, config, db, editsize, imageprep, stages, videoedit, videoprep, wildcards
+from . import accel, config, db, editsize, imageprep, stages, tracking, videoedit, videoprep, wildcards
 from . import store
 from . import sceneasset
 from . import templates as tpl
@@ -320,6 +320,7 @@ app = FastAPI(title="ComfyDeck", lifespan=lifespan)
 store.notify = broadcast  # the JSON document store (tabs, presets, objects...) tells every device when it saves
 app.include_router(store.router)
 app.include_router(sceneasset.router)
+app.include_router(tracking.router)
 
 
 class TokenGate:
@@ -742,6 +743,9 @@ async def video_prep(body: dict = Body(...)):
     except (ValueError, subprocess.SubprocessError, OSError) as e:
         raise HTTPException(400, str(e))
     return {**r, "path": str(r["path"])}
+
+
+tracking.resolve_src = _timeline_path  # motion tracking finds its clip the way the Video tab does
 
 
 @app.post("/api/video/render")

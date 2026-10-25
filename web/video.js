@@ -9,6 +9,7 @@ import { useInGenerate } from './editor.js';
 import { TabSet } from './tabs.js';
 import * as COMP from './scene-comp.js';
 import { maximizable } from './layout.js';
+import { canTrack, openTrack } from './track.js';
 import { snap, snapOn, snapStep, normDeg, Weight, WEIGHT, DEAD_PX, deadzone, snapBar } from './gizmo.js';
 
 // ---------------------------------------------------------------------------
@@ -1059,6 +1060,7 @@ function renderVideoPanel() {
       h('div', { class: 'row wrap' },
         button('✂ Split at playhead', splitAtPlayhead, { title: 'S' }),
         button('⤫ Cross-fade with previous', () => crossfadePrev(it)),
+        it.kind === 'video' && canTrack(it.src) ? button('Track motion', () => openTrack({ src: it.src, url: it.url, label: it.label, from: it.in, to: it.out ?? undefined }), { title: 'Follow the picture\'s movement and make a 3D camera from it' }) : null,
         isVisual(it) ? button('Reset framing', () => { Object.assign(it, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); delete it.rotation; delete it.anchor; timelineChanged(); }) : null,
         button('Delete clip', deleteSelected, { cls: 'small danger', title: 'Delete' })));
   })() : null;

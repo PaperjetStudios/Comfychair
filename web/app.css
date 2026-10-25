@@ -953,3 +953,12 @@ details.desc[open] summary { margin-bottom: 6px; }
   .tabs { order: 3; flex: 1 0 100%; margin-left: 0; }
   .tabs button { flex: 1 0 auto; justify-content: center; padding: 0 8px; }
 }
+/* tracking */
+.trk-stage { position: relative; width: min(100%, calc(44dvh * var(--ar, 1.78))); margin: 0 auto; aspect-ratio: var(--ar, 1.78); background: #000; border-radius: var(--r-lg); overflow: hidden; }
+.trk-video, .trk-over { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.trk-over { touch-action: none; cursor: crosshair; }
+.trk-bar { display: flex; align-items: center; gap: 10px; }
+.trk-bar input { flex: 1; min-width: 0; }
+.trk-clock { min-width: 44px; text-align: right; }
+.trk-body { display: grid; gap: 12px; }
+.trk-prog { width: 100%; height: 8px; accent-color: var(--accent); }
