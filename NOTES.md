@@ -104,6 +104,21 @@ How it fits together (`web/figure.js` is the figure, `web/scene.js` the tab):
 - **Testing**: node can `import('web/figure.js')` directly (three.js runs without a DOM). For
   pictures, a scratch page that calls `drawThumb` for every preset, shot in headless Chrome.
 
+### 3D tab: modules, tabs, modes (2026-10-25)
+- `scene.js` is the entry (`init/show/hide/projectChanged/open/addPhoto`) and owns the TabSet (kind
+  `scene-tabs`, payload = the scene `SC`, v 1, `upgrade()` is the migrate). `scene-data.js` is the scene,
+  keys/sampling and the per-tab undo list (needs nothing else; `hooks` tell the tab to save). `scene-view.js`
+  is three.js (meshes, gizmo, photos, free view), `scene-export.js` playback and renders, `scene-ui.js`
+  the panel/key sheet/toolbar/modes glue, `scene-pose.js` the figure tabs and prompt.
+- First tab is seeded from the old `deck.scene.<project>` localStorage key (left in place). Opening a
+  scene from History makes a new tab. A tab switch resets undo.
+- **Modes** (`SC.mode`: `edit` | `camera` | `create`, per tab, not an undo step): `scene-modes.js` has
+  `registerMode({ key, label, hint, panel, select, stage, view, lanes, frustum, enter, exit })` and
+  `addModeSection(key, build)`; `scene-builtin.js` registers the three. Both are re-exported from
+  `scene.js`, so a later file can import them from `./scene-modes.js` (no import cycle) or `./scene.js`.
+- Modules are imported with `?v=` added by the server only for `from '...'` imports: never use a bare
+  `import './x.js'` (it would load unversioned).
+
 ## Still open
 - **Not tried on a real tablet**: whether the keep-awake video holds the screen on your device,
   notifications (need HTTPS and the CA installed), and the feel of the bigger touch targets.
