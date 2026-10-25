@@ -75,6 +75,12 @@ function ruler() {
   return h('div', { class: 'sheet-ruler' }, ...ticks);
 }
 
+const HINTS = { dope: 'Double-tap a row to add a key there', graph: 'Double-tap the graph to add a point at that height' };
+function hintOnce() {  // said once per device, the first time each view is shown
+  const seen = store.get('deck.scene.keyhints', {});
+  if (seen[UI.mode] || !$('#tab-scene')?.classList.contains('active')) return;
+  seen[UI.mode] = true; store.set('deck.scene.keyhints', seen); toast(HINTS[UI.mode]);
+}
 let gRange = null;   // the graph's value range, held still while a key is dragged
 export function renderKeys() {
   const lanes = lanesEl();
@@ -84,7 +90,9 @@ export function renderKeys() {
   clampV();
   const sheet = $('#sceneSheet');
   if (sheet) sheet.classList.toggle('graph', UI.mode === 'graph');
+  hintOnce();
   const graph = UI.mode === 'graph' ? gLayer() : null;
+  const st = sheet?.scrollTop || 0;   // rebuilding the rows empties the sheet for a moment, which would reset its scroll
   let body;
   if (graph) {
     const chs = channels(graph);
@@ -112,6 +120,7 @@ export function renderKeys() {
       h('div', { id: 'scenePlayhead', class: 'playhead', style: `left:${lanePos(R.f)}` }));
   }
   if (G0 && G0.type === 'box' && G0.el) lanes.append(G0.el);
+  if (sheet && st) sheet.scrollTop = st;
   syncTools();
   const [item] = keyTarget();
   const add = $('#sceneAddKey'), del = $('#sceneDelKey');
@@ -363,6 +372,7 @@ function up(e) {
   if (!g.moved) {  // a tap on empty space: deselect (unless adding) and move the playhead
     if (!UI.add) SEL.clear();
     seek(frameAtX(e.clientX)); info();
+    doubleTap(e, g.L);
   } else if (g.type === 'box') renderKeys();
 }
 
@@ -383,9 +393,10 @@ function wheel(e) {
 }
 
 // ---- the sheet's controls ----------------------------------------------------------------------
+// One compact row of icon buttons that scrolls sideways (never wraps); the rarer tools sit in the ⋯ menu.
 const tools = [];   // [el, on() | null, needs: 'sel' | 'clip' | null]
-function tool(label, fn, { on = null, needs = null, title = '', cls = '' } = {}) {
-  const b = button(label, fn, { cls: `small${cls ? ` ${cls}` : ''}`, title });
+function tool(icon, fn, { name, on = null, needs = null, title = '', cls = '' } = {}) {
+  const b = button(icon, fn, { cls: `small kt${cls ? ` ${cls}` : ''}`, title: title ? `${name} · ${title}` : name, 'aria-label': name });
   tools.push([b, on, needs]);
   return b;
 }
@@ -398,41 +409,99 @@ function syncTools() {
   info();
 }
 const setUI = (k, v) => { UI[k] = v; if (k === 'mode') store.set('deck.scene.keymode', v); if (k === 'unit') store.set('deck.scene.keyunit', v); if (k === 'snap') store.set('deck.scene.keysnap', v); };
-const numIn = (label, val, fn, title, w = 56) => h('label', { class: 'keynum', title }, label,
+const numIn = (label, val, fn, title, w = 64) => h('label', { class: 'keynum', title }, label,
   h('input', { type: 'number', value: val, step: 'any', inputMode: 'decimal', style: `width:${w}px`,
     onchange: (e) => { const v = parseFloat(e.target.value); e.target.value = val; if (Number.isFinite(v)) fn(v); } }));
 
+// the ⋯ menu: fixed to the viewport (the tool row scrolls and would clip it), inside the stage (so full screen keeps it)
+let menuEl = null;
+function closeMenu() { menuEl?.remove(); menuEl = null; removeEventListener('pointerdown', menuAway, true); }
+function menuAway(e) { if (menuEl && !menuEl.contains(e.target) && !e.target.closest('.kt-more')) closeMenu(); }
+function openMenu(anchor) {
+  if (menuEl) { closeMenu(); return; }
+  const item = (label, fn, keep = false) => h('button', { type: 'button', class: 'btn small ghost', onclick: () => { fn(); if (!keep) closeMenu(); } }, label);
+  menuEl = h('div', { class: 'key-menu', role: 'menu' },
+    item('Select none', selectNone), item('Invert selection', selectInvert), item('Duplicate (Ctrl+D)', duplicateKeys),
+    numIn('Shift (frames)', 0, (v) => { moveKeys(v); closeMenu(); }, 'Move the selected keys by this many frames'),
+    numIn('Scale (%)', 100, (v) => { scaleKeys(v / 100); closeMenu(); }, 'Stretch the selected keys around the playhead, in percent'),
+    item(`Ruler in ${UI.unit === 's' ? 'frames' : 'seconds'}`, () => { setUI('unit', UI.unit === 's' ? 'f' : 's'); renderKeys(); }),
+    item(`Snap ${UI.snap ? 'off' : 'on'} (to playhead and keys)`, () => { setUI('snap', !UI.snap); syncTools(); }));
+  (stage() || document.body).append(menuEl);
+  const r = anchor.getBoundingClientRect(), mh = menuEl.offsetHeight, mw = menuEl.offsetWidth;
+  const top = r.bottom + 4 + mh > innerHeight ? Math.max(4, r.top - 4 - mh) : r.bottom + 4;  // opens up when there's no room below
+  Object.assign(menuEl.style, { top: `${top}px`, left: `${Math.max(4, Math.min(innerWidth - mw - 4, r.right - mw))}px` });
+  addEventListener('pointerdown', menuAway, true);
+}
+
 function toolRow() {
-  tools.length = 0;
+  tools.length = 0; closeMenu();
+  const sep = () => h('span', { class: 'sep' });
   return h('div', { class: 'scene-keytools', role: 'toolbar', 'aria-label': 'Key tools' },
-    tool('Dope sheet', () => { setUI('mode', 'dope'); renderKeys(); }, { on: () => UI.mode === 'dope', title: 'A row per layer' }),
-    tool('Graph', () => { setUI('mode', 'graph'); gRange = null; renderKeys(); }, { on: () => UI.mode === 'graph', title: 'One value over time: drag a key up or down to change it' }),
-    h('span', { class: 'sep' }),
-    tool('⬚ Box', () => { setUI('box', !UI.box); syncTools(); }, { on: () => UI.box, title: 'On a touch screen: drag on empty space to box-select instead of panning' }),
-    tool('＋ Add', () => { setUI('add', !UI.add); syncTools(); }, { on: () => UI.add, title: 'Taps and boxes add to the selection (a tap on a selected key takes it out)' }),
-    tool('All', selectAll, { title: 'Select all (A)' }), tool('None', selectNone, { title: 'Select none' }), tool('Invert', selectInvert, { title: 'Invert the selection' }),
-    h('span', { class: 'sep' }),
-    tool('⧉ Copy', copyKeys, { needs: 'sel', title: 'Copy the selected keys (Ctrl+C)' }),
-    tool('Paste', () => pasteKeys(), { needs: 'clip', title: 'Paste at the playhead, onto the selected layer if it fits (Ctrl+V)' }),
-    tool('Duplicate', duplicateKeys, { needs: 'sel', title: 'Copy and paste just after the selection (Ctrl+D)' }),
-    tool('🗑 Delete', deleteKeys, { needs: 'sel', cls: 'danger', title: 'Delete the selected keys (Delete)' }),
-    h('span', { class: 'sep' }),
+    tool('▤', () => { setUI('mode', 'dope'); renderKeys(); }, { name: 'Dope sheet', on: () => UI.mode === 'dope', title: 'a row per layer · double-tap a row to add a key' }),
+    tool('∿', () => { setUI('mode', 'graph'); gRange = null; renderKeys(); }, { name: 'Graph', on: () => UI.mode === 'graph', title: 'one value over time · drag a point, double-tap to add one' }),
+    sep(),
+    tool('⬚', () => { setUI('box', !UI.box); syncTools(); }, { name: 'Box select', on: () => UI.box, title: 'on a touch screen: drag on empty space to box-select instead of panning' }),
+    tool('⊕', () => { setUI('add', !UI.add); syncTools(); }, { name: 'Add to selection', on: () => UI.add, title: 'taps and boxes add to the selection (a tap on a selected key takes it out)' }),
+    tool('▣', selectAll, { name: 'Select all', title: 'A' }),
+    sep(),
+    tool('⧉', copyKeys, { name: 'Copy', needs: 'sel', title: 'Ctrl+C' }),
+    tool('📋', () => pasteKeys(), { name: 'Paste', needs: 'clip', title: 'at the playhead, onto the selected layer if it fits (Ctrl+V)' }),
+    tool('🗑', deleteKeys, { name: 'Delete selected keys', needs: 'sel', cls: 'danger', title: 'Delete' }),
+    sep(),
     (() => {
-      const s = h('select', { 'aria-label': 'Ease of the selected keys', title: 'How the selected keys blend into the next one',
+      const s = h('select', { class: 'kt-ease', 'aria-label': 'Ease of the selected keys', title: 'Ease · how the selected keys blend into the next one',
         onchange: (e) => { const v = e.target.value; e.target.value = '~'; if (v !== '~') setKeyEase(v); } },
       h('option', { value: '~' }, 'Ease…'), ...EASES.map(([v, l]) => h('option', { value: v }, l)));
       tools.push([s, null, 'sel']);
       return s;
     })(),
-    tool('⇔ Scale', () => { setUI('tool', UI.tool === 'scale' ? 'move' : 'scale'); syncTools(); }, { on: () => UI.tool === 'scale', needs: 'sel',
-      title: 'Drag across the sheet to stretch the selected keys in time around the playhead (Blender\'s S)' }),
-    numIn('Shift', 0, (v) => moveKeys(v), 'Move the selected keys by this many frames', 52),
-    numIn('Scale %', 100, (v) => scaleKeys(v / 100), 'Stretch the selected keys around the playhead, in percent', 56),
-    h('span', { class: 'sep' }),
-    tool('Snap', () => { setUI('snap', !UI.snap); syncTools(); }, { on: () => UI.snap, title: 'Dragging snaps to the playhead and to other keys' }),
-    tool('s / f', () => { setUI('unit', UI.unit === 's' ? 'f' : 's'); renderKeys(); }, { title: 'Ruler in seconds or frames' }),
-    tool('Fit', () => { V.fit = true; renderKeys(); }, { title: 'Show the whole clip' }),
+    tool('⇔', () => { setUI('tool', UI.tool === 'scale' ? 'move' : 'scale'); syncTools(); }, { name: 'Stretch in time', on: () => UI.tool === 'scale', needs: 'sel',
+      title: 'drag across the sheet to stretch the selected keys around the playhead (Blender\'s S)' }),
+    tool('🧲', () => { setUI('snap', !UI.snap); syncTools(); }, { name: 'Snap', on: () => UI.snap, title: 'dragging snaps to the playhead and to other keys' }),
+    tool('⤢', () => { V.fit = true; renderKeys(); }, { name: 'Fit', title: 'show the whole clip' }),
+    tool('⋯', (e) => openMenu(e.currentTarget), { name: 'More', cls: 'kt-more', title: 'select none, invert, duplicate, shift, scale, ruler' }),
     h('span', { id: 'sceneKeyInfo', class: 'hint keyinfo' }));
+}
+
+// the tool row can be hidden to give the sheet room (kept per device)
+const TK = 'deck.scene.keytools';
+function applyTools(on = store.get(TK, true)) {
+  const row = $('.scene-keytools'), b = $('#sceneToolsBtn');
+  if (row) row.classList.toggle('hidden', !on);
+  if (b) { b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
+  if (!on) closeMenu();
+}
+
+// ---- adding keys by hand (double-tap): a full key sampled at that time, so nothing else moves ----
+const plain = (v) => JSON.parse(JSON.stringify(v ?? null));
+function insertKey(L, f, ch = null, v = null) {
+  const item = L.item;
+  let k = item.keys.find((x) => x.f === f);
+  if (!k) {
+    if (!item.keys.length) Object.assign(item.base, plain(sample(item, L.names, f)));  // the first key keeps the look it had
+    k = { f, ...Object.fromEntries(Object.entries(plain(sample(item, L.names, f))).filter(([, x]) => x != null)) };
+    item.keys.push(k); item.keys.sort((a, b) => a.f - b.f);
+  }
+  if (ch) setChan(k, ch, v, { ...item.base, ...k });
+  TEMP.clear(); SEL.clear(); SEL.add(k);
+  done(); seek(f);
+  return k;
+}
+// the value under a tap on the graph's plot
+function valueAtY(y) {
+  const r = $('.graph-plot').getBoundingClientRect(), rg = gRange || graphRange(gLayer(), G.ch);
+  const t = Math.max(0, Math.min(1, (y - r.top - GP) / Math.max(1, r.height - 2 * GP)));
+  return rg.hi - t * (rg.hi - rg.lo);
+}
+let lastTap = null;   // the previous tap on empty space, for the double-tap
+function doubleTap(e, L) {
+  const now = e.timeStamp, prev = lastTap;
+  lastTap = { t: now, x: e.clientX, y: e.clientY };
+  if (!prev || now - prev.t > 600 || Math.hypot(e.clientX - prev.x, e.clientY - prev.y) > 28) return;
+  lastTap = null;
+  const f = frameAtX(e.clientX);
+  if (UI.mode === 'graph') { const G1 = gLayer(); if (G1) insertKey(G1, f, G.ch, valueAtY(e.clientY)); }
+  else if (L) insertKey(L, f);
 }
 
 export function renderTime() {
@@ -481,7 +550,8 @@ export function renderTransport() {
   lanes.addEventListener('wheel', wheel, { passive: false });
   G0 = null; ptrs.clear();
   $('#sceneTransport').replaceChildren(
-    h('div', { class: 'row scene-keybar' },
+    h('div', { class: 'key-head' }, h('div', { class: 'row scene-keybar' },
+      button('⚙', () => { const on = !store.get(TK, true); store.set(TK, on); applyTools(on); }, { id: 'sceneToolsBtn', cls: 'small kt', title: 'Show or hide the key tools', 'aria-label': 'Key tools' }),
       button(R.playing ? '❚❚ Pause' : '▶ Play', play, { cls: 'small primary', title: 'Play / pause (Space)' }),
       h('span', { id: 'sceneTime', class: 'timecode' }),
       h('span', { class: 'grow' }),
@@ -496,10 +566,10 @@ export function renderTransport() {
         const [item] = keyTarget(); if (!item) return;
         item.keys = item.keys.filter((k) => k.f !== R.f); changed();
       }, { id: 'sceneDelKey', title: 'Remove the key at the playhead' })),
-    toolRow(),
+    toolRow()),
     grip(),
     h('div', { id: 'sceneSheet', class: 'scene-sheet' }, h('div', { id: 'sceneNames', class: 'sheet-names' }), lanes));
-  applySheetH();
+  applySheetH(); applyTools();
   $('#sceneTransport').classList.toggle('hidden', modeOf().lanes === 'none');
   renderTime(); renderKeys();
 }
