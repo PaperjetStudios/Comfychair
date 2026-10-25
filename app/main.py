@@ -714,7 +714,8 @@ async def video_render(body: dict = Body(...)):
             if kind not in ("video", "image", "audio"):
                 raise HTTPException(400, f"{path.name} isn't a video, image or sound")
             items.append({**{k: it.get(k) for k in ("at", "in", "out", "x", "y", "scale", "fit", "opacity",
-                                                    "volume", "fade_in", "fade_out")},
+                                                    "volume", "fade_in", "fade_out", "rotation",
+                                                    "anchor_x", "anchor_y")},
                           "path": str(path), "kind": kind, "track": tr["id"], "z": z_of.get(tr["id"], 0),
                           "hidden": bool(tr.get("hidden")), "muted": bool(tr.get("muted"))})
             if (it.get("src") or {}).get("generation") is not None:
@@ -725,6 +726,8 @@ async def video_render(body: dict = Body(...)):
         size = f"{body['width']}×{body['height']}" if body.get("width") else "first clip's size"
         params = {"timeline": f"{len(items)} clips on {len(tracks)} tracks", "frame": size,
                   "fps": body.get("fps") or "first clip's", "clips": sources}
+        if isinstance(body.get("tab"), dict):  # which saved video edit (a video-tabs document) this came from
+            params["edit_tab"] = {"id": str(body["tab"].get("id") or "")[:64], "name": str(body["tab"].get("name") or "")[:120]}
         parent = {"generation": sources[0]["generation"], "index": sources[0]["index"], "frame": None} if sources else None
         gid = db.create_generation(body.get("project_id"), "video edit", params, {}, f"edit-{uuid.uuid4().hex}", parent)
         db.update_generation(gid, status="running")

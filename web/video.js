@@ -1,11 +1,13 @@
 import {
-  $, h, store, uid, api, toast, undoToast, openSheet, closeSheet, button, iconBtn, linkBtn, actions, fileButton, seg,
+  $, h, store, uid, api, toast, undoToast, clamp, openSheet, closeSheet, button, iconBtn, linkBtn, actions, fileButton, seg,
   field, section, hint, placeholder, rangeField, propNum, mediaCard, panelTop,
 } from './ui.js';
 import { S, fmtT, inputUrl, thumbUrl } from './core.js';
 import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, uploadImage, uploadMedia } from './media.js';
 import { openGeneration } from './run.js';
 import { useInGenerate } from './editor.js';
+import { TabSet } from './tabs.js';
+import { snap, snapOn, snapStep, normDeg, Weight, WEIGHT, DEAD_PX, deadzone, snapBar } from './gizmo.js';
 
 // ---------------------------------------------------------------------------
 // video: a Premiere-style timeline. Video tracks stack (V2 draws over V1), audio tracks mix, and
@@ -16,7 +18,7 @@ const HEAD_W = 84;    // track header column (px)
 const LANE_H = 52;
 const MIN_LEN = 0.1;
 const V = {
-  tracks: [], items: [], size: null, fps: 0, pps: 40,   // pps: timeline zoom, pixels per second
+  tracks: [], items: [], size: null, fps: 0, pps: store.get('deck.video.pps', 40),   // pps: timeline zoom, pixels per second (this device only)
   t: 0, playing: false, clock: 0, loop: store.get('deck.video.loop', false), sel: null,
   els: new Map(), posters: new Map(), waves: new Map(),
 };
@@ -26,24 +28,36 @@ function newItem({ kind, src, url, label, thumb = null, dur = 0 }, track) {
     x: 0, y: 0, scale: 1, fit: 'fit', opacity: 1, volume: 1, fadeIn: 0, fadeOut: 0 };
 }
 
-(function loadTimeline() {
+const defaultTracks = () => [{ id: 'v1', kind: 'video' }, { id: 'v2', kind: 'video' }, { id: 'a1', kind: 'audio' }];
+V.tracks = defaultTracks();
+
+// What this device kept before video edits became tabs (localStorage): moved into the first tab once
+function legacyTimeline() {
+  if (store.get('deck.video.seeded', false)) return null;
   const saved = store.get('deck.timeline', null);
-  if (saved) Object.assign(V, { tracks: saved.tracks || [], items: saved.items || [], size: saved.size || null, fps: saved.fps || 0, pps: saved.pps || 40 });
+  let p = null;
+  if (saved) p = { tracks: saved.tracks || [], items: saved.items || [], size: saved.size || null, fps: saved.fps || 0 };
   else {   // the old one-track clip list
+    const items = [];
     let at = 0;
     for (const c of store.get('deck.video', [])) {
       const it = newItem({ kind: 'video', src: { generation: c.generation, index: c.index }, url: c.url, label: c.label, dur: c.duration || 0 }, 'v1');
       Object.assign(it, { at, in: c.start || 0, out: c.end ?? (c.duration || null) });
       at += (it.out ?? 3) - it.in;
-      V.items.push(it);
+      items.push(it);
     }
+    if (items.length) p = { tracks: [], items, size: null, fps: 0 };
   }
-  if (!V.tracks.length) V.tracks = [{ id: 'v1', kind: 'video' }, { id: 'v2', kind: 'video' }, { id: 'a1', kind: 'audio' }];
-})();
-
-function persistTimeline() {
-  store.set('deck.timeline', { tracks: V.tracks, items: V.items, size: V.size, fps: V.fps, pps: V.pps });
+  return p && migrateEdit(p);   // (the flag is set once any tab has opened, so later projects start empty)
 }
+
+// ---- tabs: each video edit is a document in the project folder ----
+const migrateEdit = (p) => ({ tracks: p.tracks?.length ? p.tracks : defaultTracks(), items: p.items || [], size: p.size || null, fps: p.fps || 0 });
+let tabs = null, tabsReady = null;
+const ensureTabs = () => tabsReady || (tabsReady = tabs ? tabs.start() : Promise.resolve());
+
+// the timeline changed: save it (the tab flushes ~1 s later, or at once on Export / leaving)
+function persistTimeline() { tabs?.changed(); }
 
 const itLen = (it) => Math.max(MIN_LEN, (it.out ?? (it.dur || 3)) - it.in);
 const itEnd = (it) => it.at + itLen(it);
@@ -138,7 +152,7 @@ function mediaFor(it) {
 }
 
 function gotDuration(it, d) {
-  if (!isFinite(d) || !d || it.dur === d) return;
+  if (!isFinite(d) || !d || Math.abs(it.dur - d) < 0.01) return;
   it.dur = d;
   if (it.out == null || it.out > d) it.out = d;
   persistTimeline(); renderTimeline();
@@ -219,7 +233,7 @@ let drawQueued = false;
 function requestDraw() {
   if (drawQueued) return;
   drawQueued = true;
-  requestAnimationFrame(() => { drawQueued = false; drawFrame(); });
+  requestAnimationFrame(() => { drawQueued = false; drawFrame(); drawGizmo(); });
 }
 
 function drawFrame() {
@@ -246,13 +260,304 @@ function drawFrame() {
       const el = mediaFor(it);
       const nw = el.videoWidth || el.naturalWidth, nh = el.videoHeight || el.naturalHeight;
       if (!nw || (it.kind === 'video' && el.readyState < 2)) continue;
-      const s = (it.fit === 'fill' ? Math.max : Math.min)(W / nw, H / nh) * (it.scale || 1);
-      const dw = nw * s, dh = nh * s;
+      const g = geom(it, [W, H]);
       ctx.globalAlpha = (it.opacity ?? 1) * fadeGain(it, V.t, false);
-      ctx.drawImage(el, (W - dw) / 2 + (it.x || 0) * W, (H - dh) / 2 + (it.y || 0) * H, dw, dh);
+      // the anchor sits at the frame centre + (x, y); the clip turns and scales around it (videoedit._place does the same)
+      ctx.save(); ctx.translate(g.px, g.py); ctx.rotate(g.rot);
+      ctx.drawImage(el, -g.ax * g.dw, -g.ay * g.dh, g.dw, g.dh);
+      ctx.restore();
     }
   }
   ctx.globalAlpha = 1;
+}
+
+// ---- 2D gizmo: After Effects-style handles on the preview for the selected clip ----
+// A clip's anchor point lands at the frame centre + (x*W, y*H) and the clip turns and scales around
+// it, so rotating or scaling never moves the anchor. The same geometry is drawn by drawFrame and
+// rendered by videoedit._place. Handles are drawn in screen pixels so they keep their size at any zoom.
+// Tap: select / drag the body = move, corners = scale, round knob = rotate, crosshair = anchor
+// (dragging the anchor re-pins it without moving the picture). The pointer drives a weighted
+// spring (gizmo.js Weight), snaps first: grid / frame edges / rotate and scale steps.
+const G = { cv: null, hover: null, drag: null, settling: null, guides: [] };
+const COL = '#4da3ff', HOT = '#ffd24d';
+const KNOB = 34;   // rotate knob distance above the box, px
+
+// the clip's geometry in frame pixels: where its anchor lands (px, py), drawn size, turn in radians
+function geom(it, [W, H] = seqSize()) {
+  const el = V.els.get(it.id)?.el;
+  const nw = el && (el.videoWidth || el.naturalWidth), nh = el && (el.videoHeight || el.naturalHeight);
+  if (!nw) return null;
+  const base = (it.fit === 'fill' ? Math.max : Math.min)(W / nw, H / nh), s = base * (it.scale || 1);
+  return { W, H, nw, nh, base, dw: nw * s, dh: nh * s, ax: it.anchor?.x ?? 0.5, ay: it.anchor?.y ?? 0.5,
+    px: W / 2 + (it.x || 0) * W, py: H / 2 + (it.y || 0) * H, rot: ((it.rotation || 0) * Math.PI) / 180 };
+}
+// frame point at (u, v) pixels from the anchor in the clip's own axes
+const world = (g, u, v) => { const c = Math.cos(g.rot), s = Math.sin(g.rot); return [g.px + u * c - v * s, g.py + u * s + v * c]; };
+const cornerAt = (g, cx, cy) => world(g, (cx - g.ax) * g.dw, (cy - g.ay) * g.dh);
+const CORNERS = [[0, 0], [1, 0], [1, 1], [0, 1]];
+
+function gview() {
+  const r = G.cv.getBoundingClientRect(), [W, H] = seqSize(), k = Math.min(r.width / W, r.height / H) || 1;
+  return { r, W, H, k, ox: (r.width - W * k) / 2, oy: (r.height - H * k) / 2 };
+}
+const scr = (v, [x, y]) => [v.ox + x * v.k, v.oy + y * v.k];
+const unscr = (v, sx, sy) => [(sx - v.ox) / v.k, (sy - v.oy) / v.k];
+const inRange = (it) => V.t >= it.at && V.t < itEnd(it);
+const gizmoClip = () => { const it = selItem(); return it && isVisual(it) && !V.playing && inRange(it) ? it : null; };
+
+// the handle points in screen pixels
+function handlePts(g, v) {
+  const tc = scr(v, cornerAt(g, 0.5, 0)), up = [Math.sin(g.rot), -Math.cos(g.rot)];
+  return { anchor: scr(v, [g.px, g.py]), corners: CORNERS.map(([cx, cy]) => scr(v, cornerAt(g, cx, cy))), tc, rot: [tc[0] + up[0] * KNOB, tc[1] + up[1] * KNOB] };
+}
+function bodyHit(g, fx, fy) {   // is the frame point inside the clip's box?
+  const dx = fx - g.px, dy = fy - g.py, c = Math.cos(g.rot), s = Math.sin(g.rot);
+  const u = dx * c + dy * s + g.ax * g.dw, w = -dx * s + dy * c + g.ay * g.dh;
+  return u >= 0 && u <= g.dw && w >= 0 && w <= g.dh;
+}
+// what's under a screen point (sx, sy): 'anchor' | 'rotate' | 'c0'..'c3' | 'move' | null
+function gizmoHit(it, sx, sy, type) {
+  const g = geom(it), v = gview();
+  if (!g) return null;
+  const q = handlePts(g, v), r = type === 'touch' ? 26 : type === 'pen' ? 18 : 11;
+  const d = (p) => Math.hypot(p[0] - sx, p[1] - sy);
+  if (d(q.anchor) <= r * 0.8) return 'anchor';
+  if (d(q.rot) <= r) return 'rotate';
+  const ds = q.corners.map(d), best = ds.indexOf(Math.min(...ds));
+  if (ds[best] <= r) return `c${best}`;
+  return bodyHit(g, ...unscr(v, sx, sy)) ? 'move' : null;
+}
+function pickAt(sx, sy) {   // the topmost visible clip under a point
+  const v = gview(), [fx, fy] = unscr(v, sx, sy);
+  const live = V.items.filter((it) => isVisual(it) && inRange(it) && !trackOf(it)?.hidden).sort((a, b) => zOf(b) - zOf(a) || b.at - a.at);
+  return live.find((it) => { const g = geom(it); return g && bodyHit(g, fx, fy); }) || null;
+}
+
+function gizmoCursor(hit, g) {
+  if (!hit) return '';
+  if (hit === 'move') return 'move';
+  if (hit === 'anchor') return 'crosshair';
+  if (hit === 'rotate') return G.drag ? 'grabbing' : 'grab';
+  const [cx, cy] = CORNERS[+hit[1]], p = [(cx - g.ax) * g.dw, (cy - g.ay) * g.dh];   // which diagonal this corner is on, turned
+  const a = (Math.atan2(p[1], p[0]) + g.rot + Math.PI * 4) % Math.PI;
+  return a > Math.PI / 8 && a < (Math.PI * 3) / 8 ? 'nwse-resize' : a > (Math.PI * 5) / 8 && a < (Math.PI * 7) / 8 ? 'nesw-resize' : a < Math.PI / 8 || a > (Math.PI * 7) / 8 ? 'ew-resize' : 'ns-resize';
+}
+
+function drawGizmo() {
+  const cv = G.cv;
+  if (!cv) return;
+  const v = gview(), dpr = window.devicePixelRatio || 1, w = Math.round(v.r.width * dpr), hh = Math.round(v.r.height * dpr);
+  if (cv.width !== w || cv.height !== hh) { cv.width = w; cv.height = hh; }
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, v.r.width, v.r.height);
+  if (!V.items.length) return;
+  const line = (a, b, col, wd = 1, dash = null) => {
+    ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.setLineDash(dash || []); ctx.strokeStyle = col; ctx.lineWidth = wd; ctx.stroke();
+  };
+  if (snap.grid) {   // lines from the frame centre outwards, every grid step
+    const gp = (v.W * snap.gridPct) / 100;
+    for (let i = -Math.floor(v.W / 2 / gp); i <= Math.floor(v.W / 2 / gp); i++) {
+      const x = v.W / 2 + i * gp;
+      line(scr(v, [x, 0]), scr(v, [x, v.H]), i ? '#ffffff30' : '#ffffff70');
+    }
+    for (let i = -Math.floor(v.H / 2 / gp); i <= Math.floor(v.H / 2 / gp); i++) {
+      const y = v.H / 2 + i * gp;
+      line(scr(v, [0, y]), scr(v, [v.W, y]), i ? '#ffffff30' : '#ffffff70');
+    }
+  }
+  for (const gd of G.guides) line(...(gd.axis === 'x' ? [scr(v, [gd.v, 0]), scr(v, [gd.v, v.H])] : [scr(v, [0, gd.v]), scr(v, [v.W, gd.v])]), '#ff4dd2', 1.5);
+  const it = selItem();
+  if (!it || !isVisual(it) || V.playing) return;
+  if (!inRange(it)) {
+    ctx.fillStyle = '#000a'; ctx.fillRect(v.ox, v.oy + v.H * v.k - 26, 260, 22);
+    ctx.fillStyle = '#fff'; ctx.font = '12px sans-serif'; ctx.fillText('Move the playhead over the clip for handles', v.ox + 6, v.oy + v.H * v.k - 11);
+    return;
+  }
+  const g = geom(it);
+  if (!g) return;
+  const q = handlePts(g, v), act = G.drag?.hit || G.settling?.hit, on = (k) => (act || G.hover) === k;
+  const poly = () => { ctx.beginPath(); q.corners.forEach((p, i) => (i ? ctx.lineTo(...p) : ctx.moveTo(...p))); ctx.closePath(); };
+  poly(); ctx.setLineDash([]); ctx.strokeStyle = '#000a'; ctx.lineWidth = 4; ctx.stroke();
+  poly(); ctx.strokeStyle = on('move') ? HOT : COL; ctx.lineWidth = 2; ctx.stroke();
+  line(q.tc, q.rot, '#000a', 4); line(q.tc, q.rot, COL, 1.5);
+  const dot = (p, r, k, round) => {
+    ctx.beginPath();
+    if (round) ctx.arc(p[0], p[1], r, 0, Math.PI * 2); else ctx.rect(p[0] - r, p[1] - r, r * 2, r * 2);
+    ctx.fillStyle = on(k) ? HOT : '#fff'; ctx.fill(); ctx.strokeStyle = on(k) ? '#000' : COL; ctx.lineWidth = 2; ctx.stroke();
+  };
+  q.corners.forEach((p, i) => dot(p, on(`c${i}`) ? 8 : 6, `c${i}`, false));
+  dot(q.rot, on('rotate') ? 9 : 7, 'rotate', true);
+  const [ax, ay] = q.anchor, ar = on('anchor') ? 11 : 8;   // anchor: ring with a cross
+  ctx.setLineDash([]); ctx.lineWidth = 3; ctx.strokeStyle = '#000a';
+  ctx.beginPath(); ctx.arc(ax, ay, ar, 0, Math.PI * 2); ctx.moveTo(ax - ar - 5, ay); ctx.lineTo(ax + ar + 5, ay); ctx.moveTo(ax, ay - ar - 5); ctx.lineTo(ax, ay + ar + 5); ctx.stroke();
+  ctx.lineWidth = 1.5; ctx.strokeStyle = on('anchor') ? HOT : '#fff'; ctx.stroke();
+}
+
+// keep the inspector's numbers in step with the handles (only the transform group is rebuilt)
+function syncInspector() {
+  const box = $('#vidXform'), it = selItem();
+  if (box && it && isVisual(it)) box.replaceChildren(...xformFields(it));
+}
+
+// move the anchor to frame point `to` (or by sliders) without the picture moving: the anchor's spot
+// follows, so the clip stays where it was
+function pinAnchor(it, g, toX, toY) {
+  const c = Math.cos(g.rot), s = Math.sin(g.rot), dx = toX - g.px, dy = toY - g.py;
+  const ax = g.ax + (dx * c + dy * s) / g.dw, ay = g.ay + (-dx * s + dy * c) / g.dh;
+  if (Math.abs(ax - 0.5) < 1e-3 && Math.abs(ay - 0.5) < 1e-3) delete it.anchor; else it.anchor = { x: +ax.toFixed(4), y: +ay.toFixed(4) };
+  it.x = +((toX - g.W / 2) / g.W).toFixed(5); it.y = +((toY - g.H / 2) / g.H).toFixed(5);
+}
+function setAnchor(it, ax, ay) {   // from the inspector: where the anchor sits in the clip, the picture stays put
+  const g = geom(it);
+  if (!g) { it.anchor = { x: ax, y: ay }; return; }
+  const [x, y] = world(g, (ax - g.ax) * g.dw, (ay - g.ay) * g.dh);
+  pinAnchor(it, g, x, y);
+}
+
+// ---- snapping ----
+function snapMove(g, v, [x, y], ev) {
+  const gd = [], thr = 8 / v.k;
+  let lockX = false, lockY = false;
+  if (snapOn('edges', ev)) {
+    const cs = CORNERS.map(([cx, cy]) => world({ ...g, px: x, py: y }, (cx - g.ax) * g.dw, (cy - g.ay) * g.dh));
+    const near = (vals, targets) => {
+      let best = null;
+      for (const a of vals) for (const t of targets) if (Math.abs(t - a) < thr && (!best || Math.abs(t - a) < Math.abs(best.d))) best = { d: t - a, t };
+      return best;
+    };
+    const xs = cs.map((c) => c[0]), ys = cs.map((c) => c[1]);
+    const bx = near([Math.min(...xs), (Math.min(...xs) + Math.max(...xs)) / 2, Math.max(...xs), x], [0, g.W / 2, g.W]);
+    const by = near([Math.min(...ys), (Math.min(...ys) + Math.max(...ys)) / 2, Math.max(...ys), y], [0, g.H / 2, g.H]);
+    if (bx) { x += bx.d; lockX = true; gd.push({ axis: 'x', v: bx.t }); }
+    if (by) { y += by.d; lockY = true; gd.push({ axis: 'y', v: by.t }); }
+  }
+  if (snapOn('grid', ev)) {
+    const gp = (g.W * snap.gridPct) / 100;
+    if (!lockX) x = g.W / 2 + snapStep(x - g.W / 2, gp);
+    if (!lockY) y = g.H / 2 + snapStep(y - g.H / 2, gp);
+  }
+  G.guides = gd;
+  return [x, y];
+}
+function snapScale(g, s, ev) {
+  if (!snapOn('scale', ev)) return s;
+  const st = snap.scaleStep / 100;
+  s = Math.max(st, snapStep(s, st));
+  for (const m of [g.W / (g.nw * g.base), g.H / (g.nh * g.base)]) if (Math.abs(s - m) / m < 0.02) s = m;   // exactly spans the frame
+  return s;
+}
+
+// ---- pointer ----
+function gizmoDown(e) {
+  if (G.drag || (e.pointerType === 'mouse' && e.button > 0)) return;
+  G.settling?.w.finish();
+  const r = G.cv.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
+  let it = gizmoClip(), hit = it && gizmoHit(it, sx, sy, e.pointerType);
+  if (!hit) {
+    it = pickAt(sx, sy);
+    if (!it) return;
+    V.sel = it.id; hit = 'move';
+    renderTimeline(); renderVideoPanel();
+  }
+  e.preventDefault();
+  try { G.cv.setPointerCapture(e.pointerId); } catch { /* pointer gone */ }
+  gizmoStart(it, hit, e, sx, sy);
+}
+
+function gizmoStart(it, hit, e, sx, sy) {
+  const g = geom(it), v = gview();
+  if (!g) return;
+  const kind = hit === 'move' ? 'move' : hit === 'rotate' ? 'rotate' : hit === 'anchor' ? 'anchor' : 'scale';
+  const o = { scale: it.scale || 1, rot: it.rotation || 0 };
+  const P = scr(v, [g.px, g.py]), d = { id: e.pointerId, it, hit, kind, g, o, sx, sy, P, d0: Math.max(Math.hypot(sx - P[0], sy - P[1]), 14), acc: 0, last: Math.atan2(sy - P[1], sx - P[0]) };
+  const chans = {
+    move: { px: [g.px, WEIGHT.move], py: [g.py, WEIGHT.move] }, anchor: { px: [g.px, WEIGHT.anchor], py: [g.py, WEIGHT.anchor] },
+    scale: { r: [1, WEIGHT.scale] }, rotate: { a: [o.rot, WEIGHT.rotate] },
+  }[kind];
+  d.w = new Weight(chans, (val) => {   // each frame: the springs' values into the clip
+    if (kind === 'move') { it.x = +((val.px - g.W / 2) / g.W).toFixed(5); it.y = +((val.py - g.H / 2) / g.H).toFixed(5); }
+    else if (kind === 'anchor') pinAnchor(it, g, val.px, val.py);
+    else if (kind === 'scale') it.scale = +clamp(o.scale * val.r, 0.02, 20).toFixed(4);
+    else { const a = +normDeg(val.a).toFixed(2); if (a) it.rotation = a; else delete it.rotation; }
+    syncInspector(); requestDraw();
+  }, () => { G.guides = []; if (G.settling === d) G.settling = null; persistTimeline(); requestDraw(); });
+  G.drag = d;
+  persistTimeline();   // dirty from the first touch, so leaving mid-settle can't lose it
+  G.cv.style.cursor = gizmoCursor(hit, g);
+  requestDraw();
+}
+
+function gizmoMove(e) {
+  const d = G.drag;
+  if (!d) {   // hovering (a pen above the glass, or a mouse): light up the handle under it before it's touched
+    if (e.pointerType === 'touch') return;
+    const r = G.cv.getBoundingClientRect(), it = gizmoClip(), hit = it ? gizmoHit(it, e.clientX - r.left, e.clientY - r.top, e.pointerType) : null;
+    if (hit !== G.hover) {
+      G.hover = hit;
+      const g = it && geom(it);
+      G.cv.style.cursor = g ? gizmoCursor(hit, g) : '';
+      drawGizmo();
+    }
+    return;
+  }
+  if (e.pointerId !== d.id) return;
+  const v = gview(), r = v.r, sx = e.clientX - r.left, sy = e.clientY - r.top, { g, o } = d;
+  if (d.kind === 'move' || d.kind === 'anchor') {
+    const [dx, dy] = deadzone(sx - d.sx, sy - d.sy, DEAD_PX[d.kind]);
+    let t = [g.px + dx / v.k, g.py + dy / v.k];
+    if (d.kind === 'move') t = snapMove(g, v, t, e);
+    else t = snapAnchor(g, v, t, e);
+    d.w.aim('px', t[0]); d.w.aim('py', t[1]);
+  } else if (d.kind === 'scale') {
+    const dist = Math.hypot(sx - d.P[0], sy - d.P[1]), [dd] = deadzone(dist - d.d0, 0, DEAD_PX.scale);
+    const s = snapScale(g, Math.max(0.02, (o.scale * (d.d0 + dd)) / d.d0), e);
+    d.w.aim('r', s / o.scale);
+  } else {
+    const a = Math.atan2(sy - d.P[1], sx - d.P[0]);
+    let da = a - d.last;
+    if (da > Math.PI) da -= Math.PI * 2; else if (da < -Math.PI) da += Math.PI * 2;
+    d.acc += da; d.last = a;
+    let t = o.rot + (Math.hypot(sx - d.sx, sy - d.sy) <= DEAD_PX.rotate ? 0 : (d.acc * 180) / Math.PI);
+    if (snapOn('rot', e)) t = snapStep(t, snap.rotStep);
+    d.w.aim('a', t);
+  }
+}
+// the anchor sticks to the clip's own corners / edge middles / centre, and to the grid
+function snapAnchor(g, v, [x, y], ev) {
+  G.guides = [];
+  if (snapOn('edges', ev)) {
+    let best = null;
+    for (const cx of [0, 0.5, 1]) for (const cy of [0, 0.5, 1]) {
+      const p = cornerAt(g, cx, cy), dd = Math.hypot(p[0] - x, p[1] - y) * v.k;
+      if (dd < 12 && (!best || dd < best.dd)) best = { dd, p };
+    }
+    if (best) return best.p;
+  }
+  if (snapOn('grid', ev)) { const gp = (g.W * snap.gridPct) / 100; return [g.W / 2 + snapStep(x - g.W / 2, gp), g.H / 2 + snapStep(y - g.H / 2, gp)]; }
+  return [x, y];
+}
+
+function gizmoUp(e) {
+  const d = G.drag;
+  if (!d || e.pointerId !== d.id) return;
+  G.drag = null;
+  G.settling = d;   // the weight lets go: it settles into place, then saves
+  d.w.release();
+  G.cv.style.cursor = '';
+  G.hover = null;
+}
+
+function wireGizmo() {
+  const viewer = $('#vidCanvas').parentElement;
+  G.cv = h('canvas', { id: 'vidGizmo', class: 'gizmo' });
+  const bar = snapBar(['edges', 'grid', 'rot', 'scale'], () => requestDraw());
+  viewer.append(G.cv, bar);
+  G.cv.addEventListener('pointerdown', gizmoDown);
+  G.cv.addEventListener('pointermove', gizmoMove);
+  G.cv.addEventListener('pointerup', gizmoUp);
+  G.cv.addEventListener('pointercancel', gizmoUp);
+  G.cv.addEventListener('pointerleave', () => { if (!G.drag && G.hover) { G.hover = null; drawGizmo(); } });
+  new ResizeObserver(() => drawGizmo()).observe(viewer);
 }
 
 function vidPlay() {
@@ -260,6 +565,7 @@ function vidPlay() {
   if (V.t >= seqEnd() - 0.01) V.t = 0;
   unlockMedia();
   V.playing = true; V.clock = performance.now() - V.t * 1000;
+  drawGizmo();   // the handles step aside while it plays
   syncMedia();   // start what's under the playhead inside the tap, too
   showPlayState(); requestAnimationFrame(vidTick);
 }
@@ -423,7 +729,7 @@ function timelineChanged() {
   persistTimeline(); renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw();
 }
 
-export function renderVideo() { renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw(); }
+export function renderVideo() { renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw(); ensureTabs(); }
 
 // ---- timeline gestures: drag clips to move (also between tracks), drag their ends to trim ----
 const timeAt = (e) => (e.clientX - $('#timeline .tl-inner').getBoundingClientRect().left - HEAD_W) / V.pps;
@@ -515,7 +821,7 @@ function zoomTimeline(pps, aroundT = V.t, clientX = null) {
   const tl = $('#timeline');
   const screenX = clientX != null ? clientX - tl.getBoundingClientRect().left : HEAD_W + V.t * V.pps - tl.scrollLeft;
   V.pps = Math.max(4, Math.min(400, pps));
-  persistTimeline(); renderTimeline();
+  store.set('deck.video.pps', V.pps); renderTimeline();
   tl.scrollLeft = HEAD_W + aroundT * V.pps - screenX;
 }
 
@@ -543,11 +849,14 @@ function splitAtPlayhead() {
 function deleteSelected() {
   const it = selItem();
   if (!it) return;
-  const before = V.items;
+  const before = V.items, tab = tabs?.active?.id;
   V.items = V.items.filter((i) => i !== it);
   V.sel = null;
   timelineChanged();
-  undoToast('Clip deleted', () => { V.items = before; V.sel = it.id; timelineChanged(); });
+  undoToast('Clip deleted', () => {
+    if (tabs?.active?.id !== tab) return toast('Switch back to that tab to undo', true);   // the clips on screen are another edit's
+    V.items = before; V.sel = it.id; timelineChanged();
+  });
 }
 
 // Overlap this clip with the one before it on its track (moving it and everything after it on
@@ -580,6 +889,7 @@ function probeDuration(url, tag) {
 
 // New clips go after the last clip on the selected clip's track (or V1 / A1)
 export async function addToTimeline(media) {
+  await ensureTabs();   // the tab must be open, or its clips would replace this one
   if (media.kind !== 'image' && !media.dur) media.dur = await probeDuration(media.url, media.kind === 'audio' ? 'audio' : 'video');
   const it = newItem(media, targetTrack(media.kind));
   it.at = V.items.filter((i) => i.track === it.track).reduce((m, i) => Math.max(m, itEnd(i)), 0);
@@ -642,6 +952,22 @@ const clipRange = (label, get, set, opts) => rangeField(label, get, set,
 const SIZES = [['Match first clip', null], ['1280×720', [1280, 720]], ['1920×1080', [1920, 1080]], ['720×1280', [720, 1280]],
   ['1080×1920', [1080, 1920]], ['1024×1024', [1024, 1024]], ['832×480', [832, 480]], ['480×832', [480, 832]]];
 
+// framing: the same numbers the handles on the preview change (and that follow them while dragging)
+function xformFields(it) {
+  const pct = (v) => `${Math.round(v * 100)}%`, g = geom(it);
+  const anchorEnd = () => { syncInspector(); persistTimeline(); };   // moving the anchor re-pins position, so show that too
+  return [
+    field('Framing', seg([['fit', 'Fit'], ['fill', 'Fill']], it.fit || 'fit', (k) => { it.fit = k; timelineChanged(); })),
+    clipRange('Scale', () => it.scale ?? 1, (v) => { it.scale = v; }, { min: 0.1, max: 3, step: 0.01, fmt: pct }),
+    clipRange('Rotation', () => it.rotation || 0, (v) => { if (v) it.rotation = v; else delete it.rotation; }, { min: -180, max: 180, step: 1, fmt: (v) => `${Math.round(v)}°` }),
+    clipRange('Position X', () => it.x || 0, (v) => { it.x = v; }, { min: -1, max: 1, step: 0.005, fmt: pct }),
+    clipRange('Position Y', () => it.y || 0, (v) => { it.y = v; }, { min: -1, max: 1, step: 0.005, fmt: pct }),
+    clipRange('Anchor X', () => it.anchor?.x ?? 0.5, (v) => setAnchor(it, v, it.anchor?.y ?? 0.5), { min: -0.5, max: 1.5, step: 0.01, fmt: pct, onChange: anchorEnd }),
+    clipRange('Anchor Y', () => it.anchor?.y ?? 0.5, (v) => setAnchor(it, it.anchor?.x ?? 0.5, v), { min: -0.5, max: 1.5, step: 0.01, fmt: pct, onChange: anchorEnd }),
+    g ? null : hint('Handles appear once the clip has loaded.'),
+  ];
+}
+
 function renderVideoPanel() {
   const it = selItem();
   const pct = (v) => `${Math.round(v * 100)}%`;
@@ -658,19 +984,14 @@ function renderVideoPanel() {
     return section(it.label, null,
       hint(`${it.kind} on ${tr ? trackName(tr) : '?'} · ${fmtT(len)}${it.dur ? ` of ${fmtT(it.dur)}` : ''}`, 'section-sub'),
       h('div', { class: 'grid-2' }, fields),
-      isVisual(it) ? [
-        field('Framing', seg([['fit', 'Fit'], ['fill', 'Fill']], it.fit || 'fit', (k) => { it.fit = k; timelineChanged(); })),
-        clipRange('Scale', () => it.scale ?? 1, (v) => { it.scale = v; }, { min: 0.1, max: 3, step: 0.01, fmt: pct }),
-        clipRange('Position X', () => it.x || 0, (v) => { it.x = v; }, { min: -1, max: 1, step: 0.005, fmt: pct }),
-        clipRange('Position Y', () => it.y || 0, (v) => { it.y = v; }, { min: -1, max: 1, step: 0.005, fmt: pct }),
-        clipRange('Opacity', () => it.opacity ?? 1, (v) => { it.opacity = v; }, { min: 0, max: 1, step: 0.01, fmt: pct }),
-      ] : null,
+      isVisual(it) ? [h('div', { id: 'vidXform' }, xformFields(it)),
+        clipRange('Opacity', () => it.opacity ?? 1, (v) => { it.opacity = v; }, { min: 0, max: 1, step: 0.01, fmt: pct })] : null,
       it.kind !== 'image' ? clipRange('Volume', () => it.volume ?? 1, (v) => { it.volume = v; }, { min: 0, max: 2, step: 0.01,
         fmt: (v) => pct(v) + (v > 1 ? ' (preview plays at 100%)' : '') }) : null,
       h('div', { class: 'row wrap' },
         button('✂ Split at playhead', splitAtPlayhead, { title: 'S' }),
         button('⤫ Cross-fade with previous', () => crossfadePrev(it)),
-        isVisual(it) ? button('Reset framing', () => { Object.assign(it, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); timelineChanged(); }) : null,
+        isVisual(it) ? button('Reset framing', () => { Object.assign(it, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); delete it.rotation; delete it.anchor; timelineChanged(); }) : null,
         button('Delete clip', deleteSelected, { cls: 'small danger', title: 'Delete' })));
   })() : null;
 
@@ -682,7 +1003,7 @@ function renderVideoPanel() {
   fpsSel.addEventListener('change', () => { V.fps = Number(fpsSel.value); timelineChanged(); });
   const exportBtn = button('Export video', () => exportVideo(exportBtn), { cls: 'primary' });
 
-  $('#videoPanel').replaceChildren(h('div', { class: 'panel-body' },
+  $('#vidBody').replaceChildren(h('div', { class: 'panel-body' },
     h('div', { class: 'row wrap' },
       button('+ Clips', addFromHistory, { cls: 'small primary' }),
       button('+ Images', addImages),
@@ -704,11 +1025,14 @@ async function exportVideo(btn) {
   vidPause();
   btn.disabled = true; btn.textContent = 'Rendering…';
   try {
+    G.settling?.w.finish();
+    await tabs?.flush();   // the saved edit is what this render came from
     const g = await api('/api/video/render', { method: 'POST', body: {
-      project_id: S.project, width: V.size && V.size[0], height: V.size && V.size[1], fps: V.fps || null,
+      project_id: S.project, tab: tabs?.active && { id: tabs.active.id, name: tabs.active.name }, width: V.size && V.size[0], height: V.size && V.size[1], fps: V.fps || null,
       tracks: V.tracks.map(({ id, kind, hidden, muted }) => ({ id, kind, hidden, muted })),
       items: V.items.map((it) => ({ track: it.track, src: it.src, at: it.at, in: it.in, out: it.out ?? it.dur,
-        x: it.x, y: it.y, scale: it.scale, fit: it.fit, opacity: it.opacity, volume: it.volume,
+        x: it.x, y: it.y, scale: it.scale, fit: it.fit, rotation: it.rotation || 0, anchor_x: it.anchor?.x, anchor_y: it.anchor?.y,
+        opacity: it.opacity, volume: it.volume,
         fade_in: it.fadeIn, fade_out: it.fadeOut })) } });
     S.history.set(g.id, g);
     openGeneration(g.id);
@@ -770,7 +1094,24 @@ async function snapshotFrame() {
       button('Close', closeSheet, { cls: 'small ghost' })));
 }
 
+// What a tab holds: the edit itself. (Zoom and Loop are this device's, not the edit's.)
+const editAdapter = {
+  empty: () => ({ tracks: defaultTracks(), items: [], size: null, fps: 0 }),
+  migrate: migrateEdit,
+  dump: () => ({ tracks: V.tracks, items: V.items, size: V.size, fps: V.fps }),
+  load(p) {
+    vidPause();
+    Object.assign(V, { tracks: p.tracks, items: p.items, size: p.size, fps: p.fps, sel: null, t: 0, master: null, holdSince: 0 });
+    renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw();
+  },
+};
+
 export function wireVideoTransport() {
+  const mount = h('div', { class: 'vid-tabs' });
+  $('#videoPanel').replaceChildren(mount, h('div', { id: 'vidBody' }));
+  tabs = new TabSet({ kind: 'video-tabs', mount, scope: 'project', newName: (n) => `Edit ${n}`, adapter: editAdapter, seed: legacyTimeline,
+    onSwitch: () => store.set('deck.video.seeded', true) });
+  wireGizmo();
   const step = (d) => { vidPause(); vidSeek(V.t + d); };
   $('#vidStart').addEventListener('click', () => { vidPause(); vidSeek(0); });
   $('#vidPrev').addEventListener('click', () => step(-1 / fpsNow()));
@@ -811,3 +1152,6 @@ export function wireVideoTransport() {
     if (fn) { e.preventDefault(); fn(); }
   });
 }
+
+// for the headless UI checks (dev/): the live state
+export const videoDebug = () => ({ V, G, tabs, geom, gview, gizmoClip, snap, drawFrame, selItem });
