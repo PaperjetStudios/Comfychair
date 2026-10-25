@@ -538,7 +538,7 @@ export function openGeneration(id) {
   const btns = isPhoto ? [
     button('Add to 3D', async () => { closeSheet(); switchTab('scene'); (await sceneModule()).addPhoto(g); }, primary),
   ] : isScene ? [
-    button('Open in 3D', async () => { closeSheet(); switchTab('scene'); (await sceneModule()).open(g.params.scene); }, primary),
+    button('Open in 3D', async () => { closeSheet(); switchTab('scene'); (await sceneModule()).open(g.params.scene, g.id); }, primary),
     button('Use in H3 control', () => { closeSheet(); useControlVideo(g, g.params.scene || {}); }),
   ] : isEdit ? [] : [
     button('Replay & edit', () => { reuse(g); closeSheet(); }, primary),
@@ -569,12 +569,16 @@ export function openGeneration(id) {
 
 // The 3D tab (web/scene.js, with three.js) loads the first time it's needed.
 export let sceneMod = null;
+let sceneLoad = null;   // (two callers at once must share one init: it builds the tabs)
 export async function sceneModule() {
-  if (!sceneMod) {
-    sceneMod = await import('./scene.js');
-    sceneMod.init({ S, uploadImage, useControlVideo, openImagePicker, addToPrompt });
+  if (!sceneLoad) {
+    sceneLoad = import('./scene.js').then((m) => {
+      m.init({ S, uploadImage, useControlVideo, openImagePicker, addToPrompt });
+      return (sceneMod = m);
+    });
+    sceneLoad.catch(() => { sceneLoad = null; });
   }
-  return sceneMod;
+  return sceneLoad;
 }
 
 // A depth video from the 3D tab into deck-h3-ctrl2v: its control video, size and length.
