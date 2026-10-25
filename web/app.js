@@ -1803,7 +1803,7 @@ let sceneMod = null;
 async function sceneModule() {
   if (!sceneMod) {
     sceneMod = await import('./scene.js');
-    sceneMod.init({ S, uploadImage, useControlVideo, openImagePicker });
+    sceneMod.init({ S, uploadImage, useControlVideo, openImagePicker, addToPrompt });
   }
   return sceneMod;
 }

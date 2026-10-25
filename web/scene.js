@@ -48,7 +48,7 @@ const pivotOf = (o) => (pivotsFor(o).some(([k]) => k === o.pivot) || (o.type ===
 
 // ---- scene data ------------------------------------------------------------
 let SC;   // the scene (persisted per project)
-const R = { f: 0, sel: null, joint: null, figTab: 'pose', poseCat: 'stand', mask: 'all', sym: false, speed: 1, inPlace: false, mode: 'translate', playing: false, depth: false, autoKey: true, meshes: new Map(), room: [], applying: false, lastRender: null };
+const R = { f: 0, sel: null, joint: null, figTab: 'pose', poseCat: 'stand', mask: 'all', sym: false, speed: 1, inPlace: false, renders: {}, promptOff: new Set(), promptNames: false, mode: 'translate', playing: false, depth: false, autoKey: true, meshes: new Map(), room: [], applying: false, lastRender: null };
 
 const newRoom = () => ({ w: 8, d: 8, h: 2.8, walls: true, ceiling: true, hidden: false });
 function defaultScene() {
@@ -784,6 +784,7 @@ async function sendVideo(form, kind, blur) {
   if (C.S.project != null) form.append('project_id', C.S.project);
   setStatus('Encoding…');
   R.lastRender = await api('/api/scene/render', { method: 'POST', form });
+  R.renders[kind] = R.lastRender;
   const what = kind === 'pose' ? 'Pose video' : 'Depth video';
   setStatus(`${what} #${R.lastRender.id} is in History`);
   toast(`${what} saved`, false, { label: 'Use in H3 control', fn: () => C.useControlVideo(R.lastRender, SC) });
@@ -1058,11 +1059,11 @@ function takePair(o, key) {
   const dist = (x) => { const w = current(x, OBJ); return Math.hypot(w.x - v.x, w.z - v.z); };
   let b = others.sort((x, y) => dist(x) - dist(y))[0];
   if (!b) { b = newObject('figure'); SC.objects.push(b); }
-  write(o, FIG, { j: p.a, m: {}, pn: `pair:${key}`, ...liftTo(o, v, p.a, {}) });
+  write(o, FIG, { j: p.a, m: {}, pn: `pair:${key}:${b.id}`, ...liftTo(o, v, p.a, {}) });
   const floor = o.ground ? current(o, FIG).y : current(o, FIG).y - FIGURE.liftFor(p.a) * s;  // where a's floor is
   const bs = current(b, FIG).sy;
   const dx = p.at.x * s, dz = p.at.z * s;
-  write(b, FIG, { j: p.b, m: {}, pn: `pair:${key}:b`, rx: 0, rz: 0, ry: v.ry + p.at.ry,
+  write(b, FIG, { j: p.b, m: {}, pn: `partner:${key}`, rx: 0, rz: 0, ry: v.ry + p.at.ry,
     x: v.x + dx * Math.cos(r) + dz * Math.sin(r), z: v.z - dx * Math.sin(r) + dz * Math.cos(r),
     y: floor + p.at.y * s + (b.ground ? 0 : FIGURE.liftFor(p.b) * bs) });
   changed();
@@ -1275,16 +1276,80 @@ function cameraProps() {
 }
 
 function renderProps() {
+  const figs = SC.objects.some((o) => o.type === 'figure' && !o.hidden);
+  const use = (g, what) => button(`Use ${what} #${g.id} in H3 control`, () => C.useControlVideo(g, SC));
   return section('Render', null,
     slider('Soften edges', () => SC.blur, (v) => { SC.blur = v; }, { min: 0, max: 12, step: 0.5, fmt: (v) => (v ? `${v} px` : 'off') }),
     hint('Blurs the depth so H3 copies the shapes less literally. Use with deck-h3-ctrl2v (strength 1, end 0.4).'),
     h('div', { class: 'row wrap' },
       button('Render depth video', renderDepthVideo, { cls: 'small primary', disabled: busy }),
-      SC.objects.some((o) => o.type === 'figure' && !o.hidden)
-        ? button('Render pose video', renderPoseVideo, { disabled: busy, title: 'The posable people as OpenPose stick figures' }) : null,
+      figs ? button('Render pose video', renderPoseVideo, { disabled: busy, title: 'The posable people as OpenPose stick figures' }) : null,
+      figs ? button('Render both', async () => { await renderDepthVideo(); await renderPoseVideo(); }, { disabled: busy, title: 'A depth video and a pose video of the same shot' }) : null,
       button('📷 Save frame', saveFrame)),
-    R.lastRender ? button(`Use #${R.lastRender.id} in H3 control`, () => C.useControlVideo(R.lastRender, SC)) : null,
+    R.renders.depth || R.renders.pose ? h('div', { class: 'row wrap' },
+      R.renders.depth ? use(R.renders.depth, 'depth') : null, R.renders.pose ? use(R.renders.pose, 'pose') : null) : null,
     h('p', { id: 'sceneStatus', class: 'hint' }, statusText));
+}
+
+// ---- a prompt from the poses: who does what, in order, as H3's <Subject N> (or the figures' names)
+function promptItems() {
+  const figs = SC.objects.filter((o) => o.type === 'figure' && !o.hidden);
+  const tag = (o) => (R.promptNames ? o.name : `<Subject ${figs.indexOf(o) + 1}>`);
+  const items = [];
+  for (const o of figs) {
+    const states = o.keys.length ? o.keys : [o.base];
+    let last = null, said = new Set();  // params already said for this figure: only changes are worth a word
+    for (const k of states) {
+      const words = [];
+      const pn = k.pn || '';
+      let text;
+      if (pn.startsWith('partner:')) continue;  // said with the one it's paired with
+      if (pn.startsWith('pair:')) {
+        const [, key, bid] = pn.split(':'), b = figs.find((x) => x.id === bid);
+        text = b ? FIGURE.pairSay(key, tag(o), tag(b)) : '';
+      } else {
+        words.push(pn.startsWith('mine:') ? `in the pose "${pn.slice(5)}"` : FIGURE.say(pn));
+        const ps = FIGURE.sayParams(k.m);
+        words.push(...ps.filter((w) => !said.has(w)));
+        said = new Set(ps);
+        text = [...new Set(words.filter(Boolean))].join(', ');
+      }
+      if (!text || text === last) continue;
+      last = text;
+      items.push({ id: `${o.id}:${text}`, o, pair: pn.startsWith('pair:'), text, tag: tag(o) });
+    }
+  }
+  return items;
+}
+function promptText(items) {
+  const out = [];
+  let cur = null;
+  for (const it of items.filter((x) => !R.promptOff.has(x.id))) {
+    if (it.pair) { cur = null; out.push(`${it.text[0].toUpperCase()}${it.text.slice(1)}.`); continue; }
+    if (cur && cur.o === it.o) cur.parts.push(it.text);
+    else { cur = { o: it.o, tag: it.tag, parts: [it.text] }; out.push(cur); }
+  }
+  return out.map((c) => (typeof c === 'string' ? c : `${c.tag} is ${c.parts.join(', then ')}.`)).join(' ');
+}
+function promptProps() {
+  const items = promptItems();
+  if (!items.length) return null;
+  const text = promptText(items);
+  return section('Prompt from the poses', null,
+    h('div', { class: 'chips' }, items.map((it) => {
+      const off = R.promptOff.has(it.id);
+      return h('button', { type: 'button', class: 'chip prompt-chip' + (off ? ' off' : ''), title: off ? 'Put it back' : 'Leave it out',
+        onclick: () => { if (off) R.promptOff.delete(it.id); else R.promptOff.add(it.id); renderPanel(); } },
+      `${it.pair ? '' : `${it.tag}: `}${it.text}`, h('span', { class: 'x' }, off ? '＋' : '✕'));
+    })),
+    h('p', { class: 'prompt-out' }, text || '—'),
+    field('Call them', seg([[false, '<Subject 1>, <Subject 2>'], [true, 'Their names']], R.promptNames, (v) => { R.promptNames = v; renderPanel(); })),
+    h('div', { class: 'row wrap' },
+      button('Copy', async () => {
+        try { await navigator.clipboard.writeText(text); toast('Prompt copied'); } catch { toast('Copying isn\'t allowed here: select the text instead', true); }
+      }, { disabled: !text }),
+      C.addToPrompt ? button('Add to Generate prompt', () => C.addToPrompt(text), { disabled: !text }) : null),
+    hint('Tap a pose to leave it out. Keys remember the pose picked from the library or a move, so the order follows the clip.'));
 }
 
 function openAdd() {
@@ -1308,7 +1373,7 @@ function renderPanel() {
     } : null),
     layerList(),
     selItem() ? objectProps(selItem()) : R.sel === ROOM && SC.room ? roomProps() : cameraProps(),
-    renderProps()));
+    renderProps(), promptProps()));
 }
 
 // ---- entry points (called from app.js) ------------------------------------------------
@@ -1330,7 +1395,7 @@ export function hide() { if (ready) stopPlay(); }
 // a new project has its own scene
 export function projectChanged() {
   if (!ready) return;
-  stopPlay(); load(); R.lastRender = null; showAll();
+  stopPlay(); load(); R.lastRender = null; R.renders = {}; showAll();
 }
 
 // open the scene saved with a "3d scene" generation

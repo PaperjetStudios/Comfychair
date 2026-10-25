@@ -132,9 +132,17 @@ a frame, Shift+←/→ jump between keys). With **Auto key** off (K), a change t
 held until ◆ Key or the playhead moves, so you can look around without touching the keys. ↶ / ↷ (Ctrl+Z,
 Ctrl+Shift+Z) undo and redo.
 **Posable person**: a low-poly figure with joints. Tap it to show its joint dots, tap a dot to pose that
-joint (Rotate), or drag a hand or foot (Move) and the arm or leg follows (IK). Pose presets (stand, walk,
-run, sit, point, wave…) and Mirror are in its settings, and a pose is keyed like anything else.
-**Render pose video** draws the posable people as OpenPose stick figures for a pose control video.
+joint (Rotate), or drag a hand or foot (Move) and the arm or leg follows (IK). Its settings are in tabs:
+**Poses** (about 60 with pictures: standing, bending, moving, sitting and kneeling, on the floor, fitness;
+**Pairs** pose it with the nearest other figure: hug, kiss, holding hands, carry, lying together…;
+**Mine** keeps your own, per project or for all; apply to the whole, upper or lower body), **Adjust**
+(parameters on top of the pose, on/off: lean, head turn, legs apart, bend knees…; walk and run cycles
+whose steps follow how far the figure moves; squat/sit/kneel as 0–100%), **Moves** (one tap keys a walk,
+jump, sit down, push-ups, wave… from the playhead), **Joints** (a body map and sliders) and **Place**
+(planted on the floor, the pivot the gizmo turns it around). A pose is keyed like anything else.
+**Render pose video** draws the posable people as OpenPose stick figures for a pose control video
+(**Render both** makes the depth and pose videos of the same shot). **Prompt from the poses** writes
+what each `<Subject N>` does, in order, to copy or add to the Generate prompt.
 **🖼 Photo in 3D…** (in + Add) turns a picture into a mesh with MoGe in ComfyUI (a model from
 `Comfy-Org/MoGe` in `ComfyUI/models/geometry_estimation`) and puts it where the shot camera is, seen
 through the photo's lens; key a small camera move and render the depth video. The mesh is also in

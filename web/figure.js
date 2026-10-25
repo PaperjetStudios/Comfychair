@@ -524,12 +524,15 @@ const SAY = {
   squat: 'squatting', crouch: 'crouching', allFours: 'on all fours', plank: 'holding a plank', forearm: 'in a forearm plank', pushDown: 'doing a push-up',
   lieBack: 'lying on the back', lieFront: 'lying face down', lieSide: 'lying on the side',
   lunge: 'in a lunge', star: 'in a star jump', stretch: 'stretching to the side', tree: 'in tree pose', warrior: 'in warrior pose', downDog: 'in downward dog',
-  hug: 'two people hugging', kiss: 'two people kissing', hands: 'two people holding hands', shake: 'two people shaking hands',
-  dance: 'two people slow dancing', carryPair: 'one person carrying another in their arms', piggy: 'one person giving another a piggyback ride',
-  lap: 'one person sitting on another\'s lap', straddle: 'one person straddling another who sits on a chair', kneelFacing: 'two people kneeling face to face',
-  lieBacks: 'two people lying side by side on their backs', lieFronts: 'two people lying side by side on their stomachs',
-  spoon: 'two people lying on their sides, one behind the other', onTop: 'one person lying on top of another',
-  grapple: 'two people grappling', fight: 'one person punching, the other guarding', helpUp: 'one person helping another up from the floor',
+};
+// two people: {a} is the figure posed, {b} its partner
+const SAY_PAIR = {
+  hug: '{a} and {b} are hugging', kiss: '{a} and {b} are kissing', hands: '{a} and {b} are holding hands', shake: '{a} and {b} are shaking hands',
+  dance: '{a} and {b} are slow dancing', carry: '{a} is carrying {b} in their arms', piggy: '{a} is giving {b} a piggyback ride',
+  lap: '{b} is sitting on {a}\'s lap', straddle: '{b} is straddling {a}, who sits on a chair', kneelFacing: '{a} and {b} are kneeling face to face',
+  lieBacks: '{a} and {b} are lying side by side on their backs', lieFronts: '{a} and {b} are lying side by side on their stomachs',
+  spoon: '{a} and {b} are lying on their sides, {b} behind {a}', onTop: '{b} is lying on top of {a}', grapple: '{a} and {b} are grappling',
+  fight: '{a} throws a punch and {b} guards', helpUp: '{a} is helping {b} up from the floor',
 };
 const SAY_PARAM = { lean: ['leaning forward', 'leaning back'], side: ['leaning to the left', 'leaning to the right'], twist: ['twisting', 'twisting'],
   fold: ['bent at the hips', 'arching back'], sway: ['hips swayed', 'hips swayed'], turn: ['head turned left', 'head turned right'],
@@ -538,7 +541,7 @@ const SAY_PARAM = { lean: ['leaning forward', 'leaning back'], side: ['leaning t
   tiptoe: ['on tiptoe', ''], walk: ['walking', ''], run: ['running', ''], squatB: ['squatting', ''], sitB: ['sitting down', ''],
   kneelB: ['kneeling down', ''], crouchB: ['crouching', ''], bowB: ['bowing', ''] };
 export const say = (key) => SAY[key] || '';
-export const pairSay = (key) => SAY[key === 'carry' ? 'carryPair' : key] || '';
+export const pairSay = (key, a, b) => (SAY_PAIR[key] || '').replaceAll('{a}', a).replaceAll('{b}', b);
 // the parameters worth a word: big enough to see
 export const sayParams = (m = {}) => Object.entries(m).filter(([k, v]) => SAY_PARAM[k] && Math.abs(v) >= 10)
   .map(([k, v]) => SAY_PARAM[k][v > 0 ? 0 : 1]).filter(Boolean);
