@@ -3,10 +3,10 @@
 // A selection is a Set of key objects. Nothing here saves: the caller does, once per gesture.
 
 // Between two keys the blend runs through one of these (the key's own `ease`, else its layer's):
-// smooth is the old smoothstep, linear the old Linear; the others are new (const holds until the next key).
+// smooth is the old smoothstep, linear the old Linear; in / out are cubic (the camera moves' slow start and stop); the others are new (const holds until the next key).
 export const EASES = [['', 'Layer default'], ['smooth', 'Smooth'], ['linear', 'Linear'], ['in', 'Ease in'], ['out', 'Ease out'], ['const', 'Constant']];
 export const easeFn = {
-  smooth: (t) => t * t * (3 - 2 * t), linear: (t) => t, in: (t) => t * t, out: (t) => 1 - (1 - t) * (1 - t), const: () => 0,
+  smooth: (t) => t * t * (3 - 2 * t), linear: (t) => t, in: (t) => t * t * t, out: (t) => 1 - (1 - t) ** 3, const: () => 0,
 };
 export const easeAt = (name, t) => (easeFn[name] || easeFn.smooth)(t);  // an unknown name (a newer file) reads as smooth
 
