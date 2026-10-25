@@ -6,7 +6,7 @@
 import {
   $, h, store, api, toast, overlayOpened, overlayClosed, openSheet, closeSheet, button, hint,
 } from './ui.js';
-import { S, loadProjects, setSwitchTab } from './core.js';
+import { S, loadProjects, setSwitchTab, emitProject } from './core.js';
 import { generate, loadTemplates, renderFields, selectTemplate, stateKey, stop, wireZoom } from './generate.js';
 import { RUN, checkUiVersion, connectWS, loadHistory, onResume, openJobs, runChip, sceneMod, sceneModule, setConn } from './run.js';
 import { renderEditor } from './editor.js';
@@ -40,6 +40,7 @@ $('#projectSel').addEventListener('change', async (e) => {
     await loadProjects();
   } else S.project = Number(e.target.value);
   store.set('deck.project', S.project);
+  emitProject();
   S.historyDone = false; loadHistory();
   B.sel.clear();
   if ($('#tab-board').classList.contains('active')) renderBoard();

@@ -715,3 +715,23 @@ details.desc[open] summary { margin-bottom: 6px; }
   .busy.indet .busy-fill { animation: none; width: 100%; opacity: .5; }
   .working::after, .tab-chip.spin, .toast { animation: none; }
 }
+
+/* ---- saved tabs (tabs.js): a scrolling row of chips, a ＋, and a quiet note when not saved ---- */
+.tabstrip { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.tabrow { display: flex; gap: 6px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; padding: 2px 0; position: relative; }
+.tabrow::-webkit-scrollbar { display: none; }
+.tabchip { display: inline-flex; align-items: center; gap: 6px; flex: none; max-width: 220px; min-height: 40px; padding: 0 14px; border: 1px solid var(--line);
+  background: var(--surface-2); border-radius: 999px; cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: pan-x; white-space: nowrap;
+  transition: background .15s, border-color .15s; }
+.tabchip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; padding-right: 4px; }
+.tabchip.shifting { transition: transform .15s; }
+.tabchip.lift { transition: none; z-index: 2; box-shadow: var(--shadow-sm); opacity: .92; }
+.tab-name { overflow: hidden; text-overflow: ellipsis; }
+.tab-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-ink); flex: none; display: none; }
+.tab-dot.on { display: block; }
+.tab-more { min-width: 34px; min-height: 34px; border: 0; border-radius: 50%; background: transparent; color: inherit; font-size: 18px; cursor: pointer; }
+.tab-plus { border-radius: 999px; }
+.tabs-state { flex: none; border: 0; background: transparent; color: var(--warn-text); font-size: var(--fs-xs); padding: 4px 6px; }
+.tabs-state.conflict { background: var(--warn-bg); border-radius: var(--r-sm); cursor: pointer; }
+.tab-menu { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+@media (hover: hover) { .tabchip:hover:not(.on) { border-color: var(--line-2); background: var(--surface-3); } }

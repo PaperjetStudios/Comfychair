@@ -76,3 +76,11 @@ export async function loadProjects() {
 // The tab switcher lives in app.js (it knows every panel); panels call it through here.
 export let switchTab = () => {};
 export function setSwitchTab(f) { switchTab = f; }
+
+// Tiny pub/sub so modules needn't import each other: run.js owns the websocket and forwards
+// messages (plus {type:'ws_open'} on every (re)connect); app.js announces a project switch.
+const SERVER = new Map(), PROJECT = new Set();
+export function onServer(type, fn) { if (!SERVER.has(type)) SERVER.set(type, new Set()); SERVER.get(type).add(fn); return () => SERVER.get(type).delete(fn); }
+export function emitServer(m) { for (const fn of [...(SERVER.get(m.type) || [])]) { try { fn(m); } catch (e) { console.error(e); } } }
+export function onProject(fn) { PROJECT.add(fn); return () => PROJECT.delete(fn); }
+export function emitProject() { for (const fn of [...PROJECT]) { try { fn(S.project); } catch (e) { console.error(e); } } }

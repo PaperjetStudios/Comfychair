@@ -2,7 +2,7 @@ import {
   $, h, store, api, toast, SHEET, sheetOpen, openSheet, closeSheet, button, linkBtn, actions, hint, placeholder, note,
   mediaCard,
 } from './ui.js';
-import { S, fmtT, isMine, loadProjects, switchTab } from './core.js';
+import { S, fmtT, isMine, loadProjects, switchTab, emitServer } from './core.js';
 import { genLabel, mediaEl, openImagePicker, uploadImage } from './media.js';
 import { addToPrompt, adoptGenerations, builderState, keepAwake, loadTemplates, persist, renderFields, saveBuilder, selectTemplate, setVal, stop } from './generate.js';
 import { B, GAL, boardChanged, galleryRefresh } from './board.js';
@@ -264,12 +264,14 @@ export function connectWS() {
   ws.onopen = () => {
     WS.retry = 0; WS.everOpen = true;
     setServer(true);
+    emitServer({ type: 'ws_open' });
     syncWithServer();
   };
   ws.onmessage = (e) => {
     if (typeof e.data !== 'string') { onBinary(e.data); return; }
     let m; try { m = JSON.parse(e.data); } catch { return; }
     onMessage(m);
+    if (m.type === 'store') emitServer(m);
   };
   ws.onclose = () => {
     if (WS.sock !== ws) return;
