@@ -31,11 +31,20 @@ const TYPES = {
   photo: { label: 'Photo', icon: '🖼', size: [1, 1, 1] },
 };
 const EVEN = new Set(['figure', 'photo']);
-// what's keyed: a figure's keys also hold its pose (j: joint rotations)
-const FIG = [...OBJ, 'j'];
+// what's keyed: a figure's keys also hold its pose (j: joint rotations, m: parameters on top)
+const FIG = [...OBJ, 'j', 'm'];
 const namesFor = (o) => (o.type === 'figure' ? FIG : OBJ);
 const MODES = [['translate', '✥ Move', 'w'], ['rotate', '⟳ Rotate', 'e'], ['scale', '⤢ Scale', 'r']];
 const ROOM = 'room';  // R.sel for the room; null is the camera
+// where the gizmo sits on an object (what it turns and scales around), in the object's own space
+const PIVOTS = {
+  figure: [['feet', 'Feet'], ['hips', 'Hips'], ['com', 'Centre of mass'], ['head', 'Head']],
+  photo: [['origin', 'Lens'], ['center', 'Centre']],
+  other: [['base', 'Base'], ['center', 'Centre'], ['top', 'Top']],
+};
+const pivotsFor = (o) => PIVOTS[o.type] || PIVOTS.other;
+const pivotOf = (o) => (pivotsFor(o).some(([k]) => k === o.pivot) || (o.type === 'figure' && FIGURE.JOINTS[o.pivot]) ? o.pivot
+  : o.type === 'figure' ? 'hips' : o.type === 'photo' ? 'center' : 'base');
 
 // ---- scene data ------------------------------------------------------------
 let SC;   // the scene (persisted per project)
@@ -55,13 +64,16 @@ function newObject(type, at = {}, others = SC.objects) {
   const n = others.filter((o) => o.type === type).length + 1;
   const o = { id: uid(), type, name: `${t.label} ${n}`, ease: 'smooth', keys: [], hidden: false,
     base: { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: t.size[0], sy: t.size[1], sz: t.size[2], ...at } };
-  if (type === 'figure') o.base.j = FIGURE.preset('stand').j;
+  if (type === 'figure') { o.base.j = FIGURE.preset('stand').j; o.ground = true; }
   return o;
 }
 
 // scenes saved before rotation on all axes, hiding and a deletable room
 function upgrade(sc) {
-  for (const o of sc.objects) { o.base = { rx: 0, rz: 0, ...o.base }; o.hidden = !!o.hidden; }
+  for (const o of sc.objects) {
+    o.base = { rx: 0, rz: 0, ...o.base }; o.hidden = !!o.hidden;
+    if (o.type === 'figure' && o.ground == null) o.ground = false;  // planted on the floor: older figures kept their own height
+  }
   if (sc.room) sc.room = { ceiling: false, hidden: false, ...sc.room };
   return sc;
 }
@@ -118,8 +130,9 @@ function sample(item, names, f) {
   let i = 0;
   while (k[i + 1].f <= f) i++;
   const a = { ...item.base, ...k[i] }, b = { ...item.base, ...k[i + 1] };
-  const t = (f - a.f) / (b.f - a.f), e = item.ease === 'linear' ? t : ease(t);
-  return Object.fromEntries(names.map((n) => [n, n === 'j' ? FIGURE.slerpPose(a.j, b.j, e) : a[n] + (b[n] - a[n]) * e]));
+  const t = (f - a.f) / (b.f - a.f), e = (k[i].ease || item.ease) === 'linear' ? t : ease(t);  // a key can set its own ease
+  return Object.fromEntries(names.map((n) => [n, n === 'j' ? FIGURE.slerpPose(a.j, b.j, e) : n === 'm' ? FIGURE.lerpParams(a.m, b.m, e)
+    : a[n] + (b[n] - a[n]) * e]));
 }
 
 // With auto key off, a change to an animated item isn't saved: it's held here (by item, for the
@@ -182,6 +195,9 @@ const figSel = new THREE.MeshStandardMaterial({ color: 0xe9b44c, roughness: 0.8,
 const dotMat = new THREE.MeshBasicMaterial({ color: 0x4cc3ff, depthTest: false, transparent: true, opacity: 0.85 });
 const dotSel = new THREE.MeshBasicMaterial({ color: 0xff4c8a, depthTest: false, transparent: true, opacity: 0.95 });
 const ikTarget = new THREE.Object3D();  // what the gizmo drags when a hand or foot is moved (IK)
+// what the gizmo holds for a whole object: at its pivot, turned and scaled with it. pivotAt is the
+// pivot in the object's own space, kept still while dragging.
+const pivot = new THREE.Object3D(), pivotAt = new THREE.Vector3();
 const VERT = 'varying float vz; void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); vz = -mv.z; gl_Position = projectionMatrix * mv; }';
 const depthMat = new THREE.ShaderMaterial({
   uniforms: { near: { value: 0.5 }, far: { value: 20 } }, side: THREE.DoubleSide, vertexShader: VERT,
@@ -215,7 +231,7 @@ function setup() {
   scene.add(grid);
   camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.05, 500);
   camera.layers.enable(1);  // layer 1: a figure's joint dots (picked on their own, never rendered out)
-  scene.add(ikTarget);
+  scene.add(ikTarget, pivot);
 
   controls = new OrbitControls(camera, canvas);
   controls.enableDamping = false;
@@ -240,10 +256,14 @@ function setup() {
     const o = selItem(), m = gizmo.object;
     if (!o || !m) return;
     if (R.joint) return jointChanged(o);
+    const p = pivot;
     if (EVEN.has(o.type)) {  // scaled evenly: follow whichever axis was dragged
-      const was = current(o, OBJ).sy, s = [m.scale.x, m.scale.y, m.scale.z].find((v) => Math.abs(v - was) > 1e-6) ?? was;
-      m.scale.setScalar(Math.max(0.01, s));
+      const was = current(o, OBJ).sy, s = [p.scale.x, p.scale.y, p.scale.z].find((v) => Math.abs(v - was) > 1e-6) ?? was;
+      p.scale.setScalar(Math.max(0.01, s));
     }
+    // the object follows the pivot: turned and scaled around it
+    m.quaternion.copy(p.quaternion); m.scale.copy(p.scale);
+    m.position.copy(p.position).sub(pivotAt.clone().multiply(p.scale).applyQuaternion(p.quaternion));
     const d = THREE.MathUtils.radToDeg;
     write(o, namesFor(o), { x: m.position.x, y: m.position.y, z: m.position.z,
       rx: d(m.rotation.x), ry: d(m.rotation.y), rz: d(m.rotation.z),
@@ -447,6 +467,28 @@ function placeIkTarget() {
   rig.bones[R.joint].getWorldPosition(ikTarget.position);
   ikTarget.updateMatrixWorld();
 }
+// the selected object's pivot, in its own space (the figure's pose and the photo's mesh move it)
+function pivotPoint(o, m) {
+  const k = pivotOf(o), rig = m.userData.rig;
+  m.updateMatrixWorld(true);
+  if (rig) {
+    if (k === 'feet') return new THREE.Vector3();
+    return m.worldToLocal(k === 'com' ? FIGURE.centerOfMass(rig) : rig.bones[k].getWorldPosition(new THREE.Vector3()));
+  }
+  if (o.type === 'photo') {
+    const box = new THREE.Box3().setFromObject(m);
+    return k === 'center' && !box.isEmpty() ? m.worldToLocal(box.getCenter(new THREE.Vector3())) : new THREE.Vector3();
+  }
+  return new THREE.Vector3(0, { base: 0, center: 0.5, top: 1 }[k], 0);  // the shapes are 1 tall, base at 0
+}
+function placePivot() {
+  const o = selItem(), m = o && R.meshes.get(o.id);
+  if (!m) return;
+  pivotAt.copy(pivotPoint(o, m));
+  pivot.position.copy(m.localToWorld(pivotAt.clone()));
+  pivot.quaternion.copy(m.quaternion); pivot.scale.copy(m.scale);
+  pivot.updateMatrixWorld();
+}
 function jointChanged(o) {
   const rig = selRig();
   if (!rig) return;
@@ -471,7 +513,7 @@ function syncMeshes() {
   const o = selItem();
   const m = o && !o.hidden ? R.meshes.get(o.id) : null;
   if (R.joint && !m?.userData.rig) R.joint = null;
-  const target = !m ? null : !R.joint ? m : jointMode() === 'translate' ? ikTarget : m.userData.rig.bones[R.joint];
+  const target = !m ? null : !R.joint ? pivot : jointMode() === 'translate' ? ikTarget : m.userData.rig.bones[R.joint];
   if (target) {
     if (gizmo.object !== target) gizmo.attach(target);
     gizmo.setMode(R.joint ? jointMode() : R.mode);
@@ -490,9 +532,10 @@ function pose(f) {
     m.rotation.set(r(v.rx), r(v.ry), r(v.rz));
     if (EVEN.has(o.type)) m.scale.setScalar(Math.max(0.01, v.sy));
     else m.scale.set(Math.max(0.01, v.sx), Math.max(0.01, v.sy), Math.max(0.01, v.sz));
-    if (m.userData.rig) FIGURE.applyPose(m.userData.rig, v.j);
+    if (m.userData.rig) FIGURE.applyPose(m.userData.rig, v.j, v.m, o.ground);
   }
   if (gizmo.object === ikTarget && !gizmo.dragging) placeIkTarget();
+  if (gizmo.object === pivot && !gizmo.dragging) placePivot();
   const c = current(SC.camera, CAM, f);
   R.applying = true;
   camera.position.set(c.px, c.py, c.pz);
@@ -910,6 +953,9 @@ function objectProps(o) {
     o.type === 'figure' ? num('Height (m)', () => cur().sy * FIGURE.HEIGHT, (v) => even(Math.max(0.3, v) / FIGURE.HEIGHT), { min: 0.3, max: 2.5 })
       : o.type === 'photo' ? num('Scale', () => cur().sy, (v) => even(Math.max(0.05, v)), { min: 0.05, max: 20 })
       : xyz('Size (m)', [['sx', 'Width'], ['sy', 'Height'], ['sz', 'Depth']], { min: 0.05, max: 20 }),
+    field('Pivot', seg(pivotsFor(o), pivotOf(o), (v) => { o.pivot = v; changed(); }, { wrap: true })),
+    o.type === 'figure' ? h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: !!o.ground,
+      onchange: (e) => { o.ground = e.target.checked; changed(); } }), 'Planted on the floor (Up lifts it off)') : null,
     o.type === 'figure' ? figureProps(o, cur) : null,
     o.type === 'photo' ? [
       button('🎥 Camera to the photo\'s view', () => { lookThrough(o); changed(); }),
@@ -926,16 +972,22 @@ function objectProps(o) {
     hint('Drag the gizmo to move it; tap the object again (or W / E / R) for Rotate and Scale. With keys, a change sets a key at the playhead; with Auto key off it is held until ◆ Key (or until the playhead moves).'));
 }
 
+// a figure that isn't planted on the floor keeps its feet (or seat) where they were for a new pose
+function liftTo(o, v, j, m) {
+  if (o.ground) return {};
+  return { y: v.y + (FIGURE.liftFor(j, m) - FIGURE.liftFor(v.j, v.m)) * v.sy };
+}
+
 // pose: presets, mirror, and the joint picked with a dot on the figure
 function figureProps(o, cur) {
   const setPose = (j, extra = {}) => { write(o, FIG, { j, ...extra }); changed(); };
   const label = R.joint && FIGURE.JOINTS[R.joint][2];
   return field('Pose',
     h('div', { class: 'chips' }, ...FIGURE.presetList().map(([k, l]) => h('button', { type: 'button', class: 'chip', onclick: () => {
-      const p = FIGURE.preset(k); setPose(p.j, { y: p.y * cur().sy });
+      const p = FIGURE.preset(k); setPose(p.j, liftTo(o, cur(), p.j, cur().m));
     } }, l))),
     h('div', { class: 'row wrap' },
-      button('⇋ Mirror', () => setPose(FIGURE.mirrorPose(cur().j)), { title: 'Swap left and right' }),
+      button('⇋ Mirror', () => setPose(FIGURE.mirrorPose(cur().j), { m: FIGURE.mirrorParams(cur().m) }), { title: 'Swap left and right' }),
       R.joint ? button(`Reset ${label.toLowerCase()}`, () => { const j = { ...cur().j }; delete j[R.joint]; setPose(j); }) : null,
       R.joint ? button('Done', () => selectJoint(null)) : null),
     hint(R.joint

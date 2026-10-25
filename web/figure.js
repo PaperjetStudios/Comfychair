@@ -84,12 +84,19 @@ export function buildFigure(material, dotMaterial) {
   return { root, bones, meshes, dots, marks };
 }
 
-// a pose is { joint: [x, y, z, w] } (local rotations; missing = rest)
-const Q = new THREE.Quaternion(), Q2 = new THREE.Quaternion();
-export function applyPose(rig, j = {}) {
+// a pose is { joint: [x, y, z, w] } (local rotations; missing = rest), with parameters m on top
+const Q = new THREE.Quaternion(), Q2 = new THREE.Quaternion(), E = new THREE.Euler(), V = new THREE.Vector3(), M = new THREE.Matrix4();
+const rad = THREE.MathUtils.degToRad;
+export function applyPose(rig, j = {}, m = {}, ground = false) {
+  const rot = paramRot(m);
+  rig.mq = {};
   for (const [name, b] of Object.entries(rig.bones)) {
     if (j[name]) b.quaternion.fromArray(j[name]).normalize(); else b.quaternion.identity();
+    const r = rot[name];
+    if (r) { rig.mq[name] = new THREE.Quaternion().setFromEuler(E.set(rad(r[0]), rad(r[1]), rad(r[2]))); b.quaternion.multiply(rig.mq[name]); }
   }
+  rig.bones.hips.position.y = JOINTS.hips[1][1];
+  if (ground) { rig.bones.hips.position.y -= lowest(rig); rig.root.updateMatrixWorld(true); }
 }
 export function slerpPose(a = {}, b = {}, t) {
   const out = {};
@@ -99,7 +106,87 @@ export function slerpPose(a = {}, b = {}, t) {
   }
   return out;
 }
-export const readJoint = (rig, name) => rig.bones[name].quaternion.toArray();
+// a joint's own turn, without the parameters on top
+export function readJoint(rig, name) {
+  const q = rig.bones[name].quaternion.clone(), mq = rig.mq?.[name];
+  return (mq ? q.multiply(mq.clone().invert()) : q).toArray();
+}
+
+// the figure's lowest point, in its own space (scale 1): 0 when standing on the floor
+export function lowest(rig) {
+  rig.root.updateMatrixWorld(true);
+  const inv = rig.root.matrixWorld.clone().invert();
+  let min = Infinity;
+  for (const mesh of rig.meshes) {
+    M.multiplyMatrices(inv, mesh.matrixWorld);
+    const a = mesh.geometry.attributes.position;
+    for (let i = 0; i < a.count; i++) min = Math.min(min, V.fromBufferAttribute(a, i).applyMatrix4(M).y);
+  }
+  return min;
+}
+// a spare rig for working out poses away from the scene
+let SPARE;
+const spare = () => (SPARE ||= buildFigure(new THREE.MeshBasicMaterial(), new THREE.MeshBasicMaterial()));
+// how far a pose has to move up to stand on the floor (sitting is negative), at scale 1
+export function liftFor(j, m) { const r = spare(); applyPose(r, j, m); return -lowest(r); }
+
+// the centre of mass (world), from rough shares of body weight per part
+const MASS = { hips: 0.14, spine: 0.1, chest: 0.2, neck: 0.02, head: 0.08, lsho: 0.028, rsho: 0.028, lelb: 0.016, relb: 0.016,
+  lhand: 0.006, rhand: 0.006, lhip: 0.1, rhip: 0.1, lknee: 0.045, rknee: 0.045, lfoot: 0.015, rfoot: 0.015 };
+export function centerOfMass(rig) {
+  rig.root.updateMatrixWorld(true);
+  const sum = new THREE.Vector3();
+  let w = 0;
+  for (const [name, b] of Object.entries(rig.bones)) {
+    const geo = b.children.find((c) => c.isMesh && !c.userData.joint)?.geometry;
+    if (!geo || !MASS[name]) continue;
+    geo.boundingSphere || geo.computeBoundingSphere();
+    sum.addScaledVector(geo.boundingSphere.center.clone().applyMatrix4(b.matrixWorld), MASS[name]);
+    w += MASS[name];
+  }
+  return sum.divideScalar(w);
+}
+
+// ---- parameters: named turns layered on a pose, keyed with it as m: { name: value } (missing = 0,
+// off). Each turns joints by degrees (XYZ), after the pose's own turn.
+export const PARAMS = {
+  lean: { label: 'Lean', group: 'Body', min: -45, max: 60, on: 20, rot: (v) => ({ spine: [v / 2, 0, 0], chest: [v / 2, 0, 0] }) },
+  side: { label: 'Side bend', group: 'Body', min: -40, max: 40, on: 15, rot: (v) => ({ spine: [0, 0, -v / 2], chest: [0, 0, -v / 2] }) },
+  twist: { label: 'Twist', group: 'Body', min: -60, max: 60, on: 25, rot: (v) => ({ spine: [0, v / 2, 0], chest: [0, v / 2, 0] }) },
+  sway: { label: 'Hip sway', group: 'Body', min: -15, max: 15, on: 6,
+    rot: (v) => ({ hips: [0, 0, v], spine: [0, 0, -v], lhip: [0, 0, -v], rhip: [0, 0, -v] }) },
+  turn: { label: 'Head turn', group: 'Head', min: -80, max: 80, on: 30, rot: (v) => ({ head: [0, v * 0.7, 0], neck: [0, v * 0.3, 0] }) },
+  tilt: { label: 'Head tilt', group: 'Head', min: -40, max: 40, on: 15, rot: (v) => ({ head: [0, 0, -v] }) },
+  nod: { label: 'Look down', group: 'Head', min: -50, max: 50, on: 20, rot: (v) => ({ head: [v * 0.6, 0, 0], neck: [v * 0.4, 0, 0] }) },
+  armsOut: { label: 'Arms out', group: 'Arms', min: -20, max: 170, on: 35, rot: (v) => ({ lsho: [0, 0, v], rsho: [0, 0, -v] }) },
+  armsFwd: { label: 'Arms forward', group: 'Arms', min: -60, max: 180, on: 45, rot: (v) => ({ lsho: [-v, 0, 0], rsho: [-v, 0, 0] }) },
+  elbows: { label: 'Bend elbows', group: 'Arms', min: 0, max: 150, on: 60, rot: (v) => ({ lelb: [-v, 0, 0], relb: [-v, 0, 0] }) },
+  legsApart: { label: 'Legs apart', group: 'Legs', min: -10, max: 90, on: 25, rot: (v) => ({ lhip: [0, 0, v / 2], rhip: [0, 0, -v / 2] }) },
+  knees: { label: 'Bend knees', group: 'Legs', min: 0, max: 120, on: 30,
+    rot: (v) => ({ lhip: [-v / 2, 0, 0], lknee: [v, 0, 0], lfoot: [-v / 2, 0, 0], rhip: [-v / 2, 0, 0], rknee: [v, 0, 0], rfoot: [-v / 2, 0, 0] }) },
+  step: { label: 'Left foot forward', group: 'Legs', min: -45, max: 45, on: 20, rot: (v) => ({ lhip: [-v, 0, 0], rhip: [v, 0, 0] }) },
+  tiptoe: { label: 'Tiptoe', group: 'Legs', min: 0, max: 70, on: 30, rot: (v) => ({ lfoot: [v, 0, 0], rfoot: [v, 0, 0] }) },
+};
+// the turns all the parameters in m add up to, per joint (degrees)
+function paramRot(m = {}) {
+  const out = {};
+  for (const [k, v] of Object.entries(m)) {
+    if (!v || !PARAMS[k]) continue;
+    for (const [n, r] of Object.entries(PARAMS[k].rot(v))) { const o = (out[n] ||= [0, 0, 0]); o[0] += r[0]; o[1] += r[1]; o[2] += r[2]; }
+  }
+  return out;
+}
+export function lerpParams(a = {}, b = {}, t) {
+  const out = {};
+  for (const k of new Set([...Object.keys(a || {}), ...Object.keys(b || {})])) {
+    const v = (a?.[k] || 0) + ((b?.[k] || 0) - (a?.[k] || 0)) * t;
+    if (v) out[k] = v;
+  }
+  return out;
+}
+// mirrored parameters: the ones with a side change sign
+const SIDED = new Set(['side', 'twist', 'sway', 'turn', 'tilt', 'step']);
+export const mirrorParams = (m = {}) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, SIDED.has(k) ? -v : v]));
 
 // turn a bone by a world-space rotation q
 function rotateWorld(bone, q) {
@@ -140,14 +227,14 @@ export function solveIK(rig, endName, target) {
   return [rootName, midName, endName];
 }
 
-// presets: joint rotations in degrees (XYZ); y is where the figure's base goes (sitting lowers it)
+// presets: joint rotations in degrees (XYZ)
 const PRESETS = {
   stand: { label: 'Stand', j: { lsho: [0, 0, 8], rsho: [0, 0, -8], lelb: [-8, 0, 0], relb: [-8, 0, 0] } },
   walk: { label: 'Walk', j: { lhip: [-22, 0, 0], lknee: [12, 0, 0], rhip: [18, 0, 0], rknee: [28, 0, 0], rfoot: [-10, 0, 0],
     lsho: [18, 0, 6], rsho: [-18, 0, -6], lelb: [-12, 0, 0], relb: [-28, 0, 0] } },
   run: { label: 'Run', j: { spine: [10, 0, 0], lhip: [-55, 0, 0], lknee: [70, 0, 0], rhip: [25, 0, 0], rknee: [95, 0, 0],
     lsho: [40, 0, 8], rsho: [-50, 0, -8], lelb: [-80, 0, 0], relb: [-90, 0, 0] } },
-  sit: { label: 'Sit', y: -0.43, j: { lhip: [-90, 0, 0], rhip: [-90, 0, 0], lknee: [90, 0, 0], rknee: [90, 0, 0],
+  sit: { label: 'Sit', j: { lhip: [-90, 0, 0], rhip: [-90, 0, 0], lknee: [90, 0, 0], rknee: [90, 0, 0],
     lsho: [-15, 0, 6], rsho: [-15, 0, -6], lelb: [-45, 0, 0], relb: [-45, 0, 0] } },
   point: { label: 'Point', j: { rsho: [-85, 0, 0], lsho: [0, 0, 8], lelb: [-8, 0, 0], head: [0, -10, 0] } },
   wave: { label: 'Wave', j: { rsho: [0, 0, -150], relb: [0, 0, -30], lsho: [0, 0, 8], lelb: [-8, 0, 0] } },
@@ -156,9 +243,9 @@ const PRESETS = {
 };
 export const presetList = () => Object.entries(PRESETS).map(([k, p]) => [k, p.label]);
 export function preset(key) {
-  const p = PRESETS[key], e = new THREE.Euler(), r = THREE.MathUtils.degToRad, j = {};
-  for (const [n, [x, y, z]] of Object.entries(p.j)) j[n] = Q.setFromEuler(e.set(r(x), r(y), r(z))).toArray();
-  return { j, y: p.y ?? 0 };
+  const p = PRESETS[key], j = {};
+  for (const [n, [x, y, z]] of Object.entries(p.j)) j[n] = Q.setFromEuler(E.set(rad(x), rad(y), rad(z))).toArray();
+  return { j };
 }
 
 // left and right swapped, mirrored across the figure's middle
