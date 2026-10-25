@@ -541,20 +541,26 @@ function hitAt(e) {
   const hit = ray.intersectObjects(visibleMeshes(), true)[0];
   return hit && hit.object.userData.id !== ROOM && !hit.object.userData.photo ? hit.object.userData.id : null;
 }
-// the selected figure's joint dot nearest the pointer, within a finger's reach
+// the selected figure's joint dot under the pointer (within a finger's reach). Where dots overlap,
+// the one nearest the camera wins; anything else in front of it takes the tap instead. Turn the view
+// to get at one that's covered.
 function jointAt(e) {
   const rig = selRig();
   if (!rig || !rig.root.visible) return null;
   const r = canvas.getBoundingClientRect(), reach = e.pointerType === 'touch' ? 28 : 18;
   rig.root.updateMatrixWorld(true);
-  let best = null, bestD = reach;
+  let best = null;
   for (const d of rig.dots) {
-    const v = d.getWorldPosition(new THREE.Vector3()).project(camera);
+    const w = d.getWorldPosition(new THREE.Vector3()), v = w.clone().project(camera);
     if (v.z > 1) continue;
     const dist = Math.hypot(r.left + (v.x + 1) / 2 * r.width - e.clientX, r.top + (1 - v.y) / 2 * r.height - e.clientY);
-    if (dist < bestD) { best = d.userData.joint; bestD = dist; }
+    const depth = camera.position.distanceTo(w);
+    if (dist < reach && (!best || depth < best.depth)) best = { joint: d.userData.joint, depth };
   }
-  return best;
+  if (!best) return null;
+  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  const front = ray.intersectObjects(visibleMeshes().filter((m) => m !== rig.root), true)[0];
+  return front && front.distance < best.depth ? null : best.joint;
 }
 
 // ---- selection, layers ------------------------------------------------------------
@@ -887,8 +893,10 @@ function slider(label, get, set, { min, max, step, fmt = (v) => v.toFixed(2) }) 
   r.addEventListener('change', () => { save(); renderKeys(); });
   return h('label', { class: 'field' }, h('span', { class: 'lbl' }, h('span', {}, label), val), r);
 }
+// a number box (drag it sideways like a slider: the view follows, the change is saved on letting go)
 const num = (label, get, set, opts = {}) => C.propNum(label, +Number(get()).toFixed(opts.digits ?? 2), set,
-  () => { if (opts.after) opts.after(); changed(); }, { step: 'any', ...opts });
+  () => { if (opts.after) opts.after(); changed(); },
+  { step: 'any', live: () => { if (opts.after) opts.after(); syncMeshes(); pose(R.f); draw(); }, ...opts });
 const seg = (opts, cur, on) => C.h('div', { class: 'seg' }, ...opts.map(([v, label]) =>
   C.h('button', { type: 'button', class: cur === v ? 'on' : '', onclick: () => on(v) }, label)));
 const easeSeg = (item) => C.h('div', { class: 'field' }, C.h('span', { class: 'lbl' }, 'Between keys'),
@@ -903,14 +911,14 @@ function objectProps(o) {
   const name = h('input', { type: 'text', value: o.name });
   name.addEventListener('change', () => { o.name = name.value.trim() || o.name; changed(); });
   const xyz = (label, ks, opts) => h('div', { class: 'field' }, h('span', { class: 'lbl' }, label),
-    h('div', { class: 'row' }, ...ks.map(([k, l]) => num(l, () => cur()[k], set(k), opts))));
+    h('div', { class: 'row' }, ...ks.map(([k, l, o2]) => num(l, () => cur()[k], set(k), { ...opts, ...o2 }))));
   return h('div', { class: 'props' }, C.propsTitle(TYPES[o.type].label, () => select(null)),
     h('label', { class: 'field' }, h('span', { class: 'lbl' }, 'Name'), name),
-    xyz('Position (m)', [['x', 'X'], ['y', 'Up'], ['z', 'Z']]),
-    xyz('Rotation (°)', [['rx', 'X'], ['ry', 'Y'], ['rz', 'Z']], { digits: 0 }),
-    o.type === 'figure' ? num('Height (m)', () => cur().sy * FIGURE.HEIGHT, (v) => even(Math.max(0.3, v) / FIGURE.HEIGHT), { min: 0.3 })
-      : o.type === 'photo' ? num('Scale', () => cur().sy, (v) => even(Math.max(0.01, v)), { min: 0.01 })
-      : xyz('Size (m)', [['sx', 'Width'], ['sy', 'Height'], ['sz', 'Depth']], { min: 0.01 }),
+    xyz('Position (m)', [['x', 'X'], ['y', 'Up', { min: -5, max: 10 }], ['z', 'Z']], { min: -20, max: 20 }),
+    xyz('Rotation (°)', [['rx', 'X'], ['ry', 'Y'], ['rz', 'Z']], { digits: 0, min: -180, max: 180, step: 1 }),
+    o.type === 'figure' ? num('Height (m)', () => cur().sy * FIGURE.HEIGHT, (v) => even(Math.max(0.3, v) / FIGURE.HEIGHT), { min: 0.3, max: 2.5 })
+      : o.type === 'photo' ? num('Scale', () => cur().sy, (v) => even(Math.max(0.05, v)), { min: 0.05, max: 20 })
+      : xyz('Size (m)', [['sx', 'Width'], ['sy', 'Height'], ['sz', 'Depth']], { min: 0.05, max: 20 }),
     o.type === 'figure' ? figureProps(o, cur) : null,
     o.type === 'photo' ? h('div', { class: 'field' },
       h('button', { type: 'button', class: 'btn small', onclick: () => { lookThrough(o); changed(); } }, '🎥 Camera to the photo\'s view'),
@@ -953,9 +961,9 @@ function roomProps() {
   const re = () => rebuildRoom();
   return h('div', { class: 'props' }, C.propsTitle('Room', () => select(null)),
     h('div', { class: 'row' },
-      num('Width (m)', () => rm.w, (v) => { rm.w = Math.max(1, v); }, { min: 1, after: re }),
-      num('Depth (m)', () => rm.d, (v) => { rm.d = Math.max(1, v); }, { min: 1, after: re }),
-      num('Height (m)', () => rm.h, (v) => { rm.h = Math.max(1, v); }, { min: 1, after: re })),
+      num('Width (m)', () => rm.w, (v) => { rm.w = Math.max(1, v); }, { min: 1, max: 40, after: re }),
+      num('Depth (m)', () => rm.d, (v) => { rm.d = Math.max(1, v); }, { min: 1, max: 40, after: re }),
+      num('Height (m)', () => rm.h, (v) => { rm.h = Math.max(1, v); }, { min: 1, max: 10, after: re })),
     seg([['room', 'Walls + ceiling'], ['walls', 'Walls'], ['floor', 'Floor only']], rm.walls ? (rm.ceiling ? 'room' : 'walls') : 'floor',
       (v) => { rm.walls = v !== 'floor'; rm.ceiling = v === 'room'; rebuildRoom(); changed(); }),
     h('div', { class: 'hint' }, 'Keep the walls about where the real ones should be: H3 sizes the room from them. Hide it (◉) for an open space.'),
@@ -975,7 +983,7 @@ function cameraProps() {
     const n = frames();
     for (const it of [SC.camera, ...SC.objects]) it.keys = it.keys.filter((k) => k.f < n);
     R.f = Math.min(R.f, n - 1);
-  }, { min: 2, max: 15, step: 1, digits: 0, after: () => renderTransport() });
+  }, { min: 2, max: 15, step: 1, digits: 0, after: () => renderTransport(), live: null });
   return h('div', { class: 'props' }, C.propsTitle('Camera'),
     h('div', { class: 'row' }, h('label', { class: 'field' }, h('span', { class: 'lbl' }, 'Size'), sizeSel), secs),
     slider('Lens', () => current(cam, CAM).fov, (v) => write(cam, CAM, { fov: v }),

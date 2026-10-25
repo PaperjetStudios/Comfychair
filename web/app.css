@@ -73,6 +73,10 @@ select, input[type=number], input[type=text], textarea {
   min-height: var(--tap); padding: 8px 10px; width: 100%; min-width: 0;
 }
 textarea { resize: vertical; line-height: 1.45; }
+/* number boxes are dragged sideways like sliders (app.js); up and down still scrolls the panel */
+input[type=number] { touch-action: pan-y; cursor: ew-resize; }
+input[type=number]:focus { cursor: text; }
+input[type=number].scrubbing { border-color: var(--accent); color: var(--accent); }
 select:focus, input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .icon-btn {
   min-width: 40px; min-height: 40px; border-radius: 10px; border: 1px solid var(--line);

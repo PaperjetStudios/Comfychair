@@ -153,6 +153,10 @@ resize (0.5 = 2× overall). Videos are split into chunks that fit in VRAM and ke
 A `@Video` title on a **VHS_LoadVideoPath** node gives a video picker (this project's video outputs
 and the Video tab's uploaded clips); left empty, the node is removed like an empty image.
 
+Every number box also works like a slider: drag sideways on it (finger or mouse) to change the value
+across its range, tap to type. Template fields keep to sensible limits (steps 1–100, CFG 0–20, sizes
+64–4096…) inside ComfyUI's own.
+
 A node's `width` + `height` pair shows as one size picker: an aspect preset (1:1, 16:9, 9:16, 4:3…)
 plus megapixels, or a custom width/height. Sides snap to the node's own step (8, 16 or 32).
 

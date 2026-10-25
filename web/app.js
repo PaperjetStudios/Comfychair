@@ -19,6 +19,50 @@ function h(tag, props = {}, ...kids) {
   return el;
 }
 
+// Every number box is also a slider: drag left or right on it to change the value (its whole min–max
+// range over about 300 px, snapped to its step); a tap still types. While dragging it has
+// data-scrubbing set and fires 'input'; letting go fires one 'change', like typing does.
+const SCRUB_PX = 300;
+document.addEventListener('pointerdown', (e) => {
+  const inp = e.target.closest?.('input[type=number]');
+  if (!inp || inp.disabled || e.button > 0 || document.activeElement === inp) return;
+  const x0 = e.clientX, y0 = e.clientY, v0 = parseFloat(inp.value) || 0;
+  const min = parseFloat(inp.min), max = parseFloat(inp.max);
+  const step = parseFloat(inp.step) || (Number.isInteger(v0) && inp.inputMode === 'numeric' ? 1 : 0.01);
+  const span = Number.isFinite(min) && Number.isFinite(max) ? max - min : NaN;
+  // per pixel: the range over SCRUB_PX, or a step every 2 px when the range is huge (seeds) or open
+  const perPx = Number.isFinite(span) && span <= 1e5 ? span / SCRUB_PX : step / 2;
+  const dec = (String(inp.step).split('.')[1] || '').length;
+  let on = false;
+  const move = (ev) => {
+    const dx = ev.clientX - x0;
+    if (!on) {
+      if (Math.abs(dx) < 8 || Math.abs(dx) < Math.abs(ev.clientY - y0)) return;
+      on = true; inp.blur(); inp.dataset.scrubbing = '1'; inp.classList.add('scrubbing');
+      try { inp.setPointerCapture(ev.pointerId); } catch { /* the pointer is gone */ }
+    }
+    ev.preventDefault();
+    let v = v0 + dx * perPx;
+    v = Math.round(v / step) * step;
+    if (Number.isFinite(min)) v = Math.max(min, v);
+    if (Number.isFinite(max)) v = Math.min(max, v);
+    v = Number(v.toFixed(Math.min(6, Math.max(dec, step < 1 ? 2 : 0))));
+    if (String(v) !== inp.value) { inp.value = v; inp.dispatchEvent(new Event('input', { bubbles: true })); }
+  };
+  const end = () => {
+    inp.removeEventListener('pointermove', move); inp.removeEventListener('pointerup', end); inp.removeEventListener('pointercancel', end);
+    if (!on) return;
+    delete inp.dataset.scrubbing; inp.classList.remove('scrubbing');
+    // the tap that ends a drag shouldn't open the keyboard
+    inp.addEventListener('click', (c) => { c.preventDefault(); inp.blur(); }, { once: true, capture: true });
+    setTimeout(() => inp.blur());
+    inp.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  inp.addEventListener('pointermove', move);
+  inp.addEventListener('pointerup', end);
+  inp.addEventListener('pointercancel', end);
+}, true);
+
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode etc. */ } },
@@ -504,7 +548,7 @@ function sizeField(fw, fh) {
   }
   const readout = h('span', {});
   const custom = h('div', { class: 'size-custom' }, numberField(fw, false), numberField(fh, false));
-  const mpIn = h('input', { type: 'number', inputMode: 'decimal', min: 0.05, step: 0.05, value: m.mp });
+  const mpIn = h('input', { type: 'number', inputMode: 'decimal', min: 0.05, max: 16, step: 0.05, value: m.mp });
   const showReadout = () => {
     const w = S.values[fw.key], hh = S.values[fh.key];
     readout.textContent = m.aspect === 'image' && !imageAspect() ? 'matches the image once one is set'
@@ -532,7 +576,7 @@ function sizeField(fw, fh) {
     const id = k === 'Custom' ? 'custom' : k === 'Match image' ? 'image' : k;
     seg.append(h('button', { type: 'button', 'data-a': id, onclick: () => { m.aspect = id; applyPreset(); persist(); draw(); } }, k));
   }
-  const setMp = (n) => { m.mp = Math.max(0.05, Math.round(n * 100) / 100); mpIn.value = m.mp; applyPreset(); };
+  const setMp = (n) => { m.mp = Math.min(16, Math.max(0.05, Math.round(n * 100) / 100)); mpIn.value = m.mp; applyPreset(); };
   mpIn.addEventListener('change', () => setMp(parseFloat(mpIn.value) || m.mp));
   const mpRow = h('div', { class: 'field' },
     h('label', { class: 'lbl' }, h('span', {}, 'Megapixels'), h('span', {}, `sides snap to ${step}`)),
@@ -549,16 +593,36 @@ function sizeField(fw, fh) {
     h('label', { class: 'lbl' }, h('span', {}, 'Size'), readout), seg, mpRow, custom);
 }
 
+// ComfyUI's own limits are often far past anything useful (steps to 10000, cfg to 100): number fields
+// keep to these, matched on the input name or the label, inside ComfyUI's limits
+const REALISTIC = [[/^steps$/, 1, 100], [/^cfg$/, 0, 20], [/denoise/, 0, 1], [/_percent$/, 0, 1], [/strength/, 0, 2],
+  [/^(width|height)$/, 64, 4096], [/^shift$/, 0, 20], [/^(fps|frame_rate|force_rate)$/, 0, 60], [/^batch_size$/, 1, 16],
+  [/megapixel/i, 0.05, 16], [/second/i, 1, 20], [/^(length|frames?|num_frames)$/, 1, 481], [/^crf$/, 0, 51],
+  [/per_row|columns|^rows$/, 1, 16], [/spacing|gap|padding|margin|border/, 0, 256]];
+function fieldRange(f) {
+  const r = REALISTIC.find(([re]) => re.test(f.input) || re.test(f.label || ''));
+  let min = f.min, max = f.max;
+  if (r) { min = Math.max(min ?? -Infinity, r[1]); max = Math.min(max ?? Infinity, r[2]); }
+  if (min > max) [min, max] = [f.min, f.max];  // the template's own range wins over a bad guess
+  if (!Number.isFinite(max)) {  // nothing known: room above the current value, so it can still be dragged
+    const v = Math.abs(Number(f.value) || 0);
+    max = Math.max(f.kind === 'float' ? 10 : 1000, v * 4);
+    if (!Number.isFinite(min)) min = 0;
+  }
+  return [Number.isFinite(min) ? min : null, Number.isFinite(max) ? max : null];
+}
+
 function numberField(f, isFloat) {
   const step = f.step || (isFloat ? 0.01 : 1);
   const dec = isFloat ? Math.max(0, (String(step).split('.')[1] || '').length) : 0;
+  const [lo, hi] = fieldRange(f);
   const clamp = (n) => {
     if (Number.isNaN(n)) n = Number(f.value) || 0;
-    if (f.min != null) n = Math.max(f.min, n);
-    if (f.max != null) n = Math.min(f.max, n);
+    if (lo != null) n = Math.max(lo, n);
+    if (hi != null) n = Math.min(hi, n);
     return isFloat ? Number(n.toFixed(Math.min(dec, 6))) : Math.round(n);
   };
-  const input = h('input', { type: 'number', inputMode: isFloat ? 'decimal' : 'numeric', step, value: S.values[f.key] });
+  const input = h('input', { type: 'number', inputMode: isFloat ? 'decimal' : 'numeric', step, min: lo ?? undefined, max: hi ?? undefined, value: S.values[f.key] });
   let range = null;
   const sync = (n, from) => {
     n = clamp(n); setVal(f.key, n);
@@ -566,14 +630,15 @@ function numberField(f, isFloat) {
     if (range && from !== range) range.value = n;
   };
   input.addEventListener('change', () => sync(parseFloat(input.value), input));
+  input.addEventListener('input', () => { if (input.dataset.scrubbing) sync(parseFloat(input.value), input); });
   const bump = (dir) => sync(Number(S.values[f.key]) + dir * step, null);
-  const hasRange = f.min != null && f.max != null && (f.max - f.min) / step <= 4000 && (f.max - f.min) <= 10000;
+  const hasRange = lo != null && hi != null && (hi - lo) / step <= 4000 && (hi - lo) <= 10000;
   if (hasRange) {
-    range = h('input', { type: 'range', min: f.min, max: f.max, step, value: S.values[f.key] });
+    range = h('input', { type: 'range', min: lo, max: hi, step, value: S.values[f.key] });
     range.addEventListener('input', () => sync(parseFloat(range.value), range));
   }
   return h('div', { class: 'field' },
-    h('label', { class: 'lbl' }, h('span', {}, f.label), hasRange ? h('span', {}, `${f.min}–${f.max}`) : null),
+    h('label', { class: 'lbl' }, h('span', {}, f.label), hasRange ? h('span', {}, `${lo}–${hi}`) : null),
     h('div', { class: 'stepper' },
       h('button', { type: 'button', onclick: () => bump(-1), 'aria-label': 'Decrease' }, '−'),
       input,
@@ -583,7 +648,7 @@ function numberField(f, isFloat) {
 
 function seedField(f) {
   const mode = S.seedMode[f.key] || 'random';
-  const input = h('input', { type: 'number', inputMode: 'numeric', value: S.values[f.key] });
+  const input = h('input', { type: 'number', inputMode: 'numeric', min: 0, max: Number.MAX_SAFE_INTEGER, step: 1, value: S.values[f.key] });
   input.addEventListener('change', () => { setVal(f.key, Math.max(0, parseInt(input.value || '0', 10))); });
   const seg = h('div', { class: 'seg' });
   const setMode = (m) => { S.seedMode[f.key] = m; persist(); [...seg.children].forEach((b) => b.classList.toggle('on', b.dataset.m === m)); };
@@ -946,9 +1011,9 @@ function boolField(f) {
 const thumbUrl = (name, px = 320) => `/api/input?name=${encodeURIComponent(name)}&thumb=${px}`;
 
 function mpInput(get, set) {
-  const input = h('input', { type: 'number', inputMode: 'decimal', min: 0, step: 0.05, value: get() });
+  const input = h('input', { type: 'number', inputMode: 'decimal', min: 0, max: 16, step: 0.05, value: get() });
   input.addEventListener('change', () => {
-    const n = Math.max(0, parseFloat(input.value) || 0);
+    const n = Math.min(16, Math.max(0, parseFloat(input.value) || 0));
     input.value = n; set(n);
   });
   return h('label', { class: 'mp' }, h('span', {}, 'Max MP'), input,
@@ -2631,12 +2696,12 @@ const iconBtn = (label, text, fn, extra = {}) => h('button', { type: 'button', c
   ...extra, onclick: (e) => { e.stopPropagation(); fn(); } }, text);
 
 // after() runs once the value is set (save and redraw)
-function propNum(label, value, set, after, { min = -1e6, max = 1e6, step = 1 } = {}) {
+// live: called while the box is dragged (after set), for a preview that doesn't rebuild the panel
+function propNum(label, value, set, after, { min = -1e6, max = 1e6, step = 1, live = null } = {}) {
   const input = h('input', { type: 'number', inputMode: 'decimal', min, max, step, value });
-  input.addEventListener('change', () => {
-    set(Math.min(max, Math.max(min, parseFloat(input.value) || 0)));
-    after();
-  });
+  const read = () => Math.min(max, Math.max(min, parseFloat(input.value) || 0));
+  input.addEventListener('change', () => { set(read()); after(); });
+  if (live) input.addEventListener('input', () => { if (input.dataset.scrubbing) { set(read()); live(); } });
   return h('label', { class: 'field' }, h('span', { class: 'lbl' }, label), input);
 }
 
@@ -2714,9 +2779,9 @@ function layerProps(l) {
   return h('div', { class: 'props' }, title,
     h('div', { class: 'hint layer-title' }, l.name.split('/').pop()),
     h('div', { class: 'row' },
-      editorNum('X', Math.round(l.x), (v) => { l.x = v; }),
-      editorNum('Y', Math.round(l.y), (v) => { l.y = v; }),
-      editorNum('Scale %', Math.round(l.scale * 1000) / 10, (v) => setScale(v / 100), { min: 1, max: 1000, step: 'any' })),
+      editorNum('X', Math.round(l.x), (v) => { l.x = v; }, { min: -E.size.w, max: E.size.w * 2, live: drawEditorCanvas }),
+      editorNum('Y', Math.round(l.y), (v) => { l.y = v; }, { min: -E.size.h, max: E.size.h * 2, live: drawEditorCanvas }),
+      editorNum('Scale %', Math.round(l.scale * 1000) / 10, (v) => setScale(v / 100), { min: 1, max: 1000, step: 'any', live: drawEditorCanvas })),
     h('div', { class: 'hint' }, `${Math.round(r.w)}×${Math.round(r.h)} px on the canvas · ${Math.round(c.w * W)}×${Math.round(c.h * H)} px of the image`),
     h('div', { class: 'row' },
       h('button', { type: 'button', class: 'btn small', onclick: () => { E.cropping = true; E.aspect = null; renderEditor(); } }, 'Crop'),
@@ -2762,8 +2827,8 @@ function canvasProps() {
     propsTitle('Canvas'),
     h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Size'), sizeSeg),
     E.size ? h('div', { class: 'row' },
-      editorNum('Width', E.size.w, (v) => { E.size.w = v; }, { min: 1, max: 16384 }),
-      editorNum('Height', E.size.h, (v) => { E.size.h = v; }, { min: 1, max: 16384 })) : null,
+      editorNum('Width', E.size.w, (v) => { E.size.w = v; }, { min: 64, max: 8192, step: 8 }),
+      editorNum('Height', E.size.h, (v) => { E.size.h = v; }, { min: 64, max: 8192, step: 8 })) : null,
     h('label', { class: 'field', style: 'display:grid;justify-items:start' }, h('span', { class: 'lbl' }, 'Background'), bg),
     h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Arrange layers'), arrSeg),
     h('div', { class: 'row', style: 'align-items:end' },
@@ -3547,9 +3612,11 @@ async function addMediaFiles() {
 }
 
 // ---- inspector panel ----
-function numField(label, get, set, { step = 0.04, min = 0, max } = {}) {
+function numField(label, get, set, { step = 0.04, min = 0, max = 600 } = {}) {
   const inp = h('input', { type: 'number', inputMode: 'decimal', step, min, max, value: Number(get()).toFixed(2) });
   inp.addEventListener('change', () => { set(parseFloat(inp.value) || 0); timelineChanged(); });
+  // dragged like a slider: show it on the timeline as it goes
+  inp.addEventListener('input', () => { if (inp.dataset.scrubbing) { set(parseFloat(inp.value) || 0); renderTimeline(); syncMedia(); requestDraw(); } });
   return h('label', { class: 'field' }, h('span', { class: 'lbl' }, label), inp);
 }
 
@@ -3570,13 +3637,13 @@ function renderVideoPanel() {
   const clip = it ? (() => {
     const len = itLen(it), tr = trackOf(it);
     const fields = [numField('Starts at (s)', () => it.at, (v) => { it.at = Math.max(0, v); })];
-    if (it.kind === 'image') fields.push(numField('Duration (s)', () => len, (v) => { it.out = Math.max(MIN_LEN, v); }));
+    if (it.kind === 'image') fields.push(numField('Duration (s)', () => len, (v) => { it.out = Math.max(MIN_LEN, v); }, { min: MIN_LEN, max: 60 }));
     else fields.push(
       numField('In (s)', () => it.in, (v) => { it.in = Math.max(0, Math.min(v, (it.out ?? it.dur) - MIN_LEN)); }, { max: it.dur || undefined }),
       numField('Out (s)', () => it.out ?? it.dur, (v) => { it.out = Math.max(it.in + MIN_LEN, it.dur ? Math.min(v, it.dur) : v); }, { max: it.dur || undefined }));
     fields.push(
-      numField('Fade in (s)', () => it.fadeIn || 0, (v) => { it.fadeIn = Math.max(0, Math.min(v, len)); }, { step: 0.1 }),
-      numField('Fade out (s)', () => it.fadeOut || 0, (v) => { it.fadeOut = Math.max(0, Math.min(v, len)); }, { step: 0.1 }));
+      numField('Fade in (s)', () => it.fadeIn || 0, (v) => { it.fadeIn = Math.max(0, Math.min(v, len)); }, { step: 0.1, max: Math.max(0.1, len) }),
+      numField('Fade out (s)', () => it.fadeOut || 0, (v) => { it.fadeOut = Math.max(0, Math.min(v, len)); }, { step: 0.1, max: Math.max(0.1, len) }));
     const fit = h('div', { class: 'seg' }, [['fit', 'Fit'], ['fill', 'Fill']].map(([k, label]) =>
       h('button', { type: 'button', class: (it.fit || 'fit') === k ? 'on' : '', onclick: () => { it.fit = k; timelineChanged(); } }, label)));
     return h('div', { class: 'vid-section' },
