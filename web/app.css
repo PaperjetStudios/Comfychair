@@ -765,3 +765,6 @@ details.desc[open] summary { margin-bottom: 6px; }
 .scene-head { position: sticky; top: 0; z-index: 3; display: grid; gap: 6px; background: var(--surface); padding: 6px 8px 6px; margin: calc(-1 * var(--gap)) calc(-1 * var(--gap)) var(--gap); border-bottom: 1px solid var(--line); }
 .scene-modes .seg button { min-height: 48px; }
 #sceneBody { min-width: 0; }
+
+/* 3d import */
+.chip-pair { display: inline-flex; align-items: center; gap: 2px; }

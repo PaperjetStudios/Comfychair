@@ -18,8 +18,11 @@ export const TYPES = {
   // these two scale evenly (sx = sy = sz): a posable figure (figure.js) and a picture as a mesh (MoGe)
   figure: { label: 'Posable person', icon: '🤸', size: [1, 1, 1] },
   photo: { label: 'Photo', icon: '🖼', size: [1, 1, 1] },
+  // imported files (scene-import.js): scaled evenly, the layer also holds url, name, ext
+  model: { label: 'Model', icon: '🗿', size: [1, 1, 1] },
+  splat: { label: 'Splat', icon: '☁', size: [1, 1, 1] },
 };
-export const EVEN = new Set(['figure', 'photo']);
+export const EVEN = new Set(['figure', 'photo', 'model', 'splat']);
 // what's keyed: a figure's keys also hold its pose (j: joint rotations, m: parameters on top)
 export const FIG = [...OBJ, 'j', 'm', 'pn'];  // pn: the pose's name, for a prompt
 export const namesFor = (o) => (o.type === 'figure' ? FIG : OBJ);
@@ -29,6 +32,8 @@ export const ROOM = 'room';  // R.sel for the room; null is the camera
 const PIVOTS = {
   figure: [['feet', 'Feet'], ['hips', 'Hips'], ['com', 'Centre of mass'], ['head', 'Head']],
   photo: [['origin', 'Lens'], ['center', 'Centre']],
+  model: [['base', 'Base'], ['center', 'Centre']],
+  splat: [['base', 'Base'], ['center', 'Centre']],
   other: [['base', 'Base'], ['center', 'Centre'], ['top', 'Top']],
 };
 export const pivotsFor = (o) => PIVOTS[o.type] || PIVOTS.other;

@@ -5,7 +5,7 @@ import {
   section, seg, sheetOpen, store, uid, undoToast
 } from './ui.js';
 import {
-  C, CAM, FPS, HIST, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, addKey, current, defaultScene, frames, hooks, keyTarget,
+  C, CAM, EVEN, FPS, HIST, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, addKey, current, defaultScene, frames, hooks, keyTarget,
   namesFor, pivotOf, pivotsFor, sameTab, save, selItem, setSC, write
 } from './scene-data.js';
 import { FIG_TABS, adjustTab, jointsTab, movesTab, posesTab, promptProps } from './scene-pose.js';
@@ -165,7 +165,7 @@ function placeProps(o, cur) {
     xyz('Position (m)', [['x', 'X'], ['y', 'Up', { min: -5, max: 10 }], ['z', 'Z']], { min: -20, max: 20 }),
     xyz('Rotation (°)', [['rx', 'X'], ['ry', 'Y'], ['rz', 'Z']], { digits: 0, min: -180, max: 180, step: 1 }),
     o.type === 'figure' ? num('Height (m)', () => cur().sy * FIGURE.HEIGHT, (v) => even(Math.max(0.3, v) / FIGURE.HEIGHT), { min: 0.3, max: 2.5 })
-      : o.type === 'photo' ? num('Scale', () => cur().sy, (v) => even(Math.max(0.05, v)), { min: 0.05, max: 20 })
+      : EVEN.has(o.type) ? num('Scale', () => cur().sy, (v) => even(Math.max(0.05, v)), { min: 0.05, max: 20 })
       : xyz('Size (m)', [['sx', 'Width'], ['sy', 'Height'], ['sz', 'Depth']], { min: 0.05, max: 20 }),
     field('Pivot (where the gizmo turns it)', seg(pivotsFor(o), pivotsFor(o).some(([k]) => k === pivotOf(o)) ? pivotOf(o) : null,
       (v) => { o.pivot = v; changed(); }, { wrap: true })),
@@ -274,7 +274,7 @@ function renderProps() {
 function openAdd() {
   const chip = (label, fn, title) => h('button', { type: 'button', class: 'chip', title, onclick: fn }, label);
   openSheet(h('h3', {}, 'Add to the scene'),
-    h('div', { class: 'chips' }, ...Object.entries(TYPES).filter(([t]) => t !== 'photo').map(([t, d]) => chip(`${d.icon} ${d.label}`, () => addObject(t))),
+    h('div', { class: 'chips' }, ...Object.entries(TYPES).filter(([t]) => !['photo', 'model', 'splat'].includes(t)).map(([t, d]) => chip(`${d.icon} ${d.label}`, () => addObject(t))),
       SC.room ? null : chip('⌂ Room', () => addObject(ROOM)),
       chip('🖼 Photo in 3D…', () => {
         closeSheet(); C.openImagePicker({ title: 'Picture to turn into 3D', onPick: (name) => makePhoto(name) });
