@@ -151,6 +151,11 @@ async def object_info():
     return OBJECT_INFO
 
 
+@app.get("/object_info/{name}")
+async def object_info_one(name: str):  # ComfyDeck lists input images through /object_info/LoadImage
+    return {name: OBJECT_INFO[name]} if name in OBJECT_INFO else {}
+
+
 @app.post("/prompt")
 async def prompt(body: dict):
     p = body["prompt"]

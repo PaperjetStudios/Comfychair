@@ -3,7 +3,7 @@ import {
 } from './ui.js';
 import { S, switchTab } from './core.js';
 import { openGeneration, sendToInput } from './run.js';
-import { E, FULL, persistEditor, renderEditor } from './editor.js';
+import { E, FULL, editorTabsReady, persistEditor, renderEditor } from './editor.js';
 import { addToTimeline } from './video.js';
 
 // ---------------------------------------------------------------------------
@@ -169,6 +169,7 @@ async function itemsToEditor(all) {
     } catch (e) { toast(`#${g.id}: ${e.message}`, true); }
   }
   if (!names.length) return;
+  await editorTabsReady();   // a first visit loads the tab's saved state; write after it, not before
   const before = { layers: E.layers, arrange: E.arrange, size: E.size };
   E.layers = names.reverse().map((name) => ({ name, crop: { ...FULL }, scale: 1, hidden: false }));  // first selected on top of the list
   E.sel = null; E.cropping = false; E.size = null;
@@ -177,7 +178,9 @@ async function itemsToEditor(all) {
   persistEditor();
   setBoardSelecting(false);
   switchTab('editor');
+  const tid = E.tab?.id;
   if (before.layers.length) undoToast(`New edit with ${names.length} image${names.length > 1 ? 's' : ''}`, () => {
+    if (E.tab?.id !== tid) return toast('That edit is in another tab', true);
     Object.assign(E, before); persistEditor(); renderEditor();
   });
 }

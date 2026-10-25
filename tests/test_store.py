@@ -248,6 +248,69 @@ class ProjectFolders(unittest.TestCase):
         self.assertEqual(db.project_folder(None), "Unsorted")
 
 
+class StoreStill(unittest.TestCase):
+    PNG = (b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + (30).to_bytes(4, "big") + (20).to_bytes(4, "big")
+           + b"\x08\x02\x00\x00\x00" + b"\0" * 20)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.c = TestClient(main.app)
+        cls.pid = db.create_project(f"Still {time_ns()}")["id"]
+        cls.q = f"?project_id={cls.pid}"
+
+    def url(self, did, tail="/still", kind="edit-tabs"):
+        return f"/api/store/{kind}/{did}{tail}{self.q}"
+
+    def doc(self, did="s1"):
+        return self.c.put(self.url(did, ""), json={"name": "S", "payload": {"a": 1}, "rev": 0}).json()
+
+    def test_put_stores_png_and_keeps_rev(self):
+        d = self.doc()
+        r = self.c.put(self.url("s1"), content=self.PNG)
+        self.assertEqual(r.status_code, 200)
+        st = r.json()
+        self.assertEqual((st["w"], st["h"], st["rev"]), (30, 20, 1))
+        got = self.c.get(self.url("s1", ""))
+        self.assertEqual(got.json()["rev"], d["rev"])
+        self.assertEqual(got.json()["still"], st)
+        self.assertEqual(self.c.get(st["url"]).content, self.PNG)  # served by the /files/projects mount
+        self.assertEqual(self.c.put(self.url("s1"), content=self.PNG).json()["rev"], 2)
+        self.assertEqual(next(x for x in self.c.get(f"/api/store/edit-tabs{self.q}").json() if x["id"] == "s1")["still"]["rev"], 2)  # list carries it
+        # a later content save keeps the still
+        self.assertEqual(self.c.put(self.url("s1", ""), json={"payload": {"a": 2}, "rev": 1}).json()["still"]["rev"], 2)
+
+    def test_errors(self):
+        self.assertEqual(self.c.put(self.url("nope"), content=self.PNG).status_code, 404)
+        self.doc("s2")
+        self.assertEqual(self.c.put(self.url("s2"), content=b"not a png at all, sorry......").status_code, 400)
+        self.assertEqual(self.c.put(self.url("s2"), content=self.PNG + b"\0" * store.MAX_STILL).status_code, 413)
+        self.assertEqual(self.c.put(self.url("bad.id"), content=self.PNG).status_code, 400)
+        self.assertEqual(self.c.put(self.url("s2", kind="nope"), content=self.PNG).status_code, 400)
+        self.assertEqual(self.c.put(f"/api/store/edit-tabs/s2/still?scope=global", content=self.PNG).status_code, 400)
+
+    def test_delete_still(self):
+        self.doc("s3")
+        self.c.put(self.url("s3"), content=self.PNG)
+        self.assertEqual(self.c.delete(self.url("s3")).status_code, 200)
+        self.assertIsNone(self.c.get(self.url("s3", "")).json().get("still"))
+        self.assertEqual(self.c.delete(self.url("zzz")).status_code, 404)
+
+    def test_delete_trashes_still_and_restore_brings_it_back(self):
+        self.doc("s4")
+        st = self.c.put(self.url("s4"), content=self.PNG).json()
+        folder = config.PROJECTS_DIR / db.project_folder(self.pid) / ".deck" / "edit-tabs"
+        self.assertEqual(self.c.delete(self.url("s4", "")).status_code, 200)
+        self.assertFalse((folder / "s4.png").exists())
+        trashed = sorted(p.name for p in (folder / ".trash").glob("s4.*"))
+        self.assertEqual(len(trashed), 2)
+        self.assertEqual(trashed[0].rpartition(".")[0], trashed[1].rpartition(".")[0])  # same timestamp
+        r = self.c.post(self.url("s4", "/restore"))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["still"]["rev"], st["rev"])
+        self.assertEqual((folder / "s4.png").read_bytes(), self.PNG)
+        self.assertFalse(list((folder / ".trash").glob("s4.*")))
+
+
 def time_ns():
     import time
     return time.time_ns()

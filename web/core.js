@@ -84,3 +84,7 @@ export function onServer(type, fn) { if (!SERVER.has(type)) SERVER.set(type, new
 export function emitServer(m) { for (const fn of [...(SERVER.get(m.type) || [])]) { try { fn(m); } catch (e) { console.error(e); } } }
 export function onProject(fn) { PROJECT.add(fn); return () => PROJECT.delete(fn); }
 export function emitProject() { for (const fn of [...PROJECT]) { try { fn(S.project); } catch (e) { console.error(e); } } }
+
+// Image-picker sources registered by panels (media.js registerPickerSource). Lives here, not in media.js,
+// because panels register while the import cycle is still being evaluated and media.js may not have run yet.
+export const PICKER_SOURCES = new Map();

@@ -13,7 +13,9 @@ import re
 import tempfile
 import time
 
-from fastapi import APIRouter, Body, HTTPException
+from urllib.parse import quote
+
+from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from . import config, db
@@ -21,6 +23,8 @@ from . import config, db
 # The one place that says which kinds exist. Add a name here to start storing a new one.
 KINDS = ("gen-tabs", "gen-presets", "edit-tabs", "video-tabs", "scene-tabs", "objects", "scenes")
 MAX_PAYLOAD = 5 * 1024 * 1024
+MAX_STILL = 12 * 1024 * 1024
+PNG_SIG = b"\x89PNG\r\n\x1a\n"
 TRASH_DAYS = 30
 ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
@@ -103,7 +107,7 @@ def _conflict(cur):
 @router.get("/{kind}")
 async def list_docs(kind: str, project_id: int | None = None, scope: str | None = None):
     d = _dir(kind, project_id, scope)
-    return [{k: x.get(k) for k in ("id", "name", "order", "rev", "updated")} for x in _docs(d)]
+    return [{k: x.get(k) for k in ("id", "name", "order", "rev", "updated", "still")} for x in _docs(d)]
 
 
 @router.get("/{kind}/{did}")
@@ -173,7 +177,11 @@ async def delete_doc(kind: str, did: str, project_id: int | None = None, scope: 
         ts = old.name[:-5].rpartition(".")[2]
         if ts.isdigit() and int(ts) < cutoff:
             old.unlink(missing_ok=True)
-    os.replace(path, d / ".trash" / f"{did}.{time.time_ns()}.json")
+            old.with_suffix(".png").unlink(missing_ok=True)
+    ts = time.time_ns()
+    os.replace(path, d / ".trash" / f"{did}.{ts}.json")
+    if (d / f"{did}.png").exists():  # its still goes with it, same timestamp
+        os.replace(d / f"{did}.png", d / ".trash" / f"{did}.{ts}.png")
     await _tell(kind, did, doc["rev"], project_id, scope, deleted=True)
     return doc
 
@@ -191,6 +199,9 @@ async def restore_doc(kind: str, did: str, project_id: int | None = None, scope:
     if not copies:
         raise HTTPException(404, "Nothing to restore")
     src = copies[-1][1]
+    still = src.with_suffix(".png")
+    if still.exists():
+        os.replace(still, d / f"{did}.png")
     doc = _read(src)
     doc["rev"] += 1
     doc["updated"] = time.time()
@@ -220,3 +231,55 @@ async def reorder(kind: str, body: dict = Body(...), project_id: int | None = No
         _write(d / f"{i}.json", doc)
     await _tell(kind, None, None, project_id, scope, ids=ids)
     return [{k: docs[i][k] for k in ("id", "name", "order", "rev", "updated")} for i in ids]
+
+
+# ---- stills: a picture of a document (an edit tab's composite), for pickers ----
+# Lives beside the doc as <id>.png and is served by the /files/projects mount. Writing one never bumps the
+# doc's rev (it isn't content), so it can't make another device's save conflict.
+def _still_url(path, rev):
+    rel = path.relative_to(config.PROJECTS_DIR).as_posix()
+    return f"/files/projects/{quote(rel)}?v={rev}"
+
+
+@router.put("/{kind}/{did}/still")
+async def put_still(kind: str, did: str, request: Request, project_id: int | None = None, scope: str | None = None):
+    if scope == "global":
+        raise HTTPException(400, "Stills are for project documents")
+    d = _dir(kind, project_id, scope)
+    _check_id(did)
+    data = b""
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > MAX_STILL:
+            raise HTTPException(413, f"Still too large ({MAX_STILL >> 20} MB max)")
+    if len(data) < 24 or not data.startswith(PNG_SIG) or data[12:16] != b"IHDR":
+        raise HTTPException(400, "Body must be a PNG")
+    w, hh = int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    path, png = d / f"{did}.json", d / f"{did}.png"
+    if not _read(path):
+        raise HTTPException(404, "Not found")
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp-", suffix=".part")
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    os.replace(tmp, png)
+    doc = _read(path)  # again: no await from here to the write, so a concurrent save can't be overwritten
+    if not doc:
+        png.unlink(missing_ok=True)
+        raise HTTPException(404, "Not found")
+    rev = ((doc.get("still") or {}).get("rev") or 0) + 1
+    doc["still"] = {"url": _still_url(png, rev), "rev": rev, "w": w, "h": hh}
+    _write(path, doc)
+    return doc["still"]
+
+
+@router.delete("/{kind}/{did}/still")
+async def delete_still(kind: str, did: str, project_id: int | None = None, scope: str | None = None):
+    d = _dir(kind, project_id, scope)
+    _check_id(did)
+    doc = _read(d / f"{did}.json")
+    if not doc:
+        raise HTTPException(404, "Not found")
+    (d / f"{did}.png").unlink(missing_ok=True)
+    if doc.pop("still", None) is not None:
+        _write(d / f"{did}.json", doc)
+    return {"ok": True}

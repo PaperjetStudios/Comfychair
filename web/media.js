@@ -1,7 +1,7 @@
 import {
-  $, h, store, api, toast, openSheet, closeSheet, button, fileButton, seg, placeholder, note, mediaCard,
+  $, h, store, api, toast, openSheet, closeSheet, button, iconBtn, actions, fileButton, seg, placeholder, note, mediaCard,
 } from './ui.js';
-import { S, thumbUrl } from './core.js';
+import { S, PICKER_SOURCES as SOURCES, thumbUrl } from './core.js';
 import { loadHistory } from './run.js';
 
 // This project's finished outputs of the given kinds, newest first: [{ g, o, i, t }]
@@ -52,12 +52,59 @@ export function openVideoPicker({ title, onPick }) {
 }
 
 // ---------------------------------------------------------------------------
+// Extra sources for the image picker (a tab each, next to "This project" and "All inputs").
+//   registerPickerSource({ key, label, list(projectId) -> Promise<item[]>, pick(item, { mp, frame }) -> Promise<result> })
+// item:   { id, title, thumb (image url), badge?, still?: bool, video?: url, ...anything pick() needs }
+//         still: a picture of it exists (thumb); video: a clip the user may take a frame from.
+//         Both set: the user chooses; only video: straight to the frame picker; only still: picked at once.
+// pick:   frame is a PNG Blob when the user chose a frame (pickFrame below), else null (use the still).
+//         Returns what onPick gets: { name, ... } where name is an image in ComfyUI's input folder, normally
+//         from uploadImage(blob, { mp, source: 'edit-tab' }). Throw to show a toast.
+// Example, for saved video edits (video.js):
+//   registerPickerSource({ key: 'video-tabs', label: 'Saved video edits',
+//     list: async (pid) => (await api(`/api/store/video-tabs?project_id=${pid}`)).map((d) =>
+//       ({ id: d.id, title: d.name, thumb: d.still?.url, still: !!d.still, video: d.render?.url })),
+//     pick: async (it, { mp, frame }) => uploadImage(frame || await (await fetch(it.thumb)).blob(), { mp, source: 'video-tab' }) });
+// ---------------------------------------------------------------------------
+export function registerPickerSource(src) { SOURCES.set(src.key, src); }
+
+// Scrub a video and take one frame: a sheet with the clip, a slider and frame steps.
+// Resolves a PNG Blob of the shown frame, or null on Cancel (Back, if given, runs after).
+export function pickFrame({ url, title = 'Pick a frame', fps = 24, back = null }) {
+  return new Promise((resolve) => {
+    const v = h('video', { src: `${url}#t=0.001`, muted: true, playsInline: true, preload: 'auto', class: 'frame-video' });
+    const slider = h('input', { type: 'range', min: 0, max: 0, step: 'any', value: 0, 'aria-label': 'Time' });
+    const lbl = h('span', { class: 'hint' }, '0.00s');
+    const seek = (t) => { v.currentTime = Math.max(0, Math.min(v.duration || 0, t)); };
+    const step = (n) => { v.pause(); seek(v.currentTime + n / fps); };
+    v.addEventListener('loadedmetadata', () => { slider.max = v.duration; });
+    v.addEventListener('timeupdate', () => { slider.value = v.currentTime; lbl.textContent = `${v.currentTime.toFixed(2)}s / ${(v.duration || 0).toFixed(2)}s`; });
+    v.addEventListener('error', () => toast("Couldn't load that video", true));
+    slider.addEventListener('input', () => { v.pause(); seek(Number(slider.value)); });
+    const done = (blob) => { closeSheet(); resolve(blob); if (!blob) back?.(); };
+    const use = async () => {
+      if (!v.videoWidth) return toast('The video is still loading', true);
+      if (v.seeking) await new Promise((r) => v.addEventListener('seeked', r, { once: true }));
+      const cv = document.createElement('canvas');
+      cv.width = v.videoWidth; cv.height = v.videoHeight;
+      cv.getContext('2d').drawImage(v, 0, 0);
+      cv.toBlob((b) => (b ? done(b) : toast("Couldn't grab that frame", true)), 'image/png');
+    };
+    openSheet(h('h3', {}, title), h('div', { class: 'media-big' }, v), slider,
+      h('div', { class: 'row frame-bar' }, iconBtn('Back one frame', '◀', () => step(-1)), lbl, iconBtn('Forward one frame', '▶', () => step(1))),
+      actions(button('Use this frame', use, { cls: 'primary' }), button('Cancel', () => done(null), { cls: 'ghost' })));
+  });
+}
+
+// ---------------------------------------------------------------------------
 // image picker: a gallery of ComfyUI's input images and of history outputs, plus upload.
 // Whatever is picked ends up as an image in ComfyUI's input folder, so onPick gets its name.
 // multi: keep the sheet open and call onPick for every tap (the editor adds several at once).
 // ---------------------------------------------------------------------------
-export function openImagePicker({ title, mp = () => 0, onPick, multi = false }) {
+export function openImagePicker(opts) {
+  const { title, mp = () => 0, onPick, multi = false } = opts;
   let tab = store.get('deck.pickerTab2', 'project');
+  if (tab !== 'project' && tab !== 'all' && !SOURCES.has(tab)) tab = 'project';
   let q = '';
   let inputs = null;
   const search = h('input', { type: 'text', placeholder: 'Filter by name…' });
@@ -79,7 +126,7 @@ export function openImagePicker({ title, mp = () => 0, onPick, multi = false }) 
   };
 
   // This project: its uploads, editor saves and drawings plus everything it generated, newest first
-  const SOURCE = { upload: 'upload', editor: 'edit', drawing: 'drawing', crop: 'crop', snapshot: 'frame', scene: '3d' };
+  const SOURCE = { upload: 'upload', editor: 'edit', drawing: 'drawing', crop: 'crop', snapshot: 'frame', scene: '3d', 'edit-tab': 'edit tab' };
   const projectCards = async () => {
     const items = inputs.project.filter((r) => r.source !== 'generation')
       .map((r) => ({ t: r.created, el: () => inputCard(r.name, SOURCE[r.source] || null) }));
@@ -95,8 +142,31 @@ export function openImagePicker({ title, mp = () => 0, onPick, multi = false }) 
     return list.length ? list.map((n) => inputCard(n)) : placeholder('No input images match.');
   };
 
+  // a registered source (registerPickerSource): its items for this project; a tap picks the still, a frame, or asks
+  const sourceCards = async (src) => {
+    const items = await src.list(S.project);
+    const take = async (it, frame, c, nested = false) => {
+      try { const r = await src.pick(it, { mp: mp(), frame }); picked(r.name, r, c); } catch (e) { toast(e.message, true); }
+      if (nested && multi) openImagePicker(opts);   // (the choice / frame sheet replaced the picker)
+    };
+    const frameOf = async (it, c) => {
+      const f = await pickFrame({ url: it.video, title: it.title, back: () => openImagePicker(opts) });
+      if (f) take(it, f, c, true);
+    };
+    const tap = (it, c) => {
+      if (it.video && it.still) {
+        openSheet(h('h3', {}, it.title), h('div', { class: 'media-big' }, h('img', { src: it.thumb, alt: '' })),
+          actions(button('Use the saved still', () => { closeSheet(); take(it, null, c, true); }, { cls: 'primary' }),
+            button('Pick a frame…', () => frameOf(it, c)), button('Back', () => openImagePicker(opts), { cls: 'ghost' })));
+      } else if (it.video) frameOf(it, c);
+      else take(it, null, c);
+    };
+    return items.length ? items.map((it) => mediaCard(it.thumb ? h('img', { src: it.thumb, alt: '', loading: 'lazy' }) : placeholder('…'), it.title,
+      (c) => tap(it, c), { badge: it.badge || null })) : placeholder(`Nothing in ${src.label.toLowerCase()} for this project yet.`);
+  };
+
   const projName = (S.projects.find((p) => p.id === S.project) || {}).name || 'This project';
-  const tabs = seg([['project', projName], ['all', 'All inputs']], tab, (t) => { tab = t; store.set('deck.pickerTab2', t); draw(); });
+  const tabs = seg([['project', projName], ['all', 'All inputs'], ...[...SOURCES.values()].map((x) => [x.key, x.label])], tab, (t) => { tab = t; store.set('deck.pickerTab2', t); draw(); });
   const onFiles = async (files) => {
     toast(`Uploading ${files.length}…`);
     for (const fl of files) {
@@ -114,6 +184,7 @@ export function openImagePicker({ title, mp = () => 0, onPick, multi = false }) 
     fileButton('📷 Camera', onFiles, { accept: 'image/*', capture: 'environment' }),
     multi ? button('Done', closeSheet) : null], async () => {
     search.classList.toggle('hidden', tab !== 'all');
+    if (SOURCES.has(tab)) return sourceCards(SOURCES.get(tab));
     inputs ||= await api(`/api/inputs${S.project != null ? `?project_id=${S.project}` : ''}`);
     return tab === 'project' ? projectCards() : allCards();
   });

@@ -1,9 +1,10 @@
 import {
-  $, h, store, clamp01, busy, toast, undoToast, openOverlay, sheetOpen, openSheet, closeSheet, button, iconBtn, actions,
+  $, h, store, api, clamp01, busy, toast, undoToast, openOverlay, sheetOpen, openSheet, closeSheet, button, iconBtn, actions,
   seg, field, section, hint, propNum, layerRowsEl, panelTop,
 } from './ui.js';
 import { ASPECT_PRESETS, S, inputUrl, switchTab, thumbUrl } from './core.js';
-import { openImagePicker, uploadImage } from './media.js';
+import { openImagePicker, registerPickerSource, uploadImage } from './media.js';
+import { TabSet } from './tabs.js';
 import { mpInput, persist, renderFields } from './generate.js';
 
 // ---------------------------------------------------------------------------
@@ -146,28 +147,101 @@ export function templateAspect() {
 // a scale. Everything is drawn client-side on a canvas, then uploaded as a new input image.
 // ---------------------------------------------------------------------------
 export const FULL = { x: 0, y: 0, w: 1, h: 1 };
-export const E = (() => {
-  const saved = store.get('deck.editor', {});
-  const e = { size: null, cols: 2, gap: 0, bg: '#000000', mp: 0, snap: true, ...saved, arrange: saved.arrange || null };
+const SEEDED = 'deck.editor.seeded';   // set once a tab has loaded: the old single-editor state then lives in the tabs
+const BLANK = () => ({ v: 2, size: null, cols: 2, gap: 0, bg: '#000000', mp: 0, snap: true, arrange: null, layers: [] });
+// a saved payload (an edit tab, or the old `deck.editor`) as editor state
+function fromSaved(saved) {
+  const e = { ...BLANK(), ...saved, arrange: saved.arrange || null };
   // layers: { name, crop: {x,y,w,h} as fractions, x, y (canvas px), scale, hidden, img }; the last
   // one is drawn on top. size: a fixed {w,h} canvas, or null to fit around the layers.
-  e.layers = (saved.layers || []).map((l) => ({ name: l.name, crop: l.crop || { ...FULL },
+  e.layers = (saved.layers || []).map((l) => ({ name: l.name, crop: { ...(l.crop || FULL) },
     x: l.x, y: l.y, scale: l.x == null ? 1 : l.scale, hidden: !!l.hidden }));
   // The old auto-layout editor kept no positions: lay its images out once they load, in the same
   // order (its first image was leftmost, so it goes to the top of the list).
   if (saved.v !== 2 && e.layers.length) { e.arrange = saved.layout || 'row'; e.layers.reverse(); }
   delete e.layout;
   return e;
-})();
-E.sel = null; E.cropping = false; E.aspect = null; E.guides = [];   // guides: snap lines {x} or {y} while dragging
-
-
-
-
-export function persistEditor() {
-  store.set('deck.editor', { v: 2, size: E.size, cols: E.cols, gap: E.gap, bg: E.bg, mp: E.mp, snap: E.snap, arrange: E.arrange,
-    layers: E.layers.map((l) => ({ name: l.name, crop: l.crop, x: l.x, y: l.y, scale: l.scale, hidden: l.hidden })) });
 }
+export const E = fromSaved(store.get(SEEDED, false) ? {} : store.get('deck.editor', {}));
+E.sel = null; E.cropping = false; E.aspect = null; E.guides = [];   // guides: snap lines {x} or {y} while dragging
+E.tab = null;   // the tab this state belongs to: { id, qs }
+
+
+
+
+// What a tab stores: the editor's settings and its layers (input image names + crop/position), all small.
+// (Layers only ever name input images, so nothing here is a data URL or a blob.)
+const dumpEditor = () => ({ v: 2, size: E.size, cols: E.cols, gap: E.gap, bg: E.bg, mp: E.mp, snap: E.snap, arrange: E.arrange,
+  layers: E.layers.map((l) => ({ name: l.name, crop: l.crop, x: l.x, y: l.y, scale: l.scale, hidden: l.hidden })) });
+// every edit ends up here: the tab saves itself shortly and its still follows
+export function persistEditor() { tabs.changed(); stillSoon(); }
+
+const tabMount = h('div', { class: 'editor-tabs' });
+const tabs = new TabSet({ kind: 'edit-tabs', mount: tabMount, newName: (n) => `Edit ${n}`, seed: () => (store.get(SEEDED, false) ? null : dumpEditor()),
+  adapter: {
+    empty: BLANK,
+    dump: dumpEditor,
+    load(payload, doc) {
+      if (E.tab?.id !== doc.id) stillNow(); else clearTimeout(stillTimer);   // a tab being left gets its still now (the draw is synchronous)
+      stillDue = false;
+      Object.assign(E, fromSaved(payload), { sel: null, cropping: false, aspect: null, guides: [], tab: { id: doc.id, qs: tabs.qs } });
+      store.set(SEEDED, true);
+      if (!doc.still && E.layers.length) stillSoon();
+      renderEditor();
+    },
+  } });
+
+// Resolves once a tab is open (or after ~8 s, e.g. offline), so other panels can write into the current tab
+// without the first load replacing their change.
+export async function editorTabsReady() {
+  if (!tabs.started) tabs.start();
+  for (let i = 0; i < 160 && !(tabs.active && E.tab?.id === tabs.active.id); i++) await new Promise((r) => setTimeout(r, 50));
+}
+
+// ---- the still: a picture of the composite, kept beside the tab so pickers can show it ----
+const STILL_DELAY = 4000, STILL_MAX = 2048;
+let stillTimer = 0, stillDue = false;
+function stillSoon() {
+  stillDue = true; clearTimeout(stillTimer);
+  stillTimer = setTimeout(stillNow, STILL_DELAY);
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden && stillDue) stillNow(); });
+// Draw now (synchronously, so the state can't change under it), then encode and upload. Never blocks editing.
+async function stillNow() {
+  clearTimeout(stillTimer);
+  const tab = E.tab;
+  if (!stillDue || !tab) return;
+  if (E.layers.some((l) => !l.broken && !ready(l))) { stillTimer = setTimeout(stillNow, 1000); return; }   // images still loading
+  stillDue = false;
+  let cv = document.createElement('canvas');
+  const has = composeEditor(cv);
+  if (has && Math.max(cv.width, cv.height) > STILL_MAX) {
+    const k = STILL_MAX / Math.max(cv.width, cv.height), small = document.createElement('canvas');
+    small.width = Math.max(1, Math.round(cv.width * k)); small.height = Math.max(1, Math.round(cv.height * k));
+    const c2 = small.getContext('2d'); c2.imageSmoothingQuality = 'high'; c2.drawImage(cv, 0, 0, small.width, small.height);
+    cv = small;
+  }
+  const url = `/api/store/edit-tabs/${tab.id}/still${tab.qs}`;
+  try {
+    if (!has) { await fetch(url, { method: 'DELETE' }); return; }   // nothing to show any more
+    const blob = await new Promise((res) => cv.toBlob(res, 'image/png'));
+    const r = blob && await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: blob });
+    if (r && !r.ok && r.status !== 404) console.warn('still not saved:', r.status);   // 404: the tab is gone
+  } catch { stillDue = true; }   // offline: the next edit tries again
+}
+
+// Saved edits as a source in every image picker (media.js registerPickerSource)
+registerPickerSource({ key: 'edit-tabs', label: 'Saved edits',
+  async list(pid) {
+    if (stillDue) { await tabs.flush(); await stillNow(); }   // the open tab's picture first, if it's behind
+    const rows = await api(`/api/store/edit-tabs${pid != null ? `?project_id=${pid}` : ''}`);
+    return rows.filter((d) => d.still).map((d) => ({ id: d.id, title: d.name, thumb: d.still.url, still: true }));
+  },
+  async pick(it, { mp, frame }) {
+    const blob = frame || await (await fetch(it.thumb)).blob();
+    const r = await uploadImage(blob, { mp, source: 'edit-tab', filename: 'edit.png' });
+    return { ...r, from: { source: 'edit-tab', id: it.id } };   // (the input list tags it 'edit-tab'; the tab id rides along here)
+  } });
 
 const layerLoaded = (l) => !!(l.img && l.img.naturalWidth);
 const ready = (l) => !l.broken && layerLoaded(l) && l.x != null;
@@ -523,19 +597,27 @@ function removeLayer(l) {
   E.layers = E.layers.filter((o) => o !== l);
   if (E.sel === l) { E.sel = null; E.cropping = false; }
   persistEditor();
-  undoToast('Layer removed', () => { E.layers = before; E.sel = l; persistEditor(); renderEditor(); });
+  const tid = E.tab?.id;
+  undoToast('Layer removed', () => {
+    if (E.tab?.id !== tid) return toast('That layer was in another edit tab', true);
+    E.layers = before; E.sel = l; persistEditor(); renderEditor();
+  });
 }
 
 export function renderEditor() {
+  if (!tabs.started) tabs.start();
   E.layers.forEach(loadLayerImage);
   if (E.sel && !E.layers.includes(E.sel)) E.sel = null;
   if (!E.sel || !ready(E.sel)) E.cropping = false;
   $('#editorPanel').replaceChildren(
-    h('div', { class: 'panel-body' },
+    h('div', { class: 'panel-body' }, tabMount,
       panelTop(button('+ Add images', addEditorImages, { cls: 'primary' }), E.layers.length ? () => {
-        const before = E.layers;
+        const before = E.layers, tid = E.tab?.id;
         E.layers = []; E.sel = null; E.arrange = null; persistEditor(); renderEditor();
-        undoToast(`Cleared ${before.length} layer${before.length > 1 ? 's' : ''}`, () => { E.layers = before; persistEditor(); renderEditor(); });
+        undoToast(`Cleared ${before.length} layer${before.length > 1 ? 's' : ''}`, () => {
+          if (E.tab?.id !== tid) return toast('Those layers were in another edit tab', true);
+          E.layers = before; persistEditor(); renderEditor();
+        });
       } : null),
       layerList(),
       E.sel ? layerProps(E.sel) : canvasProps()));
