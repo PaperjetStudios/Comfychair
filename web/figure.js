@@ -543,6 +543,66 @@ export const pairSay = (key) => SAY[key === 'carry' ? 'carryPair' : key] || '';
 export const sayParams = (m = {}) => Object.entries(m).filter(([k, v]) => SAY_PARAM[k] && Math.abs(v) >= 10)
   .map(([k, v]) => SAY_PARAM[k][v > 0 ? 0 : 1]).filter(Boolean);
 
+// ---- moves: a few seconds of keys from the current pose. A step is [seconds, pose (null: the
+// pose it started in), parameters to set on top, { y: lift (m), ry: turn (°), d: forward (m), ease }].
+// loop: [seconds per round, ...steps] repeated to the end of the clip. travel: walk or run forward;
+// spot: walk on the spot (the step phase keyed).
+Object.assign(PRESETS, {
+  wave2: { cat: null, label: '', j: { rsho: [0, 0, -150], relb: [0, 0, -65], lsho: [0, 0, 8], lelb: [-8, 0, 0] } },
+  clapOut: { cat: null, label: '', j: { lsho: [-40, 0, 25], rsho: [-40, 0, -25] }, ik: { lhand: ['chest', [0.22, 0, 0.3]], rhand: ['chest', [-0.22, 0, 0.3]] } },
+});
+PRESETS.punchL = { cat: null, label: '', j: Object.fromEntries(Object.entries(PRESETS.punch.j).map(([n, [x, y, z]]) => [opposite(n) || n, [x, -y, -z]])) };
+const MOVES = {
+  walk: { label: 'Walk', icon: '🚶', travel: { m: { walk: 100 }, speed: 1.3, pn: 'walk' } },
+  run: { label: 'Run', icon: '🏃', travel: { m: { run: 100 }, speed: 3.6, pn: 'run' } },
+  spot: { label: 'Walk on the spot', icon: '👣', spot: { m: { walk: 100 }, rate: 0.9, pn: 'walk' } },
+  jump: { label: 'Jump', icon: '⤒', steps: [[0.35, null, { squatB: 45 }], [0.6, 'jump', null, { y: 0.45 }], [0.75, 'jump', null, { y: 0.5 }],
+    [1.0, null, { squatB: 40 }], [1.4, null]] },
+  sitDown: { label: 'Sit down', icon: '🪑', steps: [[1.0, 'sit']] },
+  standUp: { label: 'Stand up', icon: '⬆', steps: [[0.6, 'crouch'], [1.3, 'stand', {}]] },
+  kneelDown: { label: 'Kneel down', icon: '🧎', steps: [[1.2, 'kneelOne']] },
+  lieDown: { label: 'Lie down', icon: '🛌', steps: [[0.7, 'crouch'], [1.5, 'longSit'], [2.5, 'lieBack']] },
+  getUp: { label: 'Get up', icon: '🌅', steps: [[1.0, 'longSit'], [2.0, 'crouch'], [2.8, 'stand', {}]] },
+  bow: { label: 'Bow', icon: '🙇', steps: [[0.8, 'bow'], [1.5, 'bow'], [2.3, null]] },
+  turn: { label: 'Turn around', icon: '↻', steps: [[1.2, null, null, { ry: 180 }]] },
+  wave: { label: 'Wave', icon: '👋', steps: [[0.4, 'wave'], [0.7, 'wave2'], [1.0, 'wave'], [1.3, 'wave2'], [1.6, 'wave'], [2.2, null]] },
+  nod: { label: 'Nod', icon: '↕', steps: [[0.25, null, { nod: 20 }], [0.5, null, { nod: -5 }], [0.75, null, { nod: 20 }], [1.1, null]] },
+  shake: { label: 'Shake head', icon: '↔', steps: [[0.25, null, { turn: 30 }], [0.55, null, { turn: -30 }], [0.85, null, { turn: 30 }], [1.2, null]] },
+  look: { label: 'Look around', icon: '👀', steps: [[0.8, null, { turn: 60 }], [1.4, null, { turn: 60 }], [2.4, null, { turn: -60 }], [3.0, null, { turn: -60 }], [3.6, null]] },
+  squats: { label: 'Squats', icon: '🏋', loop: [1.6, [0.8, null, { squatB: 100 }], [1.6, null, { squatB: 0 }]] },
+  pushups: { label: 'Push-ups', icon: '💪', steps: [[0.8, 'kneel'], [1.6, 'plank']], loop: [1.2, [0.6, 'pushDown'], [1.2, 'plank']] },
+  jacks: { label: 'Jumping jacks', icon: '✳', loop: [0.7, [0.35, 'star', null, { y: 0.08 }], [0.7, 'stand']] },
+  punches: { label: 'Punches', icon: '🥊', steps: [[0.3, 'guard']], loop: [1.0, [0.25, 'punch'], [0.5, 'guard'], [0.75, 'punchL'], [1.0, 'guard']] },
+  clap: { label: 'Clap', icon: '👏', steps: [[0.3, 'clapOut']], loop: [0.5, [0.25, 'together'], [0.5, 'clapOut']] },
+  breathe: { label: 'Breathe', icon: '🫁', loop: [3, [1.5, null, { lean: 3, armsOut: 3 }], [3, null, { lean: 0, armsOut: 0 }]] },
+};
+export const moveList = () => Object.entries(MOVES).map(([k, mv]) => [k, mv.label, mv.icon]);
+export const moveKind = (key) => (MOVES[key].travel ? 'travel' : MOVES[key].spot ? 'spot' : 'steps');
+// the steps of a move that fit in avail seconds: [{ t, j (null: as it started), m (set on top), pn, y, ry, d, ease }]
+export function moveSteps(key, avail, inPlace = false) {
+  const mv = MOVES[key], out = [];
+  const step = (t, [, pose, m, x = {}]) => out.push({ t, j: pose ? preset(pose).j : null, pn: pose, m: m || null, ...x });
+  if (mv.travel || mv.spot) {
+    const c = mv.travel || mv.spot, ramp = Math.min(0.4, avail / 2);
+    if (mv.travel && !inPlace) {  // speed up for the first moment, then a steady pace (linear) to the end
+      out.push({ t: ramp, j: null, m: c.m, pn: c.pn, d: c.speed * ramp / 2, ease: 'linear' });
+      out.push({ t: avail, j: null, m: c.m, pn: c.pn, d: c.speed * (avail - ramp / 2) });
+    } else {
+      const rate = mv.spot ? c.rate : c.speed / strideLength(c.m);
+      out.push({ t: ramp, j: null, m: c.m, pn: c.pn, phase: rate * ramp / 2, ease: 'linear' });
+      out.push({ t: avail, j: null, m: c.m, pn: c.pn, phase: rate * (avail - ramp / 2) });
+    }
+    return out;
+  }
+  let t0 = 0;
+  for (const s of mv.steps || []) { if (s[0] > avail) return out; step(s[0], s); t0 = s[0]; }
+  if (mv.loop) {
+    const [len, ...ls] = mv.loop;
+    for (let r = 0; t0 + len * (r + 1) <= avail + 1e-6; r++) for (const s of ls) step(t0 + len * r + s[0], s);
+  }
+  return out;
+}
+
 // ---- OpenPose (COCO 18) ---------------------------------------------------------------------
 const KP = ['nose', 'neck', 'rsho', 'relb', 'rhand', 'lsho', 'lelb', 'lhand', 'rhip', 'rknee', 'rfoot', 'lhip', 'lknee', 'lfoot', 'reye', 'leye', 'rear', 'lear'];
 // the limbs and colours of controlnet_aux's draw_bodypose (1-based keypoints, first 17 limbs)

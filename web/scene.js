@@ -48,7 +48,7 @@ const pivotOf = (o) => (pivotsFor(o).some(([k]) => k === o.pivot) || (o.type ===
 
 // ---- scene data ------------------------------------------------------------
 let SC;   // the scene (persisted per project)
-const R = { f: 0, sel: null, joint: null, figTab: 'pose', poseCat: 'stand', mask: 'all', sym: false, mode: 'translate', playing: false, depth: false, autoKey: true, meshes: new Map(), room: [], applying: false, lastRender: null };
+const R = { f: 0, sel: null, joint: null, figTab: 'pose', poseCat: 'stand', mask: 'all', sym: false, speed: 1, inPlace: false, mode: 'translate', playing: false, depth: false, autoKey: true, meshes: new Map(), room: [], applying: false, lastRender: null };
 
 const newRoom = () => ({ w: 8, d: 8, h: 2.8, walls: true, ceiling: true, hidden: false });
 function defaultScene() {
@@ -971,7 +971,7 @@ function objectProps(o) {
   const tab = FIG_TABS.some(([k]) => k === R.figTab) ? R.figTab : 'pose';
   return section(o.name, () => select(null),
     seg(FIG_TABS, tab, (v) => { R.figTab = v; store.set('deck.scene.figtab', v); renderPanel(); }, { wrap: true }),
-    { pose: posesTab, adjust: adjustTab, joint: jointsTab, place: placeProps }[tab](o, cur));
+    { pose: posesTab, adjust: adjustTab, move: movesTab, joint: jointsTab, place: placeProps }[tab](o, cur));
 }
 
 // where it is, how big, its pivot; duplicate and delete
@@ -1021,7 +1021,8 @@ function liftTo(o, v, j, m) {
 }
 
 // ---- a figure's pose tabs ----------------------------------------------------------------
-const FIG_TABS = [['pose', '🧍 Poses'], ['adjust', '🎚 Adjust'], ['joint', '🦴 Joints'], ['place', '📐 Place']];
+const FIG_TABS = [['pose', '🧍 Poses'], ['adjust', '🎚 Adjust'], ['move', '🎬 Moves'], ['joint', '🦴 Joints'], ['place', '📐 Place']];
+const SPEEDS = [[1.5, 'Slow'], [1, 'Normal'], [0.7, 'Fast']];
 const UPPER = new Set(['spine', 'chest', 'neck', 'head', 'lsho', 'lelb', 'lhand', 'rsho', 'relb', 'rhand']);
 const MINE = 'deck.figure.poses';  // poses saved by hand, in every project
 let clip = null;  // a copied pose
@@ -1140,6 +1141,59 @@ function adjustTab(o, cur) {
     }),
     h('div', { class: 'row wrap' }, Object.keys(cur().m || {}).length ? button('All off', () => { setM({}); changed(); }) : null),
     hint('These sit on top of the pose, so a new pose keeps them. With keys they are keyed with the pose and blend between keys.'),
+  ];
+}
+
+// a move: keys from the playhead on, starting from the pose it's in now (one undo)
+function runMove(o, key) {
+  const v = current(o, FIG), f0 = R.f, n = frames(), k = R.speed;
+  const avail = (n - 1 - f0) / FPS / k;
+  if (avail < 0.3) return toast('Move the playhead back: there\'s no time left for a move', true);
+  const steps = FIGURE.moveSteps(key, avail, R.inPlace);
+  if (!steps.length) return toast('Not enough time left for that move: move the playhead back', true);
+  const before = clone(o);
+  const at = (st) => Math.min(n - 1, f0 + Math.max(1, Math.round(st.t * k * FPS)));
+  const last = at(steps[steps.length - 1]), r = THREE.MathUtils.degToRad(v.ry);
+  if (FIGURE.moveKind(key) === 'spot' || (R.inPlace && FIGURE.moveKind(key) === 'travel')) o.stepsFollow = false;
+  else if (FIGURE.moveKind(key) === 'travel') o.stepsFollow = true;
+  addKey(o, FIG, { ...v, m: { ...v.m } });
+  o.keys = o.keys.filter((x) => x.f <= f0 || x.f > last);
+  for (const st of steps) {
+    const f = at(st), j = st.j || v.j, m = { ...v.m, ...st.m }, d = (st.d || 0) * v.sy;
+    if (st.phase != null) m.phase = (v.m?.phase || 0) + st.phase;
+    const y = v.y + (o.ground ? 0 : (FIGURE.liftFor(j, m) - FIGURE.liftFor(v.j, v.m)) * v.sy) + (st.y || 0) * v.sy;
+    const key = { ...v, f, j, m, pn: st.pn || v.pn, y, ry: v.ry + (st.ry || 0), x: v.x + d * Math.sin(r), z: v.z + d * Math.cos(r) };
+    if (st.ease) key.ease = st.ease;
+    o.keys = o.keys.filter((x) => x.f !== f);
+    o.keys.push(key);
+  }
+  o.keys.sort((a, b) => a.f - b.f);
+  changed();
+  undoToast(`${FIGURE.moveList().find(([x]) => x === key)[1]}: keys to ${(last / FPS).toFixed(1)} s`, () => {
+    for (const k of Object.keys(o)) delete o[k];
+    Object.assign(o, before); changed();
+  });
+}
+
+// keys a step later: a key here and the same pose further on, to change into the next pose
+function nextKey(o, secs) {
+  const f = Math.min(frames() - 1, R.f + Math.round(secs * FPS));
+  if (f === R.f) return toast('At the end of the clip', true);
+  addKey(o, FIG); seek(f); addKey(o, FIG); changed();
+}
+
+function movesTab(o, cur) {
+  if (THUMBS.size > 400) THUMBS.clear();
+  const strip = o.keys.map((k) => h('button', { type: 'button', class: 'key-card' + (k.f === R.f ? ' on' : ''), onclick: () => seek(k.f) },
+    thumb(`k:${JSON.stringify([k.j, k.m])}`, [{ j: k.j, m: k.m }]), h('span', {}, `${(k.f / FPS).toFixed(1)} s`)));
+  return [
+    field('Keys', strip.length ? h('div', { class: 'key-strip' }, strip) : hint('No keys yet: a move adds them, or ◆ Key.')),
+    field('Next key in', h('div', { class: 'row' }, [0.5, 1, 2].map((t) => button(`+${t} s`, () => nextKey(o, t), { title: `A key here and one ${t} s on, ready for the next pose` })))),
+    h('div', { class: 'row' },
+      field('Speed', seg(SPEEDS, R.speed, (v) => { R.speed = v; })),
+      field('Walk and run', seg([[false, 'Go forward'], [true, 'On the spot']], R.inPlace, (v) => { R.inPlace = v; }))),
+    h('div', { class: 'pose-grid moves' }, FIGURE.moveList().map(([k, l, icon]) => tile(l, h('span', { class: 'move-icon' }, icon), () => runMove(o, k)))),
+    hint('A move starts at the playhead from the pose the figure is in, and replaces the keys it covers. Undo takes it back.'),
   ];
 }
 
