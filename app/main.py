@@ -737,22 +737,24 @@ async def video_render(body: dict = Body(...)):
 
 @app.post("/api/scene/render")
 async def scene_render(frames: list[UploadFile] = File(...), fps: float = Form(24), blur: float = Form(0),
-                       scene: str = Form("{}"), project_id: str = Form("")):
-    """The 3D tab's depth frames (PNGs, in order) as a control video in History. The scene goes in
-    the params so the 3D tab can open it again; blur softens the edges so H3 follows less literally."""
+                       scene: str = Form("{}"), project_id: str = Form(""), kind: str = Form("depth")):
+    """The 3D tab's depth (or pose) frames (PNGs, in order) as a control video in History. The scene
+    goes in the params so the 3D tab can open it again; blur softens the edges so H3 follows less literally."""
     if not imageprep.ffmpeg_available():
         raise HTTPException(400, "ffmpeg isn't installed (sudo apt install ffmpeg)")
     if not 2 <= len(frames) <= 1000:
         raise HTTPException(400, "A scene needs 2 to 1000 frames")
+    if kind not in ("depth", "pose"):
+        raise HTTPException(400, "kind is depth or pose")
     try:
         scene_data = json.loads(scene)
     except ValueError:
         raise HTTPException(400, "Bad scene")
-    params = {"frames": len(frames), "fps": fps, "blur": blur, "scene": scene_data}
+    params = {"frames": len(frames), "fps": fps, "blur": blur, "kind": kind, "scene": scene_data}
     gid = db.create_generation(_project(project_id), "3d scene", params, {}, f"scene-{uuid.uuid4().hex}", None)
     db.update_generation(gid, status="running")
     await push_gen(gid)
-    out, rel = new_output(db.get_generation(gid), "depth.mp4")
+    out, rel = new_output(db.get_generation(gid), f"{kind}.mp4")
     with tempfile.TemporaryDirectory() as td:
         for i, f in enumerate(frames):
             (Path(td) / f"f{i:05d}.png").write_bytes(await f.read())
@@ -768,6 +770,44 @@ async def scene_render(frames: list[UploadFile] = File(...), fps: float = Form(2
     db.update_generation(gid, status="done", finished=time.time(),
                          outputs=[{"filename": out.name, "path": rel, "kind": "video", "node": "scene",
                                    "duration": round(len(frames) / fps, 2)}])
+    await push_gen(gid)
+    return db.get_generation(gid)
+
+
+@app.post("/api/scene/photo")
+async def scene_photo(body: dict = Body(...)):
+    """A picture as a 3D mesh for the 3D tab: MoGe (ComfyUI's core nodes) estimates its depth and
+    camera, and the mesh, textured with the picture and torn where the depth jumps, comes back as a
+    GLB in History (glTF axes: the photo's camera at the origin, looking down -Z)."""
+    image = (body or {}).get("image")
+    if not isinstance(image, str) or not image:
+        raise HTTPException(400, "Pick a picture")
+    spec = (await comfy.object_info()).get("LoadMoGeModel")
+    if not spec:
+        raise HTTPException(400, "ComfyUI has no MoGe nodes: update ComfyUI")
+    opt = spec["input"]["required"]["model_name"]
+    models = opt[1].get("options", []) if opt and opt[0] == "COMBO" else opt[0] if opt and isinstance(opt[0], list) else []
+    if not models:
+        raise HTTPException(400, "No MoGe model: put one from Comfy-Org/MoGe (Hugging Face) in ComfyUI/models/geometry_estimation")
+    model = next((m for m in models if "moge_3_vitl" in m), None) or next((m for m in models if "moge_2" in m), models[0])
+    project_id = _project(body.get("project_id"))
+    detail = min(8, max(1, int(body.get("decimation") or 4)))  # 1 = a vertex per pixel; 4 keeps a tablet happy
+    wf = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": image}},
+        "2": {"class_type": "LoadMoGeModel", "inputs": {"model_name": model}},
+        "3": {"class_type": "MoGeInference", "inputs": {"moge_model": ["2", 0], "image": ["1", 0], "resolution_level": 9,
+              "fov_x_degrees": 0.0, "batch_size": 4, "force_projection": True, "apply_mask": True, "refine_steps": 3}},
+        "4": {"class_type": "MoGePointMapToMesh", "inputs": {"moge_geometry": ["3", 0], "batch_index": 0,
+              "decimation": detail, "discontinuity_threshold": 0.04, "texture": True}},
+        "5": {"class_type": "SaveGLB", "inputs": {"mesh": ["4", 0], "filename_prefix":
+              f"{config.COMFY_INPUT_SUBFOLDER}/{db.project_folder(project_id)}/photo3d"}},
+    }
+    try:
+        res = await comfy.queue(wf)
+    except ComfyError as e:
+        raise HTTPException(400, str(e))
+    gid = db.create_generation(project_id, "3d photo", {"image": image, "model": model, "decimation": detail},
+                               wf, res["prompt_id"], None)
     await push_gen(gid)
     return db.get_generation(gid)
 

@@ -7,6 +7,8 @@
 import * as THREE from './vendor/three.module.min.js';
 import { OrbitControls } from './vendor/OrbitControls.js';
 import { TransformControls } from './vendor/TransformControls.js';
+import { GLTFLoader } from './vendor/GLTFLoader.js';
+import * as FIGURE from './figure.js';
 
 let C;  // helpers handed over by app.js (see sceneModule there)
 const FPS = 24;
@@ -22,13 +24,20 @@ const TYPES = {
   ball: { label: 'Ball', icon: '●', size: [0.6, 0.6, 0.6] },
   cylinder: { label: 'Cylinder', icon: '⬮', size: [0.5, 1, 0.5] },
   wall: { label: 'Wall', icon: '▯', size: [3, 2.6, 0.12], geo: 'box' },
+  // these two scale evenly (sx = sy = sz): a posable figure (figure.js) and a picture as a mesh (MoGe)
+  figure: { label: 'Posable person', icon: '🤸', size: [1, 1, 1] },
+  photo: { label: 'Photo', icon: '🖼', size: [1, 1, 1] },
 };
+const EVEN = new Set(['figure', 'photo']);
+// what's keyed: a figure's keys also hold its pose (j: joint rotations)
+const FIG = [...OBJ, 'j'];
+const namesFor = (o) => (o.type === 'figure' ? FIG : OBJ);
 const MODES = [['translate', '✥ Move', 'w'], ['rotate', '⟳ Rotate', 'e'], ['scale', '⤢ Scale', 'r']];
 const ROOM = 'room';  // R.sel for the room; null is the camera
 
 // ---- scene data ------------------------------------------------------------
 let SC;   // the scene (persisted per project)
-const R = { f: 0, sel: null, mode: 'translate', playing: false, depth: false, meshes: new Map(), room: [], applying: false, lastRender: null };
+const R = { f: 0, sel: null, joint: null, mode: 'translate', playing: false, depth: false, autoKey: true, meshes: new Map(), room: [], applying: false, lastRender: null };
 
 const newRoom = () => ({ w: 8, d: 8, h: 2.8, walls: true, ceiling: true, hidden: false });
 function defaultScene() {
@@ -42,8 +51,10 @@ function defaultScene() {
 function newObject(type, at = {}, others = SC.objects) {
   const t = TYPES[type];
   const n = others.filter((o) => o.type === type).length + 1;
-  return { id: Math.random().toString(36).slice(2, 9), type, name: `${t.label} ${n}`, ease: 'smooth', keys: [], hidden: false,
+  const o = { id: Math.random().toString(36).slice(2, 9), type, name: `${t.label} ${n}`, ease: 'smooth', keys: [], hidden: false,
     base: { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: t.size[0], sy: t.size[1], sz: t.size[2], ...at } };
+  if (type === 'figure') o.base.j = FIGURE.preset('stand').j;
+  return o;
 }
 
 // scenes saved before rotation on all axes, hiding and a deletable room
@@ -58,9 +69,34 @@ function load() {
   const sc = C.store.get(sceneKey(), null);
   SC = sc && sc.v === 1 ? upgrade(sc) : defaultScene();
   R.sel = null; R.f = Math.min(R.f, frames() - 1);
+  resetHistory();
 }
+
+// undo / redo: the scene as JSON after each saved change
+const HIST = { undo: [], redo: [], cur: null };
+function resetHistory() { TEMP.clear(); HIST.undo = []; HIST.redo = []; HIST.cur = JSON.stringify(SC); renderToolbar(); }
+function remember() {
+  const s = JSON.stringify(SC);
+  if (s === HIST.cur) return;
+  HIST.undo.push(HIST.cur);
+  if (HIST.undo.length > 100) HIST.undo.shift();
+  HIST.redo = []; HIST.cur = s;
+  renderToolbar();
+}
+function undo(back = true) {
+  const [from, to] = back ? [HIST.undo, HIST.redo] : [HIST.redo, HIST.undo];
+  if (!from.length) return;
+  stopPlay();
+  to.push(HIST.cur); HIST.cur = from.pop();
+  SC = JSON.parse(HIST.cur); TEMP.clear(); R.joint = null;
+  if (R.sel === ROOM ? !SC.room : R.sel && !selItem()) R.sel = null;
+  R.f = Math.min(R.f, frames() - 1);
+  save(true); rebuildRoom(); refresh(); renderToolbar(); renderTransport(); renderPanel(); fit();
+}
+
 let saveTimer;
 function save(now = false) {  // the key and scene are taken now, so a project switch can't misfile it
+  remember();
   clearTimeout(saveTimer);
   const key = sceneKey(), sc = SC;
   if (now) C.store.set(key, sc); else saveTimer = setTimeout(() => C.store.set(key, sc), 300);
@@ -81,19 +117,29 @@ function sample(item, names, f) {
   while (k[i + 1].f <= f) i++;
   const a = { ...item.base, ...k[i] }, b = { ...item.base, ...k[i + 1] };
   const t = (f - a.f) / (b.f - a.f), e = item.ease === 'linear' ? t : ease(t);
-  return Object.fromEntries(names.map((n) => [n, a[n] + (b[n] - a[n]) * e]));
+  return Object.fromEntries(names.map((n) => [n, n === 'j' ? FIGURE.slerpPose(a.j, b.j, e) : a[n] + (b[n] - a[n]) * e]));
+}
+
+// With auto key off, a change to an animated item isn't saved: it's held here (by item, for the
+// frame it was made on) until the playhead moves, and ◆ Key keeps it.
+const TEMP = new Map();
+// an item's values at frame f, with a held change on top
+function current(item, names, f = R.f) {
+  const t = item.keys.length ? TEMP.get(item) : null;
+  return t && t.f === f ? pick(t.v, names) : sample(item, names, f);
 }
 
 // write values: into the key at the playhead when the item is animated, else into its base
 function write(item, names, vals) {
   if (!item.keys.length) { Object.assign(item.base, vals); return; }
+  if (!R.autoKey) { TEMP.set(item, { f: R.f, v: { ...current(item, names), ...vals } }); return; }
   let k = item.keys.find((x) => x.f === R.f);
   if (!k) { k = { f: R.f, ...sample(item, names, R.f) }; item.keys.push(k); item.keys.sort((a, b) => a.f - b.f); }
   Object.assign(k, vals);
 }
 
-function addKey(item, names) {
-  const vals = sample(item, names, R.f);
+function addKey(item, names, vals = current(item, names)) {
+  TEMP.delete(item);
   if (!item.keys.length) Object.assign(item.base, vals);
   const k = item.keys.find((x) => x.f === R.f);
   if (k) Object.assign(k, vals); else { item.keys.push({ f: R.f, ...vals }); item.keys.sort((a, b) => a.f - b.f); }
@@ -101,7 +147,7 @@ function addKey(item, names) {
 
 const selItem = () => SC.objects.find((o) => o.id === R.sel) || null;
 // what ◆ Key acts on: the selected object, else the camera (the room isn't animated)
-const keyTarget = () => { const o = selItem(); return o ? [o, OBJ] : R.sel === ROOM ? [null, null] : [SC.camera, CAM]; };
+const keyTarget = () => { const o = selItem(); return o ? [o, namesFor(o)] : R.sel === ROOM ? [null, null] : [SC.camera, CAM]; };
 
 // ---- geometry ----------------------------------------------------------------
 // A soft, featureless figure turned on a lathe: feet, legs as one column, hips, waist, chest,
@@ -129,6 +175,11 @@ const claySel = new THREE.MeshStandardMaterial({ color: 0xe9b44c, roughness: 0.8
 const floorMat = new THREE.MeshStandardMaterial({ color: 0x5c5c5c, roughness: 1, side: THREE.DoubleSide });
 const wallMat = new THREE.MeshStandardMaterial({ color: 0x7c7c7c, roughness: 1, side: THREE.DoubleSide });
 const roomSel = new THREE.MeshStandardMaterial({ color: 0x8a7a55, roughness: 1, side: THREE.DoubleSide });
+const figClay = new THREE.MeshStandardMaterial({ color: 0xb4b4b4, roughness: 0.9, flatShading: true });
+const figSel = new THREE.MeshStandardMaterial({ color: 0xe9b44c, roughness: 0.8, flatShading: true });
+const dotMat = new THREE.MeshBasicMaterial({ color: 0x4cc3ff, depthTest: false, transparent: true, opacity: 0.85 });
+const dotSel = new THREE.MeshBasicMaterial({ color: 0xff4c8a, depthTest: false, transparent: true, opacity: 0.95 });
+const ikTarget = new THREE.Object3D();  // what the gizmo drags when a hand or foot is moved (IK)
 const VERT = 'varying float vz; void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); vz = -mv.z; gl_Position = projectionMatrix * mv; }';
 const depthMat = new THREE.ShaderMaterial({
   uniforms: { near: { value: 0.5 }, far: { value: 20 } }, side: THREE.DoubleSide, vertexShader: VERT,
@@ -161,13 +212,17 @@ function setup() {
   grid.position.y = 0.002;
   scene.add(grid);
   camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.05, 500);
+  camera.layers.enable(1);  // layer 1: a figure's joint dots (picked on their own, never rendered out)
+  scene.add(ikTarget);
 
   controls = new OrbitControls(camera, canvas);
   controls.enableDamping = false;
   controls.addEventListener('change', () => { if (!R.applying) draw(); });
   controls.addEventListener('end', () => {
     if (R.playing) return;
-    write(SC.camera, CAM, readCamera());
+    const c = readCamera(), was = current(SC.camera, CAM);
+    if (CAM.every((n) => Math.abs(c[n] - was[n]) < 1e-6)) return;  // a tap, not a move: no key
+    write(SC.camera, CAM, c);  // with auto key off on an animated camera, only held (see TEMP)
     save(); renderKeys(); if (!R.sel) renderPanel();
   });
 
@@ -182,21 +237,30 @@ function setup() {
   gizmo.addEventListener('objectChange', () => {
     const o = selItem(), m = gizmo.object;
     if (!o || !m) return;
+    if (R.joint) return jointChanged(o);
+    if (EVEN.has(o.type)) {  // scaled evenly: follow whichever axis was dragged
+      const was = current(o, OBJ).sy, s = [m.scale.x, m.scale.y, m.scale.z].find((v) => Math.abs(v - was) > 1e-6) ?? was;
+      m.scale.setScalar(Math.max(0.01, s));
+    }
     const d = THREE.MathUtils.radToDeg;
-    write(o, OBJ, { x: m.position.x, y: m.position.y, z: m.position.z,
+    write(o, namesFor(o), { x: m.position.x, y: m.position.y, z: m.position.z,
       rx: d(m.rotation.x), ry: d(m.rotation.y), rz: d(m.rotation.z),
       sx: Math.max(0.01, m.scale.x), sy: Math.max(0.01, m.scale.y), sz: Math.max(0.01, m.scale.z) });
   });
 
   // a tap (not a drag, not on a gizmo handle) selects what's under it; tapping the selected
-  // object again switches the gizmo between Move, Rotate and Scale
+  // object again switches the gizmo between Move, Rotate and Scale. On a selected figure, a tap on
+  // a joint dot picks the joint; a tap on its body goes back to the whole figure.
   let down = null;
   canvas.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, onGizmo: gizmo.dragging || gizmo.axis != null }; });
   canvas.addEventListener('pointerup', (e) => {
     if (!down || down.onGizmo || R.playing || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down = null; return; }
     down = null;
+    const joint = jointAt(e);
+    if (joint) return selectJoint(joint);
     const id = hitAt(e);
-    if (id && id === R.sel && id !== ROOM) setMode(MODES[(MODES.findIndex(([m]) => m === R.mode) + 1) % MODES.length][0]);
+    if (id && id === R.sel && R.joint) selectJoint(null);
+    else if (id && id === R.sel && id !== ROOM) setMode(MODES[(MODES.findIndex(([m]) => m === R.mode) + 1) % MODES.length][0]);
     else select(id);
   });
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -206,16 +270,31 @@ function setup() {
       onclick: () => setMode(m) }, label)),
     C.h('span', { class: 'sep' }),
     C.h('button', { type: 'button', 'data-depth': '', title: 'Show the depth the render will use',
-      onclick: () => { R.depth = !R.depth; draw(); renderToolbar(); } }, '◐ Depth')));
+      onclick: () => { R.depth = !R.depth; draw(); renderToolbar(); } }, '◐ Depth'),
+    C.h('span', { class: 'sep' }),
+    C.h('button', { type: 'button', 'data-undo': '', title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo', onclick: () => undo() }, '↶'),
+    C.h('button', { type: 'button', 'data-redo': '', title: 'Redo (Ctrl+Shift+Z)', 'aria-label': 'Redo', onclick: () => undo(false) }, '↷')));
 
   document.addEventListener('keydown', (e) => {
     if (!C.$('#tab-scene').classList.contains('active') || !C.$('#sheet').classList.contains('hidden')
-      || e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey) return;
+      || e.target.closest('input, textarea, select')) return;
+    if (e.ctrlKey || e.metaKey) {
+      const k = e.key.toLowerCase();
+      if (k === 'z' || k === 'y') { e.preventDefault(); undo(k === 'z' && !e.shiftKey); }
+      return;
+    }
     const m = MODES.find(([, , k]) => k === e.key.toLowerCase());
     if (m) { e.preventDefault(); setMode(m[0]); }
-    else if (e.key === 'Escape') select(null);
+    else if (e.key.toLowerCase() === 'k') { e.preventDefault(); setAutoKey(!R.autoKey); }
+    else if (e.key === 'Escape') { if (R.joint) selectJoint(null); else select(null); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && R.sel) { e.preventDefault(); removeSelected(); }
     else if (e.key === ' ') { e.preventDefault(); play(); }
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {  // a frame; with Shift, to the next key
+      e.preventDefault(); stopPlay();
+      const fwd = e.key === 'ArrowRight', [item] = keyTarget();
+      const k = e.shiftKey && item ? (fwd ? item.keys.find((x) => x.f > R.f) : item.keys.findLast((x) => x.f < R.f)) : null;
+      seek(k ? k.f : e.shiftKey ? R.f : R.f + (fwd ? 1 : -1));
+    }
   });
 
   new ResizeObserver(() => fit()).observe(viewer);
@@ -258,14 +337,129 @@ function rebuildRoom() {
   for (const m of R.room) { m.userData.id = ROOM; scene.add(m); }
 }
 
+// a layer's three.js object: a mesh, a figure's rig (userData.rig, its root group), or a group the
+// photo's mesh loads into
+function makeObject(o) {
+  let m;
+  if (o.type === 'figure') {
+    const rig = FIGURE.buildFigure(figClay, dotMat);
+    m = rig.root; m.userData.rig = rig;
+    for (const p of rig.meshes) p.userData.id = o.id;
+  } else if (o.type === 'photo') {
+    m = new THREE.Group(); loadPhoto(o, m);
+  } else m = new THREE.Mesh(geometries()[TYPES[o.type].geo || o.type], clay);
+  m.userData.id = o.id; scene.add(m); R.meshes.set(o.id, m);
+  return m;
+}
+function paint(m, on) {  // a photo keeps its picture
+  if (m.userData.rig) for (const p of m.userData.rig.meshes) p.material = on ? figSel : figClay;
+  else if (m.isMesh) m.material = on ? claySel : clay;
+}
+
+// ---- photos: a picture as a mesh (MoGe, made by /api/scene/photo), in glTF axes: the photo's camera
+// at the object's origin looking down its -Z, so placing the object places that camera
+const gltf = new GLTFLoader();
+const photoScenes = new Map();  // url: Promise of the loaded mesh, shared by every copy
+function photoScene(url) {
+  if (!photoScenes.has(url)) {
+    photoScenes.set(url, gltf.loadAsync(url).then((g) => {
+      g.scene.traverse((c) => {  // the picture as it is: unlit, both sides
+        if (c.isMesh) c.material = new THREE.MeshBasicMaterial({ map: c.material.map, side: THREE.DoubleSide });
+      });
+      return g.scene;
+    }).catch((e) => { photoScenes.delete(url); throw e; }));
+  }
+  return photoScenes.get(url);
+}
+function loadPhoto(o, group) {
+  photoScene(o.url).then((src) => {
+    if (R.meshes.get(o.id) !== group) return;
+    const s = src.clone();
+    s.traverse((c) => { if (c.isMesh) { c.userData.id = o.id; c.userData.photo = true; } });
+    group.add(s); draw();
+  }).catch((e) => C.toast(`${o.name}: ${e.message}`, true));
+}
+// the photo's vertical field of view and how far its middle is, from the mesh (camera at the origin)
+function photoLens(src) {
+  let t = 0;
+  const p = new THREE.Vector3(), box = new THREE.Box3().setFromObject(src);
+  src.traverse((c) => {
+    const a = c.isMesh && c.geometry.attributes.position;
+    if (a) for (let i = 0; i < a.count; i += 7) { p.fromBufferAttribute(a, i); if (p.z < -1e-4) t = Math.max(t, Math.abs(p.y / p.z)); }
+  });
+  return { fov: t ? THREE.MathUtils.radToDeg(2 * Math.atan(t)) : 50, dist: Math.max(0.3, -box.getCenter(p).z) };
+}
+// the shot camera where the photo was taken (and with its lens)
+function lookThrough(o) {
+  const v = current(o, OBJ), r = THREE.MathUtils.degToRad;
+  const fwd = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(r(v.rx), r(v.ry), r(v.rz)));
+  const t = fwd.multiplyScalar((o.dist || 3) * v.sy).add(new THREE.Vector3(v.x, v.y, v.z));
+  write(SC.camera, CAM, { px: v.x, py: v.y, pz: v.z, tx: t.x, ty: t.y, tz: t.z, fov: o.fov || 50 });
+}
+
+// put a "3d photo" generation into the scene where the shot camera is, seen through its lens
+export async function addPhoto(g) {
+  if (!ready) { load(); setup(); ready = true; showAll(); }
+  const out = g.outputs.find((x) => /\.glb$/i.test(x.filename));
+  if (!out) return C.toast('That run has no 3D mesh', true);
+  let lens;
+  try { lens = photoLens(await photoScene(out.url)); } catch (e) { return C.toast(e.message, true); }
+  const d = THREE.MathUtils.radToDeg, c = camera;
+  const o = newObject('photo', { x: c.position.x, y: c.position.y, z: c.position.z,
+    rx: d(c.rotation.x), ry: d(c.rotation.y), rz: d(c.rotation.z) });
+  Object.assign(o, { url: out.url, gen: g.id, image: g.params.image, fov: +lens.fov.toFixed(2), dist: +lens.dist.toFixed(3) });
+  o.name = `Photo #${g.id}`;
+  SC.objects.push(o);
+  lookThrough(o);
+  save(); select(o.id);
+  C.toast('Photo added: small camera moves look best (nothing is behind what the picture shows)');
+}
+
+// picture in, MoGe in ComfyUI, mesh into the scene
+async function makePhoto(name) {
+  const bar = C.busy('Making 3D from the picture…');
+  try {
+    let g = await C.api('/api/scene/photo', { method: 'POST', body: { image: name, project_id: C.S.project } });
+    for (let i = 0; i < 300 && !['done', 'error', 'interrupted'].includes(g.status); i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      g = await C.api(`/api/generations/${g.id}`, { busy: false });
+    }
+    if (g.status !== 'done') throw new Error(g.error || 'MoGe didn\'t finish');
+    await addPhoto(g);
+  } catch (e) { C.toast(e.message, true); } finally { bar.done(); }
+}
+
+// ---- figures: a joint picked on the selected figure (R.joint) gets the gizmo: Rotate turns it,
+// Move on a hand or foot drags the limb with IK
+const jointMode = () => (FIGURE.IK[R.joint] && R.mode === 'translate' ? 'translate' : 'rotate');
+const selRig = () => R.meshes.get(R.sel)?.userData.rig || null;
+function selectJoint(name) {
+  R.joint = name;
+  if (name) R.mode = FIGURE.IK[name] ? 'translate' : 'rotate';
+  refresh(); renderToolbar(); renderPanel();
+}
+function placeIkTarget() {
+  const rig = selRig();
+  if (!rig) return;
+  rig.root.updateMatrixWorld(true);
+  rig.bones[R.joint].getWorldPosition(ikTarget.position);
+  ikTarget.updateMatrixWorld();
+}
+function jointChanged(o) {
+  const rig = selRig();
+  if (!rig) return;
+  const names = gizmo.object === ikTarget ? FIGURE.solveIK(rig, R.joint, ikTarget.position) : [R.joint];
+  const j = { ...current(o, FIG).j };
+  for (const n of names) j[n] = FIGURE.readJoint(rig, n);
+  write(o, FIG, { j });
+}
+
 function syncMeshes() {
-  const g = geometries();
   const ids = new Set(SC.objects.map((o) => o.id));
   for (const [id, m] of R.meshes) if (!ids.has(id)) { scene.remove(m); R.meshes.delete(id); }
   for (const o of SC.objects) {
-    let m = R.meshes.get(o.id);
-    if (!m) { m = new THREE.Mesh(g[TYPES[o.type].geo || o.type], clay); m.userData.id = o.id; scene.add(m); R.meshes.set(o.id, m); }
-    m.material = o.id === R.sel ? claySel : clay;
+    const m = R.meshes.get(o.id) || makeObject(o);
+    paint(m, o.id === R.sel);
     m.visible = !o.hidden;
   }
   for (const m of R.room) {
@@ -274,7 +468,13 @@ function syncMeshes() {
   }
   const o = selItem();
   const m = o && !o.hidden ? R.meshes.get(o.id) : null;
-  if (m) { if (gizmo.object !== m) gizmo.attach(m); gizmo.setMode(R.mode); } else gizmo.detach();
+  if (R.joint && !m?.userData.rig) R.joint = null;
+  const target = !m ? null : !R.joint ? m : jointMode() === 'translate' ? ikTarget : m.userData.rig.bones[R.joint];
+  if (target) {
+    if (gizmo.object !== target) gizmo.attach(target);
+    gizmo.setMode(R.joint ? jointMode() : R.mode);
+    gizmo.setSpace(R.joint && jointMode() === 'rotate' ? 'local' : 'world');
+  } else gizmo.detach();
 }
 
 // put every object and the camera where they are at frame f
@@ -283,12 +483,15 @@ function pose(f) {
   for (const o of SC.objects) {
     const m = R.meshes.get(o.id);
     if (!m) continue;
-    const v = sample(o, OBJ, f);
+    const v = current(o, namesFor(o), f);
     m.position.set(v.x, v.y, v.z);
     m.rotation.set(r(v.rx), r(v.ry), r(v.rz));
-    m.scale.set(Math.max(0.01, v.sx), Math.max(0.01, v.sy), Math.max(0.01, v.sz));
+    if (EVEN.has(o.type)) m.scale.setScalar(Math.max(0.01, v.sy));
+    else m.scale.set(Math.max(0.01, v.sx), Math.max(0.01, v.sy), Math.max(0.01, v.sz));
+    if (m.userData.rig) FIGURE.applyPose(m.userData.rig, v.j);
   }
-  const c = sample(SC.camera, CAM, f);
+  if (gizmo.object === ikTarget && !gizmo.dragging) placeIkTarget();
+  const c = current(SC.camera, CAM, f);
   R.applying = true;
   camera.position.set(c.px, c.py, c.pz);
   controls.target.set(c.tx, c.ty, c.tz);
@@ -305,6 +508,10 @@ function draw(forRender = false) {
   scene.background.set(depth ? 0x000000 : 0x24272e);
   grid.visible = !forRender && !depth;
   gizmo.getHelper().visible = !forRender && !R.playing && !!gizmo.object;
+  const dots = !forRender && !depth && !R.playing;
+  for (const [id, m] of R.meshes) {
+    for (const d of m.userData.rig?.dots || []) { d.visible = dots && id === R.sel; d.material = d.userData.joint === R.joint ? dotSel : dotMat; }
+  }
   if (!forRender) {
     if (depth) setRange(roughRange());
     renderer.render(scene, camera);
@@ -330,14 +537,34 @@ const ray = new THREE.Raycaster();
 function hitAt(e) {
   const r = canvas.getBoundingClientRect();
   ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
-  // the room only blocks: tapping a wall or the floor deselects (pick the room in the layer list)
-  const hit = ray.intersectObjects(visibleMeshes(), false)[0];
-  return hit && hit.object.userData.id !== ROOM ? hit.object.userData.id : null;
+  // the room and photos only block: tapping them deselects (pick them in the layer list)
+  const hit = ray.intersectObjects(visibleMeshes(), true)[0];
+  return hit && hit.object.userData.id !== ROOM && !hit.object.userData.photo ? hit.object.userData.id : null;
+}
+// the selected figure's joint dot nearest the pointer, within a finger's reach
+function jointAt(e) {
+  const rig = selRig();
+  if (!rig || !rig.root.visible) return null;
+  const r = canvas.getBoundingClientRect(), reach = e.pointerType === 'touch' ? 28 : 18;
+  rig.root.updateMatrixWorld(true);
+  let best = null, bestD = reach;
+  for (const d of rig.dots) {
+    const v = d.getWorldPosition(new THREE.Vector3()).project(camera);
+    if (v.z > 1) continue;
+    const dist = Math.hypot(r.left + (v.x + 1) / 2 * r.width - e.clientX, r.top + (1 - v.y) / 2 * r.height - e.clientY);
+    if (dist < bestD) { best = d.userData.joint; bestD = dist; }
+  }
+  return best;
 }
 
 // ---- selection, layers ------------------------------------------------------------
-function select(id) { R.sel = id; refresh(); renderToolbar(); renderKeys(); renderPanel(); }
-function setMode(m) { R.mode = m; if (gizmo.object) gizmo.setMode(m); draw(); renderToolbar(); }
+function select(id) { R.sel = id; R.joint = null; refresh(); renderToolbar(); renderKeys(); renderPanel(); }
+function setMode(m) { R.mode = m; refresh(); renderToolbar(); }
+function setAutoKey(on) {
+  R.autoKey = on; C.store.set('deck.scene.autokey', on);
+  const b = C.$('#sceneAutoKey');
+  if (b) { b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
+}
 
 function changed() { save(); refresh(); renderKeys(); renderPanel(); }
 
@@ -346,7 +573,7 @@ function removeSelected() {
   let name;
   if (sel === ROOM) { name = 'Room'; SC.room = null; rebuildRoom(); }
   else { const o = selItem(); if (!o) return; name = o.name; SC.objects = SC.objects.filter((x) => x !== o); }
-  R.sel = null; changed(); renderToolbar();
+  R.sel = null; R.joint = null; changed(); renderToolbar();
   C.undoToast(`${name} deleted`, () => { SC = before; R.sel = sel; rebuildRoom(); changed(); renderToolbar(); });
 }
 
@@ -381,7 +608,7 @@ function layerList() {
 let raf = 0;
 function play() {
   if (R.playing) return stopPlay();
-  R.playing = true;
+  R.playing = true; TEMP.clear();
   let t0 = performance.now(), f0 = R.f >= frames() - 1 ? 0 : R.f;
   const step = (now) => {
     if (!R.playing) return;
@@ -394,7 +621,11 @@ function play() {
   renderTransport();
 }
 function stopPlay() { if (!R.playing) return; R.playing = false; cancelAnimationFrame(raf); renderTransport(); renderPanel(); draw(); }
-function seek(f) { R.f = Math.max(0, Math.min(frames() - 1, Math.round(f))); pose(R.f); draw(); renderTime(); renderKeys(); renderPanel(); }
+function seek(f) {
+  f = Math.max(0, Math.min(frames() - 1, Math.round(f)));
+  if (f !== R.f) TEMP.clear();  // held changes (auto key off) stay on their frame
+  R.f = f; pose(R.f); draw(); renderTime(); renderKeys(); renderPanel();
+}
 
 // ---- export ----------------------------------------------------------------------
 const decodeDepth = (r, g, b) => r / 255 + g / 65025 + b / 16581375;  // rangeMat's packing, undone
@@ -447,7 +678,7 @@ function targetToBlob(rt, W, H, gray) {
 let busy = false;
 async function renderDepthVideo() {
   if (busy) return;
-  busy = true; stopPlay(); renderPanel();
+  busy = true; stopPlay(); TEMP.clear(); renderPanel();  // only what's keyed goes in the render
   const keep = R.f, W = SC.width, H = SC.height, bar = C.busy('Rendering depth frames…');
   try {
     setRange(measureRange());
@@ -463,12 +694,49 @@ async function renderDepthVideo() {
       bar.set(null, (f + 1) / frames());
     }
     rt.dispose();
-    form.append('fps', FPS); form.append('blur', SC.blur); form.append('scene', JSON.stringify(SC));
-    if (C.S.project != null) form.append('project_id', C.S.project);
-    setStatus('Encoding…');
-    R.lastRender = await C.api('/api/scene/render', { method: 'POST', form });
-    setStatus(`Depth video #${R.lastRender.id} is in History`);
-    C.toast('Depth video saved', false, { label: 'Use in H3 control', fn: () => C.useControlVideo(R.lastRender, SC) });
+    await sendVideo(form, 'depth', SC.blur);
+  } catch (e) {
+    setStatus(''); C.toast(e.message, true);
+  } finally {
+    bar.done();
+    busy = false; R.f = keep; fit(); refresh(); renderPanel();
+  }
+}
+
+async function sendVideo(form, kind, blur) {
+  form.append('fps', FPS); form.append('blur', blur); form.append('kind', kind); form.append('scene', JSON.stringify(SC));
+  if (C.S.project != null) form.append('project_id', C.S.project);
+  setStatus('Encoding…');
+  R.lastRender = await C.api('/api/scene/render', { method: 'POST', form });
+  const what = kind === 'pose' ? 'Pose video' : 'Depth video';
+  setStatus(`${what} #${R.lastRender.id} is in History`);
+  C.toast(`${what} saved`, false, { label: 'Use in H3 control', fn: () => C.useControlVideo(R.lastRender, SC) });
+}
+
+// the posable people as OpenPose stick figures (COCO 18, the colours ControlNet pose models expect)
+async function renderPoseVideo() {
+  const figs = SC.objects.filter((o) => o.type === 'figure' && !o.hidden);
+  if (busy || !figs.length) return;
+  busy = true; stopPlay(); TEMP.clear(); renderPanel();
+  const keep = R.f, W = SC.width, H = SC.height, bar = C.busy('Rendering pose frames…');
+  try {
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const ctx = cv.getContext('2d');
+    camera.aspect = W / H; camera.updateProjectionMatrix();
+    const form = new FormData();
+    for (let f = 0; f < frames(); f++) {
+      pose(f);
+      camera.updateMatrixWorld();
+      const people = figs.map((o) => FIGURE.keypoints(R.meshes.get(o.id).userData.rig).map((p) => {
+        const v = p.project(camera);
+        return v.z > 1 || v.z < -1 ? null : [(v.x + 1) / 2 * W, (1 - v.y) / 2 * H];
+      }));
+      FIGURE.drawPose(ctx, people, W, H);
+      form.append('frames', await new Promise((res) => cv.toBlob(res, 'image/png')), `f${String(f).padStart(5, '0')}.png`);
+      if (f % 12 === 0) setStatus(`Rendering ${f + 1}/${frames()}…`);
+      bar.set(null, (f + 1) / frames());
+    }
+    await sendVideo(form, 'pose', 0);
   } catch (e) {
     setStatus(''); C.toast(e.message, true);
   } finally {
@@ -483,7 +751,7 @@ async function saveFrame() {
   const rt = new THREE.WebGLRenderTarget(W, H, { colorSpace: THREE.SRGBColorSpace });
   const wasDepth = R.depth; R.depth = false;
   draw('clay');
-  for (const m of R.meshes.values()) m.material = clay;
+  for (const m of R.meshes.values()) paint(m, false);
   for (const m of R.room) m.material = m === R.room[0] ? floorMat : wallMat;
   camera.aspect = W / H; camera.updateProjectionMatrix();
   renderer.setRenderTarget(rt); renderer.render(scene, camera); renderer.setRenderTarget(null);
@@ -504,49 +772,110 @@ function renderToolbar() {
   const tb = C.$('#sceneToolbar');
   if (!tb) return;
   const can = !!selItem();
-  tb.querySelectorAll('[data-mode]').forEach((b) => { b.classList.toggle('on', can && b.dataset.mode === R.mode); b.disabled = !can; });
+  // a joint turns (Rotate); a hand or foot can also be dragged (Move, with IK)
+  const ok = (m) => can && (!R.joint || m === 'rotate' || (m === 'translate' && !!FIGURE.IK[R.joint]));
+  const mode = R.joint ? jointMode() : R.mode;
+  tb.querySelectorAll('[data-mode]').forEach((b) => { b.classList.toggle('on', ok(b.dataset.mode) && b.dataset.mode === mode); b.disabled = !ok(b.dataset.mode); });
   tb.querySelector('[data-depth]').classList.toggle('on', R.depth);
+  tb.querySelector('[data-undo]').disabled = !HIST.undo.length;
+  tb.querySelector('[data-redo]').disabled = !HIST.redo.length;
 }
 
 function renderTime() {
   const t = C.$('#sceneTime');
   if (t) t.textContent = `${(R.f / FPS).toFixed(2)} s · ${R.f + 1}/${frames()}`;
-  const r = C.$('#sceneScrub');
-  if (r && document.activeElement !== r) r.value = R.f;
+  const ph = C.$('#scenePlayhead');
+  if (ph) ph.style.left = lanePos(R.f);
+}
+
+// ---- key sheet: a row per layer (the camera, then the objects) with its keys on it. Drag a key
+// along its row to retime it; tap or drag anywhere else on a row (or the ruler) to scrub.
+const PAD = 8;  // px at each end of a row, so the first and last keys aren't cut off
+const lanePos = (f) => `calc(${PAD}px + (100% - ${2 * PAD}px) * ${f / Math.max(1, frames() - 1)})`;
+const tracks = () => [[SC.camera, null, '🎥 Camera'], ...SC.objects.map((o) => [o, o.id, `${TYPES[o.type].icon} ${o.name}`])];
+
+function frameAt(e) {
+  const r = C.$('#sceneLanes').getBoundingClientRect();
+  return Math.round(Math.max(0, Math.min(1, (e.clientX - r.left - PAD) / (r.width - 2 * PAD))) * (frames() - 1));
+}
+
+let drag = null;
+function laneDown(e) {
+  if (e.button > 0 || busy) return;
+  e.preventDefault();
+  stopPlay();
+  const lane = e.target.closest('[data-track]'), keyEl = e.target.closest('[data-key]');
+  const [item, id] = lane ? tracks()[+lane.dataset.track] : [];
+  e.currentTarget.setPointerCapture(e.pointerId);
+  drag = keyEl ? { item, key: item.keys[+keyEl.dataset.key], x: e.clientX, moved: false } : { scrub: true };
+  if (lane && id !== R.sel) select(id);
+  if (!keyEl) seek(frameAt(e));
+}
+function laneMove(e) {
+  if (!drag) return;
+  const f = frameAt(e);
+  if (drag.scrub) { if (f !== R.f) seek(f); return; }
+  if (!drag.moved && Math.abs(e.clientX - drag.x) < 4) return;
+  drag.moved = true;
+  const { item, key } = drag;
+  if (f === key.f || item.keys.some((k) => k !== key && k.f === f)) return;  // one key per frame
+  key.f = f; item.keys.sort((a, b) => a.f - b.f); seek(f);
+}
+function laneUp() {
+  const d = drag; drag = null;
+  if (d && d.key) { if (d.moved) changed(); else seek(d.key.f); }
 }
 
 function renderKeys() {
-  const box = C.$('#sceneKeys');
-  if (!box) return;
+  const lanes = C.$('#sceneLanes');
+  if (!lanes) return;
+  const { h } = C, n = Math.max(1, frames() - 1), ts = tracks();
+  const ticks = [];
+  for (let s = 0; s * FPS <= n; s++) ticks.push(h('span', { class: 'tick', style: `left:${lanePos(s * FPS)}` }, s));
+  C.$('#sceneNames').replaceChildren(h('div', { class: 'sheet-head' }),
+    ...ts.map(([it, id, label]) => h('button', { type: 'button', class: 'sheet-name' + (id === R.sel ? ' sel' : '') + (it.hidden ? ' off' : ''),
+      title: label, onclick: () => select(id) }, label)));
+  lanes.replaceChildren(h('div', { class: 'sheet-ruler' }, ...ticks),
+    ...ts.map(([it, id], i) => h('div', { class: 'sheet-lane' + (id === R.sel ? ' sel' : ''), 'data-track': i },
+      it.keys.length > 1 ? h('span', { class: 'span', style: `left:${lanePos(it.keys[0].f)};`
+        + `width:calc((100% - ${2 * PAD}px) * ${(it.keys[it.keys.length - 1].f - it.keys[0].f) / n})` }) : null,
+      ...it.keys.map((k, j) => h('span', { class: 'key' + (k.f === R.f ? ' on' : ''), 'data-key': j, style: `left:${lanePos(k.f)}`,
+        title: `Key at ${(k.f / FPS).toFixed(2)} s · drag to move` })))),
+    h('div', { id: 'scenePlayhead', class: 'playhead', style: `left:${lanePos(R.f)}` }));
   const [item] = keyTarget();
-  const n = frames() - 1;
-  box.replaceChildren(...(item ? item.keys : []).map((k) => C.h('button', {
-    type: 'button', class: 'key' + (k.f === R.f ? ' on' : ''), style: `left:${(k.f / n) * 100}%`,
-    title: `Key at ${(k.f / FPS).toFixed(2)} s`, onclick: () => seek(k.f) })));
   const add = C.$('#sceneAddKey'), del = C.$('#sceneDelKey');
   if (add) add.disabled = !item;
   if (del) del.disabled = !item || !item.keys.some((k) => k.f === R.f);
+  if (add) add.classList.toggle('pending', !!item && TEMP.has(item));  // a held change to keep
   const lbl = C.$('#sceneKeyFor');
   if (lbl) lbl.textContent = selItem() ? selItem().name : R.sel === ROOM ? 'Room (not animated)' : 'Camera';
 }
 
 function renderTransport() {
   const { h } = C;
-  const scrub = h('input', { id: 'sceneScrub', type: 'range', min: 0, max: frames() - 1, step: 1, value: R.f });
-  scrub.addEventListener('input', () => seek(+scrub.value));
+  const lanes = h('div', { id: 'sceneLanes', class: 'sheet-lanes' });
+  lanes.addEventListener('pointerdown', laneDown);
+  lanes.addEventListener('pointermove', laneMove);
+  lanes.addEventListener('pointerup', laneUp);
+  lanes.addEventListener('pointercancel', laneUp);
   C.$('#sceneTransport').replaceChildren(
-    h('button', { type: 'button', class: 'btn small primary', title: 'Play / pause (Space)', onclick: play }, R.playing ? '❚❚ Pause' : '▶ Play'),
-    h('div', { class: 'scene-scrub' }, h('div', { id: 'sceneKeys', class: 'scene-keys' }), scrub),
-    h('span', { id: 'sceneTime', class: 'timecode' }),
     h('div', { class: 'row scene-keybar' },
+      h('button', { type: 'button', class: 'btn small primary', title: 'Play / pause (Space)', onclick: play }, R.playing ? '❚❚ Pause' : '▶ Play'),
+      h('span', { id: 'sceneTime', class: 'timecode' }),
+      h('span', { class: 'grow' }),
+      h('button', { id: 'sceneAutoKey', type: 'button', class: 'btn small autokey' + (R.autoKey ? ' on' : ''), 'aria-pressed': R.autoKey,
+        title: 'Auto key (K): on, a change to something animated sets a key at the playhead. Off, it shifts the whole animation (or edits the key under the playhead).',
+        onclick: () => setAutoKey(!R.autoKey) }, '● Auto key'),
       h('span', { class: 'hint' }, 'Key: ', h('b', { id: 'sceneKeyFor' })),
       h('button', { id: 'sceneAddKey', type: 'button', class: 'btn small', title: 'Keyframe at the playhead', onclick: () => {
-        const [item, names] = keyTarget(); if (!item) return; addKey(item, names); changed();
+        const [item, names] = keyTarget(); if (!item) return;
+        addKey(item, names); changed();
       } }, '◆ Key'),
       h('button', { id: 'sceneDelKey', type: 'button', class: 'btn small', onclick: () => {
         const [item] = keyTarget(); if (!item) return;
         item.keys = item.keys.filter((k) => k.f !== R.f); changed();
-      } }, '✕ Key')));
+      } }, '✕ Key')),
+    h('div', { class: 'scene-sheet' }, h('div', { id: 'sceneNames', class: 'sheet-names' }), lanes));
   renderTime(); renderKeys();
 }
 
@@ -567,8 +896,10 @@ const easeSeg = (item) => C.h('div', { class: 'field' }, C.h('span', { class: 'l
 
 function objectProps(o) {
   const { h } = C;
-  const cur = () => sample(o, OBJ, R.f);
-  const set = (k) => (v) => write(o, OBJ, { [k]: v });
+  const names = namesFor(o);
+  const cur = () => current(o, names);
+  const set = (k) => (v) => write(o, names, { [k]: v });
+  const even = (v) => write(o, names, { sx: v, sy: v, sz: v });
   const name = h('input', { type: 'text', value: o.name });
   name.addEventListener('change', () => { o.name = name.value.trim() || o.name; changed(); });
   const xyz = (label, ks, opts) => h('div', { class: 'field' }, h('span', { class: 'lbl' }, label),
@@ -577,7 +908,13 @@ function objectProps(o) {
     h('label', { class: 'field' }, h('span', { class: 'lbl' }, 'Name'), name),
     xyz('Position (m)', [['x', 'X'], ['y', 'Up'], ['z', 'Z']]),
     xyz('Rotation (°)', [['rx', 'X'], ['ry', 'Y'], ['rz', 'Z']], { digits: 0 }),
-    xyz('Size (m)', [['sx', 'Width'], ['sy', 'Height'], ['sz', 'Depth']], { min: 0.01 }),
+    o.type === 'figure' ? num('Height (m)', () => cur().sy * FIGURE.HEIGHT, (v) => even(Math.max(0.3, v) / FIGURE.HEIGHT), { min: 0.3 })
+      : o.type === 'photo' ? num('Scale', () => cur().sy, (v) => even(Math.max(0.01, v)), { min: 0.01 })
+      : xyz('Size (m)', [['sx', 'Width'], ['sy', 'Height'], ['sz', 'Depth']], { min: 0.01 }),
+    o.type === 'figure' ? figureProps(o, cur) : null,
+    o.type === 'photo' ? h('div', { class: 'field' },
+      h('button', { type: 'button', class: 'btn small', onclick: () => { lookThrough(o); changed(); } }, '🎥 Camera to the photo\'s view'),
+      h('div', { class: 'hint' }, 'The picture as a 3D mesh (MoGe). Keep camera moves small: nothing is behind what the picture shows. Render depth video, then use it with this picture as a reference.')) : null,
     easeSeg(o),
     h('div', { class: 'row wrap' },
       h('button', { type: 'button', class: 'btn small', onclick: () => {
@@ -587,7 +924,27 @@ function objectProps(o) {
       } }, 'Duplicate'),
       o.keys.length ? h('button', { type: 'button', class: 'btn small', onclick: () => { Object.assign(o.base, cur()); o.keys = []; changed(); } }, 'Clear keys') : null),
     h('button', { type: 'button', class: 'btn small danger', onclick: removeSelected }, 'Delete'),
-    h('div', { class: 'hint' }, 'Drag the gizmo to move it; tap the object again (or W / E / R) for Rotate and Scale. With keys, a change sets a key at the playhead.'));
+    h('div', { class: 'hint' }, 'Drag the gizmo to move it; tap the object again (or W / E / R) for Rotate and Scale. With keys, a change sets a key at the playhead; with Auto key off it is held until ◆ Key (or until the playhead moves).'));
+}
+
+// pose: presets, mirror, and the joint picked with a dot on the figure
+function figureProps(o, cur) {
+  const { h } = C;
+  const setPose = (j, extra = {}) => { write(o, FIG, { j, ...extra }); changed(); };
+  const label = R.joint && FIGURE.JOINTS[R.joint][2];
+  return h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Pose'),
+    h('div', { class: 'chips' }, ...FIGURE.presetList().map(([k, l]) => h('button', { type: 'button', class: 'chip', onclick: () => {
+      const p = FIGURE.preset(k); setPose(p.j, { y: p.y * cur().sy });
+    } }, l))),
+    h('div', { class: 'row wrap' },
+      h('button', { type: 'button', class: 'btn small', title: 'Swap left and right', onclick: () => setPose(FIGURE.mirrorPose(cur().j)) }, '⇋ Mirror'),
+      R.joint ? h('button', { type: 'button', class: 'btn small', onclick: () => {
+        const j = { ...cur().j }; delete j[R.joint]; setPose(j);
+      } }, `Reset ${label.toLowerCase()}`) : null,
+      R.joint ? h('button', { type: 'button', class: 'btn small', onclick: () => selectJoint(null) }, 'Done') : null),
+    h('div', { class: 'hint' }, R.joint
+      ? `${label}: ${FIGURE.IK[R.joint] ? 'Move drags the limb (the elbow or knee follows), Rotate turns it.' : 'Rotate turns it.'} Tap the body (or Esc) for the whole figure.`
+      : 'Tap a blue dot to pose that joint; drag a hand or foot and the arm or leg follows. Render pose video for an OpenPose control video.'));
 }
 
 function roomProps() {
@@ -621,17 +978,17 @@ function cameraProps() {
   }, { min: 2, max: 15, step: 1, digits: 0, after: () => renderTransport() });
   return h('div', { class: 'props' }, C.propsTitle('Camera'),
     h('div', { class: 'row' }, h('label', { class: 'field' }, h('span', { class: 'lbl' }, 'Size'), sizeSel), secs),
-    slider('Lens', () => sample(cam, CAM, R.f).fov, (v) => write(cam, CAM, { fov: v }),
+    slider('Lens', () => current(cam, CAM).fov, (v) => write(cam, CAM, { fov: v }),
       { min: 12, max: 90, step: 0.5, fmt: (v) => `${Math.round(mm(v))} mm` }),
-    slider('Camera height', () => sample(cam, CAM, R.f).py, (v) => write(cam, CAM, { py: v }),
+    slider('Camera height', () => current(cam, CAM).py, (v) => write(cam, CAM, { py: v }),
       { min: 0.1, max: 6, step: 0.01, fmt: (v) => `${v.toFixed(2)} m` }),
     easeSeg(cam),
     h('div', { class: 'row wrap' },
       cam.keys.length ? h('button', { type: 'button', class: 'btn small', onclick: () => {
-        Object.assign(cam.base, sample(cam, CAM, R.f)); cam.keys = []; changed();
+        Object.assign(cam.base, current(cam, CAM)); cam.keys = []; changed();
       } }, 'Clear keys') : null,
       h('button', { type: 'button', class: 'btn small', onclick: () => { write(cam, CAM, { ...defaultScene().camera.base }); changed(); } }, 'Reset view')),
-    h('div', { class: 'hint' }, 'The view is the camera: drag empty space to orbit, two fingers to pan and zoom. With keys, each move sets a key at the playhead.'));
+    h('div', { class: 'hint' }, 'The view is the camera: drag empty space to orbit, two fingers to pan and zoom. With keys and Auto key on, each move sets a key at the playhead; with Auto key off it is only a look around until ◆ Key.'));
 }
 
 function renderProps() {
@@ -641,6 +998,8 @@ function renderProps() {
     h('div', { class: 'hint' }, 'Blurs the depth so H3 copies the shapes less literally. Use with deck-h3-ctrl2v (strength 1, end 0.4).'),
     h('div', { class: 'row wrap' },
       h('button', { type: 'button', class: 'btn small primary', disabled: busy, onclick: renderDepthVideo }, 'Render depth video'),
+      SC.objects.some((o) => o.type === 'figure' && !o.hidden)
+        ? h('button', { type: 'button', class: 'btn small', disabled: busy, title: 'The posable people as OpenPose stick figures', onclick: renderPoseVideo }, 'Render pose video') : null,
       h('button', { type: 'button', class: 'btn small', onclick: saveFrame }, '📷 Save frame')),
     R.lastRender ? h('button', { type: 'button', class: 'btn small', onclick: () => C.useControlVideo(R.lastRender, SC) },
       `Use #${R.lastRender.id} in H3 control`) : null,
@@ -650,9 +1009,12 @@ function renderProps() {
 function openAdd() {
   const { h } = C;
   C.openSheet(h('h3', {}, 'Add to the scene'),
-    h('div', { class: 'chips' }, ...Object.entries(TYPES).map(([t, d]) =>
+    h('div', { class: 'chips' }, ...Object.entries(TYPES).filter(([t]) => t !== 'photo').map(([t, d]) =>
       h('button', { type: 'button', class: 'chip', onclick: () => addObject(t) }, `${d.icon} ${d.label}`)),
-    SC.room ? null : h('button', { type: 'button', class: 'chip', onclick: () => addObject(ROOM) }, '⌂ Room')));
+    SC.room ? null : h('button', { type: 'button', class: 'chip', onclick: () => addObject(ROOM) }, '⌂ Room'),
+    h('button', { type: 'button', class: 'chip', title: 'Turn a picture into a 3D mesh (MoGe in ComfyUI) for camera moves', onclick: () => {
+      C.closeSheet(); C.openImagePicker({ title: 'Picture to turn into 3D', onPick: (name) => makePhoto(name) });
+    } }, '🖼 Photo in 3D…')));
 }
 
 function renderPanel() {
@@ -674,7 +1036,7 @@ function renderPanel() {
 
 // ---- entry points (called from app.js) ------------------------------------------------
 let ready = false;
-export function init(helpers) { C = helpers; }
+export function init(helpers) { C = helpers; R.autoKey = C.store.get('deck.scene.autokey', true) !== false; }
 
 function showAll() { rebuildRoom(); refresh(); renderToolbar(); renderTransport(); renderPanel(); fit(); }
 
@@ -695,6 +1057,6 @@ export function projectChanged() {
 export function open(scene) {
   if (!scene || scene.v !== 1) return C.toast('That scene is from another version', true);
   SC = upgrade(JSON.parse(JSON.stringify(scene)));
-  R.sel = null; R.f = 0; save(true);
+  R.sel = null; R.f = 0; resetHistory(); save(true);
   if (ready) showAll();
 }

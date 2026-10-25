@@ -1956,8 +1956,13 @@ function openGeneration(id) {
     : typeof v === 'string' ? v : JSON.stringify(v);
   const cur = () => g.outputs[idx];
   const isScene = g.template === '3d scene';  // a depth video from the 3D tab, with its scene in the params
-  const isEdit = g.template === 'video edit' || isScene;  // made in the Video or 3D tab: no template, no workflow
-  const actions = isScene ? [
+  const isPhoto = g.template === '3d photo';  // a picture as a mesh (MoGe), for the 3D tab
+  const isEdit = g.template === 'video edit' || isScene || isPhoto;  // made in the Video or 3D tab: no template to replay
+  const actions = isPhoto ? [
+    h('button', { class: 'btn small primary', onclick: async () => {
+      closeSheet(); switchTab('scene'); (await sceneModule()).addPhoto(g);
+    } }, 'Add to 3D'),
+  ] : isScene ? [
     h('button', { class: 'btn small primary', onclick: async () => {
       closeSheet(); switchTab('scene'); (await sceneModule()).open(g.params.scene);
     } }, 'Open in 3D'),
@@ -1995,7 +2000,7 @@ let sceneMod = null;
 async function sceneModule() {
   if (!sceneMod) {
     sceneMod = await import('./scene.js');
-    sceneMod.init({ h, $, api, busy, toast, undoToast, store, S, uploadImage, useControlVideo, openSheet, closeSheet, iconBtn, propNum, propsTitle, layerRowsEl });
+    sceneMod.init({ h, $, api, busy, toast, undoToast, store, S, uploadImage, useControlVideo, openSheet, closeSheet, iconBtn, propNum, propsTitle, layerRowsEl, openImagePicker });
   }
   return sceneMod;
 }

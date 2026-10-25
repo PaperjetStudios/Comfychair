@@ -571,17 +571,39 @@ details.desc summary { cursor: pointer; color: var(--muted); }
 /* ---- 3D tab ---- */
 #sceneViewer { display: block; background: #15171c; }
 #sceneViewer canvas { width: auto; height: auto; max-width: none; max-height: none; object-fit: fill; touch-action: none; }
-.scene-transport { gap: 10px; }
-.scene-scrub { position: relative; flex: 1 1 200px; padding-top: 14px; }
-.scene-scrub input { width: 100%; }
-.scene-keys { position: absolute; inset: 0 9px auto 9px; height: 14px; }
-.scene-keys .key {
-  position: absolute; top: 1px; width: 12px; height: 12px; margin-left: -6px; padding: 0; border: 0;
-  background: var(--muted); transform: rotate(45deg); cursor: pointer;
-}
-.scene-keys .key.on { background: var(--accent); }
-.scene-keybar { flex: 0 0 auto; gap: 8px; }
+.scene-transport { flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 6px; }
+.scene-keybar { gap: 8px; align-items: center; }
 .scene-keybar > * { flex: none; }
+.scene-keybar .grow { flex: 1; }
+.scene-keybar .btn.pending { border-color: var(--accent); color: var(--accent); }
+.scene-keybar .autokey.on { color: #fff; background: #b8322f; border-color: #b8322f; }
+/* key sheet: track names on the left, a row of keys per track on the right */
+.scene-sheet { display: flex; max-height: 136px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.sheet-names { flex: none; width: 120px; border-right: 1px solid var(--line); }
+.sheet-names > *, .sheet-lane, .sheet-ruler { height: 26px; }
+.sheet-head, .sheet-ruler { position: sticky; top: 0; z-index: 2; background: var(--surface-2); }
+.sheet-name {
+  display: block; width: 100%; padding: 0 8px; border: 0; border-top: 1px solid var(--line); background: none; color: var(--muted);
+  font: inherit; font-size: 12px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+}
+.sheet-name.sel { color: var(--text); background: var(--surface-2); }
+.sheet-name.off { opacity: .5; }
+.sheet-lanes { position: relative; flex: 1; min-width: 0; touch-action: none; user-select: none; cursor: pointer; }
+.sheet-lane { position: relative; border-top: 1px solid var(--line); }
+.sheet-lane.sel { background: var(--surface-2); }
+.sheet-ruler .tick { position: absolute; top: 0; bottom: 0; padding-left: 3px; border-left: 1px solid var(--line); font-size: 10px; line-height: 26px; color: var(--muted); }
+.sheet-lane .span { position: absolute; top: 50%; height: 2px; margin-top: -1px; background: var(--line); }
+.sheet-lane .key { position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; background: var(--muted); transform: rotate(45deg); cursor: grab; }
+.sheet-lane .key::after { content: ''; position: absolute; inset: -6px; }  /* a bigger target than the diamond */
+.sheet-lane.sel .key { background: var(--text); }
+.sheet-lane .key.on { background: var(--accent); }
+.scene-sheet .playhead { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); pointer-events: none; z-index: 3; }
+@media (pointer: coarse) {
+  .sheet-names > *, .sheet-lane, .sheet-ruler { height: 34px; }
+  .sheet-ruler .tick { line-height: 34px; }
+  .scene-sheet { max-height: 172px; }
+  .sheet-lane .key { width: 16px; height: 16px; margin: -8px 0 0 -8px; }
+}
 .shot-bar { margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--line); }
 .shot-bar b { font-size: 14px; color: var(--text); }
 .scene-toolbar { top: 8px; left: 8px; }

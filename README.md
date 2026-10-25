@@ -126,7 +126,19 @@ one), and under it are the selected layer's settings. Everything but the camera 
 Undo). Tap an object to select it and get a gizmo; tap it again (or W / E / R, or the toolbar) to switch
 between Move, Rotate and Scale. Tap empty space to go back to the camera: the view is the camera, so
 drag to orbit, two fingers to pan and zoom. **◆ Key** keyframes the selected object (or the camera) at
-the playhead; once something has keys, changing it writes a key where the playhead is.
+the playhead; once something has keys, changing it writes a key where the playhead is. The key sheet
+under the view has a row per layer: drag a key along its row to retime it, tap a row to scrub (←/→ step
+a frame, Shift+←/→ jump between keys). With **Auto key** off (K), a change to something animated is only
+held until ◆ Key or the playhead moves, so you can look around without touching the keys. ↶ / ↷ (Ctrl+Z,
+Ctrl+Shift+Z) undo and redo.
+**Posable person**: a low-poly figure with joints. Tap it to show its joint dots, tap a dot to pose that
+joint (Rotate), or drag a hand or foot (Move) and the arm or leg follows (IK). Pose presets (stand, walk,
+run, sit, point, wave…) and Mirror are in its settings, and a pose is keyed like anything else.
+**Render pose video** draws the posable people as OpenPose stick figures for a pose control video.
+**🖼 Photo in 3D…** (in + Add) turns a picture into a mesh with MoGe in ComfyUI (a model from
+`Comfy-Org/MoGe` in `ComfyUI/models/geometry_estimation`) and puts it where the shot camera is, seen
+through the photo's lens; key a small camera move and render the depth video. The mesh is also in
+History (**Add to 3D**).
 **Render depth video** puts the clip in History (near = white, far = black, the range fixed over the
 clip), and **Use in H3 control** opens `deck-h3-ctrl2v` with it, the size and the length set. Strength 1
 with End 0.4 keeps the layout and camera move but lets H3 draw real people and furniture; ending later
