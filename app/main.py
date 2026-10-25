@@ -966,13 +966,41 @@ class AppFiles(StaticFiles):
 @app.get("/", include_in_schema=False)
 @app.get("/index.html", include_in_schema=False)
 async def index():
-    """index.html with app.js / app.css links that change whenever those files do, so a copy cached
-    by an older version can't be reused."""
+    """index.html with app.js / app.css links that change whenever the UI's files do, so a copy cached
+    by an older version can't be reused. app.js gets the newest change over all web/ files, because
+    the modules it imports (see module_js) are versioned the same way."""
     html = (config.WEB_DIR / "index.html").read_text(encoding="utf-8")
-    for name in ("app.js", "app.css"):
-        v = int((config.WEB_DIR / name).stat().st_mtime)
-        html = html.replace(f'"{name}"', f'"{name}?v={v}"')
+    html = html.replace('"app.js"', f'"app.js?v={ui_version()}"')
+    v = int((config.WEB_DIR / "app.css").stat().st_mtime)
+    html = html.replace('"app.css"', f'"app.css?v={v}"')
     return Response(html, media_type="text/html", headers={"Cache-Control": "no-cache"})
+
+
+# './x.js' in `from './x.js'` and `import('./x.js')` (not ./vendor/…: those never change)
+_JS_IMPORT = re.compile(r"""(\bfrom\s*|\bimport\s*\(\s*)(['"])(\./[\w-]+\.js)\2""")
+_module_cache: dict[tuple[str, int], str] = {}
+
+
+@app.get("/{name}.js", include_in_schema=False)
+async def module_js(name: str, request: Request):
+    """The UI's ES modules (web/*.js) with every relative import carrying ?v=<ui_version>: a change to
+    any one of them gives all of them new URLs, so the browser never mixes old and new modules (or
+    keeps a stale one) however it caches. ETag/304 keeps unchanged loads cheap."""
+    path = config.WEB_DIR / f"{name}.js"
+    if "/" in name or not path.is_file():
+        raise HTTPException(404)
+    v = ui_version()
+    etag = f'"{name}-{v}"'
+    headers = {"Cache-Control": "no-cache", "ETag": etag}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    text = _module_cache.get((name, v))
+    if text is None:
+        text = _JS_IMPORT.sub(lambda m: f"{m[1]}{m[2]}{m[3]}?v={v}{m[2]}", path.read_text(encoding="utf-8"))
+        if any(k[1] != v for k in _module_cache):
+            _module_cache.clear()
+        _module_cache[(name, v)] = text
+    return Response(text, media_type="text/javascript", headers=headers)
 
 
 app.mount("/", AppFiles(directory=config.WEB_DIR, html=True), name="web")
