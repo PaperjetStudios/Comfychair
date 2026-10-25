@@ -1,168 +1,10 @@
 // ComfyDeck tablet UI. Plain ES modules, no build step.
 
-const $ = (s) => document.querySelector(s);
-
-function h(tag, props = {}, ...kids) {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(props || {})) {
-    if (v == null || v === false) continue;
-    if (k === 'class') el.className = v;
-    else if (k === 'style') el.style.cssText = v;
-    else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
-    else if (k in el && k !== 'list') el[k] = v;
-    else el.setAttribute(k, v === true ? '' : v);
-  }
-  for (const c of kids.flat(Infinity)) {
-    if (c == null || c === false) continue;
-    el.append(c instanceof Node ? c : String(c));
-  }
-  return el;
-}
-
-// Every number box is also a slider: drag left or right on it to change the value (its whole min–max
-// range over about 300 px, snapped to its step); a tap still types. While dragging it has
-// data-scrubbing set and fires 'input'; letting go fires one 'change', like typing does.
-const SCRUB_PX = 300;
-document.addEventListener('pointerdown', (e) => {
-  const inp = e.target.closest?.('input[type=number]');
-  if (!inp || inp.disabled || e.button > 0 || document.activeElement === inp) return;
-  const x0 = e.clientX, y0 = e.clientY, v0 = parseFloat(inp.value) || 0;
-  const min = parseFloat(inp.min), max = parseFloat(inp.max);
-  const step = parseFloat(inp.step) || (Number.isInteger(v0) && inp.inputMode === 'numeric' ? 1 : 0.01);
-  const span = Number.isFinite(min) && Number.isFinite(max) ? max - min : NaN;
-  // per pixel: the range over SCRUB_PX, or a step every 2 px when the range is huge (seeds) or open
-  const perPx = Number.isFinite(span) && span <= 1e5 ? span / SCRUB_PX : step / 2;
-  const dec = (String(inp.step).split('.')[1] || '').length;
-  let on = false;
-  const move = (ev) => {
-    const dx = ev.clientX - x0;
-    if (!on) {
-      if (Math.abs(dx) < 8 || Math.abs(dx) < Math.abs(ev.clientY - y0)) return;
-      on = true; inp.blur(); inp.dataset.scrubbing = '1'; inp.classList.add('scrubbing');
-      try { inp.setPointerCapture(ev.pointerId); } catch { /* the pointer is gone */ }
-    }
-    ev.preventDefault();
-    let v = v0 + dx * perPx;
-    v = Math.round(v / step) * step;
-    if (Number.isFinite(min)) v = Math.max(min, v);
-    if (Number.isFinite(max)) v = Math.min(max, v);
-    v = Number(v.toFixed(Math.min(6, Math.max(dec, step < 1 ? 2 : 0))));
-    if (String(v) !== inp.value) { inp.value = v; inp.dispatchEvent(new Event('input', { bubbles: true })); }
-  };
-  const end = () => {
-    inp.removeEventListener('pointermove', move); inp.removeEventListener('pointerup', end); inp.removeEventListener('pointercancel', end);
-    if (!on) return;
-    delete inp.dataset.scrubbing; inp.classList.remove('scrubbing');
-    // the tap that ends a drag shouldn't open the keyboard
-    inp.addEventListener('click', (c) => { c.preventDefault(); inp.blur(); }, { once: true, capture: true });
-    setTimeout(() => inp.blur());
-    inp.dispatchEvent(new Event('change', { bubbles: true }));
-  };
-  inp.addEventListener('pointermove', move);
-  inp.addEventListener('pointerup', end);
-  inp.addEventListener('pointercancel', end);
-}, true);
-
-const store = {
-  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
-  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode etc. */ } },
-};
-
-// timeout: give up (and say so) instead of hanging when the server or the Wi-Fi is gone. Uploads and
-// slow lookups pass a longer one. An error's .data holds the server's detail when it's an object.
-// busy: what the progress bar says while it runs (default: a guess from the path for anything that
-// isn't a GET; false for none). Uploads go through XHR so the bar can show how much has been sent.
-async function api(path, { method = 'GET', body, form, timeout = form ? 300000 : 30000, busy: label } = {}) {
-  if (label === undefined) label = method === 'GET' ? false : busyLabel(method, path);
-  const b = label ? busy(label) : null;
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), timeout);
-  const opts = { method, headers: {}, signal: ctl.signal };
-  if (form) opts.body = form;
-  else if (body !== undefined) { opts.body = JSON.stringify(body); opts.headers['Content-Type'] = 'application/json'; }
-  let r, text;
-  try {
-    r = form ? await xhrSend(path, method, form, ctl.signal, b) : await fetch(path, opts);
-    text = await r.text();
-  } catch (e) {
-    throw new Error(e.name === 'AbortError' ? 'ComfyDeck didn\'t answer in time (is the server running?)' : 'Can\'t reach ComfyDeck (is the server running and on this network?)');
-  } finally { clearTimeout(timer); b?.done(); }
-  let data; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
-  if (!r.ok) {
-    const d = data && data.detail;
-    const err = new Error((d && typeof d === 'object' ? d.message : d) || text || r.statusText);
-    if (d && typeof d === 'object') err.data = d;
-    throw err;
-  }
-  return data;
-}
-
-// fetch() can't report upload progress; this answers like a fetch Response (ok, status, text())
-function xhrSend(path, method, form, signal, b) {
-  return new Promise((resolve, reject) => {
-    const x = new XMLHttpRequest();
-    x.open(method, path);
-    x.upload.onprogress = (e) => { if (e.lengthComputable) b?.set(null, e.loaded / e.total); };
-    x.upload.onload = () => b?.set('Processing…', null);
-    x.onload = () => resolve({ ok: x.status >= 200 && x.status < 300, status: x.status, statusText: x.statusText, text: async () => x.responseText });
-    x.onerror = () => reject(new TypeError('network'));
-    x.onabort = () => reject(new DOMException('aborted', 'AbortError'));
-    signal.addEventListener('abort', () => x.abort());
-    x.send(form);
-  });
-}
-
-// ---------------------------------------------------------------------------
-// busy bar: a progress bar along the top saying what's happening while something slow runs, and a
-// spinner on the button that was tapped to start it. It shows after 150 ms so quick calls don't flash.
-// busy(label) → { set(label, frac), done() }; frac 0–1, or null when there's no telling how long.
-// ---------------------------------------------------------------------------
-const BUSY = new Set();
-let busyTimer = 0, lastTap = { el: null, t: 0 };
-document.addEventListener('click', (e) => { lastTap = { el: e.target.closest?.('button, .btn') || null, t: Date.now() }; }, true);
-function busy(label) {
-  const t = { label, frac: null, btn: null,
-    set(l, f = null) { if (l) t.label = l; t.frac = f; drawBusy(); },
-    done() { if (!BUSY.delete(t)) return; if (t.btn && ![...BUSY].some((o) => o.btn === t.btn)) t.btn.classList.remove('working'); drawBusy(); } };
-  if (lastTap.el?.isConnected && Date.now() - lastTap.t < 1000) {
-    t.btn = lastTap.el;
-    setTimeout(() => { if (BUSY.has(t)) t.btn.classList.add('working'); }, 150);
-  }
-  BUSY.add(t); drawBusy();
-  return t;
-}
-function drawBusy() {
-  const el = $('#busy');
-  if (!BUSY.size) { clearTimeout(busyTimer); busyTimer = 0; el.classList.add('hidden'); return; }
-  if (el.classList.contains('hidden')) {
-    if (!busyTimer) busyTimer = setTimeout(() => { busyTimer = 0; if (BUSY.size) { el.classList.remove('hidden'); drawBusy(); } }, 150);
-    return;
-  }
-  const t = [...BUSY].at(-1), pct = t.frac == null ? null : Math.round(t.frac * 100);
-  el.classList.toggle('indet', pct == null);
-  el.querySelector('.busy-fill').style.width = pct == null ? '' : `${pct}%`;
-  el.querySelector('.busy-label').textContent = pct == null ? t.label : `${t.label} ${pct}%`;
-}
-const BUSY_LABELS = [[/\/to-input$/, 'Preparing image…'], [/\/inputs\/crop$/, 'Cropping…'], [/\/(upload|media)$/, 'Uploading…'],
-  [/\/video\/render$/, 'Rendering video…'], [/\/scene\/render$/, 'Sending depth video…'], [/\/generate$/, 'Sending to ComfyUI…']];
-function busyLabel(method, path) {
-  if (method === 'DELETE') return 'Deleting…';
-  const p = path.split('?')[0];
-  return (BUSY_LABELS.find(([re]) => re.test(p)) || [null, 'Working…'])[1];
-}
-
-// action: { label, fn } adds a button (e.g. Undo) and keeps the toast up a little longer
-let toastTimer;
-function toast(msg, err = false, action = null) {
-  const t = $('#toast');
-  // replaceChildren() would turn a null into the text "null", so only pass the button when there is one
-  t.replaceChildren(h('span', {}, msg), ...(action ? [h('button', { type: 'button', class: 'btn small toast-act', onclick: () => {
-    t.classList.add('hidden'); action.fn();
-  } }, action.label)] : []));
-  t.className = 'toast' + (err ? ' err' : '');
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), err ? 7000 : action ? 6000 : 2500);
-}
-const undoToast = (msg, fn) => toast(msg, false, { label: '↶ Undo', fn });
+import {
+  $, h, store, clamp, clamp01, uid, clone, cycleIndex, api, busy, toast, undoToast, overlayOpened, overlayClosed, openOverlay,
+  SHEET, sheetOpen, openSheet, closeSheet, sheetStillOpen, nameSheet, button, iconBtn, linkBtn, actions, fileButton, seg, field,
+  section, hint, placeholder, note, rangeField, propNum, mediaCard, cycleBar, layerRowsEl, panelTop,
+} from './ui.js';
 
 // Deleting a saved snippet (settings, prompt part, prompt set) with an Undo that saves it again
 async function deleteSnippet(sn, msg, after) {
@@ -175,26 +17,6 @@ async function deleteSnippet(sn, msg, after) {
     } catch (e) { toast(e.message, true); }
   });
 }
-
-// ---------------------------------------------------------------------------
-// overlays and the back button: each sheet / full-screen editor adds a history entry, so Android's
-// back gesture (and the browser's back) closes the top overlay instead of leaving the app.
-// close(true) is called when it was closed by going back.
-// ---------------------------------------------------------------------------
-const OV = [];
-let popSkip = 0;
-function overlayOpened(close) { OV.push(close); history.pushState({ deckOverlay: OV.length }, ''); }
-function overlayClosed(close) {
-  const i = OV.lastIndexOf(close);
-  if (i < 0) return;
-  OV.splice(i, 1);
-  popSkip++; history.back();
-}
-addEventListener('popstate', () => {
-  if (popSkip) { popSkip--; return; }
-  const close = OV.pop();
-  if (close && close(true) === false) { OV.push(close); history.pushState({ deckOverlay: OV.length }, ''); }  // it said no (unsaved work)
-});
 
 // ---------------------------------------------------------------------------
 // state
@@ -235,8 +57,8 @@ async function loadTemplates(refresh = false) {
   sel.replaceChildren(...S.templates.map((t) => h('option', { value: t.id }, t.name + (t.error ? ' (error)' : ''))));
   if (!S.templates.length) {
     $('#fields').replaceChildren(failed
-      ? h('div', { class: 'note err' }, `Couldn't load templates: ${failed.message}. They load by themselves once ComfyDeck answers.`)
-      : h('div', { class: 'note warn' }, 'No templates yet. Export a workflow from ComfyUI with Workflow → Export (API), tag nodes with @, and put it in the templates/ folder.'));
+      ? note(`Couldn't load templates: ${failed.message}. They load by themselves once ComfyDeck answers.`, 'err')
+      : note('No templates yet. Export a workflow from ComfyUI with Workflow → Export (API), tag nodes with @, and put it in the templates/ folder.', 'warn'));
     return;
   }
   const want = (S.tpl && S.tpl.id) || store.get('deck.tplId', null);
@@ -269,8 +91,8 @@ function selectTemplate(id, overrideValues = null) {
 function renderFields() {
   const t = S.tpl;
   const notes = [];
-  if (t.error) notes.push(h('div', { class: 'note err' }, t.error));
-  for (const w of t.warnings) notes.push(h('div', { class: 'note warn' }, w));
+  if (t.error) notes.push(note(t.error, 'err'));
+  for (const w of t.warnings) notes.push(note(w, 'warn'));
   $('#tplNotes').replaceChildren(...notes);
 
   const openState = store.get('deck.groupsOpen', {});
@@ -297,7 +119,6 @@ function setVal(key, v) { S.values[key] = v; persist(); }
 // 💾 saves over the loaded one, ＋ saves a new one. Stored with the snippets, so every device sees them.
 // ---------------------------------------------------------------------------
 const SHOT_CATEGORY = 'Saved shot';
-const clone = (x) => JSON.parse(JSON.stringify(x ?? null));
 
 function captureShot() {
   const pb = builderState();
@@ -319,68 +140,65 @@ function applyShot(p) {
   saveBuilder(); persist(); renderFields();
 }
 
-function shotBar() {
-  const stateKey2 = `deck.shot.${S.tpl.id}`;
-  const entries = () => (S.snippets || []).filter((x) => x.category === SHOT_CATEGORY)
+// Saved entries of a snippet category whose text is JSON (shots, presets), parsed into .p; keep(p)
+// picks the ones that apply here
+function savedEntries(cat, keep = () => true) {
+  return (S.snippets || []).filter((x) => x.category === cat)
     .map((x) => { try { return { ...x, p: JSON.parse(x.text) }; } catch { return null; } })
-    .filter((x) => x && x.p.workflow === S.tpl.id)
-    .sort((a, b) => a.created - b.created);
-  const curId = () => String(store.get(stateKey2, ''));
+    .filter((x) => x && keep(x.p));
+}
+// Save (or, with an id, overwrite) a snippet and reload the list
+async function saveSnippet(body) {
+  const r = await api('/api/snippets', { method: 'POST', body });
+  await loadSnippets(true);
+  return r;
+}
+
+function shotBar() {
+  const curKey = `deck.shot.${S.tpl.id}`;
+  const entries = () => savedEntries(SHOT_CATEGORY, (p) => p.workflow === S.tpl.id).sort((a, b) => a.created - b.created);
+  const curId = () => String(store.get(curKey, ''));
+  const loaded = () => entries().find((y) => String(y.id) === curId());
   const l = entries(), i = l.findIndex((x) => String(x.id) === curId());
+  const switchTo = (id, p, msg) => {   // with an Undo back to what was there
+    const before = captureShot(), beforeId = curId();
+    store.set(curKey, id);
+    applyShot(p);
+    undoToast(msg, () => { store.set(curKey, beforeId); applyShot(before); });
+  };
   const go = (d) => {
     const list = entries();
     if (!list.length) return toast('No saved shots yet: ＋ saves this one');
-    const at = list.findIndex((x) => String(x.id) === curId());
-    const x = list[at < 0 ? (d > 0 ? 0 : list.length - 1) : (at + d + list.length) % list.length];
-    const before = captureShot(), beforeId = curId();
-    store.set(stateKey2, String(x.id));
-    applyShot(x.p);
-    undoToast(`Loaded shot "${x.name}"`, () => { store.set(stateKey2, beforeId); applyShot(before); });
+    const x = list[cycleIndex(list.findIndex((y) => String(y.id) === curId()), d, list.length)];
+    switchTo(String(x.id), x.p, `Loaded shot "${x.name}"`);
   };
-  const saveNew = () => {
-    const name = h('input', { type: 'text', placeholder: 'Name, e.g. "Market walk – wide"' });
-    openSheet(h('h3', {}, 'Save shot'),
-      h('div', { class: 'hint', style: 'margin-bottom:8px' }, `Saves everything in ${S.tpl.name}: the prompt (and its parts), images, LoRAs and every setting.`),
-      name,
-      h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: async () => {
-        try {
-          const r = await api('/api/snippets', { method: 'POST', body: { category: SHOT_CATEGORY, name: name.value.trim() || `Shot ${entries().length + 1}`,
-            text: JSON.stringify(captureShot()) } });
-          store.set(stateKey2, String(r.id));
-          await loadSnippets(true); closeSheet(); renderFields(); toast(`Saved shot "${r.name}"`);
-        } catch (e) { toast(e.message, true); }
-      } }, 'Save')));
-    setTimeout(() => name.focus(), 50);
-  };
+  const saveNew = () => nameSheet({ title: 'Save shot', placeholder: 'Name, e.g. "Market walk – wide"',
+    hint: `Saves everything in ${S.tpl.name}: the prompt (and its parts), images, LoRAs and every setting.`,
+    save: async (name) => {
+      const r = await saveSnippet({ category: SHOT_CATEGORY, name: name || `Shot ${entries().length + 1}`, text: JSON.stringify(captureShot()) });
+      store.set(curKey, String(r.id));
+      renderFields(); toast(`Saved shot "${r.name}"`);
+    } });
   const saveOver = async () => {
-    const x = entries().find((y) => String(y.id) === curId());
+    const x = loaded();
     if (!x) return saveNew();
     try {
-      await api('/api/snippets', { method: 'POST', body: { id: x.id, category: SHOT_CATEGORY, name: x.name, text: JSON.stringify(captureShot()) } });
-      await loadSnippets(true); renderFields(); toast(`Saved over "${x.name}"`);
+      await saveSnippet({ id: x.id, category: SHOT_CATEGORY, name: x.name, text: JSON.stringify(captureShot()) });
+      renderFields(); toast(`Saved over "${x.name}"`);
     } catch (e) { toast(e.message, true); }
   };
   const del = async () => {
-    const x = entries().find((y) => String(y.id) === curId());
+    const x = loaded();
     if (!x) return toast('No saved shot loaded');
-    store.set(stateKey2, '');
+    store.set(curKey, '');
     try { await deleteSnippet(x, `Deleted shot "${x.name}"`, renderFields); } catch (e) { toast(e.message, true); }
   };
-  return h('div', { class: 'part-head saved-bar shot-bar' }, h('b', {}, 'Shots'),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Previous saved shot', onclick: () => go(-1) }, '◀'),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Next saved shot', onclick: () => go(1) }, '▶'),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Save over this shot', title: 'Save over this one', onclick: saveOver }, '💾'),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Save as a new shot', title: 'Save as new', onclick: saveNew }, '＋'),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Delete this saved shot', onclick: del }, '🗑'),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Back to the template defaults', title: 'Template defaults: the prompt and settings as the template file has them',
-      onclick: () => {
-        const before = captureShot(), beforeId = curId();
-        store.set(stateKey2, '');
-        applyShot({ values: Object.fromEntries(S.tpl.fields.map((f) => [f.key, f.value])) });
-        undoToast('Back to the template defaults', () => { store.set(stateKey2, beforeId); applyShot(before); });
-      } }, '↺'),
-    h('span', { class: 'snip-pos' }, !l.length ? 'No saved shots · ＋ saves everything here'
-      : i < 0 ? `${l.length} saved · none loaded` : `${i + 1}/${l.length} · ${l[i].name}`));
+  const defaults = () => switchTo('', { values: Object.fromEntries(S.tpl.fields.map((f) => [f.key, f.value])) }, 'Back to the template defaults');
+  return cycleBar({ title: 'Shots', what: 'saved shot', prev: () => go(-1), next: () => go(1), cls: 'saved-bar shot-bar',
+    buttons: [iconBtn('Save over this shot', '💾', saveOver), iconBtn('Save as a new shot', '＋', saveNew),
+      iconBtn('Delete this saved shot', '🗑', del), iconBtn('Back to the template defaults', '↺', defaults)],
+    pos: h('span', { class: 'snip-pos' }, !l.length ? 'No saved shots · ＋ saves everything here'
+      : i < 0 ? `${l.length} saved · none loaded` : `${i + 1}/${l.length} · ${l[i].name}`) });
 }
 
 // ---------------------------------------------------------------------------
@@ -434,68 +252,55 @@ function groupPresetBar(g, fs) {
   fs = fs.filter((f) => PRESET_KINDS.has(f.kind));
   if (!fs.length) return null;
   const scopeName = (sc) => (SCOPES.find(([k]) => k === sc) || [, sc])[1].toLowerCase();
-  const entries = () => [{ id: '', name: 'Template default' }, ...(S.snippets || [])
-    .filter((x) => x.category === PRESET_CATEGORY)
-    .map((x) => { try { return { ...x, p: JSON.parse(x.text) }; } catch { return null; } })
-    .filter((x) => x && groupEntryApplies(x.p, fs, g.label))
-    .sort((a, b) => ['workflow', 'model', 'global'].indexOf(a.p.scope) - ['workflow', 'model', 'global'].indexOf(b.p.scope) || a.created - b.created)];
-  const stateKey2 = `deck.saved.${S.tpl.id}.${g.label}`;
-  const curId = () => String(store.get(stateKey2, ''));
-  const label = h('span', { class: 'snip-pos' });
+  const order = ['workflow', 'model', 'global'];
+  const entries = () => [{ id: '', name: 'Template default' }, ...savedEntries(PRESET_CATEGORY, (p) => groupEntryApplies(p, fs, g.label))
+    .sort((a, b) => order.indexOf(a.p.scope) - order.indexOf(b.p.scope) || a.created - b.created)];
+  const curKey = `deck.saved.${S.tpl.id}.${g.label}`;
+  const curId = () => String(store.get(curKey, ''));
+  const loaded = () => entries().find((y) => String(y.id) === curId());
+  const pos = h('span', { class: 'snip-pos' });
   const show = () => {
     const l = entries(), i = Math.max(0, l.findIndex((x) => String(x.id) === curId()));
-    label.textContent = `${i + 1}/${l.length} · ${l[i].name}${l[i].p ? ` · ${scopeName(l[i].p.scope)}` : ''}`;
+    pos.textContent = `${i + 1}/${l.length} · ${l[i].name}${l[i].p ? ` · ${scopeName(l[i].p.scope)}` : ''}`;
   };
   const go = (d) => {
-    const l = entries(), i = Math.max(0, l.findIndex((x) => String(x.id) === curId()));
-    const x = l[(i + d + l.length) % l.length];
-    store.set(stateKey2, String(x.id));
+    const l = entries(), x = l[cycleIndex(Math.max(0, l.findIndex((y) => String(y.id) === curId())), d, l.length)];
+    store.set(curKey, String(x.id));
     if (x.p) applyGroupEntry(x.p, fs);
     else for (const f of fs) { S.values[f.key] = f.value; delete S.seedMode[f.key]; delete S.sizeMode[f.key]; }
     persist(); renderFields();
   };
   const saveOver = async () => {
-    const x = entries().find((y) => String(y.id) === curId());
+    const x = loaded();
     if (!x || !x.p) return saveNew();
     try {
-      await api('/api/snippets', { method: 'POST', body: { id: x.id, category: PRESET_CATEGORY, name: x.name, text: JSON.stringify(captureGroup(fs, x.p.scope, g.label)) } });
-      await loadSnippets(true); show(); toast(`Saved over "${x.name}"`);
+      await saveSnippet({ id: x.id, category: PRESET_CATEGORY, name: x.name, text: JSON.stringify(captureGroup(fs, x.p.scope, g.label)) });
+      show(); toast(`Saved over "${x.name}"`);
     } catch (e) { toast(e.message, true); }
   };
   const saveNew = () => {
     let scope = 'workflow';
-    const name = h('input', { type: 'text', placeholder: `Name, e.g. "${g.label} – fast"` });
-    const seg = h('div', { class: 'seg' }, SCOPES.map(([k, l]) => h('button', { type: 'button', class: k === scope ? 'on' : '',
-      onclick: (e) => { scope = k; [...seg.children].forEach((b) => b.classList.toggle('on', b === e.target)); } }, l)));
-    openSheet(h('h3', {}, `Save ${g.label}`),
-      h('div', { class: 'hint', style: 'margin-bottom:8px' }, `Saves: ${fs.map((f) => f.label).join(', ')}.`),
-      name, seg,
-      h('div', { class: 'hint', style: 'margin-top:6px' }, `This workflow: ${S.tpl.name}. This model: ${currentModel() || '(no model setting here)'}. Everywhere: any template with the same kind of node.`),
-      h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: async () => {
-        if (scope === 'model' && !currentModel()) return toast('This template has no model setting', true);
-        try {
-          const r = await api('/api/snippets', { method: 'POST', body: { category: PRESET_CATEGORY, name: name.value.trim() || g.label,
-            text: JSON.stringify(captureGroup(fs, scope, g.label)) } });
-          store.set(stateKey2, String(r.id));
-          await loadSnippets(true); closeSheet(); renderFields(); toast(`Saved "${r.name}"`);
-        } catch (e) { toast(e.message, true); }
-      } }, 'Save')));
+    nameSheet({ title: `Save ${g.label}`, placeholder: `Name, e.g. "${g.label} – fast"`, hint: `Saves: ${fs.map((f) => f.label).join(', ')}.`,
+      extra: [seg(SCOPES, scope, (k) => { scope = k; }),
+        hint(`This workflow: ${S.tpl.name}. This model: ${currentModel() || '(no model setting here)'}. Everywhere: any template with the same kind of node.`, 'sheet-hint')],
+      save: async (name) => {
+        if (scope === 'model' && !currentModel()) throw new Error('This template has no model setting');
+        const r = await saveSnippet({ category: PRESET_CATEGORY, name: name || g.label, text: JSON.stringify(captureGroup(fs, scope, g.label)) });
+        store.set(curKey, String(r.id));
+        renderFields(); toast(`Saved "${r.name}"`);
+      } });
   };
   const del = async () => {
-    const x = entries().find((y) => String(y.id) === curId());
+    const x = loaded();
     if (!x || !x.p) return toast('The template default can\'t be deleted');
-    store.set(stateKey2, '');
+    store.set(curKey, '');
     try { await deleteSnippet(x, `Deleted "${x.name}"`, renderFields); }
     catch (e) { toast(e.message, true); }
   };
   show();
-  return h('div', { class: 'part-head saved-bar' }, h('b', {}, 'Presets'),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Previous saved ${g.label}`, onclick: () => go(-1) }, '◀'),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Next saved ${g.label}`, onclick: () => go(1) }, '▶'),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Save over this ${g.label}`, title: 'Save over this one', onclick: saveOver }, '💾'),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Save ${g.label} as new`, title: 'Save as new', onclick: saveNew }, '＋'),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Delete this saved ${g.label}`, onclick: del }, '🗑'),
-    label);
+  return cycleBar({ title: 'Presets', what: `saved ${g.label}`, prev: () => go(-1), next: () => go(1), cls: 'saved-bar', pos,
+    buttons: [iconBtn(`Save over this ${g.label}`, '💾', saveOver), iconBtn(`Save ${g.label} as new`, '＋', saveNew),
+      iconBtn(`Delete this saved ${g.label}`, '🗑', del)] });
 }
 
 // A width + height pair on one node renders as a single size picker; everything else as usual.
@@ -522,7 +327,7 @@ function inputDims(name, onLoad) {
   imgDims.set(name, null);
   const img = new Image();
   img.onload = () => { imgDims.set(name, [img.naturalWidth, img.naturalHeight]); onLoad(); };
-  img.src = `/api/input?name=${encodeURIComponent(name)}`;
+  img.src = inputUrl(name);
   return null;
 }
 
@@ -564,34 +369,34 @@ function sizeField(fw, fh) {
     custom.querySelectorAll('input[type=number]').forEach((inp, i) => { inp.value = i ? hh : w; });
     persist(); showReadout();
   };
-  const seg = h('div', { class: 'seg wrap' });
+  const aspects = [...(imgField ? [['image', 'Match image']] : []), ...ASPECT_PRESETS.map(([k]) => [k, k]), ['custom', 'Custom']];
+  const aspectSeg = seg(aspects, m.aspect, (id) => { m.aspect = id; applyPreset(); persist(); draw(); }, { wrap: true });
   const draw = () => {
-    [...seg.children].forEach((b) => b.classList.toggle('on', b.dataset.a === m.aspect));
+    aspectSeg.set(m.aspect);
     const isCustom = m.aspect === 'custom';
     custom.classList.toggle('hidden', !isCustom);
     mpRow.classList.toggle('hidden', isCustom);
     showReadout();
   };
-  for (const [k] of [...(imgField ? [['Match image']] : []), ...ASPECT_PRESETS, ['Custom']]) {
-    const id = k === 'Custom' ? 'custom' : k === 'Match image' ? 'image' : k;
-    seg.append(h('button', { type: 'button', 'data-a': id, onclick: () => { m.aspect = id; applyPreset(); persist(); draw(); } }, k));
-  }
   const setMp = (n) => { m.mp = Math.min(16, Math.max(0.05, Math.round(n * 100) / 100)); mpIn.value = m.mp; applyPreset(); };
   mpIn.addEventListener('change', () => setMp(parseFloat(mpIn.value) || m.mp));
-  const mpRow = h('div', { class: 'field' },
-    h('label', { class: 'lbl' }, h('span', {}, 'Megapixels'), h('span', {}, `sides snap to ${step}`)),
-    h('div', { class: 'stepper' },
-      h('button', { type: 'button', onclick: () => setMp(m.mp - 0.05), 'aria-label': 'Fewer megapixels' }, '−'), mpIn,
-      h('button', { type: 'button', onclick: () => setMp(m.mp + 0.05), 'aria-label': 'More megapixels' }, '+')),
-    h('div', { class: 'seg' }, [0.25, 0.4, 0.5, 1, 2].map((v) => h('button', { type: 'button', onclick: () => setMp(v) }, `${v}`))));
+  const mpRow = field(['Megapixels', h('span', {}, `sides snap to ${step}`)],
+    stepper(mpIn, (d) => setMp(m.mp + d * 0.05), 'megapixels'),
+    seg([0.25, 0.4, 0.5, 1, 2].map((v) => [v, `${v}`]), null, setMp, { action: true }));
   // custom width/height edits go through numberField's own setVal; keep the readout in step
   custom.addEventListener('change', () => setTimeout(showReadout));
   custom.addEventListener('click', () => setTimeout(showReadout));
   if (m.aspect === 'image') applyPreset();   // the image (or its crop) may have changed since
   draw();
-  return h('div', { class: 'field size-field' },
-    h('label', { class: 'lbl' }, h('span', {}, 'Size'), readout), seg, mpRow, custom);
+  const el = field(['Size', readout], aspectSeg, mpRow, custom);
+  el.classList.add('size-field');
+  return el;
 }
+
+// − [box] +; bump(±1) steps the value
+const stepper = (input, bump, what = '') => h('div', { class: 'stepper' },
+  h('button', { type: 'button', onclick: () => bump(-1), 'aria-label': `Less ${what}`.trim() }, '−'), input,
+  h('button', { type: 'button', onclick: () => bump(1), 'aria-label': `More ${what}`.trim() }, '+'));
 
 // ComfyUI's own limits are often far past anything useful (steps to 10000, cfg to 100): number fields
 // keep to these, matched on the input name or the label, inside ComfyUI's limits
@@ -637,31 +442,23 @@ function numberField(f, isFloat) {
     range = h('input', { type: 'range', min: lo, max: hi, step, value: S.values[f.key] });
     range.addEventListener('input', () => sync(parseFloat(range.value), range));
   }
-  return h('div', { class: 'field' },
-    h('label', { class: 'lbl' }, h('span', {}, f.label), hasRange ? h('span', {}, `${lo}–${hi}`) : null),
-    h('div', { class: 'stepper' },
-      h('button', { type: 'button', onclick: () => bump(-1), 'aria-label': 'Decrease' }, '−'),
-      input,
-      h('button', { type: 'button', onclick: () => bump(1), 'aria-label': 'Increase' }, '+')),
-    range);
+  return field([f.label, hasRange ? h('span', {}, `${lo}–${hi}`) : null], stepper(input, bump), range);
 }
 
 function seedField(f) {
   const mode = S.seedMode[f.key] || 'random';
   const input = h('input', { type: 'number', inputMode: 'numeric', min: 0, max: Number.MAX_SAFE_INTEGER, step: 1, value: S.values[f.key] });
   input.addEventListener('change', () => { setVal(f.key, Math.max(0, parseInt(input.value || '0', 10))); });
-  const seg = h('div', { class: 'seg' });
-  const setMode = (m) => { S.seedMode[f.key] = m; persist(); [...seg.children].forEach((b) => b.classList.toggle('on', b.dataset.m === m)); };
-  for (const [m, label] of [['random', '🎲 Random'], ['fixed', 'Fixed'], ['increment', '+1 each run']]) {
-    seg.append(h('button', { type: 'button', 'data-m': m, class: m === mode ? 'on' : '', onclick: () => setMode(m) }, label));
-  }
+  const setMode = (m) => { S.seedMode[f.key] = m; persist(); modes.set(m); };
+  const modes = seg([['random', '🎲 Random'], ['fixed', 'Fixed'], ['increment', '+1 each run']], mode, setMode);
   const last = S.lastSeed[f.key];
-  return h('div', { class: 'field', 'data-key': f.key },
-    h('label', { class: 'lbl' }, h('span', {}, f.label), h('span', { class: 'last-seed' }, last != null ? `last: ${last}` : '')),
+  const el = field([f.label, h('span', { class: 'last-seed' }, last != null ? `last: ${last}` : '')],
     h('div', { class: 'row' }, input,
-      h('button', { type: 'button', class: 'btn small', style: 'flex:none', title: 'Use last seed',
-        onclick: () => { if (S.lastSeed[f.key] != null) { input.value = S.lastSeed[f.key]; setVal(f.key, S.lastSeed[f.key]); setMode('fixed'); } } }, '↺ last')),
-    seg);
+      button('↺ last', () => { if (S.lastSeed[f.key] != null) { input.value = S.lastSeed[f.key]; setVal(f.key, S.lastSeed[f.key]); setMode('fixed'); } },
+        { cls: 'small fixed', title: 'Use last seed' })),
+    modes);
+  el.dataset.key = f.key;
+  return el;
 }
 
 function choiceField(f) {
@@ -682,7 +479,7 @@ function choiceField(f) {
       for (const o of sel.options) o.hidden = q && !o.value.toLowerCase().includes(q);
     });
   }
-  return h('div', { class: 'field' }, h('label', { class: 'lbl' }, f.label), filter, sel);
+  return field(f.label, filter, sel);
 }
 
 function autoGrow(ta, max = 420) {
@@ -697,7 +494,7 @@ function textField(f) {
   const ta = h('textarea', { rows: f.multiline ? 4 : 1, value: S.values[f.key] ?? '', spellcheck: true });
   ta.addEventListener('input', () => setVal(f.key, ta.value));
   if (f.multiline) autoGrow(ta);
-  return h('div', { class: 'field' }, h('label', { class: 'lbl' }, f.label), ta);
+  return field(f.label, ta);
 }
 
 // ---------------------------------------------------------------------------
@@ -790,12 +587,13 @@ function snippetEditor({ cat, label, get, set, placeholder, extra = [], below = 
   const pos = h('span', { class: 'snip-pos' });
   const lib = () => (S.snippets || []).filter((x) => x.category === cat);
   const idx = () => lib().findIndex((x) => x.text.trim() === clean(get()).trim());
-  const del = h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Delete this saved ${cat.toLowerCase()}`, onclick: async () => {
+  const what = cat.toLowerCase();
+  const del = iconBtn(`Delete this saved ${what}`, '🗑', async () => {
     const sn = lib()[idx()];
     if (!sn) return;
     try { await deleteSnippet(sn, `Deleted "${sn.name}" from saved`, showPos); }
     catch (e) { toast(e.message, true); }
-  } }, '🗑');
+  });
   const showPos = () => {
     const l = lib(), i = idx();
     pos.textContent = l.length ? (i >= 0 ? `${i + 1}/${l.length} · ${l[i].name}` : `${l.length} saved`) : 'none saved';
@@ -806,22 +604,19 @@ function snippetEditor({ cat, label, get, set, placeholder, extra = [], below = 
   const step = (d) => {
     const l = lib();
     if (!l.length) return toast(`Nothing saved under ${cat} yet. Write one and tap 💾.`);
-    const i = idx();
-    put(l[i < 0 ? (d > 0 ? 0 : l.length - 1) : (i + d + l.length) % l.length].text);
+    put(l[cycleIndex(idx(), d, l.length)].text);
   };
   const save = async () => {
     const text = clean(get()).trim();
     if (!text) return toast('Nothing to save', true);
     if (idx() >= 0) return toast('Already saved');
-    try { await api('/api/snippets', { method: 'POST', body: { category: cat, text } }); await loadSnippets(true); showPos(); toast(`Saved to ${cat}`); }
+    try { await saveSnippet({ category: cat, text }); showPos(); toast(`Saved to ${cat}`); }
     catch (e) { toast(e.message, true); }
   };
   showPos();
   const el = h('div', { class: 'prompt-part' },
-    h('div', { class: 'part-head' }, h('b', {}, label), pos,
-      h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Previous saved ${cat.toLowerCase()}`, onclick: () => step(-1) }, '◀'),
-      h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Next saved ${cat.toLowerCase()}`, onclick: () => step(1) }, '▶'),
-      h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Save this ${cat.toLowerCase()}`, onclick: save }, '💾'), del, ...extra),
+    cycleBar({ title: label, what: `saved ${what}`, prev: () => step(-1), next: () => step(1), pos,
+      buttons: [iconBtn(`Save this ${what}`, '💾', save), del, ...extra] }),
     ta, below);
   return { el, ta };
 }
@@ -895,12 +690,12 @@ function promptField(f) {
       cat: 'Subject', label: `Subject ${i + 1}`, placeholder: i ? 'Another character or object…' : PART_HINTS.Subject,
       get: () => x.text || '', set: (t) => { x.text = t; sync(); }, clean: stripSubjectLabel, below: pics, grow: false,
       extra: [
-        h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Move subject up', onclick: () => move(-1) }, '↑'),
-        h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Move subject down', onclick: () => move(1) }, '↓'),
-        h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Remove subject', onclick: () => {
+        iconBtn('Move subject up', '↑', () => move(-1)),
+        iconBtn('Move subject down', '↓', () => move(1)),
+        iconBtn('Remove subject', '✕', () => {
           if (st.subjects.length > 1) st.subjects.splice(i, 1); else st.subjects[0] = { text: '', pic: null };
           sync(); redraw();
-        } }, '✕')],
+        })],
     });
     fixed(ta);
     return el;
@@ -910,8 +705,7 @@ function promptField(f) {
     const { el, ta } = snippetEditor({
       cat, label: cat, placeholder: PART_HINTS[cat] || '', grow: false,
       get: () => st.parts[cat] || '', set: (t) => { st.parts[cat] = t; sync(); },
-      extra: [h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Clear ${cat.toLowerCase()}`,
-        onclick: () => { ta.value = ''; ta.dispatchEvent(new Event('input')); } }, '✕')],
+      extra: [iconBtn(`Clear ${cat.toLowerCase()}`, '✕', () => { ta.value = ''; ta.dispatchEvent(new Event('input')); })],
     });
     fixed(ta);
     return el;
@@ -931,7 +725,7 @@ function promptField(f) {
     const load = (d) => {
       const l = sets();
       if (!l.length) return toast('No saved prompt sets yet. Name this one and tap 💾.');
-      const i = cur(), j = i < 0 ? (d > 0 ? 0 : l.length - 1) : (i + d + l.length) % l.length;
+      const j = cycleIndex(cur(), d, l.length);
       try {
         const v = JSON.parse(l[j].text);
         st.parts = v.parts || {}; st.subjects = v.subjects?.length ? v.subjects : [{ text: '', pic: null }];
@@ -941,7 +735,7 @@ function promptField(f) {
     const save = async () => {
       if (cur() >= 0) return toast('Already saved');
       const n = name.value.trim() || stripSubjectLabel(st.subjects[0]?.text || '').split(/\s+/).slice(0, 5).join(' ') || 'Prompt set';
-      try { await api('/api/snippets', { method: 'POST', body: { category: SET_CATEGORY, name: n, text: snapshot() } }); await loadSnippets(true); name.value = ''; show(); toast(`Saved set "${n}"`); }
+      try { await saveSnippet({ category: SET_CATEGORY, name: n, text: snapshot() }); name.value = ''; show(); toast(`Saved set "${n}"`); }
       catch (e) { toast(e.message, true); }
     };
     const del = async () => {
@@ -952,18 +746,16 @@ function promptField(f) {
     };
     show();
     return h('div', { class: 'prompt-part sets-bar' },
-      h('div', { class: 'part-head' }, h('b', {}, 'Prompt set'), label,
-        h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Previous prompt set', onclick: () => load(-1) }, '◀'),
-        h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Next prompt set', onclick: () => load(1) }, '▶'),
-        h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Delete this prompt set', onclick: del }, '🗑')),
-      h('div', { class: 'row' }, name, h('button', { type: 'button', class: 'btn small', style: 'flex:none', onclick: save }, '💾 Save set')));
+      cycleBar({ title: 'Prompt set', what: 'prompt set', prev: () => load(-1), next: () => load(1), pos: label,
+        buttons: [iconBtn('Delete this prompt set', '🗑', del)] }),
+      h('div', { class: 'row' }, name, button('💾 Save set', save, { cls: 'small fixed' })));
   };
 
   const draw = () => {
     if (st.on) {
       body.replaceChildren(setsBar(), ...order.flatMap((cat) => cat !== 'Subject' ? [partEl(cat)] : [
         h('div', { class: 'subjects' }, st.subjects.map(subjectEl),
-          h('button', { type: 'button', class: 'btn small', onclick: () => { st.subjects.push({ text: '', pic: null }); saveBuilder(); redraw(); } }, '+ Add subject')),
+          button('+ Add subject', () => { st.subjects.push({ text: '', pic: null }); saveBuilder(); redraw(); })),
       ]), h('details', { class: 'desc' }, h('summary', {}, 'Final prompt'), final));
       sync();
     } else {
@@ -977,7 +769,7 @@ function promptField(f) {
     mode.textContent = st.on ? 'Plain text' : 'Build from parts';
     drawChips();
   };
-  const mode = h('button', { type: 'button', class: 'btn small', onclick: async () => {
+  const mode = button('', async () => {
     if (!st.on) {
       await loadSnippets();
       // first time: keep what's already written, in "Other"
@@ -985,10 +777,11 @@ function promptField(f) {
       if (empty && (S.values[f.key] || '').trim()) st.parts.Other = S.values[f.key];
     }
     st.on = !st.on; saveBuilder(); redraw();
-  } });
+  });
   if (st.on) loadSnippets().then(draw); else draw();
-  return h('div', { class: 'field prompt-field' },
-    h('label', { class: 'lbl' }, h('span', {}, f.label), mode), body);
+  const el = field([f.label, mode], body);
+  el.classList.add('prompt-field');
+  return el;
 }
 
 const PART_HINTS = {
@@ -1008,12 +801,13 @@ function boolField(f) {
   return h('label', { class: 'field toggle' }, cb, f.label);
 }
 
-const thumbUrl = (name, px = 320) => `/api/input?name=${encodeURIComponent(name)}&thumb=${px}`;
+const inputUrl = (name) => `/api/input?name=${encodeURIComponent(name)}`;
+const thumbUrl = (name, px = 320) => `${inputUrl(name)}&thumb=${px}`;
 
 function mpInput(get, set) {
   const input = h('input', { type: 'number', inputMode: 'decimal', min: 0, max: 16, step: 0.05, value: get() });
   input.addEventListener('change', () => {
-    const n = Math.min(16, Math.max(0, parseFloat(input.value) || 0));
+    const n = clamp(parseFloat(input.value) || 0, 0, 16);
     input.value = n; set(n);
   });
   return h('label', { class: 'mp' }, h('span', {}, 'Max MP'), input,
@@ -1026,6 +820,16 @@ function cropPreview(src, c) {
   return h('span', { class: 'crop-preview' },
     h('img', { class: 'under', src, alt: '' }),
     h('img', { class: 'kept', src, alt: '', style: `clip-path:inset(${pct(c.y)} ${pct(1 - c.x - c.w)} ${pct(1 - c.y - c.h)} ${pct(c.x)})` }));
+}
+
+// An image or video input: a thumbnail to tap, its buttons beside it, and extra (the MP box) under them
+function mediaInput(f, caption, thumb, pick, buttons, extra = null) {
+  const el = field([f.label, h('span', {}, caption)],
+    h('div', { class: 'imgfield' },
+      h('button', { type: 'button', class: 'thumb', onclick: pick, 'aria-label': `Choose ${f.kind}` }, thumb),
+      h('div', { class: 'actions' }, h('div', { class: 'row wrap' }, button('Choose…', pick), buttons), extra)));
+  el.dataset.key = f.key;
+  return el;
 }
 
 function imageField(f) {
@@ -1048,7 +852,7 @@ function imageField(f) {
   if (!cropped) delete S.imageCrop[f.key];
   const crop = async () => {
     const img = new Image();
-    img.src = `/api/input?name=${encodeURIComponent(v)}`;
+    img.src = inputUrl(v);
     try { await img.decode(); } catch { return toast('Could not load the image', true); }
     openCrop({ img, crop: cropped ? cropped.crop : FULL, onApply: (c) => {
       if (c.w > 0.999 && c.h > 0.999) delete S.imageCrop[f.key];
@@ -1056,21 +860,15 @@ function imageField(f) {
       persist(); renderFields();
     } });
   };
-  const thumb = h('button', { type: 'button', class: 'thumb', onclick: pick, 'aria-label': 'Choose image' },
+  const set = (name) => { setVal(f.key, name); renderFields(); };
+  return mediaInput(f, v ? String(v).split('/').pop() + (cropped ? ' · cropped' : '') : 'empty',
     cropped ? cropPreview(thumbUrl(cropped.src, 256), cropped.crop)
-      : v ? h('img', { src: thumbUrl(v, 256), alt: v }) : h('span', { class: 'hint' }, '+ image'));
-  return h('div', { class: 'field', 'data-key': f.key },
-    h('label', { class: 'lbl' }, h('span', {}, f.label),
-      h('span', {}, v ? String(v).split('/').pop() + (cropped ? ' · cropped' : '') : 'empty')),
-    h('div', { class: 'imgfield' }, thumb,
-      h('div', { class: 'actions' },
-        h('div', { class: 'row' },
-          h('button', { type: 'button', class: 'btn small', onclick: pick }, 'Choose…'),
-          v ? h('button', { type: 'button', class: 'btn small', onclick: crop }, 'Crop…') : null,
-          h('button', { type: 'button', class: 'btn small', onclick: () => openSketch({ base: v || null, aspect: templateAspect(), onDone: (name) => { setVal(f.key, name); renderFields(); } }) },
-            v ? 'Draw on' : 'Draw'),
-          v ? h('button', { type: 'button', class: 'btn small', onclick: () => { setVal(f.key, ''); renderFields(); } }, 'Clear') : null),
-        mpInput(() => S.imageMp[f.key], (n) => { S.imageMp[f.key] = n; persist(); }))));
+      : v ? h('img', { src: thumbUrl(v, 256), alt: v }) : h('span', { class: 'hint' }, '+ image'),
+    pick, [
+      v ? button('Crop…', crop) : null,
+      button(v ? 'Draw on' : 'Draw', () => openSketch({ base: v || null, aspect: templateAspect(), onDone: set })),
+      v ? button('Clear', () => set('')) : null],
+    mpInput(() => S.imageMp[f.key], (n) => { S.imageMp[f.key] = n; persist(); }));
 }
 
 // A video input (VHS_LoadVideoPath): the value is the clip's source, {generation, index} for an
@@ -1095,58 +893,56 @@ function videoField(f) {
       renderFields();
     },
   });
-  const thumb = h('button', { type: 'button', class: 'thumb', onclick: pick, 'aria-label': 'Choose video' },
-    src && src.o ? mediaEl(src.o, { thumb: true }) : h('span', { class: 'hint' }, '+ video'));
-  return h('div', { class: 'field', 'data-key': f.key },
-    h('label', { class: 'lbl' }, h('span', {}, f.label), h('span', {}, src ? src.label : 'empty')),
-    h('div', { class: 'imgfield' }, thumb,
-      h('div', { class: 'actions' },
-        h('div', { class: 'row' },
-          h('button', { type: 'button', class: 'btn small', onclick: pick }, 'Choose…'),
-          v ? h('button', { type: 'button', class: 'btn small', onclick: () => { setVal(f.key, null); renderFields(); } }, 'Clear') : null))));
+  return mediaInput(f, src ? src.label : 'empty',
+    src && src.o ? mediaEl(src.o, { thumb: true }) : h('span', { class: 'hint' }, '+ video'),
+    pick, [v ? button('Clear', () => { setVal(f.key, null); renderFields(); }) : null]);
 }
 
-// this project's video outputs, newest first, plus the Video tab's uploaded clips
-async function openVideoPicker({ title, onPick }) {
+// This project's finished outputs of the given kinds, newest first: [{ g, o, i, t }]
+async function projectOutputs(kinds) {
+  if (!S.history.size) await loadHistory();
+  const items = [];
+  for (const g of S.history.values()) {
+    if (g.project_id !== S.project || g.status !== 'done') continue;
+    g.outputs.forEach((o, i) => { if (kinds.includes(o.kind)) items.push({ g, o, i, t: g.finished || g.created }); });
+  }
+  return items.sort((x, y) => y.t - x.t);
+}
+const genLabel = (g) => `#${g.id} ${g.template}`;
+// a card's picture: a thumbnail, or a note for sound
+const cardMedia = (o) => (o.kind === 'audio' ? h('span', { class: 'placeholder' }, '♪') : mediaEl(o, { thumb: true }));
+
+// A sheet of cards to pick from: bar holds its buttons, load() returns the cards (or a message)
+function pickerSheet(title, bar, load) {
   const grid = h('div', { class: 'grid gallery' });
-  const file = h('input', { type: 'file', accept: 'video/*', class: 'hidden' });
-  const picked = (val) => { closeSheet(); onPick(val); };
-  const card = (o, label, val) => {
-    const c = h('button', { class: 'card' }, h('div', { class: 'media' }, mediaEl(o, { thumb: true })),
-      h('div', { class: 'meta' }, h('span', { class: 'name' }, label)));
-    c.addEventListener('click', () => picked(val));
-    return c;
-  };
   const draw = async () => {
-    grid.replaceChildren(h('div', { class: 'placeholder' }, 'Loading…'));
-    if (!S.history.size) await loadHistory();
+    grid.replaceChildren(placeholder('Loading…'));
+    try { const cards = await load(); grid.replaceChildren(...[cards].flat()); }
+    catch (e) { grid.replaceChildren(note(e.message, 'err')); }
+  };
+  openSheet(h('h3', {}, title), h('div', { class: 'picker-bar' }, bar), grid);
+  draw();
+  return draw;
+}
+
+const uploadMedia = (file) => { const form = new FormData(); form.append('file', file); return api('/api/media', { method: 'POST', form }); };
+
+// this project's video outputs, newest first, plus the Video tab's uploaded clips
+function openVideoPicker({ title, onPick }) {
+  const picked = (val) => { closeSheet(); onPick(val); };
+  pickerSheet(title, [
+    fileButton('Upload…', async ([fl]) => {
+      try { const m = await uploadMedia(fl); picked({ media: m.name }); }
+      catch (e) { toast('Upload failed: ' + e.message, true); }
+    }, { accept: 'video/*', cls: 'small primary' })], async () => {
     let media = [];
     try { media = (await api('/api/media')).filter((m) => m.kind === 'video'); } catch { /* the outputs still show */ }
-    const items = [];
-    for (const g of S.history.values()) {
-      if (g.project_id !== S.project || g.status !== 'done') continue;
-      g.outputs.forEach((o, i) => {
-        if (o.kind === 'video') items.push({ t: g.finished || g.created, el: () => card(o, `#${g.id} ${g.template}`, { generation: g.id, index: i }) });
-      });
-    }
-    for (const m of media) items.push({ t: m.created, el: () => card(m, m.label, { media: m.name }) });
+    const items = (await projectOutputs(['video'])).map(({ g, o, i, t }) =>
+      ({ t, el: () => mediaCard(mediaEl(o, { thumb: true }), genLabel(g), () => picked({ generation: g.id, index: i })) }));
+    for (const m of media) items.push({ t: m.created, el: () => mediaCard(mediaEl(m, { thumb: true }), m.label, () => picked({ media: m.name })) });
     items.sort((x, y) => y.t - x.t);
-    grid.replaceChildren(...(items.length ? items.slice(0, 300).map((x) => x.el())
-      : [h('div', { class: 'placeholder' }, 'No videos in this project yet. Generate one or upload a clip.')]));
-  };
-  file.addEventListener('change', async () => {
-    const fl = file.files[0]; file.value = '';
-    if (!fl) return;
-    toast(`Uploading ${fl.name}…`);
-    const form = new FormData(); form.append('file', fl);
-    try { const m = await api('/api/media', { method: 'POST', form }); picked({ media: m.name }); }
-    catch (e) { toast('Upload failed: ' + e.message, true); }
+    return items.length ? items.slice(0, 300).map((x) => x.el()) : placeholder('No videos in this project yet. Generate one or upload a clip.');
   });
-  openSheet(h('h3', {}, title),
-    h('div', { class: 'picker-bar' },
-      h('button', { type: 'button', class: 'btn small primary', onclick: () => file.click() }, 'Upload…')),
-    grid, file);
-  draw();
 }
 
 // ---------------------------------------------------------------------------
@@ -1154,14 +950,11 @@ async function openVideoPicker({ title, onPick }) {
 // Whatever is picked ends up as an image in ComfyUI's input folder, so onPick gets its name.
 // multi: keep the sheet open and call onPick for every tap (the editor adds several at once).
 // ---------------------------------------------------------------------------
-async function openImagePicker({ title, mp = () => 0, onPick, multi = false, extra = null }) {
+function openImagePicker({ title, mp = () => 0, onPick, multi = false }) {
   let tab = store.get('deck.pickerTab2', 'project');
   let q = '';
   let inputs = null;
-  const grid = h('div', { class: 'grid gallery' });
-  const file = h('input', { type: 'file', accept: 'image/*', multiple: multi, class: 'hidden' });
   const search = h('input', { type: 'text', placeholder: 'Filter by name…' });
-  const seg = h('div', { class: 'seg' });
 
   const picked = (name, info, card) => {
     if (!multi) { closeSheet(); onPick(name, info); return; }
@@ -1169,17 +962,8 @@ async function openImagePicker({ title, mp = () => 0, onPick, multi = false, ext
     if (card) card.classList.add('picked');
     toast('Added');
   };
-
-  const card = (src, label, onclick, badge) => {
-    const c = h('button', { class: 'card' },
-      h('div', { class: 'media' }, src, badge ? h('span', { class: 'play' }, badge) : null),
-      h('div', { class: 'meta' }, h('span', { class: 'name' }, label)));
-    c.addEventListener('click', () => onclick(c));
-    return c;
-  };
-  const inputCard = (n, badge) => card(h('img', { src: thumbUrl(n), alt: n, loading: 'lazy' }), n.split('/').pop(),
-    (c) => picked(n, { name: n }, c), badge);
-
+  const inputCard = (n, badge) => mediaCard(h('img', { src: thumbUrl(n), alt: n, loading: 'lazy' }), n.split('/').pop(),
+    (c) => picked(n, { name: n }, c), { badge });
   const fromHistory = async (g, i, c) => {
     try {
       const r = await api(`/api/generations/${g.id}/to-input`, { method: 'POST',
@@ -1188,55 +972,26 @@ async function openImagePicker({ title, mp = () => 0, onPick, multi = false, ext
     } catch (e) { toast(e.message, true); }
   };
 
-  const loadInputs = async () => {
-    if (inputs) return true;
-    grid.replaceChildren(h('div', { class: 'placeholder' }, 'Loading…'));
-    try { inputs = await api(`/api/inputs${S.project != null ? `?project_id=${S.project}` : ''}`); return true; }
-    catch (e) { grid.replaceChildren(h('div', { class: 'note err' }, e.message)); return false; }
-  };
-
   // This project: its uploads, editor saves and drawings plus everything it generated, newest first
-  const drawProject = async () => {
-    if (!await loadInputs()) return;
-    if (!S.history.size) await loadHistory();
-    const SOURCE = { upload: 'upload', editor: 'edit', drawing: 'drawing', crop: 'crop', snapshot: 'frame', scene: '3d' };
+  const SOURCE = { upload: 'upload', editor: 'edit', drawing: 'drawing', crop: 'crop', snapshot: 'frame', scene: '3d' };
+  const projectCards = async () => {
     const items = inputs.project.filter((r) => r.source !== 'generation')
       .map((r) => ({ t: r.created, el: () => inputCard(r.name, SOURCE[r.source] || null) }));
-    for (const g of S.history.values()) {
-      if (g.project_id !== S.project || g.status !== 'done') continue;
-      g.outputs.forEach((o, i) => {
-        if (o.kind !== 'image' && o.kind !== 'video') return;
-        items.push({ t: g.finished || g.created, el: () => card(mediaEl(o, { thumb: true }), `#${g.id} ${g.template}`,
-          (c) => fromHistory(g, i, c), o.kind === 'video' ? 'last frame' : null) });
-      });
+    for (const { g, o, i, t } of await projectOutputs(['image', 'video'])) {
+      items.push({ t, el: () => mediaCard(mediaEl(o, { thumb: true }), genLabel(g), (c) => fromHistory(g, i, c),
+        { badge: o.kind === 'video' ? 'last frame' : null }) });
     }
     items.sort((x, y) => y.t - x.t);
-    grid.replaceChildren(...(items.length ? items.slice(0, 300).map((x) => x.el())
-      : [h('div', { class: 'placeholder' }, 'Nothing in this project yet. Upload, draw, or pick from All inputs.')]));
+    return items.length ? items.slice(0, 300).map((x) => x.el()) : placeholder('Nothing in this project yet. Upload, draw, or pick from All inputs.');
   };
-
-  const drawAll = async () => {
-    if (!await loadInputs()) return;
+  const allCards = () => {
     const list = inputs.all.filter((n) => !q || n.toLowerCase().includes(q)).slice(0, 400);
-    grid.replaceChildren(...(list.length ? list.map((n) => inputCard(n))
-      : [h('div', { class: 'placeholder' }, 'No input images match.')]));
+    return list.length ? list.map((n) => inputCard(n)) : placeholder('No input images match.');
   };
 
-  const draw = () => {
-    [...seg.children].forEach((b) => b.classList.toggle('on', b.dataset.t === tab));
-    search.classList.toggle('hidden', tab !== 'all');
-    (tab === 'project' ? drawProject : drawAll)();
-  };
   const projName = (S.projects.find((p) => p.id === S.project) || {}).name || 'This project';
-  for (const [t, label] of [['project', projName], ['all', 'All inputs']]) {
-    seg.append(h('button', { type: 'button', 'data-t': t, onclick: () => { tab = t; store.set('deck.pickerTab2', t); draw(); } }, label));
-  }
-  search.addEventListener('input', () => { q = search.value.toLowerCase(); drawAll(); });
-
-  const camera = h('input', { type: 'file', accept: 'image/*', capture: 'environment', class: 'hidden' });
-  const onFiles = async (input) => {
-    const files = [...input.files]; input.value = '';
-    if (!files.length) return;
+  const tabs = seg([['project', projName], ['all', 'All inputs']], tab, (t) => { tab = t; store.set('deck.pickerTab2', t); draw(); });
+  const onFiles = async (files) => {
     toast(`Uploading ${files.length}…`);
     for (const fl of files) {
       try {
@@ -1248,17 +1003,17 @@ async function openImagePicker({ title, mp = () => 0, onPick, multi = false, ext
     }
     draw();
   };
-  file.addEventListener('change', () => onFiles(file));
-  camera.addEventListener('change', () => onFiles(camera));
-
-  openSheet(h('h3', {}, title),
-    h('div', { class: 'picker-bar' }, seg,
-      h('button', { type: 'button', class: 'btn small primary', onclick: () => file.click() }, 'Upload…'),
-      h('button', { type: 'button', class: 'btn small', onclick: () => camera.click() }, '📷 Camera'),
-      extra ? extra() : null,
-      multi ? h('button', { type: 'button', class: 'btn small', onclick: closeSheet }, 'Done') : null),
-    search, grid, file, camera);
-  draw();
+  const draw = pickerSheet(title, [tabs,
+    fileButton('Upload…', onFiles, { accept: 'image/*', multiple: multi, cls: 'small primary' }),
+    fileButton('📷 Camera', onFiles, { accept: 'image/*', capture: 'environment' }),
+    multi ? button('Done', closeSheet) : null], async () => {
+    search.classList.toggle('hidden', tab !== 'all');
+    inputs ||= await api(`/api/inputs${S.project != null ? `?project_id=${S.project}` : ''}`);
+    return tab === 'project' ? projectCards() : allCards();
+  });
+  search.addEventListener('input', () => { q = search.value.toLowerCase(); draw(); });
+  $('#sheet .picker-bar').after(search);
+  search.classList.toggle('hidden', tab !== 'all');
 }
 
 // Upload a File/Blob to ComfyUI's input folder, tagged with the open project.
@@ -1283,7 +1038,7 @@ function autoLoraFolder(folders) {
 }
 
 function loraField(f) {
-  const list = h('div', { style: 'display:grid;gap:8px' });
+  const list = h('div', { class: 'stack' });
   const rows = () => S.values[f.key] || [];
   const save = (arr) => { setVal(f.key, arr); draw(); };
   const folders = [...new Set(f.options.filter((o) => o.includes('/')).map((o) => o.split('/')[0]))].sort();
@@ -1309,27 +1064,24 @@ function loraField(f) {
       if (l.name && !f.options.includes(l.name)) sel.append(h('option', { value: l.name }, `${l.name} (missing)`));
       sel.value = l.name || '';
       sel.addEventListener('change', () => { const a = [...rows()]; a[i] = { ...a[i], name: sel.value }; save(a); });
-      const val = h('span', { style: 'min-width:3.2em;text-align:right' }, Number(l.strength ?? 1).toFixed(2));
+      const val = h('span', { class: 'range-val' }, Number(l.strength ?? 1).toFixed(2));
       const range = h('input', { type: 'range', min: -2, max: 2, step: 0.05, value: l.strength ?? 1 });
       range.addEventListener('input', () => { val.textContent = Number(range.value).toFixed(2); });
       range.addEventListener('change', () => { const a = [...rows()]; a[i] = { ...a[i], strength: parseFloat(range.value) }; setVal(f.key, a); });
-      const on = h('input', { type: 'checkbox', checked: l.enabled !== false, title: 'Enabled', style: 'width:26px;height:26px;accent-color:var(--accent)' });
+      const on = h('input', { type: 'checkbox', checked: l.enabled !== false, title: 'Enabled' });
       on.addEventListener('change', () => { const a = [...rows()]; a[i] = { ...a[i], enabled: on.checked }; save(a); });
       return h('div', { class: 'lora-row' + (l.enabled === false ? ' off' : '') },
         h('div', { class: 'top' }, on, sel,
-          l.name ? h('button', { type: 'button', class: 'icon-btn info-btn', 'aria-label': 'LoRA info', title: 'Civitai info',
-            onclick: () => openLoraInfo(l.name) }, 'i') : null,
-          h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Remove LoRA', onclick: () => save(rows().filter((_, j) => j !== i)) }, '✕')),
+          l.name ? iconBtn('LoRA info from Civitai', 'i', () => openLoraInfo(l.name), { class: 'icon-btn info-btn' }) : null,
+          iconBtn('Remove LoRA', '✕', () => save(rows().filter((_, j) => j !== i)))),
         h('div', { class: 'row' }, range, val));
     }));
   };
   drawChips(); draw();
-  return h('div', { class: 'field' },
-    h('label', { class: 'lbl' }, h('span', {}, 'LoRA stack'), h('span', {}, f.options.length ? `${f.options.length} available` : 'none found')),
+  return field(['LoRA stack', h('span', {}, f.options.length ? `${f.options.length} available` : 'none found')],
     folders.length ? chips : null,
     list,
-    h('button', { type: 'button', class: 'btn small', style: 'margin-top:8px',
-      onclick: () => save([...rows(), { name: '', strength: 1, enabled: true }]) }, '+ Add LoRA'));
+    button('+ Add LoRA', () => save([...rows(), { name: '', strength: 1, enabled: true }]), { cls: 'small add-btn' }));
 }
 
 function fieldEl(f) {
@@ -1609,13 +1361,17 @@ function showOutput(g, index = 0) {
   S.viewing = g.id;
   const o = g.outputs[index];
   const box = $('#viewerMedia');
-  if (!o) { box.replaceChildren(h('div', { class: 'placeholder' }, g.status === 'error' ? `Error: ${g.error || ''}` : 'No outputs')); return; }
+  if (!o) { box.replaceChildren(placeholder(g.status === 'error' ? `Error: ${g.error || ''}` : 'No outputs')); return; }
   const el = mediaEl(o);
   if (o.kind === 'image') el.addEventListener('click', () => openGeneration(g.id));
   box.replaceChildren(el);
-  const strip = $('#outStrip');
-  strip.replaceChildren(...(g.outputs.length > 1 ? g.outputs.map((oo, i) =>
-    h('button', { class: 'thumb' + (i === index ? ' sel' : ''), onclick: () => showOutput(g, i) }, mediaEl(oo, { thumb: true }))) : []));
+  outputThumbs($('#outStrip'), g, index, (i) => showOutput(g, i));
+}
+
+// A run's outputs as thumbnails to switch between (none when there's only one)
+function outputThumbs(strip, g, sel, onPick) {
+  strip.replaceChildren(...(g.outputs.length > 1 ? g.outputs.map((o, i) =>
+    h('button', { type: 'button', class: 'thumb' + (i === sel ? ' sel' : ''), onclick: () => onPick(i) }, mediaEl(o, { thumb: true }))) : []));
 }
 
 function setProgress(value, max, text) {
@@ -1819,7 +1575,7 @@ function syncWithServer() {
       }
       if (newest && (!S.viewing || newest.id > S.viewing) && !RUN.pid) {
         if (newest.status === 'done') showOutput(newest);
-        else { clearLive(); $('#viewerMedia').replaceChildren(h('div', { class: 'placeholder' }, `Error: ${newest.error || ''}`)); }
+        else { clearLive(); $('#viewerMedia').replaceChildren(placeholder(`Error: ${newest.error || ''}`)); }
         if (wasRunning || document.hidden) notifyDone(newest);
       } else if (!RUN.pid && $('#viewer').classList.contains('live')) restoreViewer();
       if (!jobs.active.length) keepAwake(false);
@@ -1919,13 +1675,13 @@ function onGeneration(g) {
     } else if (busy) toast(`#${g.id} failed: ${g.error || ''}`, true);
     else {
       clearLive();
-      $('#viewerMedia').replaceChildren(h('div', { class: 'placeholder' }, `Error: ${g.error || ''}`));
+      $('#viewerMedia').replaceChildren(placeholder(`Error: ${g.error || ''}`));
     }
     notifyDone(g);
   }
   if ($('#tab-history').classList.contains('active')) updateCard(g);
   if ($('#tab-board').classList.contains('active') && (g.status === 'done' || 'pinned' in g)) boardChanged(g);
-  if (S.sheetGen === g.id && !$('#sheet').classList.contains('hidden')) openGeneration(g.id);
+  if (SHEET.gen === g.id && sheetOpen()) openGeneration(g.id);
 }
 
 // ---------------------------------------------------------------------------
@@ -1944,7 +1700,7 @@ async function loadHistory(more = false) {
 
 function renderHistory() {
   const items = [...S.history.values()].filter((g) => g.project_id === S.project).sort((a, b) => b.id - a.id);
-  $('#historyGrid').replaceChildren(...(items.length ? items.map(cardEl) : [h('div', { class: 'placeholder' }, 'Nothing generated in this project yet.')]));
+  $('#historyGrid').replaceChildren(...(items.length ? items.map(cardEl) : [placeholder('Nothing generated in this project yet.')]));
   $('#moreHistory').classList.toggle('hidden', S.historyDone || !items.length);
 }
 
@@ -1967,36 +1723,12 @@ function removeCard(id) {
 
 function cardEl(g) {
   const o = g.outputs[0];
-  return h('button', { class: 'card', 'data-gen': g.id, onclick: () => openGeneration(g.id) },
-    h('div', { class: 'media' },
-      o ? mediaEl(o, { thumb: true }) : h('span', { class: 'hint' }, g.status),
-      o && o.kind === 'video' ? h('span', { class: 'play' }, '▶ video') : null,
-      g.outputs.length > 1 ? h('span', { class: 'play', style: 'left:6px;right:auto' }, `${g.outputs.length}`) : null),
-    h('div', { class: 'meta' }, h('span', {}, `#${g.id} ${g.template}`),
-      h('span', { class: `badge ${g.status}` }, g.status === 'done' && runTime(g) != null ? fmtDur(runTime(g)) : g.status)));
+  return mediaCard([o ? mediaEl(o, { thumb: true }) : h('span', { class: 'hint' }, g.status),
+    g.outputs.length > 1 ? h('span', { class: 'play count' }, `${g.outputs.length}`) : null], null, () => openGeneration(g.id), {
+    badge: o && o.kind === 'video' ? '▶ video' : null, attrs: { 'data-gen': g.id },
+    meta: [h('span', { class: 'name' }, genLabel(g)),
+      h('span', { class: `badge ${g.status}` }, g.status === 'done' && runTime(g) != null ? fmtDur(runTime(g)) : g.status)] });
 }
-
-// S.sheetSeq counts sheets opened, so a slow lookup can tell whether its sheet is still the one showing
-function openSheet(...content) {
-  S.sheetGen = null;
-  S.sheetSeq = (S.sheetSeq || 0) + 1;
-  const wasOpen = !$('#sheet').classList.contains('hidden');
-  $('#sheet').replaceChildren(
-    h('button', { class: 'icon-btn close', onclick: () => closeSheet(), 'aria-label': 'Close' }, '✕'),
-    ...content.flat().filter((c) => c != null && c !== false));
-  $('#sheet').classList.remove('hidden'); $('#sheetBackdrop').classList.remove('hidden');
-  if (!wasOpen) overlayOpened(sheetBack);
-  return S.sheetSeq;
-}
-const sheetBack = () => closeSheet(true);
-function closeSheet(viaBack = false) {
-  if ($('#sheet').classList.contains('hidden')) return;
-  S.sheetGen = null;
-  $('#sheet').querySelectorAll('video').forEach((v) => v.pause());
-  $('#sheet').classList.add('hidden'); $('#sheetBackdrop').classList.add('hidden');
-  if (viaBack !== true) overlayClosed(sheetBack);  // (used as a click handler too, so viaBack may be an event)
-}
-const sheetStillOpen = (seq) => seq === S.sheetSeq && !$('#sheet').classList.contains('hidden');
 
 function openGeneration(id) {
   const g = S.history.get(id);
@@ -2005,9 +1737,8 @@ function openGeneration(id) {
   const big = h('div', { class: 'media-big' });
   const strip = h('div', { class: 'strip' });
   const draw = () => {
-    big.replaceChildren(g.outputs[idx] ? mediaEl(g.outputs[idx]) : h('div', { class: 'placeholder' }, g.error || g.status));
-    strip.replaceChildren(...(g.outputs.length > 1 ? g.outputs.map((o, i) =>
-      h('button', { class: 'thumb' + (i === idx ? ' sel' : ''), onclick: () => { idx = i; draw(); } }, mediaEl(o, { thumb: true }))) : []));
+    big.replaceChildren(g.outputs[idx] ? mediaEl(g.outputs[idx]) : placeholder(g.error || g.status));
+    outputThumbs(strip, g, idx, (i) => { idx = i; draw(); });
   };
   draw();
   const t = S.templates.find((x) => x.id === g.template);
@@ -2023,41 +1754,37 @@ function openGeneration(id) {
   const isScene = g.template === '3d scene';  // a depth video from the 3D tab, with its scene in the params
   const isPhoto = g.template === '3d photo';  // a picture as a mesh (MoGe), for the 3D tab
   const isEdit = g.template === 'video edit' || isScene || isPhoto;  // made in the Video or 3D tab: no template to replay
-  const actions = isPhoto ? [
-    h('button', { class: 'btn small primary', onclick: async () => {
-      closeSheet(); switchTab('scene'); (await sceneModule()).addPhoto(g);
-    } }, 'Add to 3D'),
+  const primary = { cls: 'small primary' };
+  const btns = isPhoto ? [
+    button('Add to 3D', async () => { closeSheet(); switchTab('scene'); (await sceneModule()).addPhoto(g); }, primary),
   ] : isScene ? [
-    h('button', { class: 'btn small primary', onclick: async () => {
-      closeSheet(); switchTab('scene'); (await sceneModule()).open(g.params.scene);
-    } }, 'Open in 3D'),
-    h('button', { class: 'btn small', onclick: () => { closeSheet(); useControlVideo(g, g.params.scene || {}); } }, 'Use in H3 control'),
+    button('Open in 3D', async () => { closeSheet(); switchTab('scene'); (await sceneModule()).open(g.params.scene); }, primary),
+    button('Use in H3 control', () => { closeSheet(); useControlVideo(g, g.params.scene || {}); }),
   ] : isEdit ? [] : [
-    h('button', { class: 'btn small primary', onclick: () => { reuse(g); closeSheet(); } }, 'Replay & edit'),
-    h('button', { class: 'btn small', onclick: () => runAgain(g) }, 'Run again'),
+    button('Replay & edit', () => { reuse(g); closeSheet(); }, primary),
+    button('Run again', () => runAgain(g)),
   ];
   if (g.outputs.some((o) => o.kind === 'image' || o.kind === 'video')) {
-    actions.push(h('button', { class: 'btn small', onclick: () => sendToInput(g, idx, 'first') }, 'Use as input'));
-    actions.push(h('button', { class: 'btn small', title: 'For videos: grab the final frame, e.g. to extend the shot',
-      onclick: () => sendToInput(g, idx, 'last') }, 'Use last frame'));
+    btns.push(button('Use as input', () => sendToInput(g, idx, 'first')),
+      button('Use last frame', () => sendToInput(g, idx, 'last'), { title: 'For videos: grab the final frame, e.g. to extend the shot' }));
   }
-  if (!isEdit) actions.push(h('a', { class: 'btn small', href: `/api/generations/${g.id}/workflow`, style: 'display:grid;place-items:center;text-decoration:none' }, 'Workflow JSON'));
-  if (cur()) actions.push(h('a', { class: 'btn small', href: cur().url, download: cur().filename, style: 'display:grid;place-items:center;text-decoration:none' }, 'Download'));
-  actions.push(h('button', { class: 'btn small danger', onclick: async () => {
+  if (!isEdit) btns.push(linkBtn('Workflow JSON', `/api/generations/${g.id}/workflow`));
+  if (cur()) btns.push(linkBtn('Download', cur().url, { download: cur().filename }));
+  btns.push(button('Delete', async () => {
     if (!confirm(`Delete generation #${g.id} and its files?`)) return;
     try { await api(`/api/generations/${g.id}`, { method: 'DELETE' }); closeSheet(); } catch (e) { toast(e.message, true); }
-  } }, 'Delete'));
+  }, { cls: 'small danger' }));
 
   openSheet(
     h('h3', {}, `#${g.id} · ${g.template}`, ' ', h('span', { class: `badge ${g.status}` }, g.status),
-      runTime(g) != null ? h('span', { class: 'hint', style: 'margin-left:8px' }, `took ${fmtDur(runTime(g))}`) : null),
+      runTime(g) != null ? h('span', { class: 'hint' }, `took ${fmtDur(runTime(g))}`) : null),
     big, strip,
-    h('div', { class: 'actions' }, actions),
-    g.error ? h('div', { class: 'note err' }, g.error) : null,
-    g.parent ? h('div', { class: 'hint' }, `Made from #${g.parent.generation}${g.parent.frame ? ` (${g.parent.frame} frame)` : ''}`) : null,
+    actions(btns),
+    g.error ? note(g.error, 'err') : null,
+    g.parent ? hint(`Made from #${g.parent.generation}${g.parent.frame ? ` (${g.parent.frame} frame)` : ''}`) : null,
     h('table', { class: 'params' }, Object.entries(g.params).filter(([k]) => !k.startsWith('__') && !(isScene && k === 'scene')).map(([k, v]) =>
-      h('tr', {}, h('td', {}, labelFor(k)), h('td', { style: 'white-space:pre-wrap' }, fmt(v))))));
-  S.sheetGen = g.id;
+      h('tr', {}, h('td', {}, labelFor(k)), h('td', {}, fmt(v))))));
+  SHEET.gen = g.id;
 }
 
 // The 3D tab (web/scene.js, with three.js) loads the first time it's needed.
@@ -2065,7 +1792,7 @@ let sceneMod = null;
 async function sceneModule() {
   if (!sceneMod) {
     sceneMod = await import('./scene.js');
-    sceneMod.init({ h, $, api, busy, toast, undoToast, store, S, uploadImage, useControlVideo, openSheet, closeSheet, iconBtn, propNum, propsTitle, layerRowsEl, openImagePicker });
+    sceneMod.init({ S, uploadImage, useControlVideo, openImagePicker });
   }
   return sceneMod;
 }
@@ -2133,7 +1860,7 @@ async function sendToInput(g, index, frame) {
   };
   if (fields.length === 1) return go(fields[0]);
   openSheet(h('h3', {}, 'Send to which image input?'),
-    h('div', { class: 'actions' }, fields.map((f) => h('button', { class: 'btn', onclick: () => go(f) }, `${f.group} · ${f.label}`))));
+    actions(fields.map((f) => button(`${f.group} · ${f.label}`, () => go(f), { cls: '' }))));
 }
 
 // ---------------------------------------------------------------------------
@@ -2210,15 +1937,11 @@ function openSketch({ base = null, aspect = 1, onDone }) {
   cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
 
   // toolbar
-  const toolSeg = h('div', { class: 'seg' });
-  for (const [t, label] of [['pen', '✎ Pen'], ['eraser', '⌫ Eraser']]) {
-    toolSeg.append(h('button', { type: 'button', 'data-t': t, class: t === st.tool ? 'on' : '',
-      onclick: () => { st.tool = t; [...toolSeg.children].forEach((b) => b.classList.toggle('on', b.dataset.t === t)); } }, label));
-  }
+  const toolSeg = seg([['pen', '✎ Pen'], ['eraser', '⌫ Eraser']], st.tool, (t) => { st.tool = t; });
   const colorIn = h('input', { type: 'color', value: st.color });
   const setColor = (c) => {
     st.color = c; colorIn.value = c; store.set('deck.sketch.color', c);
-    if (st.tool === 'eraser') toolSeg.children[0].click();
+    if (st.tool === 'eraser') { st.tool = 'pen'; toolSeg.set('pen'); }
   };
   colorIn.addEventListener('input', () => setColor(colorIn.value));
   const swatches = h('div', { class: 'swatches' }, SWATCHES.map((c) =>
@@ -2226,48 +1949,35 @@ function openSketch({ base = null, aspect = 1, onDone }) {
   const sizeVal = h('span', { class: 'hint' }, `${st.size}px`);
   const sizeIn = h('input', { type: 'range', min: 1, max: 120, step: 1, value: st.size });
   sizeIn.addEventListener('input', () => { st.size = Number(sizeIn.value); sizeVal.textContent = `${st.size}px`; store.set('deck.sketch.size', st.size); });
-  const penBtn = h('button', { type: 'button', class: 'btn small toggle-btn', title: 'Ignore finger touches while drawing',
-    onclick: () => { st.penOnly = !st.penOnly; penBtn.classList.toggle('on', st.penOnly); } }, 'Pen only');
+  const penBtn = button('Pen only', () => { st.penOnly = !st.penOnly; penBtn.classList.toggle('on', st.penOnly); },
+    { title: 'Ignore finger touches while drawing' });
   const sizeInfo = h('span', { class: 'hint' });
-  const aspSeg = h('div', { class: 'seg wrap' }, ASPECT_PRESETS.map(([k, a]) => h('button', { type: 'button',
-    onclick: () => { snapshot(); resize(a); } }, k)));
+  const aspSeg = seg(ASPECT_PRESETS.map(([k, a]) => [a, k]), null, (a) => { snapshot(); resize(a); }, { wrap: true, action: true });
 
   const overlay = h('div', { class: 'sketch' },
     h('div', { class: 'sketch-bar' },
       toolSeg, swatches, colorIn,
       h('label', { class: 'sketch-size' }, 'Size', sizeIn, sizeVal),
       penBtn,
-      h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Undo', onclick: () => restore(st.undo, st.redo) }, '↶'),
-      h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Redo', onclick: () => restore(st.redo, st.undo) }, '↷'),
-      h('button', { type: 'button', class: 'btn small', onclick: () => { snapshot(); ctx2.fillStyle = st.bg; ctx2.fillRect(0, 0, cv.width, cv.height); } }, 'Clear'),
+      iconBtn('Undo', '↶', () => restore(st.undo, st.redo)),
+      iconBtn('Redo', '↷', () => restore(st.redo, st.undo)),
+      button('Clear', () => { snapshot(); ctx2.fillStyle = st.bg; ctx2.fillRect(0, 0, cv.width, cv.height); }),
       h('div', { class: 'spacer' }),
-      h('button', { type: 'button', class: 'btn small ghost', onclick: () => close() }, 'Cancel'),
-      h('button', { type: 'button', class: 'btn small primary', onclick: async (e) => {
+      button('Cancel', () => close(), { cls: 'small ghost' }),
+      button('Use drawing', async (e) => {
         e.target.disabled = true;
         const blob = await new Promise((res) => cv.toBlob(res, 'image/png'));
         try {
           const r = await uploadImage(blob, { source: 'drawing', filename: 'drawing.png' });
           close(false, true); onDone(r.name, r);
         } catch (err) { toast('Save failed: ' + err.message, true); e.target.disabled = false; }
-      } }, 'Use drawing')),
+      }, { cls: 'small primary' })),
     stage,
     h('div', { class: 'sketch-foot' }, h('span', { class: 'hint' }, 'Canvas'), aspSeg, sizeInfo));
-  document.body.append(overlay);
   const ro = new ResizeObserver(fit);
   ro.observe(stage);
   // Cancel, back gesture or leaving the page with strokes on the canvas asks first
-  const unsaved = () => st.undo.length > 0;
-  const guard = (e) => { if (unsaved()) { e.preventDefault(); e.returnValue = ''; } };
-  addEventListener('beforeunload', guard);
-  const close = (viaBack = false, saved = false) => {
-    if (!saved && unsaved() && !confirm('Throw away this drawing?')) return false;
-    ro.disconnect(); removeEventListener('beforeunload', guard);
-    overlay.remove();
-    if (!viaBack) overlayClosed(back);
-    return true;
-  };
-  const back = () => close(true);
-  overlayOpened(back);
+  const close = openOverlay(overlay, { dirty: () => st.undo.length > 0, ask: 'Throw away this drawing?', onClose: () => ro.disconnect() });
 
   resize(aspect);
   if (base) {  // draw over an existing image: canvas takes its aspect
@@ -2276,7 +1986,7 @@ function openSketch({ base = null, aspect = 1, onDone }) {
       resize(img.naturalWidth / img.naturalHeight);
       ctx2.drawImage(img, 0, 0, cv.width, cv.height);
     };
-    img.src = `/api/input?name=${encodeURIComponent(base)}`;
+    img.src = inputUrl(base);
   }
 }
 
@@ -2326,7 +2036,7 @@ function loadLayerImage(l) {
   l.img = new Image();
   l.img.onload = settle;
   l.img.onerror = () => { l.broken = true; settle(); };
-  l.img.src = `/api/input?name=${encodeURIComponent(l.name)}`;
+  l.img.src = inputUrl(l.name);
 }
 
 // the kept part of a layer in canvas px, and the whole image behind it (shown while cropping)
@@ -2485,10 +2195,10 @@ function drawEditorCanvas() {
   if (!EV) return;
   const { s, ox, oy } = EV, ctx = cv.getContext('2d');
   const scr = (r) => ({ x: ox + r.x * s, y: oy + r.y * s, w: r.w * s, h: r.h * s });
-  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#fff';
+  const css = getComputedStyle(document.documentElement), accent = css.getPropertyValue('--accent').trim() || '#fff';
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.imageSmoothingQuality = 'high';
-  ctx.fillStyle = '#14161c'; ctx.fillRect(0, 0, w, hh);
+  ctx.fillStyle = css.getPropertyValue('--stage-bg').trim() || '#14161c'; ctx.fillRect(0, 0, w, hh);
   ctx.save(); ctx.translate(ox, oy); ctx.scale(s, s);
   if (f) { ctx.fillStyle = E.bg; ctx.fillRect(f.x, f.y, f.w, f.h); }
   visibleLayers().forEach((l) => drawLayer(ctx, l));
@@ -2541,7 +2251,6 @@ function setEditorMode(crop) {
 // cropping the crop box (or a new one inside the image). Double-tap a layer to crop it.
 function wireEditor() {
   const cv = $('#editorCanvas');
-  const clamp01 = (v) => Math.min(1, Math.max(0, v));
   const point = (e) => {
     const r = cv.getBoundingClientRect();
     return { x: (e.clientX - r.left - EV.ox) / EV.s, y: (e.clientY - r.top - EV.oy) / EV.s };
@@ -2647,7 +2356,7 @@ function wireEditor() {
 
   // V / C switch tool, Esc finishes a crop / deselects, Delete removes the selected layer, arrows nudge it
   document.addEventListener('keydown', (e) => {
-    if (!$('#tab-editor').classList.contains('active') || !$('#sheet').classList.contains('hidden')
+    if (!$('#tab-editor').classList.contains('active') || sheetOpen()
       || e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey || !E.sel) return;
     const l = E.sel, n = e.shiftKey ? 10 : 1;
     const nudge = (dx, dy) => { if (E.cropping || !ready(l)) return; l.x += dx; l.y += dy; persistEditor(); };
@@ -2676,56 +2385,28 @@ function renderEditor() {
   if (E.sel && !E.layers.includes(E.sel)) E.sel = null;
   if (!E.sel || !ready(E.sel)) E.cropping = false;
   $('#editorPanel').replaceChildren(
-    h('div', { class: 'group-body flat' },
-      h('div', { class: 'row' },
-        h('button', { type: 'button', class: 'btn primary', onclick: addEditorImages }, '+ Add images'),
-        E.layers.length ? h('button', { type: 'button', class: 'btn ghost', style: 'flex:none',
-          onclick: () => {
-            const before = E.layers;
-            E.layers = []; E.sel = null; E.arrange = null; persistEditor(); renderEditor();
-            undoToast(`Cleared ${before.length} layer${before.length > 1 ? 's' : ''}`, () => { E.layers = before; persistEditor(); renderEditor(); });
-          } }, 'Clear all') : null),
+    h('div', { class: 'panel-body' },
+      panelTop(button('+ Add images', addEditorImages, { cls: 'primary' }), E.layers.length ? () => {
+        const before = E.layers;
+        E.layers = []; E.sel = null; E.arrange = null; persistEditor(); renderEditor();
+        undoToast(`Cleared ${before.length} layer${before.length > 1 ? 's' : ''}`, () => { E.layers = before; persistEditor(); renderEditor(); });
+      } : null),
       layerList(),
       E.sel ? layerProps(E.sel) : canvasProps()));
   drawEditorCanvas();
 }
 
-// Layer-panel pieces shared by the Editor and the 3D tab: icon buttons, number fields, the props
-// title and the layer list.
-const iconBtn = (label, text, fn, extra = {}) => h('button', { type: 'button', class: 'icon-btn', 'aria-label': label, title: label,
-  ...extra, onclick: (e) => { e.stopPropagation(); fn(); } }, text);
-
-// after() runs once the value is set (save and redraw)
-// live: called while the box is dragged (after set), for a preview that doesn't rebuild the panel
-function propNum(label, value, set, after, { min = -1e6, max = 1e6, step = 1, live = null } = {}) {
-  const input = h('input', { type: 'number', inputMode: 'decimal', min, max, step, value });
-  const read = () => Math.min(max, Math.max(min, parseFloat(input.value) || 0));
-  input.addEventListener('change', () => { set(read()); after(); });
-  if (live) input.addEventListener('input', () => { if (input.dataset.scrubbing) { set(read()); live(); } });
-  return h('label', { class: 'field' }, h('span', { class: 'lbl' }, label), input);
-}
-
-const propsTitle = (title, onDone) => h('div', { class: 'props-title' }, h('span', {}, title),
-  onDone ? h('button', { type: 'button', class: 'btn small ghost', onclick: onDone }, 'Done') : null);
-
-// rows: [{ thumb (element), name, hint, sel, off, onclick, buttons: [elements] }]
-const layerRowsEl = (rows) => h('div', { class: 'layers' }, rows.map((r) =>
-  h('div', { class: 'layer-row' + (r.sel ? ' sel' : '') + (r.off ? ' off' : ''), onclick: r.onclick },
-    h('span', { class: 'thumb' }, r.thumb),
-    h('div', { class: 'layer-name' }, h('span', {}, r.name), h('span', { class: 'hint' }, r.hint || '')),
-    h('div', { class: 'layer-btns' }, r.buttons || []))));
-
-const editorIcon = iconBtn;
-const editorNum = (label, value, set, opts) => propNum(label, value, set, () => { persistEditor(); renderEditor(); }, opts);
+const editorChanged = () => { persistEditor(); renderEditor(); };
+const editorNum = (label, value, set, opts) => propNum(label, value, set, editorChanged, opts);
 
 // Top of the list is drawn on top; tap a row to select that layer
 function layerList() {
-  if (!E.layers.length) return h('div', { class: 'hint' }, 'Add images from your inputs, generations or device, then tap one on the canvas to move, resize or crop it.');
+  if (!E.layers.length) return hint('Add images from your inputs, generations or device, then tap one on the canvas to move, resize or crop it.');
   const move = (l, d) => {
     const i = E.layers.indexOf(l), j = i + d;
     if (j < 0 || j >= E.layers.length) return;
     [E.layers[i], E.layers[j]] = [E.layers[j], E.layers[i]];
-    persistEditor(); renderEditor();
+    editorChanged();
   };
   return layerRowsEl([...E.layers].reverse().map((l) => {
     const r = ready(l) ? layerRect(l) : null, cropped = l.crop.w < 0.999 || l.crop.h < 0.999;
@@ -2737,36 +2418,30 @@ function layerList() {
       hint: l.broken ? 'could not load' : !r ? 'loading…'
         : `${Math.round(r.w)}×${Math.round(r.h)}${cropped ? ' · cropped' : ''}${l.hidden ? ' · hidden' : ''}`,
       buttons: [
-        editorIcon(l.hidden ? 'Show' : 'Hide', l.hidden ? '◌' : '◉', () => { l.hidden = !l.hidden; persistEditor(); renderEditor(); }),
-        editorIcon('Bring forward', '↑', () => move(l, 1)),
-        editorIcon('Send backward', '↓', () => move(l, -1))],
+        iconBtn(l.hidden ? 'Show' : 'Hide', l.hidden ? '◌' : '◉', () => { l.hidden = !l.hidden; editorChanged(); }),
+        iconBtn('Bring forward', '↑', () => move(l, 1)),
+        iconBtn('Send backward', '↓', () => move(l, -1))],
     };
   }));
 }
 
 function layerProps(l) {
-  const title = propsTitle(E.cropping ? 'Crop' : 'Layer', () => { if (E.cropping) E.cropping = false; else E.sel = null; renderEditor(); });
-  if (!ready(l)) {
-    return h('div', { class: 'props' }, title,
-      h('button', { type: 'button', class: 'btn small danger', onclick: () => { removeLayer(l); renderEditor(); } }, 'Delete layer'));
-  }
+  const done = () => { if (E.cropping) E.cropping = false; else E.sel = null; renderEditor(); };
+  const del = button('Delete layer', () => { removeLayer(l); renderEditor(); }, { cls: 'small danger' });
+  if (!ready(l)) return section('Layer', done, del);
   const W = l.img.naturalWidth, H = l.img.naturalHeight, c = l.crop;
   if (E.cropping) {
-    const aspSeg = h('div', { class: 'seg wrap' }, ASPECTS.map(([label, a]) =>
-      h('button', { type: 'button', class: E.aspect === a ? 'on' : '', onclick: () => {
+    return section('Crop', done,
+      hint('Drag the box or its corners on the canvas. Switch back to Transform, or tap outside the image, when you\'re done.'),
+      field('Aspect', seg(ASPECTS.map(([label, a]) => [a, label]), E.aspect, (a) => {
         E.aspect = a;
         if (a) setLayerCrop(l, aspectCrop(W, H, a));
-        persistEditor(); renderEditor();
-      } }, label)));
-    return h('div', { class: 'props' }, title,
-      h('div', { class: 'hint' }, 'Drag the box or its corners on the canvas. Switch back to Transform, or tap outside the image, when you\'re done.'),
-      h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Aspect'), aspSeg),
-      h('div', { class: 'hint' }, `Keeping ${Math.round(c.w * W)}×${Math.round(c.h * H)} of ${W}×${H} px`),
+        editorChanged();
+      }, { wrap: true })),
+      hint(`Keeping ${Math.round(c.w * W)}×${Math.round(c.h * H)} of ${W}×${H} px`),
       h('div', { class: 'row' },
-        h('button', { type: 'button', class: 'btn small primary', onclick: () => { E.cropping = false; renderEditor(); } }, 'Finish crop'),
-        h('button', { type: 'button', class: 'btn small', onclick: () => {
-          E.aspect = null; setLayerCrop(l, { ...FULL }); persistEditor(); renderEditor();
-        } }, 'Reset crop')));
+        button('Finish crop', () => { E.cropping = false; renderEditor(); }, { cls: 'small primary' }),
+        button('Reset crop', () => { E.aspect = null; setLayerCrop(l, { ...FULL }); editorChanged(); })));
   }
   const r = layerRect(l), cropped = c.w < 0.999 || c.h < 0.999;
   // scale around the layer's centre
@@ -2776,73 +2451,69 @@ function layerProps(l) {
     const n = layerRect(l);
     l.x = Math.round(cx - n.w / 2); l.y = Math.round(cy - n.h / 2);
   };
-  return h('div', { class: 'props' }, title,
-    h('div', { class: 'hint layer-title' }, l.name.split('/').pop()),
+  const fr = editorFrame() || r;   // X / Y drag over the canvas and as much again either side (E.size is null when it fits the layers)
+  return section('Layer', done,
+    hint(l.name.split('/').pop(), 'layer-title'),
     h('div', { class: 'row' },
-      editorNum('X', Math.round(l.x), (v) => { l.x = v; }, { min: -E.size.w, max: E.size.w * 2, live: drawEditorCanvas }),
-      editorNum('Y', Math.round(l.y), (v) => { l.y = v; }, { min: -E.size.h, max: E.size.h * 2, live: drawEditorCanvas }),
+      editorNum('X', Math.round(l.x), (v) => { l.x = v; }, { min: Math.floor(fr.x - fr.w), max: Math.ceil(fr.x + fr.w * 2), live: drawEditorCanvas }),
+      editorNum('Y', Math.round(l.y), (v) => { l.y = v; }, { min: Math.floor(fr.y - fr.h), max: Math.ceil(fr.y + fr.h * 2), live: drawEditorCanvas }),
       editorNum('Scale %', Math.round(l.scale * 1000) / 10, (v) => setScale(v / 100), { min: 1, max: 1000, step: 'any', live: drawEditorCanvas })),
-    h('div', { class: 'hint' }, `${Math.round(r.w)}×${Math.round(r.h)} px on the canvas · ${Math.round(c.w * W)}×${Math.round(c.h * H)} px of the image`),
-    h('div', { class: 'row' },
-      h('button', { type: 'button', class: 'btn small', onclick: () => { E.cropping = true; E.aspect = null; renderEditor(); } }, 'Crop'),
-      cropped ? h('button', { type: 'button', class: 'btn small', onclick: () => { setLayerCrop(l, { ...FULL }); persistEditor(); renderEditor(); } }, 'Reset crop') : null,
-      h('button', { type: 'button', class: 'btn small', onclick: () => { setScale(1); persistEditor(); renderEditor(); } }, '100%')),
+    hint(`${Math.round(r.w)}×${Math.round(r.h)} px on the canvas · ${Math.round(c.w * W)}×${Math.round(c.h * H)} px of the image`),
+    h('div', { class: 'row wrap' },
+      button('Crop', () => { E.cropping = true; E.aspect = null; renderEditor(); }),
+      cropped ? button('Reset crop', () => { setLayerCrop(l, { ...FULL }); editorChanged(); }) : null,
+      button('100%', () => { setScale(1); editorChanged(); })),
     alignControls(l),
-    h('button', { type: 'button', class: 'btn small danger', onclick: () => { removeLayer(l); renderEditor(); } }, 'Delete layer'),
-    h('div', { class: 'hint' }, 'Drag it on the canvas to move it, or a corner to resize; it snaps to the canvas and other layers (hold Alt, or turn off Snap, to place it freely). Switch to Crop in the toolbar above it (or double-tap).'));
+    del,
+    hint('Drag it on the canvas to move it, or a corner to resize; it snaps to the canvas and other layers (hold Alt, or turn off Snap, to place it freely). Switch to Crop in the toolbar above it (or double-tap).'));
 }
 
 // Align buttons: 0 / 0.5 / 1 = start / centre / end of the align frame, per axis
 function alignControls(l) {
   const f = alignFrame(l);
-  const align = (axis, k) => {
+  const align = (axis) => (k) => {
     const r = layerRect(l);
     if (axis === 'x') l.x = Math.round(f.x + (f.w - r.w) * k); else l.y = Math.round(f.y + (f.h - r.h) * k);
-    persistEditor(); renderEditor();
+    editorChanged();
   };
-  const seg = (axis, items) => h('div', { class: 'seg' }, items.map(([k, label, title]) =>
-    h('button', { type: 'button', title, disabled: !f, onclick: () => align(axis, k) }, label)));
-  return h('div', { class: 'field' },
-    h('span', { class: 'lbl' }, E.size ? 'Align to canvas' : 'Align to the other layers'),
-    seg('x', [[0, '⇤ Left', 'Align left edges'], [0.5, '↔ Centre', 'Centre horizontally'], [1, 'Right ⇥', 'Align right edges']]),
-    seg('y', [[0, '⤒ Top', 'Align top edges'], [0.5, '↕ Middle', 'Centre vertically'], [1, 'Bottom ⤓', 'Align bottom edges']]));
+  return field(E.size ? 'Align to canvas' : 'Align to the other layers',
+    seg([[0, '⇤ Left', 'Align left edges'], [0.5, '↔ Centre', 'Centre horizontally'], [1, 'Right ⇥', 'Align right edges']], null, align('x'), { action: true, disabled: !f }),
+    seg([[0, '⤒ Top', 'Align top edges'], [0.5, '↕ Middle', 'Centre vertically'], [1, 'Bottom ⤓', 'Align bottom edges']], null, align('y'), { action: true, disabled: !f }));
 }
 
 function canvasProps() {
   const f = editorFrame();
-  const sizeSeg = h('div', { class: 'seg' },
-    h('button', { type: 'button', class: E.size ? '' : 'on', onclick: () => { E.size = null; persistEditor(); renderEditor(); } }, 'Fit layers'),
-    h('button', { type: 'button', class: E.size ? 'on' : '', onclick: () => {
-      if (E.size) return;
+  const sizeSeg = seg([['fit', 'Fit layers'], ['fixed', 'Fixed size']], E.size ? 'fixed' : 'fit', (v) => {
+    if (v === 'fit') E.size = null;
+    else if (!E.size) {
       // start from what the layers cover now, moved so it begins at 0,0
       if (f) for (const l of E.layers) if (l.x != null) { l.x -= f.x; l.y -= f.y; }
       E.size = f ? { w: f.w, h: f.h } : { w: 1024, h: 1024 };
-      persistEditor(); renderEditor();
-    } }, 'Fixed size'));
-  const arrSeg = h('div', { class: 'seg' }, [['row', 'Side by side'], ['column', 'Stacked'], ['grid', 'Grid']].map(([m, label]) =>
-    h('button', { type: 'button', disabled: !E.layers.length, onclick: () => { arrangeLayers(m); renderEditor(); } }, label)));
+    }
+    editorChanged();
+  });
   const bg = h('input', { type: 'color', value: E.bg });
   bg.addEventListener('input', () => { E.bg = bg.value; persistEditor(); drawEditorCanvas(); });
-  return h('div', { class: 'props' },
-    propsTitle('Canvas'),
-    h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Size'), sizeSeg),
+  return section('Canvas', null,
+    field('Size', sizeSeg),
     E.size ? h('div', { class: 'row' },
       editorNum('Width', E.size.w, (v) => { E.size.w = v; }, { min: 64, max: 8192, step: 8 }),
       editorNum('Height', E.size.h, (v) => { E.size.h = v; }, { min: 64, max: 8192, step: 8 })) : null,
-    h('label', { class: 'field', style: 'display:grid;justify-items:start' }, h('span', { class: 'lbl' }, 'Background'), bg),
-    h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Arrange layers'), arrSeg),
-    h('div', { class: 'row', style: 'align-items:end' },
+    field('Background', bg),
+    field('Arrange layers', seg([['row', 'Side by side'], ['column', 'Stacked'], ['grid', 'Grid']], null,
+      (m) => { arrangeLayers(m); renderEditor(); }, { action: true, disabled: !E.layers.length })),
+    h('div', { class: 'row' },
       editorNum('Grid columns', E.cols, (v) => { E.cols = v; }, { min: 1, max: 12 }),
       editorNum('Gap (px)', E.gap, (v) => { E.gap = v; }, { min: 0, max: 400 })),
-    h('div', { class: 'field' }, mpInput(() => E.mp, (n) => { E.mp = n; persistEditor(); })),
+    mpInput(() => E.mp, (n) => { E.mp = n; persistEditor(); }),
     h('div', { class: 'row' },
-      h('button', { type: 'button', class: 'btn primary', onclick: saveEditor }, 'Save as input'),
-      h('button', { type: 'button', class: 'btn', onclick: downloadEditor }, 'Download')));
+      button('Save as input', saveEditor, { cls: 'primary' }),
+      button('Download', downloadEditor, { cls: '' })));
 }
 
 function addEditorImages() {
   openImagePicker({ title: 'Add images', multi: true, mp: () => 0, onPick: (name) => {
-    E.layers.push({ name, crop: { ...FULL }, scale: 1, hidden: false }); persistEditor(); renderEditor();
+    E.layers.push({ name, crop: { ...FULL }, scale: 1, hidden: false }); editorChanged();
   } });
 }
 
@@ -2878,14 +2549,13 @@ function useInGenerate(name, msg) {
     toast(`Set ${f.group} · ${f.label}`);
   };
   openSheet(h('h3', {}, msg),
-    h('div', { class: 'media-big' }, h('img', { src: `/api/input?name=${encodeURIComponent(name)}`, alt: '' })),
-    h('div', { class: 'hint', style: 'margin-top:8px' }, `It's now in your input images as ${name}.`),
-    fields.length ? h('div', { class: 'actions' }, fields.map((f) =>
-      h('button', { class: 'btn small', onclick: () => go(f) }, `Use for ${f.group} · ${f.label}`))) : null,
-    h('div', { class: 'actions' }, h('button', { class: 'btn small ghost', onclick: closeSheet }, 'Keep editing')));
+    h('div', { class: 'media-big' }, h('img', { src: inputUrl(name), alt: '' })),
+    hint(`It's now in your input images as ${name}.`, 'sheet-hint'),
+    fields.length ? actions(fields.map((f) => button(`Use for ${f.group} · ${f.label}`, () => go(f)))) : null,
+    actions(button('Keep editing', closeSheet, { cls: 'small ghost' })));
 }
 
-const ASPECTS = [['Free', null], ['1:1', 1], ['2:3', 2 / 3], ['3:2', 3 / 2], ['3:4', 3 / 4], ['4:3', 4 / 3], ['9:16', 9 / 16], ['16:9', 16 / 9]];
+const ASPECTS = [['Free', null], ...ASPECT_PRESETS];
 
 // Crop rectangle (fractions of a W×H image) from a fixed corner (fx,fy) to the pointer, respecting
 // the aspect lock (width/height in pixels, null = free) and the image bounds
@@ -2913,7 +2583,6 @@ function openCrop({ img, crop = FULL, onApply }) {
   const W = img.naturalWidth, H = img.naturalHeight;
   let c = { ...crop };
   let aspect = null;   // width/height in pixels, null = free
-  const clamp01 = (v) => Math.min(1, Math.max(0, v));
   const box = h('div', { class: 'crop-box' }, ['nw', 'ne', 'sw', 'se'].map((k) => h('span', { class: `handle ${k}`, 'data-h': k })));
   const wrap = h('div', { class: 'crop-wrap' }, h('img', { src: img.src, draggable: false, alt: '' }), box);
   const info = h('span', { class: 'hint' });
@@ -2925,11 +2594,10 @@ function openCrop({ img, crop = FULL, onApply }) {
   const setAspect = (a) => {
     aspect = a;
     if (a) c = aspectCrop(W, H, a);
-    [...aspSeg.children].forEach((b) => b.classList.toggle('on', b.dataset.a === String(a)));
+    aspSeg.set(a);
     draw();
   };
-  const aspSeg = h('div', { class: 'seg wrap' }, ASPECTS.map(([label, a]) =>
-    h('button', { type: 'button', 'data-a': String(a), class: a === null ? 'on' : '', onclick: () => setAspect(a) }, label)));
+  const aspSeg = seg(ASPECTS.map(([label, a]) => [a, label]), null, setAspect, { wrap: true });
 
   let drag = null;
   const pt = (e) => { const r = wrap.getBoundingClientRect(); return { x: clamp01((e.clientX - r.left) / r.width), y: clamp01((e.clientY - r.top) / r.height) }; };
@@ -2954,10 +2622,10 @@ function openCrop({ img, crop = FULL, onApply }) {
 
   openSheet(h('h3', {}, 'Crop'), aspSeg,
     h('div', { class: 'crop-stage' }, wrap),
-    h('div', { class: 'actions' },
-      h('button', { class: 'btn small primary', onclick: () => { closeSheet(); onApply(c); } }, 'Apply'),
-      h('button', { class: 'btn small', onclick: () => { c = { ...FULL }; setAspect(null); } }, 'Reset'),
-      h('button', { class: 'btn small ghost', onclick: closeSheet }, 'Cancel'), info));
+    actions(
+      button('Apply', () => { closeSheet(); onApply(c); }, { cls: 'small primary' }),
+      button('Reset', () => { c = { ...FULL }; setAspect(null); }),
+      button('Cancel', closeSheet, { cls: 'small ghost' }), info));
   draw();
 }
 
@@ -2968,7 +2636,6 @@ wireEditor();
 // clips that overlap on one track cross-fade. The preview composites the clips on a canvas;
 // Export sends the same timeline to the server, which renders it with ffmpeg into History.
 // ---------------------------------------------------------------------------
-const uid = () => Math.random().toString(36).slice(2, 10);
 const HEAD_W = 84;    // track header column (px)
 const LANE_H = 52;
 const MIN_LEN = 0.1;
@@ -3546,87 +3213,56 @@ async function addToTimeline(media) {
   return it;
 }
 
-async function addFromHistory() {
-  if (!S.history.size) await loadHistory();
-  const items = [...S.history.values()].filter((g) => g.project_id === S.project && g.status === 'done')
-    .sort((a, b) => b.id - a.id)
-    .flatMap((g) => g.outputs.map((o, i) => ({ g, o, i })).filter(({ o }) => ['video', 'image', 'audio'].includes(o.kind)));
-  openSheet(h('h3', {}, 'Add from this project'),
-    h('div', { class: 'picker-bar' }, h('span', { class: 'hint', style: 'flex:1' }, 'Tap to add in order. Videos and images go on the selected video track, sound on the audio track.'),
-      h('button', { type: 'button', class: 'btn small', onclick: closeSheet }, 'Done')),
-    h('div', { class: 'grid gallery' }, items.length ? items.map(({ g, o, i }) => {
-      const c = h('button', { class: 'card' },
-        h('div', { class: 'media' }, o.kind === 'audio' ? h('span', { class: 'placeholder' }, '♪') : mediaEl(o, { thumb: true }),
-          o.kind === 'video' ? h('span', { class: 'play' }, '▶') : null),
-        h('div', { class: 'meta' }, h('span', { class: 'name' }, `#${g.id} ${g.template}`)));
-      c.addEventListener('click', async () => {
-        c.classList.add('picked');
-        await addToTimeline({ kind: o.kind, src: { generation: g.id, index: i }, url: o.url, label: `#${g.id} ${g.template}`, dur: o.duration || 0 });
-        toast('Added');
-      });
-      return c;
-    }) : h('div', { class: 'placeholder' }, 'Nothing generated in this project yet.')));
+// A card that adds its clip to the timeline on every tap (the sheet stays open)
+const addCard = (o, label, media) => mediaCard(cardMedia(o), label, async (c) => {
+  c.classList.add('picked');
+  await addToTimeline(media);
+  toast('Added');
+}, { badge: o.kind === 'video' ? '▶' : null });
+
+function addFromHistory() {
+  pickerSheet('Add from this project', [
+    hint('Tap to add in order. Videos and images go on the selected video track, sound on the audio track.', 'grow'),
+    button('Done', closeSheet)], async () => {
+    const items = await projectOutputs(['video', 'image', 'audio']);
+    return items.length ? items.map(({ g, o, i }) => addCard(o, genLabel(g),
+      { kind: o.kind, src: { generation: g.id, index: i }, url: o.url, label: genLabel(g), dur: o.duration || 0 }))
+      : placeholder('Nothing generated in this project yet.');
+  });
 }
 
 function addImages() {
   openImagePicker({ title: 'Add images', multi: true, mp: () => 0, onPick: (name) => addToTimeline({
-    kind: 'image', src: { input: name }, url: `/api/input?name=${encodeURIComponent(name)}`,
+    kind: 'image', src: { input: name }, url: inputUrl(name),
     thumb: thumbUrl(name, 160), label: name.split('/').pop() }) });
 }
 
-async function addMediaFiles() {
-  const grid = h('div', { class: 'grid gallery' }, h('div', { class: 'placeholder' }, 'Loading…'));
-  const file = h('input', { type: 'file', accept: 'audio/*,video/*,image/*', multiple: true, class: 'hidden' });
-  const add = (m) => addToTimeline({ kind: m.kind, src: { media: m.name }, url: m.url, label: m.label, thumb: m.kind === 'image' ? m.url : null });
-  const card = (m) => {
-    const c = h('button', { class: 'card' },
-      h('div', { class: 'media' }, m.kind === 'audio' ? h('span', { class: 'placeholder' }, '♪') : mediaEl(m, { thumb: true })),
-      h('div', { class: 'meta' }, h('span', { class: 'name' }, m.label)));
-    c.addEventListener('click', async () => { c.classList.add('picked'); await add(m); toast('Added'); });
-    return c;
-  };
-  const load = async () => {
-    try {
-      const list = await api('/api/media');
-      grid.replaceChildren(...(list.length ? list.map(card) : [h('div', { class: 'placeholder' }, 'No files yet. Upload music, a voice-over or a video.')]));
-    } catch (e) { grid.replaceChildren(h('div', { class: 'note err' }, e.message)); }
-  };
-  file.addEventListener('change', async () => {
-    const files = [...file.files]; file.value = '';
-    for (const f of files) {
-      toast(`Uploading ${f.name}…`);
-      const form = new FormData(); form.append('file', f);
-      try { await add(await api('/api/media', { method: 'POST', form })); }
-      catch (e) { toast('Upload failed: ' + e.message, true); return; }
-    }
-    toast(files.length > 1 ? `Added ${files.length} files` : 'Added');
-    load();
+function addMediaFiles() {
+  const media = (m) => ({ kind: m.kind, src: { media: m.name }, url: m.url, label: m.label, thumb: m.kind === 'image' ? m.url : null });
+  const reload = pickerSheet('Sound and files', [
+    fileButton('Upload…', async (files) => {
+      for (const f of files) {
+        toast(`Uploading ${f.name}…`);
+        try { await addToTimeline(media(await uploadMedia(f))); }
+        catch (e) { toast('Upload failed: ' + e.message, true); return; }
+      }
+      toast(files.length > 1 ? `Added ${files.length} files` : 'Added');
+      reload();
+    }, { accept: 'audio/*,video/*,image/*', multiple: true, cls: 'small primary' }),
+    hint('Music, voice-overs, or videos and images from elsewhere.', 'grow'),
+    button('Done', closeSheet)], async () => {
+    const list = await api('/api/media');
+    return list.length ? list.map((m) => addCard(m, m.label, media(m))) : placeholder('No files yet. Upload music, a voice-over or a video.');
   });
-  openSheet(h('h3', {}, 'Sound and files'),
-    h('div', { class: 'picker-bar' },
-      h('button', { type: 'button', class: 'btn small primary', onclick: () => file.click() }, 'Upload…'),
-      h('span', { class: 'hint', style: 'flex:1' }, 'Music, voice-overs, or videos and images from elsewhere.'),
-      h('button', { type: 'button', class: 'btn small', onclick: closeSheet }, 'Done')),
-    grid, file);
-  load();
 }
 
 // ---- inspector panel ----
-function numField(label, get, set, { step = 0.04, min = 0, max = 600 } = {}) {
-  const inp = h('input', { type: 'number', inputMode: 'decimal', step, min, max, value: Number(get()).toFixed(2) });
-  inp.addEventListener('change', () => { set(parseFloat(inp.value) || 0); timelineChanged(); });
-  // dragged like a slider: show it on the timeline as it goes
-  inp.addEventListener('input', () => { if (inp.dataset.scrubbing) { set(parseFloat(inp.value) || 0); renderTimeline(); syncMedia(); requestDraw(); } });
-  return h('label', { class: 'field' }, h('span', { class: 'lbl' }, label), inp);
-}
+// a number box for a clip setting: dragged like a slider it shows on the timeline as it goes
+const numField = (label, get, set, { step = 0.04, min = 0, max = 600 } = {}) =>
+  propNum(label, Number(get()).toFixed(2), set, timelineChanged, { step, min, max, live: () => { renderTimeline(); syncMedia(); requestDraw(); } });
 
-function rangeField(label, get, set, { min, max, step, fmt }) {
-  const val = h('span', {}, fmt(get()));
-  const r = h('input', { type: 'range', min, max, step, value: get() });
-  r.addEventListener('input', () => { set(parseFloat(r.value)); val.textContent = fmt(get()); renderTimeline(); syncMedia(); requestDraw(); });
-  r.addEventListener('change', persistTimeline);
-  return h('label', { class: 'field' }, h('span', { class: 'lbl' }, h('span', {}, label), val), r);
-}
+const clipRange = (label, get, set, opts) => rangeField(label, get, set,
+  { ...opts, onInput: () => { renderTimeline(); syncMedia(); requestDraw(); }, onChange: persistTimeline });
 
 const SIZES = [['Match first clip', null], ['1280×720', [1280, 720]], ['1920×1080', [1920, 1080]], ['720×1280', [720, 1280]],
   ['1080×1920', [1080, 1920]], ['1024×1024', [1024, 1024]], ['832×480', [832, 480]], ['480×832', [480, 832]]];
@@ -3644,26 +3280,23 @@ function renderVideoPanel() {
     fields.push(
       numField('Fade in (s)', () => it.fadeIn || 0, (v) => { it.fadeIn = Math.max(0, Math.min(v, len)); }, { step: 0.1, max: Math.max(0.1, len) }),
       numField('Fade out (s)', () => it.fadeOut || 0, (v) => { it.fadeOut = Math.max(0, Math.min(v, len)); }, { step: 0.1, max: Math.max(0.1, len) }));
-    const fit = h('div', { class: 'seg' }, [['fit', 'Fit'], ['fill', 'Fill']].map(([k, label]) =>
-      h('button', { type: 'button', class: (it.fit || 'fit') === k ? 'on' : '', onclick: () => { it.fit = k; timelineChanged(); } }, label)));
-    return h('div', { class: 'vid-section' },
-      h('div', { class: 'vid-title' }, h('b', {}, it.label),
-        h('span', { class: 'hint' }, `${it.kind} on ${tr ? trackName(tr) : '?'} · ${fmtT(len)}${it.dur ? ` of ${fmtT(it.dur)}` : ''}`)),
-      h('div', { class: 'vid-grid' }, fields),
+    return section(it.label, null,
+      hint(`${it.kind} on ${tr ? trackName(tr) : '?'} · ${fmtT(len)}${it.dur ? ` of ${fmtT(it.dur)}` : ''}`, 'section-sub'),
+      h('div', { class: 'grid-2' }, fields),
       isVisual(it) ? [
-        h('div', { class: 'field' }, h('span', { class: 'lbl' }, 'Framing'), fit),
-        rangeField('Scale', () => it.scale ?? 1, (v) => { it.scale = v; }, { min: 0.1, max: 3, step: 0.01, fmt: pct }),
-        rangeField('Position X', () => it.x || 0, (v) => { it.x = v; }, { min: -1, max: 1, step: 0.005, fmt: pct }),
-        rangeField('Position Y', () => it.y || 0, (v) => { it.y = v; }, { min: -1, max: 1, step: 0.005, fmt: pct }),
-        rangeField('Opacity', () => it.opacity ?? 1, (v) => { it.opacity = v; }, { min: 0, max: 1, step: 0.01, fmt: pct }),
+        field('Framing', seg([['fit', 'Fit'], ['fill', 'Fill']], it.fit || 'fit', (k) => { it.fit = k; timelineChanged(); })),
+        clipRange('Scale', () => it.scale ?? 1, (v) => { it.scale = v; }, { min: 0.1, max: 3, step: 0.01, fmt: pct }),
+        clipRange('Position X', () => it.x || 0, (v) => { it.x = v; }, { min: -1, max: 1, step: 0.005, fmt: pct }),
+        clipRange('Position Y', () => it.y || 0, (v) => { it.y = v; }, { min: -1, max: 1, step: 0.005, fmt: pct }),
+        clipRange('Opacity', () => it.opacity ?? 1, (v) => { it.opacity = v; }, { min: 0, max: 1, step: 0.01, fmt: pct }),
       ] : null,
-      it.kind !== 'image' ? rangeField('Volume', () => it.volume ?? 1, (v) => { it.volume = v; }, { min: 0, max: 2, step: 0.01,
+      it.kind !== 'image' ? clipRange('Volume', () => it.volume ?? 1, (v) => { it.volume = v; }, { min: 0, max: 2, step: 0.01,
         fmt: (v) => pct(v) + (v > 1 ? ' (preview plays at 100%)' : '') }) : null,
       h('div', { class: 'row wrap' },
-        h('button', { type: 'button', class: 'btn small', onclick: splitAtPlayhead, title: 'S' }, '✂ Split at playhead'),
-        h('button', { type: 'button', class: 'btn small', onclick: () => crossfadePrev(it) }, '⤫ Cross-fade with previous'),
-        isVisual(it) ? h('button', { type: 'button', class: 'btn small', onclick: () => { Object.assign(it, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); timelineChanged(); } }, 'Reset framing') : null,
-        h('button', { type: 'button', class: 'btn small danger', onclick: deleteSelected, title: 'Delete' }, 'Delete clip')));
+        button('✂ Split at playhead', splitAtPlayhead, { title: 'S' }),
+        button('⤫ Cross-fade with previous', () => crossfadePrev(it)),
+        isVisual(it) ? button('Reset framing', () => { Object.assign(it, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); timelineChanged(); }) : null,
+        button('Delete clip', deleteSelected, { cls: 'small danger', title: 'Delete' })));
   })() : null;
 
   const sizeSel = h('select', {}, SIZES.map(([label, s], i) => h('option', { value: i, selected: JSON.stringify(s) === JSON.stringify(V.size) }, label)));
@@ -3672,27 +3305,24 @@ function renderVideoPanel() {
   const fpsSel = h('select', {}, [[0, 'Match first clip'], [16, '16'], [24, '24'], [25, '25'], [30, '30'], [60, '60']].map(([v, label]) =>
     h('option', { value: v, selected: V.fps === v }, label)));
   fpsSel.addEventListener('change', () => { V.fps = Number(fpsSel.value); timelineChanged(); });
-  const exportBtn = h('button', { type: 'button', class: 'btn primary', onclick: () => exportVideo(exportBtn) }, 'Export video');
+  const exportBtn = button('Export video', () => exportVideo(exportBtn), { cls: 'primary' });
 
-  $('#videoPanel').replaceChildren(h('div', { class: 'group-body flat' },
+  $('#videoPanel').replaceChildren(h('div', { class: 'panel-body' },
     h('div', { class: 'row wrap' },
-      h('button', { type: 'button', class: 'btn small primary', onclick: addFromHistory }, '+ Clips'),
-      h('button', { type: 'button', class: 'btn small', onclick: addImages }, '+ Images'),
-      h('button', { type: 'button', class: 'btn small', onclick: addMediaFiles }, '+ Sound / files')),
-    clip || h('div', { class: 'hint' }, V.items.length
+      button('+ Clips', addFromHistory, { cls: 'small primary' }),
+      button('+ Images', addImages),
+      button('+ Sound / files', addMediaFiles)),
+    clip || hint(V.items.length
       ? 'Tap a clip to edit it. Drag clips to move them (also onto other tracks), drag their ends to trim, and overlap two clips on a track to cross-fade. Higher video tracks draw on top.'
       : 'Add generated clips, images or sound. They line up on V1 / A1; drag them onto V2 to layer them over V1.'),
-    h('div', { class: 'vid-section' },
-      h('div', { class: 'vid-title' }, h('b', {}, 'Sequence'), h('span', { class: 'hint' }, `${seqSize().join('×')} · ${V.fps || 'auto'} fps · ${fmtT(seqEnd())}`)),
-      h('div', { class: 'vid-grid' },
-        h('label', { class: 'field' }, h('span', { class: 'lbl' }, 'Frame size'), sizeSel),
-        h('label', { class: 'field' }, h('span', { class: 'lbl' }, 'Frame rate'), fpsSel)),
-      V.items.length ? h('div', { class: 'row' }, exportBtn,
-        h('button', { type: 'button', class: 'btn ghost', style: 'flex:none', onclick: () => {
-          if (!confirm('Remove every clip from the timeline?')) return;
-          V.items = []; V.sel = null; vidSeek(0); timelineChanged();
-        } }, 'Clear')) : null,
-      V.items.length ? h('div', { class: 'hint' }, 'The export lands in History.') : null)));
+    section('Sequence', null,
+      hint(`${seqSize().join('×')} · ${V.fps || 'auto'} fps · ${fmtT(seqEnd())}`, 'section-sub'),
+      h('div', { class: 'grid-2' }, field('Frame size', sizeSel), field('Frame rate', fpsSel)),
+      V.items.length ? panelTop(exportBtn, () => {
+        if (!confirm('Remove every clip from the timeline?')) return;
+        V.items = []; V.sel = null; vidSeek(0); timelineChanged();
+      }) : null,
+      V.items.length ? hint('The export lands in History.') : null)));
 }
 
 async function exportVideo(btn) {
@@ -3753,16 +3383,16 @@ async function snapshotFrame() {
   const url = snapshotFrame.url = URL.createObjectURL(blob), name = `frame_${tc(V.t).replace(/:/g, '-')}.png`;
   openSheet(h('h3', {}, `Frame at ${tc(V.t)}`),
     h('div', { class: 'media-big' }, h('img', { src: url, alt: '' })),
-    h('div', { class: 'hint', style: 'margin-top:8px' }, `${cv.width}×${cv.height}`),
-    h('div', { class: 'actions' },
-      h('button', { class: 'btn small primary', onclick: async () => {
+    hint(`${cv.width}×${cv.height}`, 'sheet-hint'),
+    actions(
+      button('Save as input', async () => {
         try {
           const r = await uploadImage(blob, { mp: 0, source: 'snapshot', filename: name });
           useInGenerate(r.name, `Saved ${r.width}×${r.height}`);
         } catch (e) { toast('Save failed: ' + e.message, true); }
-      } }, 'Save as input'),
-      h('a', { class: 'btn small', href: url, download: name, style: 'display:grid;place-items:center;text-decoration:none' }, 'Download'),
-      h('button', { class: 'btn small ghost', onclick: closeSheet }, 'Close')));
+      }, { cls: 'small primary' }),
+      linkBtn('Download', url, { download: name }),
+      button('Close', closeSheet, { cls: 'small ghost' })));
 }
 
 function wireVideoTransport() {
@@ -3780,12 +3410,12 @@ function wireVideoTransport() {
   loopBtn.addEventListener('click', () => { V.loop = !V.loop; store.set('deck.video.loop', V.loop); showLoop(); });
   showLoop();
   $('#tlTools').replaceChildren(
-    h('button', { type: 'button', class: 'btn small', title: 'Split at playhead (S)', onclick: splitAtPlayhead }, '✂ Split'),
-    h('button', { type: 'button', class: 'btn small', title: 'Delete selected clip (Del)', onclick: deleteSelected }, '🗑 Delete'),
+    button('✂ Split', splitAtPlayhead, { title: 'Split at playhead (S)' }),
+    button('🗑 Delete', deleteSelected, { title: 'Delete selected clip (Del)' }),
     h('span', { class: 'hint tl-tip' }, 'Drag clips to move · drag ends to trim · overlap to cross-fade'),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Zoom out', onclick: () => zoomTimeline(V.pps / 1.5) }, '−'),
-    h('button', { type: 'button', class: 'btn small', onclick: fitTimeline }, 'Fit'),
-    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Zoom in', onclick: () => zoomTimeline(V.pps * 1.5) }, '+'));
+    iconBtn('Zoom out', '−', () => zoomTimeline(V.pps / 1.5)),
+    button('Fit', fitTimeline),
+    iconBtn('Zoom in', '+', () => zoomTimeline(V.pps * 1.5)));
   wireTimeline();
   showPlayState();
   // Premiere-ish keys while the Video tab is open
@@ -3819,14 +3449,12 @@ function boxesField(f) {
   const bg = boxBackdrop().image;
   if (bg) preview.style.backgroundImage = `url("${thumbUrl(bg, 320)}")`;
   const edit = () => openBoxEditor(f);
-  return h('div', { class: 'field' },
-    h('label', { class: 'lbl' }, h('span', {}, f.label), h('span', {}, boxes.length ? `${boxes.length} box${boxes.length > 1 ? 'es' : ''}` : 'none')),
+  return field([f.label, h('span', {}, boxes.length ? `${boxes.length} box${boxes.length > 1 ? 'es' : ''}` : 'none')],
     h('button', { type: 'button', class: 'boxes-btn', onclick: edit }, preview),
-    h('div', { class: 'row', style: 'margin-top:6px' },
-      h('button', { type: 'button', class: 'btn small', onclick: edit }, boxes.length ? 'Edit boxes' : 'Draw boxes'),
-      boxes.length ? h('button', { type: 'button', class: 'btn small', onclick: () => { setVal(f.key, []); renderFields(); } }, 'Clear') : null),
-    h('div', { class: 'hint', style: 'margin-top:4px' },
-      boxes.length ? boxes.map((b, i) => `${i + 1}: ${b.type === 'text' ? `text "${b.text || ''}"` : b.desc || 'object'}${b.ref ? ' + reference' : ''}`).join(' · ')
+    h('div', { class: 'row' },
+      button(boxes.length ? 'Edit boxes' : 'Draw boxes', edit),
+      boxes.length ? button('Clear', () => { setVal(f.key, []); renderFields(); }) : null),
+    hint(boxes.length ? boxes.map((b, i) => `${i + 1}: ${b.type === 'text' ? `text "${b.text || ''}"` : b.desc || 'object'}${b.ref ? ' + reference' : ''}`).join(' · ')
         : f.refs ? 'Optional. Mark where things go; describe each box, and give it a reference image if you like. In the prompt, refer to box 1 as <obj_1>.'
           : 'Optional. Mark where things go and describe each box.'));
 }
@@ -3844,7 +3472,6 @@ function openBoxEditor(f) {
   const canvas = h('div', { class: 'box-canvas' });
   const stage = h('div', { class: 'sketch-stage' }, canvas);
   const list = h('div', { class: 'box-list' });
-  const clamp01 = (v) => Math.min(1, Math.max(0, v));
 
   const fit = () => {
     const r = stage.getBoundingClientRect();
@@ -3853,10 +3480,10 @@ function openBoxEditor(f) {
     canvas.style.width = `${Math.floor(k * aspect)}px`; canvas.style.height = `${Math.floor(k)}px`;
   };
   if (image) {
-    canvas.style.backgroundImage = `url("/api/input?name=${encodeURIComponent(image)}")`;
+    canvas.style.backgroundImage = `url("${inputUrl(image)}")`;
     const probe = new Image();
     probe.onload = () => { aspect = probe.naturalWidth / probe.naturalHeight; (S.imgAspect ||= {})[image] = aspect; fit(); };
-    probe.src = `/api/input?name=${encodeURIComponent(image)}`;
+    probe.src = inputUrl(image);
   }
 
   const draw = () => {
@@ -3869,24 +3496,22 @@ function openBoxEditor(f) {
       desc.addEventListener('input', () => { b.desc = desc.value; });
       const txt = h('input', { type: 'text', value: b.text || '', placeholder: 'The words to write' });
       txt.addEventListener('input', () => { b.text = txt.value; });
-      const seg = h('div', { class: 'seg' }, [['obj', 'Object'], ['text', 'Text']].map(([t, l]) =>
-        h('button', { type: 'button', class: (b.type || 'obj') === t ? 'on' : '', onclick: () => { b.type = t; draw(); } }, l)));
+      const kind = seg([['obj', 'Object'], ['text', 'Text']], b.type || 'obj', (t) => { b.type = t; draw(); });
       const move = (d) => { const j = i + d; if (j < 0 || j >= boxes.length) return; [boxes[i], boxes[j]] = [boxes[j], boxes[i]]; sel = j; draw(); };
       return h('div', { class: 'box-item' + (i === sel ? ' sel' : ''), onclick: () => { if (sel !== i) { sel = i; draw(); } } },
-        h('div', { class: 'row' }, h('b', { style: 'flex:none' }, `${i + 1}`), seg,
-          h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Earlier', onclick: () => move(-1) }, '↑'),
-          h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Later', onclick: () => move(1) }, '↓'),
-          h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Delete box', onclick: () => { boxes.splice(i, 1); sel = Math.min(sel, boxes.length - 1); draw(); } }, '✕')),
+        h('div', { class: 'row' }, h('b', { class: 'fixed' }, `${i + 1}`), kind,
+          iconBtn('Earlier', '↑', () => move(-1)),
+          iconBtn('Later', '↓', () => move(1)),
+          iconBtn('Delete box', '✕', () => { boxes.splice(i, 1); sel = Math.min(sel, boxes.length - 1); draw(); })),
         b.type === 'text' ? txt : null, desc,
         f.refs && b.type !== 'text' ? h('div', { class: 'box-ref' },
           b.ref ? h('img', { src: thumbUrl(b.ref, 160), alt: '' }) : null,
-          h('button', { type: 'button', class: 'btn small', onclick: (e) => {
+          button(b.ref ? 'Change reference' : '+ Reference image', (e) => {
             e.stopPropagation();
             openImagePicker({ title: `Reference for box ${i + 1}`, onPick: (name) => { b.ref = name; draw(); } });
-          } }, b.ref ? 'Change reference' : '+ Reference image'),
-          b.ref ? h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Remove reference',
-            onclick: (e) => { e.stopPropagation(); delete b.ref; draw(); } }, '✕') : null) : null);
-    }) : [h('div', { class: 'hint' }, 'Drag on the picture to draw a box. Background things first, foreground last.')]));
+          }),
+          b.ref ? iconBtn('Remove reference', '✕', () => { delete b.ref; draw(); }) : null) : null);
+    }) : [hint('Drag on the picture to draw a box. Background things first, foreground last.')]));
   };
 
   // drag on empty space: new box; drag a box: move it; drag its corner: resize
@@ -3929,28 +3554,21 @@ function openBoxEditor(f) {
       h('span', { class: 'hint' }, f.refs ? 'Object boxes: describe what goes there, optionally with a reference image. Text boxes: the words, then how they look.'
         : 'Object boxes: describe what goes there. Text boxes: the words, then how they look.'),
       h('div', { class: 'spacer' }),
-      h('button', { type: 'button', class: 'btn small ghost', onclick: () => close() }, 'Cancel'),
-      h('button', { type: 'button', class: 'btn small primary', onclick: () => {
+      button('Cancel', () => close(), { cls: 'small ghost' }),
+      button('Done', () => {
         setVal(f.key, clean());
         close(false, true); renderFields();
-      } }, 'Done')),
+      }, { cls: 'small primary' })),
     h('div', { class: 'box-body' }, stage, list));
-  document.body.append(overlay);
   const ro = new ResizeObserver(fit);
   ro.observe(stage);
   const tidy = (bs) => bs.map(({ x, y, w, h: hh, type, desc, text, ref }) =>
     ({ x, y, w, h: hh, type: type || 'obj', desc: desc || '', text: text || '', ...(ref && type !== 'text' ? { ref } : {}) }));
   const clean = () => tidy(boxes);
   const start = JSON.stringify(tidy(S.values[f.key] || []));
-  const close = (viaBack = false, saved = false) => {
-    // Cancel or the back gesture with changes: ask, rather than lose them
-    if (!saved && JSON.stringify(clean()) !== start && !confirm('Throw away your changes to the boxes?')) return false;
-    ro.disconnect(); overlay.remove();
-    if (!viaBack) overlayClosed(back);
-    return true;
-  };
-  const back = () => close(true);
-  overlayOpened(back);
+  // Cancel or the back gesture with changes: ask, rather than lose them
+  const close = openOverlay(overlay, { dirty: () => JSON.stringify(clean()) !== start, ask: 'Throw away your changes to the boxes?',
+    onClose: () => ro.disconnect() });
   draw();
 }
 
@@ -3959,10 +3577,10 @@ function openBoxEditor(f) {
 // ---------------------------------------------------------------------------
 async function openLoraInfo(name) {
   const seq = openSheet(h('h3', {}, name.split('/').pop()),
-    h('div', { class: 'placeholder' }, 'Looking it up on Civitai… The first lookup hashes the file, which can take a little while.'));
+    placeholder('Looking it up on Civitai… The first lookup hashes the file, which can take a little while.'));
   let r;
   try { r = await api(`/api/lora-info?name=${encodeURIComponent(name)}`, { timeout: 240000 }); } catch (e) {
-    if (sheetStillOpen(seq)) openSheet(h('h3', {}, name.split('/').pop()), h('div', { class: 'note err' }, e.message));
+    if (sheetStillOpen(seq)) openSheet(h('h3', {}, name.split('/').pop()), note(e.message, 'err'));
     return;
   }
   if (!sheetStillOpen(seq)) return;  // closed, or something else opened, while it was looking
@@ -3970,16 +3588,14 @@ async function openLoraInfo(name) {
   const words = r.trained_words.map((w) => h('button', { type: 'button', class: 'chip', title: 'Add to prompt',
     onclick: (e) => { addToPrompt(w); e.target.classList.add('added'); } }, w));
   openSheet(h('h3', {}, r.name),
-    !r.found ? h('div', { class: 'note warn' }, 'Not found on Civitai (the file may be private, renamed from elsewhere, or not uploaded there).') : null,
+    !r.found ? note('Not found on Civitai (the file may be private, renamed from elsewhere, or not uploaded there).') : null,
     h('table', { class: 'params' },
       h('tr', {}, h('td', {}, 'File'), h('td', {}, r.file)),
       r.base_model ? h('tr', {}, h('td', {}, 'Base model'), h('td', {}, r.base_model)) : null,
       r.link ? h('tr', {}, h('td', {}, 'Civitai'), h('td', {}, h('a', { href: r.link, target: '_blank', rel: 'noopener' }, 'Open model page'))) : null),
-    words.length ? h('div', { class: 'field', style: 'margin-top:10px' },
-      h('label', { class: 'lbl' }, h('span', {}, 'Trigger words'), h('span', {}, 'tap to add to the prompt')),
-      h('div', { class: 'chips' }, words)) : null,
-    r.description ? h('details', { class: 'desc' }, h('summary', {}, 'Description'), h('div', { class: 'hint', style: 'white-space:pre-wrap' }, textOf(r.description))) : null,
-    r.media.length ? h('div', { class: 'grid gallery', style: 'margin-top:10px' }, r.media.map((m) =>
+    words.length ? field(['Trigger words', h('span', {}, 'tap to add to the prompt')], h('div', { class: 'chips' }, words)) : null,
+    r.description ? h('details', { class: 'desc' }, h('summary', {}, 'Description'), h('div', { class: 'hint pre' }, textOf(r.description))) : null,
+    r.media.length ? h('div', { class: 'grid gallery' }, r.media.map((m) =>
       h('div', { class: 'card' }, h('div', { class: 'media' }, m.type === 'video'
         ? h('video', { src: m.url, muted: true, loop: true, playsInline: true, controls: true, preload: 'metadata' })
         : h('img', { src: m.url, loading: 'lazy', alt: '' }))))) : null);
@@ -4023,31 +3639,29 @@ async function renderBoard() {
   const bar = $('#boardBar');
   if (B.filter === 'marked' && !B.marked.size) B.filter = 'all';
   const filters = [['all', 'All'], ['image', 'Images'], ['video', 'Videos'], ['pinned', '★ Pinned'], ...(B.marked.size ? [['marked', '🗑 Marked']] : [])];
-  const seg = h('div', { class: 'seg' }, filters.map(([k, l]) =>
-    h('button', { type: 'button', class: B.filter === k ? 'on' : '', onclick: () => { B.filter = k; store.set('deck.board.filter', k); renderBoard(); } }, l)));
+  const filterSeg = seg(filters, B.filter, (k) => { B.filter = k; store.set('deck.board.filter', k); renderBoard(); });
   const size = h('input', { type: 'range', min: 120, max: 520, step: 10, value: B.size, 'aria-label': 'Tile size' });
   size.addEventListener('input', () => { B.size = Number(size.value); store.set('deck.board.size', B.size); $('#board').style.setProperty('--tile', `${B.size}px`); });
   const count = h('span', { class: 'hint' });
-  const selBtn = h('button', { type: 'button', class: 'btn small toggle-btn' + (B.selecting ? ' on' : ''),
-    onclick: () => setBoardSelecting(!B.selecting) }, B.selecting ? 'Done' : '☑ Select');
+  const selBtn = button(B.selecting ? 'Done' : '☑ Select', () => setBoardSelecting(!B.selecting), { cls: 'small' + (B.selecting ? ' on' : '') });
   const delMarked = h('span', { class: 'hidden' });   // filled in once the project's generations are loaded
-  bar.replaceChildren(seg, h('label', { class: 'board-size' }, 'Size', size), selBtn, delMarked, count, boardSelBar());
+  bar.replaceChildren(filterSeg, h('label', { class: 'board-size' }, 'Size', size), selBtn, delMarked, count, boardSelBar());
   $('#board').style.setProperty('--tile', `${B.size}px`);
 
   if (B.loadedFor !== S.project) {
-    $('#board').replaceChildren(h('div', { class: 'placeholder' }, 'Loading…'));
+    $('#board').replaceChildren(placeholder('Loading…'));
     try { await loadAllProjectGenerations(); } catch (e) { toast(e.message, true); }
   }
   const tiles = boardItems().map(({ g, o, i }) => boardTile(g, o, i));
   pauseBoard();
-  $('#board').replaceChildren(...(tiles.length ? tiles : [h('div', { class: 'placeholder' },
+  $('#board').replaceChildren(...(tiles.length ? tiles : [placeholder(
     B.filter === 'pinned' ? 'Nothing pinned yet. Tap ☆ on any tile.'
       : B.filter === 'marked' ? 'Nothing marked. Mark things for deletion in the gallery (tap a tile).'
         : 'Nothing generated in this project yet.')]));
   $('#board').querySelectorAll('video').forEach((v) => boardVideos.observe(v));
   count.textContent = `${tiles.length} item${tiles.length === 1 ? '' : 's'}`;
   const nMarked = markedGens().length;
-  if (nMarked) delMarked.replaceWith(h('button', { type: 'button', class: 'btn small danger', onclick: deleteMarked }, `Delete ${nMarked} marked`));
+  if (nMarked) delMarked.replaceWith(button(`Delete ${nMarked} marked`, deleteMarked, { cls: 'small danger' }));
 }
 
 // what the board shows with the current filter, newest first: [{g, o, i, key}]
@@ -4138,11 +3752,11 @@ function boardSelBar() {
   const visibleKeys = () => [...$('#board').querySelectorAll('.tile[data-key]')].map((t) => t.dataset.key);
   return h('div', { class: 'board-sel' },
     h('b', {}, n ? `${n} selected` : 'Tap tiles to select'),
-    h('button', { type: 'button', class: 'btn small', onclick: () => { visibleKeys().forEach((k) => B.sel.add(k)); renderBoard(); } }, 'All'),
-    n ? h('button', { type: 'button', class: 'btn small', onclick: () => { B.sel.clear(); renderBoard(); } }, 'None') : null,
-    h('button', { type: 'button', class: 'btn small primary', disabled: !images, onclick: boardToEditor }, `New edit${images ? ` (${images})` : ''}`),
-    h('button', { type: 'button', class: 'btn small', disabled: !n, onclick: boardToVideo }, 'To video'),
-    h('button', { type: 'button', class: 'btn small danger', disabled: !n, onclick: boardDelete }, 'Delete'));
+    button('All', () => { visibleKeys().forEach((k) => B.sel.add(k)); renderBoard(); }),
+    n ? button('None', () => { B.sel.clear(); renderBoard(); }) : null,
+    button(`New edit${images ? ` (${images})` : ''}`, boardToEditor, { cls: 'small primary', disabled: !images }),
+    button('To video', boardToVideo, { disabled: !n }),
+    button('Delete', boardDelete, { cls: 'small danger', disabled: !n }));
 }
 
 // The selected images as a fresh Editor layout (side by side, or a grid for more than 3).
@@ -4240,8 +3854,8 @@ function openGallery(key) {
   const main = h('div', { class: 'gal-main' });
   const el = h('div', { class: 'gal-view', role: 'dialog', 'aria-modal': 'true' },
     h('div', { class: 'gal-top' }, h('span', { class: 'gal-title' }), h('span', { class: 'gal-count hint' }),
-      h('button', { type: 'button', class: 'btn small toggle-btn gal-strip-btn', title: 'Show or hide the thumbnails (T)', onclick: () => galleryStrip() }, 'Thumbnails'),
-      h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Close', onclick: () => closeGallery() }, '✕')),
+      button('Thumbnails', () => galleryStrip(), { cls: 'small gal-strip-btn', title: 'Show or hide the thumbnails (T)' }),
+      iconBtn('Close', '✕', () => closeGallery())),
     h('div', { class: 'gal-stage' }, main,
       h('button', { type: 'button', class: 'gal-nav prev', 'aria-label': 'Previous', onclick: () => galleryGo(-1) }, '‹'),
       h('button', { type: 'button', class: 'gal-nav next', 'aria-label': 'Next', onclick: () => galleryGo(1) }, '›')),
@@ -4315,14 +3929,13 @@ function galleryRender(newMedia = false) {
   GAL.key = cur.key;
 
   el.querySelector('.gal-actions').replaceChildren(...[
-    h('button', { type: 'button', class: 'btn small' + (g.pinned ? ' on' : ''), onclick: () => togglePin(g) }, g.pinned ? '★ Pinned' : '☆ Pin'),
-    h('button', { type: 'button', class: 'btn small' + (marked ? ' danger on' : ''), title: 'D',
-      onclick: () => { toggleMarked(g.id); boardChanged(g); } }, marked ? '🗑 Marked' : '🗑 Mark'),
-    o.kind === 'image' ? h('button', { type: 'button', class: 'btn small', onclick: () => { closeGallery(); itemsToEditor([cur]); } }, '✎ Edit') : null,
-    h('button', { type: 'button', class: 'btn small', onclick: () => { closeGallery(); sendToInput(g, i, 'first'); } }, 'Use as input'),
-    h('button', { type: 'button', class: 'btn small', onclick: () => openGeneration(g.id) }, 'Details'),
-    h('a', { class: 'btn small', href: o.url, download: o.filename, style: 'display:grid;place-items:center;text-decoration:none' }, 'Download'),
-    markedGens().length ? h('button', { type: 'button', class: 'btn small danger', onclick: deleteMarked }, `Delete ${markedGens().length} marked`) : null,
+    button(g.pinned ? '★ Pinned' : '☆ Pin', () => togglePin(g), { cls: 'small' + (g.pinned ? ' on' : ''), title: 'P' }),
+    button(marked ? '🗑 Marked' : '🗑 Mark', () => { toggleMarked(g.id); boardChanged(g); }, { cls: 'small' + (marked ? ' danger on' : ''), title: 'D' }),
+    o.kind === 'image' ? button('✎ Edit', () => { closeGallery(); itemsToEditor([cur]); }, { title: 'E' }) : null,
+    button('Use as input', () => { closeGallery(); sendToInput(g, i, 'first'); }),
+    button('Details', () => openGeneration(g.id)),
+    linkBtn('Download', o.url, { download: o.filename }),
+    markedGens().length ? button(`Delete ${markedGens().length} marked`, deleteMarked, { cls: 'small danger' }) : null,
   ].filter(Boolean));
 
   const strip = el.querySelector('.gal-strip');
@@ -4419,7 +4032,7 @@ function wireGallerySwipe(main) {
 }
 
 document.addEventListener('keydown', (e) => {
-  if (!GAL.el || !$('#sheet').classList.contains('hidden') || e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey) return;
+  if (!GAL.el || sheetOpen() || e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey) return;
   const cur = GAL.items[GAL.idx];
   const keys = {
     ArrowLeft: () => galleryGo(-1), ArrowRight: () => galleryGo(1),
@@ -4535,34 +4148,34 @@ async function openJobs() {
   const box = h('div', { class: 'jobs' });
   openSheet(h('h3', {}, 'Queue'), box);
   const refresh = async () => {
-    if ($('#sheet').classList.contains('hidden') || !box.isConnected) { clearInterval(jobsTimer); jobsTimer = null; return; }
+    if (!sheetOpen() || !box.isConnected) { clearInterval(jobsTimer); jobsTimer = null; return; }
     let d;
-    try { d = await api('/api/jobs'); } catch (e) { box.replaceChildren(h('div', { class: 'note err' }, e.message)); return; }
-    const row = (j, right, actions) => h('div', { class: `job ${j.status}`, onclick: () => j.id && openGeneration(j.id) },
+    try { d = await api('/api/jobs'); } catch (e) { box.replaceChildren(note(e.message, 'err')); return; }
+    const row = (j, right, btn) => h('div', { class: `job ${j.status}`, onclick: () => j.id && openGeneration(j.id) },
       h('div', { class: 'job-main' }, h('b', {}, j.id ? `#${j.id} ` : ''), j.template,
-        h('div', { class: 'hint' }, right)), actions);
+        h('div', { class: 'hint' }, right)), btn);
     const active = d.active.map((j) => row(j,
       j.status === 'running'
         ? `running ${fmtDur(j.elapsed)}${j.typical ? ` of ~${fmtDur(j.typical)}` : ''}`
         : `waiting ${fmtDur(j.waiting)} · ${j.eta != null ? `starts in ~${fmtDur(j.eta - (j.typical || 0))}, done in ~${fmtDur(j.eta)}` : 'no timing yet for this template'}`,
       j.status === 'running'
-        ? h('button', { type: 'button', class: 'btn small', onclick: async (e) => {
+        ? button('Stop', async (e) => {
             e.stopPropagation();
             const who = isMine(j.prompt_id) ? '' : ' It was started from another device.';
             if (!confirm(`Stop ${j.id ? `#${j.id}` : 'this run'}?${who}`)) return;
             await stop(j.prompt_id, { ask: false }); refresh();
-          } }, 'Stop')
-        : h('button', { type: 'button', class: 'btn small', onclick: async (e) => {
+          })
+        : button('Cancel', async (e) => {
             e.stopPropagation();
             try { await api('/api/queue/cancel', { method: 'POST', body: { prompt_id: j.prompt_id } }); refresh(); } catch (err) { toast(err.message, true); }
-          } }, 'Cancel')));
+          })));
     const recent = d.recent.map((g) => row(g,
       `${g.status === 'done' ? `took ${fmtDur(g.duration)}` : g.status} · finished ${new Date(g.finished * 1000).toLocaleTimeString()}`, null));
     box.replaceChildren(
       h('div', { class: 'lbl jobs-head' }, d.active.length ? `Running and waiting (${d.active.length})` : 'Nothing running'),
       ...active,
       h('div', { class: 'lbl jobs-head' }, 'Recent runs'),
-      ...(recent.length ? recent : [h('div', { class: 'hint' }, 'None yet')]));
+      ...(recent.length ? recent : [hint('None yet')]));
   };
   clearInterval(jobsTimer);
   jobsTimer = setInterval(refresh, 1000);
@@ -4625,7 +4238,7 @@ $('#batchPlus').addEventListener('click', () => setBatch(S.batch + 1));
 $('#debugBtn').addEventListener('click', () => {
   const counts = Object.entries(S.debugCounts).map(([k, v]) => `${k}: ${v}`).join('\n');
   openSheet(h('h3', {}, 'Websocket log'),
-    h('div', { class: 'hint', style: 'margin-bottom:6px' }, 'Message counts, then unhandled messages. Useful for checking what a custom node sends.'),
+    hint('Message counts, then unhandled messages. Useful for checking what a custom node sends.', 'sheet-hint'),
     h('div', { class: 'log' }, counts + '\n\n' + (S.debug.slice().reverse().join('\n') || '(nothing unhandled yet)')));
 });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) onResume(); });
@@ -4829,13 +4442,14 @@ function wireTextPopup() {
   // snapshots: one before each chip, one per burst of typing.
   let undo = [], lastTyped = -Infinity, prev = null;
   const state = () => ({ v: ta.value, a: ta.selectionStart, b: ta.selectionEnd });
-  const undoBtn = h('button', { type: 'button', class: 'btn small', disabled: true, onmousedown: (ev) => ev.preventDefault(), onclick: () => {
+  const keepFocus = (ev) => ev.preventDefault();   // tapping a button mustn't take the cursor out of the text
+  const undoBtn = button('↶ Undo', () => {
     const u = undo.pop();
     if (!u) return;
     ta.value = u.v; ta.focus(); ta.setSelectionRange(u.a, u.b);
     ta.dispatchEvent(new Event('input'));
     undoBtn.disabled = !undo.length;
-  } }, '↶ Undo');
+  }, { disabled: true, onmousedown: keepFocus });
   // wildcard keys, since { | } are a few keyboard pages deep. { } wraps a selection as the first option.
   const typeRaw = (fn) => {
     snap(); lastTyped = -Infinity;
@@ -4845,8 +4459,7 @@ function wireTextPopup() {
     ta.setSelectionRange(a + caret, a + caret);
     ta.dispatchEvent(new Event('input'));
   };
-  const key = (label, title, fn) => h('button', { type: 'button', class: 'btn small key', title,
-    onmousedown: (ev) => ev.preventDefault(), onclick: () => typeRaw(fn) }, label);
+  const key = (label, title, fn) => button(label, () => typeRaw(fn), { cls: 'small key', title, onmousedown: keepFocus });
   const keys = h('div', { class: 'text-pop-keys' },
     key('{ }', 'Wildcard group: one option is picked at random each run', (sel) => sel ? [`{${sel}|}`, sel.length + 2] : ['{}', 1]),
     key('|', 'Next option', () => ['|', 1]),
@@ -4865,7 +4478,7 @@ function wireTextPopup() {
   });
   const box = h('div', { class: 'text-pop hidden', role: 'dialog', 'aria-modal': 'true' },
     h('div', { class: 'text-pop-bar' }, title, keys, undoBtn,
-      h('button', { type: 'button', class: 'btn small primary', onclick: close }, 'Done')),
+      button('Done', close, { cls: 'small primary' })),
     h('div', { class: 'text-pop-body' }, ta, tags));
   document.body.append(box);
   const vv = window.visualViewport;
@@ -4893,13 +4506,13 @@ function wireTextPopup() {
     const list = [...(t.closest('.prompt-field')?.querySelectorAll('.tag-chips .chip') || [])].map((c) => c.textContent);
     const chip = (label, text = label) => h('button', { type: 'button', class: 'chip',
       title: typeof text === 'string' ? text.replace(/[§¶↵]/g, '') : label,
-      onmousedown: (ev) => ev.preventDefault(), onclick: () => { snap(); lastTyped = -Infinity; insertPhrase(ta, text); } }, label);
+      onmousedown: keepFocus, onclick: () => { snap(); lastTyped = -Infinity; insertPhrase(ta, text); } }, label);
     const phrases = S.tpl?.tag_style === 'h3' && t.closest('.prompt-field') ? H3_PHRASES : [];
     // phrase groups fold: tap a heading to open or close it (remembered)
     const open = store.get('deck.phraseGroups', { Structure: true });
     const group = ([name, items]) => {
       const body = h('div', { class: 'text-pop-group' + (open[name] ? '' : ' hidden') }, items.map(([l, x]) => chip(l, x)));
-      const head = h('button', { type: 'button', class: 'text-pop-head', onmousedown: (ev) => ev.preventDefault(), onclick: () => {
+      const head = h('button', { type: 'button', class: 'text-pop-head', onmousedown: keepFocus, onclick: () => {
         open[name] = !open[name]; store.set('deck.phraseGroups', open);
         body.classList.toggle('hidden', !open[name]); head.classList.toggle('open', !!open[name]);
       } }, name);

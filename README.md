@@ -233,6 +233,10 @@ app/templates.py   @-tag parsing, field typing from /object_info, LoRA chain spl
 app/imageprep.py   crop, megapixel cap, snap to multiple-of-N, video/gif frame grabs
 app/db.py          SQLite: projects + generations (params, exact workflow, parent lineage)
 web/               the tablet UI (vanilla JS, no build step)
+web/ui.js          shared UI kit: h(), api(), toasts, sheets, overlays and the widgets every panel uses
+                   (button, iconBtn, seg, field, section, rangeField, propNum, mediaCard, cycleBar…)
+web/app.js         Generate, Editor, Video, Board, History; web/scene.js the 3D tab (loaded on demand)
+web/app.css        styles; colours, radii and shadows come from the tokens at the top
 templates/         your workflow templates
 data/              database, projects/ (saved outputs), local copies of inputs (git-ignored)
 dev/mock_comfy.py  fake ComfyUI for UI work without a GPU
