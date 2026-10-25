@@ -83,9 +83,33 @@ Housekeeping (second pass)
 - ComfyUI's folder defaults to `../ComfyUI` next to ComfyDeck; `DECK_COMFY_DIR` overrides it, and
   `DECK_COMFY_DIR=""` turns this housekeeping off (the test stack runs that way).
 
+## 3D poser rework (2026-10-25)
+How it fits together (`web/figure.js` is the figure, `web/scene.js` the tab):
+- **A figure's key** holds `j` (joint turns), `m` (parameters on top: lean, head tilt, legs apart,
+  walk/run, squat %…) and `pn` (the name of the pose picked, for the prompt). Each joint's final turn
+  is j × the parameters' turns. `readJoint` takes the parameters back out, so IK and the gizmo store
+  only `j`. Parameters blend numerically between keys, and a key can carry its own `ease`.
+- **Planted on the floor** (`o.ground`): the hips are lifted or lowered so the lowest vertex touches
+  the floor, so Up means "off the floor". New figures have it on; older scenes load with it off.
+- **Pivot** (`o.pivot`): the gizmo holds a stand-in object at the pivot (hips by default, or feet,
+  centre of mass, head, any joint; Centre for photos) and the figure is turned around that point.
+  The number boxes still turn it around its origin at the feet.
+- **Walk/run** are curves of a step phase. With "Steps follow movement" on (the default), the phase is
+  the distance travelled ÷ the stride length (cached per figure in `PATHS`), so feet don't slide.
+- **Presets** are Euler degrees plus optional IK targets, solved once on a spare rig. **Pairs** pose
+  two figures (`at` places the partner in the first figure's space). **Moves** write keys from the
+  playhead. Saved poses go in `SC.poses` (this project) or localStorage `deck.figure.poses` (all
+  projects).
+- **Prompt from the poses** uses each key's `pn` to write what `<Subject N>` does, in order.
+- **Testing**: node can `import('web/figure.js')` directly (three.js runs without a DOM). For
+  pictures, a scratch page that calls `drawThumb` for every preset, shot in headless Chrome.
+
 ## Still open
 - **Not tried on a real tablet**: whether the keep-awake video holds the screen on your device,
   notifications (need HTTPS and the CA installed), and the feel of the bigger touch targets.
+- **3D poser**: the poses were tuned from their stick-figure pictures. Pairs where bodies touch
+  (carry, lap, lying on top, straddle) need checking in 3D. Rotating around the pivot with the
+  gizmo hasn't been checked by hand; moving has.
 
 ## Restarting the live server (:8190) remotely, without sudo
 `comfydeck.service` has `Restart=on-failure`. A plain `kill` (SIGTERM) counts as a clean exit, so
