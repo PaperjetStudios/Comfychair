@@ -3,8 +3,9 @@ import {
   button, iconBtn, seg, field, hint, placeholder, note, cycleBar,
 } from './ui.js';
 import { ASPECT_PRESETS, S, addMine, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
-import { mediaEl, openImagePicker, openVideoPicker } from './media.js';
+import { openImagePicker, openVideoPicker } from './media.js';
 import { RUN, fmtDur, notifyPrepare, onGeneration, openJobs, syncWithServer } from './run.js';
+import { videoEditor } from './vfield.js';
 import { FULL, openCrop, openSketch, templateAspect } from './editor.js';
 
 // ---------------------------------------------------------------------------
@@ -871,9 +872,47 @@ function videoField(f) {
       renderFields();
     },
   });
-  return mediaInput(f, src ? src.label : 'empty',
-    src && src.o ? mediaEl(src.o, { thumb: true }) : h('span', { class: 'hint' }, '+ video'),
-    pick, [v ? button('Clear', () => { setVal(f.key, null); renderFields(); }) : null]);
+  if (!(src && src.o)) return mediaInput(f, src ? src.label : 'empty', h('span', { class: 'hint' }, '+ video'), pick,
+    [v ? button('Clear', () => { setVal(f.key, null); renderFields(); }) : null]);
+  // Trim and crop live in the value ({generation|media, trim, crop}), so tabs, shots and Run again
+  // keep them; the server applies them (loader inputs or an ffmpeg copy, see app/videoprep.py).
+  const base = v.generation != null ? { generation: v.generation, index: v.index } : { media: v.media };
+  const edit = videoEditor({
+    url: src.o.url, source: base, trim: v.trim, crop: v.crop,
+    loader: () => videoLoader(f), budget: () => videoBudget(f),
+    onChange: (trim, crop) => setVal(f.key, { ...base, ...(trim && { trim }), ...(crop && { crop }) }),
+  });
+  loaderKnown(S.tpl.id)?.then(() => edit.refresh());
+  const el = field([f.label, h('span', {}, src.label)], edit,
+    h('div', { class: 'row wrap' }, button('Choose…', pick), button('Clear', () => { setVal(f.key, null); renderFields(); })));
+  el.dataset.key = f.key;
+  return el;
+}
+
+// the loader node's own settings next to a video field: rate, every-nth, and whether skip/cap are there
+// for the server to use (they usually aren't tagged fields, so read them from the workflow itself)
+const loaderWf = new Map();   // template id -> { wf, p: Promise }
+function videoLoader(f) {
+  const inp = loaderWf.get(S.tpl.id)?.wf?.[f.node]?.inputs;
+  const val = (name) => S.values[`${f.node}.${name}`] ?? inp?.[name];
+  return { rate: Number(val('force_rate')) || 0, nth: Number(val('select_every_nth')) || 1,
+    mapped: !inp || ('skip_first_frames' in inp && 'frame_load_cap' in inp) };
+}
+function loaderKnown(id) {
+  if (!loaderWf.has(id)) {
+    const e = { wf: null };
+    e.p = api(`/api/templates/${encodeURIComponent(id)}/workflow`).then((wf) => { e.wf = wf; }).catch(() => loaderWf.delete(id));
+    loaderWf.set(id, e);
+  }
+  return loaderWf.get(id)?.p;
+}
+
+// the template's own length setting ("Length (seconds)", a frame count), if it has one, as a budget for the trim
+function videoBudget(f) {
+  const lf = S.tpl.fields.find((x) => x.node !== f.node && (x.kind === 'int' || x.kind === 'float') && /\b(length|duration|seconds|frames?)\b/i.test(x.label));
+  const n = lf && Number(S.values[lf.key]);
+  if (!(n > 0)) return null;
+  return /second|duration/i.test(lf.label) && !/frame/i.test(lf.label) ? { secs: n } : { frames: n };
 }
 
 // LoRAs live in per-model folders (qwen/, krea/, h3/…). "Auto" shows the folder that matches the

@@ -59,6 +59,10 @@ OBJECT_INFO = {
 }
 
 
+PROMPTS: list = []
+LENIENT = {"on": False}
+
+
 def frame(seed: int, step: int, steps: int, w=320, h=320, t=0.0, label="") -> Image.Image:
     im = Image.new("RGB", (w, h))
     d = ImageDraw.Draw(im)
@@ -146,6 +150,11 @@ async def startup():
     asyncio.create_task(worker())
 
 
+@app.get("/_prompts")
+async def sent_prompts():
+    return PROMPTS
+
+
 @app.get("/object_info")
 async def object_info():
     return OBJECT_INFO
@@ -159,8 +168,9 @@ async def object_info_one(name: str):  # ComfyDeck lists input images through /o
 @app.post("/prompt")
 async def prompt(body: dict):
     p = body["prompt"]
+    PROMPTS.append(p)   # GET /_prompts: what the deck sent
     errors = {nid: {"class_type": n["class_type"], "errors": [{"message": "Node type not found"}]}
-              for nid, n in p.items() if n["class_type"] not in OBJECT_INFO}
+              for nid, n in p.items() if n["class_type"] not in OBJECT_INFO and not LENIENT["on"]}
     if errors:
         return Response(json.dumps({"error": {"message": "Prompt outputs failed validation"}, "node_errors": errors}),
                         status_code=400, media_type="application/json")
@@ -230,6 +240,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8199)
     ap.add_argument("--animated", action="store_true", help="emit VHS-style animated previews")
+    ap.add_argument("--lenient", action="store_true", help="queue workflows with node types it doesn't know (e.g. VHS), and list them at /_prompts")
     a = ap.parse_args()
+    LENIENT["on"] = a.lenient
     ANIMATED["on"] = a.animated
     uvicorn.run(app, host="127.0.0.1", port=a.port, log_level="warning")

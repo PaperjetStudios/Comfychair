@@ -862,3 +862,27 @@ details.desc[open] summary { margin-bottom: 6px; }
 .cam-params { margin-bottom: 6px; }
 /* 3d import */
 .chip-pair { display: inline-flex; align-items: center; gap: 2px; }
+
+/* video field */
+.vf { display: grid; gap: 8px; min-width: 0; }
+.vf-stage { padding: 0; }
+.vf-wrap video { display: block; max-width: 100%; max-height: 46dvh; background: #000; }
+.vf-crop { pointer-events: none; }
+.vf-crop.editing { pointer-events: auto; }
+.vf-crop:not(.editing) { border-style: dashed; }
+.vf-crop:not(.editing) .handle { display: none; }
+.vf-bar { display: flex; gap: 8px; align-items: center; }
+.vf-bar .vf-time { flex: 1; text-align: center; font-variant-numeric: tabular-nums; }
+.vf-bar .icon-btn.on { background: var(--accent); color: var(--accent-ink); }
+.vf-cropbar { display: grid; gap: 6px; }
+.vf-track { position: relative; height: 48px; touch-action: none; user-select: none; margin: 0 14px; cursor: pointer; }
+.vf-rail, .vf-range { position: absolute; top: 20px; height: 8px; border-radius: 4px; }
+.vf-rail { left: 0; right: 0; background: var(--surface-2); border: 1px solid var(--line); box-sizing: border-box; }
+.vf-range { background: var(--accent); opacity: .85; }
+.vf-head { position: absolute; top: 8px; width: 2px; height: 32px; margin-left: -1px; background: var(--text); pointer-events: none; }
+.vf-h { position: absolute; top: 4px; width: 36px; height: 40px; margin-left: -18px; cursor: ew-resize; }
+.vf-h::after { content: ''; position: absolute; left: 6px; right: 6px; top: 4px; bottom: 4px; border-radius: 8px; background: var(--accent); border: 3px solid #000; box-sizing: border-box; }
+.vf-nums { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.vf-num { display: grid; gap: 2px; font-size: var(--fs-xs); color: var(--muted); }
+.vf-num input { width: 92px; }
+.vf-info.warn { color: var(--warn, #e0a030); }

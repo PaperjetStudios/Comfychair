@@ -783,11 +783,11 @@ export function useInGenerate(name, msg) {
     actions(button('Keep editing', closeSheet, { cls: 'small ghost' })));
 }
 
-const ASPECTS = [['Free', null], ...ASPECT_PRESETS];
+export const ASPECTS = [['Free', null], ...ASPECT_PRESETS];
 
 // Crop rectangle (fractions of a W×H image) from a fixed corner (fx,fy) to the pointer, respecting
 // the aspect lock (width/height in pixels, null = free) and the image bounds
-function cropSpan(W, H, aspect, fx, fy, px, py) {
+export function cropSpan(W, H, aspect, fx, fy, px, py) {
   let w = Math.abs(px - fx), hh = Math.abs(py - fy);
   if (aspect) {
     const maxW = px < fx ? fx : 1 - fx, maxH = py < fy ? fy : 1 - fy;
@@ -800,7 +800,7 @@ function cropSpan(W, H, aspect, fx, fy, px, py) {
 }
 
 // the largest centred crop with that aspect
-function aspectCrop(W, H, a) {
+export function aspectCrop(W, H, a) {
   let w = 1, hh = W / (a * H);
   if (hh > 1) { hh = 1; w = (a * H) / W; }
   return { x: (1 - w) / 2, y: (1 - hh) / 2, w, h: hh };

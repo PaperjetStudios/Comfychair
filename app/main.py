@@ -19,7 +19,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFil
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import accel, config, db, editsize, imageprep, stages, videoedit, wildcards
+from . import accel, config, db, editsize, imageprep, stages, videoedit, videoprep, wildcards
 from . import store
 from . import sceneasset
 from . import templates as tpl
@@ -303,6 +303,7 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(migrate_outputs)
     await asyncio.to_thread(prune_thumbs)
     await asyncio.to_thread(prune_crops)
+    await asyncio.to_thread(videoprep.prune)
     for g in db.pending_generations():  # Video-tab renders run inside a request: a restart ends them
         if g["prompt_id"].startswith("edit-"):
             db.update_generation(g["id"], status="error", error="ComfyDeck restarted during the render", finished=time.time())
@@ -447,7 +448,15 @@ async def generate(body: dict = Body(...)):
                 path, kind = await _timeline_path(resolved[key], None)
                 if kind != "video":
                     raise HTTPException(400, f"{f['group']} · {f['label']}: that isn't a video")
-                run[key] = str(path)
+                spec = resolved[key]
+                node = key.rpartition(".")[0]
+                loader = {**t.workflow[node]["inputs"], **{k.rpartition(".")[2]: v for k, v in run.items() if k.rpartition(".")[0] == node}}
+                try:  # trim/crop: the loader's own inputs, or a derived copy
+                    vp = await asyncio.to_thread(videoprep.plan, path, spec.get("trim"), spec.get("crop"), loader)
+                except (ValueError, subprocess.SubprocessError) as e:
+                    raise HTTPException(400, f"{f['group']} · {f['label']}: {e}")
+                run[key] = str(vp["path"])
+                run.update({f"{node}.{k}": v for k, v in vp["inputs"].items()})
         wf = editsize.inject(accel.inject(tpl.apply(t.workflow, run), run), run, list(fields.values()))
         folder = db.project_folder(project_id)
         for node in wf.values():  # ComfyUI's own copy goes to output/comfydeck/<project>/ too
@@ -703,6 +712,36 @@ async def _timeline_path(src: dict, tmp: Path) -> tuple[Path, str]:
             raise HTTPException(400, f"{src['media']} is gone")
         return path, MEDIA_KINDS.get(path.suffix.lower(), "video")
     raise HTTPException(400, "Unknown clip source")
+
+
+@app.post("/api/videos/probe")
+async def video_probe(body: dict = Body(...)):
+    """Size, length and rate of a picked video ({source: {generation, index} | {media}}), for the trim UI."""
+    path, kind = await _timeline_path(body.get("source") or {}, None)
+    if kind != "video":
+        raise HTTPException(400, "That isn't a video")
+    try:
+        info = await asyncio.to_thread(videoedit.probe, path)
+    except (subprocess.SubprocessError, OSError, ValueError, KeyError) as e:
+        raise HTTPException(400, f"Couldn't read that video: {e}")
+    return {**info, "frames": round(info["duration"] * info["fps"])}
+
+
+@app.post("/api/videos/prep")
+async def video_prep(body: dict = Body(...)):
+    """A trimmed/cropped copy of a picked video ({source, trim: {start, len} seconds, crop: {x,y,w,h}
+    fractions}) in data/tmp/videoprep, named after source+params so the same edit reuses one file.
+    generate() does the same by itself; this is for trying it. Returns {path, width, height, duration, cached}."""
+    if not imageprep.ffmpeg_available():
+        raise HTTPException(400, "ffmpeg isn't installed on the server")
+    path, kind = await _timeline_path(body.get("source") or {}, None)
+    if kind != "video":
+        raise HTTPException(400, "That isn't a video")
+    try:
+        r = await asyncio.to_thread(videoprep.prep, path, body.get("trim"), body.get("crop"))
+    except (ValueError, subprocess.SubprocessError, OSError) as e:
+        raise HTTPException(400, str(e))
+    return {**r, "path": str(r["path"])}
 
 
 @app.post("/api/video/render")
