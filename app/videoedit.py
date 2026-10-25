@@ -42,11 +42,33 @@ def _overlaps(items: list[dict]):
                 b["xin"], a["xout"] = ov, ov
 
 
+def _place(it: dict, W: int, H: int) -> tuple[list[str], str, str]:
+    """(extra filters, overlay x, overlay y) for one visual clip. Mirrors the preview's drawing: the
+    clip's anchor point (0..1 of the clip, default the centre) sits at the frame centre + (x*W, y*H),
+    and the clip rotates (degrees, clockwise) and scales around it. A clip without rotation or
+    anchor gets exactly the filters it always had."""
+    rot = float(it.get("rotation") or 0) % 360
+    ax = 0.5 if it.get("anchor_x") is None else float(it["anchor_x"])
+    ay = 0.5 if it.get("anchor_y") is None else float(it["anchor_y"])
+    px, py = float(it.get("x") or 0) * W, float(it.get("y") or 0) * H
+    if rot < 0.005 or rot > 359.995:
+        if abs(ax - 0.5) < 1e-6 and abs(ay - 0.5) < 1e-6:
+            return [], f"(W-w)/2+{px:.1f}", f"(H-h)/2+{py:.1f}"
+        return [], f"W/2+{px:.1f}-{ax:.5f}*w", f"H/2+{py:.1f}-{ay:.5f}*h"
+    # pad so the anchor is the centre of the picture, then rotate about the centre (transparent
+    # corners), then put that centre on the anchor's spot
+    hx, hy = f"ceil(max({ax:.5f}\\,1-{ax:.5f})*iw)", f"ceil(max({ay:.5f}\\,1-{ay:.5f})*ih)"   # \, : a comma inside an option, not a new filter
+    side = "2*ceil(hypot(iw\\,ih)/2)"
+    chain = [f"pad=w=2*{hx}:h=2*{hy}:x={hx}-round({ax:.5f}*iw):y={hy}-round({ay:.5f}*ih):color=black@0",
+             f"rotate=a={rot:.4f}*PI/180:ow={side}:oh={side}:c=none"]
+    return chain, f"W/2+{px:.1f}-w/2", f"H/2+{py:.1f}-h/2"
+
+
 def render(items: list[dict], out: Path, width: int | None = None, height: int | None = None,
            fps: float | None = None):
     """items: [{"path", "kind": video|image|audio, "track", "z" (video tracks: 0 = bottom),
-    "hidden", "muted", "at", "in", "out", "x", "y", "scale", "fit", "opacity", "volume",
-    "fade_in", "fade_out"}] with times in seconds. Frame size and rate default to the first visual
+    "hidden", "muted", "at", "in", "out", "x", "y", "scale", "fit", "rotation" (degrees, clockwise), "anchor_x", "anchor_y" (0..1 of the
+    clip, default 0.5), "opacity", "volume", "fade_in", "fade_out"}] with times in seconds. Frame size and rate default to the first visual
     clip's; gaps are black, clip audio and audio-track clips are mixed."""
     items = [dict(it) for it in items]
     for it in items:
@@ -103,10 +125,10 @@ def render(items: list[dict], out: Path, width: int | None = None, height: int |
         opacity = float(it.get("opacity", 1))
         if opacity < 0.999:
             chain.append(f"colorchannelmixer=aa={max(0.0, opacity):.3f}")
+        extra, x, y = _place(it, W, H)
+        chain += extra
         chain.append(f"setpts=PTS+{it['at']:.3f}/TB")
         filters.append(f"[{j}:v]{','.join(chain)}[o{n}]")
-        x = f"(W-w)/2+{float(it.get('x') or 0) * W:.1f}"
-        y = f"(H-h)/2+{float(it.get('y') or 0) * H:.1f}"
         filters.append(f"[b{n}][o{n}]overlay=x={x}:y={y}:eof_action=pass:format=auto[b{n + 1}]")
         n += 1
     filters.append(f"[b{n}]format=yuv420p[v]")

@@ -751,3 +751,12 @@ details.desc[open] summary { margin-bottom: 6px; }
 .editor-tabs { margin-bottom: 10px; }
 .frame-bar { align-items: center; justify-content: space-between; }
 .frame-bar .hint { margin: 0; }
+/* video tabs */
+.vid-tabs { position: sticky; top: 0; z-index: 3; background: var(--surface); padding: 6px 8px 4px; border-bottom: 1px solid var(--line); }
+.viewer .gizmo { touch-action: none; z-index: 2; }
+.gz-bar { position: absolute; left: 8px; top: 8px; z-index: 3; display: flex; gap: 4px; flex-wrap: wrap; max-width: calc(100% - 16px); }
+.gz-chip {
+  min-height: 34px; min-width: 34px; padding: 0 10px; border-radius: var(--r-sm); border: 1px solid #fff4; background: #000b; color: #fff;
+  font-size: var(--fs-xs); cursor: pointer; backdrop-filter: blur(4px);
+}
+.gz-chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
