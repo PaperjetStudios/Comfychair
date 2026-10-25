@@ -18,12 +18,14 @@ import { stopPlay } from './scene-export.js';
 import { registerBuiltins } from './scene-builtin.js';
 import { initModel } from './scene-model.js';
 import { registerCamera } from './scene-camera.js';
+import { registerImport } from './scene-import.js';
 export { addModeSection, registerMode } from './scene-modes.js';
 export { addPhoto } from './scene-view.js';
 
 registerCamera();     // camera moves (a section of Camera mode)
 registerBuiltins();   // (the dependencies have run by now; a mode registered later goes after them)
 initModel();          // Create object's tools replace the placeholder panel
+registerImport({ newTab });  // models, splats and starter scenes (scene-import.js)
 
 // ---- tabs: each 3D scene is a document in the project folder ----
 let ready = false, tabs = null, tabsReady = null;
@@ -78,6 +80,16 @@ export function hide() { if (ready) { stopPlay(); tabs?.flush(); } }
 // a new project has its own scenes (the tabs reload themselves)
 export function projectChanged() {
   if (ready) stopPlay();
+}
+
+// a new tab holding a copy of this scene (from a template)
+async function newTab(payload, name) {
+  boot(); await ensureTabs();
+  if (!tabs.active || !(await tabs.leave())) return;
+  const taken = new Set(tabs.docs.map((d) => d.name));
+  let nm = name;
+  for (let i = 2; taken.has(nm); i++) nm = `${name} ${i}`;
+  try { tabs.open(await tabs.create1({ name: nm, payload: upgrade(clone(payload)), order: tabs.active.order + 0.5 })); } catch (e) { toast(e.message, true); }
 }
 
 // open the scene saved with a "3d scene" generation, in a tab of its own

@@ -51,7 +51,15 @@ const ikTarget = new THREE.Object3D();  // what the gizmo drags when a hand or f
 // what the gizmo holds for a whole object: at its pivot, turned and scaled with it. pivotAt is the
 // pivot in the object's own space, kept still while dragging.
 const pivot = new THREE.Object3D(), pivotAt = new THREE.Vector3();
-const VERT = 'varying float vz; void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); vz = -mv.z; gl_Position = projectionMatrix * mv; }';
+// (the skinning chunks pose an imported character's bones; plain meshes pass through them)
+const VERT = `#include <skinning_pars_vertex>
+varying float vz;
+void main() {
+  #include <skinbase_vertex>
+  #include <begin_vertex>
+  #include <skinning_vertex>
+  vec4 mv = modelViewMatrix * vec4(transformed, 1.0); vz = -mv.z; gl_Position = projectionMatrix * mv;
+}`;
 const depthMat = new THREE.ShaderMaterial({
   uniforms: { near: { value: 0.5 }, far: { value: 20 } }, side: THREE.DoubleSide, vertexShader: VERT,
   fragmentShader: 'uniform float near; uniform float far; varying float vz;'
@@ -238,6 +246,11 @@ export function rebuildRoom() {
   for (const m of R.room) { m.userData.id = ROOM; scene.add(m); }
 }
 
+// What scene-import.js plugs in: LOADERS[type](o, group) fills a layer's group (imported models and
+// splats load on their own time), passHooks run before each draw with the pass ('depth' or 'color')
+export const LOADERS = {};
+export const passHooks = [];
+
 // a layer's three.js object: a mesh, a figure's rig (userData.rig, its root group), or a group the
 // photo's mesh loads into
 function makeObject(o) {
@@ -249,7 +262,9 @@ function makeObject(o) {
   } else if (o.type === 'photo') {
     m = new THREE.Group(); loadPhoto(o, m);
   } else if (makers[o.type]) m = makers[o.type](o);
-  else m = new THREE.Mesh(geometries()[TYPES[o.type].geo || o.type], clay);
+  else if (LOADERS[o.type]) {
+    m = new THREE.Group(); LOADERS[o.type](o, m);
+  } else m = new THREE.Mesh(geometries()[TYPES[o.type].geo || o.type], clay);
   m.userData.id = o.id; scene.add(m); R.meshes.set(o.id, m);
   return m;
 }
@@ -359,7 +374,7 @@ function pivotPoint(o, m) {
     if (k === 'feet') return new THREE.Vector3();
     return m.worldToLocal(k === 'com' ? FIGURE.centerOfMass(rig) : rig.bones[k].getWorldPosition(new THREE.Vector3()));
   }
-  if (o.type === 'photo') {
+  if (o.type === 'photo' || LOADERS[o.type]) {  // (the mesh itself sits on the floor at its origin)
     const box = new THREE.Box3().setFromObject(m);
     return k === 'center' && !box.isEmpty() ? m.worldToLocal(box.getCenter(new THREE.Vector3())) : new THREE.Vector3();
   }
@@ -390,7 +405,7 @@ function jointChanged(o) {
 
 export function syncMeshes() {
   const ids = new Set(SC.objects.map((o) => o.id));
-  for (const [id, m] of R.meshes) if (!ids.has(id)) { scene.remove(m); R.meshes.delete(id); }
+  for (const [id, m] of R.meshes) if (!ids.has(id)) { scene.remove(m); R.meshes.delete(id); m.userData.dispose?.(); }
   for (const o of SC.objects) {
     const m = R.meshes.get(o.id) || makeObject(o);
     paint(m, o.id === R.sel);
@@ -467,6 +482,7 @@ export function draw(forRender = false) {
   scene.background.set(depth ? 0x000000 : 0x24272e);
   grid.visible = !forRender && !depth && !snap3.grid;
   snapGrid.visible = !forRender && !depth && snap3.grid;
+  for (const f of passHooks) f(depth || forRender === 'range' ? 'depth' : 'color');
   frustum.visible = wantFrustum() && !forRender && !depth;
   stage.visible = !onStage() && !forRender;
   gizmo.getHelper().visible = !forRender && !R.playing && !!gizmo.object;

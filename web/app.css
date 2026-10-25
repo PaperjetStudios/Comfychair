@@ -851,3 +851,5 @@ details.desc[open] summary { margin-bottom: 6px; }
 .cam-move.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .cam-ico { width: 24px; height: 24px; flex: none; }
 .cam-params { margin-bottom: 6px; }
+/* 3d import */
+.chip-pair { display: inline-flex; align-items: center; gap: 2px; }
