@@ -1539,6 +1539,17 @@ function showConn() {
   showConn.t = setTimeout(() => { banner.textContent = text; banner.classList.remove('hidden'); }, WS.everOpen || !server ? 2500 : 0);
 }
 
+// The installed app keeps running the code it opened with. When the UI's files on the box are newer
+// (/api/status ui_version), offer a reload; it's asked again at the next check if it's dismissed.
+let uiVersion = null;
+function checkUiVersion(v) {
+  if (v == null) return;
+  if (uiVersion == null) { uiVersion = v; return; }
+  if (v === uiVersion || $('#toast .update-act')) return;
+  toast('ComfyDeck has been updated', false, { label: '↻ Reload', fn: () => location.reload(), stay: true });
+  $('#toast .toast-act')?.classList.add('update-act');
+}
+
 // Catch up after a reload, a dropped socket or the tablet waking: what's running now (pick its
 // progress back up if it's ours), and any results that landed while we weren't listening.
 let syncing = null;
@@ -1547,7 +1558,7 @@ function syncWithServer() {
     try {
       if (!S.projects.length) await loadProjects();
       if (!S.templates.length) await loadTemplates();
-      try { const s = await api('/api/status'); setConn(s.comfy_connected); } catch { /* the socket says the rest */ }
+      try { const s = await api('/api/status'); setConn(s.comfy_connected); checkUiVersion(s.ui_version); } catch { /* the socket says the rest */ }
       const jobs = await api('/api/jobs');
       const running = jobs.active.find((j) => j.status === 'running');
       S.activePid = running ? running.prompt_id : null;
@@ -4537,7 +4548,9 @@ function wireTextPopup() {
   wireVideoTransport();
   wireZoom();
   wireFullscreen();
-  try { const s = await api('/api/status', { timeout: 8000 }); setConn(s.comfy_connected); } catch { /* server down: the socket keeps retrying */ }
+  try { const s = await api('/api/status', { timeout: 8000 }); setConn(s.comfy_connected); checkUiVersion(s.ui_version); } catch { /* server down: the socket keeps retrying */ }
+  // an installed app can stay open for days: look for a newer UI every few minutes while it's on screen
+  setInterval(() => { if (!document.hidden) api('/api/status').then((s) => checkUiVersion(s.ui_version), () => {}); }, 5 * 60000);
   await loadProjects();
   await loadTemplates();
   loadHistory();

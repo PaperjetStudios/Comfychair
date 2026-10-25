@@ -365,10 +365,16 @@ async def object_info_or_none(refresh=False):
 # ---------------------------------------------------------------------------
 # API
 # ---------------------------------------------------------------------------
+def ui_version() -> int:
+    """Newest change to the UI's files: an open (installed) app compares it with what it loaded
+    and offers a reload when they differ."""
+    return int(max(f.stat().st_mtime for f in config.WEB_DIR.rglob("*") if f.is_file()))
+
+
 @app.get("/api/status")
 async def status():
     return {"comfy_connected": comfy.connected, "comfy_url": config.COMFY_URL,
-            "ffmpeg": imageprep.ffmpeg_available()}
+            "ffmpeg": imageprep.ffmpeg_available(), "ui_version": ui_version()}
 
 
 @app.websocket("/ws")

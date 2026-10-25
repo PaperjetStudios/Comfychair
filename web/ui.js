@@ -163,14 +163,16 @@ function busyLabel(method, path) {
   return (BUSY_LABELS.find(([re]) => re.test(p)) || [null, 'Working…'])[1];
 }
 
-// action: { label, fn } adds a button (e.g. Undo) and keeps the toast up a little longer
+// action: { label, fn } adds a button (e.g. Undo) and keeps the toast up a little longer;
+// with stay: true it stays until it's tapped or another toast replaces it
 let toastTimer;
 export function toast(msg, err = false, action = null) {
   const t = $('#toast');
   // replaceChildren() would turn a null into the text "null", so only pass the button when there is one
   t.replaceChildren(h('span', {}, msg), ...(action ? [button(action.label, () => { t.classList.add('hidden'); action.fn(); }, { cls: 'small toast-act' })] : []));
   t.className = 'toast' + (err ? ' err' : '');
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), err ? 7000 : action ? 6000 : 2500);
+  clearTimeout(toastTimer);
+  if (!action?.stay) toastTimer = setTimeout(() => t.classList.add('hidden'), err ? 7000 : action ? 6000 : 2500);
 }
 export const undoToast = (msg, fn) => toast(msg, false, { label: '↶ Undo', fn });
 
