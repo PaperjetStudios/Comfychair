@@ -610,7 +610,7 @@ details.desc[open] summary { margin-bottom: 6px; }
 /* ---- 3D tab ---- */
 #sceneViewer { display: block; background: var(--stage-bg); }
 #sceneViewer canvas { width: auto; height: auto; max-width: none; max-height: none; object-fit: fill; touch-action: none; }
-.scene-transport { flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 6px; }
+.scene-transport { flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 6px; max-height: 60dvh; overflow-y: auto; overscroll-behavior: contain; }
 .scene-keybar { gap: 8px; align-items: center; }
 .scene-keybar > * { flex: none; }
 .scene-keybar .grow { flex: 1; }
@@ -618,7 +618,7 @@ details.desc[open] summary { margin-bottom: 6px; }
 .scene-keybar .autokey.on { color: #fff; background: #b8322f; border-color: #b8322f; }
 .scene-toolbar { top: 8px; left: 8px; }
 /* key sheet: track names on the left, a row of keys per track on the right */
-.scene-sheet { display: flex; max-height: 136px; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+.scene-sheet { display: flex; max-height: 136px; overflow-y: auto; overflow-x: hidden; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
 .sheet-names { flex: none; width: 120px; border-right: 1px solid var(--line); }
 .sheet-names > *, .sheet-lane, .sheet-ruler { height: 26px; }
 .sheet-head, .sheet-ruler { position: sticky; top: 0; z-index: 2; background: var(--surface-2); }
@@ -797,12 +797,17 @@ details.desc[open] summary { margin-bottom: 6px; }
 .mdl .gz-bar { position: static; max-width: none; }
 .mdl .gz-chip { min-height: 44px; padding: 0 14px; }
 /* 3d keys */
-.scene-keytools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.scene-keytools { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; padding-bottom: 2px; }
 .scene-keytools > * { flex: none; }
 .scene-keytools .sep { width: 1px; align-self: stretch; margin: 4px 2px; background: var(--line); }
-.scene-keytools select { min-height: var(--tap-sm); border: 1px solid var(--line); border-radius: var(--r); background: var(--surface-2); color: var(--text); font: inherit; font-size: 14px; padding: 0 8px; }
+.btn.kt { min-width: 36px; min-height: 36px; height: 36px; padding: 0 6px; font-size: 16px; line-height: 1; }
+.scene-keytools select { height: 36px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface-2); color: var(--text); font: inherit; font-size: 13px; padding: 0 4px; }
 .scene-keytools select:disabled { opacity: .45; }
-.keynum { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs); color: var(--muted); }
+.key-head { position: sticky; top: 0; z-index: 6; display: grid; gap: 6px; background: var(--bg); padding-bottom: 2px; min-width: 0; }
+.scene-keybar { overflow-x: auto; scrollbar-width: thin; }
+.key-menu { position: fixed; z-index: 70; display: grid; gap: 4px; min-width: 230px; padding: 6px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); box-shadow: 0 8px 24px #0008; }
+.key-menu .btn { justify-content: flex-start; text-align: left; }
+.keynum { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 6px; font-size: var(--fs-xs); color: var(--muted); }
 .keynum input { min-height: var(--tap-sm); border: 1px solid var(--line); border-radius: var(--r); background: var(--surface-2); color: var(--text); font: inherit; font-size: 14px; padding: 0 6px; text-align: right; }
 .keyinfo { min-width: 90px; font-variant-numeric: tabular-nums; }
 .sheet-grip { flex: none; height: 14px; margin: -2px 0; cursor: row-resize; touch-action: none; display: grid; place-items: center; }
@@ -810,7 +815,7 @@ details.desc[open] summary { margin-bottom: 6px; }
 .sheet-grip:hover::after, .sheet-grip.dragging::after { background: var(--accent); opacity: 1; }
 .scene-sheet.graph { height: 230px; max-height: none; overflow: hidden; }
 .scene-sheet.graph .sheet-names { overflow-y: auto; }
-.sheet-lanes { overflow: hidden; cursor: default; }
+.scene-sheet.graph .sheet-lanes { overflow: hidden; cursor: default; }  /* (in the dope sheet it must not clip: its rows run past the box and the sheet scrolls them) */
 .sheet-name-row { display: flex; align-items: stretch; border-top: 1px solid var(--line); }
 .sheet-name-row .sheet-name { border-top: 0; flex: 1; min-width: 0; width: auto; }
 .mute-btn { flex: none; width: 28px; padding: 0; border: 0; background: none; cursor: pointer; font-size: 13px; line-height: 1; opacity: .6; }
@@ -840,6 +845,7 @@ details.desc[open] summary { margin-bottom: 6px; }
   .graph-plot .key { width: 16px; height: 16px; margin: -8px 0 0 -8px; }
   .scene-sheet.graph { height: 280px; }
   .keynum input { min-height: 40px; }
+  .btn.kt, .scene-keytools select { min-height: 38px; height: 38px; }
 }
 #tab-scene .stage, .scene-transport, .scene-sheet { min-width: 0; }
 .scene-keytools select { width: auto; }
