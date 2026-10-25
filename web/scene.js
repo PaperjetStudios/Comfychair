@@ -17,9 +17,11 @@ import { setup } from './scene-view.js';
 import { stopPlay } from './scene-export.js';
 import { registerBuiltins } from './scene-builtin.js';
 import { initModel } from './scene-model.js';
+import { registerCamera } from './scene-camera.js';
 export { addModeSection, registerMode } from './scene-modes.js';
 export { addPhoto } from './scene-view.js';
 
+registerCamera();     // camera moves (a section of Camera mode)
 registerBuiltins();   // (the dependencies have run by now; a mode registered later goes after them)
 initModel();          // Create object's tools replace the placeholder panel
 

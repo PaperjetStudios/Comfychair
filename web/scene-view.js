@@ -4,6 +4,7 @@ import * as THREE from './vendor/three.module.min.js';
 import { TransformControls } from './vendor/TransformControls.js';
 import * as FIGURE from './figure.js';
 import { $, api, busy as busyBar, clone, closeSheet, toast, undoToast } from './ui.js';
+import { smoothGizmo, snap3, snapBar3 } from './gizmo.js';
 import {
   C, CAM, EVEN, FIG, MODES, OBJ, R, ROOM, SC, TYPES, current, frames, hooks, makers, namesFor, newObject, newRoom, pivotOf, sample,
   sameTab, save, selItem, setSC, write
@@ -32,6 +33,7 @@ function geometries() {
 
 // ---- three.js ------------------------------------------------------------------
 export let renderer, scene, camera, controls, gizmo, grid, canvas, viewer;
+let snapGrid, smooth;   // the floor grid shown while grid snapping is on; the gizmo's smoothing (gizmo.js)
 // the free view (setFree), the shot camera drawn in it, and the empty stage of Create object
 let viewCam, viewControls, shotCam, frustum, stage;
 const clay = new THREE.MeshStandardMaterial({ color: 0xb4b4b4, roughness: 0.9 });
@@ -43,6 +45,8 @@ const figClay = new THREE.MeshStandardMaterial({ color: 0xb4b4b4, roughness: 0.9
 const figSel = new THREE.MeshStandardMaterial({ color: 0xe9b44c, roughness: 0.8, flatShading: true });
 const dotMat = new THREE.MeshBasicMaterial({ color: 0x4cc3ff, depthTest: false, transparent: true, opacity: 0.85 });
 const dotSel = new THREE.MeshBasicMaterial({ color: 0xff4c8a, depthTest: false, transparent: true, opacity: 0.95 });
+// what the gizmo drags in the director view: the shot camera itself (keeps its distance to what it looks at)
+const camProxy = new THREE.Object3D();
 const ikTarget = new THREE.Object3D();  // what the gizmo drags when a hand or foot is moved (IK)
 // what the gizmo holds for a whole object: at its pivot, turned and scaled with it. pivotAt is the
 // pivot in the object's own space, kept still while dragging.
@@ -80,7 +84,7 @@ export function setup() {
   scene.add(grid);
   camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.05, 500);
   camera.layers.enable(1);  // layer 1: a figure's joint dots (picked on their own, never rendered out)
-  scene.add(ikTarget, pivot);
+  scene.add(ikTarget, pivot, camProxy);
 
   controls = new OrbitControls(camera, canvas);
   controls.enableDamping = false;
@@ -109,27 +113,21 @@ export function setup() {
   gizmo.setSize(1.15);
   scene.add(gizmo.getHelper());
   gizmo.addEventListener('change', () => { if (!R.applying) draw(); });
-  gizmo.addEventListener('dragging-changed', (e) => {
-    controls.enabled = !e.value;
-    if (!e.value) { save(); renderKeys(); renderPanel(); }
+  // controls off while a handle is held (the free view has its own); the drag is smoothed and snapped
+  // (gizmo.js), then saved once after it settles
+  gizmo.addEventListener('dragging-changed', (e) => { (R.free ? viewControls : controls).enabled = !e.value; });
+  smooth = smoothGizmo(gizmo, {
+    canvas, fix: fixTarget, redraw: () => draw(),
+    apply: (o) => { if (gizmo.object === o) { applyChange(); draw(); } },
+    settle: () => { save(); renderKeys(); renderPanel(); },
   });
-  gizmo.addEventListener('objectChange', () => {
-    const o = selItem(), m = o && R.meshes.get(o.id);
-    if (!o || !m) return;
-    if (R.joint) return jointChanged(o);
-    const p = pivot;
-    if (EVEN.has(o.type)) {  // scaled evenly: follow whichever axis was dragged
-      const was = current(o, OBJ).sy, s = [p.scale.x, p.scale.y, p.scale.z].find((v) => Math.abs(v - was) > 1e-6) ?? was;
-      p.scale.setScalar(Math.max(0.01, s));
-    }
-    // the object follows the pivot: turned and scaled around it
-    m.quaternion.copy(p.quaternion); m.scale.copy(p.scale);
-    m.position.copy(p.position).sub(pivotAt.clone().multiply(p.scale).applyQuaternion(p.quaternion));
-    const d = THREE.MathUtils.radToDeg;
-    write(o, namesFor(o), { x: m.position.x, y: m.position.y, z: m.position.z,
-      rx: d(m.rotation.x), ry: d(m.rotation.y), rz: d(m.rotation.z),
-      sx: Math.max(0.01, m.scale.x), sy: Math.max(0.01, m.scale.y), sz: Math.max(0.01, m.scale.z) });
-  });
+  // hovering a handle with a pen (or mouse) lights it before contact: the stage draws on demand, so it needs a nudge
+  let hoverAxis = null;
+  canvas.addEventListener('pointermove', () => { if (gizmo.axis !== hoverAxis) { hoverAxis = gizmo.axis; draw(); } });
+  snapGrid = new THREE.Object3D(); scene.add(snapGrid);
+  const bar = snapBar3(() => { floorGrid(); draw(); });
+  bar.classList.add('gz-3d'); viewer.append(bar);
+  floorGrid();
 
   // a tap (not a drag, not on a gizmo handle) selects what's under it; tapping the selected
   // object again switches the gizmo between Move, Rotate and Scale. On a selected figure, a tap on
@@ -151,6 +149,56 @@ export function setup() {
 
   new ResizeObserver(() => fit()).observe(viewer);
 }
+
+// the grid snapping moves to, drawn on the floor (rebuilt when the step changes)
+function floorGrid() {
+  if (snapGrid.userData.m === snap3.gridM) return;
+  snapGrid.userData.m = snap3.gridM;
+  snapGrid.clear();
+  const n = Math.round(20 / snap3.gridM);
+  const g = new THREE.GridHelper(n * snap3.gridM, n, 0x93b4e6, 0x6a84ad);
+  g.position.y = 0.003; snapGrid.add(g);
+}
+
+// the gizmo's target holds a whole turn of an even-scaled thing as one number: follow whichever axis moved
+function fixTarget(o, start) {
+  if (o !== pivot) return;
+  const it = selItem();
+  if (!it || !EVEN.has(it.type)) return;
+  const s = [o.scale.x, o.scale.y, o.scale.z].find((v) => Math.abs(v - start.sy) > 1e-6) ?? start.sy;
+  o.scale.setScalar(Math.max(0.01, s));
+}
+
+// each frame of a drag (and its settling): the object the gizmo holds is where the spring has it, so
+// the scene follows it and the change is written (a key, or the base)
+function applyChange() {
+  if (gizmo.object === camProxy) return camChanged();
+  const o = selItem(), m = o && R.meshes.get(o.id);
+  if (!o || !m) return;
+  if (R.joint) return jointChanged(o);
+  const p = pivot;
+  // the object follows the pivot: turned and scaled around it
+  m.quaternion.copy(p.quaternion); m.scale.copy(p.scale);
+  m.position.copy(p.position).sub(pivotAt.clone().multiply(p.scale).applyQuaternion(p.quaternion));
+  const d = THREE.MathUtils.radToDeg;
+  write(o, namesFor(o), { x: m.position.x, y: m.position.y, z: m.position.z,
+    rx: d(m.rotation.x), ry: d(m.rotation.y), rz: d(m.rotation.z),
+    sx: Math.max(0.01, m.scale.x), sy: Math.max(0.01, m.scale.y), sz: Math.max(0.01, m.scale.z) });
+}
+
+// the shot camera put where the proxy is, looking along it at what it looked at (same distance)
+function placeCamProxy() {
+  camProxy.position.copy(camera.position); camProxy.quaternion.copy(camera.quaternion); camProxy.scale.set(1, 1, 1);
+  camProxy.userData.d = Math.max(0.5, camera.position.distanceTo(controls.target));
+  camProxy.updateMatrixWorld();
+}
+function camChanged() {
+  const p = camProxy.position, t = new THREE.Vector3(0, 0, -1).applyQuaternion(camProxy.quaternion).multiplyScalar(camProxy.userData.d).add(p);
+  const c = { px: p.x, py: p.y, pz: p.z, tx: t.x, ty: t.y, tz: t.z, fov: camera.fov };
+  write(SC.camera, CAM, { px: c.px, py: c.py, pz: c.pz, tx: c.tx, ty: c.ty, tz: c.tz });
+  putCamera(c);
+}
+export const camGizmo = () => !!gizmo && gizmo.object === camProxy;
 
 function readCamera() {
   return { px: camera.position.x, py: camera.position.y, pz: camera.position.z,
@@ -355,10 +403,10 @@ export function syncMeshes() {
   const o = selItem();
   const m = o && !o.hidden && onStage() ? R.meshes.get(o.id) : null;
   if (R.joint && !m?.userData.rig) R.joint = null;
-  const target = !m ? null : !R.joint ? pivot : jointMode() === 'translate' ? ikTarget : m.userData.rig.bones[R.joint];
+  const target = !m ? (R.free && wantFrustum() ? camProxy : null) : !R.joint ? pivot : jointMode() === 'translate' ? ikTarget : m.userData.rig.bones[R.joint];
   if (target) {
-    if (gizmo.object !== target) gizmo.attach(target);
-    gizmo.setMode(R.joint ? jointMode() : R.mode);
+    if (gizmo.object !== target) { gizmo.attach(target); if (target === camProxy) placeCamProxy(); }
+    gizmo.setMode(R.joint ? jointMode() : target === camProxy && R.mode === 'scale' ? 'translate' : R.mode);
     gizmo.setSpace(R.joint && jointMode() === 'rotate' ? 'local' : 'world');
   } else gizmo.detach();
 }
@@ -395,9 +443,13 @@ export function pose(f) {
     else m.scale.set(Math.max(0.01, v.sx), Math.max(0.01, v.sy), Math.max(0.01, v.sz));
     if (m.userData.rig) { FIGURE.applyPose(m.userData.rig, v.j, stepped(o, v.m, f), o.ground); FIGURE.setHidden(m.userData.rig, o.hide); }
   }
-  if (gizmo.object === ikTarget && !gizmo.dragging) placeIkTarget();
-  if (gizmo.object === pivot && !gizmo.dragging) placePivot();
-  const c = current(SC.camera, CAM, f);
+  putCamera(current(SC.camera, CAM, f));
+  if (gizmo.dragging || smooth?.settling()) return;   // (a held handle keeps its own place)
+  if (gizmo.object === ikTarget) placeIkTarget();
+  if (gizmo.object === pivot) placePivot();
+  if (gizmo.object === camProxy) placeCamProxy();
+}
+function putCamera(c) {
   R.applying = true;
   camera.position.set(c.px, c.py, c.pz);
   controls.target.set(c.tx, c.ty, c.tz);
@@ -413,7 +465,8 @@ export function draw(forRender = false) {
   const depth = R.depth || forRender === 'depth';
   scene.overrideMaterial = depth ? depthMat : null;
   scene.background.set(depth ? 0x000000 : 0x24272e);
-  grid.visible = !forRender && !depth;
+  grid.visible = !forRender && !depth && !snap3.grid;
+  snapGrid.visible = !forRender && !depth && snap3.grid;
   frustum.visible = wantFrustum() && !forRender && !depth;
   stage.visible = !onStage() && !forRender;
   gizmo.getHelper().visible = !forRender && !R.playing && !!gizmo.object;
@@ -506,8 +559,10 @@ const wantFrustum = () => R.free && !!modeOf().frustum;
 export function setFree(on) {
   R.free = !!on;
   controls.enabled = !on; viewControls.enabled = !!on;
+  gizmo.camera = on ? viewCam : camera;   // the handles are picked and sized from what is on show
+  syncMeshes();   // (the camera gets its own gizmo in the director view)
   if (R.free) pose(R.f);   // (puts the frustum where the camera is now)
-  draw();
+  draw(); renderToolbar();
 }
 // aim the free view at a point from where
 export function aimFree(at, target) { viewCam.position.set(...at); viewControls.target.set(...target); viewControls.update(); draw(); }
