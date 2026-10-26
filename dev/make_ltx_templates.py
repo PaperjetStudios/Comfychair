@@ -301,6 +301,30 @@ def upscale():
     return g
 
 
+def sam3_mask():
+    """A clip to a mask clip (white = the thing) with SAM3: described in text, or clicked on one frame (points in
+    pixels of the clip), followed both ways from that frame."""
+    g = G()
+    g.add("src", node("VHS_LoadVideoPath", "@1 Source video [video]", video="", force_rate=FPS, custom_width=0, custom_height=0,
+                      frame_load_cap=0, skip_first_frames=0, select_every_nth=1))
+    g.add("secs", node("PrimitiveFloat", "@3 Length (seconds)", value=5.0))
+    math(g, "nf", f"min(a, round(b*{FPS}))", "frames within the clip and Length", a=["src", 1], b=["secs", 0])
+    g.add("cut", node("ImageFromBatch", image=["src", 0], batch_index=0, length=["nf", 1]))
+    g.add("pf", node("PrimitiveInt", "@6 Points frame", value=0))
+    g.add("pframe", node("ImageFromBatch", image=["cut", 0], batch_index=["pf", 0], length=1))
+    g.add("pts", node("SAM3PointCollector", "@5 Points [coordinates,neg_coordinates]", image=["pframe", 0], points_store="{}",
+                      coordinates="[]", neg_coordinates="[]"))
+    g.add("model", node("LoadSAM3Model", precision="auto", compile=False))
+    g.add("seg", node("SAM3VideoSegmentation", "@2 Prompt [prompt_mode,text_prompt]", video_frames=["cut", 0], prompt_mode="text",
+                      text_prompt="person", positive_points=["pts", 0], negative_points=["pts", 1], frame_idx=["pf", 0], score_threshold=0.3))
+    g.add("prop", node("SAM3Propagate", sam3_model_config=["model", 0], video_state=["seg", 0], start_frame=0, end_frame=-1, direction="both"))
+    g.add("out", node("SAM3VideoOutput", masks=["prop", 0], video_state=["prop", 2], scores=["prop", 1], obj_id=-1, plot_all_masks=True))
+    g.add("img", node("MaskToImage", mask=["out", 0]))
+    g.add("vid", node("CreateVideo", images=["img", 0], fps=FPS))
+    g.add("save", node("SaveVideo", video=["vid", 0], filename_prefix="deck/sam3-mask", format="auto", codec="auto"))
+    return g
+
+
 TEMPLATES = {
     "deck-ltx-t2v": t2v,
     "deck-ltx-ripple": ripple,
@@ -308,6 +332,7 @@ TEMPLATES = {
     "deck-ltx-ingredients": ingredients,
     "deck-ltx-layout": layout,
     "deck-ltx-upscale": upscale,
+    "deck-sam3-video-mask": sam3_mask,
     "deck-ltx-v2v-lora": lambda: v2v("ltx-v2v-lora", "ltx-2.5-22b-ic-lora-colorization-0.9.safetensors",
                                       lora_title="@5 IC-LoRA [lora_name,strength_model]"),
     "deck-ltx-alpha": lambda: v2v("ltx-alpha", "ltx-2.5-22b-ic-lora-alpha-gen-0.9.safetensors", prompt_title=None, max_frames=145),

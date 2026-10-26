@@ -1,0 +1,195 @@
+{
+ "src": {
+  "class_type": "VHS_LoadVideoPath",
+  "inputs": {
+   "video": "",
+   "force_rate": 24,
+   "custom_width": 0,
+   "custom_height": 0,
+   "frame_load_cap": 0,
+   "skip_first_frames": 0,
+   "select_every_nth": 1
+  },
+  "_meta": {
+   "title": "@1 Source video [video]"
+  }
+ },
+ "secs": {
+  "class_type": "PrimitiveFloat",
+  "inputs": {
+   "value": 5.0
+  },
+  "_meta": {
+   "title": "@3 Length (seconds)"
+  }
+ },
+ "nf": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "min(a, round(b*24))",
+   "values.a": [
+    "src",
+    1
+   ],
+   "values.b": [
+    "secs",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "frames within the clip and Length"
+  }
+ },
+ "cut": {
+  "class_type": "ImageFromBatch",
+  "inputs": {
+   "image": [
+    "src",
+    0
+   ],
+   "batch_index": 0,
+   "length": [
+    "nf",
+    1
+   ]
+  }
+ },
+ "pf": {
+  "class_type": "PrimitiveInt",
+  "inputs": {
+   "value": 0
+  },
+  "_meta": {
+   "title": "@6 Points frame"
+  }
+ },
+ "pframe": {
+  "class_type": "ImageFromBatch",
+  "inputs": {
+   "image": [
+    "cut",
+    0
+   ],
+   "batch_index": [
+    "pf",
+    0
+   ],
+   "length": 1
+  }
+ },
+ "pts": {
+  "class_type": "SAM3PointCollector",
+  "inputs": {
+   "image": [
+    "pframe",
+    0
+   ],
+   "points_store": "{}",
+   "coordinates": "[]",
+   "neg_coordinates": "[]"
+  },
+  "_meta": {
+   "title": "@5 Points [coordinates,neg_coordinates]"
+  }
+ },
+ "model": {
+  "class_type": "LoadSAM3Model",
+  "inputs": {
+   "precision": "auto",
+   "compile": false
+  }
+ },
+ "seg": {
+  "class_type": "SAM3VideoSegmentation",
+  "inputs": {
+   "video_frames": [
+    "cut",
+    0
+   ],
+   "prompt_mode": "text",
+   "text_prompt": "person",
+   "positive_points": [
+    "pts",
+    0
+   ],
+   "negative_points": [
+    "pts",
+    1
+   ],
+   "frame_idx": [
+    "pf",
+    0
+   ],
+   "score_threshold": 0.3
+  },
+  "_meta": {
+   "title": "@2 Prompt [prompt_mode,text_prompt]"
+  }
+ },
+ "prop": {
+  "class_type": "SAM3Propagate",
+  "inputs": {
+   "sam3_model_config": [
+    "model",
+    0
+   ],
+   "video_state": [
+    "seg",
+    0
+   ],
+   "start_frame": 0,
+   "end_frame": -1,
+   "direction": "both"
+  }
+ },
+ "out": {
+  "class_type": "SAM3VideoOutput",
+  "inputs": {
+   "masks": [
+    "prop",
+    0
+   ],
+   "video_state": [
+    "prop",
+    2
+   ],
+   "scores": [
+    "prop",
+    1
+   ],
+   "obj_id": -1,
+   "plot_all_masks": true
+  }
+ },
+ "img": {
+  "class_type": "MaskToImage",
+  "inputs": {
+   "mask": [
+    "out",
+    0
+   ]
+  }
+ },
+ "vid": {
+  "class_type": "CreateVideo",
+  "inputs": {
+   "images": [
+    "img",
+    0
+   ],
+   "fps": 24
+  }
+ },
+ "save": {
+  "class_type": "SaveVideo",
+  "inputs": {
+   "video": [
+    "vid",
+    0
+   ],
+   "filename_prefix": "deck/sam3-mask",
+   "format": "auto",
+   "codec": "auto"
+  }
+ }
+}

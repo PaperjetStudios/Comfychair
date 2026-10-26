@@ -29,7 +29,7 @@ const EFFECTS = [
     help: 'Cuts out a green or blue screen. Quick: runs on the server with ffmpeg, no GPU.' },
   { id: 'mattekey', group: 'Key', label: 'Apply matte', job: 'key', needs: ['source', 'matte'],
     help: 'Uses a matte clip (white = keep) as the clip\'s see-through channel, so lower tracks show through.' },
-  { id: 'mask', group: 'Remove', label: 'Mask (SAM3)', tpl: 'deck-sam3-video-mask', needs: ['source', 'points', 'prompt'],
+  { id: 'mask', group: 'Remove', label: 'Mask (SAM3)', tpl: 'deck-sam3-video-mask', needs: ['source', 'points', 'prompt', 'len'],
     help: 'Tap the thing to cut out on the frame (Exclude marks what to leave out), or describe it. SAM3 follows it through the clip and makes a mask clip.' },
   { id: 'cleanplate', group: 'Remove', label: 'Clean plate', tpl: 'deck-ltx-cleanplate', needs: ['source', 'prompt', 'len', 'res', 'seed'],
     help: 'Removes people and other moving things from the whole clip and fills in the background. Name what to remove in the prompt (and the negative prompt in Generate).' },
@@ -52,8 +52,11 @@ const ROLES = {
   source: (f) => f.kind === 'video' && !/mask|matte/i.test(f.group),
   matte: (f) => f.kind === 'video' && /mask|matte/i.test(f.group),
   first: (f) => f.kind === 'image',
-  prompt: (f) => f.kind === 'text' && /prompt/i.test(f.group) && !/negative/i.test(f.group),
-  points: (f) => f.kind === 'text' && /points/i.test(f.group),
+  prompt: (f) => f.kind === 'text' && /prompt/i.test(f.group) && !/negative/i.test(f.group) && f.input !== 'neg_coordinates',
+  pointsPos: (f) => f.kind === 'text' && f.input === 'coordinates',
+  pointsNeg: (f) => f.kind === 'text' && f.input === 'neg_coordinates',
+  pframe: (f) => f.kind === 'int' && /points frame/i.test(f.group),
+  mode: (f) => f.kind === 'choice' && f.input === 'prompt_mode',
   tracks: (f) => f.kind === 'text' && /tracks|paths/i.test(f.group),
   len: (f) => (f.kind === 'int' || f.kind === 'float') && /length|seconds|duration/i.test(f.label),
   width: (f) => f.kind === 'int' && /^width$/i.test(f.group),
@@ -307,7 +310,13 @@ async function run() {
   if (e.needs.includes('outsize')) put('outsize', T.outsize || 'FullHD');
   const size = T.size || (e.needs.includes('size') && T.first ? await imageSize(T.first) : null);
   if (e.needs.includes('size') && size) { put('width', size[0]); put('height', size[1]); }
-  if (e.needs.includes('points')) put('points', JSON.stringify(await pointsPx()));
+  if (e.needs.includes('points')) {
+    const pts = await pointsPx(), clicked = pts.positive.length > 0;
+    put('pointsPos', JSON.stringify(pts.positive)); put('pointsNeg', JSON.stringify(pts.negative));
+    put('mode', clicked ? 'point' : 'text');
+    put('pframe', clicked ? Math.max(0, Math.round((T.pointsAt - (T.source?.trim?.start || 0)) * FPS)) : 0);
+    if (!clicked && !T.prompt.trim()) return toast('Tap the thing on the picture, or describe it', true);
+  }
   if (e.needs.includes('tracks')) put('tracks', JSON.stringify(await tracksPx(t, values)));
   try {
     const parent = T.source?.generation != null ? { generation: T.source.generation, index: T.source.index || 0, frame: null } : null;
