@@ -19,7 +19,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFil
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import accel, config, db, editsize, imageprep, stages, tracking, videoedit, videoprep, wildcards
+from . import accel, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import store
 from . import sceneasset
 from . import templates as tpl
@@ -843,6 +843,35 @@ async def video_key(body: dict = Body(...)):
                                    "duration": round(info["duration"], 2), "alpha": True}])
     await push_gen(gid)
     return db.get_generation(gid)
+
+
+@app.post("/api/motion/file")
+async def motion_file(file: UploadFile = File(...)):
+    """A motion file (.npz / .json with 22+ joint positions per frame) as the 3D tab's motion (app/motion.py)."""
+    data = await file.read()
+    if len(data) > 64 * 1024 * 1024:
+        raise HTTPException(400, "That motion file is too big")
+    try:
+        return await asyncio.to_thread(motion.read, data, file.filename or "motion.npz")
+    except Exception as e:
+        raise HTTPException(400, f"Couldn't read that motion: {e}")
+
+
+@app.post("/api/motion/from")
+async def motion_from(body: dict = Body(...)):
+    """A generation's motion output ({generation, index}): text-to-motion and mocap templates save .npz/.json."""
+    g = db.get_generation(int(body.get("generation", -1)))
+    if not g:
+        raise HTTPException(404, "No such generation")
+    outs = [o for o in g["outputs"] if Path(o["filename"]).suffix.lower() in (".npz", ".json")]
+    idx = body.get("index")
+    o = g["outputs"][int(idx)] if idx is not None and 0 <= int(idx) < len(g["outputs"]) else (outs[0] if outs else None)
+    if not o:
+        raise HTTPException(400, "That run has no motion file")
+    try:
+        return await asyncio.to_thread(motion.read, output_file(g, o).read_bytes(), o["filename"])
+    except Exception as e:
+        raise HTTPException(400, f"Couldn't read that motion: {e}")
 
 
 @app.post("/api/scene/render")
