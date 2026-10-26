@@ -231,6 +231,20 @@
    ]
   }
  },
+ "loras": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "model": [
+    "unet",
+    0
+   ],
+   "lora_name": "",
+   "strength_model": 1.0
+  },
+  "_meta": {
+   "title": "@6 LoRAs"
+  }
+ },
  "noise": {
   "class_type": "RandomNoise",
   "inputs": {
@@ -244,7 +258,7 @@
   "class_type": "CFGGuider",
   "inputs": {
    "model": [
-    "unet",
+    "loras",
     0
    ],
    "positive": [

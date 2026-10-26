@@ -31,9 +31,11 @@ const EFFECTS = [
     help: 'Uses a matte clip (white = keep) as the clip\'s see-through channel, so lower tracks show through.' },
   { id: 'mask', group: 'Remove', label: 'Mask (SAM3)', tpl: 'deck-sam3-video-mask', needs: ['source', 'points', 'prompt', 'len'],
     help: 'Tap the thing to cut out on the frame (Exclude marks what to leave out), or describe it. SAM3 follows it through the clip and makes a mask clip.' },
+  { id: 'inpaint', group: 'Remove', label: 'Replace', tpl: 'deck-ltx-inpaint', mult: 64, needs: ['source', 'matte', 'prompt', 'len', 'res', 'seed'],
+    help: 'Paints something new where a mask clip is white (make one with Mask (SAM3) or Alpha Gen) and keeps the rest of the picture. Describe the whole shot with the new thing in it.' },
   { id: 'cleanplate', group: 'Remove', label: 'Clean plate', tpl: 'deck-ltx-cleanplate', needs: ['source', 'prompt', 'len', 'res', 'seed'],
     help: 'Removes people and other moving things from the whole clip and fills in the background. Name what to remove in the prompt (and the negative prompt in Generate).' },
-  { id: 't2v', group: 'Generate', label: 'Text / image to video', tpl: 'deck-ltx-t2v', needs: ['first?', 'prompt', 'len', 'size', 'seed'],
+  { id: 't2v', group: 'Generate', label: 'Text / image to video', tpl: 'deck-ltx-t2v', needs: ['first?', 'prompt', 'len', 'size', 'loras', 'seed'],
     help: 'A new clip from a prompt, optionally starting from a still.' },
   { id: 'layout', group: 'Generate', label: 'Layout to render', tpl: 'deck-ltx-layout', mult: 64, needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
     help: 'Turns a rough layout clip (a 3D tab render in Clay or Colour, or blocked-out footage) into a finished shot that keeps its layout and motion.' },
@@ -161,7 +163,8 @@ function lorasField(t) {
   const stack = roleField(t, 'loras'), one = roleField(t, 'lora');
   const f = stack || one;
   if (!f) return null;
-  const opts = f.options.filter((o) => /ltx/i.test(o));
+  // a stack (T2V) takes plain LoRAs; a single IC-LoRA slot takes IC-LoRAs (not SDR to HDR: that needs its own pipeline)
+  const opts = f.options.filter((o) => /ltx/i.test(o) && (stack ? !/ic-lora|ripple/i.test(o) : /ic-lora/i.test(o) && !/sdr-to-hdr|alpha-gen|clean-plate|ingredients|layout|motion-track|in-outpaint|refine|upscaler/i.test(o)));
   const list = opts.length ? opts : f.options;
   const cur = T.loras[0]?.name ?? (one ? f.value : null);
   const sel = h('select', { onchange: () => { T.loras = sel.value ? [{ name: sel.value, strength: T.loras[0]?.strength ?? 1, enabled: true }] : []; changed(); } },
