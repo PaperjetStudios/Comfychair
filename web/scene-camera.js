@@ -38,7 +38,7 @@ export const MOVES = [
 export const EASE_OPTS = [['linear', 'Linear'], ['in', 'Ease in'], ['out', 'Ease out'], ['smooth', 'In-out']];
 const LIMITS = { fov: [12, 90], pitch: 85 };   // the lens slider's range; looking straight up or down turns the view over
 
-// ---- the math: the camera after a move (pure; values are the camera's keys px..fov) ----
+// ---- the math: the camera after a move (pure; values are the camera's keys px..roll) ----
 const up = new THREE.Vector3(0, 1, 0);
 const rad = THREE.MathUtils.degToRad, clampN = THREE.MathUtils.clamp;
 const vec = (c, a, b, c2) => new THREE.Vector3(c[a], c[b], c[c2]);
@@ -88,7 +88,7 @@ export function moved(c, id, p, q = null) {
     }
     default: throw new Error(`no move ${id}`);
   }
-  return { px: P.x, py: P.y, pz: P.z, tx: T.x, ty: T.y, tz: T.z, fov };
+  return { px: P.x, py: P.y, pz: P.z, tx: T.x, ty: T.y, tz: T.z, fov, roll: c.roll || 0 };   // (a move leaves the roll as it was)
 }
 
 // a small repeatable noise (mulberry32) so a shake looks the same each time it is made
@@ -102,7 +102,7 @@ export function shaken(c, k, strength, rnd) {
   const n = () => (rnd() * 2 - 1) * k * strength;
   P.addScaledVector(right, n() * 0.015).addScaledVector(u, n() * 0.015);
   T.addScaledVector(right, n() * d * 0.006).addScaledVector(u, n() * d * 0.006);
-  return { px: P.x, py: P.y, pz: P.z, tx: T.x, ty: T.y, tz: T.z, fov: c.fov };
+  return { px: P.x, py: P.y, pz: P.z, tx: T.x, ty: T.y, tz: T.z, fov: c.fov, roll: c.roll || 0 };
 }
 
 // ---- writing keys ----

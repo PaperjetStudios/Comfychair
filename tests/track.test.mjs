@@ -13,7 +13,7 @@ assert.ok(Math.max(...T.smooth(noisy, 3).slice(10, 50).map(Math.abs)) < 0.1);
 
 // project a world point through a camera row: pixels in the clip, or null
 function project(c, p) {
-  const b = T.basis([c.px, c.py, c.pz], [c.tx, c.ty, c.tz]);
+  const b = T.basis([c.px, c.py, c.pz], [c.tx, c.ty, c.tz], c.roll);
   const d = [p[0] - c.px, p[1] - c.py, p[2] - c.pz];
   const zc = -(d[0] * b.z[0] + d[1] * b.z[1] + d[2] * b.z[2]);
   const xc = d[0] * b.x[0] + d[1] * b.x[1] + d[2] * b.x[2], yc = d[0] * b.y[0] + d[1] * b.y[1] + d[2] * b.y[2];
@@ -70,11 +70,27 @@ for (let k = 0; k + 1 < bd.keys.length; k++) {
   const t = 0.5, c = Object.fromEntries(Object.keys(ca).map((n) => [n, lerp(ca[n], cb[n], t)]));
   const wantH = 2 * 30 * Math.tan(c.fov * D2R / 2), h = lerp(ba.sy, bb.sy, t);
   assert.ok(Math.abs(h / wantH - 1) < 0.01, `card height ${h} vs ${wantH}`);
-  const eye = [c.px, c.py, c.pz], bs = T.basis(eye, [c.tx, c.ty, c.tz]);
+  const eye = [c.px, c.py, c.pz], bs = T.basis(eye, [c.tx, c.ty, c.tz], c.roll);
   const centre = [eye[0] - bs.z[0] * 30, eye[1] - bs.z[1] * 30, eye[2] - bs.z[2] * 30];
   const got = [lerp(ba.x, bb.x, t), lerp(ba.y, bb.y, t), lerp(ba.z, bb.z, t)];
   assert.ok(Math.hypot(...got.map((g, i) => g - centre[i])) < 0.2, 'card centre');
 }
+
+// roll: footage turning clockwise on screen (rot 20 deg) is a camera rolled anticlockwise (roll -20, positive is clockwise).
+// A point right of centre moves down the picture (y grows) by about its distance from centre * sin(20 deg), and no roll: none of that
+const spin = mk((i) => ({ tx: 0, ty: 0, rot: 20 * i / (N - 1), scale: 1 }));
+const sr = T.cameraRows(spin, { sigma: 0 });
+assert.equal(sr[0].roll, -0);
+assert.ok(Math.abs(sr[N - 1].roll + 20) < 1e-9, `roll ${sr[N - 1].roll}`);
+assert.ok(rows.every((r) => r.roll === 0 || r.roll === -0));
+const right = [1, 1.5, 0], r0 = project(sr[0], right), r1 = project(sr[N - 1], right);
+const dx = r0[0] - W / 2, wantY = dx * Math.sin(20 * D2R);
+assert.ok(r1[1] - r0[1] > 0.8 * wantY && r1[1] - r0[1] < 1.2 * wantY, `y moved ${r1[1] - r0[1]}, want about ${wantY}`);
+assert.ok(Math.abs((r1[0] - W / 2) - dx * Math.cos(20 * D2R)) < 0.05 * dx);
+// the scene keeps it, and the card is turned with the camera
+const ss = T.sceneFromTrack({ ...spin, atlas: { url: '/x.jpg', cols: 8, rows: 7, count: 49, step: 1 } }, { sigma: 0, points: false });
+assert.ok(Math.abs(ss.camera.keys.at(-1).roll + 20) < 1e-9 && ss.camera.keys.length >= 2);
+assert.ok(Math.abs(ss.objects[0].keys.at(-1).rz) > 5, 'card rolled');
 
 // thin: a bend keeps its corner
 const bent = Array.from({ length: 21 }, (_, i) => ({ f: i, v: i < 10 ? i : 10 - (i - 10) }));

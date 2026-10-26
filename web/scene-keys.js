@@ -56,7 +56,7 @@ function channels(L) {
   return out;
 }
 const chLabel = (ch) => (ch.startsWith('m.') ? (FIGURE.PARAMS[ch.slice(2)]?.label || ch.slice(2)) : { x: 'X', y: 'Up', z: 'Z', rx: 'Rot X', ry: 'Rot Y', rz: 'Rot Z', sx: 'Width', sy: 'Height', sz: 'Depth',
-  px: 'Cam X', py: 'Cam height', pz: 'Cam Z', tx: 'Aim X', ty: 'Aim Y', tz: 'Aim Z', fov: 'Lens' }[ch] || ch);
+  px: 'Cam X', py: 'Cam height', pz: 'Cam Z', tx: 'Aim X', ty: 'Aim Y', tz: 'Aim Z', fov: 'Lens', roll: 'Roll' }[ch] || ch);
 const sampleCh = (L, ch, f) => chanOf(sample(L.item, [ch.startsWith('m.') ? 'm' : ch], f), ch);
 function graphRange(L, ch) {
   let lo = Infinity, hi = -Infinity;
