@@ -22,7 +22,7 @@ const EFFECTS = [
   { id: 'ripple', group: 'Restyle', label: 'Ripple edit', tpl: 'deck-ltx-ripple', needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
     help: 'Change the first frame (in Generate with an edit template, or in the Editor), and the change carries through the whole clip.' },
   { id: 'lora', group: 'Restyle', label: 'LoRA restyle', tpl: 'deck-ltx-v2v-lora', needs: ['source', 'loras', 'prompt', 'len', 'res', 'seed'],
-    help: 'Runs the clip through an IC-LoRA: deblur, colourise, restore, day to night, head swap and so on. Pick the LoRA and its strength.' },
+    help: 'Runs the clip through an IC-LoRA: deblur, colourise, restore, day to night, head swap and so on. Pick the LoRA and its strength, and describe the result in the prompt (for colourise, name the colours): with an empty prompt the change is faint.' },
   { id: 'alpha', group: 'Key', label: 'Alpha Gen', tpl: 'deck-ltx-alpha', needs: ['source', 'len', 'res'],
     help: 'Makes a black-and-white matte of the main subject (white = keep). Then use it with "Apply matte", or as a mask.' },
   { id: 'colorkey', group: 'Key', label: 'Colour key', job: 'key', needs: ['source', 'keycolor'],
@@ -35,13 +35,13 @@ const EFFECTS = [
     help: 'Removes people and other moving things from the whole clip and fills in the background. Name what to remove in the prompt (and the negative prompt in Generate).' },
   { id: 't2v', group: 'Generate', label: 'Text / image to video', tpl: 'deck-ltx-t2v', needs: ['first?', 'prompt', 'len', 'size', 'seed'],
     help: 'A new clip from a prompt, optionally starting from a still.' },
-  { id: 'layout', group: 'Generate', label: 'Layout to render', tpl: 'deck-ltx-layout', needs: ['source', 'prompt', 'len', 'seed'],
+  { id: 'layout', group: 'Generate', label: 'Layout to render', tpl: 'deck-ltx-layout', mult: 64, needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
     help: 'Turns a rough layout clip (a 3D tab render in Clay or Colour, or blocked-out footage) into a finished shot that keeps its layout and motion.' },
   { id: 'tracks', group: 'Generate', label: 'Motion paths', tpl: 'deck-ltx-tracks', mult: 64, needs: ['first', 'tracks', 'prompt', 'len', 'res', 'seed'],
     help: 'Draw paths on the start image: things under a path\'s start move along it.' },
-  { id: 'ingredients', group: 'Generate', label: 'Ingredients sheet', tpl: 'deck-ltx-ingredients', needs: ['first', 'prompt', 'len', 'size', 'seed'],
+  { id: 'ingredients', group: 'Generate', label: 'Ingredients sheet', tpl: 'deck-ltx-ingredients', mult: 64, needs: ['first', 'prompt', 'len', 'res', 'seed'],
     help: 'One image with the characters, props and place laid out; say in the prompt where each one sits on the sheet.' },
-  { id: 'upscale', group: 'Generate', label: 'Upscale', tpl: 'deck-ltx-upscale', needs: ['source', 'prompt'],
+  { id: 'upscale', group: 'Generate', label: 'Upscale', tpl: 'deck-ltx-upscale', needs: ['source', 'prompt', 'len', 'outsize', 'seed'],
     help: 'Adds detail at a larger size. Describe the look (light, film, sharpness), not the things in it.' },
 ];
 const GROUPS = ['Restyle', 'Key', 'Remove', 'Generate'];
@@ -61,6 +61,7 @@ const ROLES = {
   res: (f) => f.kind === 'int' && /resolution/i.test(f.group),
   lora: (f) => f.kind === 'choice' && f.input === 'lora_name',
   strength: (f) => f.kind === 'float' && f.input === 'strength_model',
+  outsize: (f) => f.kind === 'choice' && f.input === 'output_size',
   seed: (f) => f.kind === 'seed',
   loras: (f) => f.kind === 'loras',
 };
@@ -141,7 +142,8 @@ function firstField(optional) {
     T.first = r.name; changed();
     return r.name;
   };
-  const label = T.op === 'ingredients' ? 'Ingredients sheet' : T.op === 'ripple' ? 'Edited first frame' : optional ? 'Start image (optional)' : 'Start image';
+  const label = T.op === 'ingredients' ? 'Ingredients sheet' : T.op === 'ripple' ? 'Edited first frame' : T.op === 'layout' ? 'Look (first frame)'
+    : optional ? 'Start image (optional)' : 'Start image';
   return field(label, T.first ? h('img', { class: 'vfx-still', src: thumbUrl(T.first, 480), alt: '' }) : null,
     h('div', { class: 'row wrap' },
       button(T.first ? 'Change…' : 'Choose…', pick, { cls: T.first ? '' : 'primary' }),
@@ -234,6 +236,8 @@ function render() {
       fmt: (v) => `${v.toFixed(1)}s · ${lenFrames(v)} frames`, onChange: () => changed(), help: 'LTX makes 8n+1 frames at 24 fps; long clips need a lot of memory.' }) : null,
     needs.has('res') ? field('Resolution', seg([[544, '544p'], [704, '704p'], [1088, '1088p']], T.res, (v) => { T.res = Number(v); changed(false); }),
       help('The short side, in pixels. 704p takes about 1.5 minutes for 5 s on this card; 1088p about 3.')) : null,
+    needs.has('outsize') ? field('Output size', seg([['FullHD', 'Full HD'], ['4K', '4K']], T.outsize || 'FullHD', (v) => { T.outsize = v; changed(false); }),
+      help('4K is tiled: much slower, same memory.')) : null,
     needs.has('size') ? field('Size', h('select', { onchange: (ev) => { T.size = SIZES[ev.target.value][1]; changed(false); } },
       SIZES.map(([l, s], i) => h('option', { value: i, selected: JSON.stringify(s) === JSON.stringify(T.size) }, l)))) : null,
     needs.has('seed') ? field('Seed', h('div', { class: 'row' },
@@ -300,6 +304,7 @@ async function run() {
     else if (T.loras[0]) { put('lora', T.loras[0].name); put('strength', T.loras[0].strength); }
   }
   if (e.needs.includes('res')) put('res', T.res);
+  if (e.needs.includes('outsize')) put('outsize', T.outsize || 'FullHD');
   const size = T.size || (e.needs.includes('size') && T.first ? await imageSize(T.first) : null);
   if (e.needs.includes('size') && size) { put('width', size[0]); put('height', size[1]); }
   if (e.needs.includes('points')) put('points', JSON.stringify(await pointsPx()));

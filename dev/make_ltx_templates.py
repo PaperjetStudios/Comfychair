@@ -211,10 +211,103 @@ def tracks():
     return g
 
 
+def sized_image(g, nid, image, mult=64):
+    """An image resized so its short side is @4 Resolution, both sides multiples of mult. W, H: math INT at output 1."""
+    g.add("short", node("PrimitiveInt", "@4 Resolution (short side)", value=704 if mult == 32 else 576))
+    g.add("isize", node("GetImageSize", image=image))
+    math(g, "W", f"round(a*c/min(a,b)/{mult})*{mult}", f"width: short side to Resolution, x{mult}", a=["isize", 0], b=["isize", 1], c=["short", 0])
+    math(g, "H", f"round(b*c/min(a,b)/{mult})*{mult}", f"height, x{mult}", a=["isize", 0], b=["isize", 1], c=["short", 0])
+    g.add(nid, node("ImageResizeKJv2", image=image, width=["W", 1], height=["H", 1], upscale_method="lanczos",
+                    keep_proportion="crop", pad_color="0, 0, 0", crop_position="center", divisible_by=mult, device="cpu"))
+
+
+def ingredients():
+    """One reference sheet (people, props, place laid out) held as the guide for every frame."""
+    g = G()
+    models(g)
+    text(g)
+    g.add("img", node("LoadImage", "@1 Ingredients sheet [image]", image=""))
+    g.add("secs", node("PrimitiveFloat", "@3 Length (seconds)", value=5.0))
+    math(g, "nf", f"floor(a*{FPS}/8)*8+1", "frames: 8n+1", a=["secs", 0])
+    sized_image(g, "rs", ["img", 0])
+    g.add("sheet", node("RepeatImageBatch", "the sheet on every frame", image=["rs", 0], amount=["nf", 1]))
+    g.add("lora", node("LTXICLoRALoaderModelOnly", model=["unet", 0], lora_name=LORA + "ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors",
+                       strength_model=1.3))
+    ic_guide(g, ["lora", 1], ["sheet", 0], ["nf", 1])
+    audio_latent(g, ["nf", 1])
+    g.add("av", node("LTXVConcatAVLatent", video_latent=["guide", 2], audio_latent=["alat", 0]))
+    sample(g, ["lora", 0], ["guide", 0], ["guide", 1], ["av", 0], sampler="euler_ancestral_cfg_pp")
+    g.add("crop", node("LTXVCropGuides", positive=["guide", 0], negative=["guide", 1], latent=["sep", 0]))
+    decode(g, ["crop", 2], "ltx-ingredients", audio=True)
+    return g
+
+
+def layout():
+    """A rough layout clip (a 3D tab render, a playblast) and a still that sets the look: the clip's camera and
+    placement, the still's palette, light and materials. Single stage at the chosen resolution."""
+    g = G()
+    models(g)
+    text(g)
+    g.add("src", node("VHS_LoadVideoPath", "@1 Layout video [video]", video="", force_rate=FPS, custom_width=0, custom_height=0,
+                      frame_load_cap=0, skip_first_frames=0, select_every_nth=1))
+    g.add("secs", node("PrimitiveFloat", "@3 Length (seconds)", value=5.0))
+    math(g, "nf", f"floor((min(a, b*{FPS}+1)-1)/8)*8+1", "frames: 8n+1 within the clip and Length", a=["src", 1], b=["secs", 0])
+    g.add("cut", node("ImageFromBatch", image=["src", 0], batch_index=0, length=["nf", 1]))
+    sized_image(g, "rs", ["cut", 0])
+    g.add("look", node("LoadImage", "@2 First frame [image]", image=""))
+    g.add("lookrs", node("ImageResizeKJv2", image=["look", 0], width=["W", 1], height=["H", 1], upscale_method="lanczos",
+                         keep_proportion="crop", pad_color="0, 0, 0", crop_position="center", divisible_by=64, device="cpu"))
+    g.add("lora", node("LTXICLoRALoaderModelOnly", model=["unet", 0], lora_name=LORA + "ltx-2.5-22b-ic-lora-layout-to-render-1.0.safetensors",
+                       strength_model=1.0))
+    g.add("vlat", node("EmptyLTXVLatentVideo", width=["W", 1], height=["H", 1], length=["nf", 1], batch_size=1))
+    g.add("i2v", node("LTXVImgToVideoInplace", vae=["vvae", 0], image=["lookrs", 0], latent=["vlat", 0], strength=1.0, bypass=False))
+    g.add("guide", node("LTXAddVideoICLoRAGuide", positive=["cond", 0], negative=["cond", 1], vae=["vvae", 0], latent=["i2v", 0],
+                        image=["rs", 0], frame_idx=0, strength=1.0, latent_downscale_factor=["lora", 1], crop="disabled",
+                        use_tiled_encode=False, tile_size=256, tile_overlap=64, use_streaming=False, tile_frames=97))
+    audio_latent(g, ["nf", 1])
+    g.add("av", node("LTXVConcatAVLatent", video_latent=["guide", 2], audio_latent=["alat", 0]))
+    sample(g, ["lora", 0], ["guide", 0], ["guide", 1], ["av", 0])
+    g.add("crop", node("LTXVCropGuides", positive=["guide", 0], negative=["guide", 1], latent=["sep", 0]))
+    decode(g, ["crop", 2], "ltx-layout", audio=False)
+    return g
+
+
+def upscale():
+    """Detail at a larger size: tiled fusion (overlapping tiles fused every step) with the refine-details IC-LoRA."""
+    g = G()
+    models(g)
+    text(g, "@2 Prompt", "Sharp, detailed, high quality footage, natural light, fine texture.")
+    g.add("src", node("VHS_LoadVideoPath", "@1 Source video [video]", video="", force_rate=FPS, custom_width=0, custom_height=0,
+                      frame_load_cap=0, skip_first_frames=0, select_every_nth=1))
+    g.add("secs", node("PrimitiveFloat", "@3 Length (seconds)", value=5.0))
+    math(g, "nf", f"floor((min(a, b*{FPS}+1)-1)/8)*8+1", "frames: 8n+1 within the clip and Length", a=["src", 1], b=["secs", 0])
+    g.add("cut", node("ImageFromBatch", image=["src", 0], batch_index=0, length=["nf", 1]))
+    g.add("tiles", node("LTXVGetTilingSizes", "@5 Output size [output_size]", image=["cut", 0], width=1920, height=1080, frame_count=["nf", 1],
+                        tile_size="HD", initial_canvas_size="FullHD", output_size="FullHD"))
+    g.add("vlat", node("EmptyLTXVLatentVideo", width=["tiles", 4], height=["tiles", 5], length=["nf", 1], batch_size=1))
+    g.add("big", node("ImageScale", image=["cut", 0], upscale_method="lanczos", width=["tiles", 4], height=["tiles", 5], crop="disabled"))
+    g.add("lora", node("LTXICLoRALoaderModelOnly", model=["unet", 0], lora_name=LORA + "ltx-2.5-22b-ic-lora-refine-details-1.0.safetensors",
+                       strength_model=1.0))
+    g.add("guide", node("LTXAddVideoICLoRAGuide", positive=["cond", 0], negative=["cond", 1], vae=["vvae", 0], latent=["vlat", 0],
+                        image=["big", 0], frame_idx=0, strength=1.0, latent_downscale_factor=["lora", 1], crop="disabled",
+                        use_tiled_encode=False, tile_size=256, tile_overlap=64, use_streaming=True, tile_frames=["tiles", 7]))
+    g.add("ksel", node("KSamplerSelect", sampler_name="euler"))
+    g.add("sig", node("ManualSigmas", sigmas=SIGMAS))
+    g.add("run", node("LTXVTiledFusionSampler", "@8 Seed [seed]", model=["lora", 0], positive=["guide", 0], negative=["guide", 1],
+                      latents=["guide", 2], sigmas=["sig", 0], sampler=["ksel", 0], vae=["vvae", 0], seed=42, cfg=1.0,
+                      tile_width=["tiles", 2], tile_height=["tiles", 3], overlap_frac=["tiles", 6], blend_var=0.05, grid_cycle=1,
+                      tile_frames=["tiles", 7], canvas_device="auto"))
+    decode(g, ["run", 0], "ltx-upscale", audio=False)
+    return g
+
+
 TEMPLATES = {
     "deck-ltx-t2v": t2v,
     "deck-ltx-ripple": ripple,
     "deck-ltx-tracks": tracks,
+    "deck-ltx-ingredients": ingredients,
+    "deck-ltx-layout": layout,
+    "deck-ltx-upscale": upscale,
     "deck-ltx-v2v-lora": lambda: v2v("ltx-v2v-lora", "ltx-2.5-22b-ic-lora-colorization-0.9.safetensors",
                                       lora_title="@5 IC-LoRA [lora_name,strength_model]"),
     "deck-ltx-alpha": lambda: v2v("ltx-alpha", "ltx-2.5-22b-ic-lora-alpha-gen-0.9.safetensors", prompt_title=None, max_frames=145),
