@@ -127,5 +127,79 @@ class Endpoint(unittest.TestCase):
         self.assertEqual(self.c.get("/api/track/nope").status_code, 404)
 
 
+class TapFit(unittest.TestCase):
+    """_fit: transforms from given point tracks (the TAPNext++ path)."""
+
+    def test_pan_and_hidden_points(self):
+        cv2, np = tracking._libs()
+        rng = np.random.default_rng(1)
+        base = rng.uniform(50, 590, (40, 2)).astype(np.float32)
+        P = np.stack([base + [3.0 * f, -1.0 * f] for f in range(10)], axis=1)   # (Q, N, 2): drifts right and up
+        V = np.ones(P.shape[:2], bool)
+        V[:5, 4:] = False                                                       # some points go out of sight
+        P[:3, :, 0] += rng.uniform(-40, 40, (3, 10))                            # and a few wander (a moving subject)
+        out, lost = tracking._fit(cv2, np, P, V, 2.0, 640, 360)
+        self.assertEqual((len(out), lost), (10, 0))
+        self.assertAlmostEqual(out[-1]["tx"], 27 * 2.0, delta=0.5)              # 9 frames x 3 px x (W / tw)
+        self.assertAlmostEqual(out[-1]["ty"], -9 * 2.0, delta=0.5)
+        self.assertAlmostEqual(out[-1]["scale"], 1.0, places=3)
+
+    def test_too_few_points_holds_still(self):
+        cv2, np = tracking._libs()
+        P = np.zeros((4, 3, 2), np.float32)
+        out, lost = tracking._fit(cv2, np, P, np.ones((4, 3), bool), 1.0, 100, 100)
+        self.assertEqual(lost, 2)
+        self.assertEqual(out[-1]["tx"], 0.0)
+
+    def test_queries_skip_excluded(self):
+        _, np = tracking._libs()
+        allq = tracking._queries(np, 640, 360, None, None)
+        some = tracking._queries(np, 640, 360, None, (0, 0, 0.5, 1))
+        self.assertEqual(len(allq), tracking.TAP_GRID ** 2)
+        self.assertTrue(all(q["x"] > 320 for q in some))
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(subprocess.run(["which", "ffmpeg"], capture_output=True).returncode == 0, "ffmpeg missing")
+class TapJob(unittest.TestCase):
+    """analyse_tapnext against a fake ComfyUI that 'tracks' the queued grid by shifting it 4 px a frame."""
+
+    def test_round_trip(self):
+        import asyncio
+        import json
+        td = Path(tempfile.mkdtemp(prefix="deck-tap-"))
+        src = td / "c.mp4"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=320x180:r=10:d=1",
+                        "-pix_fmt", "yuv420p", str(src)], check=True)
+        seen = {}
+
+        class Fake:
+            async def object_info(self):
+                return {"DeckTAPNextTrack": {}}
+
+            async def queue(self, wf, preview=None):
+                seen["wf"] = wf
+                self.clip_exists = Path(wf["1"]["inputs"]["video"]).is_file()
+                return {"prompt_id": "p1"}
+
+            async def history(self, pid):
+                pts = json.loads(seen["wf"]["2"]["inputs"]["points"])
+                tracks = [[[p["x"] + 4 * f, p["y"], 1] for f in range(10)] for p in pts]
+                self.payload = json.dumps({"tracks": tracks}).encode()
+                return {pid: {"status": {"status_str": "success"},
+                              "outputs": {"2": {"files": [{"filename": "t.json", "subfolder": "", "type": "output"}]}}}}
+
+            async def view(self, filename, subfolder="", type_="output"):
+                return self.payload, "application/json"
+
+        fake = Fake()
+        with mock.patch.object(tracking, "comfy", fake), mock.patch.object(tracking.config, "DATA_DIR", td):
+            r = asyncio.run(tracking.analyse_tapnext(src, atlas_path=td / "a.jpg"))
+        self.assertTrue(fake.clip_exists)
+        self.assertFalse(list((td / "tmp" / "track").glob("*.mp4")))   # the cut clip is cleaned up
+        self.assertEqual((r["method"], r["n"], r["lost"]), ("tapnext", 10, 0))
+        self.assertAlmostEqual(r["frames"][-1]["tx"], 36.0, delta=0.5)   # 9 x 4 px at full size (320 wide = analysis width)
+        self.assertTrue(r["tracks"] and r["atlas"]["count"] >= 1)

@@ -13,7 +13,11 @@ UPSCALE_CLASSES = {"SeedVR2Preprocess", "ImageUpscaleWithModel", "ImageUpscaleWi
 
 
 def fields(workflow: dict, template_fields: list[dict]) -> list[dict]:
-    if any(f["kind"] == "int" and f.get("input") in ("width", "height") for f in template_fields):
+    if any(f["kind"] == "int" and (f.get("input") in ("width", "height") or f.get("label", "").lower() in ("width", "height"))
+           for f in template_fields):
+        return []
+    # templates that size themselves from a Resolution setting (the LTX ones) keep the image as it is
+    if any(f["kind"] == "int" and "resolution" in f"{f.get('group', '')} {f.get('label', '')}".lower() for f in template_fields):
         return []
     if any(n.get("class_type") in UPSCALE_CLASSES for n in workflow.values()):
         return []

@@ -10,6 +10,7 @@ import { TabSet } from './tabs.js';
 import * as COMP from './scene-comp.js';
 import { maximizable } from './layout.js';
 import { canTrack, openTrack } from './track.js';
+import { CLIP_FX, restyleLoras, runClipStep, sendToVfx } from './vfx.js';
 import { snap, snapOn, snapStep, normDeg, Weight, WEIGHT, DEAD_PX, deadzone, snapBar } from './gizmo.js';
 
 // ---------------------------------------------------------------------------
@@ -1055,11 +1056,14 @@ function renderVideoPanel() {
       isVisual(it) ? [h('div', { id: 'vidXform' }, xformFields(it)),
         clipRange('Opacity', () => it.opacity ?? 1, (v) => { it.opacity = v; }, { min: 0, max: 1, step: 0.01, fmt: pct })] : null,
       it.kind === 'scene' ? sceneFields(it) : null,
+      it.kind === 'video' && canKey(it.fx?.orig || it) ? fxFields(it) : null,
       it.kind !== 'image' && it.kind !== 'scene' ? clipRange('Volume', () => it.volume ?? 1, (v) => { it.volume = v; }, { min: 0, max: 2, step: 0.01,
         fmt: (v) => pct(v) + (v > 1 ? ' (preview plays at 100%)' : '') }) : null,
       h('div', { class: 'row wrap' },
         button('✂ Split at playhead', splitAtPlayhead, { title: 'S' }),
         button('⤫ Cross-fade with previous', () => crossfadePrev(it)),
+        it.kind === 'video' && canKey(it) ? button('VFX…', () => sendToVfx(it.src, { label: it.label, trim: { start: it.in, len: (it.out ?? it.dur) - it.in } }), { title: 'Open this clip in the VFX tab' }) : null,
+        it.kind === 'video' && canKey(it) ? button('Key…', () => openKey(it), { title: 'Cut out a green screen, or use a matte, so lower tracks show through' }) : null,
         it.kind === 'video' && canTrack(it.src) ? button('Track motion', () => openTrack({ src: it.src, url: it.url, label: it.label, from: it.in, to: it.out ?? undefined }), { title: 'Follow the picture\'s movement and make a 3D camera from it' }) : null,
         isVisual(it) ? button('Reset framing', () => { Object.assign(it, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); delete it.rotation; delete it.anchor; timelineChanged(); }) : null,
         button('Delete clip', deleteSelected, { cls: 'small danger', title: 'Delete' })));
@@ -1090,6 +1094,151 @@ function renderVideoPanel() {
         V.items = []; V.sel = null; vidSeek(0); timelineChanged();
       }) : null,
       V.items.length ? help('The export lands in History.') : null)));
+}
+
+// ---- effects: a stack of LTX / keying steps run on the clip's range and baked into a new clip ----
+// it.fx = { steps: [{ op, ... }], orig: the clip's own source while a baked result stands in, busy, error }.
+// Rendering always starts from the original, so steps can be changed and rendered again; Remove puts it back.
+const FX_LABEL = Object.fromEntries(CLIP_FX.map(([k, l]) => [k, l]));
+const LTX_OPS = new Set(['restyle', 'cleanplate', 'replace', 'cutout']);
+function fxStepFields(it, st, i) {
+  const save = () => persistTimeline();
+  const ta = (key, ph) => h('textarea', { rows: 2, value: st[key] || '', placeholder: ph, oninput: (e) => { st[key] = e.target.value; save(); } });
+  const move = (d) => { const a = it.fx.steps, j = i + d; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; timelineChanged(); };
+  const loras = restyleLoras();
+  return h('div', { class: 'fx-step' },
+    h('div', { class: 'row' }, h('b', { class: 'grow' }, `${i + 1}. ${FX_LABEL[st.op] || st.op}`),
+      iconBtn('Earlier', '↑', () => move(-1)), iconBtn('Later', '↓', () => move(1)),
+      iconBtn('Remove effect', '✕', () => { it.fx.steps.splice(i, 1); timelineChanged(); })),
+    st.op === 'restyle' ? [
+      field('LoRA', h('select', { onchange: (e) => { st.lora = e.target.value; save(); } },
+        loras.map((o) => h('option', { value: o, selected: (st.lora || loras[0]) === o }, o.split('/').pop().replace(/^ltx-2\.\d-22b-ic-lora-|\.safetensors$/g, ''))))),
+      rangeField('Strength', () => st.strength ?? 1, (v) => { st.strength = v; }, { min: 0, max: 2, step: 0.05, onChange: save }),
+      ta('prompt', 'Describe the result (for colourise, name the colours)')] : null,
+    st.op === 'cleanplate' ? ta('prompt', 'Optional: what the empty scene looks like') : null,
+    st.op === 'replace' ? [h('input', { type: 'text', value: st.target || '', placeholder: 'What to replace, e.g. "the woman"',
+      oninput: (e) => { st.target = e.target.value; save(); } }), ta('prompt', 'Describe the shot with the new thing in it')] : null,
+    st.op === 'colorkey' ? field('Key colour', h('input', { type: 'color', value: st.color || '#00ff00', oninput: (e) => { st.color = e.target.value; save(); } })) : null,
+    st.op === 'upscale' ? field('Size', seg([['FullHD', 'Full HD'], ['4K', '4K']], st.outsize || 'FullHD', (v) => { st.outsize = v; save(); })) : null,
+    LTX_OPS.has(st.op) ? field('Resolution', seg([[544, '544p'], [704, '704p'], [1088, '1088p']], st.res || 704, (v) => { st.res = Number(v); save(); })) : null);
+}
+
+function fxFields(it) {
+  it.fx ||= { steps: [] };
+  const fx = it.fx;
+  const add = h('select', { onchange: (e) => {
+    if (!e.target.value) return;
+    fx.steps.push({ op: e.target.value, ...(e.target.value === 'restyle' && { lora: restyleLoras()[0], strength: 1 }) });
+    timelineChanged();
+  } }, h('option', { value: '' }, '+ Add effect…'), CLIP_FX.map(([k, l, tip]) => h('option', { value: k, title: tip }, l)));
+  const len = fx.orig ? fx.orig.out - fx.orig.in : itLen(it);
+  return section('Effects', null,
+    help('LTX effects run on the GPU, one after another, over this clip\'s range (up to 10 s), and the result takes the clip\'s place. Change them and render again any time: it always starts from the original. Remove puts the original back.'),
+    fx.steps.map((st, i) => fxStepFields(it, st, i)),
+    add,
+    fx.error ? note(fx.error, 'err') : null,
+    fx.busy ? hint(`Rendering: ${fx.busy}…`) : fx.orig ? hint('Showing the rendered result.') : null,
+    h('div', { class: 'row wrap' },
+      button(fx.orig ? 'Render again' : 'Render effects', () => bakeFx(it.id), { cls: 'primary', disabled: !fx.steps.length || !!fx.busy }),
+      fx.orig ? button('Remove effects', () => unbakeFx(it)) : null,
+      len > 10 ? hint('Only the first 10 s get the effects.') : null));
+}
+
+const clipBase = (it) => it.fx?.orig || { src: it.src, url: it.url, label: it.label, in: it.in, out: it.out ?? it.dur, dur: it.dur };
+function unbakeFx(it) {
+  const o = it.fx.orig;
+  if (!o) return;
+  const was = { src: it.src, url: it.url, label: it.label, in: it.in, out: it.out, dur: it.dur };
+  Object.assign(it, { src: o.src, url: o.url, label: o.label, in: o.in, out: o.out, dur: o.dur });
+  it.fx.orig = null;
+  timelineChanged();
+  undoToast('Back to the original clip', () => { Object.assign(it, was); it.fx.orig = o; timelineChanged(); });
+}
+
+async function bakeFx(id) {
+  let it = V.items.find((x) => x.id === id);
+  const tab = tabs?.active?.id;
+  const base = clipBase(it), steps = it.fx.steps.map((st) => ({ ...st }));
+  let source = { ...base.src, trim: { start: base.in, len: base.out - base.in } }, secs = base.out - base.in, r = null;
+  it.fx.error = null;
+  try {
+    for (const [i, st] of steps.entries()) {
+      it.fx.busy = `${i + 1}/${steps.length} ${FX_LABEL[st.op]}`; renderVideoPanel();
+      r = await runClipStep(st, source, secs);
+      source = { generation: r.generation, index: r.index };
+      secs = r.dur || secs;
+      it = V.items.find((x) => x.id === id) || it;
+    }
+  } catch (e) {
+    it.fx.busy = null; it.fx.error = `${it.fx.busy || ''} ${e.message}`.trim();
+    renderVideoPanel();
+    return toast(`Effects stopped: ${e.message}`, true);
+  }
+  it.fx.busy = null;
+  if (tabs?.active?.id !== tab || !V.items.includes(it)) return toast(`Effects done as #${r.generation} (the clip's edit was closed: find it in History)`);
+  it.fx.orig = base;
+  Object.assign(it, { src: { generation: r.generation, index: r.index }, url: r.url, label: `${base.label} ✨`, in: 0,
+    out: Math.min(r.dur || secs, base.out - base.in), dur: r.dur || secs });
+  timelineChanged();
+  toast('Effects rendered: the clip now plays the result');
+}
+
+// ---- keying: a copy of the clip with alpha (server: /api/video/key), swapped in where the clip is ----
+const canKey = (it) => it.src && (it.src.generation != null || it.src.media);
+
+function openKey(it) {
+  const k = { mode: 'color', color: '#00ff00', similarity: 0.12, blend: 0.08, spill: 0.5, invert: false, matte: null };
+  const frame = h('canvas', { class: 'key-frame' });
+  const swatch = h('input', { type: 'color', value: k.color, oninput: () => { k.color = swatch.value; } });
+  const m = V.els.get(it.id)?.el;
+  if (m?.videoWidth) {   // the clip as it is under the playhead: tap it to take the screen colour
+    frame.width = 320; frame.height = Math.round((320 * m.videoHeight) / m.videoWidth);
+    frame.getContext('2d').drawImage(m, 0, 0, frame.width, frame.height);
+    frame.addEventListener('pointerdown', (e) => {
+      const r = frame.getBoundingClientRect();
+      const [R, G, B] = frame.getContext('2d').getImageData(Math.floor(((e.clientX - r.left) / r.width) * frame.width),
+        Math.floor(((e.clientY - r.top) / r.height) * frame.height), 1, 1).data;
+      k.color = swatch.value = '#' + [R, G, B].map((v) => v.toString(16).padStart(2, '0')).join('');
+    });
+  }
+  const matteLabel = h('span', { class: 'muted' }, 'none');
+  const pickMatte = () => pickerSheet('Pick a matte', [help('White keeps the picture, black lets lower tracks show. Alpha Gen and mask runs make these.', 'grow'), button('Cancel', () => openKey(it))],
+    async () => (await projectOutputs(['video'])).map(({ g, o, i }) => mediaCard(cardMedia(o), genLabel(g), () => {
+      k.matte = { generation: g.id, index: i }; k.matteLabel = genLabel(g); body(); openSheet(...sheet());
+    }, { badge: '▶' })));
+  const colorFields = () => [
+    frame.width ? field('Tap the screen colour', frame) : null,
+    field('Key colour', swatch),
+    rangeField('Similarity', () => k.similarity, (v) => { k.similarity = v; }, { min: 0.01, max: 0.6, step: 0.01, help: 'How close to the key colour a pixel must be to go clear. Raise it until the screen is gone.' }),
+    rangeField('Edge blend', () => k.blend, (v) => { k.blend = v; }, { min: 0, max: 0.5, step: 0.01, help: 'Softens the cut-out edge.' }),
+    rangeField('Spill removal', () => k.spill, (v) => { k.spill = v; }, { min: 0, max: 1, step: 0.05, help: 'Takes the green (or blue) cast off hair and edges.' }),
+  ];
+  const matteFields = () => [field('Matte clip', h('div', { class: 'row' }, matteLabel, button('Pick…', pickMatte, { cls: 'small' })))];
+  const fieldsBox = h('div');
+  const body = () => {
+    matteLabel.textContent = k.matteLabel || 'none';
+    fieldsBox.replaceChildren(...(k.mode === 'color' ? colorFields() : matteFields()).filter(Boolean));
+  };
+  const go = button('Key clip', async () => {
+    if (k.mode === 'matte' && !k.matte) return toast('Pick a matte clip first', true);
+    go.disabled = true; go.textContent = 'Keying…';
+    try {
+      const g = await api('/api/video/key', { method: 'POST', body: { source: it.src, mode: k.mode, matte: k.matte, color: k.color,
+        similarity: k.similarity, blend: k.blend, spill: k.spill, invert: k.invert, project_id: S.project }, timeout: 900000 });
+      const o = g.outputs[0], was = { src: it.src, url: it.url, label: it.label };
+      Object.assign(it, { src: { generation: g.id, index: 0 }, url: o.url, label: `${it.label} (keyed)` });
+      closeSheet(); timelineChanged();
+      undoToast('Keyed: lower tracks show through', () => { Object.assign(it, was); timelineChanged(); });
+    } catch (e) { toast('Keying failed: ' + e.message, true); go.disabled = false; go.textContent = 'Key clip'; }
+  }, { cls: 'primary' });
+  const sheet = () => [h('h3', {}, 'Key ' + it.label),
+    help('Makes a copy of the clip with see-through parts and puts it in this clip\'s place (sound kept). Put the clip on a track above the background.'),
+    seg([['color', 'Colour key'], ['matte', 'Matte']], k.mode, (v) => { k.mode = v; body(); }),
+    fieldsBox,
+    field('Invert', h('input', { type: 'checkbox', checked: k.invert, onchange: (e) => { k.invert = e.target.checked; } })),
+    actions(go, button('Cancel', closeSheet))];
+  body();
+  openSheet(...sheet());
 }
 
 async function exportVideo(btn) {

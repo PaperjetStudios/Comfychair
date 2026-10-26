@@ -19,7 +19,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFil
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import accel, config, db, editsize, imageprep, stages, tracking, videoedit, videoprep, wildcards
+from . import accel, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import store
 from . import sceneasset
 from . import templates as tpl
@@ -746,6 +746,7 @@ async def video_prep(body: dict = Body(...)):
 
 
 tracking.resolve_src = _timeline_path  # motion tracking finds its clip the way the Video tab does
+tracking.comfy = comfy
 
 
 @app.post("/api/video/render")
@@ -800,6 +801,78 @@ async def video_render(body: dict = Body(...)):
                                    "duration": round(info["duration"], 2)}])
     await push_gen(gid)
     return db.get_generation(gid)
+
+
+@app.post("/api/video/key")
+async def video_key(body: dict = Body(...)):
+    """A keyed copy of a clip in History, with alpha (VP9 webm): {source, mode: color|matte, matte (a
+    source, for mode matte), color "#rrggbb", similarity, blend, spill, invert, project_id}."""
+    if not imageprep.ffmpeg_available():
+        raise HTTPException(400, "ffmpeg isn't installed (sudo apt install ffmpeg)")
+    mode = body.get("mode") or "color"
+    src = body.get("source") or {}
+    path, kind = await _timeline_path(src, None)
+    if kind != "video":
+        raise HTTPException(400, "Keying needs a video clip")
+    matte = None
+    if mode == "matte":
+        matte, mkind = await _timeline_path(body.get("matte") or {}, None)
+        if mkind != "video":
+            raise HTTPException(400, "The matte has to be a video")
+    opts = {k: body[k] for k in ("color", "similarity", "blend", "spill", "invert") if body.get(k) is not None}
+    if mode == "matte":
+        opts = {"invert": bool(opts.get("invert"))}
+    params = {"key": mode, **opts}
+    if body.get("matte"):
+        params["matte"] = body["matte"]
+    parent = ({"generation": src["generation"], "index": src.get("index", 0), "frame": None}
+              if src.get("generation") is not None else None)
+    gid = db.create_generation(body.get("project_id"), "key", params, {}, f"key-{uuid.uuid4().hex}", parent)
+    db.update_generation(gid, status="running")
+    await push_gen(gid)
+    out, rel = new_output(db.get_generation(gid), "keyed.webm")
+    try:
+        trim = body.get("trim") if isinstance(body.get("trim"), dict) else None
+        info = await asyncio.to_thread(videoedit.key, path, out, mode, matte, trim, **opts)
+    except Exception as e:
+        out.unlink(missing_ok=True)
+        db.update_generation(gid, status="error", error=str(e), finished=time.time())
+        await push_gen(gid)
+        raise HTTPException(400, str(e))
+    db.update_generation(gid, status="done", finished=time.time(),
+                         outputs=[{"filename": out.name, "path": rel, "kind": "video", "node": "key",
+                                   "duration": round(info["duration"], 2), "alpha": True}])
+    await push_gen(gid)
+    return db.get_generation(gid)
+
+
+@app.post("/api/motion/file")
+async def motion_file(file: UploadFile = File(...)):
+    """A motion file (.npz / .json with 22+ joint positions per frame) as the 3D tab's motion (app/motion.py)."""
+    data = await file.read()
+    if len(data) > 64 * 1024 * 1024:
+        raise HTTPException(400, "That motion file is too big")
+    try:
+        return await asyncio.to_thread(motion.read, data, file.filename or "motion.npz")
+    except Exception as e:
+        raise HTTPException(400, f"Couldn't read that motion: {e}")
+
+
+@app.post("/api/motion/from")
+async def motion_from(body: dict = Body(...)):
+    """A generation's motion output ({generation, index}): text-to-motion and mocap templates save .npz/.json."""
+    g = db.get_generation(int(body.get("generation", -1)))
+    if not g:
+        raise HTTPException(404, "No such generation")
+    outs = [o for o in g["outputs"] if Path(o["filename"]).suffix.lower() in (".npz", ".json")]
+    idx = body.get("index")
+    o = g["outputs"][int(idx)] if idx is not None and 0 <= int(idx) < len(g["outputs"]) else (outs[0] if outs else None)
+    if not o:
+        raise HTTPException(400, "That run has no motion file")
+    try:
+        return await asyncio.to_thread(motion.read, output_file(g, o).read_bytes(), o["filename"])
+    except Exception as e:
+        raise HTTPException(400, f"Couldn't read that motion: {e}")
 
 
 @app.post("/api/scene/render")

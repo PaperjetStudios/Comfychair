@@ -5,7 +5,8 @@ from pathlib import Path
 
 
 def probe(path: Path) -> dict:
-    """{"width", "height", "duration", "fps", "video", "audio"} for a video, image or audio file."""
+    """{"width", "height", "duration", "fps", "video", "audio", "alpha"} for a video, image or audio file.
+    "alpha" is a VP9/VP8 webm carrying an alpha channel (what key() writes)."""
     r = subprocess.run(
         ["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", "-show_format", str(path)],
         check=True, capture_output=True, timeout=30)
@@ -23,6 +24,8 @@ def probe(path: Path) -> dict:
         "duration": float(info["format"].get("duration") or (v or {}).get("duration") or 0),
         "fps": fps, "video": bool(v),
         "audio": any(s["codec_type"] == "audio" for s in info["streams"]),
+        "alpha": bool(v) and v.get("codec_name") in ("vp9", "vp8")
+                 and str((v.get("tags") or {}).get("alpha_mode") or (v.get("tags") or {}).get("ALPHA_MODE")) == "1",
     }
 
 
@@ -104,7 +107,9 @@ def render(items: list[dict], out: Path, width: int | None = None, height: int |
                 continue
             args += ["-loop", "1", "-framerate", f"{fps:g}", "-t", f"{it['len']:.3f}", "-i", it["path"]]
         else:
-            args += ["-ss", f"{it['in']:.3f}", "-t", f"{it['len']:.3f}", "-i", it["path"]]
+            # ffmpeg's native VP9 decoder drops the alpha plane; libvpx keeps it
+            dec = ["-c:v", "libvpx-vp9"] if it["info"].get("alpha") else []
+            args += dec + ["-ss", f"{it['in']:.3f}", "-t", f"{it['len']:.3f}", "-i", it["path"]]
         inputs[id(it)] = len(inputs) + 1
 
     for it in visual:
@@ -158,6 +163,62 @@ def render(items: list[dict], out: Path, width: int | None = None, height: int |
     args += ["-filter_complex", ";".join(filters + mix), "-map", "[v]", "-map", "[a]", "-t", f"{total:.3f}",
              "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
              "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)]
+    r = subprocess.run(args, capture_output=True, timeout=3600)
+    if r.returncode:
+        raise RuntimeError(r.stderr.decode(errors="replace").strip().splitlines()[-1] if r.stderr else "ffmpeg failed")
+    return probe(out)
+
+
+def _hex(color: str) -> str:
+    c = str(color or "#00ff00").lstrip("#")
+    if len(c) == 3:
+        c = "".join(ch * 2 for ch in c)
+    if len(c) != 6 or any(ch not in "0123456789abcdefABCDEF" for ch in c):
+        raise ValueError(f"Not a colour: {color}")
+    return c.lower()
+
+
+def key_filters(mode: str, color: str = "#00ff00", similarity: float = 0.12, blend: float = 0.08,
+                spill: float = 0.5, invert: bool = False) -> str:
+    """The -filter_complex for key(). Input 0 is the clip; for mode "matte" input 1 is a matte video
+    (white = keep). mode "color" keys out one colour (chromakey) and pulls its spill (despill)."""
+    if mode == "matte":
+        neg = ",negate" if invert else ""
+        return ("[1:v]format=gray" + neg + "[m];[m][0:v]scale2ref[m2][c];"
+                "[c]format=yuva420p[c2];[c2][m2]alphamerge,format=yuva420p[v]")
+    if mode != "color":
+        raise ValueError(f"Unknown key mode {mode}")
+    c = _hex(color)
+    sim = min(1.0, max(0.01, float(similarity)))
+    bl = min(1.0, max(0.0, float(blend)))
+    chain = [f"chromakey=color=0x{c}:similarity={sim:.3f}:blend={bl:.3f}"]
+    r, g, b = (int(c[i:i + 2], 16) for i in (0, 2, 4))
+    sp = min(1.0, max(0.0, float(spill)))
+    if sp > 0 and max(g, b) > r:  # after the key (despill greys the screen colour); only green and blue
+        chain += ["format=gbrap", f"despill=type={'green' if g >= b else 'blue'}:mix={sp:.3f}:expand=0"]
+    if invert:
+        chain.append("format=yuva420p,lutyuv=a=255-val")
+    return f"[0:v]{','.join(chain)},format=yuva420p[v]"
+
+
+def key(src: Path, out: Path, mode: str, matte: Path | None = None, trim: dict | None = None, **opts) -> dict:
+    """A copy of src with an alpha channel, as a VP9 webm (yuva420p, which Chromium plays and
+    render() composites). mode "matte": alpha from the matte video's brightness; "color": chroma key.
+    Sound is kept."""
+    if mode == "matte" and not matte:
+        raise ValueError("Pick a matte clip")
+    info = probe(src)
+    cut = []   # trim {start, len} (seconds) applies to the clip only: a matte made from the trimmed clip starts at 0
+    if trim:
+        cut = ["-ss", f"{max(0.0, float(trim.get('start') or 0)):.3f}"] + (["-t", f"{float(trim['len']):.3f}"] if trim.get("len") else [])
+    args = ["ffmpeg", "-v", "error", "-y", *cut, "-i", str(src)]
+    if mode == "matte":
+        args += ["-i", str(matte)]
+    args += ["-filter_complex", key_filters(mode, **opts), "-map", "[v]"]
+    if info["audio"]:
+        args += ["-map", "0:a:0", "-c:a", "libopus", "-b:a", "160k"]
+    args += ["-shortest", "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "28",
+             "-row-mt", "1", "-deadline", "good", "-cpu-used", "4", "-auto-alt-ref", "0", str(out)]
     r = subprocess.run(args, capture_output=True, timeout=3600)
     if r.returncode:
         raise RuntimeError(r.stderr.decode(errors="replace").strip().splitlines()[-1] if r.stderr else "ffmpeg failed")

@@ -377,13 +377,22 @@ def sync_layout_size(wf: dict):
 
 def drop_node(wf: dict, nid: str):
     """Remove a node and unplug every input it fed. Used for image slots left empty, which only
-    works when the inputs they feed are optional (reference images, first/last frames)."""
+    works when the inputs they feed are optional (reference images, first/last frames).
+    A node that loses an input can say what to do in its _meta: "deck_passthrough": "<input>" drops it
+    and hands that input's link to whatever it fed (an optional start image on a latent), and
+    "deck_drop": true drops it too (a resize that only served the empty image)."""
+    if nid not in wf:
+        return
     del wf[nid]
-    for other in wf.values():
+    follow = []
+    for oid, other in list(wf.items()):
         inputs = other["inputs"]
         removed = [k for k, v in inputs.items() if _is_link(v) and v[0] == nid]
         for k in removed:
             del inputs[k]
+        meta = other.get("_meta") or {}
+        if removed and (meta.get("deck_passthrough") or meta.get("deck_drop")):
+            follow.append(oid)
         # autogrow inputs ("ref_images.ref_image_0", "_1"…) must stay contiguous: close the gap
         for k in removed:
             m = AUTOGROW_RE.match(k)
@@ -395,6 +404,17 @@ def drop_node(wf: dict, nid: str):
             moved = {kk: inputs.pop(kk) for _, kk in siblings}
             for i, (_, kk) in enumerate(siblings):
                 inputs[f"{m.group('stem')}{start + i}"] = moved[kk]
+    for oid in follow:
+        node = wf.get(oid)
+        if not node:
+            continue
+        through = node["inputs"].get((node.get("_meta") or {}).get("deck_passthrough") or "")
+        if _is_link(through):   # its users take what it was passing on
+            for other in wf.values():
+                for k, v in other["inputs"].items():
+                    if _is_link(v) and v[0] == oid and v[1] == 0:
+                        other["inputs"][k] = list(through)
+        drop_node(wf, oid)
 
 
 def expand_loras(wf: dict, nid: str, loras: list):

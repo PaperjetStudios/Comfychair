@@ -1,6 +1,6 @@
 // ComfyDeck tablet UI. Plain ES modules, no build step. This is the entry point: projects, tab switching and
 // wiring. The panels live in generate.js (templates, prompt, saved settings, preview, zoom), run.js (websocket,
-// history, the queue), editor.js (+ sketch pad), video.js (timeline), board.js (board + gallery); media.js has
+// history, the queue), editor.js (+ sketch pad), video.js (timeline), vfx.js (VFX effects), board.js (board + gallery); media.js has
 // the pickers and core.js the shared state. The 3D tab (scene.js) loads on demand.
 
 import {
@@ -12,6 +12,7 @@ import './gentabs.js';   // Generate tabs + presets: plugs into generate.js thro
 import { RUN, checkUiVersion, connectWS, loadHistory, onResume, openJobs, runChip, sceneMod, sceneModule, setConn } from './run.js';
 import { renderEditor } from './editor.js';
 import { renderVideo, vidPause, wireVideoTransport } from './video.js';
+import { renderVfx, vfxPause, wireVfx } from './vfx.js';
 import { B, closeGallery, pauseBoard, renderBoard } from './board.js';
 import { maximizable, sideNav, wireSplitters } from './layout.js';
 import { loadPrefs, openPrefs } from './prefs.js';
@@ -60,10 +61,11 @@ function switchTab(name) {
   if (name === 'history') loadHistory();
   if (name === 'editor') renderEditor();
   if (name === 'video') renderVideo(); else vidPause();
+  if (name === 'vfx') renderVfx(); else vfxPause();
   if (name === 'board') renderBoard(); else { closeGallery(); pauseBoard(); }
   if (name === 'scene') sceneModule().then((m) => m.show()).catch((e) => toast(`3D view: ${e.message}`, true));
   else if (sceneMod) sceneMod.hide();
-  $('.actionbar').classList.toggle('hidden', ['editor', 'video', 'board', 'scene'].includes(name));
+  $('.actionbar').classList.toggle('hidden', ['editor', 'video', 'vfx', 'board', 'scene'].includes(name));
 }
 setSwitchTab(switchTab);
 document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
@@ -112,6 +114,7 @@ function wireLayout() {
     .map((el) => ({ el, label: el.querySelector(':scope > summary')?.textContent || '' })));
   sideNav($('#editorPanel'), 'editor', sectionTargets($('#editorPanel')));
   sideNav($('#videoPanel'), 'video', sectionTargets($('#videoPanel')));
+  sideNav($('#vfxPanel'), 'vfx', sectionTargets($('#vfxPanel')));
   sideNav($('#scenePanel'), 'scene', sectionTargets($('#scenePanel')));
 }
 // the .section blocks that sit directly in a panel's body (not ones nested inside another)
@@ -361,6 +364,7 @@ function wireTextPopup() {
   wireLayout();
   wireTextPopup();
   wireVideoTransport();
+  wireVfx();
   wireZoom();
   wireFullscreen();
   try { const s = await api('/api/status', { timeout: 8000 }); setConn(s.comfy_connected); checkUiVersion(s.ui_version); } catch { /* server down: the socket keeps retrying */ }

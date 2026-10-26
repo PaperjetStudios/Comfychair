@@ -5,6 +5,7 @@ import { button, clone, field, h, hint, iconBtn, nameSheet, section, seg, store,
 import { changed, selectJoint } from './scene-view.js';
 import { renderPanel, slider } from './scene-ui.js';
 import { seek } from './scene-export.js';
+import { motionField } from './scene-motion.js';
 
 // a figure that isn't planted on the floor keeps its feet (or seat) where they were for a new pose
 function liftTo(o, v, j, m) {
@@ -188,6 +189,7 @@ export function movesTab(o, cur) {
       field('Walk and run', seg([[false, 'Go forward'], [true, 'On the spot']], R.inPlace, (v) => { R.inPlace = v; }))),
     h('div', { class: 'pose-grid moves' }, FIGURE.moveList().map(([k, l, icon]) => tile(l, h('span', { class: 'move-icon' }, icon), () => runMove(o, k)))),
     help('A move starts at the playhead from the pose the figure is in, and replaces the keys it covers. Undo takes it back.'),
+    ...motionField(o),
   ];
 }
 
