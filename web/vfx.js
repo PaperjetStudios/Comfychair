@@ -19,11 +19,11 @@ const FPS = 24;   // LTX runs at 24 fps; lengths are 8n+1 frames
 
 // group: the sideNav-like family; tpl: the template it runs; needs: the inputs it shows
 const EFFECTS = [
-  { id: 'ripple', group: 'Restyle', label: 'Ripple edit', tpl: 'deck-ltx-ripple', needs: ['source', 'first', 'prompt', 'len', 'seed'],
+  { id: 'ripple', group: 'Restyle', label: 'Ripple edit', tpl: 'deck-ltx-ripple', needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
     help: 'Change the first frame (in Generate with an edit template, or in the Editor), and the change carries through the whole clip.' },
-  { id: 'lora', group: 'Restyle', label: 'LoRA restyle', tpl: 'deck-ltx-v2v-lora', needs: ['source', 'loras', 'prompt', 'len', 'seed'],
+  { id: 'lora', group: 'Restyle', label: 'LoRA restyle', tpl: 'deck-ltx-v2v-lora', needs: ['source', 'loras', 'prompt', 'len', 'res', 'seed'],
     help: 'Runs the clip through an IC-LoRA: deblur, colourise, restore, day to night, head swap and so on. Pick the LoRA and its strength.' },
-  { id: 'alpha', group: 'Key', label: 'Alpha Gen', tpl: 'deck-ltx-alpha', needs: ['source', 'len'],
+  { id: 'alpha', group: 'Key', label: 'Alpha Gen', tpl: 'deck-ltx-alpha', needs: ['source', 'len', 'res'],
     help: 'Makes a black-and-white matte of the main subject (white = keep). Then use it with "Apply matte", or as a mask.' },
   { id: 'colorkey', group: 'Key', label: 'Colour key', job: 'key', needs: ['source', 'keycolor'],
     help: 'Cuts out a green or blue screen. Quick: runs on the server with ffmpeg, no GPU.' },
@@ -31,8 +31,8 @@ const EFFECTS = [
     help: 'Uses a matte clip (white = keep) as the clip\'s see-through channel, so lower tracks show through.' },
   { id: 'mask', group: 'Remove', label: 'Mask (SAM3)', tpl: 'deck-sam3-video-mask', needs: ['source', 'points', 'prompt'],
     help: 'Tap the thing to cut out on the frame (Exclude marks what to leave out), or describe it. SAM3 follows it through the clip and makes a mask clip.' },
-  { id: 'cleanplate', group: 'Remove', label: 'Clean plate', tpl: 'deck-ltx-cleanplate', needs: ['source', 'matte', 'prompt', 'len', 'seed'],
-    help: 'Removes what the mask covers and fills in the background.' },
+  { id: 'cleanplate', group: 'Remove', label: 'Clean plate', tpl: 'deck-ltx-cleanplate', needs: ['source', 'prompt', 'len', 'res', 'seed'],
+    help: 'Removes people and other moving things from the whole clip and fills in the background. Name what to remove in the prompt (and the negative prompt in Generate).' },
   { id: 't2v', group: 'Generate', label: 'Text / image to video', tpl: 'deck-ltx-t2v', needs: ['first?', 'prompt', 'len', 'size', 'seed'],
     help: 'A new clip from a prompt, optionally starting from a still.' },
   { id: 'layout', group: 'Generate', label: 'Layout to render', tpl: 'deck-ltx-layout', needs: ['source', 'prompt', 'len', 'seed'],
@@ -56,8 +56,11 @@ const ROLES = {
   points: (f) => f.kind === 'text' && /points/i.test(f.group),
   tracks: (f) => f.kind === 'text' && /tracks|paths/i.test(f.group),
   len: (f) => (f.kind === 'int' || f.kind === 'float') && /length|seconds|duration/i.test(f.label),
-  width: (f) => f.kind === 'int' && /^width$/i.test(f.input === 'value' ? f.label : f.input),
-  height: (f) => f.kind === 'int' && /^height$/i.test(f.input === 'value' ? f.label : f.input),
+  width: (f) => f.kind === 'int' && /^width$/i.test(f.group),
+  height: (f) => f.kind === 'int' && /^height$/i.test(f.group),
+  res: (f) => f.kind === 'int' && /resolution/i.test(f.group),
+  lora: (f) => f.kind === 'choice' && f.input === 'lora_name',
+  strength: (f) => f.kind === 'float' && f.input === 'strength_model',
   seed: (f) => f.kind === 'seed',
   loras: (f) => f.kind === 'loras',
 };
@@ -67,7 +70,7 @@ const roleField = (t, role) => t?.fields.find(ROLES[role]);
 const SIZES = [['Match source', null], ['1280×704', [1280, 704]], ['704×1280', [704, 1280]], ['960×544', [960, 544]],
   ['544×960', [544, 960]], ['1024×1024', [1024, 1024]], ['1920×1088', [1920, 1088]]];
 
-const BLANK = () => ({ op: 'ripple', source: null, first: null, matte: null, prompt: '', loras: [], len: 5, size: null, seed: -1,
+const BLANK = () => ({ op: 'ripple', source: null, first: null, matte: null, prompt: '', loras: [], len: 5, res: 704, size: null, seed: -1,
   points: { positive: [], negative: [] }, pointsAt: 0, tracks: [], key: { color: '#00ff00', similarity: 0.12, blend: 0.08, spill: 0.5, invert: false },
   results: [], showing: null });
 let T = BLANK();
@@ -150,12 +153,16 @@ function firstField(optional) {
 }
 
 function lorasField(t) {
-  const f = roleField(t, 'loras');
+  const stack = roleField(t, 'loras'), one = roleField(t, 'lora');
+  const f = stack || one;
   if (!f) return null;
   const opts = f.options.filter((o) => /ltx/i.test(o));
   const list = opts.length ? opts : f.options;
+  const cur = T.loras[0]?.name ?? (one ? f.value : null);
   const sel = h('select', { onchange: () => { T.loras = sel.value ? [{ name: sel.value, strength: T.loras[0]?.strength ?? 1, enabled: true }] : []; changed(); } },
-    h('option', { value: '' }, '(none)'), list.map((o) => h('option', { value: o, selected: T.loras[0]?.name === o }, o.split('/').pop())));
+    stack ? h('option', { value: '' }, '(none)') : null,
+    list.map((o) => h('option', { value: o, selected: cur === o }, o.split('/').pop())));
+  if (one && !T.loras.length && cur) T.loras = [{ name: cur, strength: 1, enabled: true }];
   return [field('LoRA', sel), T.loras[0] ? rangeField('Strength', () => T.loras[0].strength, (v) => { T.loras[0].strength = v; },
     { min: 0, max: 2, step: 0.05, onChange: () => changed(false) }) : null];
 }
@@ -225,6 +232,8 @@ function render() {
     needs.has('loras') ? lorasField(t) : null,
     needs.has('len') ? rangeField('Length', () => T.len, (v) => { T.len = v; }, { min: 1, max: 10, step: 1 / 3,
       fmt: (v) => `${v.toFixed(1)}s · ${lenFrames(v)} frames`, onChange: () => changed(), help: 'LTX makes 8n+1 frames at 24 fps; long clips need a lot of memory.' }) : null,
+    needs.has('res') ? field('Resolution', seg([[544, '544p'], [704, '704p'], [1088, '1088p']], T.res, (v) => { T.res = Number(v); changed(false); }),
+      help('The short side, in pixels. 704p takes about 1.5 minutes for 5 s on this card; 1088p about 3.')) : null,
     needs.has('size') ? field('Size', h('select', { onchange: (ev) => { T.size = SIZES[ev.target.value][1]; changed(false); } },
       SIZES.map(([l, s], i) => h('option', { value: i, selected: JSON.stringify(s) === JSON.stringify(T.size) }, l)))) : null,
     needs.has('seed') ? field('Seed', h('div', { class: 'row' },
@@ -286,7 +295,11 @@ async function run() {
   put('prompt', T.prompt);
   put('len', e.needs.includes('len') ? T.len : undefined);
   put('seed', e.needs.includes('seed') ? T.seed : undefined);
-  if (e.needs.includes('loras')) put('loras', T.loras);
+  if (e.needs.includes('loras')) {
+    if (roleField(t, 'loras')) put('loras', T.loras);
+    else if (T.loras[0]) { put('lora', T.loras[0].name); put('strength', T.loras[0].strength); }
+  }
+  if (e.needs.includes('res')) put('res', T.res);
   const size = T.size || (e.needs.includes('size') && T.first ? await imageSize(T.first) : null);
   if (e.needs.includes('size') && size) { put('width', size[0]); put('height', size[1]); }
   if (e.needs.includes('points')) put('points', JSON.stringify(await pointsPx()));

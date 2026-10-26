@@ -195,3 +195,23 @@ class Housekeeping(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DropPassthrough(unittest.TestCase):
+    """An empty optional image takes the nodes marked deck_drop / deck_passthrough with it."""
+
+    def test_start_image_bypassed(self):
+        from app import templates as tpl
+        wf = {
+            "img": {"class_type": "LoadImage", "inputs": {"image": ""}, "_meta": {"title": "@Start image"}},
+            "rs": {"class_type": "ImageResizeKJv2", "inputs": {"image": ["img", 0], "width": 8}, "_meta": {"title": "r", "deck_drop": True}},
+            "lat": {"class_type": "EmptyLTXVLatentVideo", "inputs": {"width": 8}},
+            "i2v": {"class_type": "LTXVImgToVideoInplace", "inputs": {"image": ["rs", 0], "latent": ["lat", 0]},
+                    "_meta": {"title": "i", "deck_passthrough": "latent"}},
+            "cat": {"class_type": "LTXVConcatAVLatent", "inputs": {"video_latent": ["i2v", 0]}},
+        }
+        out = tpl.apply(wf, {"img.image": ""})
+        self.assertEqual(sorted(out), ["cat", "lat"])
+        self.assertEqual(out["cat"]["inputs"]["video_latent"], ["lat", 0])
+        kept = tpl.apply(wf, {"img.image": "a.png"})
+        self.assertEqual(kept["cat"]["inputs"]["video_latent"], ["i2v", 0])
