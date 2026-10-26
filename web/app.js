@@ -14,6 +14,7 @@ import { renderEditor } from './editor.js';
 import { renderVideo, vidPause, wireVideoTransport } from './video.js';
 import { B, closeGallery, pauseBoard, renderBoard } from './board.js';
 import { maximizable, sideNav, wireSplitters } from './layout.js';
+import { loadPrefs, openPrefs } from './prefs.js';
 
 // ---------------------------------------------------------------------------
 // full screen (hides the browser bars on the tablet)
@@ -77,6 +78,7 @@ $('#moreHistory').addEventListener('click', () => loadHistory(true));
 const setBatch = (n) => { S.batch = Math.max(1, Math.min(32, n)); $('#batchVal').textContent = S.batch; };
 $('#batchMinus').addEventListener('click', () => setBatch(S.batch - 1));
 $('#batchPlus').addEventListener('click', () => setBatch(S.batch + 1));
+$('#prefsBtn').addEventListener('click', openPrefs);
 $('#debugBtn').addEventListener('click', () => {
   const counts = Object.entries(S.debugCounts).map(([k, v]) => `${k}: ${v}`).join('\n');
   openSheet(h('h3', {}, 'Websocket log'),
@@ -364,7 +366,7 @@ function wireTextPopup() {
   try { const s = await api('/api/status', { timeout: 8000 }); setConn(s.comfy_connected); checkUiVersion(s.ui_version); } catch { /* server down: the socket keeps retrying */ }
   // an installed app can stay open for days: look for a newer UI every few minutes while it's on screen
   setInterval(() => { if (!document.hidden) api('/api/status').then((s) => checkUiVersion(s.ui_version), () => {}); }, 5 * 60000);
-  await loadProjects();
+  await Promise.all([loadProjects(), loadPrefs()]);
   await loadTemplates();
   loadHistory();
   connectWS();   // its first open runs syncWithServer: picks up a run that's already going

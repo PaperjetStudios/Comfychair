@@ -6,6 +6,7 @@ import { ASPECT_PRESETS, S, addMine, deleteSnippet, inputUrl, loadSnippets, save
 import { openImagePicker, openVideoPicker } from './media.js';
 import { RUN, fmtDur, notifyPrepare, onGeneration, openJobs, syncWithServer } from './run.js';
 import { videoEditor } from './vfield.js';
+import { PREFS } from './prefs.js';
 import { FULL, openCrop, openSketch, templateAspect } from './editor.js';
 
 // ---------------------------------------------------------------------------
@@ -65,6 +66,7 @@ export function selectTemplate(id, overrideValues = null) {
   persist();
 }
 
+let shownTpl = null;   // the template the settings were last drawn for
 export function renderFields() {
   const t = S.tpl;
   const notes = [];
@@ -85,7 +87,10 @@ export function renderFields() {
     groups.push(det);
   }
   // A full redraw must not move the user: keep the panel's scroll and the focused control
-  const root = $('#fields'), panel = root.closest('.panel'), y = panel ? panel.scrollTop : 0;
+  // (unless the template changed and the user asked for the top then: Settings ⚙)
+  const root = $('#fields'), panel = root.closest('.panel');
+  const y = panel && !(PREFS.tplScrollTop && shownTpl && shownTpl !== t.id) ? panel.scrollTop : 0;
+  shownTpl = t.id;
   const ae = document.activeElement, fe = ae && root.contains(ae) ? ae.closest('.field[data-key]') : null;
   const at = fe ? { key: fe.dataset.key, i: [...fe.querySelectorAll(ae.tagName)].indexOf(ae), s: ae.selectionStart, e: ae.selectionEnd } : null;
   root.replaceChildren(shotBar(), ...groups);
