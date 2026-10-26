@@ -1,0 +1,1 @@
+Vendored from github.com/google-deepmind/tapnet @ 730cda1 (Apache 2.0): tapnet/tapnext/{tapnext_torch,tapnext_lru_modules,pscan}.py and tapnet/tapnextpp/votsp2026/{model,utils}.py; imports made relative.

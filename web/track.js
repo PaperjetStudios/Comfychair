@@ -3,7 +3,7 @@
 // (track-math.js). Opened from a clip in the Video tab or a video in History. The result is kept as a
 // document of kind `tracks` (one per clip), so opening the sheet again doesn't track again.
 import {
-  $, api, actions, button, field, h, hint, note, openSheet, closeSheet, rangeField, seg, toast,
+  $, api, actions, button, field, h, help, hint, note, openSheet, closeSheet, rangeField, seg, toast,
 } from './ui.js';
 import { S, fmtT, switchTab } from './core.js';
 import { sceneModule } from './run.js';
@@ -30,7 +30,7 @@ export async function openTrack(opts) {
     result: saved.result || null, dur: 0, ar: 16 / 9, mode: 'region', t: 0, playing: false, job: null, timer: 0,
     region: saved.result?.region || null, exclude: saved.result?.exclude || null,
     from: opts.from ?? saved.result?.start ?? 0, to: opts.to ?? null,
-    set: { sigma: 2, lens: 35, zoomAs: 'fov', dist: 6, points: true, ...saved.set },
+    set: { sigma: 2, lens: 35, zoomAs: 'fov', dist: 6, points: true, method: 'klt', ...saved.set },
   };
   const video = h('video', { src: opts.url, muted: true, playsinline: true, preload: 'auto', class: 'trk-video' });
   const cv = h('canvas', { class: 'trk-over' });
@@ -121,7 +121,7 @@ export async function openTrack(opts) {
 
   async function run() {
     try {
-      const r = await api('/api/track', { method: 'POST', busy: false, body: { src, project_id: S.project, start: T.from, end: T.to, region: T.region, exclude: T.exclude } });
+      const r = await api('/api/track', { method: 'POST', busy: false, body: { src, project_id: S.project, start: T.from, end: T.to, region: T.region, exclude: T.exclude, method: T.set.method } });
       T.job = r.job; render();
       const poll = async () => {
         let s;
@@ -150,6 +150,8 @@ export async function openTrack(opts) {
     prog.classList.toggle('hidden', !busy); prog.value = 0;
     const len = Math.max(0, (T.to ?? T.dur) - T.from);
     body.replaceChildren(
+      field('Tracker', seg([['klt', 'Simple'], ['tapnext', 'TAPNext++']], T.set.method, (v) => set('method', v), { disabled: busy }),
+        help('Simple follows corners on the server in seconds. TAPNext++ runs on the GPU through ComfyUI\'s queue: slower to start, but it keeps hold of points through blur, fast moves and things passing in front.')),
       field('Draw on the picture', seg([['region', 'Track inside'], ['exclude', 'Ignore (moving subject)']], T.mode, (m) => { T.mode = m; })),
       h('div', { class: 'row wrap' },
         button('Clear box', () => { T[T.mode] = null; render(); draw(); }, { cls: 'small ghost' }),

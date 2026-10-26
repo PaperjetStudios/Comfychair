@@ -746,6 +746,7 @@ async def video_prep(body: dict = Body(...)):
 
 
 tracking.resolve_src = _timeline_path  # motion tracking finds its clip the way the Video tab does
+tracking.comfy = comfy
 
 
 @app.post("/api/video/render")

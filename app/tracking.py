@@ -6,7 +6,12 @@ back (a point that doesn't return to where it started is dropped), and one simil
 (shift, turn, uniform scale) is fitted to them with RANSAC; points that don't agree (a moving
 subject) fall out as outliers and are dropped. Transforms accumulate from the first frame, measured
 at the picture's centre. Works on a ~640 px wide copy; numpy and OpenCV load only when a track runs.
+
+method "tapnext" follows a grid of points with TAPNext++ instead (a ComfyUI node, comfy_nodes/deck_tapnext,
+run through ComfyUI's queue so it waits for the GPU), then fits the same transforms to those tracks.
 """
+import asyncio
+import json
 import math
 import subprocess
 import threading
@@ -20,6 +25,9 @@ from . import config, db, videoedit
 
 router = APIRouter(prefix="/api/track")
 resolve_src = None  # async (src dict, tmp dir) -> (path, kind); main.py sets it to the Video tab's source lookup
+comfy = None        # main.py's ComfyUI client (method "tapnext")
+TAP_NODE = "DeckTAPNextTrack"
+TAP_GRID = 20        # grid points per side, before region / exclude drop some
 
 TRACK_W = 640        # frames are analysed at this width (or the clip's own, if smaller)
 MAX_FRAMES = 1800    # 75 s at 24 fps
@@ -191,6 +199,140 @@ def analyse(path, start=0.0, end=None, region=None, exclude=None, progress=None,
     return res
 
 
+def _fit(cv2, np, P, V, k, tw, th):
+    """Frame-to-frame similarity fits for point tracks P (Q, N, 2, analysis px) with visibility V (Q, N),
+    accumulated from the first frame like analyse(). Returns (frames, lost)."""
+    M = np.eye(3)
+    centre = np.array([tw / 2, th / 2, 1.0])
+    out, lost = [{"tx": 0.0, "ty": 0.0, "rot": 0.0, "scale": 1.0}], 0
+    for f in range(1, P.shape[1]):
+        ok = V[:, f - 1] & V[:, f]
+        A = None
+        if ok.sum() >= 6:
+            A, inl = cv2.estimateAffinePartial2D(P[ok, f - 1].astype(np.float32), P[ok, f].astype(np.float32),
+                                                 method=cv2.RANSAC, ransacReprojThreshold=RANSAC_TOL, maxIters=500)
+            if A is not None and (inl.ravel() == 1).sum() < 6:
+                A = None
+        if A is None:
+            lost += 1
+            A = np.array([[1, 0, 0], [0, 1, 0]], np.float64)
+        M = np.vstack([A, [0, 0, 1]]) @ M
+        c = M @ centre
+        out.append({"tx": float((c[0] - centre[0]) * k), "ty": float((c[1] - centre[1]) * k),
+                    "rot": math.degrees(math.atan2(M[1, 0], M[0, 0])), "scale": float(math.hypot(M[0, 0], M[1, 0]))})
+    return out, lost
+
+
+def _queries(np, tw, th, region, exclude):
+    """The grid TAPNext++ follows, in analysis pixels: inside region, outside exclude."""
+    m = 0.04
+    xs, ys = np.linspace(m, 1 - m, TAP_GRID), np.linspace(m, 1 - m, TAP_GRID)
+    pts = [(x, y) for y in ys for x in xs
+           if (not region or region[0] <= x <= region[2] and region[1] <= y <= region[3])
+           and not (exclude and exclude[0] <= x <= exclude[2] and exclude[1] <= y <= exclude[3])]
+    return [{"x": round(x * tw, 2), "y": round(y * th, 2), "t": 0} for x, y in pts]
+
+
+async def analyse_tapnext(path, start=0.0, end=None, region=None, exclude=None, progress=None, cancel=None, atlas_path=None,
+                          checkpoint="tapnextpp_ckpt.pt"):
+    """analyse() with TAPNext++ tracks from ComfyUI. Same result shape (plus "method")."""
+    cv2, np = _libs()
+    info = videoedit.probe(Path(path))
+    if not info["video"] or not info["width"]:
+        raise ValueError("That isn't a video")
+    W, H, fps = info["width"], info["height"], info["fps"]
+    start = max(0.0, float(start or 0))
+    end = min(float(end) if end else info["duration"], info["duration"] or 1e9)
+    if end - start < 0.2:
+        raise ValueError("Pick at least a fifth of a second to track")
+    n = min(MAX_FRAMES, max(2, int(round((end - start) * fps))))
+    tw = min(TRACK_W, W) // 2 * 2
+    th = max(2, round(H * tw / W) // 2 * 2)
+    region, exclude = _box(region), _box(exclude)
+    oi = await comfy.object_info()
+    if TAP_NODE not in oi:
+        raise ValueError("TAPNext++ isn't installed in ComfyUI (custom_nodes/deck_tapnext): use Simple tracking, or install it and restart ComfyUI")
+
+    clip = config.DATA_DIR / "tmp" / "track" / f"{uuid.uuid4().hex[:12]}.mp4"
+    clip.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        r = await asyncio.to_thread(subprocess.run, ["ffmpeg", "-v", "error", "-y", "-ss", f"{start:.3f}", "-i", str(path), "-an",
+                                                     "-frames:v", str(n), "-vf", f"scale={tw}:{th}", "-c:v", "libx264", "-crf", "14",
+                                                     "-pix_fmt", "yuv420p", str(clip)], capture_output=True, timeout=600)
+        if r.returncode:
+            raise ValueError("Couldn't cut that clip: " + r.stderr.decode(errors="replace").strip()[-200:])
+        wf = {
+            "1": {"class_type": "VHS_LoadVideoPath", "inputs": {"video": str(clip), "force_rate": 0, "custom_width": 0,
+                  "custom_height": 0, "frame_load_cap": 0, "skip_first_frames": 0, "select_every_nth": 1}},
+            "2": {"class_type": TAP_NODE, "inputs": {"images": ["1", 0], "checkpoint": checkpoint,
+                  "points": json.dumps(_queries(np, tw, th, region, exclude)), "grid": TAP_GRID, "filename_prefix": "deck_tracks"}},
+        }
+        pid = (await comfy.queue(wf, preview="off"))["prompt_id"]
+        if progress:
+            progress(0.05)
+        entry, t0 = None, time.time()
+        while True:
+            if cancel and cancel():
+                try:
+                    await comfy.delete_queued([pid]); await comfy.interrupt()
+                except Exception:
+                    pass
+                raise InterruptedError("Stopped")
+            entry = (await comfy.history(pid)).get(pid)
+            if entry:   # (ComfyUI's history only has a prompt once it has finished)
+                break
+            if progress:   # no step progress from the node: creep towards 0.85 while it runs
+                progress(min(0.85, 0.05 + (time.time() - t0) / 120))
+            await asyncio.sleep(1.0)
+        st = entry.get("status") or {}
+        if st.get("status_str") == "error":
+            msg = next((m[1].get("exception_message") for m in st.get("messages", [])
+                        if isinstance(m, list) and len(m) == 2 and m[0] == "execution_error"), None)
+            raise ValueError(f"TAPNext++ failed: {msg or 'see ComfyUI'}")
+        f = next((it for it in (entry.get("outputs", {}).get("2", {}).get("files") or [])), None)
+        if not f:
+            raise ValueError("TAPNext++ gave no tracks")
+        data, _ = await comfy.view(f["filename"], f.get("subfolder", ""), f.get("type", "output"))
+        res = json.loads(data)
+    finally:
+        clip.unlink(missing_ok=True)
+
+    T = np.array([[p[:2] for p in tr] for tr in res["tracks"]], np.float32)   # (Q, N, 2) analysis px
+    V = np.array([[bool(p[2]) for p in tr] for tr in res["tracks"]], bool)
+    count = T.shape[1]
+    if count < 2:
+        raise ValueError("Couldn't read frames from that video")
+    out, lost = await asyncio.to_thread(_fit, cv2, np, T, V, W / tw, tw, th)
+    # the longest visible runs, as 0..1 of the picture (like analyse())
+    runs = []
+    for q in range(T.shape[0]):
+        f = 0
+        while f < count:
+            if not V[q, f]:
+                f += 1; continue
+            g = f
+            while g < count and V[q, g]:
+                g += 1
+            if g - f >= 7:
+                runs.append((f, T[q, f:g]))
+            f = g
+    runs.sort(key=lambda r: -len(r[1]))
+    tracks = [{"f": int(f0), "p": [[round(float(x) / tw, 4), round(float(y) / th, 4)] for x, y in pts]} for f0, pts in runs[:SHOW_TRACKS]]
+    for fr in out:
+        for key in fr:
+            fr[key] = round(fr[key], 4)
+    result = {"v": 1, "fps": round(fps, 4), "size": [W, H], "start": round(start, 3), "n": count, "frames": out,
+              "tracks": tracks, "lost": lost, "region": region, "exclude": exclude, "method": "tapnext"}
+    if atlas_path:
+        step = max(1, math.ceil(count / ATLAS_FRAMES))
+        thumbs = await asyncio.to_thread(lambda: [np.frombuffer(raw, np.uint8).reshape(th, tw, 3).copy()
+                                                  for i, raw in enumerate(_frames(path, info, start, count, tw, th)) if i % step == 0])
+        result["atlas"] = await asyncio.to_thread(_atlas, cv2, np, thumbs, count, step, tw / th, atlas_path)
+    if progress:
+        progress(1.0)
+    return result
+
+
 def _atlas(cv2, np, thumbs, count, step, aspect, path):
     """The footage as one picture of small frames in a grid (the 3D backdrop shows one at a time).
     Frame f is tile round(f / step), counted along rows from the top left."""
@@ -219,6 +361,17 @@ _lock = threading.Lock()
 def _run(job, kw):
     try:
         job["result"] = analyse(progress=lambda p: job.update(progress=p), cancel=lambda: job["cancel"], **kw)
+        job["state"] = "done"
+    except InterruptedError:
+        job["state"] = "error"; job["error"] = "Stopped"
+    except Exception as e:  # shown to the user as is
+        job["state"] = "error"; job["error"] = str(e) or e.__class__.__name__
+    job["progress"] = 1.0
+
+
+async def _run_tapnext(job, kw):
+    try:
+        job["result"] = await analyse_tapnext(progress=lambda p: job.update(progress=p), cancel=lambda: job["cancel"], **kw)
         job["state"] = "done"
     except InterruptedError:
         job["state"] = "error"; job["error"] = "Stopped"
@@ -257,7 +410,10 @@ async def start(body: dict = Body(...)):
         for old in [k for k, j in JOBS.items() if j["state"] != "running" and time.time() - j["t"] > 3600]:
             del JOBS[old]
         JOBS[jid] = job
-    threading.Thread(target=_run, args=(job, kw), daemon=True).start()
+    if body.get("method") == "tapnext":
+        job["task"] = asyncio.create_task(_run_tapnext(job, kw))   # (kept, so the task isn't collected mid-run)
+    else:
+        threading.Thread(target=_run, args=(job, kw), daemon=True).start()
     return {"job": jid}
 
 

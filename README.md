@@ -131,6 +131,22 @@ tagged fields, found by kind and group name (`ROLES` in `web/vfx.js`):
 and **Apply matte** effects, call `POST /api/video/key`. It writes a VP9 webm with alpha into History.
 The Video preview and its export put a keyed clip over the tracks below it.
 
+**TAPNext++ tracking** (`comfy_nodes/deck_tapnext`). This is a ComfyUI node that follows points with
+DeepMind's TAPNext++. The model code is vendored from google-deepmind/tapnet (Apache 2.0), so nothing is
+pip-installed. It needs torch, torchvision and einops, which ComfyUI already has.
+
+To install:
+1. Link the node into ComfyUI:
+   `ln -s ~/Programs/comfydeck/comfy_nodes/deck_tapnext ~/Programs/ComfyUI/custom_nodes/deck_tapnext`
+2. Put `tapnextpp_ckpt.pt` in a `tapnet` folder beside any ComfyUI model folder. Bases from
+   `extra_model_paths.yaml` count too, for example `/mnt/data/ComfyUI/models/tapnet/`.
+3. Restart ComfyUI.
+
+The Track motion sheet then offers **Tracker: TAPNext++**. ComfyDeck cuts the clip to about 640 px wide
+and queues it on ComfyUI, so it waits behind any running generation. A 20×20 grid of points (inside the
+track box, outside the ignore box) is followed through every frame. The camera is fitted to those tracks
+the same way as with Simple tracking.
+
 **Character sheets** (`deck-h3-charsheet`): give it a picture of a character as Reference 1 and it
 makes a 12 s portrait clip: a 6 s orbit on a grey studio backdrop, then cuts at 6, 7.5, 9 and 10.5 s to
 close-ups (face front, three-quarter, profile, waist up). It saves the clip plus a sheet: frames
