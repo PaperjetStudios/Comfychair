@@ -151,6 +151,12 @@ class Keying(unittest.TestCase):
         self.assertGreater(f(10, 10)[1], 200)            # white half of the matte keeps the clip
         self.assertGreater(f(150, 10)[2], 200)           # black half shows the clip below
 
+    def test_trimmed_colour_key(self):
+        out = self.td / "tr.webm"
+        info = videoedit.key(self.td / "green.mp4", out, "color", trim={"start": 0.5, "len": 0.3}, color="#00ff00")
+        self.assertTrue(info["alpha"])
+        self.assertAlmostEqual(info["duration"], 0.3, delta=0.08)
+
     def test_bad_colour(self):
         with self.assertRaises(ValueError):
             videoedit.key_filters("color", color="nope")

@@ -832,7 +832,8 @@ async def video_key(body: dict = Body(...)):
     await push_gen(gid)
     out, rel = new_output(db.get_generation(gid), "keyed.webm")
     try:
-        info = await asyncio.to_thread(videoedit.key, path, out, mode, matte, **opts)
+        trim = body.get("trim") if isinstance(body.get("trim"), dict) else None
+        info = await asyncio.to_thread(videoedit.key, path, out, mode, matte, trim, **opts)
     except Exception as e:
         out.unlink(missing_ok=True)
         db.update_generation(gid, status="error", error=str(e), finished=time.time())

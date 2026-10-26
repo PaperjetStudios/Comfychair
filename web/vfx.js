@@ -542,3 +542,85 @@ export function wireVfx() {
   // a result finishing (or failing) redraws its card
   onServer('deck_generation', (m) => { const id = m.data?.id; if (T.results.includes(id)) { setTimeout(render, 0); } });
 }
+
+// ---- effects on Video clips (video.js): one step of a clip's effect stack, run and waited for ----
+// A step is { op, prompt, lora, strength, res, outsize, target, color }. source is a clip source
+// ({generation, index} | {media}) with an optional trim {start, len} (seconds). Resolves with
+// { generation, index, url, dur } of the step's result.
+export const CLIP_FX = [
+  ['restyle', 'LoRA restyle', 'An IC-LoRA (colourise, restore, deblur, day to night…) with a prompt describing the result.'],
+  ['cleanplate', 'Clean plate', 'Removes people and moving things and fills in the background.'],
+  ['replace', 'Replace', 'Finds what you name (SAM3) and paints the prompt in its place.'],
+  ['cutout', 'Cut out (Alpha Gen)', 'Cuts out the main subject: the rest goes see-through.'],
+  ['colorkey', 'Colour key', 'Keys out a green or blue screen (no GPU).'],
+  ['upscale', 'Upscale', 'More detail at Full HD or 4K. Slow.'],
+];
+const MAX_SECS = 10;
+
+function waitGen(id) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const finish = (g) => {
+      if (done || !g || (g.status !== 'done' && g.status !== 'error' && g.status !== 'interrupted')) return;
+      done = true; off(); clearInterval(timer);
+      if (g.status === 'done') resolve(g); else reject(new Error(g.error || `#${g.id} ${g.status}`));
+    };
+    const off = onServer('deck_generation', ({ data }) => { if (data?.id === id) finish(data); });
+    const timer = setInterval(() => api(`/api/generations/${id}`, { busy: false }).then(finish, () => {}), 5000);
+  });
+}
+
+async function runTpl(tid, put) {
+  const t = S.templates.find((x) => x.id === tid && !x.error);
+  if (!t) throw new Error(`Template ${tid} isn't installed`);
+  const values = {};
+  for (const [role, v] of Object.entries(put)) {
+    const f = roleField(t, role);
+    if (f && v !== undefined && v !== null && v !== '') values[f.key] = v;
+  }
+  const gens = await api('/api/generate', { method: 'POST', body: { template: tid, values, batch: 1, project_id: S.project } });
+  adoptGenerations(gens);
+  return waitGen(gens[0].id);
+}
+
+const outOf = (g) => {
+  const i = Math.max(0, g.outputs.findIndex((o) => o.kind === 'video'));
+  return { generation: g.id, index: i, url: g.outputs[i].url, dur: g.outputs[i].duration || 0 };
+};
+
+export async function runClipStep(step, source, secs) {
+  const src = { ...(source.generation != null ? { generation: source.generation, index: source.index || 0 } : { media: source.media }),
+    ...(source.trim && { trim: source.trim }) };
+  const len = Math.min(MAX_SECS, secs);
+  const res = step.res || 704;
+  const key = (body) => api('/api/video/key', { method: 'POST', timeout: 900000, busy: false,
+    body: { source: { ...src, trim: undefined }, trim: source.trim, project_id: S.project, ...body } }).then((g) => { S.history.set(g.id, g); return g; });
+  switch (step.op) {
+    case 'restyle':
+      return outOf(await runTpl('deck-ltx-v2v-lora', { source: src, prompt: step.prompt, lora: step.lora, strength: step.strength ?? 1, len, res }));
+    case 'cleanplate':
+      return outOf(await runTpl('deck-ltx-cleanplate', { source: src, prompt: step.prompt, len, res }));
+    case 'upscale':
+      return outOf(await runTpl('deck-ltx-upscale', { source: src, prompt: step.prompt, len, outsize: step.outsize || 'FullHD' }));
+    case 'replace': {
+      if (!step.target?.trim()) throw new Error('Replace: say what to replace');
+      const mask = outOf(await runTpl('deck-sam3-video-mask', { source: src, prompt: step.target, mode: 'text', len }));
+      return outOf(await runTpl('deck-ltx-inpaint', { source: src, matte: { generation: mask.generation, index: mask.index }, prompt: step.prompt, len, res }));
+    }
+    case 'cutout': {
+      const matte = outOf(await runTpl('deck-ltx-alpha', { source: src, len, res }));
+      return outOf(await key({ mode: 'matte', matte: { generation: matte.generation, index: matte.index } }));
+    }
+    case 'colorkey':
+      return outOf(await key({ mode: 'color', color: step.color || '#00ff00', similarity: step.similarity ?? 0.12, blend: 0.08, spill: 0.5 }));
+    default:
+      throw new Error(`Unknown effect ${step.op}`);
+  }
+}
+
+// the IC-LoRAs a restyle step can use (as the LoRA restyle effect lists them)
+export function restyleLoras() {
+  const t = S.templates.find((x) => x.id === 'deck-ltx-v2v-lora');
+  const f = t && roleField(t, 'lora');
+  return (f?.options || []).filter((o) => /ic-lora/i.test(o) && !/sdr-to-hdr|alpha-gen|clean-plate|ingredients|layout|motion-track|in-outpaint|refine|upscaler/i.test(o));
+}

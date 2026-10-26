@@ -201,14 +201,17 @@ def key_filters(mode: str, color: str = "#00ff00", similarity: float = 0.12, ble
     return f"[0:v]{','.join(chain)},format=yuva420p[v]"
 
 
-def key(src: Path, out: Path, mode: str, matte: Path | None = None, **opts) -> dict:
+def key(src: Path, out: Path, mode: str, matte: Path | None = None, trim: dict | None = None, **opts) -> dict:
     """A copy of src with an alpha channel, as a VP9 webm (yuva420p, which Chromium plays and
     render() composites). mode "matte": alpha from the matte video's brightness; "color": chroma key.
     Sound is kept."""
     if mode == "matte" and not matte:
         raise ValueError("Pick a matte clip")
     info = probe(src)
-    args = ["ffmpeg", "-v", "error", "-y", "-i", str(src)]
+    cut = []   # trim {start, len} (seconds) applies to the clip only: a matte made from the trimmed clip starts at 0
+    if trim:
+        cut = ["-ss", f"{max(0.0, float(trim.get('start') or 0)):.3f}"] + (["-t", f"{float(trim['len']):.3f}"] if trim.get("len") else [])
+    args = ["ffmpeg", "-v", "error", "-y", *cut, "-i", str(src)]
     if mode == "matte":
         args += ["-i", str(matte)]
     args += ["-filter_complex", key_filters(mode, **opts), "-map", "[v]"]
