@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from . import config, db
 
 # The one place that says which kinds exist. Add a name here to start storing a new one.
-KINDS = ("gen-tabs", "gen-presets", "edit-tabs", "video-tabs", "scene-tabs", "objects", "scenes", "tracks")
+KINDS = ("gen-tabs", "gen-presets", "edit-tabs", "video-tabs", "scene-tabs", "vfx-tabs", "objects", "scenes", "tracks")
 MAX_PAYLOAD = 5 * 1024 * 1024
 MAX_STILL = 12 * 1024 * 1024
 PNG_SIG = b"\x89PNG\r\n\x1a\n"

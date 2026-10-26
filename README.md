@@ -108,6 +108,29 @@ result it missed.
 A **Primitive** node (`PrimitiveInt`, `PrimitiveFloat`…) shows as one number labelled with its title, e.g.
 `@3 Length (seconds)` feeding a math node that converts seconds to frames (see `templates/deck-h3-i2v.json`).
 
+**VFX templates** (the **VFX** tab). Each effect runs one template by id (`deck-ltx-ripple`,
+`deck-ltx-v2v-lora`, `deck-ltx-alpha`, `deck-sam3-video-mask`, `deck-ltx-cleanplate`, `deck-ltx-t2v`,
+`deck-ltx-layout`, `deck-ltx-tracks`, `deck-ltx-ingredients`, `deck-ltx-upscale`; see `EFFECTS` in
+`web/vfx.js`). An effect whose template is missing shows a note instead of Run. The tab fills these
+tagged fields, found by kind and group name (`ROLES` in `web/vfx.js`):
+
+| Node title | Filled with |
+|---|---|
+| `@Source video` on **VHS_LoadVideoPath** | the source clip, with its trim and crop |
+| `@Mask video` / `@Matte video` on **VHS_LoadVideoPath** | the mask or matte clip (white = keep / remove) |
+| `@First frame` (any title) on **LoadImage** | the edited first frame, start image or ingredients sheet |
+| `@Prompt` | the prompt (a title with "negative" is left alone) |
+| `@Length (seconds)` | the length in seconds; the graph turns it into 8n+1 frames at 24 fps |
+| `@Width`, `@Height` (Primitive or `[width,height]`) | the size, for effects that have one |
+| `@Seed` | the seed (−1 = random) |
+| `@LoRAs` | one LoRA and its strength (LoRA restyle) |
+| `@Points [points_store]` on **SAM3PointCollector** | `{"positive":[{x,y}],"negative":[…]}` in pixels of the clip |
+| `@Tracks [points_store]` on **LTXVSparseTrackEditor** | `[[{x,y},…],…]`: one list of control points per path, in pixels of the generated size |
+
+**Keying** needs no template: the Video tab's **Key…** button on a clip, and the VFX tab's **Colour key**
+and **Apply matte** effects, call `POST /api/video/key`. It writes a VP9 webm with alpha into History.
+The Video preview and its export put a keyed clip over the tracks below it.
+
 **Character sheets** (`deck-h3-charsheet`): give it a picture of a character as Reference 1 and it
 makes a 12 s portrait clip: a 6 s orbit on a grey studio backdrop, then cuts at 6, 7.5, 9 and 10.5 s to
 close-ups (face front, three-quarter, profile, waist up). It saves the clip plus a sheet: frames

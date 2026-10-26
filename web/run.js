@@ -437,7 +437,7 @@ function onMessage(m) {
       runEnd('failed');
       toast(`Error in ${d.node_type || 'node'}: ${d.exception_message || ''}`, true);
       break;
-    case 'deck_generation': onGeneration(d); break;
+    case 'deck_generation': onGeneration(d); emitServer({ type: 'deck_generation', data: d }); break;   // (the VFX tab follows its runs)
     case 'deck_generation_deleted':
       S.history.delete(d.id); removeCard(d.id);
       document.querySelectorAll(`#board .tile[data-gen="${d.id}"]`).forEach((t) => { B.sel.delete(t.dataset.key); t.remove(); });

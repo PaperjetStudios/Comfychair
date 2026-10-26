@@ -739,6 +739,14 @@ function canvasProps() {
       button('Download', downloadEditor, { cls: '' })));
 }
 
+// Another panel's picture as a new layer in the open edit tab (the VFX tab's first frame, say)
+export async function addToEditor(name) {
+  await editorTabsReady();
+  E.layers.push({ name, crop: { ...FULL }, scale: 1, hidden: false }); editorChanged();
+  switchTab('editor');
+  toast('Added to the Editor: Save as input when done');
+}
+
 function addEditorImages() {
   openImagePicker({ title: 'Add images', multi: true, mp: () => 0, onPick: (name) => {
     E.layers.push({ name, crop: { ...FULL }, scale: 1, hidden: false }); editorChanged();
