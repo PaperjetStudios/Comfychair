@@ -1,0 +1,315 @@
+{
+ "src": {
+  "class_type": "VHS_LoadVideoPath",
+  "inputs": {
+   "video": "",
+   "force_rate": 24,
+   "custom_width": 0,
+   "custom_height": 0,
+   "frame_load_cap": 0,
+   "skip_first_frames": 0,
+   "select_every_nth": 1
+  },
+  "_meta": {
+   "title": "@1 Source video [video]"
+  }
+ },
+ "secs": {
+  "class_type": "PrimitiveFloat",
+  "inputs": {
+   "value": 5.0
+  },
+  "_meta": {
+   "title": "@3 Length (seconds)"
+  }
+ },
+ "nf": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "min(a, round(b*24))",
+   "values.a": [
+    "src",
+    1
+   ],
+   "values.b": [
+    "secs",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "frames within the clip and Length"
+  }
+ },
+ "cut": {
+  "class_type": "ImageFromBatch",
+  "inputs": {
+   "image": [
+    "src",
+    0
+   ],
+   "batch_index": 0,
+   "length": [
+    "nf",
+    1
+   ]
+  }
+ },
+ "short": {
+  "class_type": "PrimitiveInt",
+  "inputs": {
+   "value": 480
+  },
+  "_meta": {
+   "title": "@4 Resolution (short side)"
+  }
+ },
+ "size": {
+  "class_type": "GetImageSize",
+  "inputs": {
+   "image": [
+    "cut",
+    0
+   ]
+  }
+ },
+ "W": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "round(a*c/min(a,b)/32)*32",
+   "values.a": [
+    "size",
+    0
+   ],
+   "values.b": [
+    "size",
+    1
+   ],
+   "values.c": [
+    "short",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "width: short side to Resolution, x32"
+  }
+ },
+ "H": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "round(b*c/min(a,b)/32)*32",
+   "values.a": [
+    "size",
+    0
+   ],
+   "values.b": [
+    "size",
+    1
+   ],
+   "values.c": [
+    "short",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "height"
+  }
+ },
+ "rs": {
+  "class_type": "ImageResizeKJv2",
+  "inputs": {
+   "image": [
+    "cut",
+    0
+   ],
+   "width": [
+    "W",
+    1
+   ],
+   "height": [
+    "H",
+    1
+   ],
+   "upscale_method": "lanczos",
+   "keep_proportion": "crop",
+   "pad_color": "0, 0, 0",
+   "crop_position": "center",
+   "divisible_by": 32,
+   "device": "cpu"
+  }
+ },
+ "img": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@11 Character [image]"
+  }
+ },
+ "tcond": {
+  "class_type": "ViggleTextCondLoader",
+  "inputs": {
+   "text_cond": "fixed_embed_fwd_anyframe.safetensors"
+  }
+ },
+ "vae": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
+  }
+ },
+ "unet": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "minimax_h3_ref2va_viggle_pruned_int8_convrot.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "lora": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "model": [
+    "unet",
+    0
+   ],
+   "lora_name": "viggle_animate_dmd_lora_r64.safetensors",
+   "strength_model": 1.0
+  }
+ },
+ "shift": {
+  "class_type": "MiniMaxH3SigmaShift",
+  "inputs": {
+   "model": [
+    "lora",
+    0
+   ],
+   "shift_video": 3.0,
+   "shift_audio": 3.0
+  }
+ },
+ "cond": {
+  "class_type": "ViggleAnimateConditioningWindowed",
+  "inputs": {
+   "cond_video": [
+    "rs",
+    0
+   ],
+   "ref_image": [
+    "img",
+    0
+   ],
+   "text_cond": [
+    "tcond",
+    0
+   ],
+   "vae": [
+    "vae",
+    0
+   ],
+   "width": 0,
+   "height": 0,
+   "chunk_frames": 124,
+   "overlap_frames": 22,
+   "continuation": "five_frame_anchor"
+  }
+ },
+ "guider": {
+  "class_type": "BasicGuider",
+  "inputs": {
+   "model": [
+    "shift",
+    0
+   ],
+   "conditioning": [
+    "cond",
+    1
+   ]
+  }
+ },
+ "ksel": {
+  "class_type": "KSamplerSelect",
+  "inputs": {
+   "sampler_name": "euler"
+  }
+ },
+ "sig": {
+  "class_type": "ManualSigmas",
+  "inputs": {
+   "sigmas": "1.0, 0.8571428571428571, 0.6, 0.0"
+  },
+  "_meta": {
+   "title": "@6 Steps [sigmas]"
+  }
+ },
+ "run": {
+  "class_type": "ViggleChunkedSampler",
+  "inputs": {
+   "guider": [
+    "guider",
+    0
+   ],
+   "sampler": [
+    "ksel",
+    0
+   ],
+   "sigmas": [
+    "sig",
+    0
+   ],
+   "cond_set": [
+    "cond",
+    0
+   ],
+   "vae": [
+    "vae",
+    0
+   ],
+   "seed": 42,
+   "rerender_chunk": 0,
+   "rerender_seed": 0
+  },
+  "_meta": {
+   "title": "@8 Seed [seed]"
+  }
+ },
+ "aud": {
+  "class_type": "TrimAudioDuration",
+  "inputs": {
+   "audio": [
+    "src",
+    2
+   ],
+   "start_index": 0.0,
+   "duration": [
+    "secs",
+    0
+   ]
+  }
+ },
+ "vid": {
+  "class_type": "CreateVideo",
+  "inputs": {
+   "images": [
+    "run",
+    0
+   ],
+   "fps": 24,
+   "audio": [
+    "aud",
+    0
+   ]
+  }
+ },
+ "save": {
+  "class_type": "SaveVideo",
+  "inputs": {
+   "video": [
+    "vid",
+    0
+   ],
+   "filename_prefix": "deck/h3-animate",
+   "format": "auto",
+   "codec": "auto"
+  }
+ }
+}

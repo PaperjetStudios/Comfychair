@@ -45,8 +45,16 @@ const EFFECTS = [
     help: 'One image with the people and props cut out on a plain white background (Alpha Gen can cut them out), and the place in the prompt. Two whole photos side by side come back as a split screen.' },
   { id: 'upscale', group: 'Generate', label: 'Upscale', tpl: 'deck-ltx-upscale', needs: ['source', 'prompt', 'len', 'outsize', 'seed'],
     help: 'Adds detail at a larger size. Describe the look (light, film, sharpness), not the things in it.' },
+  { id: 'animate', group: 'Performance', label: 'Replace character', tpl: 'deck-h3-animate', needs: ['source', 'first', 'len', 'res', 'steps', 'seed'],
+    res: [[384, '384p'], [480, '480p'], [576, '576p']], maxLen: 30,
+    help: 'Re-renders the person in the clip as the character in the still: the clip\'s motion, face, camera, light and sound are kept (Viggle-Animate on H3). Long clips run in 5 s windows.' },
+  { id: 'drive', group: 'Performance', label: 'Drive a still', tpl: 'deck-h3-drive', needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
+    res: [[384, '384p'], [448, '448p'], [576, '576p']], maxLen: 15,
+    help: 'The character in the still acts out the clip: body, hands and face follow the clip\'s pose (H3 with pose control), in a new shot described by the prompt. Call the character <Subject 1> and the still <Picture 1>. Empty prompt: the shot is kept plain.' },
+  { id: 'pose', group: 'Performance', label: 'Pose preview', tpl: 'deck-pose-video', needs: ['source', 'len'],
+    help: 'Shows what Drive a still will follow: the clip\'s body, hands and face as a stick figure. Quick: no GPU.' },
 ];
-const GROUPS = ['Restyle', 'Key', 'Remove', 'Generate'];
+const GROUPS = ['Restyle', 'Key', 'Remove', 'Generate', 'Performance'];
 const fx = (id) => EFFECTS.find((e) => e.id === id) || EFFECTS[0];
 
 // how an effect's inputs find their template fields: by kind, then by the group (node title) name
@@ -64,6 +72,7 @@ const ROLES = {
   width: (f) => f.kind === 'int' && /^width$/i.test(f.group),
   height: (f) => f.kind === 'int' && /^height$/i.test(f.group),
   res: (f) => f.kind === 'int' && /resolution/i.test(f.group),
+  steps: (f) => f.kind === 'text' && f.input === 'sigmas',
   lora: (f) => f.kind === 'choice' && f.input === 'lora_name',
   strength: (f) => f.kind === 'float' && f.input === 'strength_model',
   outsize: (f) => f.kind === 'choice' && f.input === 'output_size',
@@ -73,12 +82,19 @@ const ROLES = {
 const tplOf = (e) => e.tpl && S.templates.find((t) => t.id === e.tpl);
 const roleField = (t, role) => t?.fields.find(ROLES[role]);
 
+// Viggle-Animate's distilled schedules (shift 3): points = Euler updates + 1
+const STEPS = { 3: '1.0, 0.8571428571428571, 0.6, 0.0',
+  5: '1.0, 0.9230769230769231, 0.8181818181818182, 0.6666666666666666, 0.42857142857142855, 0.0',
+  7: '1.0, 0.9473684210526315, 0.8823529411764706, 0.8, 0.6923076923076923, 0.5454545454545454, 0.3333333333333333, 0.0' };
+const RES = [[544, '544p'], [704, '704p'], [1088, '1088p']];
+const resOf = (e) => { const r = e.res || RES; return r.some(([v]) => v === T.res) ? T.res : r[1][0]; };
+
 const SIZES = [['Match source', null], ['1280×704', [1280, 704]], ['704×1280', [704, 1280]], ['960×544', [960, 544]],
   ['544×960', [544, 960]], ['1024×1024', [1024, 1024]], ['1920×1088', [1920, 1088]]];
 
 const BLANK = () => ({ op: 'ripple', source: null, first: null, matte: null, prompt: '', loras: [], len: 5, res: 704, size: null, seed: -1,
   points: { positive: [], negative: [] }, pointsAt: 0, tracks: [], key: { color: '#00ff00', similarity: 0.12, blend: 0.08, spill: 0.5, invert: false },
-  results: [], showing: null });
+  steps: 3, results: [], showing: null });
 let T = BLANK();
 let tabs = null;
 const UI = { wipe: 0.5, draw: null, srcInfo: null, playing: false, neg: false };
@@ -136,7 +152,7 @@ function sourceField(role = 'source') {
 }
 
 function firstField(optional) {
-  const pick = () => openImagePicker({ title: T.op === 'ingredients' ? 'Ingredients sheet' : 'First frame', mp: () => 0,
+  const pick = () => openImagePicker({ title: T.op === 'ingredients' ? 'Ingredients sheet' : T.op === 'animate' ? 'Character' : 'First frame', mp: () => 0,
     onPick: (name) => { T.first = name; changed(); } });
   const takeFrame = async () => {
     const url = srcUrl(T.source);
@@ -147,16 +163,19 @@ function firstField(optional) {
     T.first = r.name; changed();
     return r.name;
   };
+  const edit = T.op === 'ripple' || T.op === 'animate';
   const label = T.op === 'ingredients' ? 'Ingredients sheet' : T.op === 'ripple' ? 'Edited first frame' : T.op === 'layout' ? 'Look (first frame)'
+    : T.op === 'animate' ? 'Character'
     : optional ? 'Start image (optional)' : 'Start image';
   return field(label, T.first ? h('img', { class: 'vfx-still', src: thumbUrl(T.first, 480), alt: '' }) : null,
     h('div', { class: 'row wrap' },
       button(T.first ? 'Change…' : 'Choose…', pick, { cls: T.first ? '' : 'primary' }),
       T.source ? button('Take from clip…', takeFrame, { title: 'A frame of the source clip' }) : null,
-      T.first && T.op === 'ripple' ? button('Edit in Generate', () => useInGenerate(T.first, 'Frame set: edit it, then pick the result here')) : null,
-      T.first && T.op === 'ripple' ? button('Edit in Editor', () => addToEditor(T.first)) : null,
+      T.first && edit ? button('Edit in Generate', () => useInGenerate(T.first, 'Frame set: edit it, then pick the result here')) : null,
+      T.first && edit ? button('Edit in Editor', () => addToEditor(T.first)) : null,
       T.first ? button('Clear', () => { T.first = null; changed(); }) : null),
-    T.op === 'ripple' ? help('Take the clip\'s first frame, change it (Edit in Generate with an edit template, or in the Editor), then Choose… the edited picture here.') : null);
+    T.op === 'ripple' ? help('Take the clip\'s first frame, change it (Edit in Generate with an edit template, or in the Editor), then Choose… the edited picture here.') : null,
+    T.op === 'animate' ? help('One person, whole body or face as in the clip. Best: Take from clip…, then repaint the person as the character (Edit in Generate), so pose and framing match.') : null);
 }
 
 function lorasField(t) {
@@ -238,10 +257,13 @@ function render() {
   const settings = section('Settings', null,
     needs.has('keycolor') ? keyFields() : null,
     needs.has('loras') ? lorasField(t) : null,
-    needs.has('len') ? rangeField('Length', () => T.len, (v) => { T.len = v; }, { min: 1, max: 10, step: 1 / 3,
-      fmt: (v) => `${v.toFixed(1)}s · ${lenFrames(v)} frames`, onChange: () => changed(), help: 'LTX makes 8n+1 frames at 24 fps; long clips need a lot of memory.' }) : null,
-    needs.has('res') ? field('Resolution', seg([[544, '544p'], [704, '704p'], [1088, '1088p']], T.res, (v) => { T.res = Number(v); changed(false); }),
-      help('The short side, in pixels. 704p takes about 1.5 minutes for 5 s on this card; 1088p about 3.')) : null,
+    needs.has('len') ? rangeField('Length', () => T.len, (v) => { T.len = v; }, { min: 1, max: e.maxLen || 10, step: 1 / 3,
+      fmt: (v) => (e.maxLen ? `${v.toFixed(1)}s` : `${v.toFixed(1)}s · ${lenFrames(v)} frames`), onChange: () => changed(),
+      help: e.maxLen ? 'Longer clips run as overlapping 5 s windows: time grows with length, memory doesn\'t.' : 'LTX makes 8n+1 frames at 24 fps; long clips need a lot of memory.' }) : null,
+    needs.has('res') ? field('Resolution', seg(e.res || RES, resOf(e), (v) => { T.res = Number(v); changed(false); }),
+      help(e.res ? 'The short side, in pixels. Higher is sharper and slower.' : 'The short side, in pixels. 704p takes about 1.5 minutes for 5 s on this card; 1088p about 3.')) : null,
+    needs.has('steps') ? field('Steps', seg([[3, 'Fast'], [5, 'Balanced'], [7, 'Quality']], T.steps || 3, (v) => { T.steps = Number(v); changed(false); }),
+      help('Fast is the upstream default (3 steps). Quality can over-sharpen.')) : null,
     needs.has('outsize') ? field('Output size', seg([['FullHD', 'Full HD'], ['4K', '4K']], T.outsize || 'FullHD', (v) => { T.outsize = v; changed(false); }),
       help('4K is tiled: much slower, same memory.')) : null,
     needs.has('size') ? field('Size', h('select', { onchange: (ev) => { T.size = SIZES[ev.target.value][1]; changed(false); } },
@@ -302,14 +324,15 @@ async function run() {
   put('source', T.source && { ...bare(T.source), ...(T.source.trim && { trim: T.source.trim }), ...(T.source.crop && { crop: T.source.crop }) });
   put('matte', T.matte && bare(T.matte));
   put('first', T.first);
-  put('prompt', T.prompt);
+  put('prompt', T.prompt.trim() ? T.prompt : undefined);   // empty: keep the template's own prompt
   put('len', e.needs.includes('len') ? T.len : undefined);
   put('seed', e.needs.includes('seed') ? T.seed : undefined);
   if (e.needs.includes('loras')) {
     if (roleField(t, 'loras')) put('loras', T.loras);
     else if (T.loras[0]) { put('lora', T.loras[0].name); put('strength', T.loras[0].strength); }
   }
-  if (e.needs.includes('res')) put('res', T.res);
+  if (e.needs.includes('res')) put('res', resOf(e));
+  if (e.needs.includes('steps')) put('steps', STEPS[T.steps] || STEPS[3]);
   if (e.needs.includes('outsize')) put('outsize', T.outsize || 'FullHD');
   const size = T.size || (e.needs.includes('size') && T.first ? await imageSize(T.first) : null);
   if (e.needs.includes('size') && size) { put('width', size[0]); put('height', size[1]); }
