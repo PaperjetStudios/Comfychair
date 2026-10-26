@@ -37,7 +37,7 @@ const EFFECTS = [
     help: 'A new clip from a prompt, optionally starting from a still.' },
   { id: 'layout', group: 'Generate', label: 'Layout to render', tpl: 'deck-ltx-layout', needs: ['source', 'prompt', 'len', 'seed'],
     help: 'Turns a rough layout clip (a 3D tab render in Clay or Colour, or blocked-out footage) into a finished shot that keeps its layout and motion.' },
-  { id: 'tracks', group: 'Generate', label: 'Motion paths', tpl: 'deck-ltx-tracks', needs: ['first', 'tracks', 'prompt', 'len', 'size', 'seed'],
+  { id: 'tracks', group: 'Generate', label: 'Motion paths', tpl: 'deck-ltx-tracks', mult: 64, needs: ['first', 'tracks', 'prompt', 'len', 'res', 'seed'],
     help: 'Draw paths on the start image: things under a path\'s start move along it.' },
   { id: 'ingredients', group: 'Generate', label: 'Ingredients sheet', tpl: 'deck-ltx-ingredients', needs: ['first', 'prompt', 'len', 'size', 'seed'],
     help: 'One image with the characters, props and place laid out; say in the prompt where each one sits on the sheet.' },
@@ -341,10 +341,16 @@ async function pointsPx() {
   const px = (p) => ({ x: ((p.x - c.x) / c.w) * W, y: ((p.y - c.y) / c.h) * H });
   return { positive: T.points.positive.map(px), negative: T.points.negative.map(px) };
 }
-// paths are fractions of the start image; the tracks node wants pixels of the generated size
+// paths are fractions of the start image; the tracks node wants pixels of the image as the template resizes it
+// (short side to Resolution, both sides multiples of 32), or of an explicit Width / Height
 async function tracksPx(t, values) {
-  const w = values[roleField(t, 'width')?.key] || (await imageSize(T.first))?.[0] || 1;
-  const hgt = values[roleField(t, 'height')?.key] || (await imageSize(T.first))?.[1] || 1;
+  const nat = await new Promise((res) => { const im = new Image(); im.onload = () => res([im.naturalWidth, im.naturalHeight]); im.onerror = () => res(null); im.src = inputUrl(T.first); });
+  let w = values[roleField(t, 'width')?.key], hgt = values[roleField(t, 'height')?.key];
+  if (!(w && hgt) && nat) {
+    const k = T.res / Math.min(nat[0], nat[1]), m = fx(T.op).mult || 32;
+    w = Math.round((nat[0] * k) / m) * m; hgt = Math.round((nat[1] * k) / m) * m;
+  }
+  w ||= 1; hgt ||= 1;
   return T.tracks.map((tr) => tr.map((p) => ({ x: Math.round(p.x * w), y: Math.round(p.y * hgt) })));
 }
 async function srcInfo() {

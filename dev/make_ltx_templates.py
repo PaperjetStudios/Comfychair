@@ -178,9 +178,43 @@ def t2v():
     return g
 
 
+def tracks():
+    """A start image and paths drawn on it (LTXVSparseTrackEditor control points, pixels of the resized image): things
+    under a path's start move along it. IC-LoRA motion-track (an LTX-2.3 LoRA that works on 2.5)."""
+    g = G()
+    models(g)
+    text(g)
+    g.add("img", node("LoadImage", "@1 Start image [image]", image=""))
+    g.add("secs", node("PrimitiveFloat", "@3 Length (seconds)", value=5.0))
+    g.add("short", node("PrimitiveInt", "@4 Resolution (short side)", value=704))
+    math(g, "nf", f"floor(a*{FPS}/8)*8+1", "frames: 8n+1", a=["secs", 0])
+    g.add("size", node("GetImageSize", image=["img", 0]))
+    math(g, "W", "round(a*c/min(a,b)/64)*64", "width: short side to Resolution, x64 (the LoRA guide is half size)", a=["size", 0], b=["size", 1], c=["short", 0])
+    math(g, "H", "round(b*c/min(a,b)/64)*64", "height, x64", a=["size", 0], b=["size", 1], c=["short", 0])
+    g.add("rs", node("ImageResizeKJv2", image=["img", 0], width=["W", 1], height=["H", 1], upscale_method="lanczos",
+                     keep_proportion="crop", pad_color="0, 0, 0", crop_position="center", divisible_by=64, device="cpu"))
+    g.add("paths", node("LTXVSparseTrackEditor", "@6 Tracks [points_store]", image=["rs", 0], points_store="[]", coordinates="[]",
+                        points_to_sample=["nf", 1]))
+    g.add("draw", node("LTXVDrawTracks", tracks=["paths", 0], width=["W", 1], height=["H", 1]))
+    g.add("lora", node("LTXICLoRALoaderModelOnly", model=["unet", 0],
+                       lora_name=LORA + "ltx-2.3-22b-ic-lora-motion-track-control-ref0.5.safetensors", strength_model=1.0))
+    g.add("vlat", node("EmptyLTXVLatentVideo", width=["W", 1], height=["H", 1], length=["nf", 1], batch_size=1))
+    g.add("i2v", node("LTXVImgToVideoInplace", vae=["vvae", 0], image=["rs", 0], latent=["vlat", 0], strength=0.7, bypass=False))
+    g.add("guide", node("LTXAddVideoICLoRAGuide", positive=["cond", 0], negative=["cond", 1], vae=["vvae", 0], latent=["i2v", 0],
+                        image=["draw", 0], frame_idx=0, strength=1.0, latent_downscale_factor=["lora", 1], crop="disabled",
+                        use_tiled_encode=False, tile_size=256, tile_overlap=64, use_streaming=False, tile_frames=97))
+    audio_latent(g, ["nf", 1])
+    g.add("av", node("LTXVConcatAVLatent", video_latent=["guide", 2], audio_latent=["alat", 0]))
+    sample(g, ["lora", 0], ["guide", 0], ["guide", 1], ["av", 0])
+    g.add("crop", node("LTXVCropGuides", positive=["guide", 0], negative=["guide", 1], latent=["sep", 0]))
+    decode(g, ["crop", 2], "ltx-tracks", audio=True)
+    return g
+
+
 TEMPLATES = {
     "deck-ltx-t2v": t2v,
     "deck-ltx-ripple": ripple,
+    "deck-ltx-tracks": tracks,
     "deck-ltx-v2v-lora": lambda: v2v("ltx-v2v-lora", "ltx-2.5-22b-ic-lora-colorization-0.9.safetensors",
                                       lora_title="@5 IC-LoRA [lora_name,strength_model]"),
     "deck-ltx-alpha": lambda: v2v("ltx-alpha", "ltx-2.5-22b-ic-lora-alpha-gen-0.9.safetensors", prompt_title=None, max_frames=145),
