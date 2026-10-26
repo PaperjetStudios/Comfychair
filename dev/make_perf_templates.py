@@ -53,11 +53,14 @@ def animate():
 
 
 def pose_frames(g, image, face=True, hands=True):
-    """DWPose (CPU, onnx) on every frame: body, hands and face landmarks as an OpenPose-style picture."""
+    """DWPose (CPU, onnx) on every frame: body, hands and face landmarks as an OpenPose-style picture (id posers)."""
     on = lambda b: "enable" if b else "disable"
     g.add("pose", node("DWPreprocessor", image=image, detect_hand=on(hands), detect_body="enable", detect_face=on(face),
                        resolution=512, bbox_detector="yolox_l.onnx", pose_estimator="dw-ll_ucoco_384.onnx",
                        scale_stick_for_xinsr_cn="disable"))
+    # DWPose answers at its own resolution (odd sizes happen): back to the clip's W x H
+    g.add("posers", node("ImageResizeKJv2", image=["pose", 0], width=["W", 1], height=["H", 1], upscale_method="bilinear",
+                         keep_proportion="stretch", pad_color="0, 0, 0", crop_position="center", divisible_by=2, device="cpu"))
 
 
 def h3_source(g, short=448):
@@ -98,7 +101,7 @@ def drive():
     shot["inputs"].update({"prompt": ["prompt", 0], "width": ["W", 1], "height": ["H", 1], "length": ["nf", 1],
                            "ref_images.ref_image_0": ["img", 0]})
     g.add("7", shot)
-    g["51"]["inputs"]["control_video"] = ["pose", 0]
+    g["51"]["inputs"]["control_video"] = ["posers", 0]
     g["51"]["_meta"] = {"title": "@5 Control [strength,end_percent]"}
     g["51"]["inputs"]["end_percent"] = 0.6
     g.add("aud", node("TrimAudioDuration", audio=["src", 2], start_index=0.0, duration=["secs", 0]))
@@ -112,7 +115,7 @@ def pose_preview():
     g = G()
     h3_source(g, short=512)
     pose_frames(g, ["rs", 0])
-    g.add("vid", node("CreateVideo", images=["pose", 0], fps=FPS))
+    g.add("vid", node("CreateVideo", images=["posers", 0], fps=FPS))
     g.add("save", node("SaveVideo", video=["vid", 0], filename_prefix="deck/pose", format="auto", codec="auto"))
     return g
 
@@ -144,7 +147,7 @@ def ltx_drive():
     g.add("vlat", node("EmptyLTXVLatentVideo", width=["W", 1], height=["H", 1], length=["nf", 1], batch_size=1))
     g.add("i2v", node("LTXVImgToVideoInplace", vae=["vvae", 0], image=["imgrs", 0], latent=["vlat", 0], strength=1.0, bypass=False))
     g.add("guide", node("LTXAddVideoICLoRAGuide", "@5 Control [strength]", positive=["cond", 0], negative=["cond", 1], vae=["vvae", 0],
-                        latent=["i2v", 0], image=["pose", 0], frame_idx=0, strength=1.0, latent_downscale_factor=["lora", 1],
+                        latent=["i2v", 0], image=["posers", 0], frame_idx=0, strength=1.0, latent_downscale_factor=["lora", 1],
                         crop="disabled", use_tiled_encode=False, tile_size=256, tile_overlap=64, use_streaming=False, tile_frames=97))
     audio_latent(g, ["nf", 1])
     g.add("av", node("LTXVConcatAVLatent", video_latent=["guide", 2], audio_latent=["alat", 0]))

@@ -1,33 +1,4 @@
 {
- "30": {
-  "class_type": "LoraLoaderModelOnly",
-  "inputs": {
-   "model": [
-    "6",
-    0
-   ],
-   "lora_name": "h3/minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
-   "strength_model": 1.0
-  },
-  "_meta": {
-   "title": "@7 Turbo LoRA"
-  }
- },
- "10": {
-  "class_type": "BasicScheduler",
-  "inputs": {
-   "model": [
-    "51",
-    0
-   ],
-   "scheduler": "simple",
-   "steps": 20,
-   "denoise": 1.0
-  },
-  "_meta": {
-   "title": "@9 Steps [steps]"
-  }
- },
  "12": {
   "class_type": "SamplerCustomAdvanced",
   "inputs": {
@@ -56,47 +27,38 @@
    "title": "Sampler"
   }
  },
- "9": {
-  "class_type": "KSamplerSelect",
+ "1": {
+  "class_type": "UNETLoader",
   "inputs": {
-   "sampler_name": "res_multistep"
+   "unet_name": "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
+   "weight_dtype": "default"
   },
   "_meta": {
-   "title": "Sampler select"
+   "title": "@10 Model [unet_name]"
   }
  },
- "50": {
-  "class_type": "ModelPatchLoader",
-  "inputs": {
-   "name": "minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors"
-  },
-  "_meta": {
-   "title": "Load Fun ControlNet"
-  }
- },
- "4": {
+ "3": {
   "class_type": "VAELoader",
   "inputs": {
-   "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+   "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
   },
   "_meta": {
-   "title": "Load audio VAE"
+   "title": "Load video VAE"
   }
  },
- "13": {
-  "class_type": "VAEDecode",
+ "10": {
+  "class_type": "BasicScheduler",
   "inputs": {
-   "samples": [
-    "12",
+   "model": [
+    "51",
     0
    ],
-   "vae": [
-    "3",
-    0
-   ]
+   "scheduler": "simple",
+   "steps": 20,
+   "denoise": 1.0
   },
   "_meta": {
-   "title": "Decode video"
+   "title": "@9 Steps [steps]"
   }
  },
  "2": {
@@ -126,23 +88,20 @@
    "title": "Guider"
   }
  },
- "1": {
-  "class_type": "UNETLoader",
+ "13": {
+  "class_type": "VAEDecode",
   "inputs": {
-   "unet_name": "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
-   "weight_dtype": "default"
+   "samples": [
+    "12",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
   },
   "_meta": {
-   "title": "@10 Model [unet_name]"
-  }
- },
- "3": {
-  "class_type": "VAELoader",
-  "inputs": {
-   "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
-  },
-  "_meta": {
-   "title": "Load video VAE"
+   "title": "Decode video"
   }
  },
  "51": {
@@ -164,12 +123,35 @@
    "start_percent": 0.0,
    "end_percent": 0.6,
    "control_video": [
-    "pose",
+    "posers",
     0
    ]
   },
   "_meta": {
    "title": "@5 Control [strength,end_percent]"
+  }
+ },
+ "9": {
+  "class_type": "KSamplerSelect",
+  "inputs": {
+   "sampler_name": "res_multistep"
+  },
+  "_meta": {
+   "title": "Sampler select"
+  }
+ },
+ "30": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "model": [
+    "6",
+    0
+   ],
+   "lora_name": "h3/minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+   "strength_model": 1.0
+  },
+  "_meta": {
+   "title": "@7 Turbo LoRA"
   }
  },
  "6": {
@@ -184,6 +166,24 @@
   },
   "_meta": {
    "title": "@6 LoRAs"
+  }
+ },
+ "50": {
+  "class_type": "ModelPatchLoader",
+  "inputs": {
+   "name": "minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors"
+  },
+  "_meta": {
+   "title": "Load Fun ControlNet"
+  }
+ },
+ "4": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+  },
+  "_meta": {
+   "title": "Load audio VAE"
   }
  },
  "src": {
@@ -338,6 +338,29 @@
    "bbox_detector": "yolox_l.onnx",
    "pose_estimator": "dw-ll_ucoco_384.onnx",
    "scale_stick_for_xinsr_cn": "disable"
+  }
+ },
+ "posers": {
+  "class_type": "ImageResizeKJv2",
+  "inputs": {
+   "image": [
+    "pose",
+    0
+   ],
+   "width": [
+    "W",
+    1
+   ],
+   "height": [
+    "H",
+    1
+   ],
+   "upscale_method": "bilinear",
+   "keep_proportion": "stretch",
+   "pad_color": "0, 0, 0",
+   "crop_position": "center",
+   "divisible_by": 2,
+   "device": "cpu"
   }
  },
  "8": {

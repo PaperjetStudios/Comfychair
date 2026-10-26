@@ -100,7 +100,8 @@ const BLANK = () => ({ op: 'ripple', source: null, first: null, matte: null, pro
   steps: 3, results: [], showing: null });
 let T = BLANK();
 let tabs = null;
-const UI = { wipe: 0.5, draw: null, srcInfo: null, playing: false, neg: false };
+// cmp: the result on the left instead of the source (comparing takes); layout: 'wipe' or 'side'
+const UI = { wipe: 0.5, draw: null, srcInfo: null, playing: false, neg: false, cmp: null, layout: 'wipe' };
 
 // ---- inputs ----
 const srcLabel = (s) => {
@@ -305,7 +306,18 @@ function resultActions(g) {
     button('Add to timeline', async () => { await addToTimeline({ kind: 'video', src, url: o.url, label: genLabel(g), dur: o.duration || 0 }); toast('Added to the Video timeline'); }, { cls: 'primary' }),
     button('Use as source', () => { T.source = src; UI.srcInfo = null; T.showing = null; changed(); }),
     button('Use as matte / mask', () => { T.matte = src; T.op = T.op === 'alpha' || T.op === 'mask' ? (T.op === 'alpha' ? 'mattekey' : 'cleanplate') : T.op; changed(); }),
-    button('Details', () => openGeneration(g.id)));
+    button('Details', () => openGeneration(g.id)),
+    compareSelect(g));
+}
+
+// the left side of the viewer: the source, or another take of this tab (to compare engines, seeds, settings)
+function compareSelect(g) {
+  const others = T.results.filter((id) => id !== g.id).map((id) => S.history.get(id)).filter((x) => x?.status === 'done');
+  if (!others.length) return null;
+  const sel = h('select', { onchange: () => { UI.cmp = Number(sel.value) || null; drawViewer(); } },
+    h('option', { value: '' }, 'Compare with source'),
+    others.slice().reverse().map((x) => h('option', { value: x.id, selected: UI.cmp === x.id }, `Compare with ${genLabel(x)}`)));
+  return sel;
 }
 
 function pickResult(onPick) {
@@ -410,30 +422,37 @@ function drawViewer() {
   if (!stage) return;
   const e = fx(T.op);
   const res = T.showing && S.history.get(T.showing);
-  const resUrl = res?.status === 'done' ? (res.outputs.find((x) => x.kind === 'video') || res.outputs[0])?.url : null;
-  const stillMode = e.needs.includes('tracks') || (!T.source && T.first);
-  const aUrl = stillMode ? null : srcUrl(T.source);
-  const want = `${aUrl}|${resUrl}|${stillMode ? T.first : ''}`;
+  const resUrl = res?.status === 'done' ? resultUrl(res) : null;
+  const cmp = resUrl && UI.cmp && UI.cmp !== T.showing && S.history.get(UI.cmp);
+  const cmpUrl = cmp?.status === 'done' ? resultUrl(cmp) : null;
+  const stillMode = !cmpUrl && (e.needs.includes('tracks') || (!T.source && T.first));
+  const aUrl = cmpUrl || (stillMode ? null : srcUrl(T.source));
+  const offset = cmpUrl ? 0 : (T.source?.trim?.start || 0);   // a result starts at 0; the source at its trim
+  const side = UI.layout === 'side' && !!aUrl && !!resUrl;
+  const want = `${aUrl}|${resUrl}|${stillMode ? T.first : ''}|${side}`;
   if (stage.dataset.want !== want) {
     stage.dataset.want = want;
     V.a = aUrl ? h('video', { src: aUrl, muted: true, playsInline: true, preload: 'auto', class: 'vfx-a' }) : null;
     V.b = resUrl ? h('video', { src: resUrl, muted: true, playsInline: true, preload: 'auto', class: 'vfx-b' }) : null;
     V.still = stillMode && T.first ? h('img', { src: inputUrl(T.first), class: 'vfx-a', alt: '' }) : null;
-    V.ov = h('canvas', { class: 'vfx-ov' });
+    V.ov = side ? null : h('canvas', { class: 'vfx-ov' });
     const base = V.a || V.still;
-    const media = h('div', { class: 'vfx-media' }, base, V.b, V.ov);
-    if (V.a && V.b) setWipe(UI.wipe);
+    const tags = V.a && V.b ? [h('span', { class: 'vfx-tag left' }, cmpUrl ? genLabel(cmp) : 'Source'), h('span', { class: 'vfx-tag right' }, genLabel(res))] : [];
+    const media = h('div', { class: `vfx-media${side ? ' side' : ''}` }, base, V.b, V.ov, ...tags);
+    if (V.a && V.b && !side) setWipe(UI.wipe);
     stage.replaceChildren(base || V.b ? media : placeholder('Choose a source clip or a start image'));
     const fit = () => sizeOverlay();
-    (V.a || V.b)?.addEventListener('loadedmetadata', () => { if (V.a && T.source?.trim) V.a.currentTime = T.source.trim.start; fit(); });
+    (V.a || V.b)?.addEventListener('loadedmetadata', () => { if (V.a && offset) V.a.currentTime = offset; fit(); });
     V.still?.addEventListener('load', fit);
-    wireOverlay(media);
-    if (V.a && V.b) V.b.addEventListener('timeupdate', () => { if (Math.abs(V.a.currentTime - V.b.currentTime - (T.source?.trim?.start || 0)) > 0.15) V.a.currentTime = V.b.currentTime + (T.source?.trim?.start || 0); });
+    if (V.ov) wireOverlay(media);
+    if (V.a && V.b) V.b.addEventListener('timeupdate', () => { if (Math.abs(V.a.currentTime - V.b.currentTime - offset) > 0.15) V.a.currentTime = V.b.currentTime + offset; });
   }
   stage.classList.toggle('drawing', !!UI.draw);
   sizeOverlay();
   renderTransport();
 }
+
+const resultUrl = (g) => (g.outputs.find((x) => x.kind === 'video') || g.outputs[0])?.url;
 
 function sizeOverlay() {
   const base = V.a || V.still || V.b;
@@ -538,7 +557,8 @@ function renderTransport() {
     iconBtn('Back one frame', '⏮', () => step(-1)),
     button(UI.playing ? '❚❚ Pause' : '▶ Play', play, { cls: 'small primary', disabled: !vids.length }),
     iconBtn('Forward one frame', '⏭', () => step(1)),
-    V.a && V.b ? h('span', { class: 'hint' }, 'Drag across the picture to wipe: source left, result right') : null,
+    V.a && V.b ? seg([['wipe', 'Wipe'], ['side', 'Side by side']], UI.layout, (v) => { UI.layout = v; UI.playing = false; drawViewer(); }) : null,
+    V.a && V.b && UI.layout === 'wipe' ? h('span', { class: 'hint' }, 'Drag across the picture to wipe') : null,
     UI.draw ? h('span', { class: 'hint' }, { points: 'Tap to place points', tracks: 'Drag to draw a path', color: 'Tap the screen colour' }[UI.draw]) : null].filter(Boolean));
 }
 
@@ -561,7 +581,7 @@ export function wireVfx() {
       empty: BLANK,
       migrate: (p) => ({ ...BLANK(), ...p, key: { ...BLANK().key, ...(p.key || {}) }, points: { ...BLANK().points, ...(p.points || {}) } }),
       dump: () => ({ ...T }),
-      load(payload) { T = { ...BLANK(), ...payload }; UI.srcInfo = null; UI.draw = null; render(); },
+      load(payload) { T = { ...BLANK(), ...payload }; UI.srcInfo = null; UI.draw = null; UI.cmp = null; render(); },
     } });
   maximizable($('#tab-vfx .stage'), $('#tab-vfx .viewer'), { onChange: () => sizeOverlay() });
   addEventListener('resize', () => { if ($('#tab-vfx').classList.contains('active')) sizeOverlay(); });

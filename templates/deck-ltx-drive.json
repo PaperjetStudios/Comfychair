@@ -226,6 +226,29 @@
    "scale_stick_for_xinsr_cn": "disable"
   }
  },
+ "posers": {
+  "class_type": "ImageResizeKJv2",
+  "inputs": {
+   "image": [
+    "pose",
+    0
+   ],
+   "width": [
+    "W",
+    1
+   ],
+   "height": [
+    "H",
+    1
+   ],
+   "upscale_method": "bilinear",
+   "keep_proportion": "stretch",
+   "pad_color": "0, 0, 0",
+   "crop_position": "center",
+   "divisible_by": 2,
+   "device": "cpu"
+  }
+ },
  "img": {
   "class_type": "LoadImage",
   "inputs": {
@@ -326,7 +349,7 @@
     0
    ],
    "image": [
-    "pose",
+    "posers",
     0
    ],
    "frame_idx": 0,
