@@ -6,7 +6,7 @@ Shares the graph helpers of make_ltx_templates.py. Field titles follow web/vfx.j
 """
 import json
 
-from make_ltx_templates import FPS, OUT, G, math, node
+from make_ltx_templates import FPS, OUT, G, audio_latent, decode, math, models, node, sample, text
 
 # Viggle-Animate: a MiniMax-H3 ref2va finetune for character replacement (ComfyUI-Viggle-Animate-H3)
 VIGGLE_UNET = "minimax_h3_ref2va_viggle_pruned_int8_convrot.safetensors"
@@ -117,10 +117,48 @@ def pose_preview():
     return g
 
 
+def ltx_drive():
+    """LTX-2.5 take on Drive a still: the character image is the first frame, and the clip's DWPose (body, hands, face)
+    guides the motion through the union-control IC-LoRA (an LTX-2.3 LoRA; ref0.5, so the guide is half size and
+    both sides are x64). Single stage at the chosen resolution, with new sound from the prompt."""
+    g = G()
+    models(g)
+    text(g)
+    g.add("src", node("VHS_LoadVideoPath", "@1 Source video [video]", video="", force_rate=FPS, custom_width=0, custom_height=0,
+                      frame_load_cap=0, skip_first_frames=0, select_every_nth=1))
+    g.add("secs", node("PrimitiveFloat", "@3 Length (seconds)", value=5.0))
+    math(g, "nf", f"floor((min(a, b*{FPS}+1)-1)/8)*8+1", "frames: 8n+1 within the clip and Length", a=["src", 1], b=["secs", 0])
+    g.add("cut", node("ImageFromBatch", image=["src", 0], batch_index=0, length=["nf", 1]))
+    g.add("short", node("PrimitiveInt", "@4 Resolution (short side)", value=576))
+    g.add("size", node("GetImageSize", image=["cut", 0]))
+    math(g, "W", "round(a*c/min(a,b)/64)*64", "width: short side to Resolution, x64 (the LoRA guide is half size)", a=["size", 0], b=["size", 1], c=["short", 0])
+    math(g, "H", "round(b*c/min(a,b)/64)*64", "height, x64", a=["size", 0], b=["size", 1], c=["short", 0])
+    g.add("rs", node("ImageResizeKJv2", image=["cut", 0], width=["W", 1], height=["H", 1], upscale_method="lanczos",
+                     keep_proportion="crop", pad_color="0, 0, 0", crop_position="center", divisible_by=64, device="cpu"))
+    pose_frames(g, ["rs", 0])
+    g.add("img", node("LoadImage", "@11 Character [image]", image=""))
+    g.add("imgrs", node("ImageResizeKJv2", image=["img", 0], width=["W", 1], height=["H", 1], upscale_method="lanczos",
+                        keep_proportion="crop", pad_color="0, 0, 0", crop_position="center", divisible_by=64, device="cpu"))
+    g.add("lora", node("LTXICLoRALoaderModelOnly", model=["unet", 0],
+                       lora_name="ltx2.3/ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors", strength_model=1.0))
+    g.add("vlat", node("EmptyLTXVLatentVideo", width=["W", 1], height=["H", 1], length=["nf", 1], batch_size=1))
+    g.add("i2v", node("LTXVImgToVideoInplace", vae=["vvae", 0], image=["imgrs", 0], latent=["vlat", 0], strength=1.0, bypass=False))
+    g.add("guide", node("LTXAddVideoICLoRAGuide", "@5 Control [strength]", positive=["cond", 0], negative=["cond", 1], vae=["vvae", 0],
+                        latent=["i2v", 0], image=["pose", 0], frame_idx=0, strength=1.0, latent_downscale_factor=["lora", 1],
+                        crop="disabled", use_tiled_encode=False, tile_size=256, tile_overlap=64, use_streaming=False, tile_frames=97))
+    audio_latent(g, ["nf", 1])
+    g.add("av", node("LTXVConcatAVLatent", video_latent=["guide", 2], audio_latent=["alat", 0]))
+    sample(g, ["lora", 0], ["guide", 0], ["guide", 1], ["av", 0])
+    g.add("crop", node("LTXVCropGuides", positive=["guide", 0], negative=["guide", 1], latent=["sep", 0]))
+    decode(g, ["crop", 2], "ltx-drive", audio=True)
+    return g
+
+
 TEMPLATES = {
     "deck-h3-animate": animate,
     "deck-h3-drive": drive,
     "deck-pose-video": pose_preview,
+    "deck-ltx-drive": ltx_drive,
 }
 
 if __name__ == "__main__":

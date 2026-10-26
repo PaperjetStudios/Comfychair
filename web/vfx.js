@@ -51,6 +51,9 @@ const EFFECTS = [
   { id: 'drive', group: 'Performance', label: 'Drive a still', tpl: 'deck-h3-drive', needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
     res: [[384, '384p'], [448, '448p'], [576, '576p']], maxLen: 15,
     help: 'The character in the still acts out the clip: body, hands and face follow the clip\'s pose (H3 with pose control), in a new shot described by the prompt. Call the character <Subject 1> and the still <Picture 1>, and name their clothes and look: otherwise the outfit can drift.' },
+  { id: 'ltxdrive', group: 'Performance', label: 'Drive a still (LTX)', tpl: 'deck-ltx-drive', mult: 64, needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
+    res: [[448, '448p'], [576, '576p'], [704, '704p']],
+    help: 'Like Drive a still, on LTX-2.5: the still is the first frame and the clip\'s pose (body, hands, face) moves it. Keeps the still\'s scene and look closely. Describe the person and what they do; the sound is made from the prompt.' },
   { id: 'pose', group: 'Performance', label: 'Pose preview', tpl: 'deck-pose-video', needs: ['source', 'len'],
     help: 'Shows what Drive a still will follow: the clip\'s body, hands and face as a stick figure. Quick: no GPU.' },
 ];
@@ -152,7 +155,7 @@ function sourceField(role = 'source') {
 }
 
 function firstField(optional) {
-  const pick = () => openImagePicker({ title: T.op === 'ingredients' ? 'Ingredients sheet' : T.op === 'animate' ? 'Character' : 'First frame', mp: () => 0,
+  const pick = () => openImagePicker({ title: T.op === 'ingredients' ? 'Ingredients sheet' : ['animate', 'drive', 'ltxdrive'].includes(T.op) ? 'Character' : 'First frame', mp: () => 0,
     onPick: (name) => { T.first = name; changed(); } });
   const takeFrame = async () => {
     const url = srcUrl(T.source);
@@ -163,9 +166,9 @@ function firstField(optional) {
     T.first = r.name; changed();
     return r.name;
   };
-  const edit = T.op === 'ripple' || T.op === 'animate';
+  const edit = ['ripple', 'animate', 'drive', 'ltxdrive'].includes(T.op);
   const label = T.op === 'ingredients' ? 'Ingredients sheet' : T.op === 'ripple' ? 'Edited first frame' : T.op === 'layout' ? 'Look (first frame)'
-    : T.op === 'animate' ? 'Character'
+    : ['animate', 'drive', 'ltxdrive'].includes(T.op) ? 'Character'
     : optional ? 'Start image (optional)' : 'Start image';
   return field(label, T.first ? h('img', { class: 'vfx-still', src: thumbUrl(T.first, 480), alt: '' }) : null,
     h('div', { class: 'row wrap' },
