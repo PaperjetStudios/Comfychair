@@ -61,7 +61,7 @@ function textSheet(o) {
   openSheet(h('h3', {}, 'Text to motion'),
     help('Describe what the body does. Each sentence is a new part, in order. It starts from the playhead and replaces the keys it covers.'),
     field('Motion', ta),
-    rangeField('Length', () => ST.secs, (v) => { ST.secs = v; }, { min: 1, max: 20, step: 0.5, fmt: (v) => `${v.toFixed(1)} s` }),
+    rangeField('Length', () => ST.secs, (v) => { ST.secs = v; }, { min: 1, max: 12, step: 0.5, fmt: (v) => `${v.toFixed(1)} s` }),
     h('div', { class: 'actions' },
       button('Make motion', () => {
         if (!ST.prompt.trim()) return toast('Describe the motion first', true);

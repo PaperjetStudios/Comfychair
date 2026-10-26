@@ -40,7 +40,7 @@ const EFFECTS = [
   { id: 'tracks', group: 'Generate', label: 'Motion paths', tpl: 'deck-ltx-tracks', mult: 64, needs: ['first', 'tracks', 'prompt', 'len', 'res', 'seed'],
     help: 'Draw paths on the start image: things under a path\'s start move along it.' },
   { id: 'ingredients', group: 'Generate', label: 'Ingredients sheet', tpl: 'deck-ltx-ingredients', mult: 64, needs: ['first', 'prompt', 'len', 'res', 'seed'],
-    help: 'One image with the characters, props and place laid out; say in the prompt where each one sits on the sheet.' },
+    help: 'One image with the people and props cut out on a plain white background (Alpha Gen can cut them out), and the place in the prompt. Two whole photos side by side come back as a split screen.' },
   { id: 'upscale', group: 'Generate', label: 'Upscale', tpl: 'deck-ltx-upscale', needs: ['source', 'prompt', 'len', 'outsize', 'seed'],
     help: 'Adds detail at a larger size. Describe the look (light, film, sharpness), not the things in it.' },
 ];
