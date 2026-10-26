@@ -1,0 +1,433 @@
+{
+ "src": {
+  "class_type": "VHS_LoadVideoPath",
+  "inputs": {
+   "video": "",
+   "force_rate": 24,
+   "custom_width": 0,
+   "custom_height": 0,
+   "frame_load_cap": 0,
+   "skip_first_frames": 0,
+   "select_every_nth": 1
+  },
+  "_meta": {
+   "title": "@1 Source video [video]"
+  }
+ },
+ "secs": {
+  "class_type": "PrimitiveFloat",
+  "inputs": {
+   "value": 5.0
+  },
+  "_meta": {
+   "title": "@3 Length (seconds)"
+  }
+ },
+ "nf": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "min(a, round(b*24))",
+   "values.a": [
+    "src",
+    1
+   ],
+   "values.b": [
+    "secs",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "frames within the clip and Length"
+  }
+ },
+ "cut": {
+  "class_type": "ImageFromBatch",
+  "inputs": {
+   "image": [
+    "src",
+    0
+   ],
+   "batch_index": 0,
+   "length": [
+    "nf",
+    1
+   ]
+  }
+ },
+ "short": {
+  "class_type": "PrimitiveInt",
+  "inputs": {
+   "value": 512
+  },
+  "_meta": {
+   "title": "@4 Resolution (short side)"
+  }
+ },
+ "scale": {
+  "class_type": "PrimitiveFloat",
+  "inputs": {
+   "value": 1.8
+  },
+  "_meta": {
+   "title": "@5 Face area"
+  }
+ },
+ "fmaskpose": {
+  "class_type": "DWPreprocessor",
+  "inputs": {
+   "image": [
+    "cut",
+    0
+   ],
+   "detect_hand": "disable",
+   "detect_body": "disable",
+   "detect_face": "enable",
+   "resolution": 512,
+   "bbox_detector": "yolox_l.onnx",
+   "pose_estimator": "dw-ll_ucoco_384.onnx",
+   "scale_stick_for_xinsr_cn": "disable"
+  }
+ },
+ "fmasksize": {
+  "class_type": "GetImageSize",
+  "inputs": {
+   "image": [
+    "cut",
+    0
+   ]
+  }
+ },
+ "fmaskrs": {
+  "class_type": "ImageResizeKJv2",
+  "inputs": {
+   "image": [
+    "fmaskpose",
+    0
+   ],
+   "width": [
+    "fmasksize",
+    0
+   ],
+   "height": [
+    "fmasksize",
+    1
+   ],
+   "upscale_method": "nearest-exact",
+   "keep_proportion": "stretch",
+   "pad_color": "0, 0, 0",
+   "crop_position": "center",
+   "divisible_by": 1,
+   "device": "cpu"
+  }
+ },
+ "fmask": {
+  "class_type": "ImageToMask",
+  "inputs": {
+   "image": [
+    "fmaskrs",
+    0
+   ],
+   "channel": "red"
+  }
+ },
+ "crop": {
+  "class_type": "DeckFaceCrop",
+  "inputs": {
+   "images": [
+    "cut",
+    0
+   ],
+   "mask": [
+    "fmask",
+    0
+   ],
+   "scale": [
+    "scale",
+    0
+   ],
+   "size": [
+    "short",
+    0
+   ],
+   "smooth": 0.6
+  }
+ },
+ "img": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@11 Character [image]"
+  }
+ },
+ "cmaskpose": {
+  "class_type": "DWPreprocessor",
+  "inputs": {
+   "image": [
+    "img",
+    0
+   ],
+   "detect_hand": "disable",
+   "detect_body": "disable",
+   "detect_face": "enable",
+   "resolution": 512,
+   "bbox_detector": "yolox_l.onnx",
+   "pose_estimator": "dw-ll_ucoco_384.onnx",
+   "scale_stick_for_xinsr_cn": "disable"
+  }
+ },
+ "cmasksize": {
+  "class_type": "GetImageSize",
+  "inputs": {
+   "image": [
+    "img",
+    0
+   ]
+  }
+ },
+ "cmaskrs": {
+  "class_type": "ImageResizeKJv2",
+  "inputs": {
+   "image": [
+    "cmaskpose",
+    0
+   ],
+   "width": [
+    "cmasksize",
+    0
+   ],
+   "height": [
+    "cmasksize",
+    1
+   ],
+   "upscale_method": "nearest-exact",
+   "keep_proportion": "stretch",
+   "pad_color": "0, 0, 0",
+   "crop_position": "center",
+   "divisible_by": 1,
+   "device": "cpu"
+  }
+ },
+ "cmask": {
+  "class_type": "ImageToMask",
+  "inputs": {
+   "image": [
+    "cmaskrs",
+    0
+   ],
+   "channel": "red"
+  }
+ },
+ "cface": {
+  "class_type": "DeckFaceCrop",
+  "inputs": {
+   "images": [
+    "img",
+    0
+   ],
+   "mask": [
+    "cmask",
+    0
+   ],
+   "scale": [
+    "scale",
+    0
+   ],
+   "size": [
+    "short",
+    0
+   ],
+   "smooth": 0.0
+  }
+ },
+ "tcond": {
+  "class_type": "ViggleTextCondLoader",
+  "inputs": {
+   "text_cond": "fixed_embed_fwd_anyframe.safetensors"
+  }
+ },
+ "vae": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
+  }
+ },
+ "unet": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "minimax_h3_ref2va_viggle_pruned_int8_convrot.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "lora": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "model": [
+    "unet",
+    0
+   ],
+   "lora_name": "viggle_animate_dmd_lora_r64.safetensors",
+   "strength_model": 1.0
+  }
+ },
+ "shift": {
+  "class_type": "MiniMaxH3SigmaShift",
+  "inputs": {
+   "model": [
+    "lora",
+    0
+   ],
+   "shift_video": 3.0,
+   "shift_audio": 3.0
+  }
+ },
+ "cond": {
+  "class_type": "ViggleAnimateConditioningWindowed",
+  "inputs": {
+   "cond_video": [
+    "crop",
+    0
+   ],
+   "ref_image": [
+    "cface",
+    0
+   ],
+   "text_cond": [
+    "tcond",
+    0
+   ],
+   "vae": [
+    "vae",
+    0
+   ],
+   "width": 0,
+   "height": 0,
+   "chunk_frames": 124,
+   "overlap_frames": 22,
+   "continuation": "five_frame_anchor"
+  }
+ },
+ "guider": {
+  "class_type": "BasicGuider",
+  "inputs": {
+   "model": [
+    "shift",
+    0
+   ],
+   "conditioning": [
+    "cond",
+    1
+   ]
+  }
+ },
+ "ksel": {
+  "class_type": "KSamplerSelect",
+  "inputs": {
+   "sampler_name": "euler"
+  }
+ },
+ "sig": {
+  "class_type": "ManualSigmas",
+  "inputs": {
+   "sigmas": "1.0, 0.8571428571428571, 0.6, 0.0"
+  },
+  "_meta": {
+   "title": "@6 Steps [sigmas]"
+  }
+ },
+ "run": {
+  "class_type": "ViggleChunkedSampler",
+  "inputs": {
+   "guider": [
+    "guider",
+    0
+   ],
+   "sampler": [
+    "ksel",
+    0
+   ],
+   "sigmas": [
+    "sig",
+    0
+   ],
+   "cond_set": [
+    "cond",
+    0
+   ],
+   "vae": [
+    "vae",
+    0
+   ],
+   "seed": 42,
+   "rerender_chunk": 0,
+   "rerender_seed": 0
+  },
+  "_meta": {
+   "title": "@8 Seed [seed]"
+  }
+ },
+ "paste": {
+  "class_type": "DeckFaceUncrop",
+  "inputs": {
+   "images": [
+    "cut",
+    0
+   ],
+   "crops": [
+    "run",
+    0
+   ],
+   "crop_info": [
+    "crop",
+    1
+   ],
+   "feather": 0.25,
+   "shape": "face",
+   "grow": 1.1
+  },
+  "_meta": {
+   "title": "@7 Blend [shape]"
+  }
+ },
+ "aud": {
+  "class_type": "TrimAudioDuration",
+  "inputs": {
+   "audio": [
+    "src",
+    2
+   ],
+   "start_index": 0.0,
+   "duration": [
+    "secs",
+    0
+   ]
+  }
+ },
+ "vid": {
+  "class_type": "CreateVideo",
+  "inputs": {
+   "images": [
+    "paste",
+    0
+   ],
+   "fps": 24,
+   "audio": [
+    "aud",
+    0
+   ]
+  }
+ },
+ "save": {
+  "class_type": "SaveVideo",
+  "inputs": {
+   "video": [
+    "vid",
+    0
+   ],
+   "filename_prefix": "deck/h3-faceswap",
+   "format": "auto",
+   "codec": "auto"
+  }
+ }
+}

@@ -48,6 +48,9 @@ const EFFECTS = [
   { id: 'animate', group: 'Performance', label: 'Replace character', tpl: 'deck-h3-animate', needs: ['source', 'first', 'len', 'res', 'steps', 'seed'],
     res: [[384, '384p'], [480, '480p'], [576, '576p']], maxLen: 30,
     help: 'Re-renders the person in the clip as the character in the still: the clip\'s motion, face, camera, light and sound are kept (Viggle-Animate on H3). Long clips run in 5 s windows.' },
+  { id: 'faceswap', group: 'Performance', label: 'Face only', tpl: 'deck-h3-faceswap', needs: ['source', 'first', 'len', 'res', 'steps', 'blend', 'seed'],
+    res: [[384, '384'], [512, '512'], [640, '640']], maxLen: 30,
+    help: 'Swaps only the face: it is followed through the clip, re-rendered as the character\'s face with the same expressions, and blended back. Hair, body and the rest of the shot stay. Works best when the face is large in frame.' },
   { id: 'drive', group: 'Performance', label: 'Drive a still', tpl: 'deck-h3-drive', needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
     res: [[384, '384p'], [448, '448p'], [576, '576p']], maxLen: 15,
     help: 'The character in the still acts out the clip: body, hands and face follow the clip\'s pose (H3 with pose control), in a new shot described by the prompt. Call the character <Subject 1> and the still <Picture 1>, and name their clothes and look: otherwise the outfit can drift.' },
@@ -76,6 +79,7 @@ const ROLES = {
   height: (f) => f.kind === 'int' && /^height$/i.test(f.group),
   res: (f) => f.kind === 'int' && /resolution/i.test(f.group),
   steps: (f) => f.kind === 'text' && f.input === 'sigmas',
+  blend: (f) => f.kind === 'choice' && f.input === 'shape',
   lora: (f) => f.kind === 'choice' && f.input === 'lora_name',
   strength: (f) => f.kind === 'float' && f.input === 'strength_model',
   outsize: (f) => f.kind === 'choice' && f.input === 'output_size',
@@ -97,7 +101,7 @@ const SIZES = [['Match source', null], ['1280×704', [1280, 704]], ['704×1280',
 
 const BLANK = () => ({ op: 'ripple', source: null, first: null, matte: null, prompt: '', loras: [], len: 5, res: 704, size: null, seed: -1,
   points: { positive: [], negative: [] }, pointsAt: 0, tracks: [], key: { color: '#00ff00', similarity: 0.12, blend: 0.08, spill: 0.5, invert: false },
-  steps: 3, results: [], showing: null });
+  steps: 3, blend: 'face', results: [], showing: null });
 let T = BLANK();
 let tabs = null;
 // cmp: the result on the left instead of the source (comparing takes); layout: 'wipe' or 'side'
@@ -156,7 +160,7 @@ function sourceField(role = 'source') {
 }
 
 function firstField(optional) {
-  const pick = () => openImagePicker({ title: T.op === 'ingredients' ? 'Ingredients sheet' : ['animate', 'drive', 'ltxdrive'].includes(T.op) ? 'Character' : 'First frame', mp: () => 0,
+  const pick = () => openImagePicker({ title: T.op === 'ingredients' ? 'Ingredients sheet' : ['animate', 'faceswap', 'drive', 'ltxdrive'].includes(T.op) ? 'Character' : 'First frame', mp: () => 0,
     onPick: (name) => { T.first = name; changed(); } });
   const takeFrame = async () => {
     const url = srcUrl(T.source);
@@ -167,9 +171,9 @@ function firstField(optional) {
     T.first = r.name; changed();
     return r.name;
   };
-  const edit = ['ripple', 'animate', 'drive', 'ltxdrive'].includes(T.op);
+  const edit = ['ripple', 'animate', 'faceswap', 'drive', 'ltxdrive'].includes(T.op);
   const label = T.op === 'ingredients' ? 'Ingredients sheet' : T.op === 'ripple' ? 'Edited first frame' : T.op === 'layout' ? 'Look (first frame)'
-    : ['animate', 'drive', 'ltxdrive'].includes(T.op) ? 'Character'
+    : ['animate', 'faceswap', 'drive', 'ltxdrive'].includes(T.op) ? 'Character'
     : optional ? 'Start image (optional)' : 'Start image';
   return field(label, T.first ? h('img', { class: 'vfx-still', src: thumbUrl(T.first, 480), alt: '' }) : null,
     h('div', { class: 'row wrap' },
@@ -268,6 +272,8 @@ function render() {
       help(e.res ? 'The short side, in pixels. Higher is sharper and slower.' : 'The short side, in pixels. 704p takes about 1.5 minutes for 5 s on this card; 1088p about 3.')) : null,
     needs.has('steps') ? field('Steps', seg([[3, 'Fast'], [5, 'Balanced'], [7, 'Quality']], T.steps || 3, (v) => { T.steps = Number(v); changed(false); }),
       help('Fast is the upstream default (3 steps). Quality can over-sharpen.')) : null,
+    needs.has('blend') ? field('Blend', seg([['face', 'Face'], ['oval', 'Head']], T.blend || 'face', (v) => { T.blend = v; changed(false); }),
+      help('Face keeps the original hair, neck and collar. Head pastes the whole tracked square (hair included), with a soft edge.')) : null,
     needs.has('outsize') ? field('Output size', seg([['FullHD', 'Full HD'], ['4K', '4K']], T.outsize || 'FullHD', (v) => { T.outsize = v; changed(false); }),
       help('4K is tiled: much slower, same memory.')) : null,
     needs.has('size') ? field('Size', h('select', { onchange: (ev) => { T.size = SIZES[ev.target.value][1]; changed(false); } },
@@ -348,6 +354,7 @@ async function run() {
   }
   if (e.needs.includes('res')) put('res', resOf(e));
   if (e.needs.includes('steps')) put('steps', STEPS[T.steps] || STEPS[3]);
+  if (e.needs.includes('blend')) put('blend', T.blend || 'face');
   if (e.needs.includes('outsize')) put('outsize', T.outsize || 'FullHD');
   const size = T.size || (e.needs.includes('size') && T.first ? await imageSize(T.first) : null);
   if (e.needs.includes('size') && size) { put('width', size[0]); put('height', size[1]); }

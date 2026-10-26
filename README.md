@@ -127,6 +127,28 @@ tagged fields, found by kind and group name (`ROLES` in `web/vfx.js`):
 | `@Points [points_store]` on **SAM3PointCollector** | `{"positive":[{x,y}],"negative":[…]}` in pixels of the clip |
 | `@Tracks [points_store]` on **LTXVSparseTrackEditor** | `[[{x,y},…],…]`: one list of control points per path, in pixels of the generated size |
 
+The **Performance** effects use more tagged fields: `@Character` (any title) on **LoadImage** for the
+character still, `@Steps [sigmas]` on **ManualSigmas** (Viggle's distilled schedules; Fast/Balanced/Quality
+send 4, 6 or 8 points) and `@Blend [shape]` on **Deck Face Uncrop** (`face` or `oval`).
+
+| Effect | Template | What it runs |
+|---|---|---|
+| Replace character | `deck-h3-animate` | Viggle-Animate (an H3 ref2va finetune): the clip's performer re-rendered as the still's character, in 124-frame windows |
+| Face only | `deck-h3-faceswap` | the same model on a square that follows the face, pasted back with Deck Face Uncrop |
+| Drive a still | `deck-h3-drive` | `deck-h3-ctrl2v`'s graph with the clip's DWPose (body, hands, face) as the control video |
+| Drive a still (LTX) | `deck-ltx-drive` | LTX-2.5 with the still as the first frame and DWPose through the union-control IC-LoRA |
+| Pose preview | `deck-pose-video` | DWPose only (CPU): what the drive effects follow |
+
+They come from `dev/make_perf_templates.py`. Viggle needs `minimax_h3_ref2va_viggle_pruned_int8_convrot`,
+`viggle_animate_dmd_lora_r64` and the `fixed_embed_fwd_anyframe` text conditioning (ComfyUI-Viggle-Animate-H3).
+
+**Face crop** (`comfy_nodes/deck_facecrop`): Deck Face Crop follows a face through a clip from a face mask
+(DWPose face points are enough). Frames without a face take their neighbours' box, the square keeps one
+size, and edges are padded. Deck Face Uncrop pastes processed crops back through an ellipse fitted to each
+frame's face. Link it like the TAPNext++ node below
+(`ln -s ~/Programs/comfydeck/comfy_nodes/deck_facecrop ~/Programs/ComfyUI/custom_nodes/deck_facecrop`) and
+restart ComfyUI.
+
 **Keying** needs no template: the Video tab's **Key…** button on a clip, and the VFX tab's **Colour key**
 and **Apply matte** effects, call `POST /api/video/key`. It writes a VP9 webm with alpha into History.
 The Video preview and its export put a keyed clip over the tracks below it.

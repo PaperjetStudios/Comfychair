@@ -1,4 +1,15 @@
 {
+ "2": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+   "type": "minimax",
+   "device": "default"
+  },
+  "_meta": {
+   "title": "Load CLIP"
+  }
+ },
  "12": {
   "class_type": "SamplerCustomAdvanced",
   "inputs": {
@@ -37,57 +48,6 @@
    "title": "@10 Model [unet_name]"
   }
  },
- "3": {
-  "class_type": "VAELoader",
-  "inputs": {
-   "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
-  },
-  "_meta": {
-   "title": "Load video VAE"
-  }
- },
- "10": {
-  "class_type": "BasicScheduler",
-  "inputs": {
-   "model": [
-    "51",
-    0
-   ],
-   "scheduler": "simple",
-   "steps": 20,
-   "denoise": 1.0
-  },
-  "_meta": {
-   "title": "@9 Steps [steps]"
-  }
- },
- "2": {
-  "class_type": "CLIPLoader",
-  "inputs": {
-   "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-   "type": "minimax",
-   "device": "default"
-  },
-  "_meta": {
-   "title": "Load CLIP"
-  }
- },
- "11": {
-  "class_type": "BasicGuider",
-  "inputs": {
-   "model": [
-    "51",
-    0
-   ],
-   "conditioning": [
-    "7",
-    0
-   ]
-  },
-  "_meta": {
-   "title": "Guider"
-  }
- },
  "13": {
   "class_type": "VAEDecode",
   "inputs": {
@@ -102,6 +62,15 @@
   },
   "_meta": {
    "title": "Decode video"
+  }
+ },
+ "9": {
+  "class_type": "KSamplerSelect",
+  "inputs": {
+   "sampler_name": "res_multistep"
+  },
+  "_meta": {
+   "title": "Sampler select"
   }
  },
  "51": {
@@ -131,27 +100,53 @@
    "title": "@5 Control [strength,end_percent]"
   }
  },
- "9": {
-  "class_type": "KSamplerSelect",
+ "4": {
+  "class_type": "VAELoader",
   "inputs": {
-   "sampler_name": "res_multistep"
+   "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
   },
   "_meta": {
-   "title": "Sampler select"
+   "title": "Load audio VAE"
   }
  },
- "30": {
-  "class_type": "LoraLoaderModelOnly",
+ "10": {
+  "class_type": "BasicScheduler",
   "inputs": {
    "model": [
-    "6",
+    "51",
     0
    ],
-   "lora_name": "h3/minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
-   "strength_model": 1.0
+   "scheduler": "simple",
+   "steps": 20,
+   "denoise": 1.0
   },
   "_meta": {
-   "title": "@7 Turbo LoRA"
+   "title": "@9 Steps [steps]"
+  }
+ },
+ "3": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
+  },
+  "_meta": {
+   "title": "Load video VAE"
+  }
+ },
+ "11": {
+  "class_type": "BasicGuider",
+  "inputs": {
+   "model": [
+    "51",
+    0
+   ],
+   "conditioning": [
+    "7",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Guider"
   }
  },
  "6": {
@@ -168,6 +163,20 @@
    "title": "@6 LoRAs"
   }
  },
+ "30": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "model": [
+    "6",
+    0
+   ],
+   "lora_name": "h3/minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+   "strength_model": 1.0
+  },
+  "_meta": {
+   "title": "@7 Turbo LoRA"
+  }
+ },
  "50": {
   "class_type": "ModelPatchLoader",
   "inputs": {
@@ -175,15 +184,6 @@
   },
   "_meta": {
    "title": "Load Fun ControlNet"
-  }
- },
- "4": {
-  "class_type": "VAELoader",
-  "inputs": {
-   "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
-  },
-  "_meta": {
-   "title": "Load audio VAE"
   }
  },
  "src": {

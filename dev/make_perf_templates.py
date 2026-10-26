@@ -157,11 +157,61 @@ def ltx_drive():
     return g
 
 
+def face_mask(g, nid, image):
+    """A mask of the face points DWPose finds (face only), at the image's own size."""
+    g.add(nid + "pose", node("DWPreprocessor", image=image, detect_hand="disable", detect_body="disable", detect_face="enable",
+                             resolution=512, bbox_detector="yolox_l.onnx", pose_estimator="dw-ll_ucoco_384.onnx",
+                             scale_stick_for_xinsr_cn="disable"))
+    g.add(nid + "size", node("GetImageSize", image=image))
+    g.add(nid + "rs", node("ImageResizeKJv2", image=[nid + "pose", 0], width=[nid + "size", 0], height=[nid + "size", 1],
+                           upscale_method="nearest-exact", keep_proportion="stretch", pad_color="0, 0, 0", crop_position="center",
+                           divisible_by=1, device="cpu"))
+    g.add(nid, node("ImageToMask", image=[nid + "rs", 0], channel="red"))
+
+
+def faceswap():
+    """Only the face: Deck Face Crop follows the face through the clip (DWPose face points), Viggle-Animate re-renders
+    that square as the character's face, and Deck Face Uncrop blends it back into the full-size frame. Body, hair
+    past the oval, clothes and background stay the original footage."""
+    g = G()
+    g.add("src", node("VHS_LoadVideoPath", "@1 Source video [video]", video="", force_rate=FPS, custom_width=0, custom_height=0,
+                      frame_load_cap=0, skip_first_frames=0, select_every_nth=1))
+    g.add("secs", node("PrimitiveFloat", "@3 Length (seconds)", value=5.0))
+    math(g, "nf", f"min(a, round(b*{FPS}))", "frames within the clip and Length", a=["src", 1], b=["secs", 0])
+    g.add("cut", node("ImageFromBatch", image=["src", 0], batch_index=0, length=["nf", 1]))
+    g.add("short", node("PrimitiveInt", "@4 Resolution (short side)", value=512))
+    g.add("scale", node("PrimitiveFloat", "@5 Face area", value=1.8))
+    face_mask(g, "fmask", ["cut", 0])
+    g.add("crop", node("DeckFaceCrop", images=["cut", 0], mask=["fmask", 0], scale=["scale", 0], size=["short", 0], smooth=0.6))
+    g.add("img", node("LoadImage", "@11 Character [image]", image=""))
+    face_mask(g, "cmask", ["img", 0])
+    g.add("cface", node("DeckFaceCrop", images=["img", 0], mask=["cmask", 0], scale=["scale", 0], size=["short", 0], smooth=0.0))
+    g.add("tcond", node("ViggleTextCondLoader", text_cond=VIGGLE_COND))
+    g.add("vae", node("VAELoader", vae_name=H3_VAE))
+    g.add("unet", node("UNETLoader", unet_name=VIGGLE_UNET, weight_dtype="default"))
+    g.add("lora", node("LoraLoaderModelOnly", model=["unet", 0], lora_name=VIGGLE_LORA, strength_model=1.0))
+    g.add("shift", node("MiniMaxH3SigmaShift", model=["lora", 0], shift_video=3.0, shift_audio=3.0))
+    g.add("cond", node("ViggleAnimateConditioningWindowed", cond_video=["crop", 0], ref_image=["cface", 0], text_cond=["tcond", 0],
+                       vae=["vae", 0], width=0, height=0, chunk_frames=124, overlap_frames=22, continuation="five_frame_anchor"))
+    g.add("guider", node("BasicGuider", model=["shift", 0], conditioning=["cond", 1]))
+    g.add("ksel", node("KSamplerSelect", sampler_name="euler"))
+    g.add("sig", node("ManualSigmas", "@6 Steps [sigmas]", sigmas=VIGGLE_SIGMAS))
+    g.add("run", node("ViggleChunkedSampler", "@8 Seed [seed]", guider=["guider", 0], sampler=["ksel", 0], sigmas=["sig", 0],
+                      cond_set=["cond", 0], vae=["vae", 0], seed=42, rerender_chunk=0, rerender_seed=0))
+    g.add("paste", node("DeckFaceUncrop", "@7 Blend [shape]", images=["cut", 0], crops=["run", 0], crop_info=["crop", 1], feather=0.25,
+                        shape="face", grow=1.1))
+    g.add("aud", node("TrimAudioDuration", audio=["src", 2], start_index=0.0, duration=["secs", 0]))
+    g.add("vid", node("CreateVideo", images=["paste", 0], fps=FPS, audio=["aud", 0]))
+    g.add("save", node("SaveVideo", video=["vid", 0], filename_prefix="deck/h3-faceswap", format="auto", codec="auto"))
+    return g
+
+
 TEMPLATES = {
     "deck-h3-animate": animate,
     "deck-h3-drive": drive,
     "deck-pose-video": pose_preview,
     "deck-ltx-drive": ltx_drive,
+    "deck-h3-faceswap": faceswap,
 }
 
 if __name__ == "__main__":
