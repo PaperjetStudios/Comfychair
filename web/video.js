@@ -1060,6 +1060,7 @@ function renderVideoPanel() {
       h('div', { class: 'row wrap' },
         button('✂ Split at playhead', splitAtPlayhead, { title: 'S' }),
         button('⤫ Cross-fade with previous', () => crossfadePrev(it)),
+        it.kind === 'video' && canKey(it) ? button('Key…', () => openKey(it), { title: 'Cut out a green screen, or use a matte, so lower tracks show through' }) : null,
         it.kind === 'video' && canTrack(it.src) ? button('Track motion', () => openTrack({ src: it.src, url: it.url, label: it.label, from: it.in, to: it.out ?? undefined }), { title: 'Follow the picture\'s movement and make a 3D camera from it' }) : null,
         isVisual(it) ? button('Reset framing', () => { Object.assign(it, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); delete it.rotation; delete it.anchor; timelineChanged(); }) : null,
         button('Delete clip', deleteSelected, { cls: 'small danger', title: 'Delete' })));
@@ -1090,6 +1091,64 @@ function renderVideoPanel() {
         V.items = []; V.sel = null; vidSeek(0); timelineChanged();
       }) : null,
       V.items.length ? help('The export lands in History.') : null)));
+}
+
+// ---- keying: a copy of the clip with alpha (server: /api/video/key), swapped in where the clip is ----
+const canKey = (it) => it.src && (it.src.generation != null || it.src.media);
+
+function openKey(it) {
+  const k = { mode: 'color', color: '#00ff00', similarity: 0.12, blend: 0.08, spill: 0.5, invert: false, matte: null };
+  const frame = h('canvas', { class: 'key-frame' });
+  const swatch = h('input', { type: 'color', value: k.color, oninput: () => { k.color = swatch.value; } });
+  const m = V.els.get(it.id)?.el;
+  if (m?.videoWidth) {   // the clip as it is under the playhead: tap it to take the screen colour
+    frame.width = 320; frame.height = Math.round((320 * m.videoHeight) / m.videoWidth);
+    frame.getContext('2d').drawImage(m, 0, 0, frame.width, frame.height);
+    frame.addEventListener('pointerdown', (e) => {
+      const r = frame.getBoundingClientRect();
+      const [R, G, B] = frame.getContext('2d').getImageData(Math.floor(((e.clientX - r.left) / r.width) * frame.width),
+        Math.floor(((e.clientY - r.top) / r.height) * frame.height), 1, 1).data;
+      k.color = swatch.value = '#' + [R, G, B].map((v) => v.toString(16).padStart(2, '0')).join('');
+    });
+  }
+  const matteLabel = h('span', { class: 'muted' }, 'none');
+  const pickMatte = () => pickerSheet('Pick a matte', [help('White keeps the picture, black lets lower tracks show. Alpha Gen and mask runs make these.', 'grow'), button('Cancel', () => openKey(it))],
+    async () => (await projectOutputs(['video'])).map(({ g, o, i }) => mediaCard(cardMedia(o), genLabel(g), () => {
+      k.matte = { generation: g.id, index: i }; k.matteLabel = genLabel(g); body(); openSheet(...sheet());
+    }, { badge: '▶' })));
+  const colorFields = () => [
+    frame.width ? field('Tap the screen colour', frame) : null,
+    field('Key colour', swatch),
+    rangeField('Similarity', () => k.similarity, (v) => { k.similarity = v; }, { min: 0.01, max: 0.6, step: 0.01, help: 'How close to the key colour a pixel must be to go clear. Raise it until the screen is gone.' }),
+    rangeField('Edge blend', () => k.blend, (v) => { k.blend = v; }, { min: 0, max: 0.5, step: 0.01, help: 'Softens the cut-out edge.' }),
+    rangeField('Spill removal', () => k.spill, (v) => { k.spill = v; }, { min: 0, max: 1, step: 0.05, help: 'Takes the green (or blue) cast off hair and edges.' }),
+  ];
+  const matteFields = () => [field('Matte clip', h('div', { class: 'row' }, matteLabel, button('Pick…', pickMatte, { cls: 'small' })))];
+  const fieldsBox = h('div');
+  const body = () => {
+    matteLabel.textContent = k.matteLabel || 'none';
+    fieldsBox.replaceChildren(...(k.mode === 'color' ? colorFields() : matteFields()).filter(Boolean));
+  };
+  const go = button('Key clip', async () => {
+    if (k.mode === 'matte' && !k.matte) return toast('Pick a matte clip first', true);
+    go.disabled = true; go.textContent = 'Keying…';
+    try {
+      const g = await api('/api/video/key', { method: 'POST', body: { source: it.src, mode: k.mode, matte: k.matte, color: k.color,
+        similarity: k.similarity, blend: k.blend, spill: k.spill, invert: k.invert, project_id: S.project }, timeout: 900000 });
+      const o = g.outputs[0], was = { src: it.src, url: it.url, label: it.label };
+      Object.assign(it, { src: { generation: g.id, index: 0 }, url: o.url, label: `${it.label} (keyed)` });
+      closeSheet(); timelineChanged();
+      undoToast('Keyed: lower tracks show through', () => { Object.assign(it, was); timelineChanged(); });
+    } catch (e) { toast('Keying failed: ' + e.message, true); go.disabled = false; go.textContent = 'Key clip'; }
+  }, { cls: 'primary' });
+  const sheet = () => [h('h3', {}, 'Key ' + it.label),
+    help('Makes a copy of the clip with see-through parts and puts it in this clip\'s place (sound kept). Put the clip on a track above the background.'),
+    seg([['color', 'Colour key'], ['matte', 'Matte']], k.mode, (v) => { k.mode = v; body(); }),
+    fieldsBox,
+    field('Invert', h('input', { type: 'checkbox', checked: k.invert, onchange: (e) => { k.invert = e.target.checked; } })),
+    actions(go, button('Cancel', closeSheet))];
+  body();
+  openSheet(...sheet());
 }
 
 async function exportVideo(btn) {

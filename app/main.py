@@ -802,6 +802,48 @@ async def video_render(body: dict = Body(...)):
     return db.get_generation(gid)
 
 
+@app.post("/api/video/key")
+async def video_key(body: dict = Body(...)):
+    """A keyed copy of a clip in History, with alpha (VP9 webm): {source, mode: color|matte, matte (a
+    source, for mode matte), color "#rrggbb", similarity, blend, spill, invert, project_id}."""
+    if not imageprep.ffmpeg_available():
+        raise HTTPException(400, "ffmpeg isn't installed (sudo apt install ffmpeg)")
+    mode = body.get("mode") or "color"
+    src = body.get("source") or {}
+    path, kind = await _timeline_path(src, None)
+    if kind != "video":
+        raise HTTPException(400, "Keying needs a video clip")
+    matte = None
+    if mode == "matte":
+        matte, mkind = await _timeline_path(body.get("matte") or {}, None)
+        if mkind != "video":
+            raise HTTPException(400, "The matte has to be a video")
+    opts = {k: body[k] for k in ("color", "similarity", "blend", "spill", "invert") if body.get(k) is not None}
+    if mode == "matte":
+        opts = {"invert": bool(opts.get("invert"))}
+    params = {"key": mode, **opts}
+    if body.get("matte"):
+        params["matte"] = body["matte"]
+    parent = ({"generation": src["generation"], "index": src.get("index", 0), "frame": None}
+              if src.get("generation") is not None else None)
+    gid = db.create_generation(body.get("project_id"), "key", params, {}, f"key-{uuid.uuid4().hex}", parent)
+    db.update_generation(gid, status="running")
+    await push_gen(gid)
+    out, rel = new_output(db.get_generation(gid), "keyed.webm")
+    try:
+        info = await asyncio.to_thread(videoedit.key, path, out, mode, matte, **opts)
+    except Exception as e:
+        out.unlink(missing_ok=True)
+        db.update_generation(gid, status="error", error=str(e), finished=time.time())
+        await push_gen(gid)
+        raise HTTPException(400, str(e))
+    db.update_generation(gid, status="done", finished=time.time(),
+                         outputs=[{"filename": out.name, "path": rel, "kind": "video", "node": "key",
+                                   "duration": round(info["duration"], 2), "alpha": True}])
+    await push_gen(gid)
+    return db.get_generation(gid)
+
+
 @app.post("/api/scene/render")
 async def scene_render(frames: list[UploadFile] = File(...), fps: float = Form(24), blur: float = Form(0),
                        scene: str = Form("{}"), project_id: str = Form(""), kind: str = Form("depth")):

@@ -962,3 +962,4 @@ details.desc[open] summary { margin-bottom: 6px; }
 .trk-clock { min-width: 44px; text-align: right; }
 .trk-body { display: grid; gap: 12px; }
 .trk-prog { width: 100%; height: 8px; accent-color: var(--accent); }
+.key-frame { width: 100%; height: auto; cursor: crosshair; border-radius: 6px; touch-action: none; }

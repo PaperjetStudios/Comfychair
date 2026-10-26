@@ -110,5 +110,51 @@ class Pixels(unittest.TestCase):
         self.assertTrue(self.red(f(170, 170)) and self.black(f(130, 130)) and self.black(f(100, 100)))
 
 
+@unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg missing")
+class Keying(unittest.TestCase):
+    """A green 160x120 clip with a red box, keyed (colour or matte) and laid over a blue clip."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.td = Path(tempfile.mkdtemp(prefix="deck-key-"))
+
+        def clip(name, src):
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", src, "-c:v", "libx264",
+                            "-pix_fmt", "yuv420p", str(cls.td / name)], check=True)
+        clip("green.mp4", "color=c=0x00ff00:s=160x120:d=1,drawbox=x=60:y=40:w=40:h=40:color=red:t=fill")
+        clip("matte.mp4", "color=c=black:s=160x120:d=1,drawbox=x=0:y=0:w=80:h=120:color=white:t=fill")
+        clip("blue.mp4", "color=c=blue:s=160x120:d=1")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.td, ignore_errors=True)
+
+    def over_blue(self, keyed):
+        out = self.td / "comp.mp4"
+        videoedit.render([{"path": str(self.td / "blue.mp4"), "kind": "video", "track": "a", "z": 0, "at": 0, "in": 0, "out": 1},
+                          {"path": str(keyed), "kind": "video", "track": "b", "z": 1, "at": 0, "in": 0, "out": 1}], out)
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", "0.5", "-i", str(out), "-frames:v", "1", "-f", "rawvideo",
+                              "-pix_fmt", "rgb24", "-"], check=True, capture_output=True).stdout
+        return lambda x, y: tuple(raw[(y * 160 + x) * 3:(y * 160 + x) * 3 + 3])
+
+    def test_colour_key(self):
+        out = self.td / "ck.webm"
+        self.assertTrue(videoedit.key(self.td / "green.mp4", out, "color", color="#0f0")["alpha"])
+        f = self.over_blue(out)
+        self.assertGreater(f(10, 10)[2], 200)            # screen gone: blue shows through
+        self.assertGreater(f(80, 60)[0], 200)            # red box kept
+
+    def test_matte_key(self):
+        out = self.td / "mt.webm"
+        self.assertTrue(videoedit.key(self.td / "green.mp4", out, "matte", matte=self.td / "matte.mp4")["alpha"])
+        f = self.over_blue(out)
+        self.assertGreater(f(10, 10)[1], 200)            # white half of the matte keeps the clip
+        self.assertGreater(f(150, 10)[2], 200)           # black half shows the clip below
+
+    def test_bad_colour(self):
+        with self.assertRaises(ValueError):
+            videoedit.key_filters("color", color="nope")
+
+
 if __name__ == "__main__":
     unittest.main()
