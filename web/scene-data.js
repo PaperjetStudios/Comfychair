@@ -7,7 +7,10 @@ export const FPS = 24;
 // the same length as the H3 templates' "Seconds to frames (24 fps, 17k+5 grid)" node
 export const framesFor = (sec) => { const n = Math.max(5, Math.round(sec * FPS)); return n + (((5 - n % 17) % 17) + 17) % 17; };
 export const OBJ = ['x', 'y', 'z', 'rx', 'ry', 'rz', 'sx', 'sy', 'sz'];
-export const CAM = ['px', 'py', 'pz', 'tx', 'ty', 'tz', 'fov'];
+// roll: degrees around the view axis, positive = the camera banks clockwise (the picture turns anticlockwise); a camera or key without it reads 0
+export const CAM = ['px', 'py', 'pz', 'tx', 'ty', 'tz', 'fov', 'roll'];
+// a three.js camera that has been aimed (lookAt), rolled
+export const applyRoll = (cam, roll) => { if (roll) cam.rotateZ(-roll * Math.PI / 180); };
 export const SIZES = [[768, 448], [448, 768], [1024, 576], [576, 1024], [832, 480], [480, 832], [1280, 720], [720, 1280], [768, 768]];
 export const TYPES = {
   person: { label: 'Person', icon: '🧍', size: [0.45, 1.75, 0.28] },
@@ -51,7 +54,7 @@ export const newRoom = () => ({ w: 8, d: 8, h: 2.8, walls: true, ceiling: true, 
 export function defaultScene() {
   return {
     v: 1, width: 768, height: 448, seconds: 6, blur: 2, room: newRoom(),
-    camera: { base: { px: 0, py: 1.6, pz: 5, tx: 0, ty: 1, tz: 0, fov: 45 }, keys: [], ease: 'smooth' },
+    camera: { base: { px: 0, py: 1.6, pz: 5, tx: 0, ty: 1, tz: 0, fov: 45, roll: 0 }, keys: [], ease: 'smooth' },
     objects: [newObject('person', { x: 0, z: 0 }, [])],
   };
 }
@@ -111,14 +114,14 @@ const pick = (o, names) => Object.fromEntries(names.map((n) => [n, o[n]]));
 
 // an item's values at frame f: its keys eased in between, held before the first and after the last
 export function sample(item, names, f) {
-  const k = item.keys;
-  if (!k.length) return pick(item.base, names);
-  if (f <= k[0].f) return pick({ ...item.base, ...k[0] }, names);
+  const k = item.keys, z = names.includes('roll') ? { roll: 0 } : null;   // (the camera's roll, missing in older scenes, is 0)
+  if (!k.length) return pick({ ...z, ...item.base }, names);
+  if (f <= k[0].f) return pick({ ...z, ...item.base, ...k[0] }, names);
   const last = k[k.length - 1];
-  if (f >= last.f) return pick({ ...item.base, ...last }, names);
+  if (f >= last.f) return pick({ ...z, ...item.base, ...last }, names);
   let i = 0;
   while (k[i + 1].f <= f) i++;
-  const a = { ...item.base, ...k[i] }, b = { ...item.base, ...k[i + 1] };
+  const a = { ...z, ...item.base, ...k[i] }, b = { ...z, ...item.base, ...k[i + 1] };
   const t = (f - a.f) / (b.f - a.f), e = easeAt(k[i].ease || item.ease, t);  // a key can set its own ease (smooth, linear, in, out, const)
   return Object.fromEntries(names.map((n) => [n, n === 'j' ? FIGURE.slerpPose(a.j, b.j, e) : n === 'm' ? FIGURE.lerpParams(a.m, b.m, e)
     : n === 'pn' ? (e < 0.5 ? a.pn : b.pn) : a[n] + (b[n] - a[n]) * e]));

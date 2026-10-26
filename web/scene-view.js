@@ -6,7 +6,7 @@ import * as FIGURE from './figure.js';
 import { $, api, busy as busyBar, clone, closeSheet, toast, undoToast } from './ui.js';
 import { smoothGizmo, snap3, snapBar3 } from './gizmo.js';
 import {
-  C, CAM, EVEN, FIG, MODES, OBJ, R, ROOM, SC, TYPES, current, frames, hooks, makers, namesFor, newObject, newRoom, pivotOf, sample,
+  C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, current, frames, hooks, makers, namesFor, newObject, newRoom, pivotOf, sample,
   sameTab, save, selItem, setSC, write
 } from './scene-data.js';
 import { modeOf } from './scene-modes.js';
@@ -96,7 +96,7 @@ export function setup() {
 
   controls = new OrbitControls(camera, canvas);
   controls.enableDamping = false;
-  controls.addEventListener('change', () => { if (!R.applying) draw(); });
+  controls.addEventListener('change', () => { if (R.applying) return; applyRoll(camera, current(SC.camera, CAM).roll); draw(); });  // (orbiting aims the camera level: the roll goes back on)
   controls.addEventListener('end', () => {
     if (R.playing) return;
     const c = readCamera(), was = current(SC.camera, CAM);
@@ -202,15 +202,18 @@ function placeCamProxy() {
 }
 function camChanged() {
   const p = camProxy.position, t = new THREE.Vector3(0, 0, -1).applyQuaternion(camProxy.quaternion).multiplyScalar(camProxy.userData.d).add(p);
-  const c = { px: p.x, py: p.y, pz: p.z, tx: t.x, ty: t.y, tz: t.z, fov: camera.fov };
-  write(SC.camera, CAM, { px: c.px, py: c.py, pz: c.pz, tx: c.tx, ty: c.ty, tz: c.tz });
+  // the roll is what is left of the proxy's turn once it is aimed level (applyRoll's sign)
+  const lvl = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(p, t, camera.up)), dq = lvl.invert().multiply(camProxy.quaternion);
+  const c = { px: p.x, py: p.y, pz: p.z, tx: t.x, ty: t.y, tz: t.z, fov: camera.fov, roll: -THREE.MathUtils.radToDeg(2 * Math.atan2(dq.z, dq.w)) };
+  if (c.roll < -180) c.roll += 360; else if (c.roll > 180) c.roll -= 360;
+  write(SC.camera, CAM, { px: c.px, py: c.py, pz: c.pz, tx: c.tx, ty: c.ty, tz: c.tz, roll: c.roll });
   putCamera(c);
 }
 export const camGizmo = () => !!gizmo && gizmo.object === camProxy;
 
 function readCamera() {
   return { px: camera.position.x, py: camera.position.y, pz: camera.position.z,
-    tx: controls.target.x, ty: controls.target.y, tz: controls.target.z, fov: camera.fov };
+    tx: controls.target.x, ty: controls.target.y, tz: controls.target.z, fov: camera.fov, roll: current(SC.camera, CAM).roll };
 }
 
 // the canvas keeps the output's aspect, as large as fits in the viewer
@@ -312,7 +315,7 @@ export function lookThrough(o) {
   const v = current(o, OBJ), r = THREE.MathUtils.degToRad;
   const fwd = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(r(v.rx), r(v.ry), r(v.rz)));
   const t = fwd.multiplyScalar((o.dist || 3) * v.sy).add(new THREE.Vector3(v.x, v.y, v.z));
-  write(SC.camera, CAM, { px: v.x, py: v.y, pz: v.z, tx: t.x, ty: t.y, tz: t.z, fov: o.fov || 50 });
+  write(SC.camera, CAM, { px: v.x, py: v.y, pz: v.z, tx: t.x, ty: t.y, tz: t.z, fov: o.fov || 50, roll: 0 });
 }
 
 
@@ -471,6 +474,7 @@ function putCamera(c) {
   controls.target.set(c.tx, c.ty, c.tz);
   camera.fov = c.fov; camera.updateProjectionMatrix();
   controls.update();
+  applyRoll(camera, c.roll);
   R.applying = false;
   syncFrustum();
 }
@@ -586,7 +590,7 @@ export function aimFree(at, target) { viewCam.position.set(...at); viewControls.
 // the shot camera set to what the free view sees (its lens stays)
 export function cameraFromView() {
   const p = viewCam.position, t = viewControls.target;
-  write(SC.camera, CAM, { px: p.x, py: p.y, pz: p.z, tx: t.x, ty: t.y, tz: t.z });
+  write(SC.camera, CAM, { px: p.x, py: p.y, pz: p.z, tx: t.x, ty: t.y, tz: t.z, roll: 0 });
 }
 function syncFrustum() {
   if (!wantFrustum()) return;

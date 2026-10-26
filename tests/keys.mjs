@@ -110,3 +110,16 @@ const N = 100;
   assert.equal(sc.camera.mute, false);
 }
 console.log('keys ok');
+
+{ // camera roll: eased like the rest, missing reads 0 (old scenes and keys), written with the camera's values
+  const cam = { base: { px: 0, py: 1, pz: 5, tx: 0, ty: 0, tz: 0, fov: 45 }, keys: [{ f: 0, px: 0 }, { f: 10, px: 10, roll: 30, ease: 'linear' }], ease: 'linear' };
+  assert.equal(D.sample(cam, D.CAM, 0).roll, 0);        // no roll anywhere: 0, never NaN
+  assert.equal(D.sample({ ...cam, keys: [] }, D.CAM, 3).roll, 0);
+  assert.equal(D.sample(cam, D.CAM, 5).roll, 15);       // a missing roll on the first key is 0, so it eases from there
+  assert.equal(D.sample(cam, D.CAM, 20).roll, 30);
+  assert.equal(D.sample({ ...cam, base: { ...cam.base, roll: 10 }, keys: [] }, D.CAM, 0).roll, 10);
+  assert.equal(D.sample(cam, D.OBJ.concat(['px']), 5).roll, undefined);   // objects don't gain a roll
+  const old = D.upgrade({ v: 1, camera: JSON.parse(JSON.stringify(cam)), objects: [] });
+  assert.equal(D.sample(old.camera, D.CAM, 5).roll, 15);
+  assert.ok(D.CAM.includes('roll') && K.isScalar('roll'));
+}

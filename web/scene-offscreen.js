@@ -6,7 +6,7 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as SCENE from './scene.js';   // (its layer types register when it loads; it is not initialised here, so no panel appears)
 import * as FIGURE from './figure.js';
-import { CAM, EVEN, FPS, OBJ, TYPES, framesFor, makers, namesFor, sample, upgrade } from './scene-data.js';
+import { CAM, EVEN, applyRoll, FPS, OBJ, TYPES, framesFor, makers, namesFor, sample, upgrade } from './scene-data.js';
 import { LOADERS, RANGE, depthMat, floorMat, geometries, photoScene, rangeMat, setRange, wallMat } from './scene-view.js';
 import { applyClay } from './scene-import.js';
 
@@ -138,6 +138,7 @@ export class Stage {
     const c = sample(this.sc.camera, CAM, f);
     this.camera.position.set(c.px, c.py, c.pz);
     this.camera.lookAt(c.tx, c.ty, c.tz);
+    applyRoll(this.camera, c.roll);
     this.camera.fov = c.fov;
     this.camera.updateProjectionMatrix(); this.camera.updateMatrixWorld();
   }
