@@ -50,7 +50,7 @@ const EFFECTS = [
     help: 'Re-renders the person in the clip as the character in the still: the clip\'s motion, face, camera, light and sound are kept (Viggle-Animate on H3). Long clips run in 5 s windows.' },
   { id: 'drive', group: 'Performance', label: 'Drive a still', tpl: 'deck-h3-drive', needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
     res: [[384, '384p'], [448, '448p'], [576, '576p']], maxLen: 15,
-    help: 'The character in the still acts out the clip: body, hands and face follow the clip\'s pose (H3 with pose control), in a new shot described by the prompt. Call the character <Subject 1> and the still <Picture 1>. Empty prompt: the shot is kept plain.' },
+    help: 'The character in the still acts out the clip: body, hands and face follow the clip\'s pose (H3 with pose control), in a new shot described by the prompt. Call the character <Subject 1> and the still <Picture 1>, and name their clothes and look: otherwise the outfit can drift.' },
   { id: 'pose', group: 'Performance', label: 'Pose preview', tpl: 'deck-pose-video', needs: ['source', 'len'],
     help: 'Shows what Drive a still will follow: the clip\'s body, hands and face as a stick figure. Quick: no GPU.' },
 ];
