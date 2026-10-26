@@ -207,7 +207,7 @@ function render() {
   const e = fx(T.op), t = tplOf(e);
   const needs = new Set(e.needs.map((n) => n.replace('?', '')));
   const missing = e.tpl && !t;
-  const runBtn = button(e.job ? (e.id === 'colorkey' ? 'Key clip' : 'Apply matte') : 'Run', run, { cls: 'primary', disabled: !!missing });
+  const runBtn = button(e.job ? (e.id === 'colorkey' ? 'Key clip' : 'Cut out with matte') : 'Run', run, { cls: 'primary', disabled: !!missing });
 
   const effect = section('Effect', null,
     GROUPS.map((g) => h('div', { class: 'vfx-group' }, h('span', { class: 'vfx-group-name' }, g),
