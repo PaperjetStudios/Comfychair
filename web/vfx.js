@@ -1,7 +1,7 @@
 import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard } from './ui.js';
 import { S, inputUrl, thumbUrl, onServer, switchTab } from './core.js';
 import { cardMedia, genLabel, openImagePicker, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
-import { adoptGenerations } from './generate.js';
+import { adoptGenerations, hooks as genHooks } from './generate.js';
 import { openGeneration } from './run.js';
 import { addToEditor, useInGenerate } from './editor.js';
 import { addToTimeline } from './video.js';
@@ -369,7 +369,8 @@ function render() {
     needs.has('seed') ? field('Seed', h('div', { class: 'row' },
       h('input', { type: 'number', value: T.seed < 0 ? '' : T.seed, placeholder: 'random', min: 0,
         onchange: (ev) => { T.seed = ev.target.value === '' ? -1 : Math.max(0, Math.floor(Number(ev.target.value))); changed(false); } }))) : null,
-    h('div', { class: 'row' }, runBtn));
+    h('div', { class: 'row wrap' }, runBtn, e.job ? null : button('Open in Generate', openInGenerate,
+      { disabled: !!missing, title: 'The same template and values in a new Generate tab, to change any setting there' })));
 
   body.replaceChildren(h('div', { class: 'panel-body' }, effect, inputs, prompt, settings, resultsSection()));
   drawViewer();
@@ -593,20 +594,26 @@ function faceFields() {
 }
 
 // ---- running ----
-async function run() {
-  const e = fx(T.op);
-  if (e.needs.includes('source') && !T.source) return toast('Choose a source clip first', true);
-  if (e.needs.includes('matte') && !T.matte) return toast(`Choose a ${T.op === 'cleanplate' ? 'mask' : 'matte'} clip first`, true);
-  if (e.needs.includes('first') && !T.first) return toast('Choose the start image first', true);
-  if (e.needs.includes('sound') && !T.sound) return toast('Choose the sound first', true);
-  if (e.still && !T.source && !T.first) return toast('Choose a clip or a picture first', true);
-  await tabs?.flush();
-  if (e.job === 'key') return runKey(e);
-  if (e.job === 'matte') return runMatte();
-  if (e.job === 'delogo') return runDelogo();
+// what's missing before effect e can run, or null
+function missingInput(e) {
+  if (e.needs.includes('source') && !T.source) return 'Choose a source clip first';
+  if (e.needs.includes('matte') && !T.matte) return `Choose a ${T.op === 'cleanplate' ? 'mask' : 'matte'} clip first`;
+  if (e.needs.includes('first') && !T.first) return 'Choose the start image first';
+  if (e.needs.includes('sound') && !T.sound) return 'Choose the sound first';
+  if (e.still && !T.source && !T.first) return 'Choose a clip or a picture first';
+  return null;
+}
+
+// template fields of tt filled from values by role ({ source, first, len, … })
+const valuesFor = (tt, roles) => Object.fromEntries(Object.entries(roles).map(([role, v]) => [roleField(tt, role)?.key, v]).filter(([k, v]) => k && v != null));
+
+// What a template effect sends: { t (the template, with its SDPose / still variant), values (by field key), rv (the
+// same by role, for the drives' posed and pose templates) }, or a message saying why it can't. loose: for Open in
+// Generate, where missing things can be filled in later
+async function buildRun(e, loose = false) {
   const t = tplOf(e);
-  if (!t) return toast(`Template ${tplId(e)} isn't installed yet`, true);
-  const values = {}, rv = {};   // rv: the same values by role, for the drives' posed and pose templates
+  if (!t) return `Template ${tplId(e)} isn't installed yet`;
+  const values = {}, rv = {};
   const put = (role, v) => { const f = roleField(t, role); if (f && v !== undefined && v !== null) { values[f.key] = v; rv[role] = v; } };
   put('source', T.source && { ...bare(T.source), ...(T.source.trim && { trim: T.source.trim }), ...(T.source.crop && { crop: T.source.crop }) });
   put('matte', T.matte && bare(T.matte));
@@ -639,22 +646,38 @@ async function run() {
     put('pointsPos', JSON.stringify(pts.positive)); put('pointsNeg', JSON.stringify(pts.negative));
     put('mode', clicked ? 'point' : 'text');
     put('pframe', clicked ? Math.max(0, Math.round((T.pointsAt - (T.source?.trim?.start || 0)) * FPS)) : 0);
-    if (!clicked && !T.prompt.trim()) return toast('Tap the thing on the picture, or describe it', true);
+    if (!clicked && !T.prompt.trim() && !loose) return 'Tap the thing on the picture, or describe it';
   }
-  if (e.needs.includes('tracks')) put('tracks', JSON.stringify(await tracksPx(t, values)));
-  if (e.needs.includes('canvas')) {   // the clip on its canvas, and the mask of what to paint, made on the server first
+  if (e.needs.includes('tracks') && T.first) put('tracks', JSON.stringify(await tracksPx(t, values)));
+  if (e.needs.includes('canvas') && T.source) {   // the clip on its canvas, and the mask of what to paint, made on the server first
     try {
       const c = T.canvas || CANVAS, a = canvasAspect();
       const r = await api('/api/video/canvas', { method: 'POST', busy: 'Setting up the canvas…', timeout: 900000,
         body: { source: bare(T.source), trim: T.source.trim || null, aspect: a, scale: c.scale, cx: c.cx, cy: c.cy } });
       put('source', r.video); put('matte', r.mask);
-    } catch (err) { return toast('Couldn\'t set up the canvas: ' + err.message, true); }
+    } catch (err) { return 'Couldn\'t set up the canvas: ' + err.message; }
   }
-  const parent = T.source?.generation != null ? { generation: T.source.generation, index: T.source.index || 0, frame: null } : null;
+  return { t, values, rv };
+}
+
+const parentOf = () => (T.source?.generation != null ? { generation: T.source.generation, index: T.source.index || 0, frame: null } : null);
+
+async function run() {
+  const e = fx(T.op);
+  const miss = missingInput(e);
+  if (miss) return toast(miss, true);
+  await tabs?.flush();
+  if (e.job === 'key') return runKey(e);
+  if (e.job === 'matte') return runMatte();
+  if (e.job === 'delogo') return runDelogo();
+  const b = await buildRun(e);
+  if (typeof b === 'string') return toast(b, true);
+  const { t, values, rv } = b;
+  const parent = parentOf();
   const tab = T;
   // queue template tt (null: this effect's own, with values) with values by role; how: added to the toast (null: no toast)
   const queue = async (tt, roles, how) => {
-    const vals = roles ? Object.fromEntries(Object.entries(roles).map(([role, v]) => [roleField(tt, role)?.key, v]).filter(([k, v]) => k && v != null)) : values;
+    const vals = roles ? valuesFor(tt, roles) : values;
     const gens = await api('/api/generate', { method: 'POST', body: { template: (tt || t).id, values: vals, batch: 1, project_id: S.project, parent } });
     adoptGenerations(gens);
     tab.results.push(...gens.map((g) => g.id));
@@ -664,6 +687,29 @@ async function run() {
   };
   if (e.posed && T.source && await drivePosed(e, rv, queue)) return;
   try { await queue(null, null, ''); } catch (err) { toast(err.message, true); }
+}
+
+// The effect's template with the values Run would send, in a new Generate tab: every field can be changed there.
+// A drive with a ready pose video opens the posed template on it.
+async function openInGenerate() {
+  const e = fx(T.op);
+  await tabs?.flush();
+  const b = await buildRun(e, true);
+  if (typeof b === 'string') return toast(b, true);
+  let { t, values } = b;
+  const posed = e.posed && S.templates.find((x) => x.id === e.posed && !x.error);
+  if (posed && T.source && !UI.remake) {
+    try {
+      const pose = await findPose();
+      if (pose) { t = posed; values = valuesFor(posed, { ...b.rv, pose: { generation: pose.generation, index: pose.index } }); }
+    } catch { /* the reading template, as it is */ }
+  }
+  if (!genHooks.openShot) return toast('The Generate tab isn\'t ready yet', true);
+  switchTab('generate');
+  await genHooks.openShot({ workflow: t.id, values }, tabs?.active?.name ? `${tabs.active.name} · ${e.label}` : e.label);
+  const parent = parentOf();
+  if (parent) S.pendingParent = parent;
+  toast(`Opened ${e.label} in Generate`);
 }
 
 async function runKey(e) {
