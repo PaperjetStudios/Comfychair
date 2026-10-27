@@ -35,15 +35,6 @@
    "title": "@1 Prompt"
   }
  },
- "negp": {
-  "class_type": "PrimitiveStringMultiline",
-  "inputs": {
-   "value": "music, speech, low quality, distorted, muffled, clipping"
-  },
-  "_meta": {
-   "title": "@5 Negative prompt"
-  }
- },
  "pos": {
   "class_type": "CLIPTextEncode",
   "inputs": {
@@ -58,14 +49,10 @@
   }
  },
  "neg": {
-  "class_type": "CLIPTextEncode",
+  "class_type": "ConditioningZeroOut",
   "inputs": {
-   "text": [
-    "negp",
-    0
-   ],
-   "clip": [
-    "clip",
+   "conditioning": [
+    "pos",
     0
    ]
   }

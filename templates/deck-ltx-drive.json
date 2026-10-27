@@ -49,11 +49,10 @@
   }
  },
  "neg": {
-  "class_type": "CLIPTextEncode",
+  "class_type": "ConditioningZeroOut",
   "inputs": {
-   "text": "",
-   "clip": [
-    "clip",
+   "conditioning": [
+    "pos",
     0
    ]
   }

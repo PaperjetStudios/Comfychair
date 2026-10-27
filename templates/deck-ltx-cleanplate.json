@@ -35,15 +35,6 @@
    "title": "@2 Prompt"
   }
  },
- "negp": {
-  "class_type": "PrimitiveStringMultiline",
-  "inputs": {
-   "value": "person, people, human, figure, limb, arm, hand, leg, body part, shadow of a person, blurry, distorted"
-  },
-  "_meta": {
-   "title": "@6 Negative prompt"
-  }
- },
  "pos": {
   "class_type": "CLIPTextEncode",
   "inputs": {
@@ -58,14 +49,10 @@
   }
  },
  "neg": {
-  "class_type": "CLIPTextEncode",
+  "class_type": "ConditioningZeroOut",
   "inputs": {
-   "text": [
-    "negp",
-    0
-   ],
-   "clip": [
-    "clip",
+   "conditioning": [
+    "pos",
     0
    ]
   }

@@ -40,17 +40,16 @@ def models(g, vae=VVAE):
     g.add("avae", node("VAELoader", vae_name=AVAE))
 
 
-def text(g, prompt_title="@2 Prompt", prompt="", negative="", negative_title=None):
+def text(g, prompt_title="@2 Prompt", prompt=""):
+    """The prompt, encoded once. Every graph samples at CFG 1, which never reads the negative, so the negative is the
+    prompt zeroed out rather than a second pass through the 12B text encoder (about a minute on 12 GB)."""
     if prompt_title:
         g.add("prompt", node("PrimitiveStringMultiline", prompt_title, value=prompt))
         pos = ["prompt", 0]
     else:
         pos = prompt
-    if negative_title:
-        g.add("negp", node("PrimitiveStringMultiline", negative_title, value=negative))
-        negative = ["negp", 0]
     g.add("pos", node("CLIPTextEncode", text=pos, clip=["clip", 0]))
-    g.add("neg", node("CLIPTextEncode", text=negative, clip=["clip", 0]))
+    g.add("neg", node("ConditioningZeroOut", conditioning=["pos", 0]))
     g.add("cond", node("LTXVConditioning", positive=["pos", 0], negative=["neg", 0], frame_rate=FPS))
 
 
@@ -110,12 +109,11 @@ def ic_guide(g, latent_factor, image, frames):
                         use_tiled_encode=False, tile_size=256, tile_overlap=64, use_streaming=False, tile_frames=97))
 
 
-def v2v(name, lora, strength=1.0, lora_title=None, prompt_title="@2 Prompt", prompt="", negative="", negative_title=None,
-        max_frames=None, audio=False):
+def v2v(name, lora, strength=1.0, lora_title=None, prompt_title="@2 Prompt", prompt="", max_frames=None, audio=False):
     """Source video → an IC-LoRA's take on it (restyle, alpha matte, clean plate)."""
     g = G()
     models(g)
-    text(g, prompt_title, prompt, negative, negative_title)
+    text(g, prompt_title, prompt)
     source(g, max_frames=max_frames)
     g.add("lora", node("LTXICLoRALoaderModelOnly", lora_title, model=["unet", 0], lora_name=LORA + lora, strength_model=strength))
     ic_guide(g, ["lora", 1], ["rs", 0], ["nf", 1])
@@ -132,8 +130,7 @@ def ripple():
     g = G()
     models(g, VVAE_CONV)
     text(g, "@2 Prompt", "Use the reference video for motion, timing, camera movement, composition, and unchanged scene content, "
-                         "while consistently propagating the visual edit established in the first frame throughout the video.",
-         "blurry, low resolution, ugly, garbled mess, compression artifacts, glitch, stop motion, still image, pixelated, oversaturated")
+                         "while consistently propagating the visual edit established in the first frame throughout the video.")
     source(g)
     g.add("first", node("LoadImage", "@1 First frame [image]", image=""))
     g.add("firstrs", node("ImageResizeKJv2", image=["first", 0], width=["W", 1], height=["H", 1], upscale_method="lanczos",
@@ -236,7 +233,7 @@ def t2a():
     Saved as an MP3."""
     g = G()
     models(g)
-    text(g, "@1 Prompt", "", "music, speech, low quality, distorted, muffled, clipping", "@5 Negative prompt")
+    text(g, "@1 Prompt", "")
     g.add("secs", node("PrimitiveFloat", "@3 Length (seconds)", value=8.0))
     math(g, "nf", f"floor(a*{FPS}/8)*8+1", "frames: 8n+1", a=["secs", 0])
     g.add("loras", node("LoraLoaderModelOnly", "@6 LoRAs", model=["unet", 0], lora_name="", strength_model=1.0))
@@ -455,9 +452,7 @@ TEMPLATES = {
         "ltx-cleanplate", "ltx-2.5-22b-ic-lora-clean-plate-1.0.safetensors",
         prompt="An empty clean plate of the exact same location: identical background, environment, structures and lighting as the "
                "source video, with no people, no humans, no figures, and no body parts such as arms, hands or legs anywhere in the "
-               "frame. Static photorealistic footage, natural light, high detail.",
-        negative="person, people, human, figure, limb, arm, hand, leg, body part, shadow of a person, blurry, distorted",
-        negative_title="@6 Negative prompt"),
+               "frame. Static photorealistic footage, natural light, high detail."),
 }
 
 if __name__ == "__main__":
