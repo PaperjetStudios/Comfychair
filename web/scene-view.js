@@ -415,7 +415,7 @@ export function syncMeshes() {
     m.visible = !o.hidden && onStage();
   }
   for (const m of R.room) {
-    m.visible = !SC.room.hidden && onStage();
+    m.visible = !!SC.room && !SC.room.hidden && onStage();   // (no room: it was deleted, its meshes go at the next rebuild)
     m.material = R.sel === ROOM ? roomSel : m === R.room[0] ? floorMat : wallMat;
   }
   const o = selItem();
