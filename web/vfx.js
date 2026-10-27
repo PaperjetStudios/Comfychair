@@ -54,16 +54,14 @@ const EFFECTS = [
   { id: 'faceswap', group: 'Performance', label: 'Face only', tpl: 'deck-h3-faceswap', needs: ['source', 'first', 'len', 'res', 'steps', 'blend', 'seed'],
     res: [[384, '384'], [512, '512'], [640, '640']], maxLen: 30,
     help: 'Swaps only the face: it is followed through the clip, re-rendered as the character\'s face with the same expressions, and blended back. Hair, body and the rest of the shot stay. Works best when the face is large in frame.' },
-  { id: 'drive', group: 'Performance', label: 'Drive a still', tpl: 'deck-h3-drive', needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
+  { id: 'drive', group: 'Performance', label: 'Drive a still', tpl: 'deck-h3-drive', sd: 'deck-h3-drive-sd', needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
     res: [[384, '384p'], [448, '448p'], [576, '576p']], maxLen: 15,
     help: 'The character in the still acts out the clip: body, hands and face follow the clip\'s pose (H3 with pose control), in a new shot described by the prompt. Call the character <Subject 1> and the still <Picture 1>, and name their clothes and look: otherwise the outfit can drift.' },
-  { id: 'ltxdrive', group: 'Performance', label: 'Drive a still (LTX)', tpl: 'deck-ltx-drive', mult: 64, needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
+  { id: 'ltxdrive', group: 'Performance', label: 'Drive a still (LTX)', tpl: 'deck-ltx-drive', sd: 'deck-ltx-drive-sd', mult: 64, needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
     res: [[448, '448p'], [576, '576p'], [704, '704p']],
     help: 'Like Drive a still, on LTX-2.5: the still is the first frame and the clip\'s pose (body, hands, face) moves it. Keeps the still\'s scene and look closely. Describe the person and what they do; the sound is made from the prompt.' },
-  { id: 'pose', group: 'Performance', label: 'Pose preview', tpl: 'deck-pose-video', needs: ['source', 'len'],
-    help: 'Shows what Drive a still will follow: the clip\'s body, hands and face as a stick figure. Quick: no GPU.' },
-  { id: 'sdpose', group: 'Performance', label: 'Pose preview (SDPose)', tpl: 'deck-pose-sdpose', needs: ['source', 'len'],
-    help: 'The same stick figure from SDPose, on the GPU: steadier on hard poses, people turned away, hands near the body and stylised footage. Finds up to 2 people.' },
+  { id: 'pose', group: 'Performance', label: 'Pose preview', tpl: 'deck-pose-video', sd: 'deck-pose-sdpose', needs: ['source', 'len'],
+    help: 'Shows what Drive a still will follow: the clip\'s body, hands and face as a stick figure.' },
 ];
 const GROUPS = ['Restyle', 'Key', 'Remove', 'Generate', 'Performance'];
 const fx = (id) => EFFECTS.find((e) => e.id === id) || EFFECTS[0];
@@ -96,7 +94,9 @@ const ROLES = {
   seed: (f) => f.kind === 'seed',
   loras: (f) => f.kind === 'loras',
 };
-const tplOf = (e) => e.tpl && S.templates.find((t) => t.id === e.tpl);
+// effects that follow a pose can read it with DWPose (CPU) or SDPose (GPU): e.sd is the SDPose take on e.tpl
+const tplId = (e) => (e.sd && T.poser === 'sdpose' ? e.sd : e.tpl);
+const tplOf = (e) => tplId(e) && S.templates.find((t) => t.id === tplId(e));
 const roleField = (t, role) => t?.fields.find(ROLES[role]);
 
 // Viggle-Animate's distilled schedules (shift 3): points = Euler updates + 1
@@ -252,14 +252,14 @@ function render() {
   if (!body) return;
   const e = fx(T.op), t = tplOf(e);
   const needs = new Set(e.needs.map((n) => n.replace('?', '')));
-  const missing = e.tpl && !t;
+  const missing = tplId(e) && !t;
   const runBtn = button(e.job ? (e.id === 'colorkey' ? 'Key clip' : 'Cut out with matte') : 'Run', run, { cls: 'primary', disabled: !!missing });
 
   const effect = section('Effect', null,
     GROUPS.map((g) => h('div', { class: 'vfx-group' }, h('span', { class: 'vfx-group-name' }, g),
       seg(EFFECTS.filter((x) => x.group === g).map((x) => [x.id, x.label]), T.op, (id) => { T.op = id; UI.draw = null; changed(); }, { wrap: true }))),
     help(e.help),
-    missing ? note(`Template ${e.tpl} isn't installed yet. It comes with the LTX-2.5 setup.`) : null,
+    missing ? note(`Template ${tplId(e)} isn't installed yet. It comes with the LTX-2.5 setup.`) : null,
     t?.error ? note(t.error, 'err') : null);
 
   const inputs = section('Source', null,
@@ -277,6 +277,8 @@ function render() {
       oninput: (ev) => { T.prompt = ev.target.value; tabs?.changed(); } })) : null;
 
   const settings = section('Settings', null,
+    e.sd ? field('Pose from', seg([['dwpose', 'DWPose'], ['sdpose', 'SDPose']], T.poser || 'dwpose', (v) => { T.poser = v; changed(); }),
+      help('DWPose runs on the CPU. SDPose uses the GPU and holds up better on hard poses, people turned away, hands near the body and stylised footage (up to 2 people).')) : null,
     needs.has('keycolor') ? keyFields() : null,
     needs.has('loras') ? lorasField(t) : null,
     needs.has('len') ? rangeField('Length', () => T.len, (v) => { T.len = v; }, { min: 1, max: e.maxLen || 10, step: 1 / 3,
@@ -378,7 +380,7 @@ async function run() {
   await tabs?.flush();
   if (e.job === 'key') return runKey(e);
   const t = tplOf(e);
-  if (!t) return toast(`Template ${e.tpl} isn't installed yet`, true);
+  if (!t) return toast(`Template ${tplId(e)} isn't installed yet`, true);
   const values = {};
   const put = (role, v) => { const f = roleField(t, role); if (f && v !== undefined && v !== null) values[f.key] = v; };
   put('source', T.source && { ...bare(T.source), ...(T.source.trim && { trim: T.source.trim }), ...(T.source.crop && { crop: T.source.crop }) });

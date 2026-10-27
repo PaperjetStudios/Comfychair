@@ -95,7 +95,7 @@ def h3_source(g, short=448):
                      keep_proportion="crop", pad_color="0, 0, 0", crop_position="center", divisible_by=32, device="cpu"))
 
 
-def drive():
+def drive(model="dwpose"):
     """A still of a character acted out by the performer in a clip: DWPose (body, hands, face) from the clip drives
     H3's Fun ControlNet on a reference-to-video shot of the character. Built on deck-h3-ctrl2v (same models and
     settings), with the clip's own sound kept."""
@@ -105,7 +105,7 @@ def drive():
     for k in keep:
         g.add(k, base[k])
     h3_source(g)
-    pose_frames(g, ["rs", 0])
+    pose_frames(g, ["rs", 0], model=model)
     g.add("8", node("RandomNoise", "@8 Seed", noise_seed=0))
     g.add("prompt", node("PrimitiveStringMultiline", "@2 Prompt", value="<Subject 1> is the person shown in <Picture 1>. "
                          "They speak and move exactly as in the control video, with the same expressions. Natural light, cinematic."))
@@ -136,7 +136,7 @@ def pose_preview(model="dwpose"):
     return g
 
 
-def ltx_drive():
+def ltx_drive(model="dwpose"):
     """LTX-2.5 take on Drive a still: the character image is the first frame, and the clip's DWPose (body, hands, face)
     guides the motion through the union-control IC-LoRA (an LTX-2.3 LoRA; ref0.5, so the guide is half size and
     both sides are x64). Single stage at the chosen resolution, with new sound from the prompt."""
@@ -154,7 +154,7 @@ def ltx_drive():
     math(g, "H", "round(b*c/min(a,b)/64)*64", "height, x64", a=["size", 0], b=["size", 1], c=["short", 0])
     g.add("rs", node("ImageResizeKJv2", image=["cut", 0], width=["W", 1], height=["H", 1], upscale_method="lanczos",
                      keep_proportion="crop", pad_color="0, 0, 0", crop_position="center", divisible_by=64, device="cpu"))
-    pose_frames(g, ["rs", 0])
+    pose_frames(g, ["rs", 0], model=model)
     g.add("img", node("LoadImage", "@11 Character [image]", image=""))
     g.add("imgrs", node("ImageResizeKJv2", image=["img", 0], width=["W", 1], height=["H", 1], upscale_method="lanczos",
                         keep_proportion="crop", pad_color="0, 0, 0", crop_position="center", divisible_by=64, device="cpu"))
@@ -225,9 +225,11 @@ def faceswap():
 TEMPLATES = {
     "deck-h3-animate": animate,
     "deck-h3-drive": drive,
+    "deck-h3-drive-sd": lambda: drive("sdpose"),
     "deck-pose-video": pose_preview,
     "deck-pose-sdpose": lambda: pose_preview("sdpose"),
     "deck-ltx-drive": ltx_drive,
+    "deck-ltx-drive-sd": lambda: ltx_drive("sdpose"),
     "deck-h3-faceswap": faceswap,
 }
 
