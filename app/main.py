@@ -19,7 +19,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFil
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import accel, audioedit, clipimport, craft, h3upscale, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
+from . import accel, audioedit, clipimport, craft, h3upscale, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import store
 from . import sceneasset
 from . import templates as tpl
@@ -63,6 +63,8 @@ async def push_gen(gid: int):
     g = db.get_generation(gid)
     if g:
         await broadcast({"type": "deck_generation", "data": g})
+        if g["status"] == "done":   # the Board's light previews, made now so it opens fast
+            asyncio.create_task(previews.warm([o["url"] for o in g["outputs"] if o.get("url") and o["kind"] in ("image", "video")]))
 
 
 running_wf: dict[str, dict] = {}  # prompt_id -> workflow, for naming progress stages
@@ -327,6 +329,7 @@ app.include_router(tracking.router)
 app.include_router(clipimport.router)
 app.include_router(voice.router)
 app.include_router(craft.router)
+app.include_router(previews.router)
 
 
 class TokenGate:
@@ -702,6 +705,30 @@ async def upload_media(file: UploadFile = File(...)):
     with path.open("wb") as f:
         shutil.copyfileobj(file.file, f)
     return _media_entry(path)
+
+
+@app.post("/api/media/to-project")
+async def media_to_project(body: dict = Body(...)):
+    """A media-library file ({name, project_id}) copied into a project as an "import": it shows on the Board and in
+    History like a generation, and every picker offers it."""
+    path = config.MEDIA_DIR / Path(str(body.get("name") or "")).name
+    if not path.is_file() or path.suffix.lower() not in MEDIA_KINDS:
+        raise HTTPException(404, "That file is gone")
+    kind = MEDIA_KINDS[path.suffix.lower()]
+    label = path.name.split("_", 1)[-1]
+    gid = db.create_generation(body.get("project_id"), "import", {"media": path.name, "label": label}, {},
+                               f"import-{uuid.uuid4().hex}", None)
+    out, rel = new_output(db.get_generation(gid), path.name.split("_", 1)[-1])
+    await asyncio.to_thread(shutil.copy2, path, out)
+    o = {"filename": out.name, "path": rel, "kind": kind, "node": "import"}
+    if kind in ("video", "audio"):
+        try:
+            o["duration"] = round((await asyncio.to_thread(videoedit.probe, out))["duration"], 2)
+        except (subprocess.SubprocessError, OSError, ValueError, KeyError):
+            pass
+    db.update_generation(gid, status="done", finished=time.time(), outputs=[o])
+    await push_gen(gid)
+    return db.get_generation(gid)
 
 
 async def _timeline_path(src: dict, tmp: Path) -> tuple[Path, str]:

@@ -62,6 +62,12 @@ export async function loadSnippets(force = false) {
 
 export const inputUrl = (name) => `/api/input?name=${encodeURIComponent(name)}`;
 export const thumbUrl = (name, px = 320) => `${inputUrl(name)}&thumb=${px}`;
+// a saved output's light preview for grids (app/previews.py): kind 'still' (JPEG; a video's first frame) or 'clip'
+// (a small 8 fps silent loop, always 320 px). w snaps to a few sizes so tiles share cached files.
+export const previewUrl = (url, w = 320, kind = 'still') => {
+  const px = kind === 'clip' ? 320 : [192, 320, 480, 640].find((x) => x >= w * (window.devicePixelRatio > 1.5 ? 1.5 : 1)) || 640;
+  return `/api/preview?u=${encodeURIComponent(url)}&w=${px}&kind=${kind}`;
+};
 export const fmtT = (t) => `${Number(t || 0).toFixed(2)}s`;
 
 // the project picker's options (the picker itself is wired in app.js)

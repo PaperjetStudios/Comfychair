@@ -1,7 +1,7 @@
 import {
   $, h, store, api, toast, openSheet, closeSheet, button, iconBtn, actions, fileButton, seg, placeholder, note, mediaCard, field,
 } from './ui.js';
-import { S, PICKER_SOURCES as SOURCES, switchTab, thumbUrl } from './core.js';
+import { S, PICKER_SOURCES as SOURCES, previewUrl, switchTab, thumbUrl } from './core.js';
 import { loadHistory } from './run.js';
 
 // This project's finished outputs of the given kinds, newest first: [{ g, o, i, t }]
@@ -301,6 +301,9 @@ export function uploadImage(blob, { mp = 0, source = 'upload', filename = 'image
 }
 
 export function mediaEl(o, { controls = true, thumb = false } = {}) {
+  if (thumb && (o.kind === 'video' || o.kind === 'image') && o.url?.startsWith('/files/')) {   // a grid card: the light still
+    return h('img', { src: previewUrl(o.url, 320), alt: o.filename || '', loading: 'lazy' });
+  }
   if (o.kind === 'video') {
     return h('video', { src: thumb ? `${o.url}#t=0.1` : o.url, muted: true, loop: true, playsInline: true, autoplay: !thumb, controls: controls && !thumb, preload: thumb ? 'metadata' : 'auto' });
   }

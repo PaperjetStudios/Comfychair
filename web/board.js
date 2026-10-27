@@ -3,7 +3,7 @@ import {
   numSlider, field, section, hint, openSheet, closeSheet,
 } from './ui.js';
 import { extractSound, soundInput, soundToSoundTab } from './media.js';
-import { S, switchTab } from './core.js';
+import { S, previewUrl, switchTab } from './core.js';
 import { openGeneration, sendToInput } from './run.js';
 import { E, FULL, editorTabsReady, persistEditor, renderEditor } from './editor.js';
 import { addToTimeline } from './video.js';
@@ -96,9 +96,10 @@ function saveMarked() { store.set('deck.board.marked', [...B.marked]); }
 function markedGens() { return [...B.marked].map((id) => S.history.get(id)).filter((g) => g && g.project_id === S.project); }
 
 function boardTile(g, o, i) {
+  // light previews (app/previews.py): a still straight away; videos loop a small 8 fps copy while on screen
   const media = o.kind === 'video'
-    ? h('video', { src: o.url, muted: true, loop: true, playsInline: true, preload: 'metadata' })
-    : h('img', { src: o.url, loading: 'lazy', alt: '', draggable: false });
+    ? h('video', { src: previewUrl(o.url, B.size, 'clip'), poster: previewUrl(o.url, B.size), muted: true, loop: true, playsInline: true, preload: 'none' })
+    : h('img', { src: previewUrl(o.url, B.size), loading: 'lazy', alt: '', draggable: false });
   const pin = h('button', { type: 'button', class: 'pin' + (g.pinned ? ' on' : ''), 'aria-label': g.pinned ? 'Unpin' : 'Pin',
     onclick: (e) => { e.stopPropagation(); togglePin(S.history.get(g.id) || g); } }, g.pinned ? '★' : '☆');
   const key = `${g.id}:${i}`;
@@ -297,6 +298,15 @@ const galThumbs = new IntersectionObserver((entries) => {   // video thumbnails 
   for (const e of entries) if (e.isIntersecting) { e.target.preload = 'metadata'; galThumbs.unobserve(e.target); }
 }, { rootMargin: '0px 400px' });
 
+// The gallery's video plays with its sound (opened by a tap, so the browser allows it), unless it was muted
+// last time; if the browser still refuses, it plays muted.
+function galleryVideo(o) {
+  const v = h('video', { src: o.url, muted: !!store.get('deck.board.muted', false), loop: true, playsInline: true, controls: true });
+  v.addEventListener('volumechange', () => store.set('deck.board.muted', v.muted));
+  v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
+  return v;
+}
+
 function openGallery(key) {
   GAL.items = boardItems();
   GAL.idx = Math.max(0, GAL.items.findIndex((x) => x.key === key));
@@ -371,9 +381,7 @@ function galleryRender(newMedia = false) {
   if (newMedia || GAL.key !== cur.key) {
     main.querySelectorAll('video').forEach((v) => v.pause());
     galleryZoom(1);
-    main.replaceChildren(o.kind === 'video'
-      ? h('video', { src: o.url, muted: true, loop: true, playsInline: true, autoplay: true, controls: true })
-      : h('img', { src: o.url, alt: o.filename, draggable: false }));
+    main.replaceChildren(o.kind === 'video' ? galleryVideo(o) : h('img', { src: o.url, alt: o.filename, draggable: false }));
     for (const d of [-1, 1]) {   // warm the cache for the neighbours
       const nb = GAL.items[GAL.idx + d];
       if (nb && nb.o.kind === 'image') new Image().src = nb.o.url;
@@ -396,8 +404,7 @@ function galleryRender(newMedia = false) {
   if (strip.childElementCount !== GAL.items.length || newMedia) {
     galThumbs.disconnect();
     strip.replaceChildren(...GAL.items.map((x, n) => h('button', { type: 'button', class: 'gal-thumb', 'data-n': n, onclick: () => { GAL.idx = n; galleryRender(true); } },
-      x.o.kind === 'video' ? h('video', { src: `${x.o.url}#t=0.1`, muted: true, playsInline: true, preload: 'none' })
-        : h('img', { src: x.o.url, loading: 'lazy', alt: '', draggable: false }),
+      h('img', { src: previewUrl(x.o.url, 192), loading: 'lazy', alt: '', draggable: false }),
       h('span', { class: 'gal-badges' }))));
     strip.querySelectorAll('video').forEach((v) => galThumbs.observe(v));
   }
