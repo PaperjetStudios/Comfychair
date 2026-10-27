@@ -86,6 +86,9 @@ input.numslide {
 }
 input.numslide:focus { background: var(--surface-2); -webkit-user-select: text; user-select: text; }
 input.numslide.scrubbing { background: linear-gradient(to right, color-mix(in srgb, var(--accent) 45%, var(--surface-2)) var(--p), var(--surface-2) var(--p)); }
+/* no spin arrows: they come up under a hovering pen and would cover the value (it is dragged or typed) */
+input.numslide { -moz-appearance: textfield; appearance: textfield; }
+input.numslide::-webkit-inner-spin-button, input.numslide::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .lora-strength { align-items: center; }
 input[type=range] { width: 100%; height: 34px; accent-color: var(--accent); margin: 0; }
 input[type=checkbox] { width: 26px; height: 26px; accent-color: var(--accent); margin: 0; flex: none; }
@@ -665,6 +668,10 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: var(--fs-
 .scene-keybar .btn.pending { border-color: var(--accent); color: var(--accent); }
 .scene-keybar .autokey.on { color: #fff; background: #b8322f; border-color: #b8322f; }
 .scene-toolbar { top: 8px; left: 8px; }
+/* the reference over the shot frame (scene-ref.js): placed like the canvas, never picked */
+.scene-ref { position: absolute; z-index: 1; pointer-events: none; overflow: hidden; }
+.scene-ref > img, .scene-ref > video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.layer-toolbar [data-ref].on { background: var(--surface-2); color: var(--accent); font-weight: 400; }
 /* icon-only gizmo buttons; the mode switch sits left of the full-screen button */
 .layer-toolbar button.ico { min-width: 40px; padding: 0 8px; font-size: 18px; }
 .scene-modebar { top: 8px; right: 54px; }
@@ -864,7 +871,7 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: var(--fs-
 .key-menu { position: fixed; z-index: 70; display: grid; gap: 4px; min-width: 230px; padding: 6px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); box-shadow: 0 8px 24px #0008; }
 .key-menu .btn { justify-content: flex-start; text-align: left; }
 .keynum { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 6px; font-size: var(--fs-xs); color: var(--muted); }
-.keynum input { min-height: var(--tap-sm); border: 1px solid var(--line); border-radius: var(--r); background: var(--surface-2); color: var(--text); font: inherit; font-size: 14px; padding: 0 6px; text-align: right; }
+.keynum input { min-height: var(--tap-sm); border: 1px solid var(--line); border-radius: var(--r); color: var(--text); font: inherit; font-size: 14px; padding: 0 6px; text-align: right; }
 .keyinfo { min-width: 90px; font-variant-numeric: tabular-nums; }
 .sheet-grip { flex: none; height: 14px; margin: -2px 0; cursor: row-resize; touch-action: none; display: grid; place-items: center; }
 .sheet-grip::after { content: ''; width: 56px; height: 4px; border-radius: 2px; background: var(--muted); opacity: .5; }

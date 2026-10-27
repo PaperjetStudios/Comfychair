@@ -1,6 +1,6 @@
 import * as FIGURE from './figure.js';
 import { maximizable } from './layout.js';
-import { $, button, h, sheetOpen, store, toast } from './ui.js';
+import { $, button, h, numSlider, sheetOpen, store, toast } from './ui.js';
 import {
   CAM, FPS, OBJ, R, ROOM, SC, TEMP, TYPES, addKey, bakeBase, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setKey, setMute
 } from './scene-data.js';
@@ -485,9 +485,13 @@ function syncTools() {
   info();
 }
 const setUI = (k, v) => { UI[k] = v; if (k === 'mode') store.set('deck.scene.keymode', v); if (k === 'unit') store.set('deck.scene.keyunit', v); if (k === 'snap') store.set('deck.scene.keysnap', v); };
-const numIn = (label, val, fn, title, w = 64) => h('label', { class: 'keynum', title }, label,
-  h('input', { type: 'number', value: val, step: 'any', inputMode: 'decimal', style: `width:${w}px`,
-    onchange: (e) => { const v = parseFloat(e.target.value); e.target.value = val; if (Number.isFinite(v)) fn(v); } }));
+// a number slider in the menu: fn(v) once it is typed or let go (then it reads val again)
+const numIn = (label, val, fn, title, { min, max, step = 1 }, w = 84) => {
+  const i = numSlider({ min, max, step, value: val, label });
+  i.style.width = `${w}px`;
+  i.addEventListener('change', () => { const v = parseFloat(i.value); i.set(val); if (Number.isFinite(v) && v !== val) fn(v); });
+  return h('label', { class: 'keynum', title }, label, i);
+};
 
 // the ⋯ menu: fixed to the viewport (the tool row scrolls and would clip it), inside the stage (so full screen keeps it)
 let menuEl = null;
@@ -498,8 +502,8 @@ function openMenu(anchor) {
   const item = (label, fn, keep = false) => h('button', { type: 'button', class: 'btn small ghost', onclick: () => { fn(); if (!keep) closeMenu(); } }, label);
   menuEl = h('div', { class: 'key-menu', role: 'menu' },
     item('Select none', selectNone), item('Invert selection', selectInvert), item('Duplicate (Ctrl+D)', duplicateKeys),
-    numIn('Shift (frames)', 0, (v) => { moveKeys(v); closeMenu(); }, 'Move the selected keys by this many frames'),
-    numIn('Scale (%)', 100, (v) => { scaleKeys(v / 100); closeMenu(); }, 'Stretch the selected keys around the playhead, in percent'),
+    numIn('Shift (frames)', 0, (v) => { moveKeys(v); closeMenu(); }, 'Move the selected keys by this many frames', { min: -frames(), max: frames() }),
+    numIn('Scale (%)', 100, (v) => { scaleKeys(v / 100); closeMenu(); }, 'Stretch the selected keys around the playhead, in percent', { min: 5, max: 500 }),
     item(`Ruler in ${UI.unit === 's' ? 'frames' : 'seconds'}`, () => { setUI('unit', UI.unit === 's' ? 'f' : 's'); renderKeys(); }),
     item(`Snap ${UI.snap ? 'off' : 'on'} (to playhead and keys)`, () => { setUI('snap', !UI.snap); syncTools(); }));
   (stage() || document.body).append(menuEl);

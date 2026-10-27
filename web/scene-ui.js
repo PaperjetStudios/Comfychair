@@ -1,11 +1,11 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import {
-  $, button, clamp, clone, closeSheet, field, h, iconBtn, layerRowsEl, openSheet, panelTop, propNum, rangeField,
+  $, button, clamp, clone, closeSheet, field, h, iconBtn, layerRowsEl, numField, openSheet, panelTop, rangeField,
   section, seg, sheetOpen, store, uid, undoToast, help
 } from './ui.js';
 import {
-  C, CAM, EVEN, HIST, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropKeys, frames, hasKeys, hooks, keyCount, keyTarget,
+  C, CAM, EVEN, FPS, HIST, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropKeys, frames, framesFor, hasKeys, hooks, keyCount, keyTarget,
   namesFor, nextKeyFrame, pivotOf, pivotsFor, sameTab, save, selItem, setSC, write
 } from './scene-data.js';
 import { FIG_TABS, adjustTab, faceTab, handsTab, jointsTab, movesTab, partsTab, posesTab, promptProps } from './scene-pose.js';
@@ -16,6 +16,7 @@ import {
 import { busy, play, renderDepthVideo, renderPoseVideo, saveFrame, seek, stopPlay } from './scene-export.js';
 import { maxBar, renderKeys, renderTransport, wireSheetKeys } from './scene-keys.js';
 import { hasMode, modeDef, modeList, modeOf, modeSections } from './scene-modes.js';
+import { syncRef, toggleRef } from './scene-ref.js';
 
 // ---- UI ----------------------------------------------------------------------
 let statusText = '';
@@ -30,6 +31,10 @@ export function renderToolbar() {
   const mode = R.joint ? jointMode() : R.mode;
   tb.querySelectorAll('[data-mode]').forEach((b) => { b.classList.toggle('on', ok(b.dataset.mode) && b.dataset.mode === mode); b.disabled = !ok(b.dataset.mode); });
   tb.querySelector('[data-depth]').classList.toggle('on', R.depth);
+  const rb = tb.querySelector('[data-ref]');
+  rb.classList.toggle('on', !!SC.ref && SC.ref.on !== false); rb.setAttribute('aria-pressed', !!SC.ref && SC.ref.on !== false);
+  rb.title = SC.ref ? 'Reference over the view: show or hide' : 'Reference over the view: pick a picture';
+  syncRef();
   tb.querySelector('[data-undo]').disabled = !HIST.undo.length;
   tb.querySelector('[data-redo]').disabled = !HIST.redo.length;
 }
@@ -40,10 +45,10 @@ export { renderKeys, renderTime, renderTransport } from './scene-keys.js';
 // a slider: the view follows while dragging, the change is saved on letting go
 export const slider = (label, get, set, opts) => rangeField(label, get, set,
   { ...opts, onInput: () => { pose(R.f); draw(); }, onChange: () => { save(); renderKeys(); } });
-// a number box (drag it sideways like a slider: the view follows, the change is saved on letting go)
-const num = (label, get, set, opts = {}) => propNum(label, +Number(get()).toFixed(opts.digits ?? 2), set,
+// a number slider (hold and pull it sideways: the view follows, the change is saved on letting go)
+const num = (label, get, set, opts = {}) => numField(label, get(), set,
   () => { if (opts.after) opts.after(); changed(); },
-  { step: 'any', live: () => { if (opts.after) opts.after(); syncMeshes(); pose(R.f); draw(); }, ...opts });
+  { digits: 2, live: () => { if (opts.after) opts.after(); syncMeshes(); pose(R.f); draw(); }, ...opts });
 const easeSeg = (item) => field('Between keys', seg([['smooth', 'Ease'], ['linear', 'Linear']], item.ease, (v) => { item.ease = v; changed(); }));
 const clearKeys = (item, names) => (hasKeys(item) ? button('Clear keys', () => { Object.assign(item.base, current(item, names)); item.chans = {}; changed(); }) : null);
 
@@ -70,11 +75,11 @@ function placeProps(o, cur) {
   return [
     field('Name', name),
     o.type === 'figure' ? field('Body', seg(FIGURE.BODIES, FIGURE.bodyOf(o.body), (v) => { o.body = v; changed(); })) : null,
-    xyz('Position (m)', [['x', 'X'], ['y', 'Up', { min: -5, max: 10 }], ['z', 'Z']], { min: -20, max: 20 }),
-    xyz('Rotation (°)', [['rx', 'X'], ['ry', 'Y'], ['rz', 'Z']], { digits: 0, min: -180, max: 180, step: 1 }),
-    o.type === 'figure' ? num('Height (m)', () => cur().sy * FIGURE.heightOf(o.body), (v) => even(Math.max(0.3, v) / FIGURE.heightOf(o.body)), { min: 0.3, max: 2.5 })
-      : EVEN.has(o.type) ? num('Scale', () => cur().sy, (v) => even(Math.max(0.05, v)), { min: 0.05, max: 20 })
-      : xyz('Size (m)', [['sx', 'Width'], ['sy', 'Height'], ['sz', 'Depth']], { min: 0.05, max: 20 }),
+    xyz('Position (m)', [['x', 'X'], ['y', 'Up', { min: -5, max: 10 }], ['z', 'Z']], { min: -20, max: 20, step: 0.01 }),
+    xyz('Rotation (°)', [['rx', 'X'], ['ry', 'Y'], ['rz', 'Z']], { digits: 0, min: -360, max: 360, step: 1 }),
+    o.type === 'figure' ? num('Height (m)', () => cur().sy * FIGURE.heightOf(o.body), (v) => even(Math.max(0.3, v) / FIGURE.heightOf(o.body)), { min: 0.3, max: 2.5, step: 0.01 })
+      : EVEN.has(o.type) ? num('Scale', () => cur().sy, (v) => even(Math.max(0.001, v)), { min: 0.001, max: 20, step: 0.001, digits: 3 })
+      : xyz('Size (m)', [['sx', 'Width'], ['sy', 'Height'], ['sz', 'Depth']], { min: 0.05, max: 20, step: 0.01 }),
     field('Pivot (where the gizmo turns it)', seg(pivotsFor(o), pivotsFor(o).some(([k]) => k === pivotOf(o)) ? pivotOf(o) : null,
       (v) => { o.pivot = v; changed(); }, { wrap: true })),
     o.type === 'figure' ? [
@@ -109,7 +114,7 @@ function layerList() {
   const hideBtn = (it, after) => iconBtn(it.hidden ? 'Show' : 'Hide', it.hidden ? '◌' : '◉', () => { it.hidden = !it.hidden; after(); });
   const delBtn = (id, name) => iconBtn(`Delete ${name}`, '🗑', () => removeLayer(id));
   const rows = [{ sel: !R.sel, thumb: h('span', { class: 'scene-icon' }, '🎥'), name: 'Camera',
-    hint: [`${SC.width}×${SC.height} · ${SC.seconds} s`, keys(SC.camera)].filter(Boolean).join(' · '), onclick: () => select(null) }];
+    hint: [`${SC.width}×${SC.height} · ${fmtSecs(SC.seconds)} s`, keys(SC.camera)].filter(Boolean).join(' · '), onclick: () => select(null) }];
   if (SC.room) {
     rows.push({ sel: R.sel === ROOM, off: SC.room.hidden, thumb: h('span', { class: 'scene-icon' }, '⌂'), name: 'Room',
       hint: `${SC.room.w}×${SC.room.d} m${SC.room.hidden ? ' · hidden' : ''}`, onclick: () => select(R.sel === ROOM ? null : ROOM),
@@ -128,9 +133,9 @@ function roomProps() {
   const re = () => rebuildRoom();
   return section('Room', () => select(null),
     h('div', { class: 'row' },
-      num('Width (m)', () => rm.w, (v) => { rm.w = Math.max(1, v); }, { min: 1, max: 40, after: re }),
-      num('Depth (m)', () => rm.d, (v) => { rm.d = Math.max(1, v); }, { min: 1, max: 40, after: re }),
-      num('Height (m)', () => rm.h, (v) => { rm.h = Math.max(1, v); }, { min: 1, max: 10, after: re })),
+      num('Width (m)', () => rm.w, (v) => { rm.w = Math.max(1, v); }, { min: 1, max: 40, step: 0.1, digits: 1, after: re }),
+      num('Depth (m)', () => rm.d, (v) => { rm.d = Math.max(1, v); }, { min: 1, max: 40, step: 0.1, digits: 1, after: re }),
+      num('Height (m)', () => rm.h, (v) => { rm.h = Math.max(1, v); }, { min: 1, max: 10, step: 0.05, after: re })),
     field('Shape', seg([['room', 'Walls + ceiling'], ['walls', 'Walls'], ['floor', 'Floor only']], rm.walls ? (rm.ceiling ? 'room' : 'walls') : 'floor',
       (v) => { rm.walls = v !== 'floor'; rm.ceiling = v === 'room'; rebuildRoom(); changed(); })),
     help('Keep the walls about where the real ones should be: H3 sizes the room from them. Hide it (◉) for an open space.'));
@@ -143,14 +148,8 @@ function cameraProps() {
   sizeSel.value = `${SC.width}x${SC.height}`;
   if (sizeSel.value !== `${SC.width}x${SC.height}`) sizeSel.append(h('option', { value: `${SC.width}x${SC.height}`, selected: true }, `${SC.width}×${SC.height}`));
   sizeSel.addEventListener('change', () => { [SC.width, SC.height] = sizeSel.value.split('x').map(Number); save(); fit(); renderPanel(); });
-  const secs = num(`Length (s) · ${frames()} frames`, () => SC.seconds, (v) => {
-    SC.seconds = Math.max(2, Math.min(15, Math.round(v || 6)));
-    const n = frames();
-    for (const it of [SC.camera, ...SC.objects]) dropKeys(it, (f) => f >= n);
-    R.f = Math.min(R.f, n - 1);
-  }, { min: 2, max: 15, step: 1, digits: 0, after: () => renderTransport(), live: null });
   return section('Camera', null,
-    h('div', { class: 'row' }, field('Size', sizeSel), secs),
+    field('Size', sizeSel), lengthProps(),
     slider('Lens', () => current(cam, CAM).fov, (v) => write(cam, CAM, { fov: v }),
       { min: 12, max: 90, step: 0.5, fmt: (v) => `${Math.round(mm(v))} mm` }),
     slider('Camera height', () => current(cam, CAM).py, (v) => write(cam, CAM, { py: v }),
@@ -163,6 +162,54 @@ function cameraProps() {
       clearKeys(cam, CAM),
       button('Reset view', () => { write(cam, CAM, { ...defaultScene().camera.base }); changed(); })),
     help('The view is the camera: drag empty space to orbit, two fingers to pan and zoom. With keys and Auto key on, each move sets a key at the playhead; with Auto key off it is only a look around until ◆ Key.'));
+}
+
+// ---- the video's length: the Generate panel's video template's (Match generate), or set here (Custom).
+// SC.lenMode: 'match' | 'custom' (scenes from before it are custom); 2–15 s, half seconds allowed.
+const LEN = [2, 15];
+const fmtSecs = (v) => String(+Number(v).toFixed(2));
+// the length of the video template picked in Generate, in seconds (a frame count goes over its fps,
+// else 24), or null when what is picked there isn't a video template with a length
+export function generateSeconds() {
+  const t = C?.S?.tpl;
+  if (!t?.fields || !(t.fields.some((f) => f.kind === 'video') || Object.values(t.node_titles || {}).some((n) => /video/i.test(n)))) return null;
+  const isNum = (f) => f.kind === 'float' || f.kind === 'int', txt = (f) => `${f.label} ${f.input}`;
+  const f = t.fields.find((x) => isNum(x) && /length|seconds|duration|frames/i.test(txt(x)));
+  const val = (x) => +(C.S.values?.[x.key] ?? x.value);
+  if (!f || !(val(f) > 0)) return null;
+  const inFrames = /frame/i.test(txt(f)) || (/^(length|num_frames)$/.test(f.input) && !/sec|duration/i.test(f.label));
+  const fps = t.fields.find((x) => isNum(x) && /fps|frame.?rate/i.test(txt(x)));
+  return inFrames ? val(f) / ((fps && val(fps)) || FPS) : val(f);
+}
+// a new length: keys after the end go, the playhead stays inside
+function setLength(v) {
+  SC.seconds = Math.round(clamp(v, ...LEN) * 100) / 100;
+  const n = frames();
+  for (const it of [SC.camera, ...SC.objects]) dropKeys(it, (f) => f >= n);
+  R.f = Math.min(R.f, n - 1);
+}
+// Match generate: take the Generate template's length when it differs (on show, and when Generate changes)
+export function syncLength() {
+  if (SC?.lenMode !== 'match') return;
+  const g = generateSeconds();
+  if (g == null || Math.abs(clamp(g, ...LEN) - SC.seconds) < 0.005) return;
+  stopPlay(); setLength(g); save(); renderTransport(); renderPanel(); renderToolbar();
+}
+function lengthProps() {
+  const mode = SC.lenMode === 'match' ? 'match' : 'custom', g = generateSeconds();
+  const choice = seg([['match', 'Match generate', 'The length of the video template picked in Generate'], ['custom', 'Custom']], mode, (v) => {
+    SC.lenMode = v;
+    if (v === 'match' && g != null) syncLength(); else { save(); renderPanel(); }
+  });
+  const label = `Length · ${fmtSecs(SC.seconds)} s · ${frames()} frames`;
+  if (mode === 'match') {
+    return field([label, h('span', { class: 'hint' }, g == null ? 'no video template in Generate' : C.S.tpl.name)], choice,
+      help('Follows the length of the video template picked in Generate (2–15 s). With no video template there, the length stays as it is.'));
+  }
+  let want = SC.seconds;
+  return [field(label, choice),
+    rangeField('Custom length', () => want, (v) => { want = v; }, { min: LEN[0], max: LEN[1], step: 0.5, fmt: (v) => `${fmtSecs(v)} s · ${framesFor(v)} frames`,
+      onChange: () => { if (Math.abs(want - SC.seconds) < 0.005) return; stopPlay(); setLength(want); save(); renderTransport(); renderPanel(); renderToolbar(); } })];
 }
 
 function renderProps() {
@@ -273,6 +320,7 @@ export function buildToolbar() {
     h('span', { class: 'sep' }),
     h('button', { type: 'button', class: 'ico', 'data-depth': '', title: 'Depth: show the depth the render will use', 'aria-label': 'Depth',
       onclick: () => { R.depth = !R.depth; draw(); renderToolbar(); } }, '◐'),
+    h('button', { type: 'button', class: 'ico', 'data-ref': '', 'aria-label': 'Reference', onclick: toggleRef }, '◫'),
     h('span', { class: 'sep' }),
     h('button', { type: 'button', 'data-undo': '', title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo', onclick: () => undo() }, '↶'),
     h('button', { type: 'button', 'data-redo': '', title: 'Redo (Ctrl+Shift+Z)', 'aria-label': 'Redo', onclick: () => undo(false) }, '↷')));

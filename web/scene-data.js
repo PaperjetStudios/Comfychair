@@ -55,7 +55,7 @@ export const R = { modeKey: null, free: false, f: 0, sel: null, joint: null, fig
 export const newRoom = () => ({ w: 8, d: 8, h: 2.8, walls: true, ceiling: true, hidden: false });
 export function defaultScene() {
   return {
-    v: 1, width: 768, height: 448, seconds: 6, blur: 2, room: newRoom(),
+    v: 1, width: 768, height: 448, seconds: 6, lenMode: 'match', blur: 2, room: newRoom(),
     camera: { base: { px: 0, py: 1.6, pz: 5, tx: 0, ty: 1, tz: 0, fov: 45, roll: 0 }, chans: {}, ease: 'smooth' },
     objects: [newObject('person', { x: 0, z: 0 }, [])],
   };

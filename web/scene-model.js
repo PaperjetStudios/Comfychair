@@ -489,9 +489,10 @@ function meshPanel() {
 // ---- library ----
 function paramSheet(kind) {
   const prim = PRIMS[kind], vals = Object.fromEntries(prim.params.map(([k, , def]) => [k, def]));
-  const inputs = prim.params.map(([k, label, , min, max]) => {
-    const i = h('input', { type: 'number', inputMode: 'decimal', min, max, step: 'any', value: vals[k] });
-    i.addEventListener('change', () => { vals[k] = clampN(parseFloat(i.value) || min, min, max); i.value = vals[k]; });
+  const inputs = prim.params.map(([k, label, def, min, max]) => {
+    const whole = Number.isInteger(def) && Number.isInteger(min) && min >= 1;   // segments, sides
+    const i = numSlider({ min, max, step: whole ? 1 : 0.05, value: vals[k], label });
+    i.addEventListener('change', () => { vals[k] = clampN(parseFloat(i.value) || min, min, max); });
     return field(label, i);
   });
   openSheet(h('h3', {}, `New ${prim.label.toLowerCase()}`), h('div', { class: 'mdl-params' }, inputs),

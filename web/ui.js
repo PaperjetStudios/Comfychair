@@ -423,6 +423,16 @@ export function propNum(label, value, set, after, { min = -1e6, max = 1e6, step 
   return tip ? withHelp(el, tip) : el;
 }
 
+// propNum as the app's slider (numSlider: the bar shows where it sits between min and max). Same
+// set / after / live as propNum; a typed value is kept in range and on the step.
+export function numField(label, value, set, after, { min, max, step = 0.01, digits = null, live = null, help: tip = null } = {}) {
+  const r = numSlider({ min, max, step, value, digits, label: Array.isArray(label) ? label[0] : label });
+  if (live) r.addEventListener('input', () => { if (r.dataset.scrubbing) { set(parseFloat(r.value)); live(); } });
+  r.addEventListener('change', () => { set(parseFloat(r.value)); after(); });
+  const el = field(label, r);
+  return tip ? withHelp(el, tip) : el;
+}
+
 // A gallery card: a picture or clip, a badge over it, a caption (or meta: nodes for the caption row)
 export function mediaCard(media, label, onclick, { badge = null, meta = null, attrs = {} } = {}) {
   const c = h('button', { type: 'button', class: 'card', ...attrs },
