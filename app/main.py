@@ -310,9 +310,11 @@ async def lifespan(app: FastAPI):
     comfy.listeners.add(on_comfy)
     await comfy.start()
     task = asyncio.create_task(reconcile_loop())
+    sweeper = asyncio.create_task(clipimport.sweeper())   # the clip importer's previews and leftovers
     log.info("ComfyDeck ready. ComfyUI at %s", config.COMFY_URL)
     yield
     task.cancel()
+    sweeper.cancel()
     await comfy.stop()
 
 

@@ -444,6 +444,22 @@ async function srcInfo() {
 // ---- viewer: source / result wipe, and drawing points and paths ----
 const V = { a: null, b: null, still: null, ov: null, stroke: null };
 
+// the source's trimmed part in its own time, [start, end); end is Infinity when it runs to the clip's end
+const srcSpan = () => { const t = T.source?.trim, s = t?.start || 0; return [s, t?.len != null ? s + t.len : Infinity]; };
+
+// while playing: the source stays inside its trim and both sides loop (a result is as long as the trim)
+function keepInTrim() {
+  if (!UI.playing) return;
+  const [s, e] = srcSpan(), src = V.a && !V.a.dataset.result ? V.a : null;
+  if ((src && (src.currentTime >= e - 0.02 || src.ended)) || V.b?.ended || (!V.b && src?.ended)) {
+    if (src) src.currentTime = s;
+    if (V.a && !src) V.a.currentTime = 0;
+    if (V.b) V.b.currentTime = 0;
+    for (const v of [V.a, V.b]) v?.play().catch(() => {});
+  }
+  requestAnimationFrame(keepInTrim);
+}
+
 function drawViewer() {
   const stage = $('#vfxStage');
   if (!stage) return;
@@ -459,7 +475,7 @@ function drawViewer() {
   const want = `${aUrl}|${resUrl}|${stillMode ? T.first : ''}|${side}`;
   if (stage.dataset.want !== want) {
     stage.dataset.want = want;
-    V.a = aUrl ? h('video', { src: aUrl, muted: true, playsInline: true, preload: 'auto', class: 'vfx-a' }) : null;
+    V.a = aUrl ? h('video', { src: aUrl, muted: true, playsInline: true, preload: 'auto', class: 'vfx-a', ...(cmpUrl && { 'data-result': '1' }) }) : null;
     V.b = resUrl ? h('video', { src: resUrl, muted: true, playsInline: true, preload: 'auto', class: 'vfx-b' }) : null;
     V.still = stillMode && T.first ? h('img', { src: inputUrl(T.first), class: 'vfx-a', alt: '' }) : null;
     V.ov = side ? null : h('canvas', { class: 'vfx-ov' });
@@ -473,6 +489,11 @@ function drawViewer() {
     V.still?.addEventListener('load', fit);
     if (V.ov) wireOverlay(media);
     if (V.a && V.b) V.b.addEventListener('timeupdate', () => { if (Math.abs(V.a.currentTime - V.b.currentTime - offset) > 0.15) V.a.currentTime = V.b.currentTime + offset; });
+  }
+  const trimKey = cmpUrl ? '' : JSON.stringify(T.source?.trim || null);
+  if (stage.dataset.trim !== trimKey) {   // the trim changed: show its first frame
+    stage.dataset.trim = trimKey;
+    if (V.a && !cmpUrl && V.a.readyState >= 1) { V.a.currentTime = offset; if (V.b) V.b.currentTime = 0; }
   }
   stage.classList.toggle('drawing', !!UI.draw);
   sizeOverlay();
@@ -576,7 +597,12 @@ function renderTransport() {
   const vids = [V.a, V.b].filter(Boolean);
   const play = () => {
     UI.playing = !UI.playing;
+    if (UI.playing && V.a && !V.a.dataset.result) {   // from the trim's start when outside it
+      const [s, e] = srcSpan();
+      if (V.a.currentTime < s - 0.05 || V.a.currentTime >= e - 0.02) { V.a.currentTime = s; if (V.b) V.b.currentTime = 0; }
+    }
     for (const v of vids) UI.playing ? v.play().catch(() => {}) : v.pause();
+    if (UI.playing) requestAnimationFrame(keepInTrim);
     renderTransport();
   };
   const step = (n) => { UI.playing = false; for (const v of vids) { v.pause(); v.currentTime = Math.max(0, v.currentTime + n / FPS); } renderTransport(); };

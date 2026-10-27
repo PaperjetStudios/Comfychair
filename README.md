@@ -84,9 +84,15 @@ network you trust.
 
 **Importing clips:** the importer shows the video, you set in/out (and optionally a crop and a size
 limit), and only that piece is saved, as h264 + aac in `data/media`.
+- The editor has a zoomed bar (2 s, 10 s or 60 s around the handle you last moved; handles snap to frames),
+  **▶ Selection** (plays in to out, looping), and keys once you tap the player: ← → a frame (Shift: a second),
+  I / O set in / out, P plays the selection, Space plays.
+- Temporary files (`data/tmp/clips`) clear themselves: a link's preview after 3 h unused, a PC preview copy after
+  3 days, leftovers after 1 h, and the least recently used first once the folder passes 4 GB.
 - *Link*: anything [yt-dlp](https://github.com/yt-dlp/yt-dlp) reads. `./run.sh` installs it into the venv;
   keep it current (`.venv/bin/pip install -U yt-dlp`), because sites change often. The preview is a small
-  stream relayed through ComfyDeck. The cut seeks into the full-quality stream, so only the chosen part is
+  stream relayed through ComfyDeck while a small whole-video copy downloads (a few seconds for a 10-minute
+  video); once it's in, the player switches to it and seeking is instant. The cut seeks into the full-quality stream, so only the chosen part is
   downloaded. Sites that only stream in pieces (HLS) get a small preview copy first (videos up to 20 min).
 - *This PC*: browses your home folder and mounted drives. Set `DECK_CLIP_ROOTS` (paths joined with `:`)
   to choose other folders. Files the browser can't play (ProRes, some MKV/HEVC) get a small preview copy.
