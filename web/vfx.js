@@ -80,6 +80,9 @@ const ROLES = {
   res: (f) => f.kind === 'int' && /resolution/i.test(f.group),
   steps: (f) => f.kind === 'text' && f.input === 'sigmas',
   blend: (f) => f.kind === 'choice' && f.input === 'shape',
+  grow: (f) => f.kind === 'float' && f.input === 'grow',
+  feather: (f) => f.kind === 'float' && f.input === 'feather',
+  chin: (f) => f.kind === 'float' && f.input === 'chin',
   lora: (f) => f.kind === 'choice' && f.input === 'lora_name',
   strength: (f) => f.kind === 'float' && f.input === 'strength_model',
   outsize: (f) => f.kind === 'choice' && f.input === 'output_size',
@@ -99,9 +102,10 @@ const resOf = (e) => { const r = e.res || RES; return r.some(([v]) => v === T.re
 const SIZES = [['Match source', null], ['1280×704', [1280, 704]], ['704×1280', [704, 1280]], ['960×544', [960, 544]],
   ['544×960', [544, 960]], ['1024×1024', [1024, 1024]], ['1920×1088', [1920, 1088]]];
 
+const FACE = { grow: 1.05, feather: 0.25, chin: 0.82 };   // Face only's blend outline (Deck Face Uncrop)
 const BLANK = () => ({ op: 'ripple', source: null, first: null, matte: null, prompt: '', loras: [], len: 5, res: 704, size: null, seed: -1,
   points: { positive: [], negative: [] }, pointsAt: 0, tracks: [], key: { color: '#00ff00', similarity: 0.12, blend: 0.08, spill: 0.5, invert: false },
-  steps: 3, blend: 'face', results: [], showing: null });
+  steps: 3, blend: 'face', face: { ...FACE }, results: [], showing: null });
 let T = BLANK();
 let tabs = null;
 // cmp: the result on the left instead of the source (comparing takes); layout: 'wipe' or 'side'
@@ -272,8 +276,9 @@ function render() {
       help(e.res ? 'The short side, in pixels. Higher is sharper and slower.' : 'The short side, in pixels. 704p takes about 1.5 minutes for 5 s on this card; 1088p about 3.')) : null,
     needs.has('steps') ? field('Steps', seg([[3, 'Fast'], [5, 'Balanced'], [7, 'Quality']], T.steps || 3, (v) => { T.steps = Number(v); changed(false); }),
       help('Fast is the upstream default (3 steps). Quality can over-sharpen.')) : null,
-    needs.has('blend') ? field('Blend', seg([['face', 'Face'], ['oval', 'Head']], T.blend || 'face', (v) => { T.blend = v; changed(false); }),
+    needs.has('blend') ? field('Blend', seg([['face', 'Face'], ['oval', 'Head']], T.blend || 'face', (v) => { T.blend = v; changed(); }),
       help('Face keeps the original hair, neck and collar. Head pastes the whole tracked square (hair included), with a soft edge.')) : null,
+    ...(needs.has('blend') ? faceFields() : []),
     needs.has('outsize') ? field('Output size', seg([['FullHD', 'Full HD'], ['4K', '4K']], T.outsize || 'FullHD', (v) => { T.outsize = v; changed(false); }),
       help('4K is tiled: much slower, same memory.')) : null,
     needs.has('size') ? field('Size', h('select', { onchange: (ev) => { T.size = SIZES[ev.target.value][1]; changed(false); } },
@@ -330,6 +335,18 @@ function pickResult(onPick) {
   openVideoPicker({ title: 'Pick a matte or mask', onPick });
 }
 
+function faceFields() {
+  const f = (T.face ||= { ...FACE }), face = (T.blend || 'face') === 'face';
+  const num = (k, label, opts) => rangeField(label, () => f[k] ?? FACE[k], (v) => { f[k] = v; },
+    { fmt: (v) => v.toFixed(2), onChange: () => changed(false), ...opts });
+  return [
+    face ? num('grow', 'Face size', { min: 0.8, max: 1.4, step: 0.01, help: 'How far past the face outline the new face reaches.' }) : null,
+    num('feather', 'Edge softness', { min: 0.05, max: 1, step: 0.01, help: 'Lower gives a firmer edge; higher fades it out over a wider band.' }),
+    face ? num('chin', 'Chin', { min: 0.5, max: 1.3, step: 0.01,
+      help: 'Moves the lower edge. Lower it if the new face spills onto the neck or collar (red patches, a second jawline).' }) : null,
+  ];
+}
+
 // ---- running ----
 async function run() {
   const e = fx(T.op);
@@ -354,7 +371,10 @@ async function run() {
   }
   if (e.needs.includes('res')) put('res', resOf(e));
   if (e.needs.includes('steps')) put('steps', STEPS[T.steps] || STEPS[3]);
-  if (e.needs.includes('blend')) put('blend', T.blend || 'face');
+  if (e.needs.includes('blend')) {
+    put('blend', T.blend || 'face');
+    for (const k of ['grow', 'feather', 'chin']) put(k, T.face?.[k] ?? FACE[k]);
+  }
   if (e.needs.includes('outsize')) put('outsize', T.outsize || 'FullHD');
   const size = T.size || (e.needs.includes('size') && T.first ? await imageSize(T.first) : null);
   if (e.needs.includes('size') && size) { put('width', size[0]); put('height', size[1]); }

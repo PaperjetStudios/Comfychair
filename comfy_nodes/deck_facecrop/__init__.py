@@ -4,9 +4,11 @@ Deck Face Crop takes the clip and a mask that marks the face on each frame (DWPo
 their extent is used). Frames without a face hold or interpolate the box of their neighbours, the square has one
 size for the whole clip (the largest face times Scale), its centre is smoothed both ways in time, and the frame is
 padded at the edges, so every crop is full and the same size. Deck Face Uncrop pastes processed crops back through
-a feathered ellipse fitted to each frame's face (with the forehead), so the neck, collar, hair and background stay
-the original footage.
+a soft outline of each frame's face (the hull of its face points plus the forehead; an ellipse when there are no
+points), so the neck, collar, hair and background stay the original footage.
 """
+import cv2
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -39,6 +41,22 @@ def _fill(boxes):
         else:
             t = (i - prev) / (nxt - prev)
             out[i] = tuple(a + (b - a) * t for a, b in zip(boxes[prev], boxes[nxt]))
+    return out
+
+
+def _hulls(mask, boxes):
+    """Each frame's convex hull of the face pixels (full-frame x, y); frames without a face borrow the nearest
+    found frame's hull, moved by the difference in box centres."""
+    out = []
+    for m in mask:
+        ys, xs = torch.nonzero(m > 0.5, as_tuple=True)
+        pts = torch.stack([xs, ys], 1).numpy().astype(np.int32) if len(xs) else None
+        out.append(None if pts is None else cv2.convexHull(pts)[:, 0].astype(np.float32))
+    known = [i for i, h in enumerate(out) if h is not None]
+    for i in range(len(out)):
+        if out[i] is None and known:
+            k = min(known, key=lambda k: abs(k - i))
+            out[i] = out[k] + np.float32([boxes[i][0] - boxes[k][0], boxes[i][1] - boxes[k][1]])
     return out
 
 
@@ -82,6 +100,7 @@ class DeckFaceCrop:
         if mask.shape[0] < n:   # one mask for a still, or a short mask clip: repeat the last
             mask = torch.cat([mask, mask[-1:].expand(n - mask.shape[0], H, W)])
         boxes = _fill(_boxes(mask[:n]))
+        hulls = _hulls(mask[:n], boxes)
         side = max(8, int(round(max(b[2] for b in boxes) * scale)))
         cx = _smooth([b[0] for b in boxes], smooth)
         cy = _smooth([b[1] for b in boxes], smooth)
@@ -96,7 +115,7 @@ class DeckFaceCrop:
         crops = torch.cat(crops).clamp(0, 1).movedim(1, -1)
         # each frame's face (centre and size, smoothed like the crop) for the paste-back ellipse
         faces = list(zip(cx, cy, _smooth([b[3] for b in boxes], smooth), _smooth([b[4] for b in boxes], smooth)))
-        return (crops, {"corners": corners, "side": side, "height": H, "width": W, "faces": faces})
+        return (crops, {"corners": corners, "side": side, "height": H, "width": W, "faces": faces, "hulls": hulls})
 
 
 class DeckFaceUncrop:
@@ -111,14 +130,16 @@ class DeckFaceUncrop:
         }, "optional": {
             "shape": (["face", "oval"], {"default": "face",
                       "tooltip": "face: an ellipse around each frame's face and forehead (keeps neck and collar). oval: the whole crop."}),
-            "grow": ("FLOAT", {"default": 1.15, "min": 0.5, "max": 3.0, "step": 0.05, "tooltip": "Size of the face ellipse."}),
+            "grow": ("FLOAT", {"default": 1.05, "min": 0.5, "max": 3.0, "step": 0.05, "tooltip": "Size of the face outline."}),
+            "chin": ("FLOAT", {"default": 0.82, "min": 0.5, "max": 1.3, "step": 0.01,
+                               "tooltip": "Pulls the lower edge up (below 1) or down (above 1): lower it to keep the new face off the neck and collar."}),
         }}
 
     RETURN_TYPES = ("IMAGE",)
     FUNCTION = "uncrop"
     CATEGORY = "ComfyDeck"
 
-    def uncrop(self, images, crops, crop_info, feather, shape="face", grow=1.15):
+    def uncrop(self, images, crops, crop_info, feather, shape="face", grow=1.05, chin=0.82):
         side, pad = crop_info["side"], crop_info["side"]
         n = min(images.shape[0], crops.shape[0], len(crop_info["corners"]))
         H, W = images.shape[1:3]
@@ -131,10 +152,29 @@ class DeckFaceUncrop:
             d = torch.sqrt(((g[None, :] - cx) / rx) ** 2 + ((g[:, None] - cy) / ry) ** 2)
             return ((1 - d) / feather).clamp(0, 1)[None, None].to(back)
 
+        def outline(h, x0, y0):
+            """A face hull with the forehead added, sized by grow and chin, filled in this crop's coordinates."""
+            x_lo, y_lo = h.min(0)
+            x_hi, y_hi = h.max(0)
+            c = np.float32([(x_lo + x_hi) / 2, (y_lo + y_hi) / 2])
+            fh = y_hi - y_lo + 1
+            pts = np.concatenate([h, h[h[:, 1] < c[1]] - np.float32([0, 0.3 * fh])])
+            pts = c + (pts - c) * grow
+            below = pts[:, 1] > c[1]
+            pts[below, 1] = c[1] + (pts[below, 1] - c[1]) * chin
+            pts = cv2.convexHull(((pts - np.float32([x0, y0])) * 16).round().astype(np.int32))
+            m = np.zeros((side, side), np.float32)
+            cv2.fillConvexPoly(m, pts, 1.0, lineType=cv2.LINE_AA, shift=4)
+            return cv2.GaussianBlur(m, (0, 0), max(0.5, 0.15 * feather * fh))
+
+        hulls = crop_info.get("hulls") if shape == "face" else None
         oval = ellipse(side / 2, side / 2, side / 2, side / 2)
         canvas = F.pad(images[:n].movedim(-1, 1), (pad, pad, pad, pad), mode="replicate")
         for i, (x0, y0) in enumerate(crop_info["corners"][:n]):
-            if faces:   # face points run brow to chin: reach up for the forehead, keep clear of the neck
+            if hulls:   # this frame's outline averaged with its neighbours', so the edge doesn't jitter
+                near = [hulls[j] for j in (i - 1, i, i + 1) if 0 <= j < len(hulls) and hulls[j] is not None]
+                alpha = torch.from_numpy(sum(outline(h, x0, y0) for h in near) / len(near))[None, None].to(back) * oval
+            elif faces:   # face points run brow to chin: reach up for the forehead, keep clear of the neck
                 fx, fy, fw, fh = faces[i]
                 alpha = ellipse(fx - x0, fy - y0 - 0.12 * fh, 0.5 * fw * grow, 0.62 * fh * grow) * oval
             else:

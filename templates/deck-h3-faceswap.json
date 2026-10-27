@@ -384,10 +384,11 @@
    ],
    "feather": 0.25,
    "shape": "face",
-   "grow": 1.1
+   "grow": 1.05,
+   "chin": 0.82
   },
   "_meta": {
-   "title": "@7 Blend [shape]"
+   "title": "@7 Blend [shape,grow,feather,chin]"
   }
  },
  "aud": {
