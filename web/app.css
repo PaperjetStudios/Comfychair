@@ -417,6 +417,22 @@ details.desc[open] summary { margin-bottom: 6px; }
 .layer-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .layer-name .hint { font-size: var(--fs-xs); }
 .layer-btns { display: flex; gap: 4px; }
+/* Settings → Projects (projects.js): drag the grip to reorder */
+.proj-list { display: grid; gap: 4px; }
+.proj-row { display: grid; grid-template-columns: 44px 1fr auto; gap: 8px; align-items: center; padding: 4px 6px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg); }
+.proj-row.sel { border-color: var(--accent); }
+.proj-row.shifting { transition: transform .15s; }
+.proj-row.lift { transition: none; position: relative; z-index: 2; box-shadow: var(--shadow-sm); opacity: .94; }
+.proj-grip { display: grid; place-items: center; width: 44px; height: 44px; font-size: 22px; color: var(--muted); cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+.proj-row.lift .proj-grip { cursor: grabbing; color: var(--accent); }
+.proj-row .layer-btns { flex-wrap: wrap; justify-content: flex-end; }
+.proj-row .icon-btn:disabled { opacity: .35; }
+.icon-btn.danger { color: var(--bad); }
+.proj-rename { min-width: 0; }
+@media (max-width: 640px) {   /* phone: the buttons go under the name */
+  .proj-row { grid-template-columns: 44px 1fr; }
+  .proj-row .layer-btns { grid-column: 1 / -1; }
+}
 .layer-row .scene-icon { display: grid; place-items: center; width: 44px; height: 44px; border-radius: var(--r-sm); background: var(--surface-2); font-size: 22px; }
 
 /* ---- editor ---- */

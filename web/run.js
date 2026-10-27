@@ -277,7 +277,7 @@ export function connectWS() {
     if (typeof e.data !== 'string') { onBinary(e.data); return; }
     let m; try { m = JSON.parse(e.data); } catch { return; }
     onMessage(m);
-    if (m.type === 'store') emitServer(m);
+    if (m.type === 'store' || m.type === 'deck_projects' || m.type === 'deck_project_job') emitServer(m);
   };
   ws.onclose = () => {
     if (WS.sock !== ws) return;
@@ -443,7 +443,7 @@ function onMessage(m) {
       document.querySelectorAll(`#board .tile[data-gen="${d.id}"]`).forEach((t) => { B.sel.delete(t.dataset.key); t.remove(); });
       if (GAL.el) galleryRefresh();
       break;
-    case 'progress_state': case 'executed': case 'execution_success': break;
+    case 'progress_state': case 'executed': case 'execution_success': case 'deck_projects': case 'deck_project_job': break;
     default: logDebug(`${m.type} ${JSON.stringify(d).slice(0, 300)}`);
   }
 }

@@ -6,7 +6,7 @@
 import {
   $, h, store, api, toast, overlayOpened, overlayClosed, openSheet, closeSheet, button, help,
 } from './ui.js';
-import { S, loadProjects, setSwitchTab, emitProject } from './core.js';
+import { S, loadProjects, setSwitchTab, setOpenProject, emitProject, onServer } from './core.js';
 import { generate, loadTemplates, selectTemplate, stop, wireTemplateFilter, wireZoom } from './generate.js';
 import './gentabs.js';   // Generate tabs + presets: plugs into generate.js through its hooks
 import { RUN, checkUiVersion, connectWS, loadHistory, onResume, openJobs, runChip, sceneMod, sceneModule, setConn } from './run.js';
@@ -44,12 +44,32 @@ $('#projectSel').addEventListener('change', async (e) => {
     }
     await loadProjects();
   } else S.project = Number(e.target.value);
+  projectOpened();
+});
+// every panel follows the project that's open on this device
+function projectOpened() {
   store.set('deck.project', S.project);
   emitProject();
   S.historyDone = false; loadHistory();
   B.sel.clear();
   if ($('#tab-board').classList.contains('active')) renderBoard();
   if (sceneMod) sceneMod.projectChanged();
+}
+setOpenProject(async (id) => {
+  if (id === S.project) return;
+  S.project = id;
+  await loadProjects();
+  projectOpened();
+});
+// another device (or Settings here) made, renamed, reordered, copied or deleted a project: redo the picker,
+// and if the one open here is gone, open the first one left
+onServer('deck_projects', async (m) => {
+  const was = S.project;
+  await loadProjects();
+  if (S.project !== was) {
+    if (m.data?.reason === 'deleted') toast(`"${m.data.name || 'That project'}" was deleted: now in ${S.projects.find((p) => p.id === S.project)?.name || 'another project'}`);
+    projectOpened();
+  }
 });
 
 function switchTab(name) {

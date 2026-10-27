@@ -82,6 +82,9 @@ export async function loadProjects() {
 // The tab switcher lives in app.js (it knows every panel); panels call it through here.
 export let switchTab = () => {};
 export function setSwitchTab(f) { switchTab = f; }
+// Opening a project (what picking it in #projectSel does) lives in app.js too; Settings → Projects calls it.
+export let openProject = async () => {};
+export function setOpenProject(f) { openProject = f; }
 
 // Tiny pub/sub so modules needn't import each other: run.js owns the websocket and forwards
 // messages (plus {type:'ws_open'} on every (re)connect); app.js announces a project switch.
