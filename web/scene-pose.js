@@ -10,7 +10,7 @@ import { motionField } from './scene-motion.js';
 // a figure that isn't planted on the floor keeps its feet (or seat) where they were for a new pose
 function liftTo(o, v, j, m) {
   if (o.ground) return {};
-  return { y: v.y + (FIGURE.liftFor(j, m, o.body) - FIGURE.liftFor(v.j, v.m, o.body)) * v.sy };
+  return { y: v.y + (FIGURE.liftFor(j, m, o.body, o.shape) - FIGURE.liftFor(v.j, v.m, o.body, o.shape)) * v.sy };
 }
 
 // ---- a figure's pose tabs ----------------------------------------------------------------
@@ -54,12 +54,12 @@ function takePair(o, key) {
   let b = others.sort((x, y) => dist(x) - dist(y))[0];
   if (!b) { b = newObject('figure'); SC.objects.push(b); }
   write(o, FIG, { j: p.a, m: {}, pn: `pair:${key}:${b.id}`, ...liftTo(o, v, p.a, {}) });
-  const floor = o.ground ? current(o, FIG).y : current(o, FIG).y - FIGURE.liftFor(p.a, {}, o.body) * s;  // where a's floor is
+  const floor = o.ground ? current(o, FIG).y : current(o, FIG).y - FIGURE.liftFor(p.a, {}, o.body, o.shape) * s;  // where a's floor is
   const bs = current(b, FIG).sy;
   const dx = p.at.x * s, dz = p.at.z * s;
   write(b, FIG, { j: p.b, m: {}, pn: `partner:${key}`, rx: 0, rz: 0, ry: v.ry + p.at.ry,
     x: v.x + dx * Math.cos(r) + dz * Math.sin(r), z: v.z - dx * Math.sin(r) + dz * Math.cos(r),
-    y: floor + p.at.y * s + (b.ground ? 0 : FIGURE.liftFor(p.b, {}, b.body) * bs) });
+    y: floor + p.at.y * s + (b.ground ? 0 : FIGURE.liftFor(p.b, {}, b.body, b.shape) * bs) });
   changed();
   toast(`${o.name} and ${b.name} together`);
 }
@@ -214,7 +214,7 @@ function runMove(o, key) {
   for (const st of steps) {
     const f = at(st), j = st.j || v.j, m = { ...v.m, ...st.m }, d = (st.d || 0) * v.sy;
     if (st.phase != null) m.phase = (v.m?.phase || 0) + st.phase;
-    const y = v.y + (o.ground ? 0 : (FIGURE.liftFor(j, m, o.body) - FIGURE.liftFor(v.j, v.m, o.body)) * v.sy) + (st.y || 0) * v.sy;
+    const y = v.y + (o.ground ? 0 : (FIGURE.liftFor(j, m, o.body, o.shape) - FIGURE.liftFor(v.j, v.m, o.body, o.shape)) * v.sy) + (st.y || 0) * v.sy;
     const key = { ...v, f, j, m, pn: st.pn || v.pn, y, ry: v.ry + (st.ry || 0), x: v.x + d * Math.sin(r), z: v.z + d * Math.cos(r) };
     if (st.ease) key.ease = st.ease;
     made.push(key);

@@ -42,4 +42,7 @@ assert.equal(keys[0].f, 10);
 const last = keys[keys.length - 1];
 assert.ok(Math.abs(last.x - 3) < 0.02 && Math.abs(last.z) < 0.02, `turned path ends at ${last.x}, ${last.z}`);   // ry 90: +Z becomes +X
 assert.ok(Math.abs(keys[0].y) < 0.01, `standing figure stays on the floor (y ${keys[0].y})`);
+// placement: on the spot keeps x/z, no rise keeps the hips at base.y
+const spot = M.toKeys({ fps: 20, frames: walk }, { x: 2, y: 0.3, z: 1, ry: 90, sy: 1, j: {}, m: {} }, { every: 1, travel: false, rise: false });
+assert.ok(spot.every((k) => k.x === 2 && k.z === 1 && k.y === 0.3), 'on the spot, hips held');
 console.log('motion ok');

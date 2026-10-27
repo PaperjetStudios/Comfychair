@@ -611,7 +611,7 @@ async function useControlVideo(g, sc) {
   const int = (re) => fs.find((f) => f.kind === 'int' && re.test(f.input === 'value' ? f.label : f.input));
   if (sc.width && int(/^width$/)) setVal(int(/^width$/).key, sc.width);
   if (sc.height && int(/^height$/)) setVal(int(/^height$/).key, sc.height);
-  if (sc.seconds && int(/length/i)) setVal(int(/length/i).key, sc.seconds);
+  if (sc.seconds && int(/length/i)) setVal(int(/length/i).key, Math.round(sc.seconds));   // (a whole number of seconds there; the scene may have a half)
   S.pendingParent = { generation: g.id, index: 0 };
   renderFields();
   toast(`Control video #${g.id} set: add references and a prompt`);

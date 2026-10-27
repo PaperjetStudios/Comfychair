@@ -22,6 +22,7 @@ export function persist() {
   if (!S.tpl) return;
   store.set(stateKey(S.tpl.id), { values: S.values, seedMode: S.seedMode, imageMp: S.imageMp, imageCrop: S.imageCrop, sizeMode: S.sizeMode, loraFolder: S.loraFolder, builder: S.builder });
   hooks.edited?.();
+  dispatchEvent(new Event('deck:generate'));   // the template or a value changed (the 3D tab can match its length)
 }
 
 export async function loadTemplates(refresh = false) {
@@ -115,6 +116,7 @@ export function installState(t, st) {
   S.seedMode = st.seedMode || {}; S.imageMp = st.imageMp || {}; S.imageCrop = st.imageCrop || {}; S.sizeMode = st.sizeMode || {};
   S.loraFolder = st.loraFolder || {}; S.builder = st.builder || {};
   renderFields();
+  dispatchEvent(new Event('deck:generate'));
 }
 
 export function setVal(key, v) { S.values[key] = v; persist(); }

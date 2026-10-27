@@ -3,7 +3,7 @@
 // a start key (the camera as it is) and an end key (the camera moved), the start key carrying the
 // easing; a shake writes a key every few frames. Plugged into the Camera mode's panel with addModeSection.
 import * as THREE from './vendor/three.module.min.js';
-import { button, clone, field, h, propNum, section, seg, toast , help } from './ui.js';
+import { button, clone, field, h, numField, section, seg, toast , help } from './ui.js';
 import { CAM, FPS, OBJ, R, SC, TEMP, current, dropKeys, frames, putKeys, sample, selItem } from './scene-data.js';
 import { changed, draw, pose } from './scene-view.js';
 import { renderKeys, renderPanel, renderTime, renderTransport } from './scene-ui.js';
@@ -195,7 +195,7 @@ function build() {
   const fill = () => {
     const m = m0();
     box.replaceChildren(h('div', { class: 'row wrap' },
-      ...m[3].map((x) => propNum(`${x.label}${x.unit ? ` (${x.unit})` : ''}`, val(m)[x.k], (v) => { ST.vals[`${m[0]}.${x.k}`] = v; }, () => {}, { min: x.min, max: x.max, step: x.step })),
+      ...m[3].map((x) => numField(`${x.label}${x.unit ? ` (${x.unit})` : ''}`, val(m)[x.k], (v) => { ST.vals[`${m[0]}.${x.k}`] = v; }, () => {}, { min: x.min, max: x.max, step: x.step || 0.1 })),
       /^orbit/.test(m[0]) ? aroundField() : null));
   };
   const aroundField = () => {
@@ -210,7 +210,7 @@ function build() {
     icon(m[2]), h('span', {}, m[1])));
   }
   fill();
-  const dur = propNum('Duration (s)', ST.secs ?? Math.min(3, SC.seconds), (v) => { ST.secs = Math.max(0.2, v); }, () => {}, { min: 0.2, max: 15, step: 0.5 });
+  const dur = numField('Duration (s)', ST.secs ?? Math.min(3, SC.seconds), (v) => { ST.secs = Math.max(0.2, v); }, () => {}, { min: 0.2, max: 15, step: 0.1, digits: 1 });
   return section('Camera moves', null,
     grid, box,
     h('div', { class: 'row wrap' }, dur,

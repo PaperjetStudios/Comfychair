@@ -5,9 +5,9 @@ import { SC } from './scene-data.js';
 // later (camera presets, modelling tools) registers a mode or plugs a section into one from its own
 // file, without touching the core. The tab remembers its mode as SC.mode.
 //
-//   registerMode({ key, label, hint, panel, select, stage, view, lanes, frustum, enter, exit })
-//     key      'edit' | 'camera' | 'create' | a new one; label / hint: the segment and its tooltip
-//     panel()  the nodes of the panel below the switch
+//   registerMode({ key, label, icon, hint, panel, select, stage, view, lanes, frustum, enter, exit })
+//     key      'edit' | 'camera' | 'create' | a new one; icon: its button on the 3D view (label / hint: its tooltip)
+//     panel()  the nodes of the panel
 //     select   objects can be picked on the stage and in the list (default true)
 //     stage    'scene' shows the scene, 'empty' an empty modelling stage (default 'scene')
 //     view     'shot' looks through the shot camera (orbiting writes its keys), 'free' is a free view
@@ -18,7 +18,7 @@ import { SC } from './scene-data.js';
 const REG = new Map(), PLUGS = new Map();
 
 export function registerMode(def) {
-  REG.set(def.key, { select: true, stage: 'scene', view: 'shot', lanes: 'all', frustum: false, panel: () => null, ...def });
+  REG.set(def.key, { icon: '•', select: true, stage: 'scene', view: 'shot', lanes: 'all', frustum: false, panel: () => null, ...def });
 }
 export function addModeSection(key, build) {
   if (!PLUGS.has(key)) PLUGS.set(key, []);

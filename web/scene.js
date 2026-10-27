@@ -12,13 +12,14 @@ import { $, clone, h, store, toast } from './ui.js';
 import {
   C, R, SC, defaultScene, frames, hooks, resetHistory, setC, setSC, upgrade
 } from './scene-data.js';
-import { buildToolbar, renderToolbar, showAll, syncMode, wireKeys } from './scene-ui.js';
+import { buildToolbar, renderToolbar, showAll, syncLength, syncMode, wireKeys } from './scene-ui.js';
 import { setup } from './scene-view.js';
 import { stopPlay } from './scene-export.js';
 import { registerBuiltins } from './scene-builtin.js';
 import { initModel } from './scene-model.js';
 import { registerCamera } from './scene-camera.js';
 import { registerImport } from './scene-import.js';
+import { registerRef } from './scene-ref.js';
 import './scene-track.js';   // the footage and track-point layers a motion track makes
 export { addModeSection, registerMode } from './scene-modes.js';
 export { addPhoto } from './scene-view.js';
@@ -27,6 +28,7 @@ registerCamera();     // camera moves (a section of Camera mode)
 registerBuiltins();   // (the dependencies have run by now; a mode registered later goes after them)
 initModel();          // Create object's tools replace the placeholder panel
 registerImport({ newTab });  // models, splats and starter scenes (scene-import.js)
+registerRef();        // a reference picture or clip over the view (Edit scene and Camera)
 
 // ---- tabs: each 3D scene is a document in the project folder ----
 let ready = false, tabs = null, tabsReady = null;
@@ -48,7 +50,7 @@ const sceneAdapter = {
     setSC(p); R.sel = null; R.joint = null; R.f = Math.min(R.f, frames() - 1);
     R.lastRender = null; R.renders = {};
     resetHistory(); syncMode();
-    if (ready) showAll();
+    if (ready) { showAll(); setTimeout(syncLength); }   // (after the tab has settled: matching the length is a saved edit)
   },
 };
 
@@ -66,14 +68,16 @@ export function init(helpers) {
   hooks.ready = async () => { boot(); await ensureTabs(); };
   hooks.persist = () => tabs?.changed(); hooks.history = renderToolbar; hooks.tab = () => tabs?.active?.id ?? null;
   const mount = h('div', { class: 'scene-tabs' });
-  $('#scenePanel').replaceChildren(h('div', { class: 'scene-head' }, h('div', { id: 'sceneModes', class: 'scene-modes' }), mount), h('div', { id: 'sceneBody' }));
+  $('#scenePanel').replaceChildren(h('div', { class: 'scene-head' }, mount), h('div', { id: 'sceneBody' }));
   tabs = new TabSet({ kind: 'scene-tabs', mount, scope: 'project', newName: (n) => `Scene ${n}`, adapter: sceneAdapter, seed: legacyScene });
+  // Match generate: the length follows the Generate panel's video template
+  addEventListener('deck:generate', () => { if (ready && $('#tab-scene').classList.contains('active')) syncLength(); });
 }
 
 export function show() {
   boot();
   showAll();
-  ensureTabs();
+  ensureTabs().then(() => syncLength());
 }
 
 export function hide() { if (ready) { stopPlay(); tabs?.flush(); } }

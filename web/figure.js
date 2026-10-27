@@ -68,7 +68,8 @@ const BODY = {
 };
 export const BODIES = [['man', 'Man'], ['woman', 'Woman']];
 export const bodyOf = (b) => (BODY[b] ? b : 'man');
-export const heightOf = (b) => HEIGHT * BODY[bodyOf(b)].k;
+// standing height at scale 1; a shape's leg and torso lengths change it (setShape)
+export const heightOf = (b, shape = {}) => { const k = BODY[bodyOf(b)].k, f = shapeFactors(shape); return k * (HEIGHT + 0.86 * (f.legs - 1) + 0.5 * (f.torso - 1)); };
 // a body's joint offsets
 function offsets(body) {
   const B = BODY[bodyOf(body)], out = {};
@@ -198,6 +199,8 @@ function fingerParts(f) {
   return [seg(len[0], r * 1.08 * k, r * 0.95 * k), seg(len[1], r * 0.95 * k, r * 0.88 * k), seg(len[2], r * 0.86 * k, r * 0.74 * k, true)];
 }
 
+// a part that setShape moves on its own: centred geometry, placed at `at` (metres, before the body's k)
+const role = (geo, r, at) => { geo.userData = { role: r, at }; return geo; };
 function parts(body) {
   const W = body === 'woman', k = BODY[body].k;
   const w = (m, f) => (W ? f : m), hd = headShape(W);
@@ -207,6 +210,9 @@ function parts(body) {
       : [[-0.135, 0.05, 0.05, 0.05], [-0.11, 0.13, 0.08, 0.1], [-0.06, 0.155, 0.09, 0.112], [-0.01, 0.158, 0.09, 0.105], [0.04, 0.15, 0.09, 0.092], [0.09, 0.142, 0.09, 0.087]], 14),
     ...(W ? [blob(0.072, 0.07, 0.055, [0.06, -0.065, -0.07]), blob(0.072, 0.07, 0.055, [-0.06, -0.065, -0.07])]
       : [blob(0.065, 0.065, 0.045, [0.058, -0.06, -0.065]), blob(0.065, 0.065, 0.045, [-0.058, -0.06, -0.065])])]),   // the seat
+    // plain mannequin anatomy for reference (off unless the figure asks for it: setShape)
+    anat: W ? [role(blob(0.045, 0.03, 0.018), 'anat', [0, -0.103, 0.072])]
+      : [role(blob(0.017, 0.045, 0.019), 'anat', [0, -0.15, 0.072]), role(blob(0.032, 0.03, 0.028), 'anat', [0, -0.128, 0.052])],
     spine: loft(W
       ? [[-0.03, 0.13, 0.085, 0.085], [0.05, 0.112, 0.08, 0.078], [0.13, 0.112, 0.083, 0.078], [0.21, 0.122, 0.088, 0.082]]
       : [[-0.03, 0.142, 0.09, 0.087], [0.06, 0.132, 0.092, 0.082], [0.14, 0.135, 0.097, 0.086], [0.21, 0.14, 0.1, 0.088]], 14),
@@ -214,8 +220,11 @@ function parts(body) {
       ? [[-0.03, 0.122, 0.088, 0.082], [0.03, 0.13, 0.092, 0.085], [0.09, 0.142, 0.095, 0.09], [0.14, 0.152, 0.09, 0.09], [0.18, 0.152, 0.08, 0.085],
         [0.21, 0.122, 0.066, 0.07], [0.235, 0.07, 0.048, 0.05]]
       : [[-0.03, 0.142, 0.1, 0.088], [0.03, 0.152, 0.11, 0.092], [0.09, 0.164, 0.12, 0.097], [0.14, 0.172, 0.115, 0.1], [0.18, 0.172, 0.1, 0.095],
-        [0.21, 0.142, 0.08, 0.08], [0.237, 0.08, 0.058, 0.058]], 14),
-    ...(W ? [blob(0.062, 0.056, 0.042, [0.054, 0.068, 0.066], 10, 8), blob(0.062, 0.056, 0.042, [-0.054, 0.068, 0.066], 10, 8)] : [])]),   // the bust
+        [0.21, 0.142, 0.08, 0.08], [0.237, 0.08, 0.058, 0.058]], 14)]),
+    // the bust: parts of their own, so Chest can size them (setShape)
+    bust: W ? [role(blob(0.062, 0.056, 0.042, [0, 0, 0], 10, 8), 'bust', [0.054, 0.068, 0.066]), role(blob(0.062, 0.056, 0.042, [0, 0, 0], 10, 8), 'bust', [-0.054, 0.068, 0.066])] : [],
+    // the belly: inside the waist until Belly pushes it out
+    belly: role(blob(W ? 0.09 : 0.1, 0.085, 0.06, [0, 0, 0], 12, 8), 'belly', [0, 0.035, 0.02]),
     neck: loft(W ? [[-0.04, 0.043, 0.04, 0.045, 0, -0.005], [0.05, 0.038, 0.036, 0.038, 0, 0], [0.11, 0.04, 0.038, 0.04, 0, 0.005]]
       : [[-0.04, 0.056, 0.05, 0.055, 0, -0.005], [0.05, 0.05, 0.045, 0.048, 0, 0], [0.11, 0.05, 0.045, 0.048, 0, 0.005]], 8),
     head: merge(headParts(W, hd)),
@@ -243,7 +252,7 @@ function parts(body) {
       [0.09, 0.045, 0.025, 0.03, 0, 0.025], [0.15, 0.045, 0.015, 0.02, 0, 0.035], [0.19, 0.03, 0.012, 0.012, 0, 0.038]], 10, 2.4).rotateX(Math.PI / 2)]),
   };
   const out = {
-    hips: [g.hips], spine: [g.spine], chest: [g.chest], neck: [g.neck], head: [g.head],
+    hips: [g.hips, ...g.anat], spine: [g.spine, g.belly], chest: [g.chest, ...g.bust], neck: [g.neck], head: [g.head],
     lsho: [g.sho], lelb: [g.elb], lhand: [g.hand], rsho: [mirrorX(g.sho)], relb: [mirrorX(g.elb)], rhand: [mirrorX(g.hand)],
     lhip: [g.hip], lknee: [g.knee], lfoot: [g.foot], rhip: [mirrorX(g.hip)], rknee: [mirrorX(g.knee)], rfoot: [mirrorX(g.foot)],
     face: { jaw: g.jaw, eye: g.eye, lid: g.lid, brow: g.brow, bits: faceBits(hd.R), pts: facePoints(hd.R) },
@@ -298,7 +307,11 @@ export function buildFigure(material, dotMaterial, body = 'man') {
   const P = (PARTS[body] ||= parts(body)), at = offsets(body), k = BODY[body].k;
   const root = new THREE.Group(), bones = {}, meshes = [], dots = [];
   const dotGeo = new THREE.SphereGeometry(0.035, 10, 8);
-  const mesh = (geo, part, on) => { const m = new THREE.Mesh(geo, material); m.userData.part = part; on.add(m); meshes.push(m); return m; };
+  const mesh = (geo, part, on) => {
+    const m = new THREE.Mesh(geo, material); m.userData.part = part; on.add(m); meshes.push(m);
+    if (geo.userData.role) { m.userData.role = geo.userData.role; m.position.fromArray(geo.userData.at.map((x) => x * k)); m.userData.at = m.position.clone(); }
+    return m;
+  };
   for (const [name, [parent, , , rest]] of Object.entries(RIG_JOINTS)) {
     const b = new THREE.Object3D();
     b.name = name;
@@ -352,8 +365,54 @@ export function buildFigure(material, dotMaterial, body = 'man') {
         bones[`${side}${f}3`].add(t); marks[`${side}${f}tip`] = t;
       }
     }
-    return { root, bones, meshes, dots, marks, face, body, at };
+    const rig = { root, bones, meshes, dots, marks, face, body, at, at0: at };
+    setShape(rig, {});
+    return rig;
   }
+}
+
+// ---- body shape (per figure, not keyed): o.shape = { key: percent } on top of the man or the woman.
+// Bones move (so IK, the floor plant and the pose video's points follow) and parts stretch with them.
+// Missing keys are 0, the body as built. anatomy: the plain mannequin shapes on the pelvis.
+export const SHAPES = [['legs', 'Leg length'], ['arms', 'Arm length'], ['torso', 'Torso length'], ['shoulders', 'Shoulder width'],
+  ['hips', 'Hip width'], ['chest', 'Chest'], ['belly', 'Belly', 0, 100], ['build', 'Build (thin to muscular)']];
+export const shapeRange = (k) => { const d = SHAPES.find((x) => x[0] === k); return [d?.[2] ?? -50, d?.[3] ?? 50]; };
+function shapeFactors(sh = {}) {
+  const v = (k) => Math.max(shapeRange(k)[0], Math.min(shapeRange(k)[1], +sh?.[k] || 0)) / 100;
+  return { legs: 1 + v('legs') * 0.3, arms: 1 + v('arms') * 0.3, torso: 1 + v('torso') * 0.3, sho: 1 + v('shoulders') * 0.35,
+    hips: 1 + v('hips') * 0.35, chest: v('chest'), belly: v('belly'), build: v('build') };
+}
+const S3 = new THREE.Vector3();
+export function setShape(rig, shape = {}, anatomy = false) {
+  const sig = JSON.stringify([shape || {}, !!anatomy]);
+  if (rig.shapeSig === sig) return;
+  rig.shapeSig = sig;
+  const f = shapeFactors(shape), a0 = rig.at0, at = { ...a0 };
+  const mul = (n, i, x) => { at[n] = at[n].slice(); at[n][i] *= x; };
+  for (const s of ['l', 'r']) {
+    mul(`${s}sho`, 0, f.sho); mul(`${s}hip`, 0, f.hips);
+    mul(`${s}elb`, 1, f.arms); mul(`${s}hand`, 1, f.arms);
+    mul(`${s}knee`, 1, f.legs); mul(`${s}foot`, 1, f.legs);
+  }
+  for (const n of ['spine', 'chest', 'neck']) mul(n, 1, f.torso);
+  at.hips = a0.hips.slice(); at.hips[1] -= (a0.lknee[1] + a0.lfoot[1]) * (f.legs - 1);   // longer legs stand the hips higher
+  rig.at = at;
+  for (const n of Object.keys(JOINTS)) rig.bones[n].position.fromArray(at[n]);
+  // the parts: [x, y, z] stretch per joint; build thickens or thins the limbs and the trunk
+  const limb = 1 + f.build * 0.22, trunk = 1 + f.build * 0.1;
+  const S = { hips: [f.hips * trunk, 1, trunk], spine: [trunk, f.torso, trunk], chest: [(1 + (f.sho - 1) * 0.6) * trunk, f.torso, (1 + f.chest * 0.18) * trunk],
+    neck: [1, f.torso, 1], sho: [limb, f.arms, limb], elb: [limb, f.arms, limb], hip: [limb * (1 + (f.hips - 1) * 0.4), f.legs, limb], knee: [limb, f.legs, limb] };
+  for (const m of rig.meshes) {
+    const n = m.parent?.name, r = m.userData.role;
+    if (r === 'bust') { m.scale.setScalar(Math.max(0.3, 1 + f.chest * 0.9)); m.position.copy(m.userData.at).multiply(S3.set(S.chest[0], f.torso, 1)); m.position.z *= 1 + f.chest * 0.25; }
+    else if (r === 'belly') {   // it grows forward (and a little down), not out to the sides
+      m.scale.set(1 + f.belly * 0.12 * trunk, 1 + f.belly * 0.3, 1 + f.belly * 0.8); m.position.copy(m.userData.at);
+      m.position.z += f.belly * 0.045 * rig.at0.chest[1] / 0.2; m.position.y -= f.belly * 0.015; m.userData.off = f.belly <= 0.01;
+    }
+    else if (r === 'anat') m.userData.off = !anatomy;
+    else if (!r && n && JOINTS[n]) { const s = S[n] || S[n.slice(1)]; if (s) m.scale.set(...s); }
+  }
+  setHidden(rig, rig.hide);
 }
 
 // ---- hiding parts (display only): a part is a joint's own meshes, so its id is the joint name -------
@@ -364,8 +423,9 @@ export const PART_GROUPS = [['head', 'Head', ['head']], ['torso', 'Torso', ['nec
 // hide is a list of part ids (absent = all shown). The meshes go invisible but stay in rig.meshes, so
 // lowest() (the floor plant) still sees the whole body and hiding legs doesn't drop the figure.
 export function setHidden(rig, hide) {
+  rig.hide = hide;
   const off = new Set(hide || []);
-  for (const m of rig.meshes) m.visible = !off.has(m.userData.part);
+  for (const m of rig.meshes) m.visible = !off.has(m.userData.part) && !m.userData.off;   // (off: a shape part not in use)
 }
 
 // a pose is { joint: [x, y, z, w] } (local rotations; missing = rest), with parameters m on top
@@ -425,7 +485,7 @@ export function lowest(rig) {
 const SPARE = {};
 const spare = (body = 'man') => (SPARE[bodyOf(body)] ||= buildFigure(new THREE.MeshBasicMaterial(), new THREE.MeshBasicMaterial(), body));
 // how far a pose has to move up to stand on the floor (sitting is negative), at scale 1
-export function liftFor(j, m, body = 'man') { const r = spare(body); applyPose(r, j, m); return -lowest(r); }
+export function liftFor(j, m, body = 'man', shape = {}) { const r = spare(body); setShape(r, shape); applyPose(r, j, m); return -lowest(r); }
 
 // the centre of mass (world), from rough shares of body weight per part
 const MASS = { hips: 0.14, spine: 0.1, chest: 0.2, neck: 0.02, head: 0.08, lsho: 0.028, rsho: 0.028, lelb: 0.016, relb: 0.016,

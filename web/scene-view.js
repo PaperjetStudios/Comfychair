@@ -469,7 +469,7 @@ export function pose(f) {
     m.rotation.set(r(v.rx), r(v.ry), r(v.rz));
     if (EVEN.has(o.type)) m.scale.setScalar(Math.max(0.01, v.sy));
     else m.scale.set(Math.max(0.01, v.sx), Math.max(0.01, v.sy), Math.max(0.01, v.sz));
-    if (m.userData.rig) { FIGURE.applyPose(m.userData.rig, v.j, stepped(o, v.m, f), o.ground); FIGURE.setHidden(m.userData.rig, o.hide); }
+    if (m.userData.rig) { FIGURE.setShape(m.userData.rig, o.shape, o.anatomy); FIGURE.applyPose(m.userData.rig, v.j, stepped(o, v.m, f), o.ground); FIGURE.setHidden(m.userData.rig, o.hide); }
     m.userData.atFrame?.(f);   // (a footage layer shows its frame, scene-track.js)
   }
   putCamera(current(SC.camera, CAM, f));
@@ -666,14 +666,17 @@ export function setMode(m) { R.mode = m; refresh(); renderToolbar(); }
 
 export function changed() { save(); refresh(); renderKeys(); renderPanel(); }
 
-export function removeSelected() {
+// delete a layer (an object's id, or ROOM), with Undo in the toast; the selection only goes if it was that layer
+export function removeLayer(id) {
   const before = clone(SC), sel = R.sel, ok = sameTab();
   let name;
-  if (sel === ROOM) { name = 'Room'; SC.room = null; rebuildRoom(); }
-  else { const o = selItem(); if (!o) return; name = o.name; SC.objects = SC.objects.filter((x) => x !== o); }
-  R.sel = null; R.joint = null; changed(); renderToolbar();
+  if (id === ROOM) { if (!SC.room) return; name = 'Room'; SC.room = null; rebuildRoom(); }
+  else { const o = id && SC.objects.find((x) => x.id === id); if (!o) return; name = o.name; SC.objects = SC.objects.filter((x) => x !== o); }
+  if (sel === id) { if (HAND.on) handMode(null); R.sel = null; R.joint = null; }
+  changed(); renderToolbar();
   undoToast(`${name} deleted`, () => { if (ok()) { setSC(before); R.sel = sel; rebuildRoom(); changed(); renderToolbar(); } });
 }
+export const removeSelected = () => removeLayer(R.sel);
 
 export function addObject(type, extra = {}) {
   closeSheet();
