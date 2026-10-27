@@ -1,6 +1,6 @@
 {
- "llm": {"class_type": "HYMotionLoadLLMGGUF", "inputs": {"gguf_file": "Qwen3-8B-Q4_K_M.gguf", "device_strategy": "cpu"},
-         "_meta": {"title": "Qwen3-8B text encoder on the CPU (it unpacks to ~16 GB)"}},
+ "llm": {"class_type": "HYMotionLoadLLM", "inputs": {"model_name": "Qwen3-8B", "quantization": "int4", "offload_to_cpu": false},
+         "_meta": {"title": "Qwen3-8B text encoder, 4-bit on the GPU (~5.5 GB; was the GGUF unpacked on the CPU)"}},
  "net": {"class_type": "HYMotionLoadNetwork", "inputs": {"model_name": "HY-Motion-1.0-Lite"}},
  "enc": {"class_type": "HYMotionEncodeText", "inputs": {"llm": ["llm", 0], "text": "A person walks forward, then sits down."},
          "_meta": {"title": "@1 Motion prompt [text]"}},
