@@ -226,7 +226,7 @@ async def voice_audio(vid: str):
 
 @router.post("/speak")
 async def speak(body: dict = Body(...)):
-    """{lines: [{voice (id), text, language?}], name?}: job -> {lines: [media entry + seconds]} in order."""
+    """{lines: [{voice (id), text, language?, delivery?, intensity?}], engine?, name?}: job -> {lines: [media entry + seconds]} in order."""
     _need()
     lines = [ln for ln in body.get("lines") or [] if str(ln.get("text") or "").strip()]
     if not lines:
@@ -240,11 +240,13 @@ async def speak(body: dict = Body(...)):
         out = _media_path(f"{stem}-{i + 1:02d}-{v['name']}", ".wav")
         outs.append(out)
         task.append({"text": str(ln["text"]).strip()[:1500], "ref": str(VOICES / f"{v['id']}.wav"), "ref_text": v.get("ref_text") or "",
-                     "language": ln.get("language") or v.get("language") or "Auto", "out": str(out)})
+                     "language": ln.get("language") or v.get("language") or "Auto", "out": str(out),
+                     "delivery": ln.get("delivery"), "intensity": ln.get("intensity")})
+    engine = str(body.get("engine") or "qwen")
 
     def work(job):
         try:
-            res = _run(job, {"op": "speak", "lines": task})
+            res = _run(job, {"op": "speak", "engine": engine, "lines": task})
         except Exception:
             for o in outs:
                 o.unlink(missing_ok=True)
