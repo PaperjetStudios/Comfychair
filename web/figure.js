@@ -324,7 +324,7 @@ export function buildFigure(material, dotMaterial, body = 'man') {
       const o = new THREE.Object3D(); o.position.set(p[0] * k, p[1] * k, p[2] * k); o.userData.rest = o.position.clone();
       bones.head.add(o); face[n] = o;
     }
-    mesh(F.jaw, 'head', face.jaw).position.set(0, -0.09 * k, -0.004 * k);
+    mesh(F.jaw, 'head', face.jaw).position.set(...F.bits.jaw.map((x) => -x * k));   // (its geometry is in head space)
     for (const s of ['l', 'r']) {
       mesh(F.eye, 'head', face[`${s}eye`]);
       const lid = new THREE.Object3D(); face[`${s}eye`].parent.add(lid); lid.position.copy(face[`${s}eye`].position); face[`${s}lid`] = lid;
