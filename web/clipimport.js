@@ -12,10 +12,11 @@ const FIRST_LEN = 10;   // a new clip starts with its first 10 s chosen
 const fmtSize = (b) => (b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1e6))} MB`);
 const fmtDur = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 
-// Poll a server job ({job}) until it ends: resolves its result, rejects with its error.
-export function waitJob({ job }, onProgress) {
+// Poll a server job ({job}) until it ends: resolves its result, rejects with its error. alive() false: stop quietly.
+export function waitJob({ job }, onProgress, alive = () => true) {
   return new Promise((resolve, reject) => {
     const poll = async () => {
+      if (!alive()) return api(`/api/clip/job/${job}/cancel`, { method: 'POST', busy: false }).catch(() => {});
       let s;
       try { s = await api(`/api/clip/job/${job}`, { busy: false }); } catch (e) { return reject(e); }
       onProgress?.(s.progress, s.label);
@@ -142,9 +143,12 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
     const drawLink = (L) => {
       const name = nameInput(L.title);
       const top = L.heights.length ? Math.max(...L.heights) : 0;
+      const ed = editor({ url: L.preview.video, audio: L.preview.audio, info: Promise.resolve({ duration: L.duration, fps: L.fps }), duration: L.duration });
+      // a whole-video copy downloads meanwhile: once it's there, seeking is local and instant
+      const smooth = h('p', { class: 'hint' }, L.cache ? 'Seeking is slow until the smooth preview is in: downloading…' : '');
       out.replaceChildren(
         h('p', { class: 'hint' }, [L.title, L.uploader, fmtDur(L.duration || 0), top ? `up to ${top}p` : null].filter(Boolean).join(' · ')),
-        editor({ url: L.preview.video, audio: L.preview.audio, info: Promise.resolve({ duration: L.duration, fps: L.fps }), duration: L.duration }),
+        ed, smooth,
         hint('The preview is small; the saved clip is cut from the full-quality video and only that part is downloaded.'),
         sizeField(), field('Name', name), bar,
         h('div', { class: 'actions' }, saveBtn(async () => {
@@ -152,6 +156,11 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
           return waitJob(await api(`/api/clip/link/${L.id}/cut`, { method: 'POST', busy: false,
             body: { start, end, height: size || null, crop: cut?.crop, name: name.value.trim() || L.title, sound: soundOnly } }), progress);
         })));
+      if (L.cache) {   // after the editor is on the page: the job stops once it's gone
+        waitJob({ job: L.cache }, (p) => { smooth.textContent = `Seeking is slow until the smooth preview is in: ${Math.round(p * 100)}%`; }, () => ed.isConnected)
+          .then((r) => { if (r && ed.isConnected) { ed.swap(r.video); smooth.textContent = 'Smooth preview in: seeking is instant now.'; } })
+          .catch(() => { smooth.textContent = ''; });
+      }
     };
     url.addEventListener('keydown', (e) => { if (e.key === 'Enter') load(); });
     body.replaceChildren(h('div', { class: 'row clip-url' }, url, button('Load', load, { cls: 'small primary' })), out);
@@ -190,11 +199,14 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
         catch (e) { toast(e.message, true); proxyBtn.disabled = false; }
         bar.classList.add('hidden');
       });
-      const cant = h('div', { class: 'hidden' }, note("This browser can't play that file. A small preview copy plays everywhere; the clip is still cut from the original.", 'warn'), proxyBtn);
+      const cant = h('div', { class: 'hidden' }, note("This browser can't play that file. A small preview copy plays everywhere; the clip is still cut from the original.", 'warn'));
+      const proxied = url.startsWith('/api/clip/tmp/');
       out.replaceChildren(
         h('p', { class: 'hint' }, `${x.name} · ${info.width}×${info.height} · ${+info.fps.toFixed(2)} fps · ${fmtDur(info.duration)} · ${fmtSize(x.size)}`),
         editor({ url, info: Promise.resolve(info), duration: info.duration, onError: () => cant.classList.remove('hidden') }),
-        cant, sizeField(), field('Name', name), bar,
+        cant, proxied ? hint('Showing the preview copy; the clip is cut from the original.')
+          : h('div', { class: 'row' }, proxyBtn, hint('Seeking slow or jumpy (4K, long files)? A small copy seeks instantly.')),
+        sizeField(), field('Name', name), bar,
         h('div', { class: 'actions' }, saveBtn(async () => {
           const { start, end } = span(info.duration);
           return waitJob(await api('/api/clip/file/cut', { method: 'POST', busy: false,

@@ -34,7 +34,7 @@ from . import config, videoedit
 router = APIRouter(prefix="/api/clip")
 media_entry = None   # main.py sets it: (Path) -> the media library's JSON for a file
 
-TMP = config.DATA_DIR / "tmp" / "clips"         # previews, proxies and uploaded pieces (cleared after a day)
+TMP = config.DATA_DIR / "tmp" / "clips"         # previews, proxies and uploaded pieces (see sweep())
 WASM_DIR = config.DATA_DIR / "vendor" / "ffmpeg-core"
 WASM_CDN = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm/"
 WASM_FILES = ("ffmpeg-core.js", "ffmpeg-core.wasm")
@@ -43,6 +43,8 @@ VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi", ".mts", ".m2ts", 
 PREVIEW_H = 480          # preview streams: the nearest height to this, at most PREVIEW_MAX_H
 PREVIEW_MAX_H = 720
 PREVIEW_DL_MAX = 1200    # seconds: longer videos that only stream in pieces aren't copied for a preview
+CACHE_H = 360            # the smooth preview: a whole-video copy at about this height, made while you look
+CACHE_MAX = 800e6        # bytes: bigger than this (very long videos) keeps the streamed preview
 YTDLP_TIMEOUT = 90
 LINK_TTL = 4 * 3600      # stream URLs expire after a few hours; the page is read again after this
 
@@ -84,15 +86,54 @@ def _stamp(t: float) -> str:
     return f"{t // 3600}h{t // 60 % 60:02d}m{t % 60:02d}s" if t >= 3600 else f"{t // 60}m{t % 60:02d}s"
 
 
-def _sweep():
-    """Leftovers older than a day: previews, proxies, uploaded pieces."""
-    cutoff = time.time() - 86400
+# how long a temporary file is kept after it was last used (mtime: serving one touches it), by name
+KEEP = (("link_", 3 * 3600),    # a link's smooth preview: for the session you're cutting in
+        ("proxy_", 3 * 86400),  # a PC file's preview copy: slow to make, kept a few days
+        ("", 3600))             # anything else (uploaded pieces, .part and .dl leftovers) belongs to a job that's over
+TMP_CAP = 4e9                   # bytes: past this, the least recently used go first
+
+
+def sweep():
+    """Clear temporary files past their KEEP time, then the least recently used while over TMP_CAP. Files a
+    running job is writing are left alone. Runs at startup, every SWEEP_EVERY, and before each new job."""
+    busy = {str(j.get("writing")) for j in JOBS.values() if j["state"] == "running"}
+    now, files = time.time(), []
     for p in TMP.iterdir():
         try:
-            if p.stat().st_mtime < cutoff:
-                p.unlink()
+            st = p.stat()
         except OSError:
-            pass
+            continue
+        if not p.is_file() or any(p.name.startswith(b) for b in busy if b):
+            continue
+        keep = next(k for prefix, k in KEEP if p.name.startswith(prefix))
+        if now - st.st_mtime > keep:
+            p.unlink(missing_ok=True)
+        else:
+            files.append((st.st_mtime, st.st_size, p))
+    total = sum(f[1] for f in files)
+    for _, size, p in sorted(files, key=lambda f: f[0]):
+        if total <= TMP_CAP:
+            break
+        p.unlink(missing_ok=True)
+        total -= size
+
+
+SWEEP_EVERY = 1800
+
+
+async def sweeper():
+    """main.py's lifespan runs this: sweep() now and every SWEEP_EVERY seconds."""
+    while True:
+        await asyncio.to_thread(sweep)
+        await asyncio.sleep(SWEEP_EVERY)
+
+
+def _touch(p: Path):
+    try:
+        os.utime(p)
+    except OSError:
+        pass
+
 
 
 # ---- jobs -------------------------------------------------------------------
@@ -261,14 +302,14 @@ def _has_a(f):
     return f.get("acodec") not in (None, "none")
 
 
-def pick_preview(formats: list[dict]) -> tuple[dict | None, dict | None]:
+def pick_preview(formats: list[dict], target: int = PREVIEW_H) -> tuple[dict | None, dict | None]:
     """(video, audio) formats a browser can play straight from their URLs: h264 first, with sound if one has
-    it, the height nearest PREVIEW_H. audio is None when the video carries sound (or there's none)."""
+    it, the height nearest target. audio is None when the video carries sound (or there's none)."""
     vids = [f for f in formats if _direct(f) and _has_v(f) and (f.get("height") or 0) <= PREVIEW_MAX_H]
     if not vids:
         return None, None
     plays = lambda f: (f.get("vcodec") or "").startswith(("avc1", "h264")) and f.get("ext") in ("mp4", "m4v")
-    v = max(vids, key=lambda f: (plays(f), _has_a(f), -abs((f.get("height") or 0) - PREVIEW_H)))
+    v = max(vids, key=lambda f: (plays(f), _has_a(f), -abs((f.get("height") or 0) - target)))
     if _has_a(v):
         return v, None
     auds = [f for f in formats if _direct(f) and _has_a(f) and not _has_v(f)]
@@ -312,7 +353,65 @@ async def link_open(body: dict = Body(...)):
     for old in [k for k, x in LINKS.items() if time.time() - x["t"] > LINK_TTL]:
         del LINKS[old]
     LINKS[lid] = link
-    return _summary(lid, link)
+    out = _summary(lid, link)
+    if v:
+        out["cache"] = _cache(lid, link)
+    return out
+
+
+def _size(f: dict | None, duration: float) -> float:
+    if not f:
+        return 0
+    return f.get("filesize") or f.get("filesize_approx") or (f.get("tbr") or 0) * 125 * duration
+
+
+def _cache(lid: str, link: dict) -> str | None:
+    """Copy the whole video small (CACHE_H, as the site has it: no re-encode) in the background, so seeking
+    is local instead of a request to the site each time. Job id; its result is {video}. None: too big."""
+    info = link["info"]
+    fmts = info.get("formats") or []
+    v, a = pick_preview(fmts, CACHE_H)
+    if not v or _size(v, info.get("duration") or 0) + _size(a, info.get("duration") or 0) > CACHE_MAX:
+        return None
+    out = TMP / f"link_{lid}.mp4"
+    base = [sys.executable, "-m", "yt_dlp"] if _has_module() else ["yt-dlp"]
+
+    def work(job):
+        job["writing"] = f"link_{lid}."
+        try:
+            return fetch(job)
+        finally:   # a cancelled or failed download leaves its pieces
+            for p in TMP.glob(f"link_{lid}.dl.*"):
+                p.unlink(missing_ok=True)
+
+    def fetch(job):
+        sweep()
+        cmd = base + [link["url"], "--no-playlist", "--no-warnings", "--newline", "--no-part", "-f",
+                      f"{v['format_id']}+{a['format_id']}" if a else v["format_id"], "--merge-output-format", "mp4",
+                      "-o", str(TMP / f"link_{lid}.dl.%(ext)s")]
+        files, part = (2 if a else 1), -1
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as proc:
+            job["proc"] = proc
+            tail = []
+            for line in proc.stdout:
+                tail = (tail + [line])[-3:]
+                if "Destination:" in line:
+                    part += 1
+                m = re.search(r"\[download\]\s+([\d.]+)%", line)
+                if m:
+                    job["progress"] = min(0.98, (max(part, 0) + float(m.group(1)) / 100) / files)
+            proc.wait()
+        if job["cancel"]:
+            raise RuntimeError("Cancelled")
+        got = TMP / f"link_{lid}.dl.mp4"
+        if proc.returncode or not got.is_file():
+            raise RuntimeError("Couldn't copy the preview: " + "".join(tail).strip()[-200:])
+        got.replace(out)
+        link["file"] = str(out)
+        link["preview"] = {"video": f"/api/clip/link/{lid}/file", "audio": None}
+        return link["preview"]
+
+    return _start(work, "Smooth preview")["job"]
 
 
 RELAY_HEADERS = ("content-type", "content-length", "content-range", "accept-ranges", "last-modified", "etag")
@@ -323,6 +422,9 @@ async def link_stream(lid: str, which: str, request: Request):
     """The preview stream, relayed with the browser's Range header so seeking only fetches what's shown."""
     link = _link(lid)
     if which == "file" and link.get("file"):
+        if not Path(link["file"]).is_file():
+            raise HTTPException(404, "That preview was cleared: load the link again")
+        _touch(Path(link["file"]))
         return FileResponse(link["file"], media_type="video/mp4")
     f = link.get({"v": "v", "a": "a"}.get(which, ""))
     if not f:
@@ -365,7 +467,8 @@ async def link_preview(lid: str):
     out = TMP / f"link_{lid}.mp4"
 
     def work(job):
-        _sweep()
+        job["writing"] = f"link_{lid}."
+        sweep()
         fmts = _ytdlp(link["url"], "-f", f"b[height<={PREVIEW_H}]/bv*[height<={PREVIEW_H}]+ba/w", "-S", "vcodec:h264,acodec:aac")
         inputs, amap = _stream_inputs(fmts)
         _encode(job, inputs, 0, dur or 36000, None, PREVIEW_H, out, amap)
@@ -464,8 +567,9 @@ async def file_proxy(body: dict = Body(...)):
     out = TMP / f"proxy_{hashlib.sha1(f'{p}{st.st_size}{st.st_mtime_ns}'.encode()).hexdigest()[:16]}.mp4"
 
     def work(job):
+        job["writing"] = out.stem + "."
         if not out.is_file():
-            _sweep()
+            sweep()
             dur = videoedit.probe(p)["duration"]
             cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(p), "-map", "0:v:0", "-map", "0:a:0?",
                    "-vf", f"scale=-2:'min({PREVIEW_H // 4 * 3},trunc(ih/2)*2)',format=yuv420p", "-c:v", "libx264",
@@ -486,6 +590,7 @@ async def tmp_file(name: str):
     p = TMP / Path(name).name
     if not p.is_file():
         raise HTTPException(404, "That preview is gone")
+    _touch(p)
     return FileResponse(p, media_type="video/mp4")
 
 
@@ -516,7 +621,7 @@ async def upload_cut(file: UploadFile = File(...), length: float = Form(...), st
     original (for the file name). Job -> media entry."""
     if not 0 < length <= 6 * 3600 or start < 0:
         raise HTTPException(400, "Bad cut length")
-    _sweep()
+    sweep()
     src = TMP / f"up_{uuid.uuid4().hex[:12]}{Path(file.filename or '').suffix.lower()[:8] or '.mov'}"
     with src.open("wb") as f:
         await asyncio.to_thread(shutil.copyfileobj, file.file, f, 4 << 20)
@@ -524,6 +629,7 @@ async def upload_cut(file: UploadFile = File(...), length: float = Form(...), st
     title = name or Path(file.filename or "clip").stem
 
     def work(job):
+        job["writing"] = src.name
         try:
             out = _out_path(title, at or start, sound)
             _encode(job, [(str(src), [])], start, length, crop_box, _height(height), out)

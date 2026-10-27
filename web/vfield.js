@@ -91,15 +91,13 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
   v.addEventListener('error', () => { time.textContent = "Couldn't load this video"; onError?.(); });
 
   // a separate sound stream (link previews): follows the picture's play, pause and seeks
-  const snd = audio ? h('audio', { src: audio, preload: 'auto' }) : null;
-  if (snd) {
-    const sync = () => { if (Math.abs(snd.currentTime - v.currentTime) > 0.2) snd.currentTime = v.currentTime; };
-    v.addEventListener('play', () => { sync(); snd.play().catch(() => {}); });
-    v.addEventListener('pause', () => snd.pause());
-    v.addEventListener('seeked', sync);
-    v.addEventListener('waiting', () => snd.pause());
-    v.addEventListener('playing', () => { sync(); snd.play().catch(() => {}); });
-  }
+  let snd = audio ? h('audio', { src: audio, preload: 'auto' }) : null;
+  const sync = () => { if (snd && Math.abs(snd.currentTime - v.currentTime) > 0.2) snd.currentTime = v.currentTime; };
+  v.addEventListener('play', () => { sync(); snd?.play().catch(() => {}); });
+  v.addEventListener('pause', () => snd?.pause());
+  v.addEventListener('seeked', sync);
+  v.addEventListener('waiting', () => snd?.pause());
+  v.addEventListener('playing', () => { sync(); snd?.play().catch(() => {}); });
 
   // ---- scrubber that also trims: the lit part is kept, the round handles are in/out ----
   const range = h('div', { class: 'vf-range' });
@@ -108,10 +106,13 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
   const hout = h('div', { class: 'vf-h out', 'data-h': 'out', role: 'slider', 'aria-label': 'Trim end' });
   const track = h('div', { class: 'vf-track' }, h('div', { class: 'vf-rail' }), range, head, hin, hout);
   const pos = (t) => `${(dur ? clamp01(t / dur) : 0) * 100}%`;
+  let want = null;   // the newest seek asked for while one is still loading (streamed clips): only that one is made
+  const shownT = () => (want ?? v.currentTime) || 0;
   const drawTrack = () => {
     const e = end();
     Object.assign(range.style, { left: pos(t0), width: `${(dur ? clamp01((e - t0) / dur) : 1) * 100}%` });
-    hin.style.left = pos(t0); hout.style.left = pos(e); head.style.left = pos(v.currentTime || 0);
+    hin.style.left = pos(t0); hout.style.left = pos(e); head.style.left = pos(shownT());
+    drawFine();
   };
   const tick = () => {   // rAF while playing: stay inside the trim
     drawTrack(); time.textContent = `${fmt(v.currentTime)} / ${fmt(dur)}`;
@@ -124,8 +125,21 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
     requestAnimationFrame(tick);
   };
   v.addEventListener('timeupdate', () => { if (v.paused) tick(); });
-  v.addEventListener('seeked', drawTrack);
-  const seek = (t) => { v.currentTime = clamp(t, 0, dur || t); drawTrack(); };
+  v.addEventListener('seeked', () => { if (want != null) { const t = want; want = null; v.currentTime = t; } drawTrack(); });
+  const seek = (t) => {
+    t = clamp(t, 0, dur || t);
+    if (v.seeking) want = t; else { want = null; v.currentTime = t; }
+    drawTrack();
+  };
+  const frame = (t) => Math.round(t * rate()) / rate();   // handles land on frames
+  const setAt = (k, t) => {   // a handle (in/out) or the playhead (seek) moved to t
+    const f = 1 / rate();
+    if (k === 'in') { t0 = clamp(frame(t), 0, end() - f); seek(t0); }
+    else if (k === 'out') { t1 = clamp(frame(t), t0 + f, dur); seek(t1 - 0.001); }
+    else seek(t);
+    focus = k === 'seek' ? 'head' : k;
+    nums(); info();
+  };
   let grab = null;
   track.addEventListener('pointerdown', (e) => {
     e.preventDefault(); track.setPointerCapture(e.pointerId);
@@ -134,15 +148,58 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
   });
   const move = (e) => {
     if (!grab || !dur) return;
-    const r = track.getBoundingClientRect(), t = clamp01((e.clientX - r.left) / r.width) * dur, f = 1 / rate();
-    if (grab === 'in') { t0 = clamp(t, 0, end() - f); seek(t0); }
-    else if (grab === 'out') { t1 = clamp(t, t0 + f, dur); seek(t1 - 0.001); }
-    else seek(t);
-    nums(); info();
+    const r = track.getBoundingClientRect();
+    setAt(grab, clamp01((e.clientX - r.left) / r.width) * dur);
   };
   track.addEventListener('pointermove', move);
-  const release = () => { if (grab && grab !== 'seek') commit(); grab = null; };
+  const release = () => { if (grab && grab !== 'seek') commit(); grab = null; recenter(); drawFine(); };
   track.addEventListener('pointerup', release); track.addEventListener('pointercancel', release);
+
+  // ---- fine bar (marks): a few seconds around the handle last moved, for frame-exact in/out on long clips ----
+  let span = 10, focus = 'head', w0 = 0, fgrab = null, ticksAt = '';
+  const fRange = h('div', { class: 'vf-range' }), fHead = h('div', { class: 'vf-head' });
+  const fIn = h('div', { class: 'vf-h in', 'data-h': 'in', role: 'slider', 'aria-label': 'Trim start, fine' });
+  const fOut = h('div', { class: 'vf-h out', 'data-h': 'out', role: 'slider', 'aria-label': 'Trim end, fine' });
+  const ticks = h('div', { class: 'vf-ticks' });
+  const fine = h('div', { class: 'vf-track vf-fine' }, h('div', { class: 'vf-rail' }), ticks, fRange, fHead, fIn, fOut);
+  const fineLbl = h('span', { class: 'hint' });
+  const win = () => Math.min(span, dur || span);
+  const focusT = () => (focus === 'in' ? t0 : focus === 'out' ? end() : shownT());
+  const recenter = () => { w0 = clamp(focusT() - win() / 2, 0, Math.max(0, (dur || 0) - win())); };
+  const fx = (t) => (t - w0) / win();
+  const drawFine = () => {
+    if (!marks || !dur) return;
+    const s = win(), ft = focusT();
+    if (!fgrab && (ft < w0 || ft > w0 + s)) recenter();   // follows the playhead or handle a page at a time
+    const a = Math.max(t0, w0), b = Math.min(end(), w0 + s);
+    Object.assign(fRange.style, { left: `${clamp01(fx(a)) * 100}%`, width: `${Math.max(0, (b - a) / s) * 100}%` });
+    for (const [el, t] of [[fIn, t0], [fOut, end()], [fHead, shownT()]]) {
+      el.style.left = `${fx(t) * 100}%`; el.style.display = t < w0 - 1e-6 || t > w0 + s + 1e-6 ? 'none' : '';
+    }
+    const key = `${w0.toFixed(3)}/${s}`;
+    if (key !== ticksAt) {   // second marks, labelled
+      ticksAt = key;
+      const gap = [0.5, 1, 2, 5, 10, 15, 30, 60].find((g) => s / g <= 12) || 120;
+      const lab = [];
+      for (let t = Math.ceil(w0 / gap) * gap; t <= w0 + s + 1e-6; t += gap) lab.push(h('span', { style: `left:${fx(t) * 100}%` }, fmt(t).replace(/\.00$/, '')));
+      ticks.replaceChildren(...lab);
+      fineLbl.textContent = `${fmt(w0)} – ${fmt(w0 + s)}`;
+    }
+  };
+  fine.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); fine.setPointerCapture(e.pointerId);
+    fgrab = (e.target.dataset && e.target.dataset.h) || 'seek'; v.pause(); fmove(e);
+  });
+  const fmove = (e) => {
+    if (!fgrab || !dur) return;
+    const r = fine.getBoundingClientRect();
+    setAt(fgrab, w0 + clamp01((e.clientX - r.left) / r.width) * win());
+  };
+  fine.addEventListener('pointermove', fmove);
+  const frelease = () => { if (fgrab && fgrab !== 'seek') commit(); fgrab = null; drawFine(); };
+  fine.addEventListener('pointerup', frelease); fine.addEventListener('pointercancel', frelease);
+  const zoom = seg([[2, '2 s'], [10, '10 s'], [60, '60 s']], span, (v2) => { span = Number(v2); recenter(); ticksAt = ''; drawFine(); });
+  const fineBox = h('div', { class: 'vf-finebox' }, h('div', { class: 'vf-bar' }, h('b', { class: 'hint' }, 'Zoom'), zoom, fineLbl), fine);
 
   // ---- numbers: seconds and frames, kept in step ----
   const num = (label, get, set, { step, min = 0 }) => {
@@ -201,22 +258,45 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
   });
   (infoP || probe(source)).then((p) => { fps = p.fps || 24; if (p.duration) dur = p.duration; if (t1 === Infinity && dur) t1 = dur; nums(); drawTrack(); info(); }).catch(() => { /* the element's own duration does */ });
 
-  // ---- marks: frame steps and in/out at the playhead ----
+  // ---- marks: frame steps, in/out at the playhead, play the selection, keys ----
+  const setIn = () => { v.pause(); t0 = clamp(frame(shownT()), 0, Math.max(0, dur - f())); if (end() <= t0 + f()) t1 = dur; focus = 'in'; nums(); drawTrack(); info(); commit(); };
+  const setOut = () => { v.pause(); t1 = clamp(frame(shownT()), t0 + f(), dur); focus = 'out'; nums(); drawTrack(); info(); commit(); };
+  const step = (n) => { v.pause(); focus = 'head'; seek(frame(shownT()) + n); };
+  const playSel = () => { want = null; v.currentTime = t0; focus = 'head'; v.play().catch(() => {}); };
   const markBar = marks ? h('div', { class: 'vf-bar vf-marks' },
-    iconBtn('Back one frame', '◀', () => { v.pause(); seek(v.currentTime - f()); }),
-    iconBtn('Forward one frame', '▶', () => { v.pause(); seek(v.currentTime + f()); }),
-    button('Set in', () => { v.pause(); t0 = clamp(v.currentTime, 0, Math.max(0, dur - f())); if (end() <= t0 + f()) t1 = dur; nums(); drawTrack(); info(); commit(); }),
-    button('Set out', () => { v.pause(); t1 = clamp(v.currentTime, t0 + f(), dur); nums(); drawTrack(); info(); commit(); }),
-    button('Go to in', () => { v.pause(); seek(t0); }, { cls: 'small ghost' })) : null;
+    iconBtn('Back one frame (←)', '◀', () => step(-f())),
+    iconBtn('Forward one frame (→)', '▶', () => step(f())),
+    button('Set in (I)', setIn), button('Set out (O)', setOut),
+    button('▶ Selection (P)', playSel, { cls: 'small primary', title: 'Play from in to out (loops while 🔁 is on)' })) : null;
 
-  const el = h('div', { class: 'vf' },
+  const el = h('div', { class: 'vf', ...(marks && { tabindex: 0 }) },
     h('div', { class: 'crop-stage vf-stage' }, wrap),
     h('div', { class: 'vf-bar' }, play, time, mute, loopBtn, cropBtn), markBar, snd,
-    cropBar, track,
+    cropBar, track, marks ? fineBox : null,
     h('div', { class: 'vf-nums' }, fields.map((x) => x.el), fitBtn),
     infoEl);
   drawCrop(); nums(); drawTrack(); info();
   el.refresh = () => { nums(); info(); };   // the loader's settings arrived or changed
   el.pause = () => v.pause();
+  el.swap = (u) => {   // the same clip from another file (a smoother preview copy with its own sound): keep the place
+    const t = shownT(), playing = !v.paused;
+    if (snd) { snd.pause(); snd.remove(); snd = null; }
+    v.src = u;
+    v.addEventListener('loadedmetadata', () => { v.currentTime = t; if (playing) v.play().catch(() => {}); }, { once: true });
+  };
+  if (marks) {   // keys while the editor has focus: ← → a frame (Shift: a second), I / O set in / out, P plays the selection, Space plays
+    el.addEventListener('keydown', (e) => {
+      if (e.target.closest('input, textarea, select')) return;
+      const k = e.key.toLowerCase();
+      if (k === 'arrowleft' || k === 'arrowright') step((k === 'arrowleft' ? -1 : 1) * (e.shiftKey ? 1 : f()));
+      else if (k === 'i') setIn();
+      else if (k === 'o') setOut();
+      else if (k === 'p') playSel();
+      else if (k === ' ') play.click();
+      else return;
+      e.preventDefault();
+    });
+    el.addEventListener('pointerdown', (e) => { if (!e.target.closest('input, button, textarea, select')) el.focus({ preventScroll: true }); });
+  }
   return el;
 }

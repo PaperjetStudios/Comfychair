@@ -73,6 +73,27 @@ class Roots(unittest.TestCase):
                 ci._video_file(str(Path(d)))   # a folder, not a video
 
 
+class Sweep(unittest.TestCase):
+    def test_ages_cap_and_busy(self):
+        import time
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(ci, "TMP", Path(d)), \
+                mock.patch.object(ci, "TMP_CAP", 200), mock.patch.dict(ci.JOBS, clear=True):
+            now = time.time()
+            def put(name, age, size=10):
+                p = Path(d) / name
+                p.write_bytes(b"x" * size)
+                os.utime(p, (now - age, now - age))
+                return p
+            old_link, new_link = put("link_a.mp4", 4 * 3600), put("link_b.mp4", 60)
+            proxy = put("proxy_c.mp4", 2 * 86400)
+            stray, busy = put("up_d.mov", 2 * 3600), put("up_e.mov", 2 * 3600)
+            big_old, big_new = put("link_f.mp4", 600, 200), put("link_g.mp4", 30, 20)
+            ci.JOBS["j"] = {"state": "running", "writing": "up_e.mov"}
+            ci.sweep()
+            gone = [p.name for p in (old_link, new_link, proxy, stray, busy, big_old, big_new) if not p.exists()]
+            self.assertEqual(sorted(gone), ["link_a.mp4", "link_f.mp4", "proxy_c.mp4", "up_d.mov"])   # over the cap: least recently used first
+
+
 @unittest.skipUnless(shutil.which("ffmpeg"), "needs ffmpeg")
 class Cut(unittest.TestCase):
     def test_exact_piece(self):
