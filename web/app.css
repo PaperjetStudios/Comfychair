@@ -58,6 +58,7 @@ p { margin: 0; }
 .note { font-size: 14px; padding: 8px 10px; border-radius: var(--r); }
 .note.warn { background: var(--warn-bg); color: var(--warn-text); }
 .note.err { background: var(--err-bg); color: var(--err-text); }
+.note.tip { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); color: var(--text); }
 .field { display: grid; gap: 6px; min-width: 0; align-content: start; }
 .lbl { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--muted); }
 .lbl > span:last-child:not(:first-child) { font-variant-numeric: tabular-nums; }
@@ -1106,6 +1107,14 @@ button.sheet-caret { width: 22px; }
 .vx-voice-top { display: flex; gap: 8px; align-items: center; }
 .vx-voice-top .hint { flex: 1; }
 .vx-voice audio { width: 100%; }
+#vxNewVoice { scroll-margin-top: 64px; }
+.vx-script textarea { width: 100%; min-height: 120px; resize: vertical; line-height: 1.45; }
+.vx-chips { display: grid; gap: 4px; }
+.vx-chip-row { flex-wrap: nowrap; overflow-x: auto; align-items: center; scrollbar-width: thin; padding-bottom: 2px; }
+.vx-chip-row .chip { flex: none; white-space: nowrap; }
+.vx-chip-lbl { flex: none; width: 62px; font-size: var(--fs-xs); color: var(--muted); position: sticky; left: 0; z-index: 1; align-self: stretch; display: flex; align-items: center; background: var(--surface); }
+/* touch screens get the script's chips in the text popup instead */
+@media (pointer: coarse) { .vx-chips { display: none; } }
 
 /* PhotoCraft / EffectCraft documents (craft.js) */
 .craft-list { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
