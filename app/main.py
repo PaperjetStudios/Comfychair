@@ -94,7 +94,7 @@ async def push_gen(gid: int):
     if g:
         await broadcast({"type": "deck_generation", "data": g})
         if g["status"] == "done":   # the Board's light previews, made now so it opens fast
-            asyncio.create_task(previews.warm([o["url"] for o in g["outputs"] if o.get("url") and o["kind"] in ("image", "video")]))
+            asyncio.create_task(previews.warm([o["url"] for o in g["outputs"] if o.get("url") and o["kind"] in ("image", "video", "audio")]))
 
 
 running_wf: dict[str, dict] = {}  # prompt_id -> workflow, for naming progress stages

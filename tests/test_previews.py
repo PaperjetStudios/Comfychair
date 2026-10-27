@@ -41,6 +41,18 @@ class Previews(unittest.TestCase):
                               str(td / "c.mp4")], capture_output=True, text=True).stdout.split()
         self.assertEqual(out, ["video,320,8/1"])   # small, 8 fps, no sound
 
+    def test_wave(self):
+        td = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, td)
+        snd = td / "s.m4a"   # quiet: the waveform is scaled up to fill the picture anyway
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-af", "volume=0.05",
+                        str(snd)], check=True)
+        previews.make_wave(snd, td / "w.png", 320)
+        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(td / "w.png")],
+                             capture_output=True, text=True).stdout.split()
+        self.assertEqual(out, ["320,106"])
+        with self.assertRaises(RuntimeError):   # a clip without sound has no waveform
+            previews.make_wave(self.clip, td / "x.png", 320)
+
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg not installed")
 class Rotation(unittest.TestCase):
