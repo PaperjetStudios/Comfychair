@@ -1,5 +1,6 @@
 import {
   $, h, store, api, toast, undoToast, overlayOpened, overlayClosed, sheetOpen, button, iconBtn, linkBtn, seg, placeholder,
+  numSlider,
 } from './ui.js';
 import { S, switchTab } from './core.js';
 import { openGeneration, sendToInput } from './run.js';
@@ -36,8 +37,9 @@ export async function renderBoard() {
   if (B.filter === 'marked' && !B.marked.size) B.filter = 'all';
   const filters = [['all', 'All'], ['image', 'Images'], ['video', 'Videos'], ['pinned', '★ Pinned'], ...(B.marked.size ? [['marked', '🗑 Marked']] : [])];
   const filterSeg = seg(filters, B.filter, (k) => { B.filter = k; store.set('deck.board.filter', k); renderBoard(); });
-  const size = h('input', { type: 'range', min: 120, max: 520, step: 10, value: B.size, 'aria-label': 'Tile size' });
-  size.addEventListener('input', () => { B.size = Number(size.value); store.set('deck.board.size', B.size); $('#board').style.setProperty('--tile', `${B.size}px`); });
+  const size = numSlider({ min: 120, max: 520, step: 10, value: B.size, label: 'Tile size' });
+  const setSize = () => { B.size = Number(size.value); store.set('deck.board.size', B.size); $('#board').style.setProperty('--tile', `${B.size}px`); };
+  size.addEventListener('input', setSize); size.addEventListener('change', setSize);
   const count = h('span', { class: 'hint' });
   const selBtn = button(B.selecting ? 'Done' : '☑ Select', () => setBoardSelecting(!B.selecting), { cls: 'small' + (B.selecting ? ' on' : '') });
   const delMarked = h('span', { class: 'hidden' });   // filled in once the project's generations are loaded

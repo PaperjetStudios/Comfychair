@@ -18,6 +18,8 @@ export function h(tag, props = {}, ...kids) {
     if (c == null || c === false) continue;
     el.append(c instanceof Node ? c : String(c));
   }
+  // a held number box being pulled sideways mustn't scroll the panel (the scrub below)
+  if (tag === 'input' && el.type === 'number') el.addEventListener('touchmove', (e) => { if (el.classList.contains('scrubbing')) e.preventDefault(); }, { passive: false });
   return el;
 }
 
@@ -33,10 +35,12 @@ export const clone = (x) => JSON.parse(JSON.stringify(x ?? null));
 // the next index when stepping d (±1) through n things from i; i < 0 (none yet) starts at an end
 export const cycleIndex = (i, d, n) => (i < 0 ? (d > 0 ? 0 : n - 1) : (i + d + n) % n);
 
-// Every number box is also a slider: drag left or right on it to change the value (its whole min–max
-// range over about 300 px, snapped to its step); a tap still types. While dragging it has
-// data-scrubbing set and fires 'input'; letting go fires one 'change', like typing does.
-const SCRUB_PX = 300;
+// Every number box is also a slider: hold it, then pull left or right to change the value (its whole
+// min–max range over about 300 px, snapped to its step); a tap still types. A finger or pen has to
+// hold still for HOLD_MS first, so a swipe that scrolls the panel never changes a value; a mouse
+// drags straight away. While dragging it has data-scrubbing set and fires 'input'; letting go fires
+// one 'change', like typing does. data-digits caps the decimals a drag writes.
+const SCRUB_PX = 300, HOLD_MS = 250;
 document.addEventListener('pointerdown', (e) => {
   const inp = e.target.closest?.('input[type=number]');
   if (!inp || inp.disabled || e.button > 0 || document.activeElement === inp) return;
@@ -46,12 +50,16 @@ document.addEventListener('pointerdown', (e) => {
   const span = Number.isFinite(min) && Number.isFinite(max) ? max - min : NaN;
   // per pixel: the range over SCRUB_PX, or a step every 2 px when the range is huge (seeds) or open
   const perPx = Number.isFinite(span) && span <= 1e5 ? span / SCRUB_PX : step / 2;
-  const dec = (String(inp.step).split('.')[1] || '').length;
-  let on = false;
+  const dec = inp.dataset.digits != null ? +inp.dataset.digits
+    : Math.min(6, Math.max((String(inp.step).split('.')[1] || '').length, step < 1 ? 2 : 0));
+  const mouse = e.pointerType === 'mouse';
+  let armed = mouse, on = false;
+  const hold = mouse ? 0 : setTimeout(() => { armed = true; inp.classList.add('scrubbing'); navigator.vibrate?.(8); }, HOLD_MS);
   const move = (ev) => {
-    const dx = ev.clientX - x0;
+    const dx = ev.clientX - x0, dy = ev.clientY - y0;
     if (!on) {
-      if (Math.abs(dx) < 8 || Math.abs(dx) < Math.abs(ev.clientY - y0)) return;
+      if (!armed) { if (Math.hypot(dx, dy) > 8) end(); return; }   // moved before the hold: a scroll
+      if (mouse ? Math.abs(dx) < 8 || Math.abs(dx) < Math.abs(dy) : Math.abs(dx) < 3) return;
       on = true; inp.blur(); inp.dataset.scrubbing = '1'; inp.classList.add('scrubbing');
       try { inp.setPointerCapture(ev.pointerId); } catch { /* the pointer is gone */ }
     }
@@ -60,22 +68,46 @@ document.addEventListener('pointerdown', (e) => {
     v = Math.round(v / step) * step;
     if (Number.isFinite(min)) v = Math.max(min, v);
     if (Number.isFinite(max)) v = Math.min(max, v);
-    v = Number(v.toFixed(Math.min(6, Math.max(dec, step < 1 ? 2 : 0))));
+    v = Number(v.toFixed(dec));
     if (String(v) !== inp.value) { inp.value = v; inp.dispatchEvent(new Event('input', { bubbles: true })); }
   };
-  const end = () => {
+  const noMenu = (c) => c.preventDefault();
+  function end() {
+    clearTimeout(hold);
     inp.removeEventListener('pointermove', move); inp.removeEventListener('pointerup', end); inp.removeEventListener('pointercancel', end);
-    if (!on) return;
-    delete inp.dataset.scrubbing; inp.classList.remove('scrubbing');
-    // the tap that ends a drag shouldn't open the keyboard
-    inp.addEventListener('click', (c) => { c.preventDefault(); inp.blur(); }, { once: true, capture: true });
+    setTimeout(() => inp.removeEventListener('contextmenu', noMenu), 300);
+    if (!armed) return;
+    inp.classList.remove('scrubbing');
+    // the tap that ends a hold or a drag shouldn't open the keyboard
+    const eat = (c) => { c.preventDefault(); inp.blur(); };
+    inp.addEventListener('click', eat, { once: true, capture: true });
+    setTimeout(() => inp.removeEventListener('click', eat, true), 400);   // no click came (a drag): the next tap types
     setTimeout(() => inp.blur());
+    if (!on) return;
+    delete inp.dataset.scrubbing;
     inp.dispatchEvent(new Event('change', { bubbles: true }));
-  };
+  }
   inp.addEventListener('pointermove', move);
   inp.addEventListener('pointerup', end);
   inp.addEventListener('pointercancel', end);
+  inp.addEventListener('contextmenu', noMenu);
 }, true);
+
+// A number box with a bar behind the number showing where it sits between min and max: the app's
+// slider. Hold and pull it sideways (above), or tap and type; a typed value is kept in range and on
+// the step. .set(v) changes it from code. digits: decimals shown (default from the step).
+export function numSlider({ min, max, step = 0.01, value, digits = null, label = null }) {
+  const dec = digits ?? Math.min(3, (String(step).split('.')[1] || '').length);
+  const inp = h('input', { type: 'number', class: 'numslide', inputMode: dec ? 'decimal' : 'numeric', min, max, step, 'aria-label': label });
+  inp.dataset.digits = dec;
+  const fit = (v) => Number(clamp(Math.round((Number.isFinite(v) ? v : min) / step) * step, min, max).toFixed(dec));
+  const paint = () => inp.style.setProperty('--p', `${clamp01(((parseFloat(inp.value) || 0) - min) / (max - min || 1)) * 100}%`);
+  inp.set = (v) => { inp.value = fit(v); paint(); };
+  inp.addEventListener('input', paint);
+  inp.addEventListener('change', () => { if (!inp.dataset.scrubbing) inp.value = fit(parseFloat(inp.value)); paint(); });
+  inp.set(value);
+  return inp;
+}
 
 // ---------------------------------------------------------------------------
 // API client
@@ -368,12 +400,14 @@ export const hint = (text, cls = '') => h('p', { class: `hint ${cls}`.trim() }, 
 export const placeholder = (text) => h('div', { class: 'placeholder' }, text);
 export const note = (text, kind = 'warn') => h('div', { class: `note ${kind}` }, text);
 
-// A slider with its value shown beside the label. onInput runs while dragging, onChange on letting go.
+// A slider (numSlider) with its value shown beside the label. onInput runs while dragging, onChange
+// once it's let go or typed.
 export function rangeField(label, get, set, { min, max, step, fmt = (v) => v.toFixed(2), onInput = null, onChange = null, help: tip = null }) {
   const val = h('span', {}, fmt(get()));
-  const r = h('input', { type: 'range', min, max, step, value: get() });
-  r.addEventListener('input', () => { set(parseFloat(r.value)); val.textContent = fmt(get()); onInput?.(); });
-  if (onChange) r.addEventListener('change', onChange);
+  const r = numSlider({ min, max, step, value: get(), label });
+  const take = () => { set(parseFloat(r.value)); val.textContent = fmt(get()); };
+  r.addEventListener('input', () => { if (r.dataset.scrubbing) { take(); onInput?.(); } });
+  r.addEventListener('change', () => { take(); onInput?.(); onChange?.(); });
   const el = field([label, val], r);
   return tip ? withHelp(el, tip) : el;
 }

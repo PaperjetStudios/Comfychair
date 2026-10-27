@@ -1,6 +1,6 @@
 import {
   $, h, store, clamp, clamp01, clone, cycleIndex, api, toast, undoToast, openOverlay, openSheet, sheetStillOpen, nameSheet,
-  button, iconBtn, seg, field, hint, placeholder, note, cycleBar, help, info
+  button, iconBtn, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider
 } from './ui.js';
 import { ASPECT_PRESETS, S, addMine, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
 import { openImagePicker, openVideoPicker } from './media.js';
@@ -417,22 +417,18 @@ function numberField(f, isFloat) {
     if (hi != null) n = Math.min(hi, n);
     return isFloat ? Number(n.toFixed(Math.min(dec, 6))) : Math.round(n);
   };
-  const input = h('input', { type: 'number', inputMode: isFloat ? 'decimal' : 'numeric', step, min: lo ?? undefined, max: hi ?? undefined, value: S.values[f.key] });
-  let range = null;
+  const hasRange = lo != null && hi != null && (hi - lo) / step <= 4000 && (hi - lo) <= 10000;
+  // with a known range the box is a slider (a bar behind the number); without one it still scrubs
+  const input = hasRange ? numSlider({ min: lo, max: hi, step, value: S.values[f.key], digits: dec, label: f.label })
+    : h('input', { type: 'number', inputMode: isFloat ? 'decimal' : 'numeric', step, min: lo ?? undefined, max: hi ?? undefined, value: S.values[f.key] });
   const sync = (n, from) => {
     n = clamp(n); setVal(f.key, n);
-    if (from !== input) input.value = n;
-    if (range && from !== range) range.value = n;
+    if (from !== input) input.set ? input.set(n) : (input.value = n);
   };
   input.addEventListener('change', () => sync(parseFloat(input.value), input));
   input.addEventListener('input', () => { if (input.dataset.scrubbing) sync(parseFloat(input.value), input); });
   const bump = (dir) => sync(Number(S.values[f.key]) + dir * step, null);
-  const hasRange = lo != null && hi != null && (hi - lo) / step <= 4000 && (hi - lo) <= 10000;
-  if (hasRange) {
-    range = h('input', { type: 'range', min: lo, max: hi, step, value: S.values[f.key] });
-    range.addEventListener('input', () => sync(parseFloat(range.value), range));
-  }
-  return field([f.label, hasRange ? h('span', {}, `${lo}–${hi}`) : null], stepper(input, bump), range);
+  return field([f.label, hasRange ? h('span', {}, `${lo}–${hi}`) : null], stepper(input, bump));
 }
 
 function seedField(f) {
@@ -958,9 +954,7 @@ function loraField(f) {
       if (l.name && !f.options.includes(l.name)) sel.append(h('option', { value: l.name }, `${l.name} (missing)`));
       sel.value = l.name || '';
       sel.addEventListener('change', () => { const a = [...rows()]; a[i] = { ...a[i], name: sel.value }; save(a); });
-      const val = h('span', { class: 'range-val' }, Number(l.strength ?? 1).toFixed(2));
-      const range = h('input', { type: 'range', min: -2, max: 2, step: 0.05, value: l.strength ?? 1 });
-      range.addEventListener('input', () => { val.textContent = Number(range.value).toFixed(2); });
+      const range = numSlider({ min: -2, max: 2, step: 0.05, value: l.strength ?? 1, digits: 2, label: 'Strength' });
       range.addEventListener('change', () => { const a = [...rows()]; a[i] = { ...a[i], strength: parseFloat(range.value) }; setVal(f.key, a); });
       const on = h('input', { type: 'checkbox', checked: l.enabled !== false, title: 'Enabled' });
       on.addEventListener('change', () => { const a = [...rows()]; a[i] = { ...a[i], enabled: on.checked }; save(a); });
@@ -968,7 +962,7 @@ function loraField(f) {
         h('div', { class: 'top' }, on, sel,
           l.name ? iconBtn('LoRA info from Civitai', 'i', () => openLoraInfo(l.name), { class: 'icon-btn info-btn' }) : null,
           iconBtn('Remove LoRA', '✕', () => save(rows().filter((_, j) => j !== i)))),
-        h('div', { class: 'row' }, range, val));
+        h('div', { class: 'row lora-strength' }, h('span', { class: 'hint' }, 'Strength'), range));
     }));
   };
   drawChips(); draw();

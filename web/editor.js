@@ -1,6 +1,6 @@
 import {
   $, h, store, api, clamp01, busy, toast, undoToast, openOverlay, sheetOpen, openSheet, closeSheet, button, iconBtn, actions,
-  seg, field, section, hint, propNum, layerRowsEl, panelTop, help
+  seg, field, section, hint, propNum, layerRowsEl, panelTop, help, numSlider
 } from './ui.js';
 import { ASPECT_PRESETS, S, inputUrl, switchTab, thumbUrl } from './core.js';
 import { openImagePicker, registerPickerSource, uploadImage } from './media.js';
@@ -91,8 +91,9 @@ export function openSketch({ base = null, aspect = 1, onDone }) {
   const swatches = h('div', { class: 'swatches' }, SWATCHES.map((c) =>
     h('button', { type: 'button', style: `background:${c}`, 'aria-label': `Colour ${c}`, onclick: () => setColor(c) })));
   const sizeVal = h('span', { class: 'hint' }, `${st.size}px`);
-  const sizeIn = h('input', { type: 'range', min: 1, max: 120, step: 1, value: st.size });
-  sizeIn.addEventListener('input', () => { st.size = Number(sizeIn.value); sizeVal.textContent = `${st.size}px`; store.set('deck.sketch.size', st.size); });
+  const sizeIn = numSlider({ min: 1, max: 120, step: 1, value: st.size, label: 'Brush size' });
+  const setSize = () => { st.size = Number(sizeIn.value); sizeVal.textContent = `${st.size}px`; store.set('deck.sketch.size', st.size); };
+  sizeIn.addEventListener('input', setSize); sizeIn.addEventListener('change', setSize);
   const penBtn = button('Pen only', () => { st.penOnly = !st.penOnly; penBtn.classList.toggle('on', st.penOnly); },
     { title: 'Ignore finger touches while drawing' });
   const sizeInfo = h('span', { class: 'hint' });

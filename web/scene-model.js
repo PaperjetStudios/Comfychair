@@ -6,7 +6,7 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as MG from './model-geom.js';
 import {
-  $, actions, api, button, closeSheet, field, h, hint, iconBtn, openSheet, section, seg, toast, uid, undoToast, help
+  $, actions, api, button, closeSheet, field, h, hint, iconBtn, openSheet, section, seg, toast, uid, undoToast, help, numSlider
 } from './ui.js';
 import { R, SC, TYPES, makers, newObject, save } from './scene-data.js';
 import { modeOf, registerMode } from './scene-modes.js';
@@ -330,16 +330,14 @@ const ROOT = h('div', { class: 'mdl' });
 const amounts = [];   // the number + slider pairs on show (updated while dragging the handle)
 function syncAmounts() { for (const f of amounts) f(); }
 
-// a number box and a slider for one value, kept in step; set(v) runs while it moves, done() on letting go
+// a slider (numSlider) for one value; set(v) runs while it's pulled, done() on letting go or typing
 function amount(label, get, set, { min, max, step = 0.01, digits = 3, done = null }) {
-  const num = h('input', { type: 'number', inputMode: 'decimal', step: 'any', value: +get().toFixed(digits) });
-  const rng = h('input', { type: 'range', min, max, step, value: get() });
-  const show = () => { num.value = +get().toFixed(digits); rng.value = get(); };
-  rng.addEventListener('input', () => { set(parseFloat(rng.value)); num.value = +get().toFixed(digits); });
-  rng.addEventListener('change', () => done?.());
-  num.addEventListener('change', () => { set(clampN(parseFloat(num.value) || 0, min, max)); show(); done?.(); });
+  const num = numSlider({ min, max, step, value: get(), digits: Math.min(digits, 3), label });
+  const show = () => num.set(get());
+  num.addEventListener('input', () => { if (num.dataset.scrubbing) set(parseFloat(num.value)); });
+  num.addEventListener('change', () => { set(parseFloat(num.value)); show(); done?.(); });
   amounts.push(show);
-  return field(label, h('div', { class: 'mdl-amount' }, num, rng));
+  return field(label, h('div', { class: 'mdl-amount' }, num));
 }
 const colorField = () => {
   const c = h('input', { type: 'color', value: ED.data.color || MG.DEFAULT_COLOR, 'aria-label': 'Colour' });
