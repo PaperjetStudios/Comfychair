@@ -35,6 +35,10 @@ export function renderToolbar() {
   rb.classList.toggle('on', !!SC.ref && SC.ref.on !== false); rb.setAttribute('aria-pressed', !!SC.ref && SC.ref.on !== false);
   rb.title = SC.ref ? 'Reference over the view: show or hide' : 'Reference over the view: pick a picture';
   syncRef();
+  const fb = tb.querySelector('[data-free]'), fixed = modeOf().view === 'free';   // (Create object only has the free view)
+  fb.classList.toggle('hidden', fixed);
+  fb.classList.toggle('on', R.free); fb.setAttribute('aria-pressed', R.free);
+  fb.title = R.free ? 'Director view: back to looking through the camera (V)' : 'Director view: look around the scene freely, the camera drawn in it (V)';
   tb.querySelector('[data-undo]').disabled = !HIST.undo.length;
   tb.querySelector('[data-redo]').disabled = !HIST.redo.length;
 }
@@ -329,6 +333,12 @@ export function cameraPanel() {
 }
 
 
+// through the camera / the director view, from the view itself (Edit scene and Camera)
+function toggleFree() {
+  if (modeOf().view === 'free') return;
+  setFree(!R.free); renderPanel();
+}
+
 export function buildToolbar() {
   viewer.append(h('div', { id: 'sceneToolbar', class: 'layer-toolbar scene-toolbar', role: 'toolbar', 'aria-label': 'Gizmo' },
     ...MODES.map(([m, icon, key, name]) => h('button', { type: 'button', class: 'ico', 'data-mode': m, title: `${name} (${key.toUpperCase()})`,
@@ -337,6 +347,7 @@ export function buildToolbar() {
     h('button', { type: 'button', class: 'ico', 'data-depth': '', title: 'Depth: show the depth the render will use', 'aria-label': 'Depth',
       onclick: () => { R.depth = !R.depth; draw(); renderToolbar(); } }, '◐'),
     h('button', { type: 'button', class: 'ico', 'data-ref': '', 'aria-label': 'Reference', onclick: toggleRef }, '◫'),
+    h('button', { type: 'button', class: 'ico', 'data-free': '', 'aria-label': 'Director view', onclick: toggleFree }, '🧭'),
     h('span', { class: 'sep' }),
     h('button', { type: 'button', 'data-undo': '', title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo', onclick: () => undo() }, '↶'),
     h('button', { type: 'button', 'data-redo': '', title: 'Redo (Ctrl+Shift+Z)', 'aria-label': 'Redo', onclick: () => undo(false) }, '↷')));
@@ -398,6 +409,7 @@ export function wireKeys() {
     const m = MODES.find(([, , k]) => k === e.key.toLowerCase());
     if (m) { e.preventDefault(); setMode(m[0]); }
     else if (e.key.toLowerCase() === 'k') { e.preventDefault(); setAutoKey(!R.autoKey); }
+    else if (e.key.toLowerCase() === 'v') { e.preventDefault(); toggleFree(); }
     else if (e.key === 'Escape') { if (HAND.on) handMode(null); else if (R.joint) selectJoint(null); else select(null); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && R.sel) { e.preventDefault(); removeSelected(); }
     else if (e.key === ' ') { e.preventDefault(); play(); }

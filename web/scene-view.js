@@ -536,7 +536,7 @@ const ray = new THREE.Raycaster();
 function hitAt(e) {
   if (!modeOf().select) return null;
   const r = canvas.getBoundingClientRect();
-  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), activeCamera());
   // the room and photos only block: tapping them deselects (pick them in the layer list)
   const hit = ray.intersectObjects(visibleMeshes(), true).find((x) => x.object.visible);  // raycasts ignore .visible: hidden figure parts can't be picked
   return hit && hit.object.userData.id !== ROOM && !hit.object.userData.photo ? hit.object.userData.id : null;
@@ -551,14 +551,14 @@ function jointAt(e) {
   rig.root.updateMatrixWorld(true);
   let best = null;
   for (const d of rig.dots) {
-    const w = d.getWorldPosition(new THREE.Vector3()), v = w.clone().project(camera);
+    const w = d.getWorldPosition(new THREE.Vector3()), v = w.clone().project(activeCamera());
     if (v.z > 1) continue;
     const dist = Math.hypot(r.left + (v.x + 1) / 2 * r.width - e.clientX, r.top + (1 - v.y) / 2 * r.height - e.clientY);
-    const depth = camera.position.distanceTo(w);
+    const depth = activeCamera().position.distanceTo(w);
     if (dist < reach && (!best || depth < best.depth)) best = { joint: d.userData.joint, depth };
   }
   if (!best) return null;
-  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), activeCamera());
   const front = ray.intersectObjects(visibleMeshes().filter((m) => m !== rig.root), true).find((x) => x.object.visible);
   return front && front.distance < best.depth ? null : best.joint;
 }
