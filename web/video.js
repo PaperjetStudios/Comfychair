@@ -3,7 +3,7 @@ import {
   field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, panelTop,
 } from './ui.js';
 import { S, fmtT, inputUrl, thumbUrl } from './core.js';
-import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, uploadImage, uploadMedia } from './media.js';
+import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, soundToSoundTab, uploadImage, uploadMedia } from './media.js';
 import { openGeneration } from './run.js';
 import { useInGenerate } from './editor.js';
 import { TabSet } from './tabs.js';
@@ -1064,6 +1064,8 @@ function renderVideoPanel() {
         button('✂ Split at playhead', splitAtPlayhead, { title: 'S' }),
         button('⤫ Cross-fade with previous', () => crossfadePrev(it)),
         it.kind === 'video' && canKey(it) ? button('VFX…', () => sendToVfx(it.src, { label: it.label, trim: { start: it.in, len: (it.out ?? it.dur) - it.in } }), { title: 'Open this clip in the VFX tab' }) : null,
+        it.kind === 'video' ? button('Sound → Sound tab', () => soundToSoundTab(it.src, { trim: { start: it.in || 0, len: itLen(it) }, name: `${it.label}-sound` }),
+          { title: 'This clip\'s sound (the part on the timeline) on the Sound tab\'s timeline' }) : null,
         it.kind === 'video' && canKey(it) ? button('Key…', () => openKey(it), { title: 'Cut out a green screen, or use a matte, so lower tracks show through' }) : null,
         it.kind === 'video' && canTrack(it.src) ? button('Track motion', () => openTrack({ src: it.src, url: it.url, label: it.label, from: it.in, to: it.out ?? undefined }), { title: 'Follow the picture\'s movement and make a 3D camera from it' }) : null,
         isVisual(it) ? button('Reset framing', () => { Object.assign(it, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); delete it.rotation; delete it.anchor; timelineChanged(); }) : null,

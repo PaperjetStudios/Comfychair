@@ -562,6 +562,9 @@ export function openGeneration(id) {
   if (cur()?.kind === 'video' && /^deck-h3-/.test(g.template) && g.status === 'done') {
     btns.push(button('Upscale (H3)…', () => openH3Upscale(g, idx), { title: 'Sample it again bigger, with this run\'s own prompt, LoRAs and references' }));
   }
+  if (cur()?.kind === 'video') btns.push(button('Sound → Sound tab', async () => {
+    closeSheet(); (await import('./media.js')).soundToSoundTab({ generation: g.id, index: idx }, { name: `${g.id}-${g.template}-sound` });
+  }, { title: 'Take the clip\'s sound out and put it on the Sound tab\'s timeline' }));
   if (cur()?.kind === 'video') btns.push(button('Track motion', () => openTrack({ src: { generation: g.id, index: idx }, url: cur().url, label: genLabel(g) }), { title: 'Follow the picture\'s movement and make a 3D camera from it' }));
   if (!isEdit) btns.push(linkBtn('Workflow JSON', `/api/generations/${g.id}/workflow`));
   if (cur()) btns.push(linkBtn('Download', cur().url, { download: cur().filename }));

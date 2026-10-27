@@ -2,7 +2,7 @@ import {
   $, h, store, api, toast, undoToast, overlayOpened, overlayClosed, sheetOpen, button, iconBtn, linkBtn, seg, placeholder,
   numSlider, field, section, hint, openSheet, closeSheet,
 } from './ui.js';
-import { extractSound, soundInput } from './media.js';
+import { extractSound, soundInput, soundToSoundTab } from './media.js';
 import { S, switchTab } from './core.js';
 import { openGeneration, sendToInput } from './run.js';
 import { E, FULL, editorTabsReady, persistEditor, renderEditor } from './editor.js';
@@ -157,7 +157,9 @@ function openSoundSheet(g, i) {
       hint('Saves the clip\'s sound as its own file in the media library, to edit in the Sound tab or use as a reference.'),
       h('div', { class: 'row wrap' }, button('Take the sound out', async () => {
         try { await extractSound(video, { name: `${g.id}-${g.template}-sound` }); closeSheet(); } catch (e) { toast(e.message, true); }
-      }, { cls: 'primary' }))),
+      }, { cls: 'primary' }), button('Into the Sound tab', async () => {
+        closeSheet(); await soundToSoundTab(video, { name: `${g.id}-${g.template}-sound` });
+      }, { title: 'Take the sound out and put it on the Sound tab\'s timeline' }))),
     section('Put a sound on it', null,
       soundInput(null, (v) => { sound = v; }, { title: 'The sound to put on the clip' }),
       field('Clip\'s own sound', seg([['replace', 'Replace it'], ['mix', 'Keep it under']], mode, (v) => { mode = v; keepRow.classList.toggle('hidden', v !== 'mix'); })),

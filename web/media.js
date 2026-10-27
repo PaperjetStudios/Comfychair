@@ -1,7 +1,7 @@
 import {
   $, h, store, api, toast, openSheet, closeSheet, button, iconBtn, actions, fileButton, seg, placeholder, note, mediaCard, field,
 } from './ui.js';
-import { S, PICKER_SOURCES as SOURCES, thumbUrl } from './core.js';
+import { S, PICKER_SOURCES as SOURCES, switchTab, thumbUrl } from './core.js';
 import { loadHistory } from './run.js';
 
 // This project's finished outputs of the given kinds, newest first: [{ g, o, i, t }]
@@ -136,6 +136,17 @@ export async function extractSound(source, { trim = null, name = null } = {}) {
   const m = await api('/api/audio/extract', { method: 'POST', body: { source, trim, name }, busy: 'Taking the sound out…', timeout: 600000 });
   toast(`Saved ${m.label} to the media library`);
   return m;
+}
+
+// A clip's sound, taken out and put on the Sound tab's timeline (the Sound tab opens on it)
+export async function soundToSoundTab(source, { trim = null, name = null } = {}) {
+  try {
+    const m = await api('/api/audio/extract', { method: 'POST', body: { source, trim, name }, busy: 'Taking the sound out…', timeout: 600000 });
+    switchTab('sound');
+    await (await import('./sound.js')).addToSound({ media: m.name });
+    toast(`${m.label} is on the Sound tab (and in the media library)`);
+    return m;
+  } catch (e) { toast('Couldn\'t take the sound out: ' + e.message, true); return null; }
 }
 
 // ---------------------------------------------------------------------------
