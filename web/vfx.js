@@ -41,8 +41,8 @@ const EFFECTS = [
     help: 'Tap the thing to cut out on the frame (Exclude marks what to leave out), or describe it. SAM3 follows it through the clip and makes a mask clip.' },
   { id: 'inpaint', group: 'Remove', label: 'Replace', tpl: 'deck-ltx-inpaint', mult: 64, needs: ['source', 'matte', 'prompt', 'len', 'res', 'seed'],
     help: 'Paints something new where a mask clip is white (make one with Mask (SAM3) or Alpha Gen) and keeps the rest of the picture. Describe the whole shot with the new thing in it.' },
-  { id: 'extend', group: 'Generate', label: 'Extend frame', tpl: 'deck-ltx-inpaint', mult: 64, needs: ['source', 'canvas', 'prompt', 'len', 'res', 'seed'],
-    help: 'Puts the clip on a bigger or differently shaped canvas (portrait to landscape, say) and paints the rest (outpainting). Pick the canvas, then drag the clip on the preview or set its size and place. Describe the whole wider shot.' },
+  { id: 'extend', group: 'Generate', label: 'Extend frame', tpl: 'deck-ltx-inpaint', mult: 64, needs: ['source', 'canvas', 'first?', 'prompt', 'len', 'res', 'seed'],
+    help: 'Puts the clip on a bigger or differently shaped canvas (portrait to landscape, say) and paints the rest (outpainting). Pick the canvas, then drag the clip on the preview or set its size and place. Describe the whole wider shot. For new parts that should look like a reference (a character, a room), make a start frame: the first frame on its canvas, filled in by an image edit with your references; the clip then grows out of it.' },
   { id: 'cleanplate', group: 'Remove', label: 'Clean plate', tpl: 'deck-ltx-cleanplate', needs: ['source', 'prompt', 'len', 'res', 'seed'],
     help: 'Removes people and other moving things from the whole clip and fills in the background. Name what to remove in the prompt.' },
   { id: 't2v', group: 'Generate', label: 'Text / image to video', tpl: 'deck-ltx-t2v', needs: ['first?', 'voice', 'prompt', 'len', 'size', 'loras', 'seed'],
@@ -204,16 +204,50 @@ function firstField(optional) {
   const edit = ['ripple', 'animate', 'faceswap', 'drive', 'ltxdrive'].includes(T.op);
   const label = T.op === 'ingredients' ? 'Ingredients sheet' : T.op === 'ripple' ? 'Edited first frame' : T.op === 'layout' ? 'Look (first frame)'
     : ['animate', 'faceswap', 'drive', 'ltxdrive'].includes(T.op) ? 'Character'
-    : optional ? 'Start image (optional)' : 'Start image';
+    : T.op === 'extend' ? 'Start frame (optional)' : optional ? 'Start image (optional)' : 'Start image';
   return field(label, T.first ? h('img', { class: 'vfx-still', src: thumbUrl(T.first, 480), alt: '' }) : null,
     h('div', { class: 'row wrap' },
       button(T.first ? 'Change…' : 'Choose…', pick, { cls: T.first ? '' : 'primary' }),
       T.source ? button('Take from clip…', takeFrame, { title: 'A frame of the source clip' }) : null,
       T.first && edit ? button('Edit in Generate', () => useInGenerate(T.first, 'Frame set: edit it, then pick the result here')) : null,
       T.first && edit ? button('Edit in Editor', () => addToEditor(T.first)) : null,
+      T.op === 'extend' && T.source ? button('Make start frame…', makeStartFrame, { title: 'The first frame on its canvas, to fill in with an image edit and your reference pictures' }) : null,
       T.first ? button('Clear', () => { T.first = null; changed(); }) : null),
     T.op === 'ripple' ? help('Take the clip\'s first frame, change it (Edit in Generate with an edit template, or in the Editor), then Choose… the edited picture here.') : null,
     T.op === 'animate' ? help('One person, whole body or face as in the clip. Best: Take from clip…, then repaint the person as the character (Edit in Generate), so pose and framing match.') : null);
+}
+
+// Extend frame's start frame: the clip's first frame (at its trim) on the canvas, the new parts flat grey, opened in
+// an image edit with room for reference pictures. The edited picture, picked back here as the start frame, is the
+// look LTX carries on into the new parts.
+const EDIT_TPL = 'deck-qwen21-edit';
+async function makeStartFrame() {
+  const v = V.a;
+  if (!v?.videoWidth) return toast('Let the clip load first', true);
+  const t0 = T.source?.trim?.start || 0;
+  if (Math.abs(v.currentTime - t0) > 0.02) { v.pause(); v.currentTime = t0; await new Promise((r) => v.addEventListener('seeked', r, { once: true })); }
+  const b = clipBox(), A = canvasAspect();
+  let W = v.videoWidth / b.w, H = W / A;
+  const k = Math.min(1, 2048 / Math.max(W, H));
+  W = Math.round((W * k) / 16) * 16; H = Math.round((H * k) / 16) * 16;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, W, H);
+  ctx.drawImage(v, b.left * W, b.top * H, b.w * W, b.h * H);
+  const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+  let r;
+  try { r = await uploadImage(blob, { source: 'vfx', filename: 'start-frame.png' }); } catch (err) { return toast(err.message, true); }
+  const t = S.templates.find((x) => x.id === EDIT_TPL && !x.error);
+  if (!t || !genHooks.openShot) { useInGenerate(r.name, 'Start frame on its canvas: fill in the grey, then pick the result here'); return; }
+  const img = t.fields.find((f) => f.kind === 'image');
+  const prompt = t.fields.find((f) => f.kind === 'text' && /edit|prompt/i.test(f.group) && f.input === 'prompt');
+  const values = { [img.key]: r.name };
+  if (prompt) values[prompt.key] = `Fill the flat grey areas of Picture 1 so the scene continues naturally beyond the original frame${T.prompt.trim() ? `: ${T.prompt.trim()}` : ''}. `
+    + 'Keep everything that is already in Picture 1 exactly as it is. Add the people and things from the reference pictures where they belong.';
+  switchTab('generate');
+  await genHooks.openShot({ workflow: t.id, values }, 'Start frame');
+  toast('Fill in the grey (add your references under More references), then pick the result as the start frame');
 }
 
 function lorasField(t) {
@@ -617,7 +651,7 @@ async function buildRun(e, loose = false) {
   const put = (role, v) => { const f = roleField(t, role); if (f && v !== undefined && v !== null) { values[f.key] = v; rv[role] = v; } };
   put('source', T.source && { ...bare(T.source), ...(T.source.trim && { trim: T.source.trim }), ...(T.source.crop && { crop: T.source.crop }) });
   put('matte', T.matte && bare(T.matte));
-  put('first', T.first);
+  if (e.needs.some((n) => n.startsWith('first'))) put('first', T.first);   // (one picture per tab: only the effects that take one)
   if (e.needs.includes('sound')) put('sound', T.sound);
   if (e.needs.includes('voice')) put('voice', T.voice);
   put('prompt', T.prompt.trim() ? T.prompt : undefined);   // empty: keep the template's own prompt

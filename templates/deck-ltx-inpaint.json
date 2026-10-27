@@ -340,6 +340,79 @@
    "batch_size": 1
   }
  },
+ "first": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@8 Start frame [image]"
+  }
+ },
+ "firstrs": {
+  "class_type": "ImageResizeKJv2",
+  "inputs": {
+   "image": [
+    "first",
+    0
+   ],
+   "width": [
+    "W",
+    1
+   ],
+   "height": [
+    "H",
+    1
+   ],
+   "upscale_method": "lanczos",
+   "keep_proportion": "crop",
+   "pad_color": "0, 0, 0",
+   "crop_position": "center",
+   "divisible_by": 64,
+   "device": "cpu"
+  },
+  "_meta": {
+   "title": "start frame to the video size",
+   "deck_drop": true
+  }
+ },
+ "firstpre": {
+  "class_type": "LTXVPreprocess",
+  "inputs": {
+   "image": [
+    "firstrs",
+    0
+   ],
+   "img_compression": 18
+  },
+  "_meta": {
+   "title": "start frame as video-like",
+   "deck_drop": true
+  }
+ },
+ "i2v": {
+  "class_type": "LTXVImgToVideoInplace",
+  "inputs": {
+   "vae": [
+    "vvae",
+    0
+   ],
+   "image": [
+    "firstpre",
+    0
+   ],
+   "latent": [
+    "vlat",
+    0
+   ],
+   "strength": 1.0,
+   "bypass": false
+  },
+  "_meta": {
+   "title": "start frame (skipped when empty)",
+   "deck_passthrough": "latent"
+  }
+ },
  "guide": {
   "class_type": "LTXAddVideoICLoRAGuideAdvanced",
   "inputs": {
@@ -356,7 +429,7 @@
     0
    ],
    "latent": [
-    "vlat",
+    "i2v",
     0
    ],
    "image": [

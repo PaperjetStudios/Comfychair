@@ -515,7 +515,21 @@ def inpaint():
     g.add("lora", node("LTXICLoRALoaderModelOnly", model=["unet", 0], lora_name=LORA + "ltx-2.3-22b-ic-lora-in-outpainting-0.9.safetensors",
                        strength_model=1.0))
     g.add("vlat", node("EmptyLTXVLatentVideo", width=["W", 1], height=["H", 1], length=["nf", 1], batch_size=1))
-    g.add("guide", node("LTXAddVideoICLoRAGuideAdvanced", positive=["cond", 0], negative=["cond", 1], vae=["vvae", 0], latent=["vlat", 0],
+    # an optional first frame as it should come out (Extend frame: the clip on its canvas with the new parts already
+    # painted, e.g. by an image edit with reference pictures): LTX carries it on into the masked areas
+    g.add("first", node("LoadImage", "@8 Start frame [image]", image=""))
+    rs = node("ImageResizeKJv2", "start frame to the video size", image=["first", 0], width=["W", 1], height=["H", 1],
+              upscale_method="lanczos", keep_proportion="crop", pad_color="0, 0, 0", crop_position="center", divisible_by=64, device="cpu")
+    rs["_meta"]["deck_drop"] = True
+    g.add("firstrs", rs)
+    pre = node("LTXVPreprocess", "start frame as video-like", image=["firstrs", 0], img_compression=18)
+    pre["_meta"]["deck_drop"] = True
+    g.add("firstpre", pre)
+    st = node("LTXVImgToVideoInplace", "start frame (skipped when empty)", vae=["vvae", 0], image=["firstpre", 0], latent=["vlat", 0],
+              strength=1.0, bypass=False)
+    st["_meta"]["deck_passthrough"] = "latent"
+    g.add("i2v", st)
+    g.add("guide", node("LTXAddVideoICLoRAGuideAdvanced", positive=["cond", 0], negative=["cond", 1], vae=["vvae", 0], latent=["i2v", 0],
                         image=["green", 0], frame_idx=0, strength=1.0, latent_downscale_factor=1, crop="disabled", use_tiled_encode=False,
                         tile_size=256, tile_overlap=64, attention_strength=1.0, use_streaming=False, tile_frames=97))
     audio_latent(g, ["nf", 1])
