@@ -10,7 +10,7 @@ import { motionField } from './scene-motion.js';
 // a figure that isn't planted on the floor keeps its feet (or seat) where they were for a new pose
 function liftTo(o, v, j, m) {
   if (o.ground) return {};
-  return { y: v.y + (FIGURE.liftFor(j, m) - FIGURE.liftFor(v.j, v.m)) * v.sy };
+  return { y: v.y + (FIGURE.liftFor(j, m, o.body) - FIGURE.liftFor(v.j, v.m, o.body)) * v.sy };
 }
 
 // ---- a figure's pose tabs ----------------------------------------------------------------
@@ -31,10 +31,11 @@ function thumb(key, people) {
 }
 const tile = (label, img, onclick, extra = null) => h('button', { type: 'button', class: 'pose-tile', title: label, onclick }, img, h('span', {}, label), extra);
 
-// a new pose for the figure, only the upper or lower body when asked; name is what it's called in a prompt
+// a new pose for the figure, only the upper or lower body when asked; name is what it's called in a prompt.
+// The fingers stay as they are unless the pose has its own.
 function takePose(o, j, { m = undefined, name = null, mask = R.mask } = {}) {
   const v = current(o, FIG);
-  let nj = j;
+  let nj = { ...FIGURE.fingersOf(v.j), ...j };
   if (mask !== 'all') {
     nj = { ...v.j };
     for (const n of Object.keys(FIGURE.JOINTS)) if (UPPER.has(n) === (mask === 'upper')) { if (j[n]) nj[n] = j[n]; else delete nj[n]; }
@@ -52,12 +53,12 @@ function takePair(o, key) {
   let b = others.sort((x, y) => dist(x) - dist(y))[0];
   if (!b) { b = newObject('figure'); SC.objects.push(b); }
   write(o, FIG, { j: p.a, m: {}, pn: `pair:${key}:${b.id}`, ...liftTo(o, v, p.a, {}) });
-  const floor = o.ground ? current(o, FIG).y : current(o, FIG).y - FIGURE.liftFor(p.a) * s;  // where a's floor is
+  const floor = o.ground ? current(o, FIG).y : current(o, FIG).y - FIGURE.liftFor(p.a, {}, o.body) * s;  // where a's floor is
   const bs = current(b, FIG).sy;
   const dx = p.at.x * s, dz = p.at.z * s;
   write(b, FIG, { j: p.b, m: {}, pn: `partner:${key}`, rx: 0, rz: 0, ry: v.ry + p.at.ry,
     x: v.x + dx * Math.cos(r) + dz * Math.sin(r), z: v.z - dx * Math.sin(r) + dz * Math.cos(r),
-    y: floor + p.at.y * s + (b.ground ? 0 : FIGURE.liftFor(p.b) * bs) });
+    y: floor + p.at.y * s + (b.ground ? 0 : FIGURE.liftFor(p.b, {}, b.body) * bs) });
   changed();
   toast(`${o.name} and ${b.name} together`);
 }
@@ -101,7 +102,11 @@ export function posesTab(o, cur) {
       : field('Apply to', seg([['all', 'Whole body'], ['upper', 'Upper'], ['lower', 'Lower']], R.mask, (v) => { R.mask = v; })),
     h('div', { class: 'pose-grid' }, tiles),
     h('div', { class: 'row wrap' },
-      button('⇋ Mirror', () => takePose(o, FIGURE.mirrorPose(cur().j), { m: FIGURE.mirrorParams(cur().m), name: cur().pn, mask: 'all' }), { title: 'Swap left and right' }),
+      button('⇋ Mirror', () => {
+        const j = FIGURE.mirrorPose(cur().j);
+        for (const n of Object.keys(FIGURE.HAND)) j[n] ||= [0, 0, 0, 1];   // (a straight finger swaps sides too)
+        takePose(o, j, { m: FIGURE.mirrorParams(cur().m), name: cur().pn, mask: 'all' });
+      }, { title: 'Swap left and right' }),
       button('Copy pose', () => { const v = cur(); clip = { j: v.j, m: v.m, pn: v.pn }; toast('Pose copied: paste it on any figure'); renderPanel(); }),
       clip ? button('Paste pose', () => takePose(o, clip.j, { m: clip.m, name: clip.pn })) : null,
       button('Reset', () => takePose(o, FIGURE.preset('stand').j, { m: {}, name: 'stand', mask: 'all' }))),
@@ -156,7 +161,7 @@ function runMove(o, key) {
   for (const st of steps) {
     const f = at(st), j = st.j || v.j, m = { ...v.m, ...st.m }, d = (st.d || 0) * v.sy;
     if (st.phase != null) m.phase = (v.m?.phase || 0) + st.phase;
-    const y = v.y + (o.ground ? 0 : (FIGURE.liftFor(j, m) - FIGURE.liftFor(v.j, v.m)) * v.sy) + (st.y || 0) * v.sy;
+    const y = v.y + (o.ground ? 0 : (FIGURE.liftFor(j, m, o.body) - FIGURE.liftFor(v.j, v.m, o.body)) * v.sy) + (st.y || 0) * v.sy;
     const key = { ...v, f, j, m, pn: st.pn || v.pn, y, ry: v.ry + (st.ry || 0), x: v.x + d * Math.sin(r), z: v.z + d * Math.cos(r) };
     if (st.ease) key.ease = st.ease;
     made.push(key);

@@ -65,7 +65,7 @@ export function newObject(type, at = {}, others = SC.objects) {
   const n = others.filter((o) => o.type === type).length + 1;
   const o = { id: uid(), type, name: `${t.label} ${n}`, ease: 'smooth', chans: {}, hidden: false,
     base: { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: t.size[0], sy: t.size[1], sz: t.size[2], ...at } };
-  if (type === 'figure') { o.base.j = FIGURE.preset('stand').j; o.ground = true; }
+  if (type === 'figure') { o.base.j = { ...FIGURE.preset('stand').j, ...FIGURE.handPose('relaxed', 'l'), ...FIGURE.handPose('relaxed', 'r') }; o.ground = true; }
   return o;
 }
 

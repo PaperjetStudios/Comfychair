@@ -62,7 +62,7 @@ export class Stage {
     const x = { mine: (_, g) => this.meshes.get(o.id) === g, draw: () => this.loaded(o.id), lib: () => this.sparkLib() };
     let m;
     if (o.type === 'figure') {
-      const rig = FIGURE.buildFigure(figClay, hidden);
+      const rig = FIGURE.buildFigure(figClay, hidden, o.body);
       m = rig.root; m.userData.rig = rig;
     } else if (o.type === 'photo') {
       m = new THREE.Group(); this.waiting.add(o.id);

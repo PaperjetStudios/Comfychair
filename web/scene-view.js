@@ -259,8 +259,8 @@ export const passHooks = [];
 function makeObject(o) {
   let m;
   if (o.type === 'figure') {
-    const rig = FIGURE.buildFigure(figClay, dotMat);
-    m = rig.root; m.userData.rig = rig;
+    const rig = FIGURE.buildFigure(figClay, dotMat, o.body);
+    m = rig.root; m.userData.rig = rig; m.userData.body = FIGURE.bodyOf(o.body);
     for (const p of rig.meshes) p.userData.id = o.id;
   } else if (o.type === 'photo') {
     m = new THREE.Group(); loadPhoto(o, m);
@@ -415,6 +415,10 @@ export function syncMeshes() {
     m.visible = !o.hidden && onStage();
   }
   for (const m of R.room) {
+  for (const o of SC.objects) {  // a figure that changed body is built again
+    const m = R.meshes.get(o.id);
+    if (m?.userData.rig && m.userData.body !== FIGURE.bodyOf(o.body)) { scene.remove(m); R.meshes.delete(o.id); }
+  }
     m.visible = !!SC.room && !SC.room.hidden && onStage();   // (no room: it was deleted, its meshes go at the next rebuild)
     m.material = R.sel === ROOM ? roomSel : m === R.room[0] ? floorMat : wallMat;
   }
@@ -565,11 +569,11 @@ export function removeSelected() {
   undoToast(`${name} deleted`, () => { if (ok()) { setSC(before); R.sel = sel; rebuildRoom(); changed(); renderToolbar(); } });
 }
 
-export function addObject(type) {
+export function addObject(type, extra = {}) {
   closeSheet();
   if (type === ROOM) { SC.room = newRoom(); rebuildRoom(); select(ROOM); save(); return; }
   const c = controls.target;
-  const o = newObject(type, { x: +c.x.toFixed(2), z: +(type === 'wall' ? c.z - 2 : c.z).toFixed(2) });
+  const o = Object.assign(newObject(type, { x: +c.x.toFixed(2), z: +(type === 'wall' ? c.z - 2 : c.z).toFixed(2) }), extra);
   SC.objects.push(o); save(); select(o.id);
 }
 
