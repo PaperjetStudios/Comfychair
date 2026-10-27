@@ -14,7 +14,8 @@ export async function projectOutputs(kinds) {
   }
   return items.sort((x, y) => y.t - x.t);
 }
-export const genLabel = (g) => `#${g.id} ${g.template}`;
+// a run by its template, an imported file by its name
+export const genLabel = (g) => `#${g.id} ${g.template === 'import' && g.params?.label ? g.params.label : g.template}`;
 // a card's picture: a thumbnail, or a note for sound
 export const cardMedia = (o) => (o.kind === 'audio' ? h('span', { class: 'placeholder' }, '♪') : mediaEl(o, { thumb: true }));
 
