@@ -3,7 +3,7 @@ import { OrbitControls } from './vendor/OrbitControls.js';
 import * as THREE from './vendor/three.module.min.js';
 import { TransformControls } from './vendor/TransformControls.js';
 import * as FIGURE from './figure.js';
-import { $, api, busy as busyBar, clone, closeSheet, toast, undoToast } from './ui.js';
+import { $, api, busy as busyBar, clone, closeSheet, h, toast, undoToast } from './ui.js';
 import { smoothGizmo, snap3, snapBar3 } from './gizmo.js';
 import {
   C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, current, frames, hooks, pathSig, makers, namesFor, newObject, newRoom, pivotOf, sample,
@@ -143,6 +143,7 @@ export function setup() {
   let down = null;
   canvas.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, onGizmo: gizmo.dragging || gizmo.axis != null }; });
   canvas.addEventListener('pointerup', (e) => {
+    if (HAND.on) { down = null; return; }   // (Hand mode keeps the figure: a tap doesn't change what's selected)
     if (!down || down.onGizmo || R.playing || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down = null; return; }
     down = null;
     const joint = jointAt(e);
@@ -153,6 +154,11 @@ export function setup() {
     else select(id);
   });
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  // Hand mode's fingertip drags, ahead of the orbit and the gizmo (capture on the viewer)
+  viewer.addEventListener('pointerdown', tipDown, true);
+  viewer.addEventListener('pointermove', tipMove, true);
+  viewer.addEventListener('pointerup', tipUp, true);
+  viewer.addEventListener('pointercancel', tipUp, true);
 
 
   new ResizeObserver(() => fit()).observe(viewer);
@@ -409,23 +415,23 @@ function jointChanged(o) {
 export function syncMeshes() {
   const ids = new Set(SC.objects.map((o) => o.id));
   for (const [id, m] of R.meshes) if (!ids.has(id)) { scene.remove(m); R.meshes.delete(id); m.userData.dispose?.(); }
+  for (const o of SC.objects) {  // a figure that changed body is built again
+    const m = R.meshes.get(o.id);
+    if (m?.userData.rig && m.userData.body !== FIGURE.bodyOf(o.body)) { scene.remove(m); R.meshes.delete(o.id); }
+  }
   for (const o of SC.objects) {
     const m = R.meshes.get(o.id) || makeObject(o);
     paint(m, o.id === R.sel);
     m.visible = !o.hidden && onStage();
   }
   for (const m of R.room) {
-  for (const o of SC.objects) {  // a figure that changed body is built again
-    const m = R.meshes.get(o.id);
-    if (m?.userData.rig && m.userData.body !== FIGURE.bodyOf(o.body)) { scene.remove(m); R.meshes.delete(o.id); }
-  }
     m.visible = !!SC.room && !SC.room.hidden && onStage();   // (no room: it was deleted, its meshes go at the next rebuild)
     m.material = R.sel === ROOM ? roomSel : m === R.room[0] ? floorMat : wallMat;
   }
   const o = selItem();
   const m = o && !o.hidden && onStage() ? R.meshes.get(o.id) : null;
   if (R.joint && !m?.userData.rig) R.joint = null;
-  const target = !m ? (R.free && wantFrustum() ? camProxy : null) : !R.joint ? pivot : jointMode() === 'translate' ? ikTarget : m.userData.rig.bones[R.joint];
+  const target = HAND.on ? null : !m ? (R.free && wantFrustum() ? camProxy : null) : !R.joint ? pivot : jointMode() === 'translate' ? ikTarget : m.userData.rig.bones[R.joint];
   if (target) {
     if (gizmo.object !== target) { gizmo.attach(target); if (target === camProxy) placeCamProxy(); }
     gizmo.setMode(R.joint ? jointMode() : target === camProxy && R.mode === 'scale' ? 'translate' : R.mode);
@@ -497,7 +503,8 @@ export function draw(forRender = false) {
   gizmo.getHelper().visible = !forRender && !R.playing && !!gizmo.object;
   const dots = !forRender && !depth && !R.playing;
   for (const [id, m] of R.meshes) {
-    for (const d of m.userData.rig?.dots || []) { d.visible = dots && id === R.sel; d.material = d.userData.joint === R.joint ? dotSel : dotMat; }
+    for (const d of m.userData.rig?.dots || []) { d.visible = dots && id === R.sel && !HAND.on; d.material = d.userData.joint === R.joint ? dotSel : dotMat; }
+    for (const d of m.userData.tips || []) { d.visible = dots && HAND.on && id === R.sel && d.userData.side === HAND.side; d.material = d.userData.finger === HAND.drag?.finger ? dotSel : dotMat; }
   }
   if (!forRender) {
     if (depth) setRange(roughRange());
@@ -555,7 +562,106 @@ function jointAt(e) {
 }
 
 // ---- selection, layers ------------------------------------------------------------
-export function select(id) { R.sel = modeOf().select ? id : null; R.joint = null; refresh(); renderToolbar(); renderKeys(); renderPanel(); }
+export function select(id) {
+  if (HAND.on && id !== R.sel) handMode(null);
+  R.sel = modeOf().select ? id : null; R.joint = null; refresh(); renderToolbar(); renderKeys(); renderPanel();
+}
+
+// ---- Hand mode: the view closes in on one hand of the selected figure (the free view, so the shot
+// camera stays put) and dragging a fingertip curls that finger: toward the knuckles closes it, away
+// opens it. One undo step per drag; with keys, it keys the finger at the playhead like any other change.
+export const HAND = { on: false, side: 'l', was: null, drag: null, bar: null };
+const tipGeo = new THREE.SphereGeometry(0.007, 8, 6);
+function tipDots(m) {
+  if (m.userData.tips) return m.userData.tips;
+  const rig = m.userData.rig;
+  m.userData.tips = [];
+  for (const side of ['l', 'r']) {
+    for (const [f] of FIGURE.FINGERS) {
+      const d = new THREE.Mesh(tipGeo, dotMat);
+      d.renderOrder = 11; d.visible = false; d.userData.side = side; d.userData.finger = f; d.raycast = () => {};
+      rig.marks[`${side}${f}tip`].add(d); m.userData.tips.push(d);
+    }
+  }
+  return m.userData.tips;
+}
+// side: 'l' or 'r' to frame that hand (entering Hand mode or switching hands), null to leave it
+export function handMode(side) {
+  const m = R.meshes.get(R.sel), rig = m?.userData.rig;
+  if (!side || !rig) {
+    if (!HAND.on) return;
+    HAND.on = false; HAND.drag = null; HAND.bar?.remove(); HAND.bar = null;
+    const w = HAND.was;
+    viewCam.position.copy(w.pos); viewControls.target.copy(w.target); viewControls.update();
+    setFree(w.free); renderPanel();
+    return;
+  }
+  if (!HAND.on) HAND.was = { free: R.free, pos: viewCam.position.clone(), target: viewControls.target.clone() };
+  HAND.on = true; HAND.side = side; R.joint = null;
+  tipDots(m);
+  setFree(true);
+  // look at the palm from a little to the thumb's side and above, close enough to fill the view
+  rig.root.updateMatrixWorld(true);
+  const hand = rig.bones[`${side}hand`], at = hand.localToWorld(new THREE.Vector3(0, -0.08, 0));
+  const toPalm = new THREE.Vector3(side === 'l' ? -0.5 : 0.5, 0.35, -1).transformDirection(hand.matrixWorld);
+  const d = 0.3 * m.scale.y;
+  aimFree(at.clone().addScaledVector(toPalm, d).toArray(), at.toArray());
+  HAND.bar?.remove();
+  const chip = (label, on, fn) => h('button', { type: 'button', class: 'gz-chip' + (on ? ' on' : ''), onclick: fn }, label);
+  HAND.bar = h('div', { class: 'gz-bar hand-bar' }, chip('✋ Left hand', side === 'l', () => handMode('l')), chip('Right hand ✋', side === 'r', () => handMode('r')),
+    h('span', { class: 'gz-chip hand-tip' }, 'Drag a fingertip to curl it'), chip('Done', false, () => handMode(null)));
+  viewer.append(HAND.bar);
+  syncMeshes(); renderPanel(); draw();
+}
+// the fingertip under a pointer (projected through the free view), within a finger's reach
+function tipAt(e) {
+  const m = R.meshes.get(R.sel), r = canvas.getBoundingClientRect(), reach = e.pointerType === 'touch' ? 30 : 18;
+  let best = null;
+  for (const d of m?.userData.tips || []) {
+    if (d.userData.side !== HAND.side) continue;
+    const v = d.getWorldPosition(new THREE.Vector3()).project(viewCam);
+    const dist = Math.hypot(r.left + (v.x + 1) / 2 * r.width - e.clientX, r.top + (1 - v.y) / 2 * r.height - e.clientY);
+    if (dist < reach && (!best || dist < best.dist)) best = { finger: d.userData.finger, dist };
+  }
+  return best?.finger || null;
+}
+const screenOf = (obj) => {
+  const r = canvas.getBoundingClientRect(), v = obj.getWorldPosition(new THREE.Vector3()).project(viewCam);
+  return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height];
+};
+function tipDown(e) {
+  if (!HAND.on || HAND.drag || e.target !== canvas) return;
+  const finger = tipAt(e), o = selItem(), rig = R.meshes.get(R.sel)?.userData.rig;
+  if (!finger || !o || !rig) return;
+  e.stopPropagation(); e.preventDefault();
+  canvas.setPointerCapture(e.pointerId);
+  // the drag runs along the finger as it is on screen: from its tip to its knuckle is closing it
+  const base = screenOf(rig.bones[`${HAND.side}${finger}1`]), tip = screenOf(rig.marks[`${HAND.side}${finger}tip`]);
+  const len = Math.max(20, Math.hypot(base[0] - tip[0], base[1] - tip[1]));
+  HAND.drag = { finger, id: e.pointerId, x: e.clientX, y: e.clientY, dir: [(base[0] - tip[0]) / len, (base[1] - tip[1]) / len], len,
+    c0: FIGURE.curlOf(current(o, FIG).j || {}, HAND.side, finger), moved: false };
+  draw();
+}
+function tipMove(e) {
+  const g = HAND.drag;
+  if (!g || e.pointerId !== g.id) return;
+  e.stopPropagation(); e.preventDefault();
+  const along = (e.clientX - g.x) * g.dir[0] + (e.clientY - g.y) * g.dir[1];
+  const c = Math.max(0, Math.min(1, g.c0 + along / (g.len * 1.2)));
+  const o = selItem();
+  if (!o) return;
+  write(o, FIG, { j: { ...current(o, FIG).j, ...FIGURE.fingerCurl(HAND.side, g.finger, c) } });
+  g.moved = true;
+  pose(R.f); draw();
+}
+function tipUp(e) {
+  const g = HAND.drag;
+  if (!g || e.pointerId !== g.id) return;
+  e.stopPropagation();
+  HAND.drag = null;
+  if (g.moved) { save(); renderKeys(); renderPanel(); }
+  draw();
+}
 export function setMode(m) { R.mode = m; refresh(); renderToolbar(); }
 
 export function changed() { save(); refresh(); renderKeys(); renderPanel(); }

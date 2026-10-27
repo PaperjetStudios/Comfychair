@@ -906,6 +906,8 @@ button.sheet-caret { width: 22px; }
 .scene-keytools select { width: auto; }
 /* 3d camera */
 .gz-bar.gz-3d { top: auto; bottom: 8px; }
+.gz-bar.hand-bar { top: auto; bottom: 50px; }   /* Hand mode, over the snap bar */
+.hand-bar .hand-tip { cursor: default; display: inline-flex; align-items: center; }
 .cam-moves { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 6px; margin-bottom: 8px; }
 .cam-move {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 64px; padding: 6px 4px;

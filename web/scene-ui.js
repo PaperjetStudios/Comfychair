@@ -8,9 +8,9 @@ import {
   C, CAM, EVEN, HIST, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropKeys, frames, hasKeys, hooks, keyCount, keyTarget,
   namesFor, nextKeyFrame, pivotOf, pivotsFor, sameTab, save, selItem, setSC, write
 } from './scene-data.js';
-import { FIG_TABS, adjustTab, jointsTab, movesTab, partsTab, posesTab, promptProps } from './scene-pose.js';
+import { FIG_TABS, adjustTab, faceTab, handsTab, jointsTab, movesTab, partsTab, posesTab, promptProps } from './scene-pose.js';
 import {
-  addObject, camGizmo, cameraFromView, changed, draw, fit, jointMode, lookThrough, makePhoto, pose, rebuildRoom, refresh,
+  HAND, addObject, camGizmo, cameraFromView, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, pose, rebuildRoom, refresh,
   removeSelected, select, selectJoint, setFree, setMode, syncMeshes, viewer
 } from './scene-view.js';
 import { busy, play, renderDepthVideo, renderPoseVideo, saveFrame, seek, stopPlay } from './scene-export.js';
@@ -55,7 +55,7 @@ function objectProps(o) {
   const tab = FIG_TABS.some(([k]) => k === R.figTab) ? R.figTab : 'pose';
   return section(o.name, () => select(null),
     seg(FIG_TABS, tab, (v) => { R.figTab = v; store.set('deck.scene.figtab', v); renderPanel(); }, { wrap: true }),
-    { pose: posesTab, adjust: adjustTab, move: movesTab, joint: jointsTab, parts: partsTab, place: placeProps }[tab](o, cur));
+    { pose: posesTab, adjust: adjustTab, hands: handsTab, face: faceTab, move: movesTab, joint: jointsTab, parts: partsTab, place: placeProps }[tab](o, cur));
 }
 
 // where it is, how big, its pivot; duplicate and delete
@@ -288,7 +288,7 @@ export function wireKeys() {
     const m = MODES.find(([, , k]) => k === e.key.toLowerCase());
     if (m) { e.preventDefault(); setMode(m[0]); }
     else if (e.key.toLowerCase() === 'k') { e.preventDefault(); setAutoKey(!R.autoKey); }
-    else if (e.key === 'Escape') { if (R.joint) selectJoint(null); else select(null); }
+    else if (e.key === 'Escape') { if (HAND.on) handMode(null); else if (R.joint) selectJoint(null); else select(null); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && R.sel) { e.preventDefault(); removeSelected(); }
     else if (e.key === ' ') { e.preventDefault(); play(); }
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {  // a frame; with Shift, to the next key
