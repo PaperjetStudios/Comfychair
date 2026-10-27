@@ -605,6 +605,33 @@
    "mask_low_res_dilation": 5
   }
  },
+ "asecs": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "a/24",
+   "values.a": [
+    "nf",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "the result's length, for its sound"
+  }
+ },
+ "aud": {
+  "class_type": "TrimAudioDuration",
+  "inputs": {
+   "audio": [
+    "src",
+    2
+   ],
+   "start_index": 0.0,
+   "duration": [
+    "asecs",
+    0
+   ]
+  }
+ },
  "vid": {
   "class_type": "CreateVideo",
   "inputs": {
@@ -612,7 +639,11 @@
     "blend",
     0
    ],
-   "fps": 24
+   "fps": 24,
+   "audio": [
+    "aud",
+    0
+   ]
   }
  },
  "save": {

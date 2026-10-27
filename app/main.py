@@ -498,6 +498,8 @@ async def generate(body: dict = Body(...)):
                 loader = {**t.workflow[node]["inputs"], **{k.rpartition(".")[2]: v for k, v in run.items() if k.rpartition(".")[0] == node}}
                 try:  # trim/crop: the loader's own inputs, or a derived copy
                     vp = await asyncio.to_thread(videoprep.plan, path, spec.get("trim"), spec.get("crop"), loader)
+                    if takes_sound(t.workflow, node):   # it keeps the clip's sound: a clip without one gets a silent track
+                        vp["path"] = await asyncio.to_thread(videoprep.with_sound, Path(vp["path"]))
                 except (ValueError, subprocess.SubprocessError) as e:
                     raise HTTPException(400, f"{f['group']} · {f['label']}: {e}")
                 run[key] = str(vp["path"])
@@ -751,6 +753,12 @@ async def media_to_project(body: dict = Body(...)):
     db.update_generation(gid, status="done", finished=time.time(), outputs=[o])
     await push_gen(gid)
     return db.get_generation(gid)
+
+
+def takes_sound(wf: dict, loader: str) -> bool:
+    """Whether a workflow uses a video loader's sound (VHS_LoadVideoPath's third output)."""
+    return any(isinstance(v, list) and len(v) == 2 and v[0] == loader and v[1] == 2
+               for n in wf.values() for v in (n.get("inputs") or {}).values())
 
 
 async def _timeline_path(src: dict, tmp: Path) -> tuple[Path, str]:

@@ -112,6 +112,28 @@ def prep(src: Path, trim=None, crop=None, info: dict | None = None) -> dict:
     return {"path": out, "width": got["width"], "height": got["height"], "duration": got["duration"], "cached": cached}
 
 
+def with_sound(src: Path) -> Path:
+    """src as it is when it has a sound track, else a copy with a silent one (the picture untouched). A workflow that
+    takes a clip's sound (VHS_LoadVideoPath's audio, to keep it) fails outright on a clip without one."""
+    if videoedit.probe(src)["audio"]:
+        return src
+    out = config.VIDEOPREP_DIR / f"{PREFIX}{cache_key(src, None, 'sound')}_snd.mp4"
+    if out.is_file() and out.stat().st_size > 0:
+        os.utime(out)
+        return out
+    tmp = out.with_name(out.stem + ".part.mp4")
+    try:
+        r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+                            "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "96k", "-shortest",
+                            "-movflags", "+faststart", str(tmp)], capture_output=True, timeout=1800)
+        if r.returncode:
+            raise ValueError("ffmpeg couldn't add a silent sound track: " + r.stderr.decode(errors="replace").strip()[-300:])
+        tmp.replace(out)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return out
+
+
 def loader_trim(info: dict, trim, loader: dict):
     """The loader's own inputs that make this trim, or None when it doesn't expose them.
     loader: the node's inputs as the run will send them. Frames count at the loader's rate

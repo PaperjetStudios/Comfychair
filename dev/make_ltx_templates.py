@@ -540,7 +540,9 @@ def inpaint():
                        temporal_tile_length=16, temporal_overlap=1, last_frame_fix=False, working_device="auto", working_dtype="auto"))   # (see decode)
     g.add("blend", node("LTXVLaplacianPyramidBlend", image_a=["vdec", 0], image_b=["green", 0], mask=["dil", 0], trim_to_shortest=True,
                         mask_low_res_dilation=5))
-    g.add("vid", node("CreateVideo", images=["blend", 0], fps=FPS))
+    math(g, "asecs", f"a/{FPS}", "the result's length, for its sound", a=["nf", 1])
+    g.add("aud", node("TrimAudioDuration", audio=["src", 2], start_index=0.0, duration=["asecs", 0]))   # the clip's own sound, kept
+    g.add("vid", node("CreateVideo", images=["blend", 0], fps=FPS, audio=["aud", 0]))
     g.add("save", node("SaveVideo", video=["vid", 0], filename_prefix="deck/ltx-inpaint", format="auto", codec="auto"))
     return g
 

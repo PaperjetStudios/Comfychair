@@ -130,3 +130,23 @@ class Canvas(unittest.TestCase):
         m = frame(td / "m.mp4")
         self.assertGreater(at(m, 5, 5), 200)                                 # above the clip: to paint
         self.assertLess(at(m, plan["W"] // 2, plan["H"] // 2), 40)           # the clip itself: kept
+
+
+@unittest.skipUnless(HAVE_FFMPEG, "needs ffmpeg")
+class SoundTrack(unittest.TestCase):
+    """A clip without sound gets a silent track when a workflow takes its sound (videoprep.with_sound)."""
+    def test_silent_clip_gets_a_track(self):
+        from app import config, main, videoprep
+        config.VIDEOPREP_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = Path(tempfile.mkdtemp(prefix="deck-snd-"))
+        src = tmp / "silent.mp4"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=64x64:r=24:d=1", "-pix_fmt", "yuv420p", str(src)], check=True)
+        out = videoprep.with_sound(src)
+        self.assertNotEqual(out, src)
+        self.assertTrue(videoedit.probe(out)["audio"])
+        self.assertEqual(videoprep.with_sound(out), out)   # one with sound is used as it is
+        wf = {"src": {"class_type": "VHS_LoadVideoPath", "inputs": {}}, "aud": {"class_type": "TrimAudioDuration", "inputs": {"audio": ["src", 2]}},
+              "img": {"class_type": "X", "inputs": {"images": ["src", 0]}}}
+        self.assertTrue(main.takes_sound(wf, "src"))
+        self.assertFalse(main.takes_sound({k: v for k, v in wf.items() if k != "aud"}, "src"))
+        shutil.rmtree(tmp, ignore_errors=True)
