@@ -222,11 +222,34 @@ def faceswap():
     return g
 
 
+def mocap():
+    """Video mocap for the 3D tab: SAM 3D Body reads the person's 3D pose on every frame (RT-DETR finds them first),
+    smoothed over time, and Deck Save Body Motion writes it as the 22-joint motion file a figure takes
+    (web/scene-motion.js, From video…)."""
+    g = G()
+    g.add("src", node("VHS_LoadVideoPath", "@1 Source video [video]", video="", force_rate=FPS, custom_width=0, custom_height=0,
+                      frame_load_cap=0, skip_first_frames=0, select_every_nth=1))
+    g.add("secs", node("PrimitiveFloat", "@2 Length (seconds) [value]", value=10.0))
+    math(g, "nf", f"max(1, min(a, round(b*{FPS})))", "frames within the clip and Length", a=["src", 1], b=["secs", 0])
+    g.add("cut", node("ImageFromBatch", image=["src", 0], batch_index=0, length=["nf", 1]))
+    g.add("det", node("UNETLoader", unet_name="rt_detr_v4-x-hgnet_fp16.safetensors", weight_dtype="default"))
+    g.add("boxes", node("RTDETR_detect", "@3 People [max_detections]", model=["det", 0], image=["cut", 0], threshold=0.5,
+                        class_name="person", max_detections=1))
+    g.add("body", node("SAM3DBody_Loader", model_file="sam_3d_body_dinov3_bf16.safetensors"))
+    g.add("pose", node("SAM3DBody_Predict", sam3d_body_model=["body", 0], image=["cut", 0], bboxes=["boxes", 0],
+                       run_hand_refinement=False, fov=0.0, batch_size=32))
+    g.add("smooth", node("SAM3DBody_Smooth", "@4 Smoothing [strength,window]", mhr_pose_data=["pose", 0], strength=1.0,
+                         method="gaussian", window=7, rotation_threshold_degrees=30.0))
+    g.add("save", node("DeckSaveBodyMotion", mhr_pose_data=["smooth", 0], fps=float(FPS), person=0, filename_prefix="deck/mocap"))
+    return g
+
+
 TEMPLATES = {
     "deck-h3-animate": animate,
     "deck-h3-drive": drive,
     "deck-h3-drive-sd": lambda: drive("sdpose"),
     "deck-pose-video": pose_preview,
+    "deck-mocap": mocap,
     "deck-pose-sdpose": lambda: pose_preview("sdpose"),
     "deck-ltx-drive": ltx_drive,
     "deck-ltx-drive-sd": lambda: ltx_drive("sdpose"),
