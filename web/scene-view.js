@@ -76,6 +76,7 @@ export const rangeMat = new THREE.ShaderMaterial({
     + ' gl_FragColor = vec4(e, 1.0); }',
 });
 
+let built = false;   // setup has made everything draw() uses
 export function setup() {
   viewer = $('#sceneViewer');
   canvas = $('#sceneCanvas');
@@ -162,6 +163,7 @@ export function setup() {
 
 
   new ResizeObserver(() => fit()).observe(viewer);
+  built = true;
 }
 
 // the grid snapping moves to, drawn on the floor (rebuilt when the step changes)
@@ -491,7 +493,7 @@ function putCamera(c) {
 
 // helpers (grid, gizmo) only in the editing view, never in a render
 export function draw(forRender = false) {
-  if (!renderer) return;
+  if (!renderer || !built) return;   // (a pen hovering the gizmo can ask for a frame while setup is still building)
   const depth = R.depth || forRender === 'depth';
   scene.overrideMaterial = depth ? depthMat : null;
   scene.background.set(depth ? 0x000000 : 0x24272e);
