@@ -225,11 +225,31 @@
    "scale_stick_for_xinsr_cn": "disable"
   }
  },
+ "steady": {
+  "class_type": "DeckPoseSmooth",
+  "inputs": {
+   "pose_keypoint": [
+    "pose",
+    1
+   ],
+   "image": [
+    "pose",
+    0
+   ],
+   "smoothing": 2.0,
+   "max_gap": 6,
+   "draw_hands": true,
+   "draw_face": true
+  },
+  "_meta": {
+   "title": "@12 Pose smoothing [smoothing,max_gap]"
+  }
+ },
  "posers": {
   "class_type": "ImageResizeKJv2",
   "inputs": {
    "image": [
-    "pose",
+    "steady",
     0
    ],
    "width": [

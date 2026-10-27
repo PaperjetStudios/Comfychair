@@ -1,67 +1,39 @@
 {
- "2": {
-  "class_type": "CLIPLoader",
+ "30": {
+  "class_type": "LoraLoaderModelOnly",
   "inputs": {
-   "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-   "type": "minimax",
-   "device": "default"
+   "model": [
+    "6",
+    0
+   ],
+   "lora_name": "h3/minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+   "strength_model": 1.0
   },
   "_meta": {
-   "title": "Load CLIP"
+   "title": "@7 Turbo LoRA"
   }
  },
- "12": {
-  "class_type": "SamplerCustomAdvanced",
+ "6": {
+  "class_type": "LoraLoaderModelOnly",
   "inputs": {
-   "noise": [
-    "8",
+   "model": [
+    "1",
     0
    ],
-   "guider": [
-    "11",
-    0
-   ],
-   "sampler": [
-    "9",
-    0
-   ],
-   "sigmas": [
-    "10",
-    0
-   ],
-   "latent_image": [
-    "7",
-    1
-   ]
+   "lora_name": "none",
+   "strength_model": 1.0
   },
   "_meta": {
-   "title": "Sampler"
+   "title": "@6 LoRAs"
   }
  },
- "1": {
-  "class_type": "UNETLoader",
+ "4": {
+  "class_type": "VAELoader",
   "inputs": {
-   "unet_name": "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
-   "weight_dtype": "default"
+   "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
   },
   "_meta": {
-   "title": "@10 Model [unet_name]"
-  }
- },
- "13": {
-  "class_type": "VAEDecode",
-  "inputs": {
-   "samples": [
-    "12",
-    0
-   ],
-   "vae": [
-    "3",
-    0
-   ]
-  },
-  "_meta": {
-   "title": "Decode video"
+   "title": "Load audio VAE"
   }
  },
  "9": {
@@ -100,37 +72,15 @@
    "title": "@5 Control [strength,end_percent]"
   }
  },
- "4": {
-  "class_type": "VAELoader",
+ "2": {
+  "class_type": "CLIPLoader",
   "inputs": {
-   "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+   "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+   "type": "minimax",
+   "device": "default"
   },
   "_meta": {
-   "title": "Load audio VAE"
-  }
- },
- "10": {
-  "class_type": "BasicScheduler",
-  "inputs": {
-   "model": [
-    "51",
-    0
-   ],
-   "scheduler": "simple",
-   "steps": 20,
-   "denoise": 1.0
-  },
-  "_meta": {
-   "title": "@9 Steps [steps]"
-  }
- },
- "3": {
-  "class_type": "VAELoader",
-  "inputs": {
-   "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
-  },
-  "_meta": {
-   "title": "Load video VAE"
+   "title": "Load CLIP"
   }
  },
  "11": {
@@ -149,32 +99,32 @@
    "title": "Guider"
   }
  },
- "6": {
-  "class_type": "LoraLoaderModelOnly",
+ "12": {
+  "class_type": "SamplerCustomAdvanced",
   "inputs": {
-   "model": [
-    "1",
+   "noise": [
+    "8",
     0
    ],
-   "lora_name": "none",
-   "strength_model": 1.0
-  },
-  "_meta": {
-   "title": "@6 LoRAs"
-  }
- },
- "30": {
-  "class_type": "LoraLoaderModelOnly",
-  "inputs": {
-   "model": [
-    "6",
+   "guider": [
+    "11",
     0
    ],
-   "lora_name": "h3/minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
-   "strength_model": 1.0
+   "sampler": [
+    "9",
+    0
+   ],
+   "sigmas": [
+    "10",
+    0
+   ],
+   "latent_image": [
+    "7",
+    1
+   ]
   },
   "_meta": {
-   "title": "@7 Turbo LoRA"
+   "title": "Sampler"
   }
  },
  "50": {
@@ -184,6 +134,56 @@
   },
   "_meta": {
    "title": "Load Fun ControlNet"
+  }
+ },
+ "13": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "12",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Decode video"
+  }
+ },
+ "10": {
+  "class_type": "BasicScheduler",
+  "inputs": {
+   "model": [
+    "51",
+    0
+   ],
+   "scheduler": "simple",
+   "steps": 20,
+   "denoise": 1.0
+  },
+  "_meta": {
+   "title": "@9 Steps [steps]"
+  }
+ },
+ "1": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
+   "weight_dtype": "default"
+  },
+  "_meta": {
+   "title": "@10 Model [unet_name]"
+  }
+ },
+ "3": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
+  },
+  "_meta": {
+   "title": "Load video VAE"
   }
  },
  "src": {
@@ -340,11 +340,31 @@
    "scale_stick_for_xinsr_cn": "disable"
   }
  },
+ "steady": {
+  "class_type": "DeckPoseSmooth",
+  "inputs": {
+   "pose_keypoint": [
+    "pose",
+    1
+   ],
+   "image": [
+    "pose",
+    0
+   ],
+   "smoothing": 2.0,
+   "max_gap": 6,
+   "draw_hands": true,
+   "draw_face": true
+  },
+  "_meta": {
+   "title": "@12 Pose smoothing [smoothing,max_gap]"
+  }
+ },
  "posers": {
   "class_type": "ImageResizeKJv2",
   "inputs": {
    "image": [
-    "pose",
+    "steady",
     0
    ],
    "width": [

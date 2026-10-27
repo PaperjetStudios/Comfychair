@@ -53,13 +53,17 @@ def animate():
 
 
 def pose_frames(g, image, face=True, hands=True):
-    """DWPose (CPU, onnx) on every frame: body, hands and face landmarks as an OpenPose-style picture (id posers)."""
+    """DWPose (CPU, onnx) on every frame, steadied over the clip: body, hands and face landmarks as an OpenPose-style
+    picture (id posers)."""
     on = lambda b: "enable" if b else "disable"
     g.add("pose", node("DWPreprocessor", image=image, detect_hand=on(hands), detect_body="enable", detect_face=on(face),
                        resolution=512, bbox_detector="yolox_l.onnx", pose_estimator="dw-ll_ucoco_384.onnx",
                        scale_stick_for_xinsr_cn="disable"))
+    # DWPose looks at each frame on its own, so the points shake: steadied over the clip (comfy_nodes/deck_posesmooth)
+    g.add("steady", node("DeckPoseSmooth", "@12 Pose smoothing [smoothing,max_gap]", pose_keypoint=["pose", 1], image=["pose", 0],
+                         smoothing=2.0, max_gap=6, draw_hands=hands, draw_face=face))
     # DWPose answers at its own resolution (odd sizes happen): back to the clip's W x H
-    g.add("posers", node("ImageResizeKJv2", image=["pose", 0], width=["W", 1], height=["H", 1], upscale_method="bilinear",
+    g.add("posers", node("ImageResizeKJv2", image=["steady", 0], width=["W", 1], height=["H", 1], upscale_method="bilinear",
                          keep_proportion="stretch", pad_color="0, 0, 0", crop_position="center", divisible_by=2, device="cpu"))
 
 

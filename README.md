@@ -162,7 +162,7 @@ the VFX tab's Face size, Edge softness and Chin sliders).
 | Face only | `deck-h3-faceswap` | the same model on a square that follows the face, pasted back with Deck Face Uncrop |
 | Drive a still | `deck-h3-drive` | `deck-h3-ctrl2v`'s graph with the clip's DWPose (body, hands, face) as the control video |
 | Drive a still (LTX) | `deck-ltx-drive` | LTX-2.5 with the still as the first frame and DWPose through the union-control IC-LoRA |
-| Pose preview | `deck-pose-video` | DWPose only (CPU): what the drive effects follow |
+| Pose preview | `deck-pose-video` | DWPose, steadied (CPU): what the drive effects follow |
 
 They come from `dev/make_perf_templates.py`. Viggle needs `minimax_h3_ref2va_viggle_pruned_int8_convrot`,
 `viggle_animate_dmd_lora_r64` and the `fixed_embed_fwd_anyframe` text conditioning (ComfyUI-Viggle-Animate-H3).
@@ -172,6 +172,14 @@ They come from `dev/make_perf_templates.py`. Viggle needs `minimax_h3_ref2va_vig
 size, and edges are padded. Deck Face Uncrop pastes processed crops back through a soft outline of each
 frame's face points plus the forehead; Chin below 1 lifts its lower edge off the neck and collar. Link it like the TAPNext++ node below
 (`ln -s ~/Programs/comfydeck/comfy_nodes/deck_facecrop ~/Programs/ComfyUI/custom_nodes/deck_facecrop`) and
+restart ComfyUI.
+
+**Pose smoothing** (`comfy_nodes/deck_posesmooth`): DWPose looks at each frame on its own, so its points
+shake. Deck Pose Smooth takes its keypoints for the whole clip, follows each person from frame to frame,
+fills gaps of up to Max gap frames, pulls back points that jump, and averages each point with its neighbours
+in time (Smoothing, in frames; hands and face get half). It has no lag and needs no model. The drive and pose
+templates use it (`@12 Pose smoothing`). Link it like the others
+(`ln -s ~/Programs/comfydeck/comfy_nodes/deck_posesmooth ~/Programs/ComfyUI/custom_nodes/deck_posesmooth`) and
 restart ComfyUI.
 
 **Keying** needs no template: the Video tab's **Key…** button on a clip, and the VFX tab's **Colour key**
