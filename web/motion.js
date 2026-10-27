@@ -96,10 +96,12 @@ export function resample(frames, fps) {
 // motion { fps, frames: [[22 x [x,y,z]]...] } as figure keys from frame f0, every `every` frames.
 // base: the figure's values where the motion starts (x, y, z, ry, sy...): the motion is turned by its ry,
 // starts at its x/z, and is scaled to its size; the source person's leg length is matched to ours.
-export function toKeys(motion, base, { f0 = 0, every = 2, maxF = Infinity } = {}) {
+// travel: false keeps it on the spot (no path); rise: false keeps the hips at base.y (no up and down);
+// fit: false takes the clip's metres as they are (only the figure's own size), not matched by leg length.
+export function toKeys(motion, base, { f0 = 0, every = 2, maxF = Infinity, travel = true, rise = true, fit = true } = {}) {
   const frames = resample(motion.frames, motion.fps || 20);
   if (!frames.length) return [];
-  const s = (LEG / (legLength(frames[0]) || LEG)) * (base.sy || 1);
+  const s = (fit ? LEG / (legLength(frames[0]) || LEG) : 1) * (base.sy || 1);
   const yaw = THREE.MathUtils.degToRad(base.ry || 0), turn = new THREE.Quaternion().setFromAxisAngle(UP, yaw);
   const p0 = v3(frames[0][I.pelvis]);
   const keys = [];
@@ -109,9 +111,9 @@ export function toKeys(motion, base, { f0 = 0, every = 2, maxF = Infinity } = {}
     if (i % every && i !== frames.length - 1) continue;
     const P = frames[i];
     const W = worldTurns(P);   // (the figure's own ry turns these with it; only the path needs turning)
-    const at = v3(P[I.pelvis]).sub(p0).setY(0).multiplyScalar(s).applyQuaternion(turn);
+    const at = travel ? v3(P[I.pelvis]).sub(p0).setY(0).multiplyScalar(s).applyQuaternion(turn) : new THREE.Vector3();
     keys.push({ ...base, f, j: localPose(W), x: base.x + at.x, z: base.z + at.z,
-      y: P[I.pelvis][1] * s - HIP_Y * (base.sy || 1), ease: 'linear', m: {} });
+      y: rise ? P[I.pelvis][1] * s - HIP_Y * (base.sy || 1) : base.y || 0, ease: 'linear', m: {} });
   }
   return keys;
 }
