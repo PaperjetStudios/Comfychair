@@ -39,6 +39,14 @@ class Preview(unittest.TestCase):
         v, a = ci.pick_preview(fs)
         self.assertEqual((v["format_id"], a["format_id"]), ("h480", "orig_lo"))
 
+    def test_formats_without_codecs_still_count_as_video(self):
+        # some sites only give the size: no vcodec / acodec at all
+        fs = [dict(fmt("sd", 480), vcodec=None, acodec=None), dict(fmt("hd", 1920), vcodec=None, acodec=None)]
+        v, a = ci.pick_preview(fs)
+        self.assertEqual((v["format_id"], a), ("sd", None))
+        self.assertTrue(ci._has_v(fs[1]))
+        self.assertFalse(ci._has_v(fmt("a", None, a="mp4a.40.2")))
+
     def test_streaming_only_has_no_preview(self):
         self.assertEqual(ci.pick_preview([fmt("hls", 480, proto="m3u8_native")]), (None, None))
 

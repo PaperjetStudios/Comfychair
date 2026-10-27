@@ -270,7 +270,7 @@ def _ytdlp(*args: str) -> dict:
     """yt-dlp -J with the given options: the venv's module when installed, else a yt-dlp on PATH."""
     base = [sys.executable, "-m", "yt_dlp"] if _has_module() else ["yt-dlp"]
     try:
-        r = subprocess.run(base + ["-J", "--no-playlist", "--no-warnings", *args], capture_output=True, text=True,
+        r = subprocess.run(base + ["-J", "--no-playlist", "--no-warnings", "--extractor-retries", "3", *args], capture_output=True, text=True,
                            timeout=YTDLP_TIMEOUT)
     except FileNotFoundError:
         raise HTTPException(400, "yt-dlp isn't installed on the server (pip install yt-dlp)")
@@ -295,7 +295,8 @@ def _direct(f: dict) -> bool:
 
 
 def _has_v(f):
-    return f.get("vcodec") not in (None, "none") and (f.get("height") or 0) > 0
+    """Video: a height, and a codec that isn't "none" (some sites don't say which codec: None, still video)."""
+    return f.get("vcodec") != "none" and (f.get("height") or 0) > 0
 
 
 def _has_a(f):
