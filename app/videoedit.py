@@ -30,9 +30,10 @@ def run_ffmpeg(args: list[str], **kw) -> subprocess.CompletedProcess:
     again with libx264."""
     r = subprocess.run(args, capture_output=True, **kw)
     if r.returncode and "h264_nvenc" in args:
-        i = args.index("h264_nvenc") - 1
-        cq = args[args.index("-cq") + 1] if "-cq" in args else "18"
-        args = args[:i] + ["-c:v", "libx264", "-preset", "medium", "-crf", cq] + args[i + 12:]   # h264() gives 12 args
+        while "h264_nvenc" in args:   # every output's encoder (h264() gives 12 args)
+            i = args.index("h264_nvenc") - 1
+            cq = args[i + 9] if args[i + 8] == "-cq" else "18"
+            args = args[:i] + ["-c:v", "libx264", "-preset", "medium", "-crf", cq] + args[i + 12:]
         r = subprocess.run(args, capture_output=True, **kw)
     return r
 
@@ -341,3 +342,44 @@ def key(src: Path, out: Path, mode: str, matte: Path | None = None, trim: dict |
     if r.returncode:
         raise RuntimeError(r.stderr.decode(errors="replace").strip().splitlines()[-1] if r.stderr else "ffmpeg failed")
     return probe(out)
+
+
+def canvas_plan(src_w: int, src_h: int, aspect: float, scale: float = 1.0, cx: float = 0.5, cy: float = 0.5,
+                max_side: int = 2048) -> dict:
+    """Where a clip sits on a new canvas (to extend the frame: outpainting). aspect: the canvas's width / height.
+    scale 1 fits the clip inside the canvas; above 1 it's bigger (part of it off the canvas), below smaller. cx, cy:
+    the clip's centre on the canvas, 0..1. The canvas is made so the clip keeps its own resolution at scale 1,
+    at most max_side px. Returns {"W", "H", "w", "h", "x", "y"} in px (even sizes; x, y may be negative)."""
+    aspect = max(0.2, min(5.0, float(aspect)))
+    scale = max(0.1, min(4.0, float(scale)))
+    if src_w / src_h > aspect:   # the clip is wider than the canvas: the width decides
+        W = src_w / scale; H = W / aspect
+    else:
+        H = src_h / scale; W = H * aspect
+    k = min(1.0, max_side / max(W, H))
+    W, H = max(64, round(W * k / 2) * 2), max(64, round(H * k / 2) * 2)
+    fit = min(W / src_w, H / src_h) * scale
+    w, h = max(2, round(src_w * fit / 2) * 2), max(2, round(src_h * fit / 2) * 2)
+    return {"W": W, "H": H, "w": w, "h": h, "x": round(cx * W - w / 2), "y": round(cy * H - h / 2)}
+
+
+def canvas_clip(src: Path, out_video: Path, out_mask: Path, plan: dict, trim: dict | None = None):
+    """The clip placed on its canvas (black around it) and the matching mask (white = to paint, black = the clip)."""
+    W, H, w, h, x, y = (plan[k] for k in ("W", "H", "w", "h", "x", "y"))
+    info = probe(src)
+    cut = []
+    if trim:
+        cut = ["-ss", f"{max(0.0, float(trim.get('start') or 0)):.3f}"] + (["-t", f"{float(trim['len']):.3f}"] if trim.get("len") else [])
+    dur = float(trim["len"]) if trim and trim.get("len") else max(0.04, info["duration"] - float((trim or {}).get("start") or 0))
+    fps = info["fps"] or 24
+    fc = (f"color=c=black:s={W}x{H}:r={fps:g}:d={dur:.3f}[bg];[0:v]scale={w}:{h},setsar=1,format=yuv420p[c];"
+          f"[bg][c]overlay=x={x}:y={y}:shortest=1,format=yuv420p[v];"
+          f"color=c=white:s={W}x{H}:r={fps:g}:d={dur:.3f}[mw];color=c=black:s={w}x{h}:r={fps:g}:d={dur:.3f}[mb];"
+          f"[mw][mb]overlay=x={x}:y={y},format=yuv420p[m]")
+    args = ["ffmpeg", "-v", "error", "-y", *cut, "-i", str(src), "-filter_complex", fc,
+            "-map", "[v]", *(["-map", "0:a:0?", "-c:a", "aac", "-b:a", "192k"] if info["audio"] else ["-an"]), *h264(16),
+            "-movflags", "+faststart", str(out_video),
+            "-map", "[m]", "-an", *h264(16), "-t", f"{dur:.3f}", "-movflags", "+faststart", str(out_mask)]
+    r = run_ffmpeg(args, timeout=1800)
+    if r.returncode:
+        raise RuntimeError(r.stderr.decode(errors="replace").strip().splitlines()[-1] if r.stderr else "ffmpeg failed")

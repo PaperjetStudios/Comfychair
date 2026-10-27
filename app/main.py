@@ -750,12 +750,46 @@ async def _timeline_path(src: dict, tmp: Path) -> tuple[Path, str]:
         if not path.is_file():
             raise HTTPException(400, "A 3D scene clip wasn't rendered: export again")
         return path, "video"
+    if src.get("canvas"):   # a clip put on a bigger canvas for Extend frame (POST /api/video/canvas), and its mask
+        name = str(src["canvas"])
+        path = config.VIDEOPREP_DIR / f"canvas_{name}.mp4"
+        if not re.fullmatch(r"[0-9a-f]{20}_[vm]", name) or not path.is_file():
+            raise HTTPException(400, "The extended frame is gone: set it up again")
+        return path, "video"
     if src.get("media"):
         path = config.MEDIA_DIR / Path(src["media"]).name
         if not path.is_file():
             raise HTTPException(400, f"{src['media']} is gone")
         return path, MEDIA_KINDS.get(path.suffix.lower(), "video")
     raise HTTPException(400, "Unknown clip source")
+
+
+@app.post("/api/video/canvas")
+async def video_canvas(body: dict = Body(...)):
+    """A clip on a bigger (or differently shaped) canvas, for Extend frame: {source, trim, aspect (w / h), scale, cx,
+    cy} -> {video, mask (sources for the inpaint template), plan}. The mask is white where the canvas is to be
+    painted. Made once per clip and settings (data/tmp/videoprep)."""
+    src = body.get("source") or {}
+    path, kind = await _timeline_path(src, None)
+    if kind != "video":
+        raise HTTPException(400, "Extend frame needs a video clip")
+    info = await asyncio.to_thread(videoedit.probe, path)
+    try:
+        plan = videoedit.canvas_plan(info["width"], info["height"], float(body.get("aspect") or info["width"] / info["height"]),
+                                     float(body.get("scale") or 1), float(body.get("cx", 0.5)), float(body.get("cy", 0.5)))
+    except (TypeError, ValueError, ZeroDivisionError) as e:
+        raise HTTPException(400, f"Bad canvas settings: {e}")
+    trim = body.get("trim") if isinstance(body.get("trim"), dict) else None
+    st = path.stat()
+    key = hashlib.sha1(json.dumps([str(path), st.st_size, st.st_mtime_ns, trim, plan], sort_keys=True).encode()).hexdigest()[:20]
+    v, m = config.VIDEOPREP_DIR / f"canvas_{key}_v.mp4", config.VIDEOPREP_DIR / f"canvas_{key}_m.mp4"
+    if not (v.is_file() and m.is_file()):
+        try:
+            await asyncio.to_thread(videoedit.canvas_clip, path, v, m, plan, trim)
+        except Exception as e:
+            v.unlink(missing_ok=True); m.unlink(missing_ok=True)
+            raise HTTPException(400, str(e))
+    return {"video": {"canvas": f"{key}_v"}, "mask": {"canvas": f"{key}_m"}, "plan": plan}
 
 
 @app.post("/api/videos/probe")

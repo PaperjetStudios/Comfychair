@@ -36,6 +36,8 @@ const EFFECTS = [
     help: 'Tap the thing to cut out on the frame (Exclude marks what to leave out), or describe it. SAM3 follows it through the clip and makes a mask clip.' },
   { id: 'inpaint', group: 'Remove', label: 'Replace', tpl: 'deck-ltx-inpaint', mult: 64, needs: ['source', 'matte', 'prompt', 'len', 'res', 'seed'],
     help: 'Paints something new where a mask clip is white (make one with Mask (SAM3) or Alpha Gen) and keeps the rest of the picture. Describe the whole shot with the new thing in it.' },
+  { id: 'extend', group: 'Generate', label: 'Extend frame', tpl: 'deck-ltx-inpaint', mult: 64, needs: ['source', 'canvas', 'prompt', 'len', 'res', 'seed'],
+    help: 'Puts the clip on a bigger or differently shaped canvas (portrait to landscape, say) and paints the rest (outpainting). Pick the canvas, then drag the clip on the preview or set its size and place. Describe the whole wider shot.' },
   { id: 'cleanplate', group: 'Remove', label: 'Clean plate', tpl: 'deck-ltx-cleanplate', needs: ['source', 'prompt', 'len', 'res', 'seed'],
     help: 'Removes people and other moving things from the whole clip and fills in the background. Name what to remove in the prompt.' },
   { id: 't2v', group: 'Generate', label: 'Text / image to video', tpl: 'deck-ltx-t2v', needs: ['first?', 'voice', 'prompt', 'len', 'size', 'loras', 'seed'],
@@ -114,9 +116,11 @@ const SIZES = [['Match source', null], ['1280×704', [1280, 704]], ['704×1280',
 const FACE = { grow: 1.05, feather: 0.25, chin: 0.82 };   // Face only's blend outline (Deck Face Uncrop)
 // Refine matte (POST /api/video/matte): combine two mattes, then grow/shrink, fill holes, steady, edge, feather
 const REFINE = { combine: 'union', grow: 0, close: 0, smooth: 0, feather: 0, low: 0, high: 1, invert: false };
+// Extend frame: the canvas's shape (width / height; 0 = the source's own) and where the clip sits on it
+const CANVAS = { aspect: 16 / 9, scale: 1, cx: 0.5, cy: 0.5 };
 const BLANK = () => ({ op: 'ripple', source: null, first: null, matte: null, sound: null, voice: null, prompt: '', loras: [], len: 5, res: 704, size: null, seed: -1,
   points: { positive: [], negative: [] }, pointsAt: 0, tracks: [], key: { color: '#00ff00', similarity: 0.12, blend: 0.08, spill: 0.5, invert: false },
-  steps: 3, blend: 'face', face: { ...FACE }, results: [], showing: null, matte2: null, refine: { ...REFINE } });
+  steps: 3, blend: 'face', face: { ...FACE }, results: [], showing: null, matte2: null, refine: { ...REFINE }, canvas: { ...CANVAS } });
 let T = BLANK();
 let tabs = null;
 // cmp: the result on the left instead of the source (comparing takes); layout: 'wipe' or 'side'
@@ -286,6 +290,7 @@ function render() {
       help('DWPose runs on the CPU. SDPose uses the GPU and holds up better on hard poses, people turned away, hands near the body and stylised footage (up to 2 people).')) : null,
     needs.has('keycolor') ? keyFields() : null,
     ...(needs.has('refine') ? refineFields() : []),
+    ...(needs.has('canvas') ? canvasFields() : []),
     needs.has('loras') ? lorasField(t) : null,
     needs.has('len') ? rangeField('Length', () => T.len, (v) => { T.len = v; }, { min: 1, max: e.maxLen || 10, step: 1 / 3,
       fmt: (v) => (e.maxLen ? `${v.toFixed(1)}s` : `${v.toFixed(1)}s · ${lenFrames(v)} frames`), onChange: () => changed(),
@@ -399,6 +404,60 @@ async function runMatte() {
   } catch (err) { toast('Refine matte failed: ' + err.message, true); }
 }
 
+// ---- Extend frame: the canvas and the clip's place on it ----
+const ASPECTS = [[0, 'Source'], [16 / 9, '16:9'], [9 / 16, '9:16'], [1, '1:1'], [4 / 5, '4:5'], [21 / 9, '21:9']];
+const srcAspect = () => (V.a?.videoWidth ? V.a.videoWidth / V.a.videoHeight : 16 / 9);
+const canvasAspect = () => (T.canvas?.aspect || srcAspect());
+// the clip's box on the canvas, in fractions of the canvas (app/videoedit.canvas_plan does the same in pixels)
+function clipBox() {
+  const c = T.canvas || CANVAS, sa = srcAspect(), A = canvasAspect();
+  const [w, h] = sa > A ? [c.scale, (c.scale * A) / sa] : [(c.scale * sa) / A, c.scale];
+  return { left: c.cx - w / 2, top: c.cy - h / 2, w, h };
+}
+function canvasFields() {
+  const c = (T.canvas ||= { ...CANVAS });
+  const num = (k, label, opts) => rangeField(label, () => c[k], (v) => { c[k] = v; layoutCanvas(); }, { onChange: () => changed(false), ...opts });
+  return [
+    field('Canvas', seg(ASPECTS.map(([v, l]) => [v, l]), ASPECTS.some(([v]) => Math.abs(v - (c.aspect || 0)) < 1e-6) ? c.aspect : 0,
+      (v) => { c.aspect = Number(v); changed(); }, { wrap: true }),
+      help('Its shape. The clip keeps its own resolution at size 1; the frame grows around it.')),
+    num('scale', 'Clip size', { min: 0.3, max: 1.5, step: 0.01, fmt: (v) => `${Math.round(v * 100)}%`, help: '100% fits the clip inside the canvas. Drag the clip on the preview to move it.' }),
+    num('cx', 'Across', { min: 0, max: 1, step: 0.01, fmt: (v) => `${Math.round(v * 100)}%` }),
+    num('cy', 'Up / down', { min: 0, max: 1, step: 0.01, fmt: (v) => `${Math.round(v * 100)}%` }),
+    button('Centre', () => { Object.assign(c, { scale: c.scale, cx: 0.5, cy: 0.5 }); changed(); }, { cls: 'small' }),
+  ];
+}
+// the viewer while setting up: the canvas (checkered) with the clip on it, draggable
+function layoutCanvas() {
+  const box = document.querySelector('#vfxStage .vfx-canvas');
+  if (!box) return;
+  const st = document.getElementById('vfxStage').getBoundingClientRect(), A = canvasAspect();
+  const w = Math.min(st.width - 16, (st.height - 16) * A);   // as big as the stage allows, at the canvas's shape
+  Object.assign(box.style, { width: `${Math.max(40, w)}px`, height: `${Math.max(40, w / A)}px` });
+  const b = clipBox();
+  Object.assign(box.querySelector('video').style, { left: `${b.left * 100}%`, top: `${b.top * 100}%`, width: `${b.w * 100}%`, height: `${b.h * 100}%` });
+}
+function canvasView(video) {
+  const box = h('div', { class: 'vfx-canvas' }, video);
+  let grab = null;
+  box.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); box.setPointerCapture(e.pointerId);
+    const c = T.canvas || CANVAS;
+    grab = { x: e.clientX, y: e.clientY, cx: c.cx, cy: c.cy, r: box.getBoundingClientRect() };
+  });
+  box.addEventListener('pointermove', (e) => {
+    if (!grab) return;
+    const c = (T.canvas ||= { ...CANVAS });
+    c.cx = clamp(grab.cx + (e.clientX - grab.x) / grab.r.width, -0.5, 1.5);
+    c.cy = clamp(grab.cy + (e.clientY - grab.y) / grab.r.height, -0.5, 1.5);
+    layoutCanvas();
+  });
+  const end = () => { if (grab) { grab = null; changed(false); render(); } };
+  box.addEventListener('pointerup', end); box.addEventListener('pointercancel', end);
+  video.addEventListener('loadedmetadata', layoutCanvas);
+  return box;
+}
+
 function pickResult(onPick) {
   openVideoPicker({ title: 'Pick a matte or mask', onPick });
 }
@@ -458,6 +517,14 @@ async function run() {
     if (!clicked && !T.prompt.trim()) return toast('Tap the thing on the picture, or describe it', true);
   }
   if (e.needs.includes('tracks')) put('tracks', JSON.stringify(await tracksPx(t, values)));
+  if (e.needs.includes('canvas')) {   // the clip on its canvas, and the mask of what to paint, made on the server first
+    try {
+      const c = T.canvas || CANVAS, a = canvasAspect();
+      const r = await api('/api/video/canvas', { method: 'POST', busy: 'Setting up the canvas…', timeout: 900000,
+        body: { source: bare(T.source), trim: T.source.trim || null, aspect: a, scale: c.scale, cx: c.cx, cy: c.cy } });
+      put('source', r.video); put('matte', r.mask);
+    } catch (err) { return toast('Couldn\'t set up the canvas: ' + err.message, true); }
+  }
   try {
     const parent = T.source?.generation != null ? { generation: T.source.generation, index: T.source.index || 0, frame: null } : null;
     const gens = await api('/api/generate', { method: 'POST', body: { template: t.id, values, batch: 1, project_id: S.project, parent } });
@@ -573,18 +640,19 @@ function drawViewer() {
   const aUrl = cmpUrl || (stillMode ? null : srcUrl(T.source));
   const offset = cmpUrl ? 0 : (T.source?.trim?.start || 0);   // a result starts at 0; the source at its trim
   const side = UI.layout === 'side' && !!aUrl && !!resUrl;
-  const want = `${aUrl}|${resUrl}|${stillMode ? T.first : ''}|${side}`;
+  const canvasMode = e.needs.includes('canvas') && !!aUrl && !resUrl && !cmpUrl;   // Extend frame, before a result
+  const want = `${aUrl}|${resUrl}|${stillMode ? T.first : ''}|${side}|${canvasMode}`;
   if (stage.dataset.want !== want) {
     stage.dataset.want = want;
     V.a = aUrl ? h('video', { src: aUrl, muted: true, playsInline: true, preload: 'auto', class: 'vfx-a', ...(cmpUrl && { 'data-result': '1' }) }) : null;
     V.b = resUrl ? h('video', { src: resUrl, muted: true, playsInline: true, preload: 'auto', class: 'vfx-b' }) : null;
     V.still = stillMode && T.first ? h('img', { src: inputUrl(T.first), class: 'vfx-a', alt: '' }) : null;
-    V.ov = side ? null : h('canvas', { class: 'vfx-ov' });
+    V.ov = side || canvasMode ? null : h('canvas', { class: 'vfx-ov' });
     const base = V.a || V.still;
     const tags = V.a && V.b ? [h('span', { class: 'vfx-tag left' }, cmpUrl ? genLabel(cmp) : 'Source'), h('span', { class: 'vfx-tag right' }, genLabel(res))] : [];
     const media = h('div', { class: `vfx-media${side ? ' side' : ''}` }, base, V.b, V.ov, ...tags);
     if (V.a && V.b && !side) setWipe(UI.wipe);
-    stage.replaceChildren(base || V.b ? media : placeholder('Choose a source clip or a start image'));
+    stage.replaceChildren(canvasMode ? canvasView(V.a) : base || V.b ? media : placeholder('Choose a source clip or a start image'));
     const fit = () => sizeOverlay();
     (V.a || V.b)?.addEventListener('loadedmetadata', () => { if (V.a && offset) V.a.currentTime = offset; fit(); });
     V.still?.addEventListener('load', fit);
@@ -596,6 +664,7 @@ function drawViewer() {
     stage.dataset.trim = trimKey;
     if (V.a && !cmpUrl && V.a.readyState >= 1) { V.a.currentTime = offset; if (V.b) V.b.currentTime = 0; }
   }
+  if (canvasMode) layoutCanvas();
   stage.classList.toggle('drawing', !!UI.draw);
   sizeOverlay();
   renderTransport();
@@ -746,7 +815,7 @@ export function wireVfx() {
       load(payload) { T = { ...BLANK(), ...payload }; UI.srcInfo = null; UI.draw = null; UI.cmp = null; render(); },
     } });
   maximizable($('#tab-vfx .stage'), $('#tab-vfx .viewer'), { onChange: () => sizeOverlay() });
-  addEventListener('resize', () => { if ($('#tab-vfx').classList.contains('active')) sizeOverlay(); });
+  addEventListener('resize', () => { if ($('#tab-vfx').classList.contains('active')) { sizeOverlay(); layoutCanvas(); } });
   // a result finishing (or failing) redraws its card
   onServer('deck_generation', (m) => { const id = m.data?.id; if (T.results.includes(id)) { setTimeout(render, 0); } });
 }

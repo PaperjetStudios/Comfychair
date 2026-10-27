@@ -1149,3 +1149,7 @@ button.sheet-caret { width: 22px; }
 
 /* Board box select (board.js) */
 .board-box { position: fixed; z-index: 30; pointer-events: none; border: 2px solid var(--accent); border-radius: 6px; background: color-mix(in srgb, var(--accent) 14%, transparent); }
+
+/* VFX Extend frame: the canvas (checkered) with the clip placed on it; drag the clip to move it */
+.vfx-canvas { position: relative; flex: none; background: var(--checker); outline: 2px dashed var(--accent); outline-offset: -1px; overflow: hidden; touch-action: none; cursor: grab; }
+.vfx-canvas > video { position: absolute; object-fit: fill; box-shadow: 0 0 0 1px #000a; pointer-events: none; }

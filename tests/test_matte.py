@@ -106,3 +106,27 @@ class Real(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Canvas(unittest.TestCase):
+    def test_plan_keeps_the_clip_resolution_at_scale_one(self):
+        p = videoedit.canvas_plan(360, 640, 16 / 9)             # a portrait clip on a landscape canvas
+        self.assertEqual((p["w"], p["h"], p["H"], p["W"]), (360, 640, 640, 1138))   # the clip as it is, the canvas around it
+        big = videoedit.canvas_plan(1080, 1920, 16 / 9)          # 3413 wide: capped at 2048, the clip shrinks with it
+        self.assertEqual((big["W"], big["H"], big["h"]), (2048, 1152, 1152))
+        p = videoedit.canvas_plan(640, 360, 1.0, scale=0.5, cx=0.25, cy=0.5)
+        self.assertEqual((p["W"], p["H"], p["w"], p["h"]), (1280, 1280, 640, 360))
+        self.assertEqual((p["x"], p["y"]), (0, 460))
+
+    @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg not installed")
+    def test_clip_and_mask(self):
+        td = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, td)
+        src = td / "s.mp4"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=320x180:d=1:r=24", "-pix_fmt", "yuv420p",
+                        str(src)], check=True)
+        plan = videoedit.canvas_plan(320, 180, 1.0, scale=1.0)
+        videoedit.canvas_clip(src, td / "v.mp4", td / "m.mp4", plan)
+        self.assertEqual((videoedit.probe(td / "v.mp4")["width"], videoedit.probe(td / "v.mp4")["height"]), (plan["W"], plan["H"]))
+        m = frame(td / "m.mp4")
+        self.assertGreater(at(m, 5, 5), 200)                                 # above the clip: to paint
+        self.assertLess(at(m, plan["W"] // 2, plan["H"] // 2), 40)           # the clip itself: kept

@@ -156,7 +156,7 @@ def plan(src: Path, trim, crop, loader: dict) -> dict:
 def prune(max_age_days=30):
     """Derived copies are remade on demand: clear the ones unused for a month."""
     cutoff = time.time() - max_age_days * 86400
-    for p in config.VIDEOPREP_DIR.glob(f"{PREFIX}*.mp4"):
+    for p in [*config.VIDEOPREP_DIR.glob(f"{PREFIX}*.mp4"), *config.VIDEOPREP_DIR.glob("canvas_*.mp4")]:   # (and Extend frame's)
         try:
             if p.stat().st_mtime < cutoff:
                 p.unlink()
