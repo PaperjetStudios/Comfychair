@@ -1075,3 +1075,28 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: var(--fs-
 .craft-doc { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--line, #2a2f3a); border-radius: var(--r-sm, 8px); }
 .craft-doc .row { align-items: center; gap: 8px; }
 .craft-doc label.check { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--muted); }
+
+/* ---- sidebars: denser than the rest of the page (tablet sidebars were cramped), touch targets kept ≥ ~38px ---- */
+.panel { --gap: 10px; font-size: 14px; }
+.panel .section { padding: 10px 12px 12px; gap: 10px; }
+.panel .section-title { min-height: 26px; }
+.panel .field { gap: 4px; }
+.panel .lbl, .panel .hint { font-size: var(--fs-xs); }
+.panel .btn { min-height: 40px; padding: 0 14px; }
+.panel .btn.small { min-height: 34px; padding: 0 10px; font-size: 13px; }
+.panel .seg button { min-height: 36px; padding: 0 6px; font-size: 13px; line-height: 1.2; }
+.panel .seg.wrap button { min-width: 76px; padding: 4px 6px; }
+.panel select, .panel input[type=number], .panel input[type=text], .panel textarea { min-height: 38px; padding-top: 6px; padding-bottom: 6px; font-size: 14px; }
+.panel .tabchip { min-height: 34px; padding: 0 12px; font-size: 14px; }
+.panel .tab-more { min-width: 30px; min-height: 30px; }
+@media (pointer: coarse) {
+  .panel .seg button { min-height: 40px; }
+  .panel .btn.small { min-height: 38px; }
+  .panel .tabchip { min-height: 38px; }
+}
+
+/* the saved-tabs row at the top of a sidebar stays put while the settings scroll under it */
+.panel > :has(.tabstrip):not(:has(.section)), .panel > .panel-body > :first-child:has(.tabstrip):not(:has(.section)) {
+  position: sticky; top: calc(-1 * var(--gap)); z-index: 3; background: var(--surface);
+  margin-top: calc(-1 * var(--gap)); padding: var(--gap) 0 6px; margin-bottom: 6px; border-bottom: 1px solid var(--line);
+}
