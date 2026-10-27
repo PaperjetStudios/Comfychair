@@ -1,7 +1,7 @@
 """ComfyDeck: steady DWPose over a clip.
 
 Deck Pose Smooth takes DWPose's keypoints (the POSE_KEYPOINT output of the DWPose Estimator in
-comfyui_controlnet_aux), steadies them over the whole clip (smooth.py: people followed from frame to frame,
+comfyui_controlnet_aux) or SDPose's (SDPose Keypoint Extractor; points under Min score count as not found), steadies them over the whole clip (smooth.py: people followed from frame to frame,
 short gaps filled, jumps pulled back, a Gaussian in time) and draws them again as OpenPose pictures, the size of
 the DWPose picture it is given. Smoothing is in frames (0 is off).
 """
@@ -43,6 +43,8 @@ class DeckPoseSmooth:
                                     "tooltip": "Frames each point is averaged over (hands and face get half). 0 is off."}),
             "max_gap": ("INT", {"default": 6, "min": 0, "max": 48,
                                 "tooltip": "Frames a point may go missing and still be filled in"}),
+            "min_score": ("FLOAT", {"default": 0.3, "min": 0.0, "max": 1.0, "step": 0.01,
+                                    "tooltip": "Points scored lower count as not found (SDPose scores them; DWPose gives 1 or 0)"}),
             "draw_hands": ("BOOLEAN", {"default": True}),
             "draw_face": ("BOOLEAN", {"default": True}),
         }}
@@ -51,10 +53,10 @@ class DeckPoseSmooth:
     FUNCTION = "run"
     CATEGORY = "ComfyDeck"
 
-    def run(self, pose_keypoint, image, smoothing, max_gap, draw_hands, draw_face):
+    def run(self, pose_keypoint, image, smoothing, max_gap, draw_hands, draw_face, min_score=0.3):
         from custom_controlnet_aux.dwpose import decode_json_as_poses, draw_poses   # comfyui_controlnet_aux
 
-        frames = smooth.smooth(list(pose_keypoint), smoothing, max_gap)
+        frames = smooth.smooth(list(pose_keypoint), smoothing, max_gap, min_score)
         H, W = int(image.shape[1]), int(image.shape[2])
         pics = []
         for f in frames:

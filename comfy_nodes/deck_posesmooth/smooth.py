@@ -1,4 +1,4 @@
-"""Steady DWPose keypoints over a clip (numpy only, so the tests run without ComfyUI).
+"""Steady DWPose or SDPose keypoints over a clip (numpy only, so the tests run without ComfyUI).
 
 DWPose looks at every frame on its own, so points shake from frame to frame, flicker out for a frame or two and
 now and then jump to the wrong place. This works on the whole clip at once (no lag, unlike a live filter):
@@ -103,11 +103,31 @@ def _gauss(xy, ok, sigma):
     return out
 
 
-def smooth(frames, smoothing=2.0, max_gap=6):
-    """frames: DWPose POSE_KEYPOINT (one OpenPose dict per frame). Returns new dicts, same layout."""
+def threshold(frames, min_score):
+    """Points scored below min_score as not found (SDPose gives real scores; DWPose only 1 or 0), the rest as 1."""
+    out = []
+    for f in frames:
+        people = []
+        for p in (f or {}).get("people") or []:
+            q = dict(p)
+            for part in PARTS:
+                v = p.get(part)
+                if v:
+                    a = np.asarray(v, dtype=np.float64).reshape(-1, 3)
+                    keep = a[:, 2] >= max(min_score, 1e-9)
+                    a[keep, 2], a[~keep] = 1.0, 0.0
+                    q[part] = [float(x) for x in a.reshape(-1)]
+            people.append(q)
+        out.append({**(f or {}), "people": people})
+    return out
+
+
+def smooth(frames, smoothing=2.0, max_gap=6, min_score=0.3):
+    """frames: POSE_KEYPOINT from DWPose or SDPose (one OpenPose dict per frame). Returns new dicts, same layout."""
     T = len(frames)
     if T == 0:
         return []
+    frames = threshold(frames, min_score)
     tr = tracks(frames)
     people = [[] for _ in range(T)]
     for track in tr:

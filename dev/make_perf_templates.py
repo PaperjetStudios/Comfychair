@@ -52,16 +52,27 @@ def animate():
     return g
 
 
-def pose_frames(g, image, face=True, hands=True):
-    """DWPose (CPU, onnx) on every frame, steadied over the clip: body, hands and face landmarks as an OpenPose-style
-    picture (id posers)."""
+def pose_frames(g, image, face=True, hands=True, model="dwpose"):
+    """The clip's body, hands and face landmarks on every frame, steadied over the clip, as an OpenPose-style picture
+    (id posers). model "dwpose": DWPose (CPU, onnx). "sdpose": SDPose wholebody (GPU), on the people RT-DETR finds;
+    it scores each point, and Min score drops the guesses."""
     on = lambda b: "enable" if b else "disable"
-    g.add("pose", node("DWPreprocessor", image=image, detect_hand=on(hands), detect_body="enable", detect_face=on(face),
-                       resolution=512, bbox_detector="yolox_l.onnx", pose_estimator="dw-ll_ucoco_384.onnx",
-                       scale_stick_for_xinsr_cn="disable"))
-    # DWPose looks at each frame on its own, so the points shake: steadied over the clip (comfy_nodes/deck_posesmooth)
-    g.add("steady", node("DeckPoseSmooth", "@12 Pose smoothing [smoothing,max_gap]", pose_keypoint=["pose", 1], image=["pose", 0],
-                         smoothing=2.0, max_gap=6, draw_hands=hands, draw_face=face))
+    if model == "sdpose":
+        g.add("sdm", node("CheckpointLoaderSimple", ckpt_name="sdpose_wholebody_fp16.safetensors"))
+        g.add("det", node("UNETLoader", unet_name="rt_detr_v4-x-hgnet_fp16.safetensors", weight_dtype="default"))
+        g.add("boxes", node("RTDETR_detect", "@13 People [max_detections]", model=["det", 0], image=image, threshold=0.5,
+                            class_name="person", max_detections=2))
+        g.add("pose", node("SDPoseKeypointExtractor", model=["sdm", 0], vae=["sdm", 2], image=image, batch_size=16,
+                           bboxes=["boxes", 0]))
+        kps, size = ["pose", 0], image
+    else:
+        g.add("pose", node("DWPreprocessor", image=image, detect_hand=on(hands), detect_body="enable", detect_face=on(face),
+                           resolution=512, bbox_detector="yolox_l.onnx", pose_estimator="dw-ll_ucoco_384.onnx",
+                           scale_stick_for_xinsr_cn="disable"))
+        kps, size = ["pose", 1], ["pose", 0]
+    # each frame is looked at on its own, so the points shake: steadied over the clip (comfy_nodes/deck_posesmooth)
+    g.add("steady", node("DeckPoseSmooth", "@12 Pose smoothing [smoothing,max_gap,min_score]", pose_keypoint=kps, image=size,
+                         smoothing=2.0, max_gap=6, min_score=0.3, draw_hands=hands, draw_face=face))
     # DWPose answers at its own resolution (odd sizes happen): back to the clip's W x H
     g.add("posers", node("ImageResizeKJv2", image=["steady", 0], width=["W", 1], height=["H", 1], upscale_method="bilinear",
                          keep_proportion="stretch", pad_color="0, 0, 0", crop_position="center", divisible_by=2, device="cpu"))
@@ -114,11 +125,12 @@ def drive():
     return g
 
 
-def pose_preview():
-    """What a drive run will follow: the clip's DWPose (body, hands, face) as a video. CPU only."""
+def pose_preview(model="dwpose"):
+    """What a drive run will follow: the clip's pose (body, hands, face) as a video. DWPose runs on the CPU; SDPose
+    (model "sdpose") on the GPU."""
     g = G()
     h3_source(g, short=512)
-    pose_frames(g, ["rs", 0])
+    pose_frames(g, ["rs", 0], model=model)
     g.add("vid", node("CreateVideo", images=["posers", 0], fps=FPS))
     g.add("save", node("SaveVideo", video=["vid", 0], filename_prefix="deck/pose", format="auto", codec="auto"))
     return g
@@ -214,6 +226,7 @@ TEMPLATES = {
     "deck-h3-animate": animate,
     "deck-h3-drive": drive,
     "deck-pose-video": pose_preview,
+    "deck-pose-sdpose": lambda: pose_preview("sdpose"),
     "deck-ltx-drive": ltx_drive,
     "deck-h3-faceswap": faceswap,
 }

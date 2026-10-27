@@ -62,6 +62,8 @@ const EFFECTS = [
     help: 'Like Drive a still, on LTX-2.5: the still is the first frame and the clip\'s pose (body, hands, face) moves it. Keeps the still\'s scene and look closely. Describe the person and what they do; the sound is made from the prompt.' },
   { id: 'pose', group: 'Performance', label: 'Pose preview', tpl: 'deck-pose-video', needs: ['source', 'len'],
     help: 'Shows what Drive a still will follow: the clip\'s body, hands and face as a stick figure. Quick: no GPU.' },
+  { id: 'sdpose', group: 'Performance', label: 'Pose preview (SDPose)', tpl: 'deck-pose-sdpose', needs: ['source', 'len'],
+    help: 'The same stick figure from SDPose, on the GPU: steadier on hard poses, people turned away, hands near the body and stylised footage. Finds up to 2 people.' },
 ];
 const GROUPS = ['Restyle', 'Key', 'Remove', 'Generate', 'Performance'];
 const fx = (id) => EFFECTS.find((e) => e.id === id) || EFFECTS[0];

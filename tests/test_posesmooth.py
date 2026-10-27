@@ -68,6 +68,15 @@ class Smooth(unittest.TestCase):
         lefts = {round(xy(f, 0)[0], 6) for f in out} | {round(xy(f, 1)[0], 6) for f in out}
         self.assertEqual(lefts, {0.1, 0.7})          # never averaged into a point between them
 
+    def test_low_scores_count_as_missing(self):
+        seq = [[person(0.3, 0.2)] for _ in range(10)]
+        for f in seq:
+            f[0]["pose_keypoints_2d"][2] = 0.9        # point 0: confident
+            f[0]["pose_keypoints_2d"][5] = 0.1        # point 1: a guess
+        out = smooth.smooth(frames(seq), min_score=0.3)
+        self.assertEqual(xy(out[5], k=0)[2], 1.0)
+        self.assertEqual(xy(out[5], k=1)[2], 0.0)
+
     def test_off_and_empty(self):
         seq = frames([[person(0.3, 0.2)], [], [person(0.3, 0.2)]])
         self.assertEqual(smooth.smooth([]), [])

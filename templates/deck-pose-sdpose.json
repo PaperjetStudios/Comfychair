@@ -1,0 +1,260 @@
+{
+ "src": {
+  "class_type": "VHS_LoadVideoPath",
+  "inputs": {
+   "video": "",
+   "force_rate": 24,
+   "custom_width": 0,
+   "custom_height": 0,
+   "frame_load_cap": 0,
+   "skip_first_frames": 0,
+   "select_every_nth": 1
+  },
+  "_meta": {
+   "title": "@1 Source video [video]"
+  }
+ },
+ "secs": {
+  "class_type": "PrimitiveFloat",
+  "inputs": {
+   "value": 5.0
+  },
+  "_meta": {
+   "title": "@3 Length (seconds)"
+  }
+ },
+ "nf": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "5 + floor((max(5, min(a, round(b*24))) - 5)/17)*17",
+   "values.a": [
+    "src",
+    1
+   ],
+   "values.b": [
+    "secs",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "frames: 17k+5 within the clip and Length"
+  }
+ },
+ "cut": {
+  "class_type": "ImageFromBatch",
+  "inputs": {
+   "image": [
+    "src",
+    0
+   ],
+   "batch_index": 0,
+   "length": [
+    "nf",
+    1
+   ]
+  }
+ },
+ "short": {
+  "class_type": "PrimitiveInt",
+  "inputs": {
+   "value": 512
+  },
+  "_meta": {
+   "title": "@4 Resolution (short side)"
+  }
+ },
+ "size": {
+  "class_type": "GetImageSize",
+  "inputs": {
+   "image": [
+    "cut",
+    0
+   ]
+  }
+ },
+ "W": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "round(a*c/min(a,b)/32)*32",
+   "values.a": [
+    "size",
+    0
+   ],
+   "values.b": [
+    "size",
+    1
+   ],
+   "values.c": [
+    "short",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "width: short side to Resolution, x32"
+  }
+ },
+ "H": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "round(b*c/min(a,b)/32)*32",
+   "values.a": [
+    "size",
+    0
+   ],
+   "values.b": [
+    "size",
+    1
+   ],
+   "values.c": [
+    "short",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "height"
+  }
+ },
+ "rs": {
+  "class_type": "ImageResizeKJv2",
+  "inputs": {
+   "image": [
+    "cut",
+    0
+   ],
+   "width": [
+    "W",
+    1
+   ],
+   "height": [
+    "H",
+    1
+   ],
+   "upscale_method": "lanczos",
+   "keep_proportion": "crop",
+   "pad_color": "0, 0, 0",
+   "crop_position": "center",
+   "divisible_by": 32,
+   "device": "cpu"
+  }
+ },
+ "sdm": {
+  "class_type": "CheckpointLoaderSimple",
+  "inputs": {
+   "ckpt_name": "sdpose_wholebody_fp16.safetensors"
+  }
+ },
+ "det": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "rt_detr_v4-x-hgnet_fp16.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "boxes": {
+  "class_type": "RTDETR_detect",
+  "inputs": {
+   "model": [
+    "det",
+    0
+   ],
+   "image": [
+    "rs",
+    0
+   ],
+   "threshold": 0.5,
+   "class_name": "person",
+   "max_detections": 2
+  },
+  "_meta": {
+   "title": "@13 People [max_detections]"
+  }
+ },
+ "pose": {
+  "class_type": "SDPoseKeypointExtractor",
+  "inputs": {
+   "model": [
+    "sdm",
+    0
+   ],
+   "vae": [
+    "sdm",
+    2
+   ],
+   "image": [
+    "rs",
+    0
+   ],
+   "batch_size": 16,
+   "bboxes": [
+    "boxes",
+    0
+   ]
+  }
+ },
+ "steady": {
+  "class_type": "DeckPoseSmooth",
+  "inputs": {
+   "pose_keypoint": [
+    "pose",
+    0
+   ],
+   "image": [
+    "rs",
+    0
+   ],
+   "smoothing": 2.0,
+   "max_gap": 6,
+   "min_score": 0.3,
+   "draw_hands": true,
+   "draw_face": true
+  },
+  "_meta": {
+   "title": "@12 Pose smoothing [smoothing,max_gap,min_score]"
+  }
+ },
+ "posers": {
+  "class_type": "ImageResizeKJv2",
+  "inputs": {
+   "image": [
+    "steady",
+    0
+   ],
+   "width": [
+    "W",
+    1
+   ],
+   "height": [
+    "H",
+    1
+   ],
+   "upscale_method": "bilinear",
+   "keep_proportion": "stretch",
+   "pad_color": "0, 0, 0",
+   "crop_position": "center",
+   "divisible_by": 2,
+   "device": "cpu"
+  }
+ },
+ "vid": {
+  "class_type": "CreateVideo",
+  "inputs": {
+   "images": [
+    "posers",
+    0
+   ],
+   "fps": 24
+  }
+ },
+ "save": {
+  "class_type": "SaveVideo",
+  "inputs": {
+   "video": [
+    "vid",
+    0
+   ],
+   "filename_prefix": "deck/pose",
+   "format": "auto",
+   "codec": "auto"
+  }
+ }
+}

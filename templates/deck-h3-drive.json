@@ -1,50 +1,4 @@
 {
- "30": {
-  "class_type": "LoraLoaderModelOnly",
-  "inputs": {
-   "model": [
-    "6",
-    0
-   ],
-   "lora_name": "h3/minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
-   "strength_model": 1.0
-  },
-  "_meta": {
-   "title": "@7 Turbo LoRA"
-  }
- },
- "6": {
-  "class_type": "LoraLoaderModelOnly",
-  "inputs": {
-   "model": [
-    "1",
-    0
-   ],
-   "lora_name": "none",
-   "strength_model": 1.0
-  },
-  "_meta": {
-   "title": "@6 LoRAs"
-  }
- },
- "4": {
-  "class_type": "VAELoader",
-  "inputs": {
-   "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
-  },
-  "_meta": {
-   "title": "Load audio VAE"
-  }
- },
- "9": {
-  "class_type": "KSamplerSelect",
-  "inputs": {
-   "sampler_name": "res_multistep"
-  },
-  "_meta": {
-   "title": "Sampler select"
-  }
- },
  "51": {
   "class_type": "MiniMaxH3FunControlNetApply",
   "inputs": {
@@ -72,15 +26,70 @@
    "title": "@5 Control [strength,end_percent]"
   }
  },
- "2": {
-  "class_type": "CLIPLoader",
+ "1": {
+  "class_type": "UNETLoader",
   "inputs": {
-   "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
-   "type": "minimax",
-   "device": "default"
+   "unet_name": "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
+   "weight_dtype": "default"
   },
   "_meta": {
-   "title": "Load CLIP"
+   "title": "@10 Model [unet_name]"
+  }
+ },
+ "9": {
+  "class_type": "KSamplerSelect",
+  "inputs": {
+   "sampler_name": "res_multistep"
+  },
+  "_meta": {
+   "title": "Sampler select"
+  }
+ },
+ "50": {
+  "class_type": "ModelPatchLoader",
+  "inputs": {
+   "name": "minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors"
+  },
+  "_meta": {
+   "title": "Load Fun ControlNet"
+  }
+ },
+ "6": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "model": [
+    "1",
+    0
+   ],
+   "lora_name": "none",
+   "strength_model": 1.0
+  },
+  "_meta": {
+   "title": "@6 LoRAs"
+  }
+ },
+ "3": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
+  },
+  "_meta": {
+   "title": "Load video VAE"
+  }
+ },
+ "10": {
+  "class_type": "BasicScheduler",
+  "inputs": {
+   "model": [
+    "51",
+    0
+   ],
+   "scheduler": "simple",
+   "steps": 20,
+   "denoise": 1.0
+  },
+  "_meta": {
+   "title": "@9 Steps [steps]"
   }
  },
  "11": {
@@ -97,6 +106,31 @@
   },
   "_meta": {
    "title": "Guider"
+  }
+ },
+ "30": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "model": [
+    "6",
+    0
+   ],
+   "lora_name": "h3/minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+   "strength_model": 1.0
+  },
+  "_meta": {
+   "title": "@7 Turbo LoRA"
+  }
+ },
+ "2": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+   "type": "minimax",
+   "device": "default"
+  },
+  "_meta": {
+   "title": "Load CLIP"
   }
  },
  "12": {
@@ -127,13 +161,13 @@
    "title": "Sampler"
   }
  },
- "50": {
-  "class_type": "ModelPatchLoader",
+ "4": {
+  "class_type": "VAELoader",
   "inputs": {
-   "name": "minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors"
+   "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
   },
   "_meta": {
-   "title": "Load Fun ControlNet"
+   "title": "Load audio VAE"
   }
  },
  "13": {
@@ -150,40 +184,6 @@
   },
   "_meta": {
    "title": "Decode video"
-  }
- },
- "10": {
-  "class_type": "BasicScheduler",
-  "inputs": {
-   "model": [
-    "51",
-    0
-   ],
-   "scheduler": "simple",
-   "steps": 20,
-   "denoise": 1.0
-  },
-  "_meta": {
-   "title": "@9 Steps [steps]"
-  }
- },
- "1": {
-  "class_type": "UNETLoader",
-  "inputs": {
-   "unet_name": "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
-   "weight_dtype": "default"
-  },
-  "_meta": {
-   "title": "@10 Model [unet_name]"
-  }
- },
- "3": {
-  "class_type": "VAELoader",
-  "inputs": {
-   "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
-  },
-  "_meta": {
-   "title": "Load video VAE"
   }
  },
  "src": {
@@ -353,11 +353,12 @@
    ],
    "smoothing": 2.0,
    "max_gap": 6,
+   "min_score": 0.3,
    "draw_hands": true,
    "draw_face": true
   },
   "_meta": {
-   "title": "@12 Pose smoothing [smoothing,max_gap]"
+   "title": "@12 Pose smoothing [smoothing,max_gap,min_score]"
   }
  },
  "posers": {

@@ -238,11 +238,12 @@
    ],
    "smoothing": 2.0,
    "max_gap": 6,
+   "min_score": 0.3,
    "draw_hands": true,
    "draw_face": true
   },
   "_meta": {
-   "title": "@12 Pose smoothing [smoothing,max_gap]"
+   "title": "@12 Pose smoothing [smoothing,max_gap,min_score]"
   }
  },
  "posers": {
