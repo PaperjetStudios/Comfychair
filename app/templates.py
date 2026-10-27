@@ -276,6 +276,7 @@ def describe(t: Template, object_info: dict | None) -> dict:
     if not fields and not t.error:
         warnings.append("No @-tagged nodes found. Rename nodes in ComfyUI (e.g. '@Prompt') and re-export.")
     return {"id": t.id, "name": t.name, "error": t.error, "warnings": warnings, "tag_style": tag_style(t.workflow),
+            "media": media_kind(t.workflow), "family": family(t.id, t.workflow),
             "groups": groups, "fields": fields, "node_titles": node_titles}
 
 
@@ -340,6 +341,40 @@ def attach_box_refs(wf: dict, boxes: list) -> list:
             b["desc"] = f"{(b.get('desc') or '').strip()} matching <ref_image_{index[ref]}>".strip()
         out.append(b)
     return out
+
+
+VIDEO_OUT = {"SaveVideo", "VHS_VideoCombine", "CreateVideo", "SaveWEBM", "SaveAnimatedWEBP"}
+IMAGE_OUT = {"SaveImage", "PreviewImage"}
+# a template's model family, from its id (deck-<family>-…): what the Generate tab's Model filter shows
+FAMILIES = [("ltx", "LTX-2.5"), ("h3", "MiniMax H3"), ("qwen", "Qwen Image"), ("klein", "Flux Klein"), ("krea", "Krea"),
+            ("moss", "MOSS"), ("ace", "ACE-Step"), ("depth", "Depth"), ("sam3", "SAM3"), ("pose", "Pose"),
+            ("mocap", "Motion"), ("motion", "Motion"), ("upscale", "Upscale")]
+
+
+def media_kind(wf: dict) -> str:
+    """What a template makes: video, image, audio, or other (a motion file…). A run that saves a video and stills
+    (a character sheet) counts as video."""
+    classes = {n.get("class_type", "") for n in wf.values()}
+    if classes & VIDEO_OUT:
+        return "video"
+    if classes & IMAGE_OUT:
+        return "image"
+    if any(c.startswith("SaveAudio") for c in classes):
+        return "audio"
+    return "other"
+
+
+def family(tid: str, wf: dict) -> str:
+    parts = tid.lower().replace("_", "-").split("-")
+    words = parts[1:] if parts[0] == "deck" else parts
+    for key, label in FAMILIES:
+        if words and words[0].startswith(key):
+            return label
+    classes = " ".join(n.get("class_type", "") for n in wf.values()).lower()
+    for key, label in FAMILIES:   # a template of the user's own: by its nodes
+        if key in classes:
+            return label
+    return "Other"
 
 
 def tag_style(wf: dict) -> str | None:

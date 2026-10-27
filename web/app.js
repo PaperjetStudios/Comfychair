@@ -7,7 +7,7 @@ import {
   $, h, store, api, toast, overlayOpened, overlayClosed, openSheet, closeSheet, button, help,
 } from './ui.js';
 import { S, loadProjects, setSwitchTab, emitProject } from './core.js';
-import { generate, loadTemplates, selectTemplate, stop, wireZoom } from './generate.js';
+import { generate, loadTemplates, selectTemplate, stop, wireTemplateFilter, wireZoom } from './generate.js';
 import './gentabs.js';   // Generate tabs + presets: plugs into generate.js through its hooks
 import { RUN, checkUiVersion, connectWS, loadHistory, onResume, openJobs, runChip, sceneMod, sceneModule, setConn } from './run.js';
 import { renderEditor } from './editor.js';
@@ -73,6 +73,7 @@ setSwitchTab(switchTab);
 document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
 
 $('#tplSel').addEventListener('change', (e) => selectTemplate(e.target.value));
+wireTemplateFilter();
 $('#reloadTpl').addEventListener('click', async () => { await loadTemplates(true); toast('Templates and model lists reloaded'); });
 $('#genBtn').addEventListener('click', () => { const p = S.pendingParent; S.pendingParent = null; generate(p); });
 $('#stopBtn').addEventListener('click', () => stop());

@@ -30,8 +30,7 @@ export async function loadTemplates(refresh = false) {
   try {
     S.templates = await api('/api/templates' + (refresh ? '?refresh=1' : ''));
   } catch (e) { failed = e; S.templates = []; }
-  const sel = $('#tplSel');
-  sel.replaceChildren(...S.templates.map((t) => h('option', { value: t.id }, t.name + (t.error ? ' (error)' : ''))));
+  fillTemplates();
   if (!S.templates.length) {
     $('#fields').replaceChildren(failed
       ? note(`Couldn't load templates: ${failed.message}. They load by themselves once ComfyDeck answers.`, 'err')
@@ -43,11 +42,50 @@ export async function loadTemplates(refresh = false) {
   if (hooks.templatesLoaded) hooks.templatesLoaded(id); else selectTemplate(id);
 }
 
+// The template list, narrowed by what it makes (video, image, audio) and then by model. The template in use always
+// stays in the list, so narrowing it never swaps the settings under you.
+const MEDIA = [['', 'All types'], ['video', 'Video'], ['image', 'Image'], ['audio', 'Audio'], ['other', 'Other']];
+function fillTemplates() {
+  const type = $('#tplType'), fam = $('#tplFam'), sel = $('#tplSel');
+  const F = store.get('deck.tplFilter', { media: '', family: '' });
+  const has = (m) => !m || S.templates.some((t) => t.media === m);
+  if (!has(F.media)) F.media = '';
+  type.replaceChildren(...MEDIA.filter(([m]) => has(m)).map(([m, l]) => h('option', { value: m }, l)));
+  type.value = F.media;
+  const fams = [...new Set(S.templates.filter((t) => !F.media || t.media === F.media).map((t) => t.family || 'Other'))].sort();
+  if (F.family && !fams.includes(F.family)) F.family = '';
+  fam.replaceChildren(h('option', { value: '' }, 'All models'), ...fams.map((f) => h('option', { value: f }, f)));
+  fam.value = F.family;
+  const cur = S.tpl?.id;
+  const shown = S.templates.filter((t) => t.id === cur || ((!F.media || t.media === F.media) && (!F.family || (t.family || 'Other') === F.family)));
+  sel.replaceChildren(...shown.map((t) => h('option', { value: t.id }, t.name + (t.error ? ' (error)' : ''))));
+  if (cur) sel.value = cur;
+  return { F, shown };
+}
+export function wireTemplateFilter() {
+  const pick = (k) => (e) => {
+    const F = store.get('deck.tplFilter', { media: '', family: '' });
+    F[k] = e.target.value;
+    if (k === 'media') F.family = '';
+    store.set('deck.tplFilter', F);
+    const prev = S.tpl?.id;
+    const { shown } = fillTemplates();
+    const fits = (t) => (!F.media || t.media === F.media) && (!F.family || (t.family || 'Other') === F.family);
+    if (prev && !fits(S.templates.find((t) => t.id === prev) || {})) {   // the one in use is outside the filter: take the first that fits
+      const first = shown.find(fits);
+      if (first) { $('#tplSel').value = first.id; $('#tplSel').dispatchEvent(new Event('change')); }
+    }
+  };
+  $('#tplType').addEventListener('change', pick('media'));
+  $('#tplFam').addEventListener('change', pick('family'));
+}
+
 export function selectTemplate(id, overrideValues = null) {
   if (hooks.pick) return hooks.pick(id, overrideValues);   // the tab decides what a template change means
   const t = S.templates.find((x) => x.id === id);
   if (!t) return;
   S.tpl = t;
+  fillTemplates();   // (the template in use is always listed)
   $('#tplSel').value = id;
   store.set('deck.tplId', id);
   const saved = store.get(stateKey(id), {});
@@ -111,6 +149,7 @@ export function renderFields() {
 // Show a template with a ready state (what a tab holds): values already in S.values; the rest here
 export function installState(t, st) {
   S.tpl = t;
+  fillTemplates();   // (the template in use is always listed)
   $('#tplSel').value = t.id;
   store.set('deck.tplId', t.id);
   S.seedMode = st.seedMode || {}; S.imageMp = st.imageMp || {}; S.imageCrop = st.imageCrop || {}; S.sizeMode = st.sizeMode || {};

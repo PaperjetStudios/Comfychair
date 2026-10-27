@@ -244,6 +244,8 @@ main { min-height: 0; position: relative; }
 .panel-body { display: grid; gap: var(--gap); }
 .panel-top > .btn.ghost { flex: none; }
 .tpl-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.tpl-filter { margin-bottom: 6px; }
+.tpl-filter select { flex: 1; min-width: 0; font-size: 0.9em; }
 #tplNotes { display: grid; gap: 6px; margin-bottom: 10px; }
 #tplNotes:empty { display: none; }
 
