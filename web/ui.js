@@ -35,10 +35,11 @@ export const clone = (x) => JSON.parse(JSON.stringify(x ?? null));
 // the next index when stepping d (±1) through n things from i; i < 0 (none yet) starts at an end
 export const cycleIndex = (i, d, n) => (i < 0 ? (d > 0 ? 0 : n - 1) : (i + d + n) % n);
 
-// Every number box is also a slider: hold it, then pull left or right to change the value (its whole
-// min–max range over about 300 px, snapped to its step); a tap still types. A finger or pen has to
-// hold still for HOLD_MS first, so a swipe that scrolls the panel never changes a value; a mouse
-// drags straight away. While dragging it has data-scrubbing set and fires 'input'; letting go fires
+// Every number box is also a slider: pull it left or right to change the value (its whole min–max
+// range over about 300 px, snapped to its step); a tap still types. A finger or pen that sets off
+// sideways drags straight away, and one that sets off up or down scrolls the panel instead (the box
+// is pan-y, so the browser leaves sideways moves to it); holding still for HOLD_MS first also
+// arms it, for a drag that starts slowly. A mouse drags straight away. While dragging it has data-scrubbing set and fires 'input'; letting go fires
 // one 'change', like typing does. data-digits caps the decimals a drag writes.
 const SCRUB_PX = 300, HOLD_MS = 250;
 document.addEventListener('pointerdown', (e) => {
@@ -58,7 +59,10 @@ document.addEventListener('pointerdown', (e) => {
   const move = (ev) => {
     const dx = ev.clientX - x0, dy = ev.clientY - y0;
     if (!on) {
-      if (!armed) { if (Math.hypot(dx, dy) > 8) end(); return; }   // moved before the hold: a scroll
+      if (!armed) {   // before the hold: sideways is a drag, up or down a scroll
+        if (Math.abs(dx) >= 6 && Math.abs(dx) > 1.5 * Math.abs(dy)) armed = true;
+        else { if (Math.abs(dy) > 8) end(); return; }
+      }
       if (mouse ? Math.abs(dx) < 8 || Math.abs(dx) < Math.abs(dy) : Math.abs(dx) < 3) return;
       on = true; inp.blur(); inp.dataset.scrubbing = '1'; inp.classList.add('scrubbing');
       try { inp.setPointerCapture(ev.pointerId); } catch { /* the pointer is gone */ }
@@ -77,6 +81,7 @@ document.addEventListener('pointerdown', (e) => {
     inp.removeEventListener('pointermove', move); inp.removeEventListener('pointerup', end); inp.removeEventListener('pointercancel', end);
     setTimeout(() => inp.removeEventListener('contextmenu', noMenu), 300);
     if (!armed) return;
+    armed = false;
     inp.classList.remove('scrubbing');
     // the tap that ends a hold or a drag shouldn't open the keyboard
     const eat = (c) => { c.preventDefault(); inp.blur(); };
