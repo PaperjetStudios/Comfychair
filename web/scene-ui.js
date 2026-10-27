@@ -177,6 +177,8 @@ function renderProps() {
       figs ? button('Render pose video', renderPoseVideo, { disabled: busy, title: 'The posable people as OpenPose stick figures' }) : null,
       figs ? button('Render both', async () => { await renderDepthVideo(); await renderPoseVideo(); }, { disabled: busy, title: 'A depth video and a pose video of the same shot' }) : null,
       button('📷 Save frame', saveFrame)),
+    figs ? h('div', { class: 'row wrap' }, ...[['poseHands', 'Hands in the pose video'], ['poseFace', 'Face points in the pose video']].map(([k, l]) =>
+      h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: SC[k] !== false, onchange: (e) => { SC[k] = e.target.checked; save(); } }), l))) : null,
     R.renders.depth || R.renders.pose ? h('div', { class: 'row wrap' },
       R.renders.depth ? use(R.renders.depth, 'depth') : null, R.renders.pose ? use(R.renders.pose, 'pose') : null) : null,
     h('p', { id: 'sceneStatus', class: 'hint' }, statusText));
