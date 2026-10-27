@@ -30,6 +30,8 @@ const EFFECTS = [
     help: 'Cuts out a green or blue screen. Quick: runs on the server with ffmpeg, no GPU.' },
   { id: 'mattekey', group: 'Key', label: 'Apply matte', job: 'key', needs: ['source', 'matte'],
     help: 'Uses a matte clip (white = keep) as the clip\'s see-through channel, so lower tracks show through.' },
+  { id: 'refine', group: 'Key', label: 'Refine matte', job: 'matte', needs: ['source?', 'matte', 'matte2', 'refine'],
+    help: 'Cleans up a matte or mask (white = keep), or combines two: SAM3\'s and Alpha Gen\'s, say. Grow or shrink it, fill holes, steady it, harden or soften the edge. Quick: ffmpeg on the server, no GPU. Then Use as matte / mask.' },
   { id: 'mask', group: 'Remove', label: 'Mask (SAM3)', tpl: 'deck-sam3-video-mask', needs: ['source', 'points', 'prompt', 'len'],
     help: 'Tap the thing to cut out on the frame (Exclude marks what to leave out), or describe it. SAM3 follows it through the clip and makes a mask clip.' },
   { id: 'inpaint', group: 'Remove', label: 'Replace', tpl: 'deck-ltx-inpaint', mult: 64, needs: ['source', 'matte', 'prompt', 'len', 'res', 'seed'],
@@ -110,9 +112,11 @@ const SIZES = [['Match source', null], ['1280×704', [1280, 704]], ['704×1280',
   ['544×960', [544, 960]], ['1024×1024', [1024, 1024]], ['1920×1088', [1920, 1088]]];
 
 const FACE = { grow: 1.05, feather: 0.25, chin: 0.82 };   // Face only's blend outline (Deck Face Uncrop)
+// Refine matte (POST /api/video/matte): combine two mattes, then grow/shrink, fill holes, steady, edge, feather
+const REFINE = { combine: 'union', grow: 0, close: 0, smooth: 0, feather: 0, low: 0, high: 1, invert: false };
 const BLANK = () => ({ op: 'ripple', source: null, first: null, matte: null, sound: null, voice: null, prompt: '', loras: [], len: 5, res: 704, size: null, seed: -1,
   points: { positive: [], negative: [] }, pointsAt: 0, tracks: [], key: { color: '#00ff00', similarity: 0.12, blend: 0.08, spill: 0.5, invert: false },
-  steps: 3, blend: 'face', face: { ...FACE }, results: [], showing: null });
+  steps: 3, blend: 'face', face: { ...FACE }, results: [], showing: null, matte2: null, refine: { ...REFINE } });
 let T = BLANK();
 let tabs = null;
 // cmp: the result on the left instead of the source (comparing takes); layout: 'wipe' or 'side'
@@ -253,7 +257,7 @@ function render() {
   const e = fx(T.op), t = tplOf(e);
   const needs = new Set(e.needs.map((n) => n.replace('?', '')));
   const missing = tplId(e) && !t;
-  const runBtn = button(e.job ? (e.id === 'colorkey' ? 'Key clip' : 'Cut out with matte') : 'Run', run, { cls: 'primary', disabled: !!missing });
+  const runBtn = button(e.job ? ({ colorkey: 'Key clip', refine: 'Refine matte' }[e.id] || 'Cut out with matte') : 'Run', run, { cls: 'primary', disabled: !!missing });
 
   const effect = section('Effect', null,
     GROUPS.map((g) => h('div', { class: 'vfx-group' }, h('span', { class: 'vfx-group-name' }, g),
@@ -269,6 +273,7 @@ function render() {
     needs.has('voice') ? [soundInput(T.voice, (v) => { T.voice = v; changed(false); }, { title: 'A voice to speak with', label: 'Voice (optional)' }),
       help('About 5 seconds of one person speaking clearly. Cut it with Start and Length.')] : null,
     needs.has('matte') ? sourceField('matte') : null,
+    needs.has('matte2') ? matte2Field() : null,
     needs.has('points') ? pointsFields() : null,
     needs.has('tracks') ? tracksFields() : null);
 
@@ -280,6 +285,7 @@ function render() {
     e.sd ? field('Pose from', seg([['dwpose', 'DWPose'], ['sdpose', 'SDPose']], T.poser || 'dwpose', (v) => { T.poser = v; changed(); }),
       help('DWPose runs on the CPU. SDPose uses the GPU and holds up better on hard poses, people turned away, hands near the body and stylised footage (up to 2 people).')) : null,
     needs.has('keycolor') ? keyFields() : null,
+    ...(needs.has('refine') ? refineFields() : []),
     needs.has('loras') ? lorasField(t) : null,
     needs.has('len') ? rangeField('Length', () => T.len, (v) => { T.len = v; }, { min: 1, max: e.maxLen || 10, step: 1 / 3,
       fmt: (v) => (e.maxLen ? `${v.toFixed(1)}s` : `${v.toFixed(1)}s · ${lenFrames(v)} frames`), onChange: () => changed(),
@@ -354,6 +360,45 @@ function compareSelect(g) {
   return sel;
 }
 
+// the second matte for Refine matte: optional; what it does with the first is Combine
+function matte2Field() {
+  const v = T.matte2, set = (val) => { T.matte2 = val; changed(); };
+  return field(['Combine with (optional)', h('span', {}, srcLabel(v))], h('div', { class: 'row wrap' },
+    button(v ? 'Change…' : 'Choose…', () => openVideoPicker({ title: 'Second matte or mask', onPick: set })),
+    v ? button('Clear', () => set(null)) : null,
+    button('From results…', () => pickResult(set), { title: 'An Alpha Gen or mask result from this tab' })));
+}
+
+function refineFields() {
+  const r = (T.refine ||= { ...REFINE });
+  const num = (k, label, opts) => rangeField(label, () => r[k] ?? REFINE[k], (v) => { r[k] = v; }, { onChange: () => changed(false), ...opts });
+  const px = (v) => `${v > 0 ? '+' : ''}${Math.round(v)} px`;
+  return [
+    T.matte2 ? field('Combine', seg([['union', 'Either'], ['intersect', 'Both'], ['subtract', 'First minus second'], ['average', 'Average']], r.combine,
+      (v) => { r.combine = v; changed(false); }, { wrap: true }),
+      help('Either keeps what either matte keeps (fills gaps one misses). Both keeps only what they agree on (drops strays). Minus cuts the second out of the first.')) : null,
+    num('grow', 'Grow / shrink', { min: -20, max: 20, step: 1, fmt: px, help: 'Plus dilates the edge outwards, minus erodes it inwards (a halo off, or fringe back).' }),
+    num('close', 'Fill holes', { min: 0, max: 20, step: 1, fmt: (v) => `${Math.round(v)} px`, help: 'Closes holes and gaps up to this size (grows, then shrinks back).' }),
+    num('smooth', 'Steady', { min: 0, max: 9, step: 1, fmt: (v) => (v > 1 ? `${Math.round(v)} frames` : 'off'), help: 'Averages each frame with its neighbours: less flicker at the edges, a little lag on fast moves.' }),
+    num('low', 'Edge: black below', { min: 0, max: 1, step: 0.01, fmt: (v) => v.toFixed(2) }),
+    num('high', 'Edge: white above', { min: 0, max: 1, step: 0.01, fmt: (v) => v.toFixed(2), help: 'Bring the two together for a hard edge; apart for a soft one.' }),
+    num('feather', 'Feather', { min: 0, max: 30, step: 0.5, fmt: (v) => `${v.toFixed(1)} px`, help: 'Blurs the edge.' }),
+    h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!r.invert, onchange: (ev) => { r.invert = ev.target.checked; changed(false); } }), ' Invert (keep what\'s black)'),
+    button('Reset', () => { T.refine = { ...REFINE }; changed(); }, { cls: 'small' }),
+  ];
+}
+
+async function runMatte() {
+  const r = T.refine || REFINE;
+  const body = { a: bare(T.matte), ...(T.matte2 && { b: bare(T.matte2) }), ...r, project_id: S.project };
+  try {
+    const g = await api('/api/video/matte', { method: 'POST', body, timeout: 900000, busy: 'Refining the matte…' });
+    S.history.set(g.id, g);
+    T.results.push(g.id); T.showing = g.id;
+    changed();
+  } catch (err) { toast('Refine matte failed: ' + err.message, true); }
+}
+
 function pickResult(onPick) {
   openVideoPicker({ title: 'Pick a matte or mask', onPick });
 }
@@ -379,6 +424,7 @@ async function run() {
   if (e.needs.includes('sound') && !T.sound) return toast('Choose the sound first', true);
   await tabs?.flush();
   if (e.job === 'key') return runKey(e);
+  if (e.job === 'matte') return runMatte();
   const t = tplOf(e);
   if (!t) return toast(`Template ${tplId(e)} isn't installed yet`, true);
   const values = {};

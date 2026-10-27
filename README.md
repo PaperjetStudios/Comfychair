@@ -182,6 +182,11 @@ templates use it (`@12 Pose smoothing`). Link it like the others
 (`ln -s ~/Programs/comfydeck/comfy_nodes/deck_posesmooth ~/Programs/ComfyUI/custom_nodes/deck_posesmooth`) and
 restart ComfyUI.
 
+**Refine matte** (VFX → Key, `POST /api/video/matte`) cleans up a matte or mask, or combines two (SAM3's and
+Alpha Gen's, say): Either, Both, First minus second or Average, then grow / shrink, fill holes, steady over
+frames, edge levels, feather and invert. It runs with ffmpeg on the server (`videoedit.matte_filters`) and lands in
+History as a new matte for Apply matte or Clean plate.
+
 **Keying** needs no template: the Video tab's **Key…** button on a clip, and the VFX tab's **Colour key**
 and **Apply matte** effects, call `POST /api/video/key`. It writes a VP9 webm with alpha into History.
 The Video preview and its export put a keyed clip over the tracks below it.

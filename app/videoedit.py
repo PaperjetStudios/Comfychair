@@ -189,6 +189,70 @@ def _hex(color: str) -> str:
     return c.lower()
 
 
+COMBINE = {"union": "lighten", "intersect": "darken", "subtract": "subtract", "average": "average"}
+
+
+def _morph(filt: str, px: int) -> list[str]:
+    """dilation / erosion grow or shrink by 1 px a pass (3x3): px passes."""
+    return [filt] * max(0, int(px))
+
+
+def matte_filters(combine: str | None = "union", grow: float = 0, close: float = 0, smooth: int = 0, feather: float = 0,
+                  low: float = 0, high: float = 1, invert: bool = False, alpha: tuple[bool, bool] = (False, False)) -> str:
+    """The -filter_complex for refine_matte(). Input 0 is matte A; input 1, when combine is set, matte B (scaled to
+    A). White = keep. In order: combine (union = either, intersect = both, subtract = A without B, average),
+    close (fill holes and gaps up to close px: grow then shrink), grow (+ dilate / - erode, px), smooth (average
+    over that many frames, for jitter), levels (low..high stretched to black..white: a hard or a soft edge),
+    feather (blur, px), invert."""
+    def gray(i, a):
+        return f"[{i}:v]{'format=yuva420p,alphaextract' if a else 'format=gray'},format=gray"
+    parts = [gray(0, alpha[0]) + "[a]"]
+    cur = "[a]"
+    if combine:
+        if combine not in COMBINE:
+            raise ValueError(f"Combine is one of {', '.join(COMBINE)}")
+        parts.append(gray(1, alpha[1]) + "[b0]")
+        parts.append("[b0][a]scale2ref=flags=bilinear[b][a2]")
+        parts.append(f"[a2][b]blend=all_mode={COMBINE[combine]}:shortest=1[c]")
+        cur = "[c]"
+    chain = []
+    c = round(max(0.0, float(close or 0)))
+    chain += _morph("dilation", c) + _morph("erosion", c)
+    g = round(float(grow or 0))
+    chain += _morph("dilation", g) if g > 0 else _morph("erosion", -g)
+    if int(smooth or 0) > 1:
+        chain.append(f"tmix=frames={min(15, int(smooth))}")
+    lo, hi = max(0.0, min(1.0, float(low or 0))), max(0.0, min(1.0, float(1 if high is None else high)))
+    if hi - lo < 0.999:
+        hi = max(hi, lo + 0.004)
+        chain.append(f"lutyuv=y='clip((val-{lo * 255:.1f})*255/{(hi - lo) * 255:.2f},0,255)'")
+    if float(feather or 0) > 0:
+        chain.append(f"gblur=sigma={float(feather) / 2:.2f}")
+    if invert:
+        chain.append("negate")
+    chain.append("format=yuv420p")
+    parts.append(f"{cur}{','.join(chain)}[v]")
+    return ";".join(parts)
+
+
+def refine_matte(a: Path, out: Path, b: Path | None = None, **opts) -> dict:
+    """A cleaned or combined matte (see matte_filters) as an H.264 clip at matte A's size and rate."""
+    ia = probe(a)
+    ib = probe(b) if b else None
+    args = ["ffmpeg", "-v", "error", "-y"]
+    for p, i in ((a, ia), (b, ib)):
+        if p:
+            args += (["-c:v", "libvpx-vp9"] if i.get("alpha") else []) + ["-i", str(p)]
+    fc = matte_filters(combine=opts.pop("combine", "union") if b else None,
+                       alpha=(bool(ia.get("alpha")), bool(ib and ib.get("alpha"))), **opts)
+    args += ["-filter_complex", fc, "-map", "[v]", "-an", "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+             "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out)]
+    r = subprocess.run(args, capture_output=True, timeout=3600)
+    if r.returncode:
+        raise RuntimeError(r.stderr.decode(errors="replace").strip().splitlines()[-1] if r.stderr else "ffmpeg failed")
+    return probe(out)
+
+
 def key_filters(mode: str, color: str = "#00ff00", similarity: float = 0.12, blend: float = 0.08,
                 spill: float = 0.5, invert: bool = False) -> str:
     """The -filter_complex for key(). Input 0 is the clip; for mode "matte" input 1 is a matte video

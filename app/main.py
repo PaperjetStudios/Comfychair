@@ -913,6 +913,46 @@ async def video_key(body: dict = Body(...)):
     return db.get_generation(gid)
 
 
+@app.post("/api/video/matte")
+async def video_matte(body: dict = Body(...)):
+    """A cleaned or combined matte in History ({a, b (optional), combine: union|intersect|subtract|average, grow,
+    close, smooth, feather, low, high, invert, project_id}): two mattes (say SAM3's and Alpha Gen's) made into one,
+    grown or shrunk, holes filled, steadied, edged and feathered (videoedit.matte_filters). White = keep."""
+    if not imageprep.ffmpeg_available():
+        raise HTTPException(400, "ffmpeg isn't installed (sudo apt install ffmpeg)")
+    a, ka = await _timeline_path(body.get("a") or {}, None)
+    b = None
+    if body.get("b"):
+        b, kb = await _timeline_path(body["b"], None)
+        if kb != "video":
+            raise HTTPException(400, "The second matte has to be a video")
+    if ka != "video":
+        raise HTTPException(400, "The matte has to be a video")
+    opts = {k: body[k] for k in ("grow", "close", "smooth", "feather", "low", "high", "invert") if body.get(k) is not None}
+    if b:
+        opts["combine"] = body.get("combine") or "union"
+    params = {"matte": body.get("a"), **({"with": body["b"]} if b else {}), **opts}
+    src = body.get("a") or {}
+    parent = ({"generation": src["generation"], "index": src.get("index", 0), "frame": None}
+              if src.get("generation") is not None else None)
+    gid = db.create_generation(body.get("project_id"), "matte", params, {}, f"matte-{uuid.uuid4().hex}", parent)
+    db.update_generation(gid, status="running")
+    await push_gen(gid)
+    out, rel = new_output(db.get_generation(gid), "matte.mp4")
+    try:
+        info = await asyncio.to_thread(videoedit.refine_matte, a, out, b, **opts)
+    except Exception as e:
+        out.unlink(missing_ok=True)
+        db.update_generation(gid, status="error", error=str(e), finished=time.time())
+        await push_gen(gid)
+        raise HTTPException(400, str(e))
+    db.update_generation(gid, status="done", finished=time.time(),
+                         outputs=[{"filename": out.name, "path": rel, "kind": "video", "node": "matte",
+                                   "duration": round(info["duration"], 2)}])
+    await push_gen(gid)
+    return db.get_generation(gid)
+
+
 def _media_path(name: str, ext: str) -> Path:
     """A fresh media-library file for a made sound: <8 hex>_<name><ext>."""
     safe = re.sub(r"[^\w.-]+", "_", Path(name or "sound").stem)[:60] or "sound"
