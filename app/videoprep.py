@@ -79,7 +79,7 @@ def build_cmd(src: Path, out: Path, info: dict, trim, crop) -> list[str]:
     if crop:
         x, y, w, h = crop
         cmd += ["-vf", f"crop={w}:{h}:{x}:{y}"]
-    cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-pix_fmt", "yuv420p"]
+    cmd += [*videoedit.h264(16, "veryfast"), "-pix_fmt", "yuv420p"]
     cmd += ["-c:a", "aac", "-b:a", "192k"] if info.get("audio") else ["-an"]
     return cmd + ["-movflags", "+faststart", str(out)]
 
@@ -99,7 +99,9 @@ def prep(src: Path, trim=None, crop=None, info: dict | None = None) -> dict:
     else:
         tmp = out.with_name(out.stem + ".part.mp4")
         try:
-            subprocess.run(build_cmd(src, tmp, info, trim, crop), check=True, capture_output=True, timeout=1800)
+            r = videoedit.run_ffmpeg(build_cmd(src, tmp, info, trim, crop), timeout=1800)
+            if r.returncode:
+                raise subprocess.CalledProcessError(r.returncode, "ffmpeg", r.stdout, r.stderr)
             tmp.replace(out)
         except subprocess.CalledProcessError as e:
             tmp.unlink(missing_ok=True)

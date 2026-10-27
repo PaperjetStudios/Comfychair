@@ -1110,8 +1110,8 @@ async def scene_render(frames: list[UploadFile] = File(...), fps: float = Form(2
             (Path(td) / f"f{i:05d}.png").write_bytes(await f.read())
         vf = (f"gblur=sigma={blur:g}," if blur > 0 else "") + "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p"
         cmd = ["ffmpeg", "-y", "-loglevel", "error", "-framerate", f"{fps:g}", "-i", str(Path(td) / "f%05d.png"),
-               "-vf", vf, "-c:v", "libx264", "-crf", "12", "-movflags", "+faststart", str(out)]
-        r = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
+               "-vf", vf, *videoedit.h264(12), "-movflags", "+faststart", str(out)]
+        r = await asyncio.to_thread(videoedit.run_ffmpeg, cmd, text=True)
     if r.returncode:
         out.unlink(missing_ok=True)
         db.update_generation(gid, status="error", error=r.stderr[-500:], finished=time.time())
@@ -1164,8 +1164,8 @@ async def scene_clip(frames: list[UploadFile] = File(...), token: str = Form(...
     out = config.SCENE_CLIP_DIR / f"{token}.mp4"
     vf = "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p"
     cmd = ["ffmpeg", "-y", "-loglevel", "error", "-framerate", f"{fps:g}", "-i", str(work / "f%05d.png"),
-           "-vf", vf, "-c:v", "libx264", "-crf", "12", "-movflags", "+faststart", str(out)]
-    r = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
+           "-vf", vf, *videoedit.h264(12), "-movflags", "+faststart", str(out)]
+    r = await asyncio.to_thread(videoedit.run_ffmpeg, cmd, text=True)
     shutil.rmtree(work, ignore_errors=True)
     if r.returncode:
         out.unlink(missing_ok=True)

@@ -1,7 +1,40 @@
 """Render the Video tab's timeline with ffmpeg: stacked video tracks, mixed audio tracks."""
 import json
+import os
 import subprocess
 from pathlib import Path
+
+_NVENC = None
+
+
+def nvenc() -> bool:
+    """Whether ffmpeg can use the card's own H.264 encoder (NVENC: separate from the CUDA cores, so it doesn't slow a
+    generation). DECK_NVENC=0 turns it off."""
+    global _NVENC
+    if _NVENC is None:
+        _NVENC = os.environ.get("DECK_NVENC", "1") != "0" and subprocess.run(
+            ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=s=320x240:d=0.2", "-c:v", "h264_nvenc", "-f", "null", "-"],
+            capture_output=True, timeout=30).returncode == 0
+    return _NVENC
+
+
+def h264(crf: int = 18, preset: str = "medium") -> list[str]:
+    """H.264 encoder arguments: NVENC at about the same quality (cq = crf) when there is one, else libx264."""
+    if nvenc():
+        return ["-c:v", "h264_nvenc", "-preset", "p5", "-tune", "hq", "-rc", "vbr", "-cq", str(crf), "-b:v", "0"]
+    return ["-c:v", "libx264", "-preset", preset, "-crf", str(crf)]
+
+
+def run_ffmpeg(args: list[str], **kw) -> subprocess.CompletedProcess:
+    """subprocess.run for an encode; when NVENC refuses it (a frame too small, the encoder sessions all busy), it runs
+    again with libx264."""
+    r = subprocess.run(args, capture_output=True, **kw)
+    if r.returncode and "h264_nvenc" in args:
+        i = args.index("h264_nvenc") - 1
+        cq = args[args.index("-cq") + 1] if "-cq" in args else "18"
+        args = args[:i] + ["-c:v", "libx264", "-preset", "medium", "-crf", cq] + args[i + 12:]   # h264() gives 12 args
+        r = subprocess.run(args, capture_output=True, **kw)
+    return r
 
 
 def probe(path: Path) -> dict:
@@ -172,9 +205,9 @@ def render(items: list[dict], out: Path, width: int | None = None, height: int |
     mix = mix_filters(items, inputs, total)
 
     args += ["-filter_complex", ";".join(filters + mix), "-map", "[v]", "-map", "[a]", "-t", f"{total:.3f}",
-             "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
+             *h264(18), "-pix_fmt", "yuv420p",
              "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)]
-    r = subprocess.run(args, capture_output=True, timeout=3600)
+    r = run_ffmpeg(args, timeout=3600)
     if r.returncode:
         raise RuntimeError(r.stderr.decode(errors="replace").strip().splitlines()[-1] if r.stderr else "ffmpeg failed")
     return probe(out)
@@ -245,9 +278,9 @@ def refine_matte(a: Path, out: Path, b: Path | None = None, **opts) -> dict:
             args += (["-c:v", "libvpx-vp9"] if i.get("alpha") else []) + ["-i", str(p)]
     fc = matte_filters(combine=opts.pop("combine", "union") if b else None,
                        alpha=(bool(ia.get("alpha")), bool(ib and ib.get("alpha"))), **opts)
-    args += ["-filter_complex", fc, "-map", "[v]", "-an", "-c:v", "libx264", "-crf", "16", "-preset", "medium",
+    args += ["-filter_complex", fc, "-map", "[v]", "-an", *h264(16),
              "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out)]
-    r = subprocess.run(args, capture_output=True, timeout=3600)
+    r = run_ffmpeg(args, timeout=3600)
     if r.returncode:
         raise RuntimeError(r.stderr.decode(errors="replace").strip().splitlines()[-1] if r.stderr else "ffmpeg failed")
     return probe(out)

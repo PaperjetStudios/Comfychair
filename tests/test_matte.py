@@ -90,6 +90,13 @@ class Real(unittest.TestCase):
         self.assertLess(at(e, 9, 15), 40)        # 1 px inside the edge: shrunk away
         self.assertGreater(at(e, 15, 15), 200)
 
+    def test_encoder_falls_back_to_libx264(self):
+        args = ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=s=16x16:d=0.2", *videoedit.h264(18),
+                "-pix_fmt", "yuv420p", str(self.td / "t.mp4")]
+        r = videoedit.run_ffmpeg(args, timeout=60)   # NVENC refuses frames this small: libx264 takes over
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((self.td / "t.mp4").stat().st_size > 0)
+
     def test_invert_and_size(self):
         info = videoedit.refine_matte(self.a, self.td / "n.mp4", invert=True)
         n = frame(self.td / "n.mp4")
