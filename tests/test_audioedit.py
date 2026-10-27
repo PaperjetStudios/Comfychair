@@ -1,5 +1,6 @@
 """Sound: extract, mix and lay with real ffmpeg on generated tones; audio fields in templates.
 Run: .venv/bin/python -m unittest discover tests"""
+import os
 import shutil
 import subprocess
 import tempfile
@@ -7,7 +8,16 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from app import audioedit, templates as tpl, videoedit
+audioedit = tpl = videoedit = None
+
+
+def setUpModule():   # imported late: other test modules set DECK_DATA/DECK_COMFY_DIR before app.config loads
+    global audioedit, tpl, videoedit
+    os.environ.setdefault("DECK_DATA", tempfile.mkdtemp(prefix="deck-test-"))
+    os.environ.setdefault("DECK_COMFY_DIR", "")
+    from app import audioedit as a, templates as t, videoedit as v
+    audioedit, tpl, videoedit = a, t, v
+
 
 HAVE_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
 
