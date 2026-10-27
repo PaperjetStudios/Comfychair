@@ -8,7 +8,8 @@ so its torch and models never touch ComfyUI's. app/voice.py starts one run per j
 {"op": "transcribe", "src": wav, "language": null}
     faster-whisper: {"text", "language", "segments": [{start, end, text}]}.
 {"op": "speak", "lines": [{"text", "ref": wav, "ref_text", "language", "out": wav}]}
-    Qwen3-TTS (1.7B Base) voice cloning, one file per line, the model loaded once.
+    Qwen3-TTS (1.7B Base) voice cloning, one file per line, the model loaded once. It takes no delivery: [tags] are
+    dropped. IndexTTS-2 and Fish S2, which do, are engine_index.py and engine_fish.py, in installs of their own.
 """
 import json
 import os
@@ -87,6 +88,12 @@ def transcribe(src: str, language=None) -> dict:
     return {"text": " ".join(s["text"] for s in segments).strip(), "language": info.language, "segments": segments}
 
 
+def plain(text: str) -> str:
+    """The line without Fish S2's [tags], which Qwen would read out; its delivery words are ignored here."""
+    import re
+    return re.sub(r"\s{2,}", " ", re.sub(r"\[[^\]]*\]", " ", text)).strip() or text
+
+
 def speak(lines: list[dict]) -> dict:
     import soundfile as sf
     import torch
@@ -102,10 +109,10 @@ def speak(lines: list[dict]) -> dict:
             prompts[key] = model.create_voice_clone_prompt(ref_audio=ln["ref"], ref_text=ln.get("ref_text") or None,
                                                            x_vector_only_mode=not ln.get("ref_text"))
         if key in prompts:
-            wavs, sr = model.generate_voice_clone(text=ln["text"], language=ln.get("language") or "Auto",
+            wavs, sr = model.generate_voice_clone(text=plain(ln["text"]), language=ln.get("language") or "Auto",
                                                   voice_clone_prompt=prompts[key])
         else:
-            wavs, sr = model.generate_voice_clone(text=ln["text"], language=ln.get("language") or "Auto",
+            wavs, sr = model.generate_voice_clone(text=plain(ln["text"]), language=ln.get("language") or "Auto",
                                                   ref_audio=ln["ref"], ref_text=ln.get("ref_text") or None)
         sf.write(ln["out"], wavs[0], sr)
         outs.append({"out": ln["out"], "seconds": round(len(wavs[0]) / sr, 2)})

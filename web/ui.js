@@ -401,6 +401,25 @@ export function section(title, onDone, ...kids) {
     title != null ? h('div', { class: 'section-title' }, h('span', {}, title), infos, onDone ? button('Done', onDone, { cls: 'small ghost' }) : null) : null, rest);
 }
 
+// A text box that grows with its text (up to max px); dispatch 'grow' on it after setting .value from code.
+export function autoGrow(ta, max = 420) {
+  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight + 2, max) + 'px'; };
+  ta.addEventListener('input', grow);
+  ta.addEventListener('grow', grow);
+  requestAnimationFrame(grow);
+}
+
+// Types text where the cursor is in a text box, with a space either side where needed.
+export function insertAtCursor(ta, text) {
+  const a = ta.selectionStart ?? ta.value.length, b = ta.selectionEnd ?? a;
+  const before = ta.value.slice(0, a), after = ta.value.slice(b);
+  const pad = before && !/\s$/.test(before) ? ' ' : '';
+  ta.value = before + pad + text + (after && !/^\s/.test(after) ? ' ' : '') + after;
+  const at = (before + pad + text).length + 1;
+  ta.focus(); ta.setSelectionRange(at, at);
+  ta.dispatchEvent(new Event('input'));
+}
+
 export const hint = (text, cls = '') => h('p', { class: `hint ${cls}`.trim() }, text);
 export const placeholder = (text) => h('div', { class: 'placeholder' }, text);
 export const note = (text, kind = 'warn') => h('div', { class: `note ${kind}` }, text);

@@ -1,6 +1,7 @@
 import {
   $, h, store, clamp, clamp01, clone, cycleIndex, api, toast, undoToast, openOverlay, openSheet, sheetStillOpen, nameSheet,
-  button, iconBtn, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider
+  button, iconBtn, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider,
+  autoGrow, insertAtCursor,
 } from './ui.js';
 import { ASPECT_PRESETS, S, addMine, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
 import { openImagePicker, openVideoPicker, soundInput } from './media.js';
@@ -509,13 +510,6 @@ function choiceField(f) {
   return field(f.label, filter, sel);
 }
 
-function autoGrow(ta, max = 420) {
-  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight + 2, max) + 'px'; };
-  ta.addEventListener('input', grow);
-  ta.addEventListener('grow', grow);
-  requestAnimationFrame(grow);
-}
-
 function textField(f) {
   if (isMainPrompt(f)) return promptField(f);
   const ta = h('textarea', { rows: f.multiline ? 4 : 1, value: S.values[f.key] ?? '', spellcheck: true });
@@ -555,16 +549,6 @@ function promptTags() {
     case 'qwen': return n(images).map((i) => `Picture ${i}`);
     default: return [];
   }
-}
-
-function insertAtCursor(ta, text) {
-  const a = ta.selectionStart ?? ta.value.length, b = ta.selectionEnd ?? a;
-  const before = ta.value.slice(0, a), after = ta.value.slice(b);
-  const pad = before && !/\s$/.test(before) ? ' ' : '';
-  ta.value = before + pad + text + (after && !/^\s/.test(after) ? ' ' : '') + after;
-  const at = (before + pad + text).length + 1;
-  ta.focus(); ta.setSelectionRange(at, at);
-  ta.dispatchEvent(new Event('input'));
 }
 
 // The reference tag a subject can point at, in this model's own syntax (null: model has none).

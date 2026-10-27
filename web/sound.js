@@ -1,7 +1,8 @@
 import {
   $, h, store, uid, api, toast, undoToast, clamp, button, iconBtn, linkBtn, seg, field, section, hint, help, info, note,
-  placeholder, numSlider, fileButton,
+  placeholder, numSlider, fileButton, rangeField, autoGrow, insertAtCursor,
 } from './ui.js';
+import { DELIVERY, INLINE_TAGS, parseScript, withDelivery, withName } from './dialogue.js';
 import { S, onServer } from './core.js';
 import { adoptGenerations } from './generate.js';
 import { extractSound, openSoundPicker, soundInput, soundSource, uploadMedia } from './media.js';
@@ -211,6 +212,8 @@ function drawWaves() {
 }
 
 // ---- the stage: the whole mix at a glance (tap to jump there) and a level meter ----
+// Its scale holds still while a clip is dragged on it (N.stageHold), so the clip doesn't run from the finger.
+const stageSpan = () => Math.max(seqEnd(), 1, N.stageHold || 0);
 function drawStage() {
   const cv = $('#sndCanvas');
   if (!cv || !$('#tab-sound').classList.contains('active')) return;
@@ -220,7 +223,7 @@ function drawStage() {
   const ctx = cv.getContext('2d');
   ctx.clearRect(0, 0, W, H);
   const meterW = Math.round(22 * dpr), plotW = W - meterW - 8 * dpr;
-  const end = Math.max(seqEnd(), 1), pps = plotW / end;
+  const end = stageSpan(), pps = plotW / end;
   const rows = N.tracks.length || 1, rowH = H / rows;
   N.tracks.forEach((tr, ri) => {
     ctx.save(); ctx.translate(0, ri * rowH);
@@ -229,6 +232,11 @@ function drawStage() {
       const w = waveOf(it), x0 = Math.round(it.at * pps), ww = Math.max(1, Math.round(itLen(it) * pps));
       ctx.fillStyle = it.id === N.sel ? '#3b6b4f' : '#24533a'; ctx.fillRect(x0, 2, ww, rowH - 4);
       if (w) { ctx.save(); ctx.translate(0, 4); paintWave(ctx, it, w, x0, ww, rowH - 8, pps, audible(tr) ? '#a7e8bd' : '#55705f'); ctx.restore(); }
+      if (it.id === N.sel) {   // the selected clip: an outline and its two trim ends
+        const lw = 2 * dpr, hw = Math.min(6 * dpr, ww / 3);
+        ctx.strokeStyle = '#e9b44c'; ctx.lineWidth = lw; ctx.strokeRect(x0 + lw / 2, 2 + lw / 2, ww - lw, rowH - 4 - lw);
+        ctx.fillStyle = '#e9b44c'; ctx.fillRect(x0, 2, hw, rowH - 4); ctx.fillRect(x0 + ww - hw, 2, hw, rowH - 4);
+      }
     }
     ctx.restore();
   });
@@ -317,22 +325,20 @@ function startScrub(e) {
   go(e);
   dragWindow(go);
 }
-function startClipDrag(e, el) {
-  const it = N.items.find((i) => i.id === el.dataset.id);
-  if (!it) return;
-  e.preventDefault();
-  const mode = e.target.classList.contains('tl-trim') ? (e.target.classList.contains('l') ? 'l' : 'r') : 'move';
+function selectClip(it) {
+  if (N.sel === it.id) return;
+  N.sel = it.id;
+  $('#sndTimeline').querySelectorAll('.tl-clip.sel').forEach((c) => c.classList.toggle('sel', c.dataset.id === it.id));
+  renderPanel(); drawStage();
+}
+// Move (mode 'move') or trim ('l' / 'r') a clip by a drag, snapping to the playhead and the other clips' ends.
+// pps: the pixels per second of what is being dragged on; trackAt(ev): the track under the pointer (or null).
+function dragClip(e, it, mode, { pps, trackAt, onTap = null }) {
   const x0 = e.clientX, y0 = e.clientY;
   const o = { at: it.at, in: it.in, out: it.out ?? (it.dur || 3) };
-  if (N.sel !== it.id) {
-    N.sel = it.id;
-    $('#sndTimeline').querySelectorAll('.tl-clip.sel').forEach((c) => c.classList.remove('sel'));
-    el.classList.add('sel');
-    renderPanel(); drawStage();
-  }
   const points = [0, N.t, ...N.items.filter((i) => i !== it).flatMap((i) => [i.at, itEnd(i)])];
   const snap = (t) => {
-    let best = t, d = 8 / N.pps;
+    let best = t, d = 8 / pps;
     for (const p of points) if (Math.abs(p - t) < d) { d = Math.abs(p - t); best = p; }
     return best;
   };
@@ -340,14 +346,14 @@ function startClipDrag(e, el) {
   dragWindow((ev) => {
     if (!moved && Math.abs(ev.clientX - x0) < 5 && Math.abs(ev.clientY - y0) < 5) return;
     moved = true;
-    const dt = (ev.clientX - x0) / N.pps;
+    const dt = (ev.clientX - x0) / pps;
     if (mode === 'move') {
       const len = o.out - o.in, at = Math.max(0, o.at + dt);
       const a1 = snap(at), a2 = snap(at + len) - len;
       const d1 = a1 !== at ? Math.abs(a1 - at) : Infinity, d2 = a2 !== at ? Math.abs(a2 - at) : Infinity;
       it.at = Math.max(0, d1 <= d2 && d1 < Infinity ? a1 : d2 < Infinity ? a2 : at);
-      const lane = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('#sndTimeline .tl-lane');
-      if (lane && N.tracks.some((t) => t.id === lane.dataset.track)) it.track = lane.dataset.track;
+      const tr = trackAt(ev);
+      if (tr && N.tracks.some((t) => t.id === tr)) it.track = tr;
     } else if (mode === 'l') {
       let d = snap(o.at + dt) - o.at;
       d = Math.max(d, -o.in, -o.at);
@@ -359,8 +365,36 @@ function startClipDrag(e, el) {
       it.out = out;
     }
     renderTimeline(); syncMedia();
-  }, () => { if (moved) changed(); });
+  }, (ev) => { if (moved) changed(); else onTap?.(ev); });
 }
+function startClipDrag(e, el) {
+  const it = N.items.find((i) => i.id === el.dataset.id);
+  if (!it) return;
+  e.preventDefault();
+  const mode = e.target.classList.contains('tl-trim') ? (e.target.classList.contains('l') ? 'l' : 'r') : 'move';
+  selectClip(it);
+  dragClip(e, it, mode, { pps: N.pps,
+    trackAt: (ev) => document.elementFromPoint(ev.clientX, ev.clientY)?.closest('#sndTimeline .tl-lane')?.dataset.track });
+}
+
+// The stage, as the timeline: a clip under the pointer and what a drag there does (null: empty space).
+// Near a clip's ends trims it; touch gets wider ends than a pen or mouse.
+function stageGeom() {
+  const r = $('#sndCanvas').getBoundingClientRect(), plotW = r.width - 30;
+  return { r, plotW, pps: plotW / stageSpan(), rowH: r.height / (N.tracks.length || 1) };
+}
+function stageHit(e) {
+  const g = stageGeom(), x = e.clientX - g.r.left, y = e.clientY - g.r.top;
+  const tr = N.tracks[clamp(Math.floor(y / g.rowH), 0, N.tracks.length - 1)];
+  if (!tr || x > g.plotW + 4) return null;
+  const pad = 6, edge0 = e.pointerType === 'touch' ? 18 : 10;
+  const hits = N.items.filter((i) => i.track === tr.id && x >= i.at * g.pps - pad && x <= itEnd(i) * g.pps + pad);
+  const it = hits.find((i) => i.id === N.sel) || hits[hits.length - 1];
+  if (!it) return null;
+  const x1 = it.at * g.pps, x2 = itEnd(it) * g.pps, edge = Math.min(edge0, (x2 - x1) / 3);
+  return { it, mode: x < x1 + edge ? 'l' : x > x2 - edge ? 'r' : 'move', g };
+}
+
 function wireTimeline() {
   const tl = $('#sndTimeline');
   tl.addEventListener('pointerdown', (e) => {
@@ -379,12 +413,24 @@ function wireTimeline() {
   }, { passive: false });
   new ResizeObserver(() => renderTimeline()).observe(tl);
   const cv = $('#sndCanvas');
-  cv.addEventListener('pointerdown', (e) => {   // the overview: tap or drag to move the playhead
-    const go = (ev) => {
-      const r = cv.getBoundingClientRect(), plotW = r.width - 30;
-      sndSeek(clamp((ev.clientX - r.left) / plotW, 0, 1) * Math.max(seqEnd(), 1));
-    };
-    sndPause(); go(e); dragWindow(go);
+  const seekAt = (ev) => { const g = stageGeom(); sndSeek(clamp((ev.clientX - g.r.left) / g.plotW, 0, 1) * stageSpan()); };
+  cv.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const hit = stageHit(e);
+    if (!hit) { sndPause(); seekAt(e); dragWindow(seekAt); return; }   // empty space: tap or drag to move the playhead
+    // a clip: select it, then drag it in time and to another track row, or drag its ends to trim; a tap also puts the playhead there
+    selectClip(hit.it);
+    N.stageHold = stageSpan();
+    dragClip(e, hit.it, hit.mode, { pps: hit.g.pps,
+      trackAt: (ev) => { const g = stageGeom(), row = Math.floor((ev.clientY - g.r.top) / g.rowH); return N.tracks[clamp(row, 0, N.tracks.length - 1)]?.id; },
+      onTap: (ev) => { sndPause(); seekAt(ev); } });
+    const release = () => { removeEventListener('pointerup', release); removeEventListener('pointercancel', release); N.stageHold = 0; drawStage(); };
+    addEventListener('pointerup', release); addEventListener('pointercancel', release);
+  });
+  cv.addEventListener('pointermove', (e) => {   // a pen or mouse hovering: show what a press would do
+    if (e.buttons) return;
+    const hit = stageHit(e);
+    cv.style.cursor = !hit ? 'pointer' : hit.mode === 'move' ? 'grab' : 'ew-resize';
   });
   new ResizeObserver(() => drawStage()).observe(cv);
 }
@@ -534,7 +580,13 @@ function makerSection() {
 }
 
 // ---- voice tools (app/voice.py): clean a voice out of a mix, keep voices, speak new lines in them ----
-const VX = { status: null, voices: null, clean: { steps: ['vocals', 'dereverb', 'denoise'] }, nv: null, script: '', lang: 'Auto', busy: '' };
+const VX = { status: null, voices: null, clean: { steps: ['vocals', 'dereverb', 'denoise'] }, nv: null, script: '', lang: 'Auto', busy: '',
+  engine: store.get('deck.sound.engine', 'index'), intensity: store.get('deck.sound.intensity', 0.7) };
+const ENGINES = [
+  ['qwen', 'Qwen (plain)', 'Qwen3-TTS: plain speech. It ignores delivery words and [tags].'],
+  ['index', 'IndexTTS-2 (delivery)', 'IndexTTS-2: speaks each line the way its (delivery words) say. Inline [tags] are dropped.'],
+  ['fish', 'Fish S2 (tags)', 'Fish S2: understands (delivery words), as a leading [tag], and inline [tags]. Slower.'],
+];
 const voicesLoad = async () => {
   try { VX.status ||= await api('/api/voice/status'); VX.voices = await api('/api/voice/voices'); } catch (e) { VX.voices = []; toast(e.message, true); }
   renderPanel();
@@ -610,9 +662,13 @@ function voiceSection() {
     lang.addEventListener('change', () => { nv.language = lang.value; });
     const ok = h('input', { type: 'checkbox', checked: !!nv.consent });
     ok.addEventListener('change', () => { nv.consent = ok.checked; });
-    form = h('div', { class: 'vx-block' },
+    const len = nv.src?.trim?.len;
+    form = h('div', { class: 'vx-block', id: 'vxNewVoice' },
       h('b', {}, 'New voice'),
       hint('5 to 15 seconds of one person speaking clearly, nothing else (clean it up first). Set Start and Length to the best part.'),
+      nv.fromClip ? note(`From “${nv.fromClip}”. Music or noise in it? Try “Clean up a voice” above first, then make the voice from the clean clip.`, 'tip') : null,
+      len > 15 ? note(`This cut is ${len.toFixed(1)} s: the model wants 5 to 15 s. Split the clip (✂) and use the best part, or shorten Length.`) : null,
+      len != null && len < 5 ? note(`This cut is only ${len.toFixed(1)} s: 5 to 15 s of speech clones better.`) : null,
       soundInput(nv.src, (v) => { nv.src = v; }, { title: 'A clean cut of one person speaking', label: 'Speech' }),
       field('Name', name), field('Language', lang), field('What is said', text),
       h('div', { class: 'row wrap' }, button('👂 Listen', async () => {
@@ -642,33 +698,65 @@ function voiceSection() {
     }, { title: it ? 'From the selected clip' : null })));
 
   // 3. dialogue
-  const script = h('textarea', { rows: 6, value: VX.script, placeholder: 'One line each, the voice\'s name first:\nAnna: Did you hear that?\nNarrator: Nobody had, of course.' });
+  const script = h('textarea', { rows: 6, value: VX.script, spellcheck: true,
+    placeholder: 'One line each, the voice\'s name first:\nAnna (whispering): Did you hear that?\nNarrator: Nobody had, of course. [sigh]' });
   script.addEventListener('input', () => { VX.script = script.value; });
+  autoGrow(script);
+  const chips = scriptChips(script);
+  script.addEventListener('focus', () => chips.classList.remove('hidden'));
+  script.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== script) chips.classList.add('hidden'); }, 150));
   const lang = h('select', {}, VX.status.languages.map((l) => h('option', { value: l, selected: l === VX.lang }, l)));
   lang.addEventListener('change', () => { VX.lang = lang.value; });
+  const eng = ENGINES.find((e) => e[0] === VX.engine) || ENGINES[1];
   const dialogue = h('div', { class: 'vx-block' }, h('b', {}, 'Dialogue'),
     hint('Speaks each line in its voice and lays the lines one after another from the playhead, a track per voice.'),
-    field('Script', script), field('Language', lang),
+    h('div', { class: 'field vx-script' }, h('div', { class: 'lbl' }, h('span', {}, 'Script'),
+      info('One line each: Name (delivery words): what they say, with [tags] anywhere in it. The (delivery) part is optional. Tap into the box for chips.')),
+    chips, script),
+    field('Engine', seg(ENGINES, eng[0], (v) => { VX.engine = v; store.set('deck.sound.engine', v); renderPanel(); }, { wrap: true }), help(eng[2])),
+    VX.status.engines && VX.status.engines[eng[0]] === false ? note(`${eng[1].replace(/ \(.*/, '')} isn't installed on the server yet: see the README (Sound tab, Voice tools).`) : null,
+    eng[0] === 'index' ? rangeField('Delivery strength', () => VX.intensity, (v) => { VX.intensity = v; store.set('deck.sound.intensity', v); },
+      { min: 0.2, max: 1, step: 0.05, help: 'How strongly the delivery words colour the line: low is a hint, 1 is all the way.' }) : null,
+    field('Language', lang),
     h('div', { class: 'row wrap' }, button('🗣 Speak the lines', speakScript, { cls: 'primary', disabled: !!VX.busy || !(VX.voices || []).length })));
 
   return section('Voice', null, help('AI voice tools: pull a voice out of a clip, keep it, and write new lines in it. They use the GPU, so ComfyUI has to be idle.'),
     busy, clean, voices, dialogue);
 }
 
+// The script box's chips: voice names start the line, delivery words go in its "(…)", tags at the cursor.
+// They float above the box while it has the cursor; on touch screens the text popup shows them (_chipGroups).
+function scriptChips(ta) {
+  const edit = (fn) => (t) => {
+    const r = fn(t.value, t.selectionStart ?? t.value.length);
+    if (!r) return toast('Start the line with a voice\'s name first (tap one)', true);
+    t.value = r.value; t.focus(); t.setSelectionRange(r.pos, r.pos);
+    t.dispatchEvent(new Event('input'));
+  };
+  const groups = () => [
+    ['Voices', (VX.voices || []).map((v) => [v.name, { run: edit((val, pos) => withName(val, pos, v.name)) }]), true],
+    ['Delivery', DELIVERY.map((w) => [`(${w})`, { run: edit((val, pos) => withDelivery(val, pos, w)) }]), true],
+    ['Tags', INLINE_TAGS.map((t) => [`[${t}]`, { run: (x) => insertAtCursor(x, `[${t}]`) }]), true],
+  ];
+  ta._chipGroups = groups;
+  return h('div', { class: 'vx-chips hidden' }, groups().filter(([, items]) => items.length).map(([name, items]) =>
+    h('div', { class: 'chips tag-chips vx-chip-row', 'aria-label': name }, h('span', { class: 'vx-chip-lbl' }, name),
+      items.map(([label, { run }]) => h('button', { type: 'button', class: 'chip', onmousedown: (e) => e.preventDefault(), onclick: () => run(ta) }, label)))));
+}
+
+// the selected clip's part on the timeline as the source of a new voice, in the Voice section's form
+function voiceFromClip(it) {
+  if (VX.status && !VX.status.installed) return toast('The AI voice tools aren\'t installed on the server yet (see README, Sound tab)', true);
+  VX.nv = { src: srcOf(it), name: '', ref_text: '', language: 'Auto', consent: false, fromClip: it.label };
+  renderPanel();
+  requestAnimationFrame(() => $('#vxNewVoice')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+}
+
 async function speakScript() {
-  const byName = new Map((VX.voices || []).map((v) => [v.name.toLowerCase(), v]));
-  const lines = [];
-  for (const raw of VX.script.split('\n')) {
-    const m = raw.match(/^\s*([^:]{1,60}):\s*(.+)$/);
-    if (!raw.trim()) continue;
-    if (!m) return toast(`Start the line with a voice's name and a colon: “${raw.trim().slice(0, 40)}”`, true);
-    const v = byName.get(m[1].trim().toLowerCase());
-    if (!v) return toast(`No voice called “${m[1].trim()}”: save one first`, true);
-    lines.push({ voice: v.id, text: m[2].trim(), language: VX.lang === 'Auto' ? null : VX.lang, who: v.name });
-  }
-  if (!lines.length) return toast('Write a line first', true);
+  const { lines, error } = parseScript(VX.script, VX.voices, { language: VX.lang === 'Auto' ? null : VX.lang, intensity: VX.intensity });
+  if (error) return toast(error, true);
   try {
-    const r = await job('/api/voice/speak', { lines, name: tabs?.active?.name || 'dialogue' }, 'Speaking');
+    const r = await job('/api/voice/speak', { lines, engine: VX.engine, name: tabs?.active?.name || 'dialogue' }, 'Speaking');
     let at = N.t;
     const trackFor = (who) => {
       let tr = N.tracks.find((t) => t.name === who);
@@ -691,6 +779,7 @@ function renderPanel() {
   const body = $('#sndBody');
   if (!body) return;
   const it = selItem(), tr = it && trackOf(it);
+  $('#sndDel').disabled = !it;
   const num = (label, get, set, opts, after = () => {}) => {
     const r = numSlider({ ...opts, value: get(), label });
     const val = h('span', {}, opts.fmt ? opts.fmt(get()) : '');
@@ -728,7 +817,8 @@ function renderPanel() {
           const m = await extractSound(it.src, { trim: { start: it.in, len: itLen(it) }, name: `${it.label}-cut` });
           toast(`${m.label}: in the media library, ready as a reference`);
         } catch (e) { toast(e.message, true); }
-      }, { title: 'This cut as its own sound file in the media library (to use as a reference in Generate / VFX)' }))) : null;
+      }, { title: 'This cut as its own sound file in the media library (to use as a reference in Generate / VFX)' })),
+    h('div', { class: 'row wrap' }, button('🎙 Make a voice from this clip', () => voiceFromClip(it), { cls: 'primary' }))) : null;
 
   const track = tr ? section(`Track · ${trackName(tr)}`, null,
     num('Track level', () => tr.volume ?? 1, (v) => { tr.volume = v; }, { min: 0, max: 2, step: 0.01, digits: 2, fmt: pct }),
@@ -790,6 +880,8 @@ export function wireSound() {
   $('#sndBack').addEventListener('click', () => sndSeek(N.t - 5));
   $('#sndFwd').addEventListener('click', () => sndSeek(N.t + 5));
   $('#sndPlay').addEventListener('click', () => (N.playing ? sndPause() : sndPlay()));
+  $('#sndSplit').addEventListener('click', splitAtPlayhead);
+  $('#sndDel').addEventListener('click', deleteSelected);
   const loopBtn = $('#sndLoop');
   const showLoop = () => { loopBtn.classList.toggle('on', N.loop); loopBtn.setAttribute('aria-pressed', String(N.loop)); };
   loopBtn.addEventListener('click', () => { N.loop = !N.loop; store.set('deck.sound.loop', N.loop); showLoop(); });

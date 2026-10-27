@@ -337,13 +337,17 @@ function wireTextPopup() {
     undo = []; lastTyped = -Infinity; undoBtn.disabled = true; prev = { v: ta.value, a: ta.value.length, b: ta.value.length };
     // the prompt's tag chips (<Picture 1>, <Subject 1>…) move in here; on touch screens the panel hides them
     const list = [...(t.closest('.prompt-field')?.querySelectorAll('.tag-chips .chip') || [])].map((c) => c.textContent);
+    // a chip's text is a phrase for insertPhrase, or { run(ta) } that edits the text itself (the Sound tab's script)
     const chip = (label, text = label) => h('button', { type: 'button', class: 'chip',
       title: typeof text === 'string' ? text.replace(/[§¶↵]/g, '') : label,
-      onmousedown: keepFocus, onclick: () => { snap(); lastTyped = -Infinity; insertPhrase(ta, text); } }, label);
-    const phrases = S.tpl?.tag_style === 'h3' && t.closest('.prompt-field') ? H3_PHRASES : [];
+      onmousedown: keepFocus, onclick: () => { snap(); lastTyped = -Infinity; if (text?.run) text.run(ta); else insertPhrase(ta, text); } }, label);
+    // a box can bring its own chip groups: t._chipGroups() → [[name, [[label, text]], open by default]]
+    const phrases = t._chipGroups ? t._chipGroups().filter(([, items]) => items.length)
+      : S.tpl?.tag_style === 'h3' && t.closest('.prompt-field') ? H3_PHRASES : [];
     // phrase groups fold: tap a heading to open or close it (remembered)
     const open = store.get('deck.phraseGroups', { Structure: true });
-    const group = ([name, items]) => {
+    const group = ([name, items, dflt = false]) => {
+      open[name] ??= dflt;
       const body = h('div', { class: 'text-pop-group' + (open[name] ? '' : ' hidden') }, items.map(([l, x]) => chip(l, x)));
       const head = h('button', { type: 'button', class: 'text-pop-head', onmousedown: keepFocus, onclick: () => {
         open[name] = !open[name]; store.set('deck.phraseGroups', open);

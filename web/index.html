@@ -111,7 +111,7 @@
     <section id="tab-sound" class="tab">
       <div class="stage editor-stage">
         <div class="viewer snd-viewer">
-          <canvas id="sndCanvas" aria-label="The whole mix: tap to move the playhead"></canvas>
+          <canvas id="sndCanvas" aria-label="The whole mix: tap to move the playhead, drag a clip to move or trim it"></canvas>
           <div id="sndEmpty" class="placeholder">Add sounds, or the sound of clips, to the tracks below</div>
         </div>
         <div class="transport">
@@ -121,6 +121,8 @@
           <button id="sndFwd" class="icon-btn" aria-label="Forward 5 seconds" title="Forward 5 s">⏩</button>
           <button id="sndLoop" class="btn small" aria-pressed="false">⟲ Loop</button>
           <span id="sndTime" class="timecode"></span>
+          <button id="sndSplit" class="icon-btn" aria-label="Split at the playhead" title="Split at the playhead (S)">✂</button>
+          <button id="sndDel" class="icon-btn" aria-label="Delete the selected clip" title="Delete the selected clip (Del)">🗑</button>
         </div>
       </div>
       <div class="splitter" role="separator" aria-label="Drag to resize preview and settings" title="Drag to resize · double-tap to reset"></div>
