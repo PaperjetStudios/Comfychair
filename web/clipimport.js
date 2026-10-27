@@ -13,7 +13,7 @@ const fmtSize = (b) => (b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(1, 
 const fmtDur = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 
 // Poll a server job ({job}) until it ends: resolves its result, rejects with its error.
-function waitJob({ job }, onProgress) {
+export function waitJob({ job }, onProgress) {
   return new Promise((resolve, reject) => {
     const poll = async () => {
       let s;
@@ -68,9 +68,11 @@ async function copyPiece(file, start, len, onLog) {
   }
 }
 
-// opts.onSaved(entry): the saved media entry ({name, url, kind, label}); the sheet is closed first
-export function openClipImport({ onSaved = null, title = 'Import a clip' } = {}) {
+// opts.onSaved(entry): the saved media entry ({name, url, kind, label}); the sheet is closed first.
+// opts.sound: start on "Sound only" (the cut is saved as an .m4a, no picture)
+export function openClipImport({ onSaved = null, title = 'Import a clip', sound = false } = {}) {
   let tab = store.get('deck.clipImport.tab', 'link');
+  let soundOnly = !!sound;
   let size = store.get('deck.clipImport.size', 0);
   let cut = null;   // { trim, crop } as the editor reports them
   let busy = false;
@@ -79,7 +81,8 @@ export function openClipImport({ onSaved = null, title = 'Import a clip' } = {})
     if (busy) { tabs.set(tab); return toast('Wait for the clip to finish', true); }
     tab = t; store.set('deck.clipImport.tab', t); show();
   });
-  openSheet(h('h3', {}, title), tabs, body);
+  const keep = seg([['clip', 'Clip'], ['sound', 'Sound only']], soundOnly ? 'sound' : 'clip', (v) => { soundOnly = v === 'sound'; });
+  openSheet(h('h3', {}, title), h('div', { class: 'row wrap' }, tabs, keep), body);
 
   const sizeField = () => field('Size', seg(SIZES.map(([v, l]) => [v, l]), size, (v) => { size = Number(v); store.set('deck.clipImport.size', size); }),
     hint('Largest height kept. Original keeps the full picture.'));
@@ -106,7 +109,7 @@ export function openClipImport({ onSaved = null, title = 'Import a clip' } = {})
       busy = true; b.disabled = true;
       try {
         const entry = await run();
-        toast(`Saved ${entry.label} to the media library`);
+        toast(`Saved ${entry.label}${entry.kind === 'audio' ? ' (sound)' : ''} to the media library`);
         closeSheet();
         onSaved?.(entry);
       } catch (e) { toast(e.message, true); bar.classList.add('hidden'); }
@@ -147,7 +150,7 @@ export function openClipImport({ onSaved = null, title = 'Import a clip' } = {})
         h('div', { class: 'actions' }, saveBtn(async () => {
           const { start, end } = span(L.duration);
           return waitJob(await api(`/api/clip/link/${L.id}/cut`, { method: 'POST', busy: false,
-            body: { start, end, height: size || null, crop: cut?.crop, name: name.value.trim() || L.title } }), progress);
+            body: { start, end, height: size || null, crop: cut?.crop, name: name.value.trim() || L.title, sound: soundOnly } }), progress);
         })));
     };
     url.addEventListener('keydown', (e) => { if (e.key === 'Enter') load(); });
@@ -195,7 +198,7 @@ export function openClipImport({ onSaved = null, title = 'Import a clip' } = {})
         h('div', { class: 'actions' }, saveBtn(async () => {
           const { start, end } = span(info.duration);
           return waitJob(await api('/api/clip/file/cut', { method: 'POST', busy: false,
-            body: { path: x.path, start, end, height: size || null, crop: cut?.crop, name: name.value.trim() || x.name } }), progress);
+            body: { path: x.path, start, end, height: size || null, crop: cut?.crop, name: name.value.trim() || x.name, sound: soundOnly } }), progress);
         })));
     };
     draw(`/api/clip/file?path=${encodeURIComponent(x.path)}`);
@@ -242,6 +245,7 @@ export function openClipImport({ onSaved = null, title = 'Import a clip' } = {})
         form.append('length', String(end - start)); form.append('height', String(size || 0));
         if (cut?.crop) form.append('crop', JSON.stringify(cut.crop));
         form.append('name', name.value.trim() || fl.name);
+        if (soundOnly) form.append('sound', 'true');
         return waitJob(await api('/api/clip/upload', { method: 'POST', form, busy: false }), progress);
       })));
   };

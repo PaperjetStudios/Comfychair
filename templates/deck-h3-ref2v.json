@@ -247,6 +247,14 @@
       "ref_images.ref_image_3": [
         "23",
         0
+      ],
+      "ref_audios.ref_audio_0": [
+        "24",
+        0
+      ],
+      "ref_audios.ref_audio_1": [
+        "25",
+        0
       ]
     },
     "_meta": {
@@ -301,6 +309,28 @@
     },
     "_meta": {
       "title": "@5 Turbo LoRA"
+    }
+  },
+  "24": {
+    "class_type": "VHS_LoadAudio",
+    "inputs": {
+      "audio_file": "",
+      "seek_seconds": 0,
+      "duration": 0
+    },
+    "_meta": {
+      "title": "@7 Sound references [audio_file]"
+    }
+  },
+  "25": {
+    "class_type": "VHS_LoadAudio",
+    "inputs": {
+      "audio_file": "",
+      "seek_seconds": 0,
+      "duration": 0
+    },
+    "_meta": {
+      "title": "@7 Sound references [audio_file]"
     }
   }
 }

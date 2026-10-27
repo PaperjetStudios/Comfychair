@@ -245,6 +245,53 @@
    "title": "@6 LoRAs"
   }
  },
+ "vref": {
+  "class_type": "VHS_LoadAudio",
+  "inputs": {
+   "audio_file": "",
+   "seek_seconds": 0,
+   "duration": 0
+  },
+  "_meta": {
+   "title": "@7 Voice [audio_file]"
+  }
+ },
+ "voice": {
+  "class_type": "LTXVReferenceAudio",
+  "inputs": {
+   "model": [
+    "loras",
+    0
+   ],
+   "positive": [
+    "cond",
+    0
+   ],
+   "negative": [
+    "cond",
+    1
+   ],
+   "reference_audio": [
+    "vref",
+    0
+   ],
+   "audio_vae": [
+    "avae",
+    0
+   ],
+   "identity_guidance_scale": 3.0,
+   "start_percent": 0.0,
+   "end_percent": 1.0
+  },
+  "_meta": {
+   "title": "@7 Voice [identity_guidance_scale]",
+   "deck_passthrough": [
+    "model",
+    "positive",
+    "negative"
+   ]
+  }
+ },
  "noise": {
   "class_type": "RandomNoise",
   "inputs": {
@@ -258,16 +305,16 @@
   "class_type": "CFGGuider",
   "inputs": {
    "model": [
-    "loras",
+    "voice",
     0
    ],
    "positive": [
-    "cond",
-    0
+    "voice",
+    1
    ],
    "negative": [
-    "cond",
-    1
+    "voice",
+    2
    ],
    "cfg": 1.0
   }

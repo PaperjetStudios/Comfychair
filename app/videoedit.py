@@ -67,6 +67,37 @@ def _place(it: dict, W: int, H: int) -> tuple[list[str], str, str]:
     return chain, f"W/2+{px:.1f}-w/2", f"H/2+{py:.1f}-h/2"
 
 
+def mix_filters(items: list[dict], inputs: dict, total: float) -> list[str]:
+    """filter_complex parts that mix every unmuted clip with sound into [a] (48 kHz stereo, total seconds).
+    items carry "info" (probe), "at", "len", "xin"/"xout" (_overlaps), "volume", "fade_in", "fade_out",
+    "pan" (-1 left .. 1 right) and "muted"; inputs maps id(item) to its ffmpeg input index."""
+    mix = [f"anullsrc=r=48000:cl=stereo,atrim=0:{total:.3f}[sil]"]
+    labels = ["[sil]"]
+    for it in items:
+        if it["kind"] == "image" or it.get("muted") or not it["info"]["audio"]:
+            continue
+        vol = float(it.get("volume", 1) if it.get("volume") is not None else 1)
+        if vol <= 0:
+            continue
+        chain = ["asetpts=PTS-STARTPTS", "aresample=48000", "aformat=channel_layouts=stereo", f"volume={vol:.3f}"]
+        pan = max(-1.0, min(1.0, float(it.get("pan") or 0)))
+        if abs(pan) > 0.005:   # balance: turn the far side down
+            chain.append(f"pan=stereo|c0={min(1.0, 1 - pan):.3f}*c0|c1={min(1.0, 1 + pan):.3f}*c1")
+        fi = max(float(it.get("fade_in") or 0), it["xin"])
+        fo = max(float(it.get("fade_out") or 0), it["xout"])
+        if fi > 0:
+            chain.append(f"afade=t=in:st=0:d={min(fi, it['len']):.3f}")
+        if fo > 0:
+            chain.append(f"afade=t=out:st={max(0.0, it['len'] - fo):.3f}:d={min(fo, it['len']):.3f}")
+        ms = round(it["at"] * 1000)
+        chain.append(f"adelay={ms}|{ms}")
+        k = len(labels)
+        mix.append(f"[{inputs[id(it)]}:a]{','.join(chain)}[a{k}]")
+        labels.append(f"[a{k}]")
+    mix.append(f"{''.join(labels)}amix=inputs={len(labels)}:duration=first:normalize=0[a]")
+    return mix
+
+
 def render(items: list[dict], out: Path, width: int | None = None, height: int | None = None,
            fps: float | None = None):
     """items: [{"path", "kind": video|image|audio, "track", "z" (video tracks: 0 = bottom),
@@ -138,27 +169,7 @@ def render(items: list[dict], out: Path, width: int | None = None, height: int |
         n += 1
     filters.append(f"[b{n}]format=yuv420p[v]")
 
-    mix = [f"anullsrc=r=48000:cl=stereo,atrim=0:{total:.3f}[sil]"]
-    labels = ["[sil]"]
-    for it in items:
-        if it["kind"] == "image" or it.get("muted") or not it["info"]["audio"]:
-            continue
-        vol = float(it.get("volume", 1))
-        if vol <= 0:
-            continue
-        chain = ["asetpts=PTS-STARTPTS", "aresample=48000", "aformat=channel_layouts=stereo", f"volume={vol:.3f}"]
-        fi = max(float(it.get("fade_in") or 0), it["xin"])
-        fo = max(float(it.get("fade_out") or 0), it["xout"])
-        if fi > 0:
-            chain.append(f"afade=t=in:st=0:d={min(fi, it['len']):.3f}")
-        if fo > 0:
-            chain.append(f"afade=t=out:st={max(0.0, it['len'] - fo):.3f}:d={min(fo, it['len']):.3f}")
-        ms = round(it["at"] * 1000)
-        chain.append(f"adelay={ms}|{ms}")
-        k = len(labels)
-        mix.append(f"[{inputs[id(it)]}:a]{','.join(chain)}[a{k}]")
-        labels.append(f"[a{k}]")
-    mix.append(f"{''.join(labels)}amix=inputs={len(labels)}:duration=first:normalize=0[a]")
+    mix = mix_filters(items, inputs, total)
 
     args += ["-filter_complex", ";".join(filters + mix), "-map", "[v]", "-map", "[a]", "-t", f"{total:.3f}",
              "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",

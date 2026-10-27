@@ -1,7 +1,8 @@
 import {
   $, h, store, api, toast, undoToast, overlayOpened, overlayClosed, sheetOpen, button, iconBtn, linkBtn, seg, placeholder,
-  numSlider,
+  numSlider, field, section, hint, openSheet, closeSheet,
 } from './ui.js';
+import { extractSound, soundInput } from './media.js';
 import { S, switchTab } from './core.js';
 import { openGeneration, sendToInput } from './run.js';
 import { E, FULL, editorTabsReady, persistEditor, renderEditor } from './editor.js';
@@ -128,6 +129,40 @@ function boardTile(g, o, i) {
   tile.addEventListener('contextmenu', (e) => e.preventDefault());   // no image menu on long press
   tile.addEventListener('dragstart', (e) => e.preventDefault());     // nor the browser's own image drag, which cancels the press
   return tile;
+}
+
+// ---- a clip's sound: take it out into the media library, or put another sound on it (a new clip in History)
+function openSoundSheet(g, i) {
+  const video = { generation: g.id, index: i };
+  let sound = null, mode = 'replace';
+  const vol = numSlider({ min: 0, max: 2, step: 0.05, value: 1, digits: 2, label: 'Sound level' });
+  const keep = numSlider({ min: 0, max: 2, step: 0.05, value: 1, digits: 2, label: 'Clip sound level' });
+  const at = h('input', { type: 'number', inputMode: 'decimal', min: 0, step: 0.1, value: 0, 'aria-label': 'Starts at (s)' });
+  const keepRow = field('The clip\'s own sound level', keep);
+  const lay = async () => {
+    if (!sound) return toast('Choose a sound first', true);
+    try {
+      const out = await api('/api/audio/lay', { method: 'POST', timeout: 600000, busy: 'Putting the sound on…', body: {
+        video, sound: { ...(sound.generation != null ? { generation: sound.generation, index: sound.index } : { media: sound.media }) },
+        sound_trim: sound.trim || null, mode, at: parseFloat(at.value) || 0, volume: parseFloat(vol.value), keep: parseFloat(keep.value), project_id: S.project } });
+      closeSheet();
+      toast(`Made #${out.id} with the new sound`);
+      S.history.set(out.id, out);
+      if (GAL.el) galleryRefresh(); else renderBoard();
+    } catch (e) { toast(e.message, true); }
+  };
+  keepRow.classList.toggle('hidden', mode !== 'mix');
+  openSheet(h('h3', {}, `Sound · #${g.id} ${g.template}`),
+    section('Take the sound out', null,
+      hint('Saves the clip\'s sound as its own file in the media library, to edit in the Sound tab or use as a reference.'),
+      h('div', { class: 'row wrap' }, button('Take the sound out', async () => {
+        try { await extractSound(video, { name: `${g.id}-${g.template}-sound` }); closeSheet(); } catch (e) { toast(e.message, true); }
+      }, { cls: 'primary' }))),
+    section('Put a sound on it', null,
+      soundInput(null, (v) => { sound = v; }, { title: 'The sound to put on the clip' }),
+      field('Clip\'s own sound', seg([['replace', 'Replace it'], ['mix', 'Keep it under']], mode, (v) => { mode = v; keepRow.classList.toggle('hidden', v !== 'mix'); })),
+      keepRow, field('Sound level', vol), field('Starts at (s)', at),
+      h('div', { class: 'row wrap' }, button('Make the clip', lay, { cls: 'primary' }))));
 }
 
 // ---- board selection: pick tiles, then make a new edit from them, put them on the timeline, or delete
@@ -349,6 +384,7 @@ function galleryRender(newMedia = false) {
     button(marked ? '🗑 Marked' : '🗑 Mark', () => { toggleMarked(g.id); boardChanged(g); }, { cls: 'small' + (marked ? ' danger on' : ''), title: 'D' }),
     o.kind === 'image' ? button('✎ Edit', () => { closeGallery(); itemsToEditor([cur]); }, { title: 'E' }) : null,
     button('Use as input', () => { closeGallery(); sendToInput(g, i, 'first'); }),
+    o.kind === 'video' ? button('♪ Sound', () => openSoundSheet(g, i), { title: 'Take the sound out, or put a sound on this clip' }) : null,
     button('Details', () => openGeneration(g.id)),
     linkBtn('Download', o.url, { download: o.filename }),
     markedGens().length ? button(`Delete ${markedGens().length} marked`, deleteMarked, { cls: 'small danger' }) : null,

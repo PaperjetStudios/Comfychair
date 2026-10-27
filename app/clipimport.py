@@ -174,14 +174,20 @@ def _vf(crop, height) -> list[str]:
 
 def _encode(job, inputs: list[tuple[str, list[str]]], start: float, length: float, crop, height, out: Path,
             audio_map: str | None = "0:a:0?"):
-    """One pass: every input seeks to start (input options before each -i), the piece is re-encoded to out."""
+    """One pass: every input seeks to start (input options before each -i), the piece is re-encoded to out.
+    An .m4a out keeps only the sound."""
+    sound = out.suffix == ".m4a"
     cmd = ["ffmpeg", "-y", "-v", "error"]
     for src, opts in inputs:
         cmd += opts + (["-ss", f"{start:.3f}"] if start > 0 else []) + ["-i", src]
-    cmd += ["-t", f"{length:.3f}", "-map", "0:v:0"] + (["-map", audio_map] if audio_map else [])
-    cmd += _vf(crop, height) + ["-c:v", "libx264", "-preset", "medium", "-crf", "17",
-                                "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)]
-    part = out.with_suffix(".part.mp4")
+    if sound:
+        cmd += ["-t", f"{length:.3f}", "-vn", "-map", (audio_map or "0:a:0").rstrip("?"), "-ac", "2", "-ar", "48000",
+                "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", str(out)]
+    else:
+        cmd += ["-t", f"{length:.3f}", "-map", "0:v:0"] + (["-map", audio_map] if audio_map else [])
+        cmd += _vf(crop, height) + ["-c:v", "libx264", "-preset", "medium", "-crf", "17",
+                                    "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)]
+    part = out.with_suffix(".part" + out.suffix)
     cmd[-1] = str(part)
     try:
         _ffmpeg(job, cmd, length)
@@ -190,8 +196,9 @@ def _encode(job, inputs: list[tuple[str, list[str]]], start: float, length: floa
         part.unlink(missing_ok=True)
 
 
-def _out_path(title: str, start: float) -> Path:
-    return config.MEDIA_DIR / f"{uuid.uuid4().hex[:8]}_{_safe(title)}_{_stamp(start)}.mp4"
+def _out_path(title: str, start: float, sound: bool = False) -> Path:
+    """A new media-library file for a cut: .mp4, or .m4a for the sound alone."""
+    return config.MEDIA_DIR / f"{uuid.uuid4().hex[:8]}_{_safe(title)}_{_stamp(start)}{'.m4a' if sound else '.mp4'}"
 
 
 def _span(body: dict, duration: float | None) -> tuple[float, float]:
@@ -385,17 +392,19 @@ def _stream_inputs(info: dict) -> tuple[list[tuple[str, list[str]]], str | None]
 
 @router.post("/link/{lid}/cut")
 async def link_cut(lid: str, body: dict = Body(...)):
-    """Cut {start, end, height?, crop?, name?} out of the link at full quality (up to height): job -> media entry."""
+    """Cut {start, end, height?, crop?, name?, sound?} out of the link at full quality (up to height), or just
+    its sound (sound: true, an .m4a): job -> media entry."""
     link = _link(lid)
     start, length = _span(body, link["info"].get("duration"))
     height, crop = _height(body.get("height")), body.get("crop")
     title = body.get("name") or link["info"].get("title") or "clip"
+    sound = bool(body.get("sound"))
 
     def work(job):
         sel = f"bv*[height<={height}]+ba/b[height<={height}]/bv*+ba/b" if height else "bv*+ba/b"
-        info = _ytdlp(link["url"], "-f", sel, "-S", "vcodec:h264,res,acodec:aac")
+        info = _ytdlp(link["url"], "-f", "ba/b" if sound else sel, "-S", "acodec:aac" if sound else "vcodec:h264,res,acodec:aac")
         inputs, amap = _stream_inputs(info)
-        out = _out_path(title, start)
+        out = _out_path(title, start, sound)
         _encode(job, inputs, start, length, crop, height, out, amap)
         return media_entry(out)
 
@@ -482,14 +491,15 @@ async def tmp_file(name: str):
 
 @router.post("/file/cut")
 async def file_cut(body: dict = Body(...)):
-    """Cut {path, start, end, height?, crop?, name?} out of a PC file: job -> media entry."""
+    """Cut {path, start, end, height?, crop?, name?, sound?} out of a PC file (sound: just its sound): job -> media entry."""
     p = _video_file(body.get("path") or "")
     start, length = _span(body, None)
     height, crop = _height(body.get("height")), body.get("crop")
     title = body.get("name") or p.stem
+    sound = bool(body.get("sound"))
 
     def work(job):
-        out = _out_path(title, start)
+        out = _out_path(title, start, sound)
         _encode(job, [(str(p), [])], start, length, crop, height, out)
         return media_entry(out)
 
@@ -499,7 +509,8 @@ async def file_cut(body: dict = Body(...)):
 # ---- files on the device ----------------------------------------------------
 @router.post("/upload")
 async def upload_cut(file: UploadFile = File(...), length: float = Form(...), start: float = Form(0),
-                     at: float = Form(0), height: int = Form(0), crop: str = Form(""), name: str = Form("")):
+                     at: float = Form(0), height: int = Form(0), crop: str = Form(""), name: str = Form(""),
+                     sound: bool = Form(False)):
     """A piece the browser cut (a stream copy starting at the cut, or the whole file when it couldn't):
     re-encoded from `start` for `length` seconds into the media library; `at` is where the piece sat in the
     original (for the file name). Job -> media entry."""
@@ -514,7 +525,7 @@ async def upload_cut(file: UploadFile = File(...), length: float = Form(...), st
 
     def work(job):
         try:
-            out = _out_path(title, at or start)
+            out = _out_path(title, at or start, sound)
             _encode(job, [(str(src), [])], start, length, crop_box, _height(height), out)
             return media_entry(out)
         finally:

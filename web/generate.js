@@ -3,7 +3,7 @@ import {
   button, iconBtn, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider
 } from './ui.js';
 import { ASPECT_PRESETS, S, addMine, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
-import { openImagePicker, openVideoPicker } from './media.js';
+import { openImagePicker, openVideoPicker, soundInput } from './media.js';
 import { RUN, fmtDur, notifyPrepare, onGeneration, openJobs, syncWithServer } from './run.js';
 import { videoEditor } from './vfield.js';
 import { PREFS } from './prefs.js';
@@ -889,6 +889,17 @@ function videoField(f) {
   return el;
 }
 
+// a sound: a sound file or a clip's sound, with a cut ({generation|media, trim}); the server readies it
+// for the loader (app/audioedit.prep)
+function audioField(f) {
+  const el = soundInput(S.values[f.key] || null, (v) => {
+    setVal(f.key, v);
+    if (v?.generation != null) S.pendingParent = { generation: v.generation, index: v.index };
+  }, { title: `${f.group} · ${f.label}`, label: f.label });
+  el.dataset.key = f.key;
+  return el;
+}
+
 // the loader node's own settings next to a video field: rate, every-nth, and whether skip/cap are there
 // for the server to use (they usually aren't tagged fields, so read them from the workflow itself)
 const loaderWf = new Map();   // template id -> { wf, p: Promise }
@@ -987,6 +998,7 @@ function fieldBody(f) {
     case 'bool': return boolField(f);
     case 'image': return imageField(f);
     case 'video': return videoField(f);
+    case 'audio': return audioField(f);
     case 'loras': return loraField(f);
     case 'boxes': return boxesField(f);
     default: return h('div', { class: 'hint' }, `${f.label}: unsupported`);

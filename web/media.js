@@ -1,5 +1,5 @@
 import {
-  $, h, store, api, toast, openSheet, closeSheet, button, iconBtn, actions, fileButton, seg, placeholder, note, mediaCard,
+  $, h, store, api, toast, openSheet, closeSheet, button, iconBtn, actions, fileButton, seg, placeholder, note, mediaCard, field,
 } from './ui.js';
 import { S, PICKER_SOURCES as SOURCES, thumbUrl } from './core.js';
 import { loadHistory } from './run.js';
@@ -50,6 +50,92 @@ export function openVideoPicker({ title, onPick }) {
     items.sort((x, y) => y.t - x.t);
     return items.length ? items.slice(0, 300).map((x) => x.el()) : placeholder('No videos in this project yet. Generate one or upload a clip.');
   });
+}
+
+// Sounds: the media library's sound files and this project's sound outputs, then clips (their sound is
+// used). onPick gets a source: {generation, index} | {media}.
+export function openSoundPicker({ title = 'Pick a sound', onPick, clips = true }) {
+  const picked = (val) => { closeSheet(); onPick(val); };
+  const head = (text) => h('h4', { class: 'picker-head' }, text);
+  pickerSheet(title, [
+    fileButton('Upload…', async ([fl]) => {
+      try { const m = await uploadMedia(fl); picked({ media: m.name }); }
+      catch (e) { toast('Upload failed: ' + e.message, true); }
+    }, { accept: 'audio/*,video/*', cls: 'small primary' }),
+    button('From a link or big file…', () => import('./clipimport.js').then((m) =>
+      m.openClipImport({ title: 'Import a sound', sound: true, onSaved: (e) => onPick({ media: e.name }) })))], async () => {
+    let media = [];
+    try { media = await api('/api/media'); } catch { /* the outputs still show */ }
+    const card = (o, label, src) => ({ t: o.t, el: () => mediaCard(cardMedia(o), label, () => picked(src)) });
+    const sounds = (await projectOutputs(['audio'])).map(({ g, o, i, t }) => card({ ...o, t }, genLabel(g), { generation: g.id, index: i }));
+    const vids = clips ? (await projectOutputs(['video'])).map(({ g, o, i, t }) => card({ ...o, t }, genLabel(g), { generation: g.id, index: i })) : [];
+    for (const m of media) {
+      if (m.kind === 'audio') sounds.push(card({ ...m, t: m.created }, m.label, { media: m.name }));
+      else if (clips && m.kind === 'video') vids.push(card({ ...m, t: m.created }, m.label, { media: m.name }));
+    }
+    const byTime = (x, y) => y.t - x.t;
+    sounds.sort(byTime); vids.sort(byTime);
+    if (!sounds.length && !vids.length) return placeholder('No sounds yet. Upload one, or bring one in from a link or a big file.');
+    return [sounds.length ? [head('Sounds'), sounds.slice(0, 300).map((x) => x.el())] : null,
+      vids.length ? [head('Clips (their sound)'), vids.slice(0, 300).map((x) => x.el())] : null].filter(Boolean);
+  });
+}
+
+// What a sound source is called and where it plays, from the media list / history: {label, url, kind} or null
+export async function soundSource(v) {
+  if (!v) return null;
+  if (v.generation != null) {
+    if (!S.history.size) await loadHistory();
+    const g = S.history.get(v.generation), o = g?.outputs[v.index];
+    return o ? { label: genLabel(g), url: o.url, kind: o.kind } : null;
+  }
+  if (v.media) {
+    let list = [];
+    try { list = await api('/api/media'); } catch { /* offline */ }
+    const m = list.find((x) => x.name === v.media);
+    return m ? { label: m.label, url: m.url, kind: m.kind } : null;
+  }
+  return null;
+}
+
+// A picked sound with a player and a cut (Start, Length in seconds): value {generation, index} | {media},
+// with trim {start, len}. onChange(value or null) on every change; title names the picker.
+export function soundInput(value, onChange, { title = 'Pick a sound', label = 'Sound' } = {}) {
+  const box = h('div', { class: 'sound-input' });
+  const base = (v) => (v.generation != null ? { generation: v.generation, index: v.index } : { media: v.media });
+  const pick = () => openSoundPicker({ title, onPick: (v) => { value = v; onChange(v); draw(); } });
+  const draw = async () => {
+    if (!value) {
+      box.replaceChildren(field([label, h('span', {}, 'none')], h('div', { class: 'row wrap' }, button('Choose…', pick, { cls: 'small primary' }))));
+      return;
+    }
+    const src = await soundSource(value);
+    const player = src ? h('audio', { src: src.url, controls: true, preload: 'metadata' }) : note('That sound is gone: pick another', 'err');
+    const t = value.trim || {};
+    const num = (v, ph, lbl) => h('input', { type: 'number', inputMode: 'decimal', min: 0, step: 0.1, value: v ?? '', placeholder: ph, 'aria-label': lbl });
+    const start = num(t.start, '0', 'Start (s)'), len = num(t.len, 'all', 'Length (s)');
+    const setTrim = () => {
+      const st = Math.max(0, parseFloat(start.value) || 0), ln = parseFloat(len.value);
+      value = { ...base(value), ...((st > 0 || ln > 0) && { trim: { start: st, ...(ln > 0 && { len: ln }) } }) };
+      onChange(value);
+    };
+    start.addEventListener('change', setTrim); len.addEventListener('change', setTrim);
+    const fromHere = button('Start here', () => { if (player.currentTime != null) { start.value = player.currentTime.toFixed(2); setTrim(); } },
+      { cls: 'small', title: 'Start the cut where the player is' });
+    box.replaceChildren(field([label, h('span', {}, src ? `${src.label}${src.kind === 'video' ? ' (its sound)' : ''}` : '')], player,
+      h('div', { class: 'sound-cut' }, h('label', {}, 'Start (s)', start), h('label', {}, 'Length (s)', len), fromHere),
+      h('div', { class: 'row wrap' }, button('Choose…', pick, { cls: 'small' }),
+        button('Clear', () => { value = null; onChange(null); draw(); }, { cls: 'small' }))));
+  };
+  draw();
+  return box;
+}
+
+// Take the sound out of a clip into the media library (a toast says so); resolves the media entry
+export async function extractSound(source, { trim = null, name = null } = {}) {
+  const m = await api('/api/audio/extract', { method: 'POST', body: { source, trim, name }, busy: 'Taking the sound out…', timeout: 600000 });
+  toast(`Saved ${m.label} to the media library`);
+  return m;
 }
 
 // ---------------------------------------------------------------------------

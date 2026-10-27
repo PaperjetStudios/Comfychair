@@ -1,6 +1,6 @@
 import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard } from './ui.js';
 import { S, inputUrl, thumbUrl, onServer, switchTab } from './core.js';
-import { cardMedia, genLabel, openImagePicker, openVideoPicker, pickFrame, projectOutputs, uploadImage } from './media.js';
+import { cardMedia, genLabel, openImagePicker, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
 import { adoptGenerations } from './generate.js';
 import { openGeneration } from './run.js';
 import { addToEditor, useInGenerate } from './editor.js';
@@ -35,8 +35,10 @@ const EFFECTS = [
     help: 'Paints something new where a mask clip is white (make one with Mask (SAM3) or Alpha Gen) and keeps the rest of the picture. Describe the whole shot with the new thing in it.' },
   { id: 'cleanplate', group: 'Remove', label: 'Clean plate', tpl: 'deck-ltx-cleanplate', needs: ['source', 'prompt', 'len', 'res', 'seed'],
     help: 'Removes people and other moving things from the whole clip and fills in the background. Name what to remove in the prompt (and the negative prompt in Generate).' },
-  { id: 't2v', group: 'Generate', label: 'Text / image to video', tpl: 'deck-ltx-t2v', needs: ['first?', 'prompt', 'len', 'size', 'loras', 'seed'],
-    help: 'A new clip from a prompt, optionally starting from a still.' },
+  { id: 't2v', group: 'Generate', label: 'Text / image to video', tpl: 'deck-ltx-t2v', needs: ['first?', 'voice', 'prompt', 'len', 'size', 'loras', 'seed'],
+    help: 'A new clip from a prompt, optionally starting from a still. Give it a Voice (a few seconds of someone speaking) and the speech in the clip takes on that voice.' },
+  { id: 'a2v', group: 'Generate', label: 'Sound to video', tpl: 'deck-ltx-a2v', needs: ['sound', 'first?', 'prompt', 'len', 'size', 'loras', 'seed'],
+    help: 'A clip that moves to a sound: speech (lips follow it), music (movement follows the beat) or effects. Pick the sound (a sound file, or the sound of a clip, cut to the part you want), describe the shot, and optionally a start image. The clip is as long as the sound, up to Length, and keeps the sound as it is.' },
   { id: 'layout', group: 'Generate', label: 'Layout to render', tpl: 'deck-ltx-layout', mult: 64, needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
     help: 'Turns a rough layout clip (a 3D tab render in Clay or Colour, or blocked-out footage) into a finished shot that keeps its layout and motion.' },
   { id: 'tracks', group: 'Generate', label: 'Motion paths', tpl: 'deck-ltx-tracks', mult: 64, needs: ['first', 'tracks', 'prompt', 'len', 'res', 'seed'],
@@ -68,6 +70,8 @@ const ROLES = {
   source: (f) => f.kind === 'video' && !/mask|matte/i.test(f.group),
   matte: (f) => f.kind === 'video' && /mask|matte/i.test(f.group),
   first: (f) => f.kind === 'image',
+  sound: (f) => f.kind === 'audio' && !/voice/i.test(f.group),
+  voice: (f) => f.kind === 'audio' && /voice/i.test(f.group),
   prompt: (f) => f.kind === 'text' && /prompt/i.test(f.group) && !/negative/i.test(f.group) && f.input !== 'neg_coordinates',
   pointsPos: (f) => f.kind === 'text' && f.input === 'coordinates',
   pointsNeg: (f) => f.kind === 'text' && f.input === 'neg_coordinates',
@@ -103,7 +107,7 @@ const SIZES = [['Match source', null], ['1280×704', [1280, 704]], ['704×1280',
   ['544×960', [544, 960]], ['1024×1024', [1024, 1024]], ['1920×1088', [1920, 1088]]];
 
 const FACE = { grow: 1.05, feather: 0.25, chin: 0.82 };   // Face only's blend outline (Deck Face Uncrop)
-const BLANK = () => ({ op: 'ripple', source: null, first: null, matte: null, prompt: '', loras: [], len: 5, res: 704, size: null, seed: -1,
+const BLANK = () => ({ op: 'ripple', source: null, first: null, matte: null, sound: null, voice: null, prompt: '', loras: [], len: 5, res: 704, size: null, seed: -1,
   points: { positive: [], negative: [] }, pointsAt: 0, tracks: [], key: { color: '#00ff00', similarity: 0.12, blend: 0.08, spill: 0.5, invert: false },
   steps: 3, blend: 'face', face: { ...FACE }, results: [], showing: null });
 let T = BLANK();
@@ -257,7 +261,10 @@ function render() {
 
   const inputs = section('Source', null,
     needs.has('source') ? sourceField('source') : null,
+    needs.has('sound') ? soundInput(T.sound, (v) => { T.sound = v; changed(false); }, { title: 'The sound the clip moves to', label: 'Sound' }) : null,
     needs.has('first') ? firstField(e.needs.includes('first?')) : null,
+    needs.has('voice') ? [soundInput(T.voice, (v) => { T.voice = v; changed(false); }, { title: 'A voice to speak with', label: 'Voice (optional)' }),
+      help('About 5 seconds of one person speaking clearly. Cut it with Start and Length.')] : null,
     needs.has('matte') ? sourceField('matte') : null,
     needs.has('points') ? pointsFields() : null,
     needs.has('tracks') ? tracksFields() : null);
@@ -353,6 +360,7 @@ async function run() {
   if (e.needs.includes('source') && !T.source) return toast('Choose a source clip first', true);
   if (e.needs.includes('matte') && !T.matte) return toast(`Choose a ${T.op === 'cleanplate' ? 'mask' : 'matte'} clip first`, true);
   if (e.needs.includes('first') && !T.first) return toast('Choose the start image first', true);
+  if (e.needs.includes('sound') && !T.sound) return toast('Choose the sound first', true);
   await tabs?.flush();
   if (e.job === 'key') return runKey(e);
   const t = tplOf(e);
@@ -362,6 +370,8 @@ async function run() {
   put('source', T.source && { ...bare(T.source), ...(T.source.trim && { trim: T.source.trim }), ...(T.source.crop && { crop: T.source.crop }) });
   put('matte', T.matte && bare(T.matte));
   put('first', T.first);
+  if (e.needs.includes('sound')) put('sound', T.sound);
+  if (e.needs.includes('voice')) put('voice', T.voice);
   put('prompt', T.prompt.trim() ? T.prompt : undefined);   // empty: keep the template's own prompt
   put('len', e.needs.includes('len') ? T.len : undefined);
   put('seed', e.needs.includes('seed') ? T.seed : undefined);

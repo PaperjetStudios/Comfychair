@@ -175,8 +175,78 @@ def t2v():
     g.add("av", node("LTXVConcatAVLatent", video_latent=["i2v", 0], audio_latent=["alat", 0]))
     g.add("loras", node("LoraLoaderModelOnly", "@6 LoRAs", model=["unet", 0], lora_name="",
                         strength_model=1.0))   # (no default: the stack starts empty, and an empty stack is bypassed)
-    sample(g, ["loras", 0], ["cond", 0], ["cond", 1], ["av", 0])
+    model, pos, neg = voice(g, ["loras", 0], ["cond", 0], ["cond", 1])
+    sample(g, model, pos, neg, ["av", 0])
     decode(g, ["sep", 0], "ltx-t2v", audio=True)
+    return g
+
+
+def voice(g, model, positive, negative):
+    """@7 Voice: an optional sound of someone speaking (~5 s) whose voice the clip's speech takes on
+    (LTXVReferenceAudio). Left empty, the node is skipped and model/positive/negative pass straight on."""
+    g.add("vref", node("VHS_LoadAudio", "@7 Voice [audio_file]", audio_file="", seek_seconds=0, duration=0))
+    v = node("LTXVReferenceAudio", "@7 Voice [identity_guidance_scale]", model=model, positive=positive, negative=negative,
+             reference_audio=["vref", 0], audio_vae=["avae", 0], identity_guidance_scale=3.0, start_percent=0.0, end_percent=1.0)
+    v["_meta"]["deck_passthrough"] = ["model", "positive", "negative"]
+    g.add("voice", v)
+    return ["voice", 0], ["voice", 1], ["voice", 2]
+
+
+def a2v():
+    """A sound (speech, music) and a prompt, optionally a start image, to a clip that moves to the sound: lips,
+    beats and timing follow it. The sound is encoded and frozen (kept as it is) while the picture is made, and
+    the clip keeps the original sound. Length: the sound's, up to @3 Length."""
+    g = G()
+    models(g)
+    text(g)
+    g.add("snd", node("VHS_LoadAudio", "@1 Sound [audio_file]", audio_file="", seek_seconds=0, duration=0))
+    g.add("secs", node("PrimitiveFloat", "@3 Length (seconds)", value=10.0))
+    g.add("W", node("PrimitiveInt", "@4 Width", value=1280))
+    g.add("H", node("PrimitiveInt", "@5 Height", value=704))
+    # 8n+1 frames no longer than the sound (so the encoded sound covers every frame) or Length
+    math(g, "nf", f"max(9, floor((min(a, b)*{FPS}-1)/8)*8+1)", "frames: 8n+1 within the sound and Length", a=["snd", 1], b=["secs", 0])
+    math(g, "dur", f"a/{FPS}", "the clip's length in seconds", a=["nf", 1])
+    g.add("cut", node("TrimAudioDuration", audio=["snd", 0], start_index=0.0, duration=["dur", 0]))
+    g.add("vlat", node("EmptyLTXVLatentVideo", width=["W", 0], height=["H", 0], length=["nf", 1], batch_size=1))
+    g.add("img", node("LoadImage", "@2 Start image [image]", image=""))
+    rs = node("ImageResizeKJv2", "start image to the video size", image=["img", 0], width=["W", 0], height=["H", 0],
+              upscale_method="lanczos", keep_proportion="crop", pad_color="0, 0, 0", crop_position="center", divisible_by=32, device="cpu")
+    rs["_meta"]["deck_drop"] = True
+    g.add("imgrs", rs)
+    pre = node("LTXVPreprocess", "start image as video-like", image=["imgrs", 0], img_compression=18)
+    pre["_meta"]["deck_drop"] = True
+    g.add("pre", pre)
+    i2v = node("LTXVImgToVideoInplace", "start image (skipped when empty)", vae=["vvae", 0], image=["pre", 0], latent=["vlat", 0],
+               strength=0.7, bypass=False)
+    i2v["_meta"]["deck_passthrough"] = "latent"
+    g.add("i2v", i2v)
+    g.add("aenc", node("LTXVAudioVAEEncode", audio=["cut", 0], audio_vae=["avae", 0]))
+    g.add("alat", node("LTXVFreezeLatent", "the sound stays as it is", latent=["aenc", 0]))
+    g.add("av", node("LTXVConcatAVLatent", video_latent=["i2v", 0], audio_latent=["alat", 0]))
+    g.add("loras", node("LoraLoaderModelOnly", "@6 LoRAs", model=["unet", 0], lora_name="", strength_model=1.0))
+    sample(g, ["loras", 0], ["cond", 0], ["cond", 1], ["av", 0])
+    g.add("vdec", node("VAEDecodeTiled", samples=["sep", 0], vae=["vvae", 0], tile_size=512, overlap=64, temporal_size=64, temporal_overlap=8))
+    g.add("vid", node("CreateVideo", images=["vdec", 0], fps=FPS, audio=["cut", 0]))
+    g.add("save", node("SaveVideo", video=["vid", 0], filename_prefix="deck/ltx-a2v", format="auto", codec="auto"))
+    return g
+
+
+def t2a():
+    """Text to sound: effects, ambience, foley, speech, from LTX-2.5 run audio-only (no picture, so it's quick).
+    Saved as an MP3."""
+    g = G()
+    models(g)
+    text(g, "@1 Prompt", "", "music, speech, low quality, distorted, muffled, clipping", "@5 Negative prompt")
+    g.add("secs", node("PrimitiveFloat", "@3 Length (seconds)", value=8.0))
+    math(g, "nf", f"floor(a*{FPS}/8)*8+1", "frames: 8n+1", a=["secs", 0])
+    g.add("loras", node("LoraLoaderModelOnly", "@6 LoRAs", model=["unet", 0], lora_name="", strength_model=1.0))
+    g.add("aonly", node("LTXVAudioOnlyModel", model=["loras", 0]))
+    g.add("vlat", node("LTXVAudioOnlyEmptyVideoLatent"))
+    audio_latent(g, ["nf", 1])
+    g.add("av", node("LTXVConcatAVLatent", video_latent=["vlat", 0], audio_latent=["alat", 0]))
+    sample(g, ["aonly", 0], ["cond", 0], ["cond", 1], ["av", 0])
+    g.add("adec", node("LTXVAudioVAEDecode", samples=["sep", 1], audio_vae=["avae", 0]))
+    g.add("save", node("SaveAudioMP3", audio=["adec", 0], filename_prefix="deck/ltx-t2a", quality="V0"))
     return g
 
 
@@ -369,6 +439,8 @@ def inpaint():
 
 TEMPLATES = {
     "deck-ltx-t2v": t2v,
+    "deck-ltx-a2v": a2v,
+    "deck-ltx-t2a": t2a,
     "deck-ltx-ripple": ripple,
     "deck-ltx-tracks": tracks,
     "deck-ltx-ingredients": ingredients,

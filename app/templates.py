@@ -15,6 +15,8 @@ into templates/. Any node whose title starts with "@" is exposed in the tablet U
                             (turbo, lightning, distill, N-step…) and starts switched off
     @Ref 1                  on a LoadImage node: an image picker. Left empty, the node is removed
                             and whatever it fed is unplugged (fine for optional inputs like refs).
+    @Sound                  on a VHS_LoadAudio node: a sound picker (a sound file, or the sound of a
+                            clip). Left empty, it is removed the same way.
 
 Input types, ranges and dropdown options come from ComfyUI's /object_info, so the UI always
 matches whatever models and nodes are actually installed.
@@ -36,6 +38,8 @@ LAYOUT_SIZED = {"MOSSImageLayoutPrompt"}
 IMAGE_CLASSES = {"LoadImage", "LoadImageMask", "LoadImageOutput"}
 # a video picker: the tablet sends {"generation", "index"} or {"media"}, main.generate swaps in the file's path
 VIDEO_CLASSES = {"VHS_LoadVideoPath"}
+# a sound picker, the same way: main.generate swaps in a file the loader can open (app/audioedit.prep)
+AUDIO_CLASSES = {"VHS_LoadAudio"}
 SEED_NAMES = {"seed", "noise_seed"}
 SAFE_ID = re.compile(r"^[\w\-. ]+$")
 TURBO_RE = re.compile(r"turbo|lightning|lightx2v|distill|\d+[-_ ]?steps?\b|lcm", re.I)
@@ -152,6 +156,8 @@ def _field(node_id, cls, name, value, ispec):
         f.update(kind="image", options=opts.get("options", []))
     elif cls in VIDEO_CLASSES and name == "video":
         f.update(kind="video", value=None)
+    elif cls in AUDIO_CLASSES and name == "audio_file":
+        f.update(kind="audio", value=None, label="Sound")
     # Primitive nodes carry control_after_generate too, but they're plain numbers (e.g. a duration)
     elif t == "INT" and (name in SEED_NAMES or opts.get("control_after_generate") and not cls.startswith("Primitive")):
         f.update(kind="seed", min=opts.get("min", 0), max=opts.get("max"))
@@ -288,7 +294,8 @@ def apply(workflow: dict, values: dict) -> dict:
         elif inp == "__boxes":
             box_ops.append((node_id, val))
         elif (inp == "image" and wf[node_id]["class_type"] in IMAGE_CLASSES
-              or inp == "video" and wf[node_id]["class_type"] in VIDEO_CLASSES) and not val:
+              or inp == "video" and wf[node_id]["class_type"] in VIDEO_CLASSES
+              or inp == "audio_file" and wf[node_id]["class_type"] in AUDIO_CLASSES) and not val:
             empty_images.append(node_id)
         else:
             wf[node_id]["inputs"][inp] = val
@@ -379,7 +386,8 @@ def drop_node(wf: dict, nid: str):
     """Remove a node and unplug every input it fed. Used for image slots left empty, which only
     works when the inputs they feed are optional (reference images, first/last frames).
     A node that loses an input can say what to do in its _meta: "deck_passthrough": "<input>" drops it
-    and hands that input's link to whatever it fed (an optional start image on a latent), and
+    and hands that input's link to whatever it fed (an optional start image on a latent), or a list of
+    inputs, one per output (a voice reference passing on model, positive, negative), and
     "deck_drop": true drops it too (a resize that only served the empty image)."""
     if nid not in wf:
         return
@@ -408,11 +416,15 @@ def drop_node(wf: dict, nid: str):
         node = wf.get(oid)
         if not node:
             continue
-        through = node["inputs"].get((node.get("_meta") or {}).get("deck_passthrough") or "")
-        if _is_link(through):   # its users take what it was passing on
+        names = (node.get("_meta") or {}).get("deck_passthrough") or []
+        names = [names] if isinstance(names, str) else names
+        for out, name in enumerate(names):   # its users take what it was passing on
+            through = node["inputs"].get(name)
+            if not _is_link(through):
+                continue
             for other in wf.values():
                 for k, v in other["inputs"].items():
-                    if _is_link(v) and v[0] == oid and v[1] == 0:
+                    if _is_link(v) and v[0] == oid and v[1] == out:
                         other["inputs"][k] = list(through)
         drop_node(wf, oid)
 
