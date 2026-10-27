@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import accel, audioedit, clipimport, craft, delogo, h3upscale, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
-from . import store
+from . import projects, store
 from . import sceneasset
 from . import templates as tpl
 from .comfy import Comfy, ComfyError
@@ -303,6 +303,7 @@ def prune_thumbs(max_age_days=30):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await asyncio.to_thread(migrate_outputs)
+    await asyncio.to_thread(projects.sweep)   # a project copy cut off by a restart
     await asyncio.to_thread(prune_thumbs)
     await asyncio.to_thread(prune_crops)
     await asyncio.to_thread(videoprep.prune)
@@ -323,6 +324,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ComfyDeck", lifespan=lifespan)
 store.notify = broadcast  # the JSON document store (tabs, presets, objects...) tells every device when it saves
+projects.notify = broadcast  # project list changes (made, renamed, reordered, copied, deleted)
+projects.comfy_copy = comfy_copy
+app.include_router(projects.router)
 app.include_router(store.router)
 app.include_router(sceneasset.router)
 app.include_router(tracking.router)
@@ -537,20 +541,7 @@ async def cancel_queued(body: dict = Body(...)):
     return {"ok": True}
 
 
-# ---- projects / history ---------------------------------------------------
-@app.get("/api/projects")
-async def projects():
-    return db.list_projects()
-
-
-@app.post("/api/projects")
-async def new_project(body: dict = Body(...)):
-    name = (body.get("name") or "").strip()
-    if not name:
-        raise HTTPException(400, "Name required")
-    return db.create_project(name[:120])
-
-
+# ---- history (projects: app/projects.py) ------------------------------------
 @app.get("/api/generations")
 async def generations(project_id: int | None = None, limit: int = 60, before: int | None = None,
                       edit_tab: str | None = None, status: str | None = None):

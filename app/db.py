@@ -11,41 +11,51 @@ from . import config
 _lock = threading.Lock()
 _conn = sqlite3.connect(config.DATA_DIR / "deck.sqlite3", check_same_thread=False)
 _conn.row_factory = sqlite3.Row
-_conn.executescript(
-    """
-    CREATE TABLE IF NOT EXISTS projects(
-        id INTEGER PRIMARY KEY, name TEXT NOT NULL, created REAL NOT NULL);
-    CREATE TABLE IF NOT EXISTS generations(
-        id INTEGER PRIMARY KEY,
-        project_id INTEGER,
-        template TEXT,
-        params TEXT,        -- resolved values actually sent (real seeds, LoRA stack, ...)
-        workflow TEXT,      -- the exact API workflow queued, for debugging in desktop ComfyUI
-        prompt_id TEXT UNIQUE,
-        status TEXT,        -- queued | running | done | error | interrupted
-        error TEXT,
-        outputs TEXT,       -- JSON list of saved files
-        parent TEXT,        -- JSON: what this was made from, e.g. {"generation": 12, "frame": "last"}
-        created REAL,
-        finished REAL);
-    CREATE INDEX IF NOT EXISTS gen_project ON generations(project_id, id);
-    CREATE TABLE IF NOT EXISTS snippets(    -- saved prompt pieces (subject, camera, style…), shared by all templates
-        id INTEGER PRIMARY KEY, category TEXT NOT NULL, name TEXT, text TEXT NOT NULL, created REAL);
-    CREATE TABLE IF NOT EXISTS inputs(      -- images sent to ComfyUI's input folder, and the project they were for
-        name TEXT PRIMARY KEY, project_id INTEGER, source TEXT, created REAL);
-    """
-)
-_cols = [r[1] for r in _conn.execute("PRAGMA table_info(generations)")]
-if "pinned" not in _cols:
-    _conn.execute("ALTER TABLE generations ADD COLUMN pinned INTEGER DEFAULT 0")
-if "started" not in _cols:  # when ComfyUI began running it; finished - started = run time
-    _conn.execute("ALTER TABLE generations ADD COLUMN started REAL")
-_cols = [r[1] for r in _conn.execute("PRAGMA table_info(projects)")]
-if "folder" not in _cols:  # output folder name, frozen the first time it's needed so it never moves
-    _conn.execute("ALTER TABLE projects ADD COLUMN folder TEXT")
-if not _conn.execute("SELECT 1 FROM projects LIMIT 1").fetchone():
-    _conn.execute("INSERT INTO projects(name, created) VALUES (?, ?)", ("Sandbox", time.time()))
-_conn.commit()
+
+
+def migrate(conn):
+    """Make or bring up to date the schema. Safe to run again on a database that is already current."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS projects(
+            id INTEGER PRIMARY KEY, name TEXT NOT NULL, created REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS generations(
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER,
+            template TEXT,
+            params TEXT,        -- resolved values actually sent (real seeds, LoRA stack, ...)
+            workflow TEXT,      -- the exact API workflow queued, for debugging in desktop ComfyUI
+            prompt_id TEXT UNIQUE,
+            status TEXT,        -- queued | running | done | error | interrupted
+            error TEXT,
+            outputs TEXT,       -- JSON list of saved files
+            parent TEXT,        -- JSON: what this was made from, e.g. {"generation": 12, "frame": "last"}
+            created REAL,
+            finished REAL);
+        CREATE INDEX IF NOT EXISTS gen_project ON generations(project_id, id);
+        CREATE TABLE IF NOT EXISTS snippets(    -- saved prompt pieces (subject, camera, style…), shared by all templates
+            id INTEGER PRIMARY KEY, category TEXT NOT NULL, name TEXT, text TEXT NOT NULL, created REAL);
+        CREATE TABLE IF NOT EXISTS inputs(      -- images sent to ComfyUI's input folder, and the project they were for
+            name TEXT PRIMARY KEY, project_id INTEGER, source TEXT, created REAL);
+        """
+    )
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(generations)")]
+    if "pinned" not in cols:
+        conn.execute("ALTER TABLE generations ADD COLUMN pinned INTEGER DEFAULT 0")
+    if "started" not in cols:  # when ComfyUI began running it; finished - started = run time
+        conn.execute("ALTER TABLE generations ADD COLUMN started REAL")
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(projects)")]
+    if "folder" not in cols:  # output folder name, frozen the first time it's needed so it never moves
+        conn.execute("ALTER TABLE projects ADD COLUMN folder TEXT")
+    if "sort" not in cols:  # the project picker's order (Settings → Projects); starts as the order they were made in
+        conn.execute("ALTER TABLE projects ADD COLUMN sort INTEGER")
+    if not conn.execute("SELECT 1 FROM projects LIMIT 1").fetchone():
+        conn.execute("INSERT INTO projects(name, created) VALUES (?, ?)", ("Sandbox", time.time()))
+    conn.execute("UPDATE projects SET sort=id WHERE sort IS NULL")
+    conn.commit()
+
+
+migrate(_conn)
 
 
 def _q(sql, args=()):
@@ -72,7 +82,12 @@ def _gen(row) -> dict | None:
 
 # ---- projects ---------------------------------------------------------------
 def list_projects():
-    return [dict(r) for r in _q("SELECT * FROM projects ORDER BY id").fetchall()]
+    return [dict(r) for r in _q("SELECT * FROM projects ORDER BY sort, id").fetchall()]
+
+
+def get_project(project_id) -> dict | None:
+    row = _q("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+    return dict(row) if row else None
 
 
 def project_folder(project_id) -> str:
@@ -95,10 +110,83 @@ def project_folder(project_id) -> str:
     return name
 
 
-def create_project(name: str) -> dict:
-    cur = _q("INSERT INTO projects(name, created) VALUES (?, ?)", (name, time.time()))
+def create_project(name: str, after: int | None = None) -> dict:
+    """A new project, last in the order (or right after project `after`)."""
+    with _lock:
+        row = _conn.execute("SELECT sort FROM projects WHERE id=?", (after,)).fetchone() if after is not None else None
+        if row:
+            sort = row[0] + 1
+            _conn.execute("UPDATE projects SET sort=sort+1 WHERE sort>=?", (sort,))
+        else:
+            sort = (_conn.execute("SELECT MAX(sort) FROM projects").fetchone()[0] or 0) + 1
+        cur = _conn.execute("INSERT INTO projects(name, created, sort) VALUES (?, ?, ?)", (name, time.time(), sort))
+        _conn.commit()
     project_folder(cur.lastrowid)  # freeze its folder now
-    return dict(_q("SELECT * FROM projects WHERE id=?", (cur.lastrowid,)).fetchone())
+    return get_project(cur.lastrowid)
+
+
+def rename_project(project_id: int, name: str):
+    """Only the name: the folder was frozen when the project was made, so its files and links stay put."""
+    _q("UPDATE projects SET name=? WHERE id=?", (name, project_id))
+
+
+def order_projects(ids: list[int]):
+    """Put the projects in this order (ids must name every project once)."""
+    with _lock:
+        have = {r[0] for r in _conn.execute("SELECT id FROM projects")}
+        if set(ids) != have or len(ids) != len(have):
+            raise ValueError("The order must list every project once")
+        _conn.executemany("UPDATE projects SET sort=? WHERE id=?", [(n, i) for n, i in enumerate(ids)])
+        _conn.commit()
+
+
+def project_counts() -> dict[int, int]:
+    """How many generations each project has."""
+    return {r[0]: r[1] for r in _q("SELECT project_id, COUNT(*) FROM generations GROUP BY project_id").fetchall()}
+
+
+def delete_project(project_id: int) -> list[dict]:
+    """Remove a project and its generations from the database (its files are projects.py's job).
+    Refuses with ValueError if it's the last project or has a run waiting or running. Returns the
+    generations that were removed, so their files can go too."""
+    with _lock:
+        if not _conn.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
+            raise LookupError("No such project")
+        if _conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0] <= 1:
+            raise ValueError("That's the only project: make another one before deleting it")
+        if _conn.execute("SELECT 1 FROM generations WHERE project_id=? AND status IN ('queued','running') LIMIT 1",
+                         (project_id,)).fetchone():
+            raise ValueError("A run in this project is waiting or running: stop it or let it finish first")
+        gens = [_gen(r) for r in _conn.execute("SELECT * FROM generations WHERE project_id=?", (project_id,)).fetchall()]
+        _conn.execute("DELETE FROM generations WHERE project_id=?", (project_id,))
+        _conn.execute("UPDATE inputs SET project_id=NULL WHERE project_id=?", (project_id,))  # the images stay in the picker's "all"
+        _conn.execute("DELETE FROM projects WHERE id=?", (project_id,))
+        _conn.commit()
+    return gens
+
+
+def copy_generations(src_project: int, dst_project: int, fix) -> dict[int, int]:
+    """Copy a project's finished generations (not ones still waiting or running) into another project,
+    oldest first, in one transaction. fix(row, ids) gets each new row (a dict of columns, JSON as text)
+    and the old id → new id map once every row is in, and returns the columns to change. Returns the map."""
+    with _lock:
+        rows = [dict(r) for r in _conn.execute("SELECT * FROM generations WHERE project_id=? AND status NOT IN "
+                                                "('queued','running') ORDER BY id", (src_project,)).fetchall()]
+        ids = {}
+        try:
+            for r in rows:
+                old = r.pop("id")
+                r.update(project_id=dst_project, prompt_id=f"copy-{old}-{time.time_ns()}")
+                cur = _conn.execute(f"INSERT INTO generations({', '.join(r)}) VALUES ({', '.join('?' * len(r))})", tuple(r.values()))
+                ids[old] = r["id"] = cur.lastrowid
+            for r in rows:
+                if ch := fix(r, ids):
+                    _conn.execute(f"UPDATE generations SET {', '.join(f'{k}=?' for k in ch)} WHERE id=?", (*ch.values(), r["id"]))
+            _conn.commit()
+        except BaseException:
+            _conn.rollback()
+            raise
+    return ids
 
 
 # ---- generations ------------------------------------------------------------
