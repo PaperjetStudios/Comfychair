@@ -202,7 +202,7 @@ input[type=color] { width: 64px; height: var(--tap); border: 1px solid var(--lin
 main { min-height: 0; position: relative; }
 .tab { display: none; height: 100%; min-height: 0; }
 .tab.active { display: grid; }
-#tab-generate, #tab-editor, #tab-video, #tab-vfx, #tab-scene { grid-template-columns: minmax(0, 1fr) 16px var(--panel-w); }
+#tab-generate, #tab-editor, #tab-video, #tab-sound, #tab-vfx, #tab-scene { grid-template-columns: minmax(0, 1fr) 16px var(--panel-w); }
 #tab-history, #tab-board { overflow-y: auto; padding: var(--gap); align-content: start; }
 #tab-history.active, #tab-board.active { display: block; }
 
@@ -435,7 +435,7 @@ details.desc[open] summary { margin-bottom: 6px; }
 .handle.sw { left: -3px; bottom: -3px; } .handle.se { right: -3px; bottom: -3px; }
 
 /* ---- video: preview, inspector and a full-width timeline underneath ---- */
-#tab-video { grid-template-rows: minmax(0, 1fr) auto; }
+#tab-video, #tab-sound { grid-template-rows: minmax(0, 1fr) auto; }
 #vidCanvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
 .transport { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
@@ -487,6 +487,18 @@ details.desc[open] summary { margin-bottom: 6px; }
 .tl-trim.l { left: 0; } .tl-trim.r { right: 0; }
 .tl-clip.sel .tl-trim { background: color-mix(in srgb, var(--accent) 75%, transparent); }
 .tl-playhead { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #ff4d4d; pointer-events: none; z-index: 5; }
+.snd-viewer { background: var(--stage-bg) !important; }
+#sndCanvas { position: absolute; inset: 8px; width: calc(100% - 16px); height: calc(100% - 16px); cursor: pointer; touch-action: none; }
+.snd-row { height: 60px; }
+.tl-tog.solo { background: var(--accent); color: var(--accent-ink); }
+.snd-exports { display: grid; gap: 8px; }
+.snd-export { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+.snd-export audio, .sound-input audio { width: 100%; }
+.sound-input { display: grid; gap: 6px; }
+.sound-cut { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
+.sound-cut label { display: grid; gap: 4px; font-size: var(--fs-sm); color: var(--muted); flex: 1; min-width: 90px; }
+.picker-head { grid-column: 1 / -1; margin: 6px 0 0; font-size: var(--fs-sm); color: var(--muted); }
+label.check { display: flex; gap: 8px; align-items: center; font-size: var(--fs-sm); }
 .tl-playhead::before { content: ""; position: absolute; top: 0; left: -6px; border: 7px solid transparent; border-top-color: #ff4d4d; }
 
 /* ---- full-screen editors: sketch pad, layout boxes ---- */
@@ -706,8 +718,8 @@ details.desc[open] summary { margin-bottom: 6px; }
 
 /* ---- portrait / narrow: stack preview over controls ---- */
 @media (max-width: 900px), (orientation: portrait) {
-  #tab-generate, #tab-editor, #tab-video, #tab-vfx, #tab-scene { grid-template-columns: 1fr; grid-template-rows: var(--stage-h, 42dvh) 16px minmax(0, 1fr); }
-  #tab-video { grid-template-rows: var(--stage-h, 34dvh) 16px minmax(0, 1fr) auto; }
+  #tab-generate, #tab-editor, #tab-video, #tab-sound, #tab-vfx, #tab-scene { grid-template-columns: 1fr; grid-template-rows: var(--stage-h, 42dvh) 16px minmax(0, 1fr); }
+  #tab-video, #tab-sound { grid-template-rows: var(--stage-h, 34dvh) 16px minmax(0, 1fr) auto; }
   .splitter { cursor: row-resize; border-inline: 0; border-block: 1px solid var(--line); }
   .splitter::after { width: 48px; height: 5px; }
   .stage { padding: 8px; }
@@ -742,8 +754,8 @@ details.desc[open] summary { margin-bottom: 6px; }
   #scenePanel input[type=range] { height: 44px; }
 }
 @media (pointer: coarse) and ((max-width: 900px) or (orientation: portrait)) {
-  #tab-generate, #tab-editor, #tab-video, #tab-vfx, #tab-scene { grid-template-rows: var(--stage-h, 42dvh) 24px minmax(0, 1fr); }
-  #tab-video { grid-template-rows: var(--stage-h, 34dvh) 24px minmax(0, 1fr) auto; }
+  #tab-generate, #tab-editor, #tab-video, #tab-sound, #tab-vfx, #tab-scene { grid-template-rows: var(--stage-h, 42dvh) 24px minmax(0, 1fr); }
+  #tab-video, #tab-sound { grid-template-rows: var(--stage-h, 34dvh) 24px minmax(0, 1fr) auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1038,3 +1050,11 @@ details.desc[open] summary { margin-bottom: 6px; }
 .clip-progress-fill { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--accent); opacity: .35; transition: width .3s; }
 .clip-progress .hint { position: relative; line-height: 26px; padding: 0 10px; }
 .vf-marks { flex-wrap: wrap; }
+
+/* sound tab: voice tools */
+.vx-block { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+.vx-voices { display: grid; gap: 6px; }
+.vx-voice { display: grid; gap: 4px; }
+.vx-voice-top { display: flex; gap: 8px; align-items: center; }
+.vx-voice-top .hint { flex: 1; }
+.vx-voice audio { width: 100%; }

@@ -13,6 +13,7 @@ import { RUN, checkUiVersion, connectWS, loadHistory, onResume, openJobs, runChi
 import { renderEditor } from './editor.js';
 import { renderVideo, vidPause, wireVideoTransport } from './video.js';
 import { renderVfx, vfxPause, wireVfx } from './vfx.js';
+import { renderSound, sndPause, wireSound } from './sound.js';
 import { B, closeGallery, pauseBoard, renderBoard } from './board.js';
 import { maximizable, sideNav, wireSplitters } from './layout.js';
 import { loadPrefs, openPrefs } from './prefs.js';
@@ -62,10 +63,11 @@ function switchTab(name) {
   if (name === 'editor') renderEditor();
   if (name === 'video') renderVideo(); else vidPause();
   if (name === 'vfx') renderVfx(); else vfxPause();
+  if (name === 'sound') renderSound(); else sndPause();
   if (name === 'board') renderBoard(); else { closeGallery(); pauseBoard(); }
   if (name === 'scene') sceneModule().then((m) => m.show()).catch((e) => toast(`3D view: ${e.message}`, true));
   else if (sceneMod) sceneMod.hide();
-  $('.actionbar').classList.toggle('hidden', ['editor', 'video', 'vfx', 'board', 'scene'].includes(name));
+  $('.actionbar').classList.toggle('hidden', ['editor', 'video', 'sound', 'vfx', 'board', 'scene'].includes(name));
 }
 setSwitchTab(switchTab);
 document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
@@ -115,6 +117,7 @@ function wireLayout() {
   sideNav($('#editorPanel'), 'editor', sectionTargets($('#editorPanel')));
   sideNav($('#videoPanel'), 'video', sectionTargets($('#videoPanel')));
   sideNav($('#vfxPanel'), 'vfx', sectionTargets($('#vfxPanel')));
+  sideNav($('#soundPanel'), 'sound', sectionTargets($('#soundPanel')));
   sideNav($('#scenePanel'), 'scene', sectionTargets($('#scenePanel')));
 }
 // the .section blocks that sit directly in a panel's body (not ones nested inside another)
@@ -365,6 +368,7 @@ function wireTextPopup() {
   wireTextPopup();
   wireVideoTransport();
   wireVfx();
+  wireSound();
   wireZoom();
   wireFullscreen();
   try { const s = await api('/api/status', { timeout: 8000 }); setConn(s.comfy_connected); checkUiVersion(s.ui_version); } catch { /* server down: the socket keeps retrying */ }

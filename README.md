@@ -20,6 +20,10 @@ fresh layout (Undo brings the old one back), **To video** adds them to the timel
 removes their generations (it asks first). **⤓ Import clip** (also "From a link or big file…" in every
 video picker) cuts a piece out of a YouTube/Reddit/X/Vimeo link, a video file on the PC, or a file on
 the device, and saves it to the media library (see *Importing clips* under Setup).
+**Compare** (select two tiles on the Board) shows them full screen as a wipe (drag the line: the split shows as a
+percentage) or side by side, two clips playing in step. **Sound** tab: a multi-track sound editor (see *Sound* below).
+Every slider is a number box with a bar behind it: hold it, then pull sideways to change it (a swipe scrolls past it), or
+tap to type.
 **3D** tab: block out a shot with soft mannequins, boxes and a room, keyframe them and the camera, and
 render it as a depth video for `deck-h3-ctrl2v` (see below).
 The preview pinch/wheel-zooms, the picker has a camera button, and ⛶ goes full screen.
@@ -308,6 +312,59 @@ desktop ComfyUI. It's the exact graph that ran, with LoRAs expanded.
 
 ---
 
+## Sound
+
+The **Sound** tab is laid out like the Video tab: tracks (mute, **S**olo, level, pan), clips from sound files or the
+sound of any clip (drag to move, drag the ends to trim, overlap to cross-fade, split, duplicate), a waveform overview
+with a level meter, and **Export**, which mixes everything (optionally evened out to −16 LUFS) into an M4A/WAV/MP3/FLAC
+file in the media library. Each mix is a tab saved in the project, like video edits.
+
+Getting sound in and out:
+
+- **Board → ♪ Sound** on a video: take its sound out into the media library, or put another sound on it (replace the
+  clip's own sound or keep it underneath); the result is a new clip in History.
+- **Import clip → Sound only** saves just the sound of a link, a PC file or a device file (an .m4a).
+- Templates with a `VHS_LoadAudio` node tagged `@…` get a **sound picker**: a sound file or a clip's sound, cut with
+  Start / Length. The server hands the loader a file it can open (`app/audioedit.prep`).
+
+Templates that use sound:
+
+| Template | What it does |
+|---|---|
+| `deck-ltx-t2a` | Sound effects, ambience and foley from a description (LTX-2.5 audio only; no extra models). Sound tab → *Make a sound*. |
+| `deck-ace-music` | Music, with or without lyrics (ACE-Step 1.5 turbo, `checkpoints/ace_step_1.5_turbo_aio.safetensors`, 9.3 GB from `Comfy-Org/ace_step_1.5_ComfyUI_files`). Sound tab → *Make a sound* → Music. Written by `dev/make_sound_templates.py`. |
+| `deck-ltx-a2v` | **Sound to video** (VFX → Generate): a clip that moves to a sound (lips follow speech, movement follows music), optionally from a start image. The sound is frozen while the picture is made, and kept. |
+| `deck-ltx-t2v` | now has an optional **Voice**: ~5 s of someone speaking, whose voice the clip's speech takes on (`LTXVReferenceAudio`). |
+| `deck-h3-ref2v` | now has two optional **Sound references** (`ref_audios` on `MiniMaxH3ReferenceToVideo`). |
+
+### Voice tools
+
+The Sound tab's **Voice** section cleans a voice out of a mix (music and effects, then echo, then noise:
+RoFormer models from [python-audio-separator](https://github.com/nomadkaraoke/python-audio-separator)), keeps saved
+voices (a 5–15 s clean cut, what is said in it — **Listen** writes it down with faster-whisper — and a consent tick),
+and speaks a script (`Name: line` per line) in those voices with [Qwen3-TTS 1.7B](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base),
+laying the lines on the timeline a track per voice.
+
+They run in their own venv so their torch never touches ComfyUI's (`voice/worker.py`, started by `app/voice.py`):
+
+```bash
+python3.12 -m venv ~/Programs/comfydeck-voice/.venv
+~/Programs/comfydeck-voice/.venv/bin/pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu128
+~/Programs/comfydeck-voice/.venv/bin/pip install "audio-separator[gpu]" qwen-tts faster-whisper soundfile audioread "av<16"
+# if a dependency swapped torchvision for a CPU build ("operator torchvision::nms does not exist"):
+~/Programs/comfydeck-voice/.venv/bin/pip install --force-reinstall --no-deps "torchvision==0.26.0+cu128" --index-url https://download.pytorch.org/whl/cu128
+```
+
+(`av<16`: faster-whisper 1.2 breaks on PyAV 19. Whisper finds the CUDA libraries torch put in the venv; `app/voice.py`
+adds them to `LD_LIBRARY_PATH`.)
+
+Models download on first use into `~/Programs/comfydeck-voice/models` (separation ~0.2–0.9 GB each, Whisper
+large-v3-turbo ~1.6 GB, Qwen3-TTS ~4.5 GB). `DECK_VOICE_HOME`, `DECK_VOICE_PY`, `DECK_TTS_MODEL` and
+`DECK_WHISPER_MODEL` override the defaults. A run needs the GPU: it waits for an empty ComfyUI queue (it refuses
+otherwise) and asks ComfyUI to unload its models first. Saved voices live in `data/voices/`.
+
+Only clone a voice that is yours or that the speaker said you may use, and don't use it to pass as them.
+
 ## Layout
 
 ```
@@ -316,10 +373,13 @@ app/comfy.py       ComfyUI HTTP + websocket client
 app/templates.py   @-tag parsing, field typing from /object_info, LoRA chain splicing
 app/imageprep.py   crop, megapixel cap, snap to multiple-of-N, video/gif frame grabs
 app/db.py          SQLite: projects + generations (params, exact workflow, parent lineage)
+app/audioedit.py   sound with ffmpeg: extract, the Sound tab's mixdown, laying a sound on a clip
+app/voice.py       the voice tools' jobs and saved voices; voice/worker.py runs in its own venv
 web/               the tablet UI (vanilla JS, no build step)
 web/ui.js          shared UI kit: h(), api(), toasts, sheets, overlays and the widgets every panel uses
-                   (button, iconBtn, seg, field, section, rangeField, propNum, mediaCard, cycleBar…)
+                   (button, iconBtn, seg, field, section, numSlider, rangeField, propNum, mediaCard, cycleBar…)
 web/app.js         Generate, Editor, Video, Board, History; web/scene.js the 3D tab (loaded on demand)
+web/sound.js       the Sound tab; web/compare.js the Board's compare view
 web/app.css        styles; colours, radii and shadows come from the tokens at the top
 templates/         your workflow templates
 data/              database, projects/ (saved outputs), local copies of inputs (git-ignored)

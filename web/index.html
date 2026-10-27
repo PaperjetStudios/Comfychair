@@ -21,6 +21,7 @@
       <button data-tab="generate" role="tab" title="Generate" class="active" aria-selected="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 4.6L18.5 9l-4.7 1.6L12 15l-1.8-4.4L5.5 9l4.7-1.4z"/><path d="M18 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg><span class="tab-label">Generate</span><span class="tab-chip hidden" id="runChip"></span></button>
       <button data-tab="editor" role="tab" title="Editor"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></svg><span class="tab-label">Editor</span></button>
       <button data-tab="video" role="tab" title="Video"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 5v14M17 5v14M3 9.5h4M3 14.5h4M17 9.5h4M17 14.5h4"/></svg><span class="tab-label">Video</span></button>
+      <button data-tab="sound" role="tab" title="Sound"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg><span class="tab-label">Sound</span></button>
       <button data-tab="vfx" role="tab" title="VFX"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20L14 10"/><path d="M15 3l1 2.5L18.5 6.5 16 7.5 15 10l-1-2.5L11.5 6.5 14 5.5z"/><path d="M19.5 11l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z"/></svg><span class="tab-label">VFX</span></button>
       <button data-tab="scene" role="tab" title="3D"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l8.5 4.8v9.4L12 21.5l-8.5-4.8V7.3z"/><path d="M3.5 7.3L12 12l8.5-4.7M12 12v9.5"/></svg><span class="tab-label">3D</span></button>
       <button data-tab="board" role="tab" title="Board"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg><span class="tab-label">Board</span></button>
@@ -100,6 +101,30 @@
         <div class="hsplit" role="separator" aria-label="Drag to resize the timeline" title="Drag to resize · double-tap to reset"></div>
         <div class="tl-tools" id="tlTools"></div>
         <div class="timeline" id="timeline"></div>
+      </div>
+    </section>
+
+    <section id="tab-sound" class="tab">
+      <div class="stage editor-stage">
+        <div class="viewer snd-viewer">
+          <canvas id="sndCanvas" aria-label="The whole mix: tap to move the playhead"></canvas>
+          <div id="sndEmpty" class="placeholder">Add sounds, or the sound of clips, to the tracks below</div>
+        </div>
+        <div class="transport">
+          <button id="sndStart" class="icon-btn" aria-label="Go to start" title="Go to start (Home)">⇤</button>
+          <button id="sndBack" class="icon-btn" aria-label="Back 5 seconds" title="Back 5 s">⏪</button>
+          <button id="sndPlay" class="btn small primary" title="Play / pause (Space)">▶ Play</button>
+          <button id="sndFwd" class="icon-btn" aria-label="Forward 5 seconds" title="Forward 5 s">⏩</button>
+          <button id="sndLoop" class="btn small" aria-pressed="false">⟲ Loop</button>
+          <span id="sndTime" class="timecode"></span>
+        </div>
+      </div>
+      <div class="splitter" role="separator" aria-label="Drag to resize preview and settings" title="Drag to resize · double-tap to reset"></div>
+      <aside class="panel" id="soundPanel"></aside>
+      <div class="timeline-wrap">
+        <div class="hsplit" role="separator" aria-label="Drag to resize the timeline" title="Drag to resize · double-tap to reset"></div>
+        <div class="tl-tools" id="sndTools"></div>
+        <div class="timeline" id="sndTimeline"></div>
       </div>
     </section>
 
