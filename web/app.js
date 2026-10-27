@@ -65,9 +65,15 @@ function switchTab(name) {
   if (name === 'vfx') renderVfx(); else vfxPause();
   if (name === 'sound') renderSound(); else sndPause();
   if (name === 'board') renderBoard(); else { closeGallery(); pauseBoard(); }
-  if (name === 'scene') sceneModule().then((m) => m.show()).catch((e) => toast(`3D view: ${e.message}`, true));
+  if (name === 'scene') sceneModule().then((m) => m.show()).catch((e) => { console.error(e); toast(`3D view: ${e.message}${whereFrom(e)}`, true); });
   else if (sceneMod) sceneMod.hide();
   $('.actionbar').classList.toggle('hidden', ['editor', 'video', 'sound', 'vfx', 'board', 'scene'].includes(name));
+}
+// where an error came from: its first two places in our files (file:line), short enough for a toast on a tablet
+function whereFrom(e) {
+  const at = String(e?.stack || '').split('\n').map((l) => l.match(/\/([\w-]+\.js)(?:\?[^:]*)?:(\d+):\d+/)).filter(Boolean)
+    .slice(0, 2).map((m) => `${m[1]}:${m[2]}`);
+  return at.length ? ` (at ${at.join(' < ')})` : '';
 }
 setSwitchTab(switchTab);
 document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
