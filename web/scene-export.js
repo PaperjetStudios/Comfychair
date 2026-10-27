@@ -80,6 +80,14 @@ function targetToBlob(rt, W, H, gray) {
 }
 
 export let busy = false;
+// A render under way can be stopped (✕ Cancel on the panel or in its toast): the frame loop checks
+// between frames. Stopped while encoding, the clip the server made is deleted. Nothing is kept either way.
+let stopAsked = false;
+class Cancelled extends Error {}
+export function cancelRender() { if (busy && !stopAsked) { stopAsked = true; setStatus('Cancelling…'); } }
+const checkStop = () => { if (stopAsked) throw new Cancelled(); };
+const cancelToast = (what) => toast(what, false, { label: '✕ Cancel', fn: cancelRender, stay: true });
+const cancelled = () => { setStatus('Render cancelled'); toast('Render cancelled: nothing was saved'); };
 // (Create object's empty stage isn't the shot: only the scene is rendered)
 function canRender() {
   if (modeOf().stage !== 'empty') return true;
@@ -87,10 +95,12 @@ function canRender() {
   return false;
 }
 
+// true once it is saved (false: cancelled, failed or not started)
 export async function renderDepthVideo() {
-  if (busy || !canRender()) return;
-  busy = true; R.real = true; stopPlay(); TEMP.clear(); renderPanel();  // only what's keyed goes in the render (mute is ignored)
+  if (busy || !canRender()) return false;
+  busy = true; stopAsked = false; R.real = true; stopPlay(); TEMP.clear(); renderPanel();  // only what's keyed goes in the render (mute is ignored)
   const keep = R.f, W = SC.width, H = SC.height, bar = busyBar('Rendering depth frames…');
+  cancelToast('Rendering the depth video…');
   try {
     setRange(measureRange());
     const rt = new THREE.WebGLRenderTarget(W, H, { colorSpace: THREE.NoColorSpace });
@@ -103,22 +113,31 @@ export async function renderDepthVideo() {
       form.append('frames', await targetToBlob(rt, W, H, true), `f${String(f).padStart(5, '0')}.png`);
       if (f % 12 === 0) setStatus(`Rendering ${f + 1}/${frames()}…`);
       bar.set(null, (f + 1) / frames());
+      if (stopAsked) { rt.dispose(); checkStop(); }
     }
     rt.dispose();
     await sendVideo(form, 'depth', SC.blur);
+    return true;
   } catch (e) {
-    setStatus(''); toast(e.message, true);
+    if (e instanceof Cancelled) cancelled(); else { setStatus(''); toast(e.message, true); }
+    return false;
   } finally {
     bar.done();
-    busy = false; R.real = false; R.f = keep; fit(); refresh(); renderPanel();
+    busy = false; stopAsked = false; R.real = false; R.f = keep; fit(); refresh(); renderPanel();
   }
 }
 
 async function sendVideo(form, kind, blur) {
   form.append('fps', FPS); form.append('blur', blur); form.append('kind', kind); form.append('scene', JSON.stringify(SC));
   if (C.S.project != null) form.append('project_id', C.S.project);
+  checkStop();
   setStatus('Encoding…');
-  R.lastRender = await api('/api/scene/render', { method: 'POST', form });
+  const g = await api('/api/scene/render', { method: 'POST', form });
+  if (stopAsked) {   // too late to stop the encode: the clip goes again
+    try { await api(`/api/generations/${g.id}`, { method: 'DELETE' }); } catch { /* it stays in History */ }
+    checkStop();
+  }
+  R.lastRender = g;
   R.renders[kind] = R.lastRender;
   const what = kind === 'pose' ? 'Pose video' : 'Depth video';
   setStatus(`${what} #${R.lastRender.id} is in History`);
@@ -129,9 +148,10 @@ async function sendVideo(form, kind, blur) {
 // their hands' 21 points and the face's 68 unless the scene leaves them out (SC.poseHands, SC.poseFace)
 export async function renderPoseVideo() {
   const figs = SC.objects.filter((o) => o.type === 'figure' && !o.hidden);
-  if (busy || !figs.length || !canRender()) return;
-  busy = true; R.real = true; stopPlay(); TEMP.clear(); renderPanel();
+  if (busy || !figs.length || !canRender()) return false;
+  busy = true; stopAsked = false; R.real = true; stopPlay(); TEMP.clear(); renderPanel();
   const keep = R.f, W = SC.width, H = SC.height, bar = busyBar('Rendering pose frames…');
+  cancelToast('Rendering the pose video…');
   try {
     const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
     const ctx = cv.getContext('2d');
@@ -146,13 +166,16 @@ export async function renderPoseVideo() {
       form.append('frames', await new Promise((res) => cv.toBlob(res, 'image/png')), `f${String(f).padStart(5, '0')}.png`);
       if (f % 12 === 0) setStatus(`Rendering ${f + 1}/${frames()}…`);
       bar.set(null, (f + 1) / frames());
+      checkStop();
     }
     await sendVideo(form, 'pose', 0);
+    return true;
   } catch (e) {
-    setStatus(''); toast(e.message, true);
+    if (e instanceof Cancelled) cancelled(); else { setStatus(''); toast(e.message, true); }
+    return false;
   } finally {
     bar.done();
-    busy = false; R.real = false; R.f = keep; fit(); refresh(); renderPanel();
+    busy = false; stopAsked = false; R.real = false; R.f = keep; fit(); refresh(); renderPanel();
   }
 }
 
@@ -170,6 +193,11 @@ export async function saveFrame() {
   const blob = await targetToBlob(rt, W, H, false);
   rt.dispose();
   R.depth = wasDepth; fit(); refresh();
+  // a moment to take back a tap by mistake before it is kept (an input image can't be deleted after)
+  let stop = false;
+  toast('Saving the frame…', false, { label: '✕ Cancel', fn: () => { stop = true; toast('Frame not saved'); }, stay: true });
+  await new Promise((r) => setTimeout(r, 1500));
+  if (stop) return;
   try {
     const r = await C.uploadImage(blob, { source: 'scene', filename: 'scene.png' });
     toast(`Saved frame as ${r.name.split('/').pop()}`);

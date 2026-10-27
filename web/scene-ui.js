@@ -13,7 +13,7 @@ import {
   HAND, addObject, camGizmo, cameraFromView, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, pose, rebuildRoom, refresh,
   removeLayer, removeSelected, select, selectJoint, setFree, setMode, syncMeshes, viewer
 } from './scene-view.js';
-import { busy, play, renderDepthVideo, renderPoseVideo, saveFrame, seek, stopPlay } from './scene-export.js';
+import { busy, cancelRender, play, renderDepthVideo, renderPoseVideo, saveFrame, seek, stopPlay } from './scene-export.js';
 import { maxBar, renderKeys, renderTransport, wireSheetKeys } from './scene-keys.js';
 import { hasMode, modeDef, modeList, modeOf, modeSections } from './scene-modes.js';
 import { syncRef, toggleRef } from './scene-ref.js';
@@ -218,11 +218,12 @@ function renderProps() {
   return section('Render', null,
     slider('Soften edges', () => SC.blur, (v) => { SC.blur = v; }, { min: 0, max: 12, step: 0.5, fmt: (v) => (v ? `${v} px` : 'off') }),
     help('Blurs the depth so H3 copies the shapes less literally. Use with deck-h3-ctrl2v (strength 1, end 0.4).'),
-    h('div', { class: 'row wrap' },
-      button('Render depth video', renderDepthVideo, { cls: 'small primary', disabled: busy }),
-      figs ? button('Render pose video', renderPoseVideo, { disabled: busy, title: 'The posable people as OpenPose stick figures' }) : null,
-      figs ? button('Render both', async () => { await renderDepthVideo(); await renderPoseVideo(); }, { disabled: busy, title: 'A depth video and a pose video of the same shot' }) : null,
-      button('📷 Save frame', saveFrame)),
+    busy ? h('div', { class: 'row wrap' }, button('✕ Cancel render', cancelRender, { cls: 'small danger', title: 'Stop the render: nothing is saved' }))
+      : h('div', { class: 'row wrap' },
+        button('Render depth video', renderDepthVideo, { cls: 'small primary' }),
+        figs ? button('Render pose video', renderPoseVideo, { title: 'The posable people as OpenPose stick figures' }) : null,
+        figs ? button('Render both', async () => { if (await renderDepthVideo()) await renderPoseVideo(); }, { title: 'A depth video and a pose video of the same shot' }) : null,
+        button('📷 Save frame', saveFrame)),
     figs ? h('div', { class: 'row wrap' }, ...[['poseHands', 'Hands in the pose video'], ['poseFace', 'Face points in the pose video']].map(([k, l]) =>
       h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: SC[k] !== false, onchange: (e) => { SC[k] = e.target.checked; save(); } }), l))) : null,
     R.renders.depth || R.renders.pose ? h('div', { class: 'row wrap' },
