@@ -936,6 +936,13 @@ button.sheet-caret { width: 22px; }
 .vf-range { background: var(--accent); opacity: .85; }
 .vf-head { position: absolute; top: 8px; width: 2px; height: 32px; margin-left: -1px; background: var(--text); pointer-events: none; }
 .vf-h { position: absolute; top: 4px; width: 36px; height: 40px; margin-left: -18px; cursor: ew-resize; }
+.vf-h { z-index: 2; }
+.vf-grip { position: absolute; top: 0; bottom: 0; z-index: 1; cursor: grab; touch-action: none; }
+.vf-grip:active { cursor: grabbing; }
+.vf-track .vf-grip::after { content: ''; position: absolute; left: 0; right: 0; top: 18px; height: 12px; border-radius: 6px; }
+.vf-grip:hover::after, .vf-grip:active::after { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+.vf-lens { flex-wrap: wrap; }
+.vf-lens .btn { flex: none; min-width: 52px; }
 .vf-h::after { content: ''; position: absolute; left: 6px; right: 6px; top: 4px; bottom: 4px; border-radius: 8px; background: var(--accent); border: 3px solid #000; box-sizing: border-box; }
 .vf-nums { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
 .vf-num { display: grid; gap: 2px; font-size: var(--fs-xs); color: var(--muted); }
@@ -1029,14 +1036,15 @@ button.sheet-caret { width: 22px; }
 .key-frame { display: block; max-width: 100%; max-height: 40vh; width: auto; height: auto; background: var(--checker); cursor: crosshair; border-radius: 6px; touch-action: none; }
 
 /* VFX tab */
-.vfx-stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.vfx-stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; container-type: size; }
 .vfx-media { position: relative; display: inline-block; max-width: 100%; max-height: 100%; touch-action: none; }
-.vfx-media > video, .vfx-media > img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+/* sized against the stage (container units): a percentage max-height of an auto-height box does nothing, so tall or odd-sized clips overflowed */
+.vfx-media > video, .vfx-media > img { display: block; max-width: 100cqw; max-height: 100cqh; object-fit: contain; }
 .vfx-media > .vfx-b { position: absolute; inset: 0; width: 100%; height: 100%; }
 .vfx-media > .vfx-b:only-of-type, .vfx-media > .vfx-b:first-child { position: static; }
 .vfx-ov { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .vfx-media.side { display: flex; gap: 4px; align-items: center; }
-.vfx-media.side > video { position: static; max-width: calc(50% - 2px); clip-path: none !important; }
+.vfx-media.side > video { position: static; max-width: calc(50cqw - 2px); clip-path: none !important; }
 .vfx-tag { position: absolute; top: 6px; padding: 2px 8px; border-radius: 4px; background: rgba(0,0,0,.6); color: #fff; font-size: 12px;
   pointer-events: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vfx-tag.left { left: 6px; }
@@ -1138,3 +1146,6 @@ button.sheet-caret { width: 22px; }
 .vf-bar { min-width: 0; flex-wrap: wrap; }
 .vf-bar .vf-time { min-width: 0; }
 .row.wrap > * { min-width: 0; }
+
+/* Board box select (board.js) */
+.board-box { position: fixed; z-index: 30; pointer-events: none; border: 2px solid var(--accent); border-radius: 6px; background: color-mix(in srgb, var(--accent) 14%, transparent); }

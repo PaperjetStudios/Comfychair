@@ -35,6 +35,7 @@ async function loadAllProjectGenerations() {
 }
 
 export async function renderBoard() {
+  if (!B.boxWired) { B.boxWired = true; wireBoxSelect(); }
   const bar = $('#boardBar');
   if (B.filter === 'marked' && !B.marked.size) B.filter = 'all';
   const filters = [['all', 'All'], ['image', 'Images'], ['video', 'Videos'], ['pinned', '★ Pinned'], ...(B.marked.size ? [['marked', '🗑 Marked']] : [])];
@@ -169,6 +170,62 @@ function openSoundSheet(g, i) {
 }
 
 // ---- board selection: pick tiles, then make a new edit from them, put them on the timeline, or delete
+// Box select: drag across the board to select the tiles under the box. A mouse drag starts it in select mode;
+// a finger (or pen) starts it with a long press and keeps going without lifting (then the page doesn't scroll).
+const BOX = { on: false, x0: 0, y0: 0, base: null, el: null, id: null, sc: null, raf: 0, last: null };
+function boxStart(e) {
+  const sc = document.getElementById('tab-board');
+  Object.assign(BOX, { on: true, x0: e.clientX, y0: e.clientY + sc.scrollTop, base: new Set(B.sel), id: e.pointerId, sc, last: e });
+  BOX.el ||= h('div', { class: 'board-box' });
+  document.body.append(BOX.el);
+  B.longPressed = true;   // the click that ends the drag isn't a tap on a tile
+  boxMove(e);
+}
+function boxMove(e) {
+  if (!BOX.on) return;
+  BOX.last = e;
+  const top = Math.min(BOX.y0 - BOX.sc.scrollTop, e.clientY), bottom = Math.max(BOX.y0 - BOX.sc.scrollTop, e.clientY);
+  const left = Math.min(BOX.x0, e.clientX), right = Math.max(BOX.x0, e.clientX);
+  Object.assign(BOX.el.style, { left: `${left}px`, top: `${top}px`, width: `${right - left}px`, height: `${bottom - top}px` });
+  const sel = new Set(BOX.base);
+  for (const t of document.querySelectorAll('#board .tile[data-key]')) {
+    const r = t.getBoundingClientRect();
+    if (r.right >= left && r.left <= right && r.bottom >= top && r.top <= bottom) sel.add(t.dataset.key);
+  }
+  B.sel = sel;
+  for (const t of document.querySelectorAll('#board .tile[data-key]')) t.classList.toggle('sel', sel.has(t.dataset.key));
+  const bar = $('#boardBar .board-sel');
+  if (bar) bar.replaceWith(boardSelBar());
+  // near the top or bottom: scroll, and keep selecting while the finger rests there
+  const sr = BOX.sc.getBoundingClientRect(), edge = 60;
+  const dy = e.clientY < sr.top + edge ? -(sr.top + edge - e.clientY) : e.clientY > sr.bottom - edge ? e.clientY - (sr.bottom - edge) : 0;
+  cancelAnimationFrame(BOX.raf);
+  if (dy) BOX.raf = requestAnimationFrame(() => { BOX.sc.scrollTop += dy / 3; boxMove(BOX.last); });
+}
+function boxEnd() {
+  if (!BOX.on) return;
+  BOX.on = false; cancelAnimationFrame(BOX.raf); BOX.el?.remove();
+  setTimeout(() => { B.longPressed = false; }, 0);
+}
+function wireBoxSelect() {
+  const board = document.getElementById('board');
+  let down = null;
+  board.addEventListener('pointerdown', (e) => {
+    down = e.button === 0 || e.pointerType !== 'mouse' ? { x: e.clientX, y: e.clientY, id: e.pointerId, type: e.pointerType, t: Date.now() } : null;
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (BOX.on) { if (e.pointerId === BOX.id) boxMove(e); return; }
+    if (!down || e.pointerId !== down.id || Math.hypot(e.clientX - down.x, e.clientY - down.y) < 12) return;
+    // a mouse drag in select mode, or any drag right after a long press
+    if ((down.type === 'mouse' && B.selecting) || B.longPressed) boxStart({ clientX: down.x, clientY: down.y, pointerId: e.pointerId }), boxMove(e);
+    else down = null;   // a finger that moves before the long press is scrolling
+  });
+  const up = () => { down = null; boxEnd(); };
+  window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
+  // while box-selecting with a finger, the page mustn't scroll under it
+  document.addEventListener('touchmove', (e) => { if (BOX.on) e.preventDefault(); }, { passive: false });
+}
+
 function setBoardSelecting(on) {
   B.selecting = on;
   if (!on) B.sel.clear();

@@ -104,13 +104,16 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
   const head = h('div', { class: 'vf-head' });
   const hin = h('div', { class: 'vf-h in', 'data-h': 'in', role: 'slider', 'aria-label': 'Trim start' });
   const hout = h('div', { class: 'vf-h out', 'data-h': 'out', role: 'slider', 'aria-label': 'Trim end' });
-  const track = h('div', { class: 'vf-track' }, h('div', { class: 'vf-rail' }), range, head, hin, hout);
+  // the lit part itself is a grip: drag it to slide the whole selection along, keeping its length
+  const grip = h('div', { class: 'vf-grip', 'data-h': 'range', 'aria-label': 'Move the selection' });
+  const track = h('div', { class: 'vf-track' }, h('div', { class: 'vf-rail' }), range, grip, head, hin, hout);
   const pos = (t) => `${(dur ? clamp01(t / dur) : 0) * 100}%`;
   let want = null;   // the newest seek asked for while one is still loading (streamed clips): only that one is made
   const shownT = () => (want ?? v.currentTime) || 0;
   const drawTrack = () => {
     const e = end();
     Object.assign(range.style, { left: pos(t0), width: `${(dur ? clamp01((e - t0) / dur) : 1) * 100}%` });
+    Object.assign(grip.style, { left: range.style.left, width: range.style.width });
     hin.style.left = pos(t0); hout.style.left = pos(e); head.style.left = pos(shownT());
     drawFine();
   };
@@ -136,15 +139,21 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
     const f = 1 / rate();
     if (k === 'in') { t0 = clamp(frame(t), 0, end() - f); seek(t0); }
     else if (k === 'out') { t1 = clamp(frame(t), t0 + f, dur); seek(t1 - 0.001); }
-    else seek(t);
-    focus = k === 'seek' ? 'head' : k;
+    else if (k === 'range') {   // t: where the grabbed point is now; slide = {off, len} from the grab
+      const len = slide.len;
+      t0 = clamp(frame(t - slide.off), 0, Math.max(0, dur - len)); t1 = Math.min(dur, t0 + len); seek(t0);
+    } else seek(t);
+    focus = k === 'seek' ? 'head' : k === 'range' ? 'in' : k;
     nums(); info();
   };
-  let grab = null;
+  let grab = null, slide = null;
+  const startSlide = (t) => { slide = { off: t - t0, len: end() - t0 }; };
   track.addEventListener('pointerdown', (e) => {
     e.preventDefault(); track.setPointerCapture(e.pointerId);
     const k = e.target.dataset && e.target.dataset.h;
-    grab = k || 'seek'; v.pause(); move(e);
+    grab = k || 'seek'; v.pause();
+    if (grab === 'range') { const r = track.getBoundingClientRect(); startSlide(clamp01((e.clientX - r.left) / r.width) * dur); }
+    move(e);
   });
   const move = (e) => {
     if (!grab || !dur) return;
@@ -161,7 +170,8 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
   const fIn = h('div', { class: 'vf-h in', 'data-h': 'in', role: 'slider', 'aria-label': 'Trim start, fine' });
   const fOut = h('div', { class: 'vf-h out', 'data-h': 'out', role: 'slider', 'aria-label': 'Trim end, fine' });
   const ticks = h('div', { class: 'vf-ticks' });
-  const fine = h('div', { class: 'vf-track vf-fine' }, h('div', { class: 'vf-rail' }), ticks, fRange, fHead, fIn, fOut);
+  const fGrip = h('div', { class: 'vf-grip', 'data-h': 'range', 'aria-label': 'Move the selection' });
+  const fine = h('div', { class: 'vf-track vf-fine' }, h('div', { class: 'vf-rail' }), ticks, fRange, fGrip, fHead, fIn, fOut);
   const fineLbl = h('span', { class: 'hint' });
   const win = () => Math.min(span, dur || span);
   const focusT = () => (focus === 'in' ? t0 : focus === 'out' ? end() : shownT());
@@ -173,6 +183,7 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
     if (!fgrab && (ft < w0 || ft > w0 + s)) recenter();   // follows the playhead or handle a page at a time
     const a = Math.max(t0, w0), b = Math.min(end(), w0 + s);
     Object.assign(fRange.style, { left: `${clamp01(fx(a)) * 100}%`, width: `${Math.max(0, (b - a) / s) * 100}%` });
+    Object.assign(fGrip.style, { left: fRange.style.left, width: fRange.style.width });
     for (const [el, t] of [[fIn, t0], [fOut, end()], [fHead, shownT()]]) {
       el.style.left = `${fx(t) * 100}%`; el.style.display = t < w0 - 1e-6 || t > w0 + s + 1e-6 ? 'none' : '';
     }
@@ -188,7 +199,9 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
   };
   fine.addEventListener('pointerdown', (e) => {
     e.preventDefault(); fine.setPointerCapture(e.pointerId);
-    fgrab = (e.target.dataset && e.target.dataset.h) || 'seek'; v.pause(); fmove(e);
+    fgrab = (e.target.dataset && e.target.dataset.h) || 'seek'; v.pause();
+    if (fgrab === 'range') { const r = fine.getBoundingClientRect(); startSlide(w0 + clamp01((e.clientX - r.left) / r.width) * win()); }
+    fmove(e);
   });
   const fmove = (e) => {
     if (!fgrab || !dur) return;
@@ -269,10 +282,19 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
     button('Set in (I)', setIn), button('Set out (O)', setOut),
     button('▶ Selection (P)', playSel, { cls: 'small primary', title: 'Play from in to out (loops while 🔁 is on)' })) : null;
 
+  // a length in one tap: from the start (moved back if the clip ends first); then slide it with the lit part
+  const lenTap = (L) => {
+    v.pause(); L = Math.min(L, dur);
+    if (t0 + L > dur) t0 = Math.max(0, frame(dur - L));
+    t1 = Math.min(dur, t0 + L); focus = 'in'; seek(t0); nums(); drawTrack(); info(); commit();
+  };
+  const lenBar = h('div', { class: 'vf-bar vf-lens' }, h('span', { class: 'hint' }, 'Length'),
+    ...[3, 5, 8, 10].map((L) => button(`${L} s`, () => lenTap(L), { cls: 'small', title: `Keep ${L} seconds from the start; drag the lit part to move it` })));
+
   const el = h('div', { class: 'vf', ...(marks && { tabindex: 0 }) },
     h('div', { class: 'crop-stage vf-stage' }, wrap),
     h('div', { class: 'vf-bar' }, play, time, mute, loopBtn, cropBtn), markBar, snd,
-    cropBar, track, marks ? fineBox : null,
+    cropBar, track, lenBar, marks ? fineBox : null,
     h('div', { class: 'vf-nums' }, fields.map((x) => x.el), fitBtn),
     infoEl);
   drawCrop(); nums(); drawTrack(); info();
