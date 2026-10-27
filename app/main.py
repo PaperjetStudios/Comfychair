@@ -19,7 +19,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFil
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import accel, audioedit, clipimport, craft, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
+from . import accel, audioedit, clipimport, craft, h3upscale, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import store
 from . import sceneasset
 from . import templates as tpl
@@ -821,6 +821,47 @@ async def video_render(body: dict = Body(...)):
     db.update_generation(gid, status="done", finished=time.time(),
                          outputs=[{"filename": out.name, "path": rel, "kind": "video", "node": "edit",
                                    "duration": round(info["duration"], 2)}])
+    await push_gen(gid)
+    return db.get_generation(gid)
+
+
+@app.post("/api/h3/upscale")
+async def h3_upscale(body: dict = Body(...)):
+    """A finished MiniMax H3 clip ({generation, index, scale}) sampled again bigger, with the same run's prompt,
+    LoRAs, references and seed (app/h3upscale.py). A new generation in History, made from the clip."""
+    g = db.get_generation(int(body.get("generation", -1)))
+    idx = int(body.get("index") or 0)
+    if not g or g["status"] != "done" or not 0 <= idx < len(g["outputs"]) or g["outputs"][idx]["kind"] != "video":
+        raise HTTPException(400, "Pick a finished H3 video")
+    wf0 = db.get_workflow(g["id"])
+    if not wf0 or not h3upscale.h3_node(wf0):
+        raise HTTPException(400, "Only MiniMax H3 runs can be upscaled this way")
+    oi = await object_info_or_none()
+    if oi is not None and "MinimaxH3LatentUpscaler3D" not in oi:   # installed since it was read?
+        oi = await object_info_or_none(refresh=True)
+    if oi is not None and "MinimaxH3LatentUpscaler3D" not in oi:
+        raise HTTPException(400, "ComfyUI doesn't have the MiniMax H3 latent upscaler (Comfyui_Minimax_h3_latent_Upscaler): "
+                                 "install it and restart ComfyUI")
+    path = output_file(g, g["outputs"][idx])
+    try:
+        info = await asyncio.to_thread(videoedit.probe, path)
+    except (subprocess.SubprocessError, OSError, ValueError, KeyError) as e:
+        raise HTTPException(400, f"Couldn't read the clip: {e}")
+    scale = min(2.0, max(1.1, float(body.get("scale") or 1.5)))
+    folder = db.project_folder(g["project_id"])
+    try:
+        wf, (w, h) = h3upscale.build(wf0, str(path), info["width"], info["height"], scale,
+                                     f"{config.COMFY_INPUT_SUBFOLDER}/{folder}/h3up", info.get("fps") or 24)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    try:
+        res = await comfy.queue(wf)
+    except ComfyError as e:
+        raise HTTPException(400, str(e))
+    params = {"source": {"generation": g["id"], "index": idx}, "scale": scale, "frame": f"{w}×{h}",
+              "from": f"{info['width']}×{info['height']}", "template": g["template"]}
+    gid = db.create_generation(g["project_id"], "h3 upscale", params, wf, res["prompt_id"],
+                               {"generation": g["id"], "index": idx, "frame": None})
     await push_gen(gid)
     return db.get_generation(gid)
 

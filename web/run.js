@@ -1,6 +1,6 @@
 import {
   $, h, store, api, toast, SHEET, sheetOpen, openSheet, closeSheet, button, linkBtn, actions, hint, placeholder, note,
-  mediaCard,
+  mediaCard, seg,
 } from './ui.js';
 import { S, fmtT, isMine, loadProjects, switchTab, emitServer } from './core.js';
 import { genLabel, mediaEl, openImagePicker, uploadImage } from './media.js';
@@ -539,7 +539,7 @@ export function openGeneration(id) {
   const cur = () => g.outputs[idx];
   const isScene = g.template === '3d scene';  // a depth video from the 3D tab, with its scene in the params
   const isPhoto = g.template === '3d photo';  // a picture as a mesh (MoGe), for the 3D tab
-  const isEdit = g.template === 'video edit' || isScene || isPhoto;  // made in the Video or 3D tab: no template to replay
+  const isEdit = g.template === 'video edit' || g.template === 'h3 upscale' || isScene || isPhoto;  // made in the Video or 3D tab, or upscaled: no template to replay
   const primary = { cls: 'small primary' };
   const btns = isPhoto ? [
     button('Add to 3D', async () => { closeSheet(); switchTab('scene'); (await sceneModule()).addPhoto(g); }, primary),
@@ -558,6 +558,9 @@ export function openGeneration(id) {
     btns.push(button(cur().kind === 'image' ? 'Open in PhotoCraft' : 'Open in EffectCraft',
       async (ev) => (await import('./craft.js')).sendToCraft('generation', { generation: g.id, index: idx }, ev.currentTarget),
       { title: 'With what it was made from as a hidden layer underneath, to keep editing on the computer' }));
+  }
+  if (cur()?.kind === 'video' && /^deck-h3-/.test(g.template) && g.status === 'done') {
+    btns.push(button('Upscale (H3)…', () => openH3Upscale(g, idx), { title: 'Sample it again bigger, with this run\'s own prompt, LoRAs and references' }));
   }
   if (cur()?.kind === 'video') btns.push(button('Track motion', () => openTrack({ src: { generation: g.id, index: idx }, url: cur().url, label: genLabel(g) }), { title: 'Follow the picture\'s movement and make a 3D camera from it' }));
   if (!isEdit) btns.push(linkBtn('Workflow JSON', `/api/generations/${g.id}/workflow`));
@@ -707,4 +710,24 @@ export async function openJobs() {
   clearInterval(jobsTimer);
   jobsTimer = setInterval(refresh, 1000);
   refresh();
+}
+
+// A finished H3 clip sampled again bigger (app/h3upscale.py): the run's own prompt, LoRAs, references and seed
+function openH3Upscale(g, idx) {
+  const o = g.outputs[idx], w = o.width || 0, hgt = o.height || 0;
+  let scale = 1.5;
+  const size = (s) => (w ? `${Math.round((w * s) / 32) * 32}×${Math.round((hgt * s) / 32) * 32}` : `${s}×`);
+  const info = h('div', { class: 'hint' });
+  const show = () => { info.textContent = `${w ? `${w}×${hgt} → ` : ''}${size(scale)}. Bigger takes longer and needs more memory: 1.5× is the safe choice on 12 GB.`; };
+  const go = button('Upscale', async () => {
+    go.disabled = true;
+    try {
+      const n = await api('/api/h3/upscale', { method: 'POST', body: { generation: g.id, index: idx, scale } });
+      S.history.set(n.id, n); closeSheet(); openGeneration(n.id);
+    } catch (e) { toast(e.message, true); go.disabled = false; }
+  }, { cls: 'primary' });
+  show();
+  openSheet(h('h3', {}, `Upscale #${g.id}`),
+    hint('Encodes the clip, makes its latent bigger with the MiniMax H3 latent upscaler, and samples it again for 3 steps with this run\'s own prompt, LoRAs, references and seed. The sound is the clip\'s own.'),
+    seg([[1.25, '1.25×'], [1.5, '1.5×'], [2, '2×']], scale, (v) => { scale = v; show(); }), info, h('div', { class: 'row' }, go));
 }

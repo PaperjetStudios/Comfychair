@@ -1,0 +1,53 @@
+"""Upscaling a finished H3 clip with its own run's workflow (app/h3upscale.py).
+Run: .venv/bin/python -m unittest discover tests"""
+import json
+import os
+import tempfile
+import unittest
+from pathlib import Path
+
+up = None
+TPL = Path(__file__).resolve().parent.parent / "templates"
+
+
+def setUpModule():   # imported late: other test modules set DECK_DATA/DECK_COMFY_DIR before app.config loads
+    global up
+    os.environ.setdefault("DECK_DATA", tempfile.mkdtemp(prefix="deck-test-"))
+    os.environ.setdefault("DECK_COMFY_DIR", "")
+    from app import h3upscale
+    up = h3upscale
+
+
+class Build(unittest.TestCase):
+    def wf(self, name):
+        return json.loads((TPL / f"{name}.json").read_text())
+
+    def test_ref2v_reuses_its_conditioning(self):
+        src = self.wf("deck-h3-ref2v")
+        wf, size = up.build(src, "/out/clip.mp4", 768, 448, 1.5)
+        self.assertEqual(size, (1152, 672))
+        h3 = up.h3_node(src)
+        self.assertEqual(wf["up_guide"]["inputs"]["conditioning"], [h3, 0])
+        self.assertEqual(wf["up_guide"]["inputs"]["model"], src["11"]["inputs"]["model"])   # the LoRA chain
+        self.assertEqual(wf["up_run"]["inputs"]["noise"], src["12"]["inputs"]["noise"])     # the seed
+        self.assertEqual((wf["up_scale"]["inputs"]["mode.width"], wf["up_scale"]["inputs"]["mode.height"]), (1152, 672))
+        self.assertEqual(wf["up_save"]["inputs"]["audio"], ["up_src", 2])                   # the clip's own sound
+        outs = [n for n in wf.values() if n["class_type"] in ("VHS_VideoCombine", "VAEDecodeAudio")]
+        self.assertEqual(len(outs), 1)                                                     # only the new save
+        self.assertNotIn("up_cond", wf)
+
+    def test_i2v_runs_its_node_again_at_the_new_size(self):
+        src = self.wf("deck-h3-i2v")
+        wf, (w, h) = up.build(src, "/out/clip.mp4", 768, 448, 1.25)
+        self.assertEqual((w, h), (960, 576))
+        self.assertEqual(wf["up_cond"]["inputs"]["width"], 960)
+        self.assertEqual(wf["up_guide"]["inputs"]["conditioning"], ["up_cond", 0])
+        self.assertEqual(wf["up_split"]["inputs"]["av_latent"], ["up_cond", 1])
+
+    def test_not_h3(self):
+        with self.assertRaises(ValueError):
+            up.build(self.wf("deck-ltx-t2v"), "/x.mp4", 768, 448)
+
+
+if __name__ == "__main__":
+    unittest.main()
