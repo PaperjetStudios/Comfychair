@@ -11,6 +11,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -31,6 +32,14 @@ WORKER = config.BASE_DIR / "voice" / "worker.py"
 VOICE_HOME = Path(os.environ.get("DECK_VOICE_HOME", config.BASE_DIR.parent / "comfydeck-voice"))
 PY = Path(os.environ.get("DECK_VOICE_PY", VOICE_HOME / ".venv" / "bin" / "python"))
 VOICES = config.DATA_DIR / "voices"
+# the dialogue's other engines, each in its own install on the SATA drive (README, Sound tab, Voice tools)
+ENGINES_HOME = Path(os.environ.get("DECK_VOICE_ENGINES", "/mnt/data/comfydeck-voice-engines"))
+INDEX_HOME = Path(os.environ.get("DECK_INDEX_TTS", ENGINES_HOME / "index-tts"))
+ENGINES = {   # engine: (its python, its script); qwen is worker.py's own speak
+    "index": (INDEX_HOME / ".venv" / "bin" / "python", config.BASE_DIR / "voice" / "engine_index.py"),
+    "fish": (Path(sys.executable), config.BASE_DIR / "voice" / "engine_fish.py"),
+}
+LINE_LUFS = -16   # every spoken line evened out to this loudness (cloned voices come out as quiet as their clip)
 ID_RE = re.compile(r"^[a-f0-9]{12}$")
 LANGS = ["Auto", "English", "Chinese", "Japanese", "Korean", "German", "French", "Russian", "Portuguese", "Spanish", "Italian"]
 _gpu = threading.Lock()   # one worker at a time: they each want most of the card
@@ -40,9 +49,19 @@ def installed() -> bool:
     return PY.is_file() and WORKER.is_file()
 
 
+def engine_ready(engine: str) -> bool:
+    if engine == "qwen":
+        return installed()
+    if engine == "fish":
+        return (ENGINES_HOME / "s2.cpp" / "build" / "s2").is_file() and (ENGINES_HOME / "models" / "s2" / "s2-pro-q8_0.gguf").is_file()
+    py, script = ENGINES.get(engine, (None, None))
+    return bool(py and py.is_file() and script.is_file() and (INDEX_HOME / "checkpoints" / "config.yaml").is_file())
+
+
 @router.get("/status")
 async def status():
-    return {"installed": installed(), "languages": LANGS, "home": str(VOICE_HOME)}
+    return {"installed": installed(), "languages": LANGS, "home": str(VOICE_HOME),
+            "engines": {e: engine_ready(e) for e in ("qwen", "index", "fish")}}
 
 
 def _need():
@@ -63,17 +82,19 @@ def _free_gpu():
         pass   # ComfyUI is off: the card is free anyway
 
 
-def _run(job: dict, task: dict, timeout=3600) -> dict:
-    """One worker run: its "@progress p label" lines move the job; the last line is the JSON result."""
+def _run(job: dict, task: dict, timeout=3600, py: Path = PY, script: Path = WORKER, hf: Path | None = None) -> dict:
+    """One worker run: its "@progress p label" lines move the job; the last line is the JSON result. py / script: another
+    engine's install and its script (same protocol); hf: where that one keeps its Hugging Face downloads."""
     # the CUDA libraries torch brought into the venv, for faster-whisper's ctranslate2 (it looks them up by name)
-    libs = [str(p) for p in sorted((PY.parent.parent / "lib").glob("python3*/site-packages/nvidia/*/lib"))]
-    env = {**os.environ, "HF_HOME": str(VOICE_HOME / "models" / "hf"), "DECK_VOICE_MODELS": str(VOICE_HOME / "models"),
+    libs = [str(p) for p in sorted((py.parent.parent / "lib").glob("python3*/site-packages/nvidia/*/lib"))]
+    env = {**os.environ, "HF_HOME": str(hf or VOICE_HOME / "models" / "hf"), "DECK_VOICE_MODELS": str(VOICE_HOME / "models"),
+           "DECK_INDEX_TTS": str(INDEX_HOME), "DECK_FISH_S2": str(ENGINES_HOME),
            "PYTHONUNBUFFERED": "1", "LD_LIBRARY_PATH": os.pathsep.join(libs + [os.environ.get("LD_LIBRARY_PATH", "")]).strip(os.pathsep)}
     with _gpu:
         _free_gpu()
         last, err = None, []
-        with subprocess.Popen([str(PY), "-I", str(WORKER), json.dumps(task)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              text=True, env=env, cwd=str(VOICE_HOME)) as proc:
+        with subprocess.Popen([str(py), "-I", str(script), json.dumps(task)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True, env=env, cwd=str(VOICE_HOME if script == WORKER else ENGINES_HOME)) as proc:
             job["proc"] = proc
             drain = threading.Thread(target=lambda: err.extend(proc.stderr), daemon=True)
             drain.start()
@@ -103,6 +124,37 @@ def _run(job: dict, task: dict, timeout=3600) -> dict:
     if not res.get("ok"):
         raise RuntimeError(res.get("error") or "The voice worker failed")
     return res
+
+
+def even_out(path: Path, lufs: float = LINE_LUFS) -> float:
+    """A spoken line brought to the same loudness as the others, in place (two-pass loudnorm: it is measured first, so
+    the gain is even over the line instead of riding it). Returns its length in seconds."""
+    probe = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(path), "-af",
+                            f"loudnorm=I={lufs}:TP=-1.5:LRA=11:print_format=json", "-f", "null", "-"],
+                           capture_output=True, text=True, timeout=300)
+    m = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", probe.stderr)
+    tmp = path.with_suffix(".even.wav")
+    af = f"loudnorm=I={lufs}:TP=-1.5:LRA=11"
+    if m:
+        st = json.loads(m.group(0))
+        if st["input_i"] not in ("-inf", "inf"):
+            af += (f":measured_I={st['input_i']}:measured_TP={st['input_tp']}:measured_LRA={st['input_lra']}"
+                   f":measured_thresh={st['input_thresh']}:offset={st['target_offset']}:linear=true")
+    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(path), "-af", af, "-ar", "48000", str(tmp)],
+                       capture_output=True, timeout=300)
+    if r.returncode == 0 and tmp.is_file():
+        tmp.replace(path)
+    tmp.unlink(missing_ok=True)
+    return _seconds(path)
+
+
+def _seconds(path: Path) -> float:
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+                       capture_output=True, text=True, timeout=30)
+    try:
+        return round(float(r.stdout.strip()), 2)
+    except ValueError:
+        return 0.0
 
 
 def _media_path(name: str, ext: str) -> Path:
@@ -243,10 +295,22 @@ async def speak(body: dict = Body(...)):
                      "language": ln.get("language") or v.get("language") or "Auto", "out": str(out),
                      "delivery": ln.get("delivery"), "intensity": ln.get("intensity")})
     engine = str(body.get("engine") or "qwen")
+    if engine not in ("qwen", *ENGINES):
+        raise HTTPException(400, f"Unknown voice engine {engine}")
+    if not engine_ready(engine):
+        raise HTTPException(400, {"index": "IndexTTS-2", "fish": "Fish S2"}.get(engine, engine) + " isn't installed yet "
+                                 "(README, Sound tab, Voice tools)")
 
     def work(job):
         try:
-            res = _run(job, {"op": "speak", "engine": engine, "lines": task})
+            if engine == "qwen":
+                res = _run(job, {"op": "speak", "lines": task})
+            else:
+                py, script = ENGINES[engine]
+                res = _run(job, {"lines": task}, py=py, script=script, hf=ENGINES_HOME / ".hf")
+            for r in res["lines"]:
+                job["label"] = "Evening out the loudness"
+                r["seconds"] = even_out(Path(r["out"]))
         except Exception:
             for o in outs:
                 o.unlink(missing_ok=True)
