@@ -19,7 +19,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFil
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import accel, audioedit, clipimport, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
+from . import accel, audioedit, clipimport, craft, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import store
 from . import sceneasset
 from . import templates as tpl
@@ -326,6 +326,7 @@ app.include_router(sceneasset.router)
 app.include_router(tracking.router)
 app.include_router(clipimport.router)
 app.include_router(voice.router)
+app.include_router(craft.router)
 
 
 class TokenGate:
@@ -764,6 +765,9 @@ clipimport.media_entry = _media_entry  # cut clips land in the media library
 voice.media_entry = _media_entry      # so do cleaned voices and spoken lines
 voice.resolve_src = _timeline_path
 tracking.resolve_src = _timeline_path  # motion tracking finds its clip the way the Video tab does
+craft.resolve_src = _timeline_path     # so do documents sent to PhotoCraft / EffectCraft
+craft.media_entry = _media_entry       # and what they bring back lands in the media library
+craft.save_input = upload_prepared
 tracking.comfy = comfy
 
 

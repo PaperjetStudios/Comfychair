@@ -8,6 +8,7 @@ import { addToTimeline } from './video.js';
 import { videoEditor } from './vfield.js';
 import { TabSet } from './tabs.js';
 import { maximizable } from './layout.js';
+import { sendToCraft } from './craft.js';
 
 // ---------------------------------------------------------------------------
 // VFX: one effect per tab, run on a clip (or from a still) with LTX-2.5 and friends. Each effect
@@ -325,7 +326,18 @@ function resultActions(g) {
     button('Use as source', () => { T.source = src; UI.srcInfo = null; T.showing = null; changed(); }),
     button('Use as matte / mask', () => { T.matte = src; T.op = T.op === 'alpha' || T.op === 'mask' ? (T.op === 'alpha' ? 'mattekey' : 'cleanplate') : T.op; changed(); }),
     button('Details', () => openGeneration(g.id)),
+    button('Open in EffectCraft', (ev) => craftVfx(ev.currentTarget), { title: 'The source, matte and every take as layers, to keep working on the computer' }),
     compareSelect(g));
+}
+
+// The tab as an EffectCraft comp: the source over its trim, the matte, and each finished take (the one on show switched on)
+function craftVfx(btn) {
+  const takes = (T.results || []).map((id) => S.history.get(id)).filter((g) => g?.status === 'done');
+  sendToCraft('vfx', { title: tabs?.active?.name || 'VFX',
+    source: T.source && { ...bare(T.source), label: srcLabel(T.source), ...(T.source.trim && { trim: T.source.trim }) },
+    matte: T.matte && bare(T.matte),
+    results: takes.map((g) => ({ generation: g.id, index: Math.max(0, g.outputs.findIndex((x) => x.kind === 'video')),
+      label: genLabel(g), showing: g.id === T.showing })) }, btn);
 }
 
 // the left side of the viewer: the source, or another take of this tab (to compare engines, seeds, settings)

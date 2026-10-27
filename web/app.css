@@ -1069,3 +1069,9 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: var(--fs-
 .vx-voice-top { display: flex; gap: 8px; align-items: center; }
 .vx-voice-top .hint { flex: 1; }
 .vx-voice audio { width: 100%; }
+
+/* PhotoCraft / EffectCraft documents (craft.js) */
+.craft-list { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.craft-doc { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--line, #2a2f3a); border-radius: var(--r-sm, 8px); }
+.craft-doc .row { align-items: center; gap: 8px; }
+.craft-doc label.check { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--muted); }

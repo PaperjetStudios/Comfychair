@@ -12,6 +12,7 @@ import { maximizable } from './layout.js';
 import { canTrack, openTrack } from './track.js';
 import { CLIP_FX, restyleLoras, runClipStep, sendToVfx } from './vfx.js';
 import { snap, snapOn, snapStep, normDeg, Weight, WEIGHT, DEAD_PX, deadzone, snapBar } from './gizmo.js';
+import { openCraftSheet, sendToCraft } from './craft.js';
 
 // ---------------------------------------------------------------------------
 // video: a Premiere-style timeline. Video tracks stack (V2 draws over V1), audio tracks mix, and
@@ -1093,7 +1094,10 @@ function renderVideoPanel() {
         if (!confirm('Remove every clip from the timeline?')) return;
         V.items = []; V.sel = null; vidSeek(0); timelineChanged();
       }) : null,
-      V.items.length ? help('The export lands in History.') : null)));
+      V.items.length ? help('The export lands in History.') : null,
+      V.items.length ? h('div', { class: 'row wrap' },
+        button('Open in EffectCraft', (ev) => craftVideo(ev.currentTarget), { cls: 'small', title: 'Each clip as a layer in a comp, to keep editing on the computer' }),
+        button('Craft documents…', () => openCraftSheet(), { cls: 'small' })) : null)));
 }
 
 // ---- effects: a stack of LTX / keying steps run on the clip's range and baked into a new clip ----
@@ -1241,33 +1245,52 @@ function openKey(it) {
   openSheet(...sheet());
 }
 
+// The timeline as /api/video/render (and /api/craft/video) take it. 3D scene clips are drawn here first, at the
+// export size and rate, and go to the server as ordinary clips.
+async function timelineBody(btn) {
+  G.settling?.w.finish();
+  await tabs?.flush();   // the saved edit is what this render came from
+  const scenes = V.items.filter((it) => it.kind === 'scene'), made = new Map();
+  const [W, H] = seqSize();
+  for (const [i, it] of scenes.entries()) {
+    made.set(it, await COMP.exportClip(it, { W, H, fps: V.fps || 24, len: itLen(it),
+      progress: (k, n) => { btn.textContent = `3D scene ${i + 1}/${scenes.length} · frame ${k}/${n}`; } }));
+  }
+  return {
+    project_id: S.project, tab: tabs?.active && { id: tabs.active.id, name: tabs.active.name },
+    width: scenes.length ? W : V.size && V.size[0], height: scenes.length ? H : V.size && V.size[1], fps: V.fps || null,
+    tracks: V.tracks.map(({ id, kind, hidden, muted }) => ({ id, kind, hidden, muted })),
+    items: V.items.map((it) => ({ track: it.track, at: it.at, name: it.label, ...(made.has(it)   // (a scene's clip is already cut to what's used)
+      ? { src: { clip: made.get(it).clip }, scene: made.get(it).scene, in: 0, out: itLen(it) } : { src: it.src, in: it.in, out: it.out ?? it.dur }),
+      x: it.x, y: it.y, scale: it.scale, fit: it.fit, rotation: it.rotation || 0, anchor_x: it.anchor?.x, anchor_y: it.anchor?.y,
+      opacity: it.opacity, volume: it.volume,
+      fade_in: it.fadeIn, fade_out: it.fadeOut })) };
+}
+
 async function exportVideo(btn) {
   vidPause();
   btn.disabled = true; btn.textContent = 'Rendering…';
   try {
-    G.settling?.w.finish();
-    await tabs?.flush();   // the saved edit is what this render came from
-    // 3D scene clips first: their frames are drawn here at the export size and rate, and the server renders them as ordinary clips
-    const scenes = V.items.filter((it) => it.kind === 'scene'), made = new Map();
-    const [W, H] = seqSize();
-    for (const [i, it] of scenes.entries()) {
-      made.set(it, await COMP.exportClip(it, { W, H, fps: V.fps || 24, len: itLen(it),
-        progress: (k, n) => { btn.textContent = `3D scene ${i + 1}/${scenes.length} · frame ${k}/${n}`; } }));
-    }
+    const body = await timelineBody(btn);
     btn.textContent = 'Rendering…';
-    const g = await api('/api/video/render', { method: 'POST', body: {
-      project_id: S.project, tab: tabs?.active && { id: tabs.active.id, name: tabs.active.name },
-      width: scenes.length ? W : V.size && V.size[0], height: scenes.length ? H : V.size && V.size[1], fps: V.fps || null,
-      tracks: V.tracks.map(({ id, kind, hidden, muted }) => ({ id, kind, hidden, muted })),
-      items: V.items.map((it) => ({ track: it.track, at: it.at, ...(made.has(it)   // (a scene's clip is already cut to what's used)
-        ? { src: { clip: made.get(it).clip }, scene: made.get(it).scene, in: 0, out: itLen(it) } : { src: it.src, in: it.in, out: it.out ?? it.dur }),
-        x: it.x, y: it.y, scale: it.scale, fit: it.fit, rotation: it.rotation || 0, anchor_x: it.anchor?.x, anchor_y: it.anchor?.y,
-        opacity: it.opacity, volume: it.volume,
-        fade_in: it.fadeIn, fade_out: it.fadeOut })) } });
+    const g = await api('/api/video/render', { method: 'POST', body });
     S.history.set(g.id, g);
     openGeneration(g.id);
   } catch (e) { toast('Export failed: ' + e.message, true); }
   finally { btn.disabled = false; btn.textContent = 'Export video'; }
+}
+
+// The timeline as an EffectCraft comp: a layer per clip, stacked by track, with its timing, framing and fades
+async function craftVideo(btn) {
+  vidPause();
+  const label = btn.textContent;
+  btn.disabled = true;
+  try {
+    const body = await timelineBody(btn);
+    btn.textContent = label;
+    await sendToCraft('video', { ...body, title: tabs?.active?.name || 'Video edit' }, btn);
+  } catch (e) { toast('Couldn\'t send it: ' + e.message, true); }
+  finally { btn.disabled = false; btn.textContent = label; }
 }
 
 // Full screen for the preview and its controls: the shared maximize button (layout.js)

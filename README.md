@@ -379,6 +379,27 @@ otherwise) and asks ComfyUI to unload its models first. Saved voices live in `da
 
 Only clone a voice that is yours or that the speaker said you may use, and don't use it to pass as them.
 
+## PhotoCraft and EffectCraft
+
+Work can go to PhotoCraft and EffectCraft with its layers and tracks, to keep editing there
+(`app/craft.py`, `web/craft.js`):
+
+- **Editor → Open in PhotoCraft:** one smart object per layer, cropped, placed and scaled as on the canvas,
+  with its name and visibility.
+- **Video → Open in EffectCraft:** one comp at the sequence's size and rate. Each clip is a layer with its
+  start, trim, position, scale, rotation and opacity. Fades become keyframes, sound levels are in dB, and
+  hidden or muted tracks are switched off. Layers are stacked as the tracks are.
+- **VFX → Open in EffectCraft:** the source over its trim, the matte (hidden; set it as a track matte),
+  and every take, with only the one on show switched on.
+- **A result → Open in PhotoCraft / EffectCraft:** what it was made from comes along as a hidden layer.
+
+Documents live in `data/craft/<id>/` and open on this computer's screen. PhotoCraft opens them as tabs.
+EffectCraft opens each in a window of its own, started with `--control <port>`, so unsaved work in
+another window is never touched. Save there, then **Bring back** (in **Craft documents…**) renders the
+saved version into the media library: PNG, MP4, or WebM with transparency. From there it goes into the
+Editor, an input, the timeline or VFX. The apps are found on `PATH`; set `DECK_PHOTOCRAFT`,
+`DECK_PHOTOCRAFT_CLI`, `DECK_EFFECTCRAFT` or `DECK_EFFECTCRAFT_CLI` to use others.
+
 ## Layout
 
 ```

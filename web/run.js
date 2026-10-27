@@ -554,6 +554,11 @@ export function openGeneration(id) {
     btns.push(button('Use as input', () => sendToInput(g, idx, 'first')),
       button('Use last frame', () => sendToInput(g, idx, 'last'), { title: 'For videos: grab the final frame, e.g. to extend the shot' }));
   }
+  if (cur()?.kind === 'image' || cur()?.kind === 'video') {
+    btns.push(button(cur().kind === 'image' ? 'Open in PhotoCraft' : 'Open in EffectCraft',
+      async (ev) => (await import('./craft.js')).sendToCraft('generation', { generation: g.id, index: idx }, ev.currentTarget),
+      { title: 'With what it was made from as a hidden layer underneath, to keep editing on the computer' }));
+  }
   if (cur()?.kind === 'video') btns.push(button('Track motion', () => openTrack({ src: { generation: g.id, index: idx }, url: cur().url, label: genLabel(g) }), { title: 'Follow the picture\'s movement and make a 3D camera from it' }));
   if (!isEdit) btns.push(linkBtn('Workflow JSON', `/api/generations/${g.id}/workflow`));
   if (cur()) btns.push(linkBtn('Download', cur().url, { download: cur().filename }));

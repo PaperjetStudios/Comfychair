@@ -6,6 +6,7 @@ import { ASPECT_PRESETS, S, inputUrl, switchTab, thumbUrl } from './core.js';
 import { openImagePicker, registerPickerSource, uploadImage } from './media.js';
 import { TabSet } from './tabs.js';
 import { mpInput, persist, renderFields } from './generate.js';
+import { openCraftSheet, sendToCraft } from './craft.js';
 
 // ---------------------------------------------------------------------------
 // sketch pad: draw an image (e.g. the source for image-to-image) with a pen or finger.
@@ -737,7 +738,20 @@ function canvasProps() {
     mpInput(() => E.mp, (n) => { E.mp = n; persistEditor(); }),
     h('div', { class: 'row' },
       button('Save as input', saveEditor, { cls: 'primary' }),
-      button('Download', downloadEditor, { cls: '' })));
+      button('Download', downloadEditor, { cls: '' })),
+    h('div', { class: 'row wrap' },
+      button('Open in PhotoCraft', (ev) => craftEditor(ev.currentTarget), { cls: 'small', title: 'Every layer as its own layer, to keep editing on the computer' }),
+      button('Craft documents…', () => openCraftSheet(), { cls: 'small' })));
+}
+
+// The edit as a layered PhotoCraft document: each layer cropped as here and placed where it sits on the canvas
+function craftEditor(btn) {
+  const f = editorFrame(), layers = E.layers.filter(ready);
+  if (!f || !layers.length) return toast('Add some images first', true);
+  sendToCraft('photo', { title: tabs?.active?.name || 'Edit', canvas: { w: f.w, h: f.h, bg: E.bg },
+    layers: layers.map((l) => { const r = layerRect(l);
+      return { src: { input: l.name }, name: l.name.split('/').pop().replace(/\.[a-z]+$/i, ''), crop: l.crop, hidden: !!l.hidden,
+        rect: { x: r.x - f.x, y: r.y - f.y, w: r.w, h: r.h } }; }) }, btn);
 }
 
 // Another panel's picture as a new layer in the open edit tab (the VFX tab's first frame, say)
