@@ -514,6 +514,7 @@ export function draw(forRender = false) {
   frustum.visible = wantFrustum() && !forRender && !depth && (live || WP.frustum);
   stage.visible = !onStage() && !forRender;
   gizmo.getHelper().visible = !forRender && (live || WP.gizmo) && !!gizmo.object;
+  if (!forRender && !gizmo.dragging) gizmo.enabled = live || WP.gizmo;   // hidden while playing: can't be grabbed either (the drag orbits)
   const dots = !forRender && !depth && (live || WP.dots);
   for (const [id, m] of R.meshes) {
     for (const d of m.userData.rig?.dots || []) { d.visible = dots && id === R.sel && !HAND.on; d.material = d.userData.joint === R.joint ? dotSel : dotMat; }
@@ -555,7 +556,10 @@ function hitAt(e) {
 // the selected figure's joint dot under the pointer (within a finger's reach). Where dots overlap,
 // the one nearest the camera wins; anything else in front of it takes the tap instead. Turn the view
 // to get at one that's covered.
+// joint dots and fingertips hidden while playing (While playing) can't be picked
+const dotsOff = () => R.playing && !WP.dots;
 function jointAt(e) {
+  if (dotsOff()) return null;
   const rig = selRig();
   if (!rig || !rig.root.visible) return null;
   const r = canvas.getBoundingClientRect(), reach = e.pointerType === 'touch' ? 28 : 18;
@@ -643,7 +647,7 @@ const screenOf = (obj) => {
   return [r.left + (v.x + 1) / 2 * r.width, r.top + (1 - v.y) / 2 * r.height];
 };
 function tipDown(e) {
-  if (!HAND.on || HAND.drag || e.target !== canvas) return;
+  if (!HAND.on || HAND.drag || e.target !== canvas || dotsOff()) return;
   const finger = tipAt(e), o = selItem(), rig = R.meshes.get(R.sel)?.userData.rig;
   if (!finger || !o || !rig) return;
   e.stopPropagation(); e.preventDefault();
