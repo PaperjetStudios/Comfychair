@@ -33,7 +33,7 @@ const shown = () => (modeOf().lanes === 'camera' ? layers().slice(0, 1) : layers
 const span = () => Math.max(1, frames() - 1);
 
 // every channel a layer can have: one track each (a channel with no keys has an empty one, for paste and the like)
-const JOINTS = Object.keys(FIGURE.JOINTS);
+const JOINTS = Object.keys(FIGURE.RIG_JOINTS);   // (the fingers too)
 function chanIds(L) {
   const own = Object.keys(L.item.chans || {});
   const base = L.kind === 'figure' ? [...OBJ, 'pn', ...Object.keys(FIGURE.PARAMS).map((p) => `m.${p}`), ...JOINTS.map((j) => `j.${j}`)] : L.names;
@@ -68,7 +68,7 @@ function gLayer() {
 const channels = (L) => chanIds(L).filter((ch) => isScalar(ch) && !(ch.startsWith('m.') && !L.item.chans?.[ch]));
 const LABELS = { x: 'X', y: 'Up', z: 'Z', rx: 'Rot X', ry: 'Rot Y', rz: 'Rot Z', sx: 'Width', sy: 'Height', sz: 'Depth',
   px: 'Cam X', py: 'Cam height', pz: 'Cam Z', tx: 'Aim X', ty: 'Aim Y', tz: 'Aim Z', fov: 'Lens', roll: 'Roll', pn: 'Pose name' };
-const chLabel = (ch) => (ch.startsWith('m.') ? (FIGURE.PARAMS[ch.slice(2)]?.label || ch.slice(2)) : ch.startsWith('j.') ? (FIGURE.JOINTS[ch.slice(2)]?.[2] || ch.slice(2)) : LABELS[ch] || ch);
+const chLabel = (ch) => (ch.startsWith('m.') ? (FIGURE.PARAMS[ch.slice(2)]?.label || ch.slice(2)) : ch.startsWith('j.') ? (FIGURE.RIG_JOINTS[ch.slice(2)]?.[2] || ch.slice(2)) : LABELS[ch] || ch);
 const sampleCh = (L, ch, f) => sampleChan(L.item, ch, f);
 function graphRange(L, ch) {
   let lo = Infinity, hi = -Infinity;
@@ -88,7 +88,7 @@ function diamonds(tracks, own) {
   for (const T of tracks) for (const k of T.keys) { if (!at.has(k.f)) at.set(k.f, []); at.get(k.f).push(k); }
   return [...at].sort((a, b) => a[0] - b[0]).map(([f, keys]) => ({ f, keys }));
 }
-const LIMBS = FIGURE.PART_GROUPS;
+const LIMBS = [...FIGURE.PART_GROUPS, ['fingersL', 'L fingers', FIGURE.handJoints('l')], ['fingersR', 'R fingers', FIGURE.handJoints('r')]];
 // the rows of one layer (its channels, nested like Blender's: the pose under a "Pose" row, by limb)
 function layerRows(L) {
   const T = new Map(tracksOf(L).map((t) => [t.ch, t])), get = (chs) => chs.map((c) => T.get(c)).filter(Boolean);

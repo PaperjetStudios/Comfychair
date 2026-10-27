@@ -62,7 +62,7 @@ export class Stage {
     const x = { mine: (_, g) => this.meshes.get(o.id) === g, draw: () => this.loaded(o.id), lib: () => this.sparkLib() };
     let m;
     if (o.type === 'figure') {
-      const rig = FIGURE.buildFigure(figClay, hidden);
+      const rig = FIGURE.buildFigure(figClay, hidden, o.body);
       m = rig.root; m.userData.rig = rig;
     } else if (o.type === 'photo') {
       m = new THREE.Group(); this.waiting.add(o.id);
@@ -179,16 +179,9 @@ export class Stage {
   // the people as OpenPose stick figures (the panel's Pose video)
   drawPose(cv) {
     const W = cv.width, H = cv.height;
-    const people = this.sc.objects.filter((o) => o.type === 'figure' && !o.hidden).map((o) => {
-      const k = FIGURE.keypoints(this.meshes.get(o.id).userData.rig, o.hide);
-      const pts = k.map((p) => {
-        if (!p) return null;
-        const v = p.project(this.camera);
-        return v.z > 1 || v.z < -1 ? null : [(v.x + 1) / 2 * W, (1 - v.y) / 2 * H];
-      });
-      pts.cut = k.cut;
-      return pts;
-    });
+    const opts = { hands: this.sc.poseHands !== false, face: this.sc.poseFace !== false };
+    const people = this.sc.objects.filter((o) => o.type === 'figure' && !o.hidden)
+      .map((o) => FIGURE.projectPose(this.meshes.get(o.id).userData.rig, o.hide, this.camera, W, H, opts));
     FIGURE.drawPose(cv.getContext('2d'), people, W, H);
   }
 

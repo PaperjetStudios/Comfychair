@@ -125,7 +125,8 @@ async function sendVideo(form, kind, blur) {
   toast(`${what} saved`, false, { label: 'Use in H3 control', fn: () => C.useControlVideo(R.lastRender, SC) });
 }
 
-// the posable people as OpenPose stick figures (COCO 18, the colours ControlNet pose models expect)
+// the posable people as OpenPose stick figures (COCO 18, the colours ControlNet pose models expect), with
+// their hands' 21 points and the face's 68 unless the scene leaves them out (SC.poseHands, SC.poseFace)
 export async function renderPoseVideo() {
   const figs = SC.objects.filter((o) => o.type === 'figure' && !o.hidden);
   if (busy || !figs.length || !canRender()) return;
@@ -139,16 +140,8 @@ export async function renderPoseVideo() {
     for (let f = 0; f < frames(); f++) {
       pose(f);
       camera.updateMatrixWorld();
-      const people = figs.map((o) => {
-        const k = FIGURE.keypoints(R.meshes.get(o.id).userData.rig, o.hide);
-        const pts = k.map((p) => {
-          if (!p) return null;
-          const v = p.project(camera);
-          return v.z > 1 || v.z < -1 ? null : [(v.x + 1) / 2 * W, (1 - v.y) / 2 * H];
-        });
-        pts.cut = k.cut;
-        return pts;
-      });
+      const opts = { hands: SC.poseHands !== false, face: SC.poseFace !== false };
+      const people = figs.map((o) => FIGURE.projectPose(R.meshes.get(o.id).userData.rig, o.hide, camera, W, H, opts));
       FIGURE.drawPose(ctx, people, W, H);
       form.append('frames', await new Promise((res) => cv.toBlob(res, 'image/png')), `f${String(f).padStart(5, '0')}.png`);
       if (f % 12 === 0) setStatus(`Rendering ${f + 1}/${frames()}…`);

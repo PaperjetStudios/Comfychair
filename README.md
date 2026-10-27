@@ -230,17 +230,24 @@ under the view has a row per layer: drag a key along its row to retime it, tap a
 a frame, Shift+←/→ jump between keys). With **Auto key** off (K), a change to something animated is only
 held until ◆ Key or the playhead moves, so you can look around without touching the keys. ↶ / ↷ (Ctrl+Z,
 Ctrl+Shift+Z) undo and redo.
-**Posable person**: a low-poly figure with joints. Tap it to show its joint dots, tap a dot to pose that
-joint (Rotate), or drag a hand or foot (Move) and the arm or leg follows (IK). Its settings are in tabs:
+**Posable person**: a low-poly man or woman with joints (+ Add has both; **Place** switches one). The
+parts are smooth volumes on the joints, built in code (no mesh files), shaped to read in a depth render:
+chest, pelvis, shoulders, a face with nose, brows, eyes, ears and a jaw. Tap it to show its joint dots, tap
+a dot to pose that joint (Rotate), or drag a hand or foot (Move) and the arm or leg follows (IK). Its settings are in tabs:
 **Poses** (about 60 with pictures: standing, bending, moving, sitting and kneeling, on the floor, fitness;
 **Pairs** pose it with the nearest other figure: hug, kiss, holding hands, carry, lying together…;
 **Mine** keeps your own, per project or for all; apply to the whole, upper or lower body), **Adjust**
 (parameters on top of the pose, on/off: lean, head turn, legs apart, bend knees…; walk and run cycles
-whose steps follow how far the figure moves; squat/sit/kneel as 0–100%), **Moves** (one tap keys a walk,
+whose steps follow how far the figure moves; squat/sit/kneel as 0–100%), **Hands** (relaxed, open, fist,
+grip, point, pinch for one hand or both, each hand's curl toward a fist, and **Hand mode**: the view closes
+in on a hand and dragging a fingertip curls that finger), **Face** (head turn, look and tilt, the eyes'
+look and blink, mouth open, smile or frown, brows), **Moves** (one tap keys a walk,
 jump, sit down, push-ups, wave… from the playhead), **Joints** (a body map and sliders) and **Place**
-(planted on the floor, the pivot the gizmo turns it around). A pose is keyed like anything else.
-**Render pose video** draws the posable people as OpenPose stick figures for a pose control video
-(**Render both** makes the depth and pose videos of the same shot). **Prompt from the poses** writes
+(planted on the floor, the pivot the gizmo turns it around). A pose is keyed like anything else; the
+fingers are joints of their own (three per finger, a row per hand in the key sheet) and blend between keys.
+**Render pose video** draws the posable people as OpenPose stick figures for a pose control video, with
+each hand's 21 points and the face's 68 (DWPose's layout; the face points follow the expression; either
+can be turned off under Render; **Render both** makes the depth and pose videos of the same shot). **Prompt from the poses** writes
 what each `<Subject N>` does, in order, to copy or add to the Generate prompt.
 **🖼 Photo in 3D…** (in + Add) turns a picture into a mesh with MoGe in ComfyUI (a model from
 `Comfy-Org/MoGe` in `ComfyUI/models/geometry_estimation`) and puts it where the shot camera is, seen

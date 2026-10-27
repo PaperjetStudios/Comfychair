@@ -2,7 +2,7 @@ import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import { C, FIG, FPS, OBJ, R, SC, TEMP, addKey, current, dropKeys, frames, isPoseCh, keyFrames, newObject, putKeys, sameTab, sample, save, write } from './scene-data.js';
 import { button, clone, field, h, hint, iconBtn, nameSheet, section, seg, store, toast, uid, undoToast , help } from './ui.js';
-import { changed, selectJoint } from './scene-view.js';
+import { HAND, changed, handMode, selectJoint } from './scene-view.js';
 import { renderPanel, slider } from './scene-ui.js';
 import { seek } from './scene-export.js';
 import { motionField } from './scene-motion.js';
@@ -10,11 +10,12 @@ import { motionField } from './scene-motion.js';
 // a figure that isn't planted on the floor keeps its feet (or seat) where they were for a new pose
 function liftTo(o, v, j, m) {
   if (o.ground) return {};
-  return { y: v.y + (FIGURE.liftFor(j, m) - FIGURE.liftFor(v.j, v.m)) * v.sy };
+  return { y: v.y + (FIGURE.liftFor(j, m, o.body) - FIGURE.liftFor(v.j, v.m, o.body)) * v.sy };
 }
 
 // ---- a figure's pose tabs ----------------------------------------------------------------
-export const FIG_TABS = [['pose', '🧍 Poses'], ['adjust', '🎚 Adjust'], ['move', '🎬 Moves'], ['joint', '🦴 Joints'], ['parts', '👁 Parts'], ['place', '📐 Place']];
+export const FIG_TABS = [['pose', '🧍 Poses'], ['adjust', '🎚 Adjust'], ['hands', '✋ Hands'], ['face', '🙂 Face'], ['move', '🎬 Moves'], ['joint', '🦴 Joints'],
+  ['parts', '👁 Parts'], ['place', '📐 Place']];
 const SPEEDS = [[1.5, 'Slow'], [1, 'Normal'], [0.7, 'Fast']];
 const UPPER = new Set(['spine', 'chest', 'neck', 'head', 'lsho', 'lelb', 'lhand', 'rsho', 'relb', 'rhand']);
 const MINE = 'deck.figure.poses';  // poses saved by hand, in every project
@@ -31,10 +32,11 @@ function thumb(key, people) {
 }
 const tile = (label, img, onclick, extra = null) => h('button', { type: 'button', class: 'pose-tile', title: label, onclick }, img, h('span', {}, label), extra);
 
-// a new pose for the figure, only the upper or lower body when asked; name is what it's called in a prompt
+// a new pose for the figure, only the upper or lower body when asked; name is what it's called in a prompt.
+// The fingers stay as they are unless the pose has its own.
 function takePose(o, j, { m = undefined, name = null, mask = R.mask } = {}) {
   const v = current(o, FIG);
-  let nj = j;
+  let nj = { ...FIGURE.fingersOf(v.j), ...j };
   if (mask !== 'all') {
     nj = { ...v.j };
     for (const n of Object.keys(FIGURE.JOINTS)) if (UPPER.has(n) === (mask === 'upper')) { if (j[n]) nj[n] = j[n]; else delete nj[n]; }
@@ -52,12 +54,12 @@ function takePair(o, key) {
   let b = others.sort((x, y) => dist(x) - dist(y))[0];
   if (!b) { b = newObject('figure'); SC.objects.push(b); }
   write(o, FIG, { j: p.a, m: {}, pn: `pair:${key}:${b.id}`, ...liftTo(o, v, p.a, {}) });
-  const floor = o.ground ? current(o, FIG).y : current(o, FIG).y - FIGURE.liftFor(p.a) * s;  // where a's floor is
+  const floor = o.ground ? current(o, FIG).y : current(o, FIG).y - FIGURE.liftFor(p.a, {}, o.body) * s;  // where a's floor is
   const bs = current(b, FIG).sy;
   const dx = p.at.x * s, dz = p.at.z * s;
   write(b, FIG, { j: p.b, m: {}, pn: `partner:${key}`, rx: 0, rz: 0, ry: v.ry + p.at.ry,
     x: v.x + dx * Math.cos(r) + dz * Math.sin(r), z: v.z - dx * Math.sin(r) + dz * Math.cos(r),
-    y: floor + p.at.y * s + (b.ground ? 0 : FIGURE.liftFor(p.b) * bs) });
+    y: floor + p.at.y * s + (b.ground ? 0 : FIGURE.liftFor(p.b, {}, b.body) * bs) });
   changed();
   toast(`${o.name} and ${b.name} together`);
 }
@@ -101,16 +103,20 @@ export function posesTab(o, cur) {
       : field('Apply to', seg([['all', 'Whole body'], ['upper', 'Upper'], ['lower', 'Lower']], R.mask, (v) => { R.mask = v; })),
     h('div', { class: 'pose-grid' }, tiles),
     h('div', { class: 'row wrap' },
-      button('⇋ Mirror', () => takePose(o, FIGURE.mirrorPose(cur().j), { m: FIGURE.mirrorParams(cur().m), name: cur().pn, mask: 'all' }), { title: 'Swap left and right' }),
+      button('⇋ Mirror', () => {
+        const j = FIGURE.mirrorPose(cur().j);
+        for (const n of Object.keys(FIGURE.HAND)) j[n] ||= [0, 0, 0, 1];   // (a straight finger swaps sides too)
+        takePose(o, j, { m: FIGURE.mirrorParams(cur().m), name: cur().pn, mask: 'all' });
+      }, { title: 'Swap left and right' }),
       button('Copy pose', () => { const v = cur(); clip = { j: v.j, m: v.m, pn: v.pn }; toast('Pose copied: paste it on any figure'); renderPanel(); }),
       clip ? button('Paste pose', () => takePose(o, clip.j, { m: clip.m, name: clip.pn })) : null,
       button('Reset', () => takePose(o, FIGURE.preset('stand').j, { m: {}, name: 'stand', mask: 'all' }))),
   ];
 }
 
-// parameters: tap one on, slide it; tap it again for off
+// parameters: tap one on, slide it; tap it again for off (the hands' and the face's have their own tabs)
 export function adjustTab(o, cur) {
-  const groups = [...new Set(Object.values(FIGURE.PARAMS).map((p) => p.group))].filter(Boolean);
+  const groups = [...new Set(Object.values(FIGURE.PARAMS).filter((p) => !p.tab).map((p) => p.group))].filter(Boolean);
   const setM = (m) => write(o, FIG, { m });
   return [
     ...groups.map((g) => {
@@ -138,6 +144,58 @@ export function adjustTab(o, cur) {
   ];
 }
 
+// a parameter's slider (0 is off: the parameter goes)
+function paramSlider(o, cur, k, label = null) {
+  const p = FIGURE.PARAMS[k];
+  return slider(label || p.label, () => cur().m?.[k] || 0, (v) => {
+    const m = { ...cur().m };
+    if (v) m[k] = v; else delete m[k];
+    write(o, FIG, { m });
+  }, { min: p.min, max: p.max, step: 1, fmt: (v) => `${Math.round(v)}${p.unit || '°'}` });
+}
+
+// the hands: a pose for one or both (relaxed, open, fist...), each hand's curl toward a fist, and Hand
+// mode to bend single fingers by dragging their tips
+const SIDES = [['both', 'Both'], ['l', 'Left'], ['r', 'Right']];
+export function handsTab(o, cur) {
+  const sides = R.handSide === 'l' || R.handSide === 'r' ? [R.handSide] : ['l', 'r'];
+  const setJ = (fn) => { const j = { ...cur().j }; fn(j); write(o, FIG, { j }); changed(); };
+  const take = (key) => setJ((j) => { for (const s of sides) Object.assign(j, FIGURE.handPose(key, s)); });
+  const copy = (from) => setJ((j) => {
+    for (const n of FIGURE.handJoints(from)) { if (j[n]) j[FIGURE.opposite(n)] = FIGURE.mirrorQ(j[n]); else delete j[FIGURE.opposite(n)]; }
+  });
+  return [
+    field('Hand', seg(SIDES, sides.length > 1 ? 'both' : sides[0], (v) => { R.handSide = v; renderPanel(); })),
+    h('div', { class: 'pose-grid moves' }, FIGURE.handList().map(([k, l, icon]) => tile(l, h('span', { class: 'move-icon' }, icon), () => take(k)))),
+    paramSlider(o, cur, 'curlL'), paramSlider(o, cur, 'curlR'),
+    h('div', { class: 'row wrap' },
+      HAND.on ? button('Done with the hand', () => handMode(null), { cls: 'small primary' })
+        : button('✋ Hand mode', () => handMode(sides.length > 1 ? 'r' : sides[0]), { title: 'Close in on a hand and drag its fingertips' }),
+      button('Left to right', () => copy('l'), { title: 'The right hand mirrors the left' }),
+      button('Right to left', () => copy('r'), { title: 'The left hand mirrors the right' }),
+      button('Straighten', () => setJ((j) => { for (const s of sides) for (const n of FIGURE.handJoints(s)) delete j[n]; }))),
+    help('A hand pose sets the fingers; curl closes them toward a fist on top of it. Hand mode zooms the view onto a hand: drag a fingertip toward the palm to curl that finger, away to open it. Fingers key and blend like the other joints.'),
+  ];
+}
+
+// the face: where the head looks, and a few expressions that show in a close depth render and in the pose
+// video's face points
+export function faceTab(o, cur) {
+  const p = (k, l) => paramSlider(o, cur, k, l);
+  const faceKeys = Object.entries(FIGURE.PARAMS).filter(([, x]) => x.tab === 'face').map(([k]) => k);
+  return [
+    field('Head', p('turn'), p('nod', 'Look down / up'), p('tilt')),
+    field('Eyes', p('lookX'), p('lookY'), p('blink')),
+    field('Expression', p('jaw'), p('smile', 'Smile / frown'), p('brows', 'Brows knit / raised')),
+    h('div', { class: 'row wrap' }, button('Reset face', () => {
+      const m = { ...cur().m };
+      for (const k of [...faceKeys, 'turn', 'nod', 'tilt']) delete m[k];
+      write(o, FIG, { m }); changed();
+    })),
+    help('These sit on top of the pose like the Adjust sliders, and key and blend the same way. The face is small: the expression reads in the depth video in a close shot, and in the pose video\'s face points.'),
+  ];
+}
+
 // a move: keys from the playhead on, starting from the pose it's in now (one undo)
 function runMove(o, key) {
   const v = current(o, FIG), f0 = R.f, n = frames(), k = R.speed;
@@ -156,7 +214,7 @@ function runMove(o, key) {
   for (const st of steps) {
     const f = at(st), j = st.j || v.j, m = { ...v.m, ...st.m }, d = (st.d || 0) * v.sy;
     if (st.phase != null) m.phase = (v.m?.phase || 0) + st.phase;
-    const y = v.y + (o.ground ? 0 : (FIGURE.liftFor(j, m) - FIGURE.liftFor(v.j, v.m)) * v.sy) + (st.y || 0) * v.sy;
+    const y = v.y + (o.ground ? 0 : (FIGURE.liftFor(j, m, o.body) - FIGURE.liftFor(v.j, v.m, o.body)) * v.sy) + (st.y || 0) * v.sy;
     const key = { ...v, f, j, m, pn: st.pn || v.pn, y, ry: v.ry + (st.ry || 0), x: v.x + d * Math.sin(r), z: v.z + d * Math.cos(r) };
     if (st.ease) key.ease = st.ease;
     made.push(key);
