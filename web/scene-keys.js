@@ -1,14 +1,14 @@
 import * as FIGURE from './figure.js';
 import { maximizable } from './layout.js';
-import { $, button, h, numSlider, sheetOpen, store, toast } from './ui.js';
+import { $, button, h, info as infoBtn, numSlider, sheetOpen, store, toast } from './ui.js';
 import {
-  CAM, FPS, OBJ, R, ROOM, SC, TEMP, TYPES, addKey, bakeBase, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setKey, setMute
+  CAM, FPS, HOLD, OBJ, R, ROOM, SC, TEMP, TYPES, WP, addKey, bakeBase, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setKey, setMute
 } from './scene-data.js';
 import {
   EASES, allKeys, bounds, copy, isScalar, kindOf, moveBy, paste, prune, remove, restore, scaleAround, setChan, setEase, snapshot, track
 } from './scene-keyops.js';
 import { changed, draw, pose, select } from './scene-view.js';
-import { busy, play, seek, stopPlay } from './scene-export.js';
+import { busy, play, seek } from './scene-export.js';
 import { setAutoKey } from './scene-ui.js';
 import { modeOf } from './scene-modes.js';
 
@@ -202,7 +202,7 @@ export function renderKeys() {
 
 // Mute: the layer ignores its keys on screen and stays where it is (renders still use the keys); one undo step
 export function toggleMute(L) {
-  stopPlay(); setMute(L.item, !L.item.mute);
+  setMute(L.item, !L.item.mute);
   changed(); pose(R.f); draw();
 }
 const muteBtn = (L) => h('button', { type: 'button', class: 'mute-btn' + (L.item.mute ? ' on' : ''), 'aria-pressed': !!L.item.mute,
@@ -321,7 +321,6 @@ function snapDt(dt, g) {
 function down(e) {
   if (busy || (e.pointerType === 'mouse' && e.button > 0)) return;
   e.preventDefault();
-  if (R.playing) { stopPlay(); return; }
   const lanes = lanesEl();
   lanes.setPointerCapture(e.pointerId);
   ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -584,6 +583,46 @@ export function renderTime() {
   if (t) t.textContent = `${(R.f / FPS).toFixed(2)} s · ${R.f + 1}/${frames()}`;
   const ph = $('#scenePlayhead');
   if (ph) ph.style.left = lanePos(R.f);
+  // While playing, Key sheet follows: a zoomed-in sheet turns the page when the playhead leaves it
+  if (R.playing && WP.follow && !V.fit && !G0 && (R.f < V.a || R.f > V.b)) {
+    const w = V.b - V.a; V.a = R.f < V.a ? Math.max(0, R.f - w * 0.9) : R.f - w * 0.1; V.b = V.a + w; renderKeys();
+  }
+  syncRec();
+}
+
+// ---- while playing: what shows (WP, per device) and Record ---------------------------------------------
+const WPK = 'deck.scene.whileplaying';
+export function loadPlaySettings() {
+  Object.assign(WP, store.get(WPK, {}));
+  R.record = store.get('deck.scene.record', false) === true;
+}
+export function setRecord(on) {
+  R.record = !!on; store.set('deck.scene.record', R.record);
+  const b = $('#sceneRec');
+  if (b) { b.classList.toggle('on', R.record); b.setAttribute('aria-pressed', R.record); }
+}
+// the REC button glows while something is being recorded
+function syncRec() {
+  const b = $('#sceneRec');
+  if (b) b.classList.toggle('live', R.record && R.playing && HOLD.items.size > 0);
+}
+const WP_OPTS = [['gizmo', 'Gizmo'], ['dots', 'Joint dots'], ['frustum', 'Camera frustum (director view)'], ['grid', 'Grid'],
+  ['follow', 'Key sheet follows playhead'], ['back', 'Jump back on release']];
+let wpEl = null;
+function closeWP() { wpEl?.remove(); wpEl = null; removeEventListener('pointerdown', wpAway, true); }
+function wpAway(e) { if (wpEl && !wpEl.contains(e.target) && !e.target.closest('#sceneWP')) closeWP(); }
+function openWP(anchor) {
+  if (wpEl) { closeWP(); return; }
+  wpEl = h('div', { class: 'key-menu wp-menu', role: 'menu', 'aria-label': 'While playing' },
+    h('div', { class: 'wp-head' }, h('b', {}, 'While playing'),
+      infoBtn('Show these while it plays (everything can still be dragged, tapped and changed). Jump back on release: after you let go of something you changed while it played, the playhead goes back to where you took hold and plays on, so you see the change at once; without Record the key goes there too.')),
+    ...WP_OPTS.map(([k, label]) => h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: !!WP[k],
+      onchange: (e) => { WP[k] = e.target.checked; store.set(WPK, { ...WP }); draw(); } }), label)));
+  (stage() || document.body).append(wpEl);
+  const r = anchor.getBoundingClientRect(), mh = wpEl.offsetHeight, mw = wpEl.offsetWidth;
+  const top = r.bottom + 4 + mh > innerHeight ? Math.max(4, r.top - 4 - mh) : r.bottom + 4;
+  Object.assign(wpEl.style, { top: `${top}px`, left: `${Math.max(4, Math.min(innerWidth - mw - 4, r.left))}px` });
+  addEventListener('pointerdown', wpAway, true);
 }
 
 // ---- the sheet's height: drag its top edge (kept per device) ----------------------------------------
@@ -628,10 +667,13 @@ export function renderTransport() {
     h('div', { class: 'key-head' }, h('div', { class: 'row scene-keybar' },
       button('⚙', () => { const on = !store.get(TK, true); store.set(TK, on); applyTools(on); }, { id: 'sceneToolsBtn', cls: 'small kt', title: 'Show or hide the key tools', 'aria-label': 'Key tools' }),
       button(R.playing ? '❚❚ Pause' : '▶ Play', play, { cls: 'small primary', title: 'Play / pause (Space)' }),
+      button('👁', (e) => openWP(e.currentTarget), { id: 'sceneWP', cls: 'small kt', title: 'While playing: what shows, and jumping back after an edit', 'aria-label': 'While playing' }),
       h('span', { id: 'sceneTime', class: 'timecode' }),
       h('span', { class: 'grow' }),
       button('● Auto key', () => setAutoKey(!R.autoKey), { id: 'sceneAutoKey', cls: 'small autokey' + (R.autoKey ? ' on' : ''), 'aria-pressed': R.autoKey,
         title: 'Auto key (K): on, a change to something animated sets a key at the playhead. Off, it shifts the whole animation (or edits the key under the playhead).' }),
+      button('REC', () => setRecord(!R.record), { id: 'sceneRec', cls: 'small rec' + (R.record ? ' on' : ''), 'aria-pressed': R.record,
+        title: 'Record: while it plays, what you hold (gizmo, slider, orbit) is keyed every few frames over the time you hold it' }),
       h('span', { class: 'hint' }, 'Key: ', h('b', { id: 'sceneKeyFor' })),
       button('◆ Key', () => {
         const [item, names] = keyTarget(); if (!item) return;

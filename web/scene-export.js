@@ -1,6 +1,6 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
-import { C, FPS, R, SC, TEMP, frames } from './scene-data.js';
+import { C, FPS, R, SC, TEMP, commitHolds, frames, holdEnd, recordFrame, settleTemp } from './scene-data.js';
 import {
   RANGE, camera, draw, fit, floorMat, paint, pose, rangeMat, refresh, renderer, scene, setRange, wallMat
 } from './scene-view.js';
@@ -9,26 +9,44 @@ import { modeOf } from './scene-modes.js';
 import { renderKeys, renderPanel, renderTime, renderTransport, setStatus } from './scene-ui.js';
 
 // ---- playback ----------------------------------------------------------------------
-let raf = 0;
+// Everything stays live while it plays: an edit is held over the keys while the user holds it
+// (scene-data.js HOLD) and lands when they let go. Only renders need it stopped.
+let raf = 0, t0 = 0, f0 = 0;
 export function play() {
   if (R.playing) return stopPlay();
   R.playing = true; TEMP.clear();
-  let t0 = performance.now(), f0 = R.f >= frames() - 1 ? 0 : R.f;
+  t0 = performance.now(); f0 = R.f >= frames() - 1 ? 0 : R.f;
   const step = (now) => {
     if (!R.playing) return;
     R.f = Math.floor(f0 + (now - t0) / 1000 * FPS);
     if (R.f >= frames()) { R.f = 0; f0 = 0; t0 = now; }
-    pose(R.f); draw(); renderTime();
+    pose(R.f); draw(); renderTime(); recordFrame(R.f);
     raf = requestAnimationFrame(step);
   };
   raf = requestAnimationFrame(step);
   renderTransport();
 }
-export function stopPlay() { if (!R.playing) return; R.playing = false; cancelAnimationFrame(raf); renderTransport(); renderPanel(); draw(); }
+export function stopPlay() {
+  if (!R.playing) return;
+  commitHolds();   // (a hold still going lands now; what the gesture does next is an ordinary edit)
+  R.playing = false; cancelAnimationFrame(raf); settleTemp();
+  renderTransport(); renderPanel(); pose(R.f); draw();
+}
 export function seek(f) {
   f = Math.max(0, Math.min(frames() - 1, Math.round(f)));
+  if (R.playing) {   // it plays on from there (the panel is brought up to date when it stops)
+    R.f = f; f0 = f; t0 = performance.now();
+    pose(R.f); draw(); renderTime(); renderKeys();
+    return;
+  }
   if (f !== R.f) TEMP.clear();  // held changes (auto key off) stay on their frame
   R.f = f; pose(R.f); draw(); renderTime(); renderKeys(); renderPanel();
+}
+// a gesture that edits ends: what it held lands, and (While playing: Jump back) the playhead goes back
+// to where the hold began, so the change is seen straight away
+export function letGo(src) {
+  const at = holdEnd(src);
+  if (at != null && R.playing) seek(at);
 }
 
 // ---- export ----------------------------------------------------------------------

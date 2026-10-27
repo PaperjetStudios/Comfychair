@@ -688,6 +688,15 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: var(--fs-
 .scene-keybar .grow { flex: 1; }
 .scene-keybar .btn.pending { border-color: var(--accent); color: var(--accent); }
 .scene-keybar .autokey.on { color: #fff; background: #b8322f; border-color: #b8322f; }
+.scene-keybar .rec { font-weight: 700; letter-spacing: 0.04em; }
+.scene-keybar .rec::before { content: '●'; margin-right: 4px; color: #b8322f; }
+.scene-keybar .rec.on { color: #fff; border-color: #b8322f; background: #6d2321; }
+.scene-keybar .rec.on::before { color: #ff5a55; }
+.scene-keybar .rec.live { background: #b8322f; animation: rec-pulse 0.8s ease-in-out infinite alternate; }
+@keyframes rec-pulse { to { background: #7a1f1d; } }
+.wp-menu { min-width: 250px; }
+.wp-menu .wp-head { display: flex; align-items: center; gap: 6px; padding: 2px 6px; }
+.wp-menu .toggle { padding: 4px 6px; min-height: var(--tap-sm); }
 .scene-toolbar { top: 8px; left: 8px; }
 .shape-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 10px; }
 /* the reference over the shot frame (scene-ref.js): placed like the canvas, never picked */

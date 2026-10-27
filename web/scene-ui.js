@@ -5,7 +5,7 @@ import {
   section, seg, sheetOpen, store, uid, undoToast, help
 } from './ui.js';
 import {
-  C, CAM, EVEN, FPS, HIST, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropKeys, frames, framesFor, hasKeys, hooks, keyCount, keyTarget,
+  C, CAM, EVEN, FPS, HIST, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropHolds, dropKeys, holdStart, frames, framesFor, hasKeys, hooks, keyCount, keyTarget,
   namesFor, nextKeyFrame, pivotOf, pivotsFor, sameTab, save, selItem, setSC, write
 } from './scene-data.js';
 import { FIG_TABS, adjustTab, faceTab, handsTab, jointsTab, movesTab, partsTab, posesTab, promptProps } from './scene-pose.js';
@@ -13,7 +13,7 @@ import {
   HAND, addObject, camGizmo, cameraFromView, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, pose, rebuildRoom, refresh,
   removeLayer, removeSelected, select, selectJoint, setFree, setMode, syncMeshes, viewer
 } from './scene-view.js';
-import { busy, cancelRender, play, renderDepthVideo, renderPoseVideo, saveFrame, seek, stopPlay } from './scene-export.js';
+import { busy, cancelRender, letGo, play, renderDepthVideo, renderPoseVideo, saveFrame, seek, stopPlay } from './scene-export.js';
 import { maxBar, renderKeys, renderTransport, wireSheetKeys } from './scene-keys.js';
 import { hasMode, modeDef, modeList, modeOf, modeSections } from './scene-modes.js';
 import { syncRef, toggleRef } from './scene-ref.js';
@@ -212,7 +212,7 @@ export function syncLength() {
   if (SC?.lenMode !== 'match') return;
   const g = generateSeconds();
   if (g == null || Math.abs(clamp(g, ...LEN) - SC.seconds) < 0.005) return;
-  stopPlay(); setLength(g); save(); renderTransport(); renderPanel(); renderToolbar();
+  setLength(g); save(); renderTransport(); renderPanel(); renderToolbar();
 }
 function lengthProps() {
   const mode = SC.lenMode === 'match' ? 'match' : 'custom', g = generateSeconds();
@@ -228,7 +228,7 @@ function lengthProps() {
   let want = SC.seconds;
   return [field(label, choice),
     rangeField('Custom length', () => want, (v) => { want = v; }, { min: LEN[0], max: LEN[1], step: 0.5, fmt: (v) => `${fmtSecs(v)} s · ${framesFor(v)} frames`,
-      onChange: () => { if (Math.abs(want - SC.seconds) < 0.005) return; stopPlay(); setLength(want); save(); renderTransport(); renderPanel(); renderToolbar(); } })];
+      onChange: () => { if (Math.abs(want - SC.seconds) < 0.005) return; setLength(want); save(); renderTransport(); renderPanel(); renderToolbar(); } })];
 }
 
 function renderProps() {
@@ -266,8 +266,8 @@ function openAdd() {
 function undo(back = true) {
   const [from, to] = back ? [HIST.undo, HIST.redo] : [HIST.redo, HIST.undo];
   if (!from.length) return;
-  stopPlay();
   const mode = SC.mode;
+  dropHolds();   // (it plays on, with the scene undone)
   to.push(HIST.cur); HIST.cur = from.pop();
   setSC(JSON.parse(HIST.cur)); SC.mode = mode; TEMP.clear(); R.joint = null;
   if (R.sel === ROOM ? !SC.room : R.sel && !selItem()) R.sel = null;
@@ -398,6 +398,11 @@ function pullHandle() {
 
 export function wireKeys() {
   wireSheetKeys();
+  // the panel's sliders, number boxes and buttons while it plays: held over the keys from touch to letting go
+  // (a moment after, so the slider's change and the button's click are part of the hold)
+  document.addEventListener('pointerdown', (e) => { if (e.target.closest?.('#sceneBody')) holdStart('panel'); }, true);
+  const up = () => setTimeout(() => letGo('panel'));
+  addEventListener('pointerup', up, true); addEventListener('pointercancel', up, true);
   document.addEventListener('keydown', (e) => {
     if (!$('#tab-scene').classList.contains('active') || sheetOpen()
       || e.target.closest('input, textarea, select')) return;

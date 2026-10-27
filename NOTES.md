@@ -151,6 +151,15 @@ will then fail to start until that process is stopped, so stop it before the nex
   in `MUTED` (not saved) instead of the keys, so a muted layer stays put and moving it writes no keys. Renders set
   `R.real` and use the real keys; Save frame is the picture on screen.
 - Tests: `tests/keys.mjs` (run by `tests/test_keys.py`).
+- **Editing while it plays** (2026-10-27): nothing that edits stops playback. A gesture is a hold *source*
+  (`holdStart/letGo`: 'gizmo', 'orbit', 'tip', 'panel' = any pointer down in `#sceneBody` until a tick after it
+  lets go). While a source holds and it plays, `write()` to an animated item (or any item with Record on) goes
+  into `HOLD` per channel and `current()` shows it over the keys. When the last source lets go, `commitHolds()`
+  keys the held channels at the hold's first frame (While playing ▸ Jump back on release, default on; the
+  playhead seeks back there) or the release frame; with REC (`R.record`) it writes `recordInto()` (scene-keyops.js)
+  every 3 frames over the span held; with Auto key off an animated item gets a TEMP with `play: true` (only its
+  changed channels, on every frame) until ◆ Key. `WP` (localStorage `deck.scene.whileplaying`) says what shows
+  while playing: gizmo, joint dots, frustum, grid, key sheet follows playhead. Seek during play re-bases the clock.
 
 ### Compositions: 3D scenes as video clips (scene-comp.js, scene-offscreen.js)
 - A video clip `{ kind: 'scene', src: { scene: <scene-tabs id>, look: color|clay|depth|pose }, nat: [w, h], dur }` is only a

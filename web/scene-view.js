@@ -6,9 +6,10 @@ import * as FIGURE from './figure.js';
 import { $, api, busy as busyBar, clone, closeSheet, h, toast, undoToast } from './ui.js';
 import { smoothGizmo, snap3, snapBar3 } from './gizmo.js';
 import {
-  C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, current, frames, hooks, pathSig, makers, namesFor, newObject, newRoom, pivotOf, sample,
+  C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, WP, current, frames, holdStart, hooks, pathSig, makers, namesFor, newObject, newRoom, pivotOf, sample,
   sameTab, save, selItem, setSC, write
 } from './scene-data.js';
+import { letGo } from './scene-export.js';
 import { modeOf } from './scene-modes.js';
 import { renderKeys, renderPanel, renderToolbar, setSceneMode } from './scene-ui.js';
 
@@ -97,13 +98,21 @@ export function setup() {
 
   controls = new OrbitControls(camera, canvas);
   controls.enableDamping = false;
-  controls.addEventListener('change', () => { if (R.applying) return; applyRoll(camera, current(SC.camera, CAM).roll); draw(); });  // (orbiting aims the camera level: the roll goes back on)
+  // (orbiting aims the camera level: the roll goes back on). While it plays, the orbit is held over the camera's keys.
+  controls.addEventListener('start', () => holdStart('orbit'));
+  controls.addEventListener('change', () => {
+    if (R.applying) return;
+    applyRoll(camera, current(SC.camera, CAM).roll);
+    if (R.playing) write(SC.camera, CAM, readCamera());
+    draw();
+  });
   controls.addEventListener('end', () => {
-    if (R.playing) return;
     const c = readCamera(), was = current(SC.camera, CAM);
-    if (CAM.every((n) => Math.abs(c[n] - was[n]) < 1e-6)) return;  // a tap, not a move: no key
-    write(SC.camera, CAM, c);  // with auto key off on an animated camera, only held (see TEMP)
-    save(); renderKeys(); if (!R.sel) renderPanel();
+    if (CAM.some((n) => Math.abs(c[n] - was[n]) >= 1e-6)) {  // (a tap, not a move: no key)
+      write(SC.camera, CAM, c);  // with auto key off on an animated camera, only held (see TEMP)
+      save(); renderKeys(); if (!R.sel && !R.playing) renderPanel();
+    }
+    letGo('orbit');
   });
 
   // the free view (see setFree): its own camera and orbit, in place of the shot camera's
@@ -129,6 +138,7 @@ export function setup() {
     canvas, fix: fixTarget, redraw: () => draw(),
     apply: (o) => { if (gizmo.object === o) { applyChange(); draw(); } },
     settle: () => { save(); renderKeys(); renderPanel(); },
+    start: () => holdStart('gizmo'), end: () => letGo('gizmo'),
   });
   // hovering a handle with a pen (or mouse) lights it before contact: the stage draws on demand, so it needs a nudge
   let hoverAxis = null;
@@ -145,7 +155,7 @@ export function setup() {
   canvas.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, onGizmo: gizmo.dragging || gizmo.axis != null }; });
   canvas.addEventListener('pointerup', (e) => {
     if (HAND.on) { down = null; return; }   // (Hand mode keeps the figure: a tap doesn't change what's selected)
-    if (!down || down.onGizmo || R.playing || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down = null; return; }
+    if (!down || down.onGizmo || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down = null; return; }
     down = null;
     const joint = jointAt(e);
     if (joint) return selectJoint(joint);
@@ -497,13 +507,14 @@ export function draw(forRender = false) {
   const depth = R.depth || forRender === 'depth';
   scene.overrideMaterial = depth ? depthMat : null;
   scene.background.set(depth ? 0x000000 : 0x24272e);
-  grid.visible = !forRender && !depth && !snap3.grid;
-  snapGrid.visible = !forRender && !depth && snap3.grid;
+  const live = !R.playing;   // (while it plays, the While-playing settings say what shows: WP)
+  grid.visible = !forRender && !depth && !snap3.grid && (live || WP.grid);
+  snapGrid.visible = !forRender && !depth && snap3.grid && (live || WP.grid);
   for (const f of passHooks) f(depth || forRender === 'range' ? 'depth' : 'color');
-  frustum.visible = wantFrustum() && !forRender && !depth;
+  frustum.visible = wantFrustum() && !forRender && !depth && (live || WP.frustum);
   stage.visible = !onStage() && !forRender;
-  gizmo.getHelper().visible = !forRender && !R.playing && !!gizmo.object;
-  const dots = !forRender && !depth && !R.playing;
+  gizmo.getHelper().visible = !forRender && (live || WP.gizmo) && !!gizmo.object;
+  const dots = !forRender && !depth && (live || WP.dots);
   for (const [id, m] of R.meshes) {
     for (const d of m.userData.rig?.dots || []) { d.visible = dots && id === R.sel && !HAND.on; d.material = d.userData.joint === R.joint ? dotSel : dotMat; }
     for (const d of m.userData.tips || []) { d.visible = dots && HAND.on && id === R.sel && d.userData.side === HAND.side; d.material = d.userData.finger === HAND.drag?.finger ? dotSel : dotMat; }
@@ -636,7 +647,7 @@ function tipDown(e) {
   const finger = tipAt(e), o = selItem(), rig = R.meshes.get(R.sel)?.userData.rig;
   if (!finger || !o || !rig) return;
   e.stopPropagation(); e.preventDefault();
-  canvas.setPointerCapture(e.pointerId);
+  canvas.setPointerCapture(e.pointerId); holdStart('tip');
   // the drag runs along the finger as it is on screen: from its tip to its knuckle is closing it
   const base = screenOf(rig.bones[`${HAND.side}${finger}1`]), tip = screenOf(rig.marks[`${HAND.side}${finger}tip`]);
   const len = Math.max(20, Math.hypot(base[0] - tip[0], base[1] - tip[1]));
@@ -661,8 +672,8 @@ function tipUp(e) {
   if (!g || e.pointerId !== g.id) return;
   e.stopPropagation();
   HAND.drag = null;
-  if (g.moved) { save(); renderKeys(); renderPanel(); }
-  draw();
+  if (g.moved) { save(); renderKeys(); if (!R.playing) renderPanel(); }
+  letGo('tip'); draw();
 }
 export function setMode(m) { R.mode = m; refresh(); renderToolbar(); }
 

@@ -87,7 +87,8 @@ export const DEAD3 = { translate: 3, rotate: 3, scale: 4 };   // px of pen or fi
 // smooths toward it. TransformControls works from the drag's start values, so putting the smoothed
 // transform back on the object between moves doesn't disturb it.
 //   opts: canvas, fix(object, start) (tidy the raw result, e.g. keep a scale even), apply(object) (use the
-//   object's transform, each frame), settle() (once), redraw()
+//   object's transform, each frame), settle() (once, if it moved), redraw(), start() / end() (each drag, from its
+//   start to once it has settled, moved or not)
 export function smoothGizmo(tc, opts) {
   const { canvas } = opts;
   let w = null, start = null, p0 = null, touched = false, alt = false;
@@ -120,6 +121,7 @@ export function smoothGizmo(tc, opts) {
   tc.addEventListener('dragging-changed', (e) => {
     if (e.value) {
       if (w) w.finish();
+      opts.start?.();
       const o = tc.object;
       start = read(o); touched = false; snaps();
       const k = {};
@@ -127,7 +129,7 @@ export function smoothGizmo(tc, opts) {
       const mine = w = new Weight(k, (v) => {
         if (!touched) return;
         put(o, v); o.updateMatrixWorld(true); opts.apply(o);
-      }, () => { if (w === mine) w = null; if (touched) opts.settle(); opts.redraw(); });
+      }, () => { if (w === mine) w = null; if (touched) opts.settle(); opts.end?.(); opts.redraw(); });
     } else if (w) w.release();
   });
   tc.addEventListener('objectChange', () => {

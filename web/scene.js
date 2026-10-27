@@ -10,9 +10,10 @@
 import { TabSet } from './tabs.js';
 import { $, clone, h, store, toast } from './ui.js';
 import {
-  C, R, SC, defaultScene, frames, hooks, resetHistory, setC, setSC, upgrade
+  C, R, SC, defaultScene, dropHolds, frames, hooks, resetHistory, setC, setSC, upgrade
 } from './scene-data.js';
-import { buildToolbar, renderToolbar, showAll, syncLength, syncMode, wireKeys } from './scene-ui.js';
+import { buildToolbar, renderKeys, renderToolbar, showAll, syncLength, syncMode, wireKeys } from './scene-ui.js';
+import { loadPlaySettings } from './scene-keys.js';
 import { setup } from './scene-view.js';
 import { stopPlay } from './scene-export.js';
 import { registerBuiltins } from './scene-builtin.js';
@@ -46,7 +47,7 @@ const sceneAdapter = {
   migrate: (p) => (p.v === 1 && Array.isArray(p.objects) ? upgrade(p) : defaultScene()),
   dump: () => SC,
   load(p) {
-    stopPlay();
+    stopPlay(); dropHolds();
     setSC(p); R.sel = null; R.joint = null; R.f = Math.min(R.f, frames() - 1);
     R.lastRender = null; R.renders = {};
     resetHistory(); syncMode();
@@ -62,11 +63,11 @@ function boot() {
 
 // ---- entry points (called from app.js) ------------------------------------------------
 export function init(helpers) {
-  setC(helpers); R.autoKey = store.get('deck.scene.autokey', true) !== false;
+  setC(helpers); R.autoKey = store.get('deck.scene.autokey', true) !== false; loadPlaySettings();
   R.figTab = store.get('deck.scene.figtab', 'pose'); R.poseCat = store.get('deck.scene.posecat', 'stand');
   setSC(defaultScene());   // what shows until the tab opens
   hooks.ready = async () => { boot(); await ensureTabs(); };
-  hooks.persist = () => tabs?.changed(); hooks.history = renderToolbar; hooks.tab = () => tabs?.active?.id ?? null;
+  hooks.persist = () => tabs?.changed(); hooks.history = renderToolbar; hooks.tab = () => tabs?.active?.id ?? null; hooks.held = renderKeys;
   const mount = h('div', { class: 'scene-tabs' });
   $('#scenePanel').replaceChildren(h('div', { class: 'scene-head' }, mount), h('div', { id: 'sceneBody' }));
   tabs = new TabSet({ kind: 'scene-tabs', mount, scope: 'project', newName: (n) => `Scene ${n}`, adapter: sceneAdapter, seed: legacyScene });
