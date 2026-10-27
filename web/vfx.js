@@ -113,7 +113,7 @@ const BLANK = () => ({ op: 'ripple', source: null, first: null, matte: null, sou
 let T = BLANK();
 let tabs = null;
 // cmp: the result on the left instead of the source (comparing takes); layout: 'wipe' or 'side'
-const UI = { wipe: 0.5, draw: null, srcInfo: null, playing: false, neg: false, cmp: null, layout: 'wipe' };
+const UI = { wipe: 0.5, draw: null, srcInfo: null, playing: false, neg: false, cmp: null, layout: 'wipe', rate: 1 };
 
 // ---- inputs ----
 const srcLabel = (s) => {
@@ -467,7 +467,36 @@ function keepInTrim() {
     if (V.b) V.b.currentTime = 0;
     for (const v of [V.a, V.b]) v?.play().catch(() => {});
   }
+  showTime();
   requestAnimationFrame(keepInTrim);
+}
+
+// the time bar runs over what is shown: a result from 0, the source over its trim (in the trim's own time)
+function span() {
+  const src = V.a && !V.a.dataset.result ? V.a : null, [s, e] = srcSpan();
+  const clock = V.b || V.a;
+  const len = V.b?.duration || (src ? Math.min(e, src.duration || Infinity) - s : V.a?.duration) || 0;
+  return { src, s: src ? s : 0, clock, len: Number.isFinite(len) ? len : 0 };
+}
+
+function seekTo(t) {
+  const { src, s, len } = span();
+  t = clamp(t, 0, len);
+  if (V.b) V.b.currentTime = t;
+  if (V.a) V.a.currentTime = src ? s + t : t;
+  showTime();
+}
+
+function showTime() {
+  const bar = $('#vfxTime'), out = $('#vfxClock');
+  if (!bar || !out) return;
+  const { s, clock, len } = span();
+  const t = clock ? clamp(clock.currentTime - (clock === V.b ? 0 : s), 0, len) : 0;
+  bar.max = len || 0;
+  if (document.activeElement !== bar) bar.value = t;
+  bar.style.setProperty('--p', len ? `${(t / len) * 100}%` : '0%');
+  const f = (x) => `${x.toFixed(2)}`;
+  out.textContent = `${f(t)} / ${f(len)} s · frame ${Math.round(t * FPS) + 1}`;
 }
 
 function drawViewer() {
@@ -615,14 +644,22 @@ function renderTransport() {
     if (UI.playing) requestAnimationFrame(keepInTrim);
     renderTransport();
   };
-  const step = (n) => { UI.playing = false; for (const v of vids) { v.pause(); v.currentTime = Math.max(0, v.currentTime + n / FPS); } renderTransport(); };
+  const step = (n) => { UI.playing = false; for (const v of vids) v.pause(); const { clock, s } = span(); if (clock) seekTo(clock.currentTime - (clock === V.b ? 0 : s) + n / FPS); renderTransport(); };
+  const time = h('input', { type: 'range', id: 'vfxTime', class: 'vfx-time', min: 0, max: 0, step: 'any', value: 0, 'aria-label': 'Time',
+    disabled: !vids.length, oninput: (ev) => seekTo(parseFloat(ev.target.value)) });
+  const rate = (r) => { UI.rate = r; for (const v of vids) v.playbackRate = r; renderTransport(); };
+  for (const v of vids) { v.playbackRate = UI.rate; v.onseeked = v.onloadedmetadata = showTime; }
   bar.replaceChildren(...[
+    h('div', { class: 'vfx-timebar' }, time, h('span', { id: 'vfxClock', class: 'vfx-clock' })),
+    iconBtn('Back to the start', '⇤', () => { step(0); seekTo(0); }),
     iconBtn('Back one frame', '⏮', () => step(-1)),
     button(UI.playing ? '❚❚ Pause' : '▶ Play', play, { cls: 'small primary', disabled: !vids.length }),
     iconBtn('Forward one frame', '⏭', () => step(1)),
+    vids.length ? seg([[0.25, '¼×'], [0.5, '½×'], [1, '1×']], UI.rate, rate) : null,
     V.a && V.b ? seg([['wipe', 'Wipe'], ['side', 'Side by side']], UI.layout, (v) => { UI.layout = v; UI.playing = false; drawViewer(); }) : null,
     V.a && V.b && UI.layout === 'wipe' ? h('span', { class: 'hint' }, 'Drag across the picture to wipe') : null,
     UI.draw ? h('span', { class: 'hint' }, { points: 'Tap to place points', tracks: 'Drag to draw a path', color: 'Tap the screen colour' }[UI.draw]) : null].filter(Boolean));
+  showTime();
 }
 
 // ---- tabs and wiring ----
