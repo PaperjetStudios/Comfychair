@@ -666,14 +666,17 @@ export function setMode(m) { R.mode = m; refresh(); renderToolbar(); }
 
 export function changed() { save(); refresh(); renderKeys(); renderPanel(); }
 
-export function removeSelected() {
+// delete a layer (an object's id, or ROOM), with Undo in the toast; the selection only goes if it was that layer
+export function removeLayer(id) {
   const before = clone(SC), sel = R.sel, ok = sameTab();
   let name;
-  if (sel === ROOM) { name = 'Room'; SC.room = null; rebuildRoom(); }
-  else { const o = selItem(); if (!o) return; name = o.name; SC.objects = SC.objects.filter((x) => x !== o); }
-  R.sel = null; R.joint = null; changed(); renderToolbar();
+  if (id === ROOM) { if (!SC.room) return; name = 'Room'; SC.room = null; rebuildRoom(); }
+  else { const o = id && SC.objects.find((x) => x.id === id); if (!o) return; name = o.name; SC.objects = SC.objects.filter((x) => x !== o); }
+  if (sel === id) { if (HAND.on) handMode(null); R.sel = null; R.joint = null; }
+  changed(); renderToolbar();
   undoToast(`${name} deleted`, () => { if (ok()) { setSC(before); R.sel = sel; rebuildRoom(); changed(); renderToolbar(); } });
 }
+export const removeSelected = () => removeLayer(R.sel);
 
 export function addObject(type, extra = {}) {
   closeSheet();

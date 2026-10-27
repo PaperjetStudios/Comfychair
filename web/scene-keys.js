@@ -648,7 +648,9 @@ export function renderTransport() {
 // ---- the 3D viewport, full screen: the shared maximize button (layout.js) ---------------------------
 const stage = () => $('#tab-scene .stage');
 let sceneMax = null;
-export const maxBar = () => (sceneMax ||= maximizable($('#tab-scene .stage'), $('#sceneViewer'), { title: 'Full screen the 3D view' })).btn;
+// (the whole page goes full screen with the stage pinned over it, so the pulled-out panel's sheets and toasts show)
+export const maxBar = (onChange = null) => (sceneMax ||= maximizable($('#tab-scene .stage'), $('#sceneViewer'),
+  { title: 'Full screen the 3D view', native: document.documentElement, onChange })).btn;
 
 // ---- the keyboard (the sheet, when it was the last thing touched) ---------------------------------
 let focus = false;

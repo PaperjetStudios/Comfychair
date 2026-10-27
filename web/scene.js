@@ -66,7 +66,7 @@ export function init(helpers) {
   hooks.ready = async () => { boot(); await ensureTabs(); };
   hooks.persist = () => tabs?.changed(); hooks.history = renderToolbar; hooks.tab = () => tabs?.active?.id ?? null;
   const mount = h('div', { class: 'scene-tabs' });
-  $('#scenePanel').replaceChildren(h('div', { class: 'scene-head' }, h('div', { id: 'sceneModes', class: 'scene-modes' }), mount), h('div', { id: 'sceneBody' }));
+  $('#scenePanel').replaceChildren(h('div', { class: 'scene-head' }, mount), h('div', { id: 'sceneBody' }));
   tabs = new TabSet({ kind: 'scene-tabs', mount, scope: 'project', newName: (n) => `Scene ${n}`, adapter: sceneAdapter, seed: legacyScene });
 }
 

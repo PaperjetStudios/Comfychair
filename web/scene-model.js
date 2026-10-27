@@ -541,7 +541,7 @@ export function renderCreate() {
 
 // ---- the mode ----
 export function initModel() {
-  registerMode({ key: 'create', label: 'Create object', hint: 'Create object mode: basic modelling for simple shapes only',
+  registerMode({ key: 'create', label: 'Create object', icon: '⬢', hint: 'Create object mode: basic modelling for simple shapes only',
     panel: () => { if (!ROOT.childNodes.length) renderCreate(); return ROOT; },
     select: false, stage: 'empty', view: 'free', lanes: 'none',
     enter: () => { aimFree([2.6, 1.9, 3.4], [0, 0.5, 0]); if (!G) { stage(); wire(); } rebuildView(); loadLib(); },

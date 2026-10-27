@@ -33,7 +33,8 @@ export const makers = {};
 // what's valued: a figure's values also hold its pose (j: joint rotations, m: parameters on top)
 export const FIG = [...OBJ, 'j', 'm', 'pn'];  // pn: the pose's name, for a prompt
 export const namesFor = (o) => (o.type === 'figure' ? FIG : OBJ);
-export const MODES = [['translate', '✥ Move', 'w'], ['rotate', '⟳ Rotate', 'e'], ['scale', '⤢ Scale', 'r']];
+// the gizmo's modes: [mode, icon, shortcut, name]
+export const MODES = [['translate', '✥', 'w', 'Move'], ['rotate', '⟳', 'e', 'Rotate'], ['scale', '⤢', 'r', 'Scale']];
 export const ROOM = 'room';  // R.sel for the room; null is the camera
 // where the gizmo sits on an object (what it turns and scales around), in the object's own space
 const PIVOTS = {

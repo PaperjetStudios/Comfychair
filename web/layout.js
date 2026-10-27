@@ -82,10 +82,12 @@ export function wireSplitters() {
 // ---------------------------------------------------------------------------
 // maximize: the same ⛶ button, top right of the viewer, in every panel. Real Fullscreen API where
 // there is one (Esc leaves it), else the stage is pinned over the page (Esc / back leaves it).
-// maximizable(stage, viewer, { onChange }) -> { toggle, exit, on }
+// maximizable(stage, viewer, { onChange, native }) -> { toggle, exit, on }
+// native: the element that goes real full screen (default the stage). The page itself keeps sheets,
+// pickers and toasts on show over the pinned stage, which a full-screen stage would hide.
 // ---------------------------------------------------------------------------
 const MAXED = [];   // open ones, innermost last
-export function maximizable(stage, viewer, { onChange = null, cls = 'maxed', title = 'Full screen' } = {}) {
+export function maximizable(stage, viewer, { onChange = null, cls = 'maxed', title = 'Full screen', native: fsEl = stage } = {}) {
   let native = false, active = false;
   const btn = h('button', { type: 'button', class: 'max-btn', 'aria-label': title, 'aria-pressed': 'false', title: `${title} (Esc leaves)` }, '⛶');
   const back = () => { set(false); };
@@ -98,12 +100,13 @@ export function maximizable(stage, viewer, { onChange = null, cls = 'maxed', tit
     btn.setAttribute('aria-label', on ? 'Leave full screen' : title);
     if (on) {
       MAXED.push(api); overlayOpened(back);
-      const req = stage.requestFullscreen || stage.webkitRequestFullscreen;
-      try { if (req) { native = true; Promise.resolve(req.call(stage)).catch(() => { native = false; }); } } catch { native = false; }
+      const req = fsEl.requestFullscreen || fsEl.webkitRequestFullscreen;
+      const already = fsEl === document.documentElement && (document.fullscreenElement || document.webkitFullscreenElement);   // the app's own ⛶ (leave it on)
+      try { if (req && !already) { native = true; Promise.resolve(req.call(fsEl)).catch(() => { native = false; }); } } catch { native = false; }
     } else {
       MAXED.splice(MAXED.indexOf(api), 1); overlayClosed(back);
       const fs = document.fullscreenElement || document.webkitFullscreenElement;
-      if (fs === stage) { native = false; try { (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch { /* already out */ } }
+      if (native && fs === fsEl) { native = false; try { (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch { /* already out */ } }
     }
     onChange?.(on);
     requestAnimationFrame(() => dispatchEvent(new Event('resize')));   // canvases refit to the new size

@@ -1,7 +1,7 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import {
-  $, button, clone, closeSheet, field, h, iconBtn, layerRowsEl, openSheet, panelTop, propNum, rangeField,
+  $, button, clamp, clone, closeSheet, field, h, iconBtn, layerRowsEl, openSheet, panelTop, propNum, rangeField,
   section, seg, sheetOpen, store, uid, undoToast, help
 } from './ui.js';
 import {
@@ -11,7 +11,7 @@ import {
 import { FIG_TABS, adjustTab, faceTab, handsTab, jointsTab, movesTab, partsTab, posesTab, promptProps } from './scene-pose.js';
 import {
   HAND, addObject, camGizmo, cameraFromView, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, pose, rebuildRoom, refresh,
-  removeSelected, select, selectJoint, setFree, setMode, syncMeshes, viewer
+  removeLayer, removeSelected, select, selectJoint, setFree, setMode, syncMeshes, viewer
 } from './scene-view.js';
 import { busy, play, renderDepthVideo, renderPoseVideo, saveFrame, seek, stopPlay } from './scene-export.js';
 import { maxBar, renderKeys, renderTransport, wireSheetKeys } from './scene-keys.js';
@@ -94,8 +94,7 @@ function placeProps(o, cur) {
         c.base.x += 0.6; (c.chans.x || []).forEach((k) => { k.v += 0.6; });
         SC.objects.push(c); save(); select(c.id);
       }),
-      clearKeys(o, names),
-      button('Delete', removeSelected, { cls: 'small danger' })),
+      clearKeys(o, names)),
     help('Drag the gizmo to move it; tap the object again (or W / E / R) for Rotate and Scale. With keys, a change sets a key at the playhead; with Auto key off it is held until ◆ Key (or until the playhead moves).')];
 }
 
@@ -108,17 +107,18 @@ export function setAutoKey(on) {
 function layerList() {
   const keys = (it) => { const n = keyCount(it); return n ? `${n} key${n > 1 ? 's' : ''}` : ''; };
   const hideBtn = (it, after) => iconBtn(it.hidden ? 'Show' : 'Hide', it.hidden ? '◌' : '◉', () => { it.hidden = !it.hidden; after(); });
+  const delBtn = (id, name) => iconBtn(`Delete ${name}`, '🗑', () => removeLayer(id));
   const rows = [{ sel: !R.sel, thumb: h('span', { class: 'scene-icon' }, '🎥'), name: 'Camera',
     hint: [`${SC.width}×${SC.height} · ${SC.seconds} s`, keys(SC.camera)].filter(Boolean).join(' · '), onclick: () => select(null) }];
   if (SC.room) {
     rows.push({ sel: R.sel === ROOM, off: SC.room.hidden, thumb: h('span', { class: 'scene-icon' }, '⌂'), name: 'Room',
       hint: `${SC.room.w}×${SC.room.d} m${SC.room.hidden ? ' · hidden' : ''}`, onclick: () => select(R.sel === ROOM ? null : ROOM),
-      buttons: [hideBtn(SC.room, changed)] });
+      buttons: [hideBtn(SC.room, changed), delBtn(ROOM, 'the room')] });
   }
   for (const o of [...SC.objects].reverse()) {
     rows.push({ sel: o.id === R.sel, off: o.hidden, thumb: h('span', { class: 'scene-icon' }, TYPES[o.type].icon), name: o.name,
       hint: [TYPES[o.type].label, keys(o), o.hidden ? 'hidden' : ''].filter(Boolean).join(' · '),
-      onclick: () => select(o.id === R.sel ? null : o.id), buttons: [hideBtn(o, changed)] });
+      onclick: () => select(o.id === R.sel ? null : o.id), buttons: [hideBtn(o, changed), delBtn(o.id, o.name)] });
   }
   return layerRowsEl(rows);
 }
@@ -133,8 +133,7 @@ function roomProps() {
       num('Height (m)', () => rm.h, (v) => { rm.h = Math.max(1, v); }, { min: 1, max: 10, after: re })),
     field('Shape', seg([['room', 'Walls + ceiling'], ['walls', 'Walls'], ['floor', 'Floor only']], rm.walls ? (rm.ceiling ? 'room' : 'walls') : 'floor',
       (v) => { rm.walls = v !== 'floor'; rm.ceiling = v === 'room'; rebuildRoom(); changed(); })),
-    help('Keep the walls about where the real ones should be: H3 sizes the room from them. Hide it (◉) for an open space.'),
-    button('Delete room', removeSelected, { cls: 'small danger' }));
+    help('Keep the walls about where the real ones should be: H3 sizes the room from them. Hide it (◉) for an open space.'));
 }
 
 function cameraProps() {
@@ -209,7 +208,7 @@ function undo(back = true) {
   save(); rebuildRoom(); refresh(); renderToolbar(); renderTransport(); renderPanel(); fit();
 }
 
-export function showAll() { rebuildRoom(); refresh(); renderModes(); renderToolbar(); renderTransport(); renderPanel(); fit(); }
+export function showAll() { rebuildRoom(); refresh(); renderToolbar(); renderModes(); renderTransport(); renderPanel(); fit(); }
 
 // the tab's mode (SC.mode) is now the one in force: leave the old, enter the new
 export function syncMode() {
@@ -226,10 +225,13 @@ export function setSceneMode(key) {
   stopPlay(); SC.mode = key; syncMode(); showAll();
   hooks.persist();
 }
-// the switch at the top of the panel, one big segment per registered mode
+// the switch on the view, beside full screen: an icon button per registered mode
 function renderModes() {
-  const el = $('#sceneModes');
-  if (el) el.replaceChildren(seg(modeList().map((m) => [m.key, m.label, m.hint]), modeOf().key, setSceneMode));
+  const el = $('#sceneModeBar');
+  if (!el) return;
+  const cur = modeOf().key;
+  el.replaceChildren(...modeList().map((m) => h('button', { type: 'button', class: m.key === cur ? 'on' : '', title: m.hint || m.label,
+    'aria-label': m.label, 'aria-pressed': m.key === cur, 'data-scene-mode': m.key, onclick: () => setSceneMode(m.key) }, m.icon)));
 }
 
 // the panel: the mode's own contents, then whatever has been plugged into that mode (addModeSection)
@@ -266,15 +268,57 @@ export function cameraPanel() {
 
 export function buildToolbar() {
   viewer.append(h('div', { id: 'sceneToolbar', class: 'layer-toolbar scene-toolbar', role: 'toolbar', 'aria-label': 'Gizmo' },
-    ...MODES.map(([m, label, key]) => h('button', { type: 'button', 'data-mode': m, title: `${label.slice(2)} (${key.toUpperCase()})`,
-      onclick: () => setMode(m) }, label)),
+    ...MODES.map(([m, icon, key, name]) => h('button', { type: 'button', class: 'ico', 'data-mode': m, title: `${name} (${key.toUpperCase()})`,
+      'aria-label': name, onclick: () => setMode(m) }, icon)),
     h('span', { class: 'sep' }),
-    h('button', { type: 'button', 'data-depth': '', title: 'Show the depth the render will use',
-      onclick: () => { R.depth = !R.depth; draw(); renderToolbar(); } }, '◐ Depth'),
+    h('button', { type: 'button', class: 'ico', 'data-depth': '', title: 'Depth: show the depth the render will use', 'aria-label': 'Depth',
+      onclick: () => { R.depth = !R.depth; draw(); renderToolbar(); } }, '◐'),
     h('span', { class: 'sep' }),
     h('button', { type: 'button', 'data-undo': '', title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo', onclick: () => undo() }, '↶'),
     h('button', { type: 'button', 'data-redo': '', title: 'Redo (Ctrl+Shift+Z)', 'aria-label': 'Redo', onclick: () => undo(false) }, '↷')));
-  viewer.append(maxBar());
+  viewer.append(maxBar(pullPanel), h('div', { id: 'sceneModeBar', class: 'layer-toolbar scene-modebar', role: 'toolbar', 'aria-label': 'Mode' }));
+  $('#tab-scene .stage').append(pullHandle());
+}
+
+// ---- full screen: the panel pulls out over the view from a handle on the right edge. It is the same
+// live panel, pinned over the stage by CSS (#tab-scene.scene-max), so nothing moves or rebuilds. Drag the
+// handle to size it, or back past the edge to put it away; a tap shows or hides it. Kept per device.
+const PULL = { open: store.get('deck.scene.ovOpen', false) === true, w: +store.get('deck.scene.ovW', 380) || 380 };
+const pullMax = () => Math.max(260, innerWidth - 60);
+function applyPull(w = PULL.w, open = PULL.open) {
+  const tab = $('#tab-scene'), hd = $('#scenePull');
+  tab.style.setProperty('--ov-w', `${Math.round(clamp(w, 0, pullMax()))}px`);
+  tab.classList.toggle('panel-out', open && tab.classList.contains('scene-max'));
+  if (hd) { hd.setAttribute('aria-expanded', open); hd.firstChild.textContent = open ? '›' : '‹'; }
+}
+function pullPanel(on) { $('#tab-scene').classList.toggle('scene-max', on); applyPull(); }
+function pullHandle() {
+  const hd = h('button', { type: 'button', id: 'scenePull', class: 'scene-pull', 'aria-label': 'Settings panel', 'aria-expanded': PULL.open,
+    title: 'Settings: tap to show or hide, drag to size' }, h('span', {}, '‹'));
+  const keep = () => { store.set('deck.scene.ovOpen', PULL.open); store.set('deck.scene.ovW', PULL.w); applyPull(); };
+  hd.addEventListener('pointerdown', (e) => {
+    if (e.button > 0) return;
+    e.preventDefault(); e.stopPropagation();
+    try { hd.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
+    const tab = $('#tab-scene'), x0 = e.clientX, w0 = PULL.open ? Math.min(PULL.w, pullMax()) : 0;
+    let w = w0, moved = false;
+    const move = (ev) => {
+      w = w0 + x0 - ev.clientX;   // to the left pulls it out
+      if (!moved && Math.abs(w - w0) < 6) return;
+      moved = true; tab.classList.add('pulling'); applyPull(w, true);
+    };
+    const up = () => {
+      hd.removeEventListener('pointermove', move); hd.removeEventListener('pointerup', up); hd.removeEventListener('pointercancel', up);
+      tab.classList.remove('pulling');
+      if (!moved) PULL.open = !PULL.open;
+      else if (w < 160) PULL.open = false;   // pushed back to the edge: put away (it keeps its width)
+      else { PULL.open = true; PULL.w = Math.round(clamp(w, 260, pullMax())); }
+      keep();
+    };
+    hd.addEventListener('pointermove', move); hd.addEventListener('pointerup', up); hd.addEventListener('pointercancel', up);
+  });
+  hd.addEventListener('click', (e) => { e.stopPropagation(); if (e.detail === 0) { PULL.open = !PULL.open; keep(); } });   // (a key; a tap is done on letting go)
+  return hd;
 }
 
 export function wireKeys() {
