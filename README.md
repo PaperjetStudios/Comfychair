@@ -27,6 +27,9 @@ tap to type.
 **3D** tab: block out a shot with soft mannequins, boxes and a room, keyframe them and the camera, and
 render it as a depth video for `deck-h3-ctrl2v` (see below).
 The preview pinch/wheel-zooms, the picker has a camera button, and ⛶ goes full screen.
+**⚙ Settings → Projects** lists every project with its size on disk and number of generations: drag ⠿ (or ↑/↓) to
+change the picker's order, ✎ renames, ⧉ duplicates (files, saved tabs and history, copied in the background) and 🗑
+deletes a project with its history and files for good (type its name to confirm).
 
 **Next:** crop/compose tool (character sheets) → scenes/shots/takes → editor tab → extend/bridge shots.
 
@@ -499,6 +502,11 @@ the payload, so differently framed preview messages still work.
 |---|---|
 | `GET /api/templates` | templates with their fields |
 | `POST /api/generate` | `{template, values: {"<node>.<input>": v}, batch, project_id, parent}`. A seed of `-1` means random |
+| `GET /api/projects` · `POST /api/projects` `{name}` | projects in picker order · make one |
+| `PATCH /api/projects/{id}` `{name}` · `POST /api/projects/order` `{ids}` | rename · reorder (every id once) |
+| `GET /api/projects/stats` | `{id: {bytes, generations}}` |
+| `POST /api/projects/{id}/duplicate` · `GET /api/projects/jobs` | copy in the background (`deck_project_job` progress on the websocket) |
+| `DELETE /api/projects/{id}?confirm=<name>` | deletes the project, its generations and its folder; 409 for the last project or one with a run waiting/running |
 | `GET /api/generations?project_id=` | history |
 | `POST /api/generations/{id}/to-input` | `{index, frame: "first"\|"last", mp, multiple}` → ComfyUI input name |
 | `POST /api/upload` | multipart `file`, `mp`, `multiple`, `crop` (`{"x","y","w","h"}` as fractions) |
