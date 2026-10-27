@@ -35,6 +35,7 @@
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }   /* Android Chrome would scale text up and push sidebars wider */
 body {
   background: var(--bg); color: var(--text);
   font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -1110,3 +1111,30 @@ button.sheet-caret { width: 22px; }
   position: sticky; top: calc(-1 * var(--gap)); z-index: 3; background: var(--surface);
   margin-top: calc(-1 * var(--gap)); padding: var(--gap) 0 6px; margin-bottom: 6px; border-bottom: 1px solid var(--line);
 }
+
+/* clip importer on a tablet: the picture and the trim bars on one screen (no scrolling between them while trimming) */
+.sheet:has(.clip-import .vf) { width: min(1280px, 100%); max-height: 96dvh; }
+@media (orientation: landscape) and (min-width: 900px) {
+  .clip-import .vf { grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); column-gap: 14px; align-items: start; }
+  .clip-import .vf > .vf-stage { grid-column: 1; grid-row: 1 / span 20; position: sticky; top: 0; }
+  .clip-import .vf > :not(.vf-stage) { grid-column: 2; }
+  .clip-import .vf-wrap video { max-height: calc(96dvh - 150px); }
+}
+@media (orientation: portrait), (max-width: 899px) {
+  .clip-import .vf > .vf-stage { position: sticky; top: 0; z-index: 2; background: var(--surface); padding-bottom: 6px; }
+  .clip-import .vf-wrap video { max-height: 30dvh; margin: 0 auto; }
+}
+
+/* the video editor inside sidebars and sheets: never wider than its column. Safari sizes a grid track from the
+   video's own width (a portrait phone clip is 1080 px) and ignores max-height when doing it, which pushed the
+   trim bar, the numbers and the buttons past the panel and squeezed the picture. */
+.field, .vf { grid-template-columns: minmax(0, 1fr); }
+.vf { contain: inline-size; }   /* its width comes from the column, never from the video inside */
+.vf > *, .vf .crop-stage { min-width: 0; max-width: 100%; }
+.vf .crop-stage { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+.vf .vf-wrap { max-width: 100%; }
+.vf-nums { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); }
+.vf-num input { width: 100%; min-width: 0; }
+.vf-bar { min-width: 0; flex-wrap: wrap; }
+.vf-bar .vf-time { min-width: 0; }
+.row.wrap > * { min-width: 0; }

@@ -6,6 +6,7 @@
 // that piece is uploaded; the server then re-encodes it from the exact start.
 import { api, button, closeSheet, field, fileButton, h, hint, note, openSheet, placeholder, seg, store, toast } from './ui.js';
 import { videoEditor } from './vfield.js';
+import { S } from './core.js';
 
 const SIZES = [[0, 'Original'], [1080, '1080p'], [720, '720p'], [480, '480p']];
 const FIRST_LEN = 10;   // a new clip starts with its first 10 s chosen
@@ -83,7 +84,11 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
     tab = t; store.set('deck.clipImport.tab', t); show();
   });
   const keep = seg([['clip', 'Clip'], ['sound', 'Sound only']], soundOnly ? 'sound' : 'clip', (v) => { soundOnly = v === 'sound'; });
-  openSheet(h('h3', {}, title), h('div', { class: 'row wrap' }, tabs, keep), body);
+  let toProject = store.get('deck.clipImport.toProject', true);
+  const projectBox = h('label', { class: 'check', title: 'Also put it on this project\'s Board and in History, like a generation' },
+    h('input', { type: 'checkbox', checked: toProject, onchange: (ev) => { toProject = ev.target.checked; store.set('deck.clipImport.toProject', toProject); } }),
+    ' Add to this project');
+  openSheet(h('h3', {}, title), h('div', { class: 'row wrap' }, tabs, keep, projectBox), body);
 
   const sizeField = () => field('Size', seg(SIZES.map(([v, l]) => [v, l]), size, (v) => { size = Number(v); store.set('deck.clipImport.size', size); }),
     hint('Largest height kept. Original keeps the full picture.'));
@@ -110,7 +115,11 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
       busy = true; b.disabled = true;
       try {
         const entry = await run();
-        toast(`Saved ${entry.label}${entry.kind === 'audio' ? ' (sound)' : ''} to the media library`);
+        if (toProject && S.project != null) {   // on the Board and in History too
+          const g = await api('/api/media/to-project', { method: 'POST', body: { name: entry.name, project_id: S.project } });
+          S.history.set(g.id, g);
+        }
+        toast(`Saved ${entry.label}${entry.kind === 'audio' ? ' (sound)' : ''} to the media library${toProject ? ' and this project' : ''}`);
         closeSheet();
         onSaved?.(entry);
       } catch (e) { toast(e.message, true); bar.classList.add('hidden'); }
@@ -163,7 +172,27 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
       }
     };
     url.addEventListener('keydown', (e) => { if (e.key === 'Enter') load(); });
-    body.replaceChildren(h('div', { class: 'row clip-url' }, url, button('Load', load, { cls: 'small primary' })), out);
+    // the clipboard: browsers only let a page read it over HTTPS (or on localhost). There it fills in a copied link
+    // as the sheet opens, and Paste does it in one tap; over plain HTTP, Paste selects the box for a long-press paste.
+    const fromClipboard = async (quiet) => {
+      try {
+        const t = (await navigator.clipboard.readText()).trim();
+        if (/^https?:\/\/\S+$/.test(t)) {
+          if (t !== url.value.trim()) { url.value = t; load(); }
+          return true;
+        }
+        if (!quiet) toast('The clipboard has no link in it', true);
+        return true;
+      } catch { return false; }
+    };
+    const paste = button('Paste', async () => {
+      if (!(navigator.clipboard?.readText && await fromClipboard(false))) {
+        url.focus(); url.select();
+        toast('Long-press the box and choose Paste (one-tap paste needs ComfyDeck on HTTPS)');
+      }
+    }, { cls: 'small' });
+    body.replaceChildren(h('div', { class: 'row clip-url' }, url, paste, button('Load', load, { cls: 'small primary' })), out);
+    if (window.isSecureContext && navigator.clipboard?.readText) fromClipboard(true);
   };
 
   // ---- a file on the PC ----
