@@ -1,97 +1,167 @@
-// Node test for the key ops (web/scene-keyops.js) and sampling/mute (web/scene-data.js). Run by test_keys.py.
+// Node test for the key ops (web/scene-keyops.js) and sampling/mute/migration (web/scene-data.js). Run by test_keys.py.
 import assert from 'node:assert/strict';
 globalThis.document = { addEventListener() {}, querySelector() { return null; } };
 globalThis.addEventListener = () => {};
 const K = await import('../web/scene-keyops.js');
 const D = await import('../web/scene-data.js');
+const F = await import('../web/figure.js');
 
-const mk = (fs, extra = {}) => ({ base: { x: 0 }, ease: 'smooth', keys: fs.map((f) => ({ f, x: f * 10 })), ...extra });
-const lay = (item, id = 'a', kind = 'obj', names = ['x']) => ({ item, id, kind, names });
-const fs = (L) => L.item.keys.map((k) => k.f);
+// an item with one channel x keyed at the frames given (value f * 10)
+const mk = (fs, extra = {}) => ({ base: { x: 0 }, ease: 'smooth', chans: { x: fs.map((f) => ({ f, v: f * 10 })) }, ...extra });
+const lay = (item, id = 'a', kind = 'obj', ch = 'x') => K.track(item, ch, { id, kind });
+const fs = (L) => L.keys.map((k) => k.f);
 const N = 100;
+const strip = (v) => JSON.parse(JSON.stringify(v));
 
 { // move: block, clamped, collision replaces unselected, no duplicates
-  const L = lay(mk([0, 10, 20, 30])), sel = new Set([L.item.keys[1], L.item.keys[2]]);
+  const L = lay(mk([0, 10, 20, 30])), sel = new Set([L.keys[1], L.keys[2]]);
   assert.equal(K.moveBy([L], sel, 10, N), 10);
   assert.deepEqual(fs(L), [0, 20, 30]);            // key at 30 replaced by the one moved from 20; 10 -> 20 replaced nothing
-  assert.equal(L.item.keys[1].x, 100);
+  assert.equal(L.keys[1].v, 100);
   assert.equal(K.moveBy([L], sel, -500, N), -20);  // stops at frame 0 as a block
   assert.deepEqual(fs(L), [0, 10]);  // the unselected key at 0 was replaced
   assert.equal(new Set(fs(L)).size, fs(L).length);
   assert.equal(K.moveBy([L], sel, NaN, N), 0);
 }
 { // scale around t0, merge: later wins, no NaN
-  const L = lay(mk([10, 20, 30])), sel = new Set(L.item.keys);
+  const L = lay(mk([10, 20, 30])), sel = new Set(L.keys);
   K.scaleAround([L], sel, 10, 2, N);
   assert.deepEqual(fs(L), [10, 30, 50]);
   K.scaleAround([L], sel, 10, 0.5, N);
   assert.deepEqual(fs(L), [10, 20, 30]);
   K.scaleAround([L], sel, 10, 0.05, N);           // squeezed together: one key survives per frame, the later wins
   assert.ok(fs(L).every(Number.isInteger) && new Set(fs(L)).size === fs(L).length);
-  assert.ok(sel.size === L.item.keys.length);
-  const M = lay(mk([10, 11])), s2 = new Set(M.item.keys);
+  assert.ok(sel.size === L.keys.length);
+  const M = lay(mk([10, 11])), s2 = new Set(M.keys);
   K.scaleAround([M], s2, 0, 0.05, N);             // both round to 1 (0.5, 0.55): later wins
-  assert.equal(M.item.keys.length, 1); assert.equal(M.item.keys[0].x, 110);
-  K.scaleAround([M], s2, NaN, NaN, N); assert.ok(M.item.keys.every((k) => Number.isFinite(k.f)));
+  assert.equal(M.keys.length, 1); assert.equal(M.keys[0].v, 110);
+  K.scaleAround([M], s2, NaN, NaN, N); assert.ok(M.keys.every((k) => Number.isFinite(k.f)));
 }
 { // snapshot / restore brings back keys a drag pushed over
-  const L = lay(mk([0, 10, 20])), sel = new Set([L.item.keys[0]]), snap = K.snapshot([L]);
+  const L = lay(mk([0, 10, 20])), sel = new Set([L.keys[0]]), snap = K.snapshot([L]);
   K.moveBy([L], sel, 10, N); assert.deepEqual(fs(L), [10, 20]);
-  K.restore(snap); assert.deepEqual(fs(L), [0, 10, 20]); assert.equal(L.item.keys[1].x, 100);
+  K.restore(snap); assert.deepEqual(fs(L), [0, 10, 20]); assert.equal(L.keys[1].v, 100);
 }
-{ // ease + delete
-  const L = lay(mk([0, 10, 20])), sel = new Set([L.item.keys[0], L.item.keys[1]]);
-  K.setEase(sel, 'const'); assert.equal(L.item.keys[0].ease, 'const');
-  K.setEase(sel, ''); assert.ok(!('ease' in L.item.keys[0]));
+{ // ease + delete; a channel that loses its last key leaves item.chans
+  const it = mk([0, 10, 20]), L = lay(it), sel = new Set([L.keys[0], L.keys[1]]);
+  K.setEase(sel, 'const'); assert.equal(L.keys[0].ease, 'const');
+  K.setEase(sel, ''); assert.ok(!('ease' in L.keys[0]));
   assert.equal(K.remove([L], sel), 2); assert.deepEqual(fs(L), [20]); assert.equal(sel.size, 0);
+  sel.add(L.keys[0]); K.remove([L], sel); assert.ok(!('x' in it.chans));
 }
-{ // copy / paste offsets, merge, past the end, other layer, no aliasing
-  const A = lay(mk([10, 15, 30]), 'a'), B = lay(mk([40]), 'b'), sel = new Set([A.item.keys[0], A.item.keys[1]]);
+{ // moving one channel's key leaves the others where they are (each channel is its own curve)
+  const it = { base: { px: 0, py: 0 }, ease: 'linear', chans: { px: [{ f: 0, v: 0 }, { f: 10, v: 10 }], py: [{ f: 0, v: 0 }, { f: 10, v: 5 }] } };
+  const tx = lay(it, null, 'cam', 'px'), ty = lay(it, null, 'cam', 'py'), sel = new Set([tx.keys[1]]);
+  assert.equal(K.moveBy([tx, ty], sel, 5, N), 5);
+  assert.deepEqual(fs(tx), [0, 15]); assert.deepEqual(fs(ty), [0, 10]);
+  assert.equal(D.sample(it, ['px', 'py'], 10).py, 5);
+  // a summary diamond is every key at that frame: selecting them all moves them all
+  const all = new Set([...tx.keys, ...ty.keys].filter((k) => k.f > 0)); K.moveBy([tx, ty], all, 3, N);
+  assert.deepEqual(fs(tx), [0, 18]); assert.deepEqual(fs(ty), [0, 13]);
+}
+{ // copy / paste offsets, merge, past the end, other item, no aliasing
+  const A = lay(mk([10, 15, 30]), 'a'), B = lay(mk([40]), 'b'), sel = new Set([A.keys[0], A.keys[1]]);
   const clip = K.copy([A, B], sel);
-  assert.deepEqual(clip.groups[0].keys.map((k) => k.f), [10, 15]);
-  const r = K.paste([A, B], clip, 40, N, { pick: B });   // onto the picked layer, first key at 40: B's own key at 40 is replaced
-  assert.deepEqual(fs(B), [40, 45]); assert.equal(B.item.keys[0].x, 100); assert.equal(r.keys.length, 2);
+  assert.deepEqual(clip.groups[0].keys.map((k) => k.f), [10, 15]); assert.equal(clip.groups[0].ch, 'x');
+  const r = K.paste([A, B], clip, 40, N, { pick: B });   // onto the picked item, first key at 40: B's own key at 40 is replaced
+  assert.deepEqual(fs(B), [40, 45]); assert.equal(B.keys[0].v, 100); assert.equal(r.keys.length, 2);
   assert.deepEqual(fs(A), [10, 15, 30]);
   K.paste([A, B], clip, 10, N);                          // back where they came from, same frames: replaced, not doubled
   assert.deepEqual(fs(A), [10, 15, 30]);
   const r2 = K.paste([A], clip, 97, N); assert.equal(r2.dropped, 1); assert.deepEqual(fs(A), [10, 15, 30, 97]);
-  A.item.keys[0].x = -1; assert.equal(clip.groups[0].keys[0].x, 100);
-  const cam = lay({ base: {}, keys: [] }, null, 'cam');  // a camera key doesn't go onto an object
+  A.keys[0].v = -1; assert.equal(clip.groups[0].keys[0].v, 100);
+  const cam = lay({ base: {}, chans: {} }, null, 'cam');  // a camera key doesn't go onto an object
   assert.equal(K.paste([cam], clip, 0, N).groups, 0);
+  const py = lay(B.item, 'b', 'obj', 'y');               // a channel goes onto its own name only
+  assert.equal(K.paste([py], clip, 0, N).groups, 0);
 }
 { // figure pose onto another figure keeps that figure's own placement
-  const mkf = (id, x) => lay({ base: { x }, keys: [{ f: 0, x, ry: 0, j: { a: [1, 2, 3] }, m: { lean: 5 }, pn: 'wave' }] }, id, 'figure', ['x', 'ry', 'j', 'm', 'pn']);
-  const A = mkf('a', 1), B = mkf('b', 9), sel = new Set(A.item.keys), clip = K.copy([A, B], sel);
-  B.item.keys = [];
-  K.paste([A, B], clip, 5, N, { pick: B, fill: (it, names) => ({ x: 9, ry: 33, j: {}, m: {}, pn: 'stand' }) });
-  const k = B.item.keys[0]; assert.equal(k.f, 5); assert.equal(k.x, 9); assert.equal(k.ry, 33); assert.deepEqual(k.j, { a: [1, 2, 3] }); assert.equal(k.pn, 'wave');
+  const mkf = (id, x) => {
+    const item = { base: { x }, ease: 'smooth', chans: { x: [{ f: 0, v: x }], ry: [{ f: 0, v: 0 }], 'j.lknee': [{ f: 0, v: [1, 2, 3, 4] }], pn: [{ f: 0, v: 'wave' }] } };
+    return ['x', 'ry', 'j.lknee', 'pn'].map((ch) => lay(item, id, 'figure', ch));
+  };
+  const A = mkf('a', 1), B = mkf('b', 9), sel = new Set(A.flatMap((T) => T.keys)), clip = K.copy([...A, ...B], sel);
+  B.forEach((T) => { T.keys = []; });
+  K.paste([...A, ...B], clip, 5, N, { pick: B[0] });
+  assert.equal(B[0].keys.length, 0); assert.equal(B[1].keys.length, 0);             // no x, ry
+  assert.deepEqual(B[2].keys[0].v, [1, 2, 3, 4]); assert.equal(B[3].keys[0].v, 'wave'); assert.equal(B[3].keys[0].f, 5);
 }
 { // graph channel write
-  const k = { f: 0, x: 1 }; K.setChan(k, 'x', 5, k); assert.equal(k.x, 5);
-  const m = { f: 0 }; K.setChan(m, 'm.lean', 12, { m: { walk: 50 } }); assert.deepEqual(m.m, { walk: 50, lean: 12 });
-  K.setChan(m, 'x', NaN, m); assert.ok(!('x' in m));
+  const k = { f: 0, v: 1 }; K.setChan(k, 5); assert.equal(k.v, 5);
+  K.setChan(k, NaN); assert.equal(k.v, 5);
+  assert.ok(K.isScalar('m.lean') && K.isScalar('x') && !K.isScalar('j.lknee') && !K.isScalar('pn'));
 }
 { // ease changes the sampled mid value; old ease names are unchanged
-  D.setSC({ camera: { base: { px: 0 }, keys: [], ease: 'smooth' }, objects: [] });
-  const it = { base: { x: 0 }, ease: 'smooth', keys: [{ f: 0, x: 0 }, { f: 10, x: 100 }] };
-  const at = (e, f = 2) => { it.keys[0].ease = e; return D.sample(it, ['x'], f).x; };
+  D.setSC({ camera: { base: { px: 0 }, chans: {}, ease: 'smooth' }, objects: [] });
+  const it = { base: { x: 0 }, ease: 'smooth', chans: { x: [{ f: 0, v: 0 }, { f: 10, v: 100 }] } };
+  const at = (e, f = 2) => { it.chans.x[0].ease = e; return D.sample(it, ['x'], f).x; };
   const sm = at('smooth'), li = at('linear'), ein = at('in'), eout = at('out'), co = at('const');
   assert.equal(li, 20); assert.ok(Math.abs(sm - 10.4) < 1e-9); assert.equal(co, 0); assert.ok(ein < li && eout > li);
-  delete it.keys[0].ease; assert.equal(D.sample(it, ['x'], 2).x, sm);
+  delete it.chans.x[0].ease; assert.equal(D.sample(it, ['x'], 2).x, sm);
   it.ease = 'linear'; assert.equal(D.sample(it, ['x'], 2).x, 20);
-  it.keys[0].ease = 'bogus'; assert.equal(D.sample(it, ['x'], 2).x, sm);
+  it.chans.x[0].ease = 'bogus'; assert.equal(D.sample(it, ['x'], 2).x, sm);
   assert.equal(D.sample(it, ['x'], 10).x, 100);
 }
-{ // old scenes round-trip through upgrade() and sample identically; mute defaults off
-  const old = { v: 1, width: 768, height: 448, seconds: 6, blur: 2, camera: { base: { px: 0, py: 1.6, pz: 5, tx: 0, ty: 1, tz: 0, fov: 45 }, keys: [{ f: 0, px: 0 }, { f: 20, px: 4, ease: 'linear' }], ease: 'smooth' },
-    objects: [{ id: 'o', type: 'box', name: 'Box', ease: 'linear', keys: [{ f: 0, x: 0 }, { f: 12, x: 6 }], base: { x: 0, y: 0, z: 0, sx: 1, sy: 1, sz: 1 } }] };
-  const before = [0, 3, 7, 12, 19].map((f) => [D.sample(old.camera, D.CAM, f), D.sample(old.objects[0], D.OBJ, f)]);
-  const up = D.upgrade(JSON.parse(JSON.stringify(old)));
+{ // channels sample on their own keys: each has its own frames and eases; an unkeyed one holds the base
+  const it = { base: { x: 1, y: 2, z: 3 }, ease: 'linear', chans: { x: [{ f: 0, v: 0 }, { f: 10, v: 10 }], y: [{ f: 5, v: 0 }, { f: 15, v: 100, ease: 'const' }, { f: 25, v: 0 }] } };
+  const s = (f) => D.sample(it, ['x', 'y', 'z'], f);
+  assert.deepEqual(s(0), { x: 0, y: 0, z: 3 }); assert.deepEqual(s(5), { x: 5, y: 0, z: 3 });
+  assert.equal(s(10).y, 50); assert.equal(s(20).y, 100);       // (the key at 15 is const: it holds 100 until 25)
+  assert.equal(s(40).x, 10); assert.equal(s(40).y, 0);
+}
+{ // poses: one joint keyed on its own slerps while the rest stay at the base pose; parameters per name; the pose name steps
+  const q = (deg) => { const r = deg * Math.PI / 360; return [Math.sin(r), 0, 0, Math.cos(r)]; };
+  const it = { base: { j: { lknee: q(0), rknee: q(30) }, m: { lean: 10 }, pn: 'stand' }, ease: 'linear',
+    chans: { 'j.lknee': [{ f: 0, v: q(0) }, { f: 10, v: q(90) }], 'm.lean': [{ f: 0, v: 0 }, { f: 10, v: 20 }], pn: [{ f: 0, v: 'a' }, { f: 10, v: 'b' }] } };
+  const v = D.sample(it, ['j', 'm', 'pn'], 5);
+  assert.ok(v.j.lknee.every((x, i) => Math.abs(x - q(45)[i]) < 1e-6)); assert.deepEqual(v.j.rknee, q(30));
+  assert.equal(v.m.lean, 10); assert.equal(D.sample(it, ['pn'], 4).pn, 'a'); assert.equal(D.sample(it, ['pn'], 6).pn, 'b');
+  assert.deepEqual(D.sample({ base: { j: { a: q(5) }, m: {}, pn: 'p' }, chans: {} }, ['j', 'm', 'pn'], 3), { j: { a: q(5) }, m: {}, pn: 'p' });
+}
+{ // old scenes (whole-item keys) migrate on upgrade() and sample identically; saved in the new form; idempotent; mute defaults off
+  const q = (deg) => { const r = deg * Math.PI / 360; return [Math.sin(r), 0, 0, Math.cos(r)]; };
+  const old = { v: 1, width: 768, height: 448, seconds: 6, blur: 2,
+    camera: { base: { px: 0, py: 1.6, pz: 5, tx: 0, ty: 1, tz: 0, fov: 45 }, ease: 'smooth',
+      keys: [{ f: 0, px: 0, py: 1.6, pz: 5, tx: 0, ty: 1, tz: 0, fov: 45 }, { f: 20, px: 4, py: 1.6, pz: 5, tx: 0, ty: 1, tz: 0, fov: 45, ease: 'linear' }, { f: 30, px: 4, py: 3, pz: 5, tx: 0, ty: 1, tz: 0, fov: 60, roll: 20 }] },
+    objects: [{ id: 'o', type: 'box', name: 'Box', ease: 'linear', keys: [{ f: 0, x: 0 }, { f: 12, x: 6 }], base: { x: 0, y: 0, z: 0, sx: 1, sy: 1, sz: 1 } },
+      { id: 'p', type: 'figure', name: 'Fig', ease: 'smooth', base: { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 1, sy: 1, sz: 1, j: { lknee: q(0) }, m: { lean: 5 }, pn: 'stand' },
+        keys: [{ f: 0, x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 1, sy: 1, sz: 1, j: { lknee: q(0), rknee: q(10) }, m: { lean: 5 }, pn: 'stand' },
+          { f: 8, x: 1, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 1, sy: 1, sz: 1, j: { lknee: q(80) }, m: {}, pn: 'sit', ease: 'in' },
+          { f: 20, x: 1, y: 0, z: 2, rx: 0, ry: 0, rz: 0, sx: 1, sy: 1, sz: 1, j: { lknee: q(0), rknee: q(10) }, m: { lean: 5, side: 8 }, pn: 'stand' }] }] };
+  const fig = old.objects[1];
+  // what the old whole-key sampler gave (the one in the commit before this change), written out here as the reference
+  const oldSample = (item, names, f) => {
+    const k = item.keys, z = names.includes('roll') ? { roll: 0 } : null, pick = (o) => Object.fromEntries(names.map((n) => [n, o[n]]));
+    if (f <= k[0].f) return pick({ ...z, ...item.base, ...k[0] });
+    const last = k[k.length - 1];
+    if (f >= last.f) return pick({ ...z, ...item.base, ...last });
+    let i = 0; while (k[i + 1].f <= f) i++;
+    const a = { ...z, ...item.base, ...k[i] }, b = { ...z, ...item.base, ...k[i + 1] };
+    const e = K.easeAt(k[i].ease || item.ease, (f - a.f) / (b.f - a.f));
+    return Object.fromEntries(names.map((n) => [n, n === 'j' ? F.slerpPose(a.j, b.j, e) : n === 'm' ? F.lerpParams(a.m, b.m, e) : n === 'pn' ? (e < 0.5 ? a.pn : b.pn) : a[n] + (b[n] - a[n]) * e]));
+  };
+  const cases = [[old.camera, D.CAM], [old.objects[0], D.OBJ], [fig, D.FIG]];
+  const frames = [0, 1, 3, 7, 8, 9, 12, 15, 19, 20, 25, 29, 30, 40];
+  const before = cases.map(([it, names]) => frames.map((f) => strip(oldSample(it, names, f))));
+  const up = D.upgrade(strip(old));
   assert.equal(up.camera.mute, false); assert.equal(up.objects[0].mute, false);
-  const after = [0, 3, 7, 12, 19].map((f) => [D.sample(up.camera, D.CAM, f), D.sample(up.objects[0], D.OBJ, f)]);
-  const strip = (v) => JSON.parse(JSON.stringify(v));
-  assert.deepEqual(strip(after).map(([c, o]) => [c, { ...o, rx: undefined, rz: undefined }]), strip(before).map(([c, o]) => [c, { ...o, rx: undefined, rz: undefined }]));
-  assert.deepEqual(JSON.parse(JSON.stringify(D.upgrade(up))), JSON.parse(JSON.stringify(up)));  // idempotent
+  assert.ok(!('keys' in up.camera) && !up.objects.some((o) => 'keys' in o));        // saved in the new form
+  const now = [[up.camera, D.CAM], [up.objects[0], D.OBJ], [up.objects[1], D.FIG]].map(([it, names]) => frames.map((f) => strip(D.sample(it, names, f))));
+  const near = (a, b, path = '') => {
+    if (typeof a === 'number') return assert.ok(Math.abs(a - b) < 1e-9, `${path}: ${a} vs ${b}`);
+    if (a && typeof a === 'object') { for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) near(a[k] ?? (typeof b[k] === 'number' ? 0 : undefined), b[k] ?? (typeof a[k] === 'number' ? 0 : undefined), `${path}.${k}`); return; }
+    assert.equal(a, b, path);
+  };
+  cases.forEach((c, i) => frames.forEach((f, j) => { if (i === 2) { delete before[i][j].rx; } near(now[i][j], before[i][j], `case ${i} frame ${f}`); }));
+  // the channels that never left the base are not keys
+  assert.deepEqual(Object.keys(up.camera.chans).sort(), ['fov', 'px', 'py', 'roll']);   // (tx, ty, tz, pz stay put; roll is new at the last key)
+  assert.ok('j.rknee' in up.objects[1].chans && 'j.lknee' in up.objects[1].chans && !('y' in up.objects[1].chans));   // (y never moves)
+  assert.deepEqual(up.objects[1].chans['m.side'].map((k) => [k.f, k.v]), [[0, 0], [8, 0], [20, 8]]);
+  assert.equal(up.objects[1].chans.x[1].ease, 'in'); assert.equal(up.camera.chans.px[1].ease, 'linear');
+  const again = strip(up); D.upgrade(again); assert.deepEqual(again, strip(up));     // idempotent
+  // an old animated item whose keys all equal the base stays animated
+  const still = D.upgrade({ v: 1, objects: [{ id: 's', type: 'box', name: 'S', ease: 'smooth', base: { x: 1 }, keys: [{ f: 0, x: 1 }, { f: 9, x: 1 }] }] });
+  assert.ok(D.hasKeys(still.objects[0]));
 }
 { // mute: keys ignored on screen, held, writes don't make keys, real keys still reachable, unmute snaps back
   const sc = D.upgrade({ v: 1, camera: { base: { px: 0, py: 1, pz: 5, tx: 0, ty: 0, tz: 0, fov: 45 }, keys: [{ f: 0, px: 0 }, { f: 10, px: 10 }], ease: 'linear' },
@@ -101,25 +171,71 @@ const N = 100;
   D.setMute(o, true);
   assert.equal(D.current(o, ['x'], 5).x, 5);
   D.R.f = 8; assert.equal(D.current(o, ['x'], 8).x, 5);          // held where it was when muted
-  D.write(o, D.OBJ, { x: 50 }); assert.equal(o.keys.length, 2); assert.equal(D.current(o, ['x'], 9).x, 50);
-  D.addKey(o, D.OBJ); assert.equal(o.keys.length, 3); assert.equal(o.keys.find((k) => k.f === 8).x, 50);  // an explicit key still works
+  D.write(o, D.OBJ, { x: 50 }); assert.equal(o.chans.x.length, 2); assert.equal(D.current(o, ['x'], 9).x, 50);
+  D.addKey(o, D.OBJ); assert.equal(o.chans.x.length, 3); assert.equal(o.chans.x.find((k) => k.f === 8).v, 50);  // an explicit key still works
   D.R.real = true; assert.equal(D.current(o, ['x'], 0).x, 0); D.R.real = false;
   D.setMute(sc.camera, true); D.write(sc.camera, D.CAM, { px: -3 });
-  assert.equal(sc.camera.keys.length, 2); assert.equal(D.current(sc.camera, D.CAM, 0).px, -3);
+  assert.equal(sc.camera.chans.px.length, 2); assert.equal(D.current(sc.camera, D.CAM, 0).px, -3);
   D.setMute(sc.camera, false); assert.equal(D.current(sc.camera, D.CAM, 0).px, 0);
   assert.equal(sc.camera.mute, false);
+}
+{ // keying only what changed: auto key writes the channels that moved; ◆ Key (nothing held) keys them all; held changes key their own
+  const sc = D.upgrade({ v: 1, camera: { base: { px: 0, py: 1, pz: 5, tx: 0, ty: 0, tz: 0, fov: 45, roll: 0 }, ease: 'linear', keys: [{ f: 0, px: 0, py: 1, pz: 5, tx: 0, ty: 0, tz: 0, fov: 45, roll: 0 }, { f: 10, px: 10, py: 1, pz: 5, tx: 0, ty: 0, tz: 0, fov: 45, roll: 0 }] },
+    objects: [] });
+  D.setSC(sc); D.R.autoKey = true; D.R.mute = false;
+  const cam = sc.camera;
+  assert.deepEqual(Object.keys(cam.chans), ['px']);               // (the rest never moved)
+  D.R.f = 4; D.write(cam, D.CAM, { px: 4, py: 1, pz: 5, tx: 0, ty: 0, tz: 0, fov: 45, roll: 0 });     // a whole camera written back, only px differs from nothing: no change
+  assert.equal(cam.chans.px.length, 2);
+  D.write(cam, D.CAM, { px: 7, py: 1, pz: 5, tx: 0, ty: 0, tz: 0, fov: 45, roll: 0 });
+  assert.deepEqual(cam.chans.px.map((k) => [k.f, k.v]), [[0, 0], [4, 7], [10, 10]]); assert.deepEqual(Object.keys(cam.chans), ['px']);
+  D.write(cam, D.CAM, { fov: 70 });                                // the lens: its own channel, one key at the playhead
+  assert.deepEqual(cam.chans.fov, [{ f: 4, v: 70 }]); assert.equal(cam.chans.px.length, 3);
+  D.write(cam, D.CAM, { py: 2.5, tz: 1 });
+  assert.deepEqual(Object.keys(cam.chans).sort(), ['fov', 'px', 'py', 'tz']);
+  D.addKey(cam, D.CAM);                                            // key all
+  assert.ok(D.CAM.every((c) => cam.chans[c].some((k) => k.f === 4)));
+  // held changes (auto key off): ◆ Key keeps only what was changed
+  D.R.autoKey = false; D.R.f = 8;
+  D.write(cam, D.CAM, { pz: 9 });
+  assert.equal(D.current(cam, D.CAM).pz, 9); assert.ok(D.TEMP.get(cam).ch.has('pz') && D.TEMP.get(cam).ch.size === 1);
+  assert.ok(!cam.chans.pz.some((k) => k.f === 8));
+  D.addKey(cam, D.CAM);
+  assert.ok(cam.chans.pz.some((k) => k.f === 8 && k.v === 9)); assert.ok(!cam.chans.px.some((k) => k.f === 8)); assert.ok(!D.TEMP.has(cam));
+  D.R.autoKey = true;
+  // an unanimated item writes into its base
+  const o = { base: { x: 0 }, chans: {}, ease: 'smooth' }; D.write(o, ['x'], { x: 3 }); assert.equal(o.base.x, 3); assert.ok(!D.hasKeys(o));
+  // frames and removal
+  assert.deepEqual(D.keyFrames(cam), [0, 4, 8, 10]); assert.ok(D.keyAt(cam, 8)); assert.equal(D.nextKeyFrame(cam, 4), 8); assert.equal(D.nextKeyFrame(cam, 4, -1), 0);
+  D.dropKeys(cam, (f) => f === 4); assert.ok(!D.keyAt(cam, 4)); assert.ok(!('fov' in cam.chans) && !('py' in cam.chans));
+}
+{ // a figure: rotating one joint keys only that joint; a pose preset keys the joints it changes; putKeys (moves, motion) skips what stays put
+  const q = (deg) => { const r = deg * Math.PI / 360; return [Math.sin(r), 0, 0, Math.cos(r)]; };
+  const fig = D.upgrade({ v: 1, objects: [{ id: 'f', type: 'figure', name: 'F', ease: 'linear', keys: [{ f: 0, x: 0, j: { lknee: q(0), rknee: q(0) }, m: {}, pn: 's' }, { f: 10, x: 5, j: { lknee: q(0), rknee: q(0) }, m: {}, pn: 's' }],
+    base: { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 1, sy: 1, sz: 1, j: { lknee: q(0), rknee: q(0) }, m: {}, pn: 's' } }] }).objects[0];
+  D.setSC({ camera: { base: {}, chans: {} }, objects: [fig] }); D.R.autoKey = true; D.R.f = 3;
+  assert.deepEqual(Object.keys(fig.chans), ['x']);
+  const j = { ...D.current(fig, D.FIG).j, lknee: q(40) };
+  D.write(fig, D.FIG, { j });
+  assert.deepEqual(Object.keys(fig.chans).sort(), ['j.lknee', 'x']); assert.deepEqual(fig.chans['j.lknee'], [{ f: 3, v: q(40) }]);
+  D.write(fig, D.FIG, { j: { lknee: q(40) } });                       // rknee dropped from the pose: it is at rest, which is what it was
+  assert.deepEqual(Object.keys(fig.chans).sort(), ['j.lknee', 'x']);
+  D.write(fig, D.FIG, { m: { lean: 12 } }); assert.deepEqual(fig.chans['m.lean'], [{ f: 3, v: 12 }]);
+  D.R.f = 6; D.putKeys(fig, [{ f: 6, x: 2, y: 0, j: { lknee: q(10), rknee: q(0) }, m: { lean: 12 }, pn: 's', ease: 'linear' }, { f: 9, x: 3, y: 0, j: { lknee: q(20), rknee: q(0) }, m: { lean: 12 }, pn: 's' }], D.FIG);
+  assert.ok(!('y' in fig.chans) && !('j.rknee' in fig.chans) && !('pn' in fig.chans));     // unchanged: no rows for them
+  assert.deepEqual(fig.chans.x.map((k) => k.f), [0, 6, 9, 10]); assert.equal(fig.chans.x[1].ease, 'linear');
+  assert.deepEqual(fig.chans['j.lknee'].map((k) => k.f), [3, 6, 9]);
 }
 console.log('keys ok');
 
 { // camera roll: eased like the rest, missing reads 0 (old scenes and keys), written with the camera's values
   const cam = { base: { px: 0, py: 1, pz: 5, tx: 0, ty: 0, tz: 0, fov: 45 }, keys: [{ f: 0, px: 0 }, { f: 10, px: 10, roll: 30, ease: 'linear' }], ease: 'linear' };
-  assert.equal(D.sample(cam, D.CAM, 0).roll, 0);        // no roll anywhere: 0, never NaN
-  assert.equal(D.sample({ ...cam, keys: [] }, D.CAM, 3).roll, 0);
-  assert.equal(D.sample(cam, D.CAM, 5).roll, 15);       // a missing roll on the first key is 0, so it eases from there
-  assert.equal(D.sample(cam, D.CAM, 20).roll, 30);
-  assert.equal(D.sample({ ...cam, base: { ...cam.base, roll: 10 }, keys: [] }, D.CAM, 0).roll, 10);
-  assert.equal(D.sample(cam, D.OBJ.concat(['px']), 5).roll, undefined);   // objects don't gain a roll
-  const old = D.upgrade({ v: 1, camera: JSON.parse(JSON.stringify(cam)), objects: [] });
-  assert.equal(D.sample(old.camera, D.CAM, 5).roll, 15);
+  const up = D.upgrade({ v: 1, camera: strip(cam), objects: [] }).camera;
+  assert.equal(D.sample(up, D.CAM, 0).roll, 0);         // no roll at the first key: 0, never NaN
+  assert.equal(D.sample({ ...up, chans: {} }, D.CAM, 3).roll, 0);
+  assert.equal(D.sample(up, D.CAM, 5).roll, 15);        // a missing roll on the first key is 0, so it eases from there
+  assert.equal(D.sample(up, D.CAM, 20).roll, 30);
+  assert.equal(D.sample({ ...up, base: { ...up.base, roll: 10 }, chans: {} }, D.CAM, 0).roll, 10);
+  assert.equal(D.sample(up, D.OBJ.concat(['px']), 5).roll, undefined);   // objects don't gain a roll
   assert.ok(D.CAM.includes('roll') && K.isScalar('roll'));
 }

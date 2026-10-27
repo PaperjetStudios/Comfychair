@@ -118,6 +118,11 @@ export function slerpPose(a = {}, b = {}, t) {
   }
   return out;
 }
+// one joint's turn between two (arrays [x, y, z, w]; missing = rest)
+export function slerpQ(a, b, t) {
+  Q.fromArray(a || [0, 0, 0, 1]); Q2.fromArray(b || [0, 0, 0, 1]);
+  return Q.slerp(Q2, t).toArray();
+}
 // a joint's own turn, without the parameters on top
 export function readJoint(rig, name) {
   const q = rig.bones[name].quaternion.clone(), mq = rig.mq?.[name];
