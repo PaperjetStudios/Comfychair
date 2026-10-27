@@ -20,6 +20,11 @@ const FPS = 24;   // LTX runs at 24 fps; lengths are 8n+1 frames
 
 // group: the sideNav-like family; tpl: the template it runs; needs: the inputs it shows
 const EFFECTS = [
+  { id: 'delogo', group: 'Quick', label: 'Remove watermark', job: 'delogo', needs: ['source', 'boxes'],
+    help: 'Draw a box over each logo, caption or mark (or tap Find). Quality fills the boxes with ProPainter from what the other frames show behind them; the rest of the picture is left exactly as it was. Fast is instant but smears the box.' },
+  { id: 'depth', group: 'Quick', label: 'Depth map', tpl: 'deck-depth-video', still: 'deck-depth-image', maxLen: 20, needs: ['source?', 'first?', 'len', 'depthModel'],
+    lenHelp: 'Up to 20 s at 24 fps. The depth is worked out over the whole clip, so it stays steady from frame to frame.',
+    help: 'A grey depth map (near is white) of a clip, or of a picture when there is no clip: Video Depth Anything. Use it as H3 control, in Layout to render, or for compositing.' },
   { id: 'ripple', group: 'Restyle', label: 'Ripple edit', tpl: 'deck-ltx-ripple', needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
     help: 'Change the first frame (in Generate with an edit template, or in the Editor), and the change carries through the whole clip.' },
   { id: 'lora', group: 'Restyle', label: 'LoRA restyle', tpl: 'deck-ltx-v2v-lora', needs: ['source', 'loras', 'prompt', 'len', 'res', 'seed'],
@@ -67,7 +72,7 @@ const EFFECTS = [
   { id: 'pose', group: 'Performance', label: 'Pose preview', tpl: 'deck-pose-video', sd: 'deck-pose-sdpose', needs: ['source', 'len'],
     help: 'Shows what Drive a still will follow: the clip\'s body, hands and face as a stick figure.' },
 ];
-const GROUPS = ['Restyle', 'Key', 'Remove', 'Generate', 'Performance'];
+const GROUPS = ['Quick', 'Restyle', 'Key', 'Remove', 'Generate', 'Performance'];
 const fx = (id) => EFFECTS.find((e) => e.id === id) || EFFECTS[0];
 
 // how an effect's inputs find their template fields: by kind, then by the group (node title) name
@@ -97,9 +102,11 @@ const ROLES = {
   outsize: (f) => f.kind === 'choice' && f.input === 'output_size',
   seed: (f) => f.kind === 'seed',
   loras: (f) => f.kind === 'loras',
+  depthModel: (f) => f.kind === 'choice' && f.input === 'model',
+  depthSize: (f) => f.kind === 'int' && f.input === 'input_size',
 };
 // effects that follow a pose can read it with DWPose (CPU) or SDPose (GPU): e.sd is the SDPose take on e.tpl
-const tplId = (e) => (e.sd && T.poser === 'sdpose' ? e.sd : e.tpl);
+const tplId = (e) => (e.sd && T.poser === 'sdpose' ? e.sd : e.still && !T.source && T.first ? e.still : e.tpl);
 const tplOf = (e) => tplId(e) && S.templates.find((t) => t.id === tplId(e));
 const roleField = (t, role) => t?.fields.find(ROLES[role]);
 
@@ -120,7 +127,7 @@ const REFINE = { combine: 'union', grow: 0, close: 0, smooth: 0, feather: 0, low
 const CANVAS = { aspect: 16 / 9, scale: 1, cx: 0.5, cy: 0.5 };
 const BLANK = () => ({ op: 'ripple', source: null, first: null, matte: null, sound: null, voice: null, prompt: '', loras: [], len: 5, res: 704, size: null, seed: -1,
   points: { positive: [], negative: [] }, pointsAt: 0, tracks: [], key: { color: '#00ff00', similarity: 0.12, blend: 0.08, spill: 0.5, invert: false },
-  steps: 3, blend: 'face', face: { ...FACE }, results: [], showing: null, matte2: null, refine: { ...REFINE }, canvas: { ...CANVAS } });
+  steps: 3, blend: 'face', face: { ...FACE }, results: [], showing: null, matte2: null, refine: { ...REFINE }, canvas: { ...CANVAS }, boxes: [], delogo: 'quality' });
 let T = BLANK();
 let tabs = null;
 // cmp: the result on the left instead of the source (comparing takes); layout: 'wipe' or 'side'
@@ -246,6 +253,50 @@ function pointsFields() {
   ];
 }
 
+// Remove watermark's boxes: fractions of the whole source frame, as drawn on the viewer (sent as fractions of the cropped clip)
+function boxesFields() {
+  const n = (T.boxes ||= []).length;
+  return [
+    h('div', { class: 'row wrap' },
+      button(UI.draw === 'boxes' ? 'Drawing boxes' : 'Draw boxes', () => { UI.draw = UI.draw === 'boxes' ? null : 'boxes'; render(); }, { cls: UI.draw === 'boxes' ? 'primary' : '' }),
+      button('Find', findBoxes, { disabled: !T.source }),
+      n ? button('Undo box', () => { T.boxes.pop(); changed(); }) : null,
+      n ? button('Clear', () => { T.boxes = []; changed(); }) : null),
+    hint(n ? `${n} box${n > 1 ? 'es' : ''}. Drag a box to move it, its corner to size it, ✕ to remove it.` : 'No boxes yet: drag over the watermark on the picture.'),
+    help('Make each box a little bigger than the mark, shadow and glow included. Find looks for edges that stay put while the picture moves; on a still shot it finds nothing.'),
+  ];
+}
+const cropOf = () => T.source?.crop || { x: 0, y: 0, w: 1, h: 1 };
+const clipFracs = (b) => { const c = cropOf(); return { x: (b.x - c.x) / c.w, y: (b.y - c.y) / c.h, w: b.w / c.w, h: b.h / c.h }; };
+const delogoBody = () => ({ source: bare(T.source), trim: T.source.trim || null, crop: T.source.crop || null });
+
+async function findBoxes() {
+  try {
+    const r = await api('/api/video/delogo/find', { method: 'POST', body: delogoBody(), timeout: 300000, busy: 'Looking for a watermark…' });
+    if (!r.boxes.length) return toast('Nothing stays put in this clip: draw the boxes yourself', true);
+    const c = cropOf();   // back to fractions of the whole frame
+    T.boxes.push(...r.boxes.map((b) => ({ x: c.x + b.x * c.w, y: c.y + b.y * c.h, w: b.w * c.w, h: b.h * c.h })));
+    UI.draw = 'boxes';
+    changed();
+    toast(`Found ${r.boxes.length}: check them on the picture`);
+  } catch (err) { toast('Find failed: ' + err.message, true); }
+}
+
+async function runDelogo() {
+  if (!T.boxes?.length) return toast('Draw a box over the watermark first', true);
+  const quality = T.delogo !== 'fast';
+  try {
+    const g = await api('/api/video/delogo', { method: 'POST', timeout: quality ? 120000 : 3600000, busy: quality ? 'Queueing…' : 'Removing the watermark…',
+      body: { ...delogoBody(), boxes: T.boxes.map(clipFracs), mode: quality ? 'quality' : 'fast', project_id: S.project } });
+    S.history.set(g.id, g);
+    if (quality) adoptGenerations([g]);
+    T.results.push(g.id); T.showing = quality ? T.showing : g.id;
+    UI.draw = null;
+    changed();
+    if (quality) toast(`Queued Remove watermark as #${g.id}`);
+  } catch (err) { toast('Remove watermark failed: ' + err.message, true); }
+}
+
 function tracksFields() {
   return [h('div', { class: 'row wrap' },
     button(UI.draw === 'tracks' ? 'Drawing paths' : 'Draw paths', () => { UI.draw = UI.draw === 'tracks' ? null : 'tracks'; render(); }, { cls: UI.draw === 'tracks' ? 'primary' : '' }),
@@ -261,7 +312,7 @@ function render() {
   const e = fx(T.op), t = tplOf(e);
   const needs = new Set(e.needs.map((n) => n.replace('?', '')));
   const missing = tplId(e) && !t;
-  const runBtn = button(e.job ? ({ colorkey: 'Key clip', refine: 'Refine matte' }[e.id] || 'Cut out with matte') : 'Run', run, { cls: 'primary', disabled: !!missing });
+  const runBtn = button(e.job ? ({ colorkey: 'Key clip', refine: 'Refine matte', delogo: 'Remove watermark' }[e.id] || 'Cut out with matte') : 'Run', run, { cls: 'primary', disabled: !!missing });
 
   const effect = section('Effect', null,
     GROUPS.map((g) => h('div', { class: 'vfx-group' }, h('span', { class: 'vfx-group-name' }, g),
@@ -279,6 +330,7 @@ function render() {
     needs.has('matte') ? sourceField('matte') : null,
     needs.has('matte2') ? matte2Field() : null,
     needs.has('points') ? pointsFields() : null,
+    needs.has('boxes') ? boxesFields() : null,
     needs.has('tracks') ? tracksFields() : null);
 
   const prompt = needs.has('prompt') ? section('Prompt', null,
@@ -289,12 +341,16 @@ function render() {
     e.sd ? field('Pose from', seg([['dwpose', 'DWPose'], ['sdpose', 'SDPose']], T.poser || 'dwpose', (v) => { T.poser = v; changed(); }),
       help('DWPose runs on the CPU. SDPose uses the GPU and holds up better on hard poses, people turned away, hands near the body and stylised footage (up to 2 people).')) : null,
     needs.has('keycolor') ? keyFields() : null,
+    needs.has('depthModel') ? field('Detail', seg([['large', 'Fine'], ['small', 'Fast']], T.depthModel || 'large', (v) => { T.depthModel = v; changed(false); }),
+      help('Fine uses the Large model: the sharpest edges, steadiest depth. Fast uses Small: about five times quicker, softer.')) : null,
+    needs.has('boxes') ? field('Quality', seg([['quality', 'Quality'], ['fast', 'Fast']], T.delogo || 'quality', (v) => { T.delogo = v; changed(false); }),
+      help('Quality runs ProPainter on the GPU: about a minute for 10 s with small boxes. Fast is ffmpeg\'s delogo: seconds, but the box goes soft.')) : null,
     ...(needs.has('refine') ? refineFields() : []),
     ...(needs.has('canvas') ? canvasFields() : []),
     needs.has('loras') ? lorasField(t) : null,
     needs.has('len') ? rangeField('Length', () => T.len, (v) => { T.len = v; }, { min: 1, max: e.maxLen || 10, step: 1 / 3,
       fmt: (v) => (e.maxLen ? `${v.toFixed(1)}s` : `${v.toFixed(1)}s · ${lenFrames(v)} frames`), onChange: () => changed(),
-      help: e.maxLen ? 'Longer clips run as overlapping 5 s windows: time grows with length, memory doesn\'t.' : 'LTX makes 8n+1 frames at 24 fps; long clips need a lot of memory.' }) : null,
+      help: e.lenHelp || (e.maxLen ? 'Longer clips run as overlapping 5 s windows: time grows with length, memory doesn\'t.' : 'LTX makes 8n+1 frames at 24 fps; long clips need a lot of memory.') }) : null,
     needs.has('res') ? field('Resolution', seg(e.res || RES, resOf(e), (v) => { T.res = Number(v); changed(false); }),
       help(e.res ? 'The short side, in pixels. Higher is sharper and slower.' : 'The short side, in pixels. 704p takes about 1.5 minutes for 5 s on this card; 1088p about 3.')) : null,
     needs.has('steps') ? field('Steps', seg([[3, 'Fast'], [5, 'Balanced'], [7, 'Quality']], T.steps || 3, (v) => { T.steps = Number(v); changed(false); }),
@@ -481,9 +537,11 @@ async function run() {
   if (e.needs.includes('matte') && !T.matte) return toast(`Choose a ${T.op === 'cleanplate' ? 'mask' : 'matte'} clip first`, true);
   if (e.needs.includes('first') && !T.first) return toast('Choose the start image first', true);
   if (e.needs.includes('sound') && !T.sound) return toast('Choose the sound first', true);
+  if (e.still && !T.source && !T.first) return toast('Choose a clip or a picture first', true);
   await tabs?.flush();
   if (e.job === 'key') return runKey(e);
   if (e.job === 'matte') return runMatte();
+  if (e.job === 'delogo') return runDelogo();
   const t = tplOf(e);
   if (!t) return toast(`Template ${tplId(e)} isn't installed yet`, true);
   const values = {};
@@ -505,6 +563,11 @@ async function run() {
   if (e.needs.includes('blend')) {
     put('blend', T.blend || 'face');
     for (const k of ['grow', 'feather', 'chin']) put(k, T.face?.[k] ?? FACE[k]);
+  }
+  if (e.needs.includes('depthModel')) {   // Large at 448 px fits a 12 GB card (dev/make_quick_templates.py SIZES)
+    const small = T.depthModel === 'small';
+    put('depthModel', small ? 'video_depth_anything_vits.pth' : 'video_depth_anything_vitl.pth');
+    put('depthSize', small ? 518 : 448);
   }
   if (e.needs.includes('outsize')) put('outsize', T.outsize || 'FullHD');
   const size = T.size || (e.needs.includes('size') && T.first ? await imageSize(T.first) : null);
@@ -581,7 +644,7 @@ async function srcInfo() {
 }
 
 // ---- viewer: source / result wipe, and drawing points and paths ----
-const V = { a: null, b: null, still: null, ov: null, stroke: null };
+const V = { a: null, b: null, still: null, ov: null, stroke: null, box: null };
 
 // the source's trimmed part in its own time, [start, end); end is Infinity when it runs to the clip's end
 const srcSpan = () => { const t = T.source?.trim, s = t?.start || 0; return [s, t?.len != null ? s + t.len : Infinity]; };
@@ -695,6 +758,19 @@ function paintOverlay() {
     T.points.positive.forEach((p) => dot(p, '#43a047'));
     T.points.negative.forEach((p) => dot(p, '#e53935'));
   }
+  if (e.needs.includes('boxes')) {
+    for (const b of [...(T.boxes || []), ...(V.box ? [V.box.b] : [])]) {
+      const [x, y, w, hh] = [b.x * W, b.y * H, b.w * W, b.h * H];
+      ctx.fillStyle = 'rgba(229, 57, 53, 0.18)'; ctx.fillRect(x, y, w, hh);
+      ctx.lineWidth = 2; ctx.strokeStyle = '#e53935'; ctx.strokeRect(x, y, w, hh);
+      if (UI.draw === 'boxes') {   // the corner to size it, and ✕ to remove it
+        ctx.fillStyle = '#e53935'; ctx.fillRect(x + w - 7, y + hh - 7, 14, 14);
+        ctx.beginPath(); ctx.arc(x + w, y, 9, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath();
+        ctx.moveTo(x + w - 4, y - 4); ctx.lineTo(x + w + 4, y + 4); ctx.moveTo(x + w + 4, y - 4); ctx.lineTo(x + w - 4, y + 4); ctx.stroke();
+      }
+    }
+  }
   if (e.needs.includes('tracks')) {
     for (const tr of [...T.tracks, ...(V.stroke ? [V.stroke] : [])]) {
       if (!tr.length) continue;
@@ -741,17 +817,51 @@ function wireOverlay(media) {
       UI.draw = null; changed(); return;
     }
     if (UI.draw === 'tracks') { media.setPointerCapture(ev.pointerId); V.stroke = [p]; paintOverlay(); return; }
+    if (UI.draw === 'boxes') { boxDown(p, media, ev); return; }
     if (V.a && V.b) { wiping = true; media.setPointerCapture(ev.pointerId); setWipe(p.x); }
   });
   media.addEventListener('pointermove', (ev) => {
-    if (V.stroke) { const p = pt(ev), l = V.stroke[V.stroke.length - 1]; if (Math.hypot(p.x - l.x, p.y - l.y) > 0.01) { V.stroke.push(p); paintOverlay(); } }
+    if (V.box) boxMove(pt(ev));
+    else if (V.stroke) { const p = pt(ev), l = V.stroke[V.stroke.length - 1]; if (Math.hypot(p.x - l.x, p.y - l.y) > 0.01) { V.stroke.push(p); paintOverlay(); } }
     else if (wiping) setWipe(pt(ev).x);
   });
   const up = () => {
+    if (V.box) boxUp();
     if (V.stroke) { if (V.stroke.length > 1) { T.tracks.push(simplify(V.stroke)); V.stroke = null; changed(); } else V.stroke = null; }
     wiping = false;
   };
   media.addEventListener('pointerup', up); media.addEventListener('pointercancel', up);
+}
+
+// boxes: drag on the picture for a new one; on a box to move it, on its corner to size it; ✕ removes it
+function boxDown(p, media, ev) {
+  const r = V.ov.getBoundingClientRect(), near = (ax, ay, px) => Math.hypot((p.x - ax) * r.width, (p.y - ay) * r.height) < px;
+  const boxes = (T.boxes ||= []);
+  for (let i = boxes.length - 1; i >= 0; i--) {
+    const b = boxes[i];
+    if (near(b.x + b.w, b.y, 14)) { boxes.splice(i, 1); changed(); return; }
+    const corner = near(b.x + b.w, b.y + b.h, 18), inside = p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
+    if (corner || inside) {
+      boxes.splice(i, 1);
+      V.box = { mode: corner ? 'size' : 'move', p0: p, b0: { ...b }, b: { ...b } };
+      media.setPointerCapture(ev.pointerId); paintOverlay(); return;
+    }
+  }
+  V.box = { mode: 'new', p0: p, b: { x: p.x, y: p.y, w: 0, h: 0 } };
+  media.setPointerCapture(ev.pointerId);
+}
+function boxMove(p) {
+  const B = V.box, { p0, b0 } = B;
+  if (B.mode === 'new') B.b = { x: Math.min(p.x, p0.x), y: Math.min(p.y, p0.y), w: Math.abs(p.x - p0.x), h: Math.abs(p.y - p0.y) };
+  else if (B.mode === 'move') B.b = { ...b0, x: clamp(b0.x + p.x - p0.x, 0, 1 - b0.w), y: clamp(b0.y + p.y - p0.y, 0, 1 - b0.h) };
+  else B.b = { ...b0, w: clamp(b0.w + p.x - p0.x, 0.01, 1 - b0.x), h: clamp(b0.h + p.y - p0.y, 0.01, 1 - b0.y) };
+  paintOverlay();
+}
+function boxUp() {
+  const { b } = V.box;
+  V.box = null;
+  if (b.w > 0.005 && b.h > 0.005) T.boxes.push(b);
+  changed();
 }
 
 function setWipe(x) {
