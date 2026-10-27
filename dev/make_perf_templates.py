@@ -198,8 +198,8 @@ def faceswap():
     g.add("sig", node("ManualSigmas", "@6 Steps [sigmas]", sigmas=VIGGLE_SIGMAS))
     g.add("run", node("ViggleChunkedSampler", "@8 Seed [seed]", guider=["guider", 0], sampler=["ksel", 0], sigmas=["sig", 0],
                       cond_set=["cond", 0], vae=["vae", 0], seed=42, rerender_chunk=0, rerender_seed=0))
-    g.add("paste", node("DeckFaceUncrop", "@7 Blend [shape]", images=["cut", 0], crops=["run", 0], crop_info=["crop", 1], feather=0.25,
-                        shape="face", grow=1.1))
+    g.add("paste", node("DeckFaceUncrop", "@7 Blend [shape,grow,feather,chin]", images=["cut", 0], crops=["run", 0],
+                        crop_info=["crop", 1], feather=0.25, shape="face", grow=1.05, chin=0.82))
     g.add("aud", node("TrimAudioDuration", audio=["src", 2], start_index=0.0, duration=["secs", 0]))
     g.add("vid", node("CreateVideo", images=["paste", 0], fps=FPS, audio=["aud", 0]))
     g.add("save", node("SaveVideo", video=["vid", 0], filename_prefix="deck/h3-faceswap", format="auto", codec="auto"))

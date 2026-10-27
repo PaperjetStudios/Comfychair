@@ -129,7 +129,8 @@ tagged fields, found by kind and group name (`ROLES` in `web/vfx.js`):
 
 The **Performance** effects use more tagged fields: `@Character` (any title) on **LoadImage** for the
 character still, `@Steps [sigmas]` on **ManualSigmas** (Viggle's distilled schedules; Fast/Balanced/Quality
-send 4, 6 or 8 points) and `@Blend [shape]` on **Deck Face Uncrop** (`face` or `oval`).
+send 4, 6 or 8 points) and `@Blend [shape,grow,feather,chin]` on **Deck Face Uncrop** (`face` or `oval`;
+the VFX tab's Face size, Edge softness and Chin sliders).
 
 | Effect | Template | What it runs |
 |---|---|---|
@@ -144,8 +145,8 @@ They come from `dev/make_perf_templates.py`. Viggle needs `minimax_h3_ref2va_vig
 
 **Face crop** (`comfy_nodes/deck_facecrop`): Deck Face Crop follows a face through a clip from a face mask
 (DWPose face points are enough). Frames without a face take their neighbours' box, the square keeps one
-size, and edges are padded. Deck Face Uncrop pastes processed crops back through an ellipse fitted to each
-frame's face. Link it like the TAPNext++ node below
+size, and edges are padded. Deck Face Uncrop pastes processed crops back through a soft outline of each
+frame's face points plus the forehead; Chin below 1 lifts its lower edge off the neck and collar. Link it like the TAPNext++ node below
 (`ln -s ~/Programs/comfydeck/comfy_nodes/deck_facecrop ~/Programs/ComfyUI/custom_nodes/deck_facecrop`) and
 restart ComfyUI.
 
