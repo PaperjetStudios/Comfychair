@@ -40,7 +40,8 @@ export function openVideoPicker({ title, onPick }) {
     fileButton('Upload…', async ([fl]) => {
       try { const m = await uploadMedia(fl); picked({ media: m.name }); }
       catch (e) { toast('Upload failed: ' + e.message, true); }
-    }, { accept: 'video/*', cls: 'small primary' })], async () => {
+    }, { accept: 'video/*', cls: 'small primary' }),
+    button('From a link or big file…', () => import('./clipimport.js').then((m) => m.openClipImport({ onSaved: (e) => onPick({ media: e.name }) })))], async () => {
     let media = [];
     try { media = (await api('/api/media')).filter((m) => m.kind === 'video'); } catch { /* the outputs still show */ }
     const items = (await projectOutputs(['video'])).map(({ g, o, i, t }) =>

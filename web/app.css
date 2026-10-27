@@ -984,3 +984,19 @@ details.desc[open] summary { margin-bottom: 6px; }
 .vfx-results .card.picked { outline: 2px solid var(--accent, #4c8dff); }
 .fx-step { border: 1px solid var(--line, #333); border-radius: 8px; padding: 8px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px; }
 .fx-step textarea, .fx-step input[type=text] { width: 100%; }
+
+/* clip importer (clipimport.js) */
+.clip-import { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.clip-url { gap: 8px; }
+.clip-url input { flex: 1; min-width: 0; }
+.clip-files { display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow-y: auto; }
+.clip-file { display: flex; justify-content: space-between; gap: 12px; text-align: left; padding: 10px 12px; border: 0;
+  border-radius: 8px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.clip-file:hover, .clip-file:focus-visible { background: var(--surface-2); }
+.clip-file span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clip-file .hint { flex: none; }
+.clip-path { word-break: break-all; margin: 0 0 4px; }
+.clip-progress { position: relative; height: 26px; border-radius: 6px; background: var(--surface-2); overflow: hidden; }
+.clip-progress-fill { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--accent); opacity: .35; transition: width .3s; }
+.clip-progress .hint { position: relative; line-height: 26px; padding: 0 10px; }
+.vf-marks { flex-wrap: wrap; }

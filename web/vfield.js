@@ -16,8 +16,12 @@ const fmt = (t) => `${Math.floor(t / 60)}:${(t % 60).toFixed(2).padStart(5, '0')
 const isFull = (c) => c.w > 1 - EPS && c.h > 1 - EPS;
 
 // opts: url, source ({generation,index} | {media}), trim, crop (as saved), loader() -> { rate (force_rate, 0 = the clip's),
-// nth, mapped (the loader's skip/cap inputs are in the template) }, budget() -> { secs } | { frames } | null, onChange
-export function videoEditor({ url, source, trim, crop, loader, budget, onChange }) {
+// nth, mapped (the loader's skip/cap inputs are in the template) }, budget() -> { secs } | { frames } | null, onChange.
+// For clips that aren't sources yet (the clip importer): info (a Promise of {duration, fps}) instead of source,
+// audio (a separate sound stream kept in step with the picture), marks (buttons: frame steps, in/out at the
+// playhead, for long videos where the bar is too coarse) and onError (the browser can't play url).
+export function videoEditor({ url, source, info: infoP = null, audio = null, trim, crop, loader = () => ({}), budget = () => null,
+  onChange, marks = false, onError = null }) {
   let dur = 0, fps = 24, W = 0, H = 0;
   let t0 = trim ? trim.start : 0;
   let t1 = trim && trim.len != null ? trim.start + trim.len : Infinity;   // Infinity: to the end
@@ -78,13 +82,24 @@ export function videoEditor({ url, source, trim, crop, loader, budget, onChange 
     v.play().catch(() => {});
   });
   const time = h('span', { class: 'vf-time hint' }, '0:00.00');
-  const mute = iconBtn('Mute', '🔊', () => { v.muted = !v.muted; mute.textContent = v.muted ? '🔇' : '🔊'; mute.setAttribute('aria-pressed', v.muted); });
+  const mute = iconBtn('Mute', '🔊', () => { v.muted = !v.muted; if (snd) snd.muted = v.muted; mute.textContent = v.muted ? '🔇' : '🔊'; mute.setAttribute('aria-pressed', v.muted); });
   let looping = true;
   const loopBtn = iconBtn('Loop', '🔁', () => { looping = !looping; loopBtn.classList.toggle('on', looping); loopBtn.setAttribute('aria-pressed', looping); });
   loopBtn.classList.add('on'); loopBtn.setAttribute('aria-pressed', 'true');
   v.addEventListener('play', () => { play.textContent = '⏸'; tick(); });
   v.addEventListener('pause', () => { play.textContent = '▶'; });
-  v.addEventListener('error', () => { time.textContent = "Couldn't load this video"; });
+  v.addEventListener('error', () => { time.textContent = "Couldn't load this video"; onError?.(); });
+
+  // a separate sound stream (link previews): follows the picture's play, pause and seeks
+  const snd = audio ? h('audio', { src: audio, preload: 'auto' }) : null;
+  if (snd) {
+    const sync = () => { if (Math.abs(snd.currentTime - v.currentTime) > 0.2) snd.currentTime = v.currentTime; };
+    v.addEventListener('play', () => { sync(); snd.play().catch(() => {}); });
+    v.addEventListener('pause', () => snd.pause());
+    v.addEventListener('seeked', sync);
+    v.addEventListener('waiting', () => snd.pause());
+    v.addEventListener('playing', () => { sync(); snd.play().catch(() => {}); });
+  }
 
   // ---- scrubber that also trims: the lit part is kept, the round handles are in/out ----
   const range = h('div', { class: 'vf-range' });
@@ -101,6 +116,7 @@ export function videoEditor({ url, source, trim, crop, loader, budget, onChange 
   const tick = () => {   // rAF while playing: stay inside the trim
     drawTrack(); time.textContent = `${fmt(v.currentTime)} / ${fmt(dur)}`;
     if (v.paused) return;
+    if (snd && !snd.paused && Math.abs(snd.currentTime - v.currentTime) > 0.3) snd.currentTime = v.currentTime;
     if (v.currentTime >= end() - 0.02) {
       if (looping) v.currentTime = t0;
       else { v.pause(); v.currentTime = end(); }
@@ -183,11 +199,19 @@ export function videoEditor({ url, source, trim, crop, loader, budget, onChange 
     v.currentTime = t0 || 0.001;
     nums(); drawTrack(); info(); drawCrop();
   });
-  probe(source).then((p) => { fps = p.fps || 24; if (p.duration) dur = p.duration; if (t1 === Infinity && dur) t1 = dur; nums(); drawTrack(); info(); }).catch(() => { /* the element's own duration does */ });
+  (infoP || probe(source)).then((p) => { fps = p.fps || 24; if (p.duration) dur = p.duration; if (t1 === Infinity && dur) t1 = dur; nums(); drawTrack(); info(); }).catch(() => { /* the element's own duration does */ });
+
+  // ---- marks: frame steps and in/out at the playhead ----
+  const markBar = marks ? h('div', { class: 'vf-bar vf-marks' },
+    iconBtn('Back one frame', '◀', () => { v.pause(); seek(v.currentTime - f()); }),
+    iconBtn('Forward one frame', '▶', () => { v.pause(); seek(v.currentTime + f()); }),
+    button('Set in', () => { v.pause(); t0 = clamp(v.currentTime, 0, Math.max(0, dur - f())); if (end() <= t0 + f()) t1 = dur; nums(); drawTrack(); info(); commit(); }),
+    button('Set out', () => { v.pause(); t1 = clamp(v.currentTime, t0 + f(), dur); nums(); drawTrack(); info(); commit(); }),
+    button('Go to in', () => { v.pause(); seek(t0); }, { cls: 'small ghost' })) : null;
 
   const el = h('div', { class: 'vf' },
     h('div', { class: 'crop-stage vf-stage' }, wrap),
-    h('div', { class: 'vf-bar' }, play, time, mute, loopBtn, cropBtn),
+    h('div', { class: 'vf-bar' }, play, time, mute, loopBtn, cropBtn), markBar, snd,
     cropBar, track,
     h('div', { class: 'vf-nums' }, fields.map((x) => x.el), fitBtn),
     infoEl);

@@ -17,7 +17,9 @@ generated clips, order them and export one video (ffmpeg); the result lands in H
 every image and video in the project as a pin board, with pins, filters and a tile-size slider.
 **☑ Select** (or long-press a tile) picks several: **New edit** puts the images in the Editor as a
 fresh layout (Undo brings the old one back), **To video** adds them to the timeline, **Delete**
-removes their generations (it asks first).
+removes their generations (it asks first). **⤓ Import clip** (also "From a link or big file…" in every
+video picker) cuts a piece out of a YouTube/Reddit/X/Vimeo link, a video file on the PC, or a file on
+the device, and saves it to the media library (see *Importing clips* under Setup).
 **3D** tab: block out a shot with soft mannequins, boxes and a room, keyframe them and the camera, and
 render it as a depth video for `deck-h3-ctrl2v` (see below).
 The preview pinch/wheel-zooms, the picker has a camera button, and ⛶ goes full screen.
@@ -79,6 +81,18 @@ the box's IP changes; the CA stays the same, so the tablets don't need it again.
 in the service), every page, file and API call needs it. Open `http://<box>:8190/?token=<it>` once on
 each device and a cookie remembers it for a year. Without it there's no login, so only run it on a
 network you trust.
+
+**Importing clips:** the importer shows the video, you set in/out (and optionally a crop and a size
+limit), and only that piece is saved, as h264 + aac in `data/media`.
+- *Link*: anything [yt-dlp](https://github.com/yt-dlp/yt-dlp) reads. `./run.sh` installs it into the venv;
+  keep it current (`.venv/bin/pip install -U yt-dlp`), because sites change often. The preview is a small
+  stream relayed through ComfyDeck. The cut seeks into the full-quality stream, so only the chosen part is
+  downloaded. Sites that only stream in pieces (HLS) get a small preview copy first (videos up to 20 min).
+- *This PC*: browses your home folder and mounted drives. Set `DECK_CLIP_ROOTS` (paths joined with `:`)
+  to choose other folders. Files the browser can't play (ProRes, some MKV/HEVC) get a small preview copy.
+- *This device*: the browser cuts the piece with ffmpeg.wasm (a 31 MB core the server fetches from
+  jsDelivr the first time, kept in `data/vendor`). It reads only the needed part of the file and sends
+  only that piece, so a multi-GB file is fine.
 
 **Several devices:** every device sees the queue, but only the device that started a run gets its
 live preview and result in the viewer; the others say "busy with another device's run". Stop only

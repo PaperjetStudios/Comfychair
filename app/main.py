@@ -19,7 +19,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFil
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import accel, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
+from . import accel, clipimport, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import store
 from . import sceneasset
 from . import templates as tpl
@@ -321,6 +321,7 @@ store.notify = broadcast  # the JSON document store (tabs, presets, objects...) 
 app.include_router(store.router)
 app.include_router(sceneasset.router)
 app.include_router(tracking.router)
+app.include_router(clipimport.router)
 
 
 class TokenGate:
@@ -745,6 +746,7 @@ async def video_prep(body: dict = Body(...)):
     return {**r, "path": str(r["path"])}
 
 
+clipimport.media_entry = _media_entry  # cut clips land in the media library
 tracking.resolve_src = _timeline_path  # motion tracking finds its clip the way the Video tab does
 tracking.comfy = comfy
 

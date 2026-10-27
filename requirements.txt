@@ -6,3 +6,4 @@ pillow>=10
 python-multipart>=0.0.9
 numpy>=1.26
 opencv-python-headless>=4.9
+yt-dlp>=2025.1

@@ -41,7 +41,9 @@ export async function renderBoard() {
   const count = h('span', { class: 'hint' });
   const selBtn = button(B.selecting ? 'Done' : '☑ Select', () => setBoardSelecting(!B.selecting), { cls: 'small' + (B.selecting ? ' on' : '') });
   const delMarked = h('span', { class: 'hidden' });   // filled in once the project's generations are loaded
-  bar.replaceChildren(filterSeg, h('label', { class: 'board-size' }, 'Size', size), selBtn, delMarked, count, boardSelBar());
+  const importBtn = button('⤓ Import clip', () => import('./clipimport.js').then((m) => m.openClipImport({ onSaved: clipImported })),
+    { title: 'Cut a piece out of a YouTube/Reddit link, or a big video file, into the media library' });
+  bar.replaceChildren(filterSeg, h('label', { class: 'board-size' }, 'Size', size), selBtn, importBtn, delMarked, count, boardSelBar());
   $('#board').style.setProperty('--tile', `${B.size}px`);
 
   if (B.loadedFor !== S.project) {
@@ -153,6 +155,11 @@ function boardSelBar() {
     button(`New edit${images ? ` (${images})` : ''}`, boardToEditor, { cls: 'small primary', disabled: !images }),
     button('To video', boardToVideo, { disabled: !n }),
     button('Delete', boardDelete, { cls: 'small danger', disabled: !n }));
+}
+
+// A clip from the importer is in the media library (not a generation, so not on the board): offer where to use it
+function clipImported(e) {
+  toast(`${e.label} is in the media library`, false, { label: 'Open in VFX', fn: () => import('./vfx.js').then((m) => m.sendToVfx({ media: e.name }, { label: e.label })) });
 }
 
 // The selected images as a fresh Editor layout (side by side, or a grid for more than 3).
