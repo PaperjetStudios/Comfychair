@@ -151,6 +151,21 @@ export function paste(tracks, clip, t, n, { pick = null } = {}) {
   return { keys: made, dropped, groups };
 }
 
+// ---- a new scene length with the animation stretched (or squeezed) to it ----
+// Every key of every item (each channel: the camera's, an object's, a figure's joints, fingers and
+// parameters) goes from frame f to round(f * to / from), from frame 0; keys that land on one frame merge (the
+// later one wins), and nothing goes past the new last frame. from, to: frame counts. Returns the factor.
+export function stretchAll(items, from, to) {
+  const k = num(to, 1) / Math.max(1, num(from, 1));
+  for (const item of items) {
+    const tracks = Object.keys(item?.chans || {}).map((ch) => track(item, ch));
+    relocate(tracks, new Set(allKeys(tracks)), (f) => f * k, Math.max(1, Math.round(num(to, 1))));
+  }
+  return k;
+}
+// how many keys a new length of n frames would cut off (the plain length change drops them)
+export const keysPast = (items, n) => items.reduce((c, it) => c + Object.values(it?.chans || {}).reduce((d, l) => d + l.filter((x) => x.f >= n).length, 0), 0);
+
 // ---- live recording: what a held gizmo or slider did over a stretch of playback, as keys ----
 // samples: [{ f, v }] in the order they were taken (one per frame shown; playback may loop, so f can
 // jump back). Each unbroken run (f going up) replaces the keys inside its span with every `every`-th

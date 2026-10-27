@@ -301,3 +301,23 @@ console.log('keys ok');
   D.R.playing = false; D.TEMP.clear(); D.dropHolds();
 }
 console.log('record ok');
+
+{ // stretch every key to a new length: from frame 0, rounded, merged (later wins), inside the new end
+  const cam = { chans: { px: [{ f: 0, v: 0 }, { f: 10, v: 1 }, { f: 148, v: 2 }], fov: [{ f: 74, v: 40, ease: 'linear' }] } };
+  const fig = { chans: { 'j.lknee': [{ f: 20, v: [0, 0, 0, 1] }, { f: 40, v: [0, 0.1, 0, 0.99] }], 'j.lthumb1': [{ f: 3, v: [0, 0, 0, 1] }], 'm.phase': [{ f: 0, v: 0 }, { f: 100, v: 4 }] } };
+  const none = { chans: {} };
+  const k = K.stretchAll([cam, fig, none, { base: {} }], 149, 221);
+  assert.ok(Math.abs(k - 221 / 149) < 1e-12);
+  assert.deepEqual(cam.chans.px.map((x) => x.f), [0, 15, 220]);   // (the last frame stays the last)
+  assert.equal(cam.chans.fov[0].f, 110); assert.equal(cam.chans.fov[0].ease, 'linear');   // (a key keeps its ease and value)
+  assert.deepEqual(fig.chans['j.lknee'].map((x) => x.f), [30, 59]); assert.deepEqual(fig.chans['j.lknee'][1].v, [0, 0.1, 0, 0.99]);
+  assert.equal(fig.chans['j.lthumb1'][0].f, 4); assert.deepEqual(fig.chans['m.phase'].map((x) => x.f), [0, 148]);
+  // squeezed: keys that meet merge, the later one's value wins; never past the end
+  const sq = { chans: { x: [{ f: 0, v: 'a' }, { f: 1, v: 'b' }, { f: 2, v: 'c' }, { f: 200, v: 'd' }] } };
+  K.stretchAll([sq], 221, 54);
+  assert.deepEqual(sq.chans.x.map((x) => [x.f, x.v]), [[0, 'c'], [49, 'd']]);
+  const far = { chans: { x: [{ f: 140, v: 1 }] } }; K.stretchAll([far], 149, 300); assert.equal(far.chans.x[0].f, 282);
+  const end = { chans: { x: [{ f: 148, v: 1 }] } }; K.stretchAll([end], 149, 400); assert.equal(end.chans.x[0].f, 397);
+  assert.equal(K.keysPast([cam, fig], 100), 3); assert.equal(K.keysPast([cam, fig, none], 300), 0);
+}
+console.log('stretch ok');

@@ -1,7 +1,7 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import {
-  $, button, clamp, clone, closeSheet, field, h, iconBtn, layerRowsEl, numField, openSheet, panelTop, rangeField,
+  $, actions, button, clamp, clone, closeSheet, field, h, iconBtn, layerRowsEl, numField, openSheet, panelTop, rangeField,
   section, seg, sheetOpen, store, uid, undoToast, help
 } from './ui.js';
 import {
@@ -17,6 +17,7 @@ import { busy, cancelRender, letGo, play, renderDepthVideo, renderPoseVideo, sav
 import { maxBar, renderKeys, renderTransport, wireSheetKeys } from './scene-keys.js';
 import { hasMode, modeDef, modeList, modeOf, modeSections } from './scene-modes.js';
 import { syncRef, toggleRef } from './scene-ref.js';
+import { keysPast, stretchAll } from './scene-keyops.js';
 
 // ---- UI ----------------------------------------------------------------------
 let statusText = '';
@@ -207,12 +208,47 @@ function setLength(v) {
   for (const it of [SC.camera, ...SC.objects]) dropKeys(it, (f) => f >= n);
   R.f = Math.min(R.f, n - 1);
 }
+const lengthChanged = () => { save(); refresh(); renderTransport(); renderPanel(); renderToolbar(); };
+const animated = () => [SC.camera, ...SC.objects];
+const clampLen = (v) => Math.round(clamp(v, ...LEN) * 100) / 100;
+// a new length; when it would cut keys off the end, ask first: stretch the animation to fit, or cut them
+function newLength(v, mode = SC.lenMode) {
+  const s = clampLen(v), cut = keysPast(animated(), framesFor(s));
+  if (!cut) { setLength(s); SC.lenMode = mode; lengthChanged(); return; }
+  openSheet(h('h3', {}, `Shorten to ${fmtSecs(s)} s?`),
+    h('p', {}, `${cut} key${cut > 1 ? 's are' : ' is'} past ${fmtSecs(s)} s.`),
+    actions(button('Cancel', () => { closeSheet(); renderPanel(); }),
+      button('✂ Cut them', () => { closeSheet(); setLength(s); SC.lenMode = mode; lengthChanged(); }, { cls: 'small danger' }),
+      button('⇔ Stretch to fit', () => { closeSheet(); stretchTo(s, mode); }, { cls: 'small primary' })));
+}
+// the whole animation stretched (or squeezed) to a new length, from frame 0: one undo step
+function stretchTo(v, mode = 'custom') {
+  const s = clampLen(v), before = clone(SC), ok = sameTab(), was = SC.seconds, from = frames();
+  SC.seconds = s;
+  stretchAll(animated(), from, frames());
+  setLength(s); SC.lenMode = mode; TEMP.clear();
+  lengthChanged();
+  undoToast(`Keys stretched ×${(s / was).toFixed(2)} to ${fmtSecs(s)} s`, () => {
+    if (!ok()) return;
+    setSC(before); R.f = Math.min(R.f, frames() - 1); TEMP.clear(); lengthChanged();
+  });
+}
+function openStretch() {
+  const g = generateSeconds();
+  let want = SC.seconds;
+  openSheet(h('h3', {}, 'Stretch keys to…'),
+    rangeField('New length', () => want, (v) => { want = v; }, { min: LEN[0], max: LEN[1], step: 0.5, fmt: (v) => `${fmtSecs(v)} s · ${framesFor(v)} frames` }),
+    help('Every key of every layer moves in time with the new length, from the start: longer slows the whole animation down, shorter speeds it up. Keys that land on the same frame merge.'),
+    actions(button('Cancel', closeSheet),
+      g != null ? button(`Match generate length · ${fmtSecs(clampLen(g))} s`, () => { closeSheet(); stretchTo(g, 'match'); }) : null,
+      button('⇔ Stretch', () => { closeSheet(); if (Math.abs(want - SC.seconds) >= 0.005) stretchTo(want, 'custom'); }, { cls: 'small primary' })));
+}
 // Match generate: take the Generate template's length when it differs (on show, and when Generate changes)
 export function syncLength() {
   if (SC?.lenMode !== 'match') return;
   const g = generateSeconds();
   if (g == null || Math.abs(clamp(g, ...LEN) - SC.seconds) < 0.005) return;
-  setLength(g); save(); renderTransport(); renderPanel(); renderToolbar();
+  newLength(g, 'match');
 }
 function lengthProps() {
   const mode = SC.lenMode === 'match' ? 'match' : 'custom', g = generateSeconds();
@@ -221,14 +257,15 @@ function lengthProps() {
     if (v === 'match' && g != null) syncLength(); else { save(); renderPanel(); }
   });
   const label = `Length · ${fmtSecs(SC.seconds)} s · ${frames()} frames`;
+  const stretch = h('div', { class: 'row wrap' }, button('⇔ Stretch keys to…', openStretch, { title: 'A new length with the whole animation stretched or squeezed to fit' }));
   if (mode === 'match') {
-    return field([label, h('span', { class: 'hint' }, g == null ? 'no video template in Generate' : C.S.tpl.name)], choice,
-      help('Follows the length of the video template picked in Generate (2–15 s). With no video template there, the length stays as it is.'));
+    return [field([label, h('span', { class: 'hint' }, g == null ? 'no video template in Generate' : C.S.tpl.name)], choice,
+      help('Follows the length of the video template picked in Generate (2–15 s). With no video template there, the length stays as it is.')), stretch];
   }
   let want = SC.seconds;
   return [field(label, choice),
     rangeField('Custom length', () => want, (v) => { want = v; }, { min: LEN[0], max: LEN[1], step: 0.5, fmt: (v) => `${fmtSecs(v)} s · ${framesFor(v)} frames`,
-      onChange: () => { if (Math.abs(want - SC.seconds) < 0.005) return; setLength(want); save(); renderTransport(); renderPanel(); renderToolbar(); } })];
+      onChange: () => { if (Math.abs(want - SC.seconds) < 0.005) return; newLength(want, 'custom'); } }), stretch];
 }
 
 function renderProps() {
