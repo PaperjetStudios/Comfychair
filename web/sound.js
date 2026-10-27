@@ -714,6 +714,7 @@ function voiceSection() {
       info('One line each: Name (delivery words): what they say, with [tags] anywhere in it. The (delivery) part is optional. Tap into the box for chips.')),
     chips, script),
     field('Engine', seg(ENGINES, eng[0], (v) => { VX.engine = v; store.set('deck.sound.engine', v); renderPanel(); }, { wrap: true }), help(eng[2])),
+    VX.status.engines && VX.status.engines[eng[0]] === false ? note(`${eng[1].replace(/ \(.*/, '')} isn't installed on the server yet: see the README (Sound tab, Voice tools).`) : null,
     eng[0] === 'index' ? rangeField('Delivery strength', () => VX.intensity, (v) => { VX.intensity = v; store.set('deck.sound.intensity', v); },
       { min: 0.2, max: 1, step: 0.05, help: 'How strongly the delivery words colour the line: low is a hint, 1 is all the way.' }) : null,
     field('Language', lang),

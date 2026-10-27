@@ -391,6 +391,34 @@ otherwise) and asks ComfyUI to unload its models first. Saved voices live in `da
 
 Only clone a voice that is yours or that the speaker said you may use, and don't use it to pass as them.
 
+**Delivery.** A script line can say how it is spoken, `Name (whispering, scared): line`, and carry inline tags,
+`I told you [sigh] it was fine`. The dialogue's **Engine** decides what is heard:
+
+- **Qwen3-TTS** ignores both.
+- **IndexTTS-2** ([index-tts](https://github.com/index-tts/index-tts)) reads the delivery words through its
+  emotion model, at the Delivery strength. It drops the tags. About 70 s for three lines, load included.
+- **Fish S2 Pro** understands both, with the delivery as a leading tag. It runs through
+  [s2.cpp](https://github.com/rodrigomatta/s2.cpp) with the q8_0 GGUF, which is near lossless and fits 12 GB.
+  About 25 s for three lines. It needs each voice's transcript.
+
+Every spoken line is evened out to −16 LUFS. Both engines live in `/mnt/data/comfydeck-voice-engines`
+(`DECK_VOICE_ENGINES`), each with its own install:
+
+```bash
+cd /mnt/data/comfydeck-voice-engines
+git clone https://github.com/index-tts/index-tts && (cd index-tts && uv sync --python 3.11)
+hf download IndexTeam/IndexTTS-2 --local-dir index-tts/checkpoints
+# s2.cpp needs nvcc 12.4+: a CUDA 12.8 toolkit from conda, no sudo
+micromamba create -p ./cuda -c nvidia/label/cuda-12.8.1 -c conda-forge cuda-nvcc cuda-cudart-dev libcublas-dev cuda-cccl cuda-version=12.8
+git clone --recurse-submodules https://github.com/rodrigomatta/s2.cpp && cd s2.cpp
+PATH=../cuda/bin:$PATH cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DS2_CUDA=ON -DCUDAToolkit_ROOT=$PWD/../cuda -DCMAKE_CUDA_ARCHITECTURES=89
+cmake --build build && cd ..
+hf download rodrigomt/s2-pro-gguf s2-pro-q8_0.gguf tokenizer.json --local-dir models/s2
+```
+
+Both licences are non-commercial: IndexTTS-2 is under the bilibili model licence, and Fish S2 Pro under the
+Fish Audio Research Licence.
+
 ## PhotoCraft and EffectCraft
 
 Work can go to PhotoCraft and EffectCraft with its layers and tracks, to keep editing there
