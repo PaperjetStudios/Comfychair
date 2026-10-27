@@ -670,6 +670,25 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: var(--fs-
 .cmp-bottom { display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
 .cmp-bottom .cmp-time { flex: 1; }
 .gal-main.marked img, .gal-main.marked video { opacity: .5; outline: 3px solid var(--bad); outline-offset: -3px; }
+.gal-main.marked .gal-audio { opacity: .5; outline: 3px solid var(--bad); outline-offset: 4px; }
+/* a sound: its waveform (app/previews.py) over a note that shows alone when there is none */
+.tile-wave, .gal-thumb-wave, .gal-wave { position: relative; display: grid; place-items: center; background: var(--surface-2); overflow: hidden; }
+.tile-wave { aspect-ratio: 3 / 2; }
+.tile-wave img, .gal-thumb-wave img, .gal-wave img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; }
+.wave-note { color: var(--muted); font-size: 34px; opacity: .5; }
+.gal-thumb-wave { height: 100%; width: 120px; }
+.gal-thumb-wave .wave-note { font-size: 20px; }
+.gal-thumb.marked .gal-thumb-wave { opacity: .4; }
+.gal-audio { width: min(900px, 100% - 32px); display: grid; gap: 14px; }
+.gal-audio-ui { display: grid; gap: 14px; touch-action: none; }
+.gal-wave { height: min(260px, 40vh); border-radius: var(--r-lg); cursor: pointer; }
+.gal-wave .wave-note { font-size: 64px; }
+.gal-wave-fill { position: absolute; inset: 0 auto 0 0; width: 0; background: color-mix(in srgb, var(--accent) 16%, transparent); border-right: 2px solid var(--accent); pointer-events: none; }
+.gal-audio-bar { display: flex; align-items: center; gap: 14px; }
+.gal-audio-bar input[type=range] { flex: 1; }
+.gal-play { flex: none; width: 64px; height: 64px; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-ink); font-size: 24px; cursor: pointer; }
+.gal-time { flex: none; min-width: 9ch; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.use-as .btn { flex: 0 1 auto; }
 .gal-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 48px; height: 72px; border: 0; border-radius: var(--r); background: #0007; color: #fff; font-size: 36px; cursor: pointer; }
 .gal-nav.prev { left: 8px; } .gal-nav.next { right: 8px; }
 .gal-nav:disabled { opacity: 0; pointer-events: none; }

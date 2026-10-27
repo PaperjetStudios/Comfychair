@@ -2,17 +2,18 @@ import {
   $, h, store, api, toast, undoToast, overlayOpened, overlayClosed, sheetOpen, button, iconBtn, linkBtn, seg, placeholder,
   numSlider, field, section, hint, openSheet, closeSheet,
 } from './ui.js';
-import { extractSound, soundInput, soundToSoundTab } from './media.js';
+import { extractSound, genLabel, soundInput, soundToSoundTab } from './media.js';
 import { S, previewUrl, switchTab } from './core.js';
-import { openGeneration, sendToInput } from './run.js';
+import { openGeneration } from './run.js';
+import { openUseAs } from './useas.js';
 import { E, FULL, editorTabsReady, persistEditor, renderEditor } from './editor.js';
 import { addToTimeline } from './video.js';
 import { maximizable } from './layout.js';
 import { openCompare } from './compare.js';
 
 // ---------------------------------------------------------------------------
-// board: every output in the project as a pin board. Pin favourites, filter, resize the tiles.
-// Videos play (muted) while on screen.
+// board: every picture, clip and sound in the project as a pin board. Pin favourites, filter, resize the tiles.
+// Videos play (muted) while on screen; sounds show their waveform.
 // ---------------------------------------------------------------------------
 export const B = { filter: store.get('deck.board.filter', 'all'), size: store.get('deck.board.size', 240), loadedFor: undefined,
   selecting: false, sel: new Set(), longPressed: false,   // sel: "<generation id>:<output index>"
@@ -38,7 +39,7 @@ export async function renderBoard() {
   if (!B.boxWired) { B.boxWired = true; wireBoxSelect(); }
   const bar = $('#boardBar');
   if (B.filter === 'marked' && !B.marked.size) B.filter = 'all';
-  const filters = [['all', 'All'], ['image', 'Images'], ['video', 'Videos'], ['pinned', '★ Pinned'], ...(B.marked.size ? [['marked', '🗑 Marked']] : [])];
+  const filters = [['all', 'All'], ['image', 'Images'], ['video', 'Videos'], ['audio', 'Sounds'], ['pinned', '★ Pinned'], ...(B.marked.size ? [['marked', '🗑 Marked']] : [])];
   const filterSeg = seg(filters, B.filter, (k) => { B.filter = k; store.set('deck.board.filter', k); renderBoard(); });
   const size = numSlider({ min: 120, max: 520, step: 10, value: B.size, label: 'Tile size' });
   const setSize = () => { B.size = Number(size.value); store.set('deck.board.size', B.size); $('#board').style.setProperty('--tile', `${B.size}px`); };
@@ -68,6 +69,7 @@ export async function renderBoard() {
 }
 
 // what the board shows with the current filter, newest first: [{g, o, i, key}]
+const MEDIA = ['image', 'video', 'audio'];
 function boardItems() {
   const items = [];
   const gens = [...S.history.values()].filter((g) => g.project_id === S.project && g.status === 'done').sort((a, b) => b.id - a.id);
@@ -75,8 +77,8 @@ function boardItems() {
     if (B.filter === 'pinned' && !g.pinned) continue;
     if (B.filter === 'marked' && !B.marked.has(g.id)) continue;
     g.outputs.forEach((o, i) => {
-      if (o.kind !== 'image' && o.kind !== 'video') return;
-      if ((B.filter === 'image' || B.filter === 'video') && o.kind !== B.filter) return;
+      if (!MEDIA.includes(o.kind)) return;
+      if (MEDIA.includes(B.filter) && o.kind !== B.filter) return;
       items.push({ g, o, i, key: `${g.id}:${i}` });
     });
   }
@@ -98,11 +100,17 @@ function markedGens() { return [...B.marked].map((id) => S.history.get(id)).filt
 
 // a clip's length on its tile: 4.9s, 1:05
 const clipLen = (s) => (s < 60 ? `${s < 10 ? s.toFixed(1) : Math.round(s)}s` : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`);
+const KIND_MARK = { video: ' ▶', audio: ' ♪' };
+// a sound's picture: its waveform (app/previews.py) over a note, which shows alone if there is no waveform
+const waveArt = (o, w, cls) => h('div', { class: cls }, h('span', { class: 'wave-note', 'aria-hidden': 'true' }, '♪'),
+  h('img', { src: previewUrl(o.url, w, 'wave'), loading: 'lazy', alt: '', draggable: false,
+    onload: (e) => { e.target.previousSibling.hidden = true; }, onerror: (e) => e.target.remove() }));
 
 function boardTile(g, o, i) {
   // light previews (app/previews.py): a still straight away; videos loop a small 8 fps copy while on screen
   const media = o.kind === 'video'
     ? h('video', { src: previewUrl(o.url, B.size, 'clip'), poster: previewUrl(o.url, B.size), muted: true, loop: true, playsInline: true, preload: 'none' })
+    : o.kind === 'audio' ? waveArt(o, B.size, 'tile-wave')
     : h('img', { src: previewUrl(o.url, B.size), loading: 'lazy', alt: '', draggable: false });
   const pin = h('button', { type: 'button', class: 'pin' + (g.pinned ? ' on' : ''), 'aria-label': g.pinned ? 'Unpin' : 'Pin',
     onclick: (e) => { e.stopPropagation(); togglePin(S.history.get(g.id) || g); } }, g.pinned ? '★' : '☆');
@@ -114,7 +122,7 @@ function boardTile(g, o, i) {
     } }, media, pin, h('span', { class: 'tick', 'aria-hidden': 'true' }, '✓'),
     h('span', { class: 'mark', 'aria-hidden': 'true' }, '🗑'),
     o.duration ? h('span', { class: 'tile-len' }, clipLen(o.duration)) : null,
-    h('div', { class: 'tile-meta' }, `#${g.id} ${g.template}${o.kind === 'video' ? ' ▶' : ''}`));
+    h('div', { class: 'tile-meta' }, `${genLabel(g)}${KIND_MARK[o.kind] || ''}`));
   // long press: start selecting with this tile
   let timer = 0, start = null;
   tile.addEventListener('pointerdown', (e) => {
@@ -158,7 +166,7 @@ function openSoundSheet(g, i) {
     } catch (e) { toast(e.message, true); }
   };
   keepRow.classList.toggle('hidden', mode !== 'mix');
-  openSheet(h('h3', {}, `Sound · #${g.id} ${g.template}`),
+  openSheet(h('h3', {}, `Sound · ${genLabel(g)}`),
     section('Take the sound out', null,
       hint('Saves the clip\'s sound as its own file in the media library, to edit in the Sound tab or use as a reference.'),
       h('div', { class: 'row wrap' }, button('Take the sound out', async () => {
@@ -249,13 +257,14 @@ function boardSelected() {   // [{g, o, i}] in board order
 function boardSelBar() {
   if (!B.selecting) return h('span', { class: 'board-sel hidden' });
   const n = B.sel.size, items = boardSelected(), images = items.filter((x) => x.o.kind === 'image').length;
+  const comparable = n === 2 && items.every((x) => x.o.kind !== 'audio');
   const visibleKeys = () => [...$('#board').querySelectorAll('.tile[data-key]')].map((t) => t.dataset.key);
   return h('div', { class: 'board-sel' },
     h('b', {}, n ? `${n} selected` : 'Tap tiles to select'),
     button('All', () => { visibleKeys().forEach((k) => B.sel.add(k)); renderBoard(); }),
     n ? button('None', () => { B.sel.clear(); renderBoard(); }) : null,
     button(`New edit${images ? ` (${images})` : ''}`, boardToEditor, { cls: 'small primary', disabled: !images }),
-    button('Compare', boardCompare, { disabled: n !== 2, title: 'Select two to see them side by side or wipe between them' }),
+    button('Compare', boardCompare, { disabled: !comparable, title: 'Select two pictures or clips to see them side by side or wipe between them' }),
     button('To video', boardToVideo, { disabled: !n }),
     button('Delete', boardDelete, { cls: 'small danger', disabled: !n }));
 }
@@ -269,7 +278,7 @@ function clipImported(e) {
 // Whatever was in the Editor can be brought back with Undo.
 function boardCompare() {
   const items = boardSelected().reverse();   // older on the left
-  if (items.length === 2) openCompare(items.map(({ g, o }) => ({ o, label: `#${g.id} ${g.template}` })));
+  if (items.length === 2 && items.every((x) => x.o.kind !== 'audio')) openCompare(items.map(({ g, o }) => ({ o, label: genLabel(g) })));
 }
 async function boardToEditor() { return itemsToEditor(boardSelected()); }
 async function itemsToEditor(all) {
@@ -305,7 +314,7 @@ async function boardToVideo() {
   const items = boardSelected().reverse();
   if (!items.length) return;
   for (const { g, o, i } of items) {
-    await addToTimeline({ kind: o.kind, src: { generation: g.id, index: i }, url: o.url, label: `#${g.id} ${g.template}`, dur: o.duration || 0 });
+    await addToTimeline({ kind: o.kind, src: { generation: g.id, index: i }, url: o.url, label: genLabel(g), dur: o.duration || 0 });
   }
   setBoardSelecting(false);
   switchTab('video');
@@ -368,6 +377,46 @@ function galleryVideo(o) {
   return v;
 }
 
+// A sound in the gallery: a big play button, its waveform as the scrub bar (tap or drag it), a slider and the time.
+// It plays on opening, like a clip.
+const clock = (s) => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
+function galleryAudio(o) {
+  const a = h('audio', { src: o.url, preload: 'auto' });
+  const fill = h('div', { class: 'gal-wave-fill' });
+  const wave = waveArt(o, 640, 'gal-wave');
+  wave.append(fill);
+  const play = h('button', { type: 'button', class: 'gal-play', 'aria-label': 'Play' }, '▶');
+  const time = h('span', { class: 'gal-time' });
+  const scrub = h('input', { type: 'range', min: 0, max: 1, step: 0.001, value: 0, 'aria-label': 'Position' });
+  const dur = () => (isFinite(a.duration) && a.duration > 0 ? a.duration : o.duration || 0);
+  let raf = 0;
+  const draw = () => {
+    const d = dur(), p = d ? Math.min(1, a.currentTime / d) : 0;
+    fill.style.width = `${p * 100}%`;
+    if (document.activeElement !== scrub || a.paused) scrub.value = p;
+    time.textContent = `${clock(a.currentTime)} / ${clock(d)}`;
+    play.textContent = a.paused ? '▶' : '❚❚';
+    play.setAttribute('aria-label', a.paused ? 'Play' : 'Pause');
+    cancelAnimationFrame(raf);
+    if (!a.paused && a.isConnected) raf = requestAnimationFrame(draw);
+  };
+  const seek = (p) => { if (dur()) { a.currentTime = Math.max(0, Math.min(1, p)) * dur(); draw(); } };
+  for (const ev of ['play', 'pause', 'ended', 'loadedmetadata', 'seeked']) a.addEventListener(ev, draw);
+  play.addEventListener('click', () => (a.paused ? a.play().catch(() => {}) : a.pause()));
+  scrub.addEventListener('input', () => seek(Number(scrub.value)));
+  wave.addEventListener('pointerdown', (e) => {
+    const at = (ev) => { const r = wave.getBoundingClientRect(); seek((ev.clientX - r.left) / r.width); };
+    try { wave.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
+    at(e);
+    const move = (ev) => at(ev), up = () => { wave.removeEventListener('pointermove', move); wave.removeEventListener('pointerup', up); wave.removeEventListener('pointercancel', up); };
+    wave.addEventListener('pointermove', move); wave.addEventListener('pointerup', up); wave.addEventListener('pointercancel', up);
+  });
+  draw();
+  a.play().catch(() => draw());
+  return h('div', { class: 'gal-audio' }, a, h('div', { class: 'gal-audio-ui' }, wave,
+    h('div', { class: 'gal-audio-bar' }, play, scrub, time)));
+}
+
 function openGallery(key) {
   GAL.items = boardItems();
   GAL.idx = Math.max(0, GAL.items.findIndex((x) => x.key === key));
@@ -403,7 +452,7 @@ export function closeGallery(viaBack = false) {
   if (!GAL.el) return;
   const key = GAL.items[GAL.idx]?.key;
   GAL.max?.exit(); GAL.max = null;
-  GAL.el.querySelectorAll('video').forEach((v) => v.pause());
+  GAL.el.querySelectorAll('video, audio').forEach((v) => v.pause());
   GAL.el.remove(); GAL.el = null; galThumbs.disconnect();
   if (viaBack !== true) overlayClosed(galleryBack);
   if ($('#tab-board').classList.contains('active')) {
@@ -433,16 +482,16 @@ function galleryRender(newMedia = false) {
   if (!el || !cur) return;
   const g = S.history.get(cur.g.id) || cur.g, { o, i } = cur;
   const marked = B.marked.has(g.id);
-  el.querySelector('.gal-title').textContent = `#${g.id} ${g.template}`;
+  el.querySelector('.gal-title').textContent = genLabel(g);
   el.querySelector('.gal-count').textContent = `${GAL.idx + 1} / ${GAL.items.length}`;
   el.querySelector('.gal-nav.prev').disabled = GAL.idx === 0;
   el.querySelector('.gal-nav.next').disabled = GAL.idx === GAL.items.length - 1;
   const main = el.querySelector('.gal-main');
   main.classList.toggle('marked', marked);
   if (newMedia || GAL.key !== cur.key) {
-    main.querySelectorAll('video').forEach((v) => v.pause());
+    main.querySelectorAll('video, audio').forEach((v) => v.pause());
     galleryZoom(1);
-    main.replaceChildren(o.kind === 'video' ? galleryVideo(o) : h('img', { src: o.url, alt: o.filename, draggable: false }));
+    main.replaceChildren(o.kind === 'video' ? galleryVideo(o) : o.kind === 'audio' ? galleryAudio(o) : h('img', { src: o.url, alt: o.filename, draggable: false }));
     for (const d of [-1, 1]) {   // warm the cache for the neighbours
       const nb = GAL.items[GAL.idx + d];
       if (nb && nb.o.kind === 'image') new Image().src = nb.o.url;
@@ -454,7 +503,7 @@ function galleryRender(newMedia = false) {
     button(g.pinned ? '★ Pinned' : '☆ Pin', () => togglePin(g), { cls: 'small' + (g.pinned ? ' on' : ''), title: 'P' }),
     button(marked ? '🗑 Marked' : '🗑 Mark', () => { toggleMarked(g.id); boardChanged(g); }, { cls: 'small' + (marked ? ' danger on' : ''), title: 'D' }),
     o.kind === 'image' ? button('✎ Edit', () => { closeGallery(); itemsToEditor([cur]); }, { title: 'E' }) : null,
-    button('Use as input', () => { closeGallery(); sendToInput(g, i, 'first'); }),
+    button('Use as…', () => openUseAs(g, i, { before: () => closeGallery() }), { cls: 'small primary', title: 'U: send it to Generate, VFX, Video, Sound, the Editor or 3D' }),
     o.kind === 'video' ? button('♪ Sound', () => openSoundSheet(g, i), { title: 'Take the sound out, or put a sound on this clip' }) : null,
     button('Details', () => openGeneration(g.id)),
     linkBtn('Download', o.url, { download: o.filename }),
@@ -465,7 +514,7 @@ function galleryRender(newMedia = false) {
   if (strip.childElementCount !== GAL.items.length || newMedia) {
     galThumbs.disconnect();
     strip.replaceChildren(...GAL.items.map((x, n) => h('button', { type: 'button', class: 'gal-thumb', 'data-n': n, onclick: () => { GAL.idx = n; galleryRender(true); } },
-      h('img', { src: previewUrl(x.o.url, 192), loading: 'lazy', alt: '', draggable: false }),
+      x.o.kind === 'audio' ? waveArt(x.o, 192, 'gal-thumb-wave') : h('img', { src: previewUrl(x.o.url, 192), loading: 'lazy', alt: '', draggable: false }),
       h('span', { class: 'gal-badges' }))));
     strip.querySelectorAll('video').forEach((v) => galThumbs.observe(v));
   }
@@ -473,7 +522,7 @@ function galleryRender(newMedia = false) {
     const x = GAL.items[n], xg = S.history.get(x.g.id) || x.g;
     t.classList.toggle('sel', n === GAL.idx);
     t.classList.toggle('marked', B.marked.has(xg.id));
-    t.querySelector('.gal-badges').textContent = `${xg.pinned ? '★' : ''}${B.marked.has(xg.id) ? '🗑' : ''}${x.o.kind === 'video' ? '▶' : ''}`;
+    t.querySelector('.gal-badges').textContent = `${xg.pinned ? '★' : ''}${B.marked.has(xg.id) ? '🗑' : ''}${(KIND_MARK[x.o.kind] || '').trim()}`;
   });
   strip.querySelector('.gal-thumb.sel')?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: newMedia ? 'smooth' : 'auto' });
 }
@@ -482,9 +531,9 @@ function galleryRender(newMedia = false) {
 // a double-tap zooms (images and videos); while zoomed one finger pans instead of swiping.
 const GZ = { s: 1, x: 0, y: 0 };
 function galleryZoom(s, x, y) {
-  if (s <= 1.01) { s = 1; x = 0; y = 0; }
-  Object.assign(GZ, { s, x, y });
   const m = GAL.el?.querySelector('.gal-main > *');
+  if (s <= 1.01 || m?.classList.contains('gal-audio')) { s = 1; x = 0; y = 0; }
+  Object.assign(GZ, { s, x, y });
   if (m) m.style.transform = s === 1 ? '' : `translate(${x}px, ${y}px) scale(${s})`;
   GAL.el?.classList.toggle('zoomed', s !== 1);
 }
@@ -499,6 +548,7 @@ function wireGallerySwipe(main) {
   const mid = () => { const [a, b] = [...pts.values()]; return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y) }; };
   main.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (e.target.closest('.gal-audio-ui')) return;   // a sound's play button and scrub bar keep their touches
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pts.size === 2) {   // second finger: pinch, and forget any swipe the first one started
       start = null; main.style.transform = '';
@@ -564,7 +614,10 @@ document.addEventListener('keydown', (e) => {
     p: () => togglePin(S.history.get(cur.g.id) || cur.g),
     d: () => { toggleMarked(cur.g.id); boardChanged(cur.g); },
     e: () => { if (cur.o.kind === 'image') { closeGallery(); itemsToEditor([cur]); } },
+    u: () => openUseAs(S.history.get(cur.g.id) || cur.g, cur.i, { before: () => closeGallery() }),
+    ' ': () => { const m = GAL.el.querySelector('.gal-main video, .gal-main audio'); if (m) { if (m.paused) m.play().catch(() => {}); else m.pause(); } },
   };
+  if (e.key === ' ' && e.target.closest('button, a')) return;   // (Space on a focused button presses it)
   if (keys[e.key]) { e.preventDefault(); keys[e.key](); }
 });
 

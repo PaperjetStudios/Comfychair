@@ -4,7 +4,7 @@ import {
 } from './ui.js';
 import { S, fmtT, isMine, loadProjects, switchTab, emitServer } from './core.js';
 import { genLabel, mediaEl, openImagePicker, uploadImage } from './media.js';
-import { addToPrompt, adoptGenerations, builderState, keepAwake, loadTemplates, persist, renderFields, saveBuilder, selectTemplate, setVal, stop } from './generate.js';
+import { addToPrompt, adoptGenerations, builderState, keepAwake, loadTemplates, renderFields, saveBuilder, selectTemplate, setVal, stop } from './generate.js';
 import { B, GAL, boardChanged, galleryRefresh } from './board.js';
 import { openTrack } from './track.js';
 
@@ -550,9 +550,9 @@ export function openGeneration(id) {
     button('Replay & edit', () => { reuse(g); closeSheet(); }, primary),
     button('Run again', () => runAgain(g)),
   ];
-  if (g.outputs.some((o) => o.kind === 'image' || o.kind === 'video')) {
-    btns.push(button('Use as input', () => sendToInput(g, idx, 'first')),
-      button('Use last frame', () => sendToInput(g, idx, 'last'), { title: 'For videos: grab the final frame, e.g. to extend the shot' }));
+  if (['image', 'video', 'audio'].includes(cur()?.kind)) {
+    btns.push(button('Use as…', async () => (await import('./useas.js')).openUseAs(g, idx),
+      { title: 'Send it to Generate, VFX, Video, Sound, the Editor or 3D' }));
   }
   if (cur()?.kind === 'image' || cur()?.kind === 'video') {
     btns.push(button(cur().kind === 'image' ? 'Open in PhotoCraft' : 'Open in EffectCraft',
@@ -645,24 +645,6 @@ async function runAgain(g) {
     const other = g.project_id !== S.project ? ` in ${(S.projects.find((p) => p.id === g.project_id) || {}).name || 'its own project'}` : '';
     toast(`Queued again as #${gens[0].id}${other}`);
   } catch (e) { toast(e.message, true); }
-}
-
-export async function sendToInput(g, index, frame) {
-  const fields = (S.tpl?.fields || []).filter((f) => f.kind === 'image');
-  if (!fields.length) return toast('The current template has no @-tagged image input', true);
-  const go = async (f) => {
-    try {
-      const r = await api(`/api/generations/${g.id}/to-input`, { method: 'POST',
-        body: { index, frame, mp: S.imageMp[f.key] ?? 1, multiple: 16 } });
-      S.values[f.key] = r.name; persist(); renderFields();
-      S.pendingParent = r.source;
-      closeSheet(); switchTab('generate');
-      toast(`Set ${f.group} · ${f.label} (${r.width}×${r.height})`);
-    } catch (e) { toast(e.message, true); }
-  };
-  if (fields.length === 1) return go(fields[0]);
-  openSheet(h('h3', {}, 'Send to which image input?'),
-    actions(fields.map((f) => button(`${f.group} · ${f.label}`, () => go(f), { cls: '' }))));
 }
 
 // ---------------------------------------------------------------------------

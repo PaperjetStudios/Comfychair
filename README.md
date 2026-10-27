@@ -14,7 +14,11 @@ join them side by side, stacked or in a grid, then save the result as an input. 
 has **Draw**: a full-screen sketch pad with pen pressure and palm rejection (once a pen touches it,
 finger touches are ignored), e.g. to sketch the source for the `-i2i` templates. **Video** tab: trim
 generated clips, order them and export one video (ffmpeg); the result lands in History. **Board**:
-every image and video in the project as a pin board, with pins, filters and a tile-size slider.
+every image, video and sound in the project as a pin board, with pins, filters and a tile-size slider (sounds show their
+waveform; tap one for a player). **Use as…** (in the Board's gallery, key U, and in History) lists every place an output
+fits: the Generate template's fields of its kind (a clip also gives its first or last frame to image fields and its sound
+to sound fields), the VFX tab's source, matte, start image, sound or voice, the Video and Sound timelines, the Editor, and
+the 3D tab's reference or a 3D photo.
 **☑ Select** (or long-press a tile) picks several: **New edit** puts the images in the Editor as a
 fresh layout (Undo brings the old one back), **To video** adds them to the timeline, **Delete**
 removes their generations (it asks first). **⤓ Import clip** (also "From a link or big file…" in every
