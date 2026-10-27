@@ -151,6 +151,36 @@ export function paste(tracks, clip, t, n, { pick = null } = {}) {
   return { keys: made, dropped, groups };
 }
 
+// ---- live recording: what a held gizmo or slider did over a stretch of playback, as keys ----
+// samples: [{ f, v }] in the order they were taken (one per frame shown; playback may loop, so f can
+// jump back). Each unbroken run (f going up) replaces the keys inside its span with every `every`-th
+// sample from its start, plus its last one (so the release is exact). A later run wins where runs
+// overlap. Returns a new sorted list; the keys outside the runs are kept as they are.
+export function recordInto(list, samples, every = 3) {
+  every = Math.max(1, Math.round(num(every, 3)));
+  const runs = [];
+  let run = null;
+  for (const s of samples) {
+    if (!s || !Number.isFinite(s.f)) continue;
+    const f = Math.round(s.f);
+    if (run && f === run[run.length - 1].f) { run[run.length - 1] = { f, v: s.v }; continue; }   // (the same frame again: the newer value)
+    if (!run || f < run[run.length - 1].f) runs.push(run = []);
+    run.push({ f, v: s.v });
+  }
+  let out = [...(list || [])];
+  for (const r of runs) {
+    const a = r[0].f, b = r[r.length - 1].f;
+    out = out.filter((k) => k.f < a || k.f > b);
+    let last = -Infinity;
+    for (let i = 0; i < r.length; i++) {
+      if (i < r.length - 1 && r[i].f - last < every) continue;   // (a slow tablet skips frames: count frames, not samples)
+      last = r[i].f;
+      out.push({ f: r[i].f, v: Array.isArray(r[i].v) ? [...r[i].v] : r[i].v });
+    }
+  }
+  return out.sort(byF);
+}
+
 // ---- channels, for the graph: 'x', 'fov', or 'm.lean' (a figure parameter) ----
 export const isScalar = (ch) => ch !== 'pn' && !ch.startsWith('j.');
 export function setChan(k, v) {

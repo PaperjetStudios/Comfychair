@@ -239,3 +239,65 @@ console.log('keys ok');
   assert.equal(D.sample(up, D.OBJ.concat(['px']), 5).roll, undefined);   // objects don't gain a roll
   assert.ok(D.CAM.includes('roll') && K.isScalar('roll'));
 }
+
+{ // live recording: runs replace keys in their span, thinned to every n frames, the last sample kept
+  const list = [{ f: 0, v: 0 }, { f: 10, v: 1 }, { f: 20, v: 2 }, { f: 40, v: 4 }];
+  const s = [8, 9, 10, 11, 12, 13, 14, 15, 16].map((f) => ({ f, v: f * 100 }));
+  const out = K.recordInto(list, s, 3);
+  assert.deepEqual(out.map((k) => k.f), [0, 8, 11, 14, 16, 20, 40]);   // 10 (inside 8..16) replaced
+  assert.equal(out.find((k) => k.f === 16).v, 1600);
+  assert.equal(list.length, 4);                                           // (a new list: the old one is untouched)
+  // skipped frames (a slow tablet): counted in frames, not samples
+  assert.deepEqual(K.recordInto([], [0, 2, 4, 6, 8].map((f) => ({ f, v: f })), 3).map((k) => k.f), [0, 4, 8]);
+  // the loop wraps: two runs, each replaces its own span; the same frame twice keeps the newer value
+  const w = K.recordInto([{ f: 1, v: 'a' }, { f: 50, v: 'b' }, { f: 95, v: 'c' }], [90, 93, 96, 99, 0, 0, 2, 4].map((f, i) => ({ f, v: i })), 3);
+  assert.deepEqual(w.map((k) => k.f), [0, 4, 50, 90, 93, 96, 99]);
+  assert.equal(w.find((k) => k.f === 0).v, 5);
+  // a quaternion is copied, nothing odd gets in
+  const q = [0, 0, 0, 1], r = K.recordInto(null, [{ f: 3, v: q }, null, { f: NaN, v: 1 }]);
+  assert.deepEqual(r, [{ f: 3, v: q }]); assert.notEqual(r[0].v, q);
+}
+{ // edits while it plays: held over the keys while a source holds them, then keyed
+  const o = { id: 'h', type: 'box', base: { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 1, sy: 1, sz: 1 }, ease: 'linear', chans: { x: [{ f: 0, v: 0 }, { f: 40, v: 40 }] } };
+  D.setSC({ seconds: 6, camera: { base: { px: 0, py: 1, pz: 5, tx: 0, ty: 0, tz: 0, fov: 45, roll: 0 }, chans: {} }, objects: [o] });
+  D.R.autoKey = true; D.R.record = false; D.R.playing = true; D.WP.back = false; D.R.f = 10;
+  D.holdStart('gizmo');
+  D.write(o, D.OBJ, { ...D.current(o, D.OBJ), x: 7, y: 2 });
+  assert.deepEqual(o.chans.x.map((k) => k.f), [0, 40]);                 // nothing keyed yet
+  D.R.f = 20;
+  assert.equal(D.current(o, D.OBJ).x, 7); assert.equal(D.current(o, D.OBJ).y, 2);   // held, not driven by its keys
+  assert.equal(D.current(o, D.OBJ).rx, 0);
+  assert.equal(D.holdEnd('other'), null);                                // (a source that wasn't holding changes nothing)
+  D.R.f = 22;
+  assert.equal(D.holdEnd('gizmo'), null);                                // no jump back: lands at the release frame
+  assert.deepEqual(o.chans.x.map((k) => k.f), [0, 22, 40]);
+  assert.equal(o.chans.y[0].f, 22); assert.equal(o.chans.y[0].v, 2);
+  assert.equal(D.HOLD.items.size, 0); assert.equal(D.current(o, D.OBJ, 30).x, 7 + (40 - 7) * (8 / 18));
+  // jump back: the key goes where the hold began, and that frame is handed back
+  D.WP.back = true; D.R.f = 5; D.holdStart('panel'); D.write(o, D.OBJ, { x: -3 }); D.R.f = 12;
+  assert.equal(D.holdEnd('panel'), 5);
+  assert.equal(o.chans.x.find((k) => k.f === 5).v, -3); assert.ok(!o.chans.x.some((k) => k.f === 12));
+  // Record: keys every 3 frames over the span held, the keys inside it replaced
+  D.R.record = true; D.R.f = 24; D.holdStart('gizmo');
+  for (let f = 24; f <= 34; f++) { D.R.f = f; D.write(o, D.OBJ, { x: 100 + f }); D.recordFrame(f); }
+  assert.equal(D.holdEnd('gizmo'), 24);
+  assert.deepEqual(o.chans.x.map((k) => k.f), [0, 5, 22, 24, 27, 30, 33, 34, 40]);
+  assert.equal(o.chans.x.find((k) => k.f === 30).v, 130);
+  // Record on a layer with no keys: it becomes animated (from the first frame it moved)
+  const b = { id: 'b', type: 'box', base: { x: 1, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 1, sy: 1, sz: 1 }, ease: 'smooth', chans: {} };
+  D.SC.objects.push(b); D.R.f = 0; D.holdStart('gizmo');
+  for (let f = 0; f <= 6; f++) { D.R.f = f; D.write(b, D.OBJ, { z: f }); D.recordFrame(f); }
+  D.holdEnd('gizmo');
+  assert.deepEqual(b.chans.z.map((k) => k.f), [1, 4, 6]); assert.ok(!b.chans.x);
+  // Auto key off: an animated layer is only held (TEMP), on every frame while it plays, until ◆ Key
+  D.R.record = false; D.R.autoKey = false; D.R.f = 3; D.holdStart('gizmo'); D.write(o, D.OBJ, { y: 9 }); D.holdEnd('gizmo');
+  assert.ok(!o.chans.y.some((k) => k.f === 3) && D.TEMP.has(o));
+  D.R.f = 17; assert.equal(D.current(o, D.OBJ).y, 9); assert.equal(D.current(o, D.OBJ).x, D.sample(o, D.OBJ, 17).x);   // the rest plays on
+  D.addKey(o, D.OBJ); assert.equal(o.chans.y.find((k) => k.f === 17).v, 9); assert.ok(!o.chans.x.some((k) => k.f === 17));
+  // not animated, no Record: written straight into the base, never held
+  const c = { id: 'c', type: 'box', base: { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 1, sy: 1, sz: 1 }, ease: 'smooth', chans: {} };
+  D.SC.objects.push(c); D.R.autoKey = true; D.holdStart('gizmo'); D.write(c, D.OBJ, { x: 4 });
+  assert.equal(c.base.x, 4); assert.equal(D.HOLD.items.size, 0); D.holdEnd('gizmo');
+  D.R.playing = false; D.TEMP.clear(); D.dropHolds();
+}
+console.log('record ok');

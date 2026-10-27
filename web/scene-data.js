@@ -1,6 +1,6 @@
 import * as FIGURE from './figure.js';
 import { toast, uid } from './ui.js';
-import { easeAt, isPoseCh } from './scene-keyops.js';
+import { easeAt, isPoseCh, recordInto } from './scene-keyops.js';
 export { isPoseCh };
 
 export let C;  // app state and actions handed over by app.js (see sceneModule there)
@@ -50,7 +50,7 @@ export const pivotOf = (o) => (pivotsFor(o).some(([k]) => k === o.pivot) || (o.t
 
 // ---- scene data ------------------------------------------------------------
 export let SC;   // the scene (persisted per project)
-export const R = { modeKey: null, free: false, f: 0, sel: null, joint: null, figTab: 'pose', poseCat: 'stand', mask: 'all', sym: false, speed: 1, inPlace: false, renders: {}, promptOff: new Set(), promptNames: false, mode: 'translate', playing: false, real: false, depth: false, autoKey: true, meshes: new Map(), room: [], applying: false, lastRender: null };
+export const R = { modeKey: null, free: false, f: 0, sel: null, joint: null, figTab: 'pose', poseCat: 'stand', mask: 'all', sym: false, speed: 1, inPlace: false, renders: {}, promptOff: new Set(), promptNames: false, mode: 'translate', playing: false, real: false, depth: false, autoKey: true, record: false, meshes: new Map(), room: [], applying: false, lastRender: null };
 
 export const newRoom = () => ({ w: 8, d: 8, h: 2.8, walls: true, ceiling: true, hidden: false });
 export function defaultScene() {
@@ -88,7 +88,7 @@ export function setSC(sc) { SC = sc; }
 
 // How an edit reaches the tab that saves it and the toolbar that shows undo (scene.js sets these), so
 // this file needs nothing from the rest.
-export const hooks = { ready: async () => {}, persist() {}, history() {}, tab: () => null };
+export const hooks = { ready: async () => {}, persist() {}, history() {}, tab: () => null, held() {} };
 // an Undo button that outlives a tab switch must not write into the other tab's scene
 export function sameTab() {
   const t = hooks.tab();
@@ -278,8 +278,90 @@ export function setMute(item, on) {
 export function current(item, names, f = R.f) {
   if (item.mute && !R.real) return pick(heldOf(item), names);
   const t = hasKeys(item) ? TEMP.get(item) : null;
-  return t && t.f === f ? pick(t.v, names) : sample(item, names, f);
+  // (a change held while it plays keeps only its own channels on top: the rest plays on)
+  const out = t?.play ? overlay(sample(item, names, f), t.hv, names) : t && t.f === f ? pick(t.v, names) : sample(item, names, f);
+  const hd = !R.real && HOLD.items.get(item);
+  return hd ? overlay(out, hd.ch, names) : out;
 }
+
+// ---- edits while it plays ----------------------------------------------------------------------------
+// What shows while playing, and what a hold does when it ends (per device; scene.js loads them).
+// back: the playhead goes back to where the hold began, so the change shows at once.
+export const WP = { gizmo: true, dots: true, frustum: true, grid: true, follow: false, back: true };
+// Each frame of playback would put every item back on its keys, so while the user holds a gizmo, a slider
+// or the orbit (a "source": holdStart/holdEnd), what they write to an animated item is held here per
+// channel and shown over its keys (the item's other channels keep playing). When the last source lets go,
+// the held channels are keyed (at the playhead, or where the hold began with WP.back), or, with Record,
+// every few frames over the span that was held; with Auto key off they are only held (TEMP) until ◆ Key.
+// f0: the frame the hold began on. rec: [{ f, v: Map }] one per frame shown, with Record on.
+export const HOLD = { src: new Set(), items: new Map(), f0: null };
+export const REC_EVERY = 3;   // a recorded key every 3 frames (8 a second)
+function overlay(out, ch, names) {
+  const o = { ...out };
+  for (const [c, v] of ch) {
+    if (c.startsWith('j.')) { if (names.includes('j')) { if (o.j === out.j) o.j = { ...out.j }; o.j[c.slice(2)] = v; } }
+    else if (c.startsWith('m.')) { if (names.includes('m')) { if (o.m === out.m) o.m = { ...out.m }; if (v) o.m[c.slice(2)] = v; else delete o.m[c.slice(2)]; } }
+    else if (names.includes(c)) o[c] = v;
+  }
+  return o;
+}
+const holding = (item) => R.playing && HOLD.src.size > 0 && (hasKeys(item) || R.record);
+function holdWrite(item, names, vals) {
+  let hd = HOLD.items.get(item);
+  if (!hd) HOLD.items.set(item, hd = { ch: new Map(), rec: [] });
+  const from = sample(item, names, R.f);
+  for (const [ch, v] of changedChans(item, names, { ...from, ...vals }, from)) hd.ch.set(ch, cloneV(v));
+}
+// a gesture that edits begins (gizmo, orbit, hand, panel); while it plays, its writes are held
+export function holdStart(src) {
+  if (!HOLD.src.size) HOLD.f0 = R.playing ? R.f : null;
+  HOLD.src.add(src);
+}
+// it ends: once nothing is held any more, what was held lands (returns the frame to go back to, or null)
+export function holdEnd(src) {
+  if (!HOLD.src.delete(src) || HOLD.src.size) return null;
+  return commitHolds();
+}
+// one frame of playback shown: with Record on, what is held now is a sample at that frame
+export function recordFrame(f) {
+  if (!R.record) return;
+  for (const hd of HOLD.items.values()) if (hd.ch.size) hd.rec.push({ f, v: new Map([...hd.ch].map(([c, v]) => [c, cloneV(v)])) });
+}
+export function commitHolds() {
+  const f0 = HOLD.f0, back = WP.back && f0 != null;
+  HOLD.src.clear(); HOLD.f0 = null;
+  if (!HOLD.items.size) return null;
+  const at = back ? Math.min(f0, frames() - 1) : R.f;
+  for (const [item, hd] of HOLD.items) {
+    if (!hd.ch.size) continue;
+    if (R.record) {
+      for (const [ch, v] of hd.ch) {
+        const samples = [...hd.rec.filter((s) => s.v.has(ch)).map((s) => ({ f: s.f, v: s.v.get(ch) })), { f: R.f, v }];
+        if (!item.chans?.[ch]?.length) bakeBase(item, ch, v);
+        chansOf(item)[ch] = recordInto(item.chans[ch], samples, REC_EVERY);
+      }
+    } else if (R.autoKey || !hasKeys(item)) {
+      for (const [ch, v] of hd.ch) setKey(item, ch, at, v);
+    } else {
+      holdTemp(item, at, new Map(hd.ch));
+    }
+  }
+  HOLD.items.clear();
+  save(); hooks.held();
+  return back ? at : null;
+}
+// with Auto key off, a change to an animated item is held until ◆ Key: while it plays, on every frame (hv:
+// just the channels it changed); once stopped, at the frame it stops on (settleTemp)
+function holdTemp(item, f, hv) {
+  const t = TEMP.get(item);
+  if (t?.play) for (const [c, v] of t.hv) if (!hv.has(c)) hv.set(c, v);
+  TEMP.set(item, { f, play: R.playing, hv, ch: new Set(hv.keys()), v: overlay(sample(item, allNames(item), f), hv, allNames(item)) });
+}
+export function settleTemp() {
+  for (const [item, t] of TEMP) if (t.play) { t.play = false; t.f = R.f; t.v = overlay(sample(item, allNames(item), R.f), t.hv, allNames(item)); }
+}
+// a new scene (undo, a tab): nothing held carries over
+export function dropHolds() { HOLD.items.clear(); HOLD.src.clear(); HOLD.f0 = null; }
 
 // the channels whose value in vals differs from what the item has (from): [[channel, value]...]
 function changedChans(item, names, vals, from) {
@@ -290,10 +372,12 @@ function changedChans(item, names, vals, from) {
 // channel that stays put gets no key); else into its base
 export function write(item, names, vals) {
   if (item.mute && !R.real) { Object.assign(heldOf(item), vals); return; }
+  if (holding(item)) { holdWrite(item, names, vals); return; }
   if (!hasKeys(item)) { Object.assign(item.base, vals); return; }
   const from = sample(item, names, R.f);
   if (!R.autoKey) {
     const v = { ...current(item, names), ...vals };
+    if (R.playing) return holdTemp(item, R.f, new Map(changedChans(item, names, v, from).map(([ch, x]) => [ch, cloneV(x)])));
     TEMP.set(item, { f: R.f, v, ch: new Set(changedChans(item, names, v, from).map(([ch]) => ch)) });
     return;
   }
@@ -304,7 +388,7 @@ export function write(item, names, vals) {
 // (or when vals are given) every channel of names. only: a set of channels to limit it to.
 export function addKey(item, names, vals = null, only = null) {
   const held = TEMP.get(item);
-  if (!vals) { vals = current(item, names); if (!only && held && held.f === R.f && held.ch.size) only = held.ch; }
+  if (!vals) { vals = current(item, names); if (!only && held && (held.f === R.f || held.play) && held.ch.size) only = held.ch; }
   TEMP.delete(item);
   if (!hasKeys(item)) Object.assign(item.base, vals);
   for (const ch of keyChans(item, names, vals)) if ((!only || only.has(ch)) && valOf(vals, ch) !== undefined) setKey(item, ch, R.f, valOf(vals, ch));
