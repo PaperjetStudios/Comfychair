@@ -59,8 +59,38 @@ async def broadcast(payload):
             clients.discard(ws)
 
 
+def fill_durations(g: dict) -> bool:
+    """A finished run's videos and sounds with their length in seconds (ComfyUI doesn't say; the Board shows it).
+    True when something was added."""
+    changed = False
+    for o in g.get("outputs") or []:
+        if o.get("kind") in ("video", "audio") and not o.get("duration"):
+            path = output_file(g, o)
+            try:
+                if path.is_file():
+                    o["duration"] = round(videoedit.probe(path)["duration"], 2)
+                    changed = True
+            except (subprocess.SubprocessError, OSError, ValueError, KeyError):
+                pass
+    if changed:
+        db.update_generation(g["id"], outputs=g["outputs"])
+    return changed
+
+
+def backfill_durations():
+    """Runs from before lengths were kept get theirs (once: a run that has them is skipped)."""
+    n = 0
+    for g in db.all_generations():
+        if g["status"] == "done" and fill_durations(g):
+            n += 1
+    if n:
+        log.info("added clip lengths to %d runs", n)
+
+
 async def push_gen(gid: int):
     g = db.get_generation(gid)
+    if g and g["status"] == "done" and await asyncio.to_thread(fill_durations, g):
+        g = db.get_generation(gid)
     if g:
         await broadcast({"type": "deck_generation", "data": g})
         if g["status"] == "done":   # the Board's light previews, made now so it opens fast
@@ -315,6 +345,7 @@ async def lifespan(app: FastAPI):
     await comfy.start()
     task = asyncio.create_task(reconcile_loop())
     sweeper = asyncio.create_task(clipimport.sweeper())   # the clip importer's previews and leftovers
+    asyncio.create_task(asyncio.to_thread(backfill_durations))
     log.info("ComfyDeck ready. ComfyUI at %s", config.COMFY_URL)
     yield
     task.cancel()

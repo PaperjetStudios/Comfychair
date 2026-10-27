@@ -96,6 +96,9 @@ function toggleMarked(id) {
 function saveMarked() { store.set('deck.board.marked', [...B.marked]); }
 function markedGens() { return [...B.marked].map((id) => S.history.get(id)).filter((g) => g && g.project_id === S.project); }
 
+// a clip's length on its tile: 4.9s, 1:05
+const clipLen = (s) => (s < 60 ? `${s < 10 ? s.toFixed(1) : Math.round(s)}s` : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`);
+
 function boardTile(g, o, i) {
   // light previews (app/previews.py): a still straight away; videos loop a small 8 fps copy while on screen
   const media = o.kind === 'video'
@@ -110,6 +113,7 @@ function boardTile(g, o, i) {
       if (B.selecting) toggleBoardSel(key, tile); else openGallery(key);
     } }, media, pin, h('span', { class: 'tick', 'aria-hidden': 'true' }, '✓'),
     h('span', { class: 'mark', 'aria-hidden': 'true' }, '🗑'),
+    o.duration ? h('span', { class: 'tile-len' }, clipLen(o.duration)) : null,
     h('div', { class: 'tile-meta' }, `#${g.id} ${g.template}${o.kind === 'video' ? ' ▶' : ''}`));
   // long press: start selecting with this tile
   let timer = 0, start = null;

@@ -612,6 +612,8 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: var(--fs-
 .tile img, .tile video { pointer-events: none; -webkit-user-drag: none; user-drag: none; }
 .tile .pin { position: absolute; top: 6px; right: 6px; width: 40px; height: 40px; border-radius: 50%; border: 0; background: #000a; color: #fff; font-size: 20px; cursor: pointer; }
 .tile .pin.on { color: var(--accent); }
+.tile-len { position: absolute; top: 8px; left: 8px; padding: 2px 7px; border-radius: 6px; background: #000b; color: #fff; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; pointer-events: none; }
+.board.selecting .tile .tile-len, .tile.marked .tile-len { display: none; }
 .tile-meta { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 8px 6px; font-size: var(--fs-xs); color: #ddd; background: linear-gradient(transparent, #000c); pointer-events: none; }
 .tile .tick { position: absolute; top: 6px; left: 6px; width: 34px; height: 34px; border-radius: 50%; display: none; place-items: center; font-weight: 700; border: 2px solid #fff; background: #000a; color: transparent; }
 .board.selecting .tile .tick { display: grid; }
