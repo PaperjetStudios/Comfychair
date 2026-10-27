@@ -154,4 +154,21 @@ const deg = (x, y, z) => new THREE.Quaternion().setFromEuler(new THREE.Euler(x *
   const k = D.keyChans(it, ['j', 'm'], { j: { lindex1: [0, 0, 0, 1] }, m: { curlL: 20 } });
   assert.ok(k.includes('j.lindex1') && k.includes('m.curlL'));
 }
+{ // body shape: longer legs stand taller and still plant; the pose points follow; anatomy is off unless asked
+  for (const body of ['man', 'woman']) {
+    const r = F.buildFigure(mat, mat, body);
+    const kp0 = F.keypoints(r), ankle0 = kp0[10].y, hip0 = kp0[8].y;   // (rfoot, rhip)
+    F.setShape(r, { legs: 50, shoulders: 30, build: 40, belly: 60, chest: 40 });
+    F.applyPose(r, F.preset('stand').j, {}, true);
+    assert.ok(Math.abs(F.lowest(r)) < 0.005, `${body} shaped floats ${F.lowest(r)}`);
+    const kp = F.keypoints(r);
+    assert.ok(kp[8].y - kp[10].y > (hip0 - ankle0) * 1.12, `${body} legs not longer`);
+    assert.ok(Math.abs(F.heightOf(body, { legs: 50 }) - F.heightOf(body) - 0.86 * 0.15 * (body === 'woman' ? 0.935 : 1)) < 1e-9);
+    assert.ok(Math.abs(F.liftFor({}, {}, body, { legs: 50 })) < 0.01, `${body} liftFor with a shape`);
+    assert.ok(r.meshes.filter((m) => m.userData.role === 'anat').every((m) => !m.visible), 'anatomy shows by default');
+    F.setShape(r, {}, true);
+    assert.ok(r.meshes.filter((m) => m.userData.role === 'anat').every((m) => m.visible), 'anatomy does not show');
+    for (const [n, [, at]] of Object.entries(F.JOINTS)) if (n !== 'hips') assert.ok(near(r.bones[n].position.toArray(), r.at0[n]), `${n} not back`);
+  }
+}
 console.log('figure ok');

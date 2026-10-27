@@ -77,11 +77,12 @@ function placeProps(o, cur) {
     o.type === 'figure' ? field('Body', seg(FIGURE.BODIES, FIGURE.bodyOf(o.body), (v) => { o.body = v; changed(); })) : null,
     xyz('Position (m)', [['x', 'X'], ['y', 'Up', { min: -5, max: 10 }], ['z', 'Z']], { min: -20, max: 20, step: 0.01 }),
     xyz('Rotation (°)', [['rx', 'X'], ['ry', 'Y'], ['rz', 'Z']], { digits: 0, min: -360, max: 360, step: 1 }),
-    o.type === 'figure' ? num('Height (m)', () => cur().sy * FIGURE.heightOf(o.body), (v) => even(Math.max(0.3, v) / FIGURE.heightOf(o.body)), { min: 0.3, max: 2.5, step: 0.01 })
+    o.type === 'figure' ? num('Height (m)', () => cur().sy * FIGURE.heightOf(o.body, o.shape), (v) => even(Math.max(0.3, v) / FIGURE.heightOf(o.body, o.shape)), { min: 0.3, max: 2.5, step: 0.01 })
       : EVEN.has(o.type) ? num('Scale', () => cur().sy, (v) => even(Math.max(0.001, v)), { min: 0.001, max: 20, step: 0.001, digits: 3 })
       : xyz('Size (m)', [['sx', 'Width'], ['sy', 'Height'], ['sz', 'Depth']], { min: 0.05, max: 20, step: 0.01 }),
     field('Pivot (where the gizmo turns it)', seg(pivotsFor(o), pivotsFor(o).some(([k]) => k === pivotOf(o)) ? pivotOf(o) : null,
       (v) => { o.pivot = v; changed(); }, { wrap: true })),
+    o.type === 'figure' ? shapeProps(o) : null,
     o.type === 'figure' ? [
       h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: !!o.ground,
         onchange: (e) => { o.ground = e.target.checked; changed(); } }), 'Planted on the floor (Up lifts it off)'),
@@ -101,6 +102,20 @@ function placeProps(o, cur) {
       }),
       clearKeys(o, names)),
     help('Drag the gizmo to move it; tap the object again (or W / E / R) for Rotate and Scale. With keys, a change sets a key at the playhead; with Auto key off it is held until ◆ Key (or until the playhead moves).')];
+}
+
+// a figure's body shape (o.shape: percent per proportion, not keyed) and the plain anatomy shapes (o.anatomy)
+function shapeProps(o) {
+  const sh = () => o.shape || {};
+  const set = (k) => (v) => { o.shape = { ...sh(), [k]: Math.round(v) }; if (!o.shape[k]) delete o.shape[k]; };
+  return field('Body shape', h('div', { class: 'shape-grid' }, FIGURE.SHAPES.map(([k, label]) => {
+    const [min, max] = FIGURE.shapeRange(k);
+    return slider(label, () => sh()[k] || 0, set(k), { min, max, step: 1, fmt: (v) => (v ? `${v > 0 ? '+' : ''}${Math.round(v)}%` : '—') });
+  })),
+  h('div', { class: 'row wrap' },
+    h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: !!o.anatomy, onchange: (e) => { o.anatomy = e.target.checked; changed(); } }), 'Anatomy (plain mannequin shapes)'),
+    Object.keys(sh()).length ? button('Reset shape', () => { delete o.shape; changed(); }) : null),
+  help('Proportions on top of the man or the woman: the joints move with them, so IK, the floor plant and the pose video follow. Height (m) above is the whole figure. Anatomy adds plain, low-detail shapes for reference in depth renders; it is off unless ticked.'));
 }
 
 export function setAutoKey(on) {

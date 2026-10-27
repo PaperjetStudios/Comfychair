@@ -469,7 +469,7 @@ export function pose(f) {
     m.rotation.set(r(v.rx), r(v.ry), r(v.rz));
     if (EVEN.has(o.type)) m.scale.setScalar(Math.max(0.01, v.sy));
     else m.scale.set(Math.max(0.01, v.sx), Math.max(0.01, v.sy), Math.max(0.01, v.sz));
-    if (m.userData.rig) { FIGURE.applyPose(m.userData.rig, v.j, stepped(o, v.m, f), o.ground); FIGURE.setHidden(m.userData.rig, o.hide); }
+    if (m.userData.rig) { FIGURE.setShape(m.userData.rig, o.shape, o.anatomy); FIGURE.applyPose(m.userData.rig, v.j, stepped(o, v.m, f), o.ground); FIGURE.setHidden(m.userData.rig, o.hide); }
     m.userData.atFrame?.(f);   // (a footage layer shows its frame, scene-track.js)
   }
   putCamera(current(SC.camera, CAM, f));
