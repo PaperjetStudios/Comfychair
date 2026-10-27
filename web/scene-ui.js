@@ -5,8 +5,8 @@ import {
   section, seg, sheetOpen, store, uid, undoToast, help
 } from './ui.js';
 import {
-  C, CAM, EVEN, HIST, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, frames, hooks, keyTarget,
-  namesFor, pivotOf, pivotsFor, sameTab, save, selItem, setSC, write
+  C, CAM, EVEN, HIST, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropKeys, frames, hasKeys, hooks, keyCount, keyTarget,
+  namesFor, nextKeyFrame, pivotOf, pivotsFor, sameTab, save, selItem, setSC, write
 } from './scene-data.js';
 import { FIG_TABS, adjustTab, jointsTab, movesTab, partsTab, posesTab, promptProps } from './scene-pose.js';
 import {
@@ -45,7 +45,7 @@ const num = (label, get, set, opts = {}) => propNum(label, +Number(get()).toFixe
   () => { if (opts.after) opts.after(); changed(); },
   { step: 'any', live: () => { if (opts.after) opts.after(); syncMeshes(); pose(R.f); draw(); }, ...opts });
 const easeSeg = (item) => field('Between keys', seg([['smooth', 'Ease'], ['linear', 'Linear']], item.ease, (v) => { item.ease = v; changed(); }));
-const clearKeys = (item, names) => (item.keys.length ? button('Clear keys', () => { Object.assign(item.base, current(item, names)); item.keys = []; changed(); }) : null);
+const clearKeys = (item, names) => (hasKeys(item) ? button('Clear keys', () => { Object.assign(item.base, current(item, names)); item.chans = {}; changed(); }) : null);
 
 function objectProps(o) {
   const names = namesFor(o);
@@ -90,7 +90,7 @@ function placeProps(o, cur) {
     h('div', { class: 'row wrap' },
       button('Duplicate', () => {
         const c = { ...clone(o), id: uid(), name: `${o.name} copy` };
-        c.base.x += 0.6; c.keys.forEach((k) => { if (k.x != null) k.x += 0.6; });
+        c.base.x += 0.6; (c.chans.x || []).forEach((k) => { k.v += 0.6; });
         SC.objects.push(c); save(); select(c.id);
       }),
       clearKeys(o, names),
@@ -105,7 +105,7 @@ export function setAutoKey(on) {
 }
 
 function layerList() {
-  const keys = (it) => (it.keys.length ? `${it.keys.length} key${it.keys.length > 1 ? 's' : ''}` : '');
+  const keys = (it) => { const n = keyCount(it); return n ? `${n} key${n > 1 ? 's' : ''}` : ''; };
   const hideBtn = (it, after) => iconBtn(it.hidden ? 'Show' : 'Hide', it.hidden ? '◌' : '◉', () => { it.hidden = !it.hidden; after(); });
   const rows = [{ sel: !R.sel, thumb: h('span', { class: 'scene-icon' }, '🎥'), name: 'Camera',
     hint: [`${SC.width}×${SC.height} · ${SC.seconds} s`, keys(SC.camera)].filter(Boolean).join(' · '), onclick: () => select(null) }];
@@ -146,7 +146,7 @@ function cameraProps() {
   const secs = num(`Length (s) · ${frames()} frames`, () => SC.seconds, (v) => {
     SC.seconds = Math.max(2, Math.min(15, Math.round(v || 6)));
     const n = frames();
-    for (const it of [SC.camera, ...SC.objects]) it.keys = it.keys.filter((k) => k.f < n);
+    for (const it of [SC.camera, ...SC.objects]) dropKeys(it, (f) => f >= n);
     R.f = Math.min(R.f, n - 1);
   }, { min: 2, max: 15, step: 1, digits: 0, after: () => renderTransport(), live: null });
   return section('Camera', null,
@@ -291,8 +291,8 @@ export function wireKeys() {
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {  // a frame; with Shift, to the next key
       e.preventDefault(); stopPlay();
       const fwd = e.key === 'ArrowRight', [item] = keyTarget();
-      const k = e.shiftKey && item ? (fwd ? item.keys.find((x) => x.f > R.f) : item.keys.findLast((x) => x.f < R.f)) : null;
-      seek(k ? k.f : e.shiftKey ? R.f : R.f + (fwd ? 1 : -1));
+      const k = e.shiftKey && item ? nextKeyFrame(item, R.f, fwd ? 1 : -1) : null;
+      seek(k != null ? k : e.shiftKey ? R.f : R.f + (fwd ? 1 : -1));
     }
   });
 }

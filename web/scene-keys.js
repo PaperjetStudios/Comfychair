@@ -2,10 +2,10 @@ import * as FIGURE from './figure.js';
 import { maximizable } from './layout.js';
 import { $, button, h, sheetOpen, store, toast } from './ui.js';
 import {
-  CAM, FPS, R, ROOM, SC, TEMP, TYPES, addKey, frames, keyTarget, namesFor, sample, selItem, setMute
+  CAM, FPS, OBJ, R, ROOM, SC, TEMP, TYPES, addKey, bakeBase, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setKey, setMute
 } from './scene-data.js';
 import {
-  EASES, allKeys, bounds, chanOf, copy, isScalar, kindOf, moveBy, paste, prune, remove, restore, scaleAround, setChan, setEase, snapshot
+  EASES, allKeys, bounds, copy, isScalar, kindOf, moveBy, paste, prune, remove, restore, scaleAround, setChan, setEase, snapshot, track
 } from './scene-keyops.js';
 import { changed, draw, pose, select } from './scene-view.js';
 import { busy, play, seek, stopPlay } from './scene-export.js';
@@ -13,14 +13,17 @@ import { setAutoKey } from './scene-ui.js';
 import { modeOf } from './scene-modes.js';
 
 // ---- the key sheet: a Blender-style dope sheet and a simple graph editor over the layers' keys -----
-// A row per layer (the camera, then the objects). Tap a key to select it, drag it to move the whole
-// selection; drag empty space to box-select (a finger pans unless Box is on); the ruler scrubs; two
-// fingers (or Ctrl+wheel) zoom the time axis. Every gesture is ONE undo step: keys move live from a
+// A row per layer (the camera, then the objects) that opens (▸) into a row per channel, a figure's pose
+// grouped by limb. Every channel keeps its own keys: a layer's or group's row only sums up the diamonds
+// under it, and moving one moves all the keys at that frame. Tap a key to select it, drag it to move
+// the whole selection; drag empty space to box-select (a finger pans unless Box is on); the ruler scrubs;
+// two fingers (or Ctrl+wheel) zoom the time axis. Every gesture is ONE undo step: keys move live from a
 // snapshot (scene-keyops.js), and changed() saves once on letting go.
 const PAD = 8, GP = 14;   // px at each end of a row; px above and below the graph's plot
 export const SEL = new Set();   // the selected key objects (an undo or a deleted layer drops them)
 const UI = { box: false, add: false, tool: 'move', mode: store.get('deck.scene.keymode', 'dope'), unit: store.get('deck.scene.keyunit', 's'),
   snap: store.get('deck.scene.keysnap', false) };
+const OPEN = new Set(store.get('deck.scene.keyopen', []));   // the rows that are open: 'i:<layer id>', 'p:<id>' (pose), 'g:<id>:<group>'
 const G = { ch: 'py' };  // the graph's channel
 const V = { a: 0, b: 1, fit: true };   // the frames on show
 
@@ -28,6 +31,17 @@ const layers = () => [{ item: SC.camera, id: null, kind: 'cam', names: CAM, labe
   ...SC.objects.map((o) => ({ item: o, id: o.id, kind: kindOf(o), names: namesFor(o), label: `${TYPES[o.type].icon} ${o.name}` }))];
 const shown = () => (modeOf().lanes === 'camera' ? layers().slice(0, 1) : layers());
 const span = () => Math.max(1, frames() - 1);
+
+// every channel a layer can have: one track each (a channel with no keys has an empty one, for paste and the like)
+const JOINTS = Object.keys(FIGURE.JOINTS);
+function chanIds(L) {
+  const own = Object.keys(L.item.chans || {});
+  const base = L.kind === 'figure' ? [...OBJ, 'pn', ...Object.keys(FIGURE.PARAMS).map((p) => `m.${p}`), ...JOINTS.map((j) => `j.${j}`)] : L.names;
+  return [...new Set([...base, ...own])];
+}
+const tracksOf = (L) => chanIds(L).map((ch) => track(L.item, ch, { id: L.id, kind: L.kind }));
+const allTracks = () => shown().flatMap(tracksOf);
+const gTrack = () => { const L = gLayer(); return L ? track(L.item, G.ch, { id: L.id, kind: L.kind }) : null; };
 
 function clampV() {
   const n = span();
@@ -50,14 +64,12 @@ function gLayer() {
   const [it] = keyTarget(), sh = shown();
   return sh.find((L) => L.item === (it || SC.camera)) || sh[0];
 }
-function channels(L) {
-  const out = L.names.filter(isScalar);
-  if (L.kind === 'figure') for (const p of Object.keys(FIGURE.PARAMS)) if (L.item.keys.some((k) => k.m && k.m[p] != null)) out.push(`m.${p}`);
-  return out;
-}
-const chLabel = (ch) => (ch.startsWith('m.') ? (FIGURE.PARAMS[ch.slice(2)]?.label || ch.slice(2)) : { x: 'X', y: 'Up', z: 'Z', rx: 'Rot X', ry: 'Rot Y', rz: 'Rot Z', sx: 'Width', sy: 'Height', sz: 'Depth',
-  px: 'Cam X', py: 'Cam height', pz: 'Cam Z', tx: 'Aim X', ty: 'Aim Y', tz: 'Aim Z', fov: 'Lens', roll: 'Roll' }[ch] || ch);
-const sampleCh = (L, ch, f) => chanOf(sample(L.item, [ch.startsWith('m.') ? 'm' : ch], f), ch);
+// the numbers the graph can plot: a figure's parameters once keyed (a joint's turn is not one number)
+const channels = (L) => chanIds(L).filter((ch) => isScalar(ch) && !(ch.startsWith('m.') && !L.item.chans?.[ch]));
+const LABELS = { x: 'X', y: 'Up', z: 'Z', rx: 'Rot X', ry: 'Rot Y', rz: 'Rot Z', sx: 'Width', sy: 'Height', sz: 'Depth',
+  px: 'Cam X', py: 'Cam height', pz: 'Cam Z', tx: 'Aim X', ty: 'Aim Y', tz: 'Aim Z', fov: 'Lens', roll: 'Roll', pn: 'Pose name' };
+const chLabel = (ch) => (ch.startsWith('m.') ? (FIGURE.PARAMS[ch.slice(2)]?.label || ch.slice(2)) : ch.startsWith('j.') ? (FIGURE.JOINTS[ch.slice(2)]?.[2] || ch.slice(2)) : LABELS[ch] || ch);
+const sampleCh = (L, ch, f) => sampleChan(L.item, ch, f);
 function graphRange(L, ch) {
   let lo = Infinity, hi = -Infinity;
   for (let f = 0; f <= span(); f++) { const v = sampleCh(L, ch, f); lo = Math.min(lo, v); hi = Math.max(hi, v); }
@@ -66,6 +78,55 @@ function graphRange(L, ch) {
   return { lo: lo - pad, hi: hi + pad };
 }
 const yPos = (rg, v) => `calc(${GP}px + (100% - ${2 * GP}px) * ${(rg.hi - v) / (rg.hi - rg.lo)})`;
+
+// ---- the dope sheet's rows ---------------------------------------------------------------------
+// { t: 'item' | 'group' | 'chan', L, label, depth, key (for OPEN, groups only), tracks, dia }: dia are the diamonds
+// [{ f, keys }]: a channel's own keys, or for a group the keys of its channels that share a frame
+function diamonds(tracks, own) {
+  if (own) return tracks[0].keys.map((k) => ({ f: k.f, keys: [k] }));
+  const at = new Map();
+  for (const T of tracks) for (const k of T.keys) { if (!at.has(k.f)) at.set(k.f, []); at.get(k.f).push(k); }
+  return [...at].sort((a, b) => a[0] - b[0]).map(([f, keys]) => ({ f, keys }));
+}
+const LIMBS = FIGURE.PART_GROUPS;
+// the rows of one layer (its channels, nested like Blender's: the pose under a "Pose" row, by limb)
+function layerRows(L) {
+  const T = new Map(tracksOf(L).map((t) => [t.ch, t])), get = (chs) => chs.map((c) => T.get(c)).filter(Boolean);
+  const row = (t, label, depth, tracks, key = null) => ({ t, L, label, depth, key, tracks, dia: diamonds(tracks, t === 'chan') });
+  const rows = [row('item', L.label, 0, [...T.values()], `i:${L.id}`)];
+  if (!OPEN.has(`i:${L.id}`)) return rows;
+  const chan = (ch, depth) => row('chan', chLabel(ch), depth, [T.get(ch)]);
+  if (L.kind !== 'figure') { for (const ch of L.names) rows.push(chan(ch, 1)); return rows; }
+  for (const ch of OBJ) rows.push(chan(ch, 1));
+  const params = [...T.keys()].filter((c) => c.startsWith('m.') && T.get(c).keys.length);
+  const pkey = `p:${L.id}`, poseTracks = get(['pn', ...JOINTS.map((j) => `j.${j}`), ...params]);
+  rows.push(row('group', 'Pose', 1, poseTracks, pkey));
+  if (!OPEN.has(pkey)) return rows;
+  rows.push(chan('pn', 2));
+  if (params.length) {
+    const k = `g:${L.id}:params`;
+    rows.push(row('group', 'Parameters', 2, get(params), k));
+    if (OPEN.has(k)) for (const c of params) rows.push(chan(c, 3));
+  }
+  for (const [gid, label, parts] of LIMBS) {
+    if (parts.length === 1) { rows.push(chan(`j.${parts[0]}`, 2)); continue; }
+    const k = `g:${L.id}:${gid}`;
+    rows.push(row('group', label, 2, get(parts.map((j) => `j.${j}`)), k));
+    if (OPEN.has(k)) for (const j of parts) rows.push(chan(`j.${j}`, 3));
+  }
+  return rows;
+}
+let ROWS = [];   // what is on screen (the dope sheet's rows, or the graph's one)
+const rowsNow = () => (UI.mode === 'graph' ? graphRows() : shown().flatMap(layerRows));
+function graphRows() {
+  const L = gLayer(), T = gTrack();
+  return L && T ? [{ t: 'chan', L, label: chLabel(G.ch), depth: 0, tracks: [T], dia: diamonds([T], true) }] : [];
+}
+function toggleOpen(key) {
+  if (OPEN.has(key)) OPEN.delete(key); else OPEN.add(key);
+  store.set('deck.scene.keyopen', [...OPEN]);
+  renderKeys();
+}
 
 // ---- drawing ----------------------------------------------------------------------------------
 const fmtT = (f) => (UI.unit === 's' ? `${+(f / FPS).toFixed(2)}s` : String(f + 1));
@@ -87,7 +148,7 @@ export function renderKeys() {
   const lanes = lanesEl();
   if (!lanes) return;
   const sh = shown();
-  prune(sh, SEL);
+  prune(allTracks(), SEL);
   clampV();
   const sheet = $('#sceneSheet');
   if (sheet) sheet.classList.toggle('graph', UI.mode === 'graph');
@@ -98,10 +159,11 @@ export function renderKeys() {
   if (graph) {
     const chs = channels(graph);
     if (!chs.includes(G.ch)) G.ch = chs[0];
+    ROWS = rowsNow();
     const rg = gRange || graphRange(graph, G.ch), n = span();
-    const L = graph, li = sh.findIndex((x) => x.item === L.item);
+    const L = graph;
     const plot = h('div', { class: 'graph-plot' + (L.item.mute ? ' muted' : '') }, h('canvas', { class: 'graph-cv' }),
-      ...L.item.keys.map((k, j) => keyEl(k, li, j, `top:${yPos(rg, sampleCh(L, G.ch, k.f))}`)));
+      ...ROWS[0].dia.map((d, j) => keyEl(d, 0, j, `top:${yPos(rg, d.keys[0].v)}`)));
     body = [plot];
     $('#sceneNames').replaceChildren(
       h('div', { class: 'sheet-head' }, layerSel(sh, L), muteBtn(L)),
@@ -109,15 +171,21 @@ export function renderKeys() {
     lanes.replaceChildren(ruler(), ...body, h('div', { id: 'scenePlayhead', class: 'playhead', style: `left:${lanePos(R.f)}` }));
     drawGraph(plot, L, rg, n);
   } else {
-    $('#sceneNames').replaceChildren(h('div', { class: 'sheet-head' }),
-      ...sh.map((L) => h('div', { class: 'sheet-name-row' }, muteBtn(L),
-        h('button', { type: 'button', class: 'sheet-name' + (L.id === R.sel ? ' sel' : '') + (L.item.hidden || L.item.mute ? ' off' : ''),
-          title: L.label, onclick: () => select(L.id) }, L.label))));
+    ROWS = rowsNow();
+    const nameRow = (r) => {
+      const L = r.L, pad = `padding-left:${r.depth * 12}px`, off = L.item.hidden || L.item.mute ? ' off' : '', mine = L.id === R.sel;
+      const caret = r.key ? h('button', { type: 'button', class: 'sheet-caret', 'aria-expanded': OPEN.has(r.key), 'aria-label': `${OPEN.has(r.key) ? 'Close' : 'Open'} ${r.label}`,
+        onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); toggleOpen(r.key); } }, OPEN.has(r.key) ? '▾' : '▸') : h('span', { class: 'sheet-caret' });
+      const name = h('button', { type: 'button', class: 'sheet-name' + (mine && (r.t === 'item' || (r.t === 'chan' && r.tracks[0].ch === G.ch)) ? ' sel' : '') + off, title: r.label,
+        onclick: () => { if (r.t === 'chan' && isScalar(r.tracks[0].ch)) { G.ch = r.tracks[0].ch; gRange = null; } select(L.id); } }, r.label);
+      return h('div', { class: `sheet-name-row ${r.t}`, style: pad }, r.t === 'item' ? muteBtn(L) : null, caret, name);
+    };
+    $('#sceneNames').replaceChildren(h('div', { class: 'sheet-head' }), ...ROWS.map(nameRow));
     lanes.replaceChildren(ruler(),
-      ...sh.map((L, i) => h('div', { class: 'sheet-lane' + (L.id === R.sel ? ' sel' : '') + (L.item.mute ? ' muted' : ''), 'data-track': i },
-        L.item.keys.length > 1 ? h('span', { class: 'span', style: `left:${lanePos(L.item.keys[0].f)};`
-          + `width:calc((100% - ${2 * PAD}px) * ${(L.item.keys[L.item.keys.length - 1].f - L.item.keys[0].f) / (V.b - V.a)})` }) : null,
-        ...L.item.keys.map((k, j) => keyEl(k, i, j, '')))),
+      ...ROWS.map((r, i) => h('div', { class: `sheet-lane ${r.t}` + (r.L.id === R.sel ? ' sel' : '') + (r.L.item.mute ? ' muted' : ''), 'data-track': i },
+        r.t !== 'chan' && r.dia.length > 1 ? h('span', { class: 'span', style: `left:${lanePos(r.dia[0].f)};`
+          + `width:calc((100% - ${2 * PAD}px) * ${(r.dia[r.dia.length - 1].f - r.dia[0].f) / (V.b - V.a)})` }) : null,
+        ...r.dia.map((d, j) => keyEl(d, i, j, '')))),
       h('div', { id: 'scenePlayhead', class: 'playhead', style: `left:${lanePos(R.f)}` }));
   }
   if (G0 && G0.type === 'box' && G0.el) lanes.append(G0.el);
@@ -126,7 +194,7 @@ export function renderKeys() {
   const [item] = keyTarget();
   const add = $('#sceneAddKey'), del = $('#sceneDelKey');
   if (add) add.disabled = !item;
-  if (del) del.disabled = !item || !item.keys.some((k) => k.f === R.f);
+  if (del) del.disabled = !item || !keyAt(item, R.f);
   if (add) add.classList.toggle('pending', !!item && TEMP.has(item));  // a held change to keep
   const lbl = $('#sceneKeyFor');
   if (lbl) lbl.textContent = selItem() ? selItem().name : R.sel === ROOM ? 'Room (not animated)' : 'Camera';
@@ -146,8 +214,12 @@ function layerSel(sh, L) {
   el.value = String(sh.findIndex((x) => x.item === L.item));
   return el;
 }
-const keyEl = (k, li, j, style) => h('span', { class: `key e-${k.ease || 'auto'}` + (SEL.has(k) ? ' sel' : '') + (k.f === R.f ? ' on' : ''),
-  'data-key': j, 'data-l': li, style: `left:${lanePos(k.f)};${style}`, title: `Key at ${(k.f / FPS).toFixed(2)} s · frame ${k.f + 1}${k.ease ? ` · ${k.ease}` : ''}` });
+// a diamond: one channel's key, or (on a layer's or group's row) all the keys at that frame
+const easeOf = (d) => (d.keys.every((k) => (k.ease || '') === (d.keys[0].ease || '')) ? d.keys[0].ease : '');
+const allSel = (d) => d.keys.every((k) => SEL.has(k));
+const keyEl = (d, ri, j, style) => h('span', { class: `key e-${easeOf(d) || 'auto'}` + (d.keys.length > 1 ? ' sum' : '') + (allSel(d) ? ' sel' : '') + (d.f === R.f ? ' on' : ''),
+  'data-key': j, 'data-l': ri, style: `left:${lanePos(d.f)};${style}`,
+  title: `Key at ${(d.f / FPS).toFixed(2)} s · frame ${d.f + 1}${d.keys.length > 1 ? ` · ${d.keys.length} channels` : easeOf(d) ? ` · ${easeOf(d)}` : ''}` });
 
 function drawGraph(plot, L, rg, n) {
   const cv = plot.firstChild, dpr = Math.min(window.devicePixelRatio || 1, 2), w = plot.clientWidth, hh = plot.clientHeight;
@@ -173,22 +245,24 @@ function drawGraph(plot, L, rg, n) {
 
 // ---- selection API (the sheet's buttons and the keyboard go through these) ----------------------
 export function selectKeys(keys, add = false) { if (!add) SEL.clear(); keys.forEach((k) => SEL.add(k)); renderKeys(); }
-export const selectAll = () => selectKeys(UI.mode === 'graph' ? (gLayer()?.item.keys || []) : allKeys(shown()));
+const poolNow = () => (UI.mode === 'graph' ? (gTrack()?.keys || []) : allKeys(allTracks()));
+export const selectAll = () => selectKeys(poolNow());
 export const selectNone = () => selectKeys([]);
 export function selectInvert() {
-  const pool = UI.mode === 'graph' ? (gLayer()?.item.keys || []) : allKeys(shown());
+  const pool = poolNow();
   selectKeys(pool.filter((k) => !SEL.has(k)));
 }
 // every edit below is one undo step
 const done = () => changed();
-export function moveKeys(dt) { if (!SEL.size) return 0; const d = moveBy(shown(), SEL, dt, frames()); done(); return d; }
-export function scaleKeys(s, t0 = R.f) { if (!SEL.size) return; scaleAround(shown(), SEL, t0, s, frames()); done(); }
+export function moveKeys(dt) { if (!SEL.size) return 0; const d = moveBy(allTracks(), SEL, dt, frames()); done(); return d; }
+export function scaleKeys(s, t0 = R.f) { if (!SEL.size) return; scaleAround(allTracks(), SEL, t0, s, frames()); done(); }
 export function deleteKeys() {
   if (!SEL.size) return;
-  for (const L of shown()) {  // a layer that loses its last key stays as it looks now (like Clear keys)
-    if (L.item.keys.length && L.item.keys.every((k) => SEL.has(k))) Object.assign(L.item.base, sample(L.item, L.names, R.f));
+  const tracks = allTracks();
+  for (const T of tracks) {  // a channel that loses its last key stays as it looks now (like Clear keys)
+    if (T.keys.length && T.keys.every((k) => SEL.has(k))) bakeBase(T.item, T.ch, sampleChan(T.item, T.ch, R.f));
   }
-  const c = remove(shown(), SEL); TEMP.clear(); done(); toast(`${c} key${c > 1 ? 's' : ''} deleted`);
+  const c = remove(tracks, SEL); TEMP.clear(); done(); toast(`${c} key${c > 1 ? 's' : ''} deleted`);
 }
 export function setKeyEase(ease) { if (!SEL.size) return; setEase(SEL, ease); done(); }
 
@@ -196,19 +270,19 @@ export function setKeyEase(ease) { if (!SEL.size) return; setEase(SEL, ease); do
 const CLIP = 'deck.scene.keyclip';
 let clip = null;
 export function copyKeys() {
-  const c = copy(shown(), SEL);
+  const c = copy(allTracks(), SEL);
   if (!c) return false;
   clip = c; store.set(CLIP, c); syncTools();
   toast(`${SEL.size} key${SEL.size > 1 ? 's' : ''} copied`);
   return true;
 }
-const getClip = () => clip || (clip = store.get(CLIP, null));
+const getClip = () => { clip ||= store.get(CLIP, null); return clip?.v === 2 ? clip : null; };   // (a clipboard from before per-channel keys is no use)
 // paste with the first key at t (the playhead): onto the selected layer if it fits, else where they came from
 export function pasteKeys(t = R.f, c = getClip()) {
   if (!c || !c.groups?.length) { toast('Nothing copied', true); return null; }
-  const [it] = keyTarget(), sh = shown();
-  const pick = sh.find((L) => L.item === (it || (R.sel === ROOM ? null : SC.camera))) || null;
-  const r = paste(sh, c, t, frames(), { pick, fill: (item, names, f) => sample(item, names, f) });
+  const [it] = keyTarget();
+  const pick = shown().find((L) => L.item === (it || (R.sel === ROOM ? null : SC.camera))) || null;
+  const r = paste(allTracks(), c, t, frames(), { pick });
   if (!r.groups) { toast('Those keys don\'t fit here', true); return null; }
   SEL.clear(); r.keys.forEach((k) => SEL.add(k));
   TEMP.clear(); done();
@@ -217,9 +291,9 @@ export function pasteKeys(t = R.f, c = getClip()) {
 }
 // copy and paste straight after the selection (a lone key goes half a second on)
 export function duplicateKeys() {
-  const b = bounds(shown(), SEL);
+  const b = bounds(allTracks(), SEL);
   if (!b) return null;
-  const c = copy(shown(), SEL);
+  const c = copy(allTracks(), SEL);
   return pasteKeys(b[0] + (b[1] > b[0] ? b[1] - b[0] + 1 : 12), c);
 }
 
@@ -229,11 +303,11 @@ const ptrs = new Map();
 const info = (t) => { const el = $('#sceneKeyInfo'); if (el) el.textContent = t ?? (SEL.size ? `${SEL.size} selected` : ''); };
 
 function syncSelClasses() {
-  const sh = shown();
-  for (const el of lanesEl().querySelectorAll('[data-key]')) el.classList.toggle('sel', SEL.has(sh[+el.dataset.l]?.item.keys[+el.dataset.key]));
+  for (const el of lanesEl().querySelectorAll('[data-key]')) { const d = diaOf(el); el.classList.toggle('sel', !!d && allSel(d)); }
   syncTools();
 }
-const keyOf = (el) => shown()[+el.dataset.l]?.item.keys[+el.dataset.key];
+const diaOf = (el) => ROWS[+el.dataset.l]?.dia[+el.dataset.key];
+const keyOf = (el) => diaOf(el)?.keys || [];   // (a summary diamond is all the keys under it)
 
 // keep the held keys' pixel pull in frames; snap onto the playhead and the keys not being moved
 function snapDt(dt, g) {
@@ -262,14 +336,14 @@ function down(e) {
   if (t.closest('.sheet-ruler')) { G0 = { type: 'scrub' }; seek(frameAtX(e.clientX)); return; }
   if (UI.tool === 'scale' && SEL.size) {
     const r = lanes.getBoundingClientRect(), phx = r.left + PAD + (R.f - V.a) * pxf();
-    G0 = { ...base, type: 'scale', phx, d0: Math.max(24, Math.abs(e.clientX - phx)), snap: snapshot(shown()) };
+    G0 = { ...base, type: 'scale', phx, d0: Math.max(24, Math.abs(e.clientX - phx)), snap: snapshot(allTracks()) };
     return;
   }
-  const L = keyEl2 ? shown()[+keyEl2.dataset.l] : laneEl ? shown()[+laneEl.dataset.track] : null;
+  const row = keyEl2 ? ROWS[+keyEl2.dataset.l] : laneEl ? ROWS[+laneEl.dataset.track] : null, L = row?.L || null;
   if (keyEl2) {
-    const key = keyOf(keyEl2), was = SEL.has(key);
-    if (UI.add) { if (!was) SEL.add(key); } else if (!was) { SEL.clear(); SEL.add(key); }
-    G0 = { ...base, type: 'key', key, was, L };
+    const keys = keyOf(keyEl2), was = keys.every((k) => SEL.has(k));
+    if (UI.add) { if (!was) keys.forEach((k) => SEL.add(k)); } else if (!was) { SEL.clear(); keys.forEach((k) => SEL.add(k)); }
+    G0 = { ...base, type: 'key', keys, was, L, row };
     if (L && L.id !== R.sel && UI.mode !== 'graph') select(L.id); else renderKeys();
     return;
   }
@@ -277,8 +351,8 @@ function down(e) {
   // empty space: a finger pans (unless Box is on); a mouse or pen draws a box
   const box = e.pointerType === 'touch' ? UI.box : true;
   const sheet = $('#sceneSheet');
-  G0 = box ? { ...base, type: 'box', start: new Set(UI.add ? SEL : []), L, el: h('div', { class: 'sel-box' }), fresh: true }
-    : { ...base, type: 'pan', a0: V.a, b0: V.b, st0: sheet.scrollTop, L };
+  G0 = box ? { ...base, type: 'box', start: new Set(UI.add ? SEL : []), L, row, el: h('div', { class: 'sel-box' }), fresh: true }
+    : { ...base, type: 'pan', a0: V.a, b0: V.b, st0: sheet.scrollTop, L, row };
 }
 
 function abort() {
@@ -319,34 +393,35 @@ function move(e) {
     SEL.clear(); g.start.forEach((k) => SEL.add(k));
     for (const el of lanes.querySelectorAll('[data-key]')) {
       const b = el.getBoundingClientRect(), cx = (b.left + b.right) / 2, cy = (b.top + b.bottom) / 2;
-      if (cx >= x1 && cx <= x2 && cy >= y1 && cy <= y2) SEL.add(keyOf(el));
+      if (cx >= x1 && cx <= x2 && cy >= y1 && cy <= y2) keyOf(el).forEach((k) => SEL.add(k));
     }
     syncSelClasses(); info();
     return;
   }
   // moving keys: from the snapshot each time, so the drag follows the pointer exactly
   if (!g.moved) {
-    g.moved = true; g.snap = g.snap || snapshot(shown()); g.held = new Set(SEL);  // (a collision drops keys from SEL; the snapshot brings them back)
+    g.tracks = allTracks();
+    g.moved = true; g.snap = g.snap || snapshot(g.tracks); g.held = new Set(SEL);  // (a collision drops keys from SEL; the snapshot brings them back)
     if (g.type === 'key') {
-      g.cands = [R.f, ...shown().flatMap((L) => L.item.keys).filter((k) => !SEL.has(k)).map((k) => k.f)];
+      g.cands = [R.f, ...allKeys(g.tracks).filter((k) => !SEL.has(k)).map((k) => k.f)];
       if (UI.mode === 'graph') {
-        const L = gLayer(); g.gL = L; gRange = graphRange(L, G.ch);
-        g.vals = new Map(L.item.keys.filter((k) => SEL.has(k)).map((k) => [k, sampleCh(L, G.ch, k.f)]));
+        const L = gLayer(); g.gL = L; g.gT = gTrack(); gRange = graphRange(L, G.ch);
+        g.vals = new Map(g.gT.keys.filter((k) => SEL.has(k)).map((k) => [k, k.v]));
       }
     }
   }
   restore(g.snap); SEL.clear(); g.held.forEach((k) => SEL.add(k));
   if (g.type === 'scale') {
-    const s = scaleAround(shown(), SEL, R.f, Math.abs(e.clientX - g.phx) / g.d0, frames());
+    const s = scaleAround(g.tracks, SEL, R.f, Math.abs(e.clientX - g.phx) / g.d0, frames());
     info(`× ${s.toFixed(2)}`);
   } else {
     g.mine = [...SEL].map((k) => ({ f0: k.f }));
-    const dt = snapDt(Math.round(dx / pxf()), g), d = moveBy(shown(), SEL, dt, frames());
+    const dt = snapDt(Math.round(dx / pxf()), g), d = moveBy(g.tracks, SEL, dt, frames());
     let t = `${d >= 0 ? '+' : ''}${d} f`;
     if (g.vals) {
       const rg = gRange, dv = -dy / Math.max(40, $('.graph-plot').clientHeight - 2 * GP) * (rg.hi - rg.lo);
       for (const [k, v0] of g.vals) {
-        if (g.gL.item.keys.includes(k)) setChan(k, G.ch, v0 + dv, { ...g.gL.item.base, ...k });
+        if (g.gT.keys.includes(k)) setChan(k, v0 + dv);
       }
       t += ` · ${dv >= 0 ? '+' : ''}${dv.toFixed(2)}`;
     }
@@ -364,7 +439,7 @@ function up(e) {
   if (g.type === 'scrub') return;
   if (g.type === 'key') {
     if (g.moved) { done(); info(); return; }
-    if (UI.add) { if (g.was) SEL.delete(g.key); } else { SEL.clear(); SEL.add(g.key); seek(g.key.f); }
+    if (UI.add) { if (g.was) g.keys.forEach((k) => SEL.delete(k)); } else { SEL.clear(); g.keys.forEach((k) => SEL.add(k)); seek(g.keys[0].f); }
     renderKeys(); info();
     return;
   }
@@ -373,7 +448,7 @@ function up(e) {
   if (!g.moved) {  // a tap on empty space: deselect (unless adding) and move the playhead
     if (!UI.add) SEL.clear();
     seek(frameAtX(e.clientX)); info();
-    doubleTap(e, g.L);
+    doubleTap(e, g.row);
   } else if (g.type === 'box') renderKeys();
 }
 
@@ -405,7 +480,7 @@ function syncTools() {
   for (const [b, on, needs] of tools) {
     if (!b.isConnected) continue;
     if (on) { const v = on(); b.classList.toggle('on', v); b.setAttribute('aria-pressed', v); }
-    if (needs) b.disabled = needs === 'sel' ? !SEL.size : !(clip || store.get(CLIP, null));
+    if (needs) b.disabled = needs === 'sel' ? !SEL.size : !getClip();
   }
   info();
 }
@@ -473,20 +548,15 @@ function applyTools(on = store.get(TK, true)) {
   if (!on) closeMenu();
 }
 
-// ---- adding keys by hand (double-tap): a full key sampled at that time, so nothing else moves ----
-const plain = (v) => JSON.parse(JSON.stringify(v ?? null));
-function insertKey(L, f, ch = null, v = null) {
-  const item = L.item;
-  let k = item.keys.find((x) => x.f === f);
-  if (!k) {
-    if (!item.keys.length) Object.assign(item.base, plain(sample(item, L.names, f)));  // the first key keeps the look it had
-    k = { f, ...Object.fromEntries(Object.entries(plain(sample(item, L.names, f))).filter(([, x]) => x != null)) };
-    item.keys.push(k); item.keys.sort((a, b) => a.f - b.f);
-  }
-  if (ch) setChan(k, ch, v, { ...item.base, ...k });
-  TEMP.clear(); SEL.clear(); SEL.add(k);
+// ---- adding keys by hand (double-tap): keys on the row's channels with the values they have there, so nothing
+// moves. A channel's row keys that channel, a limb's row its joints, a layer's row (and Pose) what ◆ Key would.
+function insertKeys(row, f, v = null) {
+  const item = row.L.item, names = row.L.names;
+  const wide = row.t === 'item' || row.key?.startsWith('p:'), ok = wide ? new Set(keyChans(item, names, sample(item, names, f))) : null;
+  const made = row.tracks.filter((T) => !ok || ok.has(T.ch)).map((T) => setKey(item, T.ch, f, v ?? sampleChan(item, T.ch, f)));
+  TEMP.clear(); SEL.clear(); made.forEach((k) => SEL.add(k));
   done(); seek(f);
-  return k;
+  return made;
 }
 // the value under a tap on the graph's plot
 function valueAtY(y) {
@@ -495,14 +565,14 @@ function valueAtY(y) {
   return rg.hi - t * (rg.hi - rg.lo);
 }
 let lastTap = null;   // the previous tap on empty space, for the double-tap
-function doubleTap(e, L) {
+function doubleTap(e, row) {
   const now = e.timeStamp, prev = lastTap;
   lastTap = { t: now, x: e.clientX, y: e.clientY };
   if (!prev || now - prev.t > 600 || Math.hypot(e.clientX - prev.x, e.clientY - prev.y) > 28) return;
   lastTap = null;
   const f = frameAtX(e.clientX);
-  if (UI.mode === 'graph') { const G1 = gLayer(); if (G1) insertKey(G1, f, G.ch, valueAtY(e.clientY)); }
-  else if (L) insertKey(L, f);
+  if (UI.mode === 'graph') { const r = graphRows()[0]; if (r) insertKeys(r, f, valueAtY(e.clientY)); }
+  else if (row) insertKeys(row, f);
 }
 
 export function renderTime() {
@@ -565,7 +635,7 @@ export function renderTransport() {
       }, { id: 'sceneAddKey', title: 'Keyframe at the playhead' }),
       button('✕ Key', () => {
         const [item] = keyTarget(); if (!item) return;
-        item.keys = item.keys.filter((k) => k.f !== R.f); changed();
+        dropKeys(item, (f) => f === R.f); changed();
       }, { id: 'sceneDelKey', title: 'Remove the key at the playhead' })),
     toolRow()),
     grip(),

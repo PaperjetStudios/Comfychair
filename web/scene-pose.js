@@ -1,6 +1,6 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
-import { C, FIG, FPS, OBJ, R, SC, addKey, current, frames, newObject, sameTab, save, write } from './scene-data.js';
+import { C, FIG, FPS, OBJ, R, SC, TEMP, addKey, current, dropKeys, frames, isPoseCh, keyFrames, newObject, putKeys, sameTab, sample, save, write } from './scene-data.js';
 import { button, clone, field, h, hint, iconBtn, nameSheet, section, seg, store, toast, uid, undoToast , help } from './ui.js';
 import { changed, selectJoint } from './scene-view.js';
 import { renderPanel, slider } from './scene-ui.js';
@@ -150,18 +150,18 @@ function runMove(o, key) {
   const last = at(steps[steps.length - 1]), r = THREE.MathUtils.degToRad(v.ry);
   if (FIGURE.moveKind(key) === 'spot' || (R.inPlace && FIGURE.moveKind(key) === 'travel')) o.stepsFollow = false;
   else if (FIGURE.moveKind(key) === 'travel') o.stepsFollow = true;
-  addKey(o, FIG, { ...v, m: { ...v.m } });
-  o.keys = o.keys.filter((x) => x.f <= f0 || x.f > last);
+  TEMP.delete(o);
+  dropKeys(o, (f) => f > f0 && f <= last);
+  const made = [{ ...v, f: f0, m: { ...v.m } }];   // (the pose it starts from is a key, on the channels the move changes)
   for (const st of steps) {
     const f = at(st), j = st.j || v.j, m = { ...v.m, ...st.m }, d = (st.d || 0) * v.sy;
     if (st.phase != null) m.phase = (v.m?.phase || 0) + st.phase;
     const y = v.y + (o.ground ? 0 : (FIGURE.liftFor(j, m) - FIGURE.liftFor(v.j, v.m)) * v.sy) + (st.y || 0) * v.sy;
     const key = { ...v, f, j, m, pn: st.pn || v.pn, y, ry: v.ry + (st.ry || 0), x: v.x + d * Math.sin(r), z: v.z + d * Math.cos(r) };
     if (st.ease) key.ease = st.ease;
-    o.keys = o.keys.filter((x) => x.f !== f);
-    o.keys.push(key);
+    made.push(key);
   }
-  o.keys.sort((a, b) => a.f - b.f);
+  putKeys(o, made, FIG);
   changed();
   undoToast(`${FIGURE.moveList().find(([x]) => x === key)[1]}: keys to ${(last / FPS).toFixed(1)} s`, () => {
     if (!ok()) return;
@@ -179,7 +179,7 @@ function nextKey(o, secs) {
 
 export function movesTab(o, cur) {
   if (THUMBS.size > 400) THUMBS.clear();
-  const strip = o.keys.map((k) => h('button', { type: 'button', class: 'key-card' + (k.f === R.f ? ' on' : ''), onclick: () => seek(k.f) },
+  const strip = keyFrames(o, isPoseCh).map((f) => ({ f, ...sample(o, ['j', 'm'], f) })).map((k) => h('button', { type: 'button', class: 'key-card' + (k.f === R.f ? ' on' : ''), onclick: () => seek(k.f) },
     thumb(`k:${JSON.stringify([k.j, k.m])}`, [{ j: k.j, m: k.m }]), h('span', {}, `${(k.f / FPS).toFixed(1)} s`)));
   return [
     field('Keys', strip.length ? h('div', { class: 'key-strip' }, strip) : hint('No keys yet: a move adds them, or ◆ Key.')),
@@ -262,7 +262,7 @@ function promptItems() {
   const tag = (o) => (R.promptNames ? o.name : `<Subject ${figs.indexOf(o) + 1}>`);
   const items = [];
   for (const o of figs) {
-    const states = o.keys.length ? o.keys : [o.base];
+    const pf = keyFrames(o, isPoseCh), states = pf.length ? pf.map((f) => sample(o, ['m', 'pn'], f)) : [o.base];
     let last = null, said = new Set();  // params already said for this figure: only changes are worth a word
     for (const k of states) {
       const words = [];

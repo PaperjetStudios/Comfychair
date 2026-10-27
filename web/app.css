@@ -666,7 +666,7 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: var(--fs-
 .scene-toolbar { top: 8px; left: 8px; }
 /* key sheet: track names on the left, a row of keys per track on the right */
 .scene-sheet { display: flex; max-height: 136px; overflow-y: auto; overflow-x: hidden; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
-.sheet-names { flex: none; width: 120px; border-right: 1px solid var(--line); }
+.sheet-names { flex: none; width: 132px; border-right: 1px solid var(--line); }
 .sheet-names > *, .sheet-lane, .sheet-ruler { height: 26px; }
 .sheet-head, .sheet-ruler { position: sticky; top: 0; z-index: 2; background: var(--surface-2); }
 .sheet-name {
@@ -752,6 +752,8 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: var(--fs-
   .sheet-ruler .tick { line-height: 34px; }
   .scene-sheet { max-height: 172px; }
   .sheet-lane .key { width: 16px; height: 16px; margin: -8px 0 0 -8px; }
+  .sheet-lane.chan .key { width: 13px; height: 13px; margin: -6.5px 0 0 -6.5px; }
+  button.sheet-caret { width: 30px; font-size: 14px; }
   .pose-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
   .body-map { grid-auto-rows: 46px; }
   #scenePanel input[type=range] { height: 44px; }
@@ -865,6 +867,14 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: var(--fs-
 .scene-sheet.graph .sheet-lanes { overflow: hidden; cursor: default; }  /* (in the dope sheet it must not clip: its rows run past the box and the sheet scrolls them) */
 .sheet-name-row { display: flex; align-items: stretch; border-top: 1px solid var(--line); }
 .sheet-name-row .sheet-name { border-top: 0; flex: 1; min-width: 0; width: auto; }
+.sheet-caret { flex: none; width: 18px; padding: 0; border: 0; background: none; color: var(--muted); font-size: 11px; cursor: pointer; }
+button.sheet-caret { width: 22px; }
+.sheet-name-row .sheet-name { padding-left: 2px; }
+.sheet-name-row.chan .sheet-name { color: var(--muted); }
+/* a channel's row is quieter than the layer or limb it belongs to, whose diamonds sum up the keys under them */
+.sheet-lane.chan, .sheet-name-row.chan { background: color-mix(in srgb, var(--surface-2) 45%, transparent); }
+.sheet-lane.chan .key { width: 10px; height: 10px; margin: -5px 0 0 -5px; }
+.sheet-lane.group .key, .sheet-lane.item .key { border-radius: 2px; }
 .mute-btn { flex: none; width: 28px; padding: 0; border: 0; background: none; cursor: pointer; font-size: 13px; line-height: 1; opacity: .6; }
 .mute-btn.on { opacity: 1; background: color-mix(in srgb, var(--bad) 22%, transparent); }
 .sheet-head { display: flex; align-items: stretch; }
