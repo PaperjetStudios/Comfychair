@@ -19,7 +19,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFil
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import accel, audioedit, clipimport, craft, h3upscale, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
+from . import accel, audioedit, clipimport, craft, delogo, h3upscale, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import store
 from . import sceneasset
 from . import templates as tpl
@@ -927,6 +927,85 @@ async def h3_upscale(body: dict = Body(...)):
               "from": f"{info['width']}×{info['height']}", "template": g["template"]}
     gid = db.create_generation(g["project_id"], "h3 upscale", params, wf, res["prompt_id"],
                                {"generation": g["id"], "index": idx, "frame": None})
+    await push_gen(gid)
+    return db.get_generation(gid)
+
+
+async def _delogo_clip(body: dict) -> tuple[dict, Path, dict]:
+    """(the source, the clip as the boxes were drawn on it: trimmed, cropped and upright, its probe)."""
+    if not imageprep.ffmpeg_available():
+        raise HTTPException(400, "ffmpeg isn't installed (sudo apt install ffmpeg)")
+    src = body.get("source") or {}
+    path, kind = await _timeline_path(src, None)
+    if kind != "video":
+        raise HTTPException(400, "Remove watermark needs a video clip")
+    try:
+        r = await asyncio.to_thread(videoprep.prep, path, body.get("trim"), body.get("crop"))
+        info = await asyncio.to_thread(videoedit.probe, r["path"])
+    except (ValueError, subprocess.SubprocessError, OSError) as e:
+        raise HTTPException(400, str(e))
+    return src, r["path"], info
+
+
+@app.post("/api/video/delogo/find")
+async def video_delogo_find(body: dict = Body(...)):
+    """Where a watermark probably is ({source, trim, crop}) -> {boxes: [{x, y, w, h} fractions of the frame]}."""
+    _, path, _ = await _delogo_clip(body)
+    try:
+        return {"boxes": await asyncio.to_thread(delogo.find_boxes, path)}
+    except (subprocess.SubprocessError, OSError, ValueError) as e:
+        raise HTTPException(400, f"Couldn't look through the clip: {e}")
+
+
+@app.post("/api/video/delogo")
+async def video_delogo(body: dict = Body(...)):
+    """Remove watermark ({source, trim, crop, boxes: [{x, y, w, h} fractions], mode: quality|fast, project_id}): the
+    boxes painted out of the clip (app/delogo.py). Quality queues ProPainter in ComfyUI; fast is ffmpeg's delogo,
+    done here. A new generation in History, made from the clip."""
+    src, path, info = await _delogo_clip(body)
+    try:
+        rects = delogo.boxes_px(body.get("boxes"), info["width"], info["height"])
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not rects:
+        raise HTTPException(400, "Draw a box over the watermark first")
+    mode = "fast" if body.get("mode") == "fast" else "quality"
+    params = {"delogo": mode, "boxes": body.get("boxes"), "source": src,
+              **({"trim": body["trim"]} if body.get("trim") else {}), **({"crop": body["crop"]} if body.get("crop") else {})}
+    parent = ({"generation": src["generation"], "index": src.get("index", 0), "frame": None}
+              if src.get("generation") is not None else None)
+    project = body.get("project_id")
+    if mode == "quality":
+        oi = await object_info_or_none()
+        if oi is not None and "ProPainterInpaint" not in oi:   # installed since it was read?
+            oi = await object_info_or_none(refresh=True)
+        if oi is not None and "ProPainterInpaint" not in oi:
+            raise HTTPException(400, "ComfyUI doesn't have ProPainter (ComfyUI_ProPainter_Nodes): install it and restart ComfyUI")
+        frames = max(2, int(round(info["duration"] * info["fps"])))
+        folder = db.project_folder(project) if project else None
+        prefix = f"{config.COMFY_INPUT_SUBFOLDER}/{folder}/delogo" if folder else f"{config.COMFY_INPUT_SUBFOLDER}/delogo"
+        wf = delogo.build(str(path), info["width"], info["height"], info["fps"] or 24, frames, rects, prefix, info["audio"])
+        try:
+            res = await comfy.queue(wf)
+        except ComfyError as e:
+            raise HTTPException(400, str(e))
+        gid = db.create_generation(project, "remove watermark", params, wf, res["prompt_id"], parent)
+        await push_gen(gid)
+        return db.get_generation(gid)
+    gid = db.create_generation(project, "remove watermark", params, {}, f"delogo-{uuid.uuid4().hex}", parent)
+    db.update_generation(gid, status="running")
+    await push_gen(gid)
+    out, rel = new_output(db.get_generation(gid), "clean.mp4")
+    try:
+        got = await asyncio.to_thread(delogo.fast, path, out, rects)
+    except Exception as e:
+        out.unlink(missing_ok=True)
+        db.update_generation(gid, status="error", error=str(e), finished=time.time())
+        await push_gen(gid)
+        raise HTTPException(400, str(e))
+    db.update_generation(gid, status="done", finished=time.time(),
+                         outputs=[{"filename": out.name, "path": rel, "kind": "video", "node": "delogo",
+                                   "duration": round(got["duration"], 2)}])
     await push_gen(gid)
     return db.get_generation(gid)
 
