@@ -715,19 +715,23 @@ export async function openJobs() {
 // A finished H3 clip sampled again bigger (app/h3upscale.py): the run's own prompt, LoRAs, references and seed
 function openH3Upscale(g, idx) {
   const o = g.outputs[idx], w = o.width || 0, hgt = o.height || 0;
-  let scale = 1.5;
+  let scale = 1.5, strength = 'medium';
   const size = (s) => (w ? `${Math.round((w * s) / 32) * 32}×${Math.round((hgt * s) / 32) * 32}` : `${s}×`);
   const info = h('div', { class: 'hint' });
   const show = () => { info.textContent = `${w ? `${w}×${hgt} → ` : ''}${size(scale)}. Bigger takes longer and needs more memory: 1.5× is the safe choice on 12 GB.`; };
   const go = button('Upscale', async () => {
     go.disabled = true;
     try {
-      const n = await api('/api/h3/upscale', { method: 'POST', body: { generation: g.id, index: idx, scale } });
+      const n = await api('/api/h3/upscale', { method: 'POST', body: { generation: g.id, index: idx, scale, strength } });
       S.history.set(n.id, n); closeSheet(); openGeneration(n.id);
     } catch (e) { toast(e.message, true); go.disabled = false; }
   }, { cls: 'primary' });
   show();
   openSheet(h('h3', {}, `Upscale #${g.id}`),
-    hint('Encodes the clip, makes its latent bigger with the MiniMax H3 latent upscaler, and samples it again for 3 steps with this run\'s own prompt, LoRAs, references and seed. The sound is the clip\'s own.'),
-    seg([[1.25, '1.25×'], [1.5, '1.5×'], [2, '2×']], scale, (v) => { scale = v; show(); }), info, h('div', { class: 'row' }, go));
+    hint('Encodes the clip, makes its latent bigger with the MiniMax H3 latent upscaler, and samples it again with this run\'s own prompt, LoRAs, references and seed. The sound is the clip\'s own.'),
+    seg([[1.25, '1.25×'], [1.5, '1.5×'], [2, '2×']], scale, (v) => { scale = v; show(); }), info,
+    h('div', { class: 'lbl' }, 'Strength'),
+    seg([['light', 'Light'], ['medium', 'Medium'], ['strong', 'Strong']], strength, (v) => { strength = v; }),
+    hint('Light keeps faces and poses closest to the clip and sharpens least (2 steps). Strong sharpens most but can change faces and hands (3 steps from 0.90).'),
+    h('div', { class: 'row' }, go));
 }

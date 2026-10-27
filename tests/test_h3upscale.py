@@ -44,6 +44,12 @@ class Build(unittest.TestCase):
         self.assertEqual(wf["up_guide"]["inputs"]["conditioning"], ["up_cond", 0])
         self.assertEqual(wf["up_split"]["inputs"]["av_latent"], ["up_cond", 1])
 
+    def test_strength_sets_where_the_second_pass_starts(self):
+        self.assertEqual(up.sigmas(up.STRENGTHS["light"]), "0.6316, 0.3158, 0.0000")
+        self.assertEqual(up.sigmas(up.STRENGTHS["strong"]), "0.9035, 0.6316, 0.3158, 0.0000")   # as tested on the GPU
+        wf, _ = up.build(self.wf("deck-h3-ref2v"), "/c.mp4", 768, 448, 1.5, strength=0.8)
+        self.assertEqual(wf["up_sigmas"]["inputs"]["sigmas"], "0.8000, 0.6316, 0.3158, 0.0000")
+
     def test_not_h3(self):
         with self.assertRaises(ValueError):
             up.build(self.wf("deck-ltx-t2v"), "/x.mp4", 768, 448)

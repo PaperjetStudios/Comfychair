@@ -827,7 +827,7 @@ async def video_render(body: dict = Body(...)):
 
 @app.post("/api/h3/upscale")
 async def h3_upscale(body: dict = Body(...)):
-    """A finished MiniMax H3 clip ({generation, index, scale}) sampled again bigger, with the same run's prompt,
+    """A finished MiniMax H3 clip ({generation, index, scale, strength: light|medium|strong}) sampled again bigger, with the same run's prompt,
     LoRAs, references and seed (app/h3upscale.py). A new generation in History, made from the clip."""
     g = db.get_generation(int(body.get("generation", -1)))
     idx = int(body.get("index") or 0)
@@ -848,17 +848,21 @@ async def h3_upscale(body: dict = Body(...)):
     except (subprocess.SubprocessError, OSError, ValueError, KeyError) as e:
         raise HTTPException(400, f"Couldn't read the clip: {e}")
     scale = min(2.0, max(1.1, float(body.get("scale") or 1.5)))
+    strength = h3upscale.STRENGTHS.get(str(body.get("strength") or "strong"))
+    if strength is None:
+        raise HTTPException(400, "Strength is light, medium or strong")
     folder = db.project_folder(g["project_id"])
     try:
         wf, (w, h) = h3upscale.build(wf0, str(path), info["width"], info["height"], scale,
-                                     f"{config.COMFY_INPUT_SUBFOLDER}/{folder}/h3up", info.get("fps") or 24)
+                                     f"{config.COMFY_INPUT_SUBFOLDER}/{folder}/h3up", info.get("fps") or 24, strength)
     except ValueError as e:
         raise HTTPException(400, str(e))
     try:
         res = await comfy.queue(wf)
     except ComfyError as e:
         raise HTTPException(400, str(e))
-    params = {"source": {"generation": g["id"], "index": idx}, "scale": scale, "frame": f"{w}×{h}",
+    params = {"source": {"generation": g["id"], "index": idx}, "scale": scale, "strength": body.get("strength") or "strong",
+              "frame": f"{w}×{h}",
               "from": f"{info['width']}×{info['height']}", "template": g["template"]}
     gid = db.create_generation(g["project_id"], "h3 upscale", params, wf, res["prompt_id"],
                                {"generation": g["id"], "index": idx, "frame": None})

@@ -4,14 +4,16 @@ The run's saved workflow is the starting point, so the second pass sees exactly 
 chain (LoRAs, turbo LoRA, attention patches), text, reference pictures and sounds, and seed. The finished clip is
 encoded back into H3's video latent, made bigger by the MiniMax H3 latent upscaler
 (Comfyui_Minimax_h3_latent_Upscaler), and sampled again from part-way (3 steps from sigma 0.90, as the pack's
-examples do). Its sound is the clip's own, so speech stays in sync. Reference-to-video conditioning doesn't depend
+examples do; Strength light or medium starts lower, at 0.63 or 0.80, which keeps faces and poses closer to the clip
+and sharpens less). Its sound is the clip's own, so speech stays in sync. Reference-to-video conditioning doesn't depend
 on the frame size, so it is reused; image-to-video's carries its keyframes at the frame size, so that node is run
 again at the new size.
 """
 import copy
 
 UPSCALER = "minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors"
-SIGMAS = "0.9035, 0.6316, 0.3158, 0.0000"
+LADDER = (0.6316, 0.3158, 0.0)   # the pack examples' second pass, below where it starts
+STRENGTHS = {"light": 0.6316, "medium": 0.8, "strong": 0.9035}
 SAMPLER = "euler"
 SIZE_FREE = {"MiniMaxH3ReferenceToVideo"}   # conditioning that doesn't depend on the frame size
 OUTPUTS = {"VHS_VideoCombine", "SaveVideo", "SaveImage", "PreviewImage", "SaveAnimatedWEBP", "SaveWEBM", "CreateVideo",
@@ -51,8 +53,13 @@ def target_size(w: int, h: int, scale: float) -> tuple[int, int]:
     return max(64, round(w * scale / 32) * 32), max(64, round(h * scale / 32) * 32)
 
 
+def sigmas(strength: float) -> str:
+    """The second pass's schedule: from strength (the sigma it starts at) down the ladder to 0."""
+    return ", ".join(f"{x:.4f}" for x in (strength, *(x for x in LADDER if x < strength - 0.01)))
+
+
 def build(workflow: dict, video: str, width: int, height: int, scale: float = 1.5, prefix: str = "comfydeck/h3up",
-          fps: float = 24) -> tuple[dict, tuple[int, int]]:
+          fps: float = 24, strength: float = STRENGTHS["strong"]) -> tuple[dict, tuple[int, int]]:
     """(the second-pass workflow, its frame size). video: the finished clip's path; width/height its frame size."""
     wf = copy.deepcopy(workflow)
     h3 = h3_node(wf)
@@ -86,7 +93,7 @@ def build(workflow: dict, video: str, width: int, height: int, scale: float = 1.
         # the sound part of the latent: the run's own empty one (the clip's real sound goes on at the end)
         "up_split": ("LTXVSeparateAVLatent", None, dict(av_latent=[cond_src, 1])),
         "up_av": ("LTXVConcatAVLatent", None, dict(video_latent=["up_scale", 0], audio_latent=["up_split", 1])),
-        "up_sigmas": ("ManualSigmas", "Second pass: 3 steps from 0.90", dict(sigmas=SIGMAS)),
+        "up_sigmas": ("ManualSigmas", f"Second pass from {strength:.2f}", dict(sigmas=sigmas(strength))),
         "up_sampler": ("KSamplerSelect", None, dict(sampler_name=SAMPLER)),
         "up_guide": ("BasicGuider", None, dict(model=model, conditioning=[cond_src, 0])),
         "up_run": ("SamplerCustomAdvanced", None, dict(noise=noise, guider=["up_guide", 0], sampler=["up_sampler", 0],
