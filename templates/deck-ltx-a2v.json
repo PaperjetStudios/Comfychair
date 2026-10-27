@@ -370,20 +370,23 @@
   }
  },
  "vdec": {
-  "class_type": "VAEDecodeTiled",
+  "class_type": "LTXVSpatioTemporalTiledVAEDecode",
   "inputs": {
-   "samples": [
-    "sep",
-    0
-   ],
    "vae": [
     "vvae",
     0
    ],
-   "tile_size": 512,
-   "overlap": 64,
-   "temporal_size": 64,
-   "temporal_overlap": 8
+   "latents": [
+    "sep",
+    0
+   ],
+   "spatial_tiles": 4,
+   "spatial_overlap": 1,
+   "temporal_tile_length": 16,
+   "temporal_overlap": 1,
+   "last_frame_fix": false,
+   "working_device": "auto",
+   "working_dtype": "auto"
   }
  },
  "vid": {
