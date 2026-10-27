@@ -162,6 +162,20 @@ export async function sendToVfx(src, { label = null, trim = null } = {}) {
   toast('Clip set as the VFX source: pick an effect');
 }
 
+// From the Board or History ("Use as…"): one input of the open VFX tab. role: 'source' | 'matte' (clips),
+// 'sound' | 'voice' (sounds, or a clip's sound), 'first' (an input image name). When the effect on show doesn't
+// take it, the toast names the ones that do.
+const ROLE_NAMES = { source: 'Source clip', matte: 'Matte clip', sound: 'Sound', voice: 'Voice', first: 'Start image' };
+export async function useInVfx(role, value, { label = null } = {}) {
+  if (role === 'source') return sendToVfx(value, { label });
+  switchTab('vfx');
+  await ensureTabs();
+  T[role] = role === 'first' ? value : bare(value);
+  changed();
+  const uses = (e) => e.needs.some((n) => n.replace('?', '') === role);
+  toast(uses(fx(T.op)) ? `${ROLE_NAMES[role]} set` : `${ROLE_NAMES[role]} set: ${EFFECTS.filter(uses).map((e) => e.label).join(', ')} use it`);
+}
+
 function sourceField(role = 'source') {
   const isSrc = role === 'source';
   const v = isSrc ? T.source : T.matte;

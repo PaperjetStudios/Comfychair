@@ -23,7 +23,8 @@ import { registerImport } from './scene-import.js';
 import { registerRef } from './scene-ref.js';
 import './scene-track.js';   // the footage and track-point layers a motion track makes
 export { addModeSection, registerMode } from './scene-modes.js';
-export { addPhoto } from './scene-view.js';
+export { addPhoto, makePhoto } from './scene-view.js';
+export { useAsRef } from './scene-ref.js';
 
 registerCamera();     // camera moves (a section of Camera mode)
 registerBuiltins();   // (the dependencies have run by now; a mode registered later goes after them)

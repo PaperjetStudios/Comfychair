@@ -2,9 +2,9 @@
 // frame, letterboxed in the viewer), to line the shot up with. It is an HTML layer, so it is never in a
 // render, a saved frame or an export. A clip follows the playhead (frame ÷ fps) and plays with the
 // transport, muted. Saved with the scene: SC.ref = { kind: 'image' | 'video', name | src, url, label, opacity, on }.
-import { C, FPS, R, SC, save } from './scene-data.js';
+import { C, FPS, R, SC, hooks, save } from './scene-data.js';
 import { canvas, viewer } from './scene-view.js';
-import { renderPanel, renderToolbar } from './scene-ui.js';
+import { renderPanel, renderToolbar, setSceneMode } from './scene-ui.js';
 import { addModeSection, modeOf } from './scene-modes.js';
 import { button, clamp, h, help, rangeField, section, toast } from './ui.js';
 import { inputUrl } from './core.js';
@@ -65,6 +65,14 @@ async function relink() {
 function setRef(ref) {
   SC.ref = { opacity: SC.ref?.opacity ?? 0.5, on: true, ...ref };
   save(); syncRef(); renderToolbar(); renderPanel();
+}
+// From the Board or History ("Use as…"): a picture ({kind: 'image', name, url, label}) or a clip ({kind: 'video', src,
+// url, label}) as the open scene's reference (it shows in the edit and camera modes)
+export async function useAsRef(ref) {
+  await hooks.ready();
+  if (modeOf().stage === 'empty') setSceneMode('edit');
+  setRef(ref);
+  toast(`${ref.kind === 'video' ? 'Clip' : 'Picture'} set as the reference over the view`);
 }
 const pickImage = () => C.openImagePicker({ title: 'Reference picture', onPick: (name) => setRef({ kind: 'image', name, url: inputUrl(name), label: name.split('/').pop() }) });
 const pickVideo = () => openVideoPicker({ title: 'Reference clip', onPick: async (src) => {
