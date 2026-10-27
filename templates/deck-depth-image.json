@@ -1,0 +1,59 @@
+{
+ "img": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@1 Picture [image]"
+  }
+ },
+ "vda": {
+  "class_type": "LoadVideoDepthAnythingModel",
+  "inputs": {
+   "model": "video_depth_anything_vitl.pth"
+  },
+  "_meta": {
+   "title": "@5 Depth model [model]"
+  }
+ },
+ "run": {
+  "class_type": "VideoDepthAnythingProcess",
+  "inputs": {
+   "vda_model": [
+    "vda",
+    0
+   ],
+   "images": [
+    "img",
+    0
+   ],
+   "input_size": 448,
+   "max_res": 2048,
+   "precision": "fp16"
+  },
+  "_meta": {
+   "title": "@6 Depth detail [input_size]"
+  }
+ },
+ "grey": {
+  "class_type": "VideoDepthAnythingOutput",
+  "inputs": {
+   "depths": [
+    "run",
+    0
+   ],
+   "colormap": "gray"
+  }
+ },
+ "save": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "grey",
+    0
+   ],
+   "filename_prefix": "deck/depth"
+  }
+ }
+}
