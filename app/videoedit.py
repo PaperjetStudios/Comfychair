@@ -38,7 +38,8 @@ def run_ffmpeg(args: list[str], **kw) -> subprocess.CompletedProcess:
 
 
 def probe(path: Path) -> dict:
-    """{"width", "height", "duration", "fps", "video", "audio", "alpha"} for a video, image or audio file.
+    """{"width", "height" (as shown: a rotation tag is applied), "rotation", "duration", "fps", "video", "audio", "alpha"}
+    for a video, image or audio file.
     "alpha" is a VP9/VP8 webm carrying an alpha channel (what key() writes)."""
     r = subprocess.run(
         ["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", "-show_format", str(path)],
@@ -52,8 +53,17 @@ def probe(path: Path) -> dict:
             fps = float(num) / float(den or 1) or 24.0
         except (ValueError, ZeroDivisionError):
             fps = 24.0
+    # phone clips are often stored on their side with a rotation tag (players and ffmpeg's decoder turn them
+    # upright): report the size as they're seen, or a portrait clip gets squeezed to landscape
+    rot = 0
+    if v:
+        rot = next((int(round(float(d["rotation"]))) for d in v.get("side_data_list") or [] if "rotation" in d),
+                   int(float((v.get("tags") or {}).get("rotate") or 0))) % 360
+    w, h = (int(v["width"]), int(v["height"])) if v else (0, 0)
+    if rot in (90, 270):
+        w, h = h, w
     return {
-        "width": int(v["width"]) if v else 0, "height": int(v["height"]) if v else 0,
+        "width": w, "height": h, "rotation": rot,
         "duration": float(info["format"].get("duration") or (v or {}).get("duration") or 0),
         "fps": fps, "video": bool(v),
         "audio": any(s["codec_type"] == "audio" for s in info["streams"]),

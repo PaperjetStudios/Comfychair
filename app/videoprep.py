@@ -90,7 +90,7 @@ def prep(src: Path, trim=None, crop=None, info: dict | None = None) -> dict:
     if not info["video"]:
         raise ValueError("that isn't a video")
     trim, crop = norm_trim(trim, info["duration"]), norm_crop(crop, info["width"], info["height"])
-    if not trim and not crop:
+    if not trim and not crop and not info.get("rotation"):
         return {"path": src, "width": info["width"], "height": info["height"], "duration": info["duration"], "cached": True}
     out = config.VIDEOPREP_DIR / f"{PREFIX}{cache_key(src, trim, crop)}.mp4"
     cached = out.is_file() and out.stat().st_size > 0
@@ -143,7 +143,7 @@ def plan(src: Path, trim, crop, loader: dict) -> dict:
     if not info["video"]:
         raise ValueError("that isn't a video")
     t, c = norm_trim(trim, info["duration"]), norm_crop(crop, info["width"], info["height"])
-    if c:   # ffmpeg crops and cuts in one pass
+    if c or info.get("rotation"):   # ffmpeg crops and cuts in one pass; a copy also has a rotation tag baked in
         return {"path": prep(src, trim, crop, info)["path"], "inputs": {}}
     if t:
         mapped = loader_trim(info, t, loader)
