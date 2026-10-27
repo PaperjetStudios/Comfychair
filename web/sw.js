@@ -1,8 +1,8 @@
 // ComfyDeck service worker (only registered over HTTPS). Network first, always: the app shell is
 // cached only so the home-screen app still opens (and says the server is unreachable) when the box
 // is off. API calls, files and the websocket are never cached.
-const CACHE = 'comfydeck-shell-v7';
-const SHELL = ['/', 'index.html', 'app.css', 'app.js', 'core.js', 'media.js', 'generate.js', 'run.js', 'editor.js', 'video.js', 'vfx.js', 'vfield.js', 'board.js', 'ui.js', 'tabs.js', 'gentabs.js', 'gizmo.js', 'prefs.js',
+const CACHE = 'comfydeck-shell-v8';
+const SHELL = ['/', 'index.html', 'app.css', 'app.js', 'core.js', 'media.js', 'generate.js', 'run.js', 'editor.js', 'video.js', 'vfx.js', 'vfield.js', 'board.js', 'compare.js', 'ui.js', 'tabs.js', 'gentabs.js', 'gizmo.js', 'prefs.js',
   'manifest.webmanifest', 'icon.svg', 'icon-192.png'];
 
 self.addEventListener('install', (e) => {

@@ -7,6 +7,7 @@ import { openGeneration, sendToInput } from './run.js';
 import { E, FULL, editorTabsReady, persistEditor, renderEditor } from './editor.js';
 import { addToTimeline } from './video.js';
 import { maximizable } from './layout.js';
+import { openCompare } from './compare.js';
 
 // ---------------------------------------------------------------------------
 // board: every output in the project as a pin board. Pin favourites, filter, resize the tiles.
@@ -155,6 +156,7 @@ function boardSelBar() {
     button('All', () => { visibleKeys().forEach((k) => B.sel.add(k)); renderBoard(); }),
     n ? button('None', () => { B.sel.clear(); renderBoard(); }) : null,
     button(`New edit${images ? ` (${images})` : ''}`, boardToEditor, { cls: 'small primary', disabled: !images }),
+    button('Compare', boardCompare, { disabled: n !== 2, title: 'Select two to see them side by side or wipe between them' }),
     button('To video', boardToVideo, { disabled: !n }),
     button('Delete', boardDelete, { cls: 'small danger', disabled: !n }));
 }
@@ -166,6 +168,10 @@ function clipImported(e) {
 
 // The selected images as a fresh Editor layout (side by side, or a grid for more than 3).
 // Whatever was in the Editor can be brought back with Undo.
+function boardCompare() {
+  const items = boardSelected().reverse();   // older on the left
+  if (items.length === 2) openCompare(items.map(({ g, o }) => ({ o, label: `#${g.id} ${g.template}` })));
+}
 async function boardToEditor() { return itemsToEditor(boardSelected()); }
 async function itemsToEditor(all) {
   const items = all.filter((x) => x.o.kind === 'image');
