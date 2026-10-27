@@ -63,10 +63,10 @@ const EFFECTS = [
   { id: 'faceswap', group: 'Performance', label: 'Face only', tpl: 'deck-h3-faceswap', needs: ['source', 'first', 'len', 'res', 'steps', 'blend', 'seed'],
     res: [[384, '384'], [512, '512'], [640, '640']], maxLen: 30,
     help: 'Swaps only the face: it is followed through the clip, re-rendered as the character\'s face with the same expressions, and blended back. Hair, body and the rest of the shot stay. Works best when the face is large in frame.' },
-  { id: 'drive', group: 'Performance', label: 'Drive a still', tpl: 'deck-h3-drive', sd: 'deck-h3-drive-sd', needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
+  { id: 'drive', group: 'Performance', label: 'Drive a still', tpl: 'deck-h3-drive', sd: 'deck-h3-drive-sd', posed: 'deck-h3-drive-posed', needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
     res: [[384, '384p'], [448, '448p'], [576, '576p']], maxLen: 15,
     help: 'The character in the still acts out the clip: body, hands and face follow the clip\'s pose (H3 with pose control), in a new shot described by the prompt. Call the character <Subject 1> and the still <Picture 1>, and name their clothes and look: otherwise the outfit can drift.' },
-  { id: 'ltxdrive', group: 'Performance', label: 'Drive a still (LTX)', tpl: 'deck-ltx-drive', sd: 'deck-ltx-drive-sd', mult: 64, needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
+  { id: 'ltxdrive', group: 'Performance', label: 'Drive a still (LTX)', tpl: 'deck-ltx-drive', sd: 'deck-ltx-drive-sd', posed: 'deck-ltx-drive-posed', mult: 64, needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
     res: [[448, '448p'], [576, '576p'], [704, '704p']],
     help: 'Like Drive a still, on LTX-2.5: the still is the first frame and the clip\'s pose (body, hands, face) moves it. Keeps the still\'s scene and look closely. Describe the person and what they do; the sound is made from the prompt.' },
   { id: 'pose', group: 'Performance', label: 'Pose preview', tpl: 'deck-pose-video', sd: 'deck-pose-sdpose', needs: ['source', 'len'],
@@ -77,8 +77,9 @@ const fx = (id) => EFFECTS.find((e) => e.id === id) || EFFECTS[0];
 
 // how an effect's inputs find their template fields: by kind, then by the group (node title) name
 const ROLES = {
-  source: (f) => f.kind === 'video' && !/mask|matte/i.test(f.group),
+  source: (f) => f.kind === 'video' && !/mask|matte|pose/i.test(f.group),
   matte: (f) => f.kind === 'video' && /mask|matte/i.test(f.group),
+  pose: (f) => f.kind === 'video' && /pose/i.test(f.group),   // a ready pose video (the drives' posed templates)
   first: (f) => f.kind === 'image',
   sound: (f) => f.kind === 'audio' && !/voice/i.test(f.group),
   voice: (f) => f.kind === 'audio' && /voice/i.test(f.group),
@@ -131,7 +132,9 @@ const BLANK = () => ({ op: 'ripple', source: null, first: null, matte: null, sou
 let T = BLANK();
 let tabs = null;
 // cmp: the result on the left instead of the source (comparing takes); layout: 'wipe' or 'side'
-const UI = { wipe: 0.5, draw: null, srcInfo: null, playing: false, neg: false, cmp: null, layout: 'wipe', rate: 1 };
+// pose: the source's finished pose video for the drives ({ key, r }: r null when there is none, undefined while
+// looking); remake: the next drive makes the pose again
+const UI = { wipe: 0.5, draw: null, srcInfo: null, playing: false, neg: false, cmp: null, layout: 'wipe', rate: 1, pose: null, remake: false };
 
 // ---- inputs ----
 const srcLabel = (s) => {
@@ -179,9 +182,10 @@ function sourceField(role = 'source') {
     url, source: base, trim: v.trim, crop: v.crop,
     loader: () => ({ rate: 0, nth: 1, mapped: true }),
     budget: () => (fxDef.needs.includes('len') ? { secs: T.len } : null),
-    onChange: (trim, crop) => { T.source = { ...base, ...(v.label && { label: v.label }), ...(trim && { trim }), ...(crop && { crop }) }; changed(false); drawViewer(); },
+    onChange: (trim, crop) => { T.source = { ...base, ...(v.label && { label: v.label }), ...(trim && { trim }), ...(crop && { crop }) }; changed(false); drawViewer(); poseLine(); },
   });
   return field([title, h('span', {}, srcLabel(v))], ed,
+    fxDef.posed ? h('div', { id: 'vfxPose' }) : null,
     h('div', { class: 'row wrap' }, button('Change…', pick), button('Clear', () => { T.source = null; T.showing = null; changed(); })));
 }
 
@@ -369,6 +373,64 @@ function render() {
 
   body.replaceChildren(h('div', { class: 'panel-body' }, effect, inputs, prompt, settings, resultsSection()));
   drawViewer();
+  poseLine();
+}
+
+// ---- the drives' pose video: a finished Pose preview of the same clip, trim, crop and poser is followed instead of
+// reading the pose again (POST /api/pose/find); without one, the drive makes it first ----
+const POSE_TPL = { dwpose: 'deck-pose-video', sdpose: 'deck-pose-sdpose' };
+const poseBody = () => ({ source: bare(T.source), trim: T.source.trim || null, crop: T.source.crop || null,
+  poser: T.poser || 'dwpose', len: T.len, project_id: S.project });
+const findPose = () => api('/api/pose/find', { method: 'POST', body: poseBody(), busy: false });
+
+// the "Pose ready · #id" line under the source, looked up again when the clip, trim, crop, poser or Length change
+async function poseLine() {
+  const box = document.getElementById('vfxPose');
+  if (!box || !T.source) return;
+  const key = JSON.stringify(poseBody());
+  if (UI.pose?.key !== key) {
+    const look = UI.pose = { key, r: undefined };
+    try { look.r = await findPose(); } catch { look.r = null; }
+    if (UI.pose !== look) return;   // changed again while looking
+  }
+  const r = UI.pose.r, now = document.getElementById('vfxPose');
+  if (r === undefined || !now) return;
+  if (!r) { now.replaceChildren(); return; }
+  now.replaceChildren(h('div', { class: 'row wrap' },
+    button(`Pose ready · #${r.generation}`, () => openGeneration(r.generation), { title: 'The pose video the drive will follow: tap to see it' }),
+    UI.remake ? h('span', { class: 'hint' }, 'Run reads it again') : null,
+    button(UI.remake ? 'Use it' : 'Make again', () => { UI.remake = !UI.remake; poseLine(); },
+      { cls: `small${UI.remake ? ' primary' : ''}`, title: UI.remake ? 'Follow this pose video' : 'Read the pose from the clip again on the next Run' })));
+}
+
+// A drive on a ready pose video: the clip's own one, or a Pose preview queued first and waited for. false when it
+// can't be done (no posed template, the lookup or the queueing failed): the caller runs the reading template.
+async function drivePosed(e, rv, queue) {
+  const posed = S.templates.find((x) => x.id === e.posed && !x.error);
+  const preview = S.templates.find((x) => x.id === POSE_TPL[T.poser || 'dwpose'] && !x.error);
+  if (!posed) return false;
+  let pose = null;
+  if (!UI.remake) { try { pose = await findPose(); } catch { return false; } }
+  if (pose) {
+    try { await queue(posed, { ...rv, pose: { generation: pose.generation, index: pose.index } }, `using the pose from #${pose.generation}`); } catch { return false; }
+    return true;
+  }
+  if (!preview) return false;
+  let pg;
+  try { pg = await queue(preview, { source: rv.source, len: rv.len, res: rv.res }, null); } catch { return false; }
+  UI.remake = false; UI.pose = null;
+  toast(`Making the pose first (#${pg.id}), then the drive`);
+  (async () => {
+    let done = null;
+    try { done = await waitGen(pg.id); } catch { /* the pose run failed: the drive reads the pose itself */ }
+    UI.pose = null; poseLine();
+    const i = done ? done.outputs.findIndex((o) => o.kind === 'video') : -1;
+    if (i >= 0) {
+      try { await queue(posed, { ...rv, pose: { generation: done.id, index: i } }, `using the pose from #${done.id}`); return; } catch { /* below */ }
+    }
+    try { await queue(null, null, 'reading the pose itself'); } catch (err) { toast(err.message, true); }
+  })();
+  return true;
 }
 
 const lenFrames = (secs) => Math.max(1, Math.round((secs * FPS) / 8)) * 8 + 1;
@@ -544,8 +606,8 @@ async function run() {
   if (e.job === 'delogo') return runDelogo();
   const t = tplOf(e);
   if (!t) return toast(`Template ${tplId(e)} isn't installed yet`, true);
-  const values = {};
-  const put = (role, v) => { const f = roleField(t, role); if (f && v !== undefined && v !== null) values[f.key] = v; };
+  const values = {}, rv = {};   // rv: the same values by role, for the drives' posed and pose templates
+  const put = (role, v) => { const f = roleField(t, role); if (f && v !== undefined && v !== null) { values[f.key] = v; rv[role] = v; } };
   put('source', T.source && { ...bare(T.source), ...(T.source.trim && { trim: T.source.trim }), ...(T.source.crop && { crop: T.source.crop }) });
   put('matte', T.matte && bare(T.matte));
   put('first', T.first);
@@ -588,14 +650,20 @@ async function run() {
       put('source', r.video); put('matte', r.mask);
     } catch (err) { return toast('Couldn\'t set up the canvas: ' + err.message, true); }
   }
-  try {
-    const parent = T.source?.generation != null ? { generation: T.source.generation, index: T.source.index || 0, frame: null } : null;
-    const gens = await api('/api/generate', { method: 'POST', body: { template: t.id, values, batch: 1, project_id: S.project, parent } });
+  const parent = T.source?.generation != null ? { generation: T.source.generation, index: T.source.index || 0, frame: null } : null;
+  const tab = T;
+  // queue template tt (null: this effect's own, with values) with values by role; how: added to the toast (null: no toast)
+  const queue = async (tt, roles, how) => {
+    const vals = roles ? Object.fromEntries(Object.entries(roles).map(([role, v]) => [roleField(tt, role)?.key, v]).filter(([k, v]) => k && v != null)) : values;
+    const gens = await api('/api/generate', { method: 'POST', body: { template: (tt || t).id, values: vals, batch: 1, project_id: S.project, parent } });
     adoptGenerations(gens);
-    T.results.push(...gens.map((g) => g.id));
-    changed();
-    toast(`Queued ${e.label} as #${gens[0].id}`);
-  } catch (err) { toast(err.message, true); }
+    tab.results.push(...gens.map((g) => g.id));
+    if (tab === T) changed(); else tabs?.changed();
+    if (how !== null) toast(`Queued ${e.label} as #${gens[0].id}${how ? `, ${how}` : ''}`);
+    return gens[0];
+  };
+  if (e.posed && T.source && await drivePosed(e, rv, queue)) return;
+  try { await queue(null, null, ''); } catch (err) { toast(err.message, true); }
 }
 
 async function runKey(e) {
