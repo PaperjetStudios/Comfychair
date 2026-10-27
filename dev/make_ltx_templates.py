@@ -178,6 +178,96 @@ def t2v():
     return g
 
 
+def sized_start(g, nid, title, mult=32, short=704):
+    """@ image, its size giving the clip's: short side to Resolution, both sides multiples of mult. Gives ids nid (the
+    picture), nid+"rs" (resized), nid+"pre" (made video-like, as LTX wants a conditioning frame), W and H (math INT at 1)."""
+    g.add(nid, node("LoadImage", title, image=""))
+    g.add("short", node("PrimitiveInt", "@4 Resolution (short side)", value=short))
+    g.add(nid + "size", node("GetImageSize", image=[nid, 0]))
+    math(g, "W", f"round(a*c/min(a,b)/{mult})*{mult}", f"width: short side to Resolution, x{mult}", a=[nid + "size", 0], b=[nid + "size", 1], c=["short", 0])
+    math(g, "H", f"round(b*c/min(a,b)/{mult})*{mult}", "height", a=[nid + "size", 0], b=[nid + "size", 1], c=["short", 0])
+    frame(g, nid, nid)
+
+
+def frame(g, nid, image):
+    """A picture resized to the clip (W, H) and made video-like: ids nid+"rs", nid+"pre"."""
+    g.add(nid + "rs", node("ImageResizeKJv2", image=[image, 0], width=["W", 1], height=["H", 1], upscale_method="lanczos",
+                           keep_proportion="crop", pad_color="0, 0, 0", crop_position="center", divisible_by=32, device="cpu"))
+    g.add(nid + "pre", node("LTXVPreprocess", image=[nid + "rs", 0], img_compression=18))
+
+
+def i2v(last=False):
+    """A start picture (and, with last, an end picture) to a clip with sound, the size of the start picture. The last
+    frame is a guide at the clip's end (LTXVAddGuide at -1), cropped off the latent before decoding."""
+    g = G()
+    models(g)
+    text(g)
+    sized_start(g, "first", "@1 Start image [image]")
+    g.add("secs", node("PrimitiveFloat", "@3 Length (seconds)", value=5.0))
+    math(g, "nf", f"floor(a*{FPS}/8)*8+1", "frames: 8n+1", a=["secs", 0])
+    g.add("vlat", node("EmptyLTXVLatentVideo", width=["W", 1], height=["H", 1], length=["nf", 1], batch_size=1))
+    g.add("i2v", node("LTXVImgToVideoInplace", vae=["vvae", 0], image=["firstpre", 0], latent=["vlat", 0], strength=1.0, bypass=False))
+    pos, neg, lat = ["cond", 0], ["cond", 1], ["i2v", 0]
+    if last:
+        g.add("last", node("LoadImage", "@2 End image [image]", image=""))
+        frame(g, "last", "last")
+        g.add("guide", node("LTXVAddGuide", "@2 End image [strength]", positive=pos, negative=neg, vae=["vvae", 0], latent=lat,
+                            image=["lastpre", 0], frame_idx=-1, strength=1.0))
+        pos, neg, lat = ["guide", 0], ["guide", 1], ["guide", 2]
+    audio_latent(g, ["nf", 1])
+    g.add("av", node("LTXVConcatAVLatent", video_latent=lat, audio_latent=["alat", 0]))
+    g.add("loras", node("LoraLoaderModelOnly", "@6 LoRAs", model=["unet", 0], lora_name="", strength_model=1.0))
+    model, vpos, vneg = voice(g, ["loras", 0], pos, neg)
+    sample(g, model, vpos, vneg, ["av", 0])
+    if last:
+        g.add("crop", node("LTXVCropGuides", positive=["guide", 0], negative=["guide", 1], latent=["sep", 0]))
+        decode(g, ["crop", 2], "ltx-flf2v", audio=True)
+    else:
+        decode(g, ["sep", 0], "ltx-i2v", audio=True)
+    return g
+
+
+def ctrl2v():
+    """Control union: a depth, pose or edge clip (the 3D tab's renders, VFX Depth map or Pose preview, or any clip of
+    them) leads the motion and layout through the union-control IC-LoRA (an LTX-2.3 LoRA; ref0.5, so the guide is half
+    size and both sides are x64), with an optional start picture for the look. New sound from the prompt."""
+    g = G()
+    models(g)
+    text(g)
+    g.add("src", node("VHS_LoadVideoPath", "@1 Control video [video]", video="", force_rate=FPS, custom_width=0, custom_height=0,
+                      frame_load_cap=0, skip_first_frames=0, select_every_nth=1))
+    g.add("secs", node("PrimitiveFloat", "@3 Length (seconds)", value=5.0))
+    math(g, "nf", f"floor((min(a, b*{FPS}+1)-1)/8)*8+1", "frames: 8n+1 within the clip and Length", a=["src", 1], b=["secs", 0])
+    g.add("cut", node("ImageFromBatch", image=["src", 0], batch_index=0, length=["nf", 1]))
+    g.add("short", node("PrimitiveInt", "@4 Resolution (short side)", value=576))
+    g.add("size", node("GetImageSize", image=["cut", 0]))
+    math(g, "W", "round(a*c/min(a,b)/64)*64", "width: short side to Resolution, x64 (the LoRA guide is half size)", a=["size", 0], b=["size", 1], c=["short", 0])
+    math(g, "H", "round(b*c/min(a,b)/64)*64", "height, x64", a=["size", 0], b=["size", 1], c=["short", 0])
+    g.add("rs", node("ImageResizeKJv2", image=["cut", 0], width=["W", 1], height=["H", 1], upscale_method="lanczos",
+                     keep_proportion="crop", pad_color="0, 0, 0", crop_position="center", divisible_by=64, device="cpu"))
+    g.add("lora", node("LTXICLoRALoaderModelOnly", model=["unet", 0],
+                       lora_name="ltx2.3/ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors", strength_model=1.0))
+    g.add("vlat", node("EmptyLTXVLatentVideo", width=["W", 1], height=["H", 1], length=["nf", 1], batch_size=1))
+    g.add("img", node("LoadImage", "@11 Start image [image]", image=""))
+    rs = node("ImageResizeKJv2", "start image to the video size", image=["img", 0], width=["W", 1], height=["H", 1],
+              upscale_method="lanczos", keep_proportion="crop", pad_color="0, 0, 0", crop_position="center", divisible_by=64, device="cpu")
+    rs["_meta"]["deck_drop"] = True
+    g.add("imgrs", rs)
+    st = node("LTXVImgToVideoInplace", "start image (skipped when empty)", vae=["vvae", 0], image=["imgrs", 0], latent=["vlat", 0],
+              strength=1.0, bypass=False)
+    st["_meta"]["deck_passthrough"] = "latent"
+    g.add("i2v", st)
+    g.add("guide", node("LTXAddVideoICLoRAGuide", "@5 Control [strength]", positive=["cond", 0], negative=["cond", 1], vae=["vvae", 0],
+                        latent=["i2v", 0], image=["rs", 0], frame_idx=0, strength=1.0, latent_downscale_factor=["lora", 1],
+                        crop="disabled", use_tiled_encode=False, tile_size=256, tile_overlap=64, use_streaming=False, tile_frames=97))
+    audio_latent(g, ["nf", 1])
+    g.add("av", node("LTXVConcatAVLatent", video_latent=["guide", 2], audio_latent=["alat", 0]))
+    sample(g, ["lora", 0], ["guide", 0], ["guide", 1], ["av", 0])
+    g.add("crop", node("LTXVCropGuides", positive=["guide", 0], negative=["guide", 1], latent=["sep", 0]))
+    decode(g, ["crop", 2], "ltx-ctrl2v", audio=True)
+    return g
+
+
 def voice(g, model, positive, negative):
     """@7 Voice: an optional sound of someone speaking (~5 s) whose voice the clip's speech takes on
     (LTXVReferenceAudio). Left empty, the node is skipped and model/positive/negative pass straight on."""
@@ -436,6 +526,9 @@ def inpaint():
 
 TEMPLATES = {
     "deck-ltx-t2v": t2v,
+    "deck-ltx-i2v": i2v,
+    "deck-ltx-flf2v": lambda: i2v(last=True),
+    "deck-ltx-ctrl2v": ctrl2v,
     "deck-ltx-a2v": a2v,
     "deck-ltx-t2a": t2a,
     "deck-ltx-ripple": ripple,
