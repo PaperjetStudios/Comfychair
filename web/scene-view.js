@@ -6,7 +6,7 @@ import * as FIGURE from './figure.js';
 import { $, api, busy as busyBar, clone, closeSheet, toast, undoToast } from './ui.js';
 import { smoothGizmo, snap3, snapBar3 } from './gizmo.js';
 import {
-  C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, current, frames, hooks, makers, namesFor, newObject, newRoom, pivotOf, sample,
+  C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, current, frames, hooks, pathSig, makers, namesFor, newObject, newRoom, pivotOf, sample,
   sameTab, save, selItem, setSC, write
 } from './scene-data.js';
 import { modeOf } from './scene-modes.js';
@@ -433,7 +433,7 @@ export function syncMeshes() {
 // don't slide: the step phase is the distance covered over the stride length
 const PATHS = new Map();  // figure: { sig, d: metres covered by each frame }
 function travelled(o, f) {
-  const sig = o.ease + o.keys.map((k) => `${k.f},${k.x},${k.z},${k.ease || ''}`).join('|');
+  const sig = pathSig(o);
   let p = PATHS.get(o);
   if (!p || p.sig !== sig || p.d.length < frames()) {
     const d = [0];

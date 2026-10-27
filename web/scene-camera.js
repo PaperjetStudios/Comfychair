@@ -4,7 +4,7 @@
 // easing; a shake writes a key every few frames. Plugged into the Camera mode's panel with addModeSection.
 import * as THREE from './vendor/three.module.min.js';
 import { button, clone, field, h, propNum, section, seg, toast , help } from './ui.js';
-import { CAM, FPS, OBJ, R, SC, TEMP, current, frames, sample, selItem } from './scene-data.js';
+import { CAM, FPS, OBJ, R, SC, TEMP, current, dropKeys, frames, putKeys, sample, selItem } from './scene-data.js';
 import { changed, draw, pose } from './scene-view.js';
 import { renderKeys, renderPanel, renderTime, renderTransport } from './scene-ui.js';
 import { seek } from './scene-export.js';
@@ -105,12 +105,7 @@ export function shaken(c, k, strength, rnd) {
   return { px: P.x, py: P.y, pz: P.z, tx: T.x, ty: T.y, tz: T.z, fov: c.fov, roll: c.roll || 0 };
 }
 
-// ---- writing keys ----
-function setKey(cam, f, vals) {
-  let k = cam.keys.find((x) => x.f === f);
-  if (!k) { k = { f }; cam.keys.push(k); }
-  Object.assign(k, vals);
-}
+// ---- writing keys: whole-camera values at a frame, keyed on the channels that go anywhere (putKeys) ----
 const SHAKE_STEP = 4;   // frames between a shake's keys
 
 // Write a move onto cam from frame f0 to f1: the start key is the camera now, the end key the camera
@@ -125,18 +120,16 @@ export function writeMove(cam, id, p, { f0, f1, ease, around = null }) {
     for (let f = f0; f < f1; f += SHAKE_STEP) fs.push(f);
     fs.push(f1);
     const base = fs.map((f) => current(cam, CAM, f)), rnd = rng(f0 * 977 + f1);
-    cam.keys = cam.keys.filter((k) => k.f < f0 || k.f > f1);
-    fs.forEach((f, i) => {   // it builds up and dies away over the first and last fifth
+    dropKeys(cam, (f) => f >= f0 && f <= f1);
+    putKeys(cam, fs.map((f, i) => {   // it builds up and dies away over the first and last fifth
       const t = (f - f0) / (f1 - f0), env = Math.min(1, t / 0.2, (1 - t) / 0.2);
-      setKey(cam, f, { ...shaken(base[i], Math.max(0, env), p.a, rnd), ease: 'smooth' });
-    });
+      return { f, ...shaken(base[i], Math.max(0, env), p.a, rnd), ease: 'smooth' };
+    }), CAM);
   } else {
     const end = moved(start, id, p, around);
-    cam.keys = cam.keys.filter((k) => k.f <= f0 || k.f >= f1);
-    setKey(cam, f0, { ...start, ease });
-    setKey(cam, f1, end);
+    dropKeys(cam, (f) => f > f0 && f < f1);
+    putKeys(cam, [{ f: f0, ...start, ease }, { f: f1, ...end }], CAM);
   }
-  cam.keys.sort((a, b) => a.f - b.f);
   return true;
 }
 
@@ -178,12 +171,12 @@ function add() {
 // plays the move from its start without keeping it: the keys are put on, played, then put back
 function preview() {
   if (R.playing) return;
-  const { m, p, o } = spec(), cam = SC.camera, keep = clone(cam.keys), was = R.f;
+  const { m, p, o } = spec(), cam = SC.camera, keep = clone(cam.chans), was = R.f;
   if (!writeMove(cam, m[0], p, o)) return toast('No room after the playhead', true);
   R.playing = true; renderTransport();
   const t0 = performance.now();
   const done = () => {
-    cam.keys = keep; R.playing = false; R.f = o.f0; renderTransport();
+    cam.chans = keep; R.playing = false; R.f = o.f0; renderTransport();
     if (was !== o.f0) seek(o.f0); else { pose(R.f); draw(); renderTime(); renderKeys(); renderPanel(); }
   };
   const step = (now) => {

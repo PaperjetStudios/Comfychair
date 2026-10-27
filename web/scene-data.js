@@ -123,7 +123,11 @@ const pick = (o, names) => Object.fromEntries(names.map((n) => [n, o[n]]));
 export const IDENT = [0, 0, 0, 1];
 export const chansOf = (item) => (item.chans ||= {});
 export const hasKeys = (item) => !!item.chans && Object.values(item.chans).some((l) => l.length);
-export const keyFrames = (item) => [...new Set(Object.values(item.chans || {}).flatMap((l) => l.map((k) => k.f)))].sort((a, b) => a - b);
+export const keyFrames = (item, only = () => true) => [...new Set(Object.entries(item.chans || {}).filter(([ch]) => only(ch)).flatMap(([, l]) => l.map((k) => k.f)))].sort((a, b) => a - b);
+// how many frames hold a key, for a layer's hint
+export const keyCount = (item) => keyFrames(item).length;
+// a string that changes when the item's position keys do (what a figure's step phase is cached on)
+export const pathSig = (o) => o.ease + ['x', 'z'].map((ch) => (o.chans?.[ch] || []).map((k) => `${k.f},${k.v},${k.ease || ''}`).join('|')).join('#');
 export const keyAt = (item, f) => Object.values(item.chans || {}).some((l) => l.some((k) => k.f === f));
 export const chanNames = (item, prefix) => Object.keys(item.chans || {}).filter((c) => c.startsWith(prefix));
 // the next key frame after (dir 1) or before (-1) f, on any channel
@@ -203,6 +207,12 @@ export function setKey(item, ch, f, v, ease) {
   const n = { f, v: cloneV(v), ...(ease ? { ease } : {}) };
   list.push(n); list.sort((a, b) => a.f - b.f);
   return n;
+}
+// make a channel's base value v (what it falls back to once it has no keys)
+export function bakeBase(item, ch, v) {
+  if (ch.startsWith('j.')) item.base.j = { ...item.base.j, [ch.slice(2)]: cloneV(v) };
+  else if (ch.startsWith('m.')) item.base.m = { ...item.base.m, [ch.slice(2)]: v };
+  else item.base[ch] = v;
 }
 // remove every key the test (frame, channel) says yes to, on every channel
 export function dropKeys(item, test) {
