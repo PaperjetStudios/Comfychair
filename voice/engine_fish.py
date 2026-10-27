@@ -15,7 +15,6 @@ import socket
 import subprocess
 import sys
 import time
-import wave
 from pathlib import Path
 
 import httpx
@@ -33,6 +32,16 @@ def progress(p: float, label: str):
 def text_for(ln: dict) -> str:
     delivery = (ln.get("delivery") or "").strip()
     return (f"[{delivery}] " if delivery else "") + ln["text"].strip()
+
+
+def seconds(path: str) -> float:
+    """A wav's length (s2.cpp writes 32-bit float wavs, which the wave module can't read)."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                       capture_output=True, text=True, timeout=30)
+    try:
+        return round(float(r.stdout.strip()), 2)
+    except ValueError:
+        return 0.0
 
 
 def _up(port: int) -> bool:
@@ -70,8 +79,7 @@ def speak(lines: list[dict]) -> dict:
                 if r.status_code != 200:
                     raise RuntimeError(f"s2.cpp: {r.status_code} {r.text[:300]}")
                 Path(ln["out"]).write_bytes(r.content)
-                with wave.open(ln["out"]) as w:
-                    outs.append({"out": ln["out"], "seconds": round(w.getnframes() / w.getframerate(), 2)})
+                outs.append({"out": ln["out"], "seconds": seconds(ln["out"])})
     finally:
         server.terminate()
         try:
