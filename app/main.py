@@ -19,7 +19,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFil
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import accel, audioedit, clipimport, craft, delogo, h3upscale, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
+from . import accel, audioedit, clipimport, craft, delogo, h3upscale, posefind, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import projects, store
 from . import sceneasset
 from . import templates as tpl
@@ -875,6 +875,47 @@ async def video_render(body: dict = Body(...)):
                                    "duration": round(info["duration"], 2)}])
     await push_gen(gid)
     return db.get_generation(gid)
+
+
+@app.post("/api/pose/find")
+async def pose_find(body: dict = Body(...)):
+    """The newest finished Pose preview of a clip, for a drive to take instead of reading the pose again:
+    {source: {generation, index} | {media}, trim, crop, poser: dwpose|sdpose, len (seconds)} ->
+    {generation, index, frames, seconds, url, poser} or null (app/posefind.py says what matches)."""
+    src = body.get("source") or {}
+    if not isinstance(src, dict) or (src.get("generation") is None and not src.get("media")):
+        raise HTTPException(400, "Pick a clip")
+    poser = str(body.get("poser") or "dwpose")
+    if poser not in posefind.TEMPLATES:
+        raise HTTPException(400, "poser is dwpose or sdpose")
+    try:
+        secs = float(body.get("len") or 5)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "len is in seconds")
+    trim = body.get("trim") if isinstance(body.get("trim"), dict) else None
+    crop = body.get("crop") if isinstance(body.get("crop"), dict) else None
+    gens = db.done_with_templates([posefind.TEMPLATES[poser]])
+    gens = [g for g in gens if posefind.same_clip((g["params"] or {}).get(posefind.SOURCE_KEY), src)]
+    if not gens:
+        return None
+    clip_secs = None
+    try:
+        path, _ = await _timeline_path(src, None)
+        clip_secs = (await asyncio.to_thread(videoedit.probe, path))["duration"] or None
+    except (HTTPException, subprocess.SubprocessError, OSError, ValueError, KeyError):
+        pass
+
+    def measure(g, o):
+        path = output_file(g, o)
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        try:
+            info = videoedit.probe(path)
+            return round(info["duration"] * (info.get("fps") or posefind.FPS)) or None
+        except (subprocess.SubprocessError, OSError, ValueError, KeyError):
+            return None
+
+    return await asyncio.to_thread(posefind.find, gens, src, trim, crop, poser, secs, clip_secs, measure)
 
 
 @app.post("/api/h3/upscale")

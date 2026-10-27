@@ -26,7 +26,7 @@
  "nf": {
   "class_type": "ComfyMathExpression",
   "inputs": {
-   "expression": "5 + floor((max(5, min(a, round(b*24))) - 5)/17)*17",
+   "expression": "max(1, min(a, round(b*24)+1))",
    "values.a": [
     "src",
     1
@@ -37,7 +37,7 @@
    ]
   },
   "_meta": {
-   "title": "frames: 17k+5 within the clip and Length"
+   "title": "frames within the clip and Length (one over, for 8n+1)"
   }
  },
  "cut": {

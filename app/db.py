@@ -281,6 +281,14 @@ def run_times(template: str, limit=10) -> list[float]:
     return [r[0] for r in rows if r[0] and r[0] > 0]
 
 
+def done_with_templates(templates, limit=300):
+    """Finished generations of these templates, newest first."""
+    marks = ",".join("?" * len(templates))
+    rows = _q(f"SELECT * FROM generations WHERE status='done' AND template IN ({marks}) ORDER BY id DESC LIMIT ?",
+              (*templates, limit)).fetchall()
+    return [_gen(r) for r in rows]
+
+
 def all_generations():
     return [_gen(r) for r in _q("SELECT * FROM generations").fetchall()]
 

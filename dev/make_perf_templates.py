@@ -78,14 +78,39 @@ def pose_frames(g, image, face=True, hands=True, model="dwpose"):
                          keep_proportion="stretch", pad_color="0, 0, 0", crop_position="center", divisible_by=2, device="cpu"))
 
 
-def h3_source(g, short=448):
+def pose_video(g):
+    """@14 Pose video: a finished Pose preview of the same clip (same trim and crop), in place of reading the pose
+    again. Gives ids psrc, and pf (math INT at output 1): the frames both the clip and the pose video have."""
+    g.add("psrc", node("VHS_LoadVideoPath", "@14 Pose video [video]", video="", force_rate=FPS, custom_width=0, custom_height=0,
+                       frame_load_cap=0, skip_first_frames=0, select_every_nth=1))
+    math(g, "pf", "min(a, b)", "frames in both the clip and the pose video", a=["src", 1], b=["psrc", 1])
+
+
+def posed_frames(g):
+    """The pose video cut and sized as pose_frames would have made it: its first nf frames, stretched to W x H.
+    Gives id posers, as pose_frames does."""
+    g.add("pcut", node("ImageFromBatch", image=["psrc", 0], batch_index=0, length=["nf", 1]))
+    g.add("posers", node("ImageResizeKJv2", image=["pcut", 0], width=["W", 1], height=["H", 1], upscale_method="bilinear",
+                         keep_proportion="stretch", pad_color="0, 0, 0", crop_position="center", divisible_by=2, device="cpu"))
+
+
+def h3_source(g, short=448, posed=False, rule="h3"):
     """@1 Source video cut to the H3 frame grid (17k+5, within the clip and Length) and resized so the short side is
-    Resolution (x32). Gives ids: cut (frames), nf (frames at output 1), W, H (math INT at output 1), rs."""
+    Resolution (x32). Gives ids: cut (frames), nf (frames at output 1), W, H (math INT at output 1), rs. posed: also
+    the @14 Pose video, and the frames stay within it too. rule "all": every frame within the clip and Length, and one
+    more (so a Pose preview covers LTX's 8n+1 as well as H3's 17k+5 for the same Length)."""
     g.add("src", node("VHS_LoadVideoPath", "@1 Source video [video]", video="", force_rate=FPS, custom_width=0, custom_height=0,
                       frame_load_cap=0, skip_first_frames=0, select_every_nth=1))
     g.add("secs", node("PrimitiveFloat", "@3 Length (seconds)", value=5.0))
-    math(g, "nf", f"5 + floor((max(5, min(a, round(b*{FPS}))) - 5)/17)*17", "frames: 17k+5 within the clip and Length",
-         a=["src", 1], b=["secs", 0])
+    if posed:
+        pose_video(g)
+    frames = ["pf", 1] if posed else ["src", 1]
+    if rule == "all":
+        math(g, "nf", f"max(1, min(a, round(b*{FPS})+1))", "frames within the clip and Length (one over, for 8n+1)",
+             a=frames, b=["secs", 0])
+    else:
+        math(g, "nf", f"5 + floor((max(5, min(a, round(b*{FPS}))) - 5)/17)*17", "frames: 17k+5 within the clip and Length",
+             a=frames, b=["secs", 0])
     g.add("cut", node("ImageFromBatch", image=["src", 0], batch_index=0, length=["nf", 1]))
     g.add("short", node("PrimitiveInt", "@4 Resolution (short side)", value=short))
     g.add("size", node("GetImageSize", image=["cut", 0]))
@@ -98,14 +123,18 @@ def h3_source(g, short=448):
 def drive(model="dwpose"):
     """A still of a character acted out by the performer in a clip: DWPose (body, hands, face) from the clip drives
     H3's Fun ControlNet on a reference-to-video shot of the character. Built on deck-h3-ctrl2v (same models and
-    settings), with the clip's own sound kept."""
+    settings), with the clip's own sound kept. model "posed": the pose comes from a @14 Pose video (a Pose preview
+    of the clip) instead; the clip still gives the size, the frames and the sound."""
     base = json.loads((OUT / "deck-h3-ctrl2v.json").read_text())
     g = G()
     keep = {"1", "2", "3", "4", "6", "9", "10", "11", "12", "13", "30", "50", "51"}
     for k in keep:
         g.add(k, base[k])
-    h3_source(g)
-    pose_frames(g, ["rs", 0], model=model)
+    h3_source(g, posed=model == "posed")
+    if model == "posed":
+        posed_frames(g)
+    else:
+        pose_frames(g, ["rs", 0], model=model)
     g.add("8", node("RandomNoise", "@8 Seed", noise_seed=0))
     g.add("prompt", node("PrimitiveStringMultiline", "@2 Prompt", value="<Subject 1> is the person shown in <Picture 1>. "
                          "They speak and move exactly as in the control video, with the same expressions. Natural light, cinematic."))
@@ -127,9 +156,10 @@ def drive(model="dwpose"):
 
 def pose_preview(model="dwpose"):
     """What a drive run will follow: the clip's pose (body, hands, face) as a video. DWPose runs on the CPU; SDPose
-    (model "sdpose") on the GPU."""
+    (model "sdpose") on the GPU. Every frame within the clip and Length (and one more), so the posed drives can take
+    it for any drive of the same clip, trim and Length."""
     g = G()
-    h3_source(g, short=512)
+    h3_source(g, short=512, rule="all")
     pose_frames(g, ["rs", 0], model=model)
     g.add("vid", node("CreateVideo", images=["posers", 0], fps=FPS))
     g.add("save", node("SaveVideo", video=["vid", 0], filename_prefix="deck/pose", format="auto", codec="auto"))
@@ -139,14 +169,18 @@ def pose_preview(model="dwpose"):
 def ltx_drive(model="dwpose"):
     """LTX-2.5 take on Drive a still: the character image is the first frame, and the clip's DWPose (body, hands, face)
     guides the motion through the union-control IC-LoRA (an LTX-2.3 LoRA; ref0.5, so the guide is half size and
-    both sides are x64). Single stage at the chosen resolution, with new sound from the prompt."""
+    both sides are x64). Single stage at the chosen resolution, with new sound from the prompt. model "posed": the
+    pose comes from a @14 Pose video (a Pose preview of the clip); the clip still gives the size and the frames."""
     g = G()
     models(g)
     text(g)
     g.add("src", node("VHS_LoadVideoPath", "@1 Source video [video]", video="", force_rate=FPS, custom_width=0, custom_height=0,
                       frame_load_cap=0, skip_first_frames=0, select_every_nth=1))
     g.add("secs", node("PrimitiveFloat", "@3 Length (seconds)", value=5.0))
-    math(g, "nf", f"floor((min(a, b*{FPS}+1)-1)/8)*8+1", "frames: 8n+1 within the clip and Length", a=["src", 1], b=["secs", 0])
+    if model == "posed":
+        pose_video(g)
+    math(g, "nf", f"floor((min(a, b*{FPS}+1)-1)/8)*8+1", "frames: 8n+1 within the clip and Length",
+         a=["pf" if model == "posed" else "src", 1], b=["secs", 0])
     g.add("cut", node("ImageFromBatch", image=["src", 0], batch_index=0, length=["nf", 1]))
     g.add("short", node("PrimitiveInt", "@4 Resolution (short side)", value=576))
     g.add("size", node("GetImageSize", image=["cut", 0]))
@@ -154,7 +188,10 @@ def ltx_drive(model="dwpose"):
     math(g, "H", "round(b*c/min(a,b)/64)*64", "height, x64", a=["size", 0], b=["size", 1], c=["short", 0])
     g.add("rs", node("ImageResizeKJv2", image=["cut", 0], width=["W", 1], height=["H", 1], upscale_method="lanczos",
                      keep_proportion="crop", pad_color="0, 0, 0", crop_position="center", divisible_by=64, device="cpu"))
-    pose_frames(g, ["rs", 0], model=model)
+    if model == "posed":
+        posed_frames(g)
+    else:
+        pose_frames(g, ["rs", 0], model=model)
     g.add("img", node("LoadImage", "@11 Character [image]", image=""))
     g.add("imgrs", node("ImageResizeKJv2", image=["img", 0], width=["W", 1], height=["H", 1], upscale_method="lanczos",
                         keep_proportion="crop", pad_color="0, 0, 0", crop_position="center", divisible_by=64, device="cpu"))
@@ -253,6 +290,9 @@ TEMPLATES = {
     "deck-pose-sdpose": lambda: pose_preview("sdpose"),
     "deck-ltx-drive": ltx_drive,
     "deck-ltx-drive-sd": lambda: ltx_drive("sdpose"),
+    # the drives on a ready pose video (from either poser): the VFX tab runs these when the clip has one
+    "deck-h3-drive-posed": lambda: drive("posed"),
+    "deck-ltx-drive-posed": lambda: ltx_drive("posed"),
     "deck-h3-faceswap": faceswap,
 }
 

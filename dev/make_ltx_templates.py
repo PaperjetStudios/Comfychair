@@ -92,7 +92,12 @@ def audio_latent(g, frames):
 
 
 def decode(g, samples, name, audio=True):
-    g.add("vdec", node("VAEDecodeTiled", samples=samples, vae=["vvae", 0], tile_size=512, overlap=64, temporal_size=64, temporal_overlap=8))
+    """The clip decoded by LTX's own tiled decoder: 4x4 tiles, 16 latent frames (128 frames) at a time with one
+    latent frame of overlap. ComfyUI's VAEDecodeTiled cut the clip every 64 frames and blended the joins, so one
+    frame in every 64 came out soft (frame 56 at 29 % of the clip's sharpness); this has no soft frames and decodes
+    1920x1088 x 10 s inside 12 GB."""
+    g.add("vdec", node("LTXVSpatioTemporalTiledVAEDecode", vae=["vvae", 0], latents=samples, spatial_tiles=4, spatial_overlap=1,
+                       temporal_tile_length=16, temporal_overlap=1, last_frame_fix=False, working_device="auto", working_dtype="auto"))
     extra = {}
     if audio:
         g.add("adec", node("LTXVAudioVAEDecode", samples=["sep", 1], audio_vae=["avae", 0]))
@@ -312,7 +317,8 @@ def a2v():
     g.add("av", node("LTXVConcatAVLatent", video_latent=["i2v", 0], audio_latent=["alat", 0]))
     g.add("loras", node("LoraLoaderModelOnly", "@6 LoRAs", model=["unet", 0], lora_name="", strength_model=1.0))
     sample(g, ["loras", 0], ["cond", 0], ["cond", 1], ["av", 0])
-    g.add("vdec", node("VAEDecodeTiled", samples=["sep", 0], vae=["vvae", 0], tile_size=512, overlap=64, temporal_size=64, temporal_overlap=8))
+    g.add("vdec", node("LTXVSpatioTemporalTiledVAEDecode", vae=["vvae", 0], latents=["sep", 0], spatial_tiles=4, spatial_overlap=1,
+                       temporal_tile_length=16, temporal_overlap=1, last_frame_fix=False, working_device="auto", working_dtype="auto"))   # (see decode)
     g.add("vid", node("CreateVideo", images=["vdec", 0], fps=FPS, audio=["cut", 0]))
     g.add("save", node("SaveVideo", video=["vid", 0], filename_prefix="deck/ltx-a2v", format="auto", codec="auto"))
     return g
@@ -509,14 +515,29 @@ def inpaint():
     g.add("lora", node("LTXICLoRALoaderModelOnly", model=["unet", 0], lora_name=LORA + "ltx-2.3-22b-ic-lora-in-outpainting-0.9.safetensors",
                        strength_model=1.0))
     g.add("vlat", node("EmptyLTXVLatentVideo", width=["W", 1], height=["H", 1], length=["nf", 1], batch_size=1))
-    g.add("guide", node("LTXAddVideoICLoRAGuideAdvanced", positive=["cond", 0], negative=["cond", 1], vae=["vvae", 0], latent=["vlat", 0],
+    # an optional first frame as it should come out (Extend frame: the clip on its canvas with the new parts already
+    # painted, e.g. by an image edit with reference pictures): LTX carries it on into the masked areas
+    g.add("first", node("LoadImage", "@8 Start frame [image]", image=""))
+    rs = node("ImageResizeKJv2", "start frame to the video size", image=["first", 0], width=["W", 1], height=["H", 1],
+              upscale_method="lanczos", keep_proportion="crop", pad_color="0, 0, 0", crop_position="center", divisible_by=64, device="cpu")
+    rs["_meta"]["deck_drop"] = True
+    g.add("firstrs", rs)
+    pre = node("LTXVPreprocess", "start frame as video-like", image=["firstrs", 0], img_compression=18)
+    pre["_meta"]["deck_drop"] = True
+    g.add("firstpre", pre)
+    st = node("LTXVImgToVideoInplace", "start frame (skipped when empty)", vae=["vvae", 0], image=["firstpre", 0], latent=["vlat", 0],
+              strength=1.0, bypass=False)
+    st["_meta"]["deck_passthrough"] = "latent"
+    g.add("i2v", st)
+    g.add("guide", node("LTXAddVideoICLoRAGuideAdvanced", positive=["cond", 0], negative=["cond", 1], vae=["vvae", 0], latent=["i2v", 0],
                         image=["green", 0], frame_idx=0, strength=1.0, latent_downscale_factor=1, crop="disabled", use_tiled_encode=False,
                         tile_size=256, tile_overlap=64, attention_strength=1.0, use_streaming=False, tile_frames=97))
     audio_latent(g, ["nf", 1])
     g.add("av", node("LTXVConcatAVLatent", video_latent=["guide", 2], audio_latent=["alat", 0]))
     sample(g, ["lora", 0], ["guide", 0], ["guide", 1], ["av", 0])
     g.add("crop", node("LTXVCropGuides", positive=["guide", 0], negative=["guide", 1], latent=["sep", 0]))
-    g.add("vdec", node("VAEDecodeTiled", samples=["crop", 2], vae=["vvae", 0], tile_size=512, overlap=64, temporal_size=64, temporal_overlap=8))
+    g.add("vdec", node("LTXVSpatioTemporalTiledVAEDecode", vae=["vvae", 0], latents=["crop", 2], spatial_tiles=4, spatial_overlap=1,
+                       temporal_tile_length=16, temporal_overlap=1, last_frame_fix=False, working_device="auto", working_dtype="auto"))   # (see decode)
     g.add("blend", node("LTXVLaplacianPyramidBlend", image_a=["vdec", 0], image_b=["green", 0], mask=["dil", 0], trim_to_shortest=True,
                         mask_low_res_dilation=5))
     g.add("vid", node("CreateVideo", images=["blend", 0], fps=FPS))

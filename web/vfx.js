@@ -1,7 +1,7 @@
 import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard } from './ui.js';
 import { S, inputUrl, thumbUrl, onServer, switchTab } from './core.js';
 import { cardMedia, genLabel, openImagePicker, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
-import { adoptGenerations } from './generate.js';
+import { adoptGenerations, hooks as genHooks } from './generate.js';
 import { openGeneration } from './run.js';
 import { addToEditor, useInGenerate } from './editor.js';
 import { addToTimeline } from './video.js';
@@ -41,8 +41,8 @@ const EFFECTS = [
     help: 'Tap the thing to cut out on the frame (Exclude marks what to leave out), or describe it. SAM3 follows it through the clip and makes a mask clip.' },
   { id: 'inpaint', group: 'Remove', label: 'Replace', tpl: 'deck-ltx-inpaint', mult: 64, needs: ['source', 'matte', 'prompt', 'len', 'res', 'seed'],
     help: 'Paints something new where a mask clip is white (make one with Mask (SAM3) or Alpha Gen) and keeps the rest of the picture. Describe the whole shot with the new thing in it.' },
-  { id: 'extend', group: 'Generate', label: 'Extend frame', tpl: 'deck-ltx-inpaint', mult: 64, needs: ['source', 'canvas', 'prompt', 'len', 'res', 'seed'],
-    help: 'Puts the clip on a bigger or differently shaped canvas (portrait to landscape, say) and paints the rest (outpainting). Pick the canvas, then drag the clip on the preview or set its size and place. Describe the whole wider shot.' },
+  { id: 'extend', group: 'Generate', label: 'Extend frame', tpl: 'deck-ltx-inpaint', mult: 64, needs: ['source', 'canvas', 'first?', 'prompt', 'len', 'res', 'seed'],
+    help: 'Puts the clip on a bigger or differently shaped canvas (portrait to landscape, say) and paints the rest (outpainting). Pick the canvas, then drag the clip on the preview or set its size and place. Describe the whole wider shot. For new parts that should look like a reference (a character, a room), make a start frame: the first frame on its canvas, filled in by an image edit with your references; the clip then grows out of it.' },
   { id: 'cleanplate', group: 'Remove', label: 'Clean plate', tpl: 'deck-ltx-cleanplate', needs: ['source', 'prompt', 'len', 'res', 'seed'],
     help: 'Removes people and other moving things from the whole clip and fills in the background. Name what to remove in the prompt.' },
   { id: 't2v', group: 'Generate', label: 'Text / image to video', tpl: 'deck-ltx-t2v', needs: ['first?', 'voice', 'prompt', 'len', 'size', 'loras', 'seed'],
@@ -63,10 +63,10 @@ const EFFECTS = [
   { id: 'faceswap', group: 'Performance', label: 'Face only', tpl: 'deck-h3-faceswap', needs: ['source', 'first', 'len', 'res', 'steps', 'blend', 'seed'],
     res: [[384, '384'], [512, '512'], [640, '640']], maxLen: 30,
     help: 'Swaps only the face: it is followed through the clip, re-rendered as the character\'s face with the same expressions, and blended back. Hair, body and the rest of the shot stay. Works best when the face is large in frame.' },
-  { id: 'drive', group: 'Performance', label: 'Drive a still', tpl: 'deck-h3-drive', sd: 'deck-h3-drive-sd', needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
+  { id: 'drive', group: 'Performance', label: 'Drive a still', tpl: 'deck-h3-drive', sd: 'deck-h3-drive-sd', posed: 'deck-h3-drive-posed', needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
     res: [[384, '384p'], [448, '448p'], [576, '576p']], maxLen: 15,
     help: 'The character in the still acts out the clip: body, hands and face follow the clip\'s pose (H3 with pose control), in a new shot described by the prompt. Call the character <Subject 1> and the still <Picture 1>, and name their clothes and look: otherwise the outfit can drift.' },
-  { id: 'ltxdrive', group: 'Performance', label: 'Drive a still (LTX)', tpl: 'deck-ltx-drive', sd: 'deck-ltx-drive-sd', mult: 64, needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
+  { id: 'ltxdrive', group: 'Performance', label: 'Drive a still (LTX)', tpl: 'deck-ltx-drive', sd: 'deck-ltx-drive-sd', posed: 'deck-ltx-drive-posed', mult: 64, needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
     res: [[448, '448p'], [576, '576p'], [704, '704p']],
     help: 'Like Drive a still, on LTX-2.5: the still is the first frame and the clip\'s pose (body, hands, face) moves it. Keeps the still\'s scene and look closely. Describe the person and what they do; the sound is made from the prompt.' },
   { id: 'pose', group: 'Performance', label: 'Pose preview', tpl: 'deck-pose-video', sd: 'deck-pose-sdpose', needs: ['source', 'len'],
@@ -77,8 +77,9 @@ const fx = (id) => EFFECTS.find((e) => e.id === id) || EFFECTS[0];
 
 // how an effect's inputs find their template fields: by kind, then by the group (node title) name
 const ROLES = {
-  source: (f) => f.kind === 'video' && !/mask|matte/i.test(f.group),
+  source: (f) => f.kind === 'video' && !/mask|matte|pose/i.test(f.group),
   matte: (f) => f.kind === 'video' && /mask|matte/i.test(f.group),
+  pose: (f) => f.kind === 'video' && /pose/i.test(f.group),   // a ready pose video (the drives' posed templates)
   first: (f) => f.kind === 'image',
   sound: (f) => f.kind === 'audio' && !/voice/i.test(f.group),
   voice: (f) => f.kind === 'audio' && /voice/i.test(f.group),
@@ -131,7 +132,9 @@ const BLANK = () => ({ op: 'ripple', source: null, first: null, matte: null, sou
 let T = BLANK();
 let tabs = null;
 // cmp: the result on the left instead of the source (comparing takes); layout: 'wipe' or 'side'
-const UI = { wipe: 0.5, draw: null, srcInfo: null, playing: false, neg: false, cmp: null, layout: 'wipe', rate: 1 };
+// pose: the source's finished pose video for the drives ({ key, r }: r null when there is none, undefined while
+// looking); remake: the next drive makes the pose again
+const UI = { wipe: 0.5, draw: null, srcInfo: null, playing: false, neg: false, cmp: null, layout: 'wipe', rate: 1, pose: null, remake: false };
 
 // ---- inputs ----
 const srcLabel = (s) => {
@@ -179,9 +182,10 @@ function sourceField(role = 'source') {
     url, source: base, trim: v.trim, crop: v.crop,
     loader: () => ({ rate: 0, nth: 1, mapped: true }),
     budget: () => (fxDef.needs.includes('len') ? { secs: T.len } : null),
-    onChange: (trim, crop) => { T.source = { ...base, ...(v.label && { label: v.label }), ...(trim && { trim }), ...(crop && { crop }) }; changed(false); drawViewer(); },
+    onChange: (trim, crop) => { T.source = { ...base, ...(v.label && { label: v.label }), ...(trim && { trim }), ...(crop && { crop }) }; changed(false); drawViewer(); poseLine(); },
   });
   return field([title, h('span', {}, srcLabel(v))], ed,
+    fxDef.posed ? h('div', { id: 'vfxPose' }) : null,
     h('div', { class: 'row wrap' }, button('Change…', pick), button('Clear', () => { T.source = null; T.showing = null; changed(); })));
 }
 
@@ -200,16 +204,50 @@ function firstField(optional) {
   const edit = ['ripple', 'animate', 'faceswap', 'drive', 'ltxdrive'].includes(T.op);
   const label = T.op === 'ingredients' ? 'Ingredients sheet' : T.op === 'ripple' ? 'Edited first frame' : T.op === 'layout' ? 'Look (first frame)'
     : ['animate', 'faceswap', 'drive', 'ltxdrive'].includes(T.op) ? 'Character'
-    : optional ? 'Start image (optional)' : 'Start image';
+    : T.op === 'extend' ? 'Start frame (optional)' : optional ? 'Start image (optional)' : 'Start image';
   return field(label, T.first ? h('img', { class: 'vfx-still', src: thumbUrl(T.first, 480), alt: '' }) : null,
     h('div', { class: 'row wrap' },
       button(T.first ? 'Change…' : 'Choose…', pick, { cls: T.first ? '' : 'primary' }),
       T.source ? button('Take from clip…', takeFrame, { title: 'A frame of the source clip' }) : null,
       T.first && edit ? button('Edit in Generate', () => useInGenerate(T.first, 'Frame set: edit it, then pick the result here')) : null,
       T.first && edit ? button('Edit in Editor', () => addToEditor(T.first)) : null,
+      T.op === 'extend' && T.source ? button('Make start frame…', makeStartFrame, { title: 'The first frame on its canvas, to fill in with an image edit and your reference pictures' }) : null,
       T.first ? button('Clear', () => { T.first = null; changed(); }) : null),
     T.op === 'ripple' ? help('Take the clip\'s first frame, change it (Edit in Generate with an edit template, or in the Editor), then Choose… the edited picture here.') : null,
     T.op === 'animate' ? help('One person, whole body or face as in the clip. Best: Take from clip…, then repaint the person as the character (Edit in Generate), so pose and framing match.') : null);
+}
+
+// Extend frame's start frame: the clip's first frame (at its trim) on the canvas, the new parts flat grey, opened in
+// an image edit with room for reference pictures. The edited picture, picked back here as the start frame, is the
+// look LTX carries on into the new parts.
+const EDIT_TPL = 'deck-qwen21-edit';
+async function makeStartFrame() {
+  const v = V.a;
+  if (!v?.videoWidth) return toast('Let the clip load first', true);
+  const t0 = T.source?.trim?.start || 0;
+  if (Math.abs(v.currentTime - t0) > 0.02) { v.pause(); v.currentTime = t0; await new Promise((r) => v.addEventListener('seeked', r, { once: true })); }
+  const b = clipBox(), A = canvasAspect();
+  let W = v.videoWidth / b.w, H = W / A;
+  const k = Math.min(1, 2048 / Math.max(W, H));
+  W = Math.round((W * k) / 16) * 16; H = Math.round((H * k) / 16) * 16;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, W, H);
+  ctx.drawImage(v, b.left * W, b.top * H, b.w * W, b.h * H);
+  const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+  let r;
+  try { r = await uploadImage(blob, { source: 'vfx', filename: 'start-frame.png' }); } catch (err) { return toast(err.message, true); }
+  const t = S.templates.find((x) => x.id === EDIT_TPL && !x.error);
+  if (!t || !genHooks.openShot) { useInGenerate(r.name, 'Start frame on its canvas: fill in the grey, then pick the result here'); return; }
+  const img = t.fields.find((f) => f.kind === 'image');
+  const prompt = t.fields.find((f) => f.kind === 'text' && /edit|prompt/i.test(f.group) && f.input === 'prompt');
+  const values = { [img.key]: r.name };
+  if (prompt) values[prompt.key] = `Fill the flat grey areas of Picture 1 so the scene continues naturally beyond the original frame${T.prompt.trim() ? `: ${T.prompt.trim()}` : ''}. `
+    + 'Keep everything that is already in Picture 1 exactly as it is. Add the people and things from the reference pictures where they belong.';
+  switchTab('generate');
+  await genHooks.openShot({ workflow: t.id, values }, 'Start frame');
+  toast('Fill in the grey (add your references under More references), then pick the result as the start frame');
 }
 
 function lorasField(t) {
@@ -365,10 +403,69 @@ function render() {
     needs.has('seed') ? field('Seed', h('div', { class: 'row' },
       h('input', { type: 'number', value: T.seed < 0 ? '' : T.seed, placeholder: 'random', min: 0,
         onchange: (ev) => { T.seed = ev.target.value === '' ? -1 : Math.max(0, Math.floor(Number(ev.target.value))); changed(false); } }))) : null,
-    h('div', { class: 'row' }, runBtn));
+    h('div', { class: 'row wrap' }, runBtn, e.job ? null : button('Open in Generate', openInGenerate,
+      { disabled: !!missing, title: 'The same template and values in a new Generate tab, to change any setting there' })));
 
   body.replaceChildren(h('div', { class: 'panel-body' }, effect, inputs, prompt, settings, resultsSection()));
   drawViewer();
+  poseLine();
+}
+
+// ---- the drives' pose video: a finished Pose preview of the same clip, trim, crop and poser is followed instead of
+// reading the pose again (POST /api/pose/find); without one, the drive makes it first ----
+const POSE_TPL = { dwpose: 'deck-pose-video', sdpose: 'deck-pose-sdpose' };
+const poseBody = () => ({ source: bare(T.source), trim: T.source.trim || null, crop: T.source.crop || null,
+  poser: T.poser || 'dwpose', len: T.len, project_id: S.project });
+const findPose = () => api('/api/pose/find', { method: 'POST', body: poseBody(), busy: false });
+
+// the "Pose ready · #id" line under the source, looked up again when the clip, trim, crop, poser or Length change
+async function poseLine() {
+  const box = document.getElementById('vfxPose');
+  if (!box || !T.source) return;
+  const key = JSON.stringify(poseBody());
+  if (UI.pose?.key !== key) {
+    const look = UI.pose = { key, r: undefined };
+    try { look.r = await findPose(); } catch { look.r = null; }
+    if (UI.pose !== look) return;   // changed again while looking
+  }
+  const r = UI.pose.r, now = document.getElementById('vfxPose');
+  if (r === undefined || !now) return;
+  if (!r) { now.replaceChildren(); return; }
+  now.replaceChildren(h('div', { class: 'row wrap' },
+    button(`Pose ready · #${r.generation}`, () => openGeneration(r.generation), { title: 'The pose video the drive will follow: tap to see it' }),
+    UI.remake ? h('span', { class: 'hint' }, 'Run reads it again') : null,
+    button(UI.remake ? 'Use it' : 'Make again', () => { UI.remake = !UI.remake; poseLine(); },
+      { cls: `small${UI.remake ? ' primary' : ''}`, title: UI.remake ? 'Follow this pose video' : 'Read the pose from the clip again on the next Run' })));
+}
+
+// A drive on a ready pose video: the clip's own one, or a Pose preview queued first and waited for. false when it
+// can't be done (no posed template, the lookup or the queueing failed): the caller runs the reading template.
+async function drivePosed(e, rv, queue) {
+  const posed = S.templates.find((x) => x.id === e.posed && !x.error);
+  const preview = S.templates.find((x) => x.id === POSE_TPL[T.poser || 'dwpose'] && !x.error);
+  if (!posed) return false;
+  let pose = null;
+  if (!UI.remake) { try { pose = await findPose(); } catch { return false; } }
+  if (pose) {
+    try { await queue(posed, { ...rv, pose: { generation: pose.generation, index: pose.index } }, `using the pose from #${pose.generation}`); } catch { return false; }
+    return true;
+  }
+  if (!preview) return false;
+  let pg;
+  try { pg = await queue(preview, { source: rv.source, len: rv.len, res: rv.res }, null); } catch { return false; }
+  UI.remake = false; UI.pose = null;
+  toast(`Making the pose first (#${pg.id}), then the drive`);
+  (async () => {
+    let done = null;
+    try { done = await waitGen(pg.id); } catch { /* the pose run failed: the drive reads the pose itself */ }
+    UI.pose = null; poseLine();
+    const i = done ? done.outputs.findIndex((o) => o.kind === 'video') : -1;
+    if (i >= 0) {
+      try { await queue(posed, { ...rv, pose: { generation: done.id, index: i } }, `using the pose from #${done.id}`); return; } catch { /* below */ }
+    }
+    try { await queue(null, null, 'reading the pose itself'); } catch (err) { toast(err.message, true); }
+  })();
+  return true;
 }
 
 const lenFrames = (secs) => Math.max(1, Math.round((secs * FPS) / 8)) * 8 + 1;
@@ -531,24 +628,30 @@ function faceFields() {
 }
 
 // ---- running ----
-async function run() {
-  const e = fx(T.op);
-  if (e.needs.includes('source') && !T.source) return toast('Choose a source clip first', true);
-  if (e.needs.includes('matte') && !T.matte) return toast(`Choose a ${T.op === 'cleanplate' ? 'mask' : 'matte'} clip first`, true);
-  if (e.needs.includes('first') && !T.first) return toast('Choose the start image first', true);
-  if (e.needs.includes('sound') && !T.sound) return toast('Choose the sound first', true);
-  if (e.still && !T.source && !T.first) return toast('Choose a clip or a picture first', true);
-  await tabs?.flush();
-  if (e.job === 'key') return runKey(e);
-  if (e.job === 'matte') return runMatte();
-  if (e.job === 'delogo') return runDelogo();
+// what's missing before effect e can run, or null
+function missingInput(e) {
+  if (e.needs.includes('source') && !T.source) return 'Choose a source clip first';
+  if (e.needs.includes('matte') && !T.matte) return `Choose a ${T.op === 'cleanplate' ? 'mask' : 'matte'} clip first`;
+  if (e.needs.includes('first') && !T.first) return 'Choose the start image first';
+  if (e.needs.includes('sound') && !T.sound) return 'Choose the sound first';
+  if (e.still && !T.source && !T.first) return 'Choose a clip or a picture first';
+  return null;
+}
+
+// template fields of tt filled from values by role ({ source, first, len, … })
+const valuesFor = (tt, roles) => Object.fromEntries(Object.entries(roles).map(([role, v]) => [roleField(tt, role)?.key, v]).filter(([k, v]) => k && v != null));
+
+// What a template effect sends: { t (the template, with its SDPose / still variant), values (by field key), rv (the
+// same by role, for the drives' posed and pose templates) }, or a message saying why it can't. loose: for Open in
+// Generate, where missing things can be filled in later
+async function buildRun(e, loose = false) {
   const t = tplOf(e);
-  if (!t) return toast(`Template ${tplId(e)} isn't installed yet`, true);
-  const values = {};
-  const put = (role, v) => { const f = roleField(t, role); if (f && v !== undefined && v !== null) values[f.key] = v; };
+  if (!t) return `Template ${tplId(e)} isn't installed yet`;
+  const values = {}, rv = {};
+  const put = (role, v) => { const f = roleField(t, role); if (f && v !== undefined && v !== null) { values[f.key] = v; rv[role] = v; } };
   put('source', T.source && { ...bare(T.source), ...(T.source.trim && { trim: T.source.trim }), ...(T.source.crop && { crop: T.source.crop }) });
   put('matte', T.matte && bare(T.matte));
-  put('first', T.first);
+  if (e.needs.some((n) => n.startsWith('first'))) put('first', T.first);   // (one picture per tab: only the effects that take one)
   if (e.needs.includes('sound')) put('sound', T.sound);
   if (e.needs.includes('voice')) put('voice', T.voice);
   put('prompt', T.prompt.trim() ? T.prompt : undefined);   // empty: keep the template's own prompt
@@ -577,25 +680,70 @@ async function run() {
     put('pointsPos', JSON.stringify(pts.positive)); put('pointsNeg', JSON.stringify(pts.negative));
     put('mode', clicked ? 'point' : 'text');
     put('pframe', clicked ? Math.max(0, Math.round((T.pointsAt - (T.source?.trim?.start || 0)) * FPS)) : 0);
-    if (!clicked && !T.prompt.trim()) return toast('Tap the thing on the picture, or describe it', true);
+    if (!clicked && !T.prompt.trim() && !loose) return 'Tap the thing on the picture, or describe it';
   }
-  if (e.needs.includes('tracks')) put('tracks', JSON.stringify(await tracksPx(t, values)));
-  if (e.needs.includes('canvas')) {   // the clip on its canvas, and the mask of what to paint, made on the server first
+  if (e.needs.includes('tracks') && T.first) put('tracks', JSON.stringify(await tracksPx(t, values)));
+  if (e.needs.includes('canvas') && T.source) {   // the clip on its canvas, and the mask of what to paint, made on the server first
     try {
       const c = T.canvas || CANVAS, a = canvasAspect();
       const r = await api('/api/video/canvas', { method: 'POST', busy: 'Setting up the canvas…', timeout: 900000,
         body: { source: bare(T.source), trim: T.source.trim || null, aspect: a, scale: c.scale, cx: c.cx, cy: c.cy } });
       put('source', r.video); put('matte', r.mask);
-    } catch (err) { return toast('Couldn\'t set up the canvas: ' + err.message, true); }
+    } catch (err) { return 'Couldn\'t set up the canvas: ' + err.message; }
   }
-  try {
-    const parent = T.source?.generation != null ? { generation: T.source.generation, index: T.source.index || 0, frame: null } : null;
-    const gens = await api('/api/generate', { method: 'POST', body: { template: t.id, values, batch: 1, project_id: S.project, parent } });
+  return { t, values, rv };
+}
+
+const parentOf = () => (T.source?.generation != null ? { generation: T.source.generation, index: T.source.index || 0, frame: null } : null);
+
+async function run() {
+  const e = fx(T.op);
+  const miss = missingInput(e);
+  if (miss) return toast(miss, true);
+  await tabs?.flush();
+  if (e.job === 'key') return runKey(e);
+  if (e.job === 'matte') return runMatte();
+  if (e.job === 'delogo') return runDelogo();
+  const b = await buildRun(e);
+  if (typeof b === 'string') return toast(b, true);
+  const { t, values, rv } = b;
+  const parent = parentOf();
+  const tab = T;
+  // queue template tt (null: this effect's own, with values) with values by role; how: added to the toast (null: no toast)
+  const queue = async (tt, roles, how) => {
+    const vals = roles ? valuesFor(tt, roles) : values;
+    const gens = await api('/api/generate', { method: 'POST', body: { template: (tt || t).id, values: vals, batch: 1, project_id: S.project, parent } });
     adoptGenerations(gens);
-    T.results.push(...gens.map((g) => g.id));
-    changed();
-    toast(`Queued ${e.label} as #${gens[0].id}`);
-  } catch (err) { toast(err.message, true); }
+    tab.results.push(...gens.map((g) => g.id));
+    if (tab === T) changed(); else tabs?.changed();
+    if (how !== null) toast(`Queued ${e.label} as #${gens[0].id}${how ? `, ${how}` : ''}`);
+    return gens[0];
+  };
+  if (e.posed && T.source && await drivePosed(e, rv, queue)) return;
+  try { await queue(null, null, ''); } catch (err) { toast(err.message, true); }
+}
+
+// The effect's template with the values Run would send, in a new Generate tab: every field can be changed there.
+// A drive with a ready pose video opens the posed template on it.
+async function openInGenerate() {
+  const e = fx(T.op);
+  await tabs?.flush();
+  const b = await buildRun(e, true);
+  if (typeof b === 'string') return toast(b, true);
+  let { t, values } = b;
+  const posed = e.posed && S.templates.find((x) => x.id === e.posed && !x.error);
+  if (posed && T.source && !UI.remake) {
+    try {
+      const pose = await findPose();
+      if (pose) { t = posed; values = valuesFor(posed, { ...b.rv, pose: { generation: pose.generation, index: pose.index } }); }
+    } catch { /* the reading template, as it is */ }
+  }
+  if (!genHooks.openShot) return toast('The Generate tab isn\'t ready yet', true);
+  switchTab('generate');
+  await genHooks.openShot({ workflow: t.id, values }, tabs?.active?.name ? `${tabs.active.name} · ${e.label}` : e.label);
+  const parent = parentOf();
+  if (parent) S.pendingParent = parent;
+  toast(`Opened ${e.label} in Generate`);
 }
 
 async function runKey(e) {

@@ -167,6 +167,16 @@ the VFX tab's Face size, Edge softness and Chin sliders).
 | Drive a still (LTX) | `deck-ltx-drive` | LTX-2.5 with the still as the first frame and DWPose through the union-control IC-LoRA |
 | Pose preview | `deck-pose-video` | DWPose, steadied (CPU): what the drive effects follow |
 
+The drives don't read the pose again when the clip already has one: before queueing, the VFX tab asks
+`POST /api/pose/find` for a finished Pose preview of the same clip (generation output or media file), trim
+start (within a frame), crop and poser (`deck-pose-video` for DWPose, `deck-pose-sdpose` for SDPose) with
+enough frames (`app/posefind.py`). With one, it runs `deck-h3-drive-posed` / `deck-ltx-drive-posed`, which
+take it as `@14 Pose video` (cut and stretched as the extracted pose would be) and keep the clip for size,
+frames and sound; the drive's params record the pose generation. Without one, it queues the Pose preview
+first, waits, then runs the posed drive, so the next drive on that clip reuses it. Anything failing falls
+back to the reading template. Under the source, "Pose ready · #id" opens the pose video; Make again reads
+it afresh on the next Run.
+
 They come from `dev/make_perf_templates.py`. Viggle needs `minimax_h3_ref2va_viggle_pruned_int8_convrot`,
 `viggle_animate_dmd_lora_r64` and the `fixed_embed_fwd_anyframe` text conditioning (ComfyUI-Viggle-Animate-H3).
 
