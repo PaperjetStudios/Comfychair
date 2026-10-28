@@ -7,6 +7,13 @@ import {
 import { api, busy as busyBar, toast } from './ui.js';
 import { modeOf } from './scene-modes.js';
 import { renderKeys, renderPanel, renderTime, renderTransport, setStatus } from './scene-ui.js';
+import { bound, frameSpan, playFrom, tickT } from './workarea-math.js';
+import { AREA } from './scene-keys.js';
+
+// the work area (scene-keys.js AREA, SC.range in frames) while it is on: play loops in it, seeks stay in it
+const area = () => bound(SC.range, frames() - 1, 0);
+// the frames a render covers: { first, count } (Range only: the work area's, its last frame included)
+const renderSpan = () => frameSpan(AREA.exportRange(), frames(), 1, true);
 
 // ---- playback ----------------------------------------------------------------------
 // Everything stays live while it plays: an edit is held over the keys while the user holds it
@@ -15,11 +22,12 @@ let raf = 0, t0 = 0, f0 = 0;
 export function play() {
   if (R.playing) return stopPlay();
   R.playing = true; TEMP.clear();
-  t0 = performance.now(); f0 = R.f >= frames() - 1 ? 0 : R.f;
+  t0 = performance.now(); f0 = playFrom(R.f, area(), frames() - 1);
   const step = (now) => {
     if (!R.playing) return;
     R.f = Math.floor(f0 + (now - t0) / 1000 * FPS);
-    if (R.f >= frames()) { R.f = 0; f0 = 0; t0 = now; }
+    const st = tickT(R.f, area(), frames() - 1, true, true);   // (loops in the work area while it is on)
+    if (st.t !== R.f) { R.f = st.t; f0 = st.t; t0 = now; }
     pose(R.f); draw(); renderTime(); recordFrame(R.f);
     raf = requestAnimationFrame(step);
   };
@@ -34,6 +42,8 @@ export function stopPlay() {
 }
 export function seek(f) {
   f = Math.max(0, Math.min(frames() - 1, Math.round(f)));
+  const a = area();
+  if (a) f = Math.max(a.a, Math.min(a.b, f));
   if (R.playing) {   // it plays on from there (the panel is brought up to date when it stops)
     R.f = f; f0 = f; t0 = performance.now();
     pose(R.f); draw(); renderTime(); renderKeys();
@@ -61,7 +71,8 @@ function measureRange() {
   renderer.setClearColor(0x000000, 0);
   scene.overrideMaterial = rangeMat;
   let near = Infinity, far = 0;
-  for (let f = 0; f < frames(); f++) {
+  const { first, count } = renderSpan();
+  for (let f = first; f < first + count; f++) {
     pose(f);
     renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, camera);
     renderer.readRenderTargetPixels(rt, 0, 0, W, H, buf);
@@ -124,13 +135,13 @@ export async function renderDepthVideo() {
     const rt = new THREE.WebGLRenderTarget(W, H, { colorSpace: THREE.NoColorSpace });
     draw('depth');
     camera.aspect = W / H; camera.updateProjectionMatrix();
-    const form = new FormData();
-    for (let f = 0; f < frames(); f++) {
-      pose(f);
+    const form = new FormData(), { first, count } = renderSpan();
+    for (let k = 0; k < count; k++) {
+      pose(first + k);
       renderer.setRenderTarget(rt); renderer.render(scene, camera); renderer.setRenderTarget(null);
-      form.append('frames', await targetToBlob(rt, W, H, true), `f${String(f).padStart(5, '0')}.png`);
-      if (f % 12 === 0) setStatus(`Rendering ${f + 1}/${frames()}…`);
-      bar.set(null, (f + 1) / frames());
+      form.append('frames', await targetToBlob(rt, W, H, true), `f${String(k).padStart(5, '0')}.png`);
+      if (k % 12 === 0) setStatus(`Rendering ${k + 1}/${count}…`);
+      bar.set(null, (k + 1) / count);
       if (stopAsked) { rt.dispose(); checkStop(); }
     }
     rt.dispose();
@@ -174,16 +185,16 @@ export async function renderPoseVideo() {
     const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
     const ctx = cv.getContext('2d');
     camera.aspect = W / H; camera.updateProjectionMatrix();
-    const form = new FormData();
-    for (let f = 0; f < frames(); f++) {
-      pose(f);
+    const form = new FormData(), { first, count } = renderSpan();
+    for (let k = 0; k < count; k++) {
+      pose(first + k);
       camera.updateMatrixWorld();
       const opts = { hands: SC.poseHands !== false, face: SC.poseFace !== false };
       const people = figs.map((o) => FIGURE.projectPose(R.meshes.get(o.id).userData.rig, o.hide, camera, W, H, opts));
       FIGURE.drawPose(ctx, people, W, H);
-      form.append('frames', await new Promise((res) => cv.toBlob(res, 'image/png')), `f${String(f).padStart(5, '0')}.png`);
-      if (f % 12 === 0) setStatus(`Rendering ${f + 1}/${frames()}…`);
-      bar.set(null, (f + 1) / frames());
+      form.append('frames', await new Promise((res) => cv.toBlob(res, 'image/png')), `f${String(k).padStart(5, '0')}.png`);
+      if (k % 12 === 0) setStatus(`Rendering ${k + 1}/${count}…`);
+      bar.set(null, (k + 1) / count);
       checkStop();
     }
     await sendVideo(form, 'pose', 0);
