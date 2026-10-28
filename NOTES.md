@@ -116,6 +116,26 @@ How it fits together (`web/figure.js` is the figure, `web/scene.js` the tab):
   `registerMode({ key, label, hint, panel, select, stage, view, lanes, frustum, enter, exit })` and
   `addModeSection(key, build)`; `scene-builtin.js` registers the three. Both are re-exported from
   `scene.js`, so a later file can import them from `./scene-modes.js` (no import cycle) or `./scene.js`.
+- **Gizmo axes** (2026-10-28, `R.orient`, localStorage `deck.scene.orient`; toolbar button after Move / Rotate / Scale,
+  key **Q** cycles World → Local → View). The maths is `web/gizmo-orient.js` (no three.js, node-tested by
+  `tests/gizmo_orient.test.mjs`). The gizmo always holds a stand-in (`pivot` for an object, `camProxy` for the shot
+  camera in the director view, `ikTarget` for a hand or foot) turned like the axes: the object's own turn in World /
+  Local (World uses TransformControls' world space), the camera on show (`activeCamera()`) in View, with space
+  `local`. The thing keeps its turn relative to the stand-in (`pivotRel` / `camRel`, taken when it is placed) and is
+  put back each frame as `follow()`: stand-in turn × rel, its pivot point under the stand-in. In View, Move goes along
+  screen right / up / toward you and Rotate turns about those; **Scale always uses the object's own axes** (a
+  screen-axis stretch of a turned box would shear it). The stand-in is put back after every drag (`placeHandle`, the
+  smoothGizmo `end`) and, in View, whenever either orbit moves (`followView`). Joint turns keep their own (local)
+  axes; a hand / foot IK target moves on the view's axes in View, else the world's. The View Z arrow is hidden by
+  TransformControls when it points straight at you (object near the middle of the view): move in depth with Local
+  or World, or with the object off-centre.
+  - **Grid snap** on turned axes (Local, View): the move goes in whole grid steps along those axes from where the drag
+    started (`snapAlong`, in `gizmo.js smoothGizmo`), not onto the floor grid; World snaps onto the floor grid as before.
+  - **Pivot at the view centre** (toolbar, crosshair-in-frame icon): the stand-in pivot goes where the ray through the
+    middle of the view hits the selected object (a splat aims at its stand-in box, `userData.pickProxy`); with no hit,
+    on that ray as far out as the current pivot. In the director view with the camera's gizmo, it pivots the shot
+    camera around what the free view's centre looks at. Held in `tmpPivot` (scene-view.js, the thing's own space), not
+    saved: it goes on Reset pivot (shown only while it is in use), another selection, or a new Pivot in the panel.
 - Modules are imported with `?v=` added by the server only for `from '...'` imports: never use a bare
   `import './x.js'` (it would load unversioned).
 

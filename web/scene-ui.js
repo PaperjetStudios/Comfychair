@@ -10,9 +10,10 @@ import {
 } from './scene-data.js';
 import { FIG_TABS, adjustTab, faceTab, handsTab, jointsTab, movesTab, partsTab, posesTab, promptProps } from './scene-pose.js';
 import {
-  HAND, addObject, camGizmo, cameraFromView, newCameraPose, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, makeSplatHere, pose, rebuildRoom, recentre, refresh,
-  removeLayer, removeSelected, select, selectJoint, setFree, setMode, syncMeshes, viewer
+  HAND, addObject, camGizmo, cameraFromView, canPivot, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, makeSplatHere, newCameraPose, orientLabel,
+  pivotMoved, pivotToView, pose, rebuildRoom, recentre, refresh, removeLayer, removeSelected, resetPivot, select, selectJoint, setFree, setMode, setOrient, syncMeshes, viewer
 } from './scene-view.js';
+import { ORIENTS, nextOrient } from './gizmo-orient.js';
 import { busy, cancelRender, letGo, play, renderColorVideo, renderDepthVideo, renderPoseVideo, saveFrame, seek, stopPlay } from './scene-export.js';
 import { AREA, maxBar, renderKeys, renderTransport, wireSheetKeys } from './scene-keys.js';
 import { hasMode, modeDef, modeList, modeOf, modeSections } from './scene-modes.js';
@@ -32,6 +33,15 @@ export function renderToolbar() {
   const ok = (m) => can && !(cam && m === 'scale') && (!R.joint || m === 'rotate' || (m === 'translate' && !!FIGURE.IK[R.joint]));
   const mode = R.joint ? jointMode() : R.mode;
   tb.querySelectorAll('[data-mode]').forEach((b) => { b.classList.toggle('on', ok(b.dataset.mode) && b.dataset.mode === mode); b.disabled = !ok(b.dataset.mode); });
+  // the gizmo's axes: the button shows the ones in use and a tap goes on to the next
+  const ob = tb.querySelector('[data-orient]'), [, , oi] = ORIENTS.find(([k]) => k === R.orient) || ORIENTS[0];
+  if (ob.dataset.orient !== R.orient) { ob.dataset.orient = R.orient; ob.replaceChildren(icon(oi)); }
+  const nx = ORIENTS.find(([k]) => k === nextOrient(R.orient))[1];
+  ob.title = `Gizmo axes: ${orientLabel()}${R.orient === 'view' ? ' (screen right, up, toward you)' : R.orient === 'local' ? ' (the object\'s own)' : ''}. Tap for ${nx} (Q)`;
+  ob.setAttribute('aria-label', `Gizmo axes: ${orientLabel()}`);
+  const pb = tb.querySelector('[data-pivot]'), moved = pivotMoved();
+  pb.disabled = !canPivot(); pb.classList.toggle('on', moved); pb.setAttribute('aria-pressed', moved);
+  tb.querySelector('[data-pivot-reset]').classList.toggle('hidden', !moved);
   tb.querySelector('[data-depth]').classList.toggle('on', R.depth);
   const rb = tb.querySelector('[data-ref]');
   rb.classList.toggle('on', !!SC.ref && SC.ref.on !== false); rb.setAttribute('aria-pressed', !!SC.ref && SC.ref.on !== false);
@@ -87,7 +97,7 @@ function placeProps(o, cur) {
       : EVEN.has(o.type) ? num('Scale', () => cur().sy, (v) => even(Math.max(0.001, v)), { min: 0.001, max: 20, step: 0.001, digits: 3 })
       : xyz('Size (m)', [['sx', 'Width'], ['sy', 'Height'], ['sz', 'Depth']], { min: 0.05, max: 20, step: 0.01 }),
     field('Pivot (where the gizmo turns it)', seg(pivotsFor(o), pivotsFor(o).some(([k]) => k === pivotOf(o)) ? pivotOf(o) : null,
-      (v) => { o.pivot = v; changed(); }, { wrap: true })),
+      (v) => { o.pivot = v; resetPivot(); changed(); }, { wrap: true })),
     o.type === 'figure' ? shapeProps(o) : null,
     o.type === 'figure' ? [
       toggle('Planted on the floor (Up lifts it off)', o.ground, (on) => { o.ground = on; changed(); }),
@@ -400,6 +410,11 @@ export function buildToolbar() {
   viewer.append(h('div', { id: 'sceneToolbar', class: 'layer-toolbar scene-toolbar', role: 'toolbar', 'aria-label': 'Gizmo' },
     ...MODES.map(([m, icon, key, name]) => h('button', { type: 'button', class: 'ico', 'data-mode': m, title: `${name} (${key.toUpperCase()})`,
       'aria-label': name, onclick: () => setMode(m) }, iconize(icon))),
+    h('button', { type: 'button', class: 'ico', 'data-orient': '', onclick: () => setOrient(nextOrient(R.orient)) }),
+    h('button', { type: 'button', class: 'ico', 'data-pivot': '', 'aria-label': 'Pivot at the view centre', onclick: pivotToView,
+      title: 'Pivot at the view centre: turn and scale around where the middle of the view meets it (until Reset or another pick)' }, icon('pivot-view')),
+    h('button', { type: 'button', class: 'ico hidden', 'data-pivot-reset': '', 'aria-label': 'Reset pivot', onclick: resetPivot,
+      title: 'Reset pivot: back to its own (Pivot in the panel)' }, icon('pivot-reset')),
     h('span', { class: 'sep' }),
     h('button', { type: 'button', class: 'ico', 'data-depth': '', title: 'Depth: show the depth the render will use', 'aria-label': 'Depth',
       onclick: () => { R.depth = !R.depth; draw(); renderToolbar(); } }, icon('contrast')),
@@ -430,6 +445,7 @@ export function wireKeys() {
     if (m) { e.preventDefault(); setMode(m[0]); }
     else if (e.key.toLowerCase() === 'k') { e.preventDefault(); setAutoKey(!R.autoKey); }
     else if (e.key.toLowerCase() === 'v') { e.preventDefault(); toggleFree(); }
+    else if (e.key.toLowerCase() === 'q') { e.preventDefault(); setOrient(nextOrient(R.orient)); toast(`Gizmo axes: ${orientLabel()}`); }
     else if (e.key === 'Escape') { if (HAND.on) handMode(null); else if (R.joint) selectJoint(null); else select(null); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && R.sel) { e.preventDefault(); removeSelected(); }
     else if (e.key === ' ') { e.preventDefault(); play(); }

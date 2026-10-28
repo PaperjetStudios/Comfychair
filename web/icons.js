@@ -89,6 +89,13 @@ const PATHS = {
   chevron: ['M9.5 6l6 6-6 6'],
   home: ['M4 11l8-7 8 7', 'M6 9.5V20h12V9.5'],
   compass: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M15.5 8.5l-2 5-5 2 2-5z'],
+  // the 3D gizmo's axes: the world's (a globe), the object's own (a turned box), the view's (a screen, right and up)
+  'axes-world': ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M3 12h18', 'M12 3c-2.6 2.5-3.8 5.5-3.8 9s1.2 6.5 3.8 9', 'M12 3c2.6 2.5 3.8 5.5 3.8 9s-1.2 6.5-3.8 9'],
+  'axes-local': ['M4 8l8-4.5L20 8l-8 4.5z', 'M4 8v8.5l8 4.5v-8.5', 'M20 8v8.5L12 21'],
+  'axes-view': ['M3 4h18v13H3z', 'M9 21h6', 'M7 13.5V8M7 13.5h6.5', 'M5.3 9.7L7 8l1.7 1.7', 'M11.8 11.8l1.7 1.7-1.7 1.7'],
+  // the gizmo's pivot: to the view's centre (a frame with a mark in its middle), back to its own
+  'pivot-view': ['M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4', 'M12 7.5v2.5M12 14v2.5M7.5 12H10M14 12h2.5', 'M12 12h.01'],
+  'pivot-reset': ['M3.5 12a8.5 8.5 0 1 0 2.7-6.2', 'M3.5 4v5h5', 'M12 12h.01'],
   reference: ['M3 5h18v14H3z', 'M12 5v14', 'M15 9h3M15 12h3'],
   plus: ['M12 5v14M5 12h14'],
   chevdown: ['M6 9.5l6 6 6-6'],

@@ -1,6 +1,7 @@
 // Shared by every transform gizmo (2D handles on the video preview now, the 3D poser through smoothGizmo): the
 // weighted feel of a handle, the snapping settings (remembered per device) and the toggles for them.
 import { h, store, openSheet, closeSheet, seg, field, button, actions , help } from './ui.js';
+import { snapAlong } from './gizmo-orient.js';
 
 // ---- snapping settings: one set for all gizmos, saved on this device ----
 const DEFAULTS = { grid: false, gridPct: 5, edges: true, rot: false, rotStep: 15, scale: false, scaleStep: 5 };
@@ -96,7 +97,9 @@ export const DEAD3 = { translate: 3, rotate: 3, scale: 4 };   // px of pen or fi
 // Wraps a TransformControls: its result becomes the target, the object follows through critically
 // damped springs (Weight), and once the drag has settled settle() runs once. Snapping is
 // TransformControls' own (set from snap3), so the target is already snapped and the spring only
-// smooths toward it. TransformControls works from the drag's start values, so putting the smoothed
+// smooths toward it. Grid snap: in world space TransformControls puts the target on the floor grid; on turned axes
+// (Local, View: space 'local') the move goes in whole grid steps along those axes from where it started instead
+// (snapAlong), since a turned axis doesn't run along the floor grid. TransformControls works from the drag's start values, so putting the smoothed
 // transform back on the object between moves doesn't disturb it.
 //   opts: canvas, fix(object, start) (tidy the raw result, e.g. keep a scale even), apply(object) (use the
 //   object's transform, each frame), settle() (once, if it moved), redraw(), start() / end() (each drag, from its
@@ -105,7 +108,7 @@ export function smoothGizmo(tc, opts) {
   const { canvas } = opts;
   let w = null, start = null, p0 = null, touched = false, alt = false;
   const snaps = () => {
-    tc.setTranslationSnap(snap3.grid && !alt ? snap3.gridM : null);
+    tc.setTranslationSnap(snap3.grid && !alt && tc.space === 'world' ? snap3.gridM : null);
     tc.setRotationSnap(snap3.rot && !alt ? (snap3.rotStep * Math.PI) / 180 : null);
     tc.setScaleSnap(snap3.scale && !alt ? snap3.scaleStep : null);
   };
@@ -148,6 +151,9 @@ export function smoothGizmo(tc, opts) {
     if (!w || w.done) return;
     const o = tc.object;
     opts.fix?.(o, start);
+    if (tc.mode === 'translate' && tc.space === 'local' && snap3.grid && !alt) {
+      o.position.fromArray(snapAlong([start.px, start.py, start.pz], o.position.toArray(), [start.qx, start.qy, start.qz, start.qw], snap3.gridM));
+    }
     const t = read(o), cur = w.values();
     if (cur.qx * t.qx + cur.qy * t.qy + cur.qz * t.qz + cur.qw * t.qw < 0) { t.qx *= -1; t.qy *= -1; t.qz *= -1; t.qw *= -1; }  // the short way round
     if (!touched) touched = Object.keys(t).some((n) => Math.abs(t[n] - start[n]) > 1e-9);
