@@ -374,13 +374,19 @@ export function buildFigure(material, dotMaterial, body = 'man') {
 // ---- body shape (per figure, not keyed): o.shape = { key: percent } on top of the man or the woman.
 // Bones move (so IK, the floor plant and the pose video's points follow) and parts stretch with them.
 // Missing keys are 0, the body as built. anatomy: the plain mannequin shapes on the pelvis.
-export const SHAPES = [['legs', 'Leg length'], ['arms', 'Arm length'], ['torso', 'Torso length'], ['shoulders', 'Shoulder width'],
-  ['hips', 'Hip width'], ['chest', 'Chest'], ['belly', 'Belly', 0, 100], ['build', 'Build (thin to muscular)']];
+// [key, label, min, max] (percent; -50 to 50 when not given)
+export const SHAPES = [['legs', 'Leg length', -50, 80], ['arms', 'Arm length', -50, 80], ['torso', 'Torso length', -50, 80], ['neck', 'Neck length', -60, 120],
+  ['shoulders', 'Shoulder width', -50, 80], ['hips', 'Hip width', -50, 80], ['waist', 'Waist', -50, 80], ['chest', 'Chest'], ['bust', 'Bust size', -100, 200],
+  ['belly', 'Belly', 0, 100], ['build', 'Build (thin to muscular)'], ['upperArms', 'Upper arms', -50, 100], ['thighs', 'Thighs', -50, 100],
+  ['calves', 'Calves', -50, 100], ['head', 'Head size', -40, 60], ['headWidth', 'Head width', -30, 40], ['headLength', 'Head length (chin to crown)', -30, 40],
+  ['hands', 'Hand size', -40, 60], ['feet', 'Foot size', -40, 60]];
 export const shapeRange = (k) => { const d = SHAPES.find((x) => x[0] === k); return [d?.[2] ?? -50, d?.[3] ?? 50]; };
 function shapeFactors(sh = {}) {
   const v = (k) => Math.max(shapeRange(k)[0], Math.min(shapeRange(k)[1], +sh?.[k] || 0)) / 100;
   return { legs: 1 + v('legs') * 0.3, arms: 1 + v('arms') * 0.3, torso: 1 + v('torso') * 0.3, sho: 1 + v('shoulders') * 0.35,
-    hips: 1 + v('hips') * 0.35, chest: v('chest'), belly: v('belly'), build: v('build') };
+    hips: 1 + v('hips') * 0.35, chest: v('chest'), bust: v('bust'), belly: v('belly'), build: v('build'), neck: 1 + v('neck') * 0.5,
+    waist: 1 + v('waist') * 0.4, upper: 1 + v('upperArms') * 0.4, thigh: 1 + v('thighs') * 0.4, calf: 1 + v('calves') * 0.4,
+    head: 1 + v('head') * 0.5, headW: 1 + v('headWidth') * 0.5, headL: 1 + v('headLength') * 0.5, hand: 1 + v('hands') * 0.5, foot: 1 + v('feet') * 0.5 };
 }
 const S3 = new THREE.Vector3();
 export function setShape(rig, shape = {}, anatomy = false) {
@@ -395,16 +401,25 @@ export function setShape(rig, shape = {}, anatomy = false) {
     mul(`${s}knee`, 1, f.legs); mul(`${s}foot`, 1, f.legs);
   }
   for (const n of ['spine', 'chest', 'neck']) mul(n, 1, f.torso);
+  mul('head', 1, f.neck);   // (the head sits on the neck's top: a longer neck lifts it)
+  // the head as a whole (its face, and the face's points for the pose video, ride on it)
+  rig.bones.head.scale.set(f.head * f.headW, f.head * f.headL, f.head * Math.sqrt(f.headW * f.headL));
   at.hips = a0.hips.slice(); at.hips[1] -= (a0.lknee[1] + a0.lfoot[1]) * (f.legs - 1);   // longer legs stand the hips higher
   rig.at = at;
   for (const n of Object.keys(JOINTS)) rig.bones[n].position.fromArray(at[n]);
   // the parts: [x, y, z] stretch per joint; build thickens or thins the limbs and the trunk
   const limb = 1 + f.build * 0.22, trunk = 1 + f.build * 0.1;
-  const S = { hips: [f.hips * trunk, 1, trunk], spine: [trunk, f.torso, trunk], chest: [(1 + (f.sho - 1) * 0.6) * trunk, f.torso, (1 + f.chest * 0.18) * trunk],
-    neck: [1, f.torso, 1], sho: [limb, f.arms, limb], elb: [limb, f.arms, limb], hip: [limb * (1 + (f.hips - 1) * 0.4), f.legs, limb], knee: [limb, f.legs, limb] };
+  const S = { hips: [f.hips * trunk, 1, trunk], spine: [trunk * f.waist, f.torso, trunk * f.waist], chest: [(1 + (f.sho - 1) * 0.6) * trunk, f.torso, (1 + f.chest * 0.18) * trunk],
+    neck: [1, f.torso * f.neck, 1], sho: [limb * f.upper, f.arms, limb * f.upper], elb: [limb, f.arms, limb],
+    hip: [limb * (1 + (f.hips - 1) * 0.4) * f.thigh, f.legs, limb * f.thigh], knee: [limb * f.calf, f.legs, limb * f.calf],
+    hand: [f.hand, f.hand, f.hand], foot: [f.foot, Math.sqrt(f.foot), f.foot] };
   for (const m of rig.meshes) {
     const n = m.parent?.name, r = m.userData.role;
-    if (r === 'bust') { m.scale.setScalar(Math.max(0.3, 1 + f.chest * 0.9)); m.position.copy(m.userData.at).multiply(S3.set(S.chest[0], f.torso, 1)); m.position.z *= 1 + f.chest * 0.25; }
+    if (r === 'bust') {   // Chest still sizes it a little (as it did); Bust size is its own, down to nothing
+      const b = (1 + f.chest * 0.9) * (1 + f.bust * 0.8);
+      m.scale.setScalar(Math.max(0.05, b)); m.userData.off = b < 0.12;
+      m.position.copy(m.userData.at).multiply(S3.set(S.chest[0], f.torso, 1)); m.position.z *= 1 + f.chest * 0.25 + f.bust * 0.15;
+    }
     else if (r === 'belly') {   // it grows forward (and a little down), not out to the sides
       m.scale.set(1 + f.belly * 0.12 * trunk, 1 + f.belly * 0.3, 1 + f.belly * 0.8); m.position.copy(m.userData.at);
       m.position.z += f.belly * 0.045 * rig.at0.chest[1] / 0.2; m.position.y -= f.belly * 0.015; m.userData.off = f.belly <= 0.01;
