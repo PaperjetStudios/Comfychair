@@ -150,6 +150,8 @@ const ICONS = [
   [/room|scene|world/i, ['M3 20V9l9-6 9 6v11z', 'M9 20v-7h6v7']],
   [/pose|figure|person|body|joint/i, ['M12 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4', 'M12 7v7M7 10l5-2 5 2M9 21l3-7 3 7']],
   [/advanced|more|other|extra|setting|option|misc/i, ['M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6', 'M19 12l2-1-1-3-2.2.5-1.3-1.3.5-2.2-3-1-1 2h-1.8l-1-2-3 1 .5 2.2-1.3 1.3L4 8l-1 3 2 1v1.8l-2 1 1 3 2.2-.5 1.3 1.3-.5 2.2 3 1 1-2h1.8l1 2 3-1-.5-2.2 1.3-1.3 2.2.5 1-3-2-1z']],
+  [/brush|eraser|shapes|fill|selection/i, ['M18.5 3.5a2.1 2.1 0 0 1 3 3L12 16l-3-3z', 'M9 13c-2.8 0-4.5 1.8-4.5 4.3 0 1.5-.9 2.4-2.5 2.7 2.2 1.4 5 1.3 6.9-.3 1.4-1.2 2.1-2.6 2.1-3.7']],
+  [/animat/i, ['M12 4l8 8-8 8-8-8z']],
 ];
 const navIcon = (label) => {
   const m = ICONS.find(([re]) => re.test(label));

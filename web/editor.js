@@ -13,14 +13,14 @@ import { putKey } from './keys.js';
 import { playKeys, transport } from './playback.js';
 import { framesToClip } from './scene-comp.js';
 import { openGeneration } from './run.js';
+import { BLENDS, SWATCHES, bindPaint, blankSheet, blendOp, isCanvas, paintProps, paintSync, painting, savePaint, setTool, unsavedPaint } from './paint.js';
+import { icon } from './icons.js';
 
 // ---------------------------------------------------------------------------
 // sketch pad: draw an image (e.g. the source for image-to-image) with a pen or finger.
 // Pen pressure sets the stroke width. Once a pen touches the canvas, finger touches are ignored
 // (palm rejection) until "Pen only" is switched off.
 // ---------------------------------------------------------------------------
-const SWATCHES = ['#000000', '#ffffff', '#7f7f7f', '#e53935', '#fb8c00', '#fdd835', '#43a047', '#1e88e5', '#8e24aa', '#6d4c41', '#f8bbd0', '#90caf9'];
-
 export function openSketch({ base = null, aspect = 1, onDone }) {
   const st = { tool: 'pen', color: store.get('deck.sketch.color', '#000000'), size: store.get('deck.sketch.size', 12),
     penOnly: false, bg: '#ffffff', undo: [], redo: [] };
@@ -160,10 +160,12 @@ const BLANK = () => ({ v: 2, size: null, cols: 2, gap: 0, bg: '#000000', mp: 0, 
 // a saved payload (an edit tab, or the old `deck.editor`) as editor state
 function fromSaved(saved) {
   const e = { ...BLANK(), ...saved, arrange: saved.arrange || null };
-  // layers: { name, crop: {x,y,w,h} as fractions, x, y (canvas px), scale, opacity, hidden, chans (its keys), img };
+  // layers: { name, crop: {x,y,w,h} as fractions, x, y (canvas px), scale, opacity, hidden, chans (its keys), img,
+  // blend (paint.js BLENDS), locked, label (the name shown, for a painted layer whose file is named after its pixels) };
   // the last one is drawn on top. size: a fixed {w,h} canvas, or null to fit around the layers. anim: see below.
   e.layers = (saved.layers || []).map((l) => ({ name: l.name, crop: { ...(l.crop || FULL) },
     x: l.x, y: l.y, scale: l.x == null ? 1 : l.scale, opacity: l.opacity ?? 1, hidden: !!l.hidden,
+    blend: l.blend || 'normal', locked: !!l.locked, ...(l.label ? { label: l.label } : {}),
     ...(l.chans ? { chans: structuredClone(l.chans) } : {}) }));
   // The old auto-layout editor kept no positions: lay its images out once they load, in the same
   // order (its first image was leftmost, so it goes to the top of the list).
@@ -180,10 +182,11 @@ E.tab = null;   // the tab this state belongs to: { id, qs }
 
 
 // What a tab stores: the editor's settings and its layers (input image names + crop/position), all small.
-// (Layers only ever name input images, so nothing here is a data URL or a blob.)
+// (Layers only ever name input images, so nothing here is a data URL or a blob. A new blank canvas has no file
+// until its first save, a moment later: it's left out until then.)
 const dumpEditor = () => ({ v: 2, size: E.size, cols: E.cols, gap: E.gap, bg: E.bg, mp: E.mp, snap: E.snap, arrange: E.arrange, anim: E.anim,
-  layers: E.layers.map((l) => ({ name: l.name, crop: l.crop, x: l.x, y: l.y, scale: l.scale, opacity: l.opacity, hidden: l.hidden,
-    chans: l.chans || null })) });
+  layers: E.layers.filter((l) => l.name).map((l) => ({ name: l.name, crop: l.crop, x: l.x, y: l.y, scale: l.scale, opacity: l.opacity, hidden: l.hidden,
+    blend: l.blend || 'normal', locked: !!l.locked, label: l.label || null, chans: l.chans || null })) });
 // every edit ends up here: an animated layer keys what moved, the tab saves itself shortly and its still follows
 export function persistEditor() { keyPose(); tabs.changed(); stillSoon(); }
 
@@ -281,6 +284,7 @@ const tabs = new TabSet({ kind: 'edit-tabs', mount: tabMount, newName: (n) => `E
   adapter: {
     empty: BLANK,
     dump: dumpEditor,
+    beforeLeave: savePaint,   // painted layers get their files (and the tab their names) before it's left
     load(payload, doc) {
       if (E.tab?.id !== doc.id) stillNow(); else clearTimeout(stillTimer);   // a tab being left gets its still now (the draw is synchronous)
       stillDue = false;
@@ -386,11 +390,13 @@ function editorFrame() {
   return { x, y, w: Math.max(1, Math.ceil(b.x + b.w) - x), h: Math.max(1, Math.ceil(b.y + b.h) - y) };
 }
 
+// (l.live: the layer with the stroke being painted on it, paint.js)
 function drawLayer(ctx, l) {
   const W = l.img.naturalWidth, H = l.img.naturalHeight, c = l.crop, r = layerRect(l);
   ctx.globalAlpha = clamp(l.opacity ?? 1, 0, 1);
-  ctx.drawImage(l.img, c.x * W, c.y * H, Math.max(1, c.w * W), Math.max(1, c.h * H), r.x, r.y, r.w, r.h);
-  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = blendOp(l);
+  ctx.drawImage(l.live || l.img, c.x * W, c.y * H, Math.max(1, c.w * W), Math.max(1, c.h * H), r.x, r.y, r.w, r.h);
+  ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
 }
 
 function composeEditor(target) {
@@ -473,18 +479,27 @@ function setLayerCrop(l, c, ir = imageRect(l)) {
 }
 
 // view: canvas px → screen px in the viewer (s = zoom, ox/oy = offset). It's refitted on every
-// redraw, except while dragging, so the canvas doesn't jump around under the finger.
-let EV = null, EVheld = false;
+// redraw, except while dragging, so the canvas doesn't jump around under the finger. While painting,
+// two fingers (or the wheel) zoom and pan on top of the fit: VZ = { z, tx, ty }, screen = fitted * z + t.
+let EV = null, EVfit = null, EVheld = false, VZ = { z: 1, tx: 0, ty: 0 };
 function fitView(w, hh) {
-  if (EVheld && EV) return;
-  const f = editorFrame(), rs = f ? [f] : [];
-  if (E.size) rs.push(...visibleLayers().map(layerRect));   // show layers hanging off a fixed canvas too
-  if (E.cropping && E.sel && ready(E.sel)) rs.push(imageRect(E.sel));
-  if (!rs.length) { EV = null; return; }
-  const b = unionRect(rs), pad = 28, top = 72;   // room above for the layer toolbar
-  const s = Math.max(1e-3, Math.min((w - 2 * pad) / b.w, (hh - pad - top) / b.h));
-  EV = { s, ox: (w - b.w * s) / 2 - b.x * s, oy: top + (hh - pad - top - b.h * s) / 2 - b.y * s };
+  if (!(EVheld && EVfit)) {
+    const f = editorFrame(), rs = f ? [f] : [];
+    if (E.size) rs.push(...visibleLayers().map(layerRect));   // show layers hanging off a fixed canvas too
+    if (E.cropping && E.sel && ready(E.sel)) rs.push(imageRect(E.sel));
+    if (!rs.length) { EV = EVfit = null; return; }
+    const b = unionRect(rs), pad = 28, left = 64, top = 72;   // room left for the paint tools, above for the layer toolbar
+    const s = Math.max(1e-3, Math.min((w - pad - left) / b.w, (hh - pad - top) / b.h));
+    EVfit = { s, ox: left + (w - pad - left - b.w * s) / 2 - b.x * s, oy: top + (hh - pad - top - b.h * s) / 2 - b.y * s };
+  }
+  EV = { s: EVfit.s * VZ.z, ox: EVfit.ox * VZ.z + VZ.tx, oy: EVfit.oy * VZ.z + VZ.ty };
 }
+const viewZoom = {
+  get: () => ({ ...VZ }),
+  set(z, tx, ty) { VZ = { z, tx, ty }; drawEditorCanvas(); paintSync(); },
+  reset() { if (viewZoom.zoomed()) { VZ = { z: 1, tx: 0, ty: 0 }; drawEditorCanvas(); } paintSync(); },
+  zoomed: () => VZ.z !== 1 || VZ.tx !== 0 || VZ.ty !== 0,
+};
 
 const HANDLE = 22;   // touch radius of a corner handle, screen px
 function drawBox(ctx, r, accent) {
@@ -524,6 +539,13 @@ function drawEditorCanvas() {
   }
   const sel = E.sel && ready(E.sel) ? E.sel : null;
   if (!sel) return;
+  if (painting()) {   // the layer being painted: a thin outline, no handles
+    const r = scr(layerRect(sel));
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = accent; ctx.lineWidth = 1;
+    ctx.strokeRect(Math.round(r.x) + 0.5, Math.round(r.y) + 0.5, Math.round(r.w), Math.round(r.h));
+    ctx.setLineDash([]);
+    return;
+  }
   if (E.cropping) {   // the whole image dimmed, the kept part on top of it
     const ir = scr(imageRect(sel));
     ctx.fillStyle = '#000a'; ctx.fillRect(0, 0, w, hh);
@@ -593,14 +615,14 @@ function wireEditor() {
       else { EVheld = false; E.cropping = false; renderEditor(); }   // tapping outside the image finishes the crop
       return;
     }
-    const k = sel && corner(p, layerRect(sel));
+    const k = sel && !sel.locked && corner(p, layerRect(sel));
     if (k) {
       const r = layerRect(sel);
       drag = { resize: true, l: sel, ax: k.includes('w') ? r.x + r.w : r.x, ay: k.includes('n') ? r.y + r.h : r.y,
         cw: r.w / sel.scale, ch: r.h / sel.scale };
       return;
     }
-    const hit = visibleLayers().reverse().find((l) => inside(p, layerRect(l)));
+    const hit = visibleLayers().reverse().find((l) => !l.locked && inside(p, layerRect(l)));   // (a locked layer is picked from the list)
     if (!hit) { EVheld = false; if (E.sel) { E.sel = null; renderEditor(); } return; }
     const now = performance.now();
     if (hit === lastTap.l && now - lastTap.t < 350) {
@@ -669,6 +691,12 @@ function wireEditor() {
     h('button', { type: 'button', 'data-snap': '', title: 'Snap to the canvas and other layers (hold Alt to skip)',
       onclick: () => { E.snap = !E.snap; persistEditor(); drawEditorCanvas(); } }, '⌖ Snap')));
   new ResizeObserver(() => { if (!EVheld) drawEditorCanvas(); }).observe(cv.parentElement);
+  // painting (paint.js): its pointer handlers come first while a paint tool is picked; its tool strip sits on the left
+  cv.parentElement.append(...bindPaint({
+    E, canvas: () => cv, viewer: () => cv.parentElement, view: () => EV, zoom: viewZoom, frame: editorFrame,
+    toCanvas: (e) => point(e), redraw: drawEditorCanvas, render: renderEditor, changed: persistEditor,
+    active: () => $('#tab-editor').classList.contains('active') && !sheetOpen() && !EA.exporting,
+  }));
 
   // V / C switch tool, Esc finishes a crop / deselects, Delete removes the selected layer, arrows nudge it
   document.addEventListener('keydown', (e) => {
@@ -710,7 +738,9 @@ export function renderEditor() {
   if (!E.sel || !ready(E.sel)) E.cropping = false;
   $('#editorPanel').replaceChildren(
     h('div', { class: 'panel-body' }, tabMount,
-      panelTop(button('+ Add images', addEditorImages, { cls: 'primary' }), E.layers.length ? () => {
+      panelTop([button('+ Add images', addEditorImages, { cls: 'primary' }),
+        h('button', { type: 'button', class: 'icon-btn ico-btn', title: 'Blank canvas: a new empty layer to paint on', 'aria-label': 'Blank canvas',
+          onclick: blankSheet }, icon('canvas'))], E.layers.length ? () => {
         const before = E.layers, tid = E.tab?.id;
         E.layers = []; E.sel = null; E.arrange = null; persistEditor(); renderEditor();
         undoToast(`Cleared ${before.length} layer${before.length > 1 ? 's' : ''}`, () => {
@@ -718,14 +748,24 @@ export function renderEditor() {
           E.layers = before; persistEditor(); renderEditor();
         });
       } : null),
-      layerList(),
+      layerList(), paintProps(),
       E.sel ? layerProps(E.sel) : null, animProps(), canvasProps(), exportProps()));   // (the panel order, app-wide)
   animBar();
   drawEditorCanvas();
+  paintSync();
 }
 
 const editorChanged = () => { persistEditor(); renderEditor(); };
 const editorNum = (label, value, set, opts) => propNum(label, value, set, editorChanged, opts);
+
+const layerName = (l) => l.label || l.name?.split('/').pop() || 'Canvas';
+// a painted layer's thumbnail, drawn from its pixels (the server's thumbnails are JPEGs: no see-through)
+function canvasThumb(src) {
+  const k = Math.min(1, 88 / Math.max(src.width, src.height)), cv = h('canvas', { class: 'paint-thumb' });
+  cv.width = Math.max(1, Math.round(src.width * k)); cv.height = Math.max(1, Math.round(src.height * k));
+  cv.getContext('2d').drawImage(src, 0, 0, cv.width, cv.height);
+  return cv;
+}
 
 // Top of the list is drawn on top; tap a row to select that layer
 function layerList() {
@@ -738,14 +778,18 @@ function layerList() {
   };
   return layerRowsEl([...E.layers].reverse().map((l) => {
     const r = ready(l) ? layerRect(l) : null, cropped = l.crop.w < 0.999 || l.crop.h < 0.999;
+    const blend = l.blend && l.blend !== 'normal' ? ` · ${BLENDS.find(([v]) => v === l.blend)?.[1].toLowerCase()}` : '';
     return {
       sel: l === E.sel, off: l.hidden || l.broken,
-      onclick: () => { E.sel = l === E.sel ? null : l; E.cropping = false; renderEditor(); },
-      thumb: h('img', { src: thumbUrl(l.name, 160), alt: '' }),
-      name: l.name.split('/').pop(),
+      // (painting the selected layer: tapping it again keeps it, so the brush always has a layer)
+      onclick: () => { E.sel = l === E.sel && !painting() ? null : l; E.cropping = false; renderEditor(); },
+      thumb: isCanvas(l) ? canvasThumb(l.img) : h('img', { src: thumbUrl(l.name, 160), alt: '' }),
+      name: layerName(l),
       hint: l.broken ? 'could not load' : !r ? 'loading…'
-        : `${Math.round(r.w)}×${Math.round(r.h)}${cropped ? ' · cropped' : ''}${anyKeys(l) ? ' · animated' : ''}${l.hidden ? ' · hidden' : ''}`,
+        : `${Math.round(r.w)}×${Math.round(r.h)}${cropped ? ' · cropped' : ''}${blend}${anyKeys(l) ? ' · animated' : ''}${l.hidden ? ' · hidden' : ''}`,
       buttons: [
+        l.locked ? h('button', { type: 'button', class: 'icon-btn ico-btn on', 'aria-label': 'Unlock', title: 'Locked: tap to unlock',
+          onclick: (e) => { e.stopPropagation(); l.locked = false; editorChanged(); } }, icon('lock')) : null,
         iconBtn(l.hidden ? 'Show' : 'Hide', l.hidden ? '◌' : '◉', () => { l.hidden = !l.hidden; editorChanged(); }),
         iconBtn('Bring forward', '↑', () => move(l, 1)),
         iconBtn('Send backward', '↓', () => move(l, -1))],
@@ -787,14 +831,18 @@ function layerProps(l) {
     : rangeField(label, () => l[ch], set, { onInput: drawEditorCanvas, onChange: editorChanged, ...opts }));
   const px = { step: 1, digits: 0, fmt: (v) => String(Math.round(v)) };
   return section('Layer', done,
-    hint(l.name.split('/').pop(), 'layer-title'),
+    hint(layerName(l), 'layer-title'),
     prop('X', 'x', (v) => { l.x = Math.round(v); }, { ...px, min: Math.floor(fr.x - fr.w), max: Math.ceil(fr.x + fr.w * 2) }),
     prop('Y', 'y', (v) => { l.y = Math.round(v); }, { ...px, min: Math.floor(fr.y - fr.h), max: Math.ceil(fr.y + fr.h * 2) }),
     prop('Scale', 'scale', (v) => setScale(Math.max(0.01, v)), { min: 0.01, max: 4, step: 0.01, fmt: pctFmt }),
     prop('Opacity', 'opacity', (v) => { l.opacity = clamp(v, 0, 1); }, { min: 0, max: 1, step: 0.01, fmt: pctFmt }),
+    field('Blend', seg(BLENDS, l.blend || 'normal', (v) => { l.blend = v; editorChanged(); }, { wrap: true })),
+    h('div', { class: 'row wrap' },
+      h('button', { type: 'button', class: `btn small${l.locked ? ' on' : ''}`, title: 'No painting, moving or resizing it on the canvas',
+        onclick: () => { l.locked = !l.locked; editorChanged(); } }, icon(l.locked ? 'lock' : 'unlock'), l.locked ? 'Locked' : 'Lock')),
     hint(`${Math.round(r.w)}×${Math.round(r.h)} px on the canvas · ${Math.round(c.w * W)}×${Math.round(c.h * H)} px of the image`),
     h('div', { class: 'row wrap' },
-      button('Crop', () => { E.cropping = true; E.aspect = null; renderEditor(); }),
+      button('Crop', () => { setTool('move'); E.cropping = true; E.aspect = null; renderEditor(); }),
       cropped ? button('Reset crop', () => { setLayerCrop(l, { ...FULL }); editorChanged(); }) : null,
       button('100%', () => { setScale(1); editorChanged(); })),
     alignControls(l),
@@ -868,12 +916,13 @@ function exportProps() {
 }
 
 // The edit as a layered PhotoCraft document: each layer cropped as here and placed where it sits on the canvas
-function craftEditor(btn) {
-  const f = editorFrame(), layers = E.layers.filter(ready);
+async function craftEditor(btn) {
+  if (unsavedPaint()) await savePaint();   // PhotoCraft reads each layer's file
+  const f = editorFrame(), layers = E.layers.filter((l) => ready(l) && l.name);
   if (!f || !layers.length) return toast('Add some images first', true);
   sendToCraft('photo', { title: tabs?.active?.name || 'Edit', canvas: { w: f.w, h: f.h, bg: E.bg },
     layers: layers.map((l) => { const r = layerRect(l);
-      return { src: { input: l.name }, name: l.name.split('/').pop().replace(/\.[a-z]+$/i, ''), crop: l.crop, hidden: !!l.hidden,
+      return { src: { input: l.name }, name: layerName(l).replace(/\.[a-z]+$/i, ''), crop: l.crop, hidden: !!l.hidden,
         rect: { x: r.x - f.x, y: r.y - f.y, w: r.w, h: r.h } }; }) }, btn);
 }
 
