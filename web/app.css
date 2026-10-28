@@ -453,11 +453,19 @@ details.desc[open] summary { margin-bottom: 6px; }
 .layer-toolbar .sep { width: 1px; margin: 4px 3px; background: var(--line); }
 /* painting (paint.js): the tool strip down the left of the canvas, the brush outline under a hovering pen */
 svg.ico { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.btn svg.ico { width: 16px; height: 16px; margin-right: 6px; vertical-align: -3px; }
-/* the app's symbols are line icons (icons.js iconize): sized to the text they sit in, solid when "filled" */
-.chip svg.ico, .seg svg.ico { width: 16px; height: 16px; margin-right: 5px; vertical-align: -3px; }
-.btn svg.ico:only-child, .chip svg.ico:only-child, .seg svg.ico:only-child { margin-right: 0; }
-.icon-btn svg.ico { width: 20px; height: 20px; margin: 0; vertical-align: middle; }
+.btn svg.ico { width: 16px; height: 16px; }
+/* the app's symbols are line icons (icons.js iconize): sized to the text they sit in, solid when "filled".
+   A button (or chip, or link) holding one centres it and its words on one line, whatever the button's own layout */
+.chip svg.ico, .seg svg.ico { width: 16px; height: 16px; }
+.icon-btn svg.ico { width: 20px; height: 20px; }
+:is(button, a.btn, .chip):not([hidden]):has(> svg.ico) { display: inline-flex; align-items: center; gap: 6px; }
+:is(button, a.btn, .chip, .btn):has(> svg.ico:only-child) { justify-content: center; }
+.btn:has(> svg.ico), .seg button:has(> svg.ico) { justify-content: center; }
+/* a name cut short with … keeps its own layout; the icon just sits on the line */
+:is(button, a.btn, .chip).sheet-name:not([hidden]):has(> svg.ico) { display: block; }
+.sheet-name > svg.ico { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; }
+:is(button, a.btn, .chip) > svg.ico { margin: 0; vertical-align: 0; flex: none; }
+.seg button:not([hidden]):has(> svg.ico) { display: flex; }
 svg.ico.filled path { fill: currentColor; }
 .paint-strip {
   position: absolute; z-index: 2; left: 8px; top: 8px; max-height: calc(100% - 16px); overflow-y: auto; scrollbar-width: none;
