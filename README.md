@@ -486,6 +486,14 @@ A LoRA group titled with "Turbo" (`@5 Turbo LoRA`) only lists speed-up LoRAs and
 Every LoRA row has an **i** button with its Civitai page, trigger words (tap to add to the prompt)
 and examples, looked up by file hash through rgthree-comfy.
 
+**Civitai…** beside **+ Add LoRA** browses civitai.com for LoRAs made for the template's model family
+(the LoRA folder: `h3` → MiniMax H3, `krea` → Krea 2, `klein` → Flux.2 Klein 9B, `qwen` → Qwen 2.1,
+`moss` → MOSS Image, `ltx2.5` → LTXV 2.5, `ltx2.3` → LTXV 2.3; see `BASES` in `app/civitai.py`). Download
+puts the file in that family's LoRA folder (the first `loras` path in ComfyUI's `extra_model_paths.yaml`, or
+`DECK_LORA_DIR`) with a `<file>.civitai.json` beside it (ids, trigger words, preview), and **Add to the
+stack** adds it. Some downloads need a Civitai API key: Settings ⚙ → Civitai. The key stays on the server in
+`data/secrets.json`; the NSFW setting there decides which pictures are blurred.
+
 The main prompt has **Build from parts**: Subject / Action / Camera / Style / Lighting / Sound
 (video) or Subject / Setting / Style / Lighting / Camera (images), joined into the prompt. Each part
 has saved snippets (💾 save, ◀ ▶ cycle, 🗑 delete), stored on the server so every device and template
@@ -767,6 +775,7 @@ Editor, an input, the timeline or VFX. The apps are found on `PATH`; set `DECK_P
 ```
 app/main.py        API routes, websocket fan-out, saving outputs, reconcile loop
 app/comfy.py       ComfyUI HTTP + websocket client
+app/civitai.py     Civitai LoRA search + downloads, the API key (data/secrets.json)
 app/templates.py   @-tag parsing, field typing from /object_info, LoRA chain splicing
 app/imageprep.py   crop, megapixel cap, snap to multiple-of-N, video/gif frame grabs
 app/db.py          SQLite: projects + generations (params, exact workflow, parent lineage)

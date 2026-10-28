@@ -23,7 +23,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFil
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import accel, audioedit, clipimport, craft, delogo, h3upscale, posefind, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
+from . import accel, audioedit, civitai, clipimport, craft, delogo, h3upscale, posefind, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import projects, store
 from . import keyexpr, maskcomp, sceneasset
 from . import templates as tpl
@@ -393,6 +393,7 @@ app.include_router(store.router)
 app.include_router(sceneasset.router)
 app.include_router(tracking.router)
 app.include_router(clipimport.router)
+app.include_router(civitai.router)
 app.include_router(voice.router)
 app.include_router(craft.router)
 app.include_router(previews.router)
