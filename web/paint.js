@@ -671,13 +671,24 @@ function moveGesture() {
 function endTouch(id) {
   touches.delete(id);
   if (!G || touches.size) return;
-  const tap = performance.now() - G.t0 < 300 && G.moved < 12;
+  const tap = painting() && performance.now() - G.t0 < 300 && G.moved < 12;   // (taps undo paint, so only while painting)
   if (tap && G.n === 2) undo(); else if (tap && G.n >= 3) redo();
   G = null;
 }
 
+// In Move mode one finger stays the editor's (move, resize, crop); a second one makes it a pinch.
+function moveModeDown(e) {
+  if (e.pointerType !== 'touch') return;
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (touches.size < 2) return;
+  e.stopImmediatePropagation(); e.preventDefault();
+  X.cancelDrag();
+  try { X.canvas().setPointerCapture(e.pointerId); } catch { /* already gone */ }
+  if (!G) startGesture(); else G.n = Math.max(G.n, touches.size);
+}
 function onDown(e) {
-  if (!painting() || !X.active()) return;
+  if (!X.active()) return;
+  if (!painting()) { moveModeDown(e); return; }
   e.stopImmediatePropagation(); e.preventDefault();
   hideRing();
   if (e.pointerType === 'pen' && !P.penOnly) { P.penOnly = true; X.render(); }
@@ -706,11 +717,11 @@ function onDown(e) {
   else if (P.tool === 'select' || P.tool === 'lasso') beginSelect(e, l);
 }
 function onMove(e) {
-  if (!painting()) return;
   if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (G) { moveGesture(); return; }
+    if (G) { e.stopImmediatePropagation(); moveGesture(); return; }
   }
+  if (!painting()) return;
   if (S && e.pointerId === S.id) {
     e.stopImmediatePropagation();
     if (S.pick) { S.c = colorAt(e); setColor(S.c, false); } else if (S.select) moveSelect(e); else if (S.shape) moveShape(e); else moveStroke(e);
@@ -718,7 +729,13 @@ function onMove(e) {
   if (e.pointerType !== 'touch') showRing(e);
 }
 function onUp(e) {
-  if (!painting()) return;
+  if (!painting()) {
+    if (e.pointerType !== 'touch' || !touches.has(e.pointerId)) return;
+    const pinching = !!G;
+    endTouch(e.pointerId);
+    if (pinching) e.stopImmediatePropagation();   // (the editor's drag ended with the pinch)
+    return;
+  }
   e.stopImmediatePropagation();
   if (e.pointerType === 'touch') { endTouch(e.pointerId); if (S?.shape) drawShape(); }
   if (!S || e.pointerId !== S.id) return;
@@ -763,7 +780,7 @@ export function setTool(t) {
   P.tool = t;
   const e = E();
   e.cropping = false;
-  if (t === 'move') { dropSel(); X.zoom.reset(); } else commitFloat();
+  if (t === 'move') dropSel(); else commitFloat();   // (the zoom stays: Move pans and zooms too)
   if (t !== 'move' && t !== 'pick' && !target()) {   // something to paint on: the top layer that can be, or a new white canvas
     const l = [...e.layers].reverse().find((o) => o.img?.naturalWidth && o.x != null && !o.hidden && !o.locked);
     if (l) e.sel = l;
@@ -898,8 +915,8 @@ export function bindPaint(ctx) {
   cv.addEventListener('pointerup', onUp, true);
   cv.addEventListener('pointercancel', onUp, true);
   cv.addEventListener('pointerleave', hideRing);
-  cv.addEventListener('wheel', (e) => {   // the wheel zooms about the pointer while painting
-    if (!painting()) return;
+  cv.addEventListener('wheel', (e) => {   // the wheel zooms about the pointer
+    if (!X.active()) return;
     e.preventDefault();
     const r = cv.getBoundingClientRect(), v = X.zoom.get(), z = clamp(v.z * Math.exp(-e.deltaY * 0.0015), 0.1, 40);
     const px = e.clientX - r.left, py = e.clientY - r.top;
