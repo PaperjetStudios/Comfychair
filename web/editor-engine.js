@@ -10,6 +10,8 @@ import { openCraftSheet, sendToCraft } from './craft.js';
 import { animated, anyKeys, keyTimes, keyedRange, refreshKeyed, value } from './keyed.js';
 import { putKey } from './keys.js';
 import { playKeys, transport } from './playback.js';
+import { workArea } from './workarea.js';
+import { frameSpan, playFrom, tickT } from './workarea-math.js';
 import { framesToClip } from './scene-comp.js';
 import { openGeneration } from './run.js';
 import { BLENDS, blendOp, createPaint, isCanvas } from './paint.js';
@@ -66,13 +68,24 @@ export function createEditor(cfg) {
   function persistEditor() { keyPose(); cfg.onChange?.(); }
 
   // ---- animation: layers keyed over time like After Effects, on keys.js (the engine the Video tab's clips and the 3D tab use) ----
-  // E.anim: null (a still) or { len, fps } (seconds, frames a second). A layer's keys are l.chans[ch] = [{ f: seconds, v }], and
+  // E.anim: null (a still) or { len, fps, range? } (seconds, frames a second; range: the work area, workarea.js). A layer's keys are l.chans[ch] = [{ f: seconds, v }], and
   // l.x / l.y / l.scale / l.opacity always hold its pose at the playhead, so everything that draws, drags or hit-tests reads
   // those as before: moving the playhead poses the layers (poseAt), and a change keys whichever animated property it moved
   // (keyPose). An animation keeps a fixed canvas, and exports as a clip (frames → /api/scene/clip → /api/video/render).
   const ANIM = ['x', 'y', 'scale', 'opacity', 'rotation'];
   const EA = { playing: false, loop: true, exporting: false, tp: null, keys: null };
   const atFrame = (t) => { const f = E.anim?.fps || 24; return Math.round(t * f) / f; };
+  // the work area: a teal range over the bar's scrub that the playhead is bound to (Alt+I / Alt+O: I and O pick paint tools)
+  const scrubBox = () => EA.tp?.el.querySelector('.scrub-wrap');
+  const WA = workArea({
+    get: () => E.anim?.range || null,
+    set: (r) => { if (!E.anim) return; if (r) E.anim.range = r; else delete E.anim.range; persistEditor(); },
+    len: () => E.anim?.len || 0, t: () => E.t, seek: (t) => editorSeek(t), step: () => 1 / (E.anim?.fps || 24), minLen: () => 1 / (E.anim?.fps || 24),
+    at: (x) => { const r = scrubBox().getBoundingClientRect(); return (x - r.left) / Math.max(1, r.width) * (E.anim?.len || 0); },
+    pos: (t) => `${(t / (E.anim?.len || 1)) * 100}%`,
+    points: () => [0, E.t, ...(E.sel ? [E.sel] : E.layers).flatMap(keyTimes)],
+    alt: true, changed: () => { EA.tp?.update(); renderEditor(); },
+  });
   function poseAt(t) {
     for (const l of E.layers) for (const ch of ANIM) if (animated(l, ch)) l[ch] = value(l, ch, t, l[ch]);
   }
@@ -85,20 +98,21 @@ export function createEditor(cfg) {
   // the playhead moved: pose the layers there and show it
   function editorSeek(t) {
     if (!E.anim) return;
-    E.t = clamp(EA.playing ? t : atFrame(t), 0, E.anim.len);
+    E.t = WA.clamp(clamp(EA.playing ? t : atFrame(t), 0, E.anim.len));
     poseAt(E.t);
     drawEditorCanvas(); EA.tp?.update(); paintAnimKeys(); refreshKeyed(cfg.panel);
   }
   function editorPlay() {
     if (!E.anim || EA.playing) return;
-    if (E.t >= E.anim.len - 1e-3) E.t = 0;
+    E.t = playFrom(E.t, WA.bound(), E.anim.len, 1e-3);
     EA.playing = true;
     let last = performance.now();
     const tick = (now) => {
       if (!EA.playing || !E.anim) return;
       let t = E.t + (now - last) / 1000;
       last = now;
-      if (t >= E.anim.len) { if (EA.loop) t = 0; else { t = E.anim.len; EA.playing = false; } }
+      const st = tickT(t, WA.bound(), E.anim.len, EA.loop);   // (inside the work area while it is on)
+      t = st.t; if (st.stop) EA.playing = false;
       editorSeek(t);
       if (EA.playing) requestAnimationFrame(tick); else editorPause();
     };
@@ -119,15 +133,15 @@ export function createEditor(cfg) {
     if (!E.anim) { editorPause(); return; }
     if (!EA.tp) {
       EA.tp = transport(editorPlayer, { step: { by: () => 1 / (E.anim?.fps || 24), label: 'one frame' }, scrub: true, frames: true,
-        fps: () => E.anim?.fps || 24, loop: { get: () => EA.loop, set: (v) => { EA.loop = v; } } });
+        fps: () => E.anim?.fps || 24, loop: { get: () => EA.loop, set: (v) => { EA.loop = v; } }, area: WA });
       const scrub = EA.tp.el.querySelector('.scrub');
       EA.keys = h('span', { class: 'anim-keys' });
       const wrap = h('span', { class: 'scrub-wrap' });
-      scrub.replaceWith(wrap); wrap.append(scrub, EA.keys);
+      scrub.replaceWith(wrap); wrap.append(scrub, EA.keys, ...WA.el());
       bar.append(EA.tp.el);
     }
     E.t = Math.min(E.t, E.anim.len);
-    EA.tp.update(); paintAnimKeys();
+    WA.sync(); EA.tp.update(); paintAnimKeys();
   }
   function paintAnimKeys() {
     if (!EA.keys || !E.anim) return;
@@ -823,7 +837,8 @@ export function createEditor(cfg) {
   function exportProps() {
     if (!E.layers.length) return null;
     return section('Export', null,
-      E.anim ? button('Export clip', (ev) => exportEditorClip(ev.currentTarget), { cls: 'primary', title: 'The animation as a video in History' }) : null,
+      E.anim ? h('div', { class: 'row wrap' }, button('Export clip', (ev) => exportEditorClip(ev.currentTarget), { cls: 'primary', title: 'The animation as a video in History' }),
+        WA.onlyToggle()) : null,
       mpInput(() => E.mp, (n) => { E.mp = n; persistEditor(); }),
       h('div', { class: 'row wrap' },
         button(E.anim ? 'Save this frame as input' : 'Save as input', saveEditor, { cls: E.anim ? 'small' : 'small primary' }),
@@ -896,11 +911,12 @@ export function createEditor(cfg) {
     editorPause();
     if (!visibleLayers().length) return toast('Add some images first', true);
     if (E.layers.some((l) => !l.broken && !ready(l))) return toast('The images are still loading', true);
-    const { fps, len } = E.anim, n = Math.max(1, Math.round(len * fps)), t0 = E.t, label = btn.textContent;
+    const { fps, len } = E.anim, t0 = E.t, label = btn.textContent;
+    const { first, count: n } = frameSpan(WA.exportRange(), Math.max(1, Math.round(len * fps)), fps);   // Range only: the work area's frames
     const cv = document.createElement('canvas');
     EA.exporting = true; btn.disabled = true;
     try {
-      const made = await framesToClip(n, fps, (k) => { poseAt(k / fps); composeEditor(cv); return cv; },
+      const made = await framesToClip(n, fps, (k) => { poseAt((first + k) / fps); composeEditor(cv); return cv; },
         (k) => { btn.textContent = `Frame ${k}/${n}`; });
       poseAt(t0);
       btn.textContent = 'Rendering…';
