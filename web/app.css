@@ -81,7 +81,7 @@ p { margin: 0; }
 .timecode { font: 14px var(--font); font-variant-numeric: tabular-nums; color: var(--muted); margin-left: auto; }
 
 /* ---- form controls ---- */
-select, input[type=number], input[type=text], textarea {
+select, input[type=number], input[type=text], input[type=search], input[type=password], textarea {
   background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r);
   min-height: var(--tap); padding: 8px 10px; width: 100%; min-width: 0;
   transition: border-color .15s;
@@ -1587,4 +1587,45 @@ body:has(.stage.maxed) .toast { z-index: 60; }
   .st-sc-who { margin-left: 30%; }
   .st-sc-paren { margin-left: 22%; max-width: 60%; }
   .st-sc-words { margin-left: 10%; max-width: 80%; }
+}
+
+/* ---- Civitai LoRA browser (civitai.js) ---- */
+.sheet:has(> .civitai) { width: min(1280px, 100%); height: 96dvh; max-height: 96dvh; }
+.civitai { display: flex; flex-direction: column; gap: 10px; }
+.civ-list { display: flex; flex-direction: column; gap: 10px; }
+.civ-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.civ-controls input[type=search] { flex: 1 1 220px; min-width: 0; }
+.civ-bases .chip { font-size: var(--fs-sm); }
+.civ-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.civ-card .media { aspect-ratio: 3 / 4; overflow: hidden; }
+.civ-card .meta, .civ-meta { padding: 8px 10px; display: grid; gap: 3px; font-size: var(--fs-sm); }
+.civ-meta .name { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.civ-meta .hint { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.civ-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; min-width: 0; }
+.civ-row .badge { overflow: hidden; text-overflow: ellipsis; }
+.civ-row .hint { display: inline-flex; align-items: center; gap: 3px; flex: none; }
+.civ-row .hint .ico { width: 14px; height: 14px; }
+.civ-got, .civ-early { position: absolute; left: 6px; top: 6px; z-index: 1; display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs);
+  background: #000b; color: var(--ok); padding: 2px 7px; border-radius: var(--r-sm); }
+.civ-early { left: auto; right: 6px; color: var(--accent); }
+.civ-got .ico { width: 12px; height: 12px; }
+.civ-noimg { color: var(--muted); }
+img.civ-blur, .civ-shot.civ-blur > * { filter: blur(22px) saturate(.6); transform: scale(1.1); }
+.civ-shot.civ-blur { cursor: pointer; }
+.civ-more { display: grid; gap: 8px; justify-items: center; }
+.civ-sentinel { height: 1px; }
+.civ-head { position: sticky; top: 0; z-index: 2; background: var(--surface); padding: 4px 0; gap: 10px; }
+.civ-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.civ-detail { display: flex; flex-direction: column; gap: 10px; }
+.civ-body { display: flex; flex-direction: column; gap: 12px; }
+.civ-carousel { display: flex; gap: 8px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 6px; }
+.civ-shot { flex: none; height: min(46dvh, 420px); max-width: 85%; border-radius: var(--r); overflow: hidden; background: #000; scroll-snap-align: start; aspect-ratio: 3 / 4; }
+.civ-shot img, .civ-shot video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.civ-actions { justify-content: flex-start; }
+.civ-after { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.civ-after:empty { display: none; }
+.civ-versions .chip { font-size: var(--fs-sm); }
+@media (max-width: 520px) {
+  .civ-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .civ-shot { height: 52dvh; }
 }

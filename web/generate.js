@@ -14,6 +14,7 @@ import { PREFS } from './prefs.js';
 import { FULL, openCrop, openSketch, templateAspect } from './editor.js';
 import { openMaskPainter } from './maskpaint.js';
 import { icon } from './icons.js';
+import { openCivitai } from './civitai.js';
 
 // ---------------------------------------------------------------------------
 // templates + fields
@@ -1024,7 +1025,17 @@ function loraField(f) {
   return field(['LoRA stack', h('span', {}, f.options.length ? `${f.options.length} available` : 'none found')],
     folders.length ? folderChips : null,
     list,
-    button('+ Add LoRA', () => save([...rows(), { name: '', strength: 1, enabled: true }]), { cls: 'small add-btn' }));
+    h('div', { class: 'row wrap' },
+      button('+ Add LoRA', () => save([...rows(), { name: '', strength: 1, enabled: true }]), { cls: 'small add-btn' }),
+      button('⤓ Civitai…', () => openCivitai({ family: current() || auto || folders[0], folders, onWord: addToPrompt,
+        onDownloaded: () => loadTemplates(true),
+        onAdd: ({ name }) => {   // into an empty row if there is one, else a new row
+          const a = [...(S.values[f.key] || [])];
+          if (a.some((l) => l.name === name)) return false;
+          const i = a.findIndex((l) => !l.name);
+          if (i >= 0) a[i] = { ...a[i], name }; else a.push({ name, strength: 1, enabled: true });
+          setVal(f.key, a); renderFields();
+        } }), { cls: 'small', title: 'Find and download LoRAs on Civitai' })));
 }
 
 function fieldEl(f) {
