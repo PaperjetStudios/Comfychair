@@ -31,6 +31,7 @@ the device, and saves it to the media library (see *Importing clips* under Setup
 percentage) or side by side, two clips playing in step. **Sound** tab: a multi-track sound editor (see *Sound* below).
 Every slider is a number box with a bar behind it: hold it, then pull sideways to change it (a swipe scrolls past it), or
 tap to type.
+**Story** tab: a storyboard of scenes and shots with frames (see *Story* below).
 **3D** tab: block out a shot with soft mannequins, boxes and a room, keyframe them and the camera, and
 render it as a depth video for `deck-h3-ctrl2v` (see below).
 The preview pinch/wheel-zooms, the picker has a camera button, and ⛶ goes full screen.
@@ -533,6 +534,27 @@ desktop ComfyUI. It's the exact graph that ran, with LoRAs expanded.
 
 ---
 
+## Story
+
+The **Story** tab (first in Make) is a storyboard: a place to write a story down and sort it out before making it. Each
+story is a tab saved in the project, like video edits.
+
+- A story has a **title**, **notes** (free writing, ideas, a script) and **scenes** in order. A scene has a heading
+  (`INT. KITCHEN - NIGHT`), a summary and **shots** in order. A shot has what we see, action / dialogue, its framing (shot
+  size, angle, camera move), a length (1–10 s), a status (idea, drafted, made) and **frames** (pictures).
+- **Outline** is the list, for writing (type straight into each shot); **Board** shows the shots as cards with big frames.
+  Tap a shot to edit it in the side panel. Drag the grip (pen, finger or mouse) to reorder shots, also into another
+  scene or onto a folded one, and scenes; the arrows do the same a step at a time. Scene ⋯ has duplicate and delete;
+  deletes have Undo.
+- **Generate frame** runs the story's text-to-image template (Frames → Template: any installed image template with a
+  prompt, a width and a height and no picture input; the first one by default) on the shot's framing and description
+  plus the story's **Style** line, at the story's **Shape** (about a megapixel), 1–4 per run. The pictures land on the
+  shot when the run ends, also after a reload. **From pictures…** (the image picker) and **Upload…** add frames too.
+  Tap a frame to make it the shot's chosen one.
+- The chosen frame goes **To Generate** (the open template's picture field), **To VFX** (the start image) or **To the
+  Editor**. **Shots to video** puts every shot's chosen frame on the Video tab's timeline in order, each for its length.
+  **Copy as text** copies the outline as plain text.
+
 ## Sound
 
 The **Sound** tab is laid out like the Video tab: tracks (mute, **S**olo, level, pan), clips from sound files or the
@@ -651,6 +673,7 @@ web/ui.js          shared UI kit: h(), api(), toasts, sheets, overlays and the w
 web/app.js         Generate, Editor, Video, Board, History; web/scene.js the 3D tab (loaded on demand)
 web/paint.js       the Editor's painting (brushes, shapes, fill, selections, undo); web/icons.js line icons
 web/sound.js       the Sound tab; web/compare.js the Board's compare view
+web/story.js       the Story tab (storyboard: scenes, shots, frames)
 web/app.css        styles; colours, radii and shadows come from the tokens at the top
 templates/         your workflow templates
 data/              database, projects/ (saved outputs), local copies of inputs (git-ignored)
