@@ -9,6 +9,7 @@ import { modeOf } from './scene-modes.js';
 import { renderKeys, renderPanel, renderTime, renderTransport, setStatus } from './scene-ui.js';
 import { bound, frameSpan, playFrom, tickT } from './workarea-math.js';
 import { AREA } from './scene-keys.js';
+import { frameRanges } from './depth-range.js';
 
 // the work area (scene-keys.js AREA, SC.range in frames) while it is on: play loops in it, seeks stay in it
 const area = () => bound(SC.range, frames() - 1, 0);
@@ -62,7 +63,9 @@ export function letGo(src) {
 // ---- export ----------------------------------------------------------------------
 const decodeDepth = (r, g, b) => r / 255 + g / 65025 + b / 16581375;  // rangeMat's packing, undone
 
-function measureRange() {
+// near / far per frame of the render (depth-range.js): each frame's depths sampled small, then fitted to the shot
+// ("Follow the shot", the default) or to the whole clip (SC.depthRange = 'clip')
+function measureRanges() {
   const W = 128, H = Math.max(8, Math.round(128 * SC.height / SC.width));
   const rt = new THREE.WebGLRenderTarget(W, H);
   const buf = new Uint8Array(W * H * 4);
@@ -70,23 +73,22 @@ function measureRange() {
   const bg = scene.background; scene.background = null;
   renderer.setClearColor(0x000000, 0);
   scene.overrideMaterial = rangeMat;
-  let near = Infinity, far = 0;
-  const { first, count } = renderSpan();
+  const { first, count } = renderSpan(), samples = [];
   for (let f = first; f < first + count; f++) {
     pose(f);
     renderer.setRenderTarget(rt); renderer.clear(); renderer.render(scene, camera);
     renderer.readRenderTargetPixels(rt, 0, 0, W, H, buf);
+    const zs = [];
     for (let i = 0; i < buf.length; i += 4) {
       if (buf[i + 3] < 128) continue;  // nothing drawn here
-      const z = decodeDepth(buf[i], buf[i + 1], buf[i + 2]) * RANGE;
-      if (z < near) near = z;
-      if (z > far) far = z;
+      zs.push(decodeDepth(buf[i], buf[i + 1], buf[i + 2]) * RANGE);
     }
+    samples.push(zs);
   }
   renderer.setRenderTarget(null); rt.dispose();
   scene.background = bg;
-  if (!isFinite(near)) throw new Error('Nothing in view');
-  return [Math.max(0.05, near * 0.97), far * 1.03];
+  if (!samples.some((z) => z.length)) throw new Error('Nothing in view');
+  return frameRanges(samples, { mode: SC.depthRange === 'clip' ? 'clip' : 'follow', window: Math.round(FPS / 2) });
 }
 
 function targetToBlob(rt, W, H, gray) {
@@ -131,13 +133,14 @@ export async function renderDepthVideo() {
   const keep = R.f, W = SC.width, H = SC.height, bar = busyBar('Rendering depth frames…');
   cancelToast('Rendering the depth video…');
   try {
-    setRange(measureRange());
+    const ranges = measureRanges();
     const rt = new THREE.WebGLRenderTarget(W, H, { colorSpace: THREE.NoColorSpace });
     draw('depth');
     camera.aspect = W / H; camera.updateProjectionMatrix();
     const form = new FormData(), { first, count } = renderSpan();
     for (let k = 0; k < count; k++) {
       pose(first + k);
+      setRange(ranges[k]);
       renderer.setRenderTarget(rt); renderer.render(scene, camera); renderer.setRenderTarget(null);
       form.append('frames', await targetToBlob(rt, W, H, true), `f${String(k).padStart(5, '0')}.png`);
       if (k % 12 === 0) setStatus(`Rendering ${k + 1}/${count}…`);

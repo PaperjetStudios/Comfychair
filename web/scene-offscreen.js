@@ -4,6 +4,7 @@
 // LOADERS (scene-model.js, scene-import.js; they take a context saying which scene they fill), figure.js
 // for people, scene-data.js `sample` for the keys. Loaded lazily by scene-comp.js (three.js is big).
 import * as THREE from './vendor/three.module.min.js';
+import { frameRanges } from './depth-range.js';
 import * as SCENE from './scene.js';   // (its layer types register when it loads; it is not initialised here, so no panel appears)
 import * as FIGURE from './figure.js';
 import { CAM, EVEN, applyOffset, applyRoll, FPS, OBJ, TYPES, framesFor, makers, namesFor, pathSig, sample, upgrade } from './scene-data.js';
@@ -172,7 +173,7 @@ export class Stage {
   draw(look, f, cv) {
     const W = cv.width, H = cv.height;
     this.setLook(look);
-    const range = look === 'depth' ? this.depthRange() : null;   // (measured first: it poses the scene through the whole clip)
+    const range = look === 'depth' ? this.depthRange()[Math.min(Math.max(0, f), this.frames - 1)] : null;   // (measured first: it poses the scene through the whole clip)
     this.pose(f);
     this.camera.aspect = W / H; this.camera.updateProjectionMatrix();
     if (look === 'pose') return this.drawPose(cv);
@@ -211,7 +212,8 @@ export class Stage {
     while (busy() && performance.now() - t0 < 3000) await sleep(20);
   }
 
-  // near and far of the whole clip, measured once (as scene-export.js measureRange does, on every few frames)
+  // near and far for each frame, measured once (depth-range.js: following the shot, or one range for the clip as
+  // the scene's Depth range says), on up to 120 frames with the rest filled in from the nearest measured one
   depthRange() {
     if (this.range) return this.range;
     const W = 128, H = Math.max(8, Math.round(128 * this.h / this.w)), gl = glr();
@@ -219,23 +221,24 @@ export class Stage {
     const bg = this.scene.background, over = this.scene.overrideMaterial;
     this.scene.background = null; this.scene.overrideMaterial = rangeMat;
     gl.setClearColor(0x000000, 0);
-    const step = Math.max(1, Math.ceil(this.frames / 48));
-    let near = Infinity, far = 0;
-    for (let f = 0; f < this.frames + step - 1; f += step) {
-      this.pose(Math.min(f, this.frames - 1));
+    const step = Math.max(1, Math.ceil(this.frames / 120)), samples = [];
+    for (let f = 0; f < this.frames; f += step) {
+      this.pose(f);
       this.camera.aspect = this.w / this.h; this.camera.updateProjectionMatrix();
       gl.setRenderTarget(rt); gl.clear(); gl.render(this.scene, this.camera);
       gl.readRenderTargetPixels(rt, 0, 0, W, H, buf);
+      const zs = [];
       for (let i = 0; i < buf.length; i += 4) {
         if (buf[i + 3] < 128) continue;
-        const z = (buf[i] / 255 + buf[i + 1] / 65025 + buf[i + 2] / 16581375) * RANGE;
-        if (z < near) near = z;
-        if (z > far) far = z;
+        zs.push((buf[i] / 255 + buf[i + 1] / 65025 + buf[i + 2] / 16581375) * RANGE);
       }
+      samples.push(zs);
     }
     gl.setRenderTarget(null); gl.setClearColor(0x000000, 1); rt.dispose();
     this.scene.background = bg; this.scene.overrideMaterial = over;
-    this.range = isFinite(near) ? [Math.max(0.05, near * 0.97), far * 1.03] : [0.3, 10];
+    const fps = this.sc.fps || 24;
+    const r = frameRanges(samples, { mode: this.sc.depthRange === 'clip' ? 'clip' : 'follow', window: Math.max(1, Math.round(fps / 2 / step)) });
+    this.range = Array.from({ length: this.frames }, (_, f) => r[Math.min(r.length - 1, Math.round(f / step))]);
     return this.range;
   }
 

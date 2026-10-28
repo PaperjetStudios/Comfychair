@@ -302,6 +302,8 @@ export function renderProps() {
   return section('Render', null,
     slider('Soften edges', () => SC.blur, (v) => { SC.blur = v; }, { min: 0, max: 12, step: 0.5, fmt: (v) => (v ? `${v} px` : 'off') }),
     help('Blurs the depth so H3 copies the shapes less literally. Use with deck-h3-ctrl2v (strength 1, end 0.4).'),
+    field(['Depth range', info('Follow the shot: each moment gets its own near and far (eased over about a second), so the depth keeps its contrast when the camera travels. Whole clip: one near and far for the whole clip (steady greys, but a long camera move squeezes part of it into a few greys, and depth control lets go there).')],
+      seg([['follow', 'Follow the shot'], ['clip', 'Whole clip']], SC.depthRange === 'clip' ? 'clip' : 'follow', (v) => { SC.depthRange = v; save(); })),
     busy ? h('div', { class: 'row wrap' }, button('✕ Cancel render', cancelRender, { cls: 'small danger', title: 'Stop the render: nothing is saved' }))
       : h('div', { class: 'row wrap' },
         button('Render depth video', renderDepthVideo, { cls: 'small primary' }),
