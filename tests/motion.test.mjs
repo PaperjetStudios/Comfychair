@@ -45,4 +45,27 @@ assert.ok(Math.abs(keys[0].y) < 0.01, `standing figure stays on the floor (y ${k
 // placement: on the spot keeps x/z, no rise keeps the hips at base.y
 const spot = M.toKeys({ fps: 20, frames: walk }, { x: 2, y: 0.3, z: 1, ry: 90, sy: 1, j: {}, m: {} }, { every: 1, travel: false, rise: false });
 assert.ok(spot.every((k) => k.x === 2 && k.z === 1 && k.y === 0.3), 'on the spot, hips held');
+
+// toWorld: a body standing still in the world, filmed by a camera that pans (and rolls) — in camera space it
+// moves; put back through the camera per frame it stands still again
+{
+  const TM = await import('../web/track-math.js');
+  const W = still.map(([x, y, z]) => [x + 0.4, y, z - 1]);   // in the world, somewhere in front of the camera
+  const cams = Array.from({ length: 24 }, (_, i) => {
+    const yaw = (i - 12) * 0.02, eye = [0, 1.5, 6];
+    return { px: eye[0], py: eye[1], pz: eye[2], tx: eye[0] + Math.sin(yaw) * 10, ty: eye[1] - 0.5, tz: eye[2] - Math.cos(yaw) * 10, roll: i * 0.5 };
+  });
+  const toCam = (p, c) => {   // world -> camera space (x right, y up, looking down -Z)
+    const b = TM.basis([c.px, c.py, c.pz], [c.tx, c.ty, c.tz], c.roll), d = [p[0] - c.px, p[1] - c.py, p[2] - c.pz];
+    return [b.x, b.y, b.z].map((ax) => ax[0] * d[0] + ax[1] * d[1] + ax[2] * d[2]);
+  };
+  // the server's normalising: a turn about y and a shift (normalised = m · given + t)
+  const a2 = 0.7, m = [[Math.cos(a2), 0, Math.sin(a2)], [0, 1, 0], [-Math.sin(a2), 0, Math.cos(a2)]], t = [0.3, 1.1, -2];
+  const norm = (p) => [0, 1, 2].map((r) => m[r][0] * p[0] + m[r][1] * p[1] + m[r][2] * p[2] + t[r]);
+  const frames = cams.map((c) => W.map((p) => norm(toCam(p, c))));
+  const out = M.toWorld({ fps: 24, frames, space: { m, t } }, (i) => cams[i]);
+  let err = 0;
+  out.frames.forEach((P) => P.forEach((p, j) => { err = Math.max(err, Math.hypot(p[0] - W[j][0], p[1] - W[j][1], p[2] - W[j][2])); }));
+  assert.ok(err < 1e-6, `toWorld off by ${err}`);
+}
 console.log('motion ok');

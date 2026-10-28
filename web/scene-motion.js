@@ -1,13 +1,14 @@
 // Motion made elsewhere onto a figure: text to motion and video mocap (ComfyUI templates that save a
 // motion .npz/.json), or a motion file. The server reads it (app/motion.py) into 22 joint positions per
 // frame; motion.js turns those into the figure's keys from the playhead.
-import { FIG, R, SC, rawCurrent, dropKeys, frames, putKeys, sameTab } from './scene-data.js';
-import { api, button, clone, field, fileButton, h, help, hint, note, openSheet, closeSheet, rangeField, seg, store, toast, undoToast, toggle, textArea } from './ui.js';
+import { CAM, FIG, OBJ, R, SC, rawCurrent, dropKeys, frames, migrateKeys, putKeys, sameTab, sample } from './scene-data.js';
+import { api, button, clone, field, fileButton, h, help, hint, note, openSheet, closeSheet, rangeField, seg, store, toast, uid, undoToast, toggle, textArea } from './ui.js';
 import { S, onServer } from './core.js';
 import { openVideoPicker } from './media.js';
 import { queueRun } from './make.js';
 import { changed } from './scene-view.js';
-import { toKeys } from './motion.js';
+import { toKeys, toWorld } from './motion.js';
+import { sceneFromTrack } from './track-math.js';
 import { reduceTracks } from './scene-keys.js';
 import { track } from './keys.js';
 
@@ -18,7 +19,8 @@ const ST = { prompt: '', secs: 5, busy: null, to: null };   // busy: what's bein
 // 'all' (from the start, the figure's other keys go); path: 'travel' (the clip's path) | 'spot' (stays where it is);
 // rise: the hips go up and down with the clip; fit: its size matched to the figure by leg length. Kept per device.
 // thin: the keys reduced as they land (the sheet's Reduce keys settings), not one every 2 frames.
-const PLACE = { from: 'head', path: 'travel', rise: true, fit: true, thin: false, ...store.get('deck.scene.motionPlace', {}) };
+// cam: From video also tracks the clip and adds its camera (Mocap camera), the body placed in the world through it.
+const PLACE = { from: 'head', path: 'travel', rise: true, fit: true, thin: false, cam: false, ...store.get('deck.scene.motionPlace', {}) };
 const keepPlace = () => store.set('deck.scene.motionPlace', PLACE);
 
 function apply(id, m, label) {
@@ -27,7 +29,12 @@ function apply(id, m, label) {
   const all = PLACE.from === 'all', f0 = all ? 0 : R.f, v = rawCurrent(o, FIG), last = frames() - 1;
   const keys = toKeys(m, v, { f0, every: 2, maxF: last, travel: PLACE.path !== 'spot', rise: PLACE.rise, fit: PLACE.fit });
   if (keys.length < 2) return toast('No time left after the playhead: move it back', true);
-  const before = clone(o), ok = sameTab(), end = keys[keys.length - 1].f;
+  const before = clone(o), ok = sameTab();
+  land(o, m, keys, f0, label, () => { for (const k of Object.keys(o)) delete o[k]; Object.assign(o, before); }, ok);
+}
+// the keys onto the figure (replacing what they cover), reduced if asked, with an undo toast
+function land(o, m, keys, f0, label, undo, ok, extra = '') {
+  const all = PLACE.from === 'all', end = keys[keys.length - 1].f;
   dropKeys(o, all ? () => true : (f) => f >= f0 && f <= end); putKeys(o, keys, FIG);
   let thin = '';
   if (PLACE.thin) {
@@ -38,15 +45,60 @@ function apply(id, m, label) {
   o.stepsFollow = false;
   changed();
   const cut = m.frames.length / (m.fps || 30) > (end - f0) / 24 + 0.1;
-  undoToast(`${label}: keys to ${(end / 24).toFixed(1)} s${cut ? ' (cut at the end of the scene)' : ''}${thin}`, () => {
+  undoToast(`${label}: keys to ${(end / 24).toFixed(1)} s${cut ? ' (cut at the end of the scene)' : ''}${thin}${extra}`, () => {
     if (!ok()) return;
-    for (const k of Object.keys(o)) delete o[k];
-    Object.assign(o, before); changed();
+    undo(); changed();
   });
 }
 
+// A video capture with its camera: the clip's track (pans, tilts, roll, zoom; a camera that travels isn't solved)
+// becomes a new camera, "Mocap camera", made active, with the footage behind it; the body goes into the world through
+// that camera frame by frame, so in a panning shot it stays put while the camera turns. The camera is raised so
+// the feet start on the floor. Its lens: SAM 3D Body's focal length when the capture says it, else 35 mm.
+export function applyWithCamera(id, m, tr, label) {
+  const o = SC.objects.find((x) => x.id === id);
+  if (!o) return toast('That figure is gone', true);
+  if (!m.space || m.source !== 'sam3d-body') { toast('That motion has no camera to go with it: put on as usual', true); return apply(id, m, label); }
+  const all = PLACE.from === 'all', f0 = all ? 0 : R.f, last = frames() - 1;
+  const W = (m.size || tr.size)[0], lens = m.focal ? Math.max(8, Math.min(300, 36 * m.focal / W)) : 35;
+  const sc = sceneFromTrack(tr, { lens, points: false, name: `Footage (${label})` });
+  const nth = [SC.camera, ...(SC.cams || [])].filter((c) => /^Mocap camera/.test(c?.name || '')).length;
+  const cam = { id: uid(), name: nth ? `Mocap camera ${nth + 1}` : 'Mocap camera', base: { ...sc.camera.base }, keys: sc.camera.keys, ease: 'linear', mute: false };
+  migrateKeys(cam, CAM);
+  const world = toWorld(m, (i) => sample(cam, CAM, i));
+  const P0 = world.frames[0], dy = -Math.min(P0[10][1], P0[11][1]);   // (toes on the floor at the start)
+  world.frames = world.frames.map((P) => P.map(([x, y, z]) => [x, y + dy, z]));
+  const bd = sc.objects.find((x) => x.type === 'backdrop');
+  if (bd) { bd.id = uid(); bd.at = f0; migrateKeys(bd, OBJ); }
+  // camera and footage: raised by dy, from the motion's first frame (f0), nothing past the end
+  for (const it of [cam, bd].filter(Boolean)) {
+    for (const ch of it === cam ? ['py', 'ty'] : ['y']) { it.base[ch] += dy; for (const k of it.chans[ch] || []) k.v += dy; }
+    for (const [ch, l] of Object.entries(it.chans)) { const keep = l.map((k) => ({ ...k, f: k.f + f0 })).filter((k) => k.f <= last); if (keep.length) it.chans[ch] = keep; else delete it.chans[ch]; }
+  }
+  const v = rawCurrent(o, FIG);
+  const keys = toKeys(world, { ...v, rx: 0, ry: 0, rz: 0, x: P0[0][0], z: P0[0][2] }, { f0, every: 2, maxF: last, travel: true, rise: true, fit: false });
+  if (keys.length < 2) return toast('No time left after the playhead: move it back', true);
+  const before = clone(SC), ok = sameTab();
+  SC.cams = [...(SC.cams || []), SC.camera]; SC.camera = cam;
+  if (bd) SC.objects.unshift(bd);
+  o.ground = false;   // (its height comes from the capture, which the camera was raised to fit)
+  land(o, m, keys, f0, label, () => { for (const k of Object.keys(SC)) delete SC[k]; Object.assign(SC, before); }, ok,
+    ` · Mocap camera made active${m.focal ? '' : ' (lens guessed: 35 mm)'}`);
+}
+
+// the clip's camera track on the server (Simple: no GPU), whole clip, as the Track panel would make it
+async function trackClip(src) {
+  const { job } = await api('/api/track', { method: 'POST', busy: false, body: { src, project_id: S.project, start: 0, end: null, method: 'klt' } });
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 700));
+    const s = await api(`/api/track/${job}`, { busy: false });
+    if (s.state === 'done') return s.result;
+    if (s.state !== 'running') throw new Error(`Tracking the camera: ${s.error || s.state}`);
+  }
+}
+
 // run a template and wait for its motion
-async function run(id, template, values, label) {
+async function run(id, template, values, label, then = apply) {
   const t = tpl(template);
   if (!t) return toast(`Template ${template} isn't installed yet`, true);
   const field = (re) => t.fields.find((f) => re(f));
@@ -61,7 +113,7 @@ async function run(id, template, values, label) {
       if (g?.id !== gid || (g.status !== 'done' && g.status !== 'error')) return;
       off(); ST.busy = null;
       if (g.status === 'error') { changed(); return toast(`${label} failed: ${g.error || ''}`, true); }
-      try { apply(id, await api('/api/motion/from', { method: 'POST', body: { generation: gid } }), label); }
+      try { await then(id, await api('/api/motion/from', { method: 'POST', body: { generation: gid } }), label); }
       catch (e) { toast(e.message, true); changed(); }
     });
   } catch (e) { toast(e.message, true); }
@@ -112,10 +164,17 @@ function videoSheet(o) {
   openSheet(h('h3', {}, 'Motion from video'),
     help('A clip of one person, whole body in view. The motion is made on the GPU and goes on the figure when it is done.'),
     placeFields(o),
+    h('div', { class: 'row wrap' }, toggle('With its camera', PLACE.cam, (on) => { PLACE.cam = on; keepPlace(); }),
+      help('Also tracks the clip (on the server, no GPU) and adds its camera as a new camera, Mocap camera, made active, with the clip as the backdrop. The body is placed in the world through that camera, so in a panning shot it stays where it is while the camera turns. Only a camera that turns is solved: pans, tilts, roll and zoom. A camera that travels (a dolly, walking with it handheld) is not solved yet, so the body moves with the camera instead. The lens comes from the capture when it says (newer Deck Save Body Motion), else 35 mm.')),
     h('div', { class: 'actions' },
       button('Pick the clip…', () => {
         const id = target(o);
-        openVideoPicker({ title: 'Video of a person', onPick: (val) => run(id, MOCAP_TPL, [[(f) => f.kind === 'video', val]], 'Motion from video') });
+        openVideoPicker({ title: 'Video of a person', onPick: (val) => {
+          if (!PLACE.cam) return run(id, MOCAP_TPL, [[(f) => f.kind === 'video', val]], 'Motion from video');
+          const tr = trackClip(val);
+          tr.catch(() => {});   // (reported when the motion lands)
+          run(id, MOCAP_TPL, [[(f) => f.kind === 'video', val]], 'Motion from video', async (fid, m, label) => applyWithCamera(fid, m, await tr, label));
+        } });
       }, { cls: 'primary' }),
       button('Cancel', closeSheet)));
 }

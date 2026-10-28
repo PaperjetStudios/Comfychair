@@ -1,7 +1,7 @@
 // The two layer types a motion track makes (track-math.js sceneFromTrack):
 //   backdrop: the footage, a plane keyed to follow the camera so it always fills the picture. It shows the
 //     clip's frame for the moment: the frames sit in one picture (a grid of small frames, from the server).
-//     { type: 'backdrop', url, cols, rows, count, step, clipFps }
+//     { type: 'backdrop', url, cols, rows, count, step, clipFps, at? (the scene frame the clip starts on) }
 //   trackpts: the tracked points as small dots placed in the scene. { type: 'trackpts', pts: [[x, y, z]] }
 // Both draw in colour only (not in depth), and are never picked by a tap.
 import * as THREE from './vendor/three.module.min.js';
@@ -29,7 +29,7 @@ makers.backdrop = (o, x) => {
     m.userData.f = f;
     const t = mat.map;
     if (!t) return;
-    const i = Math.max(0, Math.min(o.count - 1, Math.round(f * (o.clipFps || FPS) / FPS / (o.step || 1))));
+    const i = Math.max(0, Math.min(o.count - 1, Math.round((f - (o.at || 0)) * (o.clipFps || FPS) / FPS / (o.step || 1))));   // (at: the scene frame the clip starts on)
     t.offset.set((i % o.cols) / o.cols, 1 - (Math.floor(i / o.cols) + 1) / o.rows);
   };
   m.userData.dispose = () => { mat.map?.dispose(); mat.dispose(); m.geometry.dispose(); };

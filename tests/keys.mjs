@@ -443,3 +443,15 @@ console.log('offset ok');
   assert.equal(K.reduceKeys([{ f: 0, v: 1 }, { f: 3, v: 9 }], 1).length, 2);
 }
 console.log('reduce ok');
+
+{ // cameras: an old scene's one camera is the active one; another made active swaps places
+  const sc = D.upgrade({ camera: { base: { px: 1, py: 1, pz: 1, tx: 0, ty: 0, tz: 0, fov: 40 }, keys: [{ f: 0, px: 1 }, { f: 9, px: 4 }] }, objects: [] });
+  assert.deepEqual(sc.cams, []); assert.equal(sc.camera.name, 'Camera'); assert.equal(sc.camera.chans.px.length, 2);
+  D.setSC(sc); D.R.f = 0;
+  const b = D.newCamera('B'); sc.cams.push(b);
+  assert.equal(b.base.px, 1); assert.deepEqual(b.chans, {});
+  const a = sc.camera;
+  assert.ok(D.setActiveCam(b)); assert.equal(sc.camera, b); assert.deepEqual(sc.cams, [a]);
+  assert.ok(!D.setActiveCam(b)); assert.deepEqual(D.camsOf(), [b, a]);
+}
+console.log('cameras ok');

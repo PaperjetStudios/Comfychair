@@ -57,7 +57,7 @@ export const newRoom = () => ({ w: 8, d: 8, h: 2.8, walls: true, ceiling: true, 
 export function defaultScene() {
   return {
     v: 1, width: 768, height: 448, seconds: 6, lenMode: 'match', blur: 2, room: newRoom(),
-    camera: { base: { px: 0, py: 1.6, pz: 5, tx: 0, ty: 1, tz: 0, fov: 45, roll: 0 }, chans: {}, ease: 'smooth' },
+    camera: { id: 'cam0', name: 'Camera', base: { px: 0, py: 1.6, pz: 5, tx: 0, ty: 1, tz: 0, fov: 45, roll: 0 }, chans: {}, ease: 'smooth' }, cams: [],
     objects: [newObject('person', { x: 0, z: 0 }, [])],
   };
 }
@@ -74,6 +74,11 @@ export function newObject(type, at = {}, others = SC.objects) {
 // scenes saved before rotation on all axes, hiding and a deletable room, and before keys were per channel
 export function upgrade(sc) {
   if (sc.camera) migrateKeys(sc.camera, CAM);
+  // more cameras (2026-10-28): SC.camera is the active one (what the view, renders and compositions look
+  // through), SC.cams the others; an older scene's one camera is the active one
+  sc.cams = Array.isArray(sc.cams) ? sc.cams : [];
+  if (sc.camera) { sc.camera.id ||= 'cam0'; sc.camera.name ||= 'Camera'; }
+  for (const c of sc.cams) { migrateKeys(c, CAM); c.id ||= uid(); c.name ||= 'Camera'; c.mute = !!c.mute; c.ease ||= 'smooth'; }
   for (const o of sc.objects) {
     migrateKeys(o, namesFor(o));
     o.base = { rx: 0, rz: 0, ...o.base }; o.hidden = !!o.hidden; o.mute = !!o.mute;
@@ -82,6 +87,21 @@ export function upgrade(sc) {
   if (sc.camera) sc.camera.mute = !!sc.camera.mute;  // muted layers ignore their keys on screen (not in renders)
   if (sc.room) sc.room = { ceiling: false, hidden: false, ...sc.room };
   return sc;
+}
+
+// every camera, the active one first
+export const camsOf = (sc = SC) => [sc.camera, ...(sc.cams || [])].filter(Boolean);
+// a new camera where the active one is now (unkeyed); it is not added anywhere yet
+export function newCamera(name = `Camera ${camsOf().length + 1}`, from = SC.camera) {
+  return { id: uid(), name, base: { ...current(from, CAM) }, chans: {}, ease: 'smooth', mute: false };
+}
+// make one of SC.cams the active camera (the one it replaces joins the others, in its place)
+export function setActiveCam(cam) {
+  const i = (SC.cams ||= []).indexOf(cam);
+  if (i < 0) return false;
+  SC.cams.splice(i, 1, SC.camera); SC.camera = cam;
+  TEMP.delete(cam);
+  return true;
 }
 
 export function setC(helpers) { C = helpers; }

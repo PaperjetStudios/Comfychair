@@ -5,6 +5,7 @@
 // lengths don't matter. Hands and the head keep no twist of their own (22 joints don't say).
 import * as THREE from './vendor/three.module.min.js';
 import { JOINTS } from './figure.js';
+import { basis as camBasis } from './track-math.js';
 
 export const SMPL22 = ['pelvis', 'lhip', 'rhip', 'spine1', 'lknee', 'rknee', 'spine2', 'lankle', 'rankle', 'spine3', 'ltoe', 'rtoe',
   'neck', 'lcollar', 'rcollar', 'head', 'lsho', 'rsho', 'lelb', 'relb', 'lwrist', 'rwrist'];
@@ -91,6 +92,22 @@ export function resample(frames, fps) {
     out.push(frames[a].map((p, k) => p.map((x, c) => x + (frames[b][k][c] - x) * u)));
   }
   return out;
+}
+
+// A video capture is in its camera's space (Deck Save Body Motion: x right, y up, looking down -Z); app/motion.py
+// normalised it and says how (space: normalised = m · given + t). Put back through a camera per frame
+// (camAt(i): the scene camera's values px..tz, roll at 24 fps frame i), the body lands where that camera saw
+// it in the world: a shot that pans keeps a body that stands still standing still. Returns { fps: 24, frames }.
+export function toWorld(motion, camAt) {
+  const frames = resample(motion.frames, motion.fps || 20), { m: M, t } = motion.space;
+  return { fps: FPS_OUT, frames: frames.map((P, i) => {
+    const c = camAt(i), eye = [c.px, c.py, c.pz], b = camBasis(eye, [c.tx, c.ty, c.tz], c.roll || 0);
+    return P.map((p) => {
+      const q = [p[0] - t[0], p[1] - t[1], p[2] - t[2]];
+      const r = [0, 1, 2].map((j) => q[0] * M[0][j] + q[1] * M[1][j] + q[2] * M[2][j]);   // (M is a turn: its inverse is its transpose)
+      return [0, 1, 2].map((k) => eye[k] + r[0] * b.x[k] + r[1] * b.y[k] + r[2] * b.z[k]);
+    });
+  }) };
 }
 
 // motion { fps, frames: [[22 x [x,y,z]]...] } as figure keys from frame f0, every `every` frames.

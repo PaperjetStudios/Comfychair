@@ -28,9 +28,11 @@ const OPEN = new Set(store.get('deck.scene.keyopen', []));   // the rows that ar
 const G = { ch: 'py' };  // the graph's channel
 const V = { a: 0, b: 1, fit: true };   // the frames on show
 
-const layers = () => [{ item: SC.camera, id: null, kind: 'cam', names: CAM, label: '🎥 Camera' },
+// the active camera, then the others (other: they key here, but the view moves only the active one), then the objects
+const layers = () => [{ item: SC.camera, id: null, kind: 'cam', names: CAM, label: `🎥 ${SC.cams?.length ? SC.camera.name : 'Camera'}` },
+  ...(SC.cams || []).map((c) => ({ item: c, id: `cam:${c.id}`, kind: 'cam', names: CAM, label: `🎥 ${c.name}`, other: true })),
   ...SC.objects.map((o) => ({ item: o, id: o.id, kind: kindOf(o), names: namesFor(o), label: `${TYPES[o.type].icon} ${o.name}` }))];
-const shown = () => (modeOf().lanes === 'camera' ? layers().slice(0, 1) : layers());
+const shown = () => (modeOf().lanes === 'camera' ? layers().filter((L) => L.kind === 'cam') : layers());
 const span = () => Math.max(1, frames() - 1);
 
 // every channel a layer can have: one track each (a channel with no keys has an empty one, for paste and the like)
@@ -189,7 +191,7 @@ export function renderKeys() {
       const caret = r.key ? h('button', { type: 'button', class: 'sheet-caret', 'aria-expanded': OPEN.has(r.key), 'aria-label': `${OPEN.has(r.key) ? 'Close' : 'Open'} ${r.label}`,
         onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); toggleOpen(r.key); } }, OPEN.has(r.key) ? '▾' : '▸') : h('span', { class: 'sheet-caret' });
       const name = h('button', { type: 'button', class: 'sheet-name' + (mine && (r.t === 'item' || (r.t === 'chan' && r.tracks[0].ch === G.ch)) ? ' sel' : '') + off, title: r.label,
-        onclick: () => { if (r.t === 'chan' && isScalar(r.tracks[0].ch)) { G.ch = r.tracks[0].ch; gRange = null; } select(L.id); } }, r.label);
+        onclick: () => { if (r.t === 'chan' && isScalar(r.tracks[0].ch)) { G.ch = r.tracks[0].ch; gRange = null; } select(L.other ? null : L.id); } }, r.label);
       return h('div', { class: `sheet-name-row ${r.t}`, style: pad }, r.t === 'item' ? muteBtn(L) : null, caret, name);
     };
     $('#sceneNames').replaceChildren(h('div', { class: 'sheet-head' }), ...ROWS.map(nameRow));
@@ -222,7 +224,7 @@ const muteBtn = (L) => h('button', { type: 'button', class: 'mute-btn' + (L.item
   onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); toggleMute(L); } }, L.item.mute ? '🔇' : '🔊');
 
 function layerSel(sh, L) {
-  const el = h('select', { 'aria-label': 'Layer', onchange: (e) => select(sh[+e.target.value].id) }, ...sh.map((x, i) => h('option', { value: i }, x.label)));
+  const el = h('select', { 'aria-label': 'Layer', onchange: (e) => select(sh[+e.target.value].other ? null : sh[+e.target.value].id) }, ...sh.map((x, i) => h('option', { value: i }, x.label)));
   el.value = String(sh.findIndex((x) => x.item === L.item));
   return el;
 }
@@ -392,10 +394,10 @@ function down(e) {
     const keys = keyOf(keyEl2), was = keys.every((k) => SEL.has(k));
     if (UI.add) { if (!was) keys.forEach((k) => SEL.add(k)); } else if (!was) { SEL.clear(); keys.forEach((k) => SEL.add(k)); }
     G0 = { ...base, type: 'key', keys, was, L, row };
-    if (L && L.id !== R.sel && UI.mode !== 'graph') select(L.id); else renderKeys();
+    if (L && L.id !== R.sel && UI.mode !== 'graph') select(L.other ? null : L.id); else renderKeys();
     return;
   }
-  if (L && L.id !== R.sel && UI.mode !== 'graph') select(L.id);
+  if (L && L.id !== R.sel && UI.mode !== 'graph') select(L.other ? null : L.id);
   // empty space: a finger pans (unless Box is on); a mouse or pen draws a box
   const box = e.pointerType === 'touch' ? UI.box : true;
   const sheet = $('#sceneSheet');
