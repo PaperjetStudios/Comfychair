@@ -13,7 +13,7 @@ import { S, onServer, onProject } from './core.js';
 import { TabSet } from './tabs.js';
 import { hooks, installState, mainPromptKey, persist, renderFields, stateKey } from './generate.js';
 
-const SHOT_KINDS = new Set(['image', 'video', 'boxes', 'seed']);   // content of one run, not a setting
+const SHOT_KINDS = new Set(['image', 'video', 'boxes', 'seed', 'mask']);   // content of one run, not a setting
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const tplById = (id) => S.templates.find((t) => t.id === id);
 const settingKey = (t, f) => !SHOT_KINDS.has(f.kind) && f.key !== mainPromptKey(t);
