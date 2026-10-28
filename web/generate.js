@@ -7,6 +7,7 @@ import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, saveSnippet, 
 import { clipLabel, clipUrl, openImagePicker, openVideoPicker, soundInput } from './media.js';
 import { RUN, fmtDur, notifyPrepare, openJobs } from './run.js';
 import { queueRun } from './make.js';
+import { zoomPan } from './layout.js';
 
 import { clipInput } from './vfield.js';
 import { PREFS } from './prefs.js';
@@ -1262,68 +1263,11 @@ export function addToPrompt(text) {
 // ---------------------------------------------------------------------------
 // zoom + pan on the generate preview: pinch or wheel to zoom, drag to pan, double-tap to reset
 // ---------------------------------------------------------------------------
-const Z = { s: 1, x: 0, y: 0 };
 export function wireZoom() {
   const viewer = $('#viewer'), layer = $('#zoomLayer');
-  const apply = () => {
-    layer.style.transform = `translate(${Z.x}px, ${Z.y}px) scale(${Z.s})`;
-    $('#zoomReset').textContent = Z.s === 1 ? '1:1' : `${Math.round(Z.s * 100)}%`;
-    viewer.classList.toggle('zoomed', Z.s !== 1);
-  };
-  const zoomAt = (factor, cx, cy) => {
-    const r = viewer.getBoundingClientRect();
-    const px = cx - r.left, py = cy - r.top;
-    let s = Math.min(20, Math.max(0.1, Z.s * factor));
-    if (Math.abs(s - 1) < 0.04) s = 1;  // snap back to fit when passing through 100%
-    Z.x = px - (px - Z.x) * (s / Z.s); Z.y = py - (py - Z.y) * (s / Z.s); Z.s = s;
-    if (s === 1) { Z.x = 0; Z.y = 0; }
-    apply();
-  };
-  const centre = (f) => { const r = viewer.getBoundingClientRect(); zoomAt(f, r.left + r.width / 2, r.top + r.height / 2); };
-  $('#zoomIn').addEventListener('click', () => centre(1.5));
-  $('#zoomOut').addEventListener('click', () => centre(1 / 1.5));
-  $('#zoomReset').addEventListener('click', () => { Z.s = 1; Z.x = 0; Z.y = 0; apply(); });
-  // rotating the tablet changes the viewer's size, so old pan offsets could leave the image off-screen
-  let lastSize = '';
-  new ResizeObserver(() => {
-    const r = viewer.getBoundingClientRect(), size = `${Math.round(r.width)}x${Math.round(r.height)}`;
-    if (lastSize && size !== lastSize && Z.s !== 1) { Z.s = 1; Z.x = 0; Z.y = 0; apply(); }
-    lastSize = size;
-  }).observe(viewer);
-  viewer.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(Math.exp(-e.deltaY * 0.0025), e.clientX, e.clientY); }, { passive: false });
-
-  const pts = new Map();
-  let last = null, moved = false, lastTap = 0;
-  viewer.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.zoom-ctl')) return;
-    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    moved = false;
-    if (pts.size === 2 || Z.s !== 1) { try { viewer.setPointerCapture(e.pointerId); } catch { /* synthetic */ } }
-    last = [...pts.values()];
-    const now = Date.now();
-    if (pts.size === 1 && now - lastTap < 300) { if (Z.s !== 1) { Z.s = 1; Z.x = 0; Z.y = 0; apply(); } else zoomAt(2.5, e.clientX, e.clientY); moved = true; }
-    lastTap = now;
-  });
-  viewer.addEventListener('pointermove', (e) => {
-    if (!pts.has(e.pointerId)) return;
-    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    const cur = [...pts.values()];
-    if (cur.length === 2 && last && last.length === 2) {
-      const d = (a) => Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
-      const mid = { x: (cur[0].x + cur[1].x) / 2, y: (cur[0].y + cur[1].y) / 2 };
-      const lmid = { x: (last[0].x + last[1].x) / 2, y: (last[0].y + last[1].y) / 2 };
-      Z.x += mid.x - lmid.x; Z.y += mid.y - lmid.y;
-      zoomAt(d(cur) / Math.max(1, d(last)), mid.x, mid.y);
-      moved = true;
-    } else if (cur.length === 1 && Z.s !== 1 && last) {
-      const dx = cur[0].x - last[0].x, dy = cur[0].y - last[0].y;
-      if (Math.abs(dx) + Math.abs(dy) > 2) moved = true;
-      Z.x += dx; Z.y += dy; apply();
-    }
-    last = cur;
-  });
-  const up = (e) => { pts.delete(e.pointerId); last = [...pts.values()]; };
-  viewer.addEventListener('pointerup', up); viewer.addEventListener('pointercancel', up);
-  // a drag or pinch shouldn't also count as a tap on the image (which opens its details)
-  viewer.addEventListener('click', (e) => { if (moved) { e.stopPropagation(); e.preventDefault(); moved = false; } }, true);
+  const zp = zoomPan(viewer, () => layer, { min: 0.1, max: 20, snapOne: true, skip: (e) => !!e.target.closest('.zoom-ctl'),
+    onChange: (s) => { $('#zoomReset').textContent = s === 1 ? '1:1' : `${Math.round(s * 100)}%`; } });
+  $('#zoomIn').addEventListener('click', () => zp.zoomBy(1.5));
+  $('#zoomOut').addEventListener('click', () => zp.zoomBy(1 / 1.5));
+  $('#zoomReset').addEventListener('click', zp.reset);
 }

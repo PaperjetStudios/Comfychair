@@ -201,3 +201,98 @@ export function sideNav(panel, name, find) {
   refresh();
   return { refresh };
 }
+
+// ---------------------------------------------------------------------------
+// zoomPan: pinch, the wheel or a double-tap zooms a viewer's picture, the same in Generate's viewer and the
+// Board's gallery; one finger pans while zoomed. layer() is the element that moves (it can change, e.g. per
+// gallery item); its transform origin is set to its top-left. A drag or pinch doesn't also count as a tap.
+//   const zp = zoomPan(viewer, () => layer, { min, max, snapOne, canZoom(), skip(e), swipe(dir), onChange(s) });
+//   zp.reset(); zp.zoomBy(f) (about the middle); zp.s()
+// swipe: while not zoomed, one finger sideways drags the viewer and swipe(±1) moves on (the gallery).
+// skip(e): leave this press alone (a player's own controls). snapOne: a zoom passing 100% lands on it.
+// ---------------------------------------------------------------------------
+export function zoomPan(viewer, layer, { min = 1, max = 8, snapOne = false, canZoom = () => true, skip = () => false, swipe = null, onChange = null } = {}) {
+  const Z = { s: 1, x: 0, y: 0 };
+  const apply = () => {
+    const el = layer();
+    if (el) { el.style.transformOrigin = '0 0'; el.style.transform = Z.s === 1 && !Z.x && !Z.y ? '' : `translate(${Z.x}px, ${Z.y}px) scale(${Z.s})`; }
+    viewer.classList.toggle('zoomed', Z.s !== 1);
+    onChange?.(Z.s);
+  };
+  const reset = () => { Z.s = 1; Z.x = 0; Z.y = 0; apply(); };
+  // keep the point under (cx, cy) where it is (the layer's untransformed top-left is its box less the pan)
+  const zoomAt = (f, cx, cy) => {
+    const el = layer();
+    if (!el || !canZoom()) return reset();
+    const r = el.getBoundingClientRect(), px = cx - (r.left - Z.x), py = cy - (r.top - Z.y);
+    let s = clamp(Z.s * f, min, max);
+    if (snapOne && Math.abs(s - 1) < 0.04) s = 1;
+    if (s <= 1.001 && min >= 1) s = 1;
+    Z.x = px - (px - Z.x) * (s / Z.s); Z.y = py - (py - Z.y) * (s / Z.s); Z.s = s;
+    if (s === 1) { Z.x = 0; Z.y = 0; }
+    apply();
+  };
+  const zoomBy = (f) => { const r = viewer.getBoundingClientRect(); zoomAt(f, r.left + r.width / 2, r.top + r.height / 2); };
+  // rotating the tablet changes the viewer's size, so old pan offsets could leave the picture off-screen
+  let lastSize = '';
+  new ResizeObserver(() => {
+    const r = viewer.getBoundingClientRect(), size = `${Math.round(r.width)}x${Math.round(r.height)}`;
+    if (lastSize && size !== lastSize && Z.s !== 1) reset();
+    lastSize = size;
+  }).observe(viewer);
+  viewer.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(Math.exp(-e.deltaY * 0.0025), e.clientX, e.clientY); }, { passive: false });
+
+  const pts = new Map();
+  let last = null, one = null, moved = false, lastTap = 0;
+  const capture = (id) => { try { viewer.setPointerCapture(id); } catch { /* synthetic */ } };
+  viewer.addEventListener('pointerdown', (e) => {
+    if ((e.pointerType === 'mouse' && e.button !== 0) || skip(e)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 1) moved = false;
+    if (pts.size === 2) { one = null; viewer.style.transform = ''; for (const id of pts.keys()) capture(id); }   // a pinch: forget any swipe
+    else if (pts.size === 1) {
+      one = { x: e.clientX, y: e.clientY, id: e.pointerId, horiz: null };
+      if (Z.s !== 1) capture(e.pointerId);
+    }
+    last = [...pts.values()];
+  });
+  viewer.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const cur = [...pts.values()];
+    if (cur.length === 2 && last?.length === 2) {
+      const d = (a) => Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+      const mid = { x: (cur[0].x + cur[1].x) / 2, y: (cur[0].y + cur[1].y) / 2 }, lmid = { x: (last[0].x + last[1].x) / 2, y: (last[0].y + last[1].y) / 2 };
+      if (canZoom()) { Z.x += mid.x - lmid.x; Z.y += mid.y - lmid.y; zoomAt(d(cur) / Math.max(1, d(last)), mid.x, mid.y); }
+      moved = true;
+    } else if (cur.length === 1 && one && e.pointerId === one.id) {
+      const dx = e.clientX - one.x, dy = e.clientY - one.y;
+      if (Math.hypot(dx, dy) > 6) moved = true;
+      if (Z.s !== 1) { Z.x += cur[0].x - last[0].x; Z.y += cur[0].y - last[0].y; apply(); }
+      else if (swipe) {
+        if (one.horiz == null && moved) { one.horiz = Math.abs(dx) > Math.abs(dy); if (one.horiz) capture(e.pointerId); }
+        if (one.horiz) viewer.style.transform = `translateX(${dx}px)`;
+      }
+    }
+    last = cur;
+  });
+  const end = (e) => {
+    if (!pts.delete(e.pointerId)) return;
+    last = [...pts.values()];
+    if (!one || e.pointerId !== one.id) return;
+    const dx = e.clientX - one.x, { horiz } = one;
+    one = null;
+    if (horiz && swipe) {
+      viewer.style.transition = 'transform .15s'; viewer.style.transform = '';
+      setTimeout(() => { viewer.style.transition = ''; }, 160);
+      if (Math.abs(dx) > Math.min(80, viewer.clientWidth / 6)) swipe(dx < 0 ? 1 : -1);
+    }
+    if (!moved && e.type === 'pointerup') {   // double-tap: zoom in there, or back out
+      if (Date.now() - lastTap < 300) { lastTap = 0; moved = true; if (Z.s !== 1) reset(); else zoomAt(2.5, e.clientX, e.clientY); }
+      else lastTap = Date.now();
+    }
+  };
+  viewer.addEventListener('pointerup', end); viewer.addEventListener('pointercancel', end);
+  viewer.addEventListener('click', (e) => { if (moved) { e.stopPropagation(); e.preventDefault(); moved = false; } }, true);
+  return { reset, zoomBy, zoomAt, s: () => Z.s };
+}

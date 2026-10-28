@@ -9,7 +9,7 @@ import { openGeneration } from './run.js';
 import { openUseAs } from './useas.js';
 import { E, FULL, editorTabsReady, persistEditor, renderEditor } from './editor.js';
 import { addToTimeline } from './video.js';
-import { maximizable } from './layout.js';
+import { maximizable, zoomPan } from './layout.js';
 import { openCompare } from './compare.js';
 
 // ---------------------------------------------------------------------------
@@ -491,7 +491,7 @@ function galleryRender(newMedia = false) {
   main.classList.toggle('marked', marked);
   if (newMedia || GAL.key !== cur.key) {
     main.querySelectorAll('video, audio').forEach((v) => v.pause());
-    galleryZoom(1);
+    galleryZoom();
     main.replaceChildren(o.kind === 'video' ? galleryVideo(o) : o.kind === 'audio' ? galleryAudio(o) : h('img', { src: o.url, alt: o.filename, draggable: false }));
     for (const d of [-1, 1]) {   // warm the cache for the neighbours
       const nb = GAL.items[GAL.idx + d];
@@ -528,80 +528,18 @@ function galleryRender(newMedia = false) {
   strip.querySelector('.gal-thumb.sel')?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: newMedia ? 'smooth' : 'auto' });
 }
 
-// Swipe sideways on the big preview to move; the picture follows the finger. Pinch, the wheel or
-// a double-tap zooms (images and videos); while zoomed one finger pans instead of swiping.
-const GZ = { s: 1, x: 0, y: 0 };
-function galleryZoom(s, x, y) {
-  const m = GAL.el?.querySelector('.gal-main > *');
-  if (s <= 1.01 || m?.classList.contains('gal-audio')) { s = 1; x = 0; y = 0; }
-  Object.assign(GZ, { s, x, y });
-  if (m) m.style.transform = s === 1 ? '' : `translate(${x}px, ${y}px) scale(${s})`;
-  GAL.el?.classList.toggle('zoomed', s !== 1);
-}
+// Swipe sideways on the big preview to move; the picture follows the finger. Pinch, the wheel or a double-tap zooms
+// (images and videos; layout.js zoomPan, as in Generate's viewer); while zoomed one finger pans instead of swiping.
+let GZ = null;
+function galleryZoom() { GZ?.reset(); }
 function wireGallerySwipe(main) {
-  const zoomAt = (f, cx, cy) => {   // keep the point under (cx, cy) where it is
-    const r = main.getBoundingClientRect(), qx = cx - (r.left + r.width / 2), qy = cy - (r.top + r.height / 2);
-    const s = Math.max(1, Math.min(8, GZ.s * f)); f = s / GZ.s;
-    galleryZoom(s, qx - f * (qx - GZ.x), qy - f * (qy - GZ.y));
-  };
-  const pts = new Map();
-  let start = null, pinch = null, lastTap = 0;
-  const mid = () => { const [a, b] = [...pts.values()]; return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y) }; };
-  main.addEventListener('pointerdown', (e) => {
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    if (e.target.closest('.gal-audio-ui')) return;   // a sound's play button and scrub bar keep their touches
-    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pts.size === 2) {   // second finger: pinch, and forget any swipe the first one started
-      start = null; main.style.transform = '';
-      pinch = mid();
-      for (const id of pts.keys()) { try { main.setPointerCapture(id); } catch { /* synthetic */ } }
-      return;
-    }
-    if (pts.size > 2) return;
-    const m = main.firstElementChild;
-    // leave the bottom of an unzoomed video to its own controls (scrubbing)
-    if (GZ.s === 1 && m?.tagName === 'VIDEO' && e.clientY > m.getBoundingClientRect().bottom - 50) return;
-    start = { x: e.clientX, y: e.clientY, id: e.pointerId, horiz: null, pan: GZ.s > 1, zx: GZ.x, zy: GZ.y, moved: false };
-    if (start.pan) { try { main.setPointerCapture(e.pointerId); } catch { /* synthetic */ } }
-  });
-  main.addEventListener('pointermove', (e) => {
-    if (!pts.has(e.pointerId)) return;
-    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pinch && pts.size === 2) {
-      const now = mid();
-      if (pinch.d > 0) zoomAt(now.d / pinch.d, now.x, now.y);
-      galleryZoom(GZ.s, GZ.x + now.x - pinch.x, GZ.y + now.y - pinch.y);
-      pinch = now;
-      return;
-    }
-    if (!start || e.pointerId !== start.id) return;
-    const dx = e.clientX - start.x, dy = e.clientY - start.y;
-    if (Math.hypot(dx, dy) > 10) start.moved = true;
-    if (start.pan) return galleryZoom(GZ.s, start.zx + dx, start.zy + dy);
-    if (start.horiz == null && start.moved) {
-      start.horiz = Math.abs(dx) > Math.abs(dy);
-      if (start.horiz) { try { main.setPointerCapture(e.pointerId); } catch { /* synthetic */ } }
-    }
-    if (start.horiz) main.style.transform = `translateX(${dx}px)`;
-  });
-  const end = (e) => {
-    if (!pts.delete(e.pointerId)) return;
-    if (pinch) { if (!pts.size) pinch = null; return; }   // the rest of a pinch isn't a swipe or a tap
-    if (!start || e.pointerId !== start.id) return;
-    const dx = e.clientX - start.x, { horiz, pan, moved } = start;
-    start = null;
-    if (!pan && horiz) {
-      main.style.transition = 'transform .15s'; main.style.transform = '';
-      setTimeout(() => { main.style.transition = ''; }, 160);
-      if (Math.abs(dx) > Math.min(80, main.clientWidth / 6)) galleryGo(dx < 0 ? 1 : -1);
-    }
-    if (!moved && e.type === 'pointerup') {   // double-tap: zoom in there, or back out
-      if (Date.now() - lastTap < 300) { lastTap = 0; if (GZ.s > 1) galleryZoom(1); else zoomAt(2.5, e.clientX, e.clientY); }
-      else lastTap = Date.now();
-    }
-  };
-  main.addEventListener('pointerup', end); main.addEventListener('pointercancel', end);
-  main.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(Math.exp(-e.deltaY * 0.0025), e.clientX, e.clientY); }, { passive: false });
+  const media = () => main.firstElementChild;
+  GZ = zoomPan(main, media, {
+    canZoom: () => !media()?.classList.contains('gal-audio'),
+    // a sound's play button and scrub bar keep their touches, and so does the bottom of an unzoomed video (its controls)
+    skip: (e) => !!e.target.closest('.gal-audio-ui') || (GZ.s() === 1 && media()?.tagName === 'VIDEO' && e.clientY > media().getBoundingClientRect().bottom - 50),
+    swipe: (dir) => galleryGo(dir),
+    onChange: (s) => GAL.el?.classList.toggle('zoomed', s !== 1) });
 }
 
 document.addEventListener('keydown', (e) => {
