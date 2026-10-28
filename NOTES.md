@@ -210,6 +210,29 @@ will then fail to start until that process is stopped, so stop it before the nex
   at the camera instead, `deck.scene.placeAtCamera`) the object's origin is the photo's camera. Re-centre converts one.
 - Headless Chrome here is SwiftShader: a 825k splat takes ~6 s a draw, so render tests use a ~120k one.
 
+### Real size (2026-10-28; `web/scene-scale.js`, maths in `web/scale-math.js`, node-tested)
+- Scene units are metres. **Real size** in every object's panel (`placeProps` → `scaleProps`) is its world box at the
+  playhead (`worldBox`: a splat's proxy box, a figure's rig meshes, else every shown layer-0 mesh), scale and fit included.
+- **View helpers** (one group in the scene; a pass hook hides it for every render, the depth view and depth passes;
+  `passHooks` now get `(pass, forRender)`): a 1.8 m outline person (the Person shape's profile) beside the selection,
+  toggled by the person button on the view's bar (`deck.scene.refPerson`); faint "n m" sprites every metre along the
+  grid's middle lines; the measure tool's dots and line.
+- **Measure…**: the next two taps on the canvas (window capture, like the trim's Pick the centre) hit the selected
+  object: a mesh by raycast, a splat by its nearest sampled Gaussian along the ray (`pickAlong`), else its proxy box.
+  The sheet's presets (Person 1.7 / Door 2 / Table 0.75 / Car 4.5) or Custom rescale it about its base (`rescale`:
+  the world box's floor middle stays put; `write` + `changed`, so one undo step and keyed at the playhead when animated).
+- **Calibrate from a person** (photo meshes and photo splats with `o.image`): `POST /api/scene/person {image}` runs
+  `look/person_worker.py` (DWPose's YOLOX-L, tight boxes, CPU) in ComfyUI's venv; 409 while ComfyUI's queue is busy,
+  503 without the venv or `yolox_l.onnx`. The layer's points in the photo camera's space (MoGe vertices, or the splat's
+  sampled centres; `o.fov` vertical, the picture's aspect from the reply) give the person's depth: a low quantile of the
+  points that project into the middle strip of their box. Head and feet are the box's top and bottom at that depth, and
+  the layer rescales about its base so they are the height picked (1.7 m default, `deck.scene.personH`). No person or no
+  detector: a sheet offers Measure instead.
+- **Imports** (`fitOf` in scene-import.js): glTF comes in at its size (metres), FBX by its `UnitScaleFactor` (cm per
+  unit; three's FBXLoader leaves it in `userData`). OBJ, splats and anything over 50 m or under 5 cm ask "About how
+  tall is it?"; dismissed, the old usable-size fit. `o.fit` is still saved per layer, so older scenes don't change.
+  Even-scaled layers now clamp at ×0.0001 (was ×0.01) so a cm or mm file can be at true size.
+
 ### Compositions: 3D scenes as video clips (scene-comp.js, scene-offscreen.js)
 - A video clip `{ kind: 'scene', src: { scene: <scene-tabs id>, look: color|clay|depth|pose }, nat: [w, h], dur }` is only a
   link: the scene is read from the store (`scene-comp.js`) and rebuilt when a `store` event for `scene-tabs` arrives (debounced
