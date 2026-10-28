@@ -157,6 +157,11 @@ will then fail to start until that process is stopped, so stop it before the nex
   sparse keys (`off.chans`, rows under "Offset" in the sheet, track kind `off`). `current()` shows it; `rawCurrent()` is key
   space. `write()` takes it back out, or with `R.offEdit === item.id` the gizmo writes the offset (`writeOffset`).
   `bakeOffset` keys it in at every frame that has a key. Compositions (`scene-offscreen.js`) apply it too.
+- **Reduce keys** (`keys.js reduceKeys`, sheet tool + popover in scene-keys.js, `RD` per device): greedy, error-bounded at
+  every old key's frame (cm for places and sizes, ° for turns / joints / lens, a parameter in % of its range). Kept keys
+  become Auto clamped or Linear (joints always linear: curves don't apply to turns). Moves ▸ "Fewer keys" reduces a motion
+  import as it lands. No bezier handle fitting yet.
+- `web/icons.js icon(name)`: line icons for new buttons (no emoji).
 - **Mute** (`item.mute`, saved, `upgrade()` defaults it off): `current()`/`write()` in scene-data.js use values held
   in `MUTED` (not saved) instead of the keys, so a muted layer stays put and moving it writes no keys. Renders set
   `R.real` and use the real keys; Save frame is the picture on screen.

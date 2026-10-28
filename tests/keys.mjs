@@ -413,3 +413,33 @@ console.log('curves ok');
   D.R.offEdit = null;
 }
 console.log('offset ok');
+
+{ // reduce: far fewer keys, every frame within tolerance, ends and unpicked keys kept, the same key objects
+  const dense = [...Array(61)].map((_, i) => ({ f: i * 2, v: Math.sin(i / 6) * 2 + i * 0.01, ease: 'linear' }));
+  const want = (l, f) => K.sampleKeys(l, f, { ease: 'smooth' });
+  for (const as of ['clamp', 'linear']) {
+    const copy = strip(dense), out = K.reduceKeys(copy, 0.05, { as });
+    assert.ok(out.length < copy.length / 2.5, `${as}: ${out.length}`);
+    for (const k of dense) assert.ok(Math.abs(want(out, k.f) - k.v) <= 0.05 + 1e-9, `${as} f${k.f}`);
+    assert.equal(out[0], copy[0]); assert.equal(out[out.length - 1], copy[copy.length - 1]);
+    assert.ok(out.every((k) => k.ease === as));
+  }
+  // a looser tolerance keeps fewer; zero keeps what is needed for an exact curve (a straight run thins to its ends)
+  const line = [...Array(20)].map((_, i) => ({ f: i, v: i * 3, ease: 'linear' }));
+  assert.equal(K.reduceKeys(line, 0, { as: 'linear' }).length, 2);
+  assert.ok(K.reduceKeys(strip(dense), 0.2).length < K.reduceKeys(strip(dense), 0.01).length);
+  // only the picked keys can go; dry leaves eases alone
+  const c2 = strip(dense), pick = new Set(c2.slice(10, 30)), out2 = K.reduceKeys(c2, 0.05, { pick, dry: true });
+  assert.ok(c2.filter((k) => !pick.has(k)).every((k) => out2.includes(k)));
+  assert.ok(c2.every((k) => k.ease === 'linear'));
+  // joints: the error in degrees between turns
+  const q = (a) => [Math.sin(a / 2), 0, 0, Math.cos(a / 2)];
+  const jl = [...Array(30)].map((_, i) => ({ f: i, v: q(i < 15 ? i * 0.05 : 0.75), ease: 'linear' }));
+  const slerp = F.slerpQ, jo = K.reduceKeys(jl, 0.5, { as: 'linear', lerp: slerp, dist: K.quatDeg });
+  assert.ok(jo.length <= 4, `${jo.length}`);
+  for (let f = 0; f < 30; f++) assert.ok(K.quatDeg(K.sampleKeys(jo, f, { lerp: slerp }), K.sampleKeys(jl, f, { lerp: slerp })) <= 0.5 + 1e-6);
+  assert.ok(Math.abs(K.quatDeg(q(0), q(Math.PI / 2)) - 90) < 1e-6);
+  // short lists come back as they are
+  assert.equal(K.reduceKeys([{ f: 0, v: 1 }, { f: 3, v: 9 }], 1).length, 2);
+}
+console.log('reduce ok');

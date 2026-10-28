@@ -1,11 +1,12 @@
 import * as FIGURE from './figure.js';
 import { fullScreen } from './layout.js';
-import { $, button, h, info as infoBtn, numSlider, sheetOpen, store, toast, toggle, canvasFont } from './ui.js';
+import { $, button, h, info as infoBtn, numSlider, seg, sheetOpen, store, toast, toggle, canvasFont } from './ui.js';
+import { icon } from './icons.js';
 import {
   CAM, FPS, HOLD, OBJ, OFF, R, ROOM, SC, TEMP, TYPES, WP, addKey, bakeBase, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setKey, setMute
 } from './scene-data.js';
 import {
-  CURVES, EASES, allKeys, bounds, copy, handleOf, isScalar, kindOf, moveBy, moveHandle, paste, prune, remove, restore, scaleAround, setBroken, setChan, setEase, snapshot, track
+  CURVES, EASES, allKeys, bounds, copy, handleOf, isScalar, kindOf, moveBy, moveHandle, paste, prune, quatDeg, reduceKeys, remove, restore, scaleAround, setBroken, setChan, setEase, snapshot, track
 } from './keys.js';
 import { changed, draw, pose, select } from './scene-view.js';
 import { busy, play, seek } from './scene-export.js';
@@ -597,12 +598,80 @@ function toolRow() {
       tools.push([s, null, 'sel']);
       return s;
     })(),
+    tool(icon('reduce'), (e) => openReduce(e.currentTarget), { name: 'Reduce keys', cls: 'kt-reduce', title: 'fewer keys, the motion kept within a tolerance (the selected keys, else the layer\'s)' }),
     tool('⇔', () => { setUI('tool', UI.tool === 'scale' ? 'move' : 'scale'); syncTools(); }, { name: 'Stretch in time', on: () => UI.tool === 'scale', needs: 'sel',
       title: 'drag across the sheet to stretch the selected keys around the playhead (Blender\'s S)' }),
     tool('🧲', () => { setUI('snap', !UI.snap); syncTools(); }, { name: 'Snap', on: () => UI.snap, title: 'dragging snaps to the playhead and to other keys' }),
     tool('⤢', () => { V.fit = true; renderKeys(); }, { name: 'Fit', title: 'show the whole clip' }),
     tool('⋯', (e) => openMenu(e.currentTarget), { name: 'More', cls: 'kt-more', title: 'select none, invert, duplicate, shift, scale, ruler' }),
     h('span', { id: 'sceneKeyInfo', class: 'hint keyinfo' }));
+}
+
+// ---- Reduce keys: thin dense keys (mocap, a recording) while the motion stays within a tolerance ----------------
+// RD: per device. cm: positions, sizes (and a parameter, as % of its range); deg: turns, joints and the lens.
+export const RD = { cm: 0.5, deg: 0.5, as: 'clamp', ...store.get('deck.scene.reduce', {}) };
+const ANG = new Set(['rx', 'ry', 'rz', 'roll', 'fov']);
+const stepAt = (a, b, e) => (e < 0.5 ? a : b);
+// how each channel is measured and blended (a joint keeps straight slerps: curves don't apply to turns)
+function reduceOpts(T, o) {
+  const ease = T.item.ease || 'smooth', as = o.as === 'keep' ? '' : o.as;
+  if (T.ch.startsWith('j.')) return { tol: o.deg, ease, lerp: FIGURE.slerpQ, dist: quatDeg, as: as && 'linear' };
+  if (T.ch === 'pn') return { tol: 0, ease, lerp: stepAt, dist: (a, b) => (a === b ? 0 : 1), as: '' };
+  if (ANG.has(T.ch)) return { tol: o.deg, ease, as };
+  if (T.ch.startsWith('m.')) { const vs = T.keys.map((k) => k.v); return { tol: (o.cm / 100) * Math.max(1e-6, Math.max(...vs) - Math.min(...vs)), ease, as }; }
+  return { tol: o.cm / 100, ease, as };
+}
+// reduce these tracks (pick: only those keys may go); dry: just count. Returns [before, after] in the keys in play.
+export function reduceTracks(tracks, o = RD, { pick = null, dry = false } = {}) {
+  let before = 0, after = 0;
+  for (const T of tracks) {
+    const inPlay = (k) => !pick || pick.has(k), n = T.keys.filter(inPlay).length;
+    if (!n) continue;
+    const { tol, ...opts } = reduceOpts(T, o), out = reduceKeys(T.keys, tol, { ...opts, pick, dry });
+    before += n; after += out.filter(inPlay).length;
+    if (!dry) T.keys = out;
+  }
+  return [before, after];
+}
+// what it acts on: the selected keys, else every key of the selected layer
+function reduceScope() {
+  if (SEL.size) return { tracks: allTracks().filter((T) => T.keys.some((k) => SEL.has(k))), pick: SEL, what: 'the selected keys' };
+  const [it] = keyTarget(), L = shown().find((x) => x.item === (it || SC.camera));
+  return { tracks: L ? tracksOf(L).filter((T) => T.keys.length > 2) : [], pick: null, what: L ? `every key of ${L.label}` : 'nothing' };
+}
+let rdEl = null;
+function closeReduce() { rdEl?.remove(); rdEl = null; removeEventListener('pointerdown', rdAway, true); }
+function rdAway(e) { if (rdEl && !rdEl.contains(e.target) && !e.target.closest('.kt-reduce')) closeReduce(); }
+function openReduce(anchor) {
+  if (rdEl) { closeReduce(); return; }
+  const sc = reduceScope(), out = h('b', { class: 'rd-count' });
+  let t = null;
+  const count = () => { clearTimeout(t); t = setTimeout(() => { const [a, b] = reduceTracks(sc.tracks, RD, { pick: sc.pick, dry: true }); out.textContent = `${a} → ${b} keys`; }, 120); };
+  const keep = () => store.set('deck.scene.reduce', RD);
+  const slide = (label, k, max) => {
+    const i = numSlider({ min: 0, max, step: 0.05, value: RD[k], label });
+    i.style.width = '96px';
+    const on = () => { const v = parseFloat(i.value); if (Number.isFinite(v)) { RD[k] = v; keep(); count(); } };
+    i.addEventListener('input', on); i.addEventListener('change', on);
+    return h('label', { class: 'keynum' }, label, i);
+  };
+  rdEl = h('div', { class: 'key-menu rd-menu', role: 'dialog', 'aria-label': 'Reduce keys' },
+    h('div', { class: 'wp-head' }, h('b', {}, 'Reduce keys'),
+      infoBtn('Takes keys away while the motion stays within these amounts of where it was at every old key: Position in centimetres (sizes too; a figure parameter in % of its range), Turn in degrees (rotations, joints, the lens). Kept as: Auto clamped makes smooth curves through the keys left (fewest keys for smooth motion); Linear keeps straight lines; As they are leaves each key\'s ease. Joints always blend straight. Acts on the selected keys, else on the selected layer. One undo step.')),
+    h('span', { class: 'hint' }, sc.what),
+    slide('Position (cm)', 'cm', 20), slide('Turn (°)', 'deg', 20),
+    seg([['clamp', 'Auto clamped'], ['linear', 'Linear'], ['keep', 'As they are']], RD.as, (v) => { RD.as = v; keep(); count(); }),
+    h('div', { class: 'row' }, out, h('span', { class: 'grow' }),
+      button('Reduce', () => {
+        const [a, b] = reduceTracks(sc.tracks, RD, { pick: sc.pick });
+        closeReduce(); prune(allTracks(), SEL); TEMP.clear(); done(); toast(`${a} → ${b} keys`);
+      }, { cls: 'small primary', disabled: !sc.tracks.length })));
+  (stage() || document.body).append(rdEl);
+  const r = anchor.getBoundingClientRect(), mh = rdEl.offsetHeight, mw = rdEl.offsetWidth;
+  const top = r.bottom + 4 + mh > innerHeight ? Math.max(4, r.top - 4 - mh) : r.bottom + 4;
+  Object.assign(rdEl.style, { top: `${top}px`, left: `${Math.max(4, Math.min(innerWidth - mw - 4, r.left))}px` });
+  addEventListener('pointerdown', rdAway, true);
+  count();
 }
 
 // the tool row can be hidden to give the sheet room (kept per device)

@@ -929,6 +929,11 @@ details.desc[open] summary { margin-bottom: 6px; }
 .scene-keybar { overflow-x: auto; scrollbar-width: thin; }
 .key-menu { position: fixed; z-index: 70; display: grid; gap: 4px; min-width: 230px; padding: 6px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); box-shadow: 0 8px 24px #0008; }
 .key-menu .btn { justify-content: flex-start; text-align: left; }
+.rd-menu { width: min(300px, calc(100vw - 8px)); }
+.rd-menu .seg { flex-wrap: wrap; }
+.rd-menu .row { align-items: center; }
+.rd-count { white-space: nowrap; }
+.btn.kt svg { display: block; }
 .keynum { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 6px; font-size: var(--fs-xs); color: var(--muted); }
 .keynum input { min-height: var(--tap-sm); border: 1px solid var(--line); border-radius: var(--r); color: var(--text); font: inherit; font-size: 14px; padding: 0 6px; text-align: right; }
 .keyinfo { min-width: 90px; font-variant-numeric: tabular-nums; }

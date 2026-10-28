@@ -312,6 +312,39 @@ export function recordInto(list, samples, every = 3) {
   return out.sort(byF);
 }
 
+// ---- fewer keys: a dense channel (mocap, a recording) thinned while it stays within tol of what it was ----
+// Greedy and error-bounded: start from the ends (and every key that isn't `pick`ed), then keep adding the key
+// nearest the worst frame until no old key's frame is further than tol from the new curve (the keys are the
+// data: a recording's straight lines between them aren't, so a smooth curve may cut their corners). The keys kept get ease `as` ('' keeps their own); their values
+// stay. dist(a, b) is the error (numbers: |a − b|; a joint: degrees). Returns a new list (the same keys;
+// dry: the eases left alone, for a count).
+export function reduceKeys(list, tol, { pick = null, as = 'clamp', ease = 'smooth', lerp = lerpNum, dist = (a, b) => Math.abs(a - b), dry = false } = {}) {
+  if (!list || list.length < 3) return list ? [...list] : [];
+  const want = list.map((k) => [k.f, k.v]);
+  const on = (k) => !pick || pick.has(k);
+  const keep = new Set(list.filter((k, i) => i === 0 || i === list.length - 1 || !on(k)));
+  const trial = (k) => (on(k) && as ? { ...k, ease: as, ...(CURVES.has(as) && as !== 'bezier' ? { ti: undefined, to: undefined } : {}) } : k);
+  const strip = (k) => { if (k.ti === undefined) delete k.ti; if (k.to === undefined) delete k.to; return k; };
+  tol = Math.max(0, num(tol));
+  for (let guard = 0; guard < list.length; guard++) {
+    const kept = list.filter((k) => keep.has(k)), cur = kept.map((k) => strip(trial(k)));
+    const errs = want.map(([f, v]) => [dist(sampleKeys(cur, f, { ease, lerp }), v), f]).filter(([e]) => e > tol).sort((a, b) => b[0] - a[0]);
+    let added = false;
+    for (const [, f] of errs) {   // the worst frame that still has a key to add between the kept ones around it
+      const lo = kept.findLast((k) => k.f <= f), hi = kept.find((k) => k.f >= f);
+      let best = null;
+      for (const k of list) if (!keep.has(k) && k.f > lo.f && k.f < hi.f && (!best || Math.abs(k.f - f) < Math.abs(best.f - f))) best = k;   // (the worst key itself, unless kept)
+      if (best) { keep.add(best); added = true; break; }
+    }
+    if (!added) break;
+  }
+  const out = list.filter((k) => keep.has(k));
+  if (!dry) for (const k of out) if (on(k) && as) { k.ease = as; if (as !== 'bezier') { delete k.ti; delete k.to; delete k.hb; } }
+  return out;
+}
+// degrees between two turns [x, y, z, w]
+export const quatDeg = (a, b) => { const d = Math.abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]); return (2 * Math.acos(Math.min(1, d)) * 180) / Math.PI; };
+
 // ---- channels, for the graph: 'x', 'fov', or 'm.lean' (a figure parameter) ----
 export const isScalar = (ch) => ch !== 'pn' && !ch.startsWith('j.');
 export function setChan(k, v) {

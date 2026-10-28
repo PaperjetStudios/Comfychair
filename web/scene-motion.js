@@ -8,6 +8,8 @@ import { openVideoPicker } from './media.js';
 import { queueRun } from './make.js';
 import { changed } from './scene-view.js';
 import { toKeys } from './motion.js';
+import { reduceTracks } from './scene-keys.js';
+import { track } from './keys.js';
 
 const TEXT_TPL = 'deck-motion-text', MOCAP_TPL = 'deck-mocap';
 const tpl = (id) => S.templates.find((t) => t.id === id && !t.error);
@@ -15,7 +17,8 @@ const ST = { prompt: '', secs: 5, busy: null, to: null };   // busy: what's bein
 // where a motion lands (all three imports): from: 'head' (at the playhead, replacing the keys it covers) |
 // 'all' (from the start, the figure's other keys go); path: 'travel' (the clip's path) | 'spot' (stays where it is);
 // rise: the hips go up and down with the clip; fit: its size matched to the figure by leg length. Kept per device.
-const PLACE = { from: 'head', path: 'travel', rise: true, fit: true, ...store.get('deck.scene.motionPlace', {}) };
+// thin: the keys reduced as they land (the sheet's Reduce keys settings), not one every 2 frames.
+const PLACE = { from: 'head', path: 'travel', rise: true, fit: true, thin: false, ...store.get('deck.scene.motionPlace', {}) };
 const keepPlace = () => store.set('deck.scene.motionPlace', PLACE);
 
 function apply(id, m, label) {
@@ -26,10 +29,16 @@ function apply(id, m, label) {
   if (keys.length < 2) return toast('No time left after the playhead: move it back', true);
   const before = clone(o), ok = sameTab(), end = keys[keys.length - 1].f;
   dropKeys(o, all ? () => true : (f) => f >= f0 && f <= end); putKeys(o, keys, FIG);
+  let thin = '';
+  if (PLACE.thin) {
+    const tracks = Object.keys(o.chans).map((ch) => track(o, ch, { id: o.id, kind: 'figure' }));
+    const [a, b] = reduceTracks(tracks, undefined, { pick: new Set(tracks.flatMap((T) => T.keys.filter((k) => k.f >= f0 && k.f <= end))) });
+    thin = ` · ${a} → ${b} keys`;
+  }
   o.stepsFollow = false;
   changed();
   const cut = m.frames.length / (m.fps || 30) > (end - f0) / 24 + 0.1;
-  undoToast(`${label}: keys to ${(end / 24).toFixed(1)} s${cut ? ' (cut at the end of the scene)' : ''}`, () => {
+  undoToast(`${label}: keys to ${(end / 24).toFixed(1)} s${cut ? ' (cut at the end of the scene)' : ''}${thin}`, () => {
     if (!ok()) return;
     for (const k of Object.keys(o)) delete o[k];
     Object.assign(o, before); changed();
@@ -77,7 +86,7 @@ function placeFields(o) {
     h('div', { class: 'row wrap' },
       field('Starts', seg([['head', 'At the playhead'], ['all', 'Replace all keys']], PLACE.from, (v) => { PLACE.from = v; keepPlace(); })),
       field('Path', seg([['travel', 'Follow the clip'], ['spot', 'On the spot']], PLACE.path, (v) => { PLACE.path = v; keepPlace(); }))),
-    h('div', { class: 'row wrap' }, tog('rise', 'Hips rise and fall with it'), tog('fit', 'Scale it to this figure')),
+    h('div', { class: 'row wrap' }, tog('rise', 'Hips rise and fall with it'), tog('fit', 'Scale it to this figure'), tog('thin', 'Fewer keys (reduce as it lands)')),
     onto ? field('Onto', onto) : null];
 }
 
