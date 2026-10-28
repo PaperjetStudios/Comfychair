@@ -167,6 +167,8 @@ will then fail to start until that process is stopped, so stop it before the nex
   look through it), `SC.cams` the others (`camsOf()`, `setActiveCam()`; `upgrade()` gives older scenes `cams: []`).
   Others show in the key sheet (`L.other`: they key there, but tapping them selects the active camera). Camera panel ▸
   Cameras: rename, New camera, Make active, Delete.
+  In the director view the others are drawn as grey outlines with their names (scene-view.js `OTHERS`, `syncOthers`,
+  never rendered); a tap on an outline or its name (`otherCamAt`, pen 18 px / finger 28 px) makes that camera active.
 - **Mocap with its camera** (Moves ▸ From video ▸ With its camera): the clip is also tracked (`/api/track`, Simple) and
   `applyWithCamera` (scene-motion.js) adds "Mocap camera" (`sceneFromTrack`, lens from the capture's `focal` px when
   saved, else 35 mm) + its footage backdrop (`at` = start frame), makes it active, and puts the body in the world through

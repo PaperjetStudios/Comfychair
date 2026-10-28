@@ -3,11 +3,11 @@ import { OrbitControls } from './vendor/OrbitControls.js';
 import * as THREE from './vendor/three.module.min.js';
 import { TransformControls } from './vendor/TransformControls.js';
 import * as FIGURE from './figure.js';
-import { $, api, busy as busyBar, clone, closeSheet, h, toast, undoToast } from './ui.js';
+import { $, api, busy as busyBar, canvasFont, clone, closeSheet, h, toast, undoToast } from './ui.js';
 import { gzChip, smoothGizmo, snap3, snapBar3 } from './gizmo.js';
 import {
   C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, WP, current, frames, holdStart, hooks, pathSig, makers, namesFor, newObject, newRoom, pivotOf, sample,
-  sameTab, save, selItem, setSC, write
+  sameTab, save, selItem, setActiveCam, setSC, write
 } from './scene-data.js';
 import { letGo } from './scene-export.js';
 import { modeOf } from './scene-modes.js';
@@ -159,6 +159,8 @@ export function setup() {
     down = null;
     const joint = jointAt(e);
     if (joint) return selectJoint(joint);
+    const other = otherCamAt(e);
+    if (other) { setActiveCam(other); R.sel = null; changed(); toast(`${other.name} is active`); return; }
     const id = hitAt(e);
     if (id && id === R.sel && R.joint) selectJoint(null);
     else if (id && id === R.sel && id !== ROOM) setMode(MODES[(MODES.findIndex(([m]) => m === R.mode) + 1) % MODES.length][0]);
@@ -519,6 +521,7 @@ export function draw(forRender = false) {
   snapGrid.visible = !forRender && !depth && snap3.grid && (live || WP.grid);
   for (const f of passHooks) f(depth || forRender === 'range' ? 'depth' : 'color');
   frustum.visible = wantFrustum() && !forRender && !depth && (live || WP.frustum);
+  for (const x of OTHERS.values()) x.group.visible = frustum.visible;
   stage.visible = !onStage() && !forRender;
   gizmo.getHelper().visible = !forRender && (live || WP.gizmo) && !!gizmo.object;
   if (!forRender && !gizmo.dragging) gizmo.enabled = live || WP.gizmo;   // hidden while playing: can't be grabbed either (the drag orbits)
@@ -730,8 +733,63 @@ export function cameraFromView() {
 }
 function syncFrustum() {
   if (!wantFrustum()) return;
+  syncOthers();
   shotCam.position.copy(camera.position); shotCam.quaternion.copy(camera.quaternion);
   shotCam.fov = camera.fov; shotCam.aspect = camera.aspect; shotCam.updateProjectionMatrix();
   shotCam.updateMatrixWorld(true); frustum.update();
 }
 
+
+// ---- the other cameras (SC.cams) in the director view: a grey outline each, its name over it. A tap on an
+// outline makes that camera active (then the view's camera gizmo moves it). Drawn only, never rendered or picked
+// by the meshes' raycast.
+const OTHERS = new Map();   // camera item -> { group, cam, helper, label, name }
+function nameSprite(text) {
+  const cv = document.createElement('canvas'), c = cv.getContext('2d'), px = 26;
+  c.font = canvasFont(px); const w = Math.ceil(c.measureText(text).width) + 16;
+  cv.width = w; cv.height = px + 12;
+  c.font = canvasFont(px); c.fillStyle = '#000a'; c.fillRect(0, 0, cv.width, cv.height);
+  c.fillStyle = '#e8e8e8'; c.textBaseline = 'middle'; c.fillText(text, 8, cv.height / 2 + 1);
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, depthTest: false, transparent: true, sizeAttenuation: false }));
+  sp.scale.set(0.035 * cv.width / cv.height, 0.035, 1); sp.center.set(0, 0); sp.renderOrder = 12;
+  return sp;
+}
+function syncOthers() {
+  const cams = SC.cams || [];
+  for (const [c, x] of OTHERS) if (!cams.includes(c)) { scene.remove(x.group); x.helper.dispose(); x.label.material.map.dispose(); x.label.material.dispose(); OTHERS.delete(c); }
+  for (const c of cams) {
+    let x = OTHERS.get(c);
+    if (!x) {
+      const cam = new THREE.PerspectiveCamera(45, 16 / 9, 0.3, 3), helper = new THREE.CameraHelper(cam), group = new THREE.Group();
+      const grey = new THREE.Color(0x8a8f99); helper.setColors(grey, grey, grey, grey, grey);
+      group.add(cam, helper); scene.add(group);
+      OTHERS.set(c, x = { group, cam, helper, label: null, name: null });
+    }
+    if (x.name !== c.name) { if (x.label) { x.group.remove(x.label); x.label.material.map.dispose(); x.label.material.dispose(); } x.label = nameSprite(c.name); x.name = c.name; x.group.add(x.label); }
+    const v = current(c, CAM, R.f);
+    x.cam.position.set(v.px, v.py, v.pz); x.cam.lookAt(v.tx, v.ty, v.tz); applyRoll(x.cam, v.roll);
+    x.cam.fov = v.fov; x.cam.aspect = camera.aspect; x.cam.updateProjectionMatrix(); x.cam.updateMatrixWorld(true); x.helper.update();
+    x.label.position.set(v.px, v.py + 0.12, v.pz);
+  }
+}
+// the other camera whose outline (or name) is under the pointer, within a finger's reach; the nearest wins
+function otherCamAt(e) {
+  if (!wantFrustum() || !OTHERS.size) return null;
+  const r = canvas.getBoundingClientRect(), reach = e.pointerType === 'touch' ? 28 : 18, px = e.clientX - r.left, py = e.clientY - r.top;
+  const scr = (w) => { const p = w.clone().project(viewCam); return p.z > 1 ? null : [(p.x + 1) / 2 * r.width, (1 - p.y) / 2 * r.height]; };
+  const seg = (a, b) => {
+    if (!a || !b) return Infinity;
+    const dx = b[0] - a[0], dy = b[1] - a[1], t = Math.max(0, Math.min(1, ((px - a[0]) * dx + (py - a[1]) * dy) / (dx * dx + dy * dy || 1)));
+    return Math.hypot(a[0] + dx * t - px, a[1] + dy * t - py);
+  };
+  let best = null;
+  for (const [c, x] of OTHERS) {
+    const apex = scr(x.cam.position), far = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => scr(new THREE.Vector3(u, v, 1).unproject(x.cam)));
+    let d = Math.min(...far.map((p) => seg(apex, p)), ...far.map((p, i) => seg(p, far[(i + 1) % 4])));
+    const lb = scr(x.label.position);   // (the name's box, up and to the right of its corner)
+    if (lb && px >= lb[0] - 4 && py <= lb[1] + 4 && py >= lb[1] - 30 && px <= lb[0] + 160) d = Math.min(d, 0);
+    if (d < reach && (!best || d < best.d)) best = { c, d };
+  }
+  return best?.c || null;
+}
