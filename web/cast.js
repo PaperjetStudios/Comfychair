@@ -108,13 +108,17 @@ export function dialogueLines(text, list) {
 export const VIEWS = [['front', 'Front'], ['three', 'Three-quarter'], ['side', 'Side'], ['back', 'Back'], ['face', 'Face']];
 export const VIEW_KEYS = VIEWS.map(([k]) => k);
 export const viewLabel = (k) => VIEWS.find(([v]) => v === k)?.[1] || (k === 'sheet' ? 'Sheet' : k === 'main' ? 'Main picture' : k);
-// what Make the views asks deck-krea2-identity for, and at what size (portrait for the body, square for the face)
+// what Make the views asks deck-krea2-identity for, and at what size (portrait for the body, square for the face).
+// Tested on the robot character 2026-10-28: at 832×1216 the three-quarter and side views often came back as two
+// figures side by side; 704×1280 with "alone in the centre" gave one every time. A back view keeps the jacket's back
+// but the identity LoRA may still turn the head (face) to the camera: redo it, or pick a picture.
 const STUDIO = 'Plain light grey studio background, soft even light. Same outfit, same colours.';
+const ALONE = 'Full body, head to toe, the character alone in the centre of the frame,';
 export const VIEW_PROMPTS = {
-  front: ['Full body, head to toe, the character stands facing the camera, seen straight from the front, arms relaxed at the sides.', 832, 1216],
-  three: ['Full body, head to toe, the character stands turned three-quarters to the side, seen from a three-quarter front angle.', 832, 1216],
-  side: ['Full body, head to toe, the character stands in profile, seen exactly from the side, facing left.', 832, 1216],
-  back: ['Full body, head to toe, the character stands with their back to the camera, seen from behind.', 832, 1216],
+  front: [`${ALONE} facing the camera, seen straight from the front, arms relaxed at the sides.`, 704, 1280],
+  three: [`${ALONE} turned 45 degrees to the left: a three-quarter view.`, 704, 1280],
+  side: [`${ALONE} standing in profile, seen exactly from the side, facing left.`, 704, 1280],
+  back: [`${ALONE} rear view: turned 180 degrees, facing away from the camera, so we see only the back of the head and the back of the outfit.`, 704, 1280],
   face: ['Close-up portrait of the character\'s face, head and shoulders, looking straight at the camera.', 1024, 1024],
 };
 export const viewPrompt = (k) => `${VIEW_PROMPTS[k][0]} ${STUDIO}`;
