@@ -10,7 +10,7 @@ import {
 } from './scene-data.js';
 import { FIG_TABS, adjustTab, faceTab, handsTab, jointsTab, movesTab, partsTab, posesTab, promptProps } from './scene-pose.js';
 import {
-  HAND, addObject, camGizmo, cameraFromView, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, pose, rebuildRoom, refresh,
+  HAND, addObject, camGizmo, cameraFromView, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, makeSplatHere, pose, rebuildRoom, refresh,
   removeLayer, removeSelected, select, selectJoint, setFree, setMode, syncMeshes, viewer
 } from './scene-view.js';
 import { busy, cancelRender, letGo, play, renderDepthVideo, renderPoseVideo, saveFrame, seek, stopPlay } from './scene-export.js';
@@ -309,7 +309,10 @@ function openAdd() {
       SC.room ? null : chip('⌂ Room', () => addObject(ROOM)),
       chip('🖼 Photo in 3D…', () => {
         closeSheet(); C.openImagePicker({ title: 'Picture to turn into 3D', onPick: (name) => makePhoto(name) });
-      }, 'Turn a picture into a 3D mesh (MoGe in ComfyUI) for camera moves')));
+      }, 'Turn a picture into a 3D mesh (MoGe in ComfyUI) for camera moves'),
+      chip('Photo as a splat…', () => {
+        closeSheet(); C.openImagePicker({ title: 'Picture to turn into a splat', onPick: (name) => makeSplatHere(name) });
+      }, 'Turn a picture into Gaussian splats (Apple SHARP): softer and more lifelike than the mesh, for small camera moves')));
 }
 
 // ---- history, modes -----------------------------------------------------------------------

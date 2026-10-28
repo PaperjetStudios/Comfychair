@@ -109,7 +109,10 @@ LOADERS.splat = (o, group, x = {}) => {
       const f = o.flip ? -1 : 1, [x0, y0, z0, x1, y1, z1] = box;
       const lo = [x0, f > 0 ? y0 : -y1, f > 0 ? z0 : -z1], hi = [x1, f > 0 ? y1 : -y0, f > 0 ? z1 : -z0];
       holder.rotation.x = o.flip ? Math.PI : 0;
-      holder.position.set(-(lo[0] + hi[0]) / 2, -lo[1], -(lo[2] + hi[2]) / 2);
+      // a photo's splat (o.cam) keeps the photo's camera at the object's origin, looking down -Z: placing the
+      // object places that camera, as with a photo mesh
+      if (o.cam) holder.position.set(0, 0, 0);
+      else holder.position.set(-(lo[0] + hi[0]) / 2, -lo[1], -(lo[2] + hi[2]) / 2);
       proxy.scale.set(Math.max(0.01, hi[0] - lo[0]), Math.max(0.01, hi[1] - lo[1]), Math.max(0.01, hi[2] - lo[2]));
       proxy.position.set(0, proxy.scale.y / 2, 0);
     };
@@ -253,6 +256,26 @@ function itemSection(o) {
     o.type === 'splat' ? toggle('Upside down (turn it over: many splat files are y-down)', o.flip, (on) => { set('flip', on); R.meshes.get(o.id)?.userData.splat?.fit(); draw(); }) : null,
     button('Back to fitted size', () => { const f = o.fit || 1; write(o, namesFor(o), { sx: f, sy: f, sz: f }); changed(); }),
     o.type === 'splat' ? help('Splats can\'t be drawn as depth: renders (and the ◐ Depth view) use a box the size of the splat in its place.') : null);
+}
+
+// ---- a picture as a splat (SHARP, POST /api/scene/splat): where the shot camera is, seen through the photo's lens ----
+export async function makeSplat(name, { lookThrough, camera, busyBar }) {
+  const bar = busyBar('Making a splat from the picture…');
+  try {
+    const { waitJob } = await import('./clipimport.js');
+    const r = await waitJob(await api('/api/scene/splat', { method: 'POST', body: { image: name, project_id: C.S.project }, busy: false }));
+    const d = THREE.MathUtils.radToDeg, c = camera;
+    const o = newObject('splat', { x: c.position.x, y: c.position.y, z: c.position.z, rx: d(c.rotation.x), ry: d(c.rotation.y), rz: d(c.rotation.z) });
+    Object.assign(o, { name: `Splat of ${name.split('/').pop().replace(/\.\w+$/, '')}`.slice(0, 60), url: r.url, file: r.name, ext: 'ply',
+      flip: true, cam: true, image: name, fov: r.lens?.fov || 50 });
+    const mesh = await loadSplat(o);
+    o.box = splatBox(mesh).map((v) => +v.toFixed(3));
+    o.dist = +Math.max(0.3, (o.box[2] + o.box[5]) / 2).toFixed(3);   // (its middle, straight ahead of the photo's camera)
+    loaded.set(o.id, mesh);
+    SC.objects.push(o); save(); select(o.id);
+    lookThrough(o);
+    toast('Splat added: small camera moves look best (nothing is behind what the picture shows)');
+  } catch (e) { toast(e.message, true); } finally { bar.done(); }
 }
 
 export function registerImport({ newTab }) {

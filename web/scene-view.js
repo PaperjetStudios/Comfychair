@@ -356,6 +356,13 @@ export async function addPhoto(g) {
   toast('Photo added: small camera moves look best (nothing is behind what the picture shows)');
 }
 
+// picture in, SHARP on the server, splat into the scene at the shot camera (scene-import.js makeSplat)
+export async function makeSplatHere(name) {
+  await hooks.ready();
+  if (modeOf().stage === 'empty') setSceneMode('edit');
+  return (await import('./scene-import.js')).makeSplat(name, { lookThrough, camera, busyBar });
+}
+
 // picture in, MoGe in ComfyUI, mesh into the scene
 export async function makePhoto(name) {
   const bar = busyBar('Making 3D from the picture…');
