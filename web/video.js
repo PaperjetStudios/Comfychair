@@ -1,6 +1,6 @@
 import {
   $, h, store, uid, api, toast, undoToast, clamp, openSheet, closeSheet, button, iconBtn, linkBtn, actions, fileButton, seg,
-  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, panelTop, toggle, textArea, pctFmt, colorField, sizeSelect,
+  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, panelTop, toggle, textArea, pctFmt, colorField, sizeSelect, canvasFont,
 } from './ui.js';
 import { S, fmtT, inputUrl, thumbUrl } from './core.js';
 import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, soundToSoundTab, uploadImage, uploadMedia } from './media.js';
@@ -372,7 +372,7 @@ function drawGizmo() {
   if (!it || !isVisual(it) || V.playing) return;
   if (!inRange(it)) {
     ctx.fillStyle = '#000a'; ctx.fillRect(v.ox, v.oy + v.H * v.k - 26, 260, 22);
-    ctx.fillStyle = '#fff'; ctx.font = '12px sans-serif'; ctx.fillText('Move the playhead over the clip for handles', v.ox + 6, v.oy + v.H * v.k - 11);
+    ctx.fillStyle = '#fff'; ctx.font = canvasFont(12); ctx.fillText('Move the playhead over the clip for handles', v.ox + 6, v.oy + v.H * v.k - 11);
     return;
   }
   const g = geom(it);

@@ -28,6 +28,9 @@ export const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private mode etc. */ } },
 };
 
+// a canvas font in the app's typeface (app.css --font)
+let FONT = null;
+export const canvasFont = (px) => `${px}px ${(FONT ||= getComputedStyle(document.documentElement).getPropertyValue('--font').trim() || 'monospace')}`;
 export const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 export const clamp01 = (v) => clamp(v, 0, 1);
 export const uid = () => Math.random().toString(36).slice(2, 10);

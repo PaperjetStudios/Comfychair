@@ -1,6 +1,6 @@
 import * as FIGURE from './figure.js';
 import { maximizable } from './layout.js';
-import { $, button, h, info as infoBtn, numSlider, sheetOpen, store, toast, toggle } from './ui.js';
+import { $, button, h, info as infoBtn, numSlider, sheetOpen, store, toast, toggle, canvasFont } from './ui.js';
 import {
   CAM, FPS, HOLD, OBJ, R, ROOM, SC, TEMP, TYPES, WP, addKey, bakeBase, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setKey, setMute
 } from './scene-data.js';
@@ -229,7 +229,7 @@ function drawGraph(plot, L, rg, n) {
   c.scale(dpr, dpr);
   const col = (v, d) => cs.getPropertyValue(v).trim() || d;
   const X = (f) => PAD + (w - 2 * PAD) * (f - V.a) / (V.b - V.a), Y = (v) => GP + (hh - 2 * GP) * (rg.hi - v) / (rg.hi - rg.lo);
-  c.font = '10px ui-monospace, monospace'; c.textBaseline = 'bottom';
+  c.font = canvasFont(10); c.textBaseline = 'bottom';
   // horizontal guides at round values
   const raw = (rg.hi - rg.lo) / 4, mag = 10 ** Math.floor(Math.log10(raw)), st = [1, 2, 5, 10].map((m) => m * mag).find((s) => s >= raw);
   for (let v = Math.ceil(rg.lo / st) * st; v <= rg.hi; v += st) {

@@ -3,7 +3,7 @@
 // (track-math.js). Opened from a clip in the Video tab or a video in History. The result is kept as a
 // document of kind `tracks` (one per clip), so opening the sheet again doesn't track again.
 import {
-  $, api, actions, button, field, h, help, hint, note, openSheet, closeSheet, rangeField, seg, toast, toggle,
+  $, api, actions, button, field, h, help, hint, note, openSheet, closeSheet, rangeField, seg, toast, toggle, canvasFont,
 } from './ui.js';
 import { fmtTime } from './playback.js';
 import { S, fmtT, switchTab } from './core.js';
@@ -53,7 +53,7 @@ export async function openTrack(opts) {
       if (!b) return;
       g.strokeStyle = col; g.fillStyle = col + '33'; g.lineWidth = 2; g.setLineDash([6, 4]);
       g.fillRect(b[0] * w, b[1] * hh, (b[2] - b[0]) * w, (b[3] - b[1]) * hh); g.strokeRect(b[0] * w, b[1] * hh, (b[2] - b[0]) * w, (b[3] - b[1]) * hh);
-      g.setLineDash([]); g.fillStyle = col; g.font = '12px sans-serif'; g.fillText(label, b[0] * w + 4, b[1] * hh + 14);
+      g.setLineDash([]); g.fillStyle = col; g.font = canvasFont(12); g.fillText(label, b[0] * w + 4, b[1] * hh + 14);
     };
     box(T.region, '#4cc38a', 'track here'); box(T.exclude, '#ff6b6b', 'ignore');
     if (T.drag) box(T.drag, T.mode === 'region' ? '#4cc38a' : '#ff6b6b', '');

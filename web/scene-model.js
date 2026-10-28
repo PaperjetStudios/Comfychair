@@ -6,7 +6,7 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as MG from './model-geom.js';
 import {
-  $, actions, api, button, closeSheet, field, h, hint, iconBtn, openSheet, section, seg, toast, uid, undoToast, help, numSlider, colorField, chip,
+  $, actions, api, button, closeSheet, field, h, hint, iconBtn, openSheet, section, seg, toast, uid, undoToast, help, numSlider, colorField, chip, canvasFont,
 } from './ui.js';
 import { R, SC, TYPES, makers, newObject, save } from './scene-data.js';
 import { modeOf, registerMode } from './scene-modes.js';
@@ -379,7 +379,7 @@ function drawProfile() {
     if (s) c.arc(px, py, 11, 0, Math.PI * 2); else c.rect(px - 10, py - 10, 20, 20);   // round: smooth, square: a corner
     c.fill(); c.stroke();
   });
-  c.fillStyle = 'rgba(255,255,255,.5)'; c.font = '20px sans-serif';
+  c.fillStyle = 'rgba(255,255,255,.5)'; c.font = canvasFont(20);
   c.fillText('axis', ax + 8, 22); c.fillText('1 m', toPx(1, 0)[0] - 36, PV.h - 8);
 }
 function profileEditor() {

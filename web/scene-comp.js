@@ -3,7 +3,7 @@
 // and only names the scene: the scene itself is read from the store, so an edit in the 3D tab reaches every
 // video tab using it (and other devices, through the store's websocket events). Drawing is scene-offscreen.js,
 // loaded the first time a scene clip needs it. Light on purpose: video.js (loaded with the app) imports this.
-import { api } from './ui.js';
+import { api, canvasFont } from './ui.js';
 import { S, onProject, onServer } from './core.js';
 
 const KIND = 'scene-tabs';
@@ -123,7 +123,7 @@ function notice(c, w, h, state) {
   cv.width = w; cv.height = h;
   const ctx = cv.getContext('2d');
   ctx.fillStyle = state === 'loading' ? '#20242c' : '#3a1f22'; ctx.fillRect(0, 0, w, h);
-  ctx.fillStyle = '#e9d6d6'; ctx.font = `${Math.round(Math.max(14, w / 22))}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#e9d6d6'; ctx.font = canvasFont(Math.round(Math.max(14, w / 22))); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(NOTICE[state] || state, w / 2, h / 2);
   c.key = key;
   return cv;
