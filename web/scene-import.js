@@ -7,7 +7,7 @@
 // folder (POST /api/scene/asset); the layer only holds its URL.
 import * as THREE from './vendor/three.module.min.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
-import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle } from './ui.js';
+import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip } from './ui.js';
 import { C, R, SC, newObject, namesFor, save, selItem, write } from './scene-data.js';
 import { addModeSection } from './scene-modes.js';
 import { LOADERS, controls, changed, draw, passHooks, renderer, scene, select } from './scene-view.js';
@@ -204,10 +204,9 @@ const tplUrl = (id = '', tail = '') => `/api/store/scenes${id ? `/${id}` : ''}${
 
 async function openTemplates() {
   const mine = h('div', { class: 'chips' }, hint('Loading…'));
-  const chip = (label, fn, title) => h('button', { type: 'button', class: 'chip', title, onclick: fn }, label);
   openSheet(h('h3', {}, 'New scene from a template'),
     help('Opens a new 3D tab. Your current scene is not changed.'),
-    h('div', { class: 'chips' }, ...LIBRARY.map((t) => chip(t.name, () => start(t.name, t.build()), t.hint))),
+    h('div', { class: 'chips' }, ...LIBRARY.map((t) => chip(t.name, () => start(t.name, t.build()), { title: t.hint }))),
     h('h3', {}, 'Your templates'), mine,
     actions(button('Save this scene as a template…', saveAsTemplate)));
   try {

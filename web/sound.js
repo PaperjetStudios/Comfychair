@@ -1,6 +1,6 @@
 import {
   $, h, store, uid, api, toast, undoToast, clamp, button, iconBtn, linkBtn, seg, field, section, hint, help, info, note,
-  placeholder, fileButton, rangeField, insertAtCursor, panFmt, pctFmt, toggle, textArea,
+  placeholder, fileButton, rangeField, insertAtCursor, panFmt, pctFmt, toggle, textArea, chip,
 } from './ui.js';
 import { DELIVERY, INLINE_TAGS, parseScript, withDelivery, withName } from './dialogue.js';
 import { S, onServer } from './core.js';
@@ -527,7 +527,7 @@ function scriptChips(ta) {
   ta._chipGroups = groups;
   return h('div', { class: 'vx-chips hidden' }, groups().filter(([, items]) => items.length).map(([name, items]) =>
     h('div', { class: 'chips tag-chips vx-chip-row', 'aria-label': name }, h('span', { class: 'vx-chip-lbl' }, name),
-      items.map(([label, { run }]) => h('button', { type: 'button', class: 'chip', onmousedown: (e) => e.preventDefault(), onclick: () => run(ta) }, label)))));
+      items.map(([label, { run }]) => chip(label, () => run(ta), { keepFocus: true })))));
 }
 
 // the selected clip's part on the timeline as the source of a new voice, in the Voice section's form

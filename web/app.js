@@ -4,7 +4,7 @@
 // the pickers and core.js the shared state. The 3D tab (scene.js) loads on demand.
 
 import {
-  $, h, store, api, toast, overlayOpened, overlayClosed, openSheet, closeSheet, button, help,
+  $, h, store, api, toast, overlayOpened, overlayClosed, openSheet, closeSheet, button, help, chip as uiChip,
 } from './ui.js';
 import { S, loadProjects, setSwitchTab, setOpenProject, emitProject, onServer } from './core.js';
 import { generate, loadTemplates, selectTemplate, stop, wireTemplateFilter, wireZoom } from './generate.js';
@@ -364,9 +364,8 @@ function wireTextPopup() {
     // the prompt's tag chips (<Picture 1>, <Subject 1>…) move in here; on touch screens the panel hides them
     const list = [...(t.closest('.prompt-field')?.querySelectorAll('.tag-chips .chip') || [])].map((c) => c.textContent);
     // a chip's text is a phrase for insertPhrase, or { run(ta) } that edits the text itself (the Sound tab's script)
-    const chip = (label, text = label) => h('button', { type: 'button', class: 'chip',
-      title: typeof text === 'string' ? text.replace(/[§¶↵]/g, '') : label,
-      onmousedown: keepFocus, onclick: () => { snap(); lastTyped = -Infinity; if (text?.run) text.run(ta); else insertPhrase(ta, text); } }, label);
+    const chip = (label, text = label) => uiChip(label, () => { snap(); lastTyped = -Infinity; if (text?.run) text.run(ta); else insertPhrase(ta, text); },
+      { title: typeof text === 'string' ? text.replace(/[§¶↵]/g, '') : label, keepFocus: true });
     // a box can bring its own chip groups: t._chipGroups() → [[name, [[label, text]], open by default]]
     const phrases = t._chipGroups ? t._chipGroups().filter(([, items]) => items.length)
       : S.tpl?.tag_style === 'h3' && t.closest('.prompt-field') ? H3_PHRASES : [];

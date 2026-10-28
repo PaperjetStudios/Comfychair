@@ -2,7 +2,7 @@ import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import {
   $, actions, button, clamp, clone, closeSheet, field, h, iconBtn, layerRowsEl, numField, openSheet, panelTop, rangeField,
-  section, seg, sheetOpen, store, uid, undoToast, help, toggle, sizeSelect,
+  section, seg, sheetOpen, store, uid, undoToast, help, toggle, sizeSelect, chip,
 } from './ui.js';
 import {
   C, CAM, EVEN, FPS, HIST, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropHolds, dropKeys, holdStart, frames, framesFor, hasKeys, hooks, keyCount, keyTarget,
@@ -284,7 +284,6 @@ function renderProps() {
 }
 
 function openAdd() {
-  const chip = (label, fn, title) => h('button', { type: 'button', class: 'chip', title, onclick: fn }, label);
   openSheet(h('h3', {}, 'Add to the scene'),
     h('div', { class: 'chips' }, ...Object.entries(TYPES).filter(([t, d]) => !['photo', 'model', 'splat'].includes(t) && !d.hide).flatMap(([t, d]) => (t === 'figure'
       ? FIGURE.BODIES.map(([b, l]) => chip(`${d.icon} ${d.label} (${l.toLowerCase()})`, () => addObject(t, { body: b })))

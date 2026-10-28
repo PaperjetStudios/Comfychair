@@ -6,7 +6,7 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as MG from './model-geom.js';
 import {
-  $, actions, api, button, closeSheet, field, h, hint, iconBtn, openSheet, section, seg, toast, uid, undoToast, help, numSlider, colorField,
+  $, actions, api, button, closeSheet, field, h, hint, iconBtn, openSheet, section, seg, toast, uid, undoToast, help, numSlider, colorField, chip,
 } from './ui.js';
 import { R, SC, TYPES, makers, newObject, save } from './scene-data.js';
 import { modeOf, registerMode } from './scene-modes.js';
@@ -325,7 +325,6 @@ function wire() {
 }
 
 // ---- panel pieces ----
-const chip = (label, fn, on = false, title) => h('button', { type: 'button', class: 'chip' + (on ? ' on' : ''), title, onclick: fn }, label);
 const ROOT = h('div', { class: 'mdl' });
 const amounts = [];   // the number + slider pairs on show (updated while dragging the handle)
 function syncAmounts() { for (const f of amounts) f(); }
@@ -442,7 +441,7 @@ function lathePanel() {
     section('Spin', null,
       amount('Segments around', () => d.segments, (v) => liveEdit(() => { d.segments = Math.round(v); }), { min: 3, max: 64, step: 1, digits: 0, done: endLive }),
       amount('Sweep (°)', () => d.sweep, (v) => liveEdit(() => { d.sweep = Math.round(v); }), { min: 30, max: 360, step: 5, digits: 0, done: endLive }),
-      h('div', { class: 'chips' }, [90, 180, 270, 360].map((a) => chip(`${a}°`, () => { edit(() => { d.sweep = a; }); renderCreate(); rebuildView(); }, d.sweep === a))),
+      h('div', { class: 'chips' }, [90, 180, 270, 360].map((a) => chip(`${a}°`, () => { edit(() => { d.sweep = a; }); renderCreate(); rebuildView(); }, { on: d.sweep === a }))),
       modelColor())];
 }
 
@@ -462,7 +461,7 @@ function meshPanel() {
     section('Faces', null,
       seg(tools, ED.tool, (v) => { ED.tool = v; renderCreate(); rebuildView(); }),
       h('div', { class: 'row wrap' },
-        chip(ED.multi ? '☑ Adding to the selection' : '☐ Add to selection', () => { ED.multi = !ED.multi; renderCreate(); }, ED.multi, 'Each tap adds or removes a face'),
+        chip(ED.multi ? '☑ Adding to the selection' : '☐ Add to selection', () => { ED.multi = !ED.multi; renderCreate(); }, { on: ED.multi, title: 'Each tap adds or removes a face' }),
         button('All', () => { ED.sel = m.f.map((_, i) => i); renderCreate(); rebuildView(); }),
         button('None', () => { ED.sel = []; renderCreate(); rebuildView(); }),
         button('Invert', () => { const s = new Set(ED.sel); ED.sel = m.f.map((_, i) => i).filter((i) => !s.has(i)); renderCreate(); rebuildView(); })),
@@ -527,8 +526,8 @@ function libraryPanel() {
     section('Create object', null,
       help('Simple shapes: spin an outline into a vase or a bottle, or start from a box and pull faces out. Saved objects can go in any scene.'),
       h('div', { class: 'chips mdl-new' },
-        chip('🏺 Lathe', () => begin(MG.vase(), 'Vase'), false, 'Draw an outline and spin it'),
-        ...Object.entries(PRIMS).map(([k, p]) => chip(`${p.icon} ${p.label}`, () => paramSheet(k), false, `Start from a ${p.label.toLowerCase()}`)))),
+        chip('🏺 Lathe', () => begin(MG.vase(), 'Vase'), { title: 'Draw an outline and spin it' }),
+        ...Object.entries(PRIMS).map(([k, p]) => chip(`${p.icon} ${p.label}`, () => paramSheet(k), { title: `Start from a ${p.label.toLowerCase()}` })))),
     group('This project', 'project', 'Nothing saved in this project yet.'),
     group('All projects', 'global', 'Nothing shared yet: save with "All projects" to use an object everywhere.')];
 }

@@ -330,6 +330,20 @@ export function seg(options, cur, onPick, { wrap = false, action = false, disabl
   return el;
 }
 
+// A chip: a small rounded button for a tag, a preset or a quick add. on: shown picked (an on/off chip says so to
+// screen readers); keepFocus: tapping it leaves the cursor in the text box it adds to.
+export const chip = (label, onclick, { on = null, title = null, cls = '', keepFocus = false } = {}) =>
+  h('button', { type: 'button', class: `chip${on ? ' on' : ''}${cls ? ` ${cls}` : ''}`, title, onclick,
+    'aria-pressed': on == null ? null : String(!!on), onmousedown: keepFocus ? (e) => e.preventDefault() : null }, label);
+// One of options ([v, label]) picked, as a row of chips: seg's look for a list that wraps (folders, categories)
+export function chips(options, cur, onPick, { cls = '' } = {}) {
+  const el = h('div', { class: `chips${cls ? ` ${cls}` : ''}` });
+  el.set = (v) => { for (const b of el.children) b.classList.toggle('on', b.dataset.v === String(v)); };
+  el.append(...options.map(([v, label]) => { const b = chip(label, () => { el.set(v); onPick(v); }); b.dataset.v = String(v); return b; }));
+  el.set(cur);
+  return el;
+}
+
 // Explanations live behind an ⓘ, never inline. info(text) is the button: hover it with a pen or
 // mouse, or tap it, for a popover (one at a time; tap outside or Esc closes it).
 let pop = null, popBtn = null, popPinned = false;

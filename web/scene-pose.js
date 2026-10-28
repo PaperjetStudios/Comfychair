@@ -1,7 +1,7 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import { C, FIG, FPS, OBJ, R, SC, TEMP, addKey, current, dropKeys, frames, isPoseCh, keyFrames, newObject, putKeys, sameTab, sample, save, write } from './scene-data.js';
-import { button, clone, field, h, hint, iconBtn, nameSheet, section, seg, store, toast, uid, undoToast , help, toggle } from './ui.js';
+import { button, clone, field, h, hint, iconBtn, nameSheet, section, seg, store, toast, uid, undoToast , help, toggle, chips, chip } from './ui.js';
 import { HAND, changed, handMode, selectJoint } from './scene-view.js';
 import { renderPanel, slider } from './scene-ui.js';
 import { seek } from './scene-export.js';
@@ -97,8 +97,7 @@ export function posesTab(o, cur) {
     tiles = FIGURE.presetList(cat).map(([k, l]) => tile(l, thumb(k, [{ j: FIGURE.preset(k).j }]), () => takePose(o, FIGURE.preset(k).j, { name: k })));
   }
   return [
-    h('div', { class: 'cat-row' }, cats.map(([k, l]) => h('button', { type: 'button', class: 'chip' + (k === cat ? ' on' : ''),
-      onclick: () => { R.poseCat = k; store.set('deck.scene.posecat', k); renderPanel(); } }, l))),
+    chips(cats, cat, (k) => { R.poseCat = k; store.set('deck.scene.posecat', k); renderPanel(); }, { cls: 'cat-row' }),
     cat === 'pairs' ? help('Poses this figure and the nearest other posable person together (adds one if there is none).')
       : field('Apply to', seg([['all', 'Whole body'], ['upper', 'Upper'], ['lower', 'Lower']], R.mask, (v) => { R.mask = v; })),
     h('div', { class: 'pose-grid' }, tiles),
@@ -124,12 +123,11 @@ export function adjustTab(o, cur) {
       const on = keys.filter(([k]) => cur().m?.[k]);
       return field(g,
         g === 'Cycle' ? help('A walk or run in place: move the figure with keys and its steps follow, or set the step by hand.') : null,
-        h('div', { class: 'chips' }, keys.map(([k, p]) => h('button', { type: 'button', class: 'chip' + (cur().m?.[k] ? ' on' : ''), 'aria-pressed': !!cur().m?.[k],
-          onclick: () => {
-            const m = { ...cur().m };
-            if (m[k]) delete m[k]; else m[k] = p.on;
-            setM(m); changed();
-          } }, p.label))),
+        h('div', { class: 'chips' }, keys.map(([k, p]) => chip(p.label, () => {
+          const m = { ...cur().m };
+          if (m[k]) delete m[k]; else m[k] = p.on;
+          setM(m); changed();
+        }, { on: !!cur().m?.[k] }))),
         on.map(([k, p]) => slider(p.label, () => cur().m?.[k] || 0, (v) => setM({ ...cur().m, [k]: v || 0.001 }),
           { min: p.min, max: p.max, step: 1, fmt: (v) => `${Math.round(v)}${p.unit || '°'}` })),
         g === 'Cycle' && on.length ? [
@@ -293,17 +291,16 @@ const ALL_PARTS = Object.keys(FIGURE.JOINTS);
 export function partsTab(o) {
   const off = () => new Set(o.hide || []);
   const put = (set) => { if (set.size) o.hide = ALL_PARTS.filter((p) => set.has(p)); else delete o.hide; changed(); };
-  const toggle = (ids) => { const s = off(), all = ids.every((p) => s.has(p)); for (const p of ids) { if (all) s.delete(p); else s.add(p); } put(s); };
+  const flip = (ids) => { const s = off(), all = ids.every((p) => s.has(p)); for (const p of ids) { if (all) s.delete(p); else s.add(p); } put(s); };
   const s = off();
   const map = h('div', { class: 'body-map' },
     h('span', { class: 'side', style: 'grid-area:1/1' }, 'Right'), h('span', { class: 'side', style: 'grid-area:1/5' }, 'Left'),
     BODY.map(([k, r, c, l]) => h('button', { type: 'button', class: 'part' + (s.has(k) ? ' gone' : ' on'), 'aria-pressed': !s.has(k), style: `grid-area:${r}/${c}`,
-      title: `${s.has(k) ? 'Show' : 'Hide'} ${PART_LABEL[k] || l}`, onclick: () => toggle([k]) }, PART_LABEL[k] || l)));
+      title: `${s.has(k) ? 'Show' : 'Hide'} ${PART_LABEL[k] || l}`, onclick: () => flip([k]) }, PART_LABEL[k] || l)));
   const only = (keep) => put(new Set(ALL_PARTS.filter((p) => !keep(p))));
   return [
     map,
-    field('Parts', h('div', { class: 'chips' }, FIGURE.PART_GROUPS.map(([k, l, ids]) => h('button', { type: 'button', class: 'chip' + (ids.every((p) => s.has(p)) ? '' : ' on'),
-      'aria-pressed': !ids.every((p) => s.has(p)), onclick: () => toggle(ids) }, l)))),
+    field('Parts', h('div', { class: 'chips' }, FIGURE.PART_GROUPS.map(([k, l, ids]) => chip(l, () => flip(ids), { on: !ids.every((p) => s.has(p)) })))),
     h('div', { class: 'row wrap' },
       button('Show all', () => put(new Set()), { disabled: !s.size }),
       button('Upper only', () => only((p) => UPPER.has(p)), { title: 'Hide the pelvis, legs and feet' }),

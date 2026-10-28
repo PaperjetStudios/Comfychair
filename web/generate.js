@@ -1,7 +1,7 @@
 import {
   $, h, store, clamp, clamp01, clone, cycleIndex, api, toast, undoToast, openOverlay, openSheet, sheetStillOpen, nameSheet,
   button, iconBtn, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider,
-  insertAtCursor, toggle, textArea, seedField as uiSeedField, imageInput,
+  insertAtCursor, toggle, textArea, seedField as uiSeedField, imageInput, chips, chip,
 } from './ui.js';
 import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
 import { clipLabel, clipUrl, openImagePicker, openVideoPicker, soundInput } from './media.js';
@@ -645,13 +645,12 @@ function promptField(f) {
 
   // tag chips float over whichever box has the cursor
   let lastTA = null;
-  const chipsRow = h('div', { class: 'chips tag-chips' });
+  const chipsRow = h('div', { class: 'chips tag-chips' });   // (rebuilt as the tags change: plain chips, not a choice)
   const drawChips = () => {
     const tags = promptTags().filter((t) => !/^<?Subject \d+>?$/.test(t));
     const n = st.on ? Math.max(1, st.subjects.length) : (S.tpl?.tag_style === 'h3' ? 3 : 0);
     for (let i = 1; i <= n; i++) tags.push(subjectTag(i));
-    chipsRow.replaceChildren(...tags.map((t) => h('button', { type: 'button', class: 'chip', onmousedown: (e) => e.preventDefault(),
-      onclick: () => { if (lastTA) insertAtCursor(lastTA, t); else toast('Tap into a text box first'); } }, t)));
+    chipsRow.replaceChildren(...tags.map((t) => chip(t, () => { if (lastTA) insertAtCursor(lastTA, t); else toast('Tap into a text box first'); }, { keepFocus: true })));
     chipsRow.classList.toggle('hidden', !tags.length);
   };
   const track = (ta) => {
@@ -917,16 +916,15 @@ function loraField(f) {
   const save = (arr) => { setVal(f.key, arr); draw(); };
   const folders = [...new Set(f.options.filter((o) => o.includes('/')).map((o) => o.split('/')[0]))].sort();
   const auto = autoLoraFolder(folders);
-  const chips = h('div', { class: 'chips folder-chips' });
+  const folderChips = h('div');
   const current = () => {
     const mode = S.loraFolder[f.key] ?? 'auto';
     return mode === 'auto' ? auto : mode === 'all' ? null : mode;
   };
   const drawChips = () => {
     const mode = S.loraFolder[f.key] ?? 'auto';
-    chips.replaceChildren(...[['auto', auto ? `Auto · ${auto}` : 'Auto · all'], ['all', 'All'], ...folders.map((d) => [d, d])].map(([k, label]) =>
-      h('button', { type: 'button', class: 'chip' + (mode === k ? ' on' : ''),
-        onclick: () => { S.loraFolder[f.key] = k; persist(); drawChips(); draw(); } }, label)));
+    folderChips.replaceChildren(chips([['auto', auto ? `Auto · ${auto}` : 'Auto · all'], ['all', 'All'], ...folders.map((d) => [d, d])], mode,
+      (k) => { S.loraFolder[f.key] = k; persist(); draw(); }, { cls: 'folder-chips' }));
   };
   const draw = () => {
     const folder = current();
@@ -951,7 +949,7 @@ function loraField(f) {
   };
   drawChips(); draw();
   return field(['LoRA stack', h('span', {}, f.options.length ? `${f.options.length} available` : 'none found')],
-    folders.length ? chips : null,
+    folders.length ? folderChips : null,
     list,
     button('+ Add LoRA', () => save([...rows(), { name: '', strength: 1, enabled: true }]), { cls: 'small add-btn' }));
 }
@@ -1236,8 +1234,7 @@ async function openLoraInfo(name) {
   }
   if (!sheetStillOpen(seq)) return;  // closed, or something else opened, while it was looking
   const textOf = (html) => new DOMParser().parseFromString(html || '', 'text/html').body.textContent.trim();
-  const words = r.trained_words.map((w) => h('button', { type: 'button', class: 'chip', title: 'Add to prompt',
-    onclick: (e) => { addToPrompt(w); e.target.classList.add('added'); } }, w));
+  const words = r.trained_words.map((w) => chip(w, (e) => { addToPrompt(w); e.target.classList.add('added'); }, { title: 'Add to prompt' }));
   openSheet(h('h3', {}, r.name),
     !r.found ? note('Not found on Civitai (the file may be private, renamed from elsewhere, or not uploaded there).') : null,
     h('table', { class: 'params' },
