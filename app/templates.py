@@ -370,6 +370,8 @@ def media_kind(wf: dict) -> str:
 def family(tid: str, wf: dict) -> str:
     parts = tid.lower().replace("_", "-").split("-")
     words = parts[1:] if parts[0] == "deck" else parts
+    if "inpaint" in words and media_kind(wf) == "image":   # every model's inpaint template in one place
+        return "Inpaint"
     for key, label in FAMILIES:
         if words and words[0].startswith(key):
             return label

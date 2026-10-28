@@ -557,7 +557,20 @@ the full picture, so a small area gets the model's whole resolution. The output 
 size. It falls back to the whole picture when the box would be most of it.
 
 A template with a mask input of its own gets the painted mask too: a **LoadImageMask** (read from the red
-channel), or a `@… mask` / `@… inpaint` picture left empty. None of the current templates has one.
+channel), or a `@… mask` / `@… inpaint` picture left empty.
+
+**Inpainting** (the **Inpaint** model filter): `deck-krea2-inpaint` (the default choice) and `deck-qwen21-inpaint`
+make the painted area again from the prompt, instead of editing the whole picture. The picture is encoded, the
+mask (grown 16 px and softened) becomes the latent's noise mask, and Differential Diffusion blends its edge; then
+the result goes back onto the picture through the mask as above. Their picture shows **Paint area…** as its main
+button, and a run without a mask stops with "Paint the area to change first" (the server refuses it too).
+Crop to mask starts on. **Denoise** (tap 0.6 / 0.8 / 0.9 / 1.0, any denoise field has these): 0.9 is the default;
+1.0 starts from pure noise and also redraws the background inside a loose mask, 0.6–0.8 keeps the old shapes and
+colours (a recolour, a change of material). Describe what should be in the area, not an instruction ("a red
+leather jacket", not "make the jacket red"). Krea gives the fills closest to the rest of the picture; Qwen
+takes up to two **References** (Picture 1, 2) to copy a look from. Both are 8-step turbo models (about 10 s at
+1 MP). They come from `dev/make_inpaint_templates.py`. A template counts as inpaint when it has a LoadImageMask
+of its own and saves images (`maskcomp.fields` marks its Mask `required`).
 
 Masks are greyscale PNGs (white = change), saved by `POST /api/inputs/mask` under `data/inputs/mask/` and in
 ComfyUI's `input/comfydeck/mask/`; they stay out of the input pickers. The run's settings hold the mask as

@@ -584,6 +584,8 @@ async def generate(body: dict = Body(...)):
         if i == 0 and not parent:
             parent = lineage(list(fields.values()), resolved)
         flist = list(fields.values())
+        if why := maskcomp.missing(run, flist):   # an inpaint template without its mask
+            raise HTTPException(400, why)
         run = maskcomp.prefill(run, flist, t.workflow)   # a mask input of the template's own takes the painted mask
         wf = editsize.inject(accel.inject(tpl.apply(t.workflow, run), run), run, flist)
         wf = maskcomp.inject(wf, run, flist, await _mask_dims(run, flist))

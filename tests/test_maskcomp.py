@@ -230,5 +230,73 @@ class MaskInputs(unittest.TestCase):
         self.assertEqual(wf["2"]["inputs"]["image"], "mine.png")
 
 
+INPAINT = ("deck-krea2-inpaint", "deck-qwen21-inpaint")
+
+
+class Inpaint(unittest.TestCase):
+    """The inpaint templates (dev/make_inpaint_templates.py): the painted mask is the latent's noise mask."""
+    M = {"name": MASK, "feather": 8, "grow": 0, "fit": False, "box": {"x": 0.4, "y": 0.1, "w": 0.2, "h": 0.15}}
+
+    def test_the_mask_is_required_and_crop_to_mask_offered(self):
+        for tid in INPAINT:
+            d = tpl.describe(load(tid), None)
+            self.assertEqual(d["family"], "Inpaint", tid)
+            self.assertEqual(d["media"], "image", tid)
+            (mf,) = [f for f in d["fields"] if f["kind"] == "mask"]
+            self.assertEqual(mf["image_key"], "20.image", tid)
+            self.assertTrue(mf["required"] and mf["composite"] and mf["fit"] and mf["takes"], tid)
+            self.assertTrue(any(f["key"] == editsize.WIDTH for f in d["fields"]), tid)   # the edit models' Size
+            self.assertTrue(any(f["input"] == "denoise" for f in d["fields"]), tid)
+            self.assertEqual(maskcomp.missing({"20.image": "a.png"}, d["fields"]), maskcomp.NEEDS_MASK)
+            self.assertEqual(maskcomp.missing({"20.image": "a.png", mf["key"]: {"name": None}}, d["fields"]),
+                             maskcomp.NEEDS_MASK)
+            self.assertIsNone(maskcomp.missing({"20.image": "a.png", mf["key"]: self.M}, d["fields"]))
+
+    def test_other_templates_never_need_a_mask(self):
+        for tid in ("deck-qwen21-edit", "deck-klein3-edit", "deck-krea2-i2i"):
+            fields = tpl.describe(load(tid), None)["fields"]
+            self.assertFalse(any(f.get("required") for f in fields if f["kind"] == "mask"), tid)
+            self.assertIsNone(maskcomp.missing({"20.image": "a.png"}, fields), tid)
+            self.assertNotEqual(tpl.describe(load(tid), None)["family"], "Inpaint")
+        self.assertEqual(tpl.describe(load("deck-ltx-inpaint"), None)["family"], "LTX-2.5")   # a video: by its model
+
+    def test_whole_picture(self):
+        for tid in INPAINT:
+            wf, _ = run(load(tid), {"20.image": "a.png", "20.__mask": self.M, editsize.WIDTH: 1024, editsize.HEIGHT: 768})
+            check_links(self, wf)
+            (lm,) = by_class(wf, "LoadImageMask").values()
+            self.assertEqual(lm["inputs"], {"image": MASK, "channel": "red"})
+            (noise,) = by_class(wf, "SetLatentNoiseMask").values()
+            enc = node(wf, noise["inputs"]["samples"])
+            sized = node(wf, enc["inputs"]["pixels"])   # the picture at the Size, encoded
+            self.assertEqual((sized["class_type"], sized["inputs"]["width"], sized["inputs"]["height"]), ("ImageScale", 1024, 768))
+            (dd,) = by_class(wf, "DifferentialDiffusion").values()
+            (guider,) = by_class(wf, "CFGGuider").values()
+            self.assertIs(node(wf, guider["inputs"]["model"]), dd)
+            (save,) = by_class(wf, "SaveImage").values()
+            self.assertEqual(node(wf, save["inputs"]["images"])["class_type"], "ImageCompositeMasked")
+            self.assertFalse(by_class(wf, "ImageCrop"))
+
+    def test_crop_to_mask_cuts_the_mask_as_the_picture(self):
+        m = {**self.M, "fit": True}
+        for tid in INPAINT:
+            wf, _ = run(load(tid), {"20.image": "a.png", "20.__mask": m, editsize.WIDTH: 1024, editsize.HEIGHT: 1024},
+                        dims=(896, 1536))
+            check_links(self, wf)
+            box = maskcomp.fit_box(m["box"], 896, 1536, 1.0, 8)
+            crops = [n for n in by_class(wf, "ImageCrop").values()
+                     if n["inputs"]["x"] == box["x"] and n["inputs"]["width"] == box["w"]]
+            self.assertTrue(any(n["inputs"]["image"] == ["20", 0] for n in crops), tid)   # the picture
+            # the template's mask (painted smaller than the picture, say): to the picture's size, then the same box
+            (lm_id,) = by_class(wf, "LoadImageMask")
+            users = [k for k, n in wf.items() if n["inputs"].get("mask") == [lm_id, 0]]
+            self.assertEqual(len(users), 1, tid)
+            scale = next(n for n in wf.values() if n["inputs"].get("image") == [users[0], 0])
+            self.assertEqual((scale["class_type"], scale["inputs"]["width"], scale["inputs"]["height"]), ("ImageScale", 896, 1536))
+            self.assertFalse(by_class(wf, "CropMask"))
+            added = {n["class_type"] for n in wf.values() if n.get("_meta", {}).get("title", "").startswith("Mask:")}
+            self.assertLessEqual(added, CORE)
+
+
 if __name__ == "__main__":
     unittest.main()
