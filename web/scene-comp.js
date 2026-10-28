@@ -63,7 +63,7 @@ async function sync() {
       const stage = new Stage(p);
       stage.onChange = () => changed(id, true);
       d.stage?.dispose();
-      Object.assign(d, { state: 'ok', rev: doc.rev, name: doc.name, stage, nat: [stage.w, stage.h], dur: stage.dur });
+      Object.assign(d, { state: 'ok', rev: doc.rev, name: doc.name, stage, payload: p, nat: [stage.w, stage.h], dur: stage.dur });
     } catch (e) { console.error(`3D scene ${id}:`, e); if (!d.stage) d.state = 'error'; }
     changed(id);
   }
@@ -160,8 +160,16 @@ export async function exportClip(it, { W, H, fps, len, progress = () => {} }) {
   if (!d || d.state === 'loading') d = await load(it.src.scene);
   if (!d || d.state === 'missing') throw new Error(`The 3D scene "${it.label}" was deleted`);
   if (d.state !== 'ok') throw new Error(`Can't show the 3D scene "${it.label}"`);
-  const { stage } = d, look = it.src.look || 'color', rev = d.rev;
-  await stage.whenReady();
+  const look = it.src.look || 'color', rev = d.rev;
+  // splats in colour: a stage of its own with their full sets (the preview stage shows this device's lighter level)
+  const own = look === 'color' && (d.payload?.objects || []).some((o) => o.type === 'splat');
+  const stage = own ? new (await import('./scene-offscreen.js')).Stage(d.payload, { full: true }) : d.stage;
+  try {
+    await stage.whenReady(own ? 120000 : 20000);
+    return await drawClip(it, stage, look, rev, d, { W, H, fps, len, progress });
+  } finally { if (own) stage.dispose(); }
+}
+async function drawClip(it, stage, look, rev, d, { W, H, fps, len, progress }) {
   // rendered as big as the preview draws it (and no bigger than twice the frame), so the picture matches
   const base = (it.fit === 'fill' ? Math.max : Math.min)(W / stage.w, H / stage.h) * Math.min(2, Math.max(1, it.scale || 1));
   const w = even(stage.w * base), h = even(stage.h * base), n = Math.max(1, Math.round(len * fps));

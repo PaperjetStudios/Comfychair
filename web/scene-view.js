@@ -12,6 +12,8 @@ import {
 import { letGo } from './scene-export.js';
 import { modeOf } from './scene-modes.js';
 import { renderKeys, renderPanel, renderToolbar, setSceneMode } from './scene-ui.js';
+import { placeAtCamera, sharpOn } from './splat-levels.js';
+import { standShift } from './splat-shape.js';
 
 // ---- geometry ----------------------------------------------------------------
 // A soft, featureless figure turned on a lathe: feet, legs as one column, hips, waist, chest,
@@ -243,8 +245,9 @@ export function fit() {
   if (!vw || !vh) return;
   const a = SC.width / SC.height;
   const w = Math.min(vw, vh * a), hh = w / a;
-  // a splat in view on a touch screen: drawn at 1x (a tablet's 2-3x is 4-9x the work, and splats are soft anyway)
-  const splats = matchMedia('(pointer: coarse)').matches && [...R.meshes.values()].some((m) => m.userData.splat && m.visible);
+  // a splat in view on a touch screen: drawn at 1x (a tablet's 2-3x is 4-9x the work, and splats are soft anyway),
+  // unless the splat panel's Sharp is on
+  const splats = matchMedia('(pointer: coarse)').matches && !sharpOn() && [...R.meshes.values()].some((m) => m.userData.splat && m.visible);
   const dpr = splats ? 1 : Math.min(window.devicePixelRatio || 1, 2);
   canvas.style.width = `${w}px`; canvas.style.height = `${hh}px`;
   canvas.style.left = `${(vw - w) / 2}px`; canvas.style.top = `${(vh - hh) / 2}px`;
@@ -319,8 +322,35 @@ function loadPhoto(o, group) {
     if (R.meshes.get(o.id) !== group) return;
     const s = src.clone();
     s.traverse((c) => { if (c.isMesh) { c.userData.id = o.id; c.userData.photo = true; } });
+    if (o.view) s.position.set(...o.view.pos);   // (centred: the photo's camera is at o.view.pos)
     group.add(s); draw();
   }).catch((e) => toast(`${o.name}: ${e.message}`, true));
+}
+// where a photo's mesh goes to stand centred on the floor at its object's origin (the middle 99% of its points, as a
+// splat's box): the shift, which is also where the photo's camera (the mesh's origin) ends up
+export function photoShift(src) {
+  const p = new THREE.Vector3(), a = [[], [], []];
+  src.updateMatrixWorld(true);
+  src.traverse((c) => {
+    const pos = c.isMesh && c.geometry.attributes.position;
+    if (pos) for (let i = 0; i < pos.count; i += 7) { p.fromBufferAttribute(pos, i).applyMatrix4(c.matrixWorld); a[0].push(p.x); a[1].push(p.y); a[2].push(p.z); }
+  });
+  if (!a[0].length) return [0, 0, 0];
+  const box = [];
+  for (const q of [0.005, 0.995]) for (const v of a) { v.sort((x, y) => x - y); box.push(v[Math.min(v.length - 1, Math.floor(v.length * q))]); }
+  return standShift(box, false);
+}
+// A photo's mesh or splat placed the old way (at the camera) moves to the world's origin, standing centred on the
+// floor and upright, and keeps where its photo was taken (o.view), so Camera to the photo's view still works
+export async function recentre(o) {
+  const pos = o.type === 'photo' ? photoShift(await photoScene(o.url)) : standShift(o.box || [0, 0, 0, 0, 0, 0], o.flip);
+  o.view = { pos };
+  write(o, OBJ.filter((k) => ['x', 'y', 'z', 'rx', 'ry', 'rz'].includes(k)), { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 });
+  R.meshes.get(o.id)?.userData.splat?.fit();
+  const g = R.meshes.get(o.id);
+  if (o.type === 'photo' && g) for (const c of g.children) c.position.set(...pos);
+  lookThrough(o);
+  changed();
 }
 // the photo's vertical field of view and how far its middle is, from the mesh (camera at the origin)
 export function photoLens(src) {
@@ -332,12 +362,13 @@ export function photoLens(src) {
   });
   return { fov: t ? THREE.MathUtils.radToDeg(2 * Math.atan(t)) : 50, dist: Math.max(0.3, -box.getCenter(p).z) };
 }
-// the shot camera where the photo was taken (and with its lens)
+// the shot camera where the photo was taken (and with its lens): the object's origin, or o.view.pos in its space
 export function lookThrough(o) {
-  const v = current(o, OBJ), r = THREE.MathUtils.degToRad;
-  const fwd = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(r(v.rx), r(v.ry), r(v.rz)));
-  const t = fwd.multiplyScalar((o.dist || 3) * v.sy).add(new THREE.Vector3(v.x, v.y, v.z));
-  write(SC.camera, CAM, { px: v.x, py: v.y, pz: v.z, tx: t.x, ty: t.y, tz: t.z, fov: o.fov || 50, roll: 0 });
+  const v = current(o, OBJ), r = THREE.MathUtils.degToRad, rot = new THREE.Euler(r(v.rx), r(v.ry), r(v.rz));
+  const at = new THREE.Vector3(...(o.view?.pos || [0, 0, 0])).multiplyScalar(v.sy).applyEuler(rot).add(new THREE.Vector3(v.x, v.y, v.z));
+  const fwd = new THREE.Vector3(0, 0, -1).applyEuler(rot);
+  const t = fwd.multiplyScalar((o.dist || 3) * v.sy).add(at);
+  write(SC.camera, CAM, { px: at.x, py: at.y, pz: at.z, tx: t.x, ty: t.y, tz: t.z, fov: o.fov || 50, roll: 0 });
 }
 
 
@@ -346,13 +377,15 @@ export async function addPhoto(g) {
   await hooks.ready();
   const out = g.outputs.find((x) => /\.glb$/i.test(x.filename));
   if (!out) return toast('That run has no 3D mesh', true);
-  let lens;
-  try { lens = photoLens(await photoScene(out.url)); } catch (e) { return toast(e.message, true); }
+  let lens, src;
+  try { src = await photoScene(out.url); lens = photoLens(src); } catch (e) { return toast(e.message, true); }
   if (modeOf().stage === 'empty') setSceneMode('edit');   // (a photo belongs to the scene)
-  const d = THREE.MathUtils.radToDeg, c = camera;
-  const o = newObject('photo', { x: c.position.x, y: c.position.y, z: c.position.z,
-    rx: d(c.rotation.x), ry: d(c.rotation.y), rz: d(c.rotation.z) });
+  // centred at the world's origin, standing on the floor (the camera moves to the photo's view), or at the camera
+  const d = THREE.MathUtils.radToDeg, c = camera, here = placeAtCamera();
+  const o = newObject('photo', here ? { x: c.position.x, y: c.position.y, z: c.position.z,
+    rx: d(c.rotation.x), ry: d(c.rotation.y), rz: d(c.rotation.z) } : { x: 0, y: 0, z: 0 });
   Object.assign(o, { url: out.url, gen: g.id, image: g.params.image, fov: +lens.fov.toFixed(2), dist: +lens.dist.toFixed(3) });
+  if (!here) o.view = { pos: photoShift(src) };
   o.name = `Photo #${g.id}`;
   SC.objects.push(o);
   lookThrough(o);

@@ -1503,14 +1503,15 @@ async def motion_from(body: dict = Body(...)):
 @app.post("/api/scene/render")
 async def scene_render(frames: list[UploadFile] = File(...), fps: float = Form(24), blur: float = Form(0),
                        scene: str = Form("{}"), project_id: str = Form(""), kind: str = Form("depth")):
-    """The 3D tab's depth (or pose) frames (PNGs, in order) as a control video in History. The scene
-    goes in the params so the 3D tab can open it again; blur softens the edges so H3 follows less literally."""
+    """The 3D tab's depth or pose frames (PNGs, in order) as a control video in History, or its colour frames (the
+    shot as it looks, splats at their full set) as a plain video. The scene goes in the params so the 3D tab can
+    open it again; blur softens the edges so H3 follows less literally."""
     if not imageprep.ffmpeg_available():
         raise HTTPException(400, "ffmpeg isn't installed (sudo apt install ffmpeg)")
     if not 2 <= len(frames) <= 1000:
         raise HTTPException(400, "A scene needs 2 to 1000 frames")
-    if kind not in ("depth", "pose"):
-        raise HTTPException(400, "kind is depth or pose")
+    if kind not in ("depth", "pose", "color"):
+        raise HTTPException(400, "kind is depth, pose or color")
     try:
         scene_data = json.loads(scene)
     except ValueError:

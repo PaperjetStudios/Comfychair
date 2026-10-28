@@ -74,7 +74,7 @@ export function openUseAs(g, index, { before = null } = {}) {
     ['3D', sceneTargets(g, o, src, label, toInput, go)],
     ['Other templates that take it', otherTemplates(k, src, toInput, go)],
     ['More', [
-      g.template === '3d scene' ? go('Control video for H3', async () => (await run()).useControlVideo(g, g.params.scene || {}), { title: 'Into deck-h3-ctrl2v: its control video, size and length' }) : null,
+      g.template === '3d scene' && g.params?.kind !== 'color' ? go('Control video for H3', async () => (await run()).useControlVideo(g, g.params.scene || {}), { title: 'Into deck-h3-ctrl2v: its control video, size and length' }) : null,
       k === 'video' && /^deck-h3-/.test(g.template) ? go('Upscale (H3)…', async () => (await run()).openH3Upscale(g, index), { title: 'Sample it again bigger, with this run\'s own prompt, LoRAs and references' }) : null,
       k === 'image' || k === 'video' ? go(k === 'image' ? 'Open in PhotoCraft' : 'Open in EffectCraft',
         async () => (await import('./craft.js')).sendToCraft('generation', src), { title: 'With what it was made from as a hidden layer underneath, to keep editing on the computer' }) : null,
