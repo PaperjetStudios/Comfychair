@@ -620,6 +620,19 @@ ComfyUI's `input/comfydeck/mask/`; they stay out of the input pickers. The run's
 
 ---
 
+## The work area (every timeline)
+
+Every timeline has a thin teal strip along the top of its ruler: the 3D key sheet (and its graph), Video, Sound and
+the Editor's animation bar. Drag along it to mark a range, drag its ends or slide it, double-tap it (or Alt+X) to
+clear it; I / O set the in / out point at the playhead (Alt+I / Alt+O in the Editor, where I and O pick paint tools).
+Ends snap to frames, and to keys or clip edges where that timeline snaps; Alt while dragging snaps to frames only.
+
+While it's on, the playhead stays in it: play loops inside it (or stops at its out point with Loop off), stepping and
+scrubbing stop at its ends, and ⇤ / End go to them. **Range** in the transport switches that off without losing it.
+It's saved with the tab (3D scene, video edit, mix, Editor animation). Renders and exports (3D depth and pose,
+Export video, Export sound, Export clip) do only the range while **Range only** is on, which it is by default once
+there's a range. The maths is `web/workarea-math.js`, tested by `tests/workarea.test.mjs`.
+
 ## Story
 
 The **Story** tab (first in Make) is a storyboard: a place to write a story down and sort it out before making it. Each
@@ -846,6 +859,7 @@ web/ui.js          shared UI kit: h(), api(), toasts, sheets, overlays and the w
 web/app.js         Generate, Editor, Video, Board, History; web/scene.js the 3D tab (loaded on demand)
 web/paint.js       the Editor's painting (brushes, shapes, fill, selections, undo); web/icons.js line icons
 web/sound.js       the Sound tab; web/compare.js the Board's compare view
+web/workarea.js    the work area every timeline shares (web/workarea-math.js: its pure maths)
 web/story.js       the Story tab (storyboard: scenes, shots, frames)
 web/app.css        styles; colours, radii and shadows come from the tokens at the top
 templates/         your workflow templates

@@ -9,6 +9,8 @@ import { useInGenerate } from './editor.js';
 import { TabSet } from './tabs.js';
 import { clipKeys, clipSoundFields, durationOf, timeline, wavePeaks } from './timeline.js';
 import { fmtTime, playKeys, transport } from './playback.js';
+import { workArea } from './workarea.js';
+import { cutItems, playFrom, tickT } from './workarea-math.js';
 import { refreshKeyed } from './keyed.js';
 import * as COMP from './scene-comp.js';
 import { fullScreen } from './layout.js';
@@ -27,7 +29,7 @@ const HEAD_W = 84;    // track header column (px)
 const LANE_H = 52;
 const MIN_LEN = 0.1;
 const V = {
-  tracks: [], items: [], size: null, fps: 0, pps: store.get('deck.video.pps', 40),   // pps: timeline zoom, pixels per second (this device only)
+  tracks: [], items: [], size: null, fps: 0, range: null, pps: store.get('deck.video.pps', 40),   // pps: timeline zoom, pixels per second (this device only)
   t: 0, playing: false, clock: 0, loop: store.get('deck.video.loop', false), sel: null,
   els: new Map(), posters: new Map(), waves: new Map(),
 };
@@ -62,7 +64,8 @@ function legacyTimeline() {
 }
 
 // ---- tabs: each video edit is a document in the project folder ----
-const migrateEdit = (p) => ({ tracks: p.tracks?.length ? p.tracks : defaultTracks(), items: p.items || [], size: p.size || null, fps: p.fps || 0 });
+const migrateEdit = (p) => ({ tracks: p.tracks?.length ? p.tracks : defaultTracks(), items: p.items || [], size: p.size || null, fps: p.fps || 0,
+  range: p.range || null });   // range: the work area (workarea.js), seconds
 let tabs = null, tabsReady = null;
 let vtp = null;   // the transport bar (playback.js)
 const ensureTabs = () => tabsReady || (tabsReady = tabs ? tabs.start() : Promise.resolve());
@@ -75,7 +78,7 @@ const TL = timeline(V, { el: '#timeline', headW: HEAD_W, minLen: MIN_LEN, zoom: 
   pause: () => vidPause(), seek: (t) => vidSeek(t), showTime: () => { vtp?.update(); refreshKeyed($('#videoPanel')); },
   changed: () => timelineChanged(), dragged: () => { renderTimeline(); syncMedia(); requestDraw(); }, rendered: () => renderTimeline(),
   selected: () => renderVideoPanel(), deselected: () => { renderTimeline(); renderVideoPanel(); },
-  canDrop: (it, tr) => (tr.kind === 'audio') === (it.kind === 'audio'), tabs: () => tabs });
+  canDrop: (it, tr) => (tr.kind === 'audio') === (it.kind === 'audio'), tabs: () => tabs, area: () => WA });
 const { len: itLen, end: itEnd, seqEnd, selItem, xfades, updatePlayhead } = TL;
 const fadeGain = (it, t, audio) => TL.fadeGain(it, t, audio);   // pictures only fade in over an overlap (videoedit._overlaps)
 const trackOf = (it) => V.tracks.find((t) => t.id === it.track);
@@ -85,6 +88,10 @@ const zOf = (it) => tracksOf('video').findIndex((t) => t.id === it.track);
 const isVisual = (it) => it.kind === 'video' || it.kind === 'image' || it.kind === 'scene';
 const fpsNow = () => V.fps || 24;
 const tc = (t) => fmtTime(t, fpsNow());   // m:ss:ff
+// the work area: a range on the ruler the playhead is bound to (workarea.js), saved with the edit
+const WA = workArea({ get: () => V.range, set: (r) => { V.range = r; persistTimeline(); }, len: () => seqEnd(),
+  ...TL.areaGeom, t: () => V.t, seek: (t) => vidSeek(t), step: () => 1 / fpsNow(), minLen: () => 1 / fpsNow(),
+  changed: () => { renderTimeline(); renderVideoPanel(); vtp?.update(); } });
 
 // ---- animated properties (timeline.js clipKeys): a clip's keys are in its own source time, on the sequence's frames ----
 const PROPS = { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, volume: 1 };   // what an unset property is
@@ -568,7 +575,7 @@ function wireGizmo() {
 
 function vidPlay() {
   if (!V.items.length) return;
-  if (V.t >= seqEnd() - 0.01) V.t = 0;
+  V.t = playFrom(V.t, WA.bound(), seqEnd(), 0.01);
   unlockMedia();
   V.playing = true; V.clock = performance.now() - V.t * 1000;
   drawGizmo();   // the handles step aside while it plays
@@ -594,16 +601,16 @@ function vidTick() {
   const mt = masterTime();
   if (mt != null && Math.abs(mt - (performance.now() - V.clock) / 1000) < 0.5) V.clock = performance.now() - mt * 1000;
   V.t = (performance.now() - V.clock) / 1000;
-  const end = seqEnd();
-  if (V.t >= end) {
-    if (V.loop && end > 0) { V.t = 0; V.clock = performance.now(); }
-    else { V.t = end; vidPause(); updatePlayhead(); return; }
+  const step = tickT(V.t, WA.bound(), seqEnd(), V.loop);   // (inside the work area while it is on)
+  if (step.t !== V.t) {
+    V.t = step.t; V.clock = performance.now() - V.t * 1000;
+    if (step.stop) { vidPause(); updatePlayhead(); return; }
   }
   syncMedia(); drawFrame(); updatePlayhead(true);
   requestAnimationFrame(vidTick);
 }
 function vidSeek(t) {
-  V.t = Math.max(0, t);
+  V.t = WA.clamp(Math.max(0, t));
   if (V.playing) V.clock = performance.now() - V.t * 1000;
   syncMedia(); requestDraw(); updatePlayhead();
 }
@@ -908,7 +915,7 @@ function renderVideoPanel() {
       hint(`${seqSize().join('×')} · ${V.fps || 'auto'} fps · ${fmtT(seqEnd())}`, 'section-sub'),
       h('div', { class: 'grid-2' }, field('Frame size', sizeSel), field('Frame rate', fpsSel))),
     V.items.length ? section('Export', null, help('The export lands in History.'),
-      h('div', { class: 'row wrap' }, exportBtn,
+      h('div', { class: 'row wrap' }, exportBtn, WA.onlyToggle(),
         button('Open in EffectCraft', (ev) => craftVideo(ev.currentTarget), { cls: 'small', title: 'Each clip as a layer in a comp, to keep editing on the computer' }),
         button('Craft documents…', () => openCraftSheet(), { cls: 'small' }))) : null));
 }
@@ -1060,7 +1067,10 @@ function openKey(it) {
 async function timelineBody(btn) {
   G.settling?.w.finish();
   await tabs?.flush();   // the saved edit is what this render came from
-  const scenes = V.items.filter((it) => it.kind === 'scene'), made = new Map();
+  const range = WA.exportRange();   // Range only: the clips cut to the work area, starting at 0
+  const items = cutItems(V.items, range, { len: itLen, still: (it) => it.kind === 'image' });
+  if (!items.length) throw new Error('Nothing is in the work area');
+  const scenes = items.filter((it) => it.kind === 'scene'), made = new Map();
   const [W, H] = seqSize();
   for (const [i, it] of scenes.entries()) {
     made.set(it, await COMP.exportClip(it, { W, H, fps: V.fps || 24, len: itLen(it),
@@ -1070,7 +1080,7 @@ async function timelineBody(btn) {
     project_id: S.project, tab: tabs?.active && { id: tabs.active.id, name: tabs.active.name },
     width: scenes.length ? W : V.size && V.size[0], height: scenes.length ? H : V.size && V.size[1], fps: V.fps || null,
     tracks: V.tracks.map(({ id, kind, hidden, muted }) => ({ id, kind, hidden, muted })),
-    items: V.items.map((it) => ({ track: it.track, at: it.at, name: it.label, ...(made.has(it)   // (a scene's clip is already cut to what's used)
+    items: items.map((it) => ({ track: it.track, at: it.at, name: it.label, ...(made.has(it)   // (a scene's clip is already cut to what's used)
       ? { src: { clip: made.get(it).clip }, scene: made.get(it).scene, in: 0, out: itLen(it) } : { src: it.src, in: it.in, out: it.out ?? it.dur }),
       x: it.x, y: it.y, scale: it.scale, fit: it.fit, rotation: it.rotation || 0, anchor_x: it.anchor?.x, anchor_y: it.anchor?.y,
       opacity: it.opacity, volume: it.volume, chans: it.chans || null,
@@ -1138,12 +1148,13 @@ async function snapshotFrame() {
 
 // What a tab holds: the edit itself. (Zoom and Loop are this device's, not the edit's.)
 const editAdapter = {
-  empty: () => ({ tracks: defaultTracks(), items: [], size: null, fps: 0 }),
+  empty: () => ({ tracks: defaultTracks(), items: [], size: null, fps: 0, range: null }),
   migrate: migrateEdit,
-  dump: () => ({ tracks: V.tracks, items: V.items, size: V.size, fps: V.fps }),
+  dump: () => ({ tracks: V.tracks, items: V.items, size: V.size, fps: V.fps, ...(V.range && { range: V.range }) }),
   load(p) {
     vidPause();
-    Object.assign(V, { tracks: p.tracks, items: p.items, size: p.size, fps: p.fps, sel: null, t: 0, master: null, holdSince: 0 });
+    Object.assign(V, { tracks: p.tracks, items: p.items, size: p.size, fps: p.fps, range: p.range || null, sel: null, t: 0, master: null, holdSince: 0 });
+    WA.only = true; WA.sync();
     renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw(); COMP.refresh();
   },
 };
@@ -1158,7 +1169,7 @@ export function wireVideoTransport() {
     visible: () => $('#tab-video').classList.contains('active') });
   vtp = transport({ playing: () => V.playing, play: vidPlay, pause: vidPause, seek: vidSeek, t: () => V.t, len: seqEnd },
     { step: { by: () => 1 / fpsNow(), label: 'one frame' }, fps: fpsNow, loop: { get: () => V.loop, set: (on) => { V.loop = on; store.set('deck.video.loop', on); } },
-      extra: [button('📷 Frame', snapshotFrame, { title: 'Save this frame as an image' }), h('span', { id: 'vidLoad', class: 'hint' })] });
+      area: WA, extra: [button('📷 Frame', snapshotFrame, { title: 'Save this frame as an image' }), h('span', { id: 'vidLoad', class: 'hint' })] });
   $('#vidTransport').replaceWith(vtp.el);
   vidMax = fullScreen($('#tab-video'), { onChange: () => requestDraw() });
   $('#tlTools').replaceChildren(

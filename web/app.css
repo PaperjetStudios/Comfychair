@@ -23,6 +23,8 @@
   --accent: #e9b44c;
   --accent-ink: #1a1408;
   --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+  --range: #2ec4b6;              /* the work area on a timeline's ruler (workarea.js) */
+  --range-ink: #03201d;
   --ok: #5fcf8a;
   --ok-ink: #062512;
   --bad: #ef6a6a;
@@ -575,6 +577,7 @@ svg.ico.filled path { fill: currentColor; }
 .snd-viewer { background: var(--stage-bg) !important; }
 #sndCanvas { position: absolute; inset: 8px; width: calc(100% - 16px); height: calc(100% - 16px); cursor: pointer; touch-action: none; }
 .snd-row { height: 60px; }
+#sndTimeline .tl-head { width: 112px; }   /* (sound.js HEAD_W: the ruler, playhead and drags measure from it) */
 .tl-tog.solo { background: var(--accent); color: var(--accent-ink); }
 .snd-exports { display: grid; gap: 8px; }
 .snd-export { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
@@ -1672,3 +1675,34 @@ img.civ-blur, .civ-shot.civ-blur > * { filter: blur(22px) saturate(.6); transfor
 .st-drift svg.ico { width: 12px; height: 12px; }
 .st-ref { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 4px 6px; margin-bottom: 6px; }
 .st-ref .chips { grid-column: 1 / -1; }
+
+/* ---- the work area (workarea.js): a teal range along the top of a timeline's ruler ---- */
+.wa-band { position: absolute; left: 0; right: 0; top: 0; height: 9px; z-index: 3; cursor: crosshair; touch-action: none;
+  background: color-mix(in srgb, var(--range) 7%, transparent); }   /* (faintly there, so a finger finds it) */
+.wa-band:hover { background: color-mix(in srgb, var(--range) 18%, transparent); }
+.wa-bar { position: absolute; top: 1px; bottom: 1px; min-width: 2px; background: var(--range); border-radius: 2px; cursor: grab; }
+.wa-bar::before { content: ''; position: absolute; inset: -2px 0 -8px; }   /* (a taller target than the strip) */
+.wa-bar.off { background: color-mix(in srgb, var(--range) 22%, transparent); outline: 1px solid var(--range); outline-offset: -1px; }
+.wa-bar.hot { filter: brightness(1.2); }
+.wa-h { position: absolute; top: -2px; bottom: -3px; width: 6px; background: var(--range); border-radius: 2px; cursor: ew-resize; z-index: 1; }
+.wa-h.in { left: -3px; } .wa-h.out { right: -3px; }
+.wa-h::after { content: ''; position: absolute; inset: -4px -9px -10px; }   /* about 24 px wide to grab */
+.wa-h:hover, .wa-h.hot { background: #fff; box-shadow: 0 0 0 2px var(--range); }
+.wa-dim { position: absolute; top: 0; bottom: 0; background: #000a; pointer-events: none; z-index: 1; }
+.wa-dim[hidden], .wa-bar[hidden], .wa-tog[hidden] { display: none; }
+.wa-tog .ico { width: 16px; height: 16px; }
+.wa-tog.on { background: var(--range); color: var(--range-ink); border-color: var(--range); }
+.tl-ruler span { padding-top: 10px; }
+.sheet-ruler .tick { line-height: normal; padding-top: 10px; }
+.anim-bar .scrub-wrap { padding-top: 12px; }
+.anim-bar .scrub-wrap .wa-band, .anim-bar .scrub-wrap .wa-dim { top: 0; }
+.anim-bar .scrub-wrap .wa-dim { bottom: 0; }
+@media (pointer: coarse) {
+  .wa-band { height: 14px; }
+  .wa-h { width: 8px; } .wa-h.in { left: -4px; } .wa-h.out { right: -4px; }
+  .wa-h::after { inset: -6px -14px -14px; }
+  .tl-ruler-row { height: 34px; }
+  .tl-ruler span { padding-top: 15px; }
+  .sheet-ruler .tick { padding-top: 15px; }
+  .anim-bar .scrub-wrap { padding-top: 16px; }
+}

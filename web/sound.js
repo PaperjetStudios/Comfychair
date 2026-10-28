@@ -11,6 +11,8 @@ import { TabSet } from './tabs.js';
 import { clipKeys, clipSoundFields, dragWindow, durationOf, timeline, wavePeaks } from './timeline.js';
 import { refreshKeyed } from './keyed.js';
 import { fmtTime, playKeys, transport } from './playback.js';
+import { workArea } from './workarea.js';
+import { cutItems, playFrom, tickT } from './workarea-math.js';
 import { resultActions } from './useas.js';
 import { fullScreen } from './layout.js';
 
@@ -24,7 +26,7 @@ const HEAD_W = 112;   // track header column (px)
 const LANE_H = 60;
 const MIN_LEN = 0.05;
 const N = {
-  tracks: [], items: [], pps: store.get('deck.sound.pps', 30),   // pps: zoom, pixels per second (this device only)
+  tracks: [], items: [], range: null, pps: store.get('deck.sound.pps', 30),   // pps: zoom, pixels per second (this device only)
   t: 0, playing: false, clock: 0, loop: store.get('deck.sound.loop', false), sel: null,
   els: new Map(), waves: new Map(), exports: [], gens: [],   // gens: this mix's sound generations (ids), newest last
   out: { name: '', format: store.get('deck.sound.format', 'm4a'), gain: 1, normalize: false },
@@ -44,7 +46,7 @@ const persist = () => tabs?.changed();
 const TL = timeline(N, { el: '#sndTimeline', headW: HEAD_W, minLen: MIN_LEN, zoom: [2, 600], ppsKey: 'deck.sound.pps',
   pause: () => sndPause(), seek: (t) => sndSeek(t), showTime: () => { stp?.update(); refreshKeyed($('#soundPanel')); },
   changed: () => changed(), dragged: () => { renderTimeline(); syncMedia(); }, rendered: () => renderTimeline(),
-  selected: () => { renderPanel(); drawStage(); }, deselected: () => { renderTimeline(); renderPanel(); }, tabs: () => tabs });
+  selected: () => { renderPanel(); drawStage(); }, deselected: () => { renderTimeline(); renderPanel(); }, tabs: () => tabs, area: () => WA });
 const { len: itLen, end: itEnd, seqEnd, selItem, xfades, fadeGain, updatePlayhead } = TL;
 // a clip's level and pan can be keyed (timeline.js clipKeys, as in the Video tab), on 1/100 s steps
 const K = clipKeys(TL, N, { fps: () => 100, base: { volume: 1, pan: 0 }, pause: () => sndPause(), seek: (t) => sndSeek(t),
@@ -54,6 +56,10 @@ const trackName = (t) => t.name || `A${N.tracks.indexOf(t) + 1}`;
 const soloed = () => N.tracks.some((t) => t.solo);
 const audible = (tr) => tr && !tr.muted && (!soloed() || tr.solo);
 const tc = (t) => fmtTime(t);   // m:ss.ss
+// the work area: a range on the ruler the playhead is bound to (workarea.js), saved with the mix; 1/100 s steps
+const WA = workArea({ get: () => N.range, set: (r) => { N.range = r; persist(); }, len: () => seqEnd(),
+  ...TL.areaGeom, t: () => N.t, seek: (t) => sndSeek(t), step: () => 0.01, minLen: MIN_LEN,
+  changed: () => { renderTimeline(); renderPanel(); drawStage(); stp?.update(); } });
 
 // ---- playback: one <audio> per clip through Web Audio (gain, pan) into a master gain and a meter ----
 const A = { ctx: null, master: null, meter: null, data: null };
@@ -126,17 +132,17 @@ function syncMedia() {
 function sndTick() {
   if (!N.playing) return;
   N.t = (performance.now() - N.clock) / 1000;
-  const end = seqEnd();
-  if (N.t >= end) {
-    if (N.loop && end > 0) { N.t = 0; N.clock = performance.now(); }
-    else { N.t = end; sndPause(); updatePlayhead(); return; }
+  const step = tickT(N.t, WA.bound(), seqEnd(), N.loop);   // (inside the work area while it is on)
+  if (step.t !== N.t) {
+    N.t = step.t; N.clock = performance.now() - N.t * 1000;
+    if (step.stop) { sndPause(); updatePlayhead(); return; }
   }
   syncMedia(); updatePlayhead(true); drawStage();
   requestAnimationFrame(sndTick);
 }
 function sndPlay() {
   if (!N.items.length) return;
-  if (N.t >= seqEnd() - 0.01) N.t = 0;
+  N.t = playFrom(N.t, WA.bound(), seqEnd(), 0.01);
   audioCtx().resume?.();
   for (const it of N.items) wire(mediaFor(it));
   N.playing = true; N.clock = performance.now() - N.t * 1000;
@@ -147,7 +153,7 @@ export function sndPause() {
   N.playing = false; syncMedia(); showPlayState(); drawStage();
 }
 function sndSeek(t) {
-  N.t = Math.max(0, t);
+  N.t = WA.clamp(Math.max(0, t));
   if (N.playing) N.clock = performance.now() - N.t * 1000;
   syncMedia(); updatePlayhead(); drawStage();
 }
@@ -212,6 +218,12 @@ function drawStage() {
     }
     ctx.restore();
   });
+  const wa = WA.stored();   // the work area: dimmed outside while it is on, a teal strip along the top
+  if (wa) {
+    const xa = Math.round(wa.a * pps), xb = Math.round(wa.b * pps);
+    if (wa.on) { ctx.fillStyle = '#0008'; ctx.fillRect(0, 0, xa, H); ctx.fillRect(xb, 0, Math.max(0, plotW - xb), H); }
+    ctx.fillStyle = getComputedStyle(cv).getPropertyValue('--range').trim() || '#2ec4b6'; ctx.fillRect(xa, 0, Math.max(1, xb - xa), 3 * dpr);
+  }
   ctx.fillStyle = '#ff4d4d'; ctx.fillRect(Math.round(N.t * pps), 0, Math.max(1, dpr * 2), H);
   // meter: the master's peak (dB, -48..0) while playing
   let peak = 0;
@@ -633,7 +645,7 @@ function renderPanel() {
       (v) => { N.out.format = v; store.set('deck.sound.format', v); persist(); })),
     num('Master level', () => N.out.gain, (v) => { N.out.gain = v; }, { min: 0, max: 2, step: 0.01, fmt: pctFmt }),
     toggle('Even out the loudness (−16 LUFS, for speech and streaming)', N.out.normalize, (on) => { N.out.normalize = on; persist(); }),
-    h('div', { class: 'row wrap' }, button('⤓ Export sound', exportSound, { cls: 'primary' })),
+    h('div', { class: 'row wrap' }, button('⤓ Export sound', exportSound, { cls: 'primary' }), WA.onlyToggle()),
     N.exports.length ? h('div', { class: 'snd-exports' }, N.exports.slice(-3).reverse().map((m) =>
       h('div', { class: 'snd-export' }, h('b', {}, m.label), h('audio', { src: m.url, controls: true, preload: 'none' }),
         h('div', { class: 'row wrap' }, linkBtn('Download', m.url, { download: m.name }),
@@ -644,11 +656,13 @@ function renderPanel() {
 
 async function exportSound() {
   if (!N.items.length) return toast('Add some sound first', true);
+  const items = cutItems(N.items, WA.exportRange(), { len: itLen });   // Range only: the work area, from 0
+  if (!items.length) return toast('Nothing is in the work area', true);
   await tabs?.flush();
   try {
     const m = await api('/api/sound/render', { method: 'POST', timeout: 900000, busy: 'Mixing the sound…', body: {
       tracks: N.tracks, name: N.out.name || tabs?.active?.name || 'mix', format: N.out.format, gain: N.out.gain, normalize: N.out.normalize,
-      items: N.items.map((it) => ({ track: it.track, src: it.src, at: it.at, in: it.in, out: it.out ?? it.dur ?? null,
+      items: items.map((it) => ({ track: it.track, src: it.src, at: it.at, in: it.in, out: it.out ?? it.dur ?? null,
         volume: it.volume ?? 1, pan: it.pan || 0, chans: it.chans || null, fade_in: it.fadeIn || 0, fade_out: it.fadeOut || 0 })) } });
     N.exports.push(m);
     toast(`Saved ${m.label} (${m.duration} s) to the media library`);
@@ -657,15 +671,17 @@ async function exportSound() {
 }
 
 // ---- tabs: each mix is a document in the project folder ----
-const migrate = (p) => ({ tracks: p.tracks?.length ? p.tracks : defaultTracks(), items: p.items || [], out: { ...N.out, ...(p.out || {}) }, gens: p.gens || [] });
+const migrate = (p) => ({ tracks: p.tracks?.length ? p.tracks : defaultTracks(), items: p.items || [], out: { ...N.out, ...(p.out || {}) }, gens: p.gens || [],
+  range: p.range || null });   // range: the work area (workarea.js), seconds
 const adapter = {
   empty: () => ({ tracks: defaultTracks(), items: [], out: { name: '', format: N.out.format, gain: 1, normalize: false }, gens: [] }),
   migrate,
-  dump: () => ({ tracks: N.tracks, items: N.items, out: N.out, gens: N.gens.slice(-30) }),
+  dump: () => ({ tracks: N.tracks, items: N.items, out: N.out, gens: N.gens.slice(-30), ...(N.range && { range: N.range }) }),
   load(p) {
     sndPause();
     p = migrate(p);
-    Object.assign(N, { tracks: p.tracks, items: p.items, out: p.out, gens: p.gens, sel: null, t: 0, exports: [] });
+    Object.assign(N, { tracks: p.tracks, items: p.items, out: p.out, gens: p.gens, range: p.range, sel: null, t: 0, exports: [] });
+    WA.only = true; WA.sync();
     renderTimeline(); renderPanel(); syncMedia();
   },
 };
@@ -676,7 +692,7 @@ export function wireSound() {
   tabs = new TabSet({ kind: 'sound-tabs', mount, scope: 'project', newName: (n) => `Mix ${n}`, adapter });
   stp = transport({ playing: () => N.playing, play: sndPlay, pause: sndPause, seek: sndSeek, t: () => N.t, len: seqEnd },
     { step: { by: 5, key: 0.1, back: '⏪', fwd: '⏩', label: '5 s', pause: false },
-      loop: { get: () => N.loop, set: (on) => { N.loop = on; store.set('deck.sound.loop', on); } },
+      loop: { get: () => N.loop, set: (on) => { N.loop = on; store.set('deck.sound.loop', on); } }, area: WA,
       extra: [h('button', { type: 'button', id: 'sndSplit', class: 'icon-btn', 'aria-label': 'Split at the playhead', title: 'Split at the playhead (S)', onclick: TL.split }, '✂'),
         h('button', { type: 'button', id: 'sndDel', class: 'icon-btn', 'aria-label': 'Delete the selected clip', title: 'Delete the selected clip (Del)', onclick: TL.deleteSelected }, '🗑')] });
   $('#sndTransport').replaceWith(stp.el);

@@ -14,7 +14,7 @@ import {
   removeLayer, removeSelected, select, selectJoint, setFree, setMode, syncMeshes, viewer
 } from './scene-view.js';
 import { busy, cancelRender, letGo, play, renderColorVideo, renderDepthVideo, renderPoseVideo, saveFrame, seek, stopPlay } from './scene-export.js';
-import { maxBar, renderKeys, renderTransport, wireSheetKeys } from './scene-keys.js';
+import { AREA, maxBar, renderKeys, renderTransport, wireSheetKeys } from './scene-keys.js';
 import { hasMode, modeDef, modeList, modeOf, modeSections } from './scene-modes.js';
 import { syncRef, toggleRef } from './scene-ref.js';
 import { keysPast, stretchAll } from './keys.js';
@@ -296,7 +296,7 @@ export function renderProps() {
         figs ? button('Render pose video', renderPoseVideo, { title: 'The posable people as OpenPose stick figures' }) : null,
         figs ? button('Render both', async () => { if (await renderDepthVideo()) await renderPoseVideo(); }, { title: 'A depth video and a pose video of the same shot' }) : null,
         button('🎞 Render colour video', renderColorVideo, { title: 'The shot as it looks, over the scene\'s length, at its size: splats at their full set' }),
-        button('📷 Save frame', saveFrame)),
+        button('📷 Save frame', saveFrame), AREA.onlyToggle()),   // (Range only: the key sheet's work area)
     figs ? h('div', { class: 'row wrap' }, ...[['poseHands', 'Hands in the pose video'], ['poseFace', 'Face points in the pose video']].map(([k, l]) =>
       toggle(l, SC[k] !== false, (on) => { SC[k] = on; save(); }))) : null,
     R.renders.depth || R.renders.pose ? h('div', { class: 'row wrap' },

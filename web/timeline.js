@@ -9,7 +9,9 @@ import { keyTimes, keyedRange, setValue, value } from './keyed.js';
 // the two tabs can't drift apart. Overlaps mirror app/videoedit._overlaps (the export).
 //
 //   const TL = timeline(V, { el: '#timeline', headW: 84, minLen: 0.1, zoom: [4, 400], ppsKey: 'deck.video.pps',
-//     pause(), seek(t), showTime() (the transport's time: playback.js), changed(), dragged(), selected(it)?, canDrop(it, track)?, tabs: () => tabs });
+//     pause(), seek(t), showTime() (the transport's time: playback.js), changed(), dragged(), selected(it)?, canDrop(it, track)?, tabs: () => tabs,
+//     area: () => the tab's work area (workarea.js), drawn along the top of the ruler });
+//   TL.areaGeom: the work area's at / pos / points on this ruler (clip edges and the playhead to snap to)
 //
 // An image clip (Video only) has no source time: trimming its start or splitting it changes its length.
 // ---------------------------------------------------------------------------
@@ -124,6 +126,8 @@ export function timeline(st, o) {
     for (let s = 0; s <= span; s += major) {
       ruler.append(h('span', { style: `left:${s * st.pps}px` }, s >= 60 ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}` : `${+s.toFixed(2)}s`));
     }
+    const area = o.area?.();
+    if (area) ruler.append(...area.el());
     const inner = h('div', { class: 'tl-inner', style: `width:${o.headW + span * st.pps}px` },
       h('div', { class: 'tl-row tl-ruler-row' }, h('div', { class: 'tl-head tl-corner' }, ...corner), ruler));
     for (const r of rows) {
@@ -285,6 +289,8 @@ export function timeline(st, o) {
     st.items.push(b); st.sel = b.id; o.changed();
   }
 
-  return { len, end, seqEnd, selItem, trackEnd, xfades, fadeGain, render, updatePlayhead, timeAt, select, dragClip, wire, zoom, fit,
+  const areaGeom = { at: (x) => timeAt({ clientX: x }), pos: (t) => `${t * st.pps}px`, points: () => [0, st.t, ...st.items.flatMap((i) => [i.at, end(i)])] };
+
+  return { areaGeom, len, end, seqEnd, selItem, trackEnd, xfades, fadeGain, render, updatePlayhead, timeAt, select, dragClip, wire, zoom, fit,
     split, deleteSelected, crossfadePrev, duplicate };
 }

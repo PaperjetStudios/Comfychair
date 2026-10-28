@@ -12,6 +12,7 @@ import { changed, draw, pose, select } from './scene-view.js';
 import { busy, play, seek } from './scene-export.js';
 import { setAutoKey } from './scene-ui.js';
 import { modeOf } from './scene-modes.js';
+import { workArea } from './workarea.js';
 
 // ---- the key sheet: a Blender-style dope sheet and a simple graph editor over the layers' keys -----
 // A row per layer (the camera, then the objects) that opens (▸) into a row per channel, a figure's pose
@@ -64,6 +65,17 @@ function frameAtX(x) {
   const r = lanesEl().getBoundingClientRect();
   return Math.round(Math.max(0, Math.min(span(), V.a + (x - r.left - PAD) / pxf())));
 }
+
+// ---- the work area: a teal range along the top of the ruler that the playhead is bound to (workarea.js), in frames,
+// saved with the scene (SC.range, one undo step a change). Play (scene-export.js) loops inside it; renders can do only it.
+export const AREA = workArea({
+  get: () => SC.range || null, set: (r) => { if (r) SC.range = r; else delete SC.range; changed(); },
+  len: span, t: () => R.f, seek: (f) => seek(f), step: () => 1, minLen: 1,
+  at: (x) => { const r = lanesEl().getBoundingClientRect(); return V.a + (x - r.left - PAD) / pxf(); },
+  pos: (f) => lanePos(f),
+  points: () => (UI.snap ? [R.f, ...new Set(allTracks().flatMap((T) => T.keys.map((k) => k.f)))] : []),
+  changed: () => { renderKeys(); renderTime(); },
+});
 
 // ---- graph channels ---------------------------------------------------------------------------
 function gLayer() {
@@ -146,7 +158,7 @@ function ruler() {
   const cands = UI.unit === 's' ? [1, 2, 3, 6, 12, 24, 48, 96, 192] : [1, 2, 4, 6, 12, 24, 48, 96, 192];
   const step = cands.find((c) => c * pxf() >= 46) || 192, ticks = [];
   for (let f = Math.ceil(V.a / step) * step; f <= V.b; f += step) ticks.push(h('span', { class: 'tick', style: `left:${lanePos(f)}` }, fmtT(f)));
-  return h('div', { class: 'sheet-ruler' }, ...ticks);
+  return h('div', { class: 'sheet-ruler' }, ...ticks, ...AREA.el());
 }
 
 const HINTS = { dope: 'Double-tap a row to add a key there', graph: 'Double-tap the graph to add a point at that height' };
@@ -800,6 +812,7 @@ export function renderTransport() {
     h('div', { class: 'key-head' }, h('div', { class: 'row scene-keybar' },
       button('⚙', () => { const on = !store.get(TK, true); store.set(TK, on); applyTools(on); }, { id: 'sceneToolsBtn', cls: 'small kt', title: 'Show or hide the key tools', 'aria-label': 'Key tools' }),
       button(R.playing ? '❚❚ Pause' : '▶ Play', play, { cls: 'small primary', title: 'Play / pause (Space)' }),
+      AREA.toggleBtn(),
       button('👁', (e) => openWP(e.currentTarget), { id: 'sceneWP', cls: 'small kt', title: 'While playing: what shows, and jumping back after an edit', 'aria-label': 'While playing' }),
       h('span', { id: 'sceneTime', class: 'timecode' }),
       h('span', { class: 'grow' }),
@@ -836,6 +849,8 @@ export function wireSheetKeys() {
   document.addEventListener('keydown', (e) => {
     if (!$('#tab-scene').classList.contains('active') || sheetOpen() || e.target.closest('input, textarea, select')) return;
     const k = e.key.toLowerCase(), eat = () => { e.preventDefault(); e.stopImmediatePropagation(); };
+    const range = AREA.keyFn(e);   // the work area, wherever the 3D tab has the keys: I / O at the playhead, Alt+X clears
+    if (range) { eat(); range(); return; }
     if (!focus) return;
     if (e.ctrlKey || e.metaKey) {
       if (k === 'c') { eat(); copyKeys(); } else if (k === 'v') { eat(); pasteKeys(); } else if (k === 'd') { eat(); duplicateKeys(); } else if (k === 'a') { eat(); selectAll(); }
