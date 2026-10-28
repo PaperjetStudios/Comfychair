@@ -18,6 +18,7 @@ import { renderStory, wireStory } from './story.js';
 import { B, closeGallery, pauseBoard, renderBoard } from './board.js';
 import { fullScreen, sideNav, wireSplitters } from './layout.js';
 import { loadPrefs, openPrefs } from './prefs.js';
+import { EDIT_PHRASES, IMAGE_PHRASES, VIDEO_PHRASES } from './phrases.js';
 import './world.js';   // the spaces (Make, Edit, View), travel between tools, a map of where you are
 
 // ---------------------------------------------------------------------------
@@ -244,6 +245,18 @@ const H3_PHRASES = [
   ]],
 ];
 
+// the phrase groups for the open template's prompt (phrases.js): H3 has its own; a template that changes a picture
+// gets the edit phrases; video ones the camera moves; stills the lot
+function promptPhrases() {
+  const t = S.tpl;
+  if (!t) return [];
+  if (t.tag_style === 'h3') return H3_PHRASES;
+  if (t.media === 'video') return VIDEO_PHRASES;
+  if (t.media !== 'image') return [];
+  // (an inpaint prompt says what goes in the painted area: a still's words, not an edit's)
+  return t.fields.some((f) => f.kind === 'image') && !/inpaint/i.test(t.id) ? EDIT_PHRASES : IMAGE_PHRASES;
+}
+
 // The next "[Shot N] At mm:ss.mmm, the camera cuts to", 3 s after the last cut (or [Shot 1] first)
 function nextShot(text) {
   const nums = [...text.matchAll(/\[Shot (\d+)\]/g)].map((m) => Number(m[1]));
@@ -379,7 +392,7 @@ function wireTextPopup() {
       { title: typeof text === 'string' ? text.replace(/[§¶↵]/g, '') : label, keepFocus: true });
     // a box can bring its own chip groups: t._chipGroups() → [[name, [[label, text]], open by default]]
     const phrases = t._chipGroups ? t._chipGroups().filter(([, items]) => items.length)
-      : S.tpl?.tag_style === 'h3' && t.closest('.prompt-field') ? H3_PHRASES : [];
+      : t.closest('.prompt-field') ? promptPhrases() : [];
     // phrase groups fold: tap a heading to open or close it (remembered)
     const open = store.get('deck.phraseGroups', { Structure: true });
     const group = ([name, items, dflt = false]) => {
