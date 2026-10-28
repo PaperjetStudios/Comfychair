@@ -106,6 +106,16 @@ class Store(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(self.c.get(self.url("main", kind="story-tabs")).json()["payload"], story)
 
+    def test_characters_kind(self):
+        """A project's characters are one doc each (name, look, pictures, voice), deleted to the trash like tabs."""
+        self.fresh()
+        mara = {"name": "Mara", "look": "red raincoat", "pics": ["comfydeck/a.png"], "main": "comfydeck/a.png", "voice": "v1"}
+        r = self.c.put(self.url("c1", kind="characters"), json={"rev": 0, "name": "Mara", "payload": mara})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual([d["name"] for d in self.c.get(self.url(kind="characters")).json()], ["Mara"])
+        self.assertEqual(self.c.delete(self.url("c1", kind="characters")).status_code, 200)
+        self.assertEqual(self.c.post(self.url("c1", kind="characters", tail="/restore")).json()["payload"], mara)
+
     def test_bad_body(self):
         self.fresh()
         for body in ({"name": 5}, {"order": "x"}, {"payload": []}, {"rev": "1"}, {"rev": True}):

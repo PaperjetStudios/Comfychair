@@ -13,7 +13,9 @@ send any output (or a video's first/last frame) back in as an input. **Editor** 
 join them side by side, stacked or in a grid, then save the result as an input. It paints too: the
 tool strip on the left of its canvas has pressure and tilt brushes (pencil, ink, airbrush, marker), an
 eraser, line / rectangle / ellipse, bucket fill, a colour picker and rectangle / lasso selections, on
-any layer or on a **Blank canvas**; layers get blend modes and a lock. Any image field
+any layer or on a **Blank canvas**; layers get blend modes and a lock, and turn and mirror (the round handle above
+the selected layer turns it about its centre, pulling to 15 degree steps; Shift steps by 15, Alt turns freely; the
+layer panel has a Rotation slider, quarter turns and mirrors). Any image field
 has **Draw**: a full-screen sketch pad with pen pressure and palm rejection (once a pen touches it,
 finger touches are ignored), e.g. to sketch the source for the `-i2i` templates. **Video** tab: trim
 generated clips, order them and export one video (ffmpeg); the result lands in History. **Board**:
@@ -31,7 +33,7 @@ the device, and saves it to the media library (see *Importing clips* under Setup
 percentage) or side by side, two clips playing in step. **Sound** tab: a multi-track sound editor (see *Sound* below).
 Every slider is a number box with a bar behind it: hold it, then pull sideways to change it (a swipe scrolls past it), or
 tap to type.
-**Story** tab: a storyboard of scenes and shots with frames (see *Story* below).
+**Story** tab: a storyboard of scenes and shots: draw each shot's frame on a canvas, refine it, make it a video, with the project's characters (see *Story* below).
 **3D** tab: block out a shot with soft mannequins, boxes and a room, keyframe them and the camera, and
 render it as a depth video for `deck-h3-ctrl2v` (see below).
 The preview pinch/wheel-zooms, the picker has a camera button, and ⛶ goes full screen.
@@ -586,18 +588,56 @@ story is a tab saved in the project, like video edits.
 - A story has a **title**, **notes** (free writing, ideas, a script) and **scenes** in order. A scene has a heading
   (`INT. KITCHEN - NIGHT`), a summary and **shots** in order. A shot has what we see, action / dialogue, its framing (shot
   size, angle, camera move), a length (1–10 s), a status (idea, drafted, made) and **frames** (pictures).
-- **Outline** is the list, for writing (type straight into each shot); **Board** shows the shots as cards with big frames.
+- Four views of the same story (the bar under the stage):
+  - **Canvas**: the selected shot big, to draw and lay out its frame, with its scene's shots as a filmstrip under it (tap
+    one to open it; the arrows at the ends go to the scene before or after; the plus adds a shot).
+  - **Board**: the shots as cards with big frames. **Outline**: the list, for writing (type straight into each shot).
+  - **Script**: a screenplay page: scene headings, what we see as action, and the lines (`MARA: words`, `@Mara (quietly):
+    words`) as character cues and dialogue. Tap a shot to edit it.
   Tap a shot to edit it in the side panel. Drag the grip (pen, finger or mouse) to reorder shots, also into another
-  scene or onto a folded one, and scenes; the arrows do the same a step at a time. Scene ⋯ has duplicate and delete;
-  deletes have Undo.
-- **Generate frame** runs the story's text-to-image template (Frames → Template: any installed image template with a
+  scene or onto a folded one, and scenes; the arrows do the same a step at a time. Scene options have duplicate and
+  delete; deletes have Undo. The expand button over the canvas looks at the frames big: every shot's frame in turn
+  (arrows, a swipe, or the keys), a shot's other frames under it, **Choose** and **Compare** (a wipe or side by side,
+  against the chosen frame or the next shot).
+- **The shot's canvas** is the Editor's own engine, in the Story tab: layers, brushes with pressure and tilt, shapes,
+  fill, selections, crop, turning and mirroring, blank canvases, blend modes, lock and undo, the same tool strip and
+  gestures. Start from the shot's frame (**Draw on this frame** puts it under a see-through layer), a **Blank
+  canvas**, **Add pictures** (this project's pictures and outputs, any input, saved edits, uploads) or **Frame from a
+  clip** (any clip here, scrubbed to the frame you want), and lay several out as a collage. Each shot keeps its
+  composition; its flattened picture (saved a moment after the last change) is the shot's frame, shown as **Canvas** in
+  its frames, unless another frame is chosen.
+- **Generate frame** runs the story's text-to-image template (Frames, Template: any installed image template with a
   prompt, a width and a height and no picture input; the first one by default) on the shot's framing and description
-  plus the story's **Style** line, at the story's **Shape** (about a megapixel), 1–4 per run. The pictures land on the
-  shot when the run ends, also after a reload. **From pictures…** (the image picker) and **Upload…** add frames too.
-  Tap a frame to make it the shot's chosen one.
+  plus the story's **Style** line, at the story's **Shape** (about a megapixel), 1-4 per run. The pictures land on the
+  shot when the run ends, also after a reload. **From pictures** (the image picker) and **Upload** add frames too.
+  Tap a frame to make it the shot's chosen one; the canvas button on a frame puts it on the canvas as a new layer.
+- **Refine** runs the shot's frame (the canvas, flattened) through an edit or image-to-image template (the story's
+  choice, or the shot's own: `deck-qwen21-edit` first, then Klein, Krea 2, Qwen and MOSS i2i). The prompt comes from the
+  shot (what we see, its characters' looks, the story's style; an edit model is asked to turn the picture into a
+  finished frame, keeping the layout and camera), or write your own. Characters in the shot with a main picture go in as
+  the edit model's extra pictures, named in its syntax (`Picture 2`, `<ref_image_1>`). **Change** sets how far an
+  image-to-image template may go. A **mask** (painted over the frame, or the canvas's rectangle or lasso selection) keeps
+  everything outside it as it was (the masked-edit composite, below). The results land in the shot's frames.
+- **Video** runs an image-to-video template (`deck-ltx-i2v` by default; any video template with a start picture and a
+  prompt) on the shot's frame, for the shot's length, with a prompt from what we see, the action and the lines (in
+  quotes; H3 gets `<d></d>`), the camera move, the characters and the style. With a first-to-last template
+  (`deck-ltx-flf2v`, `deck-h3-flf2v`) the clip ends on the next shot's frame (**End on the next shot's frame**). Lines
+  said by characters with a voice can be spoken (**Speak the lines**: Qwen, IndexTTS-2 or Fish S2, as in the Sound tab),
+  joined into one sound, and given to a template that plays to a sound (`deck-ltx-a2v`) or takes a voice; the clip is
+  made at least as long as the lines. The clips land on the shot; tap one to choose it, the chosen one to play it.
 - The chosen frame goes **To Generate** (the open template's picture field), **To VFX** (the start image) or **To the
-  Editor**. **Shots to video** puts every shot's chosen frame on the Video tab's timeline in order, each for its length.
-  **Copy as text** copies the outline as plain text.
+  Editor**. **Shots to video** puts every shot on the Video tab's timeline in order: its chosen clip, or its chosen frame
+  for its length. **Copy as text** copies the outline as plain text.
+
+### Characters
+
+Characters belong to the project (one `characters` document each in its folder) and are listed in the Story panel.
+A character has a name, who they are, their **look** (what prompts say about them: face, hair, clothes, kept the same
+every time), reference **pictures** (tap one to make it the main one; **The shot's frame** adds the selected shot's
+frame), a **voice** from the Sound tab's voice library, and notes. Write `@` and a name in a shot, a scene summary or
+the story's notes: matching characters show as chips under the box (and in the text popup on a tablet). A shot shows
+who is in it (named with `@`, or speaking a line); Generate frame, Refine and Video add each one's look to the prompt,
+Refine and the H3 reference templates get their main picture, and their lines are spoken in their voice.
 
 ## Sound
 
