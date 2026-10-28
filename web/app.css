@@ -869,7 +869,7 @@ details.desc[open] summary { margin-bottom: 6px; }
 .frame-bar { align-items: center; justify-content: space-between; }
 .frame-bar .hint { margin: 0; }
 /* video tabs */
-.tab-strip { position: sticky; top: 0; z-index: 3; background: var(--surface); padding: 2px 0 6px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
+.tab-strip { padding: 2px 0 6px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }   /* scrolls away with the settings */
 .viewer .gizmo { touch-action: none; z-index: 2; }
 .gz-bar { position: absolute; left: 8px; top: 8px; z-index: 3; display: flex; gap: 4px; flex-wrap: wrap; max-width: calc(100% - 16px); }
 .gz-chip {
@@ -879,7 +879,7 @@ details.desc[open] summary { margin-bottom: 6px; }
 .gz-chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 /* 3d tabs */
-.scene-head { position: sticky; top: 0; z-index: 3; display: grid; gap: 6px; background: var(--surface); padding: 6px 8px 6px; margin: calc(-1 * var(--gap)) calc(-1 * var(--gap)) var(--gap); border-bottom: 1px solid var(--line); }
+.scene-head { display: grid; gap: 6px; background: var(--surface); padding: 6px 8px 6px; margin: calc(-1 * var(--gap)) calc(-1 * var(--gap)) var(--gap); border-bottom: 1px solid var(--line); }
 #sceneBody { min-width: 0; }
 
 /* generate button as a progress bar */
@@ -1037,6 +1037,8 @@ button.sheet-caret { width: 22px; }
 .panel.has-nav { display: grid; grid-template-columns: 40px minmax(0, 1fr); column-gap: 8px; align-content: start; grid-auto-rows: max-content; }
 .panel.has-nav > * { grid-column: 2; min-width: 0; }
 .panel.has-nav > .side-nav { grid-column: 1; grid-row: 1 / span 99; }
+/* a section the side strip jumps to lands with its heading in view */
+.panel .section, .panel details.group { scroll-margin-top: 8px; }
 .side-nav {
   position: sticky; top: 0; align-self: start; z-index: 4; display: flex; flex-direction: column; gap: 2px; padding: 3px;
   margin: calc(-1 * var(--gap)) 0 0 calc(-1 * var(--gap)); padding-top: calc(var(--gap) + 3px);
@@ -1052,7 +1054,6 @@ button.sheet-caret { width: 22px; }
 .side-tab.on::before { content: ''; position: absolute; left: -3px; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--accent); }
 @media (hover: hover) { .side-tab:hover:not(.on) { background: var(--surface-2); color: var(--text); } }
 @media (pointer: coarse) { .side-tab { width: 40px; height: 40px; } }
-.nav-off { display: none !important; }
 .panel.has-nav > .scene-head, .panel.has-nav > .tab-strip { margin-left: 0; }
 
 /* ---- maximize: one ⛶ on every viewer; the stage is pinned over the page (and goes real full screen) ---- */
@@ -1181,11 +1182,6 @@ button.sheet-caret { width: 22px; }
   .panel .tabchip { min-height: 38px; }
 }
 
-/* the saved-tabs row at the top of a sidebar stays put while the settings scroll under it */
-.panel > :has(.tabstrip):not(:has(.section)), .panel > .panel-body > :first-child:has(.tabstrip):not(:has(.section)) {
-  position: sticky; top: calc(-1 * var(--gap)); z-index: 3; background: var(--surface);
-  margin-top: calc(-1 * var(--gap)); padding: var(--gap) 0 6px; margin-bottom: 6px; border-bottom: 1px solid var(--line);
-}
 
 /* clip importer on a tablet: the picture and the trim bars on one screen (no scrolling between them while trimming) */
 .sheet:has(.clip-import .vf) { width: min(1280px, 100%); max-height: 96dvh; }

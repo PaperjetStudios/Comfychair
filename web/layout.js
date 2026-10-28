@@ -151,7 +151,6 @@ const ICONS = [
   [/pose|figure|person|body|joint/i, ['M12 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4', 'M12 7v7M7 10l5-2 5 2M9 21l3-7 3 7']],
   [/advanced|more|other|extra|setting|option|misc/i, ['M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6', 'M19 12l2-1-1-3-2.2.5-1.3-1.3.5-2.2-3-1-1 2h-1.8l-1-2-3 1 .5 2.2-1.3 1.3L4 8l-1 3 2 1v1.8l-2 1 1 3 2.2-.5 1.3 1.3-.5 2.2 3 1 1-2h1.8l1 2 3-1-.5-2.2 1.3-1.3 2.2.5 1-3-2-1z']],
 ];
-const ALL_ICON = ['M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z'];
 const navIcon = (label) => {
   const m = ICONS.find(([re]) => re.test(label));
   if (m) return svg(m[1]);
@@ -159,23 +158,24 @@ const navIcon = (label) => {
 };
 
 export function sideNav(panel, name, find) {
-  const key = `deck.sidetab.${name}`;
-  const strip = h('nav', { class: 'side-nav', role: 'tablist', 'aria-orientation': 'vertical', 'aria-label': 'Settings groups' });
-  let sig = '', busy = false, queued = false;
-  const apply = (targets) => {
-    let cur = store.get(key, '');
-    if (cur && !targets.some((t) => t.label === cur)) cur = '';   // that group isn't here now (another template): show all
-    for (const t of targets) t.el.classList.toggle('nav-off', !!cur && t.label !== cur);
-    for (const b of strip.children) { const on = b.dataset.g === cur; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); }
+  const strip = h('nav', { class: 'side-nav', 'aria-label': 'Jump to a group of settings' });
+  let sig = '', busy = false, queued = false, targets = [];
+  // the group in view: the last one whose top has scrolled up past the panel's top third
+  const spy = () => {
+    const r = panel.getBoundingClientRect(), atEnd = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 4;
+    const line = atEnd ? r.bottom - 40 : r.top + panel.clientHeight / 3;   // at the end the last groups can't reach the top
+    let cur = targets[0]?.label ?? '';
+    if (panel.scrollTop > 4) for (const t of targets) if (t.el.getBoundingClientRect().top <= line) cur = t.label;
+    for (const b of strip.children) b.classList.toggle('on', b.dataset.g === cur);
   };
-  const pick = (g) => {
-    store.set(key, g);
-    apply(find());
-    panel.scrollTo?.({ top: 0 });
+  // tap a group: scroll to it (a closed one opens); every group stays on show
+  const pick = (t) => {
+    if (t.el.tagName === 'DETAILS') t.el.open = true;
+    t.el.scrollIntoView({ block: 'start', behavior: 'smooth' });
   };
   const refresh = () => {
     queued = false; busy = true;
-    const targets = find();
+    targets = find();
     const on = targets.length > 1;
     panel.classList.toggle('has-nav', on);
     if (on) {
@@ -183,19 +183,14 @@ export function sideNav(panel, name, find) {
       const s = targets.map((t) => t.label).join('\n');
       if (s !== sig) {
         sig = s;
-        strip.replaceChildren(
-          navBtn('', 'All', svg(ALL_ICON)),
-          ...targets.map((t) => navBtn(t.label, t.label, navIcon(t.label))));
+        strip.replaceChildren(...targets.map((t) => h('button', { type: 'button', class: 'side-tab', 'data-g': t.label, title: t.label, 'aria-label': t.label,
+          onclick: () => pick(targets.find((x) => x.label === t.label) || t) }, navIcon(t.label))));
       }
-      apply(targets);
-    } else {
-      strip.remove(); sig = '';
-      for (const t of targets) t.el.classList.remove('nav-off');
-    }
+      spy();
+    } else { strip.remove(); sig = ''; }
     obs.takeRecords(); busy = false;
   };
-  const navBtn = (g, label, icon) => h('button', { type: 'button', role: 'tab', class: 'side-tab', 'data-g': g, title: label, 'aria-label': label,
-    onclick: () => pick(g) }, icon);
+  panel.addEventListener('scroll', () => requestAnimationFrame(spy), { passive: true });
   const obs = new MutationObserver(() => { if (!busy && !queued) { queued = true; queueMicrotask(refresh); } });
   obs.observe(panel, { childList: true, subtree: true });
   refresh();
