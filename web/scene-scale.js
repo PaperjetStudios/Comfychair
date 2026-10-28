@@ -8,6 +8,7 @@ import { actions, api, button, canvasFont, closeSheet, field, h, hint, icon, ope
 import { OBJ, R, SC, WP, current, namesFor, write } from './scene-data.js';
 import { PERSON_PROFILE, activeCamera, canvas, changed, controls, draw, passHooks, photoScene, renderer, scene } from './scene-view.js';
 import { samplePoints, pickAlong } from './splat-shape.js';
+import { modeOf } from './scene-modes.js';
 import {
   HEIGHTS, LENGTHS, baseOf, boxSize, dist, factorFor, fitForHeight, fmtHWD, fmtLen, glToCam, headFeet, personDepth, personFactor, scaledVals, tanXY
 } from './scale-math.js';
@@ -148,7 +149,7 @@ export function initScale() {
   helpers.add(refFig, labels, marks);
   scene.add(helpers);
   passHooks.push((pass, forRender) => {
-    const live = !forRender && pass === 'color';
+    const live = !forRender && pass === 'color' && modeOf().stage !== 'empty';   // (not on Create object's empty stage)
     helpers.visible = live;
     if (!live) return;
     labels.visible = !R.playing || WP.grid;
@@ -195,6 +196,7 @@ let measuring = null;   // { o, pts, grab }
 export function stopMeasure() {
   if (!measuring) return;
   removeEventListener('pointerdown', measuring.grab, true);
+  removeEventListener('keydown', measuring.esc, true);
   measuring = null;
   canvas.classList.remove('measuring');
 }
@@ -212,8 +214,10 @@ export function startMeasure(o) {
     stopMeasure();
     realSheet(o, m.pts);
   };
+  m.esc = (e) => { if (e.key === 'Escape') { e.stopImmediatePropagation(); stopMeasure(); clearMarks(); toast('Measuring stopped'); } };
   measuring = m;
   addEventListener('pointerdown', m.grab, true);
+  addEventListener('keydown', m.esc, true);
   canvas.classList.add('measuring');
   toast(`Tap the first point on ${o.name}`);
 }
