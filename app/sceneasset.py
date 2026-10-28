@@ -80,7 +80,7 @@ SHARP_CKPT = Path(os.environ.get("DECK_SHARP_CKPT", "/mnt/data/ComfyUI/models/sh
 
 # SHARP makes about 1.2M Gaussians: too many for a tablet's GPU (the 3D view went white: its WebGL context gave out).
 # The scene layer gets the most visible SPLAT_MAX of them; the full set is kept beside it (<name>_full.ply).
-SPLAT_MAX = int(os.environ.get("DECK_SPLAT_MAX", "500000"))
+SPLAT_MAX = int(os.environ.get("DECK_SPLAT_MAX", "250000"))   # (500k still crawled on the tablet)
 
 
 def thin_splat(src: Path, dst: Path, keep: int):

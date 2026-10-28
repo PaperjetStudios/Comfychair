@@ -10,7 +10,7 @@ import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip } from './ui.js';
 import { C, R, SC, newObject, namesFor, save, selItem, write } from './scene-data.js';
 import { addModeSection } from './scene-modes.js';
-import { LOADERS, controls, changed, draw, passHooks, renderer, scene, select } from './scene-view.js';
+import { LOADERS, controls, changed, draw, fit, passHooks, renderer, scene, select } from './scene-view.js';
 import { LIBRARY } from './scene-library.js';
 
 const MODELS = new Set(['glb', 'gltf', 'obj', 'fbx']);
@@ -144,6 +144,7 @@ passHooks.push((pass) => {
   if (pass !== 'color' || kicking || !spark) return;
   const has = hasSplat();
   if (has || hadSplat) kick();
+  if (has !== hadSplat) setTimeout(fit);   // (splats in or out of view: the view's resolution follows, see fit)
   hadSplat = has;
 });
 

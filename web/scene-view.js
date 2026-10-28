@@ -243,7 +243,9 @@ export function fit() {
   if (!vw || !vh) return;
   const a = SC.width / SC.height;
   const w = Math.min(vw, vh * a), hh = w / a;
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  // a splat in view on a touch screen: drawn at 1x (a tablet's 2-3x is 4-9x the work, and splats are soft anyway)
+  const splats = matchMedia('(pointer: coarse)').matches && [...R.meshes.values()].some((m) => m.userData.splat && m.visible);
+  const dpr = splats ? 1 : Math.min(window.devicePixelRatio || 1, 2);
   canvas.style.width = `${w}px`; canvas.style.height = `${hh}px`;
   canvas.style.left = `${(vw - w) / 2}px`; canvas.style.top = `${(vh - hh) / 2}px`;
   renderer.setSize(Math.round(w * dpr), Math.round(hh * dpr), false);
