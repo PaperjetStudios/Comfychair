@@ -392,6 +392,10 @@ def tag_style(wf: dict) -> str | None:
     if "TextEncodeQwenImage21" in classes and any(
             k.startswith("images.") for n in wf.values() if n.get("class_type") == "TextEncodeQwenImage21" for k in n["inputs"]):
         return "qwen"        # Picture 1
+    if "Krea2EditGroundedEncode" in classes:
+        return "krea"        # the first image, the second image (Qwen3-VL sees them in that order)
+    if "TextEncodeMOSSImageEdit" in classes:
+        return "moss"        # image 1, image 2 (the Moss-Image-Edit LoRA's own wording)
     return None
 
 
@@ -428,7 +432,11 @@ def drop_node(wf: dict, nid: str):
     A node that loses an input can say what to do in its _meta: "deck_passthrough": "<input>" drops it
     and hands that input's link to whatever it fed (an optional start image on a latent), or a list of
     inputs, one per output (a voice reference passing on model, positive, negative), and
-    "deck_drop": true drops it too (a resize that only served the empty image)."""
+    "deck_drop": true drops it too (a resize that only served the empty image).
+    "deck_follow_on": [<input>…] limits both to losing one of those inputs (a side-by-side of two optional pictures
+    passes the second on when the first is empty, and just shrinks to the first when the second is), and
+    "deck_unplugged": {<input>: value} sets widget values once any of its inputs is unplugged (a setting that
+    only suits the full wiring)."""
     if nid not in wf:
         return
     del wf[nid]
@@ -439,7 +447,10 @@ def drop_node(wf: dict, nid: str):
         for k in removed:
             del inputs[k]
         meta = other.get("_meta") or {}
-        if removed and (meta.get("deck_passthrough") or meta.get("deck_drop")):
+        if removed and isinstance(meta.get("deck_unplugged"), dict):
+            inputs.update(meta["deck_unplugged"])
+        on = meta.get("deck_follow_on")
+        if removed and (meta.get("deck_passthrough") or meta.get("deck_drop")) and (not on or set(removed) & set(on)):
             follow.append(oid)
         # autogrow inputs ("ref_images.ref_image_0", "_1"…) must stay contiguous: close the gap
         for k in removed:

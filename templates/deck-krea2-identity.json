@@ -1,0 +1,203 @@
+{
+ "1": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "krea2_turbo_fp8_scaled.safetensors",
+   "weight_dtype": "default"
+  },
+  "_meta": {
+   "title": "@9 Model [unet_name]"
+  }
+ },
+ "2": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen3vl_4b_fp8_scaled.safetensors",
+   "type": "krea2",
+   "device": "default"
+  },
+  "_meta": {
+   "title": "Load CLIP"
+  }
+ },
+ "3": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "qwen_image_vae.safetensors"
+  },
+  "_meta": {
+   "title": "Load VAE"
+  }
+ },
+ "4": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "model": [
+    "1",
+    0
+   ],
+   "lora_name": "krea/krea2_identity_edit_v2.safetensors",
+   "strength_model": 1.0
+  },
+  "_meta": {
+   "title": "Identity Edit V2 LoRA"
+  }
+ },
+ "5": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "model": [
+    "4",
+    0
+   ],
+   "lora_name": "none",
+   "strength_model": 1.0
+  },
+  "_meta": {
+   "title": "@6 LoRAs"
+  }
+ },
+ "20": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@2 Person"
+  }
+ },
+ "30": {
+  "class_type": "Krea2EditGroundedEncode",
+  "inputs": {
+   "clip": [
+    "2",
+    0
+   ],
+   "prompt": "Full body, the character stands on a misty mountain ridge at sunrise, warm light from the left, wide shot.",
+   "image": [
+    "20",
+    0
+   ],
+   "grounding_px": 768,
+   "system_prompt": ""
+  },
+  "_meta": {
+   "title": "@1 Prompt [prompt]"
+  }
+ },
+ "40": {
+  "class_type": "EmptySD3LatentImage",
+  "inputs": {
+   "width": 1024,
+   "height": 1024,
+   "batch_size": 1
+  },
+  "_meta": {
+   "title": "@3 Size [width,height]"
+  }
+ },
+ "41": {
+  "class_type": "Krea2EditModelPatch",
+  "inputs": {
+   "model": [
+    "5",
+    0
+   ],
+   "source_latent": [
+    "40",
+    0
+   ],
+   "ref_boost": 2.0,
+   "ref_boost_a": 1.0,
+   "fit_mode": "fit",
+   "vae": [
+    "3",
+    0
+   ],
+   "source_image": [
+    "20",
+    0
+   ],
+   "target_latent": [
+    "40",
+    0
+   ],
+   "ref_position": "beside (right of target)",
+   "ref_position_a": "aligned (trained)"
+  },
+  "_meta": {
+   "title": "@4 Reference [ref_boost]"
+  }
+ },
+ "31": {
+  "class_type": "ConditioningZeroOut",
+  "inputs": {
+   "conditioning": [
+    "30",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Negative (zeroed, CFG 1)"
+  }
+ },
+ "50": {
+  "class_type": "KSampler",
+  "inputs": {
+   "seed": 0,
+   "steps": 8,
+   "cfg": 1.0,
+   "sampler_name": "euler",
+   "scheduler": "simple",
+   "denoise": 1.0,
+   "model": [
+    "41",
+    0
+   ],
+   "positive": [
+    "30",
+    0
+   ],
+   "negative": [
+    "31",
+    0
+   ],
+   "latent_image": [
+    "40",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "@5 Sampler [seed,steps]"
+  }
+ },
+ "51": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "50",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "VAE Decode"
+  }
+ },
+ "52": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "krea2_identity",
+   "images": [
+    "51",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Save Image"
+  }
+ }
+}
