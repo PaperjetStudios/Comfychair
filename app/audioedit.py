@@ -21,9 +21,7 @@ FORMATS = {
 
 
 def _run(args: list[str], timeout=3600):
-    r = subprocess.run(args, capture_output=True, timeout=timeout)
-    if r.returncode:
-        raise RuntimeError(r.stderr.decode(errors="replace").strip().splitlines()[-1] if r.stderr else "ffmpeg failed")
+    videoedit.check(subprocess.run(args, capture_output=True, timeout=timeout))
 
 
 def _cut(trim, duration: float) -> list[str]:
@@ -76,16 +74,7 @@ def render(items: list[dict], out: Path, gain: float = 1.0, normalize: bool = Fa
     """Mix the Sound tab's timeline into out (.m4a/.wav/.mp3/.flac). items: [{"path", "kind" (audio|video),
     "track", "muted", "at", "in", "out", "volume", "pan", "fade_in", "fade_out"}], times in seconds.
     gain: the master level; normalize: loudness to -16 LUFS (EBU R128), like a podcast/streaming master."""
-    items = [dict(it) for it in items if it.get("kind") in ("audio", "video")]
-    for it in items:
-        it["info"] = videoedit.probe(Path(it["path"]))
-        dur = it["info"]["duration"]
-        it["in"] = max(0.0, float(it.get("in") or 0))
-        end = min(float(it.get("out") or dur or 0), dur) if dur else float(it.get("out") or 0)
-        it["len"] = end - it["in"]
-        it["at"] = max(0.0, float(it.get("at") or 0))
-        if it["len"] < 0.02:
-            raise ValueError(f"A clip on the timeline is empty ({Path(it['path']).name})")
+    items = videoedit.timeline_items([it for it in items if it.get("kind") in ("audio", "video")], 0.02, still_len=0)
     items = [it for it in items if it["info"]["audio"]]
     if not items:
         raise ValueError("Nothing on the timeline has sound")

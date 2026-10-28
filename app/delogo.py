@@ -128,8 +128,7 @@ def fast(src: Path, out: Path, rects) -> dict:
     args = ["ffmpeg", "-v", "error", "-y", "-i", str(src), "-vf", ",".join(parts) + ",format=yuv420p",
             *videoedit.h264(17), "-c:a", "copy", str(out)]
     r = videoedit.run_ffmpeg(args, timeout=3600)
-    if r.returncode:
-        raise RuntimeError(r.stderr.decode(errors="replace").strip().splitlines()[-1] if r.stderr else "ffmpeg failed")
+    videoedit.check(r)
     return videoedit.probe(out)
 
 

@@ -38,6 +38,31 @@ def run_ffmpeg(args: list[str], **kw) -> subprocess.CompletedProcess:
     return r
 
 
+def check(r: subprocess.CompletedProcess):
+    """Raise ffmpeg's last error line when it failed."""
+    if r.returncode:
+        raise RuntimeError(r.stderr.decode(errors="replace").strip().splitlines()[-1] if r.stderr else "ffmpeg failed")
+
+
+def timeline_items(items: list[dict], min_len: float, still_len: float = 3.0) -> list[dict]:
+    """Copies of a timeline's items with what the renders need: info (probe), in, len and at, clamped to
+    the source (an image has no length of its own: its out, else still_len). Raises on a clip too short to
+    render. Shared by render() and audioedit.render(); mirrors itLen in web/timeline.js."""
+    items = [dict(it) for it in items]
+    for it in items:
+        it["info"] = probe(Path(it["path"]))
+        dur = it["info"]["duration"] if it["kind"] != "image" else 0
+        it["in"] = max(0.0, float(it.get("in") or 0))
+        end = float(it.get("out") or dur or still_len)
+        if dur:
+            end = min(end, dur)
+        it["len"] = end - it["in"]
+        it["at"] = max(0.0, float(it.get("at") or 0))
+        if it["len"] < min_len:
+            raise ValueError(f"A clip on the timeline is empty ({Path(it['path']).name})")
+    return items
+
+
 def probe(path: Path) -> dict:
     """{"width", "height" (as shown: a rotation tag is applied), "rotation", "duration", "fps", "video", "audio", "alpha"}
     for a video, image or audio file.
@@ -148,18 +173,7 @@ def render(items: list[dict], out: Path, width: int | None = None, height: int |
     "hidden", "muted", "at", "in", "out", "x", "y", "scale", "fit", "rotation" (degrees, clockwise), "anchor_x", "anchor_y" (0..1 of the
     clip, default 0.5), "opacity", "volume", "fade_in", "fade_out"}] with times in seconds. Frame size and rate default to the first visual
     clip's; gaps are black, clip audio and audio-track clips are mixed."""
-    items = [dict(it) for it in items]
-    for it in items:
-        it["info"] = probe(Path(it["path"]))
-        dur = it["info"]["duration"] if it["kind"] != "image" else 0
-        it["in"] = max(0.0, float(it.get("in") or 0))
-        end = float(it.get("out") or dur or 3)
-        if dur:
-            end = min(end, dur)
-        it["len"] = end - it["in"]
-        it["at"] = max(0.0, float(it.get("at") or 0))
-        if it["len"] < 0.04:
-            raise ValueError(f"A clip on the timeline is empty ({Path(it['path']).name})")
+    items = timeline_items(items, 0.04)
     if not items:
         raise ValueError("The timeline is empty")
     _overlaps(items)
@@ -219,8 +233,7 @@ def render(items: list[dict], out: Path, width: int | None = None, height: int |
              *h264(18), "-pix_fmt", "yuv420p",
              "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)]
     r = run_ffmpeg(args, timeout=3600)
-    if r.returncode:
-        raise RuntimeError(r.stderr.decode(errors="replace").strip().splitlines()[-1] if r.stderr else "ffmpeg failed")
+    check(r)
     return probe(out)
 
 
@@ -292,8 +305,7 @@ def refine_matte(a: Path, out: Path, b: Path | None = None, **opts) -> dict:
     args += ["-filter_complex", fc, "-map", "[v]", "-an", *h264(16),
              "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out)]
     r = run_ffmpeg(args, timeout=3600)
-    if r.returncode:
-        raise RuntimeError(r.stderr.decode(errors="replace").strip().splitlines()[-1] if r.stderr else "ffmpeg failed")
+    check(r)
     return probe(out)
 
 
@@ -339,8 +351,7 @@ def key(src: Path, out: Path, mode: str, matte: Path | None = None, trim: dict |
     args += ["-shortest", "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "28",
              "-row-mt", "1", "-deadline", "good", "-cpu-used", "4", "-auto-alt-ref", "0", str(out)]
     r = subprocess.run(args, capture_output=True, timeout=3600)
-    if r.returncode:
-        raise RuntimeError(r.stderr.decode(errors="replace").strip().splitlines()[-1] if r.stderr else "ffmpeg failed")
+    check(r)
     return probe(out)
 
 
@@ -381,5 +392,4 @@ def canvas_clip(src: Path, out_video: Path, out_mask: Path, plan: dict, trim: di
             "-movflags", "+faststart", str(out_video),
             "-map", "[m]", "-an", *h264(16), "-t", f"{dur:.3f}", "-movflags", "+faststart", str(out_mask)]
     r = run_ffmpeg(args, timeout=1800)
-    if r.returncode:
-        raise RuntimeError(r.stderr.decode(errors="replace").strip().splitlines()[-1] if r.stderr else "ffmpeg failed")
+    check(r)
