@@ -54,6 +54,37 @@ class Paint(unittest.TestCase):
         Image.new("RGB", (8, 8)).save(b, "JPEG")
         self.assertEqual(c.post("/api/paint", content=b.getvalue()).status_code, 400)
 
+    def test_prune_keeps_what_tabs_name(self):
+        import json
+        import time
+        folder = config.INPUT_DIR / "paint"
+        folder.mkdir(exist_ok=True)
+        old = time.time() - 40 * 86400
+
+        def paint(tag, age=old):
+            name = f"{tag:0>20}.png"
+            (folder / name).write_bytes(b"x")
+            os.utime(folder / name, (age, age))
+            return name
+        kept_tab, kept_lib, kept_trash, gone_trash, orphan = (paint(t) for t in ("a1", "b2", "c3", "d4", "e5"))
+        fresh = paint("f6", time.time())
+
+        def doc(d, fname, layer):
+            d.mkdir(parents=True, exist_ok=True)
+            (d / fname).write_text(json.dumps({"payload": {"layers": [{"name": f"comfydeck/paint/{layer}"}]}}))
+        tabs = config.PROJECTS_DIR / "Some project" / ".deck" / "edit-tabs"
+        doc(tabs, "t1.json", kept_tab)
+        doc(config.LIBRARY_DIR / "edit-tabs", "t2.json", kept_lib)
+        now = time.time_ns()
+        doc(tabs / ".trash", f"t3.{now - 5 * 86400 * 10**9}.json", kept_trash)     # trashed 5 days ago: can come back
+        doc(tabs / ".trash", f"t4.{now - 40 * 86400 * 10**9}.json", gone_trash)    # trashed 40 days ago: gone for good
+        main.prune_paint()
+        left = {p.name for p in folder.glob("*.png")}
+        for n in (kept_tab, kept_lib, kept_trash, fresh):
+            self.assertIn(n, left)
+        for n in (gone_trash, orphan):
+            self.assertNotIn(n, left)
+
     def test_local_input_stays_in_its_folders(self):
         self.assertIsNone(main.local_input("comfydeck/paint/../../etc/passwd"))
         self.assertIsNone(main.local_input("other/x.png"))

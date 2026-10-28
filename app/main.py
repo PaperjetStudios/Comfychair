@@ -374,11 +374,13 @@ async def lifespan(app: FastAPI):
     await comfy.start()
     task = asyncio.create_task(reconcile_loop())
     sweeper = asyncio.create_task(clipimport.sweeper())   # the clip importer's previews and leftovers
+    painter = asyncio.create_task(paint_pruner())   # the Editor's paint files no tab names any more
     asyncio.create_task(asyncio.to_thread(backfill_facts))
     log.info("ComfyChair ready. ComfyUI at %s", config.COMFY_URL)
     yield
     task.cancel()
     sweeper.cancel()
+    painter.cancel()
     await comfy.stop()
 
 
@@ -750,7 +752,51 @@ async def save_paint(request: Request):
         tmp = folder / f".{fname}.tmp"
         tmp.write_bytes(data)
         tmp.replace(folder / fname)
+    else:
+        os.utime(folder / fname)   # the same pixels again: fresh, so prune_paint leaves it until its tab names it
     return {"name": f"{config.COMFY_INPUT_SUBFOLDER}/{PAINT_SUB}/{fname}", "width": w, "height": h}
+
+
+PAINT_NAME = re.compile(rf"{re.escape(PAINT_SUB)}/([0-9a-f]{{20}}\.png)")
+
+
+def prune_paint(max_age_days=30):
+    """Delete paint files older than a month that no Editor tab names: every project's and the library's
+    edit tabs, and their trashed copies still inside store.TRASH_DAYS (Undo can bring those back)."""
+    folder = config.INPUT_DIR / PAINT_SUB
+    if not folder.is_dir():
+        return
+    keep: set[str] = set()
+    trash_cutoff = time.time_ns() - store.TRASH_DAYS * 86400 * 10**9
+    dirs = [config.LIBRARY_DIR / "edit-tabs", *config.PROJECTS_DIR.glob("*/.deck/edit-tabs")]
+    for d in dirs:
+        docs = list(d.glob("*.json"))
+        for p in (d / ".trash").glob("*.json") if (d / ".trash").is_dir() else []:
+            ts = p.name[:-5].rpartition(".")[2]
+            if not ts.isdigit() or int(ts) >= trash_cutoff:   # (an odd name: kept to be safe)
+                docs.append(p)
+        for p in docs:
+            try:
+                keep.update(PAINT_NAME.findall(p.read_text(errors="replace")))
+            except OSError:
+                return   # a doc we can't read might name any of them: delete nothing this time
+    cutoff = time.time() - max_age_days * 86400
+    for p in folder.glob("*.png"):
+        try:
+            if p.name not in keep and p.stat().st_mtime < cutoff:
+                p.unlink()
+        except OSError:
+            pass
+
+
+async def paint_pruner():
+    """main.py's lifespan runs this: prune_paint() now and once a day."""
+    while True:
+        try:
+            await asyncio.to_thread(prune_paint)
+        except Exception:
+            log.exception("pruning paint files failed")
+        await asyncio.sleep(86400)
 
 
 @app.post("/api/inputs/crop")

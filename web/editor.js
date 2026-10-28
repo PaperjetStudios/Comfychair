@@ -601,13 +601,22 @@ function wireEditor() {
     }
     return null;
   };
-  let drag = null, lastTap = { t: 0, l: null };
+  let drag = null, lastTap = { t: 0, l: null }, held = [];
+  // a second finger turns the press into a pinch (paint.js): what the first finger moved goes back
+  const cancelDrag = () => {
+    if (!drag) return;
+    for (const [l, x, y, scale, crop] of held) Object.assign(l, { x, y, scale, crop });
+    drag = null; EVheld = false; E.guides = [];
+    lastTap = { t: 0, l: null };   // (a pinch's first finger isn't half a double-tap)
+    drawEditorCanvas();
+  };
   cv.addEventListener('pointerdown', (e) => {
     if (!EV || EA.exporting) return;
     editorPause();
     e.preventDefault(); cv.setPointerCapture(e.pointerId);
     const p = point(e), sel = E.sel && ready(E.sel) ? E.sel : null;
     drag = null; EVheld = true;
+    held = E.layers.map((l) => [l, l.x, l.y, l.scale, { ...l.crop }]);
     if (sel && E.cropping) {
       const ir = imageRect(sel), c = sel.crop, k = corner(p, layerRect(sel));
       const q = { x: clamp01((p.x - ir.x) / ir.w), y: clamp01((p.y - ir.y) / ir.h) };
@@ -696,7 +705,7 @@ function wireEditor() {
   // painting (paint.js): its pointer handlers come first while a paint tool is picked; its tool strip sits on the left
   cv.parentElement.append(...bindPaint({
     E, canvas: () => cv, viewer: () => cv.parentElement, view: () => EV, zoom: viewZoom, frame: editorFrame,
-    toCanvas: (e) => point(e), redraw: drawEditorCanvas, render: renderEditor, changed: persistEditor,
+    toCanvas: (e) => point(e), cancelDrag, redraw: drawEditorCanvas, render: renderEditor, changed: persistEditor,
     composite: (c) => { const f = editorFrame(); if (f) { c.fillStyle = E.bg; c.fillRect(f.x, f.y, f.w, f.h); } visibleLayers().forEach((l) => drawLayer(c, l)); },
     active: () => $('#tab-editor').classList.contains('active') && !sheetOpen() && !EA.exporting,
   }));
