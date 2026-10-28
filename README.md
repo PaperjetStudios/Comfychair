@@ -78,7 +78,31 @@ its own, so the start order between them doesn't matter.
 **HTTPS (optional, recommended):** over HTTPS the tablet can use the real screen wake-lock, show
 "done" notifications, and install ComfyChair as an app (with an offline page when the box is off).
 Over plain http ComfyChair keeps the screen on during runs with a tiny silent video instead, and
-signals a finished run with a chime and a ✓ in the tab title. To make a certificate with openssl:
+signals a finished run with a chime and a ✓ in the tab title.
+
+The easy way is Tailscale: a real certificate for the box's tailnet name, nothing to install on the
+tablet but the Tailscale app, and it works away from home too. `deploy/tailscale-https.sh` lists the
+one-time steps (install Tailscale, turn on MagicDNS and HTTPS Certificates in its admin console),
+then serves ComfyChair at `https://<box>.<tailnet>.ts.net` and prints how to install it on Android
+(Chrome ⋮ → Install app):
+
+```bash
+deploy/tailscale-https.sh                 # :8190 → https://<box>.<tailnet>.ts.net
+```
+
+**A second copy as its own app** (e.g. an experimental branch next to the one you use): check it out
+next to this one and run it on another port with another name, then serve that port too. Each address
+installs as its own home-screen app, named by `DECK_NAME`:
+
+```bash
+git worktree add ../comfychair-exp <branch>
+cd ../comfychair-exp && DECK_PORT=8191 DECK_NAME="ComfyChair Lab" ./run.sh
+deploy/tailscale-https.sh 8191 8443       # → https://<box>.<tailnet>.ts.net:8443
+```
+
+Both copies share `data/` only if you point them at the same one (`DECK_DATA`); by default each has its own.
+
+Without Tailscale, make a certificate with openssl:
 
 ```bash
 deploy/make-cert.sh                       # makes certs/comfydeck-ca.crt + the server certificate

@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import random
 import re
 import shutil
@@ -11,6 +12,7 @@ import tempfile
 import time
 import uuid
 from contextlib import asynccontextmanager
+from html import escape
 from pathlib import Path
 from urllib.parse import parse_qs, quote
 
@@ -1595,6 +1597,17 @@ class AppFiles(StaticFiles):
         return r
 
 
+APP_NAME = os.environ.get("DECK_NAME", "ComfyChair")   # a second copy (another port) installs as its own app by this name
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+async def manifest():
+    """The PWA manifest with this copy's name (DECK_NAME), so two copies on one box are two home-screen apps."""
+    m = json.loads((config.WEB_DIR / "manifest.webmanifest").read_text(encoding="utf-8"))
+    m["name"] = m["short_name"] = APP_NAME
+    return Response(json.dumps(m), media_type="application/manifest+json", headers={"Cache-Control": "no-cache"})
+
+
 @app.get("/", include_in_schema=False)
 @app.get("/index.html", include_in_schema=False)
 async def index():
@@ -1602,6 +1615,8 @@ async def index():
     by an older version can't be reused. app.js gets the newest change over all web/ files, because
     the modules it imports (see module_js) are versioned the same way."""
     html = (config.WEB_DIR / "index.html").read_text(encoding="utf-8")
+    if APP_NAME != "ComfyChair":
+        html = html.replace("<title>ComfyChair</title>", f"<title>{escape(APP_NAME)}</title>")
     html = html.replace('"app.js"', f'"app.js?v={ui_version()}"')
     v = int((config.WEB_DIR / "app.css").stat().st_mtime)
     html = html.replace('"app.css"', f'"app.css?v={v}"')
