@@ -83,6 +83,15 @@ const PATHS = {
   choose: ['M4 4h16v16H4z', 'M8 12l3 3 5-6'],
   diamond: ['M12 3.5l8.5 8.5-8.5 8.5L3.5 12z'],
   chevron: ['M9.5 6l6 6-6 6'],
+  // the Story tab
+  plus: ['M12 5v14M5 12h14'],
+  copy: ['M8 8h12v12H8z', 'M16 8V4H4v12h4'],
+  grip: ['M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01'],
+  more: ['M5 12h.01M12 12h.01M19 12h.01'],
+  list: ['M9 6h11M9 12h11M9 18h11', 'M4 6h.01M4 12h.01M4 18h.01'],
+  board: ['M3 4h8v6H3zM13 4h8v6h-8z', 'M3 14h8v6H3zM13 14h8v6h-8z'],
+  story: ['M3 4h8v6H3zM13 4h8v6h-8z', 'M3 14h8M3 17.5h6M13 14h8M13 17.5h6'],
+  text: ['M4 6h16M4 10h16M4 14h10M4 18h7'],
 };
 // what used to be on the buttons -> its icon (filled: drawn solid, the "on" version of a shape)
 const GLYPHS = {
