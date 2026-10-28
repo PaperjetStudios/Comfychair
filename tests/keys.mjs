@@ -321,3 +321,137 @@ console.log('record ok');
   assert.equal(K.keysPast([cam, fig], 100), 3); assert.equal(K.keysPast([cam, fig, none], 300), 0);
 }
 console.log('stretch ok');
+
+{ // curves: auto, clamp, bezier handles solved in time; old eases unchanged
+  const S = (l, f, ease = 'smooth') => K.sampleKeys(l, f, { ease });
+  const close = (a, b, e = 1e-6) => assert.ok(Math.abs(a - b) < e, `${a} != ${b}`);
+  const old = [{ f: 0, v: 0 }, { f: 10, v: 10 }];
+  close(S(old, 5), 5); close(S(old, 2), 10 * (0.04 * (3 - 0.4))); close(S([{ f: 0, v: 0, ease: 'linear' }, { f: 10, v: 10 }], 3), 3);
+  // auto through a straight line is the line (thirds: no solve), ends flat
+  const line = [0, 10, 20, 30].map((f) => ({ f, v: f * 2, ease: 'auto' }));
+  close(S(line, 15), 30); close(S(line, 12.5), 25);
+  assert.equal(K.handleOf(line, 0, 'to')[1], 0);   // an end key is flat
+  // auto overshoots a peak, clamp doesn't
+  const peak = (e) => [{ f: 0, v: 0, ease: e }, { f: 10, v: 10, ease: e }, { f: 12, v: 10, ease: e }, { f: 20, v: 0, ease: e }];
+  let maxA = -Infinity, maxC = -Infinity;
+  for (let f = 0; f <= 20; f += 0.25) { maxA = Math.max(maxA, S(peak('auto'), f)); maxC = Math.max(maxC, S(peak('clamp'), f)); }
+  assert.ok(maxA > 10.01); close(maxC, 10, 1e-9);
+  // the curve passes its keys exactly
+  for (const k of peak('clamp')) close(S(peak('clamp'), k.f), k.v);
+  // bezier: setEase keeps the curve where it was, then a dragged handle bends it; x solved in time (monotone in f)
+  const L = K.track({ chans: { x: peak('auto') } }, 'x'), before = [...Array(21)].map((_, f) => S(L.keys, f));
+  K.setEase(new Set(L.keys), 'bezier', [L]);
+  assert.ok(L.keys.every((k) => Array.isArray(k.ti) && Array.isArray(k.to)));
+  before.forEach((v, f) => close(S(L.keys, f), v, 1e-6));
+  K.moveHandle(L.keys, 1, 'to', 1.8, 6);   // aligned: the in handle turns to the same slope
+  close(L.keys[1].ti[1] / L.keys[1].ti[0], 6 / 1.8);
+  K.setBroken(new Set([L.keys[1]]), true); K.moveHandle(L.keys, 1, 'ti', -3, 0);
+  close(L.keys[1].to[1], 6);   // broken: the other stays
+  close(S(L.keys, 10), 10); close(S(L.keys, 12), 10);
+  // handles longer than the segment are shortened, the curve still a function of time
+  K.moveHandle(L.keys, 1, 'to', 50, 0); K.moveHandle(L.keys, 2, 'ti', -50, 0);
+  for (let f = 10; f <= 12; f += 0.1) assert.ok(Number.isFinite(S(L.keys, f)) && Math.abs(S(L.keys, f) - 10) < 1e-6);
+  // back to auto drops the handles
+  K.setEase(new Set(L.keys), 'auto', [L]); assert.ok(L.keys.every((k) => !k.ti && !k.to && !k.hb));
+  // joints (non-numbers) under a curve ease blend smooth
+  const q = [{ f: 0, v: 'a', ease: 'bezier' }, { f: 10, v: 'b' }];
+  assert.equal(K.sampleKeys(q, 4, { lerp: (a, b, e) => (e < 0.5 ? a : b) }), 'a');
+  // speed: 10k samples of a 500-key bezier channel
+  const big = [...Array(500)].map((_, i) => ({ f: i * 2, v: Math.sin(i / 7), ease: 'bezier', to: [0.5, 0.1], ti: [-0.9, -0.2] }));
+  const t0 = performance.now(); let s = 0; for (let i = 0; i < 10000; i++) s += S(big, (i * 0.0997) % 998);
+  assert.ok(Number.isFinite(s) && performance.now() - t0 < 200, `slow: ${performance.now() - t0} ms`);
+}
+console.log('curves ok');
+
+{ // the offset layer: shown on top of the keys, edits under it go back to key space, the gizmo on it, bake
+  const close = (a, b, e = 1e-6) => assert.ok(Math.abs(a - b) < e, `${a} != ${b}`);
+  const walk = [0, 10, 20].map((f) => ({ f, v: f / 10, ease: 'linear' }));   // walks 2 m along +X
+  const o = { id: 'w', type: 'figure', ease: 'smooth', base: { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 1, sy: 1, sz: 1, j: { lsho: [0, 0, 0, 1] } },
+    chans: { x: walk, ry: [{ f: 0, v: 0 }, { f: 20, v: 0 }] } };
+  D.setSC({ seconds: 6, camera: { base: {}, chans: {} }, objects: [o] }); D.R.autoKey = true; D.R.f = 0; D.R.real = false; D.TEMP.clear();
+  o.off = D.newOffset(o, 0);
+  assert.deepEqual(o.off.pv, [0, 0, 0]);
+  const keysBefore = strip(o.chans);
+  // turned 90° on Y around where it started: the walk now goes along -Z
+  D.setOffset(o, { ry: 90 });
+  let v = D.current(o, D.OBJ, 20);
+  close(v.x, 0); close(v.z, -2); close(v.ry, 90);
+  assert.deepEqual(strip(o.chans), keysBefore);   // the keys are untouched
+  assert.equal(D.sample(o, D.OBJ, 20).x, 2);
+  // the gizmo on the offset: put the figure at (5, 0, 5) at frame 10 → the whole path slides
+  D.R.offEdit = 'w'; D.R.f = 10;
+  D.write(o, D.FIG, { ...D.current(o, D.OBJ, 10), x: 5, z: 5 });
+  v = D.current(o, D.OBJ, 10); close(v.x, 5); close(v.z, 5);
+  v = D.current(o, D.OBJ, 20); close(v.x, 5); close(v.z, 4);   // one more metre along -Z
+  assert.deepEqual(strip(o.chans), keysBefore);
+  // scale it: twice the size, the path twice as long (from where it stands now)
+  D.write(o, D.FIG, { ...D.current(o, D.OBJ, 10), sx: 2, sy: 2, sz: 2 });
+  close(D.current(o, D.OBJ, 10).x, 5); close(D.current(o, D.OBJ, 20).z, 3); close(D.current(o, D.OBJ, 20).sy, 2);
+  // without offset editing, a move goes into the keys, in key space (shown 1 m further along -Z = 0.5 m of key X at 2x)
+  D.R.offEdit = null;
+  D.write(o, D.FIG, { z: D.current(o, D.OBJ, 10).z - 1 });
+  close(D.sample(o, D.OBJ, 10).x, 1.5); close(D.current(o, D.OBJ, 10).z, 4);
+  // a joint offset turns that joint on every frame, its keys kept
+  D.R.offEdit = 'w';
+  const q = [Math.sin(0.25), 0, 0, Math.cos(0.25)];
+  D.write(o, D.FIG, { j: { ...D.current(o, D.FIG).j, lsho: q } });
+  D.current(o, D.FIG, 0).j.lsho.forEach((x, i) => close(x, q[i]));
+  assert.deepEqual(o.base.j.lsho, [0, 0, 0, 1]);
+  // the offset keyed sparsely: two keys, it slides between them
+  D.R.f = 0; D.keyOffset(o); D.R.f = 20; D.setOffset(o, { x: D.offAt(o, 20).x + 1 });
+  close(D.offAt(o, 10).x - D.offAt(o, 0).x, 0.5, 1e-9);
+  // bake: what shows stays, the offset goes
+  const shown = [0, 4, 10, 15, 20].map((f) => strip(D.current(o, D.FIG, f)));
+  D.bakeOffset(o);
+  assert.ok(!o.off);
+  [0, 10, 20].forEach((f, i) => { const now = D.current(o, D.FIG, f), was = shown[[0, 2, 4][i]]; for (const k of D.OBJ) close(now[k], was[k], 1e-6); });
+  assert.ok(o.chans['j.lsho'] || o.base.j.lsho[0] > 0.1);
+  // a turn that isn't flat comes back as numbers near the keys' own (no 180 / x / 180 flip)
+  const b = { id: 'b', type: 'box', ease: 'smooth', base: { x: 0, y: 0, z: 0, rx: 10, ry: 170, rz: 0, sx: 1, sy: 1, sz: 1 }, chans: {} };
+  b.off = D.newOffset(b, 0); D.setOffset(b, { rx: 5 });
+  v = D.current(b, D.OBJ, 0); assert.ok(Math.abs(v.ry - 170) < 20, JSON.stringify(v));
+  D.R.offEdit = null;
+}
+console.log('offset ok');
+
+{ // reduce: far fewer keys, every frame within tolerance, ends and unpicked keys kept, the same key objects
+  const dense = [...Array(61)].map((_, i) => ({ f: i * 2, v: Math.sin(i / 6) * 2 + i * 0.01, ease: 'linear' }));
+  const want = (l, f) => K.sampleKeys(l, f, { ease: 'smooth' });
+  for (const as of ['clamp', 'linear']) {
+    const copy = strip(dense), out = K.reduceKeys(copy, 0.05, { as });
+    assert.ok(out.length < copy.length / 2.5, `${as}: ${out.length}`);
+    for (const k of dense) assert.ok(Math.abs(want(out, k.f) - k.v) <= 0.05 + 1e-9, `${as} f${k.f}`);
+    assert.equal(out[0], copy[0]); assert.equal(out[out.length - 1], copy[copy.length - 1]);
+    assert.ok(out.every((k) => k.ease === as));
+  }
+  // a looser tolerance keeps fewer; zero keeps what is needed for an exact curve (a straight run thins to its ends)
+  const line = [...Array(20)].map((_, i) => ({ f: i, v: i * 3, ease: 'linear' }));
+  assert.equal(K.reduceKeys(line, 0, { as: 'linear' }).length, 2);
+  assert.ok(K.reduceKeys(strip(dense), 0.2).length < K.reduceKeys(strip(dense), 0.01).length);
+  // only the picked keys can go; dry leaves eases alone
+  const c2 = strip(dense), pick = new Set(c2.slice(10, 30)), out2 = K.reduceKeys(c2, 0.05, { pick, dry: true });
+  assert.ok(c2.filter((k) => !pick.has(k)).every((k) => out2.includes(k)));
+  assert.ok(c2.every((k) => k.ease === 'linear'));
+  // joints: the error in degrees between turns
+  const q = (a) => [Math.sin(a / 2), 0, 0, Math.cos(a / 2)];
+  const jl = [...Array(30)].map((_, i) => ({ f: i, v: q(i < 15 ? i * 0.05 : 0.75), ease: 'linear' }));
+  const slerp = F.slerpQ, jo = K.reduceKeys(jl, 0.5, { as: 'linear', lerp: slerp, dist: K.quatDeg });
+  assert.ok(jo.length <= 4, `${jo.length}`);
+  for (let f = 0; f < 30; f++) assert.ok(K.quatDeg(K.sampleKeys(jo, f, { lerp: slerp }), K.sampleKeys(jl, f, { lerp: slerp })) <= 0.5 + 1e-6);
+  assert.ok(Math.abs(K.quatDeg(q(0), q(Math.PI / 2)) - 90) < 1e-6);
+  // short lists come back as they are
+  assert.equal(K.reduceKeys([{ f: 0, v: 1 }, { f: 3, v: 9 }], 1).length, 2);
+}
+console.log('reduce ok');
+
+{ // cameras: an old scene's one camera is the active one; another made active swaps places
+  const sc = D.upgrade({ camera: { base: { px: 1, py: 1, pz: 1, tx: 0, ty: 0, tz: 0, fov: 40 }, keys: [{ f: 0, px: 1 }, { f: 9, px: 4 }] }, objects: [] });
+  assert.deepEqual(sc.cams, []); assert.equal(sc.camera.name, 'Camera'); assert.equal(sc.camera.chans.px.length, 2);
+  D.setSC(sc); D.R.f = 0;
+  const b = D.newCamera('B'); sc.cams.push(b);
+  assert.equal(b.base.px, 1); assert.deepEqual(b.chans, {});
+  const a = sc.camera;
+  assert.ok(D.setActiveCam(b)); assert.equal(sc.camera, b); assert.deepEqual(sc.cams, [a]);
+  assert.ok(!D.setActiveCam(b)); assert.deepEqual(D.camsOf(), [b, a]);
+}
+console.log('cameras ok');

@@ -1,11 +1,12 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
-import { C, FIG, FPS, OBJ, R, SC, TEMP, addKey, current, dropKeys, frames, isPoseCh, keyFrames, newObject, putKeys, sameTab, sample, save, write } from './scene-data.js';
+import { C, FIG, FPS, OBJ, R, SC, TEMP, addKey, current, rawCurrent, dropKeys, frames, isPoseCh, keyFrames, newObject, putKeys, sameTab, sample, save, write } from './scene-data.js';
 import { button, clone, field, h, hint, iconBtn, nameSheet, section, seg, store, toast, uid, undoToast , help, toggle, chips, chip } from './ui.js';
 import { HAND, changed, handMode, selectJoint } from './scene-view.js';
 import { renderPanel, slider } from './scene-ui.js';
 import { seek } from './scene-export.js';
 import { motionField } from './scene-motion.js';
+import { offsetField } from './scene-offset.js';
 
 // a figure that isn't planted on the floor keeps its feet (or seat) where they were for a new pose
 function liftTo(o, v, j, m) {
@@ -195,7 +196,7 @@ export function faceTab(o, cur) {
 
 // a move: keys from the playhead on, starting from the pose it's in now (one undo)
 function runMove(o, key) {
-  const v = current(o, FIG), f0 = R.f, n = frames(), k = R.speed;
+  const v = rawCurrent(o, FIG), f0 = R.f, n = frames(), k = R.speed;   // (in key space: an offset layer stays on top)
   const avail = (n - 1 - f0) / FPS / k;
   if (avail < 0.3) return toast('Move the playhead back: there\'s no time left for a move', true);
   const steps = FIGURE.moveSteps(key, avail, R.inPlace);
@@ -245,6 +246,7 @@ export function movesTab(o, cur) {
     h('div', { class: 'pose-grid moves' }, FIGURE.moveList().map(([k, l, icon]) => tile(l, h('span', { class: 'move-icon' }, icon), () => runMove(o, k)))),
     help('A move starts at the playhead from the pose the figure is in, and replaces the keys it covers. Undo takes it back.'),
     ...motionField(o),
+    offsetField(o),
   ];
 }
 

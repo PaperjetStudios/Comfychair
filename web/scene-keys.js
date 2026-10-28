@@ -1,11 +1,12 @@
 import * as FIGURE from './figure.js';
 import { fullScreen } from './layout.js';
-import { $, button, h, info as infoBtn, numSlider, sheetOpen, store, toast, toggle, canvasFont } from './ui.js';
+import { $, button, h, info as infoBtn, numSlider, seg, sheetOpen, store, toast, toggle, canvasFont } from './ui.js';
+import { icon } from './icons.js';
 import {
-  CAM, FPS, HOLD, OBJ, R, ROOM, SC, TEMP, TYPES, WP, addKey, bakeBase, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setKey, setMute
+  CAM, FPS, HOLD, OBJ, OFF, R, ROOM, SC, TEMP, TYPES, WP, addKey, bakeBase, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setKey, setMute
 } from './scene-data.js';
 import {
-  EASES, allKeys, bounds, copy, isScalar, kindOf, moveBy, paste, prune, remove, restore, scaleAround, setChan, setEase, snapshot, track
+  CURVES, EASES, allKeys, bounds, copy, handleOf, isScalar, kindOf, moveBy, moveHandle, paste, prune, quatDeg, reduceKeys, remove, restore, scaleAround, setBroken, setChan, setEase, snapshot, track
 } from './keys.js';
 import { changed, draw, pose, select } from './scene-view.js';
 import { busy, play, seek } from './scene-export.js';
@@ -27,9 +28,11 @@ const OPEN = new Set(store.get('deck.scene.keyopen', []));   // the rows that ar
 const G = { ch: 'py' };  // the graph's channel
 const V = { a: 0, b: 1, fit: true };   // the frames on show
 
-const layers = () => [{ item: SC.camera, id: null, kind: 'cam', names: CAM, label: '🎥 Camera' },
+// the active camera, then the others (other: they key here, but the view moves only the active one), then the objects
+const layers = () => [{ item: SC.camera, id: null, kind: 'cam', names: CAM, label: `🎥 ${SC.cams?.length ? SC.camera.name : 'Camera'}` },
+  ...(SC.cams || []).map((c) => ({ item: c, id: `cam:${c.id}`, kind: 'cam', names: CAM, label: `🎥 ${c.name}`, other: true })),
   ...SC.objects.map((o) => ({ item: o, id: o.id, kind: kindOf(o), names: namesFor(o), label: `${TYPES[o.type].icon} ${o.name}` }))];
-const shown = () => (modeOf().lanes === 'camera' ? layers().slice(0, 1) : layers());
+const shown = () => (modeOf().lanes === 'camera' ? layers().filter((L) => L.kind === 'cam') : layers());
 const span = () => Math.max(1, frames() - 1);
 
 // every channel a layer can have: one track each (a channel with no keys has an empty one, for paste and the like)
@@ -39,7 +42,10 @@ function chanIds(L) {
   const base = L.kind === 'figure' ? [...OBJ, 'pn', ...Object.keys(FIGURE.PARAMS).map((p) => `m.${p}`), ...JOINTS.map((j) => `j.${j}`)] : L.names;
   return [...new Set([...base, ...own])];
 }
-const tracksOf = (L) => chanIds(L).map((ch) => track(L.item, ch, { id: L.id, kind: L.kind }));
+// (an offset layer's channels are the layer's too: kind 'off', so a paste never mixes them with its keys)
+const offIds = (L) => (L.item.off ? [...new Set([...OFF, ...Object.keys(L.item.off.chans || {})])] : []);
+const offTracks = (L) => offIds(L).map((ch) => track(L.item.off, ch, { id: L.id, kind: 'off' }));
+const tracksOf = (L) => [...chanIds(L).map((ch) => track(L.item, ch, { id: L.id, kind: L.kind })), ...offTracks(L)];
 const allTracks = () => shown().flatMap(tracksOf);
 const gTrack = () => { const L = gLayer(); return L ? track(L.item, G.ch, { id: L.id, kind: L.kind }) : null; };
 
@@ -67,7 +73,7 @@ function gLayer() {
 // the numbers the graph can plot: a figure's parameters once keyed (a joint's turn is not one number)
 const channels = (L) => chanIds(L).filter((ch) => isScalar(ch) && !(ch.startsWith('m.') && !L.item.chans?.[ch]));
 const LABELS = { x: 'X', y: 'Up', z: 'Z', rx: 'Rot X', ry: 'Rot Y', rz: 'Rot Z', sx: 'Width', sy: 'Height', sz: 'Depth',
-  px: 'Cam X', py: 'Cam height', pz: 'Cam Z', tx: 'Aim X', ty: 'Aim Y', tz: 'Aim Z', fov: 'Lens', roll: 'Roll', pn: 'Pose name' };
+  px: 'Cam X', py: 'Cam height', pz: 'Cam Z', tx: 'Aim X', ty: 'Aim Y', tz: 'Aim Z', fov: 'Lens', roll: 'Roll', pn: 'Pose name', s: 'Scale' };
 const chLabel = (ch) => (ch.startsWith('m.') ? (FIGURE.PARAMS[ch.slice(2)]?.label || ch.slice(2)) : ch.startsWith('j.') ? (FIGURE.RIG_JOINTS[ch.slice(2)]?.[2] || ch.slice(2)) : LABELS[ch] || ch);
 const sampleCh = (L, ch, f) => sampleChan(L.item, ch, f);
 function graphRange(L, ch) {
@@ -91,11 +97,17 @@ function diamonds(tracks, own) {
 const LIMBS = [...FIGURE.PART_GROUPS, ['fingersL', 'L fingers', FIGURE.handJoints('l')], ['fingersR', 'R fingers', FIGURE.handJoints('r')]];
 // the rows of one layer (its channels, nested like Blender's: the pose under a "Pose" row, by limb)
 function layerRows(L) {
-  const T = new Map(tracksOf(L).map((t) => [t.ch, t])), get = (chs) => chs.map((c) => T.get(c)).filter(Boolean);
+  const T = new Map(tracksOf(L).filter((t) => t.kind !== 'off').map((t) => [t.ch, t])), get = (chs) => chs.map((c) => T.get(c)).filter(Boolean);
   const row = (t, label, depth, tracks, key = null) => ({ t, L, label, depth, key, tracks, dia: diamonds(tracks, t === 'chan') });
-  const rows = [row('item', L.label, 0, [...T.values()], `i:${L.id}`)];
+  const OT = offTracks(L);
+  const rows = [row('item', L.label, 0, [...T.values(), ...OT], `i:${L.id}`)];
   if (!OPEN.has(`i:${L.id}`)) return rows;
   const chan = (ch, depth) => row('chan', chLabel(ch), depth, [T.get(ch)]);
+  if (OT.length) {   // the offset layer: its own group, first (it moves everything under it)
+    const k = `o:${L.id}`;
+    rows.push(row('group', 'Offset', 1, OT, k));
+    if (OPEN.has(k)) for (const t of OT) rows.push(row('chan', chLabel(t.ch), 2, [t]));
+  }
   if (L.kind !== 'figure') { for (const ch of L.names) rows.push(chan(ch, 1)); return rows; }
   for (const ch of OBJ) rows.push(chan(ch, 1));
   const params = [...T.keys()].filter((c) => c.startsWith('m.') && T.get(c).keys.length);
@@ -162,7 +174,9 @@ export function renderKeys() {
     ROWS = rowsNow();
     const rg = gRange || graphRange(graph, G.ch), n = span();
     const L = graph;
+    HS = handlesOn(L, ROWS[0].tracks[0].keys);
     const plot = h('div', { class: 'graph-plot' + (L.item.mute ? ' muted' : '') }, h('canvas', { class: 'graph-cv' }),
+      ...HS.map((x, i) => h('span', { class: 'khandle', 'data-h': i, title: `${x.side === 'ti' ? 'In' : 'Out'} handle${x.k.hb ? ' (broken)' : ''}` })),
       ...ROWS[0].dia.map((d, j) => keyEl(d, 0, j, `top:${yPos(rg, d.keys[0].v)}`)));
     body = [plot];
     $('#sceneNames').replaceChildren(
@@ -177,7 +191,7 @@ export function renderKeys() {
       const caret = r.key ? h('button', { type: 'button', class: 'sheet-caret', 'aria-expanded': OPEN.has(r.key), 'aria-label': `${OPEN.has(r.key) ? 'Close' : 'Open'} ${r.label}`,
         onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); toggleOpen(r.key); } }, OPEN.has(r.key) ? '▾' : '▸') : h('span', { class: 'sheet-caret' });
       const name = h('button', { type: 'button', class: 'sheet-name' + (mine && (r.t === 'item' || (r.t === 'chan' && r.tracks[0].ch === G.ch)) ? ' sel' : '') + off, title: r.label,
-        onclick: () => { if (r.t === 'chan' && isScalar(r.tracks[0].ch)) { G.ch = r.tracks[0].ch; gRange = null; } select(L.id); } }, r.label);
+        onclick: () => { if (r.t === 'chan' && isScalar(r.tracks[0].ch)) { G.ch = r.tracks[0].ch; gRange = null; } select(L.other ? null : L.id); } }, r.label);
       return h('div', { class: `sheet-name-row ${r.t}`, style: pad }, r.t === 'item' ? muteBtn(L) : null, caret, name);
     };
     $('#sceneNames').replaceChildren(h('div', { class: 'sheet-head' }), ...ROWS.map(nameRow));
@@ -210,14 +224,14 @@ const muteBtn = (L) => h('button', { type: 'button', class: 'mute-btn' + (L.item
   onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); toggleMute(L); } }, L.item.mute ? '🔇' : '🔊');
 
 function layerSel(sh, L) {
-  const el = h('select', { 'aria-label': 'Layer', onchange: (e) => select(sh[+e.target.value].id) }, ...sh.map((x, i) => h('option', { value: i }, x.label)));
+  const el = h('select', { 'aria-label': 'Layer', onchange: (e) => select(sh[+e.target.value].other ? null : sh[+e.target.value].id) }, ...sh.map((x, i) => h('option', { value: i }, x.label)));
   el.value = String(sh.findIndex((x) => x.item === L.item));
   return el;
 }
 // a diamond: one channel's key, or (on a layer's or group's row) all the keys at that frame
 const easeOf = (d) => (d.keys.every((k) => (k.ease || '') === (d.keys[0].ease || '')) ? d.keys[0].ease : '');
 const allSel = (d) => d.keys.every((k) => SEL.has(k));
-const keyEl = (d, ri, j, style) => h('span', { class: `key e-${easeOf(d) || 'auto'}` + (d.keys.length > 1 ? ' sum' : '') + (allSel(d) ? ' sel' : '') + (d.f === R.f ? ' on' : ''),
+const keyEl = (d, ri, j, style) => h('span', { class: `key e-${easeOf(d) || 'def'}` + (d.keys.length > 1 ? ' sum' : '') + (allSel(d) ? ' sel' : '') + (d.f === R.f ? ' on' : ''),
   'data-key': j, 'data-l': ri, style: `left:${lanePos(d.f)};${style}`,
   title: `Key at ${(d.f / FPS).toFixed(2)} s · frame ${d.f + 1}${d.keys.length > 1 ? ` · ${d.keys.length} channels` : easeOf(d) ? ` · ${easeOf(d)}` : ''}` });
 
@@ -238,9 +252,35 @@ function drawGraph(plot, L, rg, n) {
   }
   c.strokeStyle = col('--accent', '#e9b44c'); c.lineWidth = 2; c.beginPath();
   const f0 = Math.max(0, Math.floor(V.a)), f1 = Math.min(n, Math.ceil(V.b));
-  // a constant segment steps; finer sampling than a frame isn't needed (keys sit on frames)
-  for (let f = f0; f <= f1; f++) { const v = sampleCh(L, G.ch, f); if (f === f0) c.moveTo(X(f), Y(v)); else c.lineTo(X(f), Y(v)); }
+  // a few px a step, so a bezier between keys a frame or two apart still shows its shape
+  const step = Math.min(1, Math.max(1 / 16, 3 / pxf()));
+  for (let f = f0; f <= f1 + 1e-9; f += step) { const v = sampleCh(L, G.ch, f); if (f === f0) c.moveTo(X(f), Y(v)); else c.lineTo(X(f), Y(v)); }
   c.stroke();
+  // the selected keys' handles: a line from the key, the dot at least MINH px out (a short one is drawn longer, same direction)
+  const els = plot.querySelectorAll('[data-h]');
+  c.strokeStyle = col('--muted', '#888'); c.lineWidth = 1.5;
+  HS.forEach((x, i) => {
+    const kx = X(x.k.f), ky = Y(x.k.v);
+    let hx = X(x.k.f + x.dt) - kx, hy = Y(x.k.v + x.dv) - ky;
+    const len = Math.hypot(hx, hy);
+    if (len < MINH) { const s = len > 1e-6 ? MINH / len : 0; hx = len > 1e-6 ? hx * s : (x.side === 'to' ? MINH : -MINH); hy *= s; }
+    c.beginPath(); c.moveTo(kx, ky); c.lineTo(kx + hx, ky + hy); c.stroke();
+    if (els[i]) Object.assign(els[i].style, { left: `${kx + hx}px`, top: `${ky + hy}px` });
+  });
+}
+// the handles on show: the selected keys' of the graph's channel, on the sides that have a curve
+const MINH = 30;
+let HS = [];
+function handlesOn(L, list) {
+  const out = [], segOf = (k) => k.ease || L.item.ease || 'smooth';
+  list.forEach((k, j) => {
+    if (!SEL.has(k) || typeof k.v !== 'number') return;
+    const sides = [];
+    if (j > 0 && CURVES.has(segOf(list[j - 1]))) sides.push(['ti', segOf(list[j - 1])]);
+    if (j < list.length - 1 && CURVES.has(segOf(k))) sides.push(['to', segOf(k)]);
+    for (const [side, mode] of sides) { const [dt, dv] = handleOf(list, j, side, mode); out.push({ k, j, side, mode, dt, dv }); }
+  });
+  return out;
 }
 
 // ---- selection API (the sheet's buttons and the keyboard go through these) ----------------------
@@ -264,7 +304,12 @@ export function deleteKeys() {
   }
   const c = remove(tracks, SEL); TEMP.clear(); done(); toast(`${c} key${c > 1 ? 's' : ''} deleted`);
 }
-export function setKeyEase(ease) { if (!SEL.size) return; setEase(SEL, ease); done(); }
+// an ease (or 'hb:1' / 'hb:0': break or align the handles) for every selected key
+export function setKeyEase(ease) {
+  if (!SEL.size) return;
+  if (ease === 'hb:1' || ease === 'hb:0') setBroken(SEL, ease === 'hb:1'); else setEase(SEL, ease, allTracks());
+  done();
+}
 
 // the clipboard is kept in memory and in localStorage, so a tab switch (another scene) still has it
 const CLIP = 'deck.scene.keyclip';
@@ -338,15 +383,21 @@ function down(e) {
     G0 = { ...base, type: 'scale', phx, d0: Math.max(24, Math.abs(e.clientX - phx)), snap: snapshot(allTracks()) };
     return;
   }
+  const hEl = t.closest('[data-h]');
+  if (hEl && HS[+hEl.dataset.h]) {  // a bezier handle: dragged by how far the pointer goes (a short one is drawn longer)
+    const x = HS[+hEl.dataset.h], T = gTrack();
+    G0 = { ...base, type: 'handle', x, T, dt0: x.dt, dv0: x.dv, snap: snapshot([T]) };
+    return;
+  }
   const row = keyEl2 ? ROWS[+keyEl2.dataset.l] : laneEl ? ROWS[+laneEl.dataset.track] : null, L = row?.L || null;
   if (keyEl2) {
     const keys = keyOf(keyEl2), was = keys.every((k) => SEL.has(k));
     if (UI.add) { if (!was) keys.forEach((k) => SEL.add(k)); } else if (!was) { SEL.clear(); keys.forEach((k) => SEL.add(k)); }
     G0 = { ...base, type: 'key', keys, was, L, row };
-    if (L && L.id !== R.sel && UI.mode !== 'graph') select(L.id); else renderKeys();
+    if (L && L.id !== R.sel && UI.mode !== 'graph') select(L.other ? null : L.id); else renderKeys();
     return;
   }
-  if (L && L.id !== R.sel && UI.mode !== 'graph') select(L.id);
+  if (L && L.id !== R.sel && UI.mode !== 'graph') select(L.other ? null : L.id);
   // empty space: a finger pans (unless Box is on); a mouse or pen draws a box
   const box = e.pointerType === 'touch' ? UI.box : true;
   const sheet = $('#sceneSheet');
@@ -356,6 +407,7 @@ function down(e) {
 
 function abort() {
   const g = G0; G0 = null;
+  if (g?.type === 'handle' && g.moved) { restore(g.snap); pose(R.f); draw(); renderKeys(); }
   if (g && (g.type === 'key' || g.type === 'scale') && g.moved) { restore(g.snap); SEL.clear(); g.held.forEach((k) => SEL.add(k)); pose(R.f); draw(); renderKeys(); }
   if (g?.el) g.el.remove();
 }
@@ -395,6 +447,19 @@ function move(e) {
       if (cx >= x1 && cx <= x2 && cy >= y1 && cy <= y2) keyOf(el).forEach((k) => SEL.add(k));
     }
     syncSelClasses(); info();
+    return;
+  }
+  if (g.type === 'handle') {
+    if (!g.moved) { g.moved = true; gRange = graphRange(gLayer(), G.ch); }
+    restore(g.snap);
+    const rg = gRange, list = g.T.keys, j = list.indexOf(g.x.k);
+    if (j < 0) return;
+    let dt = g.dt0 + dx / pxf();
+    const dv = g.dv0 - dy / Math.max(40, $('.graph-plot').clientHeight - 2 * GP) * (rg.hi - rg.lo);
+    if (UI.snap && !e.altKey) { const r = Math.round(dt); dt = r || Math.sign(dt); }   // (snap: whole frames; Alt frees it)
+    moveHandle(list, j, g.x.side, dt, dv, g.x.mode);
+    info(`${g.x.side === 'ti' ? 'In' : 'Out'} ${dt.toFixed(1)} f · ${dv >= 0 ? '+' : ''}${dv.toFixed(2)}`);
+    pose(R.f); draw(); renderKeys();
     return;
   }
   // moving keys: from the snapshot each time, so the drag follows the pointer exactly
@@ -442,7 +507,7 @@ function up(e) {
     renderKeys(); info();
     return;
   }
-  if (g.type === 'scale') { if (g.moved) done(); info(); return; }
+  if (g.type === 'scale' || g.type === 'handle') { if (g.moved) done(); info(); return; }
   if (g.el) g.el.remove();
   if (!g.moved) {  // a tap on empty space: deselect (unless adding) and move the playhead
     if (!UI.add) SEL.clear();
@@ -530,16 +595,85 @@ function toolRow() {
     (() => {
       const s = h('select', { class: 'kt-ease', 'aria-label': 'Ease of the selected keys', title: 'Ease · how the selected keys blend into the next one',
         onchange: (e) => { const v = e.target.value; e.target.value = '~'; if (v !== '~') setKeyEase(v); } },
-      h('option', { value: '~' }, 'Ease…'), ...EASES.map(([v, l]) => h('option', { value: v }, l)));
+      h('option', { value: '~' }, 'Ease…'), h('optgroup', { label: 'Between keys' }, ...EASES.map(([v, l]) => h('option', { value: v }, l))),
+      h('optgroup', { label: 'Bezier handles' }, h('option', { value: 'hb:0' }, 'Aligned'), h('option', { value: 'hb:1' }, 'Broken')));
       tools.push([s, null, 'sel']);
       return s;
     })(),
+    tool(icon('reduce'), (e) => openReduce(e.currentTarget), { name: 'Reduce keys', cls: 'kt-reduce', title: 'fewer keys, the motion kept within a tolerance (the selected keys, else the layer\'s)' }),
     tool('⇔', () => { setUI('tool', UI.tool === 'scale' ? 'move' : 'scale'); syncTools(); }, { name: 'Stretch in time', on: () => UI.tool === 'scale', needs: 'sel',
       title: 'drag across the sheet to stretch the selected keys around the playhead (Blender\'s S)' }),
     tool('🧲', () => { setUI('snap', !UI.snap); syncTools(); }, { name: 'Snap', on: () => UI.snap, title: 'dragging snaps to the playhead and to other keys' }),
     tool('⤢', () => { V.fit = true; renderKeys(); }, { name: 'Fit', title: 'show the whole clip' }),
     tool('⋯', (e) => openMenu(e.currentTarget), { name: 'More', cls: 'kt-more', title: 'select none, invert, duplicate, shift, scale, ruler' }),
     h('span', { id: 'sceneKeyInfo', class: 'hint keyinfo' }));
+}
+
+// ---- Reduce keys: thin dense keys (mocap, a recording) while the motion stays within a tolerance ----------------
+// RD: per device. cm: positions, sizes (and a parameter, as % of its range); deg: turns, joints and the lens.
+export const RD = { cm: 0.5, deg: 0.5, as: 'clamp', ...store.get('deck.scene.reduce', {}) };
+const ANG = new Set(['rx', 'ry', 'rz', 'roll', 'fov']);
+const stepAt = (a, b, e) => (e < 0.5 ? a : b);
+// how each channel is measured and blended (a joint keeps straight slerps: curves don't apply to turns)
+function reduceOpts(T, o) {
+  const ease = T.item.ease || 'smooth', as = o.as === 'keep' ? '' : o.as;
+  if (T.ch.startsWith('j.')) return { tol: o.deg, ease, lerp: FIGURE.slerpQ, dist: quatDeg, as: as && 'linear' };
+  if (T.ch === 'pn') return { tol: 0, ease, lerp: stepAt, dist: (a, b) => (a === b ? 0 : 1), as: '' };
+  if (ANG.has(T.ch)) return { tol: o.deg, ease, as };
+  if (T.ch.startsWith('m.')) { const vs = T.keys.map((k) => k.v); return { tol: (o.cm / 100) * Math.max(1e-6, Math.max(...vs) - Math.min(...vs)), ease, as }; }
+  return { tol: o.cm / 100, ease, as };
+}
+// reduce these tracks (pick: only those keys may go); dry: just count. Returns [before, after] in the keys in play.
+export function reduceTracks(tracks, o = RD, { pick = null, dry = false } = {}) {
+  let before = 0, after = 0;
+  for (const T of tracks) {
+    const inPlay = (k) => !pick || pick.has(k), n = T.keys.filter(inPlay).length;
+    if (!n) continue;
+    const { tol, ...opts } = reduceOpts(T, o), out = reduceKeys(T.keys, tol, { ...opts, pick, dry });
+    before += n; after += out.filter(inPlay).length;
+    if (!dry) T.keys = out;
+  }
+  return [before, after];
+}
+// what it acts on: the selected keys, else every key of the selected layer
+function reduceScope() {
+  if (SEL.size) return { tracks: allTracks().filter((T) => T.keys.some((k) => SEL.has(k))), pick: SEL, what: 'the selected keys' };
+  const [it] = keyTarget(), L = shown().find((x) => x.item === (it || SC.camera));
+  return { tracks: L ? tracksOf(L).filter((T) => T.keys.length > 2) : [], pick: null, what: L ? `every key of ${L.label}` : 'nothing' };
+}
+let rdEl = null;
+function closeReduce() { rdEl?.remove(); rdEl = null; removeEventListener('pointerdown', rdAway, true); }
+function rdAway(e) { if (rdEl && !rdEl.contains(e.target) && !e.target.closest('.kt-reduce')) closeReduce(); }
+function openReduce(anchor) {
+  if (rdEl) { closeReduce(); return; }
+  const sc = reduceScope(), out = h('b', { class: 'rd-count' });
+  let t = null;
+  const count = () => { clearTimeout(t); t = setTimeout(() => { const [a, b] = reduceTracks(sc.tracks, RD, { pick: sc.pick, dry: true }); out.textContent = `${a} → ${b} keys`; }, 120); };
+  const keep = () => store.set('deck.scene.reduce', RD);
+  const slide = (label, k, max) => {
+    const i = numSlider({ min: 0, max, step: 0.05, value: RD[k], label });
+    i.style.width = '96px';
+    const on = () => { const v = parseFloat(i.value); if (Number.isFinite(v)) { RD[k] = v; keep(); count(); } };
+    i.addEventListener('input', on); i.addEventListener('change', on);
+    return h('label', { class: 'keynum' }, label, i);
+  };
+  rdEl = h('div', { class: 'key-menu rd-menu', role: 'dialog', 'aria-label': 'Reduce keys' },
+    h('div', { class: 'wp-head' }, h('b', {}, 'Reduce keys'),
+      infoBtn('Takes keys away while the motion stays within these amounts of where it was at every old key: Position in centimetres (sizes too; a figure parameter in % of its range), Turn in degrees (rotations, joints, the lens). Kept as: Auto clamped makes smooth curves through the keys left (fewest keys for smooth motion); Linear keeps straight lines; As they are leaves each key\'s ease. Joints always blend straight. Acts on the selected keys, else on the selected layer. One undo step.')),
+    h('span', { class: 'hint' }, sc.what),
+    slide('Position (cm)', 'cm', 20), slide('Turn (°)', 'deg', 20),
+    seg([['clamp', 'Auto clamped'], ['linear', 'Linear'], ['keep', 'As they are']], RD.as, (v) => { RD.as = v; keep(); count(); }),
+    h('div', { class: 'row' }, out, h('span', { class: 'grow' }),
+      button('Reduce', () => {
+        const [a, b] = reduceTracks(sc.tracks, RD, { pick: sc.pick });
+        closeReduce(); prune(allTracks(), SEL); TEMP.clear(); done(); toast(`${a} → ${b} keys`);
+      }, { cls: 'small primary', disabled: !sc.tracks.length })));
+  (stage() || document.body).append(rdEl);
+  const r = anchor.getBoundingClientRect(), mh = rdEl.offsetHeight, mw = rdEl.offsetWidth;
+  const top = r.bottom + 4 + mh > innerHeight ? Math.max(4, r.top - 4 - mh) : r.bottom + 4;
+  Object.assign(rdEl.style, { top: `${top}px`, left: `${Math.max(4, Math.min(innerWidth - mw - 4, r.left))}px` });
+  addEventListener('pointerdown', rdAway, true);
+  count();
 }
 
 // the tool row can be hidden to give the sheet room (kept per device)
@@ -556,7 +690,7 @@ function applyTools(on = store.get(TK, true)) {
 function insertKeys(row, f, v = null) {
   const item = row.L.item, names = row.L.names;
   const wide = row.t === 'item' || row.key?.startsWith('p:'), ok = wide ? new Set(keyChans(item, names, sample(item, names, f))) : null;
-  const made = row.tracks.filter((T) => !ok || ok.has(T.ch)).map((T) => setKey(item, T.ch, f, v ?? sampleChan(item, T.ch, f)));
+  const made = row.tracks.filter((T) => (T.kind === 'off' ? !wide : !ok || ok.has(T.ch))).map((T) => setKey(T.item, T.ch, f, v ?? sampleChan(T.item, T.ch, f)));
   TEMP.clear(); SEL.clear(); made.forEach((k) => SEL.add(k));
   done(); seek(f);
   return made;

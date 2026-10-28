@@ -4,7 +4,8 @@
 // (and, for arms and legs, which way the elbow or knee bends), so the source's T-pose rest and bone
 // lengths don't matter. Hands and the head keep no twist of their own (22 joints don't say).
 import * as THREE from './vendor/three.module.min.js';
-import { JOINTS } from './figure.js';
+import { JOINTS, restOffsets, shapeFor } from './figure.js';
+import { basis as camBasis } from './track-math.js';
 
 export const SMPL22 = ['pelvis', 'lhip', 'rhip', 'spine1', 'lknee', 'rknee', 'spine2', 'lankle', 'rankle', 'spine3', 'ltoe', 'rtoe',
   'neck', 'lcollar', 'rcollar', 'head', 'lsho', 'rsho', 'lelb', 'relb', 'lwrist', 'rwrist'];
@@ -93,15 +94,33 @@ export function resample(frames, fps) {
   return out;
 }
 
+// A video capture is in its camera's space (Deck Save Body Motion: x right, y up, looking down -Z); app/motion.py
+// normalised it and says how (space: normalised = m · given + t). Put back through a camera per frame
+// (camAt(i): the scene camera's values px..tz, roll at 24 fps frame i), the body lands where that camera saw
+// it in the world: a shot that pans keeps a body that stands still standing still. Returns { fps: 24, frames }.
+export function toWorld(motion, camAt) {
+  const frames = resample(motion.frames, motion.fps || 20), { m: M, t } = motion.space;
+  return { fps: FPS_OUT, frames: frames.map((P, i) => {
+    const c = camAt(i), eye = [c.px, c.py, c.pz], b = camBasis(eye, [c.tx, c.ty, c.tz], c.roll || 0);
+    return P.map((p) => {
+      const q = [p[0] - t[0], p[1] - t[1], p[2] - t[2]];
+      const r = [0, 1, 2].map((j) => q[0] * M[0][j] + q[1] * M[1][j] + q[2] * M[2][j]);   // (M is a turn: its inverse is its transpose)
+      return [0, 1, 2].map((k) => eye[k] + r[0] * b.x[k] + r[1] * b.y[k] + r[2] * b.z[k]);
+    });
+  }) };
+}
+
 // motion { fps, frames: [[22 x [x,y,z]]...] } as figure keys from frame f0, every `every` frames.
 // base: the figure's values where the motion starts (x, y, z, ry, sy...): the motion is turned by its ry,
 // starts at its x/z, and is scaled to its size; the source person's leg length is matched to ours.
 // travel: false keeps it on the spot (no path); rise: false keeps the hips at base.y (no up and down);
 // fit: false takes the clip's metres as they are (only the figure's own size), not matched by leg length.
-export function toKeys(motion, base, { f0 = 0, every = 2, maxF = Infinity, travel = true, rise = true, fit = true } = {}) {
+// scale: the clip's metres times this (instead of fit and the figure's size); hipY: where the figure's hips joint
+// stands above its root (a shaped figure's own; else the plain body's at its size).
+export function toKeys(motion, base, { f0 = 0, every = 2, maxF = Infinity, travel = true, rise = true, fit = true, scale = null, hipY = null } = {}) {
   const frames = resample(motion.frames, motion.fps || 20);
   if (!frames.length) return [];
-  const s = (fit ? LEG / (legLength(frames[0]) || LEG) : 1) * (base.sy || 1);
+  const s = scale ?? (fit ? LEG / (legLength(frames[0]) || LEG) : 1) * (base.sy || 1), hy = hipY ?? HIP_Y * (base.sy || 1);
   const yaw = THREE.MathUtils.degToRad(base.ry || 0), turn = new THREE.Quaternion().setFromAxisAngle(UP, yaw);
   const p0 = v3(frames[0][I.pelvis]);
   const keys = [];
@@ -113,7 +132,33 @@ export function toKeys(motion, base, { f0 = 0, every = 2, maxF = Infinity, trave
     const W = worldTurns(P);   // (the figure's own ry turns these with it; only the path needs turning)
     const at = travel ? v3(P[I.pelvis]).sub(p0).setY(0).multiplyScalar(s).applyQuaternion(turn) : new THREE.Vector3();
     keys.push({ ...base, f, j: localPose(W), x: base.x + at.x, z: base.z + at.z,
-      y: rise ? P[I.pelvis][1] * s - HIP_Y * (base.sy || 1) : base.y || 0, ease: 'linear', m: {} });
+      y: rise ? P[I.pelvis][1] * s - hy : base.y || 0, ease: 'linear', m: {} });
   }
   return keys;
+}
+
+// ---- the capture's proportions onto the figure: its bones measured (the median over the frames, metres), then the
+// figure's size (sy) and shape (o.shape %) that come closest, so the retarget stretches less (feet plant, hands reach)
+const median = (a) => { const b = [...a].sort((x, y) => x - y); return b.length ? b[b.length >> 1] : 0; };
+const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+export function measure(frames) {
+  const m = (fn) => median(frames.map(fn));
+  const two = (a, b) => (P) => (dist(P[I[`l${a}`]], P[I[`l${b}`]]) + dist(P[I[`r${a}`]], P[I[`r${b}`]])) / 2;
+  return {
+    leg: m(two('hip', 'knee')) + m(two('knee', 'ankle')), arm: m(two('sho', 'elb')) + m(two('elb', 'wrist')),
+    torso: m((P) => dist(P[I.pelvis], P[I.neck])), neck: m((P) => dist(P[I.neck], P[I.head])),
+    sho: m((P) => dist(P[I.lsho], P[I.rsho])), hips: m((P) => dist(P[I.lhip], P[I.rhip])),
+  };
+}
+// { sy, shape }: sy from the pelvis-to-neck height plus the legs (the steadiest lengths a capture gives), then each
+// part's length over the figure's at that size as its shape. The head's place is rough in a capture (between the
+// ears), so the neck goes only half way.
+export function matchProportions(frames, body) {
+  const c = measure(frames), r = restOffsets(body), len = (n) => Math.hypot(...r[n]);
+  const fig = { leg: len('lknee') + len('lfoot'), arm: len('lelb') + len('lhand'),
+    torso: len('spine') + len('chest') + len('neck') + Math.abs(r.lhip[1]),   // (the capture's pelvis is between the hip joints)
+    sho: Math.abs(r.lsho[0] - r.rsho[0]), hips: Math.abs(r.lhip[0] - r.rhip[0]), neck: len('head') };
+  const sy = (c.leg + c.torso) / (fig.leg + fig.torso), k = (n) => c[n] / (fig[n] * sy);
+  const shape = shapeFor({ legs: k('leg'), arms: k('arm'), torso: k('torso'), sho: k('sho'), hips: k('hips'), neck: 1 + (k('neck') - 1) * 0.5 });
+  return { sy, shape, measured: c };
 }

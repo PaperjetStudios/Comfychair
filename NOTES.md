@@ -147,6 +147,35 @@ will then fail to start until that process is stopped, so stop it before the nex
   bound API (`selectKeys, moveKeys, scaleKeys, copyKeys, pasteKeys, duplicateKeys, deleteKeys, setKeyEase`).
   A drag moves keys live from a snapshot and saves once on letting go: one undo step per gesture.
 - A key's `ease` may now be `smooth | linear | in | out | const` (unknown names read as smooth); old files are unchanged.
+- Curves (2026-10-28): `ease` can also be `auto | clamp | bezier` (keys.js `CURVES`). A key may carry its own handles
+  `ti` / `to` = `[dt, dv]` (frames, channel units; `hb: true` = broken); without them `handleOf` works them out (auto:
+  Catmull-Rom slope, a third of the way; clamp: monotone). A segment is a cubic bezier solved in time; only numbers get
+  curves (joints and pose names under a curve ease blend smooth). The graph shows the selected keys' handles (drag them;
+  an auto key becomes Bezier; Snap rounds to whole frames). The video export (`keyexpr.py`) ignores these names.
+- **Offset layer** (`item.off`, scene-data.js, panel in scene-offset.js): slides / turns / scales a whole animation (a mocap
+  move) around `off.pv` without touching its keys; joint offsets turn a limb in its parent's frame on every frame. Its own
+  sparse keys (`off.chans`, rows under "Offset" in the sheet, track kind `off`). `current()` shows it; `rawCurrent()` is key
+  space. `write()` takes it back out, or with `R.offEdit === item.id` the gizmo writes the offset (`writeOffset`).
+  `bakeOffset` keys it in at every frame that has a key. Compositions (`scene-offscreen.js`) apply it too.
+- **Reduce keys** (`keys.js reduceKeys`, sheet tool + popover in scene-keys.js, `RD` per device): greedy, error-bounded at
+  every old key's frame (cm for places and sizes, ° for turns / joints / lens, a parameter in % of its range). Kept keys
+  become Auto clamped or Linear (joints always linear: curves don't apply to turns). Moves ▸ "Fewer keys" reduces a motion
+  import as it lands. No bezier handle fitting yet.
+- `web/icons.js icon(name)`: line icons for new buttons (no emoji).
+- **Cameras** (2026-10-28): `SC.camera` is the *active* camera (the view, renders, `scene-offscreen.js` compositions all
+  look through it), `SC.cams` the others (`camsOf()`, `setActiveCam()`; `upgrade()` gives older scenes `cams: []`).
+  Others show in the key sheet (`L.other`: they key there, but tapping them selects the active camera). Camera panel ▸
+  Cameras: rename, New camera, Make active, Delete.
+- **Mocap with its camera** (Moves ▸ From video ▸ With its camera): the clip is also tracked (`/api/track`, Simple) and
+  `applyWithCamera` (scene-motion.js) adds "Mocap camera" (`sceneFromTrack`, lens from the capture's `focal` px when
+  saved, else 35 mm) + its footage backdrop (`at` = start frame), makes it active, and puts the body in the world through
+  it (`motion.js toWorld`, using `space` from `app/motion.py`: how the server normalised the camera-space capture).
+  Only turning cameras (pan / tilt / roll / zoom) are solved. `Deck Save Body Motion` now also saves `focal` (ComfyUI
+  must restart to load that).
+- **Match its proportions** (Moves ▸ where it goes): `motion.js matchProportions` measures the capture (median bone
+  lengths) and sets the figure's size (sy) and its legs / arms / torso / shoulders / hips / neck shape % (`figure.js
+  shapeFor`, shapeFactors inverted; neck only half way, a capture's head is rough); the keys then take the clip's metres
+  (`toKeys` `scale: 1`, `hipY` from `hipsHeight`). Tested by building a shaped figure from the result and comparing lengths.
 - **Mute** (`item.mute`, saved, `upgrade()` defaults it off): `current()`/`write()` in scene-data.js use values held
   in `MUTED` (not saved) instead of the keys, so a muted layer stays put and moving it writes no keys. Renders set
   `R.real` and use the real keys; Save frame is the picture on screen.

@@ -6,7 +6,7 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as SCENE from './scene.js';   // (its layer types register when it loads; it is not initialised here, so no panel appears)
 import * as FIGURE from './figure.js';
-import { CAM, EVEN, applyRoll, FPS, OBJ, TYPES, framesFor, makers, namesFor, pathSig, sample, upgrade } from './scene-data.js';
+import { CAM, EVEN, applyOffset, applyRoll, FPS, OBJ, TYPES, framesFor, makers, namesFor, pathSig, sample, upgrade } from './scene-data.js';
 import { LOADERS, RANGE, depthMat, floorMat, geometries, photoScene, rangeMat, setRange, wallMat } from './scene-view.js';
 import { applyClay } from './scene-import.js';
 
@@ -127,7 +127,7 @@ export class Stage {
     for (const o of this.sc.objects) {
       const m = this.meshes.get(o.id);
       if (!m) continue;
-      const v = sample(o, namesFor(o), f);
+      const v = applyOffset(o, sample(o, namesFor(o), f), f);   // (its offset layer on top)
       m.position.set(v.x, v.y, v.z);
       m.rotation.set(r(v.rx), r(v.ry), r(v.rz));
       if (EVEN.has(o.type)) m.scale.setScalar(Math.max(0.01, v.sy));

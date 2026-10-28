@@ -2,10 +2,10 @@ import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import {
   $, actions, button, clamp, clone, closeSheet, field, h, iconBtn, layerRowsEl, numField, openSheet, panelTop, rangeField,
-  section, seg, sheetOpen, store, uid, undoToast, help, toggle, sizeSelect, chip,
+  section, seg, sheetOpen, store, uid, undoToast, help, toggle, sizeSelect, chip, info, toast,
 } from './ui.js';
 import {
-  C, CAM, EVEN, FPS, HIST, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropHolds, dropKeys, holdStart, frames, framesFor, hasKeys, hooks, keyCount, keyTarget,
+  C, CAM, EVEN, FPS, HIST, camsOf, newCamera, setActiveCam, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropHolds, dropKeys, holdStart, frames, framesFor, hasKeys, hooks, keyCount, keyTarget,
   namesFor, nextKeyFrame, pivotOf, pivotsFor, sameTab, save, selItem, setSC, write
 } from './scene-data.js';
 import { FIG_TABS, adjustTab, faceTab, handsTab, jointsTab, movesTab, partsTab, posesTab, promptProps } from './scene-pose.js';
@@ -18,6 +18,7 @@ import { maxBar, renderKeys, renderTransport, wireSheetKeys } from './scene-keys
 import { hasMode, modeDef, modeList, modeOf, modeSections } from './scene-modes.js';
 import { syncRef, toggleRef } from './scene-ref.js';
 import { keysPast, stretchAll } from './keys.js';
+import { offsetField } from './scene-offset.js';
 
 // ---- UI ----------------------------------------------------------------------
 let statusText = '';
@@ -98,10 +99,11 @@ function placeProps(o, cur) {
       button('🎥 Camera to the photo\'s view', () => { lookThrough(o); changed(); }),
       help('The picture as a 3D mesh (MoGe). Keep camera moves small: nothing is behind what the picture shows. Render depth video, then use it with this picture as a reference.')] : null,
     easeSeg(o),
+    hasKeys(o) || o.off ? offsetField(o) : null,
     h('div', { class: 'row wrap' },
       button('Duplicate', () => {
         const c = { ...clone(o), id: uid(), name: `${o.name} copy` };
-        c.base.x += 0.6; (c.chans.x || []).forEach((k) => { k.v += 0.6; });
+        c.base.x += 0.6; (c.chans.x || []).forEach((k) => { k.v += 0.6; }); if (c.off) c.off.pv[0] += 0.6;
         SC.objects.push(c); save(); select(c.id);
       }),
       clearKeys(o, names)),
@@ -132,7 +134,7 @@ function layerList() {
   const keys = (it) => { const n = keyCount(it); return n ? `${n} key${n > 1 ? 's' : ''}` : ''; };
   const hideBtn = (it, after) => iconBtn(it.hidden ? 'Show' : 'Hide', it.hidden ? '◌' : '◉', () => { it.hidden = !it.hidden; after(); });
   const delBtn = (id, name) => iconBtn(`Delete ${name}`, '🗑', () => removeLayer(id));
-  const rows = [{ sel: !R.sel, thumb: h('span', { class: 'scene-icon' }, '🎥'), name: 'Camera',
+  const rows = [{ sel: !R.sel, thumb: h('span', { class: 'scene-icon' }, '🎥'), name: SC.cams?.length ? `${SC.camera.name} (active of ${SC.cams.length + 1})` : 'Camera',
     hint: [`${SC.width}×${SC.height} · ${fmtSecs(SC.seconds)} s`, keys(SC.camera)].filter(Boolean).join(' · '), onclick: () => select(null) }];
   if (SC.room) {
     rows.push({ sel: R.sel === ROOM, off: SC.room.hidden, thumb: h('span', { class: 'scene-icon' }, '⌂'), name: 'Room',
@@ -160,11 +162,27 @@ function roomProps() {
     help('Keep the walls about where the real ones should be: H3 sizes the room from them. Hide it (◉) for an open space.'));
 }
 
+// the scene's cameras: one is active (the view, the renders and a composition's clip look through it); the others
+// keep their own keys until made active. Old scenes have the one.
+function camerasField() {
+  const name = h('input', { type: 'text', value: SC.camera.name || 'Camera', 'aria-label': 'Active camera name' });
+  name.addEventListener('change', () => { SC.camera.name = name.value.trim() || SC.camera.name; changed(); });
+  const others = (SC.cams || []).map((c) => h('div', { class: 'row cam-row' },
+    h('span', { class: 'grow' }, c.name, h('span', { class: 'hint' }, keyCount(c) ? ` · ${keyCount(c)} keys` : '')),
+    button('Make active', () => { setActiveCam(c); changed(); }, { title: `Look through ${c.name}` }),
+    button('Delete', () => { SC.cams = SC.cams.filter((x) => x !== c); changed(); }, { cls: 'small danger', 'aria-label': `Delete ${c.name}` })));
+  return field(['Cameras', info('The view, renders and the scene as a video clip look through the active camera. Each camera keeps its own keys (the others show in the key sheet too); make one active to move it with the view. New camera starts where the active one is now.')],
+    h('div', { class: 'row' }, name, h('span', { class: 'chip on' }, 'Active')),
+    ...others,
+    button('New camera', () => { const c = newCamera(); SC.cams.push(SC.camera); SC.camera = c; changed(); toast(`${c.name} is active`); }, { title: 'A new camera here, made active' }));
+}
+
 function cameraProps() {
   const cam = SC.camera;
   const mm = (fov) => 12 / Math.tan(THREE.MathUtils.degToRad(fov) / 2);  // full-frame equivalent, from the vertical angle
   const sizeSel = sizeSelect(SIZES.map((s) => [s.join('×'), s]), [SC.width, SC.height], ([w, hh]) => { SC.width = w; SC.height = hh; save(); fit(); renderPanel(); });
   return section('Camera', null,
+    camerasField(),
     field('Size', sizeSel), lengthProps(),
     slider('Lens', () => current(cam, CAM).fov, (v) => write(cam, CAM, { fov: v }),
       { min: 12, max: 90, step: 0.5, fmt: (v) => `${Math.round(mm(v))} mm` }),
@@ -201,11 +219,11 @@ export function generateSeconds() {
 function setLength(v) {
   SC.seconds = Math.round(clamp(v, ...LEN) * 100) / 100;
   const n = frames();
-  for (const it of [SC.camera, ...SC.objects]) dropKeys(it, (f) => f >= n);
+  for (const it of [...camsOf(), ...SC.objects]) dropKeys(it, (f) => f >= n);
   R.f = Math.min(R.f, n - 1);
 }
 const lengthChanged = () => { save(); refresh(); renderTransport(); renderPanel(); renderToolbar(); };
-const animated = () => [SC.camera, ...SC.objects];
+const animated = () => [...camsOf(), ...SC.objects];
 const clampLen = (v) => Math.round(clamp(v, ...LEN) * 100) / 100;
 // a new length; when it would cut keys off the end, ask first: stretch the animation to fit, or cut them
 function newLength(v, mode = SC.lenMode) {

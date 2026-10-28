@@ -388,6 +388,24 @@ function shapeFactors(sh = {}) {
     waist: 1 + v('waist') * 0.4, upper: 1 + v('upperArms') * 0.4, thigh: 1 + v('thighs') * 0.4, calf: 1 + v('calves') * 0.4,
     head: 1 + v('head') * 0.5, headW: 1 + v('headWidth') * 0.5, headL: 1 + v('headLength') * 0.5, hand: 1 + v('hands') * 0.5, foot: 1 + v('feet') * 0.5 };
 }
+// the shape percentages that give these length factors ({ legs, arms, torso, sho, hips, neck }: shapeFactors the
+// other way round), each kept to its range; 0 is left out
+const GAIN = { legs: ['legs', 0.3], arms: ['arms', 0.3], torso: ['torso', 0.3], sho: ['shoulders', 0.35], hips: ['hips', 0.35], neck: ['neck', 0.5] };
+export function shapeFor(f) {
+  const out = {};
+  for (const [k, x] of Object.entries(f)) {
+    if (!GAIN[k] || !Number.isFinite(x)) continue;
+    const [key, g] = GAIN[k], [lo, hi] = shapeRange(key), p = Math.round(Math.max(lo, Math.min(hi, ((x - 1) / g) * 100)));
+    if (p) out[key] = p;
+  }
+  return out;
+}
+// a body's joint offsets as built (metres, before any shape), and how high its hips stand with a shape (as setShape puts them)
+export const restOffsets = (body) => offsets(body);
+export function hipsHeight(body, shape = {}) {
+  const a0 = offsets(body);
+  return a0.hips[1] - (a0.lknee[1] + a0.lfoot[1]) * (shapeFactors(shape).legs - 1);
+}
 const S3 = new THREE.Vector3();
 export function setShape(rig, shape = {}, anatomy = false) {
   const sig = JSON.stringify([shape || {}, !!anatomy]);

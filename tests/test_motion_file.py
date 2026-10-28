@@ -44,6 +44,16 @@ class Read(unittest.TestCase):
         with self.assertRaises(ValueError):
             motion.read(npz(x=np.zeros((5, 3))), "d.npz")
 
+    def test_space_undoes_the_normalising(self):
+        # a camera-space capture (y up, 3 m in front, turned and off to the side): space gives the given back
+        given = STAND @ np.array([[0, 0, 1], [0, 1, 0], [-1, 0, 0]]).T + [0.7, -1.2, -3.0]
+        for name, data in (("e.npz", npz(joints=np.stack([given, given + [0.1, 0, 0]]))),
+                           ("e.json", json.dumps({"fps": 24, "frames": np.stack([given, given]).tolist(), "source": "sam3d-body", "focal": 1100.0}).encode())):
+            m = motion.read(data, name)
+            M, t, f = np.array(m["space"]["m"]), np.array(m["space"]["t"]), np.array(m["frames"])
+            np.testing.assert_allclose((f[0] - t) @ M, given, atol=1e-3)
+        self.assertEqual((m["source"], m["focal"]), ("sam3d-body", 1100.0))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -89,6 +89,19 @@ def body_frames(pose_data, person=0):
     return out
 
 
+def body_focal(pose_data, person=0):
+    """The focal length (pixels) SAM 3D Body used for this person, the median over the frames, or None."""
+    import numpy as np
+    vals = []
+    for people in pose_data.get("frames") or []:
+        f = people[person].get("focal_length") if person < len(people) else None
+        if f is not None:
+            v = np.asarray(f.cpu() if hasattr(f, "cpu") else f, dtype=np.float64).reshape(-1)
+            if v.size and np.isfinite(v[0]) and v[0] > 0:
+                vals.append(float(v[0]))
+    return float(np.median(vals)) if vals else None
+
+
 class DeckSaveBodyMotion:
     @classmethod
     def INPUT_TYPES(cls):
@@ -107,6 +120,9 @@ class DeckSaveBodyMotion:
         frames = body_frames(mhr_pose_data, int(person))
         data = {"fps": float(fps), "frames": [[[round(float(c), 4) for c in p] for p in f] for f in frames],
                 "source": "sam3d-body"}
+        focal = body_focal(mhr_pose_data, int(person))
+        if focal:   # (the lens SAM 3D Body assumed, in pixels: the 3D tab's mocap camera uses it)
+            data["focal"] = round(focal, 2)
         out_dir = folder_paths.get_output_directory()
         folder, name, counter, sub, _ = folder_paths.get_save_image_path(filename_prefix, out_dir)
         fname = f"{name}_{counter:05}_.json"
