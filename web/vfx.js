@@ -1,4 +1,4 @@
-import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard } from './ui.js';
+import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle } from './ui.js';
 import { S, inputUrl, thumbUrl, onServer, switchTab } from './core.js';
 import { bareSource, cardMedia, clipLabel, clipUrl, genLabel, openImagePicker, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
 import { hooks as genHooks } from './generate.js';
@@ -506,7 +506,7 @@ function refineFields() {
     num('low', 'Edge: black below', { min: 0, max: 1, step: 0.01, fmt: (v) => v.toFixed(2) }),
     num('high', 'Edge: white above', { min: 0, max: 1, step: 0.01, fmt: (v) => v.toFixed(2), help: 'Bring the two together for a hard edge; apart for a soft one.' }),
     num('feather', 'Feather', { min: 0, max: 30, step: 0.5, fmt: (v) => `${v.toFixed(1)} px`, help: 'Blurs the edge.' }),
-    h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!r.invert, onchange: (ev) => { r.invert = ev.target.checked; changed(false); } }), ' Invert (keep what\'s black)'),
+    toggle('Invert (keep what\'s black)', r.invert, (on) => { r.invert = on; changed(false); }),
     button('Reset', () => { T.refine = { ...REFINE }; changed(); }, { cls: 'small' }),
   ];
 }

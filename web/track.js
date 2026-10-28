@@ -3,7 +3,7 @@
 // (track-math.js). Opened from a clip in the Video tab or a video in History. The result is kept as a
 // document of kind `tracks` (one per clip), so opening the sheet again doesn't track again.
 import {
-  $, api, actions, button, field, h, help, hint, note, openSheet, closeSheet, rangeField, seg, toast,
+  $, api, actions, button, field, h, help, hint, note, openSheet, closeSheet, rangeField, seg, toast, toggle,
 } from './ui.js';
 import { S, fmtT, switchTab } from './core.js';
 import { sceneModule } from './run.js';
@@ -174,7 +174,7 @@ export async function openTrack(opts) {
           hint('Wider lens: the same shift in pixels is a bigger turn. If the 3D objects slide against the footage, change this.')),
         field('Zoom as', seg([['fov', 'Lens zoom'], ['dolly', 'Move forward']], T.set.zoomAs, (v) => { set('zoomAs', v); render(); })),
         T.set.zoomAs === 'dolly' ? rangeField('Subject distance', () => T.set.dist, (v) => set('dist', v), { min: 1, max: 30, step: 0.5, fmt: (v) => `${v} m` }) : null,
-        h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: T.set.points, onchange: (e) => set('points', e.target.checked) }), 'Add the tracked points as dots in the scene'),
+        toggle('Add the tracked points as dots in the scene', T.set.points, (on) => set('points', on)),
         hint('Roll isn\'t used: the 3D camera stays level. The footage card follows the camera, so objects you place stay on the footage as it moves.'),
         actions(button('Create 3D scene', make, { cls: 'primary' })),
       ] : [hint('Optionally draw a box round the steady background to track inside, and a box round anything moving that should be ignored. Then Track.')]));

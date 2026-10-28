@@ -1,6 +1,6 @@
 import * as FIGURE from './figure.js';
 import { maximizable } from './layout.js';
-import { $, button, h, info as infoBtn, numSlider, sheetOpen, store, toast } from './ui.js';
+import { $, button, h, info as infoBtn, numSlider, sheetOpen, store, toast, toggle } from './ui.js';
 import {
   CAM, FPS, HOLD, OBJ, R, ROOM, SC, TEMP, TYPES, WP, addKey, bakeBase, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setKey, setMute
 } from './scene-data.js';
@@ -616,8 +616,7 @@ function openWP(anchor) {
   wpEl = h('div', { class: 'key-menu wp-menu', role: 'menu', 'aria-label': 'While playing' },
     h('div', { class: 'wp-head' }, h('b', {}, 'While playing'),
       infoBtn('Show these while it plays (everything can still be dragged, tapped and changed). Jump back on release: after you let go of something you changed while it played, the playhead goes back to where you took hold and plays on, so you see the change at once; without Record the key goes there too.')),
-    ...WP_OPTS.map(([k, label]) => h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: !!WP[k],
-      onchange: (e) => { WP[k] = e.target.checked; store.set(WPK, { ...WP }); draw(); } }), label)));
+    ...WP_OPTS.map(([k, label]) => toggle(label, WP[k], (on) => { WP[k] = on; store.set(WPK, { ...WP }); draw(); })));
   (stage() || document.body).append(wpEl);
   const r = anchor.getBoundingClientRect(), mh = wpEl.offsetHeight, mw = wpEl.offsetWidth;
   const top = r.bottom + 4 + mh > innerHeight ? Math.max(4, r.top - 4 - mh) : r.bottom + 4;

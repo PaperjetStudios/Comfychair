@@ -2,7 +2,7 @@
 // motion .npz/.json), or a motion file. The server reads it (app/motion.py) into 22 joint positions per
 // frame; motion.js turns those into the figure's keys from the playhead.
 import { FIG, R, SC, current, dropKeys, frames, putKeys, sameTab } from './scene-data.js';
-import { api, button, clone, field, fileButton, h, help, hint, note, openSheet, closeSheet, rangeField, seg, store, toast, undoToast } from './ui.js';
+import { api, button, clone, field, fileButton, h, help, hint, note, openSheet, closeSheet, rangeField, seg, store, toast, undoToast, toggle } from './ui.js';
 import { S, onServer } from './core.js';
 import { openVideoPicker } from './media.js';
 import { queueRun } from './make.js';
@@ -62,7 +62,7 @@ async function run(id, template, values, label) {
 const figures = () => SC.objects.filter((x) => x.type === 'figure');
 const target = (o) => (figures().some((x) => x.id === ST.to) ? ST.to : o.id);
 function placeFields(o) {
-  const tog = (k, label) => h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: PLACE[k], onchange: (e) => { PLACE[k] = e.target.checked; keepPlace(); } }), label);
+  const tog = (k, label) => toggle(label, PLACE[k], (on) => { PLACE[k] = on; keepPlace(); });
   const figs = figures();
   const onto = figs.length > 1 ? h('select', { onchange: (e) => { ST.to = e.target.value; } }, ...figs.map((x) => h('option', { value: x.id, selected: x.id === target(o) }, x.name))) : null;
   return [

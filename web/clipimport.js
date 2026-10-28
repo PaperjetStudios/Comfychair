@@ -4,7 +4,7 @@
 // long videos. Links and PC files are cut by the server (app/clipimport.py). Device files are cut here
 // with ffmpeg.wasm as a stream copy (no re-encode, only the needed bytes are read from the file) and only
 // that piece is uploaded; the server then re-encodes it from the exact start.
-import { api, button, closeSheet, field, fileButton, h, hint, note, openSheet, placeholder, seg, store, toast } from './ui.js';
+import { api, button, closeSheet, field, fileButton, h, hint, note, openSheet, placeholder, seg, store, toast, toggle } from './ui.js';
 import { videoEditor } from './vfield.js';
 import { S } from './core.js';
 
@@ -85,9 +85,8 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
   });
   const keep = seg([['clip', 'Clip'], ['sound', 'Sound only']], soundOnly ? 'sound' : 'clip', (v) => { soundOnly = v === 'sound'; });
   let toProject = store.get('deck.clipImport.toProject', true);
-  const projectBox = h('label', { class: 'check', title: 'Also put it on this project\'s Board and in History, like a generation' },
-    h('input', { type: 'checkbox', checked: toProject, onchange: (ev) => { toProject = ev.target.checked; store.set('deck.clipImport.toProject', toProject); } }),
-    ' Add to this project');
+  const projectBox = toggle('Add to this project', toProject, (on) => { toProject = on; store.set('deck.clipImport.toProject', on); },
+    { title: 'Also put it on this project\'s Board and in History, like a generation' });
   openSheet(h('h3', {}, title), h('div', { class: 'row wrap' }, tabs, keep, projectBox), body);
 
   const sizeField = () => field('Size', seg(SIZES.map(([v, l]) => [v, l]), size, (v) => { size = Number(v); store.set('deck.clipImport.size', size); }),

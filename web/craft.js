@@ -1,7 +1,7 @@
 // PhotoCraft and EffectCraft: send an Editor edit, a Video timeline, a VFX tab or one output to them with its
 // layers and tracks (app/craft.py builds the document and opens it on the computer's screen), and Bring back
 // what was saved there into the media library.
-import { api, button, closeSheet, h, hint, note, openSheet, placeholder, toast } from './ui.js';
+import { api, button, closeSheet, h, hint, note, openSheet, placeholder, toast, toggle } from './ui.js';
 import { S } from './core.js';
 import { waitJob } from './clipimport.js';
 
@@ -43,11 +43,11 @@ function nextSteps(entry) {
 
 function docRow(d, redraw) {
   const status = h('div', { class: 'hint' });
-  const alpha = d.app === 'effectcraft' ? h('label', { class: 'check' }, h('input', { type: 'checkbox' }), ' with transparency (WebM)') : null;
+  const alpha = d.app === 'effectcraft' ? toggle('With transparency (WebM)', false) : null;
   const back = button('Bring back', async () => {
     back.disabled = true;
     try {
-      const r = await api(`/api/craft/${d.id}/back`, { method: 'POST', body: { alpha: !!alpha?.querySelector('input').checked } });
+      const r = await api(`/api/craft/${d.id}/back`, { method: 'POST', body: { alpha: !!alpha?.input.checked } });
       const entry = await waitJob(r, (p) => { status.textContent = `Rendering… ${Math.round(p * 100)}%`; });
       status.replaceChildren(`In the media library: ${entry.label}`, h('div', { class: 'row wrap' }, ...nextSteps(entry)));
     } catch (e) { status.textContent = `Couldn't bring it back: ${e.message}`; }

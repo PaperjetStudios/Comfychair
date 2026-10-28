@@ -1,6 +1,6 @@
 import {
   $, h, store, uid, api, toast, undoToast, clamp, openSheet, closeSheet, button, iconBtn, linkBtn, actions, fileButton, seg,
-  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, panelTop,
+  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, panelTop, toggle,
 } from './ui.js';
 import { S, fmtT, inputUrl, thumbUrl } from './core.js';
 import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, soundToSoundTab, uploadImage, uploadMedia } from './media.js';
@@ -1037,7 +1037,7 @@ function openKey(it) {
     help('Makes a copy of the clip with see-through parts and puts it in this clip\'s place (sound kept). Put the clip on a track above the background.'),
     seg([['color', 'Colour key'], ['matte', 'Matte']], k.mode, (v) => { k.mode = v; body(); }),
     fieldsBox,
-    field('Invert', h('input', { type: 'checkbox', checked: k.invert, onchange: (e) => { k.invert = e.target.checked; } })),
+    toggle('Invert (keep what\'s black)', k.invert, (on) => { k.invert = on; }),
     actions(go, button('Cancel', closeSheet))];
   body();
   openSheet(...sheet());

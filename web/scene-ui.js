@@ -2,7 +2,7 @@ import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import {
   $, actions, button, clamp, clone, closeSheet, field, h, iconBtn, layerRowsEl, numField, openSheet, panelTop, rangeField,
-  section, seg, sheetOpen, store, uid, undoToast, help
+  section, seg, sheetOpen, store, uid, undoToast, help, toggle,
 } from './ui.js';
 import {
   C, CAM, EVEN, FPS, HIST, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropHolds, dropKeys, holdStart, frames, framesFor, hasKeys, hooks, keyCount, keyTarget,
@@ -89,8 +89,7 @@ function placeProps(o, cur) {
       (v) => { o.pivot = v; changed(); }, { wrap: true })),
     o.type === 'figure' ? shapeProps(o) : null,
     o.type === 'figure' ? [
-      h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: !!o.ground,
-        onchange: (e) => { o.ground = e.target.checked; changed(); } }), 'Planted on the floor (Up lifts it off)'),
+      toggle('Planted on the floor (Up lifts it off)', o.ground, (on) => { o.ground = on; changed(); }),
       button('🎥 Face the camera', () => {
         const v = cur(), c = current(SC.camera, CAM);
         write(o, names, { ry: Math.round(THREE.MathUtils.radToDeg(Math.atan2(c.px - v.x, c.pz - v.z))) }); changed();
@@ -118,7 +117,7 @@ function shapeProps(o) {
     return slider(label, () => sh()[k] || 0, set(k), { min, max, step: 1, fmt: (v) => (v ? `${v > 0 ? '+' : ''}${Math.round(v)}%` : '—') });
   })),
   h('div', { class: 'row wrap' },
-    h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: !!o.anatomy, onchange: (e) => { o.anatomy = e.target.checked; changed(); } }), 'Anatomy (plain mannequin shapes)'),
+    toggle('Anatomy (plain mannequin shapes)', o.anatomy, (on) => { o.anatomy = on; changed(); }),
     Object.keys(sh()).length ? button('Reset shape', () => { delete o.shape; changed(); }) : null),
   help('Proportions on top of the man or the woman: the joints move with them, so IK, the floor plant and the pose video follow. Height (m) above is the whole figure. Anatomy adds plain, low-detail shapes for reference in depth renders; it is off unless ticked.'));
 }
@@ -281,7 +280,7 @@ function renderProps() {
         figs ? button('Render both', async () => { if (await renderDepthVideo()) await renderPoseVideo(); }, { title: 'A depth video and a pose video of the same shot' }) : null,
         button('📷 Save frame', saveFrame)),
     figs ? h('div', { class: 'row wrap' }, ...[['poseHands', 'Hands in the pose video'], ['poseFace', 'Face points in the pose video']].map(([k, l]) =>
-      h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: SC[k] !== false, onchange: (e) => { SC[k] = e.target.checked; save(); } }), l))) : null,
+      toggle(l, SC[k] !== false, (on) => { SC[k] = on; save(); }))) : null,
     R.renders.depth || R.renders.pose ? h('div', { class: 'row wrap' },
       R.renders.depth ? use(R.renders.depth, 'depth') : null, R.renders.pose ? use(R.renders.pose, 'pose') : null) : null,
     h('p', { id: 'sceneStatus', class: 'hint' }, statusText));

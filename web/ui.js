@@ -385,6 +385,15 @@ export function withHelp(el, text) {
   return el;
 }
 
+// The app's one checkbox: a switch and its label on a row as tall as a tap, tap anywhere on it.
+// onChange(checked). help: an ⓘ after the label. The box is el.input (to read it later).
+export function toggle(label, checked, onChange = null, { help: tip = null, title = null } = {}) {
+  const box = h('input', { type: 'checkbox', checked: !!checked, title, onchange: (e) => onChange?.(e.target.checked) });
+  const el = h('label', { class: 'toggle', title }, box, label, tip ? info(tip) : null);
+  el.input = box;
+  return el;
+}
+
 // A labelled setting: the label on the left, an optional note on the right (label: [text, note]).
 // A help(text) among the kids becomes an ⓘ after the label.
 export function field(label, ...kids) {

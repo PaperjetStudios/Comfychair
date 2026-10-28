@@ -1,7 +1,7 @@
 import {
   $, h, store, clamp, clamp01, clone, cycleIndex, api, toast, undoToast, openOverlay, openSheet, sheetStillOpen, nameSheet,
   button, iconBtn, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider,
-  autoGrow, insertAtCursor,
+  autoGrow, insertAtCursor, toggle,
 } from './ui.js';
 import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
 import { clipLabel, clipUrl, openImagePicker, openVideoPicker, soundInput } from './media.js';
@@ -806,9 +806,9 @@ const PART_HINTS = {
 };
 
 function boolField(f) {
-  const cb = h('input', { type: 'checkbox', checked: !!S.values[f.key] });
-  cb.addEventListener('change', () => setVal(f.key, cb.checked));
-  return h('label', { class: 'field toggle' }, cb, f.label);
+  const el = toggle(f.label, S.values[f.key], (on) => setVal(f.key, on));
+  el.classList.add('field');   // (gentabs marks overridden fields by .field[data-key])
+  return el;
 }
 
 export function mpInput(get, set) {

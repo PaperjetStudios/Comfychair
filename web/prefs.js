@@ -1,7 +1,7 @@
 // App-wide settings: one document in the global store (library/prefs/app.json), so every device and
 // project shares them. PREFS holds the values (defaults until loaded); setPref saves; other devices'
 // changes arrive as `store` messages. openPrefs() is the ⚙ sheet; its Projects section is projects.js.
-import { h, api, toast, openSheet, help, info } from './ui.js';
+import { h, api, toast, openSheet, help, toggle } from './ui.js';
 import { onServer } from './core.js';
 import { projectsSection } from './projects.js';
 
@@ -40,7 +40,6 @@ onServer('store', (m) => { if (m.kind === 'prefs' && m.id === 'app' && m.rev !==
 export function openPrefs() {
   openSheet(h('h3', {}, 'Settings'),
     help('These apply on every device and in every project.'),
-    TOGGLES.map(([k, label, tip]) => h('label', { class: 'toggle' },
-      h('input', { type: 'checkbox', checked: !!PREFS[k], onchange: (e) => setPref(k, e.target.checked) }), label, info(tip))),
+    TOGGLES.map(([k, label, tip]) => toggle(label, PREFS[k], (on) => setPref(k, on), { help: tip })),
     projectsSection(openPrefs));
 }

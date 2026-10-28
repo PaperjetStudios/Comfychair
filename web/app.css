@@ -526,7 +526,6 @@ details.desc[open] summary { margin-bottom: 6px; }
 .sound-cut { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
 .sound-cut label { display: grid; gap: 4px; font-size: var(--fs-sm); color: var(--muted); flex: 1; min-width: 90px; }
 .picker-head { grid-column: 1 / -1; margin: 6px 0 0; font-size: var(--fs-sm); color: var(--muted); }
-label.check { display: flex; gap: 8px; align-items: center; font-size: var(--fs-sm); }
 .tl-playhead::before { content: ""; position: absolute; top: 0; left: -6px; border: 7px solid transparent; border-top-color: #ff4d4d; }
 
 /* ---- full-screen editors: sketch pad, layout boxes ---- */
@@ -1168,7 +1167,6 @@ button.sheet-caret { width: 22px; }
 .craft-list { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
 .craft-doc { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--line, #2a2f3a); border-radius: var(--r-sm, 8px); }
 .craft-doc .row { align-items: center; gap: 8px; }
-.craft-doc label.check { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--muted); }
 
 /* ---- sidebars: denser than the rest of the page (tablet sidebars were cramped), touch targets kept ≥ ~38px ---- */
 .panel { --gap: 10px; font-size: 14px; }

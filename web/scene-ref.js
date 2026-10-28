@@ -6,7 +6,7 @@ import { C, FPS, R, SC, hooks, save } from './scene-data.js';
 import { canvas, viewer } from './scene-view.js';
 import { renderPanel, renderToolbar, setSceneMode } from './scene-ui.js';
 import { addModeSection, modeOf } from './scene-modes.js';
-import { button, clamp, h, help, rangeField, section, toast } from './ui.js';
+import { button, clamp, h, help, rangeField, section, toast, toggle } from './ui.js';
 import { inputUrl } from './core.js';
 import { openVideoPicker, soundSource } from './media.js';
 
@@ -92,8 +92,7 @@ function build() {
     ref ? button('Remove', () => { delete SC.ref; save(); syncRef(); renderToolbar(); renderPanel(); }, { cls: 'small danger' }) : null);
   return section('Reference', null,
     ref ? h('p', { class: 'hint' }, `${ref.kind === 'video' ? '🎞' : '🖼'} ${ref.label || ''}`) : null,
-    ref ? h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: ref.on !== false,
-      onchange: (e) => { ref.on = e.target.checked; save(); syncRef(); renderToolbar(); } }), 'Show over the view') : null,
+    ref ? toggle('Show over the view', ref.on !== false, (on) => { ref.on = on; save(); syncRef(); renderToolbar(); }) : null,
     ref ? rangeField('Opacity', () => ref.opacity ?? 0.5, (v) => { ref.opacity = v; }, { min: 0.05, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%`,
       onChange: () => save() }) : null,
     pick,

@@ -1,6 +1,6 @@
 import {
   $, h, store, uid, api, toast, undoToast, clamp, button, iconBtn, linkBtn, seg, field, section, hint, help, info, note,
-  placeholder, numSlider, fileButton, rangeField, autoGrow, insertAtCursor,
+  placeholder, numSlider, fileButton, rangeField, autoGrow, insertAtCursor, toggle,
 } from './ui.js';
 import { DELIVERY, INLINE_TAGS, parseScript, withDelivery, withName } from './dialogue.js';
 import { S, onServer } from './core.js';
@@ -424,9 +424,7 @@ function voiceSection() {
   const busy = VX.busy ? h('p', { class: 'hint', id: 'vxBusy' }, `${VX.busy}…`) : null;
   // 1. clean up
   const stepBox = (k, label) => {
-    const c = h('input', { type: 'checkbox', checked: VX.clean.steps.includes(k) });
-    c.addEventListener('change', () => { VX.clean.steps = c.checked ? [...new Set([...VX.clean.steps, k])] : VX.clean.steps.filter((x) => x !== k); });
-    return h('label', { class: 'check' }, c, label);
+    return toggle(label, VX.clean.steps.includes(k), (on) => { VX.clean.steps = on ? [...new Set([...VX.clean.steps, k])] : VX.clean.steps.filter((x) => x !== k); });
   };
   let picked = null;
   const clean = h('div', { class: 'vx-block' },
@@ -455,8 +453,6 @@ function voiceSection() {
     text.addEventListener('input', () => { nv.ref_text = text.value; });
     const lang = h('select', {}, VX.status.languages.map((l) => h('option', { value: l, selected: l === (nv.language || 'Auto') }, l)));
     lang.addEventListener('change', () => { nv.language = lang.value; });
-    const ok = h('input', { type: 'checkbox', checked: !!nv.consent });
-    ok.addEventListener('change', () => { nv.consent = ok.checked; });
     const len = nv.src?.trim?.len;
     form = h('div', { class: 'vx-block', id: 'vxNewVoice' },
       h('b', {}, 'New voice'),
@@ -474,7 +470,7 @@ function voiceSection() {
           nv.ref_text = r.text; renderPanel();
         } catch (e) { toast(e.message, true); }
       }, { disabled: !!VX.busy, title: 'Write down what is said, with Whisper' })),
-      h('label', { class: 'check' }, ok, 'This is my voice, or the speaker said I may use it. I won\'t use it to pass as them or to mislead.'),
+      toggle('This is my voice, or the speaker said I may use it. I won\'t use it to pass as them or to mislead.', nv.consent, (on) => { nv.consent = on; }),
       h('div', { class: 'row wrap' },
         button('Save voice', async () => {
           if (!nv.src) return toast('Choose the speech first', true);
@@ -621,15 +617,13 @@ function renderPanel() {
 
   const nameIn = h('input', { type: 'text', value: N.out.name || tabs?.active?.name || '', placeholder: tabs?.active?.name || 'Mix', 'aria-label': 'File name' });
   nameIn.addEventListener('change', () => { N.out.name = nameIn.value.trim(); persist(); });
-  const norm = h('input', { type: 'checkbox', checked: !!N.out.normalize });
-  norm.addEventListener('change', () => { N.out.normalize = norm.checked; persist(); });
   const out = section('Export', null,
     help('Mixes every track into one sound file in the media library: play it, edit it again, put it on a clip (Board → ♪ Sound), or use it as a Sound / Voice reference in Generate and VFX.'),
     field('Name', nameIn),
     field('Format', seg([['m4a', 'M4A'], ['wav', 'WAV'], ['mp3', 'MP3'], ['flac', 'FLAC']], N.out.format,
       (v) => { N.out.format = v; store.set('deck.sound.format', v); persist(); })),
     num('Master level', () => N.out.gain, (v) => { N.out.gain = v; }, { min: 0, max: 2, step: 0.01, digits: 2, fmt: pct }),
-    h('label', { class: 'check' }, norm, 'Even out the loudness (−16 LUFS, for speech and streaming)'),
+    toggle('Even out the loudness (−16 LUFS, for speech and streaming)', N.out.normalize, (on) => { N.out.normalize = on; persist(); }),
     h('div', { class: 'row wrap' }, button('⤓ Export sound', exportSound, { cls: 'primary' })),
     N.exports.length ? h('div', { class: 'snd-exports' }, N.exports.slice(-3).reverse().map((m) =>
       h('div', { class: 'snd-export' }, h('b', {}, m.label), h('audio', { src: m.url, controls: true, preload: 'none' }),

@@ -7,7 +7,7 @@
 // folder (POST /api/scene/asset); the layer only holds its URL.
 import * as THREE from './vendor/three.module.min.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
-import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help } from './ui.js';
+import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle } from './ui.js';
 import { C, R, SC, newObject, namesFor, save, selItem, write } from './scene-data.js';
 import { addModeSection } from './scene-modes.js';
 import { LOADERS, controls, changed, draw, passHooks, renderer, scene, select } from './scene-view.js';
@@ -250,10 +250,8 @@ function itemSection(o) {
   const set = (k, v) => { o[k] = v; changed(); };
   return section(o.type === 'splat' ? 'Imported splat' : 'Imported model', null,
     hint(`${o.file || o.name}${o.fit && o.fit !== 1 ? ` · fitted ×${o.fit}` : ''}`),
-    o.type === 'model' ? h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: !!o.clay,
-      onchange: (e) => { o.clay = e.target.checked; applyClay(R.meshes.get(o.id), o.clay); save(); draw(); } }), 'Plain clay look (ignore its colours and textures)') : null,
-    o.type === 'splat' ? h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: !!o.flip,
-      onchange: (e) => { set('flip', e.target.checked); R.meshes.get(o.id)?.userData.splat?.fit(); draw(); } }), 'Upside down (turn it over: many splat files are y-down)') : null,
+    o.type === 'model' ? toggle('Plain clay look (ignore its colours and textures)', o.clay, (on) => { o.clay = on; applyClay(R.meshes.get(o.id), o.clay); save(); draw(); }) : null,
+    o.type === 'splat' ? toggle('Upside down (turn it over: many splat files are y-down)', o.flip, (on) => { set('flip', on); R.meshes.get(o.id)?.userData.splat?.fit(); draw(); }) : null,
     button('Back to fitted size', () => { const f = o.fit || 1; write(o, namesFor(o), { sx: f, sy: f, sz: f }); changed(); }),
     o.type === 'splat' ? help('Splats can\'t be drawn as depth: renders (and the ◐ Depth view) use a box the size of the splat in its place.') : null);
 }
