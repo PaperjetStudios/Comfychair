@@ -84,7 +84,7 @@ SHARP_CKPT = Path(os.environ.get("DECK_SHARP_CKPT", "/mnt/data/ComfyUI/models/sh
 SPLAT_MAX = int(os.environ.get("DECK_SPLAT_MAX", "250000"))   # (500k still crawled on the tablet; thin_splat's default)
 LEVELS = (("light", 150_000), ("medium", 300_000), ("dense", 600_000))
 LEVEL_NAMES = [k for k, _ in LEVELS] + ["full"]
-LEVEL_SUFFIX = re.compile(r"_(light|medium|dense|full)$")
+LEVEL_SUFFIX = re.compile(r"(_t[0-9a-f]{8})?_(light|medium|dense|full)$")
 
 
 def _read_ply(src: Path):
@@ -168,22 +168,64 @@ def splat_box(props, data) -> list:
     return [round(float(v), 3) for v in (*lo, *hi)]
 
 
-def make_levels(full: Path, base: str, grow: bool = True) -> dict:
+def clean_trim(trim) -> dict | None:
+    """A radial trim as the layer keeps it: {c: [x, y, z] (the centre, in the file's units), r (keep within this
+    of c), near (drop within this of the photo's camera, the file's origin; 0 = off)} -> rounded, or None (no trim)."""
+    if not trim:
+        return None
+    try:
+        c = [round(float(v), 4) for v in trim["c"]]
+        r, near = round(float(trim["r"]), 4), round(float(trim.get("near") or 0), 4)
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("A trim is {c: [x, y, z], r, near}")
+    if len(c) != 3 or not all(map(math.isfinite, [*c, r, near])) or r <= 0 or near < 0:
+        raise ValueError("A trim needs a centre and a radius above 0")
+    return {"c": c, "r": r, "near": near}
+
+
+def trim_tag(trim: dict) -> str:
+    import hashlib
+    return hashlib.sha1(repr((trim["c"], trim["r"], trim["near"])).encode()).hexdigest()[:8]
+
+
+def trim_mask(props, data, trim: dict):
+    """Which Gaussians a trim keeps: centre within r of c, and farther than `near` from the origin."""
+    import numpy as np
+    xyz = data[:, [props.index("x"), props.index("y"), props.index("z")]].astype("f8")
+    keep = ((xyz - np.array(trim["c"])) ** 2).sum(1) <= trim["r"] ** 2
+    if trim["near"] > 0:
+        keep &= (xyz ** 2).sum(1) > trim["near"] ** 2
+    return keep
+
+
+def make_levels(full: Path, base: str, grow: bool = True, trim: dict | None = None) -> dict:
     """The preview levels of the splat in `full`, written beside it as <base>_light.ply, _medium and _dense (only the
-    ones lighter than the full set). -> {n: the full count, box, levels: {name: {file, n}}}."""
+    ones lighter than the full set). -> {n: the full count, kept, box, levels: {name: {file, n}}}.
+    With a trim (clean_trim) only the Gaussians it keeps go in, as <base>_t<tag>_<level>.ply, so a level's budget is
+    spent inside the trim; the first level with room for all of them holds all of them. (Earlier trims' files stay:
+    another layer may use them.) The box is always the untrimmed set's, so the layer doesn't move."""
     props, data = _read_ply(full)
-    n = len(data)
-    order = _visible_order(props, data) if n > LEVELS[0][1] else None
+    n, box = len(data), splat_box(props, data)
+    if trim:
+        data = data[trim_mask(props, data, trim)]
+        if not len(data):
+            raise ValueError("That trim leaves nothing: make the radius bigger")
+    kept = len(data)
+    order = _visible_order(props, data) if kept > LEVELS[0][1] else None
+    prefix = f"{base}_t{trim_tag(trim)}" if trim else base
     levels = {}
     for k, keep in LEVELS:
-        dst = full.with_name(f"{base}_{k}.ply")
-        if keep >= n:
-            if dst != full:
+        dst = full.with_name(f"{prefix}_{k}.ply")
+        if keep >= kept:
+            if trim and kept < n and not any(v["n"] >= kept for v in levels.values()):
+                _write_ply(dst, props, data)   # (all of what the trim keeps)
+                levels[k] = {"file": dst.name, "n": kept}
+            elif dst != full and not trim:
                 dst.unlink(missing_ok=True)   # (left from an earlier, bigger set)
             continue
-        _write_ply(dst, props, _thinned(props, data, order, keep, grow_for(n, keep) if grow else 1.0))
+        _write_ply(dst, props, _thinned(props, data, order, keep, grow_for(kept, keep) if grow else 1.0))
         levels[k] = {"file": dst.name, "n": keep}
-    return {"n": n, "box": splat_box(props, data), "levels": levels}
+    return {"n": n, "kept": kept, "box": box, "levels": levels}
 
 
 def _asset_url(folder: str, group: str, name: str) -> str:
@@ -200,9 +242,10 @@ def level_list(folder: str, group: str, made: dict, full_name: str | None) -> li
 
 @router.post("/splat/levels")
 async def splat_levels(body: dict = Body(...)):
-    """{url: a splat asset's URL} -> {levels, n, box}: its preview levels, (re)made from its full set. That is
-    <name>_full.ply when there is one (a photo's splat), else the file itself (an imported .ply), so older splats
-    and imports get levels too."""
+    """{url: a splat asset's URL, trim?: {c, r, near}} -> {levels, n, kept, box, trim}: its preview levels, (re)made
+    from its full set. That is <name>_full.ply when there is one (a photo's splat), else the file itself (an imported
+    .ply), so older splats and imports get levels too. With a trim the levels hold only what it keeps (the full set
+    stays whole: renders trim it as they draw)."""
     import asyncio
     from urllib.parse import unquote
     m = re.fullmatch(r"/files/projects/([^/]+)/\.deck/assets/([0-9a-f]{8})/([^/]+)", str((body or {}).get("url") or "").split("?")[0])
@@ -222,10 +265,12 @@ async def splat_levels(body: dict = Body(...)):
     if full is None:
         raise HTTPException(400, "The full set of that splat is gone: only a preview of it is left")
     try:
-        made = await asyncio.to_thread(make_levels, full, base)
+        trim = clean_trim(body.get("trim"))
+        made = await asyncio.to_thread(make_levels, full, base, True, trim)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return {"levels": level_list(folder, group, made, full.name), "n": made["n"], "box": made["box"]}
+    return {"levels": level_list(folder, group, made, full.name), "n": made["n"], "kept": made["kept"], "box": made["box"],
+            "trim": trim}
 
 
 def _ply_lens(path: Path) -> dict:

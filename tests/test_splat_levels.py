@@ -111,6 +111,34 @@ class Levels(unittest.TestCase):
         with self.assertRaises(ValueError):
             sa._read_ply(p)
 
+    def test_trimmed_levels(self):
+        src = self.d / "t_full.ply"
+        data = write_ply(src, 1000)
+        xyz = data[:, :3].astype("f8")
+        trim = sa.clean_trim({"c": [1, 0.5, 1.5], "r": 0.8, "near": 0.5})
+        inside = (((xyz - [1, 0.5, 1.5]) ** 2).sum(1) <= 0.64) & ((xyz ** 2).sum(1) > 0.25)
+        made = sa.make_levels(src, "t", trim=trim)
+        self.assertEqual((made["n"], made["kept"]), (1000, int(inside.sum())))
+        tag = sa.trim_tag(trim)
+        files = {k: v["file"] for k, v in made["levels"].items()}
+        self.assertTrue(all(f.startswith(f"t_t{tag}_") for f in files.values()), files)
+        # every Gaussian in every level is one the trim keeps; the first level with room has all of them
+        for k, v in made["levels"].items():
+            props, lv = sa._read_ply(self.d / v["file"])
+            p = lv[:, :3].astype("f8")
+            self.assertTrue(((((p - [1, 0.5, 1.5]) ** 2).sum(1)) <= 0.64 + 1e-6).all(), k)
+        self.assertEqual(max(v["n"] for v in made["levels"].values()), made["kept"])
+        # the untrimmed levels are untouched, the box is the whole set's
+        self.assertEqual(made["box"], sa.make_levels(src, "t")["box"])
+        self.assertTrue((self.d / "t_light.ply").exists() and (self.d / f"t_t{tag}_light.ply").exists())
+        self.assertEqual(sa.LEVEL_SUFFIX.sub("", f"t_t{tag}_light"), "t")
+        with self.assertRaises(ValueError):
+            sa.make_levels(src, "t", trim=sa.clean_trim({"c": [50, 50, 50], "r": 0.1}))
+        for bad in ({"c": [0, 0], "r": 1}, {"c": [0, 0, 0], "r": 0}, {"c": [0, 0, "x"], "r": 1}, {"r": 1}, {"c": [0, 0, 0], "r": float("nan")}):
+            with self.assertRaises(ValueError, msg=bad):
+                sa.clean_trim(bad)
+        self.assertIsNone(sa.clean_trim(None))
+
     def test_pick_level(self):
         lv = [{"k": "light"}, {"k": "medium"}, {"k": "full"}]
         self.assertEqual(sa.pick_level(lv, "light")["k"], "light")
@@ -171,6 +199,15 @@ class Endpoint(unittest.TestCase):
         # asked again from a level's URL: the same levels (made from the full file, not the level)
         again = self.levels(j["levels"][0]["url"]).json()
         self.assertEqual(again["levels"], j["levels"])
+        # trimmed: fewer kept, the full set (for renders) is still the whole file
+        t = self.c.post("/api/scene/splat/levels", json={"url": up["url"], "trim": {"c": [1, 0.5, 1.5], "r": 0.6}}).json()
+        self.assertLess(t["kept"], 500)
+        self.assertEqual(t["levels"][-1]["url"], up["url"])
+        self.assertIn("_t", t["levels"][0]["url"])
+        self.assertEqual(t["trim"], {"c": [1.0, 0.5, 1.5], "r": 0.6, "near": 0.0})
+        # asked from a trimmed level's URL with no trim: the untrimmed levels again
+        self.assertEqual(self.levels(t["levels"][0]["url"]).json()["levels"], j["levels"])
+        self.assertEqual(self.c.post("/api/scene/splat/levels", json={"url": up["url"], "trim": {"c": [1], "r": 1}}).status_code, 400)
 
     def test_old_photo_splat_uses_its_full_set(self):
         # an older photo splat: <name>.ply (thinned) beside <name>_full.ply
