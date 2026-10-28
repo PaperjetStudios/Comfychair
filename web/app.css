@@ -577,6 +577,7 @@ svg.ico.filled path { fill: currentColor; }
 .snd-viewer { background: var(--stage-bg) !important; }
 #sndCanvas { position: absolute; inset: 8px; width: calc(100% - 16px); height: calc(100% - 16px); cursor: pointer; touch-action: none; }
 .snd-row { height: 60px; }
+#sndTimeline .tl-head { width: 112px; }   /* (sound.js HEAD_W: the ruler, playhead and drags measure from it) */
 .tl-tog.solo { background: var(--accent); color: var(--accent-ink); }
 .snd-exports { display: grid; gap: 8px; }
 .snd-export { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
