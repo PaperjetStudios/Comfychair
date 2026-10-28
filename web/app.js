@@ -4,7 +4,7 @@
 // the pickers and core.js the shared state. The 3D tab (scene.js) loads on demand.
 
 import {
-  $, h, store, api, toast, overlayOpened, overlayClosed, openSheet, closeSheet, button, help, chip as uiChip,
+  $, h, store, api, toast, overlayOpened, overlayClosed, openSheet, closeSheet, button, help, chip as uiChip, setIcon,
 } from './ui.js';
 import { S, loadProjects, setSwitchTab, setOpenProject, emitProject, onServer } from './core.js';
 import { generate, loadTemplates, selectTemplate, stop, wireTemplateFilter, wireZoom } from './generate.js';
@@ -97,6 +97,8 @@ function whereFrom(e) {
   return at.length ? ` (at ${at.join(' < ')})` : '';
 }
 setSwitchTab(switchTab);
+// the page's own buttons (index.html) show line icons too, not the symbols written there
+for (const b of document.querySelectorAll('button, a.btn')) if (!b.children.length && b.textContent.trim()) setIcon(b, b.textContent.trim());
 document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
 
 $('#tplSel').addEventListener('change', (e) => selectTemplate(e.target.value));

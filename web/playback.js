@@ -1,4 +1,4 @@
-import { button, h, iconBtn, seg } from './ui.js';
+import { button, h, iconBtn, seg, setIcon } from './ui.js';
 
 // ---------------------------------------------------------------------------
 // playback: the transport bar and keys every player shares (Video, Sound, VFX): ⇤ to the start, back and
@@ -41,7 +41,7 @@ export function transport(p, { step, loop = null, rates = null, rate = null, scr
   const loopBtn = loop ? button('⟲ Loop', () => { loop.set(!loop.get()); showLoop(); }, { title: 'Play it again from the start at the end' }) : null;
   const showLoop = () => { if (!loopBtn) return; loopBtn.classList.toggle('on', !!loop.get()); loopBtn.setAttribute('aria-pressed', String(!!loop.get())); };
   tp.update = () => {
-    playBtn.textContent = p.playing() ? '❚❚ Pause' : '▶ Play';
+    setIcon(playBtn, p.playing() ? '❚❚ Pause' : '▶ Play');
     const t = p.t(), len = p.len(), f = fpsNow();
     time.textContent = `${fmtTime(t, f)} / ${fmtTime(len, f)}${frames && f ? ` · frame ${Math.round(t * f) + 1}` : ''}`;
     if (bar) {

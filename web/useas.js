@@ -1,4 +1,4 @@
-import { h, api, toast, openSheet, closeSheet, button, section, linkBtn, chip, hint } from './ui.js';
+import { h, api, toast, openSheet, closeSheet, button, section, linkBtn, chip, hint, setIcon } from './ui.js';
 import { S, inputUrl, switchTab } from './core.js';
 import { genLabel } from './media.js';
 import { renderFields, selectTemplate, setVal } from './generate.js';
@@ -24,7 +24,7 @@ export function takeButtons(g, i, { details = false, onDeleted = null } = {}) {
   const pin = button(g.pinned ? '★ Pinned' : '☆ Pin', async () => {
     try {
       const r = await api(`/api/generations/${g.id}/pin`, { method: 'POST', body: { pinned: !g.pinned } });
-      g.pinned = r.pinned; S.history.set(r.id, r); pin.textContent = r.pinned ? '★ Pinned' : '☆ Pin';
+      g.pinned = r.pinned; S.history.set(r.id, r); setIcon(pin, r.pinned ? '★ Pinned' : '☆ Pin');
       (await import('./board.js')).boardChanged(r);
     } catch (e) { toast(e.message, true); }
   }, { title: 'Keep it at hand: the Board\'s ★ Pinned' });

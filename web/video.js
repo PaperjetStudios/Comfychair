@@ -1,6 +1,6 @@
 import {
   $, h, store, uid, api, toast, undoToast, clamp, openSheet, closeSheet, button, iconBtn, linkBtn, actions, fileButton, seg,
-  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, toggle, textArea, pctFmt, colorField, sizeSelect, canvasFont,
+  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, toggle, textArea, pctFmt, colorField, sizeSelect, canvasFont, icon,
 } from './ui.js';
 import { S, fmtT, inputUrl, thumbUrl } from './core.js';
 import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, soundToSoundTab, uploadImage, uploadMedia } from './media.js';
@@ -661,7 +661,7 @@ function clipEl(it) {
     title: gone ? 'This 3D scene was deleted from the 3D tab' : null,
     style: `left:${it.at * V.pps}px;width:${Math.max(6, itLen(it) * V.pps)}px` + (bg ? `;background-image:url("${bg}")` : '') },
     it.kind === 'audio' ? h('canvas', { class: 'wave' }) : null,
-    h('span', { class: 'tl-label' }, (gone ? '⚠ ' : '') + it.label),
+    h('span', { class: 'tl-label' }, gone ? icon('warn') : null, it.label),
     fi ? h('span', { class: 'tl-fade in', style: `width:${fi * V.pps}px` }) : null,
     it.fadeOut ? h('span', { class: 'tl-fade out', style: `width:${it.fadeOut * V.pps}px` }) : null,
     K.diamonds(it, V.pps, tc),   // its keys, After Effects style

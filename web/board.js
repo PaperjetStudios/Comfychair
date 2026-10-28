@@ -1,6 +1,6 @@
 import {
   $, h, store, api, toast, undoToast, overlayOpened, overlayClosed, sheetOpen, button, iconBtn, linkBtn, seg, placeholder,
-  numSlider, field, section, hint, openSheet, closeSheet,
+  numSlider, field, section, hint, openSheet, closeSheet, icon, iconize, setIcon,
 } from './ui.js';
 import { fmtTime } from './playback.js';
 import { bareSource, extractSound, genLabel, soundInput, soundToSoundTab } from './media.js';
@@ -105,21 +105,21 @@ function markedGens() { return [...B.marked].map((id) => S.history.get(id)).filt
 
 // a clip's length on its tile: 4.9s, 1:05
 const clipLen = (s) => (s < 60 ? `${s < 10 ? s.toFixed(1) : Math.round(s)}s` : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`);
-const kindMark = (o) => (kindOf(o) === 'image' ? '' : ` ${kindDef(o).icon}`);   // (kinds.js)
+const kindMark = (o) => (kindOf(o) === 'image' ? null : icon(kindDef(o).icon));   // (kinds.js)
 function boardTile(g, o, i) {
   // light previews (app/previews.py): a still straight away; videos loop a small 8 fps copy while on screen
   const media = cardPicture(o, g, B.size, { live: true });   // (kinds.js: the same pictures as everywhere)
   const pin = h('button', { type: 'button', class: 'pin' + (g.pinned ? ' on' : ''), 'aria-label': g.pinned ? 'Unpin' : 'Pin',
-    onclick: (e) => { e.stopPropagation(); togglePin(S.history.get(g.id) || g); } }, g.pinned ? '★' : '☆');
+    onclick: (e) => { e.stopPropagation(); togglePin(S.history.get(g.id) || g); } }, iconize(g.pinned ? '★' : '☆'));
   const key = `${g.id}:${i}`;
   const tile = h('div', { class: 'tile' + (B.sel.has(key) ? ' sel' : '') + (B.marked.has(g.id) ? ' marked' : ''), 'data-gen': g.id, 'data-key': key,
     onclick: () => {
       if (B.longPressed) { B.longPressed = false; return; }   // the long press already selected it
       if (B.selecting) toggleBoardSel(key, tile); else openGallery(key);
-    } }, media, pin, h('span', { class: 'tick', 'aria-hidden': 'true' }, '✓'),
-    h('span', { class: 'mark', 'aria-hidden': 'true' }, '🗑'),
+    } }, media, pin, h('span', { class: 'tick', 'aria-hidden': 'true' }, icon('check')),
+    h('span', { class: 'mark', 'aria-hidden': 'true' }, icon('trash')),
     o.duration ? h('span', { class: 'tile-len' }, clipLen(o.duration)) : null,
-    h('div', { class: 'tile-meta' }, `${genLabel(g)}${kindMark(o)}`));
+    h('div', { class: 'tile-meta' }, genLabel(g), kindMark(o)));
   // long press: start selecting with this tile
   let timer = 0, start = null;
   tile.addEventListener('pointerdown', (e) => {
@@ -361,7 +361,7 @@ export function boardChanged(g) {
   const tiles = $('#board').querySelectorAll(`.tile[data-gen="${g.id}"]`);
   if (!tiles.length || (B.filter === 'pinned' && !g.pinned) || (B.filter === 'marked' && !B.marked.has(g.id))) return renderBoard();
   tiles.forEach((t) => {
-    const p = t.querySelector('.pin'); p.classList.toggle('on', !!g.pinned); p.textContent = g.pinned ? '★' : '☆';
+    const p = t.querySelector('.pin'); p.classList.toggle('on', !!g.pinned); setIcon(p, g.pinned ? '★' : '☆');
     t.classList.toggle('marked', B.marked.has(g.id));
   });
 }
@@ -390,7 +390,7 @@ function galleryAudio(o) {
   const fill = h('div', { class: 'gal-wave-fill' });
   const wave = waveArt(o, 640, 'gal-wave');
   wave.append(fill);
-  const play = h('button', { type: 'button', class: 'gal-play', 'aria-label': 'Play' }, '▶');
+  const play = h('button', { type: 'button', class: 'gal-play', 'aria-label': 'Play' }, icon('play'));
   const time = h('span', { class: 'gal-time' });
   const scrub = h('input', { type: 'range', min: 0, max: 1, step: 0.001, value: 0, 'aria-label': 'Position' });
   const dur = () => (isFinite(a.duration) && a.duration > 0 ? a.duration : o.duration || 0);
@@ -400,7 +400,7 @@ function galleryAudio(o) {
     fill.style.width = `${p * 100}%`;
     if (document.activeElement !== scrub || a.paused) scrub.value = p;
     time.textContent = `${clock(a.currentTime)} / ${clock(d)}`;
-    play.textContent = a.paused ? '▶' : '❚❚';
+    setIcon(play, a.paused ? '▶' : '❚❚');
     play.setAttribute('aria-label', a.paused ? 'Play' : 'Pause');
     cancelAnimationFrame(raf);
     if (!a.paused && a.isConnected) raf = requestAnimationFrame(draw);
@@ -527,7 +527,7 @@ function galleryRender(newMedia = false) {
     const x = GAL.items[n], xg = S.history.get(x.g.id) || x.g;
     t.classList.toggle('sel', n === GAL.idx);
     t.classList.toggle('marked', B.marked.has(xg.id));
-    t.querySelector('.gal-badges').textContent = `${xg.pinned ? '★' : ''}${B.marked.has(xg.id) ? '🗑' : ''}${kindMark(x.o).trim()}`;
+    t.querySelector('.gal-badges').replaceChildren(...[xg.pinned && iconize('★'), B.marked.has(xg.id) && icon('trash'), kindMark(x.o)].filter(Boolean));
   });
   strip.querySelector('.gal-thumb.sel')?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: newMedia ? 'smooth' : 'auto' });
 }

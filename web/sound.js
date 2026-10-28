@@ -1,6 +1,6 @@
 import {
   $, h, store, uid, api, toast, undoToast, clamp, button, iconBtn, linkBtn, seg, field, section, hint, help, info, note,
-  placeholder, fileButton, rangeField, insertAtCursor, panFmt, pctFmt, toggle, textArea, chip,
+  placeholder, fileButton, rangeField, insertAtCursor, panFmt, pctFmt, toggle, textArea, chip, icon,
 } from './ui.js';
 import { DELIVERY, INLINE_TAGS, parseScript, withDelivery, withName } from './dialogue.js';
 import { S, onServer } from './core.js';
@@ -229,7 +229,7 @@ function clipEl(it) {
   return h('div', { class: 'tl-clip audio' + (N.sel === it.id ? ' sel' : ''), 'data-id': it.id,
     style: `left:${it.at * N.pps}px;width:${Math.max(6, itLen(it) * N.pps)}px` },
     h('canvas', { class: 'wave' }),
-    h('span', { class: 'tl-label' }, `${it.kind === 'video' ? '🎞 ' : ''}${it.label}${(it.volume ?? 1) !== 1 ? ` · ${Math.round(it.volume * 100)}%` : ''}`),
+    h('span', { class: 'tl-label' }, it.kind === 'video' ? icon('film') : null, `${it.label}${(it.volume ?? 1) !== 1 ? ` · ${Math.round(it.volume * 100)}%` : ''}`),
     fi ? h('span', { class: 'tl-fade in', style: `width:${fi * N.pps}px` }) : null,
     it.fadeOut ? h('span', { class: 'tl-fade out', style: `width:${it.fadeOut * N.pps}px` }) : null,
     K.diamonds(it, N.pps, tc),

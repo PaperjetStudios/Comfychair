@@ -1,4 +1,4 @@
-import { h, iconBtn, rangeField } from './ui.js';
+import { h, iconBtn, rangeField, setIcon } from './ui.js';
 import { nextKey, putKey, removeKey, sampleKeys } from './keys.js';
 
 // ---------------------------------------------------------------------------
@@ -43,7 +43,7 @@ export function keyedRange(label, { item, ch, t, base, setBase, seek, onKeys, on
   const prev = iconBtn(`Previous ${label} key`, '◀', () => jump(-1)), next = iconBtn(`Next ${label} key`, '▶', () => jump(1));
   const paint = () => {
     const on = animated(item, ch), here = on && keyAt(item, ch, t());
-    diamond.textContent = here ? '◆' : '◇';
+    setIcon(diamond, here ? '◆' : '◇');
     diamond.classList.toggle('on', on);
     diamond.title = here ? `Take away this ${label} key` : on ? `Key ${label} here` : `Animate ${label}: a key here`;
     prev.hidden = next.hidden = !on;

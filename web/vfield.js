@@ -1,7 +1,7 @@
 // The player + trim + crop widget of a template's video field (generate.js videoField builds the rest).
 // It never redraws the field: edits report through onChange(trim|null, crop|null) when a drag or a
 // typed number ends. trim = {start, len} in seconds; crop = {x, y, w, h} fractions of the frame.
-import { api, button, clamp, clamp01, field, h, iconBtn, pickButtons, seg } from './ui.js';
+import { api, button, clamp, clamp01, field, h, iconBtn, pickButtons, seg, setIcon } from './ui.js';
 import { fmtTime } from './playback.js';
 import { ASPECTS, aspectCrop, cropSpan } from './editor.js';
 
@@ -83,12 +83,12 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
     v.play().catch(() => {});
   });
   const time = h('span', { class: 'vf-time hint' }, '0:00.00');
-  const mute = iconBtn('Mute', '🔊', () => { v.muted = !v.muted; if (snd) snd.muted = v.muted; mute.textContent = v.muted ? '🔇' : '🔊'; mute.setAttribute('aria-pressed', v.muted); });
+  const mute = iconBtn('Mute', '🔊', () => { v.muted = !v.muted; if (snd) snd.muted = v.muted; setIcon(mute, v.muted ? '🔇' : '🔊'); mute.setAttribute('aria-pressed', v.muted); });
   let looping = true;
   const loopBtn = iconBtn('Loop', '🔁', () => { looping = !looping; loopBtn.classList.toggle('on', looping); loopBtn.setAttribute('aria-pressed', looping); });
   loopBtn.classList.add('on'); loopBtn.setAttribute('aria-pressed', 'true');
-  v.addEventListener('play', () => { play.textContent = '❚❚'; tick(); });
-  v.addEventListener('pause', () => { play.textContent = '▶'; });
+  v.addEventListener('play', () => { setIcon(play, '❚❚'); tick(); });
+  v.addEventListener('pause', () => { setIcon(play, '▶'); });
   v.addEventListener('error', () => { time.textContent = "Couldn't load this video"; onError?.(); });
 
   // a separate sound stream (link previews): follows the picture's play, pause and seeks

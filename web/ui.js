@@ -1,3 +1,5 @@
+import { iconize } from './icons.js';
+export { icon, iconize, setIcon } from './icons.js';
 // Shared UI building blocks for app.js and scene.js: the element helper, storage, the API client
 // with its busy bar, toasts, overlays and the bottom sheet, and the small widgets every panel is
 // made of (buttons, segmented controls, labelled fields, sliders, number boxes, cards, layer rows).
@@ -302,15 +304,15 @@ export function nameSheet({ title, hint = null, placeholder = '', extra = null, 
 // ---------------------------------------------------------------------------
 // cls: the button's look after "btn" (small, primary, ghost, danger…, combined freely)
 export const button = (text, onclick, { cls = 'small', ...attrs } = {}) =>
-  h('button', { type: 'button', class: `btn ${cls}`.trim(), onclick, ...attrs }, text);
+  h('button', { type: 'button', class: `btn ${cls}`.trim(), onclick, ...attrs }, iconize(text));
 
 // A square button with a symbol; the label is read out and shown on hover. Taps don't reach the
 // row or card it sits in.
 export const iconBtn = (label, text, fn, extra = {}) => h('button', { type: 'button', class: 'icon-btn', 'aria-label': label, title: label,
-  ...extra, onclick: (e) => { e.stopPropagation(); fn(e); } }, text);
+  ...extra, onclick: (e) => { e.stopPropagation(); fn(e); } }, iconize(text));
 
 // A link that looks like a button (downloads, the workflow JSON)
-export const linkBtn = (text, href, attrs = {}) => h('a', { class: 'btn small', href, ...attrs }, text);
+export const linkBtn = (text, href, attrs = {}) => h('a', { class: 'btn small', href, ...attrs }, iconize(text));
 
 // A row of buttons, as at the bottom of a sheet
 export const actions = (...kids) => h('div', { class: 'actions' }, kids);
@@ -328,7 +330,7 @@ export function seg(options, cur, onPick, { wrap = false, action = false, disabl
   const el = h('div', { class: 'seg' + (wrap ? ' wrap' : '') });
   el.set = (v) => { for (const b of el.children) b.classList.toggle('on', !action && b.dataset.v === String(v)); };
   el.append(...options.map(([v, label, title]) => h('button', { type: 'button', 'data-v': String(v), title, disabled,
-    onclick: () => { el.set(v); onPick(v); } }, label)));
+    onclick: () => { el.set(v); onPick(v); } }, iconize(label))));
   el.set(cur);
   return el;
 }
@@ -337,7 +339,7 @@ export function seg(options, cur, onPick, { wrap = false, action = false, disabl
 // screen readers); keepFocus: tapping it leaves the cursor in the text box it adds to.
 export const chip = (label, onclick, { on = null, title = null, cls = '', keepFocus = false } = {}) =>
   h('button', { type: 'button', class: `chip${on ? ' on' : ''}${cls ? ` ${cls}` : ''}`, title, onclick,
-    'aria-pressed': on == null ? null : String(!!on), onmousedown: keepFocus ? (e) => e.preventDefault() : null }, label);
+    'aria-pressed': on == null ? null : String(!!on), onmousedown: keepFocus ? (e) => e.preventDefault() : null }, iconize(label));
 // One of options ([v, label]) picked, as a row of chips: seg's look for a list that wraps (folders, categories)
 export function chips(options, cur, onPick, { cls = '' } = {}) {
   const el = h('div', { class: `chips${cls ? ` ${cls}` : ''}` });

@@ -1,6 +1,6 @@
 import {
   $, h, store, api, toast, SHEET, sheetOpen, openSheet, closeSheet, button, linkBtn, actions, hint, placeholder, note,
-  mediaCard, seg,
+  mediaCard, seg, setIcon,
 } from './ui.js';
 import { S, fmtT, isMine, loadProjects, switchTab, emitServer } from './core.js';
 import { genLabel, mediaEl, openImagePicker, outputCard, uploadImage } from './media.js';
@@ -164,7 +164,7 @@ export function runChip(value, max, text) {
   if (!state && /\b(done|fail)\b/.test(chip.className) && !tab.classList.contains('active')) return;
   const pct = max ? Math.round((100 * value) / max) : null;
   chip.className = 'tab-chip' + (state ? ` ${state}` : ' hidden') + ((state === 'run' || state === 'other') && pct == null ? ' spin' : '');
-  chip.textContent = state === 'done' ? '✓' : state === 'fail' ? '!' : pct != null ? `${pct}%` : '';
+  setIcon(chip, state === 'done' ? '✓' : state === 'fail' ? '!' : pct != null ? `${pct}%` : '');
   tab.style.setProperty('--run', state === 'run' && pct != null ? `${pct}%` : '0%');
   tab.title = state ? `Generate · ${text}` : 'Generate';
 }

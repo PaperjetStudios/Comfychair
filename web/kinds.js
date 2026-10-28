@@ -1,4 +1,4 @@
-import { h } from './ui.js';
+import { h, icon } from './ui.js';
 import { previewUrl, thumbUrl } from './core.js';
 import { fmtTime } from './playback.js';
 
@@ -15,13 +15,13 @@ const rate = (o) => (o.fps ? `${+o.fps.toFixed(2)} fps` : null);
 const count = (o) => (o.frames ? `${o.frames} frames` : o.fps && o.duration ? `${Math.round(o.fps * o.duration)} frames` : null);
 
 export const KINDS = {
-  image: { icon: '🖼', name: 'Picture', facts: [size] },
-  video: { icon: '▶', name: 'Clip', facts: [len, size, rate, count] },
-  audio: { icon: '♪', name: 'Sound', facts: [len] },
-  motion: { icon: '🕺', name: 'Motion', facts: [len, rate, count] },
-  mesh: { icon: '🧊', name: '3D model', facts: [] },
-  splat: { icon: '✦', name: 'Splat', facts: [] },
-  file: { icon: '📄', name: 'File', facts: [] },
+  image: { icon: 'image', name: 'Picture', facts: [size] },
+  video: { icon: 'play', name: 'Clip', facts: [len, size, rate, count] },
+  audio: { icon: 'music', name: 'Sound', facts: [len] },
+  motion: { icon: 'move', name: 'Motion', facts: [len, rate, count] },
+  mesh: { icon: 'cube', name: '3D model', facts: [] },
+  splat: { icon: 'sparkle', name: 'Splat', facts: [] },
+  file: { icon: 'file', name: 'File', facts: [] },
 };
 // (the same extensions as app/imageprep.py, for outputs saved as a plain "file" before their kind existed)
 const EXT = { motion: /\.(npz|bvh)$/i, mesh: /\.(glb|gltf|obj|fbx)$/i, splat: /\.(ply|splat|ksplat|spz)$/i };
@@ -37,7 +37,7 @@ export const factsOf = (o) => (o ? kindDef(o).facts.map((f) => f(o)).filter(Bool
 export const isMedia = (o) => ['image', 'video', 'audio'].includes(kindOf(o));
 
 // a sound's picture: its waveform (app/previews.py) over a note, which shows alone if there is no waveform
-export const waveArt = (o, w, cls) => h('div', { class: cls }, h('span', { class: 'wave-note', 'aria-hidden': 'true' }, '♪'),
+export const waveArt = (o, w, cls) => h('div', { class: cls }, h('span', { class: 'wave-note', 'aria-hidden': 'true' }, icon('music')),
   h('img', { src: previewUrl(o.url, w, 'wave'), loading: 'lazy', alt: '', draggable: false,
     onload: (e) => { e.target.previousSibling.hidden = true; }, onerror: (e) => e.target.remove() }));
 
@@ -46,7 +46,7 @@ export function kindTile(o, g = null) {
   const d = kindDef(o), src = kindOf(o) === 'mesh' && g?.params?.image;
   return h('div', { class: 'kind-tile' },
     src ? h('img', { src: thumbUrl(src, 320), alt: '', loading: 'lazy', onerror: (e) => e.target.remove() }) : null,   // (the picture may be gone)
-    h('span', { class: 'kind-icon', 'aria-hidden': 'true' }, d.icon),
+    h('span', { class: 'kind-icon', 'aria-hidden': 'true' }, icon(d.icon)),
     h('span', { class: 'kind-name' }, d.name), h('span', { class: 'kind-facts' }, factsOf(o)));
 }
 

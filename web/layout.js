@@ -2,7 +2,7 @@
 // the sidebar has a strip of icon tabs, and every viewer maximizes the same way. Sizes and picks
 // are remembered per device (localStorage), per panel.
 
-import { $, h, store, clamp, overlayOpened, overlayClosed } from './ui.js';
+import { $, h, store, clamp, overlayOpened, overlayClosed, setIcon } from './ui.js';
 
 const svg = (paths) => {
   const ns = 'http://www.w3.org/2000/svg', s = document.createElementNS(ns, 'svg');
@@ -96,7 +96,7 @@ export function maximizable(stage, viewer, { onChange = null, cls = 'maxed', tit
     active = on;
     stage.classList.toggle(cls, on);
     btn.classList.toggle('on', on); btn.setAttribute('aria-pressed', on);
-    btn.textContent = on ? '✕' : '⛶';
+    setIcon(btn, on ? '✕' : '⛶');
     btn.setAttribute('aria-label', on ? 'Leave full screen' : title);
     if (on) {
       MAXED.push(api); overlayOpened(back);

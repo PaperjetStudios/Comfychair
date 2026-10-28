@@ -3,7 +3,7 @@
 // (track-math.js). Opened from a clip in the Video tab or a video in History. The result is kept as a
 // document of kind `tracks` (one per clip), so opening the sheet again doesn't track again.
 import {
-  $, api, actions, button, field, h, help, hint, note, openSheet, closeSheet, rangeField, seg, toast, toggle, canvasFont,
+  $, api, actions, button, field, h, help, hint, note, openSheet, closeSheet, rangeField, seg, toast, toggle, canvasFont, setIcon,
 } from './ui.js';
 import { fmtTime } from './playback.js';
 import { S, fmtT, switchTab } from './core.js';
@@ -71,7 +71,7 @@ export async function openTrack(opts) {
       g.fillStyle = '#ffd24a'; g.beginPath(); g.arc(x * w, y * hh, 3, 0, 7); g.fill();
     }
   };
-  const showTime = () => { scrub.value = T.t; clock.textContent = fmtTime(T.t); play.textContent = video.paused ? '▶' : '❚❚'; draw(); readout(); };
+  const showTime = () => { scrub.value = T.t; clock.textContent = fmtTime(T.t); setIcon(play, video.paused ? '▶' : '❚❚'); draw(); readout(); };
   const seek = (t) => { T.t = Math.max(0, Math.min(T.dur || 0, t)); video.currentTime = T.t; showTime(); };
   scrub.addEventListener('input', () => { video.pause(); seek(parseFloat(scrub.value)); });
   let raf = 0;

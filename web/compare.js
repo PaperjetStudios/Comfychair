@@ -1,4 +1,4 @@
-import { h, button, iconBtn, seg, store, clamp01, openOverlay } from './ui.js';
+import { h, button, iconBtn, seg, store, clamp01, openOverlay, icon, setIcon } from './ui.js';
 
 // ---------------------------------------------------------------------------
 // compare two board items full screen: a wipe (drag the line across to show more of one or the
@@ -7,7 +7,7 @@ import { h, button, iconBtn, seg, store, clamp01, openOverlay } from './ui.js';
 // ---------------------------------------------------------------------------
 // the wipe's line with its grip, and a side's name over the picture: Compare and the VFX tab's wipe draw these the
 // same (the line sits at the --w of the box it's in)
-export const wipeLine = () => h('div', { class: 'cmp-line' }, h('span', { class: 'cmp-grip' }, '⇆'));
+export const wipeLine = () => h('div', { class: 'cmp-line' }, h('span', { class: 'cmp-grip' }, icon('swap')));
 export const sideTag = (label, side) => h('span', { class: `cmp-tag ${side}` }, label);
 
 const C = { layout: store.get('deck.compare.layout', 'wipe'), wipe: 0.5, sound: 'off' };   // sound: off | l | r
@@ -53,7 +53,7 @@ export function openCompare(items) {
     for (const m of [A, B]) m.addEventListener(m.tagName === 'VIDEO' ? 'loadedmetadata' : 'load', fit);
     const vids = [A, B].some((m) => m.tagName === 'VIDEO');
     time.classList.toggle('hidden', !vids); playBtn.classList.toggle('hidden', !vids);
-    playBtn.textContent = '❚❚ Pause';
+    setIcon(playBtn, '❚❚ Pause');
     cancelAnimationFrame(raf); if (vids) raf = requestAnimationFrame(tick);
     soundSeg.classList.toggle('hidden', !vids);
     fit(); setWipe(C.wipe); hear();
@@ -106,7 +106,7 @@ export function openCompare(items) {
   function togglePlay() {
     const c = clock();
     if (c.paused) c.play().catch(() => {}); else c.pause();
-    playBtn.textContent = c.paused ? '▶ Play' : '❚❚ Pause';
+    setIcon(playBtn, c.paused ? '▶ Play' : '❚❚ Pause');
   }
   time.addEventListener('input', () => {
     const t = parseFloat(time.value);
