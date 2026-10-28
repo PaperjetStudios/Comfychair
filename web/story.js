@@ -556,7 +556,7 @@ const picNumber = (t, f) => t.fields.filter((x) => x.kind === 'image' && !/mask|
 const usable = (t, media) => !t.error && t.media === media && roleField(t, 'main', RROLE) && roleField(t, 'prompt', RROLE) && !t.fields.some((f) => f.kind === 'video');
 const refineTemplates = () => S.templates.filter((t) => usable(t, 'image'));
 const videoTemplates = () => S.templates.filter((t) => usable(t, 'video'));
-const REFINE_FIRST = ['deck-qwen21-edit', 'deck-klein3-edit', 'deck-krea2-edit', 'deck-moss-edit', 'deck-krea2-i2i', 'deck-qwen21-i2i', 'deck-moss-i2i'];
+const REFINE_FIRST = ['deck-krea2-edit', 'deck-klein3-edit', 'deck-qwen21-edit', 'deck-moss-edit', 'deck-krea2-i2i', 'deck-qwen21-i2i', 'deck-moss-i2i'];   // (Krea edit keeps characters and scenes best: tested 2026-10-28)
 const VIDEO_FIRST = ['deck-ltx-i2v', 'deck-ltx-flf2v', 'deck-h3-i2v'];
 const pickOf = (ts, want, first) => ts.find((t) => t.id === want) || first.map((id) => ts.find((t) => t.id === id)).find(Boolean) || ts[0] || null;
 const refineTemplate = (s) => pickOf(refineTemplates(), s.rtpl || P.refine.tpl, REFINE_FIRST);
