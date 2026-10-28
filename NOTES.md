@@ -172,6 +172,10 @@ will then fail to start until that process is stopped, so stop it before the nex
   it (`motion.js toWorld`, using `space` from `app/motion.py`: how the server normalised the camera-space capture).
   Only turning cameras (pan / tilt / roll / zoom) are solved. `Deck Save Body Motion` now also saves `focal` (ComfyUI
   must restart to load that).
+- **Match its proportions** (Moves ▸ where it goes): `motion.js matchProportions` measures the capture (median bone
+  lengths) and sets the figure's size (sy) and its legs / arms / torso / shoulders / hips / neck shape % (`figure.js
+  shapeFor`, shapeFactors inverted; neck only half way, a capture's head is rough); the keys then take the clip's metres
+  (`toKeys` `scale: 1`, `hipY` from `hipsHeight`). Tested by building a shaped figure from the result and comparing lengths.
 - **Mute** (`item.mute`, saved, `upgrade()` defaults it off): `current()`/`write()` in scene-data.js use values held
   in `MUTED` (not saved) instead of the keys, so a muted layer stays put and moving it writes no keys. Renders set
   `R.real` and use the real keys; Save frame is the picture on screen.

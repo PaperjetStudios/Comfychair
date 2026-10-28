@@ -68,4 +68,25 @@ assert.ok(spot.every((k) => k.x === 2 && k.z === 1 && k.y === 0.3), 'on the spot
   out.frames.forEach((P) => P.forEach((p, j) => { err = Math.max(err, Math.hypot(p[0] - W[j][0], p[1] - W[j][1], p[2] - W[j][2])); }));
   assert.ok(err < 1e-6, `toWorld off by ${err}`);
 }
+
+// proportions: a shaped, scaled figure's own points measured; the size and shape matched to them give a figure
+// with the same bone lengths (size and shape trade off, so it's the lengths that must agree, not the numbers)
+const capture = (body, shape, sy) => {
+  const r = F.buildFigure(mat, mat, body);
+  F.setShape(r, shape); r.root.scale.setScalar(sy); F.applyPose(r, {}, {});
+  const P = smpl(r); P[0] = mid(P[1], P[2]);   // (a capture's pelvis is between its hip joints, as Deck Save Body Motion puts it)
+  return P;
+};
+for (const [body, shape, sy] of [['man', { legs: 30, arms: -20, torso: 10, shoulders: 25, hips: -15 }, 1.1], ['woman', {}, 0.95], ['man', { legs: -40, neck: 40 }, 1],
+  ['woman', { arms: 40, shoulders: -20 }, 1.05]]) {
+  const want = M.measure([capture(body, shape, sy)]);
+  const got = M.matchProportions([capture(body, shape, sy)], body), back = M.measure([capture(body, got.shape, got.sy)]);
+  for (const k of ['leg', 'arm', 'torso', 'sho', 'hips']) assert.ok(Math.abs(back[k] - want[k]) < 0.02, `${body} ${k}: ${back[k].toFixed(3)} not ${want[k].toFixed(3)}`);
+  assert.ok(Object.entries(got.shape).every(([k, v]) => v >= F.shapeRange(k)[0] && v <= F.shapeRange(k)[1]));
+}
+// out of range: clamped to the slider's ends
+assert.equal(F.shapeFor({ legs: 9 }).legs, F.shapeRange('legs')[1]);
+assert.deepEqual(F.shapeFor({ legs: 1, arms: NaN }), {});
+const hy = F.hipsHeight('man', { legs: 30 });
+assert.ok(Math.abs(hy - (0.95 + 0.86 * 0.09)) < 1e-9);
 console.log('motion ok');

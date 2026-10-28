@@ -7,7 +7,8 @@ import { S, onServer } from './core.js';
 import { openVideoPicker } from './media.js';
 import { queueRun } from './make.js';
 import { changed } from './scene-view.js';
-import { toKeys, toWorld } from './motion.js';
+import * as FIGURE from './figure.js';
+import { matchProportions, toKeys, toWorld } from './motion.js';
 import { sceneFromTrack } from './track-math.js';
 import { reduceTracks } from './scene-keys.js';
 import { track } from './keys.js';
@@ -20,17 +21,33 @@ const ST = { prompt: '', secs: 5, busy: null, to: null };   // busy: what's bein
 // rise: the hips go up and down with the clip; fit: its size matched to the figure by leg length. Kept per device.
 // thin: the keys reduced as they land (the sheet's Reduce keys settings), not one every 2 frames.
 // cam: From video also tracks the clip and adds its camera (Mocap camera), the body placed in the world through it.
-const PLACE = { from: 'head', path: 'travel', rise: true, fit: true, thin: false, cam: false, ...store.get('deck.scene.motionPlace', {}) };
+// match: the figure's shape (o.shape) and size changed to the capture's proportions first (then fit is moot).
+const PLACE = { from: 'head', path: 'travel', rise: true, fit: true, thin: false, cam: false, match: false, ...store.get('deck.scene.motionPlace', {}) };
 const keepPlace = () => store.set('deck.scene.motionPlace', PLACE);
+
+// With "Match its proportions": the figure's lengths (legs, arms, torso, shoulders, hips, neck: its other shape
+// sliders stay) and size from the capture, so the keys can take the clip's metres as they are. Returns how to place
+// it ({ sy, scale: 1, hipY }), or null.
+const MATCHED = ['legs', 'arms', 'torso', 'shoulders', 'hips', 'neck'];
+function matched(o, m) {
+  if (!PLACE.match) return null;
+  const { sy, shape } = matchProportions(m.frames, o.body);
+  o.shape = { ...Object.fromEntries(Object.entries(o.shape || {}).filter(([k]) => !MATCHED.includes(k))), ...shape };
+  if (!Object.keys(o.shape).length) delete o.shape;
+  return { sy, scale: 1, hipY: (FIGURE.hipsHeight(o.body, o.shape) - Math.abs(FIGURE.restOffsets(o.body).lhip[1])) * sy };
+}
+const sized = (v, mt) => (mt ? { ...v, sx: mt.sy, sy: mt.sy, sz: mt.sy } : v);
+const heightNote = (o, mt) => (mt ? ` · shaped to the capture, ${(FIGURE.heightOf(o.body, o.shape) * mt.sy).toFixed(2)} m tall` : '');
 
 function apply(id, m, label) {
   const o = SC.objects.find((x) => x.id === id);
   if (!o) return toast('That figure is gone', true);
-  const all = PLACE.from === 'all', f0 = all ? 0 : R.f, v = rawCurrent(o, FIG), last = frames() - 1;
-  const keys = toKeys(m, v, { f0, every: 2, maxF: last, travel: PLACE.path !== 'spot', rise: PLACE.rise, fit: PLACE.fit });
-  if (keys.length < 2) return toast('No time left after the playhead: move it back', true);
-  const before = clone(o), ok = sameTab();
-  land(o, m, keys, f0, label, () => { for (const k of Object.keys(o)) delete o[k]; Object.assign(o, before); }, ok);
+  const before = clone(o), ok = sameTab(), mt = matched(o, m);
+  const all = PLACE.from === 'all', f0 = all ? 0 : R.f, v = sized(rawCurrent(o, FIG), mt), last = frames() - 1;
+  const keys = toKeys(m, v, { f0, every: 2, maxF: last, travel: PLACE.path !== 'spot', rise: PLACE.rise, fit: PLACE.fit, ...(mt ? { scale: mt.scale, hipY: mt.hipY } : {}) });
+  const undo = () => { for (const k of Object.keys(o)) delete o[k]; Object.assign(o, before); };
+  if (keys.length < 2) { undo(); return toast('No time left after the playhead: move it back', true); }
+  land(o, m, keys, f0, label, undo, ok, heightNote(o, mt));
 }
 // the keys onto the figure (replacing what they cover), reduced if asked, with an undo toast
 function land(o, m, keys, f0, label, undo, ok, extra = '') {
@@ -75,15 +92,19 @@ export function applyWithCamera(id, m, tr, label) {
     for (const ch of it === cam ? ['py', 'ty'] : ['y']) { it.base[ch] += dy; for (const k of it.chans[ch] || []) k.v += dy; }
     for (const [ch, l] of Object.entries(it.chans)) { const keep = l.map((k) => ({ ...k, f: k.f + f0 })).filter((k) => k.f <= last); if (keep.length) it.chans[ch] = keep; else delete it.chans[ch]; }
   }
-  const v = rawCurrent(o, FIG);
-  const keys = toKeys(world, { ...v, rx: 0, ry: 0, rz: 0, x: P0[0][0], z: P0[0][2] }, { f0, every: 2, maxF: last, travel: true, rise: true, fit: false });
-  if (keys.length < 2) return toast('No time left after the playhead: move it back', true);
-  const before = clone(SC), ok = sameTab();
+  const before = clone(SC), ok = sameTab(), mt = matched(o, m), v = sized(rawCurrent(o, FIG), mt);
+  const keys = toKeys(world, { ...v, rx: 0, ry: 0, rz: 0, x: P0[0][0], z: P0[0][2] },
+    { f0, every: 2, maxF: last, travel: true, rise: true, fit: false, ...(mt ? { scale: mt.scale, hipY: mt.hipY } : {}) });
+  if (keys.length < 2) {   // (nothing lands: the shape goes back)
+    const was = before.objects.find((x) => x.id === o.id)?.shape;
+    if (was) o.shape = was; else delete o.shape;
+    return toast('No time left after the playhead: move it back', true);
+  }
   SC.cams = [...(SC.cams || []), SC.camera]; SC.camera = cam;
   if (bd) SC.objects.unshift(bd);
   o.ground = false;   // (its height comes from the capture, which the camera was raised to fit)
   land(o, m, keys, f0, label, () => { for (const k of Object.keys(SC)) delete SC[k]; Object.assign(SC, before); }, ok,
-    ` · Mocap camera made active${m.focal ? '' : ' (lens guessed: 35 mm)'}`);
+    ` · Mocap camera made active${m.focal ? '' : ' (lens guessed: 35 mm)'}${heightNote(o, mt)}`);
 }
 
 // the clip's camera track on the server (Simple: no GPU), whole clip, as the Track panel would make it
@@ -138,7 +159,9 @@ function placeFields(o) {
     h('div', { class: 'row wrap' },
       field('Starts', seg([['head', 'At the playhead'], ['all', 'Replace all keys']], PLACE.from, (v) => { PLACE.from = v; keepPlace(); })),
       field('Path', seg([['travel', 'Follow the clip'], ['spot', 'On the spot']], PLACE.path, (v) => { PLACE.path = v; keepPlace(); }))),
-    h('div', { class: 'row wrap' }, tog('rise', 'Hips rise and fall with it'), tog('fit', 'Scale it to this figure'), tog('thin', 'Fewer keys (reduce as it lands)')),
+    h('div', { class: 'row wrap' }, tog('rise', 'Hips rise and fall with it'), tog('fit', 'Scale it to this figure'), tog('thin', 'Fewer keys (reduce as it lands)'),
+      tog('match', 'Match its proportions'),
+      help('Match its proportions: the figure takes the captured person\'s leg, arm and torso lengths, shoulder and hip width, neck and height (Body shape and size on the Place tab; its other shape sliders stay), so the move lands with less stretching: feet plant, hands reach. Undo puts the figure back too.')),
     onto ? field('Onto', onto) : null];
 }
 
