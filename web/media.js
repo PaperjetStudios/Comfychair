@@ -82,6 +82,21 @@ export function openSoundPicker({ title = 'Pick a sound', onPick, clips = true }
   });
 }
 
+// ---- clip and sound sources: {generation, index} for an output, {media} for a file in the media library ----
+// (a picked one may also carry trim, crop and a label)
+export function bareSource(v) { return v.generation != null ? { generation: v.generation, index: v.index || 0 } : { media: v.media }; }
+// where a clip source plays, from the history loaded so far (null: not loaded, or gone)
+export function clipUrl(v) {
+  if (!v) return null;
+  if (v.generation != null) return S.history.get(v.generation)?.outputs[v.index || 0]?.url || null;
+  return v.media ? `/files/media/${encodeURIComponent(v.media)}` : null;
+}
+export function clipLabel(v) {
+  if (!v) return 'none';
+  if (v.generation != null) { const g = S.history.get(v.generation); return g ? genLabel(g) : `#${v.generation} (not loaded)`; }
+  return v.label || (v.media || '').split('_').slice(1).join('_') || v.media;
+}
+
 // What a sound source is called and where it plays, from the media list / history: {label, url, kind} or null
 export async function soundSource(v) {
   if (!v) return null;
@@ -103,7 +118,6 @@ export async function soundSource(v) {
 // with trim {start, len}. onChange(value or null) on every change; title names the picker.
 export function soundInput(value, onChange, { title = 'Pick a sound', label = 'Sound' } = {}) {
   const box = h('div', { class: 'sound-input' });
-  const base = (v) => (v.generation != null ? { generation: v.generation, index: v.index } : { media: v.media });
   const pick = () => openSoundPicker({ title, onPick: (v) => { value = v; onChange(v); draw(); } });
   const draw = async () => {
     if (!value) {
@@ -117,7 +131,7 @@ export function soundInput(value, onChange, { title = 'Pick a sound', label = 'S
     const start = num(t.start, '0', 'Start (s)'), len = num(t.len, 'all', 'Length (s)');
     const setTrim = () => {
       const st = Math.max(0, parseFloat(start.value) || 0), ln = parseFloat(len.value);
-      value = { ...base(value), ...((st > 0 || ln > 0) && { trim: { start: st, ...(ln > 0 && { len: ln }) } }) };
+      value = { ...bareSource(value), ...((st > 0 || ln > 0) && { trim: { start: st, ...(ln > 0 && { len: ln }) } }) };
       onChange(value);
     };
     start.addEventListener('change', setTrim); len.addEventListener('change', setTrim);

@@ -2,7 +2,7 @@ import {
   $, h, store, api, toast, undoToast, overlayOpened, overlayClosed, sheetOpen, button, iconBtn, linkBtn, seg, placeholder,
   numSlider, field, section, hint, openSheet, closeSheet,
 } from './ui.js';
-import { extractSound, genLabel, soundInput, soundToSoundTab } from './media.js';
+import { bareSource, extractSound, genLabel, soundInput, soundToSoundTab } from './media.js';
 import { S, previewUrl, switchTab } from './core.js';
 import { openGeneration } from './run.js';
 import { openUseAs } from './useas.js';
@@ -157,7 +157,7 @@ function openSoundSheet(g, i) {
     if (!sound) return toast('Choose a sound first', true);
     try {
       const out = await api('/api/audio/lay', { method: 'POST', timeout: 600000, busy: 'Putting the sound on…', body: {
-        video, sound: { ...(sound.generation != null ? { generation: sound.generation, index: sound.index } : { media: sound.media }) },
+        video, sound: bareSource(sound),
         sound_trim: sound.trim || null, mode, at: parseFloat(at.value) || 0, volume: parseFloat(vol.value), keep: parseFloat(keep.value), project_id: S.project } });
       closeSheet();
       toast(`Made #${out.id} with the new sound`);

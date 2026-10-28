@@ -4,8 +4,8 @@ import {
 } from './ui.js';
 import { DELIVERY, INLINE_TAGS, parseScript, withDelivery, withName } from './dialogue.js';
 import { S, onServer } from './core.js';
-import { queueRun } from './make.js';
-import { extractSound, openSoundPicker, soundInput, soundSource, uploadMedia } from './media.js';
+import { ROLES, queueRun, template, valuesByRole } from './make.js';
+import { bareSource, extractSound, openSoundPicker, soundInput, soundSource, uploadMedia } from './media.js';
 import { waitJob } from './clipimport.js';
 import { TabSet } from './tabs.js';
 import { dragWindow, durationOf, timeline, wavePeaks } from './timeline.js';
@@ -304,7 +304,7 @@ async function addSource(src) {
   const s = await soundSource(src);
   if (!s) return toast('That sound is gone', true);
   const sel = selItem(), track = sel?.track || N.tracks[0]?.id || addTrack();
-  const it = newItem({ kind: s.kind === 'video' ? 'video' : 'audio', src: src.generation != null ? { generation: src.generation, index: src.index } : { media: src.media },
+  const it = newItem({ kind: s.kind === 'video' ? 'video' : 'audio', src: bareSource(src),
     url: s.url, label: s.label, dur: await durationOf(s.url) }, track);
   it.at = Math.max(TL.trackEnd(track), sel ? 0 : N.t);
   if (src.trim) { it.in = src.trim.start || 0; if (src.trim.len) it.out = it.in + src.trim.len; }
@@ -323,25 +323,21 @@ const MAKERS = [
     help: 'Songs or instrumentals from style tags (ACE-Step 1.5). Add lyrics with [verse] / [chorus] lines, or leave them empty for an instrumental.' },
 ];
 const G = { op: store.get('deck.sound.maker', 'sfx'), prompt: '', lyrics: '', len: null, seed: -1, bpm: 90, key: null };
+// the makers' fields by role: make.js ROLES, with a music template's tags, lyrics, BPM and key
 const ROLE = {
   prompt: (f) => f.kind === 'text' && (/prompt|tags/i.test(f.group) || f.input === 'tags') && !/negative|lyrics/i.test(f.group) && f.input !== 'lyrics',
   lyrics: (f) => f.kind === 'text' && (f.input === 'lyrics' || /lyrics/i.test(f.group)),
   len: (f) => (f.kind === 'int' || f.kind === 'float') && /length|seconds|duration/i.test(`${f.label} ${f.input}`),
-  seed: (f) => f.kind === 'seed',
   bpm: (f) => f.kind === 'int' && f.input === 'bpm',
   key: (f) => f.kind === 'choice' && f.input === 'keyscale',
 };
 async function makeSound() {
   const mk = MAKERS.find((m) => m.id === G.op) || MAKERS[0];
-  const t = S.templates.find((x) => x.id === mk.tpl);
+  const t = template(mk.tpl);
   if (!t) return toast(`Template ${mk.tpl} isn't installed yet`, true);
   if (!G.prompt.trim()) return toast('Describe the sound first', true);
-  const values = {};
+  const values = valuesByRole(t, { prompt: G.prompt, seed: G.seed, ...(mk.lyrics && { lyrics: G.lyrics, bpm: G.bpm, key: G.key }) }, { ...ROLES, ...ROLE });
   for (const f of t.fields.filter(ROLE.len)) values[f.key] = G.len ?? mk.len;   // (music: the encoder's and the latent's length)
-  const put = (role, v) => { const f = t.fields.find(ROLE[role]); if (f && v != null) values[f.key] = v; };
-  put('prompt', G.prompt);
-  if (mk.lyrics) { put('lyrics', G.lyrics); put('bpm', G.bpm); put('key', G.key); }
-  put('seed', G.seed);
   try {
     const gens = await queueRun({ template: t.id, values });
     N.gens.push(...gens.map((g) => g.id));
@@ -405,7 +401,7 @@ async function cleanVoice(it, picked) {
   const src = it ? srcOf(it) : picked;
   if (!src) return toast('Select a clip, or choose a sound', true);
   try {
-    const m = await job('/api/voice/isolate', { source: src.generation != null ? { generation: src.generation, index: src.index } : { media: src.media },
+    const m = await job('/api/voice/isolate', { source: bareSource(src),
       trim: src.trim || null, steps: VX.clean.steps, name: `${it?.label || 'sound'}-voice` }, 'Taking the voice out');
     const s = await soundSource({ media: m.name });
     const ti = it ? N.tracks.indexOf(trackOf(it)) : -1;
@@ -473,7 +469,7 @@ function voiceSection() {
       h('div', { class: 'row wrap' }, button('👂 Listen', async () => {
         if (!nv.src) return toast('Choose the speech first', true);
         try {
-          const r = await job('/api/voice/transcribe', { source: nv.src.generation != null ? { generation: nv.src.generation, index: nv.src.index } : { media: nv.src.media },
+          const r = await job('/api/voice/transcribe', { source: bareSource(nv.src),
             trim: nv.src.trim || null }, 'Listening');
           nv.ref_text = r.text; renderPanel();
         } catch (e) { toast(e.message, true); }
@@ -484,7 +480,7 @@ function voiceSection() {
           if (!nv.src) return toast('Choose the speech first', true);
           try {
             await api('/api/voice/voices', { method: 'POST', body: { name: nv.name, ref_text: nv.ref_text, language: nv.language, consent: nv.consent,
-              source: nv.src.generation != null ? { generation: nv.src.generation, index: nv.src.index } : { media: nv.src.media }, trim: nv.src.trim || null } });
+              source: bareSource(nv.src), trim: nv.src.trim || null } });
             VX.nv = null; toast('Voice saved'); voicesLoad();
           } catch (e) { toast(e.message, true); }
         }, { cls: 'primary' }),

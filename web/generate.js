@@ -4,11 +4,11 @@ import {
   autoGrow, insertAtCursor,
 } from './ui.js';
 import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
-import { openImagePicker, openVideoPicker, soundInput } from './media.js';
+import { clipLabel, clipUrl, openImagePicker, openVideoPicker, soundInput } from './media.js';
 import { RUN, fmtDur, notifyPrepare, openJobs } from './run.js';
 import { queueRun } from './make.js';
 
-import { videoEditor } from './vfield.js';
+import { clipInput } from './vfield.js';
 import { PREFS } from './prefs.js';
 import { FULL, openCrop, openSketch, templateAspect } from './editor.js';
 
@@ -878,38 +878,15 @@ function imageField(f) {
 
 // A video input (VHS_LoadVideoPath): the value is the clip's source, {generation, index} for an
 // output or {media} for a file uploaded in the Video tab; the server turns it into the file's path.
-function videoSource(v) {
-  if (v && v.generation != null) {
-    const g = S.history.get(v.generation), o = g && g.outputs[v.index || 0];
-    return o ? { o, label: `#${g.id} ${g.template}` } : { o: null, label: `#${v.generation} (not loaded)` };
-  }
-  if (v && v.media) return { o: { kind: 'video', url: `/files/media/${encodeURIComponent(v.media)}` }, label: v.media.split('_').slice(1).join('_') || v.media };
-  return null;
-}
-
+// Trim and crop live in the value ({generation|media, trim, crop}), so tabs, shots and Run again
+// keep them; the server applies them (loader inputs or an ffmpeg copy, see app/videoprep.py).
 function videoField(f) {
   const v = S.values[f.key];
-  const src = videoSource(v);
-  const pick = () => openVideoPicker({
-    title: `${f.group} · ${f.label}`,
-    onPick: (val) => {
-      setVal(f.key, val);
-      renderFields();
-    },
-  });
-  if (!(src && src.o)) return mediaInput(f, src ? src.label : 'empty', h('span', { class: 'hint' }, '+ video'), pick,
-    [v ? button('Clear', () => { setVal(f.key, null); renderFields(); }) : null]);
-  // Trim and crop live in the value ({generation|media, trim, crop}), so tabs, shots and Run again
-  // keep them; the server applies them (loader inputs or an ffmpeg copy, see app/videoprep.py).
-  const base = v.generation != null ? { generation: v.generation, index: v.index } : { media: v.media };
-  const edit = videoEditor({
-    url: src.o.url, source: base, trim: v.trim, crop: v.crop,
-    loader: () => videoLoader(f), budget: () => videoBudget(f),
-    onChange: (trim, crop) => setVal(f.key, { ...base, ...(trim && { trim }), ...(crop && { crop }) }),
-  });
-  loaderKnown(S.tpl.id)?.then(() => edit.refresh());
-  const el = field([f.label, h('span', {}, src.label)], edit,
-    h('div', { class: 'row wrap' }, button('Choose…', pick), button('Clear', () => { setVal(f.key, null); renderFields(); })));
+  const set = (val) => { setVal(f.key, val); renderFields(); };
+  const el = clipInput({ label: f.label, value: v, url: clipUrl(v), name: clipLabel(v), onChange: set, onEdit: (val) => setVal(f.key, val),
+    pick: () => openVideoPicker({ title: `${f.group} · ${f.label}`, onPick: set }),
+    loader: () => videoLoader(f), budget: () => videoBudget(f) });
+  loaderKnown(S.tpl.id)?.then(() => el.refresh());
   el.dataset.key = f.key;
   return el;
 }

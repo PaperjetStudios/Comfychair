@@ -1,12 +1,12 @@
 import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard } from './ui.js';
 import { S, inputUrl, thumbUrl, onServer, switchTab } from './core.js';
-import { cardMedia, genLabel, openImagePicker, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
+import { bareSource, cardMedia, clipLabel, clipUrl, genLabel, openImagePicker, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
 import { hooks as genHooks } from './generate.js';
-import { adoptGenerations, queueRun, roleField, runAndWait, valuesByRole, waitGen } from './make.js';
+import { adoptGenerations, queueRun, roleField, runAndWait, template, valuesByRole, waitGen } from './make.js';
 import { openGeneration } from './run.js';
 import { addToEditor, useInGenerate } from './editor.js';
 import { addToTimeline } from './video.js';
-import { videoEditor } from './vfield.js';
+import { clipInput } from './vfield.js';
 import { TabSet } from './tabs.js';
 import { maximizable } from './layout.js';
 import { sendToCraft } from './craft.js';
@@ -108,26 +108,13 @@ const tabState = () => { const { results, showing, ...rest } = T; return JSON.pa
 const UI = { wipe: 0.5, draw: null, srcInfo: null, playing: false, neg: false, cmp: null, layout: 'wipe', rate: 1, pose: null, remake: false };
 
 // ---- inputs ----
-const srcLabel = (s) => {
-  if (!s) return 'none';
-  if (s.generation != null) { const g = S.history.get(s.generation); return g ? genLabel(g) : `#${s.generation}`; }
-  return s.label || (s.media || '').split('_').slice(1).join('_') || s.media;
-};
-const srcUrl = (s) => {
-  if (!s) return null;
-  if (s.generation != null) return S.history.get(s.generation)?.outputs[s.index || 0]?.url || null;
-  if (s.media) return `/files/media/${encodeURIComponent(s.media)}`;
-  return null;
-};
-const bare = (s) => (s.generation != null ? { generation: s.generation, index: s.index || 0 } : { media: s.media });
-
 function changed(redraw = true) { tabs?.changed(); if (redraw) render(); }
 
 // From the Video tab (or anywhere): open a VFX tab on this clip
 export async function sendToVfx(src, { label = null, trim = null } = {}) {
   switchTab('vfx');
   await ensureTabs();
-  T.source = { ...bare(src), ...(trim && { trim }), ...(label && { label }) };
+  T.source = { ...bareSource(src), ...(trim && { trim }), ...(label && { label }) };
   T.showing = null; UI.srcInfo = null;
   changed();
   toast('Clip set as the VFX source: pick an effect');
@@ -141,7 +128,7 @@ export async function useInVfx(role, value, { label = null } = {}) {
   if (role === 'source') return sendToVfx(value, { label });
   switchTab('vfx');
   await ensureTabs();
-  T[role] = role === 'first' ? value : bare(value);
+  T[role] = role === 'first' ? value : bareSource(value);
   changed();
   const uses = (e) => e.needs.some((n) => n.replace('?', '') === role);
   toast(uses(fx(T.op)) ? `${ROLE_NAMES[role]} set` : `${ROLE_NAMES[role]} set: ${EFFECTS.filter(uses).map((e) => e.label).join(', ')} use it`);
@@ -150,35 +137,25 @@ export async function useInVfx(role, value, { label = null } = {}) {
 function sourceField(role = 'source') {
   const isSrc = role === 'source';
   const v = isSrc ? T.source : T.matte;
-  const title = isSrc ? 'Source clip' : (T.op === 'cleanplate' ? 'Mask clip' : 'Matte clip');
-  const pick = () => openVideoPicker({ title, onPick: (val) => {
+  const fxDef = fx(T.op);
+  const set = (val) => {
     if (isSrc) { T.source = val; UI.srcInfo = null; T.showing = null; } else T.matte = val;
     changed();
-  } });
-  const url = srcUrl(v);
-  if (!isSrc || !url) {
-    return field([title, h('span', {}, srcLabel(v))], h('div', { class: 'row wrap' }, button(v ? 'Change…' : 'Choose…', pick, { cls: v ? '' : 'primary' }),
-      v ? button('Clear', () => { if (isSrc) T.source = null; else T.matte = null; changed(); }) : null,
-      !isSrc ? button('From results…', () => pickResult((val) => { T.matte = val; changed(); }), { title: 'An Alpha Gen or mask result from this tab' }) : null));
-  }
-  const base = bare(v);
-  const fxDef = fx(T.op);
-  const ed = videoEditor({
-    url, source: base, trim: v.trim, crop: v.crop,
-    loader: () => ({ rate: 0, nth: 1, mapped: true }),
-    budget: () => (fxDef.needs.includes('len') ? { secs: T.len } : null),
-    onChange: (trim, crop) => { T.source = { ...base, ...(v.label && { label: v.label }), ...(trim && { trim }), ...(crop && { crop }) }; changed(false); drawViewer(); poseLine(); },
-  });
-  return field([title, h('span', {}, srcLabel(v))], ed,
-    fxDef.posed ? h('div', { id: 'vfxPose' }) : null,
-    h('div', { class: 'row wrap' }, button('Change…', pick), button('Clear', () => { T.source = null; T.showing = null; changed(); })));
+  };
+  const title = isSrc ? 'Source clip' : (T.op === 'cleanplate' ? 'Mask clip' : 'Matte clip');
+  return clipInput({ label: title, value: v, url: isSrc ? clipUrl(v) : null, name: clipLabel(v), onChange: set,   // (a matte is only picked: no player)
+    pick: () => openVideoPicker({ title, onPick: set }),
+    onEdit: (val) => { T.source = val; changed(false); drawViewer(); poseLine(); },
+    loader: () => ({ rate: 0, nth: 1, mapped: true }), budget: () => (fxDef.needs.includes('len') ? { secs: T.len } : null),
+    below: isSrc && fxDef.posed ? h('div', { id: 'vfxPose' }) : null,
+    buttons: isSrc ? [] : [button('From results…', () => pickResult(set), { title: 'An Alpha Gen or mask result from this tab' })] });
 }
 
 function firstField(optional) {
   const pick = () => openImagePicker({ title: T.op === 'ingredients' ? 'Ingredients sheet' : ['animate', 'faceswap', 'drive', 'ltxdrive'].includes(T.op) ? 'Character' : 'First frame', mp: () => 0,
     onPick: (name) => { T.first = name; changed(); } });
   const takeFrame = async () => {
-    const url = srcUrl(T.source);
+    const url = clipUrl(T.source);
     if (!url) return toast('Choose a source clip first', true);
     const blob = await pickFrame({ url, title: 'Frame to edit' });
     if (!blob) return;
@@ -235,12 +212,15 @@ async function makeStartFrame() {
   toast('Fill in the grey (add your references under More references), then pick the result as the start frame');
 }
 
+// an IC-LoRA a restyle can use: not the ones that come with their own pipeline (SDR to HDR, Alpha Gen, the other effects')
+const restyleLora = (o) => /ic-lora/i.test(o) && !/sdr-to-hdr|alpha-gen|clean-plate|ingredients|layout|motion-track|in-outpaint|refine|upscaler/i.test(o);
+
 function lorasField(t) {
   const stack = roleField(t, 'loras'), one = roleField(t, 'lora');
   const f = stack || one;
   if (!f) return null;
   // a stack (T2V) takes plain LoRAs; a single IC-LoRA slot takes IC-LoRAs (not SDR to HDR: that needs its own pipeline)
-  const opts = f.options.filter((o) => /ltx/i.test(o) && (stack ? !/ic-lora|ripple/i.test(o) : /ic-lora/i.test(o) && !/sdr-to-hdr|alpha-gen|clean-plate|ingredients|layout|motion-track|in-outpaint|refine|upscaler/i.test(o)));
+  const opts = f.options.filter((o) => /ltx/i.test(o) && (stack ? !/ic-lora|ripple/i.test(o) : restyleLora(o)));
   const list = opts.length ? opts : f.options;
   const cur = T.loras[0]?.name ?? (one ? f.value : null);
   const sel = h('select', { onchange: () => { T.loras = sel.value ? [{ name: sel.value, strength: T.loras[0]?.strength ?? 1, enabled: true }] : []; changed(); } },
@@ -291,7 +271,7 @@ function boxesFields() {
 }
 const cropOf = () => T.source?.crop || { x: 0, y: 0, w: 1, h: 1 };
 const clipFracs = (b) => { const c = cropOf(); return { x: (b.x - c.x) / c.w, y: (b.y - c.y) / c.h, w: b.w / c.w, h: b.h / c.h }; };
-const delogoBody = () => ({ source: bare(T.source), trim: T.source.trim || null, crop: T.source.crop || null });
+const delogoBody = () => ({ source: bareSource(T.source), trim: T.source.trim || null, crop: T.source.crop || null });
 
 async function findBoxes() {
   try {
@@ -399,7 +379,7 @@ function render() {
 // ---- the drives' pose video: a finished Pose preview of the same clip, trim, crop and poser is followed instead of
 // reading the pose again (POST /api/pose/find); without one, the drive makes it first ----
 const POSE_TPL = { dwpose: 'deck-pose-video', sdpose: 'deck-pose-sdpose' };
-const poseBody = () => ({ source: bare(T.source), trim: T.source.trim || null, crop: T.source.crop || null,
+const poseBody = () => ({ source: bareSource(T.source), trim: T.source.trim || null, crop: T.source.crop || null,
   poser: T.poser || 'dwpose', len: T.len, project_id: S.project });
 const findPose = () => api('/api/pose/find', { method: 'POST', body: poseBody(), busy: false });
 
@@ -487,8 +467,8 @@ function resultActions(g) {
 function craftVfx(btn) {
   const takes = (T.results || []).map((id) => S.history.get(id)).filter((g) => g?.status === 'done');
   sendToCraft('vfx', { title: tabs?.active?.name || 'VFX',
-    source: T.source && { ...bare(T.source), label: srcLabel(T.source), ...(T.source.trim && { trim: T.source.trim }) },
-    matte: T.matte && bare(T.matte),
+    source: T.source && { ...bareSource(T.source), label: clipLabel(T.source), ...(T.source.trim && { trim: T.source.trim }) },
+    matte: T.matte && bareSource(T.matte),
     results: takes.map((g) => ({ generation: g.id, index: Math.max(0, g.outputs.findIndex((x) => x.kind === 'video')),
       label: genLabel(g), showing: g.id === T.showing })) }, btn);
 }
@@ -506,7 +486,7 @@ function compareSelect(g) {
 // the second matte for Refine matte: optional; what it does with the first is Combine
 function matte2Field() {
   const v = T.matte2, set = (val) => { T.matte2 = val; changed(); };
-  return field(['Combine with (optional)', h('span', {}, srcLabel(v))], h('div', { class: 'row wrap' },
+  return field(['Combine with (optional)', h('span', {}, clipLabel(v))], h('div', { class: 'row wrap' },
     button(v ? 'Change…' : 'Choose…', () => openVideoPicker({ title: 'Second matte or mask', onPick: set })),
     v ? button('Clear', () => set(null)) : null,
     button('From results…', () => pickResult(set), { title: 'An Alpha Gen or mask result from this tab' })));
@@ -533,7 +513,7 @@ function refineFields() {
 
 async function runMatte() {
   const r = T.refine || REFINE;
-  const body = { a: bare(T.matte), ...(T.matte2 && { b: bare(T.matte2) }), ...r, project_id: S.project };
+  const body = { a: bareSource(T.matte), ...(T.matte2 && { b: bareSource(T.matte2) }), ...r, project_id: S.project };
   try {
     const g = await api('/api/video/matte', { method: 'POST', body, timeout: 900000, busy: 'Refining the matte…' });
     S.history.set(g.id, g);
@@ -632,8 +612,8 @@ async function buildRun(e, loose = false) {
   if (!t) return `Template ${tplId(e)} isn't installed yet`;
   const values = {}, rv = {};
   const put = (role, v) => { const f = roleField(t, role); if (f && v !== undefined && v !== null) { values[f.key] = v; rv[role] = v; } };
-  put('source', T.source && { ...bare(T.source), ...(T.source.trim && { trim: T.source.trim }), ...(T.source.crop && { crop: T.source.crop }) });
-  put('matte', T.matte && bare(T.matte));
+  put('source', T.source && { ...bareSource(T.source), ...(T.source.trim && { trim: T.source.trim }), ...(T.source.crop && { crop: T.source.crop }) });
+  put('matte', T.matte && bareSource(T.matte));
   if (e.needs.some((n) => n.startsWith('first'))) put('first', T.first);   // (one picture per tab: only the effects that take one)
   if (e.needs.includes('sound')) put('sound', T.sound);
   if (e.needs.includes('voice')) put('voice', T.voice);
@@ -670,7 +650,7 @@ async function buildRun(e, loose = false) {
     try {
       const c = T.canvas || CANVAS, a = canvasAspect();
       const r = await api('/api/video/canvas', { method: 'POST', busy: 'Setting up the canvas…', timeout: 900000,
-        body: { source: bare(T.source), trim: T.source.trim || null, aspect: a, scale: c.scale, cx: c.cx, cy: c.cy } });
+        body: { source: bareSource(T.source), trim: T.source.trim || null, aspect: a, scale: c.scale, cx: c.cx, cy: c.cy } });
       put('source', r.video); put('matte', r.mask);
     } catch (err) { return 'Couldn\'t set up the canvas: ' + err.message; }
   }
@@ -727,9 +707,9 @@ async function openInGenerate() {
 }
 
 async function runKey(e) {
-  const body = { source: bare(T.source), trim: T.source.trim || null, mode: e.id === 'colorkey' ? 'color' : 'matte', project_id: S.project };
+  const body = { source: bareSource(T.source), trim: T.source.trim || null, mode: e.id === 'colorkey' ? 'color' : 'matte', project_id: S.project };
   if (e.id === 'colorkey') Object.assign(body, T.key);
-  else Object.assign(body, { matte: bare(T.matte), invert: T.key.invert });
+  else Object.assign(body, { matte: bareSource(T.matte), invert: T.key.invert });
   try {
     const g = await api('/api/video/key', { method: 'POST', body, timeout: 900000, busy: 'Keying…' });
     S.history.set(g.id, g);
@@ -767,7 +747,7 @@ async function tracksPx(t, values) {
 }
 async function srcInfo() {
   if (!T.source) return null;
-  if (!UI.srcInfo) { try { UI.srcInfo = await api('/api/videos/probe', { method: 'POST', body: { source: bare(T.source) } }); } catch { UI.srcInfo = null; } }
+  if (!UI.srcInfo) { try { UI.srcInfo = await api('/api/videos/probe', { method: 'POST', body: { source: bareSource(T.source) } }); } catch { UI.srcInfo = null; } }
   return UI.srcInfo;
 }
 
@@ -828,7 +808,7 @@ function drawViewer() {
   const cmp = resUrl && UI.cmp && UI.cmp !== T.showing && S.history.get(UI.cmp);
   const cmpUrl = cmp?.status === 'done' ? resultUrl(cmp) : null;
   const stillMode = !cmpUrl && (e.needs.includes('tracks') || (!T.source && T.first));
-  const aUrl = cmpUrl || (stillMode ? null : srcUrl(T.source));
+  const aUrl = cmpUrl || (stillMode ? null : clipUrl(T.source));
   const offset = cmpUrl ? 0 : (T.source?.trim?.start || 0);   // a result starts at 0; the source at its trim
   const side = UI.layout === 'side' && !!aUrl && !!resUrl;
   const canvasMode = e.needs.includes('canvas') && !!aUrl && !resUrl && !cmpUrl;   // Extend frame, before a result
@@ -1088,7 +1068,7 @@ const outOf = (g) => {
 };
 
 export async function runClipStep(step, source, secs) {
-  const src = { ...(source.generation != null ? { generation: source.generation, index: source.index || 0 } : { media: source.media }),
+  const src = { ...bareSource(source),
     ...(source.trim && { trim: source.trim }) };
   const len = Math.min(MAX_SECS, secs);
   const res = step.res || 704;
@@ -1119,7 +1099,6 @@ export async function runClipStep(step, source, secs) {
 
 // the IC-LoRAs a restyle step can use (as the LoRA restyle effect lists them)
 export function restyleLoras() {
-  const t = S.templates.find((x) => x.id === 'deck-ltx-v2v-lora');
-  const f = t && roleField(t, 'lora');
-  return (f?.options || []).filter((o) => /ic-lora/i.test(o) && !/sdr-to-hdr|alpha-gen|clean-plate|ingredients|layout|motion-track|in-outpaint|refine|upscaler/i.test(o));
+  const f = roleField(template('deck-ltx-v2v-lora'), 'lora');
+  return (f?.options || []).filter(restyleLora);
 }
