@@ -7,18 +7,18 @@
 # desktop), which starts ComfyUI, ComfyChair and, once this has installed it, ComfyChair Lab.
 #
 #   deploy/lab.sh            # make or update the Lab checkout and (re)start its service (comfydeck-lab)
-#   deploy/lab.sh https      # also serve it over Tailscale HTTPS on :8443, to install it on the tablet
 #   deploy/lab.sh run        # just run it in this terminal instead (Ctrl+C stops it)
+#
+# With HTTPS on (deploy/local-https.sh) the Lab uses ComfyChair's certificate: https://<this box's IP>:8191
 #   deploy/lab.sh off        # stop it and take it out of the boot
 #
 #   LAB_DIR=…  where the checkout goes (default: next to this one, <this>-lab)
-#   LAB_PORT=8191 LAB_HTTPS=8443   DECK_DATA=…  (point it at this copy's data/ to share its History)
+#   LAB_PORT=8191   DECK_DATA=…  (point it at this copy's data/ to share its History)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO=$(pwd)
 LAB_DIR="${LAB_DIR:-${REPO}-lab}"
 LAB_PORT="${LAB_PORT:-8191}"
-LAB_HTTPS="${LAB_HTTPS:-8443}"
 UNIT=/etc/systemd/system/comfydeck-lab.service
 DROPIN=/etc/systemd/system/comfyui.target.d/lab.conf
 
@@ -53,7 +53,7 @@ case "${1:-service}" in
     cd "$LAB_DIR"
     DECK_PORT="$LAB_PORT" DECK_NAME="ComfyChair Lab" exec ./run.sh
     ;;
-  service|https)
+  service)
     # The unit is ComfyChair's own (deploy/comfydeck.service: its user, its wait for /home, its restarts),
     # pointed at the Lab checkout, port and name, so the two always boot the same way.
     sed -e "s#^Description=.*#Description=ComfyChair Lab (the experimental copy, branch lab)#" \
@@ -68,13 +68,16 @@ case "${1:-service}" in
     sudo systemd-analyze verify "$UNIT" 2>&1 | grep -v "^$" || true
     sudo systemctl daemon-reload
     sudo systemctl restart comfydeck-lab.service
-    for _ in $(seq 30); do curl -fsS -m 2 "http://127.0.0.1:$LAB_PORT/api/status" >/dev/null 2>&1 && break; sleep 1; done
-    if curl -fsS -m 2 "http://127.0.0.1:$LAB_PORT/api/status" >/dev/null 2>&1; then
-      echo "ComfyChair Lab is running on :$LAB_PORT, and starts with ComfyUI and ComfyChair at every boot."
+    up() { curl -fsSk -m 2 "https://127.0.0.1:$LAB_PORT/api/status" >/dev/null 2>&1 || curl -fsS -m 2 "http://127.0.0.1:$LAB_PORT/api/status" >/dev/null 2>&1; }
+    for _ in $(seq 30); do up && break; sleep 1; done
+    IP=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v ':' | grep . | head -1 || true)
+    SCHEME=http; [[ -f /etc/systemd/system/comfydeck-lab.service.d/https.conf ]] && SCHEME=https
+    if up; then
+      echo "ComfyChair Lab is at ${SCHEME}://${IP:-<box-ip>}:$LAB_PORT, and starts with ComfyUI and ComfyChair at every boot."
+      [[ $SCHEME == http ]] && echo "(For HTTPS, to install it as an app: deploy/local-https.sh)"
     else
       echo "ComfyChair Lab didn't answer on :$LAB_PORT yet: journalctl -u comfydeck-lab -n 50"
     fi
-    [[ "${1:-service}" == https ]] && "$REPO/deploy/tailscale-https.sh" "$LAB_PORT" "$LAB_HTTPS"
     ;;
-  *) echo "usage: deploy/lab.sh [service|https|run|off]"; exit 1 ;;
+  *) echo "usage: deploy/lab.sh [service|run|off]"; exit 1 ;;
 esac
