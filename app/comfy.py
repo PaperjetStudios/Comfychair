@@ -14,6 +14,15 @@ log = logging.getLogger("comfydeck.comfy")
 VIDEO_NODES = ("VHS_VideoCombine", "SaveVideo", "CreateVideo", "SaveWEBM", "SaveAnimatedWEBP")
 
 
+MODEL_INPUTS = ("unet_name", "ckpt_name", "clip_name", "clip_name1", "clip_name2", "clip_name3", "model_name", "mmaudio_model")
+
+
+def models_in(workflow: dict) -> frozenset:
+    """The big model files a workflow loads (diffusion models, checkpoints, text encoders), not LoRAs or VAEs."""
+    return frozenset(v for n in workflow.values() if isinstance(n, dict)
+                     for k, v in (n.get("inputs") or {}).items() if k in MODEL_INPUTS and isinstance(v, str) and v)
+
+
 def is_video(workflow: dict) -> bool:
     return any(n.get("class_type", "") in VIDEO_NODES or n.get("class_type", "").startswith("MiniMaxH3")
                for n in workflow.values())
@@ -165,6 +174,7 @@ class Comfy:
         return r.json()["LoadImage"]["input"]["required"]["image"][0]
 
     async def queue(self, workflow: dict, preview: str | None = None) -> dict:
+        await self._free_on_model_change(workflow)
         # Live sampler previews: ComfyUI sends none unless asked. Images use "taesd" (the tiny
         # decoders in models/vae_approx, else latent2rgb). Video uses latent2rgb with VHS's animated
         # preview switch, read from the workflow extras where the desktop UI puts it: the video TAE
@@ -191,6 +201,25 @@ class Comfy:
                 payload = r.text
             raise ComfyError(payload)
         return r.json()
+
+    # A run that loads other big models than the last one (another diffusion model, checkpoint or text encoder)
+    # first has ComfyUI unload what it holds. Left resident, the previous model fills the 12 GB card and the next
+    # one's text encoder streams its weights in slivers: a Qwen edit after a few runs took over a minute to encode
+    # instead of seconds. ComfyUI does the unload once the job in hand is done, so nothing running is cut short;
+    # runs on the same models keep them loaded (and fast).
+    _last_models: frozenset | None = None
+
+    async def _free_on_model_change(self, workflow: dict):
+        models = models_in(workflow)
+        if not models:
+            return
+        if self._last_models is not None and models != self._last_models:
+            try:
+                await self.http.post("/free", json={"unload_models": True, "free_memory": True})
+                log.info("Other models than the last run: asked ComfyUI to unload first")
+            except httpx.HTTPError:
+                pass
+        self._last_models = models
 
     async def history(self, prompt_id: str) -> dict:
         r = await self.http.get(f"/history/{prompt_id}")
