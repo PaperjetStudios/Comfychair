@@ -1,4 +1,4 @@
-import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle, textArea, pctFmt, colorField, seedField, sizeSelect, imageInput, store } from './ui.js';
+import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle, textArea, pctFmt, colorField, seedField, sizeSelect, imageInput, store, info, icon } from './ui.js';
 import { S, inputUrl, thumbUrl, onServer, switchTab } from './core.js';
 import { bareSource, cardMedia, outputCard, clipLabel, clipUrl, genLabel, openImagePicker, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
 import { hooks as genHooks } from './generate.js';
@@ -13,6 +13,8 @@ import { playKeys, transport } from './playback.js';
 import { TabSet } from './tabs.js';
 import { fullScreen } from './layout.js';
 import { sendToCraft } from './craft.js';
+import { characterById, characters, loadCharacters, mainPicture } from './characters.js';
+import { TALK_ENGINES, talkKey, talkPrompt, talkSeconds } from './talk.js';
 
 // ---------------------------------------------------------------------------
 // VFX: one effect per tab, run on a clip (or from a still) with LTX-2.5 and friends. Each effect
@@ -73,6 +75,8 @@ const EFFECTS = [
   { id: 'ltxdrive', group: 'Performance', label: 'Drive a still (LTX)', tpl: 'deck-ltx-drive', sd: 'deck-ltx-drive-sd', posed: 'deck-ltx-drive-posed', mult: 64, needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
     res: [[448, '448p'], [576, '576p'], [704, '704p']],
     help: 'Like Drive a still, on LTX-2.5: the still is the first frame and the clip\'s pose (body, hands, face) moves it. Keeps the still\'s scene and look closely. Describe the person and what they do; the sound is made from the prompt.' },
+  { id: 'talk', group: 'Performance', label: 'Talking shot', tpl: 'deck-ltx-a2v', needs: ['line', 'first', 'prompt', 'size', 'loras', 'seed'],
+    help: 'Someone in a picture says a line, with their lips in time: pick a character (their picture and voice) or a picture and a voice, write the line and Speak it (or choose a sound of someone speaking). Works best with the face clear and turned towards the camera; the closer the face, the crisper the lips. The clip is as long as the line and keeps its sound. LTX-2.5 sound to video.' },
   { id: 'pose', group: 'Performance', label: 'Pose preview', tpl: 'deck-pose-video', sd: 'deck-pose-sdpose', needs: ['source', 'len'],
     help: 'Shows what Drive a still will follow: the clip\'s body, hands and face as a stick figure.' },
 ];
@@ -100,7 +104,7 @@ const REFINE = { combine: 'union', grow: 0, close: 0, smooth: 0, feather: 0, low
 const CANVAS = { aspect: 16 / 9, scale: 1, cx: 0.5, cy: 0.5 };
 const BLANK = () => ({ op: 'ripple', source: null, first: null, matte: null, sound: null, voice: null, prompt: '', loras: [], len: 5, res: 704, size: null, seed: -1,
   points: { positive: [], negative: [] }, pointsAt: 0, tracks: [], key: { color: '#00ff00', similarity: 0.12, blend: 0.08, spill: 0.5, invert: false },
-  steps: 3, blend: 'face', face: { ...FACE }, results: [], showing: null, matte2: null, refine: { ...REFINE }, canvas: { ...CANVAS }, boxes: [], delogo: 'quality' });
+  talk: { char: null, voice: null, engine: 'qwen', text: '', delivery: '', said: null }, steps: 3, blend: 'face', face: { ...FACE }, results: [], showing: null, matte2: null, refine: { ...REFINE }, canvas: { ...CANVAS }, boxes: [], delogo: 'quality' });
 let T = BLANK();
 let tabs = null;
 // What a run keeps of the tab that made it (params.__face), so History's Edit can open it here again: the settings, not the takes
@@ -171,7 +175,7 @@ function firstField(optional) {
   const edit = ['ripple', 'animate', 'faceswap', 'drive', 'ltxdrive'].includes(T.op);
   const label = T.op === 'ingredients' ? 'Ingredients sheet' : T.op === 'ripple' ? 'Edited first frame' : T.op === 'layout' ? 'Look (first frame)'
     : ['animate', 'faceswap', 'drive', 'ltxdrive'].includes(T.op) ? 'Character'
-    : T.op === 'extend' ? 'Start frame (optional)' : optional ? 'Start image (optional)' : 'Start image';
+    : T.op === 'extend' ? 'Start frame (optional)' : T.op === 'talk' ? 'Who speaks (a picture)' : optional ? 'Start image (optional)' : 'Start image';
   return imageInput({ label, name: T.first ? T.first.split('/').pop() : '', thumb: T.first ? h('img', { src: thumbUrl(T.first, 256), alt: '' }) : null,
     pick, onClear: () => { T.first = null; changed(); },
     tip: T.op === 'ripple' ? 'Take the clip\'s first frame, change it (Edit in Generate with an edit template, or in the Editor), then Choose… the edited picture here.'
@@ -329,6 +333,76 @@ function tracksFields() {
   hint(`${T.tracks.length} path${T.tracks.length === 1 ? '' : 's'}. Drag on the start image from a thing to where it should go.`)];
 }
 
+// ---- Talking shot: who, the line, its voice, spoken by the Sound tab's engines into T.sound (web/talk.js) ----
+const tk = () => (T.talk ||= { ...BLANK().talk });
+function talkPromptOf() {
+  const L = tk(), c = characterById(L.char);
+  return talkPrompt({ who: c?.name, look: c?.look, text: L.text, delivery: L.delivery });
+}
+// the "prompt it makes" ⓘ, swapped for a new one as the line is typed (a redraw would take the box's focus)
+function talkInfo() {
+  const b = info(talkPromptOf(), 'The prompt it makes');
+  if (UI.talkInfo?.isConnected) UI.talkInfo.replaceWith(b);
+  return (UI.talkInfo = b);
+}
+async function talkVoices() {
+  if (UI.voices) return;
+  UI.voices = [];
+  try { UI.voices = await api('/api/voice/voices', { busy: false }); } catch { /* none: the field says so */ }
+  if (T.op === 'talk') render();
+}
+function pickCharacter(id) {
+  const L = tk(), c = characterById(id);
+  L.char = c ? c.id : null;
+  if (c?.voice) L.voice = c.voice;
+  if (c && mainPicture(c)) T.first = mainPicture(c);
+  changed();
+}
+async function speakTalk() {
+  const tab = T, L = tk();
+  if (!L.voice) return toast('Choose a voice first', true);
+  if (!L.text.trim()) return toast('Write the line first', true);
+  UI.speaking = true; render();
+  try {
+    const { waitJob } = await import('./clipimport.js');
+    const r = await waitJob(await api('/api/voice/speak', { method: 'POST', busy: false, body: {
+      lines: [{ voice: L.voice, text: L.text.trim(), delivery: L.delivery.trim() || null }], engine: L.engine || 'qwen', name: 'talk' } }),
+    (p, l) => { const el = document.getElementById('vfxSpeaking'); if (el) el.textContent = `${l || 'Speaking'}… ${Math.round((p || 0) * 100)}%`; });
+    const m = r.lines[0];
+    tab.sound = { media: m.name };
+    tab.talk.said = { key: talkKey(tab.talk), seconds: m.seconds };
+    if (tab === T) changed(false); else tabs?.changed();
+  } catch (err) { toast(err.message, true); } finally { UI.speaking = false; render(); }
+}
+function lineFields() {
+  const L = tk(), cast = characters();
+  if (UI.castFor !== S.project) { UI.castFor = S.project; loadCharacters().then(() => { if (T.op === 'talk') render(); }); }
+  talkVoices();
+  const vs = UI.voices || [];
+  const sel = (label, opts, cur, set) => {
+    const el = h('select', { 'aria-label': label }, opts.map(([v, t]) => h('option', { value: v, selected: v === (cur || '') }, t)));
+    el.addEventListener('change', () => set(el.value || null));
+    return el;
+  };
+  const del = h('input', { type: 'text', value: L.delivery || '', placeholder: 'calm, angry, whispering…', 'aria-label': 'How it is said' });
+  del.addEventListener('change', () => { L.delivery = del.value.trim(); changed(false); talkInfo(); });
+  const stale = T.sound && L.said && L.said.key !== talkKey(L);
+  return [
+    cast.length ? field('Character', sel('Character', [['', 'None'], ...cast.filter((c) => c.name.trim()).map((c) => [c.id, c.name])], L.char, pickCharacter),
+      help('Their main picture becomes the start image and their voice speaks the line; their look goes in the prompt.')) : null,
+    field('Voice', vs.length ? sel('Voice', [['', 'Choose…'], ...vs.map((v) => [v.id, v.name])], L.voice, (v) => { L.voice = v; changed(); })
+      : hint('No voices saved yet: make one in the Sound tab (Voice tools).')),
+    field('Line', textArea(() => L.text, (v) => { L.text = v; tabs?.changed(); talkInfo(); }, { rows: 2, label: 'The line', placeholder: 'What they say' })),
+    field('Delivery', del, help('IndexTTS-2 and Fish S2 act it out (Qwen ignores it). It also goes in the prompt.')),
+    field('Engine', seg(TALK_ENGINES, L.engine || 'qwen', (v) => { L.engine = v; changed(false); }, { wrap: true })),
+    h('div', { class: 'row wrap' },
+      button([icon('mic'), T.sound && L.said ? 'Speak it again' : 'Speak the line'], speakTalk, { cls: T.sound ? '' : 'primary', disabled: !!UI.speaking })),
+    UI.speaking ? h('p', { id: 'vfxSpeaking', class: 'hint' }, 'Speaking…') : null,
+    stale ? note('The line changed since it was spoken: speak it again.') : null,
+    soundInput(T.sound, (v) => { T.sound = v; L.said = null; changed(false); }, { title: 'Someone speaking the line', label: 'Spoken line' }),
+  ];
+}
+
 // ---- the panel ----
 function render() {
   const body = $('#vfxBody');
@@ -348,6 +422,7 @@ function render() {
   const inputs = section('Source', null,
     needs.has('source') ? sourceField('source') : null,
     needs.has('sound') ? soundInput(T.sound, (v) => { T.sound = v; changed(false); }, { title: 'The sound the clip moves to', label: 'Sound' }) : null,
+    needs.has('line') ? lineFields() : null,
     needs.has('first') ? firstField(e.needs.includes('first?')) : null,
     needs.has('voice') ? [soundInput(T.voice, (v) => { T.voice = v; changed(false); }, { title: 'A voice to speak with', label: 'Voice (optional)' }),
       help('About 5 seconds of one person speaking clearly. Cut it with Start and Length.')] : null,
@@ -359,7 +434,8 @@ function render() {
 
   const prompt = needs.has('prompt') ? section('Prompt', null,
     textArea(() => T.prompt, (v) => { T.prompt = v; tabs?.changed(); }, { rows: 4, label: 'Prompt',
-      placeholder: e.id === 'mask' ? 'What to cut out, e.g. "the man in the red coat"' : 'Describe the result' })) : null;
+      placeholder: e.id === 'mask' ? 'What to cut out, e.g. "the man in the red coat"' : needs.has('line') ? 'Leave empty for one made from the line' : 'Describe the result' }),
+    needs.has('line') ? talkInfo() : null) : null;
 
   const settings = section('Settings', null,
     e.sd ? field('Pose from', seg([['dwpose', 'DWPose'], ['sdpose', 'SDPose']], T.poser || 'dwpose', (v) => { T.poser = v; changed(); }),
@@ -611,6 +687,7 @@ function missingInput(e) {
   if (e.needs.includes('matte') && !T.matte) return `Choose a ${T.op === 'cleanplate' ? 'mask' : 'matte'} clip first`;
   if (e.needs.includes('first') && !T.first) return 'Choose the start image first';
   if (e.needs.includes('sound') && !T.sound) return 'Choose the sound first';
+  if (e.needs.includes('line') && !T.sound) return 'Speak the line first, or choose a sound';
   if (e.still && !T.source && !T.first) return 'Choose a clip or a picture first';
   return null;
 }
@@ -648,7 +725,12 @@ async function buildRun(e, loose = false) {
     put('depthSize', small ? 518 : 448);
   }
   if (e.needs.includes('outsize')) put('outsize', T.outsize || 'FullHD');
-  const size = T.size || (e.needs.includes('size') && T.first ? await imageSize(T.first) : null);
+  if (e.needs.includes('line')) {   // the spoken line, the prompt made from it, the clip as long as it, at about 0.9 MP
+    put('sound', T.sound);
+    put('prompt', T.prompt.trim() ? T.prompt : talkPromptOf());
+    if (T.talk?.said?.seconds) put('len', talkSeconds(T.talk.said.seconds, roleField(t, 'len')?.max || 20));
+  }
+  const size = T.size || (e.needs.includes('size') && T.first ? await imageSize(T.first, e.needs.includes('line') ? 1280 * 704 : 0) : null);
   if (e.needs.includes('size') && size) { put('width', size[0]); put('height', size[1]); }
   if (e.needs.includes('points')) {
     const pts = await pointsPx(), clicked = pts.positive.length > 0;
@@ -730,9 +812,13 @@ async function runKey(e) {
   } catch (err) { toast('Keying failed: ' + err.message, true); }
 }
 
-const imageSize = (name) => new Promise((res) => {
+// area: at most that many pixels (0: as it is)
+const imageSize = (name, area = 0) => new Promise((res) => {
   const im = new Image();
-  im.onload = () => res([Math.round(im.naturalWidth / 32) * 32, Math.round(im.naturalHeight / 32) * 32]);
+  im.onload = () => {
+    const k = area ? Math.min(1, Math.sqrt(area / (im.naturalWidth * im.naturalHeight))) : 1;
+    res([Math.round((im.naturalWidth * k) / 32) * 32, Math.round((im.naturalHeight * k) / 32) * 32]);
+  };
   im.onerror = () => res(null);
   im.src = inputUrl(name);
 });
@@ -1045,7 +1131,7 @@ export function wireVfx() {
   tabs = new TabSet({ kind: 'vfx-tabs', mount, scope: 'project', newName: (n) => `Shot ${n}`,
     adapter: {
       empty: BLANK,
-      migrate: (p) => ({ ...BLANK(), ...p, key: { ...BLANK().key, ...(p.key || {}) }, points: { ...BLANK().points, ...(p.points || {}) } }),
+      migrate: (p) => ({ ...BLANK(), ...p, talk: { ...BLANK().talk, ...(p.talk || {}) }, key: { ...BLANK().key, ...(p.key || {}) }, points: { ...BLANK().points, ...(p.points || {}) } }),
       dump: () => ({ ...T }),
       load(payload) { T = { ...BLANK(), ...payload }; UI.srcInfo = null; UI.draw = null; UI.cmp = null; render(); },
     } });

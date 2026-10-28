@@ -355,6 +355,17 @@ the VFX tab's Face size, Edge softness and Chin sliders).
 | Drive a still | `deck-h3-drive` | `deck-h3-ctrl2v`'s graph with the clip's DWPose (body, hands, face) as the control video |
 | Drive a still (LTX) | `deck-ltx-drive` | LTX-2.5 with the still as the first frame and DWPose through the union-control IC-LoRA |
 | Pose preview | `deck-pose-video` | DWPose, steadied (CPU): what the drive effects follow |
+| Talking shot | `deck-ltx-a2v` | a picture of someone and a line: the line spoken by the Sound tab's engines (or a sound picked), then sound to video with the line in the prompt |
+
+**Talking shot** (`web/talk.js`): pick a project character (their main picture becomes the start image, their voice
+speaks, their look goes in the prompt) or a picture and a voice, write the line, choose the engine and how it is said,
+and **Speak the line** (`POST /api/voice/speak`, one line, evened to −16 LUFS). Or pick any sound of someone speaking.
+With the prompt left empty it is made from the line (`talkPrompt`: who, their look, the line in quotes, then "their
+lips move in time with every word…"). The clip is the line's length plus a quarter to half a second, at the picture's
+shape scaled to about 1280×704. Tested 2026-10-28 on an 8.5 s line: a 1280×704 close-up took about 2 minutes warm,
+a medium shot 2.5 minutes; lips close on b/m/p and between phrases, and the face keeps the picture's identity. The
+closer and more frontal the face, the crisper the mouth. In Story, **Talking shot** (next to Speak the lines) speaks the
+shot's lines if needed and runs `deck-ltx-a2v` on its frame whatever the shot's video template; the clip lands on the shot.
 
 The drives don't read the pose again when the clip already has one: before queueing, the VFX tab asks
 `POST /api/pose/find` for a finished Pose preview of the same clip (generation output or media file), trim
