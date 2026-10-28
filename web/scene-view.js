@@ -148,7 +148,8 @@ export function setup() {
     canvas, fix: fixTarget, redraw: () => draw(),
     apply: (o) => { if (gizmo.object === o) { applyChange(); draw(); } },
     settle: () => { save(); renderKeys(); renderPanel(); },
-    start: () => holdStart('gizmo'), end: () => letGo('gizmo'),
+    end: () => { letGo('gizmo'); placeHandle(); },
+    start: () => holdStart('gizmo'),
   });
   // hovering a handle with a pen (or mouse) lights it before contact: the stage draws on demand, so it needs a nudge
   let hoverAxis = null;
@@ -443,8 +444,10 @@ function placePivot() {
   pivot.updateMatrixWorld();
 }
 // View axes follow the view: put the gizmo's stand-in back each time the view moves (not while a handle is held)
-function followView() {
-  if (R.orient !== 'view' || !gizmo?.object || gizmo.dragging || smooth?.settling()) return;
+function followView() { if (R.orient === 'view') placeHandle(); }
+// the stand-in put back on what it holds: after the view moves, and after a drag (a View turn leaves it turned off the view's axes)
+function placeHandle() {
+  if (!gizmo?.object || gizmo.dragging || smooth?.settling()) return;
   if (gizmo.object === pivot) placePivot();
   else if (gizmo.object === ikTarget) placeIkTarget();
   else if (gizmo.object === camProxy) placeCamProxy();
