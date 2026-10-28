@@ -1,7 +1,9 @@
 {
+  "id": "/",
   "name": "ComfyChair",
   "short_name": "ComfyChair",
   "start_url": "/",
+  "scope": "/",
   "display": "fullscreen",
   "orientation": "any",
   "background_color": "#0f1115",
