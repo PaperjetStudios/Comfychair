@@ -288,9 +288,11 @@ function insertPhrase(ta, text) {
   const a = ta.selectionStart ?? ta.value.length, b = ta.selectionEnd ?? a;
   let before = ta.value.slice(0, a);
   const after = ta.value.slice(b);
+  const joined = text.startsWith('+');   // (carries on the words before it: "Mara" + "looks at §")
+  if (joined) text = text.slice(1);
   const at = text.indexOf('§'), clean = text.replace('§', '');
   // continuing a sentence ("…her face" + "the camera pans left") gets a comma; after "of", "the"… a space
-  const comma = !clean.startsWith('\n') && /[\w)]\s*$/.test(before) && /^[a-z]/.test(clean)
+  const comma = !joined && !clean.startsWith('\n') && /[\w)]\s*$/.test(before) && /^[a-z]/.test(clean)
     && !/\b(says|of|and|to|the|a|an|at|in|on|by|with|from|as)\s*$/i.test(before);
   if (comma) before = before.replace(/\s+$/, '');
   const pad = comma ? ', ' : before && !/\s$/.test(before) && !clean.startsWith('\n') ? ' ' : '';

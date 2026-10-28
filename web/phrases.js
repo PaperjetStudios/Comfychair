@@ -1,5 +1,6 @@
 // Prompt phrases: the chip groups the writing box (app.js wireTextPopup) offers for a template's prompt. A group is
-// [name, [[label, text]…], open by default]; "§" in a text marks where the cursor lands (app.js insertPhrase).
+// [name, [[label, text]…], open by default]; "§" in a text marks where the cursor lands, and a leading "+" carries
+// on the words before it without a comma ("Mara" + "looks at §") (app.js insertPhrase).
 // IMAGE_PHRASES for stills, EDIT_PHRASES on top for templates that edit a picture, VIDEO_PHRASES for video templates
 // that aren't H3 (H3 has its own, with its prompt structure and sound fields).
 
@@ -275,6 +276,61 @@ const PEOPLE = ['People', [
   ['Hair in wind', 'hair blowing in the wind'],
 ]];
 
+// directing the people in the shot: where they are, how they relate, where they look, what their body says. Type who
+// it's about first ("Mara", "Mara and Tom"), then tap: the cursor lands where the other person goes, if any
+const DIRECTION = ['Direction', [
+  ['In foreground', '+in the foreground, close to the camera'],
+  ['In background', '+in the background, small in the frame'],
+  ['Left of frame', '+on the left of the frame'],
+  ['Right of frame', '+on the right of the frame'],
+  ['Centre stage', '+in the centre of the frame, the focus of the scene'],
+  ['Facing each other', '+face each other'],
+  ['Side by side', '+stand side by side'],
+  ['Back to back', '+stand back to back'],
+  ['Apart', '+stand far apart, a gap between them'],
+  ['Close together', '+stand close together'],
+  ['Towers over', '+towers over §'],
+  ['Kneeling before', '+kneels before §'],
+  ['Behind', '+stands behind §, a hand on their shoulder'],
+  ['Looks at', '+looks at §'],
+  ['Looks away from', '+looks away from §'],
+  ['Eyes down', '+looks down at the floor'],
+  ['Glances back', '+glances back over the shoulder'],
+  ['Stares out', '+stares out of the window'],
+  ['Eye contact', '+lock eyes'],
+  ['Talking', '+talks to §, mid-sentence'],
+  ['Whispering', '+whispers into the ear of §'],
+  ['Arguing', '+argue, leaning toward each other'],
+  ['Laughing together', '+laugh together'],
+  ['Embrace', '+embrace'],
+  ['Hand on shoulder', '+rests a hand on the shoulder of §'],
+  ['Holding hands', '+hold hands'],
+  ['Handing over', '+hands § a '],
+  ['Pointing', '+points at §'],
+  ['Reaching', '+reaches out toward §'],
+  ['Confrontation', '+confronts §, squared up, tense'],
+  ['Ignoring', '+ignores §, turned away'],
+  ['Slumped', '+slumped, shoulders down, exhausted'],
+  ['Upright', '+standing tall, chest out, confident'],
+  ['Guarded', '+arms folded, closed off'],
+  ['Open', '+open body language, relaxed'],
+  ['Hunched', '+hunched over §'],
+  ['Leaning in', '+leans in, interested'],
+  ['Pacing', '+pacing, restless'],
+  ['Frozen', '+frozen mid-step'],
+  ['Hands to face', '+covers the face with both hands'],
+  ['Fists clenched', '+fists clenched at the sides'],
+  ['Mid-gesture', '+caught mid-gesture, hands animated'],
+  ['Nervous', '+fidgeting nervously'],
+  ['Determined', '+with a determined look'],
+  ['Heartbroken', '+heartbroken, eyes wet'],
+  ['Relieved', '+relieved, letting out a breath'],
+  ['Suspicious', '+eyeing § suspiciously'],
+  ['Secret smile', '+with a small private smile'],
+  ['Shocked', '+shocked, mouth open'],
+  ['Unaware', '+unaware of § behind them'],
+], true];
+
 const QUALITY = ['Detail', [
   ['Sharp', 'sharp focus'],
   ['Highly detailed', 'highly detailed'],
@@ -375,6 +431,6 @@ const ACTION = ['Action', [
   ['Particles', 'dust particles drift through the light'],
 ]];
 
-export const IMAGE_PHRASES = [FRAMING, CAMERA, COMPOSITION, LIGHTING, TIME_WEATHER, SETTING, MOOD, COLOR, MEDIUM, STYLE, MATERIALS, PEOPLE, QUALITY, CLEAN];
-export const EDIT_PHRASES = [EDIT, REFERENCES, LIGHTING, TIME_WEATHER, STYLE, MEDIUM, COLOR, MOOD, CAMERA];
-export const VIDEO_PHRASES = [FRAMING, MOVES, ACTION, CAMERA, LIGHTING, TIME_WEATHER, MOOD, COLOR, MEDIUM, STYLE, CLEAN];
+export const IMAGE_PHRASES = [FRAMING, DIRECTION, CAMERA, COMPOSITION, LIGHTING, TIME_WEATHER, SETTING, MOOD, COLOR, MEDIUM, STYLE, MATERIALS, PEOPLE, QUALITY, CLEAN];
+export const EDIT_PHRASES = [EDIT, REFERENCES, DIRECTION, LIGHTING, TIME_WEATHER, STYLE, MEDIUM, COLOR, MOOD, CAMERA];
+export const VIDEO_PHRASES = [FRAMING, MOVES, ACTION, DIRECTION, CAMERA, LIGHTING, TIME_WEATHER, MOOD, COLOR, MEDIUM, STYLE, CLEAN];
