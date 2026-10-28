@@ -18,7 +18,7 @@ import { standShift } from './splat-shape.js';
 // ---- geometry ----------------------------------------------------------------
 // A soft, featureless figure turned on a lathe: feet, legs as one column, hips, waist, chest,
 // neck and head in one smooth outline. Unit size (1 wide, 1 tall, base at y=0), scaled per object.
-const PERSON_PROFILE = [[0, 0], [0.27, 0], [0.29, 0.02], [0.25, 0.08], [0.28, 0.27], [0.36, 0.45], [0.4, 0.52],
+export const PERSON_PROFILE = [[0, 0], [0.27, 0], [0.29, 0.02], [0.25, 0.08], [0.28, 0.27], [0.36, 0.45], [0.4, 0.52],
   [0.33, 0.63], [0.44, 0.73], [0.5, 0.8], [0.4, 0.83], [0.11, 0.855], [0.12, 0.875], [0.18, 0.91], [0.185, 0.95],
   [0.13, 0.99], [0, 1]];
 let GEO;
@@ -275,7 +275,8 @@ export function rebuildRoom() {
 }
 
 // What scene-import.js plugs in: LOADERS[type](o, group) fills a layer's group (imported models and
-// splats load on their own time), passHooks run before each draw with the pass ('depth' or 'color')
+// splats load on their own time), passHooks run before each draw with the pass ('depth' or 'color') and what the
+// draw is for (false: the view; else a render's kind)
 export const LOADERS = {};
 export const passHooks = [];
 
@@ -554,7 +555,7 @@ export function draw(forRender = false) {
   const live = !R.playing;   // (while it plays, the While-playing settings say what shows: WP)
   grid.visible = !forRender && !depth && !snap3.grid && (live || WP.grid);
   snapGrid.visible = !forRender && !depth && snap3.grid && (live || WP.grid);
-  for (const f of passHooks) f(depth || forRender === 'range' ? 'depth' : 'color');
+  for (const f of passHooks) f(depth || forRender === 'range' ? 'depth' : 'color', forRender);
   frustum.visible = wantFrustum() && !forRender && !depth && (live || WP.frustum);
   for (const x of OTHERS.values()) x.group.visible = frustum.visible;
   stage.visible = !onStage() && !forRender;

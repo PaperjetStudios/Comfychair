@@ -15,6 +15,7 @@ import {
 import { buildToolbar, renderKeys, renderToolbar, showAll, syncLength, syncMode, wireKeys } from './scene-ui.js';
 import { loadPlaySettings } from './scene-keys.js';
 import { setup } from './scene-view.js';
+import { initScale } from './scene-scale.js';
 import { stopPlay } from './scene-export.js';
 import { registerBuiltins } from './scene-builtin.js';
 import { initModel } from './scene-model.js';
@@ -59,7 +60,7 @@ const sceneAdapter = {
 
 function boot() {
   if (ready) return;
-  setup(); buildToolbar(); wireKeys();
+  setup(); buildToolbar(); initScale(); wireKeys();
   ready = true;
 }
 
