@@ -89,12 +89,13 @@ function scratch(k, w, hh) {
 const toLayer = (l, p) => ({ x: (p.x - l.x) / l.scale + l.crop.x * l.img.naturalWidth, y: (p.y - l.y) / l.scale + l.crop.y * l.img.naturalHeight });
 
 // A new blank layer to paint on: the canvas's size by default, see-through or filled
-let blanks = 0;
 export function addBlank({ w, h: hh, fill = null }) {
   const cv = makeCanvas(Math.round(w), Math.round(hh));
   if (fill) { const c = cv.getContext('2d'); c.fillStyle = fill; c.fillRect(0, 0, cv.width, cv.height); }
   const f = X.frame();
-  const l = { name: null, label: `Canvas ${++blanks}`, crop: { x: 0, y: 0, w: 1, h: 1 }, x: f ? f.x : 0, y: f ? f.y : 0, scale: 1, opacity: 1,
+  let n = 1;
+  while (E().layers.some((o) => o.label === `Canvas ${n}`)) n++;   // the first free number in this edit
+  const l = { name: null, label: `Canvas ${n}`, crop: { x: 0, y: 0, w: 1, h: 1 }, x: f ? f.x : 0, y: f ? f.y : 0, scale: 1, opacity: 1,
     hidden: false, blend: 'normal', img: cv };
   E().layers.push(l);
   E().sel = l; E().cropping = false;
