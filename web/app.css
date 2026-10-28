@@ -1723,3 +1723,47 @@ img.civ-blur, .civ-shot.civ-blur > * { filter: blur(22px) saturate(.6); transfor
   .sheet-ruler .tick { padding-top: 15px; }
   .anim-bar .scrub-wrap { padding-top: 16px; }
 }
+
+/* ---- contextual tools (scene-ui.js): fade in when they apply, gone when they don't ---- */
+.ctx { transition: opacity .2s ease, transform .2s ease, display .2s allow-discrete; }
+.ctx.ctx-off { display: none; opacity: 0; transform: translateY(-4px); }
+@starting-style { .ctx { opacity: 0; transform: translateY(-4px); } }
+.tb-group { display: flex; gap: 2px; align-items: stretch; }
+/* the bars over the 3D view are see-through, solid while touched */
+#tab-scene .scene-toolbar, #tab-scene .scene-modebar, #tab-scene .gz-3d .gz-chip:not(.on) {
+  background: color-mix(in srgb, var(--surface) 62%, transparent); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  transition: background .15s;
+}
+#tab-scene .scene-toolbar:hover, #tab-scene .scene-toolbar:focus-within, #tab-scene .scene-modebar:hover { background: var(--surface); }
+.snap-row { display: grid; gap: 4px; padding: 4px 0; border-top: 1px solid var(--line); }
+/* the HUD (H): every tool over the 3D view hidden but its own button */
+.hud-btn { top: 56px; }
+@media (pointer: coarse) { .hud-btn { top: 60px; } }
+@media (max-width: 600px) { #tab-scene .hud-btn { top: 8px; right: 56px; } }
+.tab.panel-out .stage.maxed .hud-btn { right: calc(var(--ov-w) + 8px); }
+@media (max-width: 600px) { .tab.panel-out .stage.maxed .hud-btn { right: auto; left: 56px; top: 58px; } }
+#tab-scene.hud-off .scene-toolbar, #tab-scene.hud-off .scene-modebar, #tab-scene.hud-off .gz-bar,
+#tab-scene.hud-off .stage.maxed #sceneTransport, #tab-scene.hud-off .scene-ref-ctl { display: none; }
+#tab-scene.hud-off .hud-btn { opacity: .45; }
+/* ---- Undo / Redo for the open tab (undo-dock.js): in the top bar; over a full-screen view, at its top middle ---- */
+.undo-dock { display: inline-flex; gap: 2px; }
+.undo-dock[hidden] { display: none; }
+body > .undo-dock { position: fixed; z-index: 57; top: 8px; left: 50%; transform: translateX(-50%); padding: 3px;
+  border: 1px solid var(--line-2); border-radius: var(--r); background: color-mix(in srgb, var(--surface) 70%, transparent);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+/* ---- Transform rows (scene-ui.js vecRow): three boxes, the axis letter inside, X red, Y green, Z blue ---- */
+.vec { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+.vbox { position: relative; display: block; min-width: 0; }
+.vbox > b { position: absolute; left: 0; top: 0; bottom: 0; width: 20px; display: grid; place-items: center; z-index: 1; pointer-events: none;
+  font-size: 12px; color: #fff; border-radius: var(--r) 0 0 var(--r); }
+.vbox.ax-x > b { background: #c4473f; } .vbox.ax-y > b { background: #5b9a3c; } .vbox.ax-z > b { background: #3f74c4; }
+.vbox input.numslide { width: 100%; padding-left: 26px; text-align: right; background: var(--surface-2); }
+.vbox input.numslide.scrubbing { background: color-mix(in srgb, var(--accent) 22%, var(--surface-2)); }
+.lock-btn { min-width: 30px; min-height: 26px; margin: -6px 0 -6px 4px; padding: 0; background: transparent; border-color: transparent; color: var(--muted); }
+.icon-btn.lock-btn.on, .icon-btn.lock-btn.on:hover { color: var(--accent); background: transparent; border-color: transparent; }
+.lock-btn .ico { width: 16px; height: 16px; }
+/* a phone: the key bar is one row that scrolls sideways (wrapped, it would squeeze the view away) */
+@media (max-width: 700px) {
+  .scene-keybar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .scene-keybar .grow { display: none; }
+}

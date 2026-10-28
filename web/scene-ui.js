@@ -2,7 +2,7 @@ import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import {
   $, actions, button, clamp, clone, closeSheet, field, h, iconBtn, layerRowsEl, numField, openSheet, panelTop, rangeField,
-  section, seg, sheetOpen, store, uid, undoToast, help, toggle, sizeSelect, chip, info, toast, icon, iconize,
+  section, seg, sheetOpen, store, uid, undoToast, help, toggle, sizeSelect, chip, info, toast, icon, iconize, numSlider, popover, closePopover,
 } from './ui.js';
 import {
   C, CAM, EVEN, FPS, HIST, camsOf, newCamera, setActiveCam, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropHolds, dropKeys, holdStart, frames, framesFor, hasKeys, hooks, keyCount, addKey, bakeBase, sampleChan,
@@ -20,7 +20,8 @@ import { hasMode, modeDef, modeList, modeOf, modeSections } from './scene-modes.
 import { syncRef, toggleRef } from './scene-ref.js';
 import { keysPast, stretchAll } from './keys.js';
 import { offsetField } from './scene-offset.js';
-import { scaleProps } from './scene-scale.js';
+import { refOn as scaleRefOn, scaleProps, setRef as setScaleRef } from './scene-scale.js';
+import { registerUndo, syncUndo } from './undo-dock.js';
 
 // ---- UI ----------------------------------------------------------------------
 let statusText = '';
@@ -43,17 +44,17 @@ export function renderToolbar() {
   const pb = tb.querySelector('[data-pivot]'), moved = pivotMoved();
   pb.disabled = !canPivot(); pb.classList.toggle('on', moved); pb.setAttribute('aria-pressed', moved);
   tb.querySelector('[data-pivot-reset]').classList.toggle('hidden', !moved);
-  tb.querySelector('[data-depth]').classList.toggle('on', R.depth);
-  const rb = tb.querySelector('[data-ref]');
-  rb.classList.toggle('on', !!SC.ref && SC.ref.on !== false); rb.setAttribute('aria-pressed', !!SC.ref && SC.ref.on !== false);
-  rb.title = SC.ref ? 'Reference over the view: show or hide' : 'Reference over the view: pick a picture';
+  const ov = R.depth || (!!SC.ref && SC.ref.on !== false) || scaleRefOn();
+  tb.querySelector('[data-overlays]').classList.toggle('on', ov);
   syncRef();
+  // contextual: the transform tools and the snapping only while something can be moved (they fade in and out)
+  tb.querySelector('[data-ctx=transform]').classList.toggle('ctx-off', !can);
+  viewer.querySelector('.gz-3d')?.classList.toggle('ctx-off', !can);
   const fb = tb.querySelector('[data-free]'), fixed = modeOf().view === 'free';   // (Create object only has the free view)
   fb.classList.toggle('hidden', fixed);
   fb.classList.toggle('on', R.free); fb.setAttribute('aria-pressed', R.free);
   fb.title = R.free ? 'Director view: back to looking through the camera (V)' : 'Director view: look around the scene freely, the camera drawn in it (V)';
-  tb.querySelector('[data-undo]').disabled = !HIST.undo.length;
-  tb.querySelector('[data-redo]').disabled = !HIST.redo.length;
+  syncUndo();
 }
 
 // the key sheet (dope sheet, graph, selection and key edits) is scene-keys.js
@@ -112,21 +113,20 @@ function objectProps(o) {
 // where it is, how big, its pivot; duplicate and delete
 function placeProps(o, cur) {
   const names = namesFor(o);
-  const set = (k) => (v) => write(o, names, { [k]: v });
   const even = (v) => write(o, names, { sx: v, sy: v, sz: v });
   const name = h('input', { type: 'text', value: o.name });
   name.addEventListener('change', () => { o.name = name.value.trim() || o.name; changed(); });
-  const xyz = (label, ks, opts) => withKeys(field(label,
-    h('div', { class: 'row' }, ...ks.map(([k, l, o2]) => num(l, () => cur()[k], set(k), { ...opts, ...o2 })))), label, o, names, ks.map(([k]) => k));
+  const lock = { get: () => o.lockSize === true, set: (on) => { o.lockSize = on; save(); } };
   const sizeKeys = (el, label) => withKeys(el, label, o, names, ['sx', 'sy', 'sz']);
   return [
     field('Name', name),
     o.type === 'figure' ? field('Body', seg(FIGURE.BODIES, FIGURE.bodyOf(o.body), (v) => { o.body = v; changed(); })) : null,
-    xyz('Position (m)', [['x', 'X'], ['y', 'Up', { min: -5, max: 10 }], ['z', 'Z']], { min: -20, max: 20, step: 0.01 }),
-    xyz('Rotation (°)', [['rx', 'X'], ['ry', 'Y'], ['rz', 'Z']], { digits: 0, min: -360, max: 360, step: 1 }),
+    vecRow('Position (m)', o, names, [['x', 'X', 'x'], ['y', 'Y', 'y', 'Y (up)'], ['z', 'Z', 'z']], { min: -50, max: 50 }),
+    vecRow('Rotation (°)', o, names, [['rx', 'X', 'x'], ['ry', 'Y', 'y'], ['rz', 'Z', 'z']], { min: -720, max: 720, step: 0.5, digits: 1, perPx: 0.5 }),
     o.type === 'figure' ? sizeKeys(num('Height (m)', () => cur().sy * FIGURE.heightOf(o.body, o.shape), (v) => even(Math.max(0.3, v) / FIGURE.heightOf(o.body, o.shape)), { min: 0.3, max: 2.5, step: 0.01 }), 'Height')
       : EVEN.has(o.type) ? sizeKeys(num('Scale', () => cur().sy, (v) => even(Math.max(0.0001, v)), { min: 0.0001, max: 20, step: 0.001, digits: 4 }), 'Scale')
-      : xyz('Size (m)', [['sx', 'Width'], ['sy', 'Height'], ['sz', 'Depth']], { min: 0.05, max: 20, step: 0.01 }),
+      : vecRow('Size (m)', o, names, [['sx', 'W', 'x', 'Width'], ['sy', 'H', 'y', 'Height'], ['sz', 'D', 'z', 'Depth']],
+        { min: 0.01, max: 50, step: 0.01, perPx: 0.005, reset: { sx: TYPES[o.type].size[0], sy: TYPES[o.type].size[1], sz: TYPES[o.type].size[2] }, lock }),
     scaleProps(o),
     field('Pivot (where the gizmo turns it)', seg(pivotsFor(o), pivotsFor(o).some(([k]) => k === pivotOf(o)) ? pivotOf(o) : null,
       (v) => { o.pivot = v; resetPivot(); changed(); }, { wrap: true })),
@@ -221,6 +221,41 @@ function camerasField() {
       { title: 'A new camera, made active: at the view you see in the director view, else a step behind the active camera' }));
 }
 
+// ---- Transform: a row per vector (Blender's N panel). Three boxes with their axis letter inside, coloured X red,
+// Y (up) green, Z blue; typed, or held and pulled sideways at a steady rate (perPx: a metre per 100 px, a degree a px…;
+// Shift on a mouse is finer); a double-tap puts one back (reset). ◀ ◆ ▶ key the row; lock: a chain that keeps the three
+// in proportion (a change to one scales the others with it).
+//   vecRow(label, item, names, [[ch, letter, axis 'x'|'y'|'z', title?]], { min, max, step, digits, perPx, reset (a number, or one per channel), lock })
+//   lock: { get(), set(on) }
+function vecRow(label, item, names, ks, { min = -50, max = 50, step = 0.01, digits = 2, perPx = 0.01, reset = 0, lock = null } = {}) {
+  const cur = () => current(item, names);
+  const setOne = (k, v) => {
+    if (lock?.get()) {   // in proportion: every box by the same factor
+      const c = cur(), f = c[k] ? v / c[k] : 1;
+      if (Number.isFinite(f) && f > 0) return write(item, names, Object.fromEntries(ks.map(([ch]) => [ch, Math.max(min, Math.min(max, c[ch] * f))])));
+    }
+    write(item, names, { [k]: v });
+  };
+  const box = ([k, letter, axis, title]) => {
+    const r = numSlider({ min, max, step, digits, value: cur()[k], label: `${label} ${title || letter}` });
+    r.dataset.perpx = perPx;
+    r.addEventListener('input', () => { if (r.dataset.scrubbing) { setOne(k, parseFloat(r.value)); syncMeshes(); pose(R.f); draw(); } });
+    r.addEventListener('change', () => { setOne(k, parseFloat(r.value)); changed(); });
+    const back = typeof reset === 'object' ? reset[k] : reset;
+    r.addEventListener('dblclick', () => { r.blur(); write(item, names, { [k]: back }); changed(); });
+    return h('label', { class: `vbox ax-${axis}`, title: `${title || letter} · double-tap: back to ${back}` }, h('b', {}, letter), r);
+  };
+  const el = field(label, h('div', { class: 'vec' }, ...ks.map(box)));
+  if (lock) {
+    const on = lock.get();
+    const b = iconBtn(on ? 'Unlock proportions' : 'Lock proportions', '', () => { lock.set(!on); renderPanel(); });
+    b.replaceChildren(icon(on ? 'link' : 'unlink')); b.classList.add('lock-btn'); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on));
+    el.querySelector('.lbl > span').after(b);
+  }
+  return withKeys(el, label, item, names, ks.map(([k]) => k));
+}
+const camXYZ = (cam, label, ks) => vecRow(label, cam, CAM, ks, { min: -50, max: 50 });
+
 function cameraProps() {
   const cam = SC.camera;
   const mm = (fov) => 12 / Math.tan(THREE.MathUtils.degToRad(fov) / 2);  // full-frame equivalent, from the vertical angle
@@ -230,8 +265,8 @@ function cameraProps() {
     field('Size', sizeSel), lengthProps(),
     slider('Lens', () => current(cam, CAM).fov, (v) => write(cam, CAM, { fov: v }),
       { min: 12, max: 90, step: 0.5, fmt: (v) => `${Math.round(mm(v))} mm`, keys: [cam, CAM, ['fov']] }),
-    slider('Camera height', () => current(cam, CAM).py, (v) => write(cam, CAM, { py: v }),
-      { min: 0.1, max: 6, step: 0.01, fmt: (v) => `${v.toFixed(2)} m`, keys: [cam, CAM, ['py']] }),
+    camXYZ(cam, 'Position (m)', [['px', 'X', 'x'], ['py', 'Y', 'y', 'Y (up)'], ['pz', 'Z', 'z']]),
+    camXYZ(cam, 'Aims at (m)', [['tx', 'X', 'x'], ['ty', 'Y', 'y', 'Y (up)'], ['tz', 'Z', 'z']]),
     slider('Roll', () => current(cam, CAM).roll, (v) => write(cam, CAM, { roll: v }),
       { min: -180, max: 180, step: 0.5, fmt: (v) => `${v.toFixed(1)}°`, keys: [cam, CAM, ['roll']],
         help: 'Tilts the camera around the way it looks. Positive banks it clockwise, so the picture turns anticlockwise. Key it to roll the view; motion tracking sets it from footage that turns.' }),
@@ -440,8 +475,12 @@ function toggleFree() {
   setFree(!R.free); renderPanel();
 }
 
+// ---- the view's tool bar: the transform tools fade in when something can be moved (contextual), the view's
+// overlays (depth, reference, scale person) are one menu, the director view a button. H hides every tool over the
+// view (the HUD); N, in full screen, pulls the settings panel in and out (Blender's N).
 export function buildToolbar() {
   viewer.append(h('div', { id: 'sceneToolbar', class: 'layer-toolbar scene-toolbar', role: 'toolbar', 'aria-label': 'Gizmo' },
+    h('span', { class: 'tb-group ctx', 'data-ctx': 'transform' },
     ...MODES.map(([m, icon, key, name]) => h('button', { type: 'button', class: 'ico', 'data-mode': m, title: `${name} (${key.toUpperCase()})`,
       'aria-label': name, onclick: () => setMode(m) }, iconize(icon))),
     h('button', { type: 'button', class: 'ico', 'data-orient': '', onclick: () => setOrient(nextOrient(R.orient)) }),
@@ -449,15 +488,38 @@ export function buildToolbar() {
       title: 'Pivot at the view centre: turn and scale around where the middle of the view meets it (until Reset or another pick)' }, icon('pivot-view')),
     h('button', { type: 'button', class: 'ico hidden', 'data-pivot-reset': '', 'aria-label': 'Reset pivot', onclick: resetPivot,
       title: 'Reset pivot: back to its own (Pivot in the panel)' }, icon('pivot-reset')),
-    h('span', { class: 'sep' }),
-    h('button', { type: 'button', class: 'ico', 'data-depth': '', title: 'Depth: show the depth the render will use', 'aria-label': 'Depth',
-      onclick: () => { R.depth = !R.depth; draw(); renderToolbar(); } }, icon('contrast')),
-    h('button', { type: 'button', class: 'ico', 'data-ref': '', 'aria-label': 'Reference', onclick: toggleRef }, icon('reference')),
+    h('span', { class: 'sep' })),
     h('button', { type: 'button', class: 'ico', 'data-free': '', 'aria-label': 'Director view', onclick: toggleFree }, icon('compass')),
-    h('span', { class: 'sep' }),
-    h('button', { type: 'button', 'data-undo': '', title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo', onclick: () => undo() }, '↶'),
-    h('button', { type: 'button', 'data-redo': '', title: 'Redo (Ctrl+Shift+Z)', 'aria-label': 'Redo', onclick: () => undo(false) }, '↷')));
+    h('button', { type: 'button', class: 'ico', 'data-overlays': '', 'aria-label': 'Overlays', title: 'Overlays: depth, reference picture, scale person',
+      onclick: (e) => overlayMenu(e.currentTarget) }, icon('contrast'))));
+  viewer.append(h('button', { type: 'button', class: 'max-btn hud-btn', id: 'sceneHud', onclick: () => setHud(!hudOff()) }));
+  setHud(hudOff());
+  // Undo / Redo: the app's dock (undo-dock.js), in the top bar and over the full-screen view
+  registerUndo('scene', { undo: () => undo(), redo: () => undo(false), can: () => [HIST.undo.length > 0, HIST.redo.length > 0] });
   viewer.append(maxBar(), h('div', { id: 'sceneModeBar', class: 'layer-toolbar scene-modebar', role: 'toolbar', 'aria-label': 'Mode' }));
+}
+
+// the view's overlays, in one menu
+function overlayMenu(anchor) {
+  popover(anchor, h('b', {}, 'Overlays'),
+    toggle('Depth: what the render will use', R.depth, (on) => { R.depth = on; draw(); renderToolbar(); }),
+    SC.ref ? toggle('Reference over the view', SC.ref.on !== false, () => { toggleRef(); }) : button('🖼 Reference picture…', () => { closePopover(); toggleRef(); }, { cls: 'small ghost' }),
+    toggle('Scale person (1.8 m, only in the view)', scaleRefOn(), (on) => { setScaleRef(on); renderToolbar(); }),
+    h('span', { class: 'hint' }, 'H hides every tool over the view; N pulls the panel out in full screen.'));
+}
+
+// the HUD: every tool over the view, hidden or shown (kept per device)
+const HUD = 'deck.scene.hudOff';
+const hudOff = () => store.get(HUD, false) === true;
+function setHud(off) {
+  store.set(HUD, !!off);
+  $('#tab-scene').classList.toggle('hud-off', !!off);
+  const b = $('#sceneHud');
+  if (b) {
+    b.replaceChildren(icon(off ? 'eye' : 'eyeoff'));
+    b.title = off ? 'Show the tools over the view (H)' : 'Hide the tools over the view (H)';
+    b.setAttribute('aria-label', b.title); b.setAttribute('aria-pressed', String(!!off));
+  }
 }
 
 export function wireKeys() {
@@ -479,6 +541,8 @@ export function wireKeys() {
     if (m) { e.preventDefault(); setMode(m[0]); }
     else if (e.key.toLowerCase() === 'k') { e.preventDefault(); setAutoKey(!R.autoKey); }
     else if (e.key.toLowerCase() === 'v') { e.preventDefault(); toggleFree(); }
+    else if (e.key.toLowerCase() === 'h') { e.preventDefault(); setHud(!hudOff()); }
+    else if (e.key.toLowerCase() === 'n') { const p = $('#tab-scene .stage.maxed .pull-tab'); if (p) { e.preventDefault(); p.dispatchEvent(new MouseEvent('click', { bubbles: true })); } }
     else if (e.key.toLowerCase() === 'q') { e.preventDefault(); setOrient(nextOrient(R.orient)); toast(`Gizmo axes: ${orientLabel()}`); }
     else if (e.key === 'Escape') { if (HAND.on) handMode(null); else if (R.joint) selectJoint(null); else select(null); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && R.sel) { e.preventDefault(); removeSelected(); }

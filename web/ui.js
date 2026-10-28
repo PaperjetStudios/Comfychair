@@ -54,8 +54,9 @@ document.addEventListener('pointerdown', (e) => {
   const min = parseFloat(inp.min), max = parseFloat(inp.max);
   const step = parseFloat(inp.step) || (Number.isInteger(v0) && inp.inputMode === 'numeric' ? 1 : 0.01);
   const span = Number.isFinite(min) && Number.isFinite(max) ? max - min : NaN;
-  // per pixel: the range over SCRUB_PX, or a step every 2 px when the range is huge (seeds) or open
-  const perPx = Number.isFinite(span) && span <= 1e5 ? span / SCRUB_PX : step / 2;
+  // per pixel: the box's own rate (data-perpx: a position in metres, a turn in degrees), else the range over SCRUB_PX,
+  // or a step every 2 px when the range is huge (seeds) or open. Shift (a mouse) drags ten times finer.
+  const perPx = (+inp.dataset.perpx || (Number.isFinite(span) && span <= 1e5 ? span / SCRUB_PX : step / 2)) * (e.shiftKey ? 0.1 : 1);
   const dec = inp.dataset.digits != null ? +inp.dataset.digits
     : Math.min(6, Math.max((String(inp.step).split('.')[1] || '').length, step < 1 ? 2 : 0));
   const mouse = e.pointerType === 'mouse';

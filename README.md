@@ -656,6 +656,19 @@ jump between its keys, and its label is yellow on a key and green between keys. 
 **Key at** and **Value** to type: the frame moves them (keeping their spacing), the value sets every selected number.
 In full screen with the settings panel out, the key bar stays clear of the panel.
 
+The 3D view's tool bar is contextual: Move / Rotate / Scale, the gizmo's axes and the pivot (and the **Snap** chip, a
+menu with each snap and its step) fade in only while something can be moved. Depth, the reference picture and the
+scale person are one **Overlays** menu beside the director view. The bars are see-through. **H** (or the eye under the
+full-screen button) hides every tool over the view; **N** pulls the settings panel in and out in full screen.
+
+The panel's **Position**, **Rotation** and **Size** (and the camera's **Position** and **Aims at**) are rows of three
+boxes with their axis inside, X red, Y (up) green, Z blue: type a value, or hold and pull sideways at a steady rate
+(1 cm, half a degree, 5 mm a pixel; Shift on a mouse is ten times finer); a double-tap puts one back. The chain on
+Size locks its proportions.
+
+**Undo / Redo** sit in the top bar for the open tab (3D, and the Editor's and Story's painting; `web/undo-dock.js`),
+and float at the top of a full-screen view.
+
 ## Story
 
 The **Story** tab (first in Make) is a storyboard: a place to write a story down and sort it out before making it. Each

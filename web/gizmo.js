@@ -1,6 +1,6 @@
 // Shared by every transform gizmo (2D handles on the video preview now, the 3D poser through smoothGizmo): the
 // weighted feel of a handle, the snapping settings (remembered per device) and the toggles for them.
-import { h, store, openSheet, closeSheet, seg, field, button, actions , help } from './ui.js';
+import { h, store, openSheet, closeSheet, seg, field, button, actions, help, iconize, popover, toggle } from './ui.js';
 import { snapAlong } from './gizmo-orient.js';
 
 // ---- snapping settings: one set for all gizmos, saved on this device ----
@@ -213,3 +213,24 @@ const S3 = {
   },
 };
 export const snapBar3 = (onChange) => chipBar(S3, ['grid', 'rot', 'scale'], onChange);
+
+// the 3D view's snapping as one chip (it shows what is on) that opens a menu: each snap on / off and its step
+const SNAP3 = [['grid', 'Move on a floor grid', 'gridM', [0.05, 0.1, 0.25, 0.5, 1], (v) => `${v} m`],
+  ['rot', 'Turn in steps', 'rotStep', [5, 15, 30, 45, 90], (v) => `${v}°`],
+  ['scale', 'Size in steps (m, or × for a figure or photo)', 'scaleStep', [0.01, 0.05, 0.1, 0.25, 0.5], (v) => `${v}`]];
+export function snapMenu3(onChange) {
+  const show = () => {
+    const on = SNAP3.filter(([p]) => snap3[p]);
+    chip.replaceChildren(...[iconize(`🧲 ${on.length ? on.map(([, , k, , f]) => f(snap3[k])).join(' · ') : 'Snap'}`)].flat());
+    chip.classList.toggle('on', on.length > 0); chip.setAttribute('aria-pressed', String(on.length > 0));
+  };
+  const set = (fn) => { fn(); saveSnap3(); show(); onChange?.(); };
+  const open = () => popover(chip, h('b', {}, 'Snapping'),
+    ...SNAP3.map(([p, label, k, opts, f]) => h('div', { class: 'snap-row' },
+      toggle(label, snap3[p], (on) => set(() => { snap3[p] = on; })),
+      seg(opts.map((v) => [v, f(v)]), snap3[k], (v) => set(() => { snap3[k] = Number(v); snap3[p] = true; })))),
+    h('span', { class: 'hint' }, 'On a desktop, hold Alt while dragging to drag freely.'));
+  const chip = gzChip('', open, { title: 'Snapping: grid, turn and size steps' });
+  show();
+  return h('div', { class: 'gz-bar' }, chip);
+}

@@ -4,6 +4,7 @@ import { registerPickerSource, uploadImage } from './media.js';
 import { TabSet } from './tabs.js';
 import { SWATCHES } from './paint.js';
 import { BLANK, createEditor } from './editor-engine.js';
+import { registerUndo } from './undo-dock.js';
 
 export { ASPECTS, FULL, aspectCrop, cropSpan, openCrop, useInGenerate } from './editor-engine.js';
 
@@ -147,6 +148,7 @@ export function templateAspect() {
 const SEEDED = 'deck.editor.seeded';   // set once a tab has loaded: the old single-editor state then lives in the tabs
 const tabMount = h('div', { class: 'editor-tabs' });
 let tabs = null;
+registerUndo('editor', { undo: () => ED.paint?.undo(), redo: () => ED.paint?.redo() });   // (the painting's history: undo-dock.js)
 const ED = createEditor({
   canvas: $('#editorCanvas'), empty: $('#editorEmpty'), size: $('#editorSize'), anim: $('#editorAnim'), panel: $('#editorPanel'),
   initial: store.get(SEEDED, false) ? {} : store.get('deck.editor', {}),

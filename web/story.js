@@ -13,6 +13,7 @@ import { openCompare } from './compare.js';
 import { addPicture as addCharPicture, castSection, characterById, characterSection, characters, mainPicture, mentionBox, onCharacters } from './characters.js';
 import { TALK_HINT, TALK_TPL } from './talk.js';
 import { castLines, dialogueLines, findCharacter, mentioned, packPictures, pictureTag, plain, refPicture, speakerOf, viewLabel, VIEWS as LOOK_VIEWS, wantedView } from './cast.js';
+import { registerUndo } from './undo-dock.js';
 
 // ---------------------------------------------------------------------------
 // story: a storyboard for writing a story down and sorting it out. A story is a title, notes (free writing or a
@@ -483,6 +484,7 @@ function makeCanvas() {
   CV.canvas = h('canvas', { class: 'hidden', 'aria-label': 'The shot\'s canvas' });
   CV.empty = h('div', { class: 'placeholder st-cv-empty' });
   CV.viewer = h('div', { class: 'viewer st-cv-viewer' }, CV.canvas, CV.empty);
+  registerUndo('story', { undo: () => CV.eng?.paint?.undo(), redo: () => CV.eng?.paint?.redo() });   // (the shot canvas's painting)
   CV.eng = createEditor({
     canvas: CV.canvas, empty: CV.empty, panel: $('#storyBody'),
     active: () => shown() && U.view === 'canvas',

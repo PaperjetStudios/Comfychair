@@ -124,8 +124,6 @@ function placeRef() {
 
 export function setRef(on) {
   store.set('deck.scene.refPerson', !!on);
-  const b = document.querySelector('[data-refperson]');
-  if (b) { b.classList.toggle('on', !!on); b.setAttribute('aria-pressed', String(!!on)); }
   draw();
 }
 
@@ -156,14 +154,7 @@ export function initScale() {
     refFig.visible = refOn();
     if (refFig.visible) placeRef();
   });
-  // the button on the view's bar, after the director view's
-  const tb = document.querySelector('#sceneToolbar [data-free]');
-  if (tb) {
-    const b = h('button', { type: 'button', class: `ico${refOn() ? ' on' : ''}`, 'data-refperson': '', 'aria-pressed': String(refOn()),
-      title: 'Scale reference: a 1.8 m person beside what is selected (only in the view)', 'aria-label': 'Scale reference',
-      onclick: () => setRef(!refOn()) }, icon('person'));
-    tb.after(b);
-  }
+  // (its toggle is in the view bar's Overlays menu: scene-ui.js)
 }
 
 // ---- measure: two taps on the selected object, then what that distance really is ----

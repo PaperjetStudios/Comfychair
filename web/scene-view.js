@@ -4,7 +4,7 @@ import * as THREE from './vendor/three.module.min.js';
 import { TransformControls } from './vendor/TransformControls.js';
 import * as FIGURE from './figure.js';
 import { $, api, busy as busyBar, canvasFont, clone, closeSheet, h, store, toast, undoToast } from './ui.js';
-import { gzChip, smoothGizmo, snap3, snapBar3 } from './gizmo.js';
+import { gzChip, smoothGizmo, snap3, snapMenu3 } from './gizmo.js';
 import { ORIENTS, centrePoint, follow, frameQuat, orientOf, relQuat, spaceOf } from './gizmo-orient.js';
 import {
   C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, WP, current, frames, holdStart, hooks, pathSig, makers, namesFor, newObject, newRoom, pivotOf, sample,
@@ -157,8 +157,8 @@ export function setup() {
   let hoverAxis = null;
   canvas.addEventListener('pointermove', () => { if (gizmo.axis !== hoverAxis) { hoverAxis = gizmo.axis; draw(); } });
   snapGrid = new THREE.Object3D(); scene.add(snapGrid);
-  const bar = snapBar3(() => { floorGrid(); draw(); });
-  bar.classList.add('gz-3d'); viewer.append(bar);
+  const bar = snapMenu3(() => { floorGrid(); draw(); });
+  bar.classList.add('gz-3d', 'ctx'); viewer.append(bar);
   floorGrid();
 
   // a tap (not a drag, not on a gizmo handle) selects what's under it; tapping the selected

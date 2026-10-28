@@ -20,6 +20,7 @@ import { fullScreen, sideNav, wireSplitters } from './layout.js';
 import { loadPrefs, openPrefs } from './prefs.js';
 import { EDIT_PHRASES, IMAGE_PHRASES, VIDEO_PHRASES } from './phrases.js';
 import { openDescribe, openImprove, tplTarget } from './prompthelp.js';
+import { wireUndoDock } from './undo-dock.js';
 import './world.js';   // the spaces (Make, Edit, View), travel between tools, a map of where you are
 
 // ---------------------------------------------------------------------------
@@ -444,6 +445,7 @@ function wireTextPopup() {
 (async function init() {
   wireLayout();
   wireTextPopup();
+  wireUndoDock();
   wireVideoTransport();
   wireVfx();
   wireSound();
