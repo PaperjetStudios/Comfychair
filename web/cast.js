@@ -99,3 +99,54 @@ export function dialogueLines(text, list) {
   }
   return out;
 }
+
+// ---- look packs: a character's named views, and which one a shot's camera wants ----
+// c.views: { front, three, side, back, face } -> input names (any may be missing); c.sheet: the views composed into
+// one picture (POST /api/looks/sheet). A shot's reference picture for a character is picked from its framing: a
+// close-up wants the face, a profile the side, from behind the back, else the front or three-quarter; the shot can
+// name one instead (s.refs[character id]: 'auto' | 'main' | 'sheet' | a view).
+export const VIEWS = [['front', 'Front'], ['three', 'Three-quarter'], ['side', 'Side'], ['back', 'Back'], ['face', 'Face']];
+export const VIEW_KEYS = VIEWS.map(([k]) => k);
+export const viewLabel = (k) => VIEWS.find(([v]) => v === k)?.[1] || (k === 'sheet' ? 'Sheet' : k === 'main' ? 'Main picture' : k);
+// what Make the views asks deck-krea2-identity for, and at what size (portrait for the body, square for the face)
+const STUDIO = 'Plain light grey studio background, soft even light. Same outfit, same colours.';
+export const VIEW_PROMPTS = {
+  front: ['Full body, head to toe, the character stands facing the camera, seen straight from the front, arms relaxed at the sides.', 832, 1216],
+  three: ['Full body, head to toe, the character stands turned three-quarters to the side, seen from a three-quarter front angle.', 832, 1216],
+  side: ['Full body, head to toe, the character stands in profile, seen exactly from the side, facing left.', 832, 1216],
+  back: ['Full body, head to toe, the character stands with their back to the camera, seen from behind.', 832, 1216],
+  face: ['Close-up portrait of the character\'s face, head and shoulders, looking straight at the camera.', 1024, 1024],
+};
+export const viewPrompt = (k) => `${VIEW_PROMPTS[k][0]} ${STUDIO}`;
+
+// the view a shot's camera wants: from its size, its angle, then its words
+export function wantedView(s = {}) {
+  if (s.size === 'close' || s.size === 'ecu') return 'face';
+  if (s.angle === 'side') return 'side';
+  if (s.angle === 'back') return 'back';
+  const t = `${s.what || ''}`.toLowerCase();
+  if (/\b(from behind|from the back|back to (the )?camera|back view|walks away)\b/.test(t)) return 'back';
+  if (/\b(in profile|profile view|side view|from the side|side-on)\b/.test(t)) return 'side';
+  if (/\b(close[- ]?up|portrait)\b/.test(t)) return 'face';
+  return s.size === 'medium' ? 'three' : 'front';
+}
+// the order to look for a view in when the pack lacks the wanted one
+const FALLBACK = { face: ['face', 'three', 'front'], side: ['side', 'three', 'front'], back: ['back', 'side', 'front'],
+  three: ['three', 'front', 'side'], front: ['front', 'three', 'side'] };
+export const packViews = (c) => VIEW_KEYS.filter((k) => c?.views?.[k]);
+export const mainOf = (c) => (c?.main && c.pics?.includes(c.main) ? c.main : c?.pics?.[0] || null);
+
+// the picture to show a model for c in shot s: { name, view } (view: a view key, 'sheet' or 'main'), or null
+export function refPicture(c, s = {}, choice = s?.refs?.[c?.id] || 'auto') {
+  if (!c) return null;
+  const v = c.views || {};
+  if (choice === 'sheet' && c.sheet) return { name: c.sheet, view: 'sheet' };
+  if (choice === 'main' && mainOf(c)) return { name: mainOf(c), view: 'main' };
+  if (VIEW_KEYS.includes(choice) && v[choice]) return { name: v[choice], view: choice };
+  const k = FALLBACK[wantedView(s)].find((x) => v[x]);
+  if (k) return { name: v[k], view: k };
+  const m = mainOf(c);
+  return m ? { name: m, view: 'main' } : c.sheet ? { name: c.sheet, view: 'sheet' } : null;
+}
+// every picture a look check compares a result to: the views, else the main picture
+export const packPictures = (c) => { const p = packViews(c).map((k) => c.views[k]); return p.length ? p : [mainOf(c)].filter(Boolean); };

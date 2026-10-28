@@ -41,4 +41,39 @@ assert.deepEqual(C.castLines([mara], { style: 'krea', pics }), ['Mara: a woman i
 assert.equal(C.pictureTag('krea', 1), 'the first image');
 assert.equal(C.pictureTag('krea', 3), 'the right half of the second image');
 assert.deepEqual(C.castLines([{ id: 'x', name: 'X', look: '', desc: '' }]), []);
+
+// look packs: the view a shot's camera wants
+assert.equal(C.wantedView({ size: 'close' }), 'face');
+assert.equal(C.wantedView({ size: 'ecu', angle: 'side' }), 'face');
+assert.equal(C.wantedView({ size: 'wide', angle: 'side' }), 'side');
+assert.equal(C.wantedView({ angle: 'back' }), 'back');
+assert.equal(C.wantedView({ what: '@Mara walks away down the pier' }), 'back');
+assert.equal(C.wantedView({ what: 'Mara in profile against the window' }), 'side');
+assert.equal(C.wantedView({ what: 'a close-up of Mara' }), 'face');
+assert.equal(C.wantedView({ size: 'medium' }), 'three');
+assert.equal(C.wantedView({ size: 'wide' }), 'front');
+assert.equal(C.wantedView({}), 'front');
+
+// the reference picture: the wanted view, a fallback view, the main picture; the shot's own choice first
+const full = { id: 'm', name: 'Mara', pics: ['p1', 'p2'], main: 'p2', sheet: 'sh',
+  views: { front: 'vf', three: 'v3', side: 'vs', back: 'vb', face: 'vface' } };
+assert.deepEqual(C.refPicture(full, { size: 'close' }), { name: 'vface', view: 'face' });
+assert.deepEqual(C.refPicture(full, { angle: 'side' }), { name: 'vs', view: 'side' });
+assert.deepEqual(C.refPicture(full, { angle: 'back' }), { name: 'vb', view: 'back' });
+assert.deepEqual(C.refPicture(full, { size: 'medium' }), { name: 'v3', view: 'three' });
+assert.deepEqual(C.refPicture(full, { size: 'wide' }), { name: 'vf', view: 'front' });
+assert.deepEqual(C.refPicture(full, { size: 'close', refs: { m: 'sheet' } }), { name: 'sh', view: 'sheet' });
+assert.deepEqual(C.refPicture(full, { size: 'close', refs: { m: 'main' } }), { name: 'p2', view: 'main' });
+assert.deepEqual(C.refPicture(full, { size: 'close', refs: { m: 'back' } }), { name: 'vb', view: 'back' });
+const some = { id: 's', name: 'S', pics: ['p1'], views: { front: 'vf', side: null } };
+assert.deepEqual(C.refPicture(some, { size: 'close' }), { name: 'vf', view: 'front' });     // no face: the front
+assert.deepEqual(C.refPicture(some, { angle: 'back' }), { name: 'vf', view: 'front' });
+assert.deepEqual(C.refPicture(some, { angle: 'side', refs: { s: 'side' } }), { name: 'vf', view: 'front' });   // asked for a missing view
+assert.deepEqual(C.refPicture(some, { refs: { s: 'sheet' } }), { name: 'vf', view: 'front' });   // no sheet yet
+assert.deepEqual(C.refPicture({ id: 'n', name: 'N', pics: ['p1'] }, { size: 'close' }), { name: 'p1', view: 'main' });
+assert.equal(C.refPicture({ id: 'e', name: 'E', pics: [] }, {}), null);
+assert.deepEqual(C.packPictures(some), ['vf']);
+assert.deepEqual(C.packPictures({ pics: ['p1'] }), ['p1']);
+assert.deepEqual(C.packViews(full), ['front', 'three', 'side', 'back', 'face']);
+assert.match(C.viewPrompt('side'), /profile.*grey studio/);
 console.log('cast ok');
