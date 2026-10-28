@@ -1585,6 +1585,22 @@ body:has(.stage.maxed) .toast { z-index: 60; }
 .ch-pic.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .ch-pic-img { position: absolute; inset: 0; border: 0; padding: 0; background: none; cursor: pointer; }
 .ch-pic-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* a character's look pack: five view slots, new views to review, the sheet */
+.ch-views { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; }
+.ch-view { position: relative; aspect-ratio: 2 / 3; border: 1px dashed var(--line-2); border-radius: var(--r); overflow: hidden; background: var(--surface-2); }
+.ch-view.on { border-style: solid; border-color: var(--line); background: #000; }
+.ch-view-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  border: 0; background: none; color: var(--muted); font-size: var(--fs-xs); cursor: pointer; }
+button.ch-view-empty:hover { color: var(--text); }
+.ch-view-lbl { position: absolute; left: 0; right: 0; bottom: 0; padding: 2px 4px; font-size: var(--fs-xs); color: #fff; background: #000a; text-align: center; pointer-events: none; }
+.ch-view-make { position: absolute; right: 2px; top: 2px; min-width: 32px; min-height: 32px; }
+.ch-cands { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+.ch-cand { display: grid; gap: 4px; }
+.ch-cand-img { position: relative; aspect-ratio: 2 / 3; border: 1px solid var(--accent); border-radius: var(--r); overflow: hidden; background: #000; }
+.ch-cand-img img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.ch-cand-btns { display: flex; justify-content: space-between; }
+.ch-sheet { position: relative; margin: 8px 0; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: #000; }
+.ch-sheet img { width: 100%; display: block; }
 .ch-audio { width: 100%; height: 36px; margin-top: 6px; }
 .ch-mention { display: grid; gap: 4px; min-width: 0; }
 .ch-suggest { gap: 4px; }
@@ -1650,3 +1666,8 @@ img.civ-blur, .civ-shot.civ-blur > * { filter: blur(22px) saturate(.6); transfor
   .civ-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .civ-shot { height: 52dvh; }
 }
+/* Story: a frame whose characters' look drifted from their look pack; a shot's reference picture per character */
+.st-drift { position: absolute; left: 4px; bottom: 4px; display: flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: var(--r-sm); background: var(--warn-bg); color: var(--warn-text); border: 1px solid var(--warn-text); font-size: var(--fs-xs); pointer-events: none; }
+.st-drift svg.ico { width: 12px; height: 12px; }
+.st-ref { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 4px 6px; margin-bottom: 6px; }
+.st-ref .chips { grid-column: 1 / -1; }

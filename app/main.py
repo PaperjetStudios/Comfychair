@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import accel, audioedit, civitai, clipimport, craft, delogo, h3upscale, posefind, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import projects, store
-from . import keyexpr, maskcomp, promptaid, sceneasset
+from . import keyexpr, looks, maskcomp, promptaid, sceneasset
 from . import templates as tpl
 from .comfy import Comfy, ComfyError
 
@@ -398,6 +398,7 @@ app.include_router(voice.router)
 app.include_router(craft.router)
 app.include_router(previews.router)
 app.include_router(promptaid.router)
+app.include_router(looks.router)
 
 
 class TokenGate:
@@ -1057,6 +1058,10 @@ tracking.resolve_src = _timeline_path  # motion tracking finds its clip the way 
 craft.resolve_src = _timeline_path     # so do documents sent to PhotoCraft / EffectCraft
 craft.media_entry = _media_entry       # and what they bring back lands in the media library
 craft.save_input = upload_prepared
+looks.save_input = upload_prepared      # character sheets are input pictures
+looks.input_bytes = input_bytes
+looks.local_input = local_input
+looks.output_path = output_file
 tracking.comfy = comfy
 
 

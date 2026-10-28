@@ -677,7 +677,30 @@ every time), reference **pictures** (tap one to make it the main one; **The shot
 frame), a **voice** from the Sound tab's voice library, and notes. Write `@` and a name in a shot, a scene summary or
 the story's notes: matching characters show as chips under the box (and in the text popup on a tablet). A shot shows
 who is in it (named with `@`, or speaking a line); Generate frame, Refine and Video add each one's look to the prompt,
-Refine and the H3 reference templates get their main picture, and their lines are spoken in their voice.
+Refine and the H3 reference templates get their picture (below), and their lines are spoken in their voice.
+
+**Look pack** (in the character): five views, **Front**, **Three-quarter**, **Side**, **Back** and **Face**, each optional.
+**Make the views** draws the missing ones from the main picture with `deck-krea2-identity` (Reference strength 4,
+704×1280 full body on light grey, the face 1024×1024; the prompts are `VIEW_PROMPTS` in `web/cast.js`); each result
+comes back under the slots to **keep**, **make again** or **throw away**. The plus on an empty slot takes one of your
+pictures instead. **Character sheet** puts the kept views side by side on light grey as one input picture
+(`POST /api/looks/sheet`). A back view keeps the back of the outfit but the identity LoRA may still turn a face to the
+camera: make it again or pick one.
+
+**Which picture a shot uses**: Refine and Video give each character the view the shot's camera wants: a Close or
+Extreme close shot the face, the **Profile** angle (or "in profile", "from the side") the side, **From behind** (or
+"walks away", "from behind") the back, a medium shot the three-quarter, otherwise the front, falling back to a near view
+and then the main picture. Refine's **Reference pictures** shows the pick per character and takes another (a view, the
+sheet or the main picture) for that shot.
+
+**Look check**: when a frame lands on a shot with characters, the server compares it with their packs
+(`app/looks.py`): the DFN5B CLIP ViT-H-14 image tower that ComfyUI-MMAudio already keeps in `models/mmaudio`, run in
+ComfyUI's venv on the CPU (no VRAM; about 7 s to start, 1–3 s a picture), on each person DWPose's YOLOX finds, plus a
+hue match of their middle (a jacket that changed colour). Below 0.75 look or 0.6 colours (`DECK_LOOK_MIN`,
+`DECK_COLOUR_MIN`) the frame shows **Look drifted**, and Refine offers **Redo with stronger reference** (Reference
+strength 2 higher, up to 6; a template without one uses `deck-krea2-edit`). It catches another person or a changed
+outfit colour; a changed head of the same colours can pass. `DECK_LOOK_SCORER=none` turns it off; `DECK_LOOK_PY`,
+`DECK_LOOK_MODEL` and `DECK_LOOK_DET` point at the venv, the CLIP file and the detector when ComfyUI is elsewhere.
 
 ## Sound
 

@@ -12,7 +12,7 @@ import { BLANK as COMP_BLANK, createEditor } from './editor-engine.js';
 import { openCompare } from './compare.js';
 import { addPicture as addCharPicture, castSection, characterById, characterSection, characters, mainPicture, mentionBox, onCharacters } from './characters.js';
 import { TALK_HINT, TALK_TPL } from './talk.js';
-import { castLines, dialogueLines, findCharacter, mentioned, pictureTag, plain, speakerOf } from './cast.js';
+import { castLines, dialogueLines, findCharacter, mentioned, packPictures, pictureTag, plain, refPicture, speakerOf, viewLabel, VIEWS as LOOK_VIEWS, wantedView } from './cast.js';
 
 // ---------------------------------------------------------------------------
 // story: a storyboard for writing a story down and sorting it out. A story is a title, notes (free writing or a
@@ -37,7 +37,8 @@ import { castLines, dialogueLines, findCharacter, mentioned, pictureTag, plain, 
 
 const SIZES = [['wide', 'Wide', 'wide shot'], ['medium', 'Medium', 'medium shot'], ['close', 'Close', 'close-up'], ['ecu', 'Extreme close', 'extreme close-up']];
 const ANGLES = [['eye', 'Eye level', 'eye level'], ['low', 'Low', 'low angle'], ['high', 'High', 'high angle'], ['over', 'Overhead', 'overhead shot'],
-  ['dutch', 'Dutch', 'dutch angle'], ['pov', 'POV', 'point of view shot'], ['ots', 'Over shoulder', 'over-the-shoulder shot']];
+  ['dutch', 'Dutch', 'dutch angle'], ['pov', 'POV', 'point of view shot'], ['ots', 'Over shoulder', 'over-the-shoulder shot'],
+  ['side', 'Profile', 'side view, in profile'], ['back', 'From behind', 'seen from behind']];
 const MOVES = [['static', 'Static'], ['pan', 'Pan'], ['tilt', 'Tilt'], ['push', 'Push in'], ['pull', 'Pull back'], ['track', 'Track'],
   ['handheld', 'Handheld'], ['crane', 'Crane'], ['zoom', 'Zoom']];
 const DURS = [1, 2, 3, 4, 5, 6, 8, 10];
@@ -54,7 +55,7 @@ const ROLE = {
 };
 
 const newShot = (o = {}) => ({ id: uid(), what: '', action: '', size: '', angle: '', move: '', dur: 3, status: 'idea', frames: [], pick: null, pending: [], comp: null, canvas: null,
-  clips: [], clip: null, vpending: [], mask: null, voice: null, rtpl: null, rprompt: '', vtpl: null, vprompt: '', toNext: true, ...o });
+  clips: [], clip: null, vpending: [], mask: null, voice: null, rtpl: null, rprompt: '', vtpl: null, vprompt: '', toNext: true, refs: {}, ...o });
 const newScene = (o = {}) => ({ id: uid(), slug: '', summary: '', collapsed: false, shots: [newShot()], ...o });
 const BLANK = () => ({ title: '', notes: '', style: '', aspect: '16:9', tpl: null, batch: 1, scenes: [newScene()],
   refine: { tpl: null, change: 0.55, batch: 2 }, video: { tpl: null, engine: 'qwen' } });
@@ -248,6 +249,7 @@ function settle(s, g) {
     const fresh = g.outputs.map((o, index) => ({ o, index })).filter(({ o, index }) => o.kind === 'image' && !have.has(index))
       .map(({ o, index }) => ({ id: uid(), gen: g.id, index, url: o.url }));
     s.frames.push(...fresh);
+    if (fresh.length) setTimeout(() => checkLooks(s, fresh), 0);
     if (fresh.length && !s.frames.some((f) => f.id === s.pick)) s.pick = fresh[0].id;
     if (fresh.length && s.status === 'idea') s.status = 'drafted';
     const haveC = new Set(s.clips.filter((c) => c.gen === g.id).map((c) => c.index));
@@ -567,12 +569,13 @@ const CHANGE = [[0.35, 'A little'], [0.55, 'Some'], [0.75, 'A lot'], [0.9, 'Most
 const CAMERA = { static: 'The camera holds still.', pan: 'The camera pans.', tilt: 'The camera tilts.', push: 'The camera slowly pushes in.',
   pull: 'The camera slowly pulls back.', track: 'The camera tracks with the movement.', handheld: 'Handheld camera.', crane: 'A rising crane shot.', zoom: 'The camera zooms in.' };
 
-// the shot's characters' main pictures into the template's reference pictures, in order: Map character id -> picture
-// number (for the prompt). values gets the pictures.
+// the shot's characters' pictures into the template's reference pictures, in order: Map character id -> picture
+// number (for the prompt). values gets the pictures. Each character's picture is the look-pack view the shot's camera
+// wants (cast.js refPicture: a close-up gets the face, a profile the side...), or the one the shot picked (s.refs).
 function castPictures(t, s, values) {
   const pics = new Map(), slots = refFields(t).filter((f) => !values[f.key]);
   for (const c of castOf(s)) {
-    const m = mainPicture(c), f = m && slots.shift();
+    const m = refPicture(c, s)?.name, f = m && slots.shift();
     if (!f) continue;
     values[f.key] = m;
     pics.set(c.id, picNumber(t, f));
@@ -618,8 +621,11 @@ const nextShot = (s) => { const l = allShots(); return l[l.indexOf(s) + 1] || nu
 const lineKey = (s) => dialogueLines(s.action, characters()).filter((l) => l.c?.voice).map((l) => `${l.c.voice}|${l.paren}|${l.text}`).join('\n');
 
 // ---- refine: the shot's frame (the canvas, flattened) through an edit or image-to-image template ----
-async function refineShot(s) {
-  const t = refineTemplate(s);
+// stronger: the look drifted last time, so the characters' pictures count for more (a Reference strength two
+// higher, up to 6; a template without one gives way to the Krea edit, which has it)
+async function refineShot(s, { stronger = false } = {}) {
+  let t = refineTemplate(s);
+  if (stronger && t && !boostField(t) && refFields(template(STRONG_TPL) || { fields: [] }).length) t = template(STRONG_TPL);
   if (!t) return toast('No image-to-image or edit template is installed', true);
   if (CV.shot === s.id) await settleCanvas();   // the canvas as it is now
   const f = chosen(s);
@@ -631,14 +637,41 @@ async function refineShot(s) {
     const prompt = s.rprompt.trim() ? plain(s.rprompt.trim(), characters()) : refinePrompt(s, t, pics);
     const [w, hh] = frameSize(t);
     Object.assign(values, valuesByRole(t, { prompt, seed: -1, width: w, height: hh, denoise: P.refine.change }, RROLE));
+    const bf = stronger && boostField(t);
+    if (bf) values[bf.key] = Math.min(bf.max ?? 6, 6, (+bf.value || 4) + 2);
     const mf = t.fields.find((x) => x.kind === 'mask' && x.image_key === main.key);
     if (s.mask?.name && mf) values[mf.key] = { feather: 8, grow: 0, fit: false, name: s.mask.name, box: s.mask.box || null, src: values[main.key], crop: null };
     const gens = await queueRun({ template: t.id, values, batch: P.refine.batch });
     s.pending.push(...gens.map((g) => g.id));
     changed();
-    toast(`Refining (#${gens[0].id}${gens.length > 1 ? '…' : ''}): the results land in the shot's frames`);
+    toast(`Refining (#${gens[0].id}${gens.length > 1 ? '…' : ''})${bf ? `, Reference strength ${values[bf.key]}` : ''}: the results land in the shot's frames`);
   } catch (e) { toast(e.message, true); }
 }
+const STRONG_TPL = 'deck-krea2-edit';
+const boostField = (t) => t?.fields.find((f) => f.kind === 'float' && f.input === 'ref_boost') || null;
+
+// ---- the look check: a new frame of a shot with characters is compared to their look packs (app/looks.py) ----
+// f.look: { character id: { score, look, colour, drift } }; a drifted one is flagged on the frame and in Refine
+const LOOK = { status: null };
+async function lookStatus() {
+  if (!LOOK.status) LOOK.status = api('/api/looks/status', { busy: false }).catch(() => ({ ready: false, why: 'offline' }));
+  return LOOK.status;
+}
+async function checkLooks(s, frames) {
+  const cast = castOf(s).map((c) => ({ id: c.id, pictures: packPictures(c) })).filter((c) => c.pictures.length);
+  if (!cast.length || !(await lookStatus()).ready) return;
+  for (const f of frames.filter((x) => x.gen)) {
+    try {
+      const r = await api('/api/looks/check', { method: 'POST', busy: false, timeout: 180000, body: { image: { generation: f.gen, index: f.index }, characters: cast } });
+      f.look = r.results;
+      const bad = Object.entries(r.results).filter(([, v]) => v.drift).map(([id]) => characterById(id)?.name).filter(Boolean);
+      if (bad.length) toast(`Look drifted on a frame: ${bad.join(', ')} (Refine can redo it with a stronger reference)`, true);
+      changed();
+    } catch (e) { console.warn('look check', e); return; }
+  }
+}
+const drifted = (f) => !!f && Object.values(f.look || {}).some((v) => v.drift);
+const lookNote = (f) => Object.entries(f.look || {}).map(([id, v]) => `${characterById(id)?.name || 'Someone'}: ${v.drift ? 'drifted' : 'kept'} (look ${v.look}${v.colour != null ? `, colours ${v.colour}` : ''})`).join('; ');
 // a mask over the shot's frame for a refine: painted (maskpaint.js), or the canvas's selection
 async function paintRefineMask(s) {
   if (CV.shot === s.id) await settleCanvas();
@@ -754,6 +787,9 @@ function refineSection(at) {
   return section('Refine', null,
     help('Runs the shot\'s frame (the canvas, flattened) through an edit or image-to-image template, with the shot\'s words, its characters\' looks and pictures, and the story\'s style. The pictures it makes land in the shot\'s frames: choose one, or put it on the canvas as a new layer to keep working.'),
     field('Template', tplSelect(ts, story, s.rtpl, (v) => { s.rtpl = v; changed(); }, 'Refine template')),
+    refsField(s, t),
+    drifted(f) ? field('Look', note(`The look drifted: ${lookNote(f)}`),
+      button([icon('refresh'), 'Redo with stronger reference'], () => refineShot(s, { stronger: true }), { cls: 'small primary', disabled: !t })) : null,
     mf ? field('Mask', help('Only the masked part changes; the rest of the frame stays as it is.'),
       mask, h('div', { class: 'row wrap' },
         button([icon('brush'), s.mask ? 'Paint again' : 'Paint a mask'], () => paintRefineMask(s), { disabled: !f }),
@@ -804,6 +840,21 @@ function videoSection(at) {
     field([`Clips`, h('span', {}, `${s.clips.length}`)], clips),
     button([icon('video'), 'Make the video'], () => makeVideo(s), { cls: 'primary', disabled: !chosen(s) || !t || (sound && !vo),
       title: `${t?.name || t?.id || ''}, ${Math.max(+s.dur || 3, vo ? Math.ceil(vo.seconds + 0.5) : 0)} s` }));
+}
+// which picture of each character goes to the model: the view the camera wants (Auto), or one the shot picks
+function refsField(s, t) {
+  const cast = castOf(s).filter((c) => refPicture(c, s));
+  if (!cast.length || !t || !refFields(t).length) return null;
+  return field('Reference pictures', help(`Auto picks from each character's look pack by the shot's camera: this shot wants the ${viewLabel(wantedView(s)).toLowerCase()} view (close-up: face, Profile: side, From behind: back). Tap another to use it here instead.`),
+    ...cast.map((c) => {
+      const cur = s.refs?.[c.id] || 'auto', got = refPicture(c, s);
+      const opts = [['auto', `Auto (${viewLabel(refPicture(c, s, 'auto').view)})`], ...LOOK_VIEWS.filter(([k]) => c.views?.[k]),
+        ...(c.sheet ? [['sheet', 'Sheet']] : []), ...(mainPicture(c) ? [['main', 'Main picture']] : [])];
+      return h('div', { class: 'st-ref' },
+        h('span', { class: 'ch-chip-face' }, h('img', { src: thumbUrl(got.name, 64), alt: '' })),
+        h('b', {}, c.name),
+        h('div', { class: 'chips' }, opts.map(([k, l]) => chip(l, () => { s.refs = { ...(s.refs || {}) }; if (k === 'auto') delete s.refs[c.id]; else s.refs[c.id] = k; changed(); }, { on: cur === k }))));
+    }));
 }
 const toggleBtn = (label, on, set) => h('button', { type: 'button', class: `btn small${on ? ' on' : ''}`, 'aria-pressed': String(!!on), onclick: () => set(!on) }, label);
 
@@ -1101,6 +1152,7 @@ function shotSection(at) {
       h('button', { type: 'button', class: 'st-frame-img', 'aria-label': on(fr) ? 'The chosen frame (tap to see it big)' : 'Choose this frame',
         onclick: () => { if (on(fr)) openLightbox(s.id); else { s.pick = fr.id; changed(); } } }, h('img', { src: frameThumb(fr, 320), alt: '', loading: 'lazy' })),
       on(fr) ? h('span', { class: 'st-frame-on' }, icon('check')) : null,
+      drifted(fr) ? h('span', { class: 'st-drift', title: lookNote(fr) }, icon('warn'), 'Look drifted') : null,
       fr.canvas ? h('span', { class: 'st-frame-tag' }, 'Canvas')
         : h('div', { class: 'st-frame-btns' },
           iconBtn('Put it on the canvas', icon('canvas'), () => frameToCanvas(s, fr), { class: 'icon-btn' }),
