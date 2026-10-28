@@ -696,11 +696,11 @@ function wireEditor() {
   };
   cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
   cv.parentElement.append(h('div', { id: 'editorToolbar', class: 'layer-toolbar hidden', role: 'toolbar', 'aria-label': 'Layer tool' },
-    h('button', { type: 'button', 'data-mode': 'transform', title: 'Move and resize (V)', onclick: () => setEditorMode(false) }, '✥ Transform'),
-    h('button', { type: 'button', 'data-mode': 'crop', title: 'Crop (C)', onclick: () => setEditorMode(true) }, '⛶ Crop'),
+    h('button', { type: 'button', 'data-mode': 'transform', title: 'Move and resize (V)', 'aria-label': 'Transform', onclick: () => setEditorMode(false) }, icon('move')),
+    h('button', { type: 'button', 'data-mode': 'crop', title: 'Crop (C)', 'aria-label': 'Crop', onclick: () => setEditorMode(true) }, icon('crop')),
     h('span', { class: 'sep' }),
-    h('button', { type: 'button', 'data-snap': '', title: 'Snap to the canvas and other layers (hold Alt to skip)',
-      onclick: () => { E.snap = !E.snap; persistEditor(); drawEditorCanvas(); } }, '⌖ Snap')));
+    h('button', { type: 'button', 'data-snap': '', title: 'Snap to the canvas and other layers (hold Alt to skip)', 'aria-label': 'Snap',
+      onclick: () => { E.snap = !E.snap; persistEditor(); drawEditorCanvas(); } }, icon('target'))));
   new ResizeObserver(() => { if (!EVheld) drawEditorCanvas(); }).observe(cv.parentElement);
   // painting (paint.js): its pointer handlers come first while a paint tool is picked; its tool strip sits on the left
   cv.parentElement.append(...bindPaint({

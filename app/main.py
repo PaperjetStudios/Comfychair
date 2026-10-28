@@ -1755,7 +1755,12 @@ async def module_js(name: str, request: Request):
     path = config.WEB_DIR / f"{name}.js"
     if "/" in name or not path.is_file():
         raise HTTPException(404)
-    v = ui_version()
+    # a module asked for at a version keeps its imports at that version: a page opened before an update that
+    # loads a module late (a dynamic import) would otherwise import the newer URLs of modules it already has,
+    # and run a second copy of each (a second Editor tool strip, a second core.js state). The page is offered
+    # a reload when the UI is newer (run.js checkUiVersion).
+    asked = request.query_params.get("v", "")
+    v = int(asked) if asked.isdigit() else ui_version()
     etag = f'"{name}-{v}"'
     headers = {"Cache-Control": "no-cache", "ETag": etag}
     if request.headers.get("if-none-match") == etag:
@@ -1763,7 +1768,7 @@ async def module_js(name: str, request: Request):
     text = _module_cache.get((name, v))
     if text is None:
         text = _JS_IMPORT.sub(lambda m: f"{m[1]}{m[2]}{m[3]}?v={v}{m[2]}", path.read_text(encoding="utf-8"))
-        if any(k[1] != v for k in _module_cache):
+        if len(_module_cache) > 400:   # (pages on older versions ask too: keep a few versions' worth)
             _module_cache.clear()
         _module_cache[(name, v)] = text
     return Response(text, media_type="text/javascript", headers=headers)

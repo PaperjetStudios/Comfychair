@@ -88,6 +88,7 @@ const PATHS = {
   reference: ['M3 5h18v14H3z', 'M12 5v14', 'M15 9h3M15 12h3'],
   plus: ['M12 5v14M5 12h14'],
   chevdown: ['M6 9.5l6 6 6-6'],
+  crop: ['M6 2v14a2 2 0 0 0 2 2h14', 'M2 6h14a2 2 0 0 1 2 2v14'],
   rows: ['M4 5h16v14H4z', 'M4 9.5h16M4 14.5h16'],
   wave: ['M3 12c2.5-6 5-6 7.5 0s5 6 7.5 0 2.5-3 3-3'],
   boxsel: ['M4 7V4h3M10 4h4M17 4h3v3M20 10v4M20 17v3h-3M14 20h-4M7 20H4v-3M4 14v-4'],

@@ -1,5 +1,6 @@
 import { h, store, toast, clamp, seg, field, section, help, rangeField, button, hint, pctFmt, colorField, openSheet, closeSheet, actions, propNum } from './ui.js';
 import { icon } from './icons.js';
+import { ASPECT_PRESETS } from './core.js';
 
 // ---------------------------------------------------------------------------
 // Painting in the Editor: brushes with pen pressure and tilt, an eraser, blank canvas layers, undo.
@@ -106,10 +107,26 @@ export function addBlank({ w, h: hh, fill = null }) {
 export function blankSheet() {
   const f = X.frame(), dw = f ? f.w : 1024, dh = f ? f.h : 1024;
   let w = dw, hh = dh, fill = store.get('deck.paint.blankFill', 'clear');
+  // its size: the canvas's own by default, or a shape and megapixels tapped; Custom types the sides
+  let shape = 'canvas', mp = 1;
+  const sizeBox = h('div', {});
+  const sizeOut = h('span', {});
+  const drawSize = () => {
+    const a = (ASPECT_PRESETS.find(([k]) => k === shape) || [])[1];
+    if (shape === 'canvas') { w = dw; hh = dh; } else if (a) { w = Math.round(Math.sqrt(mp * 1e6 * a) / 8) * 8; hh = Math.round(Math.sqrt((mp * 1e6) / a) / 8) * 8; }
+    sizeOut.textContent = `${w}×${hh}`;
+    sizeBox.replaceChildren(shape === 'custom'
+      ? h('div', { class: 'row' },
+        propNum('Width', w, (v) => { w = v; sizeOut.textContent = `${w}×${hh}`; }, () => {}, { min: 16, max: 8192, step: 8 }),
+        propNum('Height', hh, (v) => { hh = v; sizeOut.textContent = `${w}×${hh}`; }, () => {}, { min: 16, max: 8192, step: 8 }))
+      : shape === 'canvas' ? null
+        : field('Megapixels', seg([0.25, 0.5, 1, 1.5, 2, 4].map((v) => [v, `${v}`]), mp, (v) => { mp = v; drawSize(); }, { wrap: true })));
+  };
+  const shapeSeg = seg([['canvas', 'Canvas size'], ...ASPECT_PRESETS.map(([k]) => [k, k]), ['custom', 'Custom']], shape,
+    (v) => { shape = v; drawSize(); }, { wrap: true });
+  drawSize();
   openSheet(h('h3', {}, 'Blank canvas'),
-    h('div', { class: 'row' },
-      propNum('Width', w, (v) => { w = v; }, () => {}, { min: 16, max: 8192, step: 8 }),
-      propNum('Height', hh, (v) => { hh = v; }, () => {}, { min: 16, max: 8192, step: 8 })),
+    field(['Size', sizeOut], shapeSeg), sizeBox,
     field('Fill', seg([['clear', 'See-through'], ['white', 'White'], ['bg', 'Background colour']], fill, (v) => { fill = v; store.set('deck.paint.blankFill', v); })),
     actions(
       button('Add canvas', () => {
