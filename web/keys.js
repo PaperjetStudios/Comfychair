@@ -318,16 +318,23 @@ export function recordInto(list, samples, every = 3) {
 // data: a recording's straight lines between them aren't, so a smooth curve may cut their corners). The keys kept get ease `as` ('' keeps their own); their values
 // stay. dist(a, b) is the error (numbers: |a − b|; a joint: degrees). Returns a new list (the same keys;
 // dry: the eases left alone, for a count).
+// as 'fit': the kept keys become Bezier with handles fitted to the old keys (least squares, see fitHandles), and
+// the tolerance is checked against that fitted curve, so the count is what the curve really needs.
 export function reduceKeys(list, tol, { pick = null, as = 'clamp', ease = 'smooth', lerp = lerpNum, dist = (a, b) => Math.abs(a - b), dry = false } = {}) {
   if (!list || list.length < 3) return list ? [...list] : [];
   const want = list.map((k) => [k.f, k.v]);
   const on = (k) => !pick || pick.has(k);
+  const fit = as === 'fit' && lerp === lerpNum && list.every((k) => isNum(k.v));
+  if (as === 'fit' && !fit) as = 'linear';   // (turns and names have no handles)
   const keep = new Set(list.filter((k, i) => i === 0 || i === list.length - 1 || !on(k)));
-  const trial = (k) => (on(k) && as ? { ...k, ease: as, ...(CURVES.has(as) && as !== 'bezier' ? { ti: undefined, to: undefined } : {}) } : k);
+  const trial = (k) => (on(k) && as ? { ...k, ease: fit ? 'bezier' : as, ...(CURVES.has(as) && as !== 'bezier' ? { ti: undefined, to: undefined } : {}) } : k);
   const strip = (k) => { if (k.ti === undefined) delete k.ti; if (k.to === undefined) delete k.to; return k; };
   tol = Math.max(0, num(tol));
+  let cur = null;
   for (let guard = 0; guard < list.length; guard++) {
-    const kept = list.filter((k) => keep.has(k)), cur = kept.map((k) => strip(trial(k)));
+    const kept = list.filter((k) => keep.has(k));
+    cur = kept.map((k) => strip(trial(k)));
+    if (fit) fitHandles(cur, kept.map(on), want, ease);
     const errs = want.map(([f, v]) => [dist(sampleKeys(cur, f, { ease, lerp }), v), f]).filter(([e]) => e > tol).sort((a, b) => b[0] - a[0]);
     let added = false;
     for (const [, f] of errs) {   // the worst frame that still has a key to add between the kept ones around it
@@ -339,8 +346,50 @@ export function reduceKeys(list, tol, { pick = null, as = 'clamp', ease = 'smoot
     if (!added) break;
   }
   const out = list.filter((k) => keep.has(k));
-  if (!dry) for (const k of out) if (on(k) && as) { k.ease = as; if (as !== 'bezier') { delete k.ti; delete k.to; delete k.hb; } }
+  if (!dry && fit) out.forEach((k, i) => { if (on(k)) { k.ease = 'bezier'; k.ti = cur[i].ti; k.to = cur[i].to; delete k.hb; } });
+  else if (!dry) for (const k of out) if (on(k) && as) { k.ease = as; if (as !== 'bezier') { delete k.ti; delete k.to; delete k.hb; } }
   return out;
+}
+// Handles for keys (copies, in place) that follow the old keys `want` ([[f, v]...]) as closely as they can: each
+// handle a third of the way to the next key (so time needs no solving), one slope per key shared by its two
+// handles (aligned: no kinks). With that, the curve is linear in the slopes: least squares over every old key,
+// a tridiagonal system (each segment ties two neighbours), solved straight through. A light pull towards the auto
+// slope settles a segment with no old keys inside. Only `free` keys move; the others keep their own handles.
+function fitHandles(keys, free, want, ease) {
+  const n = keys.length;
+  if (n < 2) return;
+  const slope = keys.map((k, i) => handleOf(keys, i, i ? 'ti' : 'to', 'auto')).map(([dt, dv]) => (dt ? dv / dt : 0));
+  const A = new Float64Array(n), B = new Float64Array(n), r = new Float64Array(n);   // diagonal, above it, right side
+  let j = 0;
+  for (let i = 0; i < n - 1; i++) {
+    const a = keys[i], b = keys[i + 1], h = b.f - a.f;
+    if (!free[i] && !CURVES.has(a.ease || ease)) continue;   // (a straight or stepped segment left as it is)
+    for (; j < want.length && want[j][0] <= b.f; j++) {
+      const [f, v] = want[j];
+      if (f < a.f) continue;
+      const t = (f - a.f) / h, w = 1 - t, b0 = w * w * w, b1 = 3 * w * w * t, b2 = 3 * w * t * t, b3 = t * t * t;
+      const ca = (b1 * h) / 3, cb = (-b2 * h) / 3, res = v - (b0 + b1) * a.v - (b2 + b3) * b.v;
+      A[i] += ca * ca; B[i] += ca * cb; A[i + 1] += cb * cb; r[i] += ca * res; r[i + 1] += cb * res;
+    }
+    j = Math.max(0, j - 1);   // (the key at b.f starts the next segment too)
+  }
+  const mean = A.reduce((x, y) => x + y, 0) / n || 1;
+  for (let i = 0; i < n; i++) { const lam = free[i] ? 1e-4 * mean : 1e9 * mean; A[i] += lam; r[i] += lam * slope[i]; }
+  // Thomas: symmetric tridiagonal (A diagonal, B the off-diagonal between i and i + 1)
+  const c = new Float64Array(n), d = new Float64Array(n);
+  c[0] = B[0] / A[0]; d[0] = r[0] / A[0];
+  for (let i = 1; i < n; i++) {
+    const m = A[i] - B[i - 1] * c[i - 1];
+    c[i] = i < n - 1 ? B[i] / m : 0; d[i] = (r[i] - B[i - 1] * d[i - 1]) / m;
+  }
+  const s = new Float64Array(n);
+  s[n - 1] = d[n - 1];
+  for (let i = n - 2; i >= 0; i--) s[i] = d[i] - c[i] * s[i + 1];
+  keys.forEach((k, i) => {
+    if (!free[i]) return;
+    const hl = i ? (k.f - keys[i - 1].f) / 3 : 1, hr = i < n - 1 ? (keys[i + 1].f - k.f) / 3 : 1;
+    k.ti = [-hl, -s[i] * hl]; k.to = [hr, s[i] * hr];
+  });
 }
 // degrees between two turns [x, y, z, w]
 export const quatDeg = (a, b) => { const d = Math.abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]); return (2 * Math.acos(Math.min(1, d)) * 180) / Math.PI; };

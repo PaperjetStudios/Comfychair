@@ -442,6 +442,21 @@ console.log('offset ok');
   // short lists come back as they are
   assert.equal(K.reduceKeys([{ f: 0, v: 1 }, { f: 3, v: 9 }], 1).length, 2);
 }
+{ // fitted handles: fewer keys than auto clamped at the same tolerance, still within it at every old key, aligned
+  const dense = () => [...Array(61)].map((_, i) => ({ f: i * 2, v: Math.sin(i / 6) * 2 + i * 0.01, ease: 'linear' }));
+  const src = dense(), fit = K.reduceKeys(dense(), 0.01, { as: 'fit' }), clamp = K.reduceKeys(dense(), 0.01, { as: 'clamp' });
+  assert.ok(fit.length < clamp.length * 0.6, `fit ${fit.length} vs clamp ${clamp.length}`);
+  for (const k of src) assert.ok(Math.abs(K.sampleKeys(fit, k.f) - k.v) <= 0.01 + 1e-9, `fit f${k.f}`);
+  assert.ok(fit.every((k) => k.ease === 'bezier' && !k.hb && Math.abs(k.ti[1] / k.ti[0] - k.to[1] / k.to[0]) < 1e-9));
+  // dry leaves the keys alone; unpicked keys keep their handles; joints fall back to linear
+  const d2 = dense(); K.reduceKeys(d2, 0.01, { as: 'fit', dry: true }); assert.ok(d2.every((k) => k.ease === 'linear' && !k.ti));
+  const d3 = dense(), fixed = d3[30]; fixed.ease = 'bezier'; fixed.ti = [-1, 0]; fixed.to = [1, 0];
+  K.reduceKeys(d3, 0.01, { as: 'fit', pick: new Set(d3.filter((k) => k !== fixed)) });
+  assert.deepEqual([fixed.ti, fixed.to], [[-1, 0], [1, 0]]);
+  const q = (a) => [Math.sin(a / 2), 0, 0, Math.cos(a / 2)];
+  const jl = [...Array(20)].map((_, i) => ({ f: i, v: q(i * 0.05), ease: 'linear' }));
+  assert.ok(K.reduceKeys(jl, 0.5, { as: 'fit', lerp: F.slerpQ, dist: K.quatDeg }).every((k) => k.ease === 'linear'));
+}
 console.log('reduce ok');
 
 { // cameras: an old scene's one camera is the active one; another made active swaps places
