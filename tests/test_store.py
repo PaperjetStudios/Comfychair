@@ -98,6 +98,14 @@ class Store(unittest.TestCase):
         self.assertEqual(self.c.get("/api/store/gen-tabs?scope=bogus").status_code, 400)
         self.assertEqual(self.c.get(f"/api/store/gen-tabs?scope=global&project_id={self.pid}").status_code, 400)
 
+    def test_story_tabs_kind(self):
+        """The Story tab's storyboards are project docs like the other panels' tabs."""
+        self.fresh()
+        story = {"title": "T", "scenes": [{"id": "s1", "slug": "INT. ROOM", "shots": [{"id": "a", "what": "x", "frames": []}]}]}
+        r = self.c.put(self.url("main", kind="story-tabs"), json={"rev": 0, "name": "Story 1", "payload": story})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.c.get(self.url("main", kind="story-tabs")).json()["payload"], story)
+
     def test_bad_body(self):
         self.fresh()
         for body in ({"name": 5}, {"order": "x"}, {"payload": []}, {"rev": "1"}, {"rev": True}):
