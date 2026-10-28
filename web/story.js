@@ -10,6 +10,8 @@ import { TabSet } from './tabs.js';
 import { fullScreen } from './layout.js';
 import { BLANK as COMP_BLANK, createEditor } from './editor-engine.js';
 import { openCompare } from './compare.js';
+import { addPicture as addCharPicture, castSection, characterById, characterSection, characters, mainPicture, mentionBox, onCharacters } from './characters.js';
+import { castLines, mentioned, plain, speakerOf } from './cast.js';
 
 // ---------------------------------------------------------------------------
 // story: a storyboard for writing a story down and sorting it out. A story is a title, notes (free writing or a
@@ -55,7 +57,7 @@ const newScene = (o = {}) => ({ id: uid(), slug: '', summary: '', collapsed: fal
 const BLANK = () => ({ title: '', notes: '', style: '', aspect: '16:9', tpl: null, batch: 1, scenes: [newScene()] });
 let P = BLANK();
 const VIEWS = [['canvas', 'canvas', 'Canvas'], ['board', 'board', 'Board'], ['outline', 'list', 'Outline'], ['script', 'text', 'Script']];
-const U = { sel: null, doc: null, view: store.get('deck.story.view', 'canvas') };
+const U = { sel: null, doc: null, char: null, view: store.get('deck.story.view', 'canvas') };
 if (!VIEWS.some(([v]) => v === U.view)) U.view = 'canvas';
 
 let tabs = null, tabsReady = null;
@@ -91,7 +93,8 @@ function changed() { persist(); renderStage(); renderPanel(); }
 
 // A text box (or one-line input) bound to obj[key]. Every box bound to the same thing follows as you type (a shot's
 // description shows in its row, its card and the panel), and [data-show] spans take the text.
-function bound(obj, key, { rows = 1, placeholder = '', label = null, line = false, cls = '' } = {}) {
+// mention: @Name suggestions under it (characters.js); the wrapper comes back, its box as .ta
+function bound(obj, key, { rows = 1, placeholder = '', label = null, line = false, cls = '', mention = false } = {}) {
   const tag = `${obj.id || 'story'}.${key}`;
   const sync = (el) => {
     for (const o of document.querySelectorAll(`[data-bind="${tag}"]`)) if (o !== el && o.value !== obj[key]) { o.value = obj[key]; o.dispatchEvent(new Event('grow')); }
@@ -106,6 +109,7 @@ function bound(obj, key, { rows = 1, placeholder = '', label = null, line = fals
     if (cls) el.className = cls;
   }
   el.dataset.bind = tag;
+  if (mention) { const w = mentionBox(el); w.ta = el; return w; }
   return el;
 }
 
@@ -213,8 +217,10 @@ function frameSize(t) {
   return [fit(roleField(t, 'width', ROLE), Math.round(Math.sqrt(AREA * r) / 64) * 64), fit(roleField(t, 'height', ROLE), Math.round(Math.sqrt(AREA / r) / 64) * 64)];
 }
 // the prompt: framing, what we see, then the story's style
-const promptOf = (s) => [[SIZES.find(([k]) => k === s.size)?.[2], ANGLES.find(([k]) => k === s.angle)?.[2]].filter(Boolean).join(', '),
-  s.what.trim(), P.style.trim()].filter(Boolean).join(', ');
+const promptOf = (s) => [[[SIZES.find(([k]) => k === s.size)?.[2], ANGLES.find(([k]) => k === s.angle)?.[2]].filter(Boolean).join(', '),
+  plain(s.what.trim(), characters()), P.style.trim()].filter(Boolean).join(', '), ...castLines(castOf(s))].join('\n');
+// the characters a shot brings in: named in what we see or the action, or speaking
+const castOf = (s) => mentioned(`${s.what}\n${s.action}`, characters());
 
 async function makeFrame(s) {
   const t = storyTemplate();
@@ -657,7 +663,7 @@ function shotRow(sc, si, s, i) {
   h('span', { class: 'st-num' }, `${si + 1}.${i + 1}`),
   h('button', { type: 'button', class: 'st-thumb', style: `aspect-ratio:${ratio()}`, 'aria-label': `Shot ${si + 1}.${i + 1}: edit`, onclick: () => select(s.id) }, thumbOf(s)),
   h('div', { class: 'st-row-text' },
-    (() => { const ta = bound(s, 'what', { placeholder: 'What we see', label: `Shot ${si + 1}.${i + 1}: what we see` }); ta.addEventListener('focus', () => { if (U.sel !== s.id) select(s.id); }); return ta; })(),
+    (() => { const w = bound(s, 'what', { placeholder: 'What we see', label: `Shot ${si + 1}.${i + 1}: what we see`, mention: true }); w.ta.addEventListener('focus', () => { if (U.sel !== s.id) select(s.id); }); return w; })(),
     h('div', { class: 'st-row-meta' }, statusDot(s), h('span', {}, [camText(s), `${s.dur} s`, s.frames.length ? `${s.frames.length} frame${s.frames.length > 1 ? 's' : ''}` : ''].filter(Boolean).join(' · ')))),
   h('div', { class: 'st-row-btns' }, iconBtn('Move up', icon('up'), () => moveShot(s.id, -1)), iconBtn('Move down', icon('down'), () => moveShot(s.id, 1))));
 }
@@ -694,7 +700,7 @@ function sceneEl(sc, si, board) {
       iconBtn('Add a shot', icon('plus'), () => addShot(sc)),
       iconBtn('Scene options', icon('more'), () => sceneMenu(sc, si))),
     sc.collapsed ? null : [
-      bound(sc, 'summary', { placeholder: 'What happens in this scene', label: `Scene ${si + 1} summary`, cls: 'st-summary' }),
+      bound(sc, 'summary', { placeholder: 'What happens in this scene', label: `Scene ${si + 1} summary`, cls: 'st-summary', mention: true }),
       h('div', { class: board ? 'st-shots st-cards' : 'st-shots st-rows' },
         sc.shots.map((s, i) => (board ? shotCard(sc, si, s, i) : shotRow(sc, si, s, i))),
         h('button', { type: 'button', class: board ? 'st-add-card' : 'st-add-row', onclick: () => addShot(sc, sc.shots[sc.shots.length - 1]) }, icon('plus'), 'Shot'))]);
@@ -742,15 +748,17 @@ function refreshThumbs() {
 // ---- the script view: a screenplay page (scene headings, action, the characters' lines) ----
 // A shot's action / dialogue is read line by line: "NAME: words" (or "@Name: words") is a line of dialogue, a line in
 // brackets on its own a parenthetical, anything else action.
-export function scriptLines(text) {
-  const out = [];
+// (a speaker in capitals, or a character's name in any case)
+function scriptLines(text) {
+  const out = [], cast = characters();
   for (const raw of (text || '').split('\n')) {
     const l = raw.trim();
     if (!l) continue;
-    const m = l.match(/^@?([\p{L}][\p{L}\p{N} .'-]{0,30}?)\s*(\([^)]*\))?\s*:\s*(.+)$/u);
-    if (m && (m[1] === m[1].toUpperCase() || l.startsWith('@'))) out.push({ kind: 'line', who: m[1].trim(), paren: m[2] || '', text: m[3] });
-    else if (/^\(.*\)$/.test(l)) out.push({ kind: 'paren', text: l });
-    else out.push({ kind: 'action', text: l });
+    const m = speakerOf(l);
+    if (m && m.text.trim() && (m.who === m.who.toUpperCase() || l.startsWith('@') || cast.some((c) => c.name.trim().toLowerCase() === m.who.toLowerCase()))) {
+      out.push({ kind: 'line', who: m.who, paren: m.paren, text: plain(m.text, cast) });
+    } else if (/^\(.*\)$/.test(l)) out.push({ kind: 'paren', text: l });
+    else out.push({ kind: 'action', text: plain(l, cast) });
   }
   return out;
 }
@@ -759,10 +767,10 @@ function scriptStage(st) {
     h('h2', { class: 'st-sc-title' }, (P.title || tabs?.active?.name || 'Story').toUpperCase()),
     P.scenes.map((sc, si) => [
       h('h3', { class: 'st-sc-slug' }, `${si + 1}. ${(sc.slug || 'Scene').toUpperCase()}`),
-      sc.summary.trim() ? h('p', { class: 'st-sc-action st-sc-summary' }, sc.summary.trim()) : null,
+      sc.summary.trim() ? h('p', { class: 'st-sc-action st-sc-summary' }, plain(sc.summary.trim(), characters())) : null,
       sc.shots.map((s, i) => h('div', { class: `st-sc-shot${U.sel === s.id ? ' sel' : ''}`, 'data-kind': 'shot', 'data-id': s.id, onclick: () => select(s.id) },
         h('span', { class: 'st-sc-num' }, `${si + 1}.${i + 1}`),
-        s.what.trim() ? h('p', { class: 'st-sc-action' }, s.what.trim()) : null,
+        s.what.trim() ? h('p', { class: 'st-sc-action' }, plain(s.what.trim(), characters())) : null,
         scriptLines(s.action).map((ln) => (ln.kind === 'line'
           ? h('div', { class: 'st-sc-line' }, h('p', { class: 'st-sc-who' }, ln.who.toUpperCase()),
             ln.paren ? h('p', { class: 'st-sc-paren' }, ln.paren) : null, h('p', { class: 'st-sc-words' }, ln.text))
@@ -783,7 +791,7 @@ export function renderStage() {
   const head = board ? h('div', { class: 'st-head' }, h('b', { class: 'st-board-title', 'data-show': 'story.title', 'data-empty': tabs?.active?.name || 'Story' }, P.title || tabs?.active?.name || 'Story'))
     : h('div', { class: 'st-head' },
       bound(P, 'title', { line: true, placeholder: tabs?.active?.name || 'Title', label: 'Title', cls: 'st-title' }),
-      bound(P, 'notes', { rows: 4, placeholder: 'Notes, ideas, the script: anything goes here', label: 'Notes', cls: 'st-notes' }));
+      bound(P, 'notes', { rows: 4, placeholder: 'Notes, ideas, the script: anything goes here', label: 'Notes', cls: 'st-notes', mention: true }));
   st.replaceChildren(head, ...P.scenes.map((sc, si) => sceneEl(sc, si, board)),
     h('div', { class: 'st-end' }, button([icon('plus'), 'Scene'], () => addScene(), { cls: 'small' })));
   renderBar();
@@ -822,8 +830,9 @@ function shotSection(at) {
       h('span', { class: 'st-spin' }), h('span', {}, S.history.get(id)?.status === 'running' ? 'Making…' : 'Waiting…'))));
   const lbl = `frame ${n}`;
   return section(`Shot ${n}${sc.slug ? ` · ${sc.slug}` : ''}`, () => select(null),
-    field('What we see', bound(s, 'what', { rows: 3, placeholder: 'e.g. Mara at the window, rain running down the glass', label: 'What we see' })),
-    field('Action / dialogue', bound(s, 'action', { rows: 2, placeholder: 'MARA: He isn\'t coming.', label: 'Action / dialogue' })),
+    field('What we see', bound(s, 'what', { rows: 3, placeholder: 'e.g. @Mara at the window, rain running down the glass', label: 'What we see', mention: true })),
+    field('Action / dialogue', bound(s, 'action', { rows: 2, placeholder: 'MARA: He isn\'t coming.', label: 'Action / dialogue', mention: true })),
+    castChips(s),
     field('Shot size', seg(SIZES.map(([v, l]) => [v, l]), s.size, (v) => { s.size = v; changed(); }, { wrap: true })),
     field('Angle', toggleChips(ANGLES, 'angle')),
     field('Camera move', toggleChips(MOVES, 'move')),
@@ -872,7 +881,26 @@ function framesSection() {
     field('Frames per run', seg([1, 2, 3, 4].map((n) => [n, String(n)]), P.batch, (v) => { P.batch = v; persist(); renderPanel(); })));
 }
 
-// The panel: the shot, then (on the canvas view) the canvas's tools, then the story's frame settings. The brush's
+// a character open in the panel (null: none), scrolled to
+function openCharacter(id) {
+  U.char = id;
+  renderPanel();
+  if (id) requestAnimationFrame(() => [...document.querySelectorAll('#storyBody .section-title span')].find((x) => x.textContent.startsWith('Character ·'))?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+}
+async function frameToCharacter(c, s) {
+  const f = chosen(s);
+  if (!c || !f) return;
+  try { addCharPicture(c, await frameInput(f)); toast(`Added to ${c.name}'s pictures`); } catch (e) { toast(e.message, true); }
+}
+// the characters a shot brings in, as chips (tap one to open them)
+function castChips(s) {
+  const cast = castOf(s);
+  if (!cast.length) return null;
+  return field('In this shot', h('div', { class: 'chips' }, cast.map((c) => chip([h('span', { class: 'ch-chip-face' }, mainPicture(c) ? h('img', { src: thumbUrl(mainPicture(c), 64), alt: '' }) : icon('person')), c.name],
+    () => openCharacter(c.id), { title: c.look || c.desc || c.name, on: U.char === c.id }))));
+}
+
+// The panel: the shot, then (on the canvas view) the canvas's tools, then the characters, then the story's frame settings. The brush's
 // settings come first while painting. A redraw keeps the cursor in the box being typed in.
 function fillPanel() {
   const body = $('#storyBody');
@@ -883,6 +911,9 @@ function fillPanel() {
   const parts = [ed?.paintProps(), at ? shotSection(at) : section('Shot', null, placeholder('Tap a shot to edit it here')),
     ...(ed ? [section('Layers', null, ed.topRow([iconBtn('Frame from a clip', icon('film'), frameFromVideo, { class: 'icon-btn ico-btn' })]), ed.layerList()),
       ed.layerProps(), ed.canvasProps()] : []),
+    castSection({ open: U.char, onOpen: openCharacter }),
+    U.char && characterById(U.char) ? characterSection(characterById(U.char), { done: () => openCharacter(null),
+      extra: at && chosen(at.s) ? [button([icon('canvas'), 'The shot\'s frame'], () => frameToCharacter(characterById(U.char), at.s), { title: 'Add this shot\'s frame as one of their pictures' })] : [] }) : null,
     framesSection()].filter(Boolean);
   const a = document.activeElement, key = a && body.contains(a) ? a.dataset?.bind : null;
   const range = key && 'selectionStart' in a ? [a.selectionStart, a.selectionEnd] : null;
@@ -926,6 +957,7 @@ export function wireStory() {
   tabs = new TabSet({ kind: 'story-tabs', mount, scope: 'project', newName: (n) => `Story ${n}`, adapter });
   fullScreen($('#tab-story'));
   makeCanvas();
+  onCharacters(() => { if (!shown()) return; if (U.view === 'script') renderStage(); renderPanel(); });
   // a frame run for a shot here ends: this device queued it, so this device files the pictures (another device
   // showing the same story gets them with the save); anything else just redraws its waiting tiles
   onServer('deck_generation', ({ data: g }) => {
