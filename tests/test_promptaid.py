@@ -77,7 +77,7 @@ class Improve(unittest.TestCase):
     def test_asks_again_when_every_variant_lost_a_tag(self):
         calls = []
 
-        def fake(msgs, device="auto", temperature=0.8):
+        def fake(msgs, device="auto", temperature=0.8, lines=False):
             calls.append(msgs)
             return ({"variants": ["no tag"]} if len(calls) == 1 else {"variants": ["@Mara at the window"]}), "cpu"
         with mock.patch.object(pa, "chat", side_effect=fake):
@@ -86,6 +86,14 @@ class Improve(unittest.TestCase):
         self.assertIn('"@Mara"', calls[1][-1]["content"])
         self.assertEqual(r["variants"][0]["text"], "@Mara at the window")
         self.assertEqual(r["device"], "cpu")
+
+    def test_h3_lines_become_one_prompt(self):
+        lines = ["[Shot 1] She runs.", "overall_soundscape: rain", "non_diegetic_music: N/A"]
+        squashed = '{\n"[Shot 1] She runs.",\n"overall_soundscape: rain\\nnon_diegetic_music: N/A"\n}'
+        with mock.patch.object(pa, "chat", return_value=({"variants": [lines, squashed]}, "gpu")) as chat:
+            r = pa.improve("[Shot 1] she runs\noverall_soundscape: rain\nnon_diegetic_music: N/A", "MiniMax H3", "h3")
+        self.assertTrue(chat.call_args.kwargs["lines"])
+        self.assertEqual([v["text"] for v in r["variants"]], ["\n".join(lines)])   # (the second is the same, once joined)
 
     def test_empty_and_bad_mode(self):
         with self.assertRaises(HTTPException):
@@ -144,7 +152,7 @@ class Describe(unittest.TestCase):
         Image.new("RGB", (3000, 1500), "red").save(buf, "PNG")
         seen = {}
 
-        def fake(msgs, device="auto", temperature=0.8):
+        def fake(msgs, device="auto", temperature=0.8, lines=False):
             seen["msgs"] = msgs
             return {"variants": ["A red field.", "Red."]}, "gpu"
         with mock.patch.object(pa, "chat", side_effect=fake):

@@ -120,8 +120,8 @@ def status():
 FAMILY_KEYS = {"krea": "krea", "flux klein": "klein", "klein": "klein", "qwen image": "qwen", "qwen": "qwen", "moss": "moss",
                "ltx-2.5": "ltx", "ltx": "ltx", "minimax h3": "h3", "h3": "h3", "image": "image", "video": "video"}
 
-STYLE = ("Write natural, concrete English, as one flowing description; no lists, no headings, no quality tags "
-         "(masterpiece, 8k, best quality), no negative prompt, no commentary.")
+STYLE = ("Write natural, concrete English in a few clear sentences, as one paragraph; no lists, no headings, no "
+         "quality tags (masterpiece, 8k, best quality), no negative prompt, no commentary.")
 GUIDE = {
     "krea": ("Krea 2, a photographic image model that reads full sentences well. Lead with the subject and what they do, "
              "then the setting, the composition and camera (shot size, angle, lens), the light (source, direction, time of "
@@ -145,13 +145,14 @@ GUIDE = {
            "starting \"[Shot 1] \" and, for later shots, \"[Shot 2] At 00:03.000, the camera cuts to …\" with the same "
            "timestamps as the original; spoken words go inside <d></d> after who says them (\"<Subject 1> says: "
            "<d>words</d>\"); last come two lines, \"overall_soundscape: …\" (ambience and sound effects, or N/A) and "
-           "\"non_diegetic_music: …\" (the score, or N/A). Each shot describes the framing, the action in order, the "
-           "camera movement and the light."),
+           "\"non_diegetic_music: …\" (the score, or N/A). Keep who each subject is as the user wrote it. Each shot "
+           "describes the framing, the action in order, the camera movement and the light."),
     "video": ("a video model. Describe in the present tense what happens in order, the camera movement, the setting, the "
               "light and the mood, in one paragraph."),
 }
-EDIT = ("This template edits the reference picture(s): write an edit instruction. Say exactly what to change, with "
-        "concrete detail, then what must stay the same (the person's face and identity, pose, framing, light) unless the "
+EDIT = ("This template edits the reference picture(s), so write an edit instruction, not a description of a new "
+        "picture. Start with the change as a command (\"Change her coat to…\", \"Put her on…\", \"Make it night…\"), with "
+        "concrete detail, then say what must stay the same (the person's face and identity, pose, framing) unless the "
         "change is about that. Don't describe parts of the picture that aren't changing.")
 I2V = ("The video starts from the reference picture, so don't re-describe how it looks: describe the motion, the "
        "camera and the sound.")
@@ -219,8 +220,9 @@ def _system(fam: str, mode: str, edit: bool, i2v: bool, keep: list[str], n: int)
     if keep:
         parts.append("Copy these exactly as written, each at least once, where they belong: "
                      + ", ".join(json.dumps(k, ensure_ascii=False) for k in keep) + ".")
+    shape = '[["line 1", "line 2", "…"]], each version a list of its lines' if fam == "h3" else '["…"]'
     parts.append(f"Give {n} different versions (they may differ in detail, framing or mood, never in what is asked for). "
-                 f"Reply with JSON only: {{\"variants\": [\"…\"]}}.")
+                 f"Reply with JSON only: {{\"variants\": {shape}}}.")
     return "\n\n".join(parts)
 
 
@@ -235,8 +237,9 @@ DESCRIBE = {
 }
 
 
-def _schema():
-    return {"type": "object", "properties": {"variants": {"type": "array", "items": {"type": "string"}}}, "required": ["variants"]}
+def _schema(lines: bool = False):
+    item = {"type": "array", "items": {"type": "string"}} if lines else {"type": "string"}
+    return {"type": "object", "properties": {"variants": {"type": "array", "items": item}}, "required": ["variants"]}
 
 
 def _vram_free_mb() -> int | None:
@@ -282,10 +285,11 @@ def _post(payload: dict, timeout: float) -> dict:
     return r.json()
 
 
-def chat(messages: list[dict], device: str = "auto", temperature: float = 0.8) -> tuple[dict, str]:
-    """One JSON answer from the prompt model -> (parsed, the device it ran on). device: auto | gpu | cpu."""
+def chat(messages: list[dict], device: str = "auto", temperature: float = 0.8, lines: bool = False) -> tuple[dict, str]:
+    """One JSON answer from the prompt model -> (parsed, the device it ran on). device: auto | gpu | cpu.
+    lines: each variant comes as a list of its lines (H3's structure), which the model gets right more often."""
     ensure_server()
-    payload = {"model": MODEL, "stream": False, "think": False, "keep_alive": 0, "format": _schema(),
+    payload = {"model": MODEL, "stream": False, "think": False, "keep_alive": 0, "format": _schema(lines),
                "options": {"temperature": temperature, "num_ctx": 4096, "num_predict": 1600}, "messages": messages}
     auto = device not in ("gpu", "cpu")
     if auto:
@@ -326,7 +330,16 @@ def _variants(data, n: int) -> list[str]:
         vs = [vs]
     out = []
     for v in vs or []:
-        c = clean(v if not isinstance(v, dict) else (v.get("prompt") or v.get("text")))
+        if isinstance(v, dict):
+            v = v.get("prompt") or v.get("text") or v.get("lines")
+        if isinstance(v, str) and re.match(r"^\s*[\[{]\s*\"", v):   # its lines written as a JSON list inside the string
+            try:
+                v = json.loads("[" + v.strip()[1:-1] + "]")
+            except ValueError:
+                pass
+        if isinstance(v, list):
+            v = "\n".join(clean(x) for x in v if str(x or "").strip())
+        c = clean(v)
         if c and c not in out:
             out.append(c)
     return out[:n]
@@ -344,14 +357,14 @@ def improve(text: str, family: str = "", tag_style: str = "", media: str = "", m
     keep = protected(text)
     t0 = time.time()
     msgs = [{"role": "system", "content": _system(fam, mode, edit, i2v, keep, n)}, {"role": "user", "content": text}]
-    data, used = chat(msgs, device)
+    data, used = chat(msgs, device, lines=fam == "h3")
     vs = _variants(data, n)
     lost = [missing(v, keep) for v in vs]
     if keep and (not vs or all(lost)):   # every one dropped a tag: ask once more, naming them
         msgs.append({"role": "assistant", "content": json.dumps({"variants": vs}, ensure_ascii=False)})
         msgs.append({"role": "user", "content": "Each version must contain these exactly: "
                      + ", ".join(json.dumps(k, ensure_ascii=False) for k in keep) + ". Write them again."})
-        data, used = chat(msgs, used)
+        data, used = chat(msgs, used, lines=fam == "h3")
         vs = _variants(data, n) or vs
         lost = [missing(v, keep) for v in vs]
     if not vs:
