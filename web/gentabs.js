@@ -165,7 +165,11 @@ function pick(id, over) {
     renderFields();
   }
   persist();
-  if (before.template) undoToast(kept.length ? `${t.name}: kept the ${kept.join(', ')}` : `${t.name}: this tab starts fresh`, () => { load(before); persist(); });
+  if (!before.template) return;
+  const undo = { label: '↶ Undo', fn: () => { load(before); persist(); } };
+  // kept the prompt and pictures: Start fresh clears them for this template after all (as if Keep were off)
+  const fresh = { label: 'Start fresh', fn: () => { load({ v: 1, template: id, presetId: null, overrides: {}, builder: before.builder }); persist(); renderFields(); } };
+  toast(kept.length ? `${t.name}: kept the ${kept.join(', ')}` : `${t.name}: this tab starts fresh`, false, kept.length ? [undo, fresh] : undo);
 }
 
 // ---- the tabs ----
