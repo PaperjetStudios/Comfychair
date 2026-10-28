@@ -2,7 +2,7 @@ import { h, toast } from './ui.js';
 import { switchTab } from './core.js';
 
 // ---------------------------------------------------------------------------
-// world (ComfyChair Lab): the app as a small world of three spaces you move around in.
+// world: the app as a small world of three spaces you move around in.
 //   Make  (Generate, VFX, 3D)       where things get made: a process, its inputs, a big GO
 //   Edit  (Editor, Video, Sound)    where made things are put together in space and time
 //   View  (Board, History)          where everything made is seen and sent on
@@ -14,7 +14,7 @@ import { switchTab } from './core.js';
 // back gesture lives) is left alone, the page never overscrolls sideways (Chrome's swipe back / forward), and
 // if Back does fire with nothing open, it goes to the tool you were on before instead of leaving the app.
 //
-// Only the Lab branch loads this (app.js); the tabs themselves are the main copy's, so the two never drift.
+// The tabs themselves stay their own modules: this only moves between them.
 // ---------------------------------------------------------------------------
 const SPACES = [
   { id: 'make', name: 'Make', tabs: ['generate', 'vfx', 'scene'], icon: ['M12 3l1.8 4.6L18.5 9l-4.7 1.6L12 15l-1.8-4.4L5.5 9l4.7-1.4z', 'M5 21l4-4'] },
@@ -250,6 +250,5 @@ document.body.append(map);
 const nav = document.querySelector('nav.tabs');
 nav.before(bar);
 wireBarSwipe(document.querySelector('.topbar'));
-document.querySelector('.brand')?.append(h('sup', { class: 'lab-badge', title: 'ComfyChair Lab: the experimental copy' }, 'Lab'));
 new MutationObserver(paint).observe(nav, { subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
 paint();
