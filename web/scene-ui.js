@@ -384,49 +384,7 @@ export function buildToolbar() {
     h('span', { class: 'sep' }),
     h('button', { type: 'button', 'data-undo': '', title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo', onclick: () => undo() }, '↶'),
     h('button', { type: 'button', 'data-redo': '', title: 'Redo (Ctrl+Shift+Z)', 'aria-label': 'Redo', onclick: () => undo(false) }, '↷')));
-  viewer.append(maxBar(pullPanel), h('div', { id: 'sceneModeBar', class: 'layer-toolbar scene-modebar', role: 'toolbar', 'aria-label': 'Mode' }));
-  $('#tab-scene .stage').append(pullHandle());
-}
-
-// ---- full screen: the panel pulls out over the view from a handle on the right edge. It is the same
-// live panel, pinned over the stage by CSS (#tab-scene.scene-max), so nothing moves or rebuilds. Drag the
-// handle to size it, or back past the edge to put it away; a tap shows or hides it. Kept per device.
-const PULL = { open: store.get('deck.scene.ovOpen', false) === true, w: +store.get('deck.scene.ovW', 380) || 380 };
-const pullMax = () => Math.max(260, innerWidth - 60);
-function applyPull(w = PULL.w, open = PULL.open) {
-  const tab = $('#tab-scene'), hd = $('#scenePull');
-  tab.style.setProperty('--ov-w', `${Math.round(clamp(w, 0, pullMax()))}px`);
-  tab.classList.toggle('panel-out', open && tab.classList.contains('scene-max'));
-  if (hd) { hd.setAttribute('aria-expanded', open); hd.firstChild.textContent = open ? '›' : '‹'; }
-}
-function pullPanel(on) { $('#tab-scene').classList.toggle('scene-max', on); applyPull(); }
-function pullHandle() {
-  const hd = h('button', { type: 'button', id: 'scenePull', class: 'scene-pull', 'aria-label': 'Settings panel', 'aria-expanded': PULL.open,
-    title: 'Settings: tap to show or hide, drag to size' }, h('span', {}, '‹'));
-  const keep = () => { store.set('deck.scene.ovOpen', PULL.open); store.set('deck.scene.ovW', PULL.w); applyPull(); };
-  hd.addEventListener('pointerdown', (e) => {
-    if (e.button > 0) return;
-    e.preventDefault(); e.stopPropagation();
-    try { hd.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
-    const tab = $('#tab-scene'), x0 = e.clientX, w0 = PULL.open ? Math.min(PULL.w, pullMax()) : 0;
-    let w = w0, moved = false;
-    const move = (ev) => {
-      w = w0 + x0 - ev.clientX;   // to the left pulls it out
-      if (!moved && Math.abs(w - w0) < 6) return;
-      moved = true; tab.classList.add('pulling'); applyPull(w, true);
-    };
-    const up = () => {
-      hd.removeEventListener('pointermove', move); hd.removeEventListener('pointerup', up); hd.removeEventListener('pointercancel', up);
-      tab.classList.remove('pulling');
-      if (!moved) PULL.open = !PULL.open;
-      else if (w < 160) PULL.open = false;   // pushed back to the edge: put away (it keeps its width)
-      else { PULL.open = true; PULL.w = Math.round(clamp(w, 260, pullMax())); }
-      keep();
-    };
-    hd.addEventListener('pointermove', move); hd.addEventListener('pointerup', up); hd.addEventListener('pointercancel', up);
-  });
-  hd.addEventListener('click', (e) => { e.stopPropagation(); if (e.detail === 0) { PULL.open = !PULL.open; keep(); } });   // (a key; a tap is done on letting go)
-  return hd;
+  viewer.append(maxBar(), h('div', { id: 'sceneModeBar', class: 'layer-toolbar scene-modebar', role: 'toolbar', 'aria-label': 'Mode' }));
 }
 
 export function wireKeys() {

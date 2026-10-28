@@ -15,7 +15,7 @@ import { renderVideo, vidPause, wireVideoTransport } from './video.js';
 import { renderVfx, vfxPause, wireVfx } from './vfx.js';
 import { renderSound, sndPause, wireSound } from './sound.js';
 import { B, closeGallery, pauseBoard, renderBoard } from './board.js';
-import { maximizable, sideNav, wireSplitters } from './layout.js';
+import { fullScreen, sideNav, wireSplitters } from './layout.js';
 import { loadPrefs, openPrefs } from './prefs.js';
 
 // ---------------------------------------------------------------------------
@@ -137,7 +137,7 @@ function wireLayout() {
   wireSplitters();
   for (const id of ['generate', 'editor']) {
     const tab = $(`#tab-${id}`);
-    const max = maximizable(tab.querySelector('.stage'), tab.querySelector('.viewer'));
+    const max = fullScreen(tab);
     document.addEventListener('keydown', (e) => {   // f: full screen, as in the players (playback.js playKeys)
       if (e.key !== 'f' || !tab.classList.contains('active') || e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey) return;
       e.preventDefault(); max.toggle();

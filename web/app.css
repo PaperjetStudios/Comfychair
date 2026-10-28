@@ -1217,33 +1217,36 @@ button.sheet-caret { width: 22px; }
 .vfx-canvas { position: relative; flex: none; background: var(--checker); outline: 2px dashed var(--accent); outline-offset: -1px; overflow: hidden; touch-action: none; cursor: grab; }
 .vfx-canvas > video { position: absolute; object-fit: fill; box-shadow: 0 0 0 1px #000a; pointer-events: none; }
 
-/* ---- 3D full screen: the settings panel pulls out over the view (scene-ui.js pullHandle) ---- */
-.scene-pull { display: none; }
-#tab-scene .stage.maxed .scene-pull {
+/* ---- full screen, every tab: the settings panel pulls out over the view (layout.js fullScreen) ---- */
+.pull-tab { display: none; }
+.tab .stage.maxed .pull-tab {
   display: grid; place-items: center; position: fixed; z-index: 57; top: 50%; right: 0; transform: translateY(-50%);
   width: 26px; height: 96px; padding: 0; border: 1px solid var(--line-2); border-right: 0; border-radius: var(--r-lg) 0 0 var(--r-lg);
   background: color-mix(in srgb, var(--surface) 85%, transparent); color: var(--text); font-size: 22px; cursor: ew-resize; touch-action: none;
   transition: right .18s ease-out;
 }
-@media (pointer: coarse) { #tab-scene .stage.maxed .scene-pull { width: 32px; height: 112px; } }
-#tab-scene.panel-out .stage.maxed .scene-pull { right: var(--ov-w); }
-#tab-scene.scene-max > .panel {
+@media (pointer: coarse) { .tab .stage.maxed .pull-tab { width: 32px; height: 112px; } }
+.tab.panel-out .stage.maxed .pull-tab { right: var(--ov-w); }
+.tab.view-max > .panel {
   position: fixed; z-index: 56; top: 0; bottom: 0; right: 0; width: var(--ov-w); max-width: calc(100vw - 40px);
   padding-top: max(var(--gap), env(safe-area-inset-top)); padding-bottom: max(var(--gap), env(safe-area-inset-bottom));
   background: color-mix(in srgb, var(--surface) 80%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
   border-left: 1px solid var(--line-2); box-shadow: var(--shadow);
   transform: translateX(100%); visibility: hidden; transition: transform .18s ease-out, visibility 0s .18s;
 }
-#tab-scene.scene-max.panel-out > .panel { transform: none; visibility: visible; transition: transform .18s ease-out; }
-#tab-scene.scene-max.pulling > .panel, #tab-scene.pulling .scene-pull { transition: none; }
-#tab-scene.scene-max > .panel .scene-head { background: color-mix(in srgb, var(--surface) 92%, transparent); }
+.tab.view-max.panel-out > .panel { transform: none; visibility: visible; transition: transform .18s ease-out; }
+.tab.view-max.pulling > .panel, .tab.pulling .pull-tab { transition: none; }
 /* what sits at the view's right edge moves left of the pulled-out panel */
-#tab-scene.panel-out .stage.maxed .max-btn { right: calc(var(--ov-w) + 8px); }
+.tab.panel-out .stage.maxed .max-btn { right: calc(var(--ov-w) + 8px); }
 #tab-scene.panel-out .stage.maxed .scene-modebar { right: calc(var(--ov-w) + 54px); }
 @media (pointer: coarse) { #tab-scene.panel-out .stage.maxed .scene-modebar { right: calc(var(--ov-w) + 58px); } }
+/* Generate's action bar (Generate, Stop, batch) stays on hand over its full-screen view */
+body:has(#tab-generate.view-max.active) .actionbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 57; }
+body:has(#tab-generate.view-max.active.panel-out) .actionbar { right: var(--ov-w); }
+#tab-generate.view-max .stage.maxed { padding-bottom: 76px; }
 /* (a phone: what's left of the view is a strip, so they stack at its left, under the gizmo bar) */
 @media (max-width: 600px) {
-  #tab-scene.panel-out .stage.maxed .max-btn { right: auto; left: 8px; top: 58px; }
+  .tab.panel-out .stage.maxed .max-btn { right: auto; left: 8px; top: 58px; }
   #tab-scene.panel-out .stage.maxed .scene-modebar { right: auto; left: 8px; top: 108px; flex-direction: column; }
 }
 /* a viewer pinned over the page: sheets, pickers and toasts still come up over it */

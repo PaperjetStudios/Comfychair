@@ -291,3 +291,52 @@ export function zoomPan(viewer, layer, { min = 1, max = 8, snapOne = false, canZ
   viewer.addEventListener('click', (e) => { if (moved) { e.stopPropagation(); e.preventDefault(); moved = false; } }, true);
   return { reset, zoomBy, zoomAt, s: () => Z.s };
 }
+
+// ---------------------------------------------------------------------------
+// fullScreen: a tab's full screen, the same in every tab (the 3D tab's): the page goes full screen with the
+// stage pinned over it, and the tab's own settings panel pulls out over the view from a handle on the right
+// edge. It is the same live panel, pinned by CSS (.tab.view-max), so nothing moves or rebuilds. Tap the handle
+// to show or hide it, drag it to size it, or back past the edge to put it away. Kept per device, per tab.
+//   const max = fullScreen(tab, { viewer, title, onChange });   // max: maximizable's { toggle, exit, on, btn }
+// ---------------------------------------------------------------------------
+export function fullScreen(tab, { viewer = tab.querySelector('.viewer'), title = 'Full screen', onChange = null } = {}) {
+  const key = `deck.pull.${tab.id}`;
+  const P = { open: store.get(`${key}.open`, false) === true, w: +store.get(`${key}.w`, 380) || 380 };
+  const most = () => Math.max(260, innerWidth - 60);
+  const hd = h('button', { type: 'button', class: 'pull-tab', 'aria-label': 'Settings panel', 'aria-expanded': P.open,
+    title: 'Settings: tap to show or hide, drag to size' }, h('span', {}, '‹'));
+  const apply = (w = P.w, open = P.open) => {
+    const px = `${Math.round(clamp(w, 0, most()))}px`;
+    tab.style.setProperty('--ov-w', px);
+    document.documentElement.style.setProperty('--ov-w', px);   // (Generate's action bar, outside the tab, keeps clear of it)
+    tab.classList.toggle('panel-out', open && tab.classList.contains('view-max'));
+    hd.setAttribute('aria-expanded', open); hd.firstChild.textContent = open ? '›' : '‹';
+  };
+  const keep = () => { store.set(`${key}.open`, P.open); store.set(`${key}.w`, P.w); apply(); };
+  hd.addEventListener('pointerdown', (e) => {
+    if (e.button > 0) return;
+    e.preventDefault(); e.stopPropagation();
+    try { hd.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
+    const x0 = e.clientX, w0 = P.open ? Math.min(P.w, most()) : 0;
+    let w = w0, moved = false;
+    const move = (ev) => {
+      w = w0 + x0 - ev.clientX;   // to the left pulls it out
+      if (!moved && Math.abs(w - w0) < 6) return;
+      moved = true; tab.classList.add('pulling'); apply(w, true);
+    };
+    const up = () => {
+      hd.removeEventListener('pointermove', move); hd.removeEventListener('pointerup', up); hd.removeEventListener('pointercancel', up);
+      tab.classList.remove('pulling');
+      if (!moved) P.open = !P.open;
+      else if (w < 160) P.open = false;   // pushed back to the edge: put away (it keeps its width)
+      else { P.open = true; P.w = Math.round(clamp(w, 260, most())); }
+      keep();
+    };
+    hd.addEventListener('pointermove', move); hd.addEventListener('pointerup', up); hd.addEventListener('pointercancel', up);
+  });
+  hd.addEventListener('click', (e) => { e.stopPropagation(); if (e.detail === 0) { P.open = !P.open; keep(); } });   // (a key; a tap is done on letting go)
+  const stage = tab.querySelector('.stage');
+  stage.append(hd);
+  return maximizable(stage, viewer, { title, native: document.documentElement,
+    onChange: (on) => { tab.classList.toggle('view-max', on); apply(); onChange?.(on); } });
+}

@@ -1,5 +1,5 @@
 import * as FIGURE from './figure.js';
-import { maximizable } from './layout.js';
+import { fullScreen } from './layout.js';
 import { $, button, h, info as infoBtn, numSlider, sheetOpen, store, toast, toggle, canvasFont } from './ui.js';
 import {
   CAM, FPS, HOLD, OBJ, R, ROOM, SC, TEMP, TYPES, WP, addKey, bakeBase, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setKey, setMute
@@ -690,12 +690,10 @@ export function renderTransport() {
   renderTime(); renderKeys();
 }
 
-// ---- the 3D viewport, full screen: the shared maximize button (layout.js) ---------------------------
+// ---- the 3D viewport, full screen: the shared full screen (layout.js fullScreen, the panel pulls out) --------
 const stage = () => $('#tab-scene .stage');
 let sceneMax = null;
-// (the whole page goes full screen with the stage pinned over it, so the pulled-out panel's sheets and toasts show)
-export const maxBar = (onChange = null) => (sceneMax ||= maximizable($('#tab-scene .stage'), $('#sceneViewer'),
-  { title: 'Full screen the 3D view', native: document.documentElement, onChange })).btn;
+export const maxBar = () => (sceneMax ||= fullScreen($('#tab-scene'), { viewer: $('#sceneViewer'), title: 'Full screen the 3D view' })).btn;
 
 // ---- the keyboard (the sheet, when it was the last thing touched) ---------------------------------
 let focus = false;

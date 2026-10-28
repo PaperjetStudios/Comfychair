@@ -11,7 +11,7 @@ import { resultActions } from './useas.js';
 import { sideTag, wipeLine } from './compare.js';
 import { playKeys, transport } from './playback.js';
 import { TabSet } from './tabs.js';
-import { maximizable } from './layout.js';
+import { fullScreen } from './layout.js';
 import { sendToCraft } from './craft.js';
 
 // ---------------------------------------------------------------------------
@@ -1049,7 +1049,7 @@ export function wireVfx() {
       dump: () => ({ ...T }),
       load(payload) { T = { ...BLANK(), ...payload }; UI.srcInfo = null; UI.draw = null; UI.cmp = null; render(); },
     } });
-  const max = maximizable($('#tab-vfx .stage'), $('#tab-vfx .viewer'), { onChange: () => sizeOverlay() });
+  const max = fullScreen($('#tab-vfx'), { onChange: () => sizeOverlay() });
   addEventListener('resize', () => { if ($('#tab-vfx').classList.contains('active')) { sizeOverlay(); layoutCanvas(); } });
   playKeys(() => $('#tab-vfx').classList.contains('active'), () => vtp, () => ({ f: max.toggle }));
   // a result finishing (or failing) redraws its card

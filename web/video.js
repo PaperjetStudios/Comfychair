@@ -10,7 +10,7 @@ import { TabSet } from './tabs.js';
 import { clipSoundFields, durationOf, timeline, wavePeaks } from './timeline.js';
 import { fmtTime, playKeys, transport } from './playback.js';
 import * as COMP from './scene-comp.js';
-import { maximizable } from './layout.js';
+import { fullScreen } from './layout.js';
 import { canTrack, openTrack } from './track.js';
 import { CLIP_FX, keyRangeFields, loraChoice, restyleLoras, runClipStep, sendToVfx } from './vfx.js';
 import { snap, snapOn, snapStep, snapNearest, normDeg, Weight, WEIGHT, DEAD_PX, deadzone, snapBar } from './gizmo.js';
@@ -1085,7 +1085,7 @@ async function craftVideo(btn) {
   finally { btn.disabled = false; btn.textContent = label; }
 }
 
-// Full screen for the preview and its controls: the shared maximize button (layout.js)
+// Full screen for the preview and its controls: the shared full screen (layout.js fullScreen: the panel pulls out)
 const vidStage = () => $('#tab-video .stage');
 let vidMax = null;
 const vidFullscreen = () => !!vidMax?.on();
@@ -1141,7 +1141,7 @@ export function wireVideoTransport() {
     { step: { by: () => 1 / fpsNow(), label: 'one frame' }, fps: fpsNow, loop: { get: () => V.loop, set: (on) => { V.loop = on; store.set('deck.video.loop', on); } },
       extra: [button('📷 Frame', snapshotFrame, { title: 'Save this frame as an image' }), h('span', { id: 'vidLoad', class: 'hint' })] });
   $('#vidTransport').replaceWith(vtp.el);
-  vidMax = maximizable(vidStage(), $('#tab-video .viewer'), { onChange: () => requestDraw() });
+  vidMax = fullScreen($('#tab-video'), { onChange: () => requestDraw() });
   $('#tlTools').replaceChildren(
     button('✂ Split', TL.split, { title: 'Split at playhead (S)' }),
     button('🗑 Delete', TL.deleteSelected, { title: 'Delete selected clip (Del)' }),
