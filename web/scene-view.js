@@ -634,7 +634,7 @@ export function handMode(side) {
   const d = 0.3 * m.scale.y;
   aimFree(at.clone().addScaledVector(toPalm, d).toArray(), at.toArray());
   HAND.bar?.remove();
-  HAND.bar = h('div', { class: 'gz-bar hand-bar' }, gzChip('✋ Left hand', () => handMode('l'), { on: side === 'l' }), gzChip('Right hand ✋', () => handMode('r'), { on: side === 'r' }),
+  HAND.bar = h('div', { class: 'gz-bar hand-bar' }, gzChip('Left hand', () => handMode('l'), { on: side === 'l' }), gzChip('Right hand', () => handMode('r'), { on: side === 'r' }),
     h('span', { class: 'gz-chip hand-tip' }, 'Drag a fingertip to curl it'), gzChip('Done', () => handMode(null)));
   viewer.append(HAND.bar);
   syncMeshes(); renderPanel(); draw();

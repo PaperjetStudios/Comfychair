@@ -83,6 +83,30 @@ const PATHS = {
   choose: ['M4 4h16v16H4z', 'M8 12l3 3 5-6'],
   diamond: ['M12 3.5l8.5 8.5-8.5 8.5L3.5 12z'],
   chevron: ['M9.5 6l6 6-6 6'],
+  home: ['M4 11l8-7 8 7', 'M6 9.5V20h12V9.5'],
+  compass: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M15.5 8.5l-2 5-5 2 2-5z'],
+  reference: ['M3 5h18v14H3z', 'M12 5v14', 'M15 9h3M15 12h3'],
+  plus: ['M12 5v14M5 12h14'],
+  chevdown: ['M6 9.5l6 6 6-6'],
+  rows: ['M4 5h16v14H4z', 'M4 9.5h16M4 14.5h16'],
+  wave: ['M3 12c2.5-6 5-6 7.5 0s5 6 7.5 0 2.5-3 3-3'],
+  boxsel: ['M4 7V4h3M10 4h4M17 4h3v3M20 10v4M20 17v3h-3M14 20h-4M7 20H4v-3M4 14v-4'],
+  addsel: ['M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16z', 'M12 8v8M8 12h8'],
+  all: ['M4 4h16v16H4z', 'M8 8h8v8H8z'],
+  copy: ['M8 8h12v12H8z', 'M16 8V4H4v12h4'],
+  paste: ['M8 4h8v3H8z', 'M8 5.5H5V21h14V5.5h-3'],
+  magnet: ['M5 4v8a7 7 0 0 0 14 0V4h-4v8a3 3 0 0 1-6 0V4z', 'M5 8h4M15 8h4'],
+  more: ['M5 12h.01M12 12h.01M19 12h.01'],
+  angle: ['M4 19h16', 'M4 19L15 6', 'M10 19a6 6 0 0 0-1.7-4.2'],
+  person: ['M12 7a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z', 'M9 22v-7l-1.5-.5V10a2 2 0 0 1 2-2h5a2 2 0 0 1 2 2v4.5L15 15v7'],
+  figure: ['M12 6.5a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4z', 'M4 9l8 1.5L20 9', 'M12 10.5v5', 'M12 15.5l-4 6.5M12 15.5l4 6.5'],
+  box: ['M4 8l8-4 8 4v8l-8 4-8-4z', 'M4 8l8 4 8-4', 'M12 12v8'],
+  cylinder: ['M5 6c0-1.7 3.1-3 7-3s7 1.3 7 3-3.1 3-7 3-7-1.3-7-3z', 'M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6'],
+  wall: ['M3 5h18v14H3z', 'M3 10h18M3 15h18', 'M9 5v5M15 10v5M9 15v4'],
+  plane: ['M7 6h14l-4 12H3z'],
+  hexagon: ['M12 3l8 4.5v9L12 21l-8-4.5v-9z'],
+  cloud: ['M7 18a4.5 4.5 0 0 1-.6-9A6 6 0 0 1 18 8.5a4.8 4.8 0 0 1-.5 9.5z'],
+  contrast: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M12 3v18'],
 };
 // what used to be on the buttons -> its icon (filled: drawn solid, the "on" version of a shape)
 const GLYPHS = {
@@ -93,14 +117,14 @@ const GLYPHS = {
   '🎙': 'mic', '●': 'record', '▦': 'grid', '⇔': 'swap', '↔': 'swap', '⇄': 'swap', '⇆': 'swap', '↕': 'swapv', '📷': 'camera', '👁': 'eye',
   '👀': 'eye', '⬆': 'upload', '⤓': 'download', '✦': 'sparkle', '✨': 'sparkle', '✳': 'sparkle', '⛶': 'fit', '⤢': 'maximize', '⌖': 'target',
   '◉': 'target', '◌': 'circle', '🔁': 'loop', '🎲': 'dice', '🧊': 'cube', '📦': 'cube', '📁': 'folder', '📄': 'file', '⚠': 'warn',
-  '☑': 'choose', '◇': 'diamond', '◆': 'diamond', '✥': 'move',
+  '☑': 'choose', '▤': 'rows', '∿': 'wave', '⬚': 'boxsel', '⊕': 'addsel', '▣': 'all', '⧉': 'copy', '📋': 'paste', '🧲': 'magnet', '⋯': 'more', '⟳': 'refresh', '∠': 'angle', '▾': 'chevdown', '🧍': 'person', '🧒': 'person', '🤸': 'figure', '▭': 'box', '⬮': 'cylinder', '▯': 'wall', '▱': 'plane', '⬢': 'hexagon', '🗿': 'cube', '☁': 'cloud', '◐': 'contrast', '🖐': 'hand', '🕺': 'figure', '⌂': 'home', '🧭': 'compass', '◫': 'reference', '＋': 'plus', '◇': 'diamond', '◆': 'diamond', '✥': 'move',
 };
 const FILLED = new Set(['★', '◆', '●']);
 
 
 // A label that starts with one of those symbols: [its icon, the rest]. Another emoji there is dropped (the words
 // say it); anything else is left as it is. Strings only.
-const LEAD = /^(\p{Extended_Pictographic}|[\u2190-\u21ff\u2300-\u23ff\u25a0-\u27bf\u2900-\u297f\u2b00-\u2bff])\ufe0f?\s*/u;
+const LEAD = /^(\p{Extended_Pictographic}|[\u2190-\u23ff\u25a0-\u27ff\u2900-\u29ff\u2b00-\u2bff])\ufe0f?\s*/u;
 export function iconize(label) {
   if (typeof label !== 'string') return label;
   label = label.replace('❚❚', '❚');   // (two bars were the pause sign)

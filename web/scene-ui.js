@@ -2,7 +2,7 @@ import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import {
   $, actions, button, clamp, clone, closeSheet, field, h, iconBtn, layerRowsEl, numField, openSheet, panelTop, rangeField,
-  section, seg, sheetOpen, store, uid, undoToast, help, toggle, sizeSelect, chip, info, toast,
+  section, seg, sheetOpen, store, uid, undoToast, help, toggle, sizeSelect, chip, info, toast, icon, iconize,
 } from './ui.js';
 import {
   C, CAM, EVEN, FPS, HIST, camsOf, newCamera, setActiveCam, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropHolds, dropKeys, holdStart, frames, framesFor, hasKeys, hooks, keyCount, keyTarget,
@@ -134,15 +134,15 @@ function layerList() {
   const keys = (it) => { const n = keyCount(it); return n ? `${n} key${n > 1 ? 's' : ''}` : ''; };
   const hideBtn = (it, after) => iconBtn(it.hidden ? 'Show' : 'Hide', it.hidden ? '◌' : '◉', () => { it.hidden = !it.hidden; after(); });
   const delBtn = (id, name) => iconBtn(`Delete ${name}`, '🗑', () => removeLayer(id));
-  const rows = [{ sel: !R.sel, thumb: h('span', { class: 'scene-icon' }, '🎥'), name: SC.cams?.length ? `${SC.camera.name} (active of ${SC.cams.length + 1})` : 'Camera',
+  const rows = [{ sel: !R.sel, thumb: h('span', { class: 'scene-icon' }, icon('video')), name: SC.cams?.length ? `${SC.camera.name} (active of ${SC.cams.length + 1})` : 'Camera',
     hint: [`${SC.width}×${SC.height} · ${fmtSecs(SC.seconds)} s`, keys(SC.camera)].filter(Boolean).join(' · '), onclick: () => select(null) }];
   if (SC.room) {
-    rows.push({ sel: R.sel === ROOM, off: SC.room.hidden, thumb: h('span', { class: 'scene-icon' }, '⌂'), name: 'Room',
+    rows.push({ sel: R.sel === ROOM, off: SC.room.hidden, thumb: h('span', { class: 'scene-icon' }, icon('home')), name: 'Room',
       hint: `${SC.room.w}×${SC.room.d} m${SC.room.hidden ? ' · hidden' : ''}`, onclick: () => select(R.sel === ROOM ? null : ROOM),
       buttons: [hideBtn(SC.room, changed), delBtn(ROOM, 'the room')] });
   }
   for (const o of [...SC.objects].reverse()) {
-    rows.push({ sel: o.id === R.sel, off: o.hidden, thumb: h('span', { class: 'scene-icon' }, TYPES[o.type].icon), name: o.name,
+    rows.push({ sel: o.id === R.sel, off: o.hidden, thumb: h('span', { class: 'scene-icon' }, iconize(TYPES[o.type].icon)), name: o.name,
       hint: [TYPES[o.type].label, keys(o), o.hidden ? 'hidden' : ''].filter(Boolean).join(' · '),
       onclick: () => select(o.id === R.sel ? null : o.id), buttons: [hideBtn(o, changed), delBtn(o.id, o.name)] });
   }
@@ -351,7 +351,7 @@ function renderModes() {
   if (!el) return;
   const cur = modeOf().key;
   el.replaceChildren(...modeList().map((m) => h('button', { type: 'button', class: m.key === cur ? 'on' : '', title: m.hint || m.label,
-    'aria-label': m.label, 'aria-pressed': m.key === cur, 'data-scene-mode': m.key, onclick: () => setSceneMode(m.key) }, m.icon)));
+    'aria-label': m.label, 'aria-pressed': m.key === cur, 'data-scene-mode': m.key, onclick: () => setSceneMode(m.key) }, iconize(m.icon))));
 }
 
 // the panel: the mode's own contents, then whatever has been plugged into that mode (addModeSection)
@@ -396,12 +396,12 @@ function toggleFree() {
 export function buildToolbar() {
   viewer.append(h('div', { id: 'sceneToolbar', class: 'layer-toolbar scene-toolbar', role: 'toolbar', 'aria-label': 'Gizmo' },
     ...MODES.map(([m, icon, key, name]) => h('button', { type: 'button', class: 'ico', 'data-mode': m, title: `${name} (${key.toUpperCase()})`,
-      'aria-label': name, onclick: () => setMode(m) }, icon)),
+      'aria-label': name, onclick: () => setMode(m) }, iconize(icon))),
     h('span', { class: 'sep' }),
     h('button', { type: 'button', class: 'ico', 'data-depth': '', title: 'Depth: show the depth the render will use', 'aria-label': 'Depth',
-      onclick: () => { R.depth = !R.depth; draw(); renderToolbar(); } }, '◐'),
-    h('button', { type: 'button', class: 'ico', 'data-ref': '', 'aria-label': 'Reference', onclick: toggleRef }, '◫'),
-    h('button', { type: 'button', class: 'ico', 'data-free': '', 'aria-label': 'Director view', onclick: toggleFree }, '🧭'),
+      onclick: () => { R.depth = !R.depth; draw(); renderToolbar(); } }, icon('contrast')),
+    h('button', { type: 'button', class: 'ico', 'data-ref': '', 'aria-label': 'Reference', onclick: toggleRef }, icon('reference')),
+    h('button', { type: 'button', class: 'ico', 'data-free': '', 'aria-label': 'Director view', onclick: toggleFree }, icon('compass')),
     h('span', { class: 'sep' }),
     h('button', { type: 'button', 'data-undo': '', title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo', onclick: () => undo() }, '↶'),
     h('button', { type: 'button', 'data-redo': '', title: 'Redo (Ctrl+Shift+Z)', 'aria-label': 'Redo', onclick: () => undo(false) }, '↷')));

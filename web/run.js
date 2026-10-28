@@ -301,7 +301,12 @@ export function onResume() {
 
 // Two separate things can be down: ComfyChair itself (no socket) or ComfyUI behind it.
 function setServer(on) { S.serverUp = on; showConn(); }
-export function setConn(on) { S.connected = on; showConn(); }
+export function setConn(on) {
+  const back = on && S.connected === false;
+  S.connected = on; showConn();
+  // ComfyUI came back (a restart): the templates were read without its nodes, so read them again (app.js)
+  if (back) document.dispatchEvent(new Event('deck-comfy-back'));
+}
 function showConn() {
   const server = S.serverUp !== false, comfy = S.connected;
   $('#connDot').classList.toggle('on', server && comfy);

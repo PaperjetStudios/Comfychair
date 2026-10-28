@@ -6,7 +6,7 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as MG from './model-geom.js';
 import {
-  $, actions, api, button, closeSheet, field, h, hint, iconBtn, openSheet, section, seg, toast, uid, undoToast, help, numSlider, colorField, chip, canvasFont,
+  $, actions, api, button, closeSheet, field, h, hint, iconBtn, openSheet, section, seg, toast, uid, undoToast, help, numSlider, colorField, chip, canvasFont, icon,
 } from './ui.js';
 import { R, SC, TYPES, makers, newObject, save } from './scene-data.js';
 import { modeOf, registerMode } from './scene-modes.js';
@@ -515,7 +515,7 @@ async function removeEntry(e) {
 }
 const card = (e) => h('div', { class: 'mdl-card' },
   h('button', { type: 'button', class: 'mdl-thumb', title: `Edit ${e.name}`, onclick: () => openEntry(e) },
-    e.still ? h('img', { src: e.still.url, alt: e.name, loading: 'lazy' }) : h('span', {}, '🧊')),
+    e.still ? h('img', { src: e.still.url, alt: e.name, loading: 'lazy' }) : h('span', {}, icon('cube'))),
   h('div', { class: 'mdl-cap' }, h('span', { class: 'mdl-title' }, e.name),
     h('div', { class: 'mdl-btns' }, button('＋ Scene', () => addToScene(e), { cls: 'small primary', title: 'Put it in the scene' }),
       iconBtn('Edit', '✎', () => openEntry(e)), iconBtn('Delete', '🗑', () => removeEntry(e)))));

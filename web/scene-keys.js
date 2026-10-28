@@ -1,6 +1,6 @@
 import * as FIGURE from './figure.js';
 import { fullScreen } from './layout.js';
-import { $, button, h, info as infoBtn, numSlider, seg, sheetOpen, store, toast, toggle, canvasFont } from './ui.js';
+import { $, button, h, info as infoBtn, numSlider, seg, sheetOpen, store, toast, toggle, canvasFont, iconize } from './ui.js';
 import { icon } from './icons.js';
 import {
   CAM, FPS, HOLD, OBJ, OFF, R, ROOM, SC, TEMP, TYPES, WP, addKey, bakeBase, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setKey, setMute
@@ -189,9 +189,9 @@ export function renderKeys() {
     const nameRow = (r) => {
       const L = r.L, pad = `padding-left:${r.depth * 12}px`, off = L.item.hidden || L.item.mute ? ' off' : '', mine = L.id === R.sel;
       const caret = r.key ? h('button', { type: 'button', class: 'sheet-caret', 'aria-expanded': OPEN.has(r.key), 'aria-label': `${OPEN.has(r.key) ? 'Close' : 'Open'} ${r.label}`,
-        onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); toggleOpen(r.key); } }, OPEN.has(r.key) ? '▾' : '▸') : h('span', { class: 'sheet-caret' });
+        onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); toggleOpen(r.key); } }, iconize(OPEN.has(r.key) ? '▾' : '▸')) : h('span', { class: 'sheet-caret' });
       const name = h('button', { type: 'button', class: 'sheet-name' + (mine && (r.t === 'item' || (r.t === 'chan' && r.tracks[0].ch === G.ch)) ? ' sel' : '') + off, title: r.label,
-        onclick: () => { if (r.t === 'chan' && isScalar(r.tracks[0].ch)) { G.ch = r.tracks[0].ch; gRange = null; } select(L.other ? null : L.id); } }, r.label);
+        onclick: () => { if (r.t === 'chan' && isScalar(r.tracks[0].ch)) { G.ch = r.tracks[0].ch; gRange = null; } select(L.other ? null : L.id); } }, iconize(r.label));
       return h('div', { class: `sheet-name-row ${r.t}`, style: pad }, r.t === 'item' ? muteBtn(L) : null, caret, name);
     };
     $('#sceneNames').replaceChildren(h('div', { class: 'sheet-head' }), ...ROWS.map(nameRow));
@@ -221,7 +221,7 @@ export function toggleMute(L) {
 }
 const muteBtn = (L) => h('button', { type: 'button', class: 'mute-btn' + (L.item.mute ? ' on' : ''), 'aria-pressed': !!L.item.mute,
   'aria-label': `Mute ${L.label}`, title: L.item.mute ? 'Muted: ignores its keys and stays where it is (renders still use them). Tap to unmute' : 'Mute: ignore this layer\'s keys on screen so you can move it freely',
-  onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); toggleMute(L); } }, L.item.mute ? '🔇' : '🔊');
+  onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); toggleMute(L); } }, iconize(L.item.mute ? '🔇' : '🔊'));
 
 function layerSel(sh, L) {
   const el = h('select', { 'aria-label': 'Layer', onchange: (e) => select(sh[+e.target.value].other ? null : sh[+e.target.value].id) }, ...sh.map((x, i) => h('option', { value: i }, x.label)));

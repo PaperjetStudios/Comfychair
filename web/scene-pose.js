@@ -1,7 +1,7 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import { C, FIG, FPS, OBJ, R, SC, TEMP, addKey, current, rawCurrent, dropKeys, frames, isPoseCh, keyFrames, newObject, putKeys, sameTab, sample, save, write } from './scene-data.js';
-import { button, clone, field, h, hint, iconBtn, nameSheet, section, seg, store, toast, uid, undoToast , help, toggle, chips, chip } from './ui.js';
+import { button, clone, field, h, hint, iconBtn, nameSheet, section, seg, store, toast, uid, undoToast , help, toggle, chips, chip, icon } from './ui.js';
 import { HAND, changed, handMode, selectJoint } from './scene-view.js';
 import { renderPanel, slider } from './scene-ui.js';
 import { seek } from './scene-export.js';
@@ -361,7 +361,7 @@ export function promptProps() {
       const off = R.promptOff.has(it.id);
       return h('button', { type: 'button', class: 'chip prompt-chip' + (off ? ' off' : ''), title: off ? 'Put it back' : 'Leave it out',
         onclick: () => { if (off) R.promptOff.delete(it.id); else R.promptOff.add(it.id); renderPanel(); } },
-      `${it.pair ? '' : `${it.tag}: `}${it.text}`, h('span', { class: 'x' }, off ? '＋' : '✕'));
+      `${it.pair ? '' : `${it.tag}: `}${it.text}`, h('span', { class: 'x' }, icon(off ? 'plus' : 'close')));
     })),
     h('p', { class: 'prompt-out' }, text || '—'),
     field('Call them', seg([[false, '<Subject 1>, <Subject 2>'], [true, 'Their names']], R.promptNames, (v) => { R.promptNames = v; renderPanel(); })),
