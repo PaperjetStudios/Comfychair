@@ -1,5 +1,5 @@
 import { h } from './ui.js';
-import { previewUrl } from './core.js';
+import { previewUrl, thumbUrl } from './core.js';
 import { fmtTime } from './playback.js';
 
 // ---------------------------------------------------------------------------
@@ -45,7 +45,7 @@ export const waveArt = (o, w, cls) => h('div', { class: cls }, h('span', { class
 export function kindTile(o, g = null) {
   const d = kindDef(o), src = kindOf(o) === 'mesh' && g?.params?.image;
   return h('div', { class: 'kind-tile' },
-    src ? h('img', { src: `/api/input?name=${encodeURIComponent(src)}&thumb=320`, alt: '', loading: 'lazy' }) : null,
+    src ? h('img', { src: thumbUrl(src, 320), alt: '', loading: 'lazy', onerror: (e) => e.target.remove() }) : null,   // (the picture may be gone)
     h('span', { class: 'kind-icon', 'aria-hidden': 'true' }, d.icon),
     h('span', { class: 'kind-name' }, d.name), h('span', { class: 'kind-facts' }, factsOf(o)));
 }
