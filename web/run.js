@@ -597,6 +597,20 @@ export async function useControlVideo(g, sc) {
   toast(`Control video #${g.id} set: add references and a prompt`);
 }
 
+// A clip (a 3D colour render, a splat camera move) into deck-h3-refine: H3 draws it again from part-way, with references.
+// depth: a depth render of the same camera, to hold the shapes (optional)
+export async function useRefineClip(g, index = 0, depth = null) {
+  if (!S.templates.find((t) => t.id === 'deck-h3-refine')) return toast('Template deck-h3-refine is missing', true);
+  S.history.set(g.id, S.history.get(g.id) || g);
+  switchTab('generate');
+  if (S.tpl?.id !== 'deck-h3-refine') selectTemplate('deck-h3-refine');
+  const vids = S.tpl.fields.filter((f) => f.kind === 'video');
+  if (vids[0]) setVal(vids[0].key, { generation: g.id, index });
+  if (depth && vids[1]) { S.history.set(depth.id, S.history.get(depth.id) || depth); setVal(vids[1].key, { generation: depth.id, index: 0 }); }
+  renderFields();
+  toast(`Clip #${g.id} set: add references (the splat's photo first) and Generate`);
+}
+
 // Load a past generation's settings into Generate to edit: prompt (and its builder parts), seed,
 // images, LoRAs, sizes. The seed is set to Fixed so you get the same result until you change it.
 // A run made in the VFX tab opens there instead, as a new tab with that run's effect, inputs and settings.

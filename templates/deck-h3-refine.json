@@ -1,0 +1,481 @@
+{
+ "1": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
+   "weight_dtype": "default"
+  },
+  "_meta": {
+   "title": "@10 Model [unet_name]"
+  }
+ },
+ "2": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+   "type": "minimax",
+   "device": "default"
+  },
+  "_meta": {
+   "title": "Load CLIP"
+  }
+ },
+ "3": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "minimax_h3_video_vae_int8_convrot.safetensors"
+  },
+  "_meta": {
+   "title": "Load video VAE"
+  }
+ },
+ "4": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+  },
+  "_meta": {
+   "title": "Load audio VAE"
+  }
+ },
+ "6": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "model": [
+    "1",
+    0
+   ],
+   "lora_name": "none",
+   "strength_model": 1.0
+  },
+  "_meta": {
+   "title": "@6 LoRAs"
+  }
+ },
+ "8": {
+  "class_type": "RandomNoise",
+  "inputs": {
+   "noise_seed": 0
+  },
+  "_meta": {
+   "title": "@8 Seed"
+  }
+ },
+ "30": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "model": [
+    "6",
+    0
+   ],
+   "lora_name": "h3/minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+   "strength_model": 1.0
+  },
+  "_meta": {
+   "title": "@7 Turbo LoRA"
+  }
+ },
+ "50": {
+  "class_type": "ModelPatchLoader",
+  "inputs": {
+   "name": "minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors"
+  },
+  "_meta": {
+   "title": "Load Fun ControlNet"
+  }
+ },
+ "src": {
+  "class_type": "VHS_LoadVideoPath",
+  "inputs": {
+   "video": "",
+   "force_rate": 24,
+   "custom_width": 0,
+   "custom_height": 0,
+   "frame_load_cap": 0,
+   "skip_first_frames": 0,
+   "select_every_nth": 1,
+   "format": "H3"
+  },
+  "_meta": {
+   "title": "@1 Clip to refine [video]"
+  }
+ },
+ "7": {
+  "class_type": "MiniMaxH3ReferenceToVideo",
+  "inputs": {
+   "clip": [
+    "2",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ],
+   "audio_vae": [
+    "4",
+    0
+   ],
+   "prompt": "The same shot, as a real photograph: clean sharp detail, true textures and light, steady camera, no smearing or floating specks. <Picture 1> shows the place.",
+   "width": 768,
+   "height": 448,
+   "length": [
+    "src",
+    1
+   ],
+   "ref_image_size": "match",
+   "ref_images.ref_image_0": [
+    "20",
+    0
+   ],
+   "ref_images.ref_image_1": [
+    "21",
+    0
+   ],
+   "ref_images.ref_image_2": [
+    "22",
+    0
+   ],
+   "ref_images.ref_image_3": [
+    "23",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "@2 Prompt [prompt,ref_image_size]"
+  }
+ },
+ "20": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@3 References"
+  }
+ },
+ "21": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@3 References"
+  }
+ },
+ "22": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@3 References"
+  }
+ },
+ "23": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@3 References"
+  }
+ },
+ "ctlvid": {
+  "class_type": "VHS_LoadVideoPath",
+  "inputs": {
+   "video": "",
+   "force_rate": 24,
+   "custom_width": 0,
+   "custom_height": 0,
+   "frame_load_cap": 0,
+   "skip_first_frames": 0,
+   "select_every_nth": 1,
+   "format": "H3"
+  },
+  "_meta": {
+   "title": "@5 Depth video to hold the shapes (optional) [video]"
+  }
+ },
+ "51": {
+  "class_type": "MiniMaxH3FunControlNetApply",
+  "inputs": {
+   "model": [
+    "30",
+    0
+   ],
+   "model_patch": [
+    "50",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ],
+   "strength": 0.7,
+   "start_percent": 0.0,
+   "end_percent": 0.6,
+   "control_video": [
+    "ctlsize",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "@6 Depth hold [strength,end_percent]",
+   "deck_passthrough": "model",
+   "deck_follow_on": [
+    "control_video"
+   ]
+  }
+ },
+ "enc": {
+  "class_type": "VAEEncode",
+  "inputs": {
+   "pixels": [
+    "src",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Clip into H3's latent"
+  }
+ },
+ "up": {
+  "class_type": "MinimaxH3LatentUpscaler3D",
+  "inputs": {
+   "latent": [
+    "enc",
+    0
+   ],
+   "model_name": "minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors",
+   "mode": "scale by multiplier",
+   "mode.scale": [
+    "scale",
+    0
+   ],
+   "align": 32,
+   "enable_temporal_chunking": false,
+   "force_unload": true,
+   "device": "cuda",
+   "precision": "bf16"
+  },
+  "_meta": {
+   "title": "Latent upscale"
+  }
+ },
+ "split": {
+  "class_type": "LTXVSeparateAVLatent",
+  "inputs": {
+   "av_latent": [
+    "7",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "Empty sound latent"
+  }
+ },
+ "av": {
+  "class_type": "LTXVConcatAVLatent",
+  "inputs": {
+   "video_latent": [
+    "up",
+    0
+   ],
+   "audio_latent": [
+    "split",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "Clip + sound latent"
+  }
+ },
+ "9": {
+  "class_type": "KSamplerSelect",
+  "inputs": {
+   "sampler_name": "euler"
+  },
+  "_meta": {
+   "title": "Sampler select"
+  }
+ },
+ "10": {
+  "class_type": "BasicScheduler",
+  "inputs": {
+   "model": [
+    "51",
+    0
+   ],
+   "scheduler": "simple",
+   "steps": 4,
+   "denoise": 0.5
+  },
+  "_meta": {
+   "title": "@7 Strength [denoise,steps]"
+  }
+ },
+ "11": {
+  "class_type": "BasicGuider",
+  "inputs": {
+   "model": [
+    "51",
+    0
+   ],
+   "conditioning": [
+    "7",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Guider"
+  }
+ },
+ "12": {
+  "class_type": "SamplerCustomAdvanced",
+  "inputs": {
+   "noise": [
+    "8",
+    0
+   ],
+   "guider": [
+    "11",
+    0
+   ],
+   "sampler": [
+    "9",
+    0
+   ],
+   "sigmas": [
+    "10",
+    0
+   ],
+   "latent_image": [
+    "av",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Sampler"
+  }
+ },
+ "13": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "12",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Decode video"
+  }
+ },
+ "15": {
+  "class_type": "VHS_VideoCombine",
+  "inputs": {
+   "images": [
+    "13",
+    0
+   ],
+   "frame_rate": 24,
+   "loop_count": 0,
+   "filename_prefix": "comfydeck/h3refine",
+   "format": "video/h264-mp4",
+   "pix_fmt": "yuv420p",
+   "crf": 19,
+   "save_metadata": true,
+   "trim_to_audio": false,
+   "pingpong": false,
+   "save_output": true
+  },
+  "_meta": {
+   "title": "Save video"
+  }
+ },
+ "scale": {
+  "class_type": "PrimitiveFloat",
+  "inputs": {
+   "value": 1.5
+  },
+  "_meta": {
+   "title": "@4 Upscale (1 = same size, up to 2)"
+  }
+ },
+ "vinfo": {
+  "class_type": "VHS_VideoInfoLoaded",
+  "inputs": {
+   "video_info": [
+    "src",
+    3
+   ]
+  },
+  "_meta": {
+   "title": "Clip size"
+  }
+ },
+ "mw": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "round(a * b / 32) * 32",
+   "values.a": [
+    "vinfo",
+    3
+   ],
+   "values.b": [
+    "scale",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Upscaled width"
+  }
+ },
+ "mh": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "round(a * b / 32) * 32",
+   "values.a": [
+    "vinfo",
+    4
+   ],
+   "values.b": [
+    "scale",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Upscaled height"
+  }
+ },
+ "ctlsize": {
+  "class_type": "ImageScale",
+  "inputs": {
+   "image": [
+    "ctlvid",
+    0
+   ],
+   "upscale_method": "bilinear",
+   "width": [
+    "mw",
+    1
+   ],
+   "height": [
+    "mh",
+    1
+   ],
+   "crop": "center"
+  },
+  "_meta": {
+   "title": "Depth at the upscaled size",
+   "deck_drop": true
+  }
+ }
+}

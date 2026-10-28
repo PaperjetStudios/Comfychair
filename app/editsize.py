@@ -9,7 +9,7 @@ from .accel import _is_link
 
 WIDTH, HEIGHT = "__deck.width", "__deck.height"
 # upscalers size their output from the input on purpose: no picker, no crop
-UPSCALE_CLASSES = {"SeedVR2Preprocess", "ImageUpscaleWithModel", "ImageUpscaleWithModelBatched"}
+UPSCALE_CLASSES = {"SeedVR2Preprocess", "ImageUpscaleWithModel", "ImageUpscaleWithModelBatched", "MinimaxH3LatentUpscaler3D"}
 
 
 def fields(workflow: dict, template_fields: list[dict]) -> list[dict]:

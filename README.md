@@ -440,9 +440,16 @@ between Move, Rotate and Scale. Tap empty space to go back to the camera: the vi
 drag to orbit, two fingers to pan and zoom. **◆ Key** keyframes the selected object (or the camera) at
 the playhead; once something has keys, changing it writes a key where the playhead is. The key sheet
 under the view has a row per layer: drag a key along its row to retime it, tap a row to scrub (←/→ step
-a frame, Shift+←/→ jump between keys). With **Auto key** off (K), a change to something animated is only
+a frame, Shift+←/→ to the start / end, ↑/↓ jump between keys). With **Auto key** off (K), a change to something animated is only
 held until ◆ Key or the playhead moves, so you can look around without touching the keys. ↶ / ↷ (Ctrl+Z,
-Ctrl+Shift+Z) undo and redo.
+Ctrl+Shift+Z) undo and redo (in the top bar).
+
+**Refining a render** (`deck-h3-refine`): **Use as → Refine with H3** on any clip (a splat camera move rendered as colour
+video, a 3D render) loads it into a template that encodes it into H3's latent, enlarges it with the H3 latent upscaler
+(**Upscale**, 1 keeps the size) and samples it again from part-way (**Strength**: Denoise and Steps), conditioned on the
+prompt and up to four **References** (the splat's source photo first). An optional **Depth video** of the same camera
+(the 3D tab's depth render) is resized to match and applied as H3's Fun ControlNet (**Depth hold**), so a stronger pass
+can clean up without moving the room. The clip is trimmed to H3's frame grid (17k+5 frames at 24 fps); no sound.
 **Real size**: the scene is in metres. Each object's settings show its **Real size** (height × width × depth).
 The person button on the view's bar puts a 1.8 m outline person beside what is selected, and the floor has
 faint metre marks; neither ever shows in a render. **Measure…** on an object: tap two points on it, then say
