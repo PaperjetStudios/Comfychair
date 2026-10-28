@@ -5,6 +5,7 @@ import {
 import { ASPECT_PRESETS, S, inputUrl, switchTab, thumbUrl } from './core.js';
 import { openImagePicker, registerPickerSource, uploadImage } from './media.js';
 import { TabSet } from './tabs.js';
+import { snapNearest } from './gizmo.js';
 import { mpInput, persist, renderFields } from './generate.js';
 import { openCraftSheet, sendToCraft } from './craft.js';
 
@@ -362,15 +363,6 @@ function snapTargets(l) {
   const rs = visibleLayers().filter((o) => o !== l).map(layerRect), f = alignFrame(l);
   if (f) rs.push(f);
   return { xs: rs.flatMap((r) => [r.x, r.x + r.w / 2, r.x + r.w]), ys: rs.flatMap((r) => [r.y, r.y + r.h / 2, r.y + r.h]) };
-}
-// the smallest shift (d) that puts one of vals on a target within thr, and that target (at)
-function snapNearest(vals, targets, thr) {
-  let best = null;
-  for (const v of vals) for (const t of targets) {
-    const d = t - v;
-    if (Math.abs(d) <= thr && (!best || Math.abs(d) < Math.abs(best.d))) best = { d, at: t };
-  }
-  return best;
 }
 
 // Set a layer's crop without moving the image under it

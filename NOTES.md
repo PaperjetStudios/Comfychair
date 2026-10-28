@@ -171,3 +171,20 @@ will then fail to start until that process is stopped, so stop it before the nex
   elsewhere. Depth range is measured once per stage. Loaded lazily (three.js) on the first scene clip.
 - Export: each scene clip's frames are drawn at export size and rate and uploaded in batches to `POST /api/scene/clip`
   (temp mp4 in `data/tmp/sceneclips`, swept after a day); the render takes it as `src: { clip }`.
+
+## Shared engines (2026-10-28, branch `unify-engines`)
+The tabs that did the same job twice now share it:
+- **Timeline** (`web/timeline.js`): Video and Sound. Clip lengths, cross-fades, scrub, move/trim with snapping, zoom/fit,
+  split, delete with Undo, cross-fade with the previous clip, waveform peaks and media durations. Each tab keeps its own
+  state, clip drawing, track heads and playback, and passes what differs (`canDrop`, `fadeGain(…, outOverlap)`). The
+  export side shares `videoedit.timeline_items()` and `videoedit.check()`.
+- **Runs** (`web/make.js`): every template run (Generate, VFX, clip effects, Sound makers, 3D motion, Run again) goes
+  through `queueRun`; `waitGen`, `runAndWait`, the role-based field lookup (`ROLES`, `valuesByRole`) and
+  `adoptGenerations` live there. `face: { kind, state }` is kept as `params.__face` (VFX: Replay & edit reopens it there).
+- **Lineage** (`app/main.py lineage`): a run's parent, when the caller names none, is the first input that came from an
+  output (clip, then picture, then sound). Pictures sent in from an output remember it in `input_origins` (a cropped
+  copy keeps it). Generate's `S.pendingParent` is gone.
+- **Inputs**: `vfield.js clipInput` is the clip field Generate and VFX show; `media.js bareSource / clipUrl / clipLabel`
+  are the one way to read a clip or sound source. `gizmo.js snapNearest` is the Editor's and the Video gizmo's snap.
+- Module cycles: `make.js` ↔ `run.js` ↔ `generate.js` import each other. Keep top-level code in them free of the others'
+  `const`s (read them inside functions), or a load order change throws "before initialization".

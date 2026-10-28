@@ -10,6 +10,15 @@ const saveSnap = () => store.set('deck.snap', snap);
 export const snapOn = (key, ev) => !!snap[key] && !ev?.altKey;
 
 export const snapStep = (v, step) => Math.round(v / step) * step;
+// the smallest shift (d) that puts one of vals on one of targets within thr, and that target (at); null if none is that near
+export function snapNearest(vals, targets, thr) {
+  let best = null;
+  for (const v of vals) for (const t of targets) {
+    const d = t - v;
+    if (Math.abs(d) <= thr && (!best || Math.abs(d) < Math.abs(best.d))) best = { d, at: t };
+  }
+  return best;
+}
 export const normDeg = (d) => ((((d + 180) % 360) + 360) % 360) - 180;
 
 // ---- weight: critically damped springs ----

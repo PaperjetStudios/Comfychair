@@ -12,7 +12,7 @@ import * as COMP from './scene-comp.js';
 import { maximizable } from './layout.js';
 import { canTrack, openTrack } from './track.js';
 import { CLIP_FX, restyleLoras, runClipStep, sendToVfx } from './vfx.js';
-import { snap, snapOn, snapStep, normDeg, Weight, WEIGHT, DEAD_PX, deadzone, snapBar } from './gizmo.js';
+import { snap, snapOn, snapStep, snapNearest, normDeg, Weight, WEIGHT, DEAD_PX, deadzone, snapBar } from './gizmo.js';
 import { openCraftSheet, sendToCraft } from './craft.js';
 
 // ---------------------------------------------------------------------------
@@ -423,16 +423,12 @@ function snapMove(g, v, [x, y], ev) {
   let lockX = false, lockY = false;
   if (snapOn('edges', ev)) {
     const cs = CORNERS.map(([cx, cy]) => world({ ...g, px: x, py: y }, (cx - g.ax) * g.dw, (cy - g.ay) * g.dh));
-    const near = (vals, targets) => {
-      let best = null;
-      for (const a of vals) for (const t of targets) if (Math.abs(t - a) < thr && (!best || Math.abs(t - a) < Math.abs(best.d))) best = { d: t - a, t };
-      return best;
-    };
+    const near = (vals, targets) => snapNearest(vals, targets, thr);
     const xs = cs.map((c) => c[0]), ys = cs.map((c) => c[1]);
     const bx = near([Math.min(...xs), (Math.min(...xs) + Math.max(...xs)) / 2, Math.max(...xs), x], [0, g.W / 2, g.W]);
     const by = near([Math.min(...ys), (Math.min(...ys) + Math.max(...ys)) / 2, Math.max(...ys), y], [0, g.H / 2, g.H]);
-    if (bx) { x += bx.d; lockX = true; gd.push({ axis: 'x', v: bx.t }); }
-    if (by) { y += by.d; lockY = true; gd.push({ axis: 'y', v: by.t }); }
+    if (bx) { x += bx.d; lockX = true; gd.push({ axis: 'x', v: bx.at }); }
+    if (by) { y += by.d; lockY = true; gd.push({ axis: 'y', v: by.at }); }
   }
   if (snapOn('grid', ev)) {
     const gp = (g.W * snap.gridPct) / 100;
