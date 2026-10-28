@@ -342,22 +342,34 @@ async def link_open(body: dict = Body(...)):
     url = str(body.get("url") or "").strip()
     if not re.match(r"^https?://", url):
         raise HTTPException(400, "Paste a link that starts with http:// or https://")
-    info = await asyncio.to_thread(_ytdlp, url)
+    # the same link read again (to cut another piece): its page and its smooth preview are reused, not fetched again
+    seen = next((x for x in LINKS.values() if x["url"] == url and time.time() - x["t"] < LINK_TTL), None)
+    info = seen["info"] if seen else await asyncio.to_thread(_ytdlp, url)
     if info.get("_type") == "playlist":
         raise HTTPException(400, "That's a playlist: open one video and copy its link")
     if info.get("is_live"):
         raise HTTPException(400, "Live streams can't be cut: wait for the recording")
     lid = hashlib.sha1(f"{url}{time.time()}".encode()).hexdigest()[:12]
     v, a = pick_preview(info.get("formats") or ([info] if info.get("url") else []))
-    link = {"url": url, "info": info, "t": time.time(), "v": v, "a": a,
+    link = {"url": url, "info": info, "t": seen["t"] if seen else time.time(), "v": v, "a": a,
             "preview": {"video": f"/api/clip/link/{lid}/v", "audio": a and f"/api/clip/link/{lid}/a"} if v else None}
+    have = _cache_file(url)
+    if have.is_file():   # copied already (smooth, or the small copy of a site that streams in pieces): seek it locally
+        _touch(have)
+        link["file"] = str(have)
+        link["preview"] = {"video": f"/api/clip/link/{lid}/file", "audio": None}
     for old in [k for k, x in LINKS.items() if time.time() - x["t"] > LINK_TTL]:
         del LINKS[old]
     LINKS[lid] = link
     out = _summary(lid, link)
-    if v:
+    if v and not link.get("file"):
         out["cache"] = _cache(lid, link)
     return out
+
+
+def _cache_file(url: str) -> Path:
+    """Where a link's whole-video copy lives: by its link, so loading it again finds it."""
+    return TMP / f"link_{hashlib.sha1(url.encode()).hexdigest()[:16]}.mp4"
 
 
 def _size(f: dict | None, duration: float) -> float:
@@ -374,7 +386,7 @@ def _cache(lid: str, link: dict) -> str | None:
     v, a = pick_preview(fmts, CACHE_H)
     if not v or _size(v, info.get("duration") or 0) + _size(a, info.get("duration") or 0) > CACHE_MAX:
         return None
-    out = TMP / f"link_{lid}.mp4"
+    out = _cache_file(link["url"])
     base = [sys.executable, "-m", "yt_dlp"] if _has_module() else ["yt-dlp"]
 
     def work(job):
@@ -465,10 +477,10 @@ async def link_preview(lid: str):
     if dur > PREVIEW_DL_MAX:
         raise HTTPException(400, f"That site only streams in pieces, and copying {dur / 60:.0f} minutes just to "
                                  "preview takes too long. Type the start and end times instead.")
-    out = TMP / f"link_{lid}.mp4"
+    out = _cache_file(link["url"])
 
     def work(job):
-        job["writing"] = f"link_{lid}."
+        job["writing"] = out.name   # (the sweep leaves the copy being made alone)
         sweep()
         fmts = _ytdlp(link["url"], "-f", f"b[height<={PREVIEW_H}]/bv*[height<={PREVIEW_H}]+ba/w", "-S", "vcodec:h264,acodec:aac")
         inputs, amap = _stream_inputs(fmts)
