@@ -1,6 +1,7 @@
 import { h, store, toast, clamp, seg, field, section, help, rangeField, button, hint, pctFmt, colorField, openSheet, closeSheet, actions, propNum } from './ui.js';
 import { icon } from './icons.js';
 import { ASPECT_PRESETS } from './core.js';
+import { canvasToImage, imageToCanvas, invert, layerMatrix } from './layer-geom.js';
 
 // ---------------------------------------------------------------------------
 // Painting in the Editor: brushes with pen pressure and tilt, an eraser, blank canvas layers, undo.
@@ -65,7 +66,8 @@ function scratch(k, w, hh) {
   return s;
 }
 // canvas px -> the layer's own pixels (its crop and scale undone)
-const toLayer = (l, p) => ({ x: (p.x - l.x) / l.scale + l.crop.x * l.img.naturalWidth, y: (p.y - l.y) / l.scale + l.crop.y * l.img.naturalHeight });
+// (through its turn and mirrors: a stroke lands under the pen on a turned layer)
+const toLayer = canvasToImage;
 
 export function flood(img, W, H, x0, y0, tol) {
   const d = img.data, t = Math.round(clamp(tol, 0, 1) * 255), i0 = (y0 * W + x0) * 4;
@@ -336,9 +338,9 @@ export function createPaint(ctx) {
     if (x < 0 || y < 0 || x >= W || y >= H) { toast('Tap inside the layer to fill it', true); return; }
     let src;
     if (P.fillAll) {   // what every layer shows there, drawn in this layer's pixels
-      const s = scratch('sample', W, H), k = 1 / l.scale;
+      const s = scratch('sample', W, H);
       s.ctx.setTransform(1, 0, 0, 1, 0, 0); s.ctx.clearRect(0, 0, W, H);
-      s.ctx.setTransform(k, 0, 0, k, -l.x * k + l.crop.x * W, -l.y * k + l.crop.y * H);
+      s.ctx.setTransform(...invert(layerMatrix(l)));   // canvas px -> this layer's pixels
       X.composite(s.ctx);
       s.ctx.setTransform(1, 0, 0, 1, 0, 0);
       src = s.ctx.getImageData(0, 0, W, H);
@@ -554,7 +556,7 @@ export function createPaint(ctx) {
     }
     return null;
   }
-  const toCanvasPt = (l, q) => ({ x: l.x + (q.x - l.crop.x * l.img.naturalWidth) * l.scale, y: l.y + (q.y - l.crop.y * l.img.naturalHeight) * l.scale });
+  const toCanvasPt = imageToCanvas;
   function beginSelect(e, l) {
     layerCanvas(l);
     const p = X.toCanvas(e), q = toLayer(l, p), s = selOf(l);
@@ -625,7 +627,7 @@ export function createPaint(ctx) {
       c.drawImage(l.img, 0, 0);
       c.globalCompositeOperation = 'destination-in'; c.drawImage(cur.mask, 0, 0);
       const n = { name: null, label: `${l.label || l.name?.split('/').pop() || 'Layer'} ${kind === 'cut' ? 'cut' : 'copy'}`, crop: { ...l.crop }, x: l.x, y: l.y,
-        scale: l.scale, opacity: 1, hidden: false, blend: 'normal', img: cv };
+        scale: l.scale, rotation: l.rotation || 0, flipX: !!l.flipX, flipY: !!l.flipY, opacity: 1, hidden: false, blend: 'normal', img: cv };
       if (kind === 'cut') change(l, bb, (cc) => { cc.globalCompositeOperation = 'destination-out'; cc.drawImage(cur.mask, bb.x, bb.y, bb.w, bb.h, bb.x, bb.y, bb.w, bb.h); });
       const e = E();
       e.layers.splice(e.layers.indexOf(l) + 1, 0, n);

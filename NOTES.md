@@ -254,3 +254,19 @@ The tabs that did the same job twice now share it:
 - **Side panels**: `layout.js sideNav` scrolls to a section (nothing sticky); sections go add/list → selected → how it's made
   → guides → output.
 - **HTTPS / PWA**: `deploy/tailscale-https.sh [port] [https-port]`; `DECK_NAME` names a second copy's app (manifest + title).
+
+## Editor engine, turned layers, the Story canvas (2026-10-28)
+- **One engine, several hosts**: `web/editor-engine.js createEditor(cfg)` is the Editor's layer stack (state `E`, view,
+  animation, pointer, panel sections) and `web/paint.js createPaint(ctx)` its painter (tool, selection, stroke, undo,
+  strip), one of each per canvas. `editor.js` is the Editor tab's host (edit tabs, stills, picker source, `addToEditor`);
+  `story.js` mounts a second one on the Story tab's canvas view. cfg: `{ canvas, empty, size?, anim?, panel,
+  panelParts(eng) | renderPanel(eng), active(), onChange(), docId(), name(), initial }`; the engine gives `load(payload)`,
+  `dump()`, `compose(canvas)`, `addImage(name, o)`, `frame()`, `loading()`, `paint` and the panel's sections.
+- **Turned layers** (`web/layer-geom.js`, node tests in `tests/layer_geom.test.mjs`): `l.rotation` (degrees, about the
+  kept part's centre), `l.flipX` / `l.flipY`; `l.x/y` stay the unturned top-left. `layerMatrix(l)` maps image px to
+  canvas px; drawing, hit tests (`insideLayer`), painting (`toLayer` = `canvasToImage`), crop (`cropKeepingPlace` keeps
+  the image still while the pivot moves), snapping, fit, arrange and align use it or `bounds(l)`. Saved only when set.
+  `rotation` is an animatable channel. PhotoCraft gets a turned layer baked into a picture of its box.
+- **Story canvas**: a shot's composition is `s.comp` (an editor payload); its flattened picture is saved through
+  `/api/paint` as `s.canvas` (paint files named by story-tabs are kept by `prune_paint`). Characters are the
+  `characters` store kind (`web/characters.js`), mentions and prompt lines in `web/cast.js` (node tests).
