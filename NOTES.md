@@ -199,3 +199,20 @@ The tabs that did the same job twice now share it:
   (pin / mark / select), and the wipe *gestures* in VFX (its canvas also takes points, paths and boxes).
 - Module cycles: `make.js` ↔ `run.js` ↔ `generate.js` import each other. Keep top-level code in them free of the others'
   `const`s (read them inside functions), or a load order change throws "before initialization".
+- **Keyframes** (`web/keys.js`, `web/keyed.js`, `app/keyexpr.py`): one engine. `keys.js` is the key maths (`sampleKeys`,
+  `putKey`, `removeKey`, `nextKey`, plus the 3D sheet's moves); the 3D tab keeps its own key sheet UI on top of it.
+  `keyed.js keyedRange` is a slider with ◀ ◆ ▶ (After Effects style: ◆ starts animating a property, then any change keys it).
+  - Video clips: `it.chans[ch]` in the clip's **source time** (seconds), so moving/trimming keeps the animation on the picture;
+    scale, rotation, position, opacity and level. Splits deep-copy the keys (a still's second half shifts them). The export
+    writes each channel as a per-frame ffmpeg expression (`keyexpr.expr`; `videoedit._keyed_scale` / `_place_keyed`).
+  - Editor layers: `E.anim = { len, fps }`, `E.t` the playhead; `l.chans` in edit time. `l.x / y / scale / opacity` always
+    hold the pose at the playhead (`poseAt`), and `persistEditor` keys whatever an animated property moved (`keyPose`), so
+    drags, nudges, align and arrange key without knowing about it. An animation keeps a fixed canvas and exports as a clip:
+    frames → `scene-comp.js framesToClip` (`/api/scene/clip`, shared with the 3D compositions) → `/api/video/render`.
+- **Kinds** (`web/kinds.js`, `app/imageprep.py KINDS`): one table of what each kind is called, its icon and its facts
+  (`factsOf`), `cardPicture` / `kindTile` for every card. `main.py fill_facts` keeps size, length, fps and frames on each
+  output. Where a kind can go is `useas.js openUseAs` (by kind).
+- **Full screen** (`layout.js fullScreen(tab)`): every tab; the side panel pulls out from the right edge (`.pull-tab`).
+- **Side panels**: `layout.js sideNav` scrolls to a section (nothing sticky); sections go add/list → selected → how it's made
+  → guides → output.
+- **HTTPS / PWA**: `deploy/tailscale-https.sh [port] [https-port]`; `DECK_NAME` names a second copy's app (manifest + title).

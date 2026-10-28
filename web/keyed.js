@@ -25,13 +25,16 @@ export const keyTimes = (item) => [...new Set(Object.values(item.chans || {}).fl
 
 // A slider for an animatable property: rangeField with ◀ ◆ ▶ beside its label. t(): the item's time now (seconds);
 // base(): the plain value, setBase(v) sets it; seek(t): move the playhead to the item's time t; onKeys(): keys changed.
-export function keyedRange(label, { item, ch, t, base, setBase, seek, onKeys, onInput, onChange, ...opts }) {
-  const el = rangeField(label, () => value(item, ch, t(), base()), (v) => setValue(item, ch, t(), v, setBase),
+// direct: setBase(v) takes every change and the caller keys it (the Editor: a layer holds its pose at the playhead
+// and keys whatever moved, so a scale about the centre keys the position too).
+export function keyedRange(label, { item, ch, t, base, setBase, seek, onKeys, onInput, onChange, direct = false, ...opts }) {
+  const cur = () => (direct ? base() : value(item, ch, t(), base()));
+  const el = rangeField(label, cur, (v) => (direct ? setBase(v) : setValue(item, ch, t(), v, setBase)),
     { ...opts, onInput, onChange });
   const diamond = iconBtn(`Key ${label}`, '◇', () => {
     const now = t();
     if (keyAt(item, ch, now)) removeKey(item.chans, ch, now);
-    else { item.chans ||= {}; putKey(item.chans, ch, now, value(item, ch, now, base())); }
+    else { item.chans ||= {}; putKey(item.chans, ch, now, cur()); }
     if (item.chans && !Object.keys(item.chans).length) delete item.chans;
     paint(); onKeys?.();
   });
@@ -52,7 +55,7 @@ export function keyedRange(label, { item, ch, t, base, setBase, seek, onKeys, on
   const fmt = opts.fmt || ((v) => v.toFixed(2));
   el.refresh = () => {
     if (animated(item, ch) && document.activeElement !== input && !input.dataset.scrubbing) {
-      const v = value(item, ch, t(), base());
+      const v = cur();
       input.set?.(v); if (readout) readout.textContent = fmt(v);
     }
     paint();

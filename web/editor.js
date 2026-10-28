@@ -1,6 +1,6 @@
 import {
   $, h, store, api, clamp01, busy, toast, undoToast, openOverlay, sheetOpen, openSheet, closeSheet, button, iconBtn, actions,
-  seg, field, section, hint, propNum, layerRowsEl, panelTop, help, numSlider, colorField,
+  seg, field, section, hint, propNum, layerRowsEl, panelTop, help, numSlider, colorField, rangeField, pctFmt, clamp,
 } from './ui.js';
 import { ASPECT_PRESETS, S, inputUrl, switchTab, thumbUrl } from './core.js';
 import { openImagePicker, registerPickerSource, uploadImage } from './media.js';
@@ -8,6 +8,11 @@ import { TabSet } from './tabs.js';
 import { snapNearest } from './gizmo.js';
 import { mpInput, persist, renderFields } from './generate.js';
 import { openCraftSheet, sendToCraft } from './craft.js';
+import { animated, anyKeys, keyTimes, keyedRange, refreshKeyed, value } from './keyed.js';
+import { putKey } from './keys.js';
+import { playKeys, transport } from './playback.js';
+import { framesToClip } from './scene-comp.js';
+import { openGeneration } from './run.js';
 
 // ---------------------------------------------------------------------------
 // sketch pad: draw an image (e.g. the source for image-to-image) with a pen or finger.
@@ -151,14 +156,15 @@ export function templateAspect() {
 // ---------------------------------------------------------------------------
 export const FULL = { x: 0, y: 0, w: 1, h: 1 };
 const SEEDED = 'deck.editor.seeded';   // set once a tab has loaded: the old single-editor state then lives in the tabs
-const BLANK = () => ({ v: 2, size: null, cols: 2, gap: 0, bg: '#000000', mp: 0, snap: true, arrange: null, layers: [] });
+const BLANK = () => ({ v: 2, size: null, cols: 2, gap: 0, bg: '#000000', mp: 0, snap: true, arrange: null, anim: null, layers: [] });
 // a saved payload (an edit tab, or the old `deck.editor`) as editor state
 function fromSaved(saved) {
   const e = { ...BLANK(), ...saved, arrange: saved.arrange || null };
-  // layers: { name, crop: {x,y,w,h} as fractions, x, y (canvas px), scale, hidden, img }; the last
-  // one is drawn on top. size: a fixed {w,h} canvas, or null to fit around the layers.
+  // layers: { name, crop: {x,y,w,h} as fractions, x, y (canvas px), scale, opacity, hidden, chans (its keys), img };
+  // the last one is drawn on top. size: a fixed {w,h} canvas, or null to fit around the layers. anim: see below.
   e.layers = (saved.layers || []).map((l) => ({ name: l.name, crop: { ...(l.crop || FULL) },
-    x: l.x, y: l.y, scale: l.x == null ? 1 : l.scale, hidden: !!l.hidden }));
+    x: l.x, y: l.y, scale: l.x == null ? 1 : l.scale, opacity: l.opacity ?? 1, hidden: !!l.hidden,
+    ...(l.chans ? { chans: structuredClone(l.chans) } : {}) }));
   // The old auto-layout editor kept no positions: lay its images out once they load, in the same
   // order (its first image was leftmost, so it goes to the top of the list).
   if (saved.v !== 2 && e.layers.length) { e.arrange = saved.layout || 'row'; e.layers.reverse(); }
@@ -167,6 +173,7 @@ function fromSaved(saved) {
 }
 export const E = fromSaved(store.get(SEEDED, false) ? {} : store.get('deck.editor', {}));
 E.sel = null; E.cropping = false; E.aspect = null; E.guides = [];   // guides: snap lines {x} or {y} while dragging
+E.t = 0;   // the playhead, seconds (an animation)
 E.tab = null;   // the tab this state belongs to: { id, qs }
 
 
@@ -174,10 +181,100 @@ E.tab = null;   // the tab this state belongs to: { id, qs }
 
 // What a tab stores: the editor's settings and its layers (input image names + crop/position), all small.
 // (Layers only ever name input images, so nothing here is a data URL or a blob.)
-const dumpEditor = () => ({ v: 2, size: E.size, cols: E.cols, gap: E.gap, bg: E.bg, mp: E.mp, snap: E.snap, arrange: E.arrange,
-  layers: E.layers.map((l) => ({ name: l.name, crop: l.crop, x: l.x, y: l.y, scale: l.scale, hidden: l.hidden })) });
-// every edit ends up here: the tab saves itself shortly and its still follows
-export function persistEditor() { tabs.changed(); stillSoon(); }
+const dumpEditor = () => ({ v: 2, size: E.size, cols: E.cols, gap: E.gap, bg: E.bg, mp: E.mp, snap: E.snap, arrange: E.arrange, anim: E.anim,
+  layers: E.layers.map((l) => ({ name: l.name, crop: l.crop, x: l.x, y: l.y, scale: l.scale, opacity: l.opacity, hidden: l.hidden,
+    chans: l.chans || null })) });
+// every edit ends up here: an animated layer keys what moved, the tab saves itself shortly and its still follows
+export function persistEditor() { keyPose(); tabs.changed(); stillSoon(); }
+
+// ---- animation: layers keyed over time like After Effects, on keys.js (the engine the Video tab's clips and the 3D tab use) ----
+// E.anim: null (a still) or { len, fps } (seconds, frames a second). A layer's keys are l.chans[ch] = [{ f: seconds, v }], and
+// l.x / l.y / l.scale / l.opacity always hold its pose at the playhead, so everything that draws, drags or hit-tests reads
+// those as before: moving the playhead poses the layers (poseAt), and a change keys whichever animated property it moved
+// (keyPose). An animation keeps a fixed canvas, and exports as a clip (frames → /api/scene/clip → /api/video/render).
+const ANIM = ['x', 'y', 'scale', 'opacity'];
+const EA = { playing: false, loop: true, exporting: false, tp: null, keys: null };
+const atFrame = (t) => { const f = E.anim?.fps || 24; return Math.round(t * f) / f; };
+function poseAt(t) {
+  for (const l of E.layers) for (const ch of ANIM) if (animated(l, ch)) l[ch] = value(l, ch, t, l[ch]);
+}
+function keyPose() {
+  if (!E.anim || EA.exporting) return;
+  for (const l of E.layers) for (const ch of ANIM) {
+    if (animated(l, ch) && l[ch] != null && Math.abs(l[ch] - value(l, ch, E.t, l[ch])) > 1e-6) putKey(l.chans, ch, E.t, l[ch]);
+  }
+}
+// the playhead moved: pose the layers there and show it
+function editorSeek(t) {
+  if (!E.anim) return;
+  E.t = clamp(EA.playing ? t : atFrame(t), 0, E.anim.len);
+  poseAt(E.t);
+  drawEditorCanvas(); EA.tp?.update(); paintAnimKeys(); refreshKeyed($('#editorPanel'));
+}
+function editorPlay() {
+  if (!E.anim || EA.playing) return;
+  if (E.t >= E.anim.len - 1e-3) E.t = 0;
+  EA.playing = true;
+  let last = performance.now();
+  const tick = (now) => {
+    if (!EA.playing || !E.anim) return;
+    let t = E.t + (now - last) / 1000;
+    last = now;
+    if (t >= E.anim.len) { if (EA.loop) t = 0; else { t = E.anim.len; EA.playing = false; } }
+    editorSeek(t);
+    if (EA.playing) requestAnimationFrame(tick); else editorPause();
+  };
+  requestAnimationFrame(tick);
+}
+function editorPause() {
+  if (!EA.playing) return;
+  EA.playing = false;
+  editorSeek(E.t);   // (on a frame again, where keys go)
+}
+const editorPlayer = { playing: () => EA.playing, play: editorPlay, pause: editorPause, seek: editorSeek, t: () => E.t, len: () => E.anim?.len || 0 };
+// The bar under the canvas while animating: the shared transport, its scrub bar showing the keys of the selected layer
+// (of every layer, when none is)
+function animBar() {
+  const bar = $('#editorAnim');
+  bar.classList.toggle('hidden', !E.anim);
+  if (!E.anim) { editorPause(); return; }
+  if (!EA.tp) {
+    EA.tp = transport(editorPlayer, { step: { by: () => 1 / (E.anim?.fps || 24), label: 'one frame' }, scrub: true, frames: true,
+      fps: () => E.anim?.fps || 24, loop: { get: () => EA.loop, set: (v) => { EA.loop = v; } } });
+    const scrub = EA.tp.el.querySelector('.scrub');
+    EA.keys = h('span', { class: 'anim-keys' });
+    const wrap = h('span', { class: 'scrub-wrap' });
+    scrub.replaceWith(wrap); wrap.append(scrub, EA.keys);
+    bar.append(EA.tp.el);
+  }
+  E.t = Math.min(E.t, E.anim.len);
+  EA.tp.update(); paintAnimKeys();
+}
+function paintAnimKeys() {
+  if (!EA.keys || !E.anim) return;
+  const times = [...new Set((E.sel ? [E.sel] : E.layers).flatMap(keyTimes))];
+  EA.keys.replaceChildren(...times.filter((f) => f <= E.anim.len).map((f) =>
+    h('span', { class: 'tl-key', style: `left:${(f / E.anim.len) * 100}%` })));
+}
+// Start animating: the canvas becomes a fixed size (if it fit the layers) and the playhead goes to the start
+function startAnim() {
+  if (!E.size) toFixedSize();
+  E.anim = { len: 3, fps: 24 }; E.t = 0;
+  poseAt(0); editorChanged();
+}
+// A fixed canvas the size of what the layers cover now, moved (keys too) so it begins at 0,0
+function toFixedSize() {
+  const f = editorFrame();
+  if (f) {
+    for (const l of E.layers) {
+      if (l.x == null) continue;
+      l.x -= f.x; l.y -= f.y;
+      for (const k of l.chans?.x || []) k.v -= f.x;
+      for (const k of l.chans?.y || []) k.v -= f.y;
+    }
+  }
+  E.size = f ? { w: f.w, h: f.h } : { w: 1024, h: 1024 };
+}
 
 const tabMount = h('div', { class: 'editor-tabs' });
 const tabs = new TabSet({ kind: 'edit-tabs', mount: tabMount, newName: (n) => `Edit ${n}`, seed: () => (store.get(SEEDED, false) ? null : dumpEditor()),
@@ -187,7 +284,9 @@ const tabs = new TabSet({ kind: 'edit-tabs', mount: tabMount, newName: (n) => `E
     load(payload, doc) {
       if (E.tab?.id !== doc.id) stillNow(); else clearTimeout(stillTimer);   // a tab being left gets its still now (the draw is synchronous)
       stillDue = false;
-      Object.assign(E, fromSaved(payload), { sel: null, cropping: false, aspect: null, guides: [], tab: { id: doc.id, qs: tabs.qs } });
+      editorPause();
+      Object.assign(E, fromSaved(payload), { sel: null, cropping: false, aspect: null, guides: [], t: 0, tab: { id: doc.id, qs: tabs.qs } });
+      poseAt(0);
       store.set(SEEDED, true);
       if (!doc.still && E.layers.length) stillSoon();
       renderEditor();
@@ -289,7 +388,9 @@ function editorFrame() {
 
 function drawLayer(ctx, l) {
   const W = l.img.naturalWidth, H = l.img.naturalHeight, c = l.crop, r = layerRect(l);
+  ctx.globalAlpha = clamp(l.opacity ?? 1, 0, 1);
   ctx.drawImage(l.img, c.x * W, c.y * H, Math.max(1, c.w * W), Math.max(1, c.h * H), r.x, r.y, r.w, r.h);
+  ctx.globalAlpha = 1;
 }
 
 function composeEditor(target) {
@@ -478,7 +579,8 @@ function wireEditor() {
   };
   let drag = null, lastTap = { t: 0, l: null };
   cv.addEventListener('pointerdown', (e) => {
-    if (!EV) return;
+    if (!EV || EA.exporting) return;
+    editorPause();
     e.preventDefault(); cv.setPointerCapture(e.pointerId);
     const p = point(e), sel = E.sel && ready(E.sel) ? E.sel : null;
     drag = null; EVheld = true;
@@ -584,6 +686,9 @@ function wireEditor() {
     if (!keys[e.key]) return;
     e.preventDefault(); keys[e.key](); renderEditor();
   });
+  // an animation's keys (Space, and ← → Home End when no layer is selected: those nudge a selected one)
+  playKeys(() => !!E.anim && $('#tab-editor').classList.contains('active') && !sheetOpen(), () => EA.tp,
+    () => (E.sel ? { ArrowLeft: null, ArrowRight: null, Home: null, End: null } : {}));
 }
 
 function removeLayer(l) {
@@ -614,7 +719,8 @@ export function renderEditor() {
         });
       } : null),
       layerList(),
-      E.sel ? layerProps(E.sel) : null, canvasProps(), exportProps()));   // (the panel order, app-wide)
+      E.sel ? layerProps(E.sel) : null, animProps(), canvasProps(), exportProps()));   // (the panel order, app-wide)
+  animBar();
   drawEditorCanvas();
 }
 
@@ -638,7 +744,7 @@ function layerList() {
       thumb: h('img', { src: thumbUrl(l.name, 160), alt: '' }),
       name: l.name.split('/').pop(),
       hint: l.broken ? 'could not load' : !r ? 'loading…'
-        : `${Math.round(r.w)}×${Math.round(r.h)}${cropped ? ' · cropped' : ''}${l.hidden ? ' · hidden' : ''}`,
+        : `${Math.round(r.w)}×${Math.round(r.h)}${cropped ? ' · cropped' : ''}${anyKeys(l) ? ' · animated' : ''}${l.hidden ? ' · hidden' : ''}`,
       buttons: [
         iconBtn(l.hidden ? 'Show' : 'Hide', l.hidden ? '◌' : '◉', () => { l.hidden = !l.hidden; editorChanged(); }),
         iconBtn('Bring forward', '↑', () => move(l, 1)),
@@ -674,12 +780,18 @@ function layerProps(l) {
     l.x = Math.round(cx - n.w / 2); l.y = Math.round(cy - n.h / 2);
   };
   const fr = editorFrame() || r;   // X / Y drag over the canvas and as much again either side (E.size is null when it fits the layers)
+  // X, Y, Scale and Opacity: sliders, with ◀ ◆ ▶ to key them while animating (keyed.js; the layer keys its own pose)
+  const prop = (label, ch, set, opts) => (E.anim
+    ? keyedRange(label, { item: l, ch, direct: true, t: () => E.t, base: () => l[ch], setBase: set, seek: editorSeek,
+      onKeys: () => { poseAt(E.t); editorChanged(); }, onInput: drawEditorCanvas, onChange: editorChanged, ...opts })
+    : rangeField(label, () => l[ch], set, { onInput: drawEditorCanvas, onChange: editorChanged, ...opts }));
+  const px = { step: 1, digits: 0, fmt: (v) => String(Math.round(v)) };
   return section('Layer', done,
     hint(l.name.split('/').pop(), 'layer-title'),
-    h('div', { class: 'row' },
-      editorNum('X', Math.round(l.x), (v) => { l.x = v; }, { min: Math.floor(fr.x - fr.w), max: Math.ceil(fr.x + fr.w * 2), live: drawEditorCanvas }),
-      editorNum('Y', Math.round(l.y), (v) => { l.y = v; }, { min: Math.floor(fr.y - fr.h), max: Math.ceil(fr.y + fr.h * 2), live: drawEditorCanvas }),
-      editorNum('Scale %', Math.round(l.scale * 1000) / 10, (v) => setScale(v / 100), { min: 1, max: 1000, step: 'any', live: drawEditorCanvas })),
+    prop('X', 'x', (v) => { l.x = Math.round(v); }, { ...px, min: Math.floor(fr.x - fr.w), max: Math.ceil(fr.x + fr.w * 2) }),
+    prop('Y', 'y', (v) => { l.y = Math.round(v); }, { ...px, min: Math.floor(fr.y - fr.h), max: Math.ceil(fr.y + fr.h * 2) }),
+    prop('Scale', 'scale', (v) => setScale(Math.max(0.01, v)), { min: 0.01, max: 4, step: 0.01, fmt: pctFmt }),
+    prop('Opacity', 'opacity', (v) => { l.opacity = clamp(v, 0, 1); }, { min: 0, max: 1, step: 0.01, fmt: pctFmt }),
     hint(`${Math.round(r.w)}×${Math.round(r.h)} px on the canvas · ${Math.round(c.w * W)}×${Math.round(c.h * H)} px of the image`),
     h('div', { class: 'row wrap' },
       button('Crop', () => { E.cropping = true; E.aspect = null; renderEditor(); }),
@@ -703,15 +815,30 @@ function alignControls(l) {
     seg([[0, '⤒ Top', 'Align top edges'], [0.5, '↕ Middle', 'Centre vertically'], [1, 'Bottom ⤓', 'Align bottom edges']], null, align('y'), { action: true, disabled: !f }));
 }
 
+// Animate the layers: how long, how many frames a second
+function animProps() {
+  if (!E.layers.length) return null;
+  if (!E.anim) {
+    return section('Animation', null,
+      help('Animate the layers like After Effects: tap ◆ beside X, Y, Scale or Opacity for a key, move the playhead, change it, and it keys again. It exports as a clip.'),
+      button('Animate', startAnim, { cls: 'small' }));
+  }
+  return section('Animation', null,
+    h('div', { class: 'row' },
+      editorNum('Length (s)', E.anim.len, (v) => { E.anim.len = v; E.t = Math.min(E.t, v); }, { min: 0.5, max: 60, step: 0.5 }),
+      field('Frame rate', seg([[12, '12'], [24, '24'], [30, '30']], E.anim.fps, (v) => { E.anim.fps = Number(v); E.t = atFrame(E.t); editorChanged(); }))),
+    hint(anyKeys(E.sel || {}) || E.layers.some(anyKeys) ? 'Keys show on the bar under the canvas (the selected layer\'s, or every layer\'s).'
+      : 'Select a layer and tap ◆ beside a property to key it here.'),
+    button('Stop animating', () => { editorPause(); E.anim = null; editorChanged(); },
+      { cls: 'small', title: 'Back to a still: the layers stay as they are at the playhead (their keys are kept for next time)' }));
+}
+
 function canvasProps() {
-  const f = editorFrame();
   const sizeSeg = seg([['fit', 'Fit layers'], ['fixed', 'Fixed size']], E.size ? 'fixed' : 'fit', (v) => {
-    if (v === 'fit') E.size = null;
-    else if (!E.size) {
-      // start from what the layers cover now, moved so it begins at 0,0
-      if (f) for (const l of E.layers) if (l.x != null) { l.x -= f.x; l.y -= f.y; }
-      E.size = f ? { w: f.w, h: f.h } : { w: 1024, h: 1024 };
-    }
+    if (v === 'fit') {
+      if (E.anim) { toast('An animation keeps a fixed canvas', true); renderEditor(); return; }
+      E.size = null;
+    } else if (!E.size) toFixedSize();
     editorChanged();
   });
   return section('Canvas', null,
@@ -731,9 +858,10 @@ function canvasProps() {
 function exportProps() {
   if (!E.layers.length) return null;
   return section('Export', null,
+    E.anim ? button('Export clip', (ev) => exportEditorClip(ev.currentTarget), { cls: 'primary', title: 'The animation as a video in History' }) : null,
     mpInput(() => E.mp, (n) => { E.mp = n; persistEditor(); }),
     h('div', { class: 'row wrap' },
-      button('Save as input', saveEditor, { cls: 'small primary' }),
+      button(E.anim ? 'Save this frame as input' : 'Save as input', saveEditor, { cls: E.anim ? 'small' : 'small primary' }),
       button('Download', downloadEditor),
       button('Open in PhotoCraft', (ev) => craftEditor(ev.currentTarget), { title: 'Every layer as its own layer, to keep editing on the computer' }),
       button('Craft documents…', () => openCraftSheet())));
@@ -752,14 +880,14 @@ function craftEditor(btn) {
 // Another panel's picture as a new layer in the open edit tab (the VFX tab's first frame, say)
 export async function addToEditor(name) {
   await editorTabsReady();
-  E.layers.push({ name, crop: { ...FULL }, scale: 1, hidden: false }); editorChanged();
+  E.layers.push({ name, crop: { ...FULL }, scale: 1, opacity: 1, hidden: false }); editorChanged();
   switchTab('editor');
   toast('Added to the Editor: Save as input when done');
 }
 
 function addEditorImages() {
   openImagePicker({ title: 'Add images', multi: true, mp: () => 0, onPick: (name) => {
-    E.layers.push({ name, crop: { ...FULL }, scale: 1, hidden: false }); editorChanged();
+    E.layers.push({ name, crop: { ...FULL }, scale: 1, opacity: 1, hidden: false }); editorChanged();
   } });
 }
 
@@ -778,6 +906,30 @@ async function saveEditor() {
     useInGenerate(r.name, `Saved ${r.width}×${r.height}`);
   } catch (e) { toast('Save failed: ' + e.message, true); }
   finally { b.done(); }
+}
+
+// The animation as a clip in History: each frame drawn here, the frames made a clip on the server (as the 3D tab's
+// scenes are), and that clip rendered like a one-clip Video edit
+async function exportEditorClip(btn) {
+  editorPause();
+  if (!visibleLayers().length) return toast('Add some images first', true);
+  if (E.layers.some((l) => !l.broken && !ready(l))) return toast('The images are still loading', true);
+  const { fps, len } = E.anim, n = Math.max(1, Math.round(len * fps)), t0 = E.t, label = btn.textContent;
+  const cv = document.createElement('canvas');
+  EA.exporting = true; btn.disabled = true;
+  try {
+    const made = await framesToClip(n, fps, (k) => { poseAt(k / fps); composeEditor(cv); return cv; },
+      (k) => { btn.textContent = `Frame ${k}/${n}`; });
+    poseAt(t0);
+    btn.textContent = 'Rendering…';
+    const g = await api('/api/video/render', { method: 'POST', busy: 'Rendering…', body: {
+      project_id: S.project, fps, tracks: [{ id: 'v1', kind: 'video' }],
+      items: [{ track: 'v1', at: 0, in: 0, out: made.duration, name: tabs.active?.name || 'Edit', src: { clip: made.clip },
+        x: 0, y: 0, scale: 1, fit: 'fit', opacity: 1, volume: 1 }] } });
+    S.history.set(g.id, g);
+    openGeneration(g.id);
+  } catch (e) { toast('Export failed: ' + e.message, true); }
+  finally { EA.exporting = false; poseAt(E.t = t0); drawEditorCanvas(); btn.disabled = false; btn.textContent = label; }
 }
 
 async function downloadEditor() {

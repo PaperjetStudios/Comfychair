@@ -130,6 +130,27 @@ function notice(c, w, h, state) {
 }
 export const forget = (ids) => { for (const id of [...CANVAS.keys()]) if (!ids.has(id)) CANVAS.delete(id); EXTRA.clear(); };
 
+// n frames, drawn by draw(k) → a canvas (the same size each time), as a temporary mp4 on the server
+// (POST /api/scene/clip, in batches) that /api/video/render takes as a clip: { clip, frames, duration }.
+// The 3D compositions here and the Editor's animations both export this way.
+export async function framesToClip(n, fps, draw, progress = () => {}) {
+  const token = crypto.randomUUID().replace(/-/g, '').slice(0, 24);
+  let form = new FormData(), start = 0, res = null;
+  const send = async (done) => {
+    form.append('token', token); form.append('start', start); form.append('fps', fps); form.append('done', done ? 'true' : 'false');
+    res = await api('/api/scene/clip', { method: 'POST', form, busy: false });
+    form = new FormData(); start += BATCH;
+  };
+  for (let k = 0; k < n; k++) {
+    const cv = await draw(k);
+    form.append('frames', await new Promise((r) => cv.toBlob(r, 'image/png')), `f${String(k).padStart(5, '0')}.png`);
+    if ((k + 1) % BATCH === 0 && k + 1 < n) await send(false);
+    progress(k + 1, n);
+  }
+  await send(true);
+  return res;
+}
+
 // ---- export: the clip's frames at the export size and rate, as a temporary video on the server ----
 // W, H: the sequence frame; len: seconds of the clip. Returns { clip, scene } for the render request.
 const even = (v) => Math.max(2, 2 * Math.round(v / 2));
@@ -145,21 +166,11 @@ export async function exportClip(it, { W, H, fps, len, progress = () => {} }) {
   const base = (it.fit === 'fill' ? Math.max : Math.min)(W / stage.w, H / stage.h) * Math.min(2, Math.max(1, it.scale || 1));
   const w = even(stage.w * base), h = even(stage.h * base), n = Math.max(1, Math.round(len * fps));
   const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
-  const token = crypto.randomUUID().replace(/-/g, '').slice(0, 24);
-  let form = new FormData(), start = 0, res = null;
-  const send = async (done) => {
-    form.append('token', token); form.append('start', start); form.append('fps', fps); form.append('done', done ? 'true' : 'false');
-    res = await api('/api/scene/clip', { method: 'POST', form, busy: false });
-    form = new FormData(); start += BATCH;
-  };
-  for (let k = 0; k < n; k++) {
+  const res = await framesToClip(n, fps, async (k) => {
     const f = Math.min(it.in + k / fps, stage.dur) * FPS;
     stage.draw(look, f, cv);
     if (stage.hasSplat) { await stage.settle(); stage.draw(look, f, cv); }   // (a splat's sort needs a moment after the camera moves)
-    form.append('frames', await new Promise((r) => cv.toBlob(r, 'image/png')), `f${String(k).padStart(5, '0')}.png`);
-    if ((k + 1) % BATCH === 0 && k + 1 < n) await send(false);
-    progress(k + 1, n);
-  }
-  await send(true);
+    return cv;
+  }, progress);
   return { clip: res.clip, scene: { id: it.src.scene, name: d.name, look, rev } };
 }

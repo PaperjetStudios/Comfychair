@@ -935,7 +935,7 @@ async def video_render(body: dict = Body(...)):
                                                     "anchor_x", "anchor_y", "chans")},   # chans: its keys (keyexpr.py)
                           "path": str(path), "kind": kind, "track": tr["id"], "z": z_of.get(tr["id"], 0),
                           "hidden": bool(tr.get("hidden")), "muted": bool(tr.get("muted"))})
-            if (it.get("src") or {}).get("clip"):
+            if (it.get("src") or {}).get("clip") and it.get("scene"):   # (an Editor animation's clip names no scene)
                 scenes.append({k: (it.get("scene") or {}).get(k) for k in ("id", "name", "look", "rev")})
             if (it.get("src") or {}).get("generation") is not None:
                 sources.append({"generation": it["src"]["generation"], "index": it["src"].get("index", 0),
