@@ -331,7 +331,7 @@ const MAKERS = [
     help: 'Effects, ambience and foley from a description (LTX-2.5, audio only). Name the sounds, the place and how near they are.' },
   { id: 'foley', label: 'Sound from clip', tpl: 'deck-mmaudio-foley', len: 8, maxLen: 30, clip: true,
     placeholder: 'Optional: what to hear, e.g. footsteps on wet gravel, wind',
-    help: 'Sound for a clip, made from its picture (MMAudio): footsteps, impacts, ambience, timed to what happens. Use the selected clip or pick one; the prompt steers it and the negative prompt keeps things out (music and speech by default). Best up to 8 s; longer clips work but drift. Add to the mix puts it under the clip.' },
+    help: 'Sound for a clip, made from its picture (MMAudio): footsteps, impacts, ambience, timed to what happens. Use the selected clip or pick one; the prompt steers it, and music and speech are kept out. Best up to 8 s; longer clips work but drift. Add to the mix puts it under the clip.' },
   { id: 'music', label: 'Music', tpl: 'deck-ace-music', len: 60, maxLen: 240,
     placeholder: 'Style tags, e.g. lo-fi hip hop, warm piano, vinyl crackle, 80 bpm', lyrics: true,
     help: 'Songs or instrumentals from style tags (ACE-Step 1.5). Add lyrics with [verse] / [chorus] lines, or leave them empty for an instrumental.' },
