@@ -5,6 +5,7 @@
 import {
   $, api, actions, button, field, h, help, hint, note, openSheet, closeSheet, rangeField, seg, toast, toggle,
 } from './ui.js';
+import { fmtTime } from './playback.js';
 import { S, fmtT, switchTab } from './core.js';
 import { sceneModule } from './run.js';
 import { sceneFromTrack, smooth } from './track-math.js';
@@ -70,7 +71,7 @@ export async function openTrack(opts) {
       g.fillStyle = '#ffd24a'; g.beginPath(); g.arc(x * w, y * hh, 3, 0, 7); g.fill();
     }
   };
-  const showTime = () => { scrub.value = T.t; clock.textContent = fmtT(T.t); play.textContent = video.paused ? '▶' : '❚❚'; draw(); readout(); };
+  const showTime = () => { scrub.value = T.t; clock.textContent = fmtTime(T.t); play.textContent = video.paused ? '▶' : '❚❚'; draw(); readout(); };
   const seek = (t) => { T.t = Math.max(0, Math.min(T.dur || 0, t)); video.currentTime = T.t; showTime(); };
   scrub.addEventListener('input', () => { video.pause(); seek(parseFloat(scrub.value)); });
   let raf = 0;

@@ -12,7 +12,7 @@ export function openCompare(items) {
   const stage = h('div', { class: 'cmp-stage' });
   const pct = h('span', { class: 'cmp-pct hint' });
   const time = h('input', { type: 'range', min: 0, max: 0, step: 'any', value: 0, 'aria-label': 'Time', class: 'cmp-time hidden' });
-  const playBtn = button('Pause', () => togglePlay(), { cls: 'small hidden' });
+  const playBtn = button('❚❚ Pause', () => togglePlay(), { cls: 'small primary hidden', title: 'Play / pause (Space)' });
   const soundSeg = seg([['off', '🔇'], ['l', '🔊 Left'], ['r', '🔊 Right']], C.sound, (v) => { C.sound = v; hear(); });
   const layoutSeg = seg([['wipe', 'Wipe'], ['side', 'Side by side']], C.layout, (v) => { C.layout = v; store.set('deck.compare.layout', v); build(); });
   const el = h('div', { class: 'cmp-view', role: 'dialog', 'aria-modal': 'true' },
@@ -49,7 +49,7 @@ export function openCompare(items) {
     for (const m of [A, B]) m.addEventListener(m.tagName === 'VIDEO' ? 'loadedmetadata' : 'load', fit);
     const vids = [A, B].some((m) => m.tagName === 'VIDEO');
     time.classList.toggle('hidden', !vids); playBtn.classList.toggle('hidden', !vids);
-    playBtn.textContent = 'Pause';
+    playBtn.textContent = '❚❚ Pause';
     cancelAnimationFrame(raf); if (vids) raf = requestAnimationFrame(tick);
     soundSeg.classList.toggle('hidden', !vids);
     fit(); setWipe(C.wipe); hear();
@@ -102,7 +102,7 @@ export function openCompare(items) {
   function togglePlay() {
     const c = clock();
     if (c.paused) c.play().catch(() => {}); else c.pause();
-    playBtn.textContent = c.paused ? 'Play' : 'Pause';
+    playBtn.textContent = c.paused ? '▶ Play' : '❚❚ Pause';
   }
   time.addEventListener('input', () => {
     const t = parseFloat(time.value);

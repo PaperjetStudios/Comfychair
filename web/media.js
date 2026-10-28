@@ -1,6 +1,7 @@
 import {
   $, h, store, api, toast, openSheet, closeSheet, button, iconBtn, actions, fileButton, seg, placeholder, note, mediaCard, field, pickButtons,
 } from './ui.js';
+import { fmtTime } from './playback.js';
 import { S, PICKER_SOURCES as SOURCES, previewUrl, switchTab, thumbUrl } from './core.js';
 import { loadHistory } from './run.js';
 
@@ -186,11 +187,11 @@ export function pickFrame({ url, title = 'Pick a frame', fps = 24, back = null }
   return new Promise((resolve) => {
     const v = h('video', { src: `${url}#t=0.001`, muted: true, playsInline: true, preload: 'auto', class: 'frame-video' });
     const slider = h('input', { type: 'range', min: 0, max: 0, step: 'any', value: 0, 'aria-label': 'Time' });
-    const lbl = h('span', { class: 'hint' }, '0.00s');
+    const lbl = h('span', { class: 'timecode' }, fmtTime(0));
     const seek = (t) => { v.currentTime = Math.max(0, Math.min(v.duration || 0, t)); };
     const step = (n) => { v.pause(); seek(v.currentTime + n / fps); };
     v.addEventListener('loadedmetadata', () => { slider.max = v.duration; });
-    v.addEventListener('timeupdate', () => { slider.value = v.currentTime; lbl.textContent = `${v.currentTime.toFixed(2)}s / ${(v.duration || 0).toFixed(2)}s`; });
+    v.addEventListener('timeupdate', () => { slider.value = v.currentTime; lbl.textContent = `${fmtTime(v.currentTime, fps)} / ${fmtTime(v.duration, fps)}`; });
     v.addEventListener('error', () => toast("Couldn't load that video", true));
     slider.addEventListener('input', () => { v.pause(); seek(Number(slider.value)); });
     const done = (blob) => { closeSheet(); resolve(blob); if (!blob) back?.(); };
@@ -203,7 +204,7 @@ export function pickFrame({ url, title = 'Pick a frame', fps = 24, back = null }
       cv.toBlob((b) => (b ? done(b) : toast("Couldn't grab that frame", true)), 'image/png');
     };
     openSheet(h('h3', {}, title), h('div', { class: 'media-big' }, v), slider,
-      h('div', { class: 'row frame-bar' }, iconBtn('Back one frame', '◀', () => step(-1)), lbl, iconBtn('Forward one frame', '▶', () => step(1))),
+      h('div', { class: 'row frame-bar' }, iconBtn('Back one frame', '⏮', () => step(-1)), lbl, iconBtn('Forward one frame', '⏭', () => step(1))),
       actions(button('Use this frame', use, { cls: 'primary' }), button('Cancel', () => done(null), { cls: 'ghost' })));
   });
 }

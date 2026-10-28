@@ -2,6 +2,7 @@
 // It never redraws the field: edits report through onChange(trim|null, crop|null) when a drag or a
 // typed number ends. trim = {start, len} in seconds; crop = {x, y, w, h} fractions of the frame.
 import { api, button, clamp, clamp01, field, h, iconBtn, pickButtons, seg } from './ui.js';
+import { fmtTime } from './playback.js';
 import { ASPECTS, aspectCrop, cropSpan } from './editor.js';
 
 const FULL = { x: 0, y: 0, w: 1, h: 1 };
@@ -12,7 +13,7 @@ const probe = (source) => {
   if (!probes.has(k)) probes.set(k, api('/api/videos/probe', { method: 'POST', body: { source } }).catch((e) => { probes.delete(k); throw e; }));
   return probes.get(k);
 };
-const fmt = (t) => `${Math.floor(t / 60)}:${(t % 60).toFixed(2).padStart(5, '0')}`;
+const fmt = (t) => fmtTime(t);
 const isFull = (c) => c.w > 1 - EPS && c.h > 1 - EPS;
 
 // opts: url, source ({generation,index} | {media}), trim, crop (as saved), loader() -> { rate (force_rate, 0 = the clip's),
@@ -86,7 +87,7 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
   let looping = true;
   const loopBtn = iconBtn('Loop', '🔁', () => { looping = !looping; loopBtn.classList.toggle('on', looping); loopBtn.setAttribute('aria-pressed', looping); });
   loopBtn.classList.add('on'); loopBtn.setAttribute('aria-pressed', 'true');
-  v.addEventListener('play', () => { play.textContent = '⏸'; tick(); });
+  v.addEventListener('play', () => { play.textContent = '❚❚'; tick(); });
   v.addEventListener('pause', () => { play.textContent = '▶'; });
   v.addEventListener('error', () => { time.textContent = "Couldn't load this video"; onError?.(); });
 

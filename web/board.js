@@ -2,6 +2,7 @@ import {
   $, h, store, api, toast, undoToast, overlayOpened, overlayClosed, sheetOpen, button, iconBtn, linkBtn, seg, placeholder,
   numSlider, field, section, hint, openSheet, closeSheet,
 } from './ui.js';
+import { fmtTime } from './playback.js';
 import { bareSource, extractSound, genLabel, soundInput, soundToSoundTab } from './media.js';
 import { S, previewUrl, switchTab } from './core.js';
 import { openGeneration } from './run.js';
@@ -379,7 +380,7 @@ function galleryVideo(o) {
 
 // A sound in the gallery: a big play button, its waveform as the scrub bar (tap or drag it), a slider and the time.
 // It plays on opening, like a clip.
-const clock = (s) => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
+const clock = (s) => fmtTime(s);
 function galleryAudio(o) {
   const a = h('audio', { src: o.url, preload: 'auto' });
   const fill = h('div', { class: 'gal-wave-fill' });
