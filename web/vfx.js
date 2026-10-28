@@ -1,7 +1,8 @@
 import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard } from './ui.js';
 import { S, inputUrl, thumbUrl, onServer, switchTab } from './core.js';
 import { cardMedia, genLabel, openImagePicker, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
-import { adoptGenerations, hooks as genHooks } from './generate.js';
+import { hooks as genHooks } from './generate.js';
+import { adoptGenerations, queueRun, roleField, runAndWait, valuesByRole, waitGen } from './make.js';
 import { openGeneration } from './run.js';
 import { addToEditor, useInGenerate } from './editor.js';
 import { addToTimeline } from './video.js';
@@ -12,7 +13,7 @@ import { sendToCraft } from './craft.js';
 
 // ---------------------------------------------------------------------------
 // VFX: one effect per tab, run on a clip (or from a still) with LTX-2.5 and friends. Each effect
-// is a template (deck-ltx-*) whose tagged fields are found by their group names (see ROLES), or a
+// is a template (deck-ltx-*) whose tagged fields are found by their group names (make.js ROLES), or a
 // server job (keying). The viewer wipes between the source and a result; points and motion
 // paths are drawn on it. Results go back to the Video timeline.
 // ---------------------------------------------------------------------------
@@ -75,41 +76,9 @@ const EFFECTS = [
 const GROUPS = ['Quick', 'Restyle', 'Key', 'Remove', 'Generate', 'Performance'];
 const fx = (id) => EFFECTS.find((e) => e.id === id) || EFFECTS[0];
 
-// how an effect's inputs find their template fields: by kind, then by the group (node title) name
-const ROLES = {
-  source: (f) => f.kind === 'video' && !/mask|matte|pose/i.test(f.group),
-  matte: (f) => f.kind === 'video' && /mask|matte/i.test(f.group),
-  pose: (f) => f.kind === 'video' && /pose/i.test(f.group),   // a ready pose video (the drives' posed templates)
-  first: (f) => f.kind === 'image',
-  sound: (f) => f.kind === 'audio' && !/voice/i.test(f.group),
-  voice: (f) => f.kind === 'audio' && /voice/i.test(f.group),
-  prompt: (f) => f.kind === 'text' && /prompt/i.test(f.group) && !/negative/i.test(f.group) && f.input !== 'neg_coordinates',
-  pointsPos: (f) => f.kind === 'text' && f.input === 'coordinates',
-  pointsNeg: (f) => f.kind === 'text' && f.input === 'neg_coordinates',
-  pframe: (f) => f.kind === 'int' && /points frame/i.test(f.group),
-  mode: (f) => f.kind === 'choice' && f.input === 'prompt_mode',
-  tracks: (f) => f.kind === 'text' && /tracks|paths/i.test(f.group),
-  len: (f) => (f.kind === 'int' || f.kind === 'float') && /length|seconds|duration/i.test(f.label),
-  width: (f) => f.kind === 'int' && /^width$/i.test(f.group),
-  height: (f) => f.kind === 'int' && /^height$/i.test(f.group),
-  res: (f) => f.kind === 'int' && /resolution/i.test(f.group),
-  steps: (f) => f.kind === 'text' && f.input === 'sigmas',
-  blend: (f) => f.kind === 'choice' && f.input === 'shape',
-  grow: (f) => f.kind === 'float' && f.input === 'grow',
-  feather: (f) => f.kind === 'float' && f.input === 'feather',
-  chin: (f) => f.kind === 'float' && f.input === 'chin',
-  lora: (f) => f.kind === 'choice' && f.input === 'lora_name',
-  strength: (f) => f.kind === 'float' && f.input === 'strength_model',
-  outsize: (f) => f.kind === 'choice' && f.input === 'output_size',
-  seed: (f) => f.kind === 'seed',
-  loras: (f) => f.kind === 'loras',
-  depthModel: (f) => f.kind === 'choice' && f.input === 'model',
-  depthSize: (f) => f.kind === 'int' && f.input === 'input_size',
-};
 // effects that follow a pose can read it with DWPose (CPU) or SDPose (GPU): e.sd is the SDPose take on e.tpl
 const tplId = (e) => (e.sd && T.poser === 'sdpose' ? e.sd : e.still && !T.source && T.first ? e.still : e.tpl);
 const tplOf = (e) => tplId(e) && S.templates.find((t) => t.id === tplId(e));
-const roleField = (t, role) => t?.fields.find(ROLES[role]);
 
 // Viggle-Animate's distilled schedules (shift 3): points = Euler updates + 1
 const STEPS = { 3: '1.0, 0.8571428571428571, 0.6, 0.0',
@@ -131,6 +100,8 @@ const BLANK = () => ({ op: 'ripple', source: null, first: null, matte: null, sou
   steps: 3, blend: 'face', face: { ...FACE }, results: [], showing: null, matte2: null, refine: { ...REFINE }, canvas: { ...CANVAS }, boxes: [], delogo: 'quality' });
 let T = BLANK();
 let tabs = null;
+// What a run keeps of the tab that made it (params.__face), so History's Edit can open it here again: the settings, not the takes
+const tabState = () => { const { results, showing, ...rest } = T; return JSON.parse(JSON.stringify(rest)); };
 // cmp: the result on the left instead of the source (comparing takes); layout: 'wipe' or 'side'
 // pose: the source's finished pose video for the drives ({ key, r }: r null when there is none, undefined while
 // looking); remake: the next drive makes the pose again
@@ -652,8 +623,6 @@ function missingInput(e) {
   return null;
 }
 
-// template fields of tt filled from values by role ({ source, first, len, … })
-const valuesFor = (tt, roles) => Object.fromEntries(Object.entries(roles).map(([role, v]) => [roleField(tt, role)?.key, v]).filter(([k, v]) => k && v != null));
 
 // What a template effect sends: { t (the template, with its SDPose / still variant), values (by field key), rv (the
 // same by role, for the drives' posed and pose templates) }, or a message saying why it can't. loose: for Open in
@@ -721,13 +690,12 @@ async function run() {
   const b = await buildRun(e);
   if (typeof b === 'string') return toast(b, true);
   const { t, values, rv } = b;
-  const parent = parentOf();
-  const tab = T;
+  const parent = parentOf();   // the source clip, also when the run gets a canvas made from it
+  const tab = T, face = { kind: 'vfx', state: tabState() };
   // queue template tt (null: this effect's own, with values) with values by role; how: added to the toast (null: no toast)
   const queue = async (tt, roles, how) => {
-    const vals = roles ? valuesFor(tt, roles) : values;
-    const gens = await api('/api/generate', { method: 'POST', body: { template: (tt || t).id, values: vals, batch: 1, project_id: S.project, parent } });
-    adoptGenerations(gens);
+    const vals = roles ? valuesByRole(tt, roles) : values;
+    const gens = await queueRun({ template: (tt || t).id, values: vals, parent, face });
     tab.results.push(...gens.map((g) => g.id));
     if (tab === T) changed(); else tabs?.changed();
     if (how !== null) toast(`Queued ${e.label} as #${gens[0].id}${how ? `, ${how}` : ''}`);
@@ -749,14 +717,12 @@ async function openInGenerate() {
   if (posed && T.source && !UI.remake) {
     try {
       const pose = await findPose();
-      if (pose) { t = posed; values = valuesFor(posed, { ...b.rv, pose: { generation: pose.generation, index: pose.index } }); }
+      if (pose) { t = posed; values = valuesByRole(posed, { ...b.rv, pose: { generation: pose.generation, index: pose.index } }); }
     } catch { /* the reading template, as it is */ }
   }
   if (!genHooks.openShot) return toast('The Generate tab isn\'t ready yet', true);
   switchTab('generate');
   await genHooks.openShot({ workflow: t.id, values }, tabs?.active?.name ? `${tabs.active.name} · ${e.label}` : e.label);
-  const parent = parentOf();
-  if (parent) S.pendingParent = parent;
   toast(`Opened ${e.label} in Generate`);
 }
 
@@ -1071,6 +1037,16 @@ async function ensureTabs() {
   for (let i = 0; i < 160 && !tabs.active; i++) await new Promise((r) => setTimeout(r, 50));
 }
 
+// A run's settings (params.__face.state) in a new tab, to change and run again (History's Edit)
+export async function openVfxState(state, name) {
+  switchTab('vfx');
+  await ensureTabs();
+  if (tabs.active && !(await tabs.leave())) return;
+  try {
+    tabs.open(await tabs.create1({ name: String(name || 'Shot').slice(0, 120), payload: { ...BLANK(), ...state, results: [], showing: null },
+      order: tabs.active ? tabs.active.order + 0.5 : undefined }));
+  } catch (e) { toast(e.message, true); }
+}
 export function renderVfx() { ensureTabs(); render(); }
 export function vfxPause() { UI.playing = false; for (const v of [V.a, V.b]) v?.pause(); }
 
@@ -1106,32 +1082,6 @@ export const CLIP_FX = [
 ];
 const MAX_SECS = 10;
 
-function waitGen(id) {
-  return new Promise((resolve, reject) => {
-    let done = false;
-    const finish = (g) => {
-      if (done || !g || (g.status !== 'done' && g.status !== 'error' && g.status !== 'interrupted')) return;
-      done = true; off(); clearInterval(timer);
-      if (g.status === 'done') resolve(g); else reject(new Error(g.error || `#${g.id} ${g.status}`));
-    };
-    const off = onServer('deck_generation', ({ data }) => { if (data?.id === id) finish(data); });
-    const timer = setInterval(() => api(`/api/generations/${id}`, { busy: false }).then(finish, () => {}), 5000);
-  });
-}
-
-async function runTpl(tid, put) {
-  const t = S.templates.find((x) => x.id === tid && !x.error);
-  if (!t) throw new Error(`Template ${tid} isn't installed`);
-  const values = {};
-  for (const [role, v] of Object.entries(put)) {
-    const f = roleField(t, role);
-    if (f && v !== undefined && v !== null && v !== '') values[f.key] = v;
-  }
-  const gens = await api('/api/generate', { method: 'POST', body: { template: tid, values, batch: 1, project_id: S.project } });
-  adoptGenerations(gens);
-  return waitGen(gens[0].id);
-}
-
 const outOf = (g) => {
   const i = Math.max(0, g.outputs.findIndex((o) => o.kind === 'video'));
   return { generation: g.id, index: i, url: g.outputs[i].url, dur: g.outputs[i].duration || 0 };
@@ -1146,18 +1096,18 @@ export async function runClipStep(step, source, secs) {
     body: { source: { ...src, trim: undefined }, trim: source.trim, project_id: S.project, ...body } }).then((g) => { S.history.set(g.id, g); return g; });
   switch (step.op) {
     case 'restyle':
-      return outOf(await runTpl('deck-ltx-v2v-lora', { source: src, prompt: step.prompt, lora: step.lora, strength: step.strength ?? 1, len, res }));
+      return outOf(await runAndWait('deck-ltx-v2v-lora', { source: src, prompt: step.prompt, lora: step.lora, strength: step.strength ?? 1, len, res }));
     case 'cleanplate':
-      return outOf(await runTpl('deck-ltx-cleanplate', { source: src, prompt: step.prompt, len, res }));
+      return outOf(await runAndWait('deck-ltx-cleanplate', { source: src, prompt: step.prompt, len, res }));
     case 'upscale':
-      return outOf(await runTpl('deck-ltx-upscale', { source: src, prompt: step.prompt, len, outsize: step.outsize || 'FullHD' }));
+      return outOf(await runAndWait('deck-ltx-upscale', { source: src, prompt: step.prompt, len, outsize: step.outsize || 'FullHD' }));
     case 'replace': {
       if (!step.target?.trim()) throw new Error('Replace: say what to replace');
-      const mask = outOf(await runTpl('deck-sam3-video-mask', { source: src, prompt: step.target, mode: 'text', len }));
-      return outOf(await runTpl('deck-ltx-inpaint', { source: src, matte: { generation: mask.generation, index: mask.index }, prompt: step.prompt, len, res }));
+      const mask = outOf(await runAndWait('deck-sam3-video-mask', { source: src, prompt: step.target, mode: 'text', len }));
+      return outOf(await runAndWait('deck-ltx-inpaint', { source: src, matte: { generation: mask.generation, index: mask.index }, prompt: step.prompt, len, res }));
     }
     case 'cutout': {
-      const matte = outOf(await runTpl('deck-ltx-alpha', { source: src, len, res }));
+      const matte = outOf(await runAndWait('deck-ltx-alpha', { source: src, len, res }));
       return outOf(await key({ mode: 'matte', matte: { generation: matte.generation, index: matte.index } }));
     }
     case 'colorkey':

@@ -5,7 +5,7 @@ import { FIG, R, SC, current, dropKeys, frames, putKeys, sameTab } from './scene
 import { api, button, clone, field, fileButton, h, help, hint, note, openSheet, closeSheet, rangeField, seg, store, toast, undoToast } from './ui.js';
 import { S, onServer } from './core.js';
 import { openVideoPicker } from './media.js';
-import { adoptGenerations } from './generate.js';
+import { queueRun } from './make.js';
 import { changed } from './scene-view.js';
 import { toKeys } from './motion.js';
 
@@ -44,8 +44,7 @@ async function run(id, template, values, label) {
   const vals = {};
   for (const [test, v] of values) { const f = field(test); if (f && v != null) vals[f.key] = v; }
   try {
-    const gens = await api('/api/generate', { method: 'POST', body: { template, values: vals, batch: 1, project_id: S.project } });
-    adoptGenerations(gens);
+    const gens = await queueRun({ template, values: vals });
     const gid = gens[0].id;
     ST.busy = `${label} #${gid}`; changed();
     toast(`${label}: queued as #${gid}. The keys go in when it's done.`);

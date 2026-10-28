@@ -3,9 +3,11 @@ import {
   button, iconBtn, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider,
   autoGrow, insertAtCursor,
 } from './ui.js';
-import { ASPECT_PRESETS, S, addMine, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
+import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
 import { openImagePicker, openVideoPicker, soundInput } from './media.js';
-import { RUN, fmtDur, notifyPrepare, onGeneration, openJobs, syncWithServer } from './run.js';
+import { RUN, fmtDur, notifyPrepare, openJobs } from './run.js';
+import { queueRun } from './make.js';
+
 import { videoEditor } from './vfield.js';
 import { PREFS } from './prefs.js';
 import { FULL, openCrop, openSketch, templateAspect } from './editor.js';
@@ -843,7 +845,6 @@ function imageField(f) {
     title: `${f.group} · ${f.label}`, mp: () => S.imageMp[f.key],
     onPick: (name, info) => {
       setVal(f.key, name);
-      if (info && info.source) S.pendingParent = info.source;
       renderFields();
       if (info && info.width) toast(`Set ${f.label} (${info.width}×${info.height})`);
     },
@@ -893,7 +894,6 @@ function videoField(f) {
     title: `${f.group} · ${f.label}`,
     onPick: (val) => {
       setVal(f.key, val);
-      if (val.generation != null) S.pendingParent = { generation: val.generation, index: val.index };
       renderFields();
     },
   });
@@ -917,10 +917,7 @@ function videoField(f) {
 // a sound: a sound file or a clip's sound, with a cut ({generation|media, trim}); the server readies it
 // for the loader (app/audioedit.prep)
 function audioField(f) {
-  const el = soundInput(S.values[f.key] || null, (v) => {
-    setVal(f.key, v);
-    if (v?.generation != null) S.pendingParent = { generation: v.generation, index: v.index };
-  }, { title: `${f.group} · ${f.label}`, label: f.label });
+  const el = soundInput(S.values[f.key] || null, (v) => setVal(f.key, v), { title: `${f.group} · ${f.label}`, label: f.label });
   el.dataset.key = f.key;
   return el;
 }
@@ -1033,7 +1030,7 @@ function fieldBody(f) {
 // ---------------------------------------------------------------------------
 // generate / stop
 // ---------------------------------------------------------------------------
-export async function generate(parent = null) {
+export async function generate() {
   if (!S.tpl || S.tpl.error) return toast('Pick a working template first', true);
   const values = {};
   for (const f of S.tpl.fields) {
@@ -1051,14 +1048,7 @@ export async function generate(parent = null) {
     for (const f of S.tpl.fields) if (f.kind === 'image') values[f.key] = await cropForRun(f, values[f.key]);
     const pf = S.tpl.fields.find(isMainPrompt);
     const builder = pf && builderState().on ? { parts: S.pb.parts, subjects: S.pb.subjects } : null;
-    let gens;
-    try {
-      gens = await api('/api/generate', { method: 'POST', timeout: 120000, body: { template: S.tpl.id, values, batch: S.batch, project_id: S.project, parent, builder } });
-    } catch (e) {  // part of a batch may already be queued: follow those, then report the failure
-      for (const g of e.data?.created || []) { addMine(g.prompt_id); S.history.set(g.id, g); }
-      throw e;
-    }
-    adoptGenerations(gens);
+    const gens = await queueRun({ template: S.tpl.id, values, batch: S.batch, builder, timeout: 120000 });   // (what it's made from: the server reads it off the inputs)
     const lastGen = gens[gens.length - 1];
     for (const f of S.tpl.fields) {
       if (f.kind !== 'seed') continue;
@@ -1068,24 +1058,9 @@ export async function generate(parent = null) {
     persist(); refreshSeedLabels();
     toast(gens.length > 1 ? `Queued ${gens.length}` : 'Queued');
   } catch (e) {
-    if (parent && !S.pendingParent && !e.data?.created) S.pendingParent = parent;  // nothing ran: keep the lineage for the retry
     if (!S.queueRemaining && !RUN.pid) keepAwake(false);
     toast(e.message, true);
   } finally { btn.disabled = false; }
-}
-
-// Runs just queued from here. With an idle queue ComfyUI can start (or even finish) one before the
-// queue reply arrives, so its websocket messages were taken for another device's: catch up then.
-export function adoptGenerations(gens) {
-  let missed = false;
-  for (const g of gens) {
-    addMine(g.prompt_id);
-    const seen = S.history.get(g.id);
-    if (!seen) S.history.set(g.id, g);   // never overwrite a newer status that came over the socket
-    else if (seen.status === 'done' || seen.status === 'error') { S.history.delete(g.id); onGeneration(seen); }  // show it now
-    if (g.prompt_id === S.activePid && RUN.pid !== S.activePid) missed = true;
-  }
-  if (missed) syncWithServer();
 }
 
 // Wildcard prompts ({a|b}) with a missing or extra brace: count of braces with no partner.

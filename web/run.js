@@ -4,9 +4,10 @@ import {
 } from './ui.js';
 import { S, fmtT, isMine, loadProjects, switchTab, emitServer } from './core.js';
 import { genLabel, mediaEl, openImagePicker, uploadImage } from './media.js';
-import { addToPrompt, adoptGenerations, builderState, keepAwake, loadTemplates, renderFields, saveBuilder, selectTemplate, setVal, stop } from './generate.js';
+import { addToPrompt, builderState, keepAwake, loadTemplates, renderFields, saveBuilder, selectTemplate, setVal, stop } from './generate.js';
 import { B, GAL, boardChanged, galleryRefresh } from './board.js';
 import { openTrack } from './track.js';
+import { queueRun } from './make.js';
 
 // ---------------------------------------------------------------------------
 // "it's done": a chime, ✓ in the tab title, and a system notification where allowed (HTTPS)
@@ -612,15 +613,19 @@ async function useControlVideo(g, sc) {
   if (sc.width && int(/^width$/)) setVal(int(/^width$/).key, sc.width);
   if (sc.height && int(/^height$/)) setVal(int(/^height$/).key, sc.height);
   if (sc.seconds && int(/length/i)) setVal(int(/length/i).key, Math.round(sc.seconds));   // (a whole number of seconds there; the scene may have a half)
-  S.pendingParent = { generation: g.id, index: 0 };
   renderFields();
   toast(`Control video #${g.id} set: add references and a prompt`);
 }
 
 // Load a past generation's settings into Generate to edit: prompt (and its builder parts), seed,
 // images, LoRAs, sizes. The seed is set to Fixed so you get the same result until you change it.
-function reuse(g) {
+// A run made in the VFX tab opens there instead, as a new tab with that run's effect, inputs and settings.
+async function reuse(g) {
   if (!S.templates.find((t) => t.id === g.template)) return toast(`Template "${g.template}" no longer exists`, true);
+  if (g.params.__face?.kind === 'vfx' && g.params.__face.state) {
+    await (await import('./vfx.js')).openVfxState(g.params.__face.state, `#${g.id} again`);
+    return toast(`Loaded #${g.id}'s effect and settings in a new VFX tab. Change them and Run.`);
+  }
   const b = g.params.__builder;
   if (b) {
     builderState();
@@ -638,9 +643,8 @@ function reuse(g) {
 async function runAgain(g) {
   try {
     const values = Object.fromEntries(Object.entries(g.params).filter(([k]) => !k.startsWith('__')));
-    const gens = await api('/api/generate', { method: 'POST', body: { template: g.template, values, batch: 1, project_id: g.project_id,
-      parent: g.parent, builder: g.params.__builder || null } });
-    adoptGenerations(gens);
+    const gens = await queueRun({ template: g.template, values, project: g.project_id, parent: g.parent,
+      builder: g.params.__builder, face: g.params.__face });
     notifyPrepare(); keepAwake(true);
     const other = g.project_id !== S.project ? ` in ${(S.projects.find((p) => p.id === g.project_id) || {}).name || 'its own project'}` : '';
     toast(`Queued again as #${gens[0].id}${other}`);

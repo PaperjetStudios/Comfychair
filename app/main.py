@@ -456,6 +456,25 @@ async def template_workflow(tid: str):
     return t.workflow
 
 
+LINEAGE_KINDS = ("video", "image", "audio")
+
+
+def lineage(fields: list[dict], values: dict) -> dict | None:
+    """What a run is made from, when its caller doesn't say: the first of its inputs that came from an
+    output, a video input before a picture before a sound, each kind in the template's field order. A
+    clip or sound is picked as its source ({generation, index}); a picture by its input name, whose
+    origin was kept when an output was sent in (db.input_origins). One rule for every tab, and it holds
+    after a reload or a second run of the same settings."""
+    for kind in LINEAGE_KINDS:
+        for f in fields:
+            v = values.get(f["key"]) if f["kind"] == kind else None
+            if isinstance(v, dict) and v.get("generation") is not None:
+                return {"generation": v["generation"], "index": v.get("index", 0), "frame": None}
+            if kind == "image" and isinstance(v, str) and v and (o := db.input_origin(v)):
+                return o
+    return None
+
+
 @app.post("/api/generate")
 async def generate(body: dict = Body(...)):
     t = tpl.get(config.TEMPLATES_DIR, body.get("template", ""))
@@ -514,6 +533,8 @@ async def generate(body: dict = Body(...)):
                     run[key] = str(await asyncio.to_thread(audioedit.prep, path, resolved[key].get("trim")))
                 except (ValueError, RuntimeError, subprocess.SubprocessError) as e:
                     raise HTTPException(400, f"{f['group']} · {f['label']}: {e}")
+        if i == 0 and not parent:
+            parent = lineage(list(fields.values()), resolved)
         wf = editsize.inject(accel.inject(tpl.apply(t.workflow, run), run), run, list(fields.values()))
         folder = db.project_folder(project_id)
         for node in wf.values():  # ComfyUI's own copy goes to output/comfydeck/<project>/ too
@@ -528,6 +549,8 @@ async def generate(body: dict = Body(...)):
             raise HTTPException(400, str(e))
         if body.get("builder"):  # the prompt builder's parts, so History can restore them for editing
             resolved["__builder"] = body["builder"]
+        if isinstance(body.get("face"), dict):  # the tab that ran it and its settings there (e.g. a VFX effect), so Edit reopens it there
+            resolved["__face"] = body["face"]
         if raw:  # the prompts as written, so Edit restores the wildcards (Run again keeps this run's picks)
             resolved["__wildcards"] = raw
         gid = db.create_generation(project_id, t.id, resolved, wf, res["prompt_id"], parent)
@@ -667,7 +690,9 @@ async def crop_input(body: dict = Body(...)):
         png, w, h = await asyncio.to_thread(imageprep.prep, data, mp, multiple, crop)
     except Exception as e:
         raise HTTPException(400, f"Couldn't crop that image: {e}")
+    origin = db.input_origin(body.get("name") or "")
     name = await comfy.upload_image(png, f"crop_{key}.png", config.COMFY_INPUT_SUBFOLDER)
+    db.set_input_origin(name, origin)   # a cropped picture is still made from the same output
     return {"name": name, "width": w, "height": h}
 
 
@@ -697,8 +722,9 @@ async def generation_to_input(gid: int, body: dict = Body(default={})):
     except Exception as e:
         raise HTTPException(500, str(e))
     name = await upload_prepared(png, g["project_id"], "generation")
-    return {"name": name, "width": w, "height": h,
-            "source": {"generation": gid, "index": idx, "frame": which if out["kind"] == "video" else None}}
+    source = {"generation": gid, "index": idx, "frame": which if out["kind"] == "video" else None}
+    db.set_input_origin(name, source)
+    return {"name": name, "width": w, "height": h, "source": source}
 
 
 MEDIA_KINDS = {".mp4": "video", ".webm": "video", ".mov": "video", ".mkv": "video", ".m4v": "video",

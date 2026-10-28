@@ -101,7 +101,7 @@ document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('cli
 $('#tplSel').addEventListener('change', (e) => selectTemplate(e.target.value));
 wireTemplateFilter();
 $('#reloadTpl').addEventListener('click', async () => { await loadTemplates(true); toast('Templates and model lists reloaded'); });
-$('#genBtn').addEventListener('click', () => { const p = S.pendingParent; S.pendingParent = null; generate(p); });
+$('#genBtn').addEventListener('click', () => generate());
 $('#stopBtn').addEventListener('click', () => stop());
 $('#jobsBtn').addEventListener('click', openJobs);
 $('#sheetBackdrop').addEventListener('click', closeSheet);

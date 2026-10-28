@@ -4,7 +4,7 @@ import {
 } from './ui.js';
 import { DELIVERY, INLINE_TAGS, parseScript, withDelivery, withName } from './dialogue.js';
 import { S, onServer } from './core.js';
-import { adoptGenerations } from './generate.js';
+import { queueRun } from './make.js';
 import { extractSound, openSoundPicker, soundInput, soundSource, uploadMedia } from './media.js';
 import { waitJob } from './clipimport.js';
 import { TabSet } from './tabs.js';
@@ -343,8 +343,7 @@ async function makeSound() {
   if (mk.lyrics) { put('lyrics', G.lyrics); put('bpm', G.bpm); put('key', G.key); }
   put('seed', G.seed);
   try {
-    const gens = await api('/api/generate', { method: 'POST', body: { template: t.id, values, batch: 1, project_id: S.project } });
-    adoptGenerations(gens);
+    const gens = await queueRun({ template: t.id, values });
     N.gens.push(...gens.map((g) => g.id));
     persist(); renderPanel();
     toast(`Queued ${mk.label.toLowerCase()} as #${gens[0].id}`);

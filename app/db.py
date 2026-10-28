@@ -37,6 +37,8 @@ def migrate(conn):
             id INTEGER PRIMARY KEY, category TEXT NOT NULL, name TEXT, text TEXT NOT NULL, created REAL);
         CREATE TABLE IF NOT EXISTS inputs(      -- images sent to ComfyUI's input folder, and the project they were for
             name TEXT PRIMARY KEY, project_id INTEGER, source TEXT, created REAL);
+        CREATE TABLE IF NOT EXISTS input_origins(   -- input images made from an output: which one (JSON {generation, index, frame}),
+            name TEXT PRIMARY KEY, origin TEXT);     -- so a run that uses one is recorded as made from it
         """
     )
     cols = [r[1] for r in conn.execute("PRAGMA table_info(generations)")]
@@ -246,6 +248,16 @@ def update_generation(gid: int, **fields):
 def add_input(name: str, project_id, source: str = "upload"):
     _q("INSERT OR REPLACE INTO inputs(name, project_id, source, created) VALUES (?,?,?,?)",
        (name, project_id, source, time.time()))
+
+
+def set_input_origin(name: str, origin: dict | None):
+    if origin and origin.get("generation") is not None:
+        _q("INSERT OR REPLACE INTO input_origins(name, origin) VALUES (?,?)", (name, json.dumps(origin)))
+
+
+def input_origin(name: str) -> dict | None:
+    r = _q("SELECT origin FROM input_origins WHERE name=?", (name,)).fetchone()
+    return json.loads(r["origin"]) if r else None
 
 
 def project_inputs(project_id) -> list[dict]:

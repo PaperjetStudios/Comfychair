@@ -49,17 +49,16 @@ export function openUseAs(g, index, { before = null } = {}) {
 function generateTargets(kind, src, toInput, go) {
   const fs = S.tpl?.fields || [];
   const name = (f) => `${f.group} · ${f.label}`;
-  const set = (f, v, parent, size) => {
+  const set = (f, v, size) => {   // (the run is recorded as made from it: app/main.py lineage)
     setVal(f.key, v); renderFields();
-    S.pendingParent = parent;
     switchTab('generate');
     toast(`Set ${name(f)}${size ? ` (${size})` : ''}`);
   };
   const image = (f, frame, text) => go(text, async () => {
     const r = await toInput(frame, S.imageMp[f.key] ?? 1, 16);
-    set(f, r.name, r.source, `${r.width}×${r.height}`);
+    set(f, r.name, `${r.width}×${r.height}`);
   });
-  const clip = (f, text) => go(text, async () => set(f, { ...src }, { ...src }));
+  const clip = (f, text) => go(text, async () => set(f, { ...src }));
   const of = (k) => fs.filter((f) => f.kind === k);
   if (kind === 'image') return of('image').map((f) => image(f, 'first', name(f)));
   if (kind === 'video') {
