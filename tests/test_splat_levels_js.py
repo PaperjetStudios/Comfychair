@@ -12,6 +12,11 @@ class SplatLevelsJs(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         self.assertIn("splat levels ok", r.stdout)
 
+    def test_shape(self):
+        r = subprocess.run(["node", str(Path(__file__).with_name("splat_shape.test.mjs"))], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        self.assertIn("splat shape ok", r.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

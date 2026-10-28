@@ -7,14 +7,18 @@
 // folder (POST /api/scene/asset); the layer only holds its URL.
 import * as THREE from './vendor/three.module.min.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
-import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip, field, seg, info } from './ui.js';
+import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip, field, seg, info, rangeField } from './ui.js';
 import { C, R, SC, newObject, namesFor, save, selItem, write } from './scene-data.js';
 import { addModeSection } from './scene-modes.js';
-import { LOADERS, controls, changed, draw, fit, passHooks, renderer, scene, select } from './scene-view.js';
+import { LOADERS, activeCamera, controls, changed, draw, fit, lookThrough, passHooks, recentre, renderer, scene, select } from './scene-view.js';
 import { LIBRARY } from './scene-library.js';
 import {
-  LEVELS, countLabel, fileOf, levelFor, levelName, makeChoices, previewLevel, previewUrl, renderUrl, setMakeChoices, setPreviewLevel, setSharp, sharpOn
+  LEVELS, countLabel, fileOf, levelFor, levelName, makeChoices, placeAtCamera, previewLevel, previewUrl, renderUrl, setMakeChoices, setPlaceAtCamera,
+  setPreviewLevel, setSharp, sharpOn
 } from './splat-levels.js';
+import {
+  GROWS, fillFactor, keptShare, medianOf, pickAlong, reachOf, samplePoints, sameTrim, shapeMesh, standShift, trimBody, trimSphere
+} from './splat-shape.js';
 
 const MODELS = new Set(['glb', 'gltf', 'obj', 'fbx']);
 const SPLATS = new Set(['ply', 'splat', 'ksplat', 'spz']);
@@ -88,6 +92,7 @@ async function loadSplat(o, x = {}, url = splatUrl(o, x)) {
   await mesh.initialized;
   mesh.raycast = () => {};  // picking uses the box (the splats are far too many to ray-test)
   mesh.userData.url = url;
+  shapeMesh(lib, mesh, o, !!x.full);   // (size and trim, splat-shape.js; a render's follow the layer's "renders too")
   return mesh;
 }
 // where the splat is: the middle 99% of its centres per axis, so a few stray floaters don't count
@@ -117,16 +122,18 @@ LOADERS.splat = (o, group, x = {}) => {
       const f = o.flip ? -1 : 1, [x0, y0, z0, x1, y1, z1] = box;
       const lo = [x0, f > 0 ? y0 : -y1, f > 0 ? z0 : -z1], hi = [x1, f > 0 ? y1 : -y0, f > 0 ? z1 : -z0];
       holder.rotation.x = o.flip ? Math.PI : 0;
-      // a photo's splat (o.cam) keeps the photo's camera at the object's origin, looking down -Z: placing the
-      // object places that camera, as with a photo mesh
-      if (o.cam) holder.position.set(0, 0, 0);
-      else holder.position.set(-(lo[0] + hi[0]) / 2, -lo[1], -(lo[2] + hi[2]) / 2);
+      // a photo's splat (o.cam) placed the old way keeps the photo's camera at the object's origin, looking down -Z
+      // (placing the object places that camera); one with o.view stands centred on the floor like any splat, and
+      // o.view.pos says where the photo's camera is (the holder's shift: the file's origin)
+      if (o.cam && !o.view) holder.position.set(0, 0, 0);
+      else holder.position.set(...standShift(box, o.flip));
       proxy.scale.set(Math.max(0.01, hi[0] - lo[0]), Math.max(0.01, hi[1] - lo[1]), Math.max(0.01, hi[2] - lo[2]));
       proxy.position.set(0, proxy.scale.y / 2, 0);
     };
     fit();
     group.add(holder, proxy);
     const sp = group.userData.splat = { fit, proxy, holder, mesh, url: mesh.userData.url };
+    if (!x.mine) { sp.sphere = trimSphere(); holder.add(sp.sphere); }   // (the trim's sphere, while it is adjusted)
     group.userData.dispose = () => { holder.remove(sp.mesh); sp.mesh.dispose(); sp.mesh = null; };  // (the layer is gone: free its buffers)
     tagPicks(o, group); redraw();
   }).catch((e) => toast(`${o.name}: ${e.message}`, true));
@@ -168,7 +175,12 @@ function kick() {
   kickTimer = setTimeout(go, 80);
 }
 passHooks.push((pass) => {
-  for (const m of R.meshes.values()) if (m.userData.splat) m.userData.splat.proxy.visible = pass === 'depth';
+  for (const m of R.meshes.values()) {
+    const sp = m.userData.splat;
+    if (!sp) continue;
+    sp.proxy.visible = pass === 'depth';
+    if (sp.sphere && pass === 'depth') sp.sphere.visible = false;
+  }
   if (spark) spark.visible = pass !== 'depth';
   if (pass !== 'color' || kicking || !spark) return;
   const has = hasSplat();
@@ -284,7 +296,11 @@ function itemSection(o) {
     hint(`${o.file || o.name}${o.fit && o.fit !== 1 ? ` · fitted ×${o.fit}` : ''}`),
     o.type === 'model' ? toggle('Plain clay look (ignore its colours and textures)', o.clay, (on) => { o.clay = on; applyClay(R.meshes.get(o.id), o.clay); save(); draw(); }) : null,
     o.type === 'splat' ? toggle('Upside down (turn it over: many splat files are y-down)', o.flip, (on) => { set('flip', on); R.meshes.get(o.id)?.userData.splat?.fit(); draw(); }) : null,
+    o.type === 'splat' && o.cam ? h('div', { class: 'row wrap' },
+      button('🎥 Camera to the photo\'s view', () => { lookThrough(o); changed(); }),
+      o.view ? null : button('Re-centre', () => recentre(o), { title: 'Stand it centred at the middle of the scene, on the floor and upright; the camera moves to the photo\'s view' })) : null,
     o.type === 'splat' ? previewFields(o) : null,
+    o.type === 'splat' ? shapeFields(o) : null,
     button('Back to fitted size', () => { const f = o.fit || 1; write(o, namesFor(o), { sx: f, sy: f, sz: f }); changed(); }),
     o.type === 'splat' ? help('Splats can\'t be drawn as depth: renders (and the ◐ Depth view) use a box the size of the splat in its place.') : null);
 }
@@ -321,6 +337,109 @@ function previewFields(o) {
   return out;
 }
 
+// ---- splat size (erode / dilate) and radial trim: live through the mesh's modifier (splat-shape.js); a trim can
+// also cut the preview levels on the server, so the view really draws fewer ----
+const meshOf = (o) => R.meshes.get(o.id)?.userData.splat?.mesh || null;
+const worldScale = (o) => Math.abs(R.meshes.get(o.id)?.scale.x || 1);
+function reshape(o) { meshOf(o)?.userData.shape?.set(o); draw(); }
+let sphereTimer = 0;
+function showSphere(o) {
+  const sp = R.meshes.get(o.id)?.userData.splat, s = sp?.sphere;
+  if (!s) return;
+  const t = o.trim;
+  s.visible = !!(t?.on && t.c);
+  if (s.visible) { s.position.set(...t.c); s.scale.setScalar(t.r); }
+  clearTimeout(sphereTimer);
+  sphereTimer = setTimeout(() => { s.visible = false; draw(); }, 2500);
+  draw();
+}
+// pick the trim's centre: the next tap on the view lands on the nearest splat under it (else on its box)
+function pickCentre(o, done) {
+  toast('Tap the splat where the middle of what to keep is');
+  const grab = (e) => {
+    const cv = renderer.domElement;
+    if (e.target !== cv) return;
+    e.stopImmediatePropagation(); e.preventDefault();
+    removeEventListener('pointerdown', grab, true);
+    addEventListener('pointerup', (u) => { u.stopImmediatePropagation(); }, { capture: true, once: true });
+    const mesh = meshOf(o);
+    if (!mesh) return;
+    const r = cv.getBoundingClientRect(), ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), activeCamera());
+    const inv = mesh.matrixWorld.clone().invert();
+    const org = ray.ray.origin.clone().applyMatrix4(inv), dir = ray.ray.direction.clone().transformDirection(inv);
+    const b = o.box || [-1, -1, -1, 1, 1, 1], diag = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]);
+    let hit = pickAlong(samplePoints(mesh), org.toArray(), dir.toArray(), diag * 0.01);
+    if (!hit) {
+      const box = new THREE.Box3(new THREE.Vector3(b[0], b[1], b[2]), new THREE.Vector3(b[3], b[4], b[5]));
+      hit = new THREE.Ray(org, dir).intersectBox(box, new THREE.Vector3())?.toArray() || null;
+    }
+    if (!hit) return toast('Nothing of the splat there: tap on it', true);
+    done(hit.map((v) => +v.toFixed(4)));
+  };
+  addEventListener('pointerdown', grab, true);
+}
+function shapeFields(o) {
+  const n = levelFor(o, 'full')?.n || meshOf(o)?.packedSplats?.numSplats || 0;
+  const facts = hint('');
+  const showFacts = () => {
+    const g = +o.grow || 1, t = o.trim, mesh = meshOf(o);
+    const cut = t?.on && t.c && sameTrim(trimBody(t), t.made) && t.kept;   // (cut: the server counted it; else the shown level's points say)
+    const share = cut && n ? t.kept / n : t?.on && t.c && mesh ? keptShare(samplePoints(mesh), t) : 1;
+    const parts = [];
+    if (g !== 1) parts.push(`each Gaussian ×${g} wide · fill ≈ ×${fillFactor(g)}`);
+    if (t?.on && t.c) parts.push(`trim keeps ≈ ${Math.round(share * 100)}%${n ? ` (${countLabel(Math.round(share * n))} of ${countLabel(n)})` : ''}`
+      + (sameTrim(trimBody(t), t.made) ? ' · previews cut' : ' · previews not cut yet'));
+    facts.textContent = parts.join(' · ') || 'As made';
+  };
+  showFacts();
+  const after = () => { save(); reshape(o); showFacts(); };
+  const out = [
+    field(['Splat size', info('Erode (below 1) shrinks every Gaussian on all three axes: less overdraw, quicker on a tablet, but gaps can show. Dilate (above 1) grows them: fills the gaps of a light preview. Renders keep the size as made unless "Size in renders too" is on.')],
+      seg(GROWS.map((g) => [g, `×${g}`, g < 1 ? `Erode: fill ≈ ×${fillFactor(g)}` : g > 1 ? `Dilate: fill ≈ ×${fillFactor(g)}` : 'As made']), +o.grow || 1,
+        (g) => { o.grow = g === 1 ? undefined : g; after(); })),
+    toggle('Size in renders too', !!o.growRenders, (on) => { o.growRenders = on || undefined; save(); }),
+    toggle('Radial trim', !!o.trim?.on, (on) => {
+      const mesh = meshOf(o);
+      if (on && !o.trim?.c && mesh) {
+        const pts = samplePoints(mesh), c = medianOf(pts);
+        o.trim = { on: true, c, r: reachOf(pts, c), near: 0, renders: true };
+      } else o.trim = { ...(o.trim || { near: 0, renders: true }), on };
+      reshape(o); showSphere(o); changed();
+    }, { help: 'Keep only the Gaussians within a distance of a centre (the splat\'s middle, or a point you tap). Shown live; "Cut the previews" makes the preview files hold only what is kept, so the view draws fewer. Renders trim the full set the same way.' }),
+  ];
+  const t = o.trim;
+  if (t?.on && t.c) {
+    const s = worldScale(o), b = o.box || [0, 0, 0, 1, 1, 1];
+    const big = Math.max(0.5, Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) * s);
+    const live = () => { reshape(o); showSphere(o); showFacts(); };
+    out.push(
+      rangeField('Keep within (m)', () => t.r * s, (v) => { t.r = Math.max(0.01, v / s); }, { min: 0.05, max: +big.toFixed(2), step: 0.01, fmt: (v) => v.toFixed(2), onInput: live, onChange: () => { save(); live(); } }),
+      o.cam ? rangeField('Drop near the camera (m)', () => (t.near || 0) * s, (v) => { t.near = Math.max(0, v / s); }, { min: 0, max: +Math.min(big, 5).toFixed(2), step: 0.01, fmt: (v) => (v ? v.toFixed(2) : 'off'), onInput: live, onChange: () => { save(); live(); } }) : null,
+      h('div', { class: 'row wrap' },
+        button('Centre: its middle', () => { const m = meshOf(o); if (!m) return; t.c = medianOf(samplePoints(m)); save(); live(); }),
+        button('Pick the centre…', () => pickCentre(o, (c) => { t.c = c; live(); changed(); })),
+        button('Show', () => showSphere(o), { title: 'Show the trim\'s sphere for a moment' })),
+      toggle('Trim renders too', t.renders !== false, (on) => { t.renders = on; save(); }));
+    if (/\.ply$/i.test(fileOf(o.url)) && !sameTrim(trimBody(t), t.made)) {
+      out.push(button('Cut the previews', () => remakeLevels(o, trimBody(t)), { cls: 'small primary', title: 'Make the preview levels hold only what the trim keeps (the full set stays whole for renders)' }));
+    }
+  } else if (o.trim?.made && /\.ply$/i.test(fileOf(o.url))) {
+    out.push(button('Whole previews again', () => remakeLevels(o, null), { title: 'The trim is off: make the preview levels from the whole splat again' }));
+  }
+  out.push(facts);
+  return out;
+}
+async function remakeLevels(o, trim) {
+  try {
+    const r = await api('/api/scene/splat/levels', { method: 'POST', body: { url: o.url, trim }, busy: trim ? 'Cutting the previews…' : 'Making whole previews…' });
+    o.levels = r.levels; o.box ||= r.box;
+    if (o.trim) { o.trim.made = r.trim || undefined; o.trim.kept = r.trim ? r.kept : undefined; }
+    changed(); applySplatLevels();
+    toast(trim ? `Previews cut: ${countLabel(r.kept)} of ${countLabel(r.n)} kept` : 'Previews made from the whole splat');
+  } catch (e) { toast(e.message, true); }
+}
+
 // ---- a picture as a splat (SHARP, POST /api/scene/splat): where the shot camera is, seen through the photo's lens ----
 // First a small sheet: the preview density (this device's, as the layer panel's Splat preview) and whether the
 // full set is kept for renders. These are remembered per device.
@@ -333,6 +452,8 @@ export function makeSplat(name, ctx) {
     field('Preview density', seg(LEVELS.map(([k, label, n]) => [k, label, Number.isFinite(n) ? `${label}: about ${countLabel(n)} Gaussians` : `${label}: every Gaussian`]),
       ch.preview, (k) => { ch.preview = k; })),
     keep,
+    toggle('Place at the camera instead', placeAtCamera(), (on) => setPlaceAtCamera(on),
+      { help: 'Off: the splat stands centred at the middle of the scene, on the floor, and the shot camera moves to where the photo was taken. On: the splat goes where the shot camera is now (the camera stays).' }),
     actions(button('Cancel', closeSheet), button('Make the splat', () => {
       closeSheet(); setMakeChoices(ch); setPreviewLevel(ch.preview); runSplat(name, ch, ctx);
     }, { cls: 'primary' })));
@@ -343,13 +464,14 @@ async function runSplat(name, ch, { lookThrough, camera, busyBar }) {
   try {
     const { waitJob } = await import('./clipimport.js');
     const r = await waitJob(await api('/api/scene/splat', { method: 'POST', body: { image: name, project_id: C.S.project, preview: ch.preview, keep_full: ch.keepFull }, busy: false }));
-    const d = THREE.MathUtils.radToDeg, c = camera;
-    const o = newObject('splat', { x: c.position.x, y: c.position.y, z: c.position.z, rx: d(c.rotation.x), ry: d(c.rotation.y), rz: d(c.rotation.z) });
+    const d = THREE.MathUtils.radToDeg, c = camera, here = placeAtCamera();
+    const o = newObject('splat', here ? { x: c.position.x, y: c.position.y, z: c.position.z, rx: d(c.rotation.x), ry: d(c.rotation.y), rz: d(c.rotation.z) } : {});
     Object.assign(o, { name: `Splat of ${name.split('/').pop().replace(/\.\w+$/, '')}`.slice(0, 60), url: r.url, file: r.name, ext: 'ply',
       flip: true, cam: true, image: name, fov: r.lens?.fov || 50, levels: r.levels || undefined });
     const mesh = await loadSplat(o);
     o.box = r.box || splatBox(mesh).map((v) => +v.toFixed(3));   // (the full set's, so every level sits the same)
     o.dist = +Math.max(0.3, (o.box[2] + o.box[5]) / 2).toFixed(3);   // (its middle, straight ahead of the photo's camera)
+    if (!here) o.view = { pos: standShift(o.box, o.flip) };   // (centred on the floor: the photo's camera is there)
     loaded.set(o.id, mesh);
     SC.objects.push(o); save(); select(o.id);
     lookThrough(o);

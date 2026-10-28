@@ -10,7 +10,7 @@ import {
 } from './scene-data.js';
 import { FIG_TABS, adjustTab, faceTab, handsTab, jointsTab, movesTab, partsTab, posesTab, promptProps } from './scene-pose.js';
 import {
-  HAND, addObject, camGizmo, cameraFromView, newCameraPose, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, makeSplatHere, pose, rebuildRoom, refresh,
+  HAND, addObject, camGizmo, cameraFromView, newCameraPose, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, makeSplatHere, pose, rebuildRoom, recentre, refresh,
   removeLayer, removeSelected, select, selectJoint, setFree, setMode, syncMeshes, viewer
 } from './scene-view.js';
 import { busy, cancelRender, letGo, play, renderColorVideo, renderDepthVideo, renderPoseVideo, saveFrame, seek, stopPlay } from './scene-export.js';
@@ -97,6 +97,7 @@ function placeProps(o, cur) {
       })] : null,
     o.type === 'photo' ? [
       button('🎥 Camera to the photo\'s view', () => { lookThrough(o); changed(); }),
+      o.view ? null : button('Re-centre', () => recentre(o), { title: 'Stand it centred at the middle of the scene, on the floor and upright; the camera moves to the photo\'s view' }),
       help('The picture as a 3D mesh (MoGe). Keep camera moves small: nothing is behind what the picture shows. Render depth video, then use it with this picture as a reference.')] : null,
     easeSeg(o),
     hasKeys(o) || o.off ? offsetField(o) : null,

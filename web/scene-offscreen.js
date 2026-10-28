@@ -68,7 +68,12 @@ export class Stage {
       m = rig.root; m.userData.rig = rig;
     } else if (o.type === 'photo') {
       m = new THREE.Group(); this.waiting.add(o.id);
-      photoScene(o.url).then((src) => { if (x.mine(o, m)) m.add(src.clone()); }).catch(() => {}).finally(() => this.loaded(o.id));
+      photoScene(o.url).then((src) => {
+        if (!x.mine(o, m)) return;
+        const s = src.clone();
+        if (o.view) s.position.set(...o.view.pos);   // (centred: as scene-view.js loadPhoto)
+        m.add(s);
+      }).catch(() => {}).finally(() => this.loaded(o.id));
     } else if (makers[o.type]) {
       m = makers[o.type](o, x);
       if (o.ref || o.type === 'backdrop') this.waiting.add(o.id);   // (an object layer fills itself in once its library entry arrives)

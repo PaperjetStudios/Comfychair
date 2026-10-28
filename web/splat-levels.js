@@ -40,6 +40,10 @@ export const setPreviewLevel = (k, ls = local()) => { if (k in RANK) put(ls, KEY
 // "Sharp": a touch screen draws splats at its full pixel ratio too (off: 1x while a splat is in view)
 export const sharpOn = (ls = local()) => get(ls, SHARP, false) === true;
 export const setSharp = (on, ls = local()) => put(ls, SHARP, !!on);
+// a photo's splat or mesh lands at the shot camera (the old way) instead of centred at the world's origin
+const PLACE = 'deck.scene.placeAtCamera';
+export const placeAtCamera = (ls = local()) => get(ls, PLACE, false) === true;
+export const setPlaceAtCamera = (on, ls = local()) => put(ls, PLACE, !!on);
 // the Photo as a splat sheet's last choices
 export function makeChoices(coarse, ls = local()) {
   const v = get(ls, MAKE, {}) || {};
