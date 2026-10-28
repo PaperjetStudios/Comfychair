@@ -38,7 +38,7 @@ BASES = {
     "klein": (["Flux.2 Klein 9B", "Flux.2 Klein 9B-base"], ["Flux.2 Klein 4B", "Flux.2 Klein 4B-base"]),
     "qwen": (["Qwen 2.1"], ["Qwen"]),
     "moss": (["MOSS Image"], []),
-    "ltx2.5": (["LTXV 2.5"], ["LTXV 2.3"]),
+    "ltx2.5": (["LTXV 2.5", "LTXV 2.3"], ["LTXV2"]),   # (2.3 IC-LoRAs run on 2.5: README)
     "ltx2.3": (["LTXV 2.3"], ["LTXV 2.5", "LTXV2"]),
     "ltx": (["LTXV 2.5", "LTXV 2.3"], ["LTXV2", "LTXV"]),
     "flux": (["Flux.1 D"], ["Flux.1 Kontext", "Flux.2 D"]),

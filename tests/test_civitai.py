@@ -101,7 +101,7 @@ class Families(unittest.TestCase):
         self.assertEqual(cv.bases_for("moss")[0], ["MOSS Image"])
         self.assertIn("Flux.2 Klein 9B", cv.bases_for("klein")[0])
         self.assertEqual(cv.bases_for("qwen")[0], ["Qwen 2.1"])
-        self.assertEqual(cv.bases_for("ltx2.5")[0], ["LTXV 2.5"])
+        self.assertEqual(cv.bases_for("ltx2.5")[0], ["LTXV 2.5", "LTXV 2.3"])
         self.assertEqual(cv.bases_for("ltx2.3")[0], ["LTXV 2.3"])
 
     def test_prefix_and_unknown(self):
