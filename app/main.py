@@ -18,14 +18,14 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote
 
 import httpx
-from PIL import Image
+from PIL import Image, ImageOps
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import accel, audioedit, clipimport, craft, delogo, h3upscale, posefind, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import projects, store
-from . import keyexpr, sceneasset
+from . import keyexpr, maskcomp, sceneasset
 from . import templates as tpl
 from .comfy import Comfy, ComfyError
 
@@ -509,6 +509,20 @@ def lineage(fields: list[dict], values: dict) -> dict | None:
     return None
 
 
+async def _mask_dims(run: dict, flist: list[dict]) -> tuple[int, int] | None:
+    """The picture's size, for a mask with Crop to mask (the box is placed in its pixels)."""
+    mf = next((f for f in flist if f["kind"] == "mask"), None)
+    m = mf and maskcomp.mask_of(run, mf)
+    name = m and m.get("fit") and run.get(mf["image_key"])
+    if not name:
+        return None
+    try:
+        data = await input_bytes(name)
+        return await asyncio.to_thread(lambda: ImageOps.exif_transpose(Image.open(io.BytesIO(data))).size)
+    except Exception:
+        return None   # (then it runs on the whole picture)
+
+
 @app.post("/api/generate")
 async def generate(body: dict = Body(...)):
     t = tpl.get(config.TEMPLATES_DIR, body.get("template", ""))
@@ -569,7 +583,10 @@ async def generate(body: dict = Body(...)):
                     raise HTTPException(400, f"{f['group']} · {f['label']}: {e}")
         if i == 0 and not parent:
             parent = lineage(list(fields.values()), resolved)
-        wf = editsize.inject(accel.inject(tpl.apply(t.workflow, run), run), run, list(fields.values()))
+        flist = list(fields.values())
+        run = maskcomp.prefill(run, flist, t.workflow)   # a mask input of the template's own takes the painted mask
+        wf = editsize.inject(accel.inject(tpl.apply(t.workflow, run), run), run, flist)
+        wf = maskcomp.inject(wf, run, flist, await _mask_dims(run, flist))
         folder = db.project_folder(project_id)
         for node in wf.values():  # ComfyUI's own copy goes to output/comfydeck/<project>/ too
             fp = node["inputs"].get("filename_prefix")
@@ -702,6 +719,7 @@ async def upload(file: UploadFile = File(...), mp: float = Form(0), multiple: in
 
 
 PAINT_SUB = "paint"   # the Editor's painted layers: kept here only, out of ComfyUI and the input galleries
+MASK_SUB = "mask"     # masks painted over a Generate picture: here and in ComfyUI, out of the input galleries
 
 
 def local_input(name: str) -> Path | None:
@@ -710,8 +728,8 @@ def local_input(name: str) -> Path | None:
     fname = Path(fname).name
     if sub == config.COMFY_INPUT_SUBFOLDER:
         p = config.INPUT_DIR / fname
-    elif sub == f"{config.COMFY_INPUT_SUBFOLDER}/{PAINT_SUB}":
-        p = config.INPUT_DIR / PAINT_SUB / fname
+    elif sub in (f"{config.COMFY_INPUT_SUBFOLDER}/{PAINT_SUB}", f"{config.COMFY_INPUT_SUBFOLDER}/{MASK_SUB}"):
+        p = config.INPUT_DIR / sub.rpartition("/")[2] / fname
     else:
         return None
     return p if p.is_file() else None
@@ -755,6 +773,33 @@ async def save_paint(request: Request):
     else:
         os.utime(folder / fname)   # the same pixels again: fresh, so prune_paint leaves it until its tab names it
     return {"name": f"{config.COMFY_INPUT_SUBFOLDER}/{PAINT_SUB}/{fname}", "width": w, "height": h}
+
+
+@app.post("/api/inputs/mask")
+async def save_mask(request: Request):
+    """A mask painted over a Generate picture (the PNG as the body; white = change). Kept as greyscale, named after
+    its content, here and in ComfyUI's input folder (the run loads it); it stays out of the input galleries."""
+    data = await request.body()
+    if len(data) > MAX_IMAGE_UPLOAD:
+        raise HTTPException(413, f"That mask is over {MAX_IMAGE_UPLOAD >> 20} MB")
+
+    def grey():
+        im = Image.open(io.BytesIO(data))
+        if im.format != "PNG" or max(im.size) > 16384:
+            raise ValueError("not a PNG of a usable size")
+        out = io.BytesIO()
+        im.convert("L").save(out, "PNG", optimize=True)
+        return out.getvalue(), im.size
+    try:
+        png, (w, h) = await asyncio.to_thread(grey)
+    except Exception as e:
+        raise HTTPException(400, f"Couldn't read that mask: {e}")
+    fname = f"{hashlib.sha1(png).hexdigest()[:20]}.png"
+    folder = config.INPUT_DIR / MASK_SUB
+    folder.mkdir(exist_ok=True)
+    (folder / fname).write_bytes(png)
+    name = await comfy.upload_image(png, fname, f"{config.COMFY_INPUT_SUBFOLDER}/{MASK_SUB}")
+    return {"name": name, "width": w, "height": h}
 
 
 PAINT_NAME = re.compile(rf"{re.escape(PAINT_SUB)}/([0-9a-f]{{20}}\.png)")

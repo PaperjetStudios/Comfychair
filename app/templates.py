@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import accel, editsize
+from . import accel, editsize, maskcomp
 
 TAG_RE = re.compile(r"^@\s*(?:(?P<order>\d+)\s+)?(?P<label>[^\[\]]*?)\s*(?:\[(?P<inputs>[^\]]*)\])?\s*$")
 LORA_CLASSES = {"LoraLoader", "LoraLoaderModelOnly"}
@@ -269,6 +269,7 @@ def describe(t: Template, object_info: dict | None) -> dict:
                 f["mp"] = 0
     if t.workflow:  # edit models size their output from Image 1: offer a size for it
         fields += editsize.fields(t.workflow, fields)
+        fields += maskcomp.fields(t.workflow, fields)   # a mask painted on the first picture (after the Size: Crop to mask needs it)
     adv = accel.fields(t.workflow, object_info) if t.workflow else []
     if adv:  # attention backend / Veda: offered on every template, applied in accel.inject
         fields += adv
@@ -294,6 +295,8 @@ def apply(workflow: dict, values: dict) -> dict:
             lora_ops.append((node_id, val))
         elif inp == "__boxes":
             box_ops.append((node_id, val))
+        elif inp == maskcomp.MASK:   # applied after editsize (maskcomp.inject)
+            continue
         elif (inp == "image" and wf[node_id]["class_type"] in IMAGE_CLASSES
               or inp == "video" and wf[node_id]["class_type"] in VIDEO_CLASSES
               or inp == "audio_file" and wf[node_id]["class_type"] in AUDIO_CLASSES) and not val:
