@@ -12,11 +12,15 @@
 #   1. curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up
 #   2. In the admin console (https://login.tailscale.com/admin/dns): turn on MagicDNS and HTTPS Certificates.
 #   3. On the tablet: install Tailscale from the Play Store and sign in with the same account.
-# `tailscale serve --bg` is kept by Tailscale across reboots, so this only needs running again to change it.
+# `tailscale serve --bg` is kept by Tailscale across reboots (also in the terminal-only boot), so this only
+# needs running again to change it.
 set -euo pipefail
 
 command -v tailscale >/dev/null || { echo "Tailscale isn't installed: curl -fsSL https://tailscale.com/install.sh | sh"; exit 1; }
 tailscale status >/dev/null 2>&1 || { echo "Tailscale isn't connected: sudo tailscale up"; exit 1; }
+# tailscaled starts with multi-user.target, which the terminal-only boot (comfyui.target) brings up too; it keeps
+# the `serve` settings below across reboots, so make sure it's on at boot
+systemctl is-enabled -q tailscaled 2>/dev/null || sudo systemctl enable tailscaled
 
 if [[ "${1:-}" == "off" ]]; then
   sudo tailscale serve reset
