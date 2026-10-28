@@ -8,19 +8,27 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-VIDEO_EXT = {".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v"}
-AUDIO_EXT = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".opus"}
-IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+# What a file is, by its extension: the one table the server goes by (outputs, the media library). The UI's
+# web/kinds.js says how each kind is shown and where it can go. A .json is a motion when the motion nodes
+# saved it (DeckSaveMotion / DeckSaveBodyMotion); fill_facts in main.py checks its content.
+KINDS = {
+    "video": {".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v"},
+    "audio": {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".opus", ".aac"},
+    "image": {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"},
+    "motion": {".npz", ".bvh"},
+    "mesh": {".glb", ".gltf", ".obj", ".fbx"},
+    "splat": {".ply", ".splat", ".ksplat", ".spz"},
+}
+VIDEO_EXT, AUDIO_EXT, IMAGE_EXT = KINDS["video"], KINDS["audio"], KINDS["image"]
 
 
-def kind_of(filename: str) -> str:
+def kind_of(filename: str, node_class: str = "") -> str:
     ext = Path(filename).suffix.lower()
-    if ext in VIDEO_EXT:
-        return "video"
-    if ext in AUDIO_EXT:
-        return "audio"
-    if ext in IMAGE_EXT:
-        return "image"
+    for kind, exts in KINDS.items():
+        if ext in exts:
+            return kind
+    if ext == ".json" and "motion" in node_class.lower():
+        return "motion"
     return "file"
 
 

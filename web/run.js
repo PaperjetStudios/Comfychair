@@ -4,9 +4,9 @@ import {
 } from './ui.js';
 import { S, fmtT, isMine, loadProjects, switchTab, emitServer } from './core.js';
 import { genLabel, mediaEl, openImagePicker, outputCard, uploadImage } from './media.js';
+import { factsOf, isMedia, kindDef, kindTile } from './kinds.js';
 import { addToPrompt, builderState, keepAwake, loadTemplates, renderFields, saveBuilder, selectTemplate, setVal, stop } from './generate.js';
 import { B, GAL, boardChanged, galleryRefresh } from './board.js';
-import { openTrack } from './track.js';
 import { queueRun } from './make.js';
 
 // ---------------------------------------------------------------------------
@@ -510,17 +510,22 @@ function removeCard(id) {
 
 const cardEl = (g) => outputCard(g, { onPick: () => openGeneration(g.id) });
 
-export function openGeneration(id) {
+export async function openGeneration(id) {
   const g = S.history.get(id);
   if (!g) return;
   let idx = 0;
   const big = h('div', { class: 'media-big' });
   const strip = h('div', { class: 'strip' });
+  const facts = h('p', { class: 'hint gen-facts' });   // what it is and what's worth knowing (kinds.js)
+  const bar = h('div');   // the buttons, for the output on show
+  const { takeButtons } = await import('./useas.js');
   const draw = () => {
-    big.replaceChildren(g.outputs[idx] ? mediaEl(g.outputs[idx]) : placeholder(g.error || g.status));
+    const o = g.outputs[idx];
+    big.replaceChildren(!o ? placeholder(g.error || g.status) : isMedia(o) ? mediaEl(o) : kindTile(o, g));
+    facts.textContent = o ? [kindDef(o).name, factsOf(o)].filter(Boolean).join(' · ') : '';
     outputThumbs(strip, g, idx, (i) => { idx = i; draw(); });
+    bar.replaceChildren(actions(buttons()));
   };
-  draw();
   const t = S.templates.find((x) => x.id === g.template);
   const labelFor = (k) => {
     const f = t && t.fields.find((x) => x.key === k);
@@ -534,44 +539,21 @@ export function openGeneration(id) {
   const isScene = g.template === '3d scene';  // a depth video from the 3D tab, with its scene in the params
   const isPhoto = g.template === '3d photo';  // a picture as a mesh (MoGe), for the 3D tab
   const isEdit = g.template === 'video edit' || g.template === 'h3 upscale' || isScene || isPhoto;  // made in the Video or 3D tab, or upscaled: no template to replay
+  // the same buttons as every take (useas.js takeButtons: Use as…, Pin, Download, Delete), after running it again
+  // when its template is there; where each kind can go (3D, the Editor, Craft, Upscale, Track motion…) is Use as…
   const primary = { cls: 'small primary' };
-  const btns = isPhoto ? [
-    button('Add to 3D', async () => { closeSheet(); switchTab('scene'); (await sceneModule()).addPhoto(g); }, primary),
-  ] : isScene ? [
-    button('Open in 3D', async () => { closeSheet(); switchTab('scene'); (await sceneModule()).open(g.params.scene, g.id); }, primary),
-    button('Use in H3 control', () => { closeSheet(); useControlVideo(g, g.params.scene || {}); }),
-  ] : isEdit || !S.templates.some((t) => t.id === g.template) ? [] : [   // key, matte, imports…: no template to run again
+  const buttons = () => [...(isEdit || !S.templates.some((t) => t.id === g.template) ? [] : [   // key, matte, imports…: no template to run again
     button('Replay & edit', () => { reuse(g); closeSheet(); }, primary),
     button('Run again', () => runAgain(g)),
-  ];
-  if (['image', 'video', 'audio'].includes(cur()?.kind)) {
-    btns.push(button('Use as…', async () => (await import('./useas.js')).openUseAs(g, idx),
-      { title: 'Send it to Generate, VFX, Video, Sound, the Editor or 3D' }));
-  }
-  if (cur()?.kind === 'image' || cur()?.kind === 'video') {
-    btns.push(button(cur().kind === 'image' ? 'Open in PhotoCraft' : 'Open in EffectCraft',
-      async (ev) => (await import('./craft.js')).sendToCraft('generation', { generation: g.id, index: idx }, ev.currentTarget),
-      { title: 'With what it was made from as a hidden layer underneath, to keep editing on the computer' }));
-  }
-  if (cur()?.kind === 'video' && /^deck-h3-/.test(g.template) && g.status === 'done') {
-    btns.push(button('Upscale (H3)…', () => openH3Upscale(g, idx), { title: 'Sample it again bigger, with this run\'s own prompt, LoRAs and references' }));
-  }
-  if (cur()?.kind === 'video') btns.push(button('Sound → Sound tab', async () => {
-    closeSheet(); (await import('./media.js')).soundToSoundTab({ generation: g.id, index: idx }, { name: `${g.id}-${g.template}-sound` });
-  }, { title: 'Take the clip\'s sound out and put it on the Sound tab\'s timeline' }));
-  if (cur()?.kind === 'video') btns.push(button('Track motion', () => openTrack({ src: { generation: g.id, index: idx }, url: cur().url, label: genLabel(g) }), { title: 'Follow the picture\'s movement and make a 3D camera from it' }));
-  if (!isEdit) btns.push(linkBtn('Workflow JSON', `/api/generations/${g.id}/workflow`));
-  if (cur()) btns.push(linkBtn('Download', cur().url, { download: cur().filename }));
-  btns.push(button('Delete', async () => {
-    if (!confirm(`Delete generation #${g.id} and its files?`)) return;
-    try { await api(`/api/generations/${g.id}`, { method: 'DELETE' }); closeSheet(); } catch (e) { toast(e.message, true); }
-  }, { cls: 'small danger' }));
+  ]), ...takeButtons(g, idx, { onDeleted: () => closeSheet() }),
+  !isEdit ? linkBtn('Workflow JSON', `/api/generations/${g.id}/workflow`) : null].filter(Boolean);
+  draw();
 
   openSheet(
-    h('h3', {}, `#${g.id} · ${g.template}`, ' ', h('span', { class: `badge ${g.status}` }, g.status),
+    h('h3', {}, genLabel(g), ' ', h('span', { class: `badge ${g.status}` }, g.status),
       runTime(g) != null ? h('span', { class: 'hint' }, `took ${fmtDur(runTime(g))}`) : null),
-    big, strip,
-    actions(btns),
+    big, strip, facts,
+    bar,
     g.error ? note(g.error, 'err') : null,
     g.parent ? hint(`Made from #${g.parent.generation}${g.parent.frame ? ` (${g.parent.frame} frame)` : ''}`) : null,
     h('table', { class: 'params' }, Object.entries(g.params).filter(([k]) => !k.startsWith('__') && !(isScene && k === 'scene')).map(([k, v]) =>
@@ -594,7 +576,7 @@ export async function sceneModule() {
 }
 
 // A depth video from the 3D tab into deck-h3-ctrl2v: its control video, size and length.
-async function useControlVideo(g, sc) {
+export async function useControlVideo(g, sc) {
   if (!S.templates.find((t) => t.id === 'deck-h3-ctrl2v')) return toast('Template deck-h3-ctrl2v is missing', true);
   S.history.set(g.id, S.history.get(g.id) || g);
   switchTab('generate');
@@ -695,7 +677,7 @@ export async function openJobs() {
 }
 
 // A finished H3 clip sampled again bigger (app/h3upscale.py): the run's own prompt, LoRAs, references and seed
-function openH3Upscale(g, idx) {
+export function openH3Upscale(g, idx) {
   const o = g.outputs[idx], w = o.width || 0, hgt = o.height || 0;
   let scale = 1.5, strength = 'medium';
   const size = (s) => (w ? `${Math.round((w * s) / 32) * 32}×${Math.round((hgt * s) / 32) * 32}` : `${s}×`);

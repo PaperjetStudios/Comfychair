@@ -4,12 +4,13 @@ import {
 } from './ui.js';
 import { fmtTime } from './playback.js';
 import { bareSource, extractSound, genLabel, soundInput, soundToSoundTab } from './media.js';
-import { S, previewUrl, switchTab } from './core.js';
+import { S, switchTab } from './core.js';
 import { openGeneration } from './run.js';
 import { openUseAs } from './useas.js';
 import { E, FULL, editorTabsReady, persistEditor, renderEditor } from './editor.js';
 import { addToTimeline } from './video.js';
 import { maximizable, zoomPan } from './layout.js';
+import { cardPicture, kindDef, kindOf, kindTile, waveArt } from './kinds.js';
 import { openCompare } from './compare.js';
 
 // ---------------------------------------------------------------------------
@@ -40,7 +41,8 @@ export async function renderBoard() {
   if (!B.boxWired) { B.boxWired = true; wireBoxSelect(); }
   const bar = $('#boardBar');
   if (B.filter === 'marked' && !B.marked.size) B.filter = 'all';
-  const filters = [['all', 'All'], ['image', 'Images'], ['video', 'Videos'], ['audio', 'Sounds'], ['pinned', '★ Pinned'], ...(B.marked.size ? [['marked', '🗑 Marked']] : [])];
+  const filters = [['all', 'All'], ['image', 'Images'], ['video', 'Videos'], ['audio', 'Sounds'], ['motion', 'Motion'], ['3d', '3D'],
+    ['pinned', '★ Pinned'], ...(B.marked.size ? [['marked', '🗑 Marked']] : [])];
   const filterSeg = seg(filters, B.filter, (k) => { B.filter = k; store.set('deck.board.filter', k); renderBoard(); });
   const size = numSlider({ min: 120, max: 520, step: 10, value: B.size, label: 'Tile size' });
   const setSize = () => { B.size = Number(size.value); store.set('deck.board.size', B.size); $('#board').style.setProperty('--tile', `${B.size}px`); };
@@ -70,7 +72,8 @@ export async function renderBoard() {
 }
 
 // what the board shows with the current filter, newest first: [{g, o, i, key}]
-const MEDIA = ['image', 'video', 'audio'];
+// a filter's kinds: 3D is models and splats; every kind the app makes is on the board (not plain files)
+const FILTER_KINDS = { image: ['image'], video: ['video'], audio: ['audio'], motion: ['motion'], '3d': ['mesh', 'splat'] };
 function boardItems() {
   const items = [];
   const gens = [...S.history.values()].filter((g) => g.project_id === S.project && g.status === 'done').sort((a, b) => b.id - a.id);
@@ -78,8 +81,9 @@ function boardItems() {
     if (B.filter === 'pinned' && !g.pinned) continue;
     if (B.filter === 'marked' && !B.marked.has(g.id)) continue;
     g.outputs.forEach((o, i) => {
-      if (!MEDIA.includes(o.kind)) return;
-      if (MEDIA.includes(B.filter) && o.kind !== B.filter) return;
+      const k = kindOf(o);
+      if (k === 'file') return;
+      if (FILTER_KINDS[B.filter] && !FILTER_KINDS[B.filter].includes(k)) return;
       items.push({ g, o, i, key: `${g.id}:${i}` });
     });
   }
@@ -101,18 +105,10 @@ function markedGens() { return [...B.marked].map((id) => S.history.get(id)).filt
 
 // a clip's length on its tile: 4.9s, 1:05
 const clipLen = (s) => (s < 60 ? `${s < 10 ? s.toFixed(1) : Math.round(s)}s` : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`);
-const KIND_MARK = { video: ' ▶', audio: ' ♪' };
-// a sound's picture: its waveform (app/previews.py) over a note, which shows alone if there is no waveform
-const waveArt = (o, w, cls) => h('div', { class: cls }, h('span', { class: 'wave-note', 'aria-hidden': 'true' }, '♪'),
-  h('img', { src: previewUrl(o.url, w, 'wave'), loading: 'lazy', alt: '', draggable: false,
-    onload: (e) => { e.target.previousSibling.hidden = true; }, onerror: (e) => e.target.remove() }));
-
+const kindMark = (o) => (kindOf(o) === 'image' ? '' : ` ${kindDef(o).icon}`);   // (kinds.js)
 function boardTile(g, o, i) {
   // light previews (app/previews.py): a still straight away; videos loop a small 8 fps copy while on screen
-  const media = o.kind === 'video'
-    ? h('video', { src: previewUrl(o.url, B.size, 'clip'), poster: previewUrl(o.url, B.size), muted: true, loop: true, playsInline: true, preload: 'none' })
-    : o.kind === 'audio' ? waveArt(o, B.size, 'tile-wave')
-    : h('img', { src: previewUrl(o.url, B.size), loading: 'lazy', alt: '', draggable: false });
+  const media = cardPicture(o, g, B.size, { live: true });   // (kinds.js: the same pictures as everywhere)
   const pin = h('button', { type: 'button', class: 'pin' + (g.pinned ? ' on' : ''), 'aria-label': g.pinned ? 'Unpin' : 'Pin',
     onclick: (e) => { e.stopPropagation(); togglePin(S.history.get(g.id) || g); } }, g.pinned ? '★' : '☆');
   const key = `${g.id}:${i}`;
@@ -123,7 +119,7 @@ function boardTile(g, o, i) {
     } }, media, pin, h('span', { class: 'tick', 'aria-hidden': 'true' }, '✓'),
     h('span', { class: 'mark', 'aria-hidden': 'true' }, '🗑'),
     o.duration ? h('span', { class: 'tile-len' }, clipLen(o.duration)) : null,
-    h('div', { class: 'tile-meta' }, `${genLabel(g)}${KIND_MARK[o.kind] || ''}`));
+    h('div', { class: 'tile-meta' }, `${genLabel(g)}${kindMark(o)}`));
   // long press: start selecting with this tile
   let timer = 0, start = null;
   tile.addEventListener('pointerdown', (e) => {
@@ -492,7 +488,7 @@ function galleryRender(newMedia = false) {
   if (newMedia || GAL.key !== cur.key) {
     main.querySelectorAll('video, audio').forEach((v) => v.pause());
     galleryZoom();
-    main.replaceChildren(o.kind === 'video' ? galleryVideo(o) : o.kind === 'audio' ? galleryAudio(o) : h('img', { src: o.url, alt: o.filename, draggable: false }));
+    main.replaceChildren(o.kind === 'video' ? galleryVideo(o) : o.kind === 'audio' ? galleryAudio(o) : o.kind === 'image' ? h('img', { src: o.url, alt: o.filename, draggable: false }) : kindTile(o, cur.g));
     for (const d of [-1, 1]) {   // warm the cache for the neighbours
       const nb = GAL.items[GAL.idx + d];
       if (nb && nb.o.kind === 'image') new Image().src = nb.o.url;
@@ -515,7 +511,7 @@ function galleryRender(newMedia = false) {
   if (strip.childElementCount !== GAL.items.length || newMedia) {
     galThumbs.disconnect();
     strip.replaceChildren(...GAL.items.map((x, n) => h('button', { type: 'button', class: 'gal-thumb', 'data-n': n, onclick: () => { GAL.idx = n; galleryRender(true); } },
-      x.o.kind === 'audio' ? waveArt(x.o, 192, 'gal-thumb-wave') : h('img', { src: previewUrl(x.o.url, 192), loading: 'lazy', alt: '', draggable: false }),
+      x.o.kind === 'audio' ? waveArt(x.o, 192, 'gal-thumb-wave') : cardPicture(x.o, x.g, 192),
       h('span', { class: 'gal-badges' }))));
     strip.querySelectorAll('video').forEach((v) => galThumbs.observe(v));
   }
@@ -523,7 +519,7 @@ function galleryRender(newMedia = false) {
     const x = GAL.items[n], xg = S.history.get(x.g.id) || x.g;
     t.classList.toggle('sel', n === GAL.idx);
     t.classList.toggle('marked', B.marked.has(xg.id));
-    t.querySelector('.gal-badges').textContent = `${xg.pinned ? '★' : ''}${B.marked.has(xg.id) ? '🗑' : ''}${(KIND_MARK[x.o.kind] || '').trim()}`;
+    t.querySelector('.gal-badges').textContent = `${xg.pinned ? '★' : ''}${B.marked.has(xg.id) ? '🗑' : ''}${kindMark(x.o).trim()}`;
   });
   strip.querySelector('.gal-thumb.sel')?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: newMedia ? 'smooth' : 'auto' });
 }

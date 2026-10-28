@@ -17,6 +17,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote
 
 import httpx
+from PIL import Image
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -61,37 +62,61 @@ async def broadcast(payload):
             clients.discard(ws)
 
 
-def fill_durations(g: dict) -> bool:
-    """A finished run's videos and sounds with their length in seconds (ComfyUI doesn't say; the Board shows it).
-    True when something was added."""
+def fill_facts(g: dict) -> bool:
+    """A finished run's outputs with what the UI shows about each (ComfyUI doesn't say): a clip's length, size and
+    frame rate, a sound's length, a picture's size, a motion's length and frame rate. An output saved as a plain
+    "file" from before the motion and 3D kinds gets its kind. Looked at once per output ("facts"). True when
+    something was added."""
     changed = False
     for o in g.get("outputs") or []:
-        if o.get("kind") in ("video", "audio") and not o.get("duration"):
-            path = output_file(g, o)
-            try:
-                if path.is_file():
-                    o["duration"] = round(videoedit.probe(path)["duration"], 2)
-                    changed = True
-            except (subprocess.SubprocessError, OSError, ValueError, KeyError):
-                pass
+        if o.get("facts"):
+            continue
+        path = output_file(g, o)
+        try:
+            if not path.is_file():
+                continue
+            if o.get("kind") == "file":
+                k = imageprep.kind_of(o["filename"])
+                if k == "file" and path.suffix.lower() == ".json":
+                    try:
+                        motion.read(path.read_bytes(), path.name)
+                        k = "motion"
+                    except ValueError:
+                        pass
+                o["kind"] = k
+            if o["kind"] in ("video", "audio"):
+                info = videoedit.probe(path)
+                o["duration"] = round(info["duration"], 2)
+                if o["kind"] == "video" and info.get("width"):
+                    o.update(width=info["width"], height=info["height"], fps=round(info.get("fps") or 0, 3))
+            elif o["kind"] == "image":
+                with Image.open(path) as im:
+                    o["width"], o["height"] = im.size
+            elif o["kind"] == "motion":
+                m = motion.read(path.read_bytes(), path.name)
+                o.update(duration=m["seconds"], fps=m["fps"], frames=len(m["frames"]))
+        except (subprocess.SubprocessError, OSError, ValueError, KeyError) as e:
+            log.debug("no facts for %s: %s", o.get("filename"), e)
+        o["facts"] = 1
+        changed = True
     if changed:
         db.update_generation(g["id"], outputs=g["outputs"])
     return changed
 
 
-def backfill_durations():
-    """Runs from before lengths were kept get theirs (once: a run that has them is skipped)."""
+def backfill_facts():
+    """Runs from before their outputs' facts were kept get them (once: an output that has them is skipped)."""
     n = 0
     for g in db.all_generations():
-        if g["status"] == "done" and fill_durations(g):
+        if g["status"] == "done" and fill_facts(g):
             n += 1
     if n:
-        log.info("added clip lengths to %d runs", n)
+        log.info("added output facts to %d runs", n)
 
 
 async def push_gen(gid: int):
     g = db.get_generation(gid)
-    if g and g["status"] == "done" and await asyncio.to_thread(fill_durations, g):
+    if g and g["status"] == "done" and await asyncio.to_thread(fill_facts, g):
         g = db.get_generation(gid)
     if g:
         await broadcast({"type": "deck_generation", "data": g})
@@ -225,7 +250,7 @@ async def finalize(pid: str):
                     msg = m[1].get("exception_message", msg)
             db.update_generation(gid, status="error", error=msg, finished=time.time())
             return
-        saved, used = [], set()
+        saved, used, wf = [], set(), db.get_workflow(gid)
         for it in _collect_outputs(entry.get("outputs")):
             name = re.sub(r"[^\w.\-]", "_", Path(it["filename"]).name)
             while name in used:
@@ -235,7 +260,8 @@ async def finalize(pid: str):
             src = {"filename": it["filename"], "subfolder": it.get("subfolder", ""), "type": it.get("type", "output")}
             await comfy.download(src["filename"], src["subfolder"], src["type"], path)
             # "comfy": where ComfyUI keeps its own copy, so deleting the generation can remove that too
-            saved.append({"filename": name, "path": rel, "kind": imageprep.kind_of(name), "node": it["node"], "comfy": src})
+            cls = ((wf or {}).get(str(it["node"])) or {}).get("class_type", "")   # (what saved it: a motion node's .json)
+            saved.append({"filename": name, "path": rel, "kind": imageprep.kind_of(name, cls), "node": it["node"], "comfy": src})
         db.update_generation(gid, status="done", outputs=saved, finished=time.time())
     except Exception as e:
         log.exception("finalize failed for %s", pid)
@@ -347,7 +373,7 @@ async def lifespan(app: FastAPI):
     await comfy.start()
     task = asyncio.create_task(reconcile_loop())
     sweeper = asyncio.create_task(clipimport.sweeper())   # the clip importer's previews and leftovers
-    asyncio.create_task(asyncio.to_thread(backfill_durations))
+    asyncio.create_task(asyncio.to_thread(backfill_facts))
     log.info("ComfyChair ready. ComfyUI at %s", config.COMFY_URL)
     yield
     task.cancel()
@@ -729,10 +755,8 @@ async def generation_to_input(gid: int, body: dict = Body(default={})):
     return {"name": name, "width": w, "height": h, "source": source}
 
 
-MEDIA_KINDS = {".mp4": "video", ".webm": "video", ".mov": "video", ".mkv": "video", ".m4v": "video",
-               ".mp3": "audio", ".wav": "audio", ".m4a": "audio", ".aac": "audio", ".ogg": "audio",
-               ".flac": "audio", ".opus": "audio",
-               ".png": "image", ".jpg": "image", ".jpeg": "image", ".webp": "image", ".gif": "image"}
+# what the media library takes: pictures, clips and sounds (imageprep.KINDS)
+MEDIA_KINDS = {ext: k for k in ("video", "audio", "image") for ext in imageprep.KINDS[k]}
 
 
 def _media_entry(p: Path) -> dict:

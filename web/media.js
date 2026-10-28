@@ -2,6 +2,7 @@ import {
   $, h, store, api, toast, openSheet, closeSheet, button, iconBtn, actions, fileButton, seg, placeholder, note, mediaCard, field, pickButtons,
 } from './ui.js';
 import { fmtTime } from './playback.js';
+import { cardPicture, kindTile } from './kinds.js';
 import { S, PICKER_SOURCES as SOURCES, previewUrl, switchTab, thumbUrl } from './core.js';
 import { fmtDur, loadHistory, runTime } from './run.js';
 
@@ -18,7 +19,7 @@ export async function projectOutputs(kinds) {
 // a run by its template, an imported file by its name
 export const genLabel = (g) => `#${g.id} ${g.template === 'import' && g.params?.label ? g.params.label : g.template}`;
 // a card's picture: a thumbnail, or a note for sound
-export const cardMedia = (o) => (o.kind === 'audio' ? h('span', { class: 'placeholder' }, '♪') : mediaEl(o, { thumb: true }));
+export const cardMedia = (o, g = null) => cardPicture(o, g);   // (kinds.js: a still, a waveform, or what the kind is)
 
 // A run as a card, the same in History, the VFX tab's takes and the Sound tab's makers: its output (kind: the one to
 // show when it made several), ▶ on a clip, how many it made, and its state (waiting, running, failed, or how long it
@@ -26,7 +27,7 @@ export const cardMedia = (o) => (o.kind === 'audio' ? h('span', { class: 'placeh
 export function outputCard(g, { kind = null, onPick, picked = false } = {}) {
   const i = kind ? Math.max(0, g.outputs.findIndex((x) => x.kind === kind)) : 0, o = g.status === 'done' ? g.outputs[i] : null;
   const took = g.status === 'done' ? runTime(g) : null;
-  const media = o ? cardMedia(o)
+  const media = o ? cardMedia(o, g)
     : placeholder(g.status === 'error' ? `Failed: ${g.error || ''}` : g.status === 'queued' ? 'Waiting…' : g.status === 'interrupted' ? 'Stopped' : 'Running…');
   return mediaCard([media, g.outputs.length > 1 ? h('span', { class: 'play count' }, `${g.outputs.length}`) : null], null, () => onPick?.(g), {
     badge: o?.kind === 'video' ? '▶' : null, attrs: { 'data-gen': g.id, class: `card${picked ? ' picked' : ''}` },
@@ -337,5 +338,5 @@ export function mediaEl(o, { controls = true, thumb = false } = {}) {
   }
   if (o.kind === 'audio') return h('audio', { src: o.url, controls: true });
   if (o.kind === 'image') return h('img', { src: o.url, alt: o.filename, loading: 'lazy' });
-  return h('a', { href: o.url, target: '_blank' }, o.filename);
+  return kindTile(o);   // a motion, a 3D model, a file: what it is and its facts (Download has the file)
 }

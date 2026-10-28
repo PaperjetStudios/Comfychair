@@ -58,6 +58,14 @@ async function run(id, template, values, label) {
   } catch (e) { toast(e.message, true); }
 }
 
+// A past run's motion (History, the Board, Use as…) onto a figure: the one selected, else the first in the scene
+export async function motionOnto(src, label) {
+  const o = SC.objects.find((x) => x.id === R.sel && x.type === 'figure') || figures()[0];
+  if (!o) return toast('Add a person to the scene first, then use the motion on them', true);
+  try { apply(o.id, await api('/api/motion/from', { method: 'POST', body: { generation: src.generation, index: src.index } }), label); }
+  catch (e) { toast(e.message, true); }
+}
+
 // the placement choices, the same in the panel and the two sheets; onto: which figure (when there are several)
 const figures = () => SC.objects.filter((x) => x.type === 'figure');
 const target = (o) => (figures().some((x) => x.id === ST.to) ? ST.to : o.id);

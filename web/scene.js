@@ -25,6 +25,7 @@ import './scene-track.js';   // the footage and track-point layers a motion trac
 export { addModeSection, registerMode } from './scene-modes.js';
 export { addPhoto, makePhoto } from './scene-view.js';
 export { useAsRef } from './scene-ref.js';
+export { motionOnto } from './scene-motion.js';
 
 registerCamera();     // camera moves (a section of Camera mode)
 registerBuiltins();   // (the dependencies have run by now; a mode registered later goes after them)
