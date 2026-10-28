@@ -364,7 +364,7 @@ function wireTextPopup() {
   });
   document.addEventListener('focusin', (e) => {
     const t = e.target;
-    if (t === ta || t.tagName !== 'TEXTAREA' || t.readOnly || !t.closest('.panel')) return;
+    if (t === ta || t.tagName !== 'TEXTAREA' || t.readOnly || !t.closest('.panel, .boxes-editor')) return;
     if (!src) overlayOpened(back);
     src = t;
     title.textContent = t.closest('.prompt-part')?.querySelector('.part-head b')?.textContent

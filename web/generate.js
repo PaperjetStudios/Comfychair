@@ -1141,10 +1141,14 @@ function openBoxEditor(f) {
       style: `left:${b.x * 100}%;top:${b.y * 100}%;width:${b.w * 100}%;height:${b.h * 100}%` },
       h('span', { class: 'bx-num' }, String(i + 1)), h('span', { class: 'bx-handle', 'data-i': i }))));
     list.replaceChildren(...(boxes.length ? boxes.map((b, i) => {
-      const desc = h('input', { type: 'text', value: b.desc || '', placeholder: b.type === 'text' ? 'Look of the text (e.g. neon sign)' : 'What goes here' });
-      desc.addEventListener('input', () => { b.desc = desc.value; });
-      const txt = h('input', { type: 'text', value: b.text || '', placeholder: 'The words to write' });
-      txt.addEventListener('input', () => { b.text = txt.value; });
+      // a box's prompt is a prompt like the main one: several lines, saved ones to step through and save, the full-screen
+      // writing box on a tap (app.js), and the prompt's tags (<Picture 1>, <obj_1>…) as chips there
+      const tags = () => [['Tags', [...promptTags(), ...boxes.map((_, k) => `<obj_${k + 1}>`)].map((t) => [t, t]), true]];
+      const { el: desc, ta: descTa } = snippetEditor({ cat: 'Box', label: b.type === 'text' ? 'How the words look' : 'What goes here', grow: true,
+        placeholder: b.type === 'text' ? 'Look of the text (e.g. neon sign)' : 'What goes here', get: () => b.desc || '', set: (t) => { b.desc = t; } });
+      descTa._chipGroups = tags;
+      const txt = textArea(() => b.text || '', (t) => { b.text = t; }, { rows: 2, placeholder: 'The words to write', grow: true });
+      txt._chipGroups = tags;
       const kind = seg([['obj', 'Object'], ['text', 'Text']], b.type || 'obj', (t) => { b.type = t; draw(); });
       const move = (d) => { const j = i + d; if (j < 0 || j >= boxes.length) return; [boxes[i], boxes[j]] = [boxes[j], boxes[i]]; sel = j; draw(); };
       return h('div', { class: 'box-item' + (i === sel ? ' sel' : ''), onclick: () => { if (sel !== i) { sel = i; draw(); } } },
@@ -1193,8 +1197,8 @@ function openBoxEditor(f) {
   const end = () => {
     if (drag && drag.mode === 'new' && (drag.b.w < 0.02 || drag.b.h < 0.02)) { boxes.pop(); sel = boxes.length - 1; }
     drag = null; draw();
-    const inp = list.querySelector('.box-item.sel input:last-of-type');
-    if (inp && !inp.value) inp.focus();
+    const inp = [...list.querySelectorAll('.box-item.sel textarea')].pop();
+    if (inp && !inp.value && !matchMedia('(pointer: coarse)').matches) inp.focus();   // (on a tablet a tap opens the writing box)
   };
   canvas.addEventListener('pointerup', end); canvas.addEventListener('pointercancel', end);
 
