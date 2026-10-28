@@ -119,6 +119,150 @@ result it missed.
 
 ---
 
+## What ComfyUI needs
+
+The repo holds no model weights (`.gitignore` keeps them out). These are the custom nodes and model
+files the bundled templates and the app expect, by the filename the templates load. Folders are under
+`ComfyUI/models/` (or any `base_path` in `extra_model_paths.yaml`). A template whose files are missing
+still lists; it fails when run. You only need the files of the templates you use.
+
+### Custom node packs
+
+| Pack | Used by |
+|---|---|
+| [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) | video load/save in most video templates, animated previews |
+| [ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes) | `ImageResizeKJv2`, LTX guide nodes |
+| [ComfyUI-LTXVideo](https://github.com/Lightricks/ComfyUI-LTXVideo) | `deck-ltx-*` IC-LoRA, tiling, inpaint, tracks, audio-only |
+| [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) | `deck-klein9b-edit` (GGUF text encoder) |
+| [comfyui_controlnet_aux](https://github.com/Fannovel16/comfyui_controlnet_aux) | DWPose in `deck-pose-video`, `deck-h3-drive`, `deck-h3-faceswap`, `deck-ltx-drive` |
+| [ComfyUI-UtilsCollection](https://github.com/silveroxides/ComfyUI-UtilsCollection) | `UC_StitchImageGrid` |
+| [ComfyUI-Viggle-Animate-H3](https://github.com/Saganaki22/ComfyUI-Viggle-Animate-H3) | `deck-h3-animate`, `deck-h3-faceswap` |
+| [ComfyUI-SAM3](https://github.com/PozzettiAndrea/ComfyUI-SAM3) | `deck-sam3-video-mask` |
+| [ComfyUI-Video-Depth-Anything](https://github.com/yuvraj108c/ComfyUI-Video-Depth-Anything) | `deck-depth-image`, `deck-depth-video` (patched, see below) |
+| [ComfyUI-HY-Motion1](https://github.com/jtydhr88/ComfyUI-HY-Motion1) | `deck-motion-text` |
+| [ComfyUI_ProPainter_Nodes](https://github.com/daniabib/ComfyUI_ProPainter_Nodes) | VFX logo removal, Quality (patched, see below) |
+| [Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler) | H3 upscale (`POST /api/h3/upscale`) |
+| [Veda-on-ComfyUI](https://github.com/veda-sparse/Veda-on-ComfyUI) | optional Veda sparse attention for H3 (Advanced) |
+| `comfy_nodes/deck_*` (this repo) | face crop, pose smoothing, motion save, TAPNext++: symlink each into `custom_nodes` |
+
+Three packs carry local fixes, each marked `(ComfyDeck patch)`; an update or reinstall drops them, so grep for the
+marker afterwards and re-apply:
+- **comfy_env** (in ComfyUI's venv, used by ComfyUI-SAM3), `isolation/workers/{_persistent_worker.py,_ipc_shared.py,_ipc_parent.py}`:
+  sends empty arrays and tensors over the IPC. Without it SAM3 fails with "cannot mmap an empty file".
+- **ComfyUI-Video-Depth-Anything**: `video_depth_anything/dinov2_layers/attention.py` uses `F.scaled_dot_product_attention`,
+  and `node.py` `process()` calls `mm.unload_all_models()` first. Large at 518 px still runs out of memory on 12 GB,
+  so the templates use 448 for Large.
+- **ComfyUI_ProPainter_Nodes**: `propainter_nodes.py` `ProPainterInpaint` unloads ComfyUI's models before it runs.
+
+MiniMax H3, MOSS, Flux2/Klein, Qwen Image 2.1, SeedVR2, SAM 3D Body, SDPose, RT-DETR, MoGe and ACE-Step
+nodes are ComfyUI core: keep ComfyUI current.
+
+### Models
+
+**LTX-2.5** (all `deck-ltx-*`)
+
+| Folder | File | Size |
+|---|---|---|
+| `diffusion_models` | `ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors` | 21 GB |
+| `text_encoders` | `gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors` | 15 GB |
+| `vae` | `ltx-2.5-video-vae-bf16.safetensors` | 1.4 GB |
+| `vae` | `ltx-2.5-video-vae-conv-bf16.safetensors` (`deck-ltx-ripple` only) | 1.4 GB |
+| `vae` | `ltx-2.5-audio-vae-bf16.safetensors` | 348 MB |
+
+IC-LoRAs, each for one template:
+
+| Folder | File | Template |
+|---|---|---|
+| `loras/ltx2.3` | `ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors` | `deck-ltx-ctrl2v`, `deck-ltx-drive*` |
+| `loras/ltx2.5` | `ltx-2.3-22b-ic-lora-in-outpainting-0.9.safetensors` | `deck-ltx-inpaint` |
+| `loras/ltx2.5` | `ltx-2.3-22b-ic-lora-motion-track-control-ref0.5.safetensors` | `deck-ltx-tracks` |
+| `loras/ltx2.5` | `ltx-2.5-22b-ic-lora-alpha-gen-0.9.safetensors` | `deck-ltx-alpha` |
+| `loras/ltx2.5` | `ltx-2.5-22b-ic-lora-clean-plate-1.0.safetensors` | `deck-ltx-cleanplate` |
+| `loras/ltx2.5` | `ltx-2.5-22b-ic-lora-colorization-0.9.safetensors` | `deck-ltx-v2v-lora` |
+| `loras/ltx2.5` | `ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors` | `deck-ltx-ingredients` |
+| `loras/ltx2.5` | `ltx-2.5-22b-ic-lora-layout-to-render-1.0.safetensors` | `deck-ltx-layout` |
+| `loras/ltx2.5` | `ltx-2.5-22b-ic-lora-refine-details-1.0.safetensors` | `deck-ltx-upscale` |
+| `loras/ltx2.5` | `LTX25_Ripple_v11.safetensors` | `deck-ltx-ripple` |
+
+**MiniMax H3** (`deck-h3-*` except animate/faceswap)
+
+| Folder | File | Size |
+|---|---|---|
+| `diffusion_models` | `Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors` | 20 GB |
+| `text_encoders` | `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` | 15 GB |
+| `vae` | `minimax_h3_video_vae_int8_convrot.safetensors` | 3.0 GB |
+| `vae` | `minimax_h3_audio_vae_fp32.safetensors` | 578 MB |
+| `loras/h3` | `minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors` (ref2v, sheets, ctrl2v, drive) | 1.9 GB |
+| `loras/h3` | `minimax_h3_turbo_v4_step600_pruned_comfyui.safetensors` (`deck-h3-i2v`, `deck-h3-flf2v`) | 592 MB |
+| `controlnet` | `minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors` (`deck-h3-ctrl2v`, `deck-h3-drive*`) | 2.2 GB |
+| `latent_upscale_models` | `minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors` (H3 upscale) | 659 MB |
+| `veda` | `minimax_h3_r2va_veda_preview_fp8.safetensors`, `minimax_h3_t2va_veda_8nfe_600step_preview_fp8.safetensors` (optional) | 263 MB each |
+| `vae_approx` | `taeh3-comfy` (optional, sharper previews) | |
+
+**Viggle Animate H3** (`deck-h3-animate`, `deck-h3-faceswap`): the H3 video VAE above, plus
+
+| Folder | File | Size |
+|---|---|---|
+| `diffusion_models` | `minimax_h3_ref2va_viggle_pruned_int8_convrot.safetensors` | 20 GB |
+| `loras` | `viggle_animate_dmd_lora_r64.safetensors` | 899 MB |
+| `text_cond` | `fixed_embed_fwd_anyframe.safetensors` | 3.6 MB |
+
+**Images**
+
+| Template | Folder | File | Size |
+|---|---|---|---|
+| `deck-qwen21-*` | `diffusion_models` | `qwen_image_2.1_turbo_int8_convrot.safetensors` | 6.8 GB |
+| | `text_encoders` | `qwen3vl_8b_int8_convrot.safetensors` | 8.8 GB |
+| | `vae` | `qwen_image_2.1_vae_bf16.safetensors` | 645 MB |
+| `deck-krea2-*` | `diffusion_models` | `krea2_turbo_fp8_scaled.safetensors` | 13 GB |
+| | `text_encoders` | `qwen3vl_4b_fp8_scaled.safetensors` | 4.9 GB |
+| | `vae` | `qwen_image_vae.safetensors` | 243 MB |
+| `deck-moss-*` | `diffusion_models` | `moss_image_sft_int8_convrot.safetensors` | 5.1 GB |
+| | `text_encoders` | `qwen3.5_9b_w4a8_gptq.safetensors` | 6.9 GB |
+| | `vae` | `flux2-vae_small.safetensors` | 238 MB |
+| `deck-klein3-edit` | `diffusion_models` | `flux3-image-klein-int8-convrot.safetensors` | 5.5 GB |
+| | `text_encoders` | `qwen3vl_4b_int8_convrot.safetensors` | 4.6 GB |
+| | `vae` | `flux2-vae.safetensors` | 321 MB |
+| `deck-klein9b-edit` | `diffusion_models` | `flux-2-klein-9b-fp8.safetensors` | 8.8 GB |
+| | `text_encoders` | `Qwen3-8B-Q8_0.gguf` | 8.2 GB |
+| | `vae` | `flux2-vae.safetensors` | 321 MB |
+| previews | `vae_approx` | `taef2_decoder` (optional, Flux2/MOSS/Klein) | |
+
+**Upscale**
+
+| Template | Folder | File | Size |
+|---|---|---|---|
+| `deck-upscale-image`, `deck-upscale-video` | `diffusion_models` | `seedvr2_7b_sharp_int8_convrot.safetensors` | 7.8 GB |
+| `deck-upscale-video-fast` | `diffusion_models` | `seedvr2_3b_int8_convrot.safetensors` | 3.3 GB |
+| all three | `vae` | `seedvr2_ema_vae_fp16.safetensors` | 479 MB |
+| `deck-upscale-image-fast` | `upscale_models` | `4x-UltraSharp.pth` | 64 MB |
+
+**Pose, depth, masks, 3D**
+
+| Used by | Folder | File | Size |
+|---|---|---|---|
+| DWPose (`deck-pose-video`, `deck-h3-drive`, `deck-h3-faceswap`, `deck-ltx-drive`) | `custom_nodes/comfyui_controlnet_aux/ckpts/yzd-v/DWPose` | `yolox_l.onnx`, `dw-ll_ucoco_384.onnx` (the pack downloads them) | 207 + 129 MB |
+| SDPose (`deck-pose-sdpose`, `deck-*-drive-sd`) | `checkpoints` | `sdpose_wholebody_fp16.safetensors` | 1.8 GB |
+| SDPose, `deck-mocap` person detector | `diffusion_models` | `rt_detr_v4-x-hgnet_fp16.safetensors` | 119 MB |
+| `deck-mocap` | `detection` | `sam_3d_body_dinov3_bf16.safetensors` | 2.7 GB |
+| `deck-depth-*` | `videodepthanything` | `video_depth_anything_vitl.pth` | 1.5 GB |
+| `deck-sam3-video-mask` | `sam3` | `sam3.safetensors` | |
+| `deck-motion-text` | `HY-Motion` | `HY-Motion-1.0-Lite` and `ckpts/Qwen3-8B` (the pack's layout) | |
+| 3D tab, Photo in 3D | `geometry_estimation` | `moge_3_vitl_fp16.safetensors` (from `Comfy-Org/MoGe`) | |
+| VFX tracking (TAPNext++) | `tapnet` | `tapnextpp_ckpt.pt` | 2.4 GB |
+| VFX logo removal | `propainter` (or the pack's `weights/`) | `ProPainter.pth`, `raft-things.pth`, `recurrent_flow_completion.pth` | |
+
+**Sound**
+
+| Template | Folder | File | Size |
+|---|---|---|---|
+| `deck-ace-music` | `checkpoints` | `ace_step_1.5_turbo_aio.safetensors` | 9.4 GB |
+
+`deck-ltx-t2a` and `deck-ltx-a2v` use the LTX files above. The voice tools keep their own models outside
+ComfyUI (see *Voice tools*).
+
+---
+
 ## Making templates
 
 1. Build the workflow in desktop ComfyUI and check that it runs.

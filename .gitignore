@@ -4,3 +4,11 @@ __pycache__/
 *.pyc
 certs/
 .claude/settings.local.json
+# model weights never go in the repo: see "What ComfyUI needs" in README.md
+*.safetensors
+*.gguf
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.bin
