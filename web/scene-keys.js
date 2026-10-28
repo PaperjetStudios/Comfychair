@@ -611,7 +611,7 @@ function toolRow() {
 
 // ---- Reduce keys: thin dense keys (mocap, a recording) while the motion stays within a tolerance ----------------
 // RD: per device. cm: positions, sizes (and a parameter, as % of its range); deg: turns, joints and the lens.
-export const RD = { cm: 0.5, deg: 0.5, as: 'clamp', ...store.get('deck.scene.reduce', {}) };
+export const RD = { cm: 0.5, deg: 0.5, as: 'fit', ...store.get('deck.scene.reduce', {}) };
 const ANG = new Set(['rx', 'ry', 'rz', 'roll', 'fov']);
 const stepAt = (a, b, e) => (e < 0.5 ? a : b);
 // how each channel is measured and blended (a joint keeps straight slerps: curves don't apply to turns)
@@ -659,10 +659,10 @@ function openReduce(anchor) {
   };
   rdEl = h('div', { class: 'key-menu rd-menu', role: 'dialog', 'aria-label': 'Reduce keys' },
     h('div', { class: 'wp-head' }, h('b', {}, 'Reduce keys'),
-      infoBtn('Takes keys away while the motion stays within these amounts of where it was at every old key: Position in centimetres (sizes too; a figure parameter in % of its range), Turn in degrees (rotations, joints, the lens). Kept as: Auto clamped makes smooth curves through the keys left (fewest keys for smooth motion); Linear keeps straight lines; As they are leaves each key\'s ease. Joints always blend straight. Acts on the selected keys, else on the selected layer. One undo step.')),
+      infoBtn('Takes keys away while the motion stays within these amounts of where it was at every old key: Position in centimetres (sizes too; a figure parameter in % of its range), Turn in degrees (rotations, joints, the lens). Kept as: Fitted gives the keys left Bezier handles fitted to the old keys (fewest keys for smooth motion); Auto clamped makes smooth curves with worked-out handles; Linear keeps straight lines; As they are leaves each key\'s ease. Joints always blend straight. Acts on the selected keys, else on the selected layer. One undo step.')),
     h('span', { class: 'hint' }, sc.what),
     slide('Position (cm)', 'cm', 20), slide('Turn (°)', 'deg', 20),
-    seg([['clamp', 'Auto clamped'], ['linear', 'Linear'], ['keep', 'As they are']], RD.as, (v) => { RD.as = v; keep(); count(); }),
+    seg([['fit', 'Fitted'], ['clamp', 'Auto clamped'], ['linear', 'Linear'], ['keep', 'As they are']], RD.as, (v) => { RD.as = v; keep(); count(); }),
     h('div', { class: 'row' }, out, h('span', { class: 'grow' }),
       button('Reduce', () => {
         const [a, b] = reduceTracks(sc.tracks, RD, { pick: sc.pick });

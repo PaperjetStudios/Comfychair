@@ -159,8 +159,9 @@ will then fail to start until that process is stopped, so stop it before the nex
   `bakeOffset` keys it in at every frame that has a key. Compositions (`scene-offscreen.js`) apply it too.
 - **Reduce keys** (`keys.js reduceKeys`, sheet tool + popover in scene-keys.js, `RD` per device): greedy, error-bounded at
   every old key's frame (cm for places and sizes, ° for turns / joints / lens, a parameter in % of its range). Kept keys
-  become Auto clamped or Linear (joints always linear: curves don't apply to turns). Moves ▸ "Fewer keys" reduces a motion
-  import as it lands. No bezier handle fitting yet.
+  become Fitted (the default: Bezier, one slope per key fitted by least squares to the old keys, handles at thirds;
+  `fitHandles`, refitted at every greedy step so the tolerance holds for the fitted curve), Auto clamped or Linear
+  (joints always linear: curves don't apply to turns). Moves ▸ "Fewer keys" reduces a motion import as it lands.
 - `web/icons.js icon(name)`: line icons for new buttons (no emoji).
 - **Cameras** (2026-10-28): `SC.camera` is the *active* camera (the view, renders, `scene-offscreen.js` compositions all
   look through it), `SC.cams` the others (`camsOf()`, `setActiveCam()`; `upgrade()` gives older scenes `cams: []`).
