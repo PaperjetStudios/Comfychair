@@ -490,6 +490,45 @@ def sam3_mask():
     return g
 
 
+def alpha_crop():
+    """Alpha Gen on just the thing a mask clip marks (a SAM3 mask): the clip is cropped round it (still, or following
+    it), the crop gets the pixels a whole frame would have had at Resolution, and the matte is put back in a full
+    black frame and kept only near the mask. Sharper mattes for the same time, and just that thing."""
+    g = G()
+    models(g)
+    text(g, None, "")
+    g.add("src", node("VHS_LoadVideoPath", "@1 Source video [video]", video="", force_rate=FPS, custom_width=0, custom_height=0,
+                      frame_load_cap=0, skip_first_frames=0, select_every_nth=1))
+    g.add("msk", node("VHS_LoadVideoPath", "@5 Mask video [video]", video="", force_rate=FPS, custom_width=0, custom_height=0,
+                      frame_load_cap=0, skip_first_frames=0, select_every_nth=1))
+    g.add("secs", node("PrimitiveFloat", "@3 Length (seconds)", value=5.0))
+    g.add("short", node("PrimitiveInt", "@4 Resolution (short side)", value=704))
+    math(g, "nf", f"floor((min(a, c, b*{FPS}+1, 145)-1)/8)*8+1", "frames: 8n+1 within both clips and Length",
+         a=["src", 1], b=["secs", 0], c=["msk", 1])
+    g.add("cut", node("ImageFromBatch", image=["src", 0], batch_index=0, length=["nf", 1]))
+    g.add("mcut", node("ImageFromBatch", image=["msk", 0], batch_index=0, length=["nf", 1]))
+    g.add("mask", node("ImageToMask", image=["mcut", 0], channel="red"))
+    g.add("sub", node("DeckSubjectCrop", "@7 Crop [margin,follow]", images=["cut", 0], mask=["mask", 0], margin=0.2,
+                      short=["short", 0], follow="auto", smooth=0.85))
+    g.add("lora", node("LTXICLoRALoaderModelOnly", model=["unet", 0], lora_name=LORA + "ltx-2.5-22b-ic-lora-alpha-gen-0.9.safetensors",
+                       strength_model=1.0))
+    g.add("vlat", node("EmptyLTXVLatentVideo", width=["sub", 2], height=["sub", 3], length=["nf", 1], batch_size=1))
+    g.add("guide", node("LTXAddVideoICLoRAGuide", positive=["cond", 0], negative=["cond", 1], vae=["vvae", 0], latent=["vlat", 0],
+                        image=["sub", 0], frame_idx=0, strength=1.0, latent_downscale_factor=["lora", 1], crop="disabled",
+                        use_tiled_encode=False, tile_size=256, tile_overlap=64, use_streaming=False, tile_frames=97))
+    audio_latent(g, ["nf", 1])
+    g.add("av", node("LTXVConcatAVLatent", video_latent=["guide", 2], audio_latent=["alat", 0]))
+    sample(g, ["lora", 0], ["guide", 0], ["guide", 1], ["av", 0])
+    g.add("crop", node("LTXVCropGuides", positive=["guide", 0], negative=["guide", 1], latent=["sep", 0]))
+    g.add("vdec", node("LTXVSpatioTemporalTiledVAEDecode", vae=["vvae", 0], latents=["crop", 2], spatial_tiles=4, spatial_overlap=1,
+                       temporal_tile_length=16, temporal_overlap=1, last_frame_fix=False, working_device="auto", working_dtype="auto"))   # (see decode)
+    g.add("back", node("DeckMatteUncrop", "@8 Only the masked thing [only_mask,grow]", matte=["vdec", 0], crop_info=["sub", 1],
+                       mask=["mask", 0], only_mask=True, grow=0.06))
+    g.add("vid", node("CreateVideo", images=["back", 0], fps=FPS))
+    g.add("save", node("SaveVideo", video=["vid", 0], filename_prefix="deck/ltx-alpha-crop", format="auto", codec="auto"))
+    return g
+
+
 def inpaint():
     """Replace what a mask clip covers (white) with what the prompt says; the rest of the picture is kept and blended
     back. The in/outpainting IC-LoRA (LTX-2.3) on a green-filled guide, single stage at the chosen resolution."""
@@ -564,6 +603,7 @@ TEMPLATES = {
     "deck-ltx-v2v-lora": lambda: v2v("ltx-v2v-lora", "ltx-2.5-22b-ic-lora-colorization-0.9.safetensors",
                                       lora_title="@5 IC-LoRA [lora_name,strength_model]"),
     "deck-ltx-alpha": lambda: v2v("ltx-alpha", "ltx-2.5-22b-ic-lora-alpha-gen-0.9.safetensors", prompt_title=None, max_frames=145),
+    "deck-ltx-alpha-crop": alpha_crop,
     "deck-ltx-cleanplate": lambda: v2v(
         "ltx-cleanplate", "ltx-2.5-22b-ic-lora-clean-plate-1.0.safetensors",
         prompt="An empty clean plate of the exact same location: identical background, environment, structures and lighting as the "

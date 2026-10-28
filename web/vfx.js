@@ -33,8 +33,8 @@ const EFFECTS = [
     help: 'Change the first frame (in Generate with an edit template, or in the Editor), and the change carries through the whole clip.' },
   { id: 'lora', group: 'Restyle', label: 'LoRA restyle', tpl: 'deck-ltx-v2v-lora', needs: ['source', 'loras', 'prompt', 'len', 'res', 'seed'],
     help: 'Runs the clip through an IC-LoRA: deblur, colourise, restore, day to night, head swap and so on. Pick the LoRA and its strength, and describe the result in the prompt (for colourise, name the colours): with an empty prompt the change is faint.' },
-  { id: 'alpha', group: 'Key', label: 'Alpha Gen', tpl: 'deck-ltx-alpha', needs: ['source', 'len', 'res'],
-    help: 'Makes a black-and-white matte of the main subject (white = keep). Then use it with "Apply matte", or as a mask.' },
+  { id: 'alpha', group: 'Key', label: 'Alpha Gen', tpl: 'deck-ltx-alpha', masked: 'deck-ltx-alpha-crop', needs: ['source', 'matte?', 'len', 'res'],
+    help: 'Makes a black-and-white matte of the main subject (white = keep). Then use it with "Apply matte", or as a mask. Give it a mask of one thing (Mask (SAM3), from the same clip) and it works on a crop round that thing: a sharper matte in the same time, of just that thing.' },
   { id: 'colorkey', group: 'Key', label: 'Colour key', job: 'key', needs: ['source', 'keycolor'],
     help: 'Cuts out a green or blue screen. Quick: runs on the server with ffmpeg, no GPU.' },
   { id: 'mattekey', group: 'Key', label: 'Apply matte', job: 'key', needs: ['source', 'matte'],
@@ -80,7 +80,7 @@ const GROUPS = ['Quick', 'Restyle', 'Key', 'Remove', 'Generate', 'Performance'];
 const fx = (id) => EFFECTS.find((e) => e.id === id) || EFFECTS[0];
 
 // effects that follow a pose can read it with DWPose (CPU) or SDPose (GPU): e.sd is the SDPose take on e.tpl
-const tplId = (e) => (e.sd && T.poser === 'sdpose' ? e.sd : e.still && !T.source && T.first ? e.still : e.tpl);
+const tplId = (e) => (e.sd && T.poser === 'sdpose' ? e.sd : e.still && !T.source && T.first ? e.still : e.masked && T.matte ? e.masked : e.tpl);
 const tplOf = (e) => tplId(e) && S.templates.find((t) => t.id === tplId(e));
 
 // Viggle-Animate's distilled schedules (shift 3): points = Euler updates + 1
@@ -147,7 +147,7 @@ function sourceField(role = 'source') {
     if (isSrc) { T.source = val; UI.srcInfo = null; T.showing = null; } else T.matte = val;
     changed();
   };
-  const title = isSrc ? 'Source clip' : (T.op === 'cleanplate' ? 'Mask clip' : 'Matte clip');
+  const title = isSrc ? 'Source clip' : T.op === 'cleanplate' ? 'Mask clip' : T.op === 'alpha' ? 'Subject mask (optional)' : 'Matte clip';
   return clipInput({ label: title, value: v, url: isSrc ? clipUrl(v) : null, name: clipLabel(v), onChange: set,   // (a matte is only picked: no player)
     pick: () => openVideoPicker({ title, onPick: set }),
     onEdit: (val) => { T.source = val; changed(false); drawViewer(); poseLine(); },
