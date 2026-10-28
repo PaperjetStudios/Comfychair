@@ -730,9 +730,15 @@ const addCard = (o, label, media) => mediaCard(cardMedia(o), label, async (c) =>
   toast('Added');
 }, { badge: o.kind === 'video' ? '▶' : null });
 
+// a piece of a link (YouTube, Reddit…) or a big file, cut into the media library (clipimport.js), straight onto the timeline
+const importLink = () => import('./clipimport.js').then((m) => m.openClipImport({ onSaved: async (e) => {
+  await addToTimeline({ kind: e.kind, src: { media: e.name }, url: e.url, label: e.label });
+  toast('Added');
+} }));
 function addFromHistory() {
   pickerSheet('Add from this project', [
     help('Tap to add in order. Videos and images go on the selected video track, sound on the audio track.', 'grow'),
+    button('From a link or big file…', importLink),
     button('Done', closeSheet)], async () => {
     const items = await projectOutputs(['video', 'image', 'audio']);
     return items.length ? items.map(({ g, o, i }) => addCard(o, genLabel(g),
@@ -798,6 +804,7 @@ function addMediaFiles() {
       toast(files.length > 1 ? `Added ${files.length} files` : 'Added');
       reload();
     }, { accept: 'audio/*,video/*,image/*', multiple: true, cls: 'small primary' }),
+    button('From a link or big file…', importLink),
     help('Music, voice-overs, or videos and images from elsewhere.', 'grow'),
     button('Done', closeSheet)], async () => {
     const list = await api('/api/media');
