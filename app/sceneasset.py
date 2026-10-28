@@ -78,6 +78,41 @@ SHARP = Path(os.environ.get("DECK_SHARP", "/mnt/data/sharp-venv/bin/sharp"))
 SHARP_CKPT = Path(os.environ.get("DECK_SHARP_CKPT", "/mnt/data/ComfyUI/models/sharp/sharp_2572gikvuh.pt"))
 
 
+# SHARP makes about 1.2M Gaussians: too many for a tablet's GPU (the 3D view went white: its WebGL context gave out).
+# The scene layer gets the most visible SPLAT_MAX of them; the full set is kept beside it (<name>_full.ply).
+SPLAT_MAX = int(os.environ.get("DECK_SPLAT_MAX", "500000"))
+
+
+def thin_splat(src: Path, dst: Path, keep: int):
+    """Write src's Gaussians to dst, at most `keep` of them: the most visible (opacity × size) first. Only the vertex
+    element is written (SHARP's camera elements after it are read by _ply_lens from the full file)."""
+    import numpy as np
+    with src.open("rb") as f:
+        props, n, el = [], 0, None
+        while (line := f.readline().decode("ascii", "replace").strip()) != "end_header":
+            p = line.split()
+            if p[:1] == ["element"]:
+                el = p[1]
+                if el == "vertex":
+                    n = int(p[2])
+            elif p[:1] == ["property"] and el == "vertex":
+                if p[1] != "float":
+                    raise ValueError(f"Unexpected splat property type {p[1]}")
+                props.append(p[2])
+        data = np.frombuffer(f.read(n * 4 * len(props)), dtype="<f4").reshape(n, len(props))
+    if n > keep:
+        col = {k: i for i, k in enumerate(props)}
+        opacity = 1 / (1 + np.exp(-data[:, col["opacity"]]))
+        size = np.exp(data[:, [col["scale_0"], col["scale_1"], col["scale_2"]]]).prod(1) ** (1 / 3)
+        data = data[np.sort(np.argsort(-(opacity * size))[:keep])]
+    header = ["ply", "format binary_little_endian 1.0", f"element vertex {len(data)}", *[f"property float {k}" for k in props], "end_header"]
+    tmp = dst.with_suffix(".tmp")
+    with tmp.open("wb") as f:
+        f.write(("\n".join(header) + "\n").encode())
+        f.write(np.ascontiguousarray(data, dtype="<f4").tobytes())
+    tmp.replace(dst)
+
+
 def _ply_lens(path: Path) -> dict:
     """The camera SHARP saved after the Gaussians (its intrinsic and image_size elements): vertical field of view."""
     sizes = {"float": 4, "uint": 4, "int": 4, "uchar": 1, "char": 1, "ushort": 2, "short": 2, "double": 8}
@@ -132,9 +167,13 @@ async def photo_splat(body: dict = Body(...)):
                 raise RuntimeError("SHARP failed: " + ((r.stderr or r.stdout).strip().splitlines() or ["no output"])[-1][:300])
             d.mkdir(parents=True, exist_ok=True)
             name = _safe_name(Path(image).stem + "_splat.ply")
-            shutil.move(str(plys[0]), d / name)
+            full = d / (Path(name).stem + "_full.ply")
+            shutil.move(str(plys[0]), full)
+        lens = _ply_lens(full)
+        job["label"] = "Thinning it for the tablet"
+        thin_splat(full, d / name, SPLAT_MAX)
         size = (d / name).stat().st_size
         return {"url": f"/files/projects/{quote(folder)}/.deck/assets/{group}/{quote(name)}", "name": name, "group": group,
-                "kind": "splat", "size": size, "lens": _ply_lens(d / name)}
+                "kind": "splat", "size": size, "lens": lens}
 
     return clipimport._start(work, "Making the splat")
