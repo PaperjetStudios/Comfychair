@@ -90,7 +90,18 @@ then serves ComfyChair at `https://<box>.<tailnet>.ts.net` and prints how to ins
 deploy/tailscale-https.sh                 # :8190 → https://<box>.<tailnet>.ts.net
 ```
 
-**A second copy as its own app** (e.g. an experimental branch next to the one you use): check it out
+**ComfyChair Lab**, the experimental copy (branch `lab`: travel with three fingers, things with a little
+physics), runs beside this one as its own app, with its own data:
+
+```bash
+deploy/lab.sh            # check out the lab branch next to this one and run it on :8191
+deploy/lab.sh https      # serve it over Tailscale too → https://<box>.<tailnet>.ts.net:8443 (install it from there)
+deploy/lab.sh service    # or keep it running as a service (comfydeck-lab), like ComfyChair
+```
+
+Run `deploy/lab.sh` again (or `deploy/lab.sh service`) to update it.
+
+**Any second copy as its own app** (e.g. another branch next to the one you use): check it out
 next to this one and run it on another port with another name, then serve that port too. Each address
 installs as its own home-screen app, named by `DECK_NAME`:
 

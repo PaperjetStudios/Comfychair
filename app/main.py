@@ -431,6 +431,9 @@ app.add_middleware(TokenGate)
 
 @app.exception_handler(httpx.HTTPError)
 async def comfy_unreachable(request: Request, exc: httpx.HTTPError):
+    # a file ComfyUI doesn't have is a 404 here too (not a failed request): a deleted input, say
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 404:
+        return JSONResponse({"detail": "Not found in ComfyUI"}, status_code=404)
     return JSONResponse({"detail": f"ComfyUI request failed: {exc}"}, status_code=502)
 
 

@@ -111,11 +111,14 @@ async def list_docs(kind: str, project_id: int | None = None, scope: str | None 
 
 
 @router.get("/{kind}/{did}")
-async def get_doc(kind: str, did: str, project_id: int | None = None, scope: str | None = None):
+async def get_doc(kind: str, did: str, project_id: int | None = None, scope: str | None = None, optional: bool = False):
+    """A document; optional=true answers null for one not saved yet (the app's settings before the first change)."""
     d = _dir(kind, project_id, scope)
     _check_id(did)
     doc = _read(d / f"{did}.json")
     if not doc:
+        if optional:
+            return None
         raise HTTPException(404, "Not found")
     return doc
 

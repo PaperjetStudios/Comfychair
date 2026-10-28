@@ -18,9 +18,9 @@ const TOGGLES = [
 
 export async function loadPrefs() {
   try {
-    const d = await api(DOC, { busy: false });
-    rev = d.rev; Object.assign(PREFS, DEFAULTS, d.payload);
-  } catch { /* none saved yet (404) or offline: defaults */ }
+    const d = await api(`${DOC}&optional=true`, { busy: false });   // (null: none saved yet)
+    rev = d?.rev || 0; Object.assign(PREFS, DEFAULTS, d?.payload);
+  } catch { /* offline: defaults */ }
 }
 
 export async function setPref(key, value) {
