@@ -32,6 +32,7 @@ const TOOLS = [
   ['brush', 'Brush', 'b'], ['eraser', 'Eraser', 'e'],
   ['line', 'Line', 'l'], ['rect', 'Rectangle', 'r'], ['ellipse', 'Ellipse', 'o'],
   ['fill', 'Fill', 'g'], ['pick', 'Colour picker', 'i'],
+  ['select', 'Rectangle select', 'm'], ['lasso', 'Lasso select', 'a'],
 ];
 const KEYS = Object.fromEntries(TOOLS.map(([t, , k]) => [k, t]));
 
@@ -178,8 +179,8 @@ function step(from, to, which) {
   }
   syncStrip();
 }
-export const undo = () => step(U.undo, U.redo, 'before');
-export const redo = () => step(U.redo, U.undo, 'after');
+export const undo = () => { if (P.sel?.float) cancelFloat(); else step(U.undo, U.redo, 'before'); };   // (a lifted selection just drops back)
+export const redo = () => { commitFloat(); step(U.redo, U.undo, 'after'); };
 // Run fn(ctx) on the layer's pixels inside the box, as one undo step
 function change(l, box, fn) {
   const cv = layerCanvas(l), c = cv.getContext('2d');
@@ -224,7 +225,7 @@ function openBuffers(l) {
 }
 function beginStroke(e, l) {
   openBuffers(l);
-  S = { l, id: e.pointerId, type: e.pointerType, b: bset(), erase: P.tool === 'eraser', bb: null, sm: null, last: null, carry: 0, raw: null, frame: 0 };
+  S = { l, id: e.pointerId, type: e.pointerType, b: bset(), erase: P.tool === 'eraser', bb: null, sm: null, last: null, carry: 0, raw: null, frame: 0, clip: clipOf(l) };
   moveStroke(e);
 }
 
@@ -232,7 +233,7 @@ function beginStroke(e, l) {
 function beginShape(e, l) {
   openBuffers(l);
   const q = toLayer(l, X.toCanvas(e));
-  S = { l, id: e.pointerId, type: e.pointerType, b: bset('shape'), erase: false, bb: null, frame: 0, shape: P.tool, a: q, z: q, shift: e.shiftKey };
+  S = { l, id: e.pointerId, type: e.pointerType, b: bset('shape'), erase: false, bb: null, frame: 0, shape: P.tool, a: q, z: q, shift: e.shiftKey, clip: clipOf(l) };
   drawShape();
 }
 function moveShape(e) {
@@ -329,7 +330,7 @@ function fillAt(e, l) {
   }
   buf.ctx.clearRect(0, 0, W, H);
   buf.ctx.putImageData(img, bb.x, bb.y);
-  change(l, bb, (c) => laydown(c, buf.cv, bb, { b: bset('fill'), erase: false }));
+  change(l, bb, (c) => laydown(c, buf.cv, bb, { b: bset('fill'), erase: false, clip: clipOf(l) }));
   X.redraw();
 }
 
@@ -394,8 +395,18 @@ const intBox = (bb, cv) => {
   return { x, y, w: clamp(Math.ceil(bb.x + bb.w), 0, cv.width) - x, h: clamp(Math.ceil(bb.y + bb.h), 0, cv.height) - y };
 };
 // the buffer put onto ctx (the layer, or its live copy) at the brush's opacity
+// (o.clip: a selection's mask; only what's inside it goes down)
 function laydown(c, src, bb, o = S) {
   if (bb.w < 1 || bb.h < 1) return;
+  if (o.clip) {
+    const t = scratch('clip', src.width, src.height).ctx;
+    t.clearRect(bb.x, bb.y, bb.w, bb.h);
+    t.drawImage(src, bb.x, bb.y, bb.w, bb.h, bb.x, bb.y, bb.w, bb.h);
+    t.globalCompositeOperation = 'destination-in';
+    t.drawImage(o.clip, bb.x, bb.y, bb.w, bb.h, bb.x, bb.y, bb.w, bb.h);
+    t.globalCompositeOperation = 'source-over';
+    src = t.canvas;
+  }
   c.globalAlpha = o.b.opacity;
   c.globalCompositeOperation = o.erase ? 'destination-out' : 'source-over';
   c.drawImage(src, bb.x, bb.y, bb.w, bb.h, bb.x, bb.y, bb.w, bb.h);
@@ -427,6 +438,214 @@ function cancelStroke() {
   if (S.l) S.l.live = null;
   S = null;
   X.redraw();
+}
+
+// ---- selections (rectangle and lasso) on the layer being painted: P.sel = { l, poly (layer px), mask (a canvas
+// the layer's size, opaque inside), bb, float }. Painting, shapes and fill stay inside it. Dragging inside it lifts
+// the pixels (float: { cv, src, x, y, w, h }) to move them, a corner scales them; they go down as one undo step when
+// another tool is picked, the selection is dropped, or Done. ----
+const selOf = (l) => (P.sel && P.sel.l === l ? P.sel : null);
+const clipOf = (l) => selOf(l)?.mask || null;
+function polyBox(poly) {
+  const xs = poly.map((p) => p.x), ys = poly.map((p) => p.y);
+  const x = Math.min(...xs), y = Math.min(...ys);
+  return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+}
+function setSel(l, poly) {
+  const cv = layerCanvas(l), mask = document.createElement('canvas');
+  mask.width = cv.width; mask.height = cv.height;
+  const c = mask.getContext('2d');
+  c.fillStyle = '#fff'; c.beginPath(); poly.forEach((p, i) => (i ? c.lineTo(p.x, p.y) : c.moveTo(p.x, p.y))); c.closePath(); c.fill();
+  const bb = intBox(polyBox(poly), cv);
+  P.sel = bb.w >= 1 && bb.h >= 1 ? { l, poly, mask, bb, float: null } : null;
+}
+function inPoly(poly, q) {   // even-odd ray test
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i], b = poly[j];
+    if ((a.y > q.y) !== (b.y > q.y) && q.x < ((b.x - a.x) * (q.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+// the rectangle the selection covers now (moved and scaled, while lifted)
+const selRect = (s) => (s.float ? { x: s.float.x, y: s.float.y, w: s.float.w, h: s.float.h } : { ...s.bb });
+function lift(s) {
+  if (s.float) return;
+  const l = s.l, cv = l.img, bb = s.bb;
+  const f = document.createElement('canvas');
+  f.width = bb.w; f.height = bb.h;
+  const fc = f.getContext('2d');
+  fc.drawImage(cv, bb.x, bb.y, bb.w, bb.h, 0, 0, bb.w, bb.h);
+  fc.globalCompositeOperation = 'destination-in';
+  fc.drawImage(s.mask, bb.x, bb.y, bb.w, bb.h, 0, 0, bb.w, bb.h);
+  const holed = scratch('holed', cv.width, cv.height).ctx;   // the layer with the lifted pixels cut out
+  holed.globalCompositeOperation = 'source-over';
+  holed.clearRect(0, 0, cv.width, cv.height); holed.drawImage(cv, 0, 0);
+  holed.globalCompositeOperation = 'destination-out'; holed.drawImage(s.mask, 0, 0); holed.globalCompositeOperation = 'source-over';
+  s.float = { cv: f, src: { ...bb }, x: bb.x, y: bb.y, w: bb.w, h: bb.h };
+  showFloat(s);
+}
+function showFloat(s) {
+  const cv = s.l.img, live = scratch('live', cv.width, cv.height).ctx, f = s.float;
+  live.globalCompositeOperation = 'source-over'; live.globalAlpha = 1;
+  live.clearRect(0, 0, cv.width, cv.height);
+  live.drawImage(SCR.holed.cv, 0, 0);
+  live.drawImage(f.cv, f.x, f.y, f.w, f.h);
+  s.l.live = live.canvas;
+  X.redraw();
+}
+// where a point of the lifted pixels ends up
+const floatPoint = (f, p) => ({ x: f.x + (p.x - f.src.x) * f.w / f.src.w, y: f.y + (p.y - f.src.y) * f.h / f.src.h });
+function commitFloat() {
+  const s = P.sel;
+  if (!s?.float) return;
+  const f = s.float, l = s.l;
+  s.float = null; l.live = null;
+  if (!E().layers.includes(l)) return;
+  change(l, { x: 0, y: 0, w: l.img.width, h: l.img.height }, (c) => {
+    c.globalCompositeOperation = 'destination-out'; c.drawImage(s.mask, 0, 0);
+    c.globalCompositeOperation = 'source-over'; c.drawImage(f.cv, f.x, f.y, f.w, f.h);
+  });
+  setSel(l, s.poly.map((p) => floatPoint(f, p)));   // the selection stays on the pixels, where they are now
+  X.redraw();
+}
+function cancelFloat() {
+  const s = P.sel;
+  if (!s?.float) return;
+  s.float = null; s.l.live = null;
+  X.redraw(); syncStrip();
+}
+export function dropSel() {
+  if (!P.sel) return;
+  commitFloat();
+  P.sel = null;
+  X.redraw();
+}
+// the corner of the selection's box under the point (canvas px), if any
+function selCorner(s, p) {
+  const v = X.view(), l = s.l, r = selRect(s);
+  for (const k of ['nw', 'ne', 'sw', 'se']) {
+    const q = toCanvasPt(l, { x: k.includes('w') ? r.x : r.x + r.w, y: k.includes('n') ? r.y : r.y + r.h });
+    if (Math.hypot(q.x - p.x, q.y - p.y) * v.s < 22) return k;
+  }
+  return null;
+}
+const toCanvasPt = (l, q) => ({ x: l.x + (q.x - l.crop.x * l.img.naturalWidth) * l.scale, y: l.y + (q.y - l.crop.y * l.img.naturalHeight) * l.scale });
+function beginSelect(e, l) {
+  layerCanvas(l);
+  const p = X.toCanvas(e), q = toLayer(l, p), s = selOf(l);
+  const base = { id: e.pointerId, type: e.pointerType, select: true, sl: l, p0: q };
+  const k = s && selCorner(s, p);
+  if (s && (k || inPoly(s.float ? s.poly.map((pt) => floatPoint(s.float, pt)) : s.poly, q))) {
+    lift(s);
+    const f = s.float;
+    S = { ...base, move: !k, corner: k, f0: { x: f.x, y: f.y, w: f.w, h: f.h } };
+    return;
+  }
+  commitFloat();
+  S = { ...base, poly: [q], shift: e.shiftKey };
+  P.sel = null;
+  X.redraw();
+}
+function moveSelect(e) {
+  const l = S.sl, q = toLayer(l, X.toCanvas(e));
+  if (S.move || S.corner) {
+    const s = P.sel, f = s.float, f0 = S.f0, dx = q.x - S.p0.x, dy = q.y - S.p0.y;
+    if (S.move) { f.x = Math.round(f0.x + dx); f.y = Math.round(f0.y + dy); } else {
+      const k = S.corner, ax = k.includes('w') ? f0.x + f0.w : f0.x, ay = k.includes('n') ? f0.y + f0.h : f0.y;   // the opposite corner stays
+      let w = Math.max(2, Math.abs(q.x - ax)), hh = Math.max(2, Math.abs(q.y - ay));
+      if (P.constrain || e.shiftKey || touches.size) { const r = Math.max(w / f0.w, hh / f0.h); w = f0.w * r; hh = f0.h * r; }   // keep its shape
+      f.w = w; f.h = hh; f.x = k.includes('w') ? ax - w : ax; f.y = k.includes('n') ? ay - hh : ay;
+    }
+    showFloat(s);
+    return;
+  }
+  S.shift = e.shiftKey;
+  if (P.tool === 'lasso') {
+    const last = S.poly[S.poly.length - 1], v = X.view();
+    if (Math.hypot(q.x - last.x, q.y - last.y) * l.scale * v.s >= 3) S.poly.push(q);
+  } else S.poly[1] = q;
+  X.redraw();
+}
+function endSelect() {
+  const s = S;
+  S = null;
+  if (s.move || s.corner) { syncStrip(); X.render(); return; }
+  const l = s.sl;
+  let poly = s.poly;
+  if (P.tool !== 'lasso') {
+    const [a, b = a] = poly;
+    let w = b.x - a.x, hh = b.y - a.y;
+    if (P.constrain || s.shift) { const m = Math.max(Math.abs(w), Math.abs(hh)); w = Math.sign(w || 1) * m; hh = Math.sign(hh || 1) * m; }
+    poly = [a, { x: a.x + w, y: a.y }, { x: a.x + w, y: a.y + hh }, { x: a.x, y: a.y + hh }];
+  }
+  const r = polyBox(poly);
+  if (poly.length < 3 || r.w * l.scale * X.view().s < 4 || r.h * l.scale * X.view().s < 4) P.sel = null;   // a tap: nothing selected
+  else setSel(l, poly);
+  X.render();
+}
+// what the selection buttons do
+function selAction(kind) {
+  const s = P.sel;
+  if (!s) return;
+  commitFloat();
+  const l = s.l, cur = P.sel, bb = cur.bb;
+  if (kind === 'clear') change(l, bb, (c) => { c.globalCompositeOperation = 'destination-out'; c.drawImage(cur.mask, bb.x, bb.y, bb.w, bb.h, bb.x, bb.y, bb.w, bb.h); });
+  else if (kind === 'fill') {
+    const buf = scratch('buf', l.img.width, l.img.height).ctx;
+    buf.clearRect(0, 0, l.img.width, l.img.height);
+    buf.fillStyle = P.color; buf.fillRect(bb.x, bb.y, bb.w, bb.h);
+    change(l, bb, (c) => laydown(c, buf.canvas, bb, { b: { opacity: 1 }, erase: false, clip: cur.mask }));
+  } else if (kind === 'copy' || kind === 'cut') {   // to a new layer above, the same size and place as this one
+    const cv = makeCanvas(l.img.width, l.img.height), c = cv.getContext('2d');
+    c.drawImage(l.img, 0, 0);
+    c.globalCompositeOperation = 'destination-in'; c.drawImage(cur.mask, 0, 0);
+    const n = { name: null, label: `${l.label || l.name?.split('/').pop() || 'Layer'} ${kind === 'cut' ? 'cut' : 'copy'}`, crop: { ...l.crop }, x: l.x, y: l.y,
+      scale: l.scale, opacity: 1, hidden: false, blend: 'normal', img: cv };
+    if (kind === 'cut') change(l, bb, (cc) => { cc.globalCompositeOperation = 'destination-out'; cc.drawImage(cur.mask, bb.x, bb.y, bb.w, bb.h, bb.x, bb.y, bb.w, bb.h); });
+    const e = E();
+    e.layers.splice(e.layers.indexOf(l) + 1, 0, n);
+    e.sel = n; P.sel = null;
+    dirty(n, 200);
+    X.changed();
+  } else if (kind === 'all') {
+    const w = l.img.width, hh = l.img.height;
+    setSel(l, [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: hh }, { x: 0, y: hh }]);
+  }
+  X.render();
+}
+// marching ants round the selection (and the one being drawn), handles on its corners
+export function paintOverlay(ctx) {
+  const v = X.view();
+  const l = target();
+  if (!v || !l) return;
+  const s = selOf(l), drawing = S?.select && S.poly ? S : null;
+  if (!s && !drawing) return;
+  const scr = (q) => { const p = toCanvasPt(l, q); return { x: v.ox + p.x * v.s, y: v.oy + p.y * v.s }; };
+  let poly;
+  if (drawing) {
+    poly = drawing.poly;
+    if (P.tool !== 'lasso') { const [a, b = a] = poly; poly = [a, { x: b.x, y: a.y }, b, { x: a.x, y: b.y }]; }
+  } else poly = s.float ? s.poly.map((p) => floatPoint(s.float, p)) : s.poly;
+  const pts = poly.map(scr);
+  ctx.save();
+  ctx.lineWidth = 1;
+  for (const [col, off] of [['#000', 0], ['#fff', 4]]) {
+    ctx.strokeStyle = col; ctx.setLineDash([4, 4]); ctx.lineDashOffset = off;
+    ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+    if (!drawing || P.tool !== 'lasso') ctx.closePath();
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  if (s && !drawing && (P.tool === 'select' || P.tool === 'lasso')) {
+    const r = selRect(s), accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#fff';
+    ctx.fillStyle = accent; ctx.strokeStyle = '#000';
+    for (const q of [{ x: r.x, y: r.y }, { x: r.x + r.w, y: r.y }, { x: r.x, y: r.y + r.h }, { x: r.x + r.w, y: r.y + r.h }]) {
+      const p = scr(q);
+      ctx.beginPath(); ctx.rect(p.x - 6, p.y - 6, 12, 12); ctx.fill(); ctx.stroke();
+    }
+  }
+  ctx.restore();
 }
 
 // ---- the pointer: the pen paints; fingers paint until a pen has been seen, two fingers pan and zoom,
@@ -483,6 +702,7 @@ function onDown(e) {
   if (P.tool === 'brush' || P.tool === 'eraser') beginStroke(e, l);
   else if (SHAPES.includes(P.tool)) beginShape(e, l);
   else if (P.tool === 'fill') fillAt(e, l);
+  else if (P.tool === 'select' || P.tool === 'lasso') beginSelect(e, l);
 }
 function onMove(e) {
   if (!painting()) return;
@@ -492,7 +712,7 @@ function onMove(e) {
   }
   if (S && e.pointerId === S.id) {
     e.stopImmediatePropagation();
-    if (S.pick) { S.c = colorAt(e); setColor(S.c, false); } else if (S.shape) moveShape(e); else moveStroke(e);
+    if (S.pick) { S.c = colorAt(e); setColor(S.c, false); } else if (S.select) moveSelect(e); else if (S.shape) moveShape(e); else moveStroke(e);
   }
   if (e.pointerType !== 'touch') showRing(e);
 }
@@ -506,7 +726,7 @@ function onUp(e) {
     setColor(c);
     if (P.tool === 'pick') setTool(P.back);   // back to what it was picking a colour for
     else X.render();
-  } else if (e.type === 'pointercancel') cancelStroke(); else endStroke();
+  } else if (S.select) { if (e.type === 'pointercancel') { S = null; X.redraw(); } else endSelect(); } else if (e.type === 'pointercancel') cancelStroke(); else endStroke();
 }
 
 // the brush outline under a hovering pen (or the mouse)
@@ -526,6 +746,7 @@ function hideRing() { ring?.classList.add('hidden'); }
 let strip = null;
 function syncStrip() {
   if (!strip) return;
+  if (P.sel && (P.sel.l !== target() || !E().layers.includes(P.sel.l))) { commitFloat(); P.sel = null; }   // another layer: the selection goes
   for (const b of strip.querySelectorAll('[data-tool]')) b.classList.toggle('on', b.dataset.tool === P.tool);
   strip.querySelector('[data-act=undo]').disabled = !U.undo.length;
   strip.querySelector('[data-act=redo]').disabled = !U.redo.length;
@@ -541,8 +762,8 @@ export function setTool(t) {
   P.tool = t;
   const e = E();
   e.cropping = false;
-  if (t === 'move') X.zoom.reset();
-  else if (!target() && t !== 'pick') {   // something to paint on: the top layer that can be, or a new white canvas
+  if (t === 'move') { dropSel(); X.zoom.reset(); } else commitFloat();
+  if (t !== 'move' && t !== 'pick' && !target()) {   // something to paint on: the top layer that can be, or a new white canvas
     const l = [...e.layers].reverse().find((o) => o.img?.naturalWidth && o.x != null && !o.hidden && !o.locked);
     if (l) e.sel = l;
     else if (!e.layers.length) addBlank({ ...(X.frame() || { w: 1024, h: 1024 }), fill: '#ffffff' });
@@ -587,7 +808,10 @@ export function paintProps() {
   const opacity = (label = 'Opacity') => rangeField(label, () => bset(k).opacity, (v) => keepB({ opacity: clamp(v, 0.01, 1) }), { min: 0.01, max: 1, step: 0.01, fmt: pctFmt });
   const colour = colorField('Colour', () => P.color, (c) => setColor(c, false), swatches);
   const penOnly = toggle('Pen only', P.penOnly, () => { P.penOnly = !P.penOnly; }, 'Fingers pan and zoom, and don\'t paint');
-  const on = t === 'pick' ? null : hint(l ? `On ${l.label || l.name?.split('/').pop() || 'the new canvas'}${l.locked ? ' (locked)' : ''}` : 'Pick a layer to paint on', 'layer-title');
+  const on = t === 'pick' ? null : h('div', { class: 'row wrap' },
+    hint(l ? `On ${l.label || l.name?.split('/').pop() || 'the new canvas'}${l.locked ? ' (locked)' : ''}${selOf(l) && t !== 'select' && t !== 'lasso' ? ' · inside the selection' : ''}`
+      : 'Pick a layer to paint on', 'layer-title'),
+    selOf(l) && t !== 'select' && t !== 'lasso' ? button('Deselect', () => { dropSel(); X.render(); }) : null);
   const done = () => setTool('move');
   const gestures = 'Two fingers pan and zoom; tap with two fingers to undo, three to redo.';
   if (t === 'brush' || t === 'eraser') {
@@ -618,6 +842,20 @@ export function paintProps() {
       opacity(), colour, penOnly,
       help(`Tap to fill the area of like colour around that point. Tolerance: how different a colour can be and still count. All layers: fills on this layer, up to the lines you see on the others (draw lines on one layer, colour on another). ${gestures}`));
   }
+  if (t === 'select' || t === 'lasso') {
+    const s = selOf(l), act = (label, kind, title) => button(label, () => selAction(kind), { title, disabled: !s });
+    return section('Selection', done, on,
+      h('div', { class: 'row wrap' },
+        act('Delete', 'clear', 'Clear what\'s selected (Delete)'), act('Fill', 'fill', 'Fill it with the colour'),
+        act('Copy to layer', 'copy', 'A new layer with what\'s selected'), act('Cut to layer', 'cut', 'Move what\'s selected to a new layer')),
+      h('div', { class: 'row wrap' },
+        button('Select all', () => selAction('all'), { disabled: !l }),
+        button('Deselect', () => { dropSel(); X.render(); }, { disabled: !s, title: 'Esc' }),
+        s?.float ? button('Place', () => { commitFloat(); X.render(); }, { cls: 'small primary', title: 'Put the moved pixels down (Enter)' }) : null),
+      colour,
+      toggle(t === 'lasso' ? 'Keep shape when scaling' : 'Square / keep shape', P.constrain, () => { P.constrain = !P.constrain; }, 'Also: hold Shift, or rest a finger on the screen'),
+      help(`${t === 'lasso' ? 'Draw round what you want.' : 'Drag a box.'} Brushes, shapes and fill then stay inside it. Drag inside it to move what's selected, a corner to scale it; it goes down when you pick another tool, Place or Deselect (undo puts it back). The Editor has no masks, so there's no mask from a selection. ${gestures}`));
+  }
   return section('Colour picker', done, colour,
     help('Touch the canvas and slide to pick the colour under the pen; it goes back to the tool you had. With a brush, shape or fill, hold Alt and click to pick without switching.'));
 }
@@ -643,7 +881,9 @@ function onKey(e) {
   }
   // the layout keys (Delete removes the layer, arrows nudge it, Esc deselects) don't apply while painting
   if (painting() && ['Delete', 'Backspace', 'Escape', 'Enter', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'c'].includes(e.key)) {
-    if (e.key === 'Escape') setTool('move');
+    if (e.key === 'Escape') { if (P.sel) dropSel(); else setTool('move'); X.render(); }
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && P.sel) selAction('clear');
+    else if (e.key === 'Enter' && P.sel?.float) { commitFloat(); X.render(); }
     e.preventDefault(); e.stopImmediatePropagation();
   }
 }
@@ -665,6 +905,11 @@ export function bindPaint(ctx) {
     X.zoom.set(z, px - (px - v.tx) * z / v.z, py - (py - v.ty) * z / v.z);
   }, { passive: false });
   document.addEventListener('keydown', onKey, true);
+  new ResizeObserver(() => {   // too tall for the canvas (a phone): two columns
+    if (!strip) return;
+    strip.classList.remove('two');
+    strip.classList.toggle('two', strip.scrollHeight > X.viewer().clientHeight - 16);
+  }).observe(X.viewer());
   document.addEventListener('visibilitychange', () => { if (document.hidden) savePaint(); });
   return buildStrip();
 }

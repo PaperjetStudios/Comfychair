@@ -13,7 +13,7 @@ import { putKey } from './keys.js';
 import { playKeys, transport } from './playback.js';
 import { framesToClip } from './scene-comp.js';
 import { openGeneration } from './run.js';
-import { BLENDS, SWATCHES, bindPaint, blankSheet, blendOp, isCanvas, paintProps, paintSync, painting, savePaint, setTool, unsavedPaint } from './paint.js';
+import { BLENDS, SWATCHES, bindPaint, blankSheet, blendOp, isCanvas, paintOverlay, paintProps, paintSync, painting, savePaint, setTool, unsavedPaint } from './paint.js';
 import { icon } from './icons.js';
 
 // ---------------------------------------------------------------------------
@@ -488,7 +488,8 @@ function fitView(w, hh) {
     if (E.size) rs.push(...visibleLayers().map(layerRect));   // show layers hanging off a fixed canvas too
     if (E.cropping && E.sel && ready(E.sel)) rs.push(imageRect(E.sel));
     if (!rs.length) { EV = EVfit = null; return; }
-    const b = unionRect(rs), pad = 28, left = 64, top = 72;   // room left for the paint tools, above for the layer toolbar
+    const strip = $('#editorCanvas').parentElement.querySelector('.paint-strip');
+    const b = unionRect(rs), pad = 28, left = (strip?.offsetWidth || 36) + 16, top = 72;   // room left for the paint tools, above for the layer toolbar
     const s = Math.max(1e-3, Math.min((w - pad - left) / b.w, (hh - pad - top) / b.h));
     EVfit = { s, ox: left + (w - pad - left - b.w * s) / 2 - b.x * s, oy: top + (hh - pad - top - b.h * s) / 2 - b.y * s };
   }
@@ -544,6 +545,7 @@ function drawEditorCanvas() {
     ctx.setLineDash([4, 4]); ctx.strokeStyle = accent; ctx.lineWidth = 1;
     ctx.strokeRect(Math.round(r.x) + 0.5, Math.round(r.y) + 0.5, Math.round(r.w), Math.round(r.h));
     ctx.setLineDash([]);
+    paintOverlay(ctx);
     return;
   }
   if (E.cropping) {   // the whole image dimmed, the kept part on top of it

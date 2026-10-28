@@ -467,6 +467,9 @@ svg.ico { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColo
 @media (hover: hover) { .paint-strip button:hover:not(:disabled):not(.on) { color: var(--text); background: var(--surface-2); } }
 .paint-strip button.on { background: var(--accent); color: var(--accent-ink); }
 .paint-strip .sep { height: 1px; margin: 3px 4px; background: var(--line); flex: none; }
+/* a short canvas (a phone): the tools in two columns */
+.paint-strip.two { display: grid; grid-template-columns: repeat(2, auto); align-content: start; }
+.paint-strip.two .sep { grid-column: 1 / -1; }
 .paint-color { position: relative; width: 40px; height: 40px; flex: none; display: grid; place-items: center; cursor: pointer; }
 .paint-color::after { content: ""; width: 26px; height: 26px; border-radius: 50%; background: var(--c, #000); border: 2px solid var(--text); box-shadow: 0 0 0 1px #0008; }
 .paint-color input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; padding: 0; border: 0; }
