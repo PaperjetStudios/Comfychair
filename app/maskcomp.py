@@ -8,6 +8,8 @@ change). At generate time:
   softened, says where the generated pixels are used. Core ComfyUI nodes only.
 - a mask input of the template's own (a LoadImageMask, or a picture whose group or label says mask / inpaint) gets
   the mask too.
+- an inpaint template (a LoadImageMask of its own, see dev/make_inpaint_templates.py) needs the mask: its Mask
+  setting is marked required and a run without one is refused (missing()).
 - fit ("Crop to mask", templates with an editsize Size only): the model sees only a box around the mask, at the
   template's size, and the result is scaled back into that box on the full picture (more detail for a small area).
 The extra settings ride on the value, so tabs, shots and Replay & edit keep them like any other value.
@@ -54,9 +56,22 @@ def fields(wf: dict, template_fields: list[dict]) -> list[dict]:
     if not first:
         return []
     fit = composite and any(f["key"] == editsize.WIDTH for f in template_fields)
+    # an inpaint template (a LoadImageMask of its own, saving images) can't run without a mask
+    inpaint = composite and bool(_mask_nodes(wf))
     return [{"key": f"{first['node']}.{MASK}", "node": first["node"], "input": MASK, "kind": "mask", "label": "Mask",
              "value": None, "group": first["group"], "image_key": first["key"], "composite": composite,
-             "takes": takes, "fit": fit}]
+             "takes": takes, "fit": fit, "required": inpaint}]
+
+
+NEEDS_MASK = "Paint the area to change first"
+
+
+def missing(values: dict, template_fields: list[dict]) -> str | None:
+    """Why this run can't go: an inpaint template without a painted mask (None when it can)."""
+    for mf in (f for f in template_fields if f["kind"] == "mask" and f.get("required")):
+        if not mask_of(values, mf):
+            return NEEDS_MASK
+    return None
 
 
 def mask_of(values: dict, f: dict) -> dict | None:
@@ -176,10 +191,14 @@ def inject(wf: dict, values: dict, template_fields: list[dict], dims: tuple[int,
         crop = g.add("ImageCrop", "the box around the mask", image=[src, 0], width=region["w"], height=region["h"],
                      x=region["x"], y=region["y"])
         _relink(wf, [src, 0], crop, keep={crop[0]})
-        for k in _mask_nodes(wf):   # the template's own mask, cut the same way
-            cm = g.add("CropMask", "the box around the mask", mask=[k, 0], x=region["x"], y=region["y"],
-                       width=region["w"], height=region["h"])
-            _relink(wf, [k, 0], cm, keep={cm[0]})
+        for k in _mask_nodes(wf):   # the template's own mask, cut the same way (it may be smaller than the picture)
+            first = mi = g.add("MaskToImage", "template mask as a picture", mask=[k, 0])
+            mi = g.add("ImageScale", "template mask to the picture", image=mi, upscale_method="bilinear",
+                       width=dims[0], height=dims[1], crop="center")
+            mi = g.add("ImageCrop", "template mask in the box", image=mi, width=region["w"], height=region["h"],
+                       x=region["x"], y=region["y"])
+            cm = g.add("ImageToMask", "template mask", image=mi, channel="red")
+            _relink(wf, [k, 0], cm, keep={first[0]})
     mask_load = g.add("LoadImage", "the painted mask", image=m["name"])
 
     done = {}
