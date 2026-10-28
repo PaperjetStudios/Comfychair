@@ -4,7 +4,8 @@
 // devices, and conflict handling. It never touches the panel's UI: it only calls adapter.load/dump.
 //
 //   const tabs = new TabSet({ kind: 'gen-tabs', mount, scope: 'project', newName: (n) => `Tab ${n}`,
-//     adapter: { empty(), load(payload, doc), dump(), migrate?(payload) }, seed?(), onSwitch?(doc) });
+//     adapter: { empty(), load(payload, doc), dump(), migrate?(payload), beforeLeave?() }, seed?(), onSwitch?(doc) });
+//   (beforeLeave: awaited before the tab is saved and left, for writes the payload must name first)
 //   await tabs.start();   // when the panel first needs its tabs (it also reloads itself on project change)
 //   tabs.changed();       // after every edit: marks dirty, saves ~1 s later
 //   await tabs.flush();   // save now (before generate/render, on hide); true when saved
@@ -114,6 +115,7 @@ export class TabSet {
   }
   // leave the current tab: save it; a pending conflict blocks leaving (it would be lost)
   async leave() {
+    try { await this.adapter.beforeLeave?.(); } catch (e) { console.warn(e); }   // the panel's own last writes (the Editor's paint files)
     await this.flush();
     if (this.conflict) { toast('Resolve the conflict on this tab first', true); this.showConflict(); return false; }
     return true;

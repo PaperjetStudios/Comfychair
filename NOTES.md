@@ -238,6 +238,12 @@ The tabs that did the same job twice now share it:
     hold the pose at the playhead (`poseAt`), and `persistEditor` keys whatever an animated property moved (`keyPose`), so
     drags, nudges, align and arrange key without knowing about it. An animation keeps a fixed canvas and exports as a clip:
     frames → `scene-comp.js framesToClip` (`/api/scene/clip`, shared with the 3D compositions) → `/api/video/render`.
+  - Editor painting (`web/paint.js`): a painted layer's `l.img` becomes a canvas (it answers `naturalWidth` like the
+    image did, so drawing and hit-testing don't change). Its pixels are saved to `POST /api/paint`, named after their
+    content (`comfydeck/paint/<sha1>.png`, kept only in `data/inputs/paint/`, out of ComfyUI and the input galleries),
+    1.5 s after the last stroke and before the tab is left (`TabSet` `adapter.beforeLeave`); the layer then names that
+    file. `l.label` keeps the name shown. Undo keeps per-stroke pixel patches in memory (lost on reload). Old paint
+    files are never deleted yet.
 - **Kinds** (`web/kinds.js`, `app/imageprep.py KINDS`): one table of what each kind is called, its icon and its facts
   (`factsOf`), `cardPicture` / `kindTile` for every card. `main.py fill_facts` keeps size, length, fps and frames on each
   output. Where a kind can go is `useas.js openUseAs` (by kind).

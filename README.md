@@ -10,7 +10,10 @@ tablet ──http/ws──▶ ComfyChair :8190 ──http/ws──▶ ComfyUI :8
 **v1 (this scaffold):** template system, generate screen with live (animated) sampler previews,
 LoRA stacks, image upload with megapixel cap, projects, history with full lineage, reuse settings,
 send any output (or a video's first/last frame) back in as an input. **Editor** tab: crop images and
-join them side by side, stacked or in a grid, then save the result as an input. Any image field
+join them side by side, stacked or in a grid, then save the result as an input. It paints too: the
+tool strip on the left of its canvas has pressure and tilt brushes (pencil, ink, airbrush, marker), an
+eraser, line / rectangle / ellipse, bucket fill, a colour picker and rectangle / lasso selections, on
+any layer or on a **Blank canvas**; layers get blend modes and a lock. Any image field
 has **Draw**: a full-screen sketch pad with pen pressure and palm rejection (once a pen touches it,
 finger touches are ignored), e.g. to sketch the source for the `-i2i` templates. **Video** tab: trim
 generated clips, order them and export one video (ffmpeg); the result lands in History. **Board**:
@@ -646,6 +649,7 @@ web/               the tablet UI (vanilla JS, no build step)
 web/ui.js          shared UI kit: h(), api(), toasts, sheets, overlays and the widgets every panel uses
                    (button, iconBtn, seg, field, section, numSlider, rangeField, propNum, mediaCard, cycleBar…)
 web/app.js         Generate, Editor, Video, Board, History; web/scene.js the 3D tab (loaded on demand)
+web/paint.js       the Editor's painting (brushes, shapes, fill, selections, undo); web/icons.js line icons
 web/sound.js       the Sound tab; web/compare.js the Board's compare view
 web/app.css        styles; colours, radii and shadows come from the tokens at the top
 templates/         your workflow templates

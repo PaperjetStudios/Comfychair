@@ -451,6 +451,35 @@ details.desc[open] summary { margin-bottom: 6px; }
 .layer-toolbar button.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .layer-toolbar [data-snap].on, .layer-toolbar [data-depth].on { background: var(--surface-2); color: var(--text); font-weight: 400; }
 .layer-toolbar .sep { width: 1px; margin: 4px 3px; background: var(--line); }
+/* painting (paint.js): the tool strip down the left of the canvas, the brush outline under a hovering pen */
+svg.ico { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.btn svg.ico { width: 16px; height: 16px; margin-right: 6px; vertical-align: -3px; }
+.paint-strip {
+  position: absolute; z-index: 2; left: 8px; top: 8px; max-height: calc(100% - 16px); overflow-y: auto; scrollbar-width: none;
+  display: flex; flex-direction: column; gap: 2px; padding: 3px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow-sm);
+}
+.paint-strip button {
+  width: 40px; height: 40px; flex: none; display: grid; place-items: center; border: 0; border-radius: var(--r);
+  background: transparent; color: var(--muted); cursor: pointer; padding: 0;
+}
+.paint-strip button:disabled { opacity: .35; cursor: default; }
+@media (hover: hover) { .paint-strip button:hover:not(:disabled):not(.on) { color: var(--text); background: var(--surface-2); } }
+.paint-strip button.on { background: var(--accent); color: var(--accent-ink); }
+.paint-strip .sep { height: 1px; margin: 3px 4px; background: var(--line); flex: none; }
+/* a short canvas (a phone): the tools in two columns */
+.paint-strip.two { display: grid; grid-template-columns: repeat(2, auto); align-content: start; }
+.paint-strip.two .sep { grid-column: 1 / -1; }
+.paint-color { position: relative; width: 40px; height: 40px; flex: none; display: grid; place-items: center; cursor: pointer; }
+.paint-color::after { content: ""; width: 26px; height: 26px; border-radius: 50%; background: var(--c, #000); border: 2px solid var(--text); box-shadow: 0 0 0 1px #0008; }
+.paint-color input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; padding: 0; border: 0; }
+.brush-ring { position: absolute; z-index: 1; pointer-events: none; border-radius: 50%; border: 1px solid #fff; box-shadow: 0 0 0 1px #000a; }
+.brush-ring.off { border-style: dashed; opacity: .6; }
+.paint-thumb { width: 44px; height: 44px; object-fit: contain; background: var(--checker); border-radius: var(--r-sm); }
+.icon-btn.ico-btn { display: inline-grid; place-items: center; }
+.panel-top > .icon-btn { flex: none; }
+.swatches button.on { border-color: var(--accent); }
+@media (pointer: coarse) { .paint-strip button, .paint-color { width: 44px; height: 44px; } }
 
 .crop-stage { display: grid; place-items: center; background: #000; border-radius: var(--r-lg); padding: 8px; }
 .crop-wrap { position: relative; touch-action: none; user-select: none; line-height: 0; overflow: hidden; }

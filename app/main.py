@@ -1,6 +1,7 @@
 """ComfyChair server: a touch-first front end that drives ComfyUI through its API."""
 import asyncio
 import hashlib
+import io
 import json
 import logging
 import os
@@ -698,14 +699,58 @@ async def upload(file: UploadFile = File(...), mp: float = Form(0), multiple: in
     return {"name": name, "width": w, "height": h}
 
 
+PAINT_SUB = "paint"   # the Editor's painted layers: kept here only, out of ComfyUI and the input galleries
+
+
+def local_input(name: str) -> Path | None:
+    """The local copy of one of ComfyChair's own input images (an upload or a painted layer), if there is one."""
+    sub, _, fname = name.rpartition("/")
+    fname = Path(fname).name
+    if sub == config.COMFY_INPUT_SUBFOLDER:
+        p = config.INPUT_DIR / fname
+    elif sub == f"{config.COMFY_INPUT_SUBFOLDER}/{PAINT_SUB}":
+        p = config.INPUT_DIR / PAINT_SUB / fname
+    else:
+        return None
+    return p if p.is_file() else None
+
+
 async def input_bytes(name: str) -> bytes:
     """An image in ComfyUI's input folder (ComfyChair's own uploads come from the local copies)."""
-    sub, _, fname = name.rpartition("/")
-    local = config.INPUT_DIR / Path(fname).name
-    if sub == config.COMFY_INPUT_SUBFOLDER and local.is_file():
+    local = local_input(name)
+    if local:
         return local.read_bytes()
+    sub, _, fname = name.rpartition("/")
     data, _ = await comfy.view(fname, sub, "input")
     return data
+
+
+@app.post("/api/paint")
+async def save_paint(request: Request):
+    """A painted Editor layer (the PNG as the body). Named after its content, so a file never changes once
+    written: undo, a duplicated tab or an older copy of the tab still find the pixels they had."""
+    data = await request.body()
+    if len(data) > MAX_IMAGE_UPLOAD:
+        raise HTTPException(413, f"That image is over {MAX_IMAGE_UPLOAD >> 20} MB")
+
+    def check():
+        im = Image.open(io.BytesIO(data))
+        if im.format != "PNG" or max(im.size) > 16384:
+            raise ValueError("not a PNG of a usable size")
+        im.verify()
+        return im.size
+    try:
+        w, h = await asyncio.to_thread(check)
+    except Exception as e:
+        raise HTTPException(400, f"Couldn't read that image: {e}")
+    fname = f"{hashlib.sha1(data).hexdigest()[:20]}.png"
+    folder = config.INPUT_DIR / PAINT_SUB
+    folder.mkdir(exist_ok=True)
+    if not (folder / fname).is_file():
+        tmp = folder / f".{fname}.tmp"
+        tmp.write_bytes(data)
+        tmp.replace(folder / fname)
+    return {"name": f"{config.COMFY_INPUT_SUBFOLDER}/{PAINT_SUB}/{fname}", "width": w, "height": h}
 
 
 @app.post("/api/inputs/crop")
@@ -1587,13 +1632,13 @@ async def list_inputs(project_id: str = ""):
 async def input_image(name: str, thumb: int = 0):
     """Preview of an image in ComfyUI's input folder. thumb=N returns a cached JPEG at most N px wide."""
     sub, _, fname = name.rpartition("/")
-    local = config.INPUT_DIR / Path(fname).name
+    local = local_input(name)
     if thumb:
         thumb = max(64, min(thumb, 1024))
         key = hashlib.sha1(f"{name}:{thumb}".encode()).hexdigest()[:20]
         cached = config.THUMB_DIR / f"{key}.jpg"
         if not cached.is_file():
-            if sub == config.COMFY_INPUT_SUBFOLDER and local.is_file():
+            if local:
                 data = local.read_bytes()
             else:
                 data, _ = await comfy.view(fname, sub, "input")
@@ -1602,7 +1647,7 @@ async def input_image(name: str, thumb: int = 0):
             except Exception as e:
                 raise HTTPException(415, f"Not an image: {e}")
         return Response(cached.read_bytes(), media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
-    if sub == config.COMFY_INPUT_SUBFOLDER and local.is_file():
+    if local:
         return Response(local.read_bytes(), media_type="image/png")
     data, ctype = await comfy.view(fname, sub, "input")
     return Response(data, media_type=ctype, headers={"Cache-Control": "max-age=3600"})
