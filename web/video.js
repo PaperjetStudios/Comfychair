@@ -7,6 +7,7 @@ import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, regi
 import { openGeneration } from './run.js';
 import { useInGenerate } from './editor.js';
 import { TabSet } from './tabs.js';
+import { durationOf, timeline, wavePeaks } from './timeline.js';
 import * as COMP from './scene-comp.js';
 import { maximizable } from './layout.js';
 import { canTrack, openTrack } from './track.js';
@@ -66,41 +67,24 @@ const ensureTabs = () => tabsReady || (tabsReady = tabs ? tabs.start() : Promise
 // the timeline changed: save it (the tab flushes ~1 s later, or at once on Export / leaving)
 function persistTimeline() { tabs?.changed(); }
 
-const itLen = (it) => Math.max(MIN_LEN, (it.out ?? (it.dur || 3)) - it.in);
-const itEnd = (it) => it.at + itLen(it);
+// the timeline itself (timeline.js, shared with the Sound tab): a sound clip only goes on an audio track, a picture on a video track
+const TL = timeline(V, { el: '#timeline', headW: HEAD_W, minLen: MIN_LEN, zoom: [4, 400], ppsKey: 'deck.video.pps',
+  pause: () => vidPause(), seek: (t) => vidSeek(t), timeLabel: (t) => tc(t), showTime: (s) => { $('#vidTime').textContent = s; },
+  changed: () => timelineChanged(), dragged: () => { renderTimeline(); syncMedia(); requestDraw(); }, rendered: () => renderTimeline(),
+  selected: () => renderVideoPanel(), deselected: () => { renderTimeline(); renderVideoPanel(); },
+  canDrop: (it, tr) => (tr.kind === 'audio') === (it.kind === 'audio'), tabs: () => tabs });
+const { len: itLen, end: itEnd, seqEnd, selItem, xfades, updatePlayhead } = TL;
+const fadeGain = (it, t, audio) => TL.fadeGain(it, t, audio);   // pictures only fade in over an overlap (videoedit._overlaps)
 const trackOf = (it) => V.tracks.find((t) => t.id === it.track);
 const tracksOf = (kind) => V.tracks.filter((t) => t.kind === kind);   // video: V1 (bottom) first
 const trackName = (t) => `${t.kind === 'video' ? 'V' : 'A'}${tracksOf(t.kind).indexOf(t) + 1}`;
 const zOf = (it) => tracksOf('video').findIndex((t) => t.id === it.track);
-const seqEnd = () => V.items.reduce((m, it) => Math.max(m, itEnd(it)), 0);
 const isVisual = (it) => it.kind === 'video' || it.kind === 'image' || it.kind === 'scene';
-const selItem = () => V.items.find((i) => i.id === V.sel) || null;
 const fpsNow = () => V.fps || 24;
 const tc = (t) => {
   const f = fpsNow(), m = Math.floor(t / 60), s = Math.floor(t % 60), fr = Math.min(f - 1, Math.floor((t % 1) * f + 1e-6));
   return `${m}:${String(s).padStart(2, '0')}:${String(fr).padStart(2, '0')}`;
 };
-
-// Overlap with the clip before (xin) and after (xout) it on the same track: the later clip fades
-// in over the overlap; sound also fades the earlier one out. Mirrors videoedit._overlaps.
-function xfades(it) {
-  let xin = 0, xout = 0;
-  for (const o of V.items) {
-    if (o === it || o.track !== it.track) continue;
-    if (o.at < it.at || (o.at === it.at && V.items.indexOf(o) < V.items.indexOf(it))) xin = Math.max(xin, Math.min(itEnd(o) - it.at, itLen(it), itLen(o)));
-    else xout = Math.max(xout, Math.min(itEnd(it) - o.at, itLen(it), itLen(o)));
-  }
-  return { xin, xout };
-}
-
-function fadeGain(it, t, audio) {
-  const local = t - it.at, len = itLen(it), { xin, xout } = xfades(it);
-  const fi = Math.max(it.fadeIn || 0, xin), fo = Math.max(it.fadeOut || 0, audio ? xout : 0);
-  let g = 1;
-  if (fi > 0 && local < fi) g = Math.min(g, local / fi);
-  if (fo > 0 && len - local < fo) g = Math.min(g, (len - local) / fo);
-  return Math.max(0, Math.min(1, g));
-}
 
 // ---- playback: one media element per clip, kept in step with the timeline clock ----
 // Preloading: each video/sound on the timeline is downloaded whole into memory (a blob: URL), so
@@ -622,14 +606,6 @@ function vidSeek(t) {
 }
 function showPlayState() { $('#vidPlay').textContent = V.playing ? '❚❚ Pause' : '▶ Play'; }
 
-function updatePlayhead(follow = false) {
-  const tl = $('#timeline'), ph = tl.querySelector('.tl-playhead');
-  const x = HEAD_W + V.t * V.pps;
-  if (ph) ph.style.left = `${x}px`;
-  $('#vidTime').textContent = `${tc(V.t)} / ${tc(seqEnd())}`;
-  if (follow && (x > tl.scrollLeft + tl.clientWidth - 30 || x < tl.scrollLeft + HEAD_W)) tl.scrollLeft = x - HEAD_W - 30;
-}
-
 // ---- timeline drawing ----
 function posterFor(it) {   // first frame of a video, as a small JPEG for the clip's filmstrip
   const p = V.posters.get(it.url);
@@ -649,22 +625,10 @@ function posterFor(it) {   // first frame of a video, as a small JPEG for the cl
   return null;
 }
 
-async function loadWave(url) {   // loudness peaks, 50 per second, for drawing audio clips
+async function loadWave(url) {   // loudness peaks, 50 per second, for drawing audio clips (scaled up to full height)
   V.waves.set(url, 'loading');
-  try {
-    const b = blobs.get(url);
-    const buf = await (await fetch(b && b.state === 'ready' ? b.src : url)).arrayBuffer();
-    const audio = await new OfflineAudioContext(1, 1, 44100).decodeAudioData(buf);
-    const ch = audio.getChannelData(0), rate = 50, block = Math.floor(audio.sampleRate / rate);
-    const peaks = new Float32Array(Math.ceil(ch.length / block));
-    for (let i = 0; i < peaks.length; i++) {
-      let m = 0;
-      for (let j = i * block, e = Math.min(ch.length, j + block); j < e; j += 4) m = Math.max(m, Math.abs(ch[j]));
-      peaks[i] = m;
-    }
-    const top = peaks.reduce((m, v) => Math.max(m, v), 0) || 1;   // scale quiet recordings up to full height
-    V.waves.set(url, { peaks: peaks.map((v) => v / top), rate });
-  } catch { V.waves.set(url, 'none'); }
+  const b = blobs.get(url);
+  try { V.waves.set(url, await wavePeaks(b && b.state === 'ready' ? b.src : url, 50, { normalize: true })); } catch { V.waves.set(url, 'none'); }
   drawWaves();
 }
 
@@ -720,28 +684,12 @@ function addTrack(kind) {
 }
 
 function renderTimeline() {
-  const tl = $('#timeline');
-  const span = Math.max(seqEnd() + 10, (tl.clientWidth - HEAD_W) / V.pps);
-  const major = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300].find((s) => s * V.pps >= 70) || 600;
-  const ruler = h('div', { class: 'tl-ruler', style: `background-size:${(major * V.pps) / 5}px 100%` });
-  for (let s = 0; s <= span; s += major) {
-    ruler.append(h('span', { style: `left:${s * V.pps}px` }, s >= 60 ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}` : `${s}s`));
-  }
-  const inner = h('div', { class: 'tl-inner', style: `width:${HEAD_W + span * V.pps}px` },
-    h('div', { class: 'tl-row tl-ruler-row' },
-      h('div', { class: 'tl-head tl-corner' },
-        h('button', { type: 'button', class: 'tl-tog', title: 'Add a video track', onclick: () => { addTrack('video'); timelineChanged(); } }, '+V'),
-        h('button', { type: 'button', class: 'tl-tog', title: 'Add an audio track', onclick: () => { addTrack('audio'); timelineChanged(); } }, '+A')),
-      ruler));
-  for (const tr of [...tracksOf('video')].reverse().concat(tracksOf('audio'))) {
-    inner.append(h('div', { class: `tl-row ${tr.kind}` + (tr.hidden || tr.muted && tr.kind === 'audio' ? ' off' : '') },
-      trackHead(tr),
-      h('div', { class: 'tl-lane', 'data-track': tr.id }, V.items.filter((i) => i.track === tr.id).map(clipEl))));
-  }
-  inner.append(h('div', { class: 'tl-playhead' }));
-  const { scrollLeft, scrollTop } = tl;
-  tl.replaceChildren(inner);
-  tl.scrollLeft = scrollLeft; tl.scrollTop = scrollTop;
+  TL.render({
+    corner: [h('button', { type: 'button', class: 'tl-tog', title: 'Add a video track', onclick: () => { addTrack('video'); timelineChanged(); } }, '+V'),
+      h('button', { type: 'button', class: 'tl-tog', title: 'Add an audio track', onclick: () => { addTrack('audio'); timelineChanged(); } }, '+A')],
+    rows: [...tracksOf('video')].reverse().concat(tracksOf('audio'))
+      .map((tr) => ({ track: tr, cls: tr.kind + (tr.hidden || tr.muted && tr.kind === 'audio' ? ' off' : ''), head: trackHead(tr) })),
+    clipEl });
   drawWaves(); pruneEls(); preloadMedia(); updatePlayhead();
   $('#vidEmpty').classList.toggle('hidden', V.items.length > 0);
 }
@@ -752,146 +700,7 @@ function timelineChanged() {
 
 export function renderVideo() { renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw(); ensureTabs(); COMP.refresh(); }
 
-// ---- timeline gestures: drag clips to move (also between tracks), drag their ends to trim ----
-const timeAt = (e) => (e.clientX - $('#timeline .tl-inner').getBoundingClientRect().left - HEAD_W) / V.pps;
-
-function dragWindow(onMove, onUp) {
-  const up = (ev) => { removeEventListener('pointermove', onMove); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); onUp && onUp(ev); };
-  addEventListener('pointermove', onMove); addEventListener('pointerup', up); addEventListener('pointercancel', up);
-}
-
-function startScrub(e) {
-  e.preventDefault();
-  vidPause();
-  const go = (ev) => {
-    let t = Math.max(0, timeAt(ev));
-    for (const p of [0, ...V.items.flatMap((i) => [i.at, itEnd(i)])]) if (Math.abs(p - t) < 6 / V.pps) t = p;
-    vidSeek(t);
-  };
-  go(e);
-  dragWindow(go);
-}
-
-function startClipDrag(e, el) {
-  const it = V.items.find((i) => i.id === el.dataset.id);
-  if (!it) return;
-  e.preventDefault();
-  const mode = e.target.classList.contains('tl-trim') ? (e.target.classList.contains('l') ? 'l' : 'r') : 'move';
-  const x0 = e.clientX, y0 = e.clientY;
-  const o = { at: it.at, in: it.in, out: it.out ?? (it.dur || 3) };
-  if (V.sel !== it.id) {
-    V.sel = it.id;
-    $('#timeline').querySelectorAll('.tl-clip.sel').forEach((c) => c.classList.remove('sel'));
-    el.classList.add('sel');
-    renderVideoPanel();
-  }
-  const points = [0, V.t, ...V.items.filter((i) => i !== it).flatMap((i) => [i.at, itEnd(i)])];
-  const snap = (t) => {
-    let best = t, d = 8 / V.pps;
-    for (const p of points) if (Math.abs(p - t) < d) { d = Math.abs(p - t); best = p; }
-    return best;
-  };
-  let moved = false;
-  dragWindow((ev) => {
-    if (!moved && Math.abs(ev.clientX - x0) < 5 && Math.abs(ev.clientY - y0) < 5) return;
-    moved = true;
-    const dt = (ev.clientX - x0) / V.pps;
-    if (mode === 'move') {
-      const len = o.out - o.in, at = Math.max(0, o.at + dt);
-      const a1 = snap(at), a2 = snap(at + len) - len;   // snap whichever end is closer to something
-      const d1 = a1 !== at ? Math.abs(a1 - at) : Infinity, d2 = a2 !== at ? Math.abs(a2 - at) : Infinity;
-      it.at = Math.max(0, d1 <= d2 && d1 < Infinity ? a1 : d2 < Infinity ? a2 : at);
-      const lane = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('.tl-lane');
-      const tr = lane && V.tracks.find((t) => t.id === lane.dataset.track);
-      if (tr && (tr.kind === 'audio') === (it.kind === 'audio')) it.track = tr.id;
-    } else if (mode === 'l') {
-      let d = snap(o.at + dt) - o.at;
-      if (it.kind !== 'image') d = Math.max(d, -o.in);   // not before the start of the source
-      d = Math.max(-o.at, Math.min(d, o.out - o.in - MIN_LEN));
-      it.at = o.at + d;
-      if (it.kind === 'image') it.out = o.out - d; else it.in = o.in + d;
-    } else {
-      let out = o.in + snap(o.at + (o.out - o.in) + dt) - o.at;
-      out = Math.max(o.in + MIN_LEN, it.kind === 'image' || !it.dur ? out : Math.min(out, it.dur));
-      it.out = out;
-    }
-    renderTimeline(); syncMedia(); requestDraw();
-  }, () => { if (moved) timelineChanged(); });
-}
-
-function wireTimeline() {
-  const tl = $('#timeline');
-  tl.addEventListener('pointerdown', (e) => {
-    const clip = e.target.closest('.tl-clip');
-    if (clip) startClipDrag(e, clip);
-    else if (e.target.closest('.tl-ruler')) startScrub(e);
-  });
-  tl.addEventListener('click', (e) => {   // tap an empty spot: deselect and move the playhead there
-    if (!e.target.classList.contains('tl-lane')) return;
-    V.sel = null; vidPause(); vidSeek(Math.max(0, timeAt(e))); renderTimeline(); renderVideoPanel();
-  });
-  tl.addEventListener('wheel', (e) => {   // ctrl/pinch + wheel zooms around the pointer
-    if (!e.ctrlKey && !e.metaKey) return;
-    e.preventDefault();
-    zoomTimeline(V.pps * (e.deltaY < 0 ? 1.15 : 1 / 1.15), timeAt(e), e.clientX);
-  }, { passive: false });
-  new ResizeObserver(() => renderTimeline()).observe(tl);
-}
-
-function zoomTimeline(pps, aroundT = V.t, clientX = null) {
-  const tl = $('#timeline');
-  const screenX = clientX != null ? clientX - tl.getBoundingClientRect().left : HEAD_W + V.t * V.pps - tl.scrollLeft;
-  V.pps = Math.max(4, Math.min(400, pps));
-  store.set('deck.video.pps', V.pps); renderTimeline();
-  tl.scrollLeft = HEAD_W + aroundT * V.pps - screenX;
-}
-
-function fitTimeline() {
-  const tl = $('#timeline');
-  zoomTimeline((tl.clientWidth - HEAD_W - 30) / Math.max(1, seqEnd()), 0, HEAD_W);
-  tl.scrollLeft = 0;
-}
-
 // ---- editing ----
-function splitAtPlayhead() {
-  const t = V.t;
-  const under = V.items.filter((it) => t > it.at + 0.02 && t < itEnd(it) - 0.02);
-  const targets = under.some((it) => it.id === V.sel) ? under.filter((it) => it.id === V.sel) : under;
-  if (!targets.length) return toast('Put the playhead over a clip to split it', true);
-  for (const a of targets) {
-    const end = itEnd(a), b = { ...a, id: uid(), at: t, fadeIn: 0 };
-    if (a.kind === 'image') { b.out = end - t; a.out = t - a.at; } else { b.in = a.in + (t - a.at); a.out = b.in; }
-    a.fadeOut = 0;
-    V.items.splice(V.items.indexOf(a) + 1, 0, b);
-  }
-  timelineChanged();
-}
-
-function deleteSelected() {
-  const it = selItem();
-  if (!it) return;
-  const before = V.items, tab = tabs?.active?.id;
-  V.items = V.items.filter((i) => i !== it);
-  V.sel = null;
-  timelineChanged();
-  undoToast('Clip deleted', () => {
-    if (tabs?.active?.id !== tab) return toast('Switch back to that tab to undo', true);   // the clips on screen are another edit's
-    V.items = before; V.sel = it.id; timelineChanged();
-  });
-}
-
-// Overlap this clip with the one before it on its track (moving it and everything after it on
-// that track to the left), so the two cross-fade.
-function crossfadePrev(it, d = 0.5) {
-  const prev = V.items.filter((i) => i !== it && i.track === it.track && i.at < it.at)
-    .sort((a, b) => itEnd(b) - itEnd(a))[0];
-  if (!prev) return toast('There is no clip before this one on its track', true);
-  d = Math.min(d, itLen(prev) / 2, itLen(it) / 2);
-  const shift = it.at - (itEnd(prev) - d);
-  for (const i of V.items) if (i.track === it.track && i.at >= it.at) i.at = Math.max(0, i.at - shift);
-  timelineChanged();
-}
-
 function targetTrack(kind) {
   const want = kind === 'audio' ? 'audio' : 'video';
   const sel = selItem(), st = sel && trackOf(sel);
@@ -899,21 +708,12 @@ function targetTrack(kind) {
   return (tracksOf(want)[0] || {}).id || addTrack(want);
 }
 
-function probeDuration(url, tag) {
-  return new Promise((res) => {
-    const m = Object.assign(document.createElement(tag), { preload: 'metadata', muted: true });
-    m.onloadedmetadata = () => { res(isFinite(m.duration) ? m.duration : 0); m.removeAttribute('src'); };
-    m.onerror = () => res(0);
-    m.src = url;
-  });
-}
-
 // New clips go after the last clip on the selected clip's track (or V1 / A1)
 export async function addToTimeline(media) {
   await ensureTabs();   // the tab must be open, or its clips would replace this one
-  if (media.kind !== 'image' && !media.dur) media.dur = await probeDuration(media.url, media.kind === 'audio' ? 'audio' : 'video');
+  if (media.kind !== 'image' && !media.dur) media.dur = await durationOf(media.url, media.kind === 'audio' ? 'audio' : 'video');
   const it = newItem(media, targetTrack(media.kind));
-  it.at = V.items.filter((i) => i.track === it.track).reduce((m, i) => Math.max(m, itEnd(i)), 0);
+  it.at = TL.trackEnd(it.track);
   V.items.push(it); V.sel = it.id;
   timelineChanged();
   return it;
@@ -1061,15 +861,15 @@ function renderVideoPanel() {
       it.kind !== 'image' && it.kind !== 'scene' ? clipRange('Volume', () => it.volume ?? 1, (v) => { it.volume = v; }, { min: 0, max: 2, step: 0.01,
         fmt: (v) => pct(v) + (v > 1 ? ' (preview plays at 100%)' : '') }) : null,
       h('div', { class: 'row wrap' },
-        button('✂ Split at playhead', splitAtPlayhead, { title: 'S' }),
-        button('⤫ Cross-fade with previous', () => crossfadePrev(it)),
+        button('✂ Split at playhead', TL.split, { title: 'S' }),
+        button('⤫ Cross-fade with previous', () => TL.crossfadePrev(it)),
         it.kind === 'video' && canKey(it) ? button('VFX…', () => sendToVfx(it.src, { label: it.label, trim: { start: it.in, len: (it.out ?? it.dur) - it.in } }), { title: 'Open this clip in the VFX tab' }) : null,
         it.kind === 'video' ? button('Sound → Sound tab', () => soundToSoundTab(it.src, { trim: { start: it.in || 0, len: itLen(it) }, name: `${it.label}-sound` }),
           { title: 'This clip\'s sound (the part on the timeline) on the Sound tab\'s timeline' }) : null,
         it.kind === 'video' && canKey(it) ? button('Key…', () => openKey(it), { title: 'Cut out a green screen, or use a matte, so lower tracks show through' }) : null,
         it.kind === 'video' && canTrack(it.src) ? button('Track motion', () => openTrack({ src: it.src, url: it.url, label: it.label, from: it.in, to: it.out ?? undefined }), { title: 'Follow the picture\'s movement and make a 3D camera from it' }) : null,
         isVisual(it) ? button('Reset framing', () => { Object.assign(it, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); delete it.rotation; delete it.anchor; timelineChanged(); }) : null,
-        button('Delete clip', deleteSelected, { cls: 'small danger', title: 'Delete' })));
+        button('Delete clip', TL.deleteSelected, { cls: 'small danger', title: 'Delete' })));
   })() : null;
 
   const sizeSel = h('select', {}, SIZES.map(([label, s], i) => h('option', { value: i, selected: JSON.stringify(s) === JSON.stringify(V.size) }, label)));
@@ -1359,13 +1159,13 @@ export function wireVideoTransport() {
   loopBtn.addEventListener('click', () => { V.loop = !V.loop; store.set('deck.video.loop', V.loop); showLoop(); });
   showLoop();
   $('#tlTools').replaceChildren(
-    button('✂ Split', splitAtPlayhead, { title: 'Split at playhead (S)' }),
-    button('🗑 Delete', deleteSelected, { title: 'Delete selected clip (Del)' }),
+    button('✂ Split', TL.split, { title: 'Split at playhead (S)' }),
+    button('🗑 Delete', TL.deleteSelected, { title: 'Delete selected clip (Del)' }),
     h('span', { class: 'tl-tip' }, info('Drag clips to move · drag ends to trim · overlap to cross-fade')),
-    iconBtn('Zoom out', '−', () => zoomTimeline(V.pps / 1.5)),
-    button('Fit', fitTimeline),
-    iconBtn('Zoom in', '+', () => zoomTimeline(V.pps * 1.5)));
-  wireTimeline();
+    iconBtn('Zoom out', '−', () => TL.zoom(V.pps / 1.5)),
+    button('Fit', TL.fit),
+    iconBtn('Zoom in', '+', () => TL.zoom(V.pps * 1.5)));
+  TL.wire();
   showPlayState();
   // Premiere-ish keys while the Video tab is open
   document.addEventListener('keydown', (e) => {
@@ -1376,9 +1176,9 @@ export function wireVideoTransport() {
       ArrowRight: () => step(e.shiftKey ? 1 : 1 / fpsNow()),
       Home: () => { vidPause(); vidSeek(0); },
       End: () => { vidPause(); vidSeek(seqEnd()); },
-      s: splitAtPlayhead, c: splitAtPlayhead, f: toggleVideoFullscreen,
-      Delete: deleteSelected, Backspace: deleteSelected,
-      '=': () => zoomTimeline(V.pps * 1.5), '+': () => zoomTimeline(V.pps * 1.5), '-': () => zoomTimeline(V.pps / 1.5),
+      s: TL.split, c: TL.split, f: toggleVideoFullscreen,
+      Delete: TL.deleteSelected, Backspace: TL.deleteSelected,
+      '=': () => TL.zoom(V.pps * 1.5), '+': () => TL.zoom(V.pps * 1.5), '-': () => TL.zoom(V.pps / 1.5),
     };
     const fn = keys[e.key];
     if (fn) { e.preventDefault(); fn(); }

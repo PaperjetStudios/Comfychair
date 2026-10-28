@@ -8,6 +8,7 @@ import { adoptGenerations } from './generate.js';
 import { extractSound, openSoundPicker, soundInput, soundSource, uploadMedia } from './media.js';
 import { waitJob } from './clipimport.js';
 import { TabSet } from './tabs.js';
+import { dragWindow, durationOf, timeline, wavePeaks } from './timeline.js';
 
 // ---------------------------------------------------------------------------
 // sound: a multi-track sound editor laid out like the Video tab. Tracks mix (mute, solo, level, pan),
@@ -35,34 +36,16 @@ let tabs = null, tabsReady = null;
 const ensureTabs = () => tabsReady || (tabsReady = tabs ? tabs.start() : Promise.resolve());
 const persist = () => tabs?.changed();
 
-const itLen = (it) => Math.max(MIN_LEN, (it.out ?? (it.dur || 3)) - it.in);
-const itEnd = (it) => it.at + itLen(it);
+const TL = timeline(N, { el: '#sndTimeline', headW: HEAD_W, minLen: MIN_LEN, zoom: [2, 600], ppsKey: 'deck.sound.pps',
+  pause: () => sndPause(), seek: (t) => sndSeek(t), timeLabel: (t) => tc(t), showTime: (s) => { $('#sndTime').textContent = s; },
+  changed: () => changed(), dragged: () => { renderTimeline(); syncMedia(); }, rendered: () => renderTimeline(),
+  selected: () => { renderPanel(); drawStage(); }, deselected: () => { renderTimeline(); renderPanel(); }, tabs: () => tabs });
+const { len: itLen, end: itEnd, seqEnd, selItem, xfades, fadeGain, updatePlayhead } = TL;
 const trackOf = (it) => N.tracks.find((t) => t.id === it.track);
 const trackName = (t) => t.name || `A${N.tracks.indexOf(t) + 1}`;
-const seqEnd = () => N.items.reduce((m, it) => Math.max(m, itEnd(it)), 0);
-const selItem = () => N.items.find((i) => i.id === N.sel) || null;
 const soloed = () => N.tracks.some((t) => t.solo);
 const audible = (tr) => tr && !tr.muted && (!soloed() || tr.solo);
 const tc = (t) => `${Math.floor(t / 60)}:${(t % 60).toFixed(2).padStart(5, '0')}`;
-
-// overlap with the clip before (xin) / after (xout) on the same track: both fade over it (audioedit / videoedit._overlaps)
-function xfades(it) {
-  let xin = 0, xout = 0;
-  for (const o of N.items) {
-    if (o === it || o.track !== it.track) continue;
-    if (o.at < it.at || (o.at === it.at && N.items.indexOf(o) < N.items.indexOf(it))) xin = Math.max(xin, Math.min(itEnd(o) - it.at, itLen(it), itLen(o)));
-    else xout = Math.max(xout, Math.min(itEnd(it) - o.at, itLen(it), itLen(o)));
-  }
-  return { xin, xout };
-}
-function fadeGain(it, t) {
-  const local = t - it.at, len = itLen(it), { xin, xout } = xfades(it);
-  const fi = Math.max(it.fadeIn || 0, xin), fo = Math.max(it.fadeOut || 0, xout);
-  let g = 1;
-  if (fi > 0 && local < fi) g = Math.min(g, local / fi);
-  if (fo > 0 && len - local < fo) g = Math.min(g, (len - local) / fo);
-  return clamp(g, 0, 1);
-}
 
 // ---- playback: one <audio> per clip through Web Audio (gain, pan) into a master gain and a meter ----
 const A = { ctx: null, master: null, meter: null, data: null };
@@ -161,30 +144,11 @@ function sndSeek(t) {
   syncMedia(); updatePlayhead(); drawStage();
 }
 function showPlayState() { $('#sndPlay').textContent = N.playing ? '❚❚ Pause' : '▶ Play'; }
-function updatePlayhead(follow = false) {
-  const tl = $('#sndTimeline'), ph = tl.querySelector('.tl-playhead');
-  const x = HEAD_W + N.t * N.pps;
-  if (ph) ph.style.left = `${x}px`;
-  $('#sndTime').textContent = `${tc(N.t)} / ${tc(seqEnd())}`;
-  if (follow && (x > tl.scrollLeft + tl.clientWidth - 30 || x < tl.scrollLeft + HEAD_W)) tl.scrollLeft = x - HEAD_W - 30;
-}
 
 // ---- waveforms: loudness peaks, 100 per second ----
 async function loadWave(url) {
   N.waves.set(url, 'loading');
-  try {
-    const buf = await (await fetch(url)).arrayBuffer();
-    const audio = await new OfflineAudioContext(1, 1, 44100).decodeAudioData(buf);
-    const chans = [...Array(audio.numberOfChannels)].map((_, c) => audio.getChannelData(c));
-    const rate = 100, block = Math.floor(audio.sampleRate / rate), n = Math.ceil(chans[0].length / block);
-    const peaks = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-      let m = 0;
-      for (const ch of chans) for (let j = i * block, e = Math.min(ch.length, j + block); j < e; j += 2) m = Math.max(m, Math.abs(ch[j]));
-      peaks[i] = m;
-    }
-    N.waves.set(url, { peaks, rate });
-  } catch { N.waves.set(url, 'none'); }
+  try { N.waves.set(url, await wavePeaks(url, 100)); } catch { N.waves.set(url, 'none'); }
   drawWaves(); drawStage();
 }
 const waveOf = (it) => { const w = N.waves.get(it.url); if (!w) loadWave(it.url); return w && typeof w !== 'string' ? w : null; };
@@ -278,27 +242,10 @@ function trackHead(tr) {
 }
 
 function renderTimeline() {
-  const tl = $('#sndTimeline');
-  const span = Math.max(seqEnd() + 10, (tl.clientWidth - HEAD_W) / N.pps);
-  const major = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300].find((s) => s * N.pps >= 70) || 600;
-  const ruler = h('div', { class: 'tl-ruler', style: `background-size:${(major * N.pps) / 5}px 100%` });
-  for (let s = 0; s <= span; s += major) {
-    ruler.append(h('span', { style: `left:${s * N.pps}px` }, s >= 60 ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}` : `${+s.toFixed(2)}s`));
-  }
-  const inner = h('div', { class: 'tl-inner', style: `width:${HEAD_W + span * N.pps}px` },
-    h('div', { class: 'tl-row tl-ruler-row' },
-      h('div', { class: 'tl-head tl-corner' },
-        h('button', { type: 'button', class: 'tl-tog', title: 'Add a track', onclick: () => { addTrack(); changed(); } }, '+ Track')),
-      ruler));
-  for (const tr of N.tracks) {
-    inner.append(h('div', { class: 'tl-row audio snd-row' + (audible(tr) ? '' : ' off') },
-      trackHead(tr),
-      h('div', { class: 'tl-lane', 'data-track': tr.id }, N.items.filter((i) => i.track === tr.id).map(clipEl))));
-  }
-  inner.append(h('div', { class: 'tl-playhead' }));
-  const { scrollLeft, scrollTop } = tl;
-  tl.replaceChildren(inner);
-  tl.scrollLeft = scrollLeft; tl.scrollTop = scrollTop;
+  TL.render({
+    corner: [h('button', { type: 'button', class: 'tl-tog', title: 'Add a track', onclick: () => { addTrack(); changed(); } }, '+ Track')],
+    rows: N.tracks.map((tr) => ({ track: tr, cls: 'audio snd-row' + (audible(tr) ? '' : ' off'), head: trackHead(tr) })),
+    clipEl });
   drawWaves(); pruneEls(); updatePlayhead(); drawStage();
   $('#sndEmpty').classList.toggle('hidden', N.items.length > 0);
 }
@@ -309,74 +256,6 @@ function changed() { persist(); renderTimeline(); renderPanel(); syncMedia(); }
 export function renderSound() { renderTimeline(); renderPanel(); syncMedia(); ensureTabs(); }
 
 // ---- gestures ----
-const timeAt = (e) => (e.clientX - $('#sndTimeline .tl-inner').getBoundingClientRect().left - HEAD_W) / N.pps;
-function dragWindow(onMove, onUp) {
-  const up = (ev) => { removeEventListener('pointermove', onMove); removeEventListener('pointerup', up); removeEventListener('pointercancel', up); onUp && onUp(ev); };
-  addEventListener('pointermove', onMove); addEventListener('pointerup', up); addEventListener('pointercancel', up);
-}
-function startScrub(e) {
-  e.preventDefault();
-  sndPause();
-  const go = (ev) => {
-    let t = Math.max(0, timeAt(ev));
-    for (const p of [0, ...N.items.flatMap((i) => [i.at, itEnd(i)])]) if (Math.abs(p - t) < 6 / N.pps) t = p;
-    sndSeek(t);
-  };
-  go(e);
-  dragWindow(go);
-}
-function selectClip(it) {
-  if (N.sel === it.id) return;
-  N.sel = it.id;
-  $('#sndTimeline').querySelectorAll('.tl-clip.sel').forEach((c) => c.classList.toggle('sel', c.dataset.id === it.id));
-  renderPanel(); drawStage();
-}
-// Move (mode 'move') or trim ('l' / 'r') a clip by a drag, snapping to the playhead and the other clips' ends.
-// pps: the pixels per second of what is being dragged on; trackAt(ev): the track under the pointer (or null).
-function dragClip(e, it, mode, { pps, trackAt, onTap = null }) {
-  const x0 = e.clientX, y0 = e.clientY;
-  const o = { at: it.at, in: it.in, out: it.out ?? (it.dur || 3) };
-  const points = [0, N.t, ...N.items.filter((i) => i !== it).flatMap((i) => [i.at, itEnd(i)])];
-  const snap = (t) => {
-    let best = t, d = 8 / pps;
-    for (const p of points) if (Math.abs(p - t) < d) { d = Math.abs(p - t); best = p; }
-    return best;
-  };
-  let moved = false;
-  dragWindow((ev) => {
-    if (!moved && Math.abs(ev.clientX - x0) < 5 && Math.abs(ev.clientY - y0) < 5) return;
-    moved = true;
-    const dt = (ev.clientX - x0) / pps;
-    if (mode === 'move') {
-      const len = o.out - o.in, at = Math.max(0, o.at + dt);
-      const a1 = snap(at), a2 = snap(at + len) - len;
-      const d1 = a1 !== at ? Math.abs(a1 - at) : Infinity, d2 = a2 !== at ? Math.abs(a2 - at) : Infinity;
-      it.at = Math.max(0, d1 <= d2 && d1 < Infinity ? a1 : d2 < Infinity ? a2 : at);
-      const tr = trackAt(ev);
-      if (tr && N.tracks.some((t) => t.id === tr)) it.track = tr;
-    } else if (mode === 'l') {
-      let d = snap(o.at + dt) - o.at;
-      d = Math.max(d, -o.in, -o.at);
-      d = Math.min(d, o.out - o.in - MIN_LEN);
-      it.at = o.at + d; it.in = o.in + d;
-    } else {
-      let out = o.in + snap(o.at + (o.out - o.in) + dt) - o.at;
-      out = Math.max(o.in + MIN_LEN, it.dur ? Math.min(out, it.dur) : out);
-      it.out = out;
-    }
-    renderTimeline(); syncMedia();
-  }, (ev) => { if (moved) changed(); else onTap?.(ev); });
-}
-function startClipDrag(e, el) {
-  const it = N.items.find((i) => i.id === el.dataset.id);
-  if (!it) return;
-  e.preventDefault();
-  const mode = e.target.classList.contains('tl-trim') ? (e.target.classList.contains('l') ? 'l' : 'r') : 'move';
-  selectClip(it);
-  dragClip(e, it, mode, { pps: N.pps,
-    trackAt: (ev) => document.elementFromPoint(ev.clientX, ev.clientY)?.closest('#sndTimeline .tl-lane')?.dataset.track });
-}
-
 // The stage, as the timeline: a clip under the pointer and what a drag there does (null: empty space).
 // Near a clip's ends trims it; touch gets wider ends than a pen or mouse.
 function stageGeom() {
@@ -396,22 +275,7 @@ function stageHit(e) {
 }
 
 function wireTimeline() {
-  const tl = $('#sndTimeline');
-  tl.addEventListener('pointerdown', (e) => {
-    const clip = e.target.closest('.tl-clip');
-    if (clip) startClipDrag(e, clip);
-    else if (e.target.closest('.tl-ruler')) startScrub(e);
-  });
-  tl.addEventListener('click', (e) => {
-    if (!e.target.classList.contains('tl-lane')) return;
-    N.sel = null; sndPause(); sndSeek(Math.max(0, timeAt(e))); renderTimeline(); renderPanel();
-  });
-  tl.addEventListener('wheel', (e) => {
-    if (!e.ctrlKey && !e.metaKey) return;
-    e.preventDefault();
-    zoomTimeline(N.pps * (e.deltaY < 0 ? 1.15 : 1 / 1.15), timeAt(e), e.clientX);
-  }, { passive: false });
-  new ResizeObserver(() => renderTimeline()).observe(tl);
+  TL.wire();
   const cv = $('#sndCanvas');
   const seekAt = (ev) => { const g = stageGeom(); sndSeek(clamp((ev.clientX - g.r.left) / g.plotW, 0, 1) * stageSpan()); };
   cv.addEventListener('pointerdown', (e) => {
@@ -419,9 +283,9 @@ function wireTimeline() {
     const hit = stageHit(e);
     if (!hit) { sndPause(); seekAt(e); dragWindow(seekAt); return; }   // empty space: tap or drag to move the playhead
     // a clip: select it, then drag it in time and to another track row, or drag its ends to trim; a tap also puts the playhead there
-    selectClip(hit.it);
+    TL.select(hit.it);
     N.stageHold = stageSpan();
-    dragClip(e, hit.it, hit.mode, { pps: hit.g.pps,
+    TL.dragClip(e, hit.it, hit.mode, { pps: hit.g.pps,
       trackAt: (ev) => { const g = stageGeom(), row = Math.floor((ev.clientY - g.r.top) / g.rowH); return N.tracks[clamp(row, 0, N.tracks.length - 1)]?.id; },
       onTap: (ev) => { sndPause(); seekAt(ev); } });
     const release = () => { removeEventListener('pointerup', release); removeEventListener('pointercancel', release); N.stageHold = 0; drawStage(); };
@@ -434,70 +298,7 @@ function wireTimeline() {
   });
   new ResizeObserver(() => drawStage()).observe(cv);
 }
-function zoomTimeline(pps, aroundT = N.t, clientX = null) {
-  const tl = $('#sndTimeline');
-  const screenX = clientX != null ? clientX - tl.getBoundingClientRect().left : HEAD_W + N.t * N.pps - tl.scrollLeft;
-  N.pps = clamp(pps, 2, 600);
-  store.set('deck.sound.pps', N.pps); renderTimeline();
-  tl.scrollLeft = HEAD_W + aroundT * N.pps - screenX;
-}
-function fitTimeline() {
-  const tl = $('#sndTimeline');
-  zoomTimeline((tl.clientWidth - HEAD_W - 30) / Math.max(1, seqEnd()), 0, HEAD_W);
-  tl.scrollLeft = 0;
-}
-
-// ---- editing ----
-function splitAtPlayhead() {
-  const t = N.t;
-  const under = N.items.filter((it) => t > it.at + 0.02 && t < itEnd(it) - 0.02);
-  const targets = under.some((it) => it.id === N.sel) ? under.filter((it) => it.id === N.sel) : under;
-  if (!targets.length) return toast('Put the playhead over a clip to split it', true);
-  for (const a of targets) {
-    const b = { ...a, id: uid(), at: t, fadeIn: 0, in: a.in + (t - a.at) };
-    a.out = b.in; a.fadeOut = 0;
-    N.items.splice(N.items.indexOf(a) + 1, 0, b);
-  }
-  changed();
-}
-function deleteSelected() {
-  const it = selItem();
-  if (!it) return;
-  const before = N.items, tab = tabs?.active?.id;
-  N.items = N.items.filter((i) => i !== it);
-  N.sel = null;
-  changed();
-  undoToast('Clip deleted', () => {
-    if (tabs?.active?.id !== tab) return toast('Switch back to that tab to undo', true);
-    N.items = before; N.sel = it.id; changed();
-  });
-}
-function crossfadePrev(it, d = 0.5) {
-  const prev = N.items.filter((i) => i !== it && i.track === it.track && i.at < it.at).sort((a, b) => itEnd(b) - itEnd(a))[0];
-  if (!prev) return toast('There is no clip before this one on its track', true);
-  d = Math.min(d, itLen(prev) / 2, itLen(it) / 2);
-  const shift = it.at - (itEnd(prev) - d);
-  for (const i of N.items) if (i.track === it.track && i.at >= it.at) i.at = Math.max(0, i.at - shift);
-  changed();
-}
-function duplicateSel() {
-  const it = selItem();
-  if (!it) return;
-  const b = { ...it, id: uid(), at: itEnd(it) };
-  N.items.push(b); N.sel = b.id; changed();
-}
-
-// a sound's length (s) from its metadata, so a new clip lands at its real size; 0 if it can't tell in time
-function durationOf(url) {
-  return new Promise((resolve) => {
-    const el = Object.assign(document.createElement('audio'), { preload: 'metadata', src: url });
-    const done = (d) => { clearTimeout(timer); el.removeAttribute('src'); resolve(isFinite(d) && d > 0 ? d : 0); };
-    const timer = setTimeout(() => done(0), 8000);
-    el.addEventListener('loadedmetadata', () => done(el.duration), { once: true });
-    el.addEventListener('error', () => done(0), { once: true });
-  });
-}
-
+// ---- adding ----
 // A sound source picked anywhere goes after the last clip on the selected clip's track (or A1), at the playhead when it's past that
 async function addSource(src) {
   const s = await soundSource(src);
@@ -505,8 +306,7 @@ async function addSource(src) {
   const sel = selItem(), track = sel?.track || N.tracks[0]?.id || addTrack();
   const it = newItem({ kind: s.kind === 'video' ? 'video' : 'audio', src: src.generation != null ? { generation: src.generation, index: src.index } : { media: src.media },
     url: s.url, label: s.label, dur: await durationOf(s.url) }, track);
-  const last = N.items.filter((i) => i.track === track).reduce((m, i) => Math.max(m, itEnd(i)), 0);
-  it.at = Math.max(last, sel ? 0 : N.t);
+  it.at = Math.max(TL.trackEnd(track), sel ? 0 : N.t);
   if (src.trim) { it.in = src.trim.start || 0; if (src.trim.len) it.out = it.in + src.trim.len; }
   N.items.push(it); N.sel = it.id;
   changed();
@@ -808,9 +608,9 @@ function renderPanel() {
     num('Fade out (s)', () => it.fadeOut || 0, (v) => { it.fadeOut = v; }, { min: 0, max: Math.max(0.1, Math.min(10, itLen(it))), step: 0.05, digits: 2 }),
     h('p', { class: 'hint' }, `At ${tc(it.at)} · ${itLen(it).toFixed(2)} s, from ${tc(it.in)} of the source`),
     h('div', { class: 'row wrap' },
-      button('✂ Split', splitAtPlayhead), button('⧉ Duplicate', duplicateSel),
-      button('⤫ Cross-fade', () => crossfadePrev(it), { title: 'Overlap with the clip before it on its track' }),
-      button('🗑 Delete', deleteSelected, { cls: 'small danger' })),
+      button('✂ Split', TL.split), button('⧉ Duplicate', TL.duplicate),
+      button('⤫ Cross-fade', () => TL.crossfadePrev(it), { title: 'Overlap with the clip before it on its track' }),
+      button('🗑 Delete', TL.deleteSelected, { cls: 'small danger' })),
     h('div', { class: 'row wrap' },
       button('💾 Save its sound', async () => {
         try {
@@ -880,19 +680,19 @@ export function wireSound() {
   $('#sndBack').addEventListener('click', () => sndSeek(N.t - 5));
   $('#sndFwd').addEventListener('click', () => sndSeek(N.t + 5));
   $('#sndPlay').addEventListener('click', () => (N.playing ? sndPause() : sndPlay()));
-  $('#sndSplit').addEventListener('click', splitAtPlayhead);
-  $('#sndDel').addEventListener('click', deleteSelected);
+  $('#sndSplit').addEventListener('click', TL.split);
+  $('#sndDel').addEventListener('click', TL.deleteSelected);
   const loopBtn = $('#sndLoop');
   const showLoop = () => { loopBtn.classList.toggle('on', N.loop); loopBtn.setAttribute('aria-pressed', String(N.loop)); };
   loopBtn.addEventListener('click', () => { N.loop = !N.loop; store.set('deck.sound.loop', N.loop); showLoop(); });
   showLoop();
   $('#sndTools').replaceChildren(
-    button('✂ Split', splitAtPlayhead, { title: 'Split at playhead (S)' }),
-    button('🗑 Delete', deleteSelected, { title: 'Delete selected clip (Del)' }),
+    button('✂ Split', TL.split, { title: 'Split at playhead (S)' }),
+    button('🗑 Delete', TL.deleteSelected, { title: 'Delete selected clip (Del)' }),
     h('span', { class: 'tl-tip' }, info('Drag clips to move · drag ends to trim · overlap to cross-fade · S solos a track')),
-    iconBtn('Zoom out', '−', () => zoomTimeline(N.pps / 1.5)),
-    button('Fit', fitTimeline),
-    iconBtn('Zoom in', '+', () => zoomTimeline(N.pps * 1.5)));
+    iconBtn('Zoom out', '−', () => TL.zoom(N.pps / 1.5)),
+    button('Fit', TL.fit),
+    iconBtn('Zoom in', '+', () => TL.zoom(N.pps * 1.5)));
   wireTimeline();
   showPlayState();
   onServer('deck_generation', ({ data }) => { if (N.gens.includes(data?.id) && $('#tab-sound').classList.contains('active')) setTimeout(renderPanel, 0); });
@@ -904,9 +704,9 @@ export function wireSound() {
       ArrowRight: () => sndSeek(N.t + (e.shiftKey ? 1 : 0.1)),
       Home: () => { sndPause(); sndSeek(0); },
       End: () => { sndPause(); sndSeek(seqEnd()); },
-      s: splitAtPlayhead, c: splitAtPlayhead, d: duplicateSel,
-      Delete: deleteSelected, Backspace: deleteSelected,
-      '=': () => zoomTimeline(N.pps * 1.5), '+': () => zoomTimeline(N.pps * 1.5), '-': () => zoomTimeline(N.pps / 1.5),
+      s: TL.split, c: TL.split, d: TL.duplicate,
+      Delete: TL.deleteSelected, Backspace: TL.deleteSelected,
+      '=': () => TL.zoom(N.pps * 1.5), '+': () => TL.zoom(N.pps * 1.5), '-': () => TL.zoom(N.pps / 1.5),
     };
     const fn = keys[e.key];
     if (fn) { e.preventDefault(); fn(); }
