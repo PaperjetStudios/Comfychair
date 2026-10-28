@@ -7,9 +7,9 @@ import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, regi
 import { openGeneration } from './run.js';
 import { useInGenerate } from './editor.js';
 import { TabSet } from './tabs.js';
-import { clipSoundFields, durationOf, timeline, wavePeaks } from './timeline.js';
+import { clipKeys, clipSoundFields, durationOf, timeline, wavePeaks } from './timeline.js';
 import { fmtTime, playKeys, transport } from './playback.js';
-import { keyTimes, keyedRange, refreshKeyed, setValue, value } from './keyed.js';
+import { refreshKeyed } from './keyed.js';
 import * as COMP from './scene-comp.js';
 import { fullScreen } from './layout.js';
 import { canTrack, openTrack } from './track.js';
@@ -86,12 +86,11 @@ const isVisual = (it) => it.kind === 'video' || it.kind === 'image' || it.kind =
 const fpsNow = () => V.fps || 24;
 const tc = (t) => fmtTime(t, fpsNow());   // m:ss:ff
 
-// ---- animated properties (keyed.js, After Effects style): a clip's keys are in its own source time ----
+// ---- animated properties (timeline.js clipKeys): a clip's keys are in its own source time, on the sequence's frames ----
 const PROPS = { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, volume: 1 };   // what an unset property is
-// the clip's own time at timeline time t, on a frame of the sequence
-const clipT = (it, t = V.t) => { const f = fpsNow(); return Math.round((it.in + clamp(t - it.at, 0, itLen(it))) * f) / f; };
-const prop = (it, ch, t = V.t) => value(it, ch, clipT(it, t), it[ch] ?? PROPS[ch]);
-const setProp = (it, ch, v) => setValue(it, ch, clipT(it), v, (x) => { it[ch] = x; });
+const K = clipKeys(TL, V, { fps: fpsNow, base: PROPS, pause: () => vidPause(), seek: (t) => vidSeek(t), onKeys: () => timelineChanged(),
+  live: { onInput: () => { renderTimeline(); syncMedia(); requestDraw(); }, onChange: () => persistTimeline() } });
+const { prop, setProp } = K;
 
 // ---- playback: one media element per clip, kept in step with the timeline clock ----
 // Preloading: each video/sound on the timeline is downloaded whole into memory (a blob: URL), so
@@ -665,8 +664,7 @@ function clipEl(it) {
     h('span', { class: 'tl-label' }, (gone ? '⚠ ' : '') + it.label),
     fi ? h('span', { class: 'tl-fade in', style: `width:${fi * V.pps}px` }) : null,
     it.fadeOut ? h('span', { class: 'tl-fade out', style: `width:${it.fadeOut * V.pps}px` }) : null,
-    keyTimes(it).filter((f) => f >= it.in - 1e-3 && f <= it.in + itLen(it) + 1e-3)   // its keys, After Effects style
-      .map((f) => h('span', { class: 'tl-key', style: `left:${(f - it.in) * V.pps}px`, title: `Key at ${tc(it.at + f - it.in)}` })),
+    K.diamonds(it, V.pps, tc),   // its keys, After Effects style
     h('span', { class: 'tl-trim l' }), h('span', { class: 'tl-trim r' }));
 }
 
@@ -814,10 +812,8 @@ const timeBox = (label, get, set, { step = 0.04, min = 0, max = 600 } = {}) =>
 
 const clipLive = { onInput: () => { renderTimeline(); syncMedia(); requestDraw(); }, onChange: persistTimeline };
 const clipRange = (label, get, set, opts) => rangeField(label, get, set, { ...opts, ...clipLive });
-// an animatable clip property (keyed.js): ◀ ◆ ▶ beside its slider; the playhead moves to a key in the clip's time
-const clipKeyed = (it, label, ch, opts) => keyedRange(label, { item: it, ch, t: () => clipT(it), base: () => it[ch] ?? PROPS[ch],
-  setBase: (v) => { it[ch] = v; }, seek: (ct) => { vidPause(); vidSeek(it.at + ct - it.in); }, onKeys: () => { timelineChanged(); },
-  ...clipLive, ...opts });
+// an animatable clip property: ◀ ◆ ▶ beside its slider; the playhead moves to a key in the clip's time
+const clipKeyed = (it, label, ch, opts) => K.field(it, label, ch, opts);
 
 const SIZES = [['Match first clip', null], ['1280×720', [1280, 720]], ['1920×1080', [1920, 1080]], ['720×1280', [720, 1280]],
   ['1080×1920', [1080, 1920]], ['1024×1024', [1024, 1024]], ['832×480', [832, 480]], ['480×832', [480, 832]]];

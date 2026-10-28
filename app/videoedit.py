@@ -198,7 +198,11 @@ def mix_filters(items: list[dict], inputs: dict, total: float) -> list[str]:
         level = f"volume='{keyexpr.expr(kv, src, it.get('ease') or 'smooth')}':eval=frame" if kv else f"volume={vol:.3f}"
         chain = ["asetpts=PTS-STARTPTS", "aresample=48000", "aformat=channel_layouts=stereo", level]
         pan = max(-1.0, min(1.0, float(it.get("pan") or 0)))
-        if abs(pan) > 0.005:   # balance: turn the far side down
+        kp = keyexpr.keyed(it, "pan")
+        if kp:   # keyed balance: the same, per sample
+            p = keyexpr.expr(kp, src, it.get("ease") or "smooth")
+            chain.append(f"aeval='val(0)*min(1\\,1-({p}))|val(1)*min(1\\,1+({p}))':c=same")
+        elif abs(pan) > 0.005:   # balance: turn the far side down
             chain.append(f"pan=stereo|c0={min(1.0, 1 - pan):.3f}*c0|c1={min(1.0, 1 + pan):.3f}*c1")
         fi = max(float(it.get("fade_in") or 0), it["xin"])
         fo = max(float(it.get("fade_out") or 0), it["xout"])

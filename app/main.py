@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import accel, audioedit, clipimport, craft, delogo, h3upscale, posefind, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import projects, store
-from . import sceneasset
+from . import keyexpr, sceneasset
 from . import templates as tpl
 from .comfy import Comfy, ComfyError
 
@@ -1266,10 +1266,11 @@ async def sound_render(body: dict = Body(...)):
         path, kind = await _timeline_path(it.get("src") or {}, None)
         if kind not in ("video", "audio"):
             raise HTTPException(400, f"{path.name} has no sound")
-        tvol = float(tr.get("volume", 1) if tr.get("volume") is not None else 1)
+        tvol, tpan = float(tr.get("volume", 1) if tr.get("volume") is not None else 1), float(tr.get("pan") or 0)
         items.append({**{k: it.get(k) for k in ("at", "in", "out", "fade_in", "fade_out")},
                       "volume": float(it.get("volume", 1) if it.get("volume") is not None else 1) * tvol,
-                      "pan": max(-1.0, min(1.0, float(it.get("pan") or 0) + float(tr.get("pan") or 0))),
+                      "pan": max(-1.0, min(1.0, float(it.get("pan") or 0) + tpan)),
+                      "chans": keyexpr.with_track(it.get("chans"), tvol, tpan),   # keyed level / pan (keyexpr.py)
                       "path": str(path), "kind": kind, "track": tr["id"],
                       "muted": bool(tr.get("muted")) or bool(solo) and tr["id"] not in solo})
     if not items:

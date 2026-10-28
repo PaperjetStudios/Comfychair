@@ -8,7 +8,8 @@ import { ROLES, queueRun, template, valuesByRole } from './make.js';
 import { bareSource, extractSound, openSoundPicker, outputCard, soundInput, soundSource, uploadMedia } from './media.js';
 import { waitJob } from './clipimport.js';
 import { TabSet } from './tabs.js';
-import { clipSoundFields, dragWindow, durationOf, timeline, wavePeaks } from './timeline.js';
+import { clipKeys, clipSoundFields, dragWindow, durationOf, timeline, wavePeaks } from './timeline.js';
+import { refreshKeyed } from './keyed.js';
 import { fmtTime, playKeys, transport } from './playback.js';
 import { resultActions } from './useas.js';
 import { fullScreen } from './layout.js';
@@ -41,10 +42,13 @@ const ensureTabs = () => tabsReady || (tabsReady = tabs ? tabs.start() : Promise
 const persist = () => tabs?.changed();
 
 const TL = timeline(N, { el: '#sndTimeline', headW: HEAD_W, minLen: MIN_LEN, zoom: [2, 600], ppsKey: 'deck.sound.pps',
-  pause: () => sndPause(), seek: (t) => sndSeek(t), showTime: () => stp?.update(),
+  pause: () => sndPause(), seek: (t) => sndSeek(t), showTime: () => { stp?.update(); refreshKeyed($('#soundPanel')); },
   changed: () => changed(), dragged: () => { renderTimeline(); syncMedia(); }, rendered: () => renderTimeline(),
   selected: () => { renderPanel(); drawStage(); }, deselected: () => { renderTimeline(); renderPanel(); }, tabs: () => tabs });
 const { len: itLen, end: itEnd, seqEnd, selItem, xfades, fadeGain, updatePlayhead } = TL;
+// a clip's level and pan can be keyed (timeline.js clipKeys, as in the Video tab), on 1/100 s steps
+const K = clipKeys(TL, N, { fps: () => 100, base: { volume: 1, pan: 0 }, pause: () => sndPause(), seek: (t) => sndSeek(t),
+  onKeys: () => changed(), live: { onInput: () => { syncMedia(); drawStage(); }, onChange: () => changed() } });
 const trackOf = (it) => N.tracks.find((t) => t.id === it.track);
 const trackName = (t) => t.name || `A${N.tracks.indexOf(t) + 1}`;
 const soloed = () => N.tracks.some((t) => t.solo);
@@ -106,9 +110,9 @@ function syncMedia() {
       continue;
     }
     const want = it.in + N.t - it.at;
-    const level = audible(tr) ? (it.volume ?? 1) * (tr.volume ?? 1) * fadeGain(it, N.t) : 0;
+    const level = audible(tr) ? K.prop(it, 'volume') * (tr.volume ?? 1) * fadeGain(it, N.t) : 0;
     if (e.gain) { e.gain.gain.value = level; el.volume = 1; } else el.volume = clamp(level, 0, 1);
-    if (e.pan) e.pan.pan.value = clamp((it.pan || 0) + (tr?.pan || 0), -1, 1);
+    if (e.pan) e.pan.pan.value = clamp(K.prop(it, 'pan') + (tr?.pan || 0), -1, 1);
     if (N.playing) {
       if (el.paused) { el.currentTime = want; el.play().catch(() => {}); }
       else if (Math.abs(el.currentTime - want) > 0.25) el.currentTime = want;
@@ -228,6 +232,7 @@ function clipEl(it) {
     h('span', { class: 'tl-label' }, `${it.kind === 'video' ? '🎞 ' : ''}${it.label}${(it.volume ?? 1) !== 1 ? ` · ${Math.round(it.volume * 100)}%` : ''}`),
     fi ? h('span', { class: 'tl-fade in', style: `width:${fi * N.pps}px` }) : null,
     it.fadeOut ? h('span', { class: 'tl-fade out', style: `width:${it.fadeOut * N.pps}px` }) : null,
+    K.diamonds(it, N.pps, tc),
     h('span', { class: 'tl-trim l' }), h('span', { class: 'tl-trim r' }));
 }
 
@@ -585,7 +590,7 @@ function renderPanel() {
     hint('A clip\'s sound plays straight from the clip. To keep it as a file of its own, select it and Save its sound.'));
 
   const clip = it ? section(`Clip · ${it.label}`, () => { N.sel = null; renderTimeline(); renderPanel(); },
-    clipSoundFields(it, itLen(it), { pan: true, ...live }),
+    clipSoundFields(it, itLen(it), { pan: true, ...live, keyed: (label, ch, o) => K.field(it, label, ch, o) }),
     h('p', { class: 'hint' }, `At ${tc(it.at)} · ${itLen(it).toFixed(2)} s, from ${tc(it.in)} of the source`),
     h('div', { class: 'row wrap' },
       button('✂ Split', TL.split), button('⧉ Duplicate', TL.duplicate),
@@ -629,7 +634,7 @@ async function exportSound() {
     const m = await api('/api/sound/render', { method: 'POST', timeout: 900000, busy: 'Mixing the sound…', body: {
       tracks: N.tracks, name: N.out.name || tabs?.active?.name || 'mix', format: N.out.format, gain: N.out.gain, normalize: N.out.normalize,
       items: N.items.map((it) => ({ track: it.track, src: it.src, at: it.at, in: it.in, out: it.out ?? it.dur ?? null,
-        volume: it.volume ?? 1, pan: it.pan || 0, fade_in: it.fadeIn || 0, fade_out: it.fadeOut || 0 })) } });
+        volume: it.volume ?? 1, pan: it.pan || 0, chans: it.chans || null, fade_in: it.fadeIn || 0, fade_out: it.fadeOut || 0 })) } });
     N.exports.push(m);
     toast(`Saved ${m.label} (${m.duration} s) to the media library`);
     renderPanel();
