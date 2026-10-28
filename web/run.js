@@ -3,7 +3,7 @@ import {
   mediaCard, seg,
 } from './ui.js';
 import { S, fmtT, isMine, loadProjects, switchTab, emitServer } from './core.js';
-import { genLabel, mediaEl, openImagePicker, uploadImage } from './media.js';
+import { genLabel, mediaEl, openImagePicker, outputCard, uploadImage } from './media.js';
 import { addToPrompt, builderState, keepAwake, loadTemplates, renderFields, saveBuilder, selectTemplate, setVal, stop } from './generate.js';
 import { B, GAL, boardChanged, galleryRefresh } from './board.js';
 import { openTrack } from './track.js';
@@ -508,14 +508,7 @@ function removeCard(id) {
   if (el) el.remove();
 }
 
-function cardEl(g) {
-  const o = g.outputs[0];
-  return mediaCard([o ? mediaEl(o, { thumb: true }) : h('span', { class: 'hint' }, g.status),
-    g.outputs.length > 1 ? h('span', { class: 'play count' }, `${g.outputs.length}`) : null], null, () => openGeneration(g.id), {
-    badge: o && o.kind === 'video' ? '▶ video' : null, attrs: { 'data-gen': g.id },
-    meta: [h('span', { class: 'name' }, genLabel(g)),
-      h('span', { class: `badge ${g.status}` }, g.status === 'done' && runTime(g) != null ? fmtDur(runTime(g)) : g.status)] });
-}
+const cardEl = (g) => outputCard(g, { onPick: () => openGeneration(g.id) });
 
 export function openGeneration(id) {
   const g = S.history.get(id);
@@ -654,7 +647,7 @@ async function runAgain(g) {
 // ---------------------------------------------------------------------------
 // queue: what's running and waiting, how long things take, ETA from recent runs of the same template
 // ---------------------------------------------------------------------------
-const runTime = (g) => (g.finished ? g.finished - (g.started || g.created) : null);
+export const runTime = (g) => (g.finished ? g.finished - (g.started || g.created) : null);
 export function fmtDur(sec) {
   if (sec == null || !isFinite(sec)) return '–';
   sec = Math.max(0, Math.round(sec));

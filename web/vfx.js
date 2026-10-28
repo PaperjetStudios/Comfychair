@@ -1,12 +1,13 @@
 import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle, textArea, pctFmt, colorField, seedField, sizeSelect, imageInput, store } from './ui.js';
 import { S, inputUrl, thumbUrl, onServer, switchTab } from './core.js';
-import { bareSource, cardMedia, clipLabel, clipUrl, genLabel, openImagePicker, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
+import { bareSource, cardMedia, outputCard, clipLabel, clipUrl, genLabel, openImagePicker, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
 import { hooks as genHooks } from './generate.js';
 import { adoptGenerations, queueRun, roleField, runAndWait, template, valuesByRole, waitGen } from './make.js';
 import { openGeneration } from './run.js';
 import { addToEditor, useInGenerate } from './editor.js';
 import { addToTimeline } from './video.js';
 import { clipInput } from './vfield.js';
+import { resultActions } from './useas.js';
 import { playKeys, transport } from './playback.js';
 import { TabSet } from './tabs.js';
 import { maximizable } from './layout.js';
@@ -456,29 +457,22 @@ const lenFrames = (secs) => Math.max(1, Math.round((secs * FPS) / 8)) * 8 + 1;
 function resultsSection() {
   const gens = T.results.map((id) => S.history.get(id)).filter(Boolean);
   if (!gens.length) return section('Output', null, hint('Results of this tab show here.'));
-  return section('Output', null, h('div', { class: 'grid gallery vfx-results' }, gens.slice().reverse().map((g) => {
-    const o = g.outputs.find((x) => x.kind === 'video') || g.outputs[0];
-    const on = T.showing === g.id;
-    const card = g.status === 'done' && o
-      ? mediaCard(cardMedia(o), genLabel(g), () => { T.showing = on ? null : g.id; changed(); }, { badge: '▶', attrs: { class: `card${on ? ' picked' : ''}` } })
-      : h('div', { class: 'card' }, h('div', { class: 'media' }, placeholder(g.status === 'error' ? `Failed: ${g.error || ''}` : 'Running…')),
-        h('div', { class: 'meta' }, genLabel(g)));
-    return card;
-  })), T.showing ? resultActions(S.history.get(T.showing)) : null);
+  return section('Output', null, h('div', { class: 'grid gallery vfx-results' }, gens.slice().reverse().map((g) =>
+    outputCard(g, { kind: 'video', picked: T.showing === g.id, onPick: () => { T.showing = T.showing === g.id ? null : g.id; changed(); } }))),
+  T.showing ? takeActions(S.history.get(T.showing)) : null);
 }
 
-function resultActions(g) {
+function takeActions(g) {
   if (!g || g.status !== 'done') return null;
   const i = Math.max(0, g.outputs.findIndex((x) => x.kind === 'video'));
   const o = g.outputs[i];
   const src = { generation: g.id, index: i };
-  return h('div', { class: 'row wrap' },
-    button('Add to timeline', async () => { await addToTimeline({ kind: 'video', src, url: o.url, label: genLabel(g), dur: o.duration || 0 }); toast('Added to the Video timeline'); }, { cls: 'primary' }),
+  return resultActions(g, { kind: 'video', first: [
+    button('Add to the timeline', async () => { await addToTimeline({ kind: 'video', src, url: o.url, label: genLabel(g), dur: o.duration || 0 }); toast('Added to the Video timeline'); }, { cls: 'small primary' }),
     button('Use as source', () => { T.source = src; UI.srcInfo = null; T.showing = null; changed(); }),
-    button('Use as matte / mask', () => { T.matte = src; T.op = T.op === 'alpha' || T.op === 'mask' ? (T.op === 'alpha' ? 'mattekey' : 'cleanplate') : T.op; changed(); }),
-    button('Details', () => openGeneration(g.id)),
-    button('Open in EffectCraft', (ev) => craftVfx(ev.currentTarget), { title: 'The source, matte and every take as layers, to keep working on the computer' }),
-    compareSelect(g));
+    button('Use as matte / mask', () => { T.matte = src; T.op = T.op === 'alpha' || T.op === 'mask' ? (T.op === 'alpha' ? 'mattekey' : 'cleanplate') : T.op; changed(); })],
+  more: [button('Open in EffectCraft', (ev) => craftVfx(ev.currentTarget), { title: 'The source, matte and every take as layers, to keep working on the computer' }),
+    compareSelect(g)] });
 }
 
 // The tab as an EffectCraft comp: the source over its trim, the matte, and each finished take (the one on show switched on)

@@ -521,7 +521,7 @@ details.desc[open] summary { margin-bottom: 6px; }
 .tl-tog.solo { background: var(--accent); color: var(--accent-ink); }
 .snd-exports { display: grid; gap: 8px; }
 .snd-export { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
-.snd-export audio, .sound-input audio { width: 100%; }
+.snd-export audio, .sound-input audio, .take-player { width: 100%; }
 .sound-input { display: grid; gap: 6px; }
 .sound-cut { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
 .sound-cut label { display: grid; gap: 4px; font-size: var(--fs-sm); color: var(--muted); flex: 1; min-width: 90px; }

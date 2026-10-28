@@ -5,11 +5,12 @@ import {
 import { DELIVERY, INLINE_TAGS, parseScript, withDelivery, withName } from './dialogue.js';
 import { S, onServer } from './core.js';
 import { ROLES, queueRun, template, valuesByRole } from './make.js';
-import { bareSource, extractSound, openSoundPicker, soundInput, soundSource, uploadMedia } from './media.js';
+import { bareSource, extractSound, openSoundPicker, outputCard, soundInput, soundSource, uploadMedia } from './media.js';
 import { waitJob } from './clipimport.js';
 import { TabSet } from './tabs.js';
 import { clipSoundFields, dragWindow, durationOf, timeline, wavePeaks } from './timeline.js';
 import { fmtTime, playKeys, transport } from './playback.js';
+import { resultActions } from './useas.js';
 
 // ---------------------------------------------------------------------------
 // sound: a multi-track sound editor laid out like the Video tab. Tracks mix (mute, solo, level, pan),
@@ -324,7 +325,7 @@ const MAKERS = [
     placeholder: 'Style tags, e.g. lo-fi hip hop, warm piano, vinyl crackle, 80 bpm', lyrics: true,
     help: 'Songs or instrumentals from style tags (ACE-Step 1.5). Add lyrics with [verse] / [chorus] lines, or leave them empty for an instrumental.' },
 ];
-const G = { op: store.get('deck.sound.maker', 'sfx'), prompt: '', lyrics: '', len: null, seed: -1, bpm: 90, key: null };
+const G = { op: store.get('deck.sound.maker', 'sfx'), prompt: '', lyrics: '', len: null, seed: -1, bpm: 90, key: null, showing: null };   // showing: the take picked
 // the makers' fields by role: make.js ROLES, with a music template's tags, lyrics, BPM and key
 const ROLE = {
   prompt: (f) => f.kind === 'text' && (/prompt|tags/i.test(f.group) || f.input === 'tags') && !/negative|lyrics/i.test(f.group) && f.input !== 'lyrics',
@@ -355,13 +356,14 @@ function makerSection() {
   const keyF = t?.fields.find(ROLE.key);
   const key = mk.lyrics && keyF ? h('select', {}, keyF.options.map((o) => h('option', { value: o, selected: o === (G.key || keyF.value) }, o))) : null;
   key?.addEventListener('change', () => { G.key = key.value; });
-  const results = N.gens.slice(-6).reverse().map((id) => S.history.get(id)).filter(Boolean).map((g) => {
-    const i = g.outputs.findIndex((o) => o.kind === 'audio'), o = g.outputs[i];
-    return h('div', { class: 'snd-export' },
-      h('b', {}, `#${g.id} ${g.status === 'done' ? '' : g.status}`), g.status === 'error' ? note(g.error || 'failed', 'err') : null,
-      o ? h('audio', { src: o.url, controls: true, preload: 'none' }) : null,
-      o ? h('div', { class: 'row wrap' }, button('Add to the mix', () => addSource({ generation: g.id, index: i }), { cls: 'small primary' })) : null);
-  });
+  // its takes, as the VFX tab shows them: tap one to hear it and act on it
+  const gens = N.gens.slice(-6).reverse().map((id) => S.history.get(id)).filter(Boolean);
+  const picked = gens.find((g) => g.id === G.showing && g.status === 'done');
+  const pi = picked ? Math.max(0, picked.outputs.findIndex((o) => o.kind === 'audio')) : 0;
+  const results = gens.length ? [h('div', { class: 'grid gallery' }, gens.map((g) =>
+    outputCard(g, { kind: 'audio', picked: g.id === G.showing, onPick: () => { G.showing = G.showing === g.id ? null : g.id; renderPanel(); } }))),
+  picked ? h('audio', { src: picked.outputs[pi].url, controls: true, autoplay: true, class: 'take-player' }) : null,
+  picked ? resultActions(picked, { kind: 'audio', first: [button('Add to the mix', () => addSource({ generation: picked.id, index: pi }), { cls: 'small primary' })] }) : null] : [];
   return section('Make a sound', null,
     seg(MAKERS.map((m) => [m.id, m.label]), G.op, (v) => { G.op = v; G.len = null; store.set('deck.sound.maker', v); renderPanel(); }),
     help(mk.help),
@@ -371,7 +373,7 @@ function makerSection() {
     mk.lyrics ? rangeField('BPM', () => G.bpm, (v) => { G.bpm = Math.round(v); }, { min: 40, max: 220, step: 1, digits: 0, fmt: (v) => `${Math.round(v)}` }) : null,
     key ? field('Key', key) : null,
     h('div', { class: 'row wrap' }, button('✦ Make it', makeSound, { cls: 'primary', disabled: !t })),
-    results.length ? h('div', { class: 'snd-exports' }, results) : null);
+    results);
 }
 
 // ---- voice tools (app/voice.py): clean a voice out of a mix, keep voices, speak new lines in them ----

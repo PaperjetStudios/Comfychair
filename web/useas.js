@@ -1,4 +1,4 @@
-import { h, api, toast, openSheet, closeSheet, button, section } from './ui.js';
+import { h, api, toast, openSheet, closeSheet, button, section, linkBtn } from './ui.js';
 import { S, inputUrl, switchTab } from './core.js';
 import { genLabel } from './media.js';
 import { renderFields, setVal } from './generate.js';
@@ -7,6 +7,17 @@ import { renderFields, setVal } from './generate.js';
 // "Use as…" (Board gallery, History details): every place a finished output can go, grouped by tab, only the
 // ones that take its kind. Picking one sets it there and opens that tab.
 // ---------------------------------------------------------------------------
+
+// The buttons under a picked take, the same in every tab: the tab's own first (first), then Use as…, Details and
+// Download, then more. i: the output (default: the first of kind, or the first).
+export function resultActions(g, { kind = null, first = [], more = [] } = {}) {
+  if (!g || g.status !== 'done') return null;
+  const i = kind ? Math.max(0, g.outputs.findIndex((x) => x.kind === kind)) : 0, o = g.outputs[i];
+  return h('div', { class: 'row wrap result-actions' }, ...first,
+    button('Use as…', () => openUseAs(g, i), { title: 'Send it to Generate, VFX, Video, Sound, the Editor or 3D' }),
+    button('Details', async () => (await import('./run.js')).openGeneration(g.id)),
+    o ? linkBtn('Download', o.url, { download: o.filename }) : null, ...more);
+}
 
 // before: runs first when a place is picked (the gallery closes itself)
 export function openUseAs(g, index, { before = null } = {}) {

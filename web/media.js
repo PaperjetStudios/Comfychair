@@ -3,7 +3,7 @@ import {
 } from './ui.js';
 import { fmtTime } from './playback.js';
 import { S, PICKER_SOURCES as SOURCES, previewUrl, switchTab, thumbUrl } from './core.js';
-import { loadHistory } from './run.js';
+import { fmtDur, loadHistory, runTime } from './run.js';
 
 // This project's finished outputs of the given kinds, newest first: [{ g, o, i, t }]
 export async function projectOutputs(kinds) {
@@ -19,6 +19,19 @@ export async function projectOutputs(kinds) {
 export const genLabel = (g) => `#${g.id} ${g.template === 'import' && g.params?.label ? g.params.label : g.template}`;
 // a card's picture: a thumbnail, or a note for sound
 export const cardMedia = (o) => (o.kind === 'audio' ? h('span', { class: 'placeholder' }, '♪') : mediaEl(o, { thumb: true }));
+
+// A run as a card, the same in History, the VFX tab's takes and the Sound tab's makers: its output (kind: the one to
+// show when it made several), ▶ on a clip, how many it made, and its state (waiting, running, failed, or how long it
+// took). onPick(g) on a tap; picked: drawn as the one on show.
+export function outputCard(g, { kind = null, onPick, picked = false } = {}) {
+  const i = kind ? Math.max(0, g.outputs.findIndex((x) => x.kind === kind)) : 0, o = g.status === 'done' ? g.outputs[i] : null;
+  const took = g.status === 'done' ? runTime(g) : null;
+  const media = o ? cardMedia(o)
+    : placeholder(g.status === 'error' ? `Failed: ${g.error || ''}` : g.status === 'queued' ? 'Waiting…' : g.status === 'interrupted' ? 'Stopped' : 'Running…');
+  return mediaCard([media, g.outputs.length > 1 ? h('span', { class: 'play count' }, `${g.outputs.length}`) : null], null, () => onPick?.(g), {
+    badge: o?.kind === 'video' ? '▶' : null, attrs: { 'data-gen': g.id, class: `card${picked ? ' picked' : ''}` },
+    meta: [h('span', { class: 'name' }, genLabel(g)), h('span', { class: `badge ${g.status}` }, took != null ? fmtDur(took) : g.status)] });
+}
 
 // A sheet of cards to pick from: bar holds its buttons, load() returns the cards (or a message)
 export function pickerSheet(title, bar, load) {
