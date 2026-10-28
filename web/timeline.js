@@ -48,12 +48,14 @@ export async function wavePeaks(url, rate, { normalize = false } = {}) {
 }
 
 // A clip's level, pan and fades, the same sliders in the Video and Sound tabs. onInput: while dragging (a live
-// preview); onChange: once it's let go or typed. levelNote(v): more after the level's value.
-export function clipSoundFields(it, len, { onInput, onChange, level = true, pan = false, levelNote = () => '' }) {
-  const r = (label, get, set, o) => rangeField(label, get, set, { digits: 2, ...o, onInput, onChange });
+// preview); onChange: once it's let go or typed. levelNote(v): more after the level's value. keyed(label, ch, opts):
+// the tab's animatable slider (keyed.js) for the level, when its clips can be animated.
+export function clipSoundFields(it, len, { onInput, onChange, level = true, pan = false, levelNote = () => '', keyed = null }) {
+  const r = (label, get, set, o, ch = null) => (keyed && ch ? keyed(label, ch, { digits: 2, ...o })
+    : rangeField(label, get, set, { digits: 2, ...o, onInput, onChange }));
   const fadeMax = Math.max(0.1, Math.min(10, len)), secs = (v) => `${v.toFixed(2)} s`;
   return [
-    level ? r('Level', () => it.volume ?? 1, (v) => { it.volume = v; }, { min: 0, max: 2, step: 0.01, fmt: (v) => pctFmt(v) + levelNote(v) }) : null,
+    level ? r('Level', () => it.volume ?? 1, (v) => { it.volume = v; }, { min: 0, max: 2, step: 0.01, fmt: (v) => pctFmt(v) + levelNote(v) }, 'volume') : null,
     pan ? r('Pan', () => it.pan || 0, (v) => { it.pan = v; }, { min: -1, max: 1, step: 0.05, fmt: panFmt }) : null,
     r('Fade in', () => it.fadeIn || 0, (v) => { it.fadeIn = v; }, { min: 0, max: fadeMax, step: 0.05, fmt: secs }),
     r('Fade out', () => it.fadeOut || 0, (v) => { it.fadeOut = v; }, { min: 0, max: fadeMax, step: 0.05, fmt: secs }),
@@ -225,8 +227,11 @@ export function timeline(st, o) {
     const targets = under.some((it) => it.id === st.sel) ? under.filter((it) => it.id === st.sel) : under;
     if (!targets.length) return toast('Put the playhead over a clip to split it', true);
     for (const a of targets) {
-      const e = end(a), b = { ...a, id: uid(), at: t, fadeIn: 0 };
-      if (a.kind === 'image') { b.out = e - t; a.out = t - a.at; } else { b.in = a.in + (t - a.at); a.out = b.in; }
+      const e = end(a), b = { ...a, id: uid(), at: t, fadeIn: 0, ...(a.chans && { chans: structuredClone(a.chans) }) };   // (its own keys)
+      if (a.kind === 'image') {   // (a still has no source time: its second half's keys start where it does)
+        b.out = e - t; a.out = t - a.at;
+        for (const l of Object.values(b.chans || {})) for (const k of l) k.f = +(k.f - (t - a.at)).toFixed(3);
+      } else { b.in = a.in + (t - a.at); a.out = b.in; }
       a.fadeOut = 0;
       st.items.splice(st.items.indexOf(a) + 1, 0, b);
     }
@@ -256,7 +261,7 @@ export function timeline(st, o) {
   function duplicate() {
     const it = selItem();
     if (!it) return;
-    const b = { ...it, id: uid(), at: end(it) };
+    const b = { ...it, id: uid(), at: end(it), ...(it.chans && { chans: structuredClone(it.chans) }) };
     st.items.push(b); st.sel = b.id; o.changed();
   }
 

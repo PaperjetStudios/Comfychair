@@ -1,8 +1,11 @@
 """Render the Video tab's timeline with ffmpeg: stacked video tracks, mixed audio tracks."""
 import json
+import math
 import os
 import subprocess
 from pathlib import Path
+
+from . import keyexpr
 
 _NVENC = None
 
@@ -136,6 +139,48 @@ def _place(it: dict, W: int, H: int) -> tuple[list[str], str, str]:
     return chain, f"W/2+{px:.1f}-w/2", f"H/2+{py:.1f}-h/2"
 
 
+# ---- keyframed clips (web/keyed.js): a clip's keys are in its source time, so a filter before the clip is
+# moved into place reads it as t + in, and overlay (on the sequence's clock) as t - at + in ----
+TRANSFORM = ("x", "y", "scale", "rotation")
+
+
+def _animated(it: dict) -> bool:
+    return any(keyexpr.keyed(it, ch) for ch in TRANSFORM)
+
+
+def _keyed_scale(it: dict, W: int, H: int) -> list[str]:
+    """The clip scaled to fit (or fill) the frame times its scale, per frame when the scale is keyed."""
+    nw, nh = it["info"].get("width") or W, it["info"].get("height") or H
+    fit = (max if it.get("fit") == "fill" else min)(W / nw, H / nh)
+    ks = keyexpr.keyed(it, "scale")
+    s = keyexpr.expr(ks, f"(t+{it['in']:.4f})", it.get("ease") or "smooth") if ks else f"{max(0.01, float(it.get('scale') or 1)):.6g}"
+    return [f"scale=w='max(2\\,trunc(iw*{fit:.6g}*({s})/2)*2)':h='max(2\\,trunc(ih*{fit:.6g}*({s})/2)*2)':eval=frame"]
+
+
+def _place_keyed(it: dict, W: int, H: int) -> tuple[list[str], str, str]:
+    """(extra filters, overlay x, overlay y) for a clip with keyed x / y / scale / rotation: it is padded into a
+    fixed box (as big as its largest scale) with its anchor at the box's centre, turned about that centre, and
+    the centre put on the anchor's spot, the frame centre + (x*W, y*H). The same drawing as the preview's."""
+    nw, nh = it["info"].get("width") or W, it["info"].get("height") or H
+    fit = (max if it.get("fit") == "fill" else min)(W / nw, H / nh)
+    ax = 0.5 if it.get("anchor_x") is None else float(it["anchor_x"])
+    ay = 0.5 if it.get("anchor_y") is None else float(it["anchor_y"])
+    ease, src, seq = it.get("ease") or "smooth", f"(t+{it['in']:.4f})", f"(t-{it['at']:.4f}+{it['in']:.4f})"
+    _, smax = keyexpr.span(keyexpr.keyed(it, "scale"), max(0.01, float(it.get("scale") or 1)))
+    hx = math.ceil(max(ax, 1 - ax) * nw * fit * smax) + 2
+    hy = math.ceil(max(ay, 1 - ay) * nh * fit * smax) + 2
+    chain = [f"pad=w={2 * hx}:h={2 * hy}:x={hx}-round({ax:.5f}*iw):y={hy}-round({ay:.5f}*ih):color=black@0:eval=frame"]
+    kr, rot = keyexpr.keyed(it, "rotation"), float(it.get("rotation") or 0)
+    if kr or abs(rot) > 0.005:
+        side = 2 * math.ceil(math.hypot(hx, hy))
+        a = keyexpr.expr(kr, src, ease) if kr else f"{rot:.4f}"
+        chain.append(f"rotate=a='({a})*PI/180':ow={side}:oh={side}:c=none")
+    def pos(ch, size):
+        ks = keyexpr.keyed(it, ch)
+        return f"({keyexpr.expr(ks, seq, ease, scale=size)})" if ks else f"{float(it.get(ch) or 0) * size:.1f}"
+    return chain, f"W/2+{pos('x', W)}-w/2", f"H/2+{pos('y', H)}-h/2"
+
+
 def mix_filters(items: list[dict], inputs: dict, total: float) -> list[str]:
     """filter_complex parts that mix every unmuted clip with sound into [a] (48 kHz stereo, total seconds).
     items carry "info" (probe), "at", "len", "xin"/"xout" (_overlaps), "volume", "fade_in", "fade_out",
@@ -146,9 +191,12 @@ def mix_filters(items: list[dict], inputs: dict, total: float) -> list[str]:
         if it["kind"] == "image" or it.get("muted") or not it["info"]["audio"]:
             continue
         vol = float(it.get("volume", 1) if it.get("volume") is not None else 1)
-        if vol <= 0:
+        kv = keyexpr.keyed(it, "volume")
+        if vol <= 0 and not kv:
             continue
-        chain = ["asetpts=PTS-STARTPTS", "aresample=48000", "aformat=channel_layouts=stereo", f"volume={vol:.3f}"]
+        src = f"(t+{float(it.get('in') or 0):.4f})"   # (after asetpts, t is the clip's own time from 0)
+        level = f"volume='{keyexpr.expr(kv, src, it.get('ease') or 'smooth')}':eval=frame" if kv else f"volume={vol:.3f}"
+        chain = ["asetpts=PTS-STARTPTS", "aresample=48000", "aformat=channel_layouts=stereo", level]
         pan = max(-1.0, min(1.0, float(it.get("pan") or 0)))
         if abs(pan) > 0.005:   # balance: turn the far side down
             chain.append(f"pan=stereo|c0={min(1.0, 1 - pan):.3f}*c0|c1={min(1.0, 1 + pan):.3f}*c1")
@@ -207,19 +255,27 @@ def render(items: list[dict], out: Path, width: int | None = None, height: int |
         j = inputs[id(it)]
         scale = max(0.01, float(it.get("scale") or 1))
         mode = "increase" if it.get("fit") == "fill" else "decrease"
-        chain = [f"fps={fps:g}", "setpts=PTS-STARTPTS",
-                 f"scale=w={round(W * scale)}:h={round(H * scale)}:force_original_aspect_ratio={mode}:force_divisible_by=2",
-                 "setsar=1", "format=yuva420p"]
+        anim = _animated(it)
+        if anim:   # keyed scale (or a fixed one, for the placement below): its size per frame from the keys
+            chain = [f"fps={fps:g}", "setpts=PTS-STARTPTS", *_keyed_scale(it, W, H), "setsar=1", "format=yuva420p"]
+        else:
+            chain = [f"fps={fps:g}", "setpts=PTS-STARTPTS",
+                     f"scale=w={round(W * scale)}:h={round(H * scale)}:force_original_aspect_ratio={mode}:force_divisible_by=2",
+                     "setsar=1", "format=yuva420p"]
         fi = max(float(it.get("fade_in") or 0), it["xin"])
         fo = float(it.get("fade_out") or 0)
         if fi > 0:
             chain.append(f"fade=t=in:st=0:d={min(fi, it['len']):.3f}:alpha=1")
         if fo > 0:
             chain.append(f"fade=t=out:st={max(0.0, it['len'] - fo):.3f}:d={min(fo, it['len']):.3f}:alpha=1")
-        opacity = float(it.get("opacity", 1))
-        if opacity < 0.999:
+        opacity = float(it.get("opacity", 1) if it.get("opacity") is not None else 1)
+        ok = keyexpr.keyed(it, "opacity")
+        if ok:   # alpha times the keyed opacity, per frame (geq's time is T)
+            o = keyexpr.expr(ok, f"(T+{it['in']:.4f})", it.get("ease") or "smooth")
+            chain.append(f"geq=lum='lum(X\\,Y)':cb='cb(X\\,Y)':cr='cr(X\\,Y)':a='alpha(X\\,Y)*clip({o}\\,0\\,1)'")
+        elif opacity < 0.999:
             chain.append(f"colorchannelmixer=aa={max(0.0, opacity):.3f}")
-        extra, x, y = _place(it, W, H)
+        extra, x, y = _place_keyed(it, W, H) if anim else _place(it, W, H)
         chain += extra
         chain.append(f"setpts=PTS+{it['at']:.3f}/TB")
         filters.append(f"[{j}:v]{','.join(chain)}[o{n}]")

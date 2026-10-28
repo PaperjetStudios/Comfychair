@@ -9,6 +9,7 @@ import { useInGenerate } from './editor.js';
 import { TabSet } from './tabs.js';
 import { clipSoundFields, durationOf, timeline, wavePeaks } from './timeline.js';
 import { fmtTime, playKeys, transport } from './playback.js';
+import { keyTimes, keyedRange, refreshKeyed, setValue, value } from './keyed.js';
 import * as COMP from './scene-comp.js';
 import { fullScreen } from './layout.js';
 import { canTrack, openTrack } from './track.js';
@@ -71,7 +72,7 @@ function persistTimeline() { tabs?.changed(); }
 
 // the timeline itself (timeline.js, shared with the Sound tab): a sound clip only goes on an audio track, a picture on a video track
 const TL = timeline(V, { el: '#timeline', headW: HEAD_W, minLen: MIN_LEN, zoom: [4, 400], ppsKey: 'deck.video.pps',
-  pause: () => vidPause(), seek: (t) => vidSeek(t), showTime: () => vtp?.update(),
+  pause: () => vidPause(), seek: (t) => vidSeek(t), showTime: () => { vtp?.update(); refreshKeyed($('#videoPanel')); },
   changed: () => timelineChanged(), dragged: () => { renderTimeline(); syncMedia(); requestDraw(); }, rendered: () => renderTimeline(),
   selected: () => renderVideoPanel(), deselected: () => { renderTimeline(); renderVideoPanel(); },
   canDrop: (it, tr) => (tr.kind === 'audio') === (it.kind === 'audio'), tabs: () => tabs });
@@ -84,6 +85,13 @@ const zOf = (it) => tracksOf('video').findIndex((t) => t.id === it.track);
 const isVisual = (it) => it.kind === 'video' || it.kind === 'image' || it.kind === 'scene';
 const fpsNow = () => V.fps || 24;
 const tc = (t) => fmtTime(t, fpsNow());   // m:ss:ff
+
+// ---- animated properties (keyed.js, After Effects style): a clip's keys are in its own source time ----
+const PROPS = { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, volume: 1 };   // what an unset property is
+// the clip's own time at timeline time t, on a frame of the sequence
+const clipT = (it, t = V.t) => { const f = fpsNow(); return Math.round((it.in + clamp(t - it.at, 0, itLen(it))) * f) / f; };
+const prop = (it, ch, t = V.t) => value(it, ch, clipT(it, t), it[ch] ?? PROPS[ch]);
+const setProp = (it, ch, v) => setValue(it, ch, clipT(it), v, (x) => { it[ch] = x; });
 
 // ---- playback: one media element per clip, kept in step with the timeline clock ----
 // Preloading: each video/sound on the timeline is downloaded whole into memory (a blob: URL), so
@@ -125,7 +133,7 @@ function showPreload() {
 // a scene clip's picture at the playhead, drawn at the size it shows at (a canvas that stands in for a media element)
 function sceneEl(it) {
   const [nw, nh] = COMP.natOf(it), [W, H] = seqSize();
-  const s = (it.fit === 'fill' ? Math.max : Math.min)(W / nw, H / nh) * (it.scale || 1);
+  const s = (it.fit === 'fill' ? Math.max : Math.min)(W / nw, H / nh) * (prop(it, 'scale') || 1);
   const el = COMP.frame(it, V.t, nw * s, nh * s);
   V.els.set(it.id, { el, url: null, src: null });
   return el;
@@ -180,8 +188,9 @@ function syncMedia() {
       continue;
     }
     const want = it.in + V.t - it.at;
-    el.muted = !!(tr && tr.muted) || !(it.volume > 0) || starting.get(el) === 'muted';
-    el.volume = Math.min(1, (it.volume ?? 1) * fadeGain(it, V.t, true));
+    const vol = prop(it, 'volume');
+    el.muted = !!(tr && tr.muted) || !(vol > 0) || starting.get(el) === 'muted';
+    el.volume = clamp(vol * fadeGain(it, V.t, true), 0, 1);
     if (V.playing) {
       if (el.paused) startMedia(el, want);
       else if (it.id !== V.master && Math.abs(el.currentTime - want) > 0.35) el.currentTime = want;
@@ -263,7 +272,7 @@ function drawFrame() {
       const nw = el.videoWidth || el.naturalWidth, nh = el.videoHeight || el.naturalHeight;
       if (!nw || (it.kind === 'video' && el.readyState < 2)) continue;
       const g = geom(it, [W, H]);
-      ctx.globalAlpha = (it.opacity ?? 1) * fadeGain(it, V.t, false);
+      ctx.globalAlpha = clamp(prop(it, 'opacity'), 0, 1) * fadeGain(it, V.t, false);
       // the anchor sits at the frame centre + (x, y); the clip turns and scales around it (videoedit._place does the same)
       ctx.save(); ctx.translate(g.px, g.py); ctx.rotate(g.rot);
       ctx.drawImage(el, -g.ax * g.dw, -g.ay * g.dh, g.dw, g.dh);
@@ -289,9 +298,9 @@ function geom(it, [W, H] = seqSize()) {
   const el = V.els.get(it.id)?.el;
   const nw = el && (el.videoWidth || el.naturalWidth), nh = el && (el.videoHeight || el.naturalHeight);
   if (!nw) return null;
-  const base = (it.fit === 'fill' ? Math.max : Math.min)(W / nw, H / nh), s = base * (it.scale || 1);
+  const base = (it.fit === 'fill' ? Math.max : Math.min)(W / nw, H / nh), s = base * (prop(it, 'scale') || 1);
   return { W, H, nw, nh, base, dw: nw * s, dh: nh * s, ax: it.anchor?.x ?? 0.5, ay: it.anchor?.y ?? 0.5,
-    px: W / 2 + (it.x || 0) * W, py: H / 2 + (it.y || 0) * H, rot: ((it.rotation || 0) * Math.PI) / 180 };
+    px: W / 2 + prop(it, 'x') * W, py: H / 2 + prop(it, 'y') * H, rot: (prop(it, 'rotation') * Math.PI) / 180 };
 }
 // frame point at (u, v) pixels from the anchor in the clip's own axes
 const world = (g, u, v) => { const c = Math.cos(g.rot), s = Math.sin(g.rot); return [g.px + u * c - v * s, g.py + u * s + v * c]; };
@@ -407,7 +416,7 @@ function pinAnchor(it, g, toX, toY) {
   const c = Math.cos(g.rot), s = Math.sin(g.rot), dx = toX - g.px, dy = toY - g.py;
   const ax = g.ax + (dx * c + dy * s) / g.dw, ay = g.ay + (-dx * s + dy * c) / g.dh;
   if (Math.abs(ax - 0.5) < 1e-3 && Math.abs(ay - 0.5) < 1e-3) delete it.anchor; else it.anchor = { x: +ax.toFixed(4), y: +ay.toFixed(4) };
-  it.x = +((toX - g.W / 2) / g.W).toFixed(5); it.y = +((toY - g.H / 2) / g.H).toFixed(5);
+  setProp(it, 'x', +((toX - g.W / 2) / g.W).toFixed(5)); setProp(it, 'y', +((toY - g.H / 2) / g.H).toFixed(5));
 }
 function setAnchor(it, ax, ay) {   // from the inspector: where the anchor sits in the clip, the picture stays put
   const g = geom(it);
@@ -466,17 +475,17 @@ function gizmoStart(it, hit, e, sx, sy) {
   const g = geom(it), v = gview();
   if (!g) return;
   const kind = hit === 'move' ? 'move' : hit === 'rotate' ? 'rotate' : hit === 'anchor' ? 'anchor' : 'scale';
-  const o = { scale: it.scale || 1, rot: it.rotation || 0 };
+  const o = { scale: prop(it, 'scale') || 1, rot: prop(it, 'rotation') };
   const P = scr(v, [g.px, g.py]), d = { id: e.pointerId, it, hit, kind, g, o, sx, sy, P, d0: Math.max(Math.hypot(sx - P[0], sy - P[1]), 14), acc: 0, last: Math.atan2(sy - P[1], sx - P[0]) };
   const chans = {
     move: { px: [g.px, WEIGHT.move], py: [g.py, WEIGHT.move] }, anchor: { px: [g.px, WEIGHT.anchor], py: [g.py, WEIGHT.anchor] },
     scale: { r: [1, WEIGHT.scale] }, rotate: { a: [o.rot, WEIGHT.rotate] },
   }[kind];
   d.w = new Weight(chans, (val) => {   // each frame: the springs' values into the clip
-    if (kind === 'move') { it.x = +((val.px - g.W / 2) / g.W).toFixed(5); it.y = +((val.py - g.H / 2) / g.H).toFixed(5); }
+    if (kind === 'move') { setProp(it, 'x', +((val.px - g.W / 2) / g.W).toFixed(5)); setProp(it, 'y', +((val.py - g.H / 2) / g.H).toFixed(5)); }
     else if (kind === 'anchor') pinAnchor(it, g, val.px, val.py);
-    else if (kind === 'scale') it.scale = +clamp(o.scale * val.r, 0.02, 20).toFixed(4);
-    else { const a = +normDeg(val.a).toFixed(2); if (a) it.rotation = a; else delete it.rotation; }
+    else if (kind === 'scale') setProp(it, 'scale', +clamp(o.scale * val.r, 0.02, 20).toFixed(4));
+    else setProp(it, 'rotation', +normDeg(val.a).toFixed(2));   // (a key holds every value; the plain one is just a number)
     syncInspector(); requestDraw();
   }, () => { G.guides = []; if (G.settling === d) G.settling = null; persistTimeline(); requestDraw(); });
   G.drag = d;
@@ -656,6 +665,8 @@ function clipEl(it) {
     h('span', { class: 'tl-label' }, (gone ? '⚠ ' : '') + it.label),
     fi ? h('span', { class: 'tl-fade in', style: `width:${fi * V.pps}px` }) : null,
     it.fadeOut ? h('span', { class: 'tl-fade out', style: `width:${it.fadeOut * V.pps}px` }) : null,
+    keyTimes(it).filter((f) => f >= it.in - 1e-3 && f <= it.in + itLen(it) + 1e-3)   // its keys, After Effects style
+      .map((f) => h('span', { class: 'tl-key', style: `left:${(f - it.in) * V.pps}px`, title: `Key at ${tc(it.at + f - it.in)}` })),
     h('span', { class: 'tl-trim l' }), h('span', { class: 'tl-trim r' }));
 }
 
@@ -801,8 +812,12 @@ function addMediaFiles() {
 const timeBox = (label, get, set, { step = 0.04, min = 0, max = 600 } = {}) =>
   propNum(label, Number(get()).toFixed(2), set, timelineChanged, { step, min, max, live: () => { renderTimeline(); syncMedia(); requestDraw(); } });
 
-const clipRange = (label, get, set, opts) => rangeField(label, get, set,
-  { ...opts, onInput: () => { renderTimeline(); syncMedia(); requestDraw(); }, onChange: persistTimeline });
+const clipLive = { onInput: () => { renderTimeline(); syncMedia(); requestDraw(); }, onChange: persistTimeline };
+const clipRange = (label, get, set, opts) => rangeField(label, get, set, { ...opts, ...clipLive });
+// an animatable clip property (keyed.js): ◀ ◆ ▶ beside its slider; the playhead moves to a key in the clip's time
+const clipKeyed = (it, label, ch, opts) => keyedRange(label, { item: it, ch, t: () => clipT(it), base: () => it[ch] ?? PROPS[ch],
+  setBase: (v) => { it[ch] = v; }, seek: (ct) => { vidPause(); vidSeek(it.at + ct - it.in); }, onKeys: () => { timelineChanged(); },
+  ...clipLive, ...opts });
 
 const SIZES = [['Match first clip', null], ['1280×720', [1280, 720]], ['1920×1080', [1920, 1080]], ['720×1280', [720, 1280]],
   ['1080×1920', [1080, 1920]], ['1024×1024', [1024, 1024]], ['832×480', [832, 480]], ['480×832', [480, 832]]];
@@ -823,10 +838,10 @@ function xformFields(it) {
   const anchorEnd = () => { syncInspector(); persistTimeline(); };   // moving the anchor re-pins position, so show that too
   return [
     field('Framing', seg([['fit', 'Fit'], ['fill', 'Fill']], it.fit || 'fit', (k) => { it.fit = k; timelineChanged(); })),
-    clipRange('Scale', () => it.scale ?? 1, (v) => { it.scale = v; }, { min: 0.1, max: 3, step: 0.01, fmt: pct }),
-    clipRange('Rotation', () => it.rotation || 0, (v) => { if (v) it.rotation = v; else delete it.rotation; }, { min: -180, max: 180, step: 1, fmt: (v) => `${Math.round(v)}°` }),
-    clipRange('Position X', () => it.x || 0, (v) => { it.x = v; }, { min: -1, max: 1, step: 0.005, fmt: pct }),
-    clipRange('Position Y', () => it.y || 0, (v) => { it.y = v; }, { min: -1, max: 1, step: 0.005, fmt: pct }),
+    clipKeyed(it, 'Scale', 'scale', { min: 0.1, max: 3, step: 0.01, fmt: pct }),
+    clipKeyed(it, 'Rotation', 'rotation', { min: -180, max: 180, step: 1, fmt: (v) => `${Math.round(v)}°` }),
+    clipKeyed(it, 'Position X', 'x', { min: -1, max: 1, step: 0.005, fmt: pct }),
+    clipKeyed(it, 'Position Y', 'y', { min: -1, max: 1, step: 0.005, fmt: pct }),
     clipRange('Anchor X', () => it.anchor?.x ?? 0.5, (v) => setAnchor(it, v, it.anchor?.y ?? 0.5), { min: -0.5, max: 1.5, step: 0.01, fmt: pct, onChange: anchorEnd }),
     clipRange('Anchor Y', () => it.anchor?.y ?? 0.5, (v) => setAnchor(it, it.anchor?.x ?? 0.5, v), { min: -0.5, max: 1.5, step: 0.01, fmt: pct, onChange: anchorEnd }),
     g ? null : hint('Handles appear once the clip has loaded.'),
@@ -847,11 +862,11 @@ function renderVideoPanel() {
       hint(`${it.kind} on ${tr ? trackName(tr) : '?'} · ${fmtT(len)}${it.dur ? ` of ${fmtT(it.dur)}` : ''}`, 'section-sub'),
       h('div', { class: 'grid-2' }, fields),
       isVisual(it) ? [h('div', { id: 'vidXform' }, xformFields(it)),
-        clipRange('Opacity', () => it.opacity ?? 1, (v) => { it.opacity = v; }, { min: 0, max: 1, step: 0.01, fmt: pct })] : null,
+        clipKeyed(it, 'Opacity', 'opacity', { min: 0, max: 1, step: 0.01, fmt: pct })] : null,
       it.kind === 'scene' ? sceneFields(it) : null,
       it.kind === 'video' && canKey(it.fx?.orig || it) ? fxFields(it) : null,
       clipSoundFields(it, len, { level: it.kind !== 'image' && it.kind !== 'scene', levelNote: (v) => (v > 1 ? ' (preview plays at 100%)' : ''),
-        onInput: () => { renderTimeline(); syncMedia(); requestDraw(); }, onChange: persistTimeline }),
+        keyed: (label, ch, o) => clipKeyed(it, label, ch, o), ...clipLive }),
       h('div', { class: 'row wrap' },
         button('✂ Split at playhead', TL.split, { title: 'S' }),
         button('⤫ Cross-fade with previous', () => TL.crossfadePrev(it)),
@@ -860,7 +875,7 @@ function renderVideoPanel() {
           { title: 'This clip\'s sound (the part on the timeline) on the Sound tab\'s timeline' }) : null,
         it.kind === 'video' && canKey(it) ? button('Key…', () => openKey(it), { title: 'Cut out a green screen, or use a matte, so lower tracks show through' }) : null,
         it.kind === 'video' && canTrack(it.src) ? button('Track motion', () => openTrack({ src: it.src, url: it.url, label: it.label, from: it.in, to: it.out ?? undefined }), { title: 'Follow the picture\'s movement and make a 3D camera from it' }) : null,
-        isVisual(it) ? button('Reset framing', () => { Object.assign(it, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); delete it.rotation; delete it.anchor; timelineChanged(); }) : null,
+        isVisual(it) ? button('Reset framing', () => { Object.assign(it, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); delete it.rotation; delete it.anchor; for (const ch of ['x', 'y', 'scale', 'rotation', 'opacity']) delete it.chans?.[ch]; timelineChanged(); }) : null,
         button('Delete clip', TL.deleteSelected, { cls: 'small danger', title: 'Delete' })));
   })() : null;
 
@@ -1054,7 +1069,7 @@ async function timelineBody(btn) {
     items: V.items.map((it) => ({ track: it.track, at: it.at, name: it.label, ...(made.has(it)   // (a scene's clip is already cut to what's used)
       ? { src: { clip: made.get(it).clip }, scene: made.get(it).scene, in: 0, out: itLen(it) } : { src: it.src, in: it.in, out: it.out ?? it.dur }),
       x: it.x, y: it.y, scale: it.scale, fit: it.fit, rotation: it.rotation || 0, anchor_x: it.anchor?.x, anchor_y: it.anchor?.y,
-      opacity: it.opacity, volume: it.volume,
+      opacity: it.opacity, volume: it.volume, chans: it.chans || null,
       fade_in: it.fadeIn, fade_out: it.fadeOut })) };
 }
 

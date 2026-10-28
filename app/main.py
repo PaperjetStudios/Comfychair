@@ -932,7 +932,7 @@ async def video_render(body: dict = Body(...)):
                 raise HTTPException(400, f"{path.name} isn't a video, image or sound")
             items.append({**{k: it.get(k) for k in ("at", "in", "out", "x", "y", "scale", "fit", "opacity",
                                                     "volume", "fade_in", "fade_out", "rotation",
-                                                    "anchor_x", "anchor_y")},
+                                                    "anchor_x", "anchor_y", "chans")},   # chans: its keys (keyexpr.py)
                           "path": str(path), "kind": kind, "track": tr["id"], "z": z_of.get(tr["id"], 0),
                           "hidden": bool(tr.get("hidden")), "muted": bool(tr.get("muted"))})
             if (it.get("src") or {}).get("clip"):
