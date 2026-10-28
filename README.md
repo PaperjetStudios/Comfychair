@@ -80,50 +80,44 @@ its own, so the start order between them doesn't matter.
 Over plain http ComfyChair keeps the screen on during runs with a tiny silent video instead, and
 signals a finished run with a chime and a ✓ in the tab title.
 
-The easy way is Tailscale: a real certificate for the box's tailnet name, nothing to install on the
-tablet but the Tailscale app, and it works away from home too. `deploy/tailscale-https.sh` lists the
-one-time steps (install Tailscale, turn on MagicDNS and HTTPS Certificates in its admin console),
-then serves ComfyChair at `https://<box>.<tailnet>.ts.net` and prints how to install it on Android
-(Chrome ⋮ → Install app):
+Free, on your own network, all from the text console: the box makes its own certificate and the tablet
+trusts it once you install one small file on it. One command does it all, and it stays on across reboots
+(the services start on HTTPS and renew the certificate themselves, also when the box's IP changes):
 
 ```bash
-deploy/tailscale-https.sh                 # :8190 → https://<box>.<tailnet>.ts.net
+deploy/local-https.sh        # certificate, ComfyChair (and the Lab) on HTTPS, then it serves the tablet the
+                             # file at http://<box-ip>:8000/comfydeck-ca.crt and prints the Android steps
+deploy/local-https.sh ca     # the file again, for another tablet
+deploy/local-https.sh off    # back to plain http
 ```
+
+Then open `https://<box-ip>:8190` on the tablet and ⋮ → Install app. Give the box a fixed IP in your router
+(a DHCP reservation, free on any router): the installed app is tied to its address.
+
+(`deploy/tailscale-https.sh` does the same through Tailscale, for reaching the box away from home.)
 
 **ComfyChair Lab**, the experimental copy (branch `lab`: three main spaces, travel with three fingers,
 things with a little physics), runs beside this one as its own app, with its own data. It boots the same
 way: `comfyui.target` starts it with ComfyUI and ComfyChair (a drop-in, `comfyui.target.d/lab.conf`, so
-`install-services.sh` keeps it). Once, and again to update it:
+`install-services.sh` keeps it), and it uses ComfyChair's HTTPS certificate. Once, and again to update it:
 
 ```bash
-deploy/lab.sh https      # check out the lab branch beside this one (<this>-lab), start comfydeck-lab on :8191,
-                         # serve it at https://<box>.<tailnet>.ts.net:8443 (install it on the tablet from there)
-deploy/lab.sh            # later updates: pull the lab branch and restart it
+deploy/lab.sh            # check out the lab branch beside this one (<this>-lab), start comfydeck-lab on :8191
+                         # → https://<box-ip>:8191 (install it on the tablet from there)
 deploy/lab.sh off        # stop it and take it out of the boot
 journalctl -u comfydeck-lab -f
 ```
 
 **Any second copy as its own app** (e.g. another branch next to the one you use): check it out
-next to this one and run it on another port with another name, then serve that port too. Each address
-installs as its own home-screen app, named by `DECK_NAME`:
+next to this one and run it on another port with another name. Each address installs as its own
+home-screen app, named by `DECK_NAME`:
 
 ```bash
 git worktree add ../comfychair-exp <branch>
-cd ../comfychair-exp && DECK_PORT=8191 DECK_NAME="ComfyChair Lab" ./run.sh
-deploy/tailscale-https.sh 8191 8443       # → https://<box>.<tailnet>.ts.net:8443
+cd ../comfychair-exp && DECK_PORT=8192 DECK_NAME="ComfyChair Exp" ./run.sh
 ```
 
 Both copies share `data/` only if you point them at the same one (`DECK_DATA`); by default each has its own.
-
-Without Tailscale, make a certificate with openssl:
-
-```bash
-deploy/make-cert.sh                       # makes certs/comfydeck-ca.crt + the server certificate
-SSL_CERT=certs/deck.pem SSL_KEY=certs/deck-key.pem ./run.sh
-```
-
-Install `certs/comfydeck-ca.crt` on each tablet once (the script prints how). Re-run the script if
-the box's IP changes; the CA stays the same, so the tablets don't need it again.
 
 **Access token (optional):** with `DECK_TOKEN=<something long>` set (e.g. `Environment=DECK_TOKEN=…`
 in the service), every page, file and API call needs it. Open `http://<box>:8190/?token=<it>` once on
