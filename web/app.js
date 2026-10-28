@@ -357,7 +357,7 @@ function wireTextPopup() {
     if (!src) overlayOpened(back);
     src = t;
     title.textContent = t.closest('.prompt-part')?.querySelector('.part-head b')?.textContent
-      || t.closest('.field')?.querySelector('.lbl')?.firstChild?.textContent || 'Text';
+      || t.closest('.field')?.querySelector('.lbl')?.firstChild?.textContent || t.getAttribute('aria-label') || 'Text';
     ta.value = t.value;
     ta.placeholder = t.placeholder || '';
     undo = []; lastTyped = -Infinity; undoBtn.disabled = true; prev = { v: ta.value, a: ta.value.length, b: ta.value.length };

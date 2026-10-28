@@ -1,6 +1,6 @@
 import {
   $, h, store, uid, api, toast, undoToast, clamp, openSheet, closeSheet, button, iconBtn, linkBtn, actions, fileButton, seg,
-  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, panelTop, toggle,
+  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, panelTop, toggle, textArea,
 } from './ui.js';
 import { S, fmtT, inputUrl, thumbUrl } from './core.js';
 import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, soundToSoundTab, uploadImage, uploadMedia } from './media.js';
@@ -905,7 +905,7 @@ const FX_LABEL = Object.fromEntries(CLIP_FX.map(([k, l]) => [k, l]));
 const LTX_OPS = new Set(['restyle', 'cleanplate', 'replace', 'cutout']);
 function fxStepFields(it, st, i) {
   const save = () => persistTimeline();
-  const ta = (key, ph) => h('textarea', { rows: 2, value: st[key] || '', placeholder: ph, oninput: (e) => { st[key] = e.target.value; save(); } });
+  const ta = (key, ph) => textArea(() => st[key], (v) => { st[key] = v; save(); }, { rows: 2, placeholder: ph, label: ph });
   const move = (d) => { const a = it.fx.steps, j = i + d; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; timelineChanged(); };
   const loras = restyleLoras();
   return h('div', { class: 'fx-step' },

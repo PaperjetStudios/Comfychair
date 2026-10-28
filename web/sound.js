@@ -1,6 +1,6 @@
 import {
   $, h, store, uid, api, toast, undoToast, clamp, button, iconBtn, linkBtn, seg, field, section, hint, help, info, note,
-  placeholder, numSlider, fileButton, rangeField, autoGrow, insertAtCursor, toggle,
+  placeholder, numSlider, fileButton, rangeField, insertAtCursor, toggle, textArea,
 } from './ui.js';
 import { DELIVERY, INLINE_TAGS, parseScript, withDelivery, withName } from './dialogue.js';
 import { S, onServer } from './core.js';
@@ -348,8 +348,8 @@ async function makeSound() {
 function makerSection() {
   const mk = MAKERS.find((m) => m.id === G.op) || MAKERS[0];
   const t = S.templates.find((x) => x.id === mk.tpl);
-  const prompt = h('textarea', { rows: 3, value: G.prompt, placeholder: mk.placeholder, oninput: (e) => { G.prompt = e.target.value; } });
-  const lyrics = mk.lyrics ? h('textarea', { rows: 5, value: G.lyrics, placeholder: '[verse]\n…\n[chorus]\n…', oninput: (e) => { G.lyrics = e.target.value; } }) : null;
+  const prompt = textArea(() => G.prompt, (v) => { G.prompt = v; }, { rows: 3, placeholder: mk.placeholder, label: mk.label });
+  const lyrics = mk.lyrics ? textArea(() => G.lyrics, (v) => { G.lyrics = v; }, { rows: 5, placeholder: '[verse]\n…\n[chorus]\n…', label: 'Lyrics' }) : null;
   const len = numSlider({ min: 1, max: mk.maxLen, step: 0.5, value: G.len ?? mk.len, digits: 1, label: 'Length (s)' });
   const keyF = t?.fields.find(ROLE.key);
   const bpm = mk.lyrics ? numSlider({ min: 40, max: 220, step: 1, value: G.bpm, digits: 0, label: 'BPM' }) : null;
@@ -449,8 +449,7 @@ function voiceSection() {
   if (nv) {
     const name = h('input', { type: 'text', value: nv.name || '', placeholder: 'e.g. Narrator, Anna', 'aria-label': 'Voice name' });
     name.addEventListener('input', () => { nv.name = name.value; });
-    const text = h('textarea', { rows: 3, value: nv.ref_text || '', placeholder: 'Exactly what is said in the cut (Listen fills it in)' });
-    text.addEventListener('input', () => { nv.ref_text = text.value; });
+    const text = textArea(() => nv.ref_text, (v) => { nv.ref_text = v; }, { rows: 3, label: 'What is said', placeholder: 'Exactly what is said in the cut (Listen fills it in)' });
     const lang = h('select', {}, VX.status.languages.map((l) => h('option', { value: l, selected: l === (nv.language || 'Auto') }, l)));
     lang.addEventListener('change', () => { nv.language = lang.value; });
     const len = nv.src?.trim?.len;
@@ -489,10 +488,8 @@ function voiceSection() {
     }, { title: it ? 'From the selected clip' : null })));
 
   // 3. dialogue
-  const script = h('textarea', { rows: 6, value: VX.script, spellcheck: true,
+  const script = textArea(() => VX.script, (v) => { VX.script = v; }, { rows: 6, label: 'Script',
     placeholder: 'One line each, the voice\'s name first:\nAnna (whispering): Did you hear that?\nNarrator: Nobody had, of course. [sigh]' });
-  script.addEventListener('input', () => { VX.script = script.value; });
-  autoGrow(script);
   const chips = scriptChips(script);
   script.addEventListener('focus', () => chips.classList.remove('hidden'));
   script.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== script) chips.classList.add('hidden'); }, 150));

@@ -1,4 +1,4 @@
-import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle } from './ui.js';
+import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle, textArea } from './ui.js';
 import { S, inputUrl, thumbUrl, onServer, switchTab } from './core.js';
 import { bareSource, cardMedia, clipLabel, clipUrl, genLabel, openImagePicker, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
 import { hooks as genHooks } from './generate.js';
@@ -337,8 +337,8 @@ function render() {
     needs.has('tracks') ? tracksFields() : null);
 
   const prompt = needs.has('prompt') ? section('Prompt', null,
-    h('textarea', { rows: 4, value: T.prompt, placeholder: e.id === 'mask' ? 'What to cut out, e.g. "the man in the red coat"' : 'Describe the result',
-      oninput: (ev) => { T.prompt = ev.target.value; tabs?.changed(); } })) : null;
+    textArea(() => T.prompt, (v) => { T.prompt = v; tabs?.changed(); }, { rows: 4, label: 'Prompt',
+      placeholder: e.id === 'mask' ? 'What to cut out, e.g. "the man in the red coat"' : 'Describe the result' })) : null;
 
   const settings = section('Settings', null,
     e.sd ? field('Pose from', seg([['dwpose', 'DWPose'], ['sdpose', 'SDPose']], T.poser || 'dwpose', (v) => { T.poser = v; changed(); }),

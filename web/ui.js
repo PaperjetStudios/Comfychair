@@ -410,6 +410,15 @@ export function section(title, onDone, ...kids) {
     title != null ? h('div', { class: 'section-title' }, h('span', {}, title), infos, onDone ? button('Done', onDone, { cls: 'small ghost' }) : null) : null, rest);
 }
 
+// The app's text box: spell-checked and growing with its text (up to max px; grow: false keeps its rows).
+// set(text) on every keystroke. label names it for screen readers and titles the touch text popup (app.js).
+export function textArea(get, set, { rows = 3, placeholder = '', grow = true, max = 420, label = null, spellcheck = true } = {}) {
+  const ta = h('textarea', { rows, value: get() ?? '', placeholder, spellcheck, 'aria-label': label });
+  ta.addEventListener('input', () => set(ta.value));
+  if (grow) autoGrow(ta, max);
+  return ta;
+}
+
 // A text box that grows with its text (up to max px); dispatch 'grow' on it after setting .value from code.
 export function autoGrow(ta, max = 420) {
   const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight + 2, max) + 'px'; };

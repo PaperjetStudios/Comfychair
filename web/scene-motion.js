@@ -2,7 +2,7 @@
 // motion .npz/.json), or a motion file. The server reads it (app/motion.py) into 22 joint positions per
 // frame; motion.js turns those into the figure's keys from the playhead.
 import { FIG, R, SC, current, dropKeys, frames, putKeys, sameTab } from './scene-data.js';
-import { api, button, clone, field, fileButton, h, help, hint, note, openSheet, closeSheet, rangeField, seg, store, toast, undoToast, toggle } from './ui.js';
+import { api, button, clone, field, fileButton, h, help, hint, note, openSheet, closeSheet, rangeField, seg, store, toast, undoToast, toggle, textArea } from './ui.js';
 import { S, onServer } from './core.js';
 import { openVideoPicker } from './media.js';
 import { queueRun } from './make.js';
@@ -74,8 +74,8 @@ function placeFields(o) {
 }
 
 function textSheet(o) {
-  const ta = h('textarea', { rows: 4, value: ST.prompt, placeholder: 'A person walks forward. The person sits down on a chair.',
-    oninput: () => { ST.prompt = ta.value; } });
+  const ta = textArea(() => ST.prompt, (v) => { ST.prompt = v; }, { rows: 4, label: 'What the body does',
+    placeholder: 'A person walks forward. The person sits down on a chair.' });
   openSheet(h('h3', {}, 'Text to motion'),
     help('Describe what the body does. Each sentence is a new part, in order. It starts from the playhead and replaces the keys it covers.'),
     field('Motion', ta),

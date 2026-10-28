@@ -1,7 +1,7 @@
 import {
   $, h, store, clamp, clamp01, clone, cycleIndex, api, toast, undoToast, openOverlay, openSheet, sheetStillOpen, nameSheet,
   button, iconBtn, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider,
-  autoGrow, insertAtCursor, toggle,
+  insertAtCursor, toggle, textArea,
 } from './ui.js';
 import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
 import { clipLabel, clipUrl, openImagePicker, openVideoPicker, soundInput } from './media.js';
@@ -514,10 +514,7 @@ function choiceField(f) {
 
 function textField(f) {
   if (isMainPrompt(f)) return promptField(f);
-  const ta = h('textarea', { rows: f.multiline ? 4 : 1, value: S.values[f.key] ?? '', spellcheck: true });
-  ta.addEventListener('input', () => setVal(f.key, ta.value));
-  if (f.multiline) autoGrow(ta);
-  return field(f.label, ta);
+  return field(f.label, textArea(() => S.values[f.key], (v) => setVal(f.key, v), { rows: f.multiline ? 4 : 1, grow: !!f.multiline }));
 }
 
 // ---------------------------------------------------------------------------
@@ -592,8 +589,7 @@ function composePrompt(st, order) {
 // One text box with saved-snippet controls: ◀ ▶ cycle the library for `cat`, 💾 save, 🗑 delete.
 // get/set read and write the box's text; `extra` adds buttons after the library controls.
 function snippetEditor({ cat, label, get, set, placeholder, extra = [], below = null, clean = (t) => t, grow = true }) {
-  const ta = h('textarea', { rows: 3, value: get(), spellcheck: true, placeholder });
-  if (grow) autoGrow(ta, 260);
+  const ta = textArea(get, (v) => { set(v); showPos(); }, { rows: 3, placeholder, grow, max: 260 });
   const pos = h('span', { class: 'snip-pos' });
   const lib = () => (S.snippets || []).filter((x) => x.category === cat);
   const idx = () => lib().findIndex((x) => x.text.trim() === clean(get()).trim());
@@ -610,7 +606,6 @@ function snippetEditor({ cat, label, get, set, placeholder, extra = [], below = 
     del.classList.toggle('invisible', i < 0);  // keep its space so the header never re-wraps
   };
   const put = (text) => { ta.value = text; set(text); showPos(); ta.dispatchEvent(new Event('grow')); };
-  ta.addEventListener('input', () => { set(ta.value); showPos(); });
   const step = (d) => {
     const l = lib();
     if (!l.length) return toast(`Nothing saved under ${cat} yet. Write one and tap 💾.`);
@@ -769,9 +764,7 @@ function promptField(f) {
       ]), h('details', { class: 'desc' }, h('summary', {}, 'Final prompt'), final));
       sync();
     } else {
-      const ta = track(h('textarea', { rows: 4, value: S.values[f.key] ?? '', spellcheck: true }));
-      ta.addEventListener('input', () => setVal(f.key, ta.value));
-      autoGrow(ta);
+      const ta = track(textArea(() => S.values[f.key], (v) => setVal(f.key, v), { rows: 4 }));
       body.replaceChildren(ta);
     }
     body.prepend(chipsRow);
