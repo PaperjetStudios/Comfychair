@@ -582,6 +582,17 @@ svg.ico.filled path { fill: currentColor; }
 .sketch-size input { width: 90px; min-height: var(--tap-sm); }
 .sketch-stage { min-height: 0; overflow: hidden; display: grid; place-items: center; padding: 10px; background: var(--checker); }
 .sketch-canvas { touch-action: none; box-shadow: var(--shadow); background: #fff; cursor: crosshair; }
+/* the mask painter: the picture with the mask over it as a red tint, panned and zoomed as one layer */
+.mask-stage { position: relative; min-height: 0; overflow: hidden; touch-action: none; background: var(--checker); cursor: crosshair; }
+.mask-layer { position: absolute; left: 0; top: 0; transform-origin: 0 0; box-shadow: var(--shadow); }
+.mask-layer canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.mask-layer .mask-paint { opacity: .55; }
+.mask-painter { grid-template-rows: auto 1fr; }
+/* a Generate picture's mask: its thumbnail, and the edge settings under the picture */
+.mask-set { display: grid; gap: 6px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.mask-set .row { align-items: center; gap: 8px; }
+.mask-thumb { width: 44px; height: 44px; padding: 0; border: 1px solid var(--line); border-radius: var(--r-sm); background: #000; cursor: pointer; overflow: hidden; flex: none; }
+.mask-thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
 
 .boxes-btn { display: block; width: 100%; padding: 0; border: 1px solid var(--line); border-radius: var(--r); background: #000; cursor: pointer; overflow: hidden; }
 .boxes-preview { position: relative; width: 100%; max-height: 220px; background: #1b1e26 center / cover no-repeat; }

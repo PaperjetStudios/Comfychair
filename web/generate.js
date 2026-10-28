@@ -12,6 +12,8 @@ import { zoomPan } from './layout.js';
 import { clipInput } from './vfield.js';
 import { PREFS } from './prefs.js';
 import { FULL, openCrop, openSketch, templateAspect } from './editor.js';
+import { openMaskPainter } from './maskpaint.js';
+import { icon } from './icons.js';
 
 // ---------------------------------------------------------------------------
 // templates + fields
@@ -350,6 +352,7 @@ function groupFieldEls(fs) {
       if (fh) { const el = sizeField(f, fh); el.dataset.key = f.key; out.push(el); continue; }
     }
     if (f.kind === 'int' && f.input === 'height' && fs.some((x) => x.node === f.node && x.input === 'width' && x.kind === 'int')) continue;
+    if (f.kind === 'mask') continue;   // drawn inside its picture's field
     out.push(fieldEl(f));
   }
   return out;
@@ -835,18 +838,74 @@ function imageField(f) {
     openCrop({ img, crop: cropped ? cropped.crop : FULL, onApply: (c) => {
       if (c.w > 0.999 && c.h > 0.999) delete S.imageCrop[f.key];
       else S.imageCrop[f.key] = { src: v, crop: c };
+      if (mf && S.values[mf.key]?.name && !maskFits(S.values[mf.key], v, S.imageCrop[f.key]?.crop)) toast('The mask was cleared: it was painted on the old crop');
       persist(); renderFields();
     } });
   };
   const set = (name) => { setVal(f.key, name); renderFields(); };
+  // a mask painted over this picture (its own pseudo field): it goes when the picture or its crop changes
+  const mf = maskFieldOf(f);
+  const mask = mf ? S.values[mf.key] : null;
+  if (mask?.name && !maskFits(mask, v, cropped?.crop)) S.values[mf.key] = { ...mask, name: null, box: null, src: null, crop: null };
   const el = imageInput({ label: f.label, name: v ? String(v).split('/').pop() + (cropped ? ' · cropped' : '') : '',
     thumb: cropped ? cropPreview(thumbUrl(cropped.src, 256), cropped.crop) : v ? h('img', { src: thumbUrl(v, 256), alt: v }) : null,
     pick, onClear: () => set(''), buttons: [
       v ? button('Crop…', crop) : null,
+      v && mf ? button('Mask…', () => paintMask(f, mf, v, cropped?.crop || null)) : null,
       button(v ? 'Draw on' : 'Draw', () => openSketch({ base: v || null, aspect: templateAspect(), onDone: set }))],
-    below: mpInput(() => S.imageMp[f.key], (n) => { S.imageMp[f.key] = n; persist(); }) });
+    below: [mpInput(() => S.imageMp[f.key], (n) => { S.imageMp[f.key] = n; persist(); }),
+      v && mf && S.values[mf.key]?.name ? maskSettings(f, mf, v, cropped?.crop || null) : null] });
   el.dataset.key = f.key;
   return el;
+}
+
+// ---- masks: paint where the edit may change the picture (web/maskpaint.js); the server puts every result back
+// onto the picture through it (app/maskcomp.py). The value: { name, src, crop, box, feather, grow, fit }. ----
+const FEATHERS = [[0, 'Hard'], [4, '4 px'], [8, '8 px'], [16, '16 px'], [32, '32 px'], [64, '64 px']];
+const GROWS = [[0, 'None'], [4, '4 px'], [8, '8 px'], [16, '16 px'], [32, '32 px']];
+const MASK_DEFAULT = { feather: 8, grow: 0, fit: false };
+const maskFieldOf = (f) => (S.tpl?.fields || []).find((x) => x.kind === 'mask' && x.image_key === f.key) || null;
+const sameCrop = (a, b) => JSON.stringify(a || null) === JSON.stringify(b || null);
+const maskFits = (m, v, crop) => !!v && m.src === v && sameCrop(m.crop, crop);
+
+function paintMask(f, mf, v, crop) {
+  const m = S.values[mf.key];
+  openMaskPainter({ picture: v, crop, mask: m?.name || null, onDone: async (blob, box) => {
+    const keep = { ...MASK_DEFAULT, ...(m || {}) };
+    if (!blob) {
+      if (m?.name) toast('Nothing painted: the mask is off');
+      setVal(mf.key, { ...keep, name: null, box: null, src: null, crop: null }); renderFields();
+      return;
+    }
+    const r = await fetch('/api/inputs/mask', { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: blob });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
+    setVal(mf.key, { ...keep, name: (await r.json()).name, src: v, crop, box });
+    renderFields();
+  } });
+}
+
+function maskSettings(f, mf, v, crop) {
+  const m = { ...MASK_DEFAULT, ...S.values[mf.key] };
+  const put = (o) => { setVal(mf.key, { ...m, ...o }); renderFields(); };
+  const remove = () => {
+    const was = S.values[mf.key];
+    put({ name: null, box: null, src: null, crop: null });
+    undoToast('Mask removed', () => { setVal(mf.key, was); renderFields(); });
+  };
+  const num = (x) => Number(x);
+  const what = mf.composite
+    ? 'Only the painted part can change: every result is put back onto this picture through the mask, so the rest stays exactly as it was. If the result\'s shape differs from the picture, the picture is cropped from the middle to fit it first.'
+    : 'The template takes the mask as its own mask input.';
+  return h('div', { class: 'mask-set' },
+    field('Mask', help(`${what} Tap the mask to paint more or less. Edge softness blends the border; Grow widens the painted part first.${mf.fit ? ' Crop to mask runs the edit on a box around the mask at the chosen size, then puts it back: more detail for a small area (the rest of the picture is not seen by the model).' : ''}`),
+      h('div', { class: 'row' },
+        h('button', { type: 'button', class: 'mask-thumb', title: 'Edit the mask', 'aria-label': 'Edit the mask', onclick: () => paintMask(f, mf, v, crop) },
+          h('img', { src: thumbUrl(m.name, 128), alt: '' })),
+        button('Edit…', () => paintMask(f, mf, v, crop)),
+        iconBtn('Remove the mask', icon('trash'), remove))),
+    mf.composite ? field('Edge softness', chips(FEATHERS, m.feather, (x) => put({ feather: num(x) }))) : null,
+    mf.composite ? field('Grow', chips(GROWS, m.grow, (x) => put({ grow: num(x) }))) : null,
+    mf.fit ? toggle('Crop to mask', m.fit, (on) => put({ fit: on })) : null);
 }
 
 // A video input (VHS_LoadVideoPath): the value is the clip's source, {generation, index} for an
@@ -995,6 +1054,10 @@ export async function generate() {
   keepAwake(true);
   try {
     for (const f of S.tpl.fields) if (f.kind === 'image') values[f.key] = await cropForRun(f, values[f.key]);
+    for (const f of S.tpl.fields) {   // the picture goes as its cropped copy: the mask belongs to that (so Replay & edit keeps it)
+      const m = f.kind === 'mask' ? values[f.key] : null;
+      if (m?.name) values[f.key] = { ...m, src: values[f.image_key], crop: null };
+    }
     const pf = S.tpl.fields.find(isMainPrompt);
     const builder = pf && builderState().on ? { parts: S.pb.parts, subjects: S.pb.subjects } : null;
     const gens = await queueRun({ template: S.tpl.id, values, batch: S.batch, builder, timeout: 120000 });   // (what it's made from: the server reads it off the inputs)

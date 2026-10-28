@@ -532,6 +532,37 @@ latent node), and maybe `@9 Model` on the UNet loader if you switch high/low-noi
 If a template looks wrong, open a generation in History → **Workflow JSON** and drag it into
 desktop ComfyUI. It's the exact graph that ran, with LoRAs expanded.
 
+### Masked edits
+
+On an image template (the `-edit` and `-i2i` ones), the first picture has **Mask…**: a full-screen painter
+over the picture as cropped. Paint what the edit may change; it shows as a red tint. The pen paints (press
+harder for a wider line), **Erase** takes paint off, **Size** is on screen (zoom in for fine work, or `[` `]`),
+and **Invert**, **Fill all** and **Clear** work on the whole mask. Two fingers pan and zoom; once the pen has
+touched the screen, fingers only pan (**Pen only**). A two-finger tap undoes, three redo (or Ctrl+Z).
+**Use mask** saves it, and the picture's field shows its thumbnail (tap to edit it, the bin removes it)
+with **Edge softness** (Hard, 4–64 px) and **Grow** (none, 4–32 px). A new picture or a new crop clears it.
+Tabs, shots and **Replay & edit** keep the mask.
+
+At run time every saved image is put back onto the picture through the mask (`app/maskcomp.py`, core nodes
+only): the picture, scaled to the result's size, is the background; the mask is scaled the same way, grown,
+then blurred; `ImageCompositeMasked` puts the result over it where the mask is. So whatever the model did
+outside the mask is thrown away, and the rest is your picture, pixel for pixel. When the result's shape differs
+from the picture (a different Size), the picture is scaled and cropped from the middle to fit, the same way the
+edit templates' Size crops it on the way in. Videos and sounds are left alone; the setting is only offered on
+templates that save images.
+
+**Crop to mask** (on the templates with a Size, the edit models): the model only sees a box around the mask
+(with room around it, in the Size's shape), made at the Size, and the result is scaled back into that box on
+the full picture, so a small area gets the model's whole resolution. The output is then the picture's own
+size. It falls back to the whole picture when the box would be most of it.
+
+A template with a mask input of its own gets the painted mask too: a **LoadImageMask** (read from the red
+channel), or a `@… mask` / `@… inpaint` picture left empty. None of the current templates has one.
+
+Masks are greyscale PNGs (white = change), saved by `POST /api/inputs/mask` under `data/inputs/mask/` and in
+ComfyUI's `input/comfydeck/mask/`; they stay out of the input pickers. The run's settings hold the mask as
+`<node>.__mask` = `{name, feather, grow, fit, box}`.
+
 ---
 
 ## Story
