@@ -88,16 +88,7 @@
           <canvas id="vidCanvas"></canvas>
           <div id="vidEmpty" class="placeholder">Add clips, images or sound to the timeline</div>
         </div>
-        <div class="transport">
-          <button id="vidStart" class="icon-btn" aria-label="Go to start" title="Go to start (Home)">⇤</button>
-          <button id="vidPrev" class="icon-btn" aria-label="Back one frame" title="Back one frame (←)">⏮</button>
-          <button id="vidPlay" class="btn small primary" title="Play / pause (Space)">▶ Play</button>
-          <button id="vidNext" class="icon-btn" aria-label="Forward one frame" title="Forward one frame (→)">⏭</button>
-          <button id="vidLoop" class="btn small" aria-pressed="false">⟲ Loop</button>
-          <button id="vidSnap" class="btn small" title="Save this frame as an image">📷 Frame</button>
-          <span id="vidLoad" class="hint"></span>
-          <span id="vidTime" class="timecode"></span>
-        </div>
+        <div class="transport" id="vidTransport"></div>
       </div>
       <div class="splitter" role="separator" aria-label="Drag to resize preview and settings" title="Drag to resize · double-tap to reset"></div>
       <aside class="panel" id="videoPanel"></aside>
@@ -114,16 +105,7 @@
           <canvas id="sndCanvas" aria-label="The whole mix: tap to move the playhead, drag a clip to move or trim it"></canvas>
           <div id="sndEmpty" class="placeholder">Add sounds, or the sound of clips, to the tracks below</div>
         </div>
-        <div class="transport">
-          <button id="sndStart" class="icon-btn" aria-label="Go to start" title="Go to start (Home)">⇤</button>
-          <button id="sndBack" class="icon-btn" aria-label="Back 5 seconds" title="Back 5 s">⏪</button>
-          <button id="sndPlay" class="btn small primary" title="Play / pause (Space)">▶ Play</button>
-          <button id="sndFwd" class="icon-btn" aria-label="Forward 5 seconds" title="Forward 5 s">⏩</button>
-          <button id="sndLoop" class="btn small" aria-pressed="false">⟲ Loop</button>
-          <span id="sndTime" class="timecode"></span>
-          <button id="sndSplit" class="icon-btn" aria-label="Split at the playhead" title="Split at the playhead (S)">✂</button>
-          <button id="sndDel" class="icon-btn" aria-label="Delete the selected clip" title="Delete the selected clip (Del)">🗑</button>
-        </div>
+        <div class="transport" id="sndTransport"></div>
       </div>
       <div class="splitter" role="separator" aria-label="Drag to resize preview and settings" title="Drag to resize · double-tap to reset"></div>
       <aside class="panel" id="soundPanel"></aside>

@@ -8,6 +8,7 @@ import { openGeneration } from './run.js';
 import { useInGenerate } from './editor.js';
 import { TabSet } from './tabs.js';
 import { clipSoundFields, durationOf, timeline, wavePeaks } from './timeline.js';
+import { fmtTime, playKeys, transport } from './playback.js';
 import * as COMP from './scene-comp.js';
 import { maximizable } from './layout.js';
 import { canTrack, openTrack } from './track.js';
@@ -62,6 +63,7 @@ function legacyTimeline() {
 // ---- tabs: each video edit is a document in the project folder ----
 const migrateEdit = (p) => ({ tracks: p.tracks?.length ? p.tracks : defaultTracks(), items: p.items || [], size: p.size || null, fps: p.fps || 0 });
 let tabs = null, tabsReady = null;
+let vtp = null;   // the transport bar (playback.js)
 const ensureTabs = () => tabsReady || (tabsReady = tabs ? tabs.start() : Promise.resolve());
 
 // the timeline changed: save it (the tab flushes ~1 s later, or at once on Export / leaving)
@@ -69,7 +71,7 @@ function persistTimeline() { tabs?.changed(); }
 
 // the timeline itself (timeline.js, shared with the Sound tab): a sound clip only goes on an audio track, a picture on a video track
 const TL = timeline(V, { el: '#timeline', headW: HEAD_W, minLen: MIN_LEN, zoom: [4, 400], ppsKey: 'deck.video.pps',
-  pause: () => vidPause(), seek: (t) => vidSeek(t), timeLabel: (t) => tc(t), showTime: (s) => { $('#vidTime').textContent = s; },
+  pause: () => vidPause(), seek: (t) => vidSeek(t), showTime: () => vtp?.update(),
   changed: () => timelineChanged(), dragged: () => { renderTimeline(); syncMedia(); requestDraw(); }, rendered: () => renderTimeline(),
   selected: () => renderVideoPanel(), deselected: () => { renderTimeline(); renderVideoPanel(); },
   canDrop: (it, tr) => (tr.kind === 'audio') === (it.kind === 'audio'), tabs: () => tabs });
@@ -81,10 +83,7 @@ const trackName = (t) => `${t.kind === 'video' ? 'V' : 'A'}${tracksOf(t.kind).in
 const zOf = (it) => tracksOf('video').findIndex((t) => t.id === it.track);
 const isVisual = (it) => it.kind === 'video' || it.kind === 'image' || it.kind === 'scene';
 const fpsNow = () => V.fps || 24;
-const tc = (t) => {
-  const f = fpsNow(), m = Math.floor(t / 60), s = Math.floor(t % 60), fr = Math.min(f - 1, Math.floor((t % 1) * f + 1e-6));
-  return `${m}:${String(s).padStart(2, '0')}:${String(fr).padStart(2, '0')}`;
-};
+const tc = (t) => fmtTime(t, fpsNow());   // m:ss:ff
 
 // ---- playback: one media element per clip, kept in step with the timeline clock ----
 // Preloading: each video/sound on the timeline is downloaded whole into memory (a blob: URL), so
@@ -600,7 +599,7 @@ function vidSeek(t) {
   if (V.playing) V.clock = performance.now() - V.t * 1000;
   syncMedia(); requestDraw(); updatePlayhead();
 }
-function showPlayState() { $('#vidPlay').textContent = V.playing ? '❚❚ Pause' : '▶ Play'; }
+function showPlayState() { vtp?.update(); }
 
 // ---- timeline drawing ----
 function posterFor(it) {   // first frame of a video, as a small JPEG for the clip's filmstrip
@@ -1135,17 +1134,11 @@ export function wireVideoTransport() {
   wireGizmo();
   COMP.wire({ ids: () => V.items.filter((i) => i.kind === 'scene').map((i) => i.src.scene), onChange: sceneChanged,
     visible: () => $('#tab-video').classList.contains('active') });
-  const step = (d) => { vidPause(); vidSeek(V.t + d); };
-  $('#vidStart').addEventListener('click', () => { vidPause(); vidSeek(0); });
-  $('#vidPrev').addEventListener('click', () => step(-1 / fpsNow()));
-  $('#vidNext').addEventListener('click', () => step(1 / fpsNow()));
-  $('#vidPlay').addEventListener('click', () => (V.playing ? vidPause() : vidPlay()));
-  $('#vidSnap').addEventListener('click', snapshotFrame);
+  vtp = transport({ playing: () => V.playing, play: vidPlay, pause: vidPause, seek: vidSeek, t: () => V.t, len: seqEnd },
+    { step: { by: () => 1 / fpsNow(), label: 'one frame' }, fps: fpsNow, loop: { get: () => V.loop, set: (on) => { V.loop = on; store.set('deck.video.loop', on); } },
+      extra: [button('📷 Frame', snapshotFrame, { title: 'Save this frame as an image' }), h('span', { id: 'vidLoad', class: 'hint' })] });
+  $('#vidTransport').replaceWith(vtp.el);
   vidMax = maximizable(vidStage(), $('#tab-video .viewer'), { onChange: () => requestDraw() });
-  const loopBtn = $('#vidLoop');
-  const showLoop = () => { loopBtn.classList.toggle('on', V.loop); loopBtn.setAttribute('aria-pressed', String(V.loop)); };
-  loopBtn.addEventListener('click', () => { V.loop = !V.loop; store.set('deck.video.loop', V.loop); showLoop(); });
-  showLoop();
   $('#tlTools').replaceChildren(
     button('✂ Split', TL.split, { title: 'Split at playhead (S)' }),
     button('🗑 Delete', TL.deleteSelected, { title: 'Delete selected clip (Del)' }),
@@ -1154,23 +1147,12 @@ export function wireVideoTransport() {
     button('Fit', TL.fit),
     iconBtn('Zoom in', '+', () => TL.zoom(V.pps * 1.5)));
   TL.wire();
-  showPlayState();
-  // Premiere-ish keys while the Video tab is open
-  document.addEventListener('keydown', (e) => {
-    if (!$('#tab-video').classList.contains('active') || e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey) return;
-    const keys = {
-      ' ': () => (V.playing ? vidPause() : vidPlay()),
-      ArrowLeft: () => step(e.shiftKey ? -1 : -1 / fpsNow()),
-      ArrowRight: () => step(e.shiftKey ? 1 : 1 / fpsNow()),
-      Home: () => { vidPause(); vidSeek(0); },
-      End: () => { vidPause(); vidSeek(seqEnd()); },
-      s: TL.split, c: TL.split, f: toggleVideoFullscreen,
-      Delete: TL.deleteSelected, Backspace: TL.deleteSelected,
-      '=': () => TL.zoom(V.pps * 1.5), '+': () => TL.zoom(V.pps * 1.5), '-': () => TL.zoom(V.pps / 1.5),
-    };
-    const fn = keys[e.key];
-    if (fn) { e.preventDefault(); fn(); }
-  });
+  // Premiere-ish keys while the Video tab is open (playback.js: Space, arrows, Home / End)
+  playKeys(() => $('#tab-video').classList.contains('active'), () => vtp, () => ({
+    s: TL.split, c: TL.split, f: toggleVideoFullscreen,
+    Delete: TL.deleteSelected, Backspace: TL.deleteSelected,
+    '=': () => TL.zoom(V.pps * 1.5), '+': () => TL.zoom(V.pps * 1.5), '-': () => TL.zoom(V.pps / 1.5),
+  }));
 }
 
 // Saved video edits as a source in every image picker (media.js registerPickerSource): a tab's video is its

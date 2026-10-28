@@ -8,7 +8,7 @@ import { $, h, store, uid, toast, undoToast, clamp, panFmt, pctFmt, rangeField }
 // the two tabs can't drift apart. Overlaps mirror app/videoedit._overlaps (the export).
 //
 //   const TL = timeline(V, { el: '#timeline', headW: 84, minLen: 0.1, zoom: [4, 400], ppsKey: 'deck.video.pps',
-//     pause(), seek(t), timeLabel(t), changed(), dragged(), selected(it)?, canDrop(it, track)?, tabs: () => tabs });
+//     pause(), seek(t), showTime() (the transport's time: playback.js), changed(), dragged(), selected(it)?, canDrop(it, track)?, tabs: () => tabs });
 //
 // An image clip (Video only) has no source time: trimming its start or splitting it changes its length.
 // ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ export function timeline(st, o) {
     const tl = box(), ph = tl.querySelector('.tl-playhead');
     const x = o.headW + st.t * st.pps;
     if (ph) ph.style.left = `${x}px`;
-    o.showTime?.(`${o.timeLabel(st.t)} / ${o.timeLabel(seqEnd())}`);
+    o.showTime?.();
     if (follow && (x > tl.scrollLeft + tl.clientWidth - 30 || x < tl.scrollLeft + o.headW)) tl.scrollLeft = x - o.headW - 30;
   }
 

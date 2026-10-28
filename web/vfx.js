@@ -1,4 +1,4 @@
-import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle, textArea, pctFmt, colorField, seedField, sizeSelect, imageInput } from './ui.js';
+import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle, textArea, pctFmt, colorField, seedField, sizeSelect, imageInput, store } from './ui.js';
 import { S, inputUrl, thumbUrl, onServer, switchTab } from './core.js';
 import { bareSource, cardMedia, clipLabel, clipUrl, genLabel, openImagePicker, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
 import { hooks as genHooks } from './generate.js';
@@ -7,6 +7,7 @@ import { openGeneration } from './run.js';
 import { addToEditor, useInGenerate } from './editor.js';
 import { addToTimeline } from './video.js';
 import { clipInput } from './vfield.js';
+import { playKeys, transport } from './playback.js';
 import { TabSet } from './tabs.js';
 import { maximizable } from './layout.js';
 import { sendToCraft } from './craft.js';
@@ -105,7 +106,9 @@ const tabState = () => { const { results, showing, ...rest } = T; return JSON.pa
 // cmp: the result on the left instead of the source (comparing takes); layout: 'wipe' or 'side'
 // pose: the source's finished pose video for the drives ({ key, r }: r null when there is none, undefined while
 // looking); remake: the next drive makes the pose again
-const UI = { wipe: 0.5, draw: null, srcInfo: null, playing: false, neg: false, cmp: null, layout: 'wipe', rate: 1, pose: null, remake: false };
+const UI = { wipe: 0.5, draw: null, srcInfo: null, playing: false, neg: false, cmp: null, layout: 'wipe', rate: 1, pose: null, remake: false,
+  loop: store.get('deck.vfx.loop', true) };
+let vtp = null;   // the transport bar (playback.js)
 
 // ---- inputs ----
 function changed(redraw = true) { tabs?.changed(); if (redraw) render(); }
@@ -779,6 +782,7 @@ function keepInTrim() {
     if (src) src.currentTime = s;
     if (V.a && !src) V.a.currentTime = 0;
     if (V.b) V.b.currentTime = 0;
+    if (!UI.loop) { vfxPause(); return; }   // (back at the start, stopped)
     for (const v of [V.a, V.b]) v?.play().catch(() => {});
   }
   showTime();
@@ -801,17 +805,7 @@ function seekTo(t) {
   showTime();
 }
 
-function showTime() {
-  const bar = $('#vfxTime'), out = $('#vfxClock');
-  if (!bar || !out) return;
-  const { s, clock, len } = span();
-  const t = clock ? clamp(clock.currentTime - (clock === V.b ? 0 : s), 0, len) : 0;
-  bar.max = len || 0;
-  if (document.activeElement !== bar) bar.value = t;
-  bar.style.setProperty('--p', len ? `${(t / len) * 100}%` : '0%');
-  const f = (x) => `${x.toFixed(2)}`;
-  out.textContent = `${f(t)} / ${f(len)} s · frame ${Math.round(t * FPS) + 1}`;
-}
+function showTime() { vtp?.update(); }
 
 function drawViewer() {
   const stage = $('#vfxStage');
@@ -993,36 +987,42 @@ function setWipe(x) {
   paintOverlay();
 }
 
+// the shown time: a result from 0, the source in its trim's own time
+const shownT = () => { const { s, clock, len } = span(); return clock ? clamp(clock.currentTime - (clock === V.b ? 0 : s), 0, len) : 0; };
+const vfxPlayer = {
+  playing: () => UI.playing,
+  play() {
+    const vids = [V.a, V.b].filter(Boolean);
+    if (!vids.length) return;
+    UI.playing = true;
+    if (V.a && !V.a.dataset.result) {   // from the trim's start when outside it
+      const [s, e] = srcSpan();
+      if (V.a.currentTime < s - 0.05 || V.a.currentTime >= e - 0.02) { V.a.currentTime = s; if (V.b) V.b.currentTime = 0; }
+    }
+    for (const v of vids) v.play().catch(() => {});
+    requestAnimationFrame(keepInTrim);
+  },
+  pause: () => vfxPause(),
+  seek: (t) => seekTo(t),
+  t: shownT,
+  len: () => span().len,
+};
+
 function renderTransport() {
   const bar = $('#vfxTransport');
   if (!bar) return;
   const vids = [V.a, V.b].filter(Boolean);
-  const play = () => {
-    UI.playing = !UI.playing;
-    if (UI.playing && V.a && !V.a.dataset.result) {   // from the trim's start when outside it
-      const [s, e] = srcSpan();
-      if (V.a.currentTime < s - 0.05 || V.a.currentTime >= e - 0.02) { V.a.currentTime = s; if (V.b) V.b.currentTime = 0; }
-    }
-    for (const v of vids) UI.playing ? v.play().catch(() => {}) : v.pause();
-    if (UI.playing) requestAnimationFrame(keepInTrim);
-    renderTransport();
-  };
-  const step = (n) => { UI.playing = false; for (const v of vids) v.pause(); const { clock, s } = span(); if (clock) seekTo(clock.currentTime - (clock === V.b ? 0 : s) + n / FPS); renderTransport(); };
-  const time = h('input', { type: 'range', id: 'vfxTime', class: 'vfx-time', min: 0, max: 0, step: 'any', value: 0, 'aria-label': 'Time',
-    disabled: !vids.length, oninput: (ev) => seekTo(parseFloat(ev.target.value)) });
-  const rate = (r) => { UI.rate = r; for (const v of vids) v.playbackRate = r; renderTransport(); };
   for (const v of vids) { v.playbackRate = UI.rate; v.onseeked = v.onloadedmetadata = showTime; }
-  bar.replaceChildren(...[
-    h('div', { class: 'vfx-timebar' }, time, h('span', { id: 'vfxClock', class: 'vfx-clock' })),
-    iconBtn('Back to the start', '⇤', () => { step(0); seekTo(0); }),
-    iconBtn('Back one frame', '⏮', () => step(-1)),
-    button(UI.playing ? '❚❚ Pause' : '▶ Play', play, { cls: 'small primary', disabled: !vids.length }),
-    iconBtn('Forward one frame', '⏭', () => step(1)),
-    vids.length ? seg([[0.25, '¼×'], [0.5, '½×'], [1, '1×']], UI.rate, rate) : null,
-    V.a && V.b ? seg([['wipe', 'Wipe'], ['side', 'Side by side']], UI.layout, (v) => { UI.layout = v; UI.playing = false; drawViewer(); }) : null,
-    V.a && V.b && UI.layout === 'wipe' ? h('span', { class: 'hint' }, 'Drag across the picture to wipe') : null,
-    UI.draw ? h('span', { class: 'hint' }, { points: 'Tap to place points', tracks: 'Drag to draw a path', color: 'Tap the screen colour' }[UI.draw]) : null].filter(Boolean));
-  showTime();
+  vtp = transport(vfxPlayer, { step: { by: 1 / FPS, label: 'one frame' }, fps: FPS, frames: true, scrub: true, disabled: !vids.length,
+    loop: { get: () => UI.loop, set: (on) => { UI.loop = on; store.set('deck.vfx.loop', on); } },
+    rates: vids.length ? [[0.25, '¼×'], [0.5, '½×'], [1, '1×']] : null,
+    rate: { get: () => UI.rate, set: (r) => { UI.rate = r; for (const v of [V.a, V.b]) if (v) v.playbackRate = r; } },
+    extra: [
+      V.a && V.b ? seg([['wipe', 'Wipe'], ['side', 'Side by side']], UI.layout, (v) => { UI.layout = v; vfxPause(); drawViewer(); }) : null,
+      V.a && V.b && UI.layout === 'wipe' ? h('span', { class: 'hint' }, 'Drag across the picture to wipe') : null,
+      UI.draw ? h('span', { class: 'hint' }, { points: 'Tap to place points', tracks: 'Drag to draw a path', color: 'Tap the screen colour' }[UI.draw]) : null] });
+  vtp.el.id = 'vfxTransport';
+  bar.replaceWith(vtp.el);
 }
 
 // ---- tabs and wiring ----
@@ -1042,7 +1042,7 @@ export async function openVfxState(state, name) {
   } catch (e) { toast(e.message, true); }
 }
 export function renderVfx() { ensureTabs(); render(); }
-export function vfxPause() { UI.playing = false; for (const v of [V.a, V.b]) v?.pause(); }
+export function vfxPause() { UI.playing = false; for (const v of [V.a, V.b]) v?.pause(); vtp?.update(); }
 
 export function wireVfx() {
   const panel = $('#vfxPanel');
@@ -1058,6 +1058,7 @@ export function wireVfx() {
     } });
   maximizable($('#tab-vfx .stage'), $('#tab-vfx .viewer'), { onChange: () => sizeOverlay() });
   addEventListener('resize', () => { if ($('#tab-vfx').classList.contains('active')) { sizeOverlay(); layoutCanvas(); } });
+  playKeys(() => $('#tab-vfx').classList.contains('active'), () => vtp);
   // a result finishing (or failing) redraws its card
   onServer('deck_generation', (m) => { const id = m.data?.id; if (T.results.includes(id)) { setTimeout(render, 0); } });
 }

@@ -9,6 +9,7 @@ import { bareSource, extractSound, openSoundPicker, soundInput, soundSource, upl
 import { waitJob } from './clipimport.js';
 import { TabSet } from './tabs.js';
 import { clipSoundFields, dragWindow, durationOf, timeline, wavePeaks } from './timeline.js';
+import { fmtTime, playKeys, transport } from './playback.js';
 
 // ---------------------------------------------------------------------------
 // sound: a multi-track sound editor laid out like the Video tab. Tracks mix (mute, solo, level, pan),
@@ -33,11 +34,12 @@ function newItem({ kind, src, url, label, dur = 0 }, track) {
 }
 
 let tabs = null, tabsReady = null;
+let stp = null;   // the transport bar (playback.js)
 const ensureTabs = () => tabsReady || (tabsReady = tabs ? tabs.start() : Promise.resolve());
 const persist = () => tabs?.changed();
 
 const TL = timeline(N, { el: '#sndTimeline', headW: HEAD_W, minLen: MIN_LEN, zoom: [2, 600], ppsKey: 'deck.sound.pps',
-  pause: () => sndPause(), seek: (t) => sndSeek(t), timeLabel: (t) => tc(t), showTime: (s) => { $('#sndTime').textContent = s; },
+  pause: () => sndPause(), seek: (t) => sndSeek(t), showTime: () => stp?.update(),
   changed: () => changed(), dragged: () => { renderTimeline(); syncMedia(); }, rendered: () => renderTimeline(),
   selected: () => { renderPanel(); drawStage(); }, deselected: () => { renderTimeline(); renderPanel(); }, tabs: () => tabs });
 const { len: itLen, end: itEnd, seqEnd, selItem, xfades, fadeGain, updatePlayhead } = TL;
@@ -45,7 +47,7 @@ const trackOf = (it) => N.tracks.find((t) => t.id === it.track);
 const trackName = (t) => t.name || `A${N.tracks.indexOf(t) + 1}`;
 const soloed = () => N.tracks.some((t) => t.solo);
 const audible = (tr) => tr && !tr.muted && (!soloed() || tr.solo);
-const tc = (t) => `${Math.floor(t / 60)}:${(t % 60).toFixed(2).padStart(5, '0')}`;
+const tc = (t) => fmtTime(t);   // m:ss.ss
 
 // ---- playback: one <audio> per clip through Web Audio (gain, pan) into a master gain and a meter ----
 const A = { ctx: null, master: null, meter: null, data: null };
@@ -143,7 +145,7 @@ function sndSeek(t) {
   if (N.playing) N.clock = performance.now() - N.t * 1000;
   syncMedia(); updatePlayhead(); drawStage();
 }
-function showPlayState() { $('#sndPlay').textContent = N.playing ? '❚❚ Pause' : '▶ Play'; }
+function showPlayState() { stp?.update(); }
 
 // ---- waveforms: loudness peaks, 100 per second ----
 async function loadWave(url) {
@@ -649,16 +651,12 @@ export function wireSound() {
   const mount = h('div', { class: 'vid-tabs' });
   $('#soundPanel').replaceChildren(mount, h('div', { id: 'sndBody' }));
   tabs = new TabSet({ kind: 'sound-tabs', mount, scope: 'project', newName: (n) => `Mix ${n}`, adapter });
-  $('#sndStart').addEventListener('click', () => { sndPause(); sndSeek(0); });
-  $('#sndBack').addEventListener('click', () => sndSeek(N.t - 5));
-  $('#sndFwd').addEventListener('click', () => sndSeek(N.t + 5));
-  $('#sndPlay').addEventListener('click', () => (N.playing ? sndPause() : sndPlay()));
-  $('#sndSplit').addEventListener('click', TL.split);
-  $('#sndDel').addEventListener('click', TL.deleteSelected);
-  const loopBtn = $('#sndLoop');
-  const showLoop = () => { loopBtn.classList.toggle('on', N.loop); loopBtn.setAttribute('aria-pressed', String(N.loop)); };
-  loopBtn.addEventListener('click', () => { N.loop = !N.loop; store.set('deck.sound.loop', N.loop); showLoop(); });
-  showLoop();
+  stp = transport({ playing: () => N.playing, play: sndPlay, pause: sndPause, seek: sndSeek, t: () => N.t, len: seqEnd },
+    { step: { by: 5, key: 0.1, back: '⏪', fwd: '⏩', label: '5 s', pause: false },
+      loop: { get: () => N.loop, set: (on) => { N.loop = on; store.set('deck.sound.loop', on); } },
+      extra: [h('button', { type: 'button', id: 'sndSplit', class: 'icon-btn', 'aria-label': 'Split at the playhead', title: 'Split at the playhead (S)', onclick: TL.split }, '✂'),
+        h('button', { type: 'button', id: 'sndDel', class: 'icon-btn', 'aria-label': 'Delete the selected clip', title: 'Delete the selected clip (Del)', onclick: TL.deleteSelected }, '🗑')] });
+  $('#sndTransport').replaceWith(stp.el);
   $('#sndTools').replaceChildren(
     button('✂ Split', TL.split, { title: 'Split at playhead (S)' }),
     button('🗑 Delete', TL.deleteSelected, { title: 'Delete selected clip (Del)' }),
@@ -667,23 +665,12 @@ export function wireSound() {
     button('Fit', TL.fit),
     iconBtn('Zoom in', '+', () => TL.zoom(N.pps * 1.5)));
   wireTimeline();
-  showPlayState();
   onServer('deck_generation', ({ data }) => { if (N.gens.includes(data?.id) && $('#tab-sound').classList.contains('active')) setTimeout(renderPanel, 0); });
-  document.addEventListener('keydown', (e) => {
-    if (!$('#tab-sound').classList.contains('active') || e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey) return;
-    const keys = {
-      ' ': () => (N.playing ? sndPause() : sndPlay()),
-      ArrowLeft: () => sndSeek(N.t - (e.shiftKey ? 1 : 0.1)),
-      ArrowRight: () => sndSeek(N.t + (e.shiftKey ? 1 : 0.1)),
-      Home: () => { sndPause(); sndSeek(0); },
-      End: () => { sndPause(); sndSeek(seqEnd()); },
-      s: TL.split, c: TL.split, d: TL.duplicate,
-      Delete: TL.deleteSelected, Backspace: TL.deleteSelected,
-      '=': () => TL.zoom(N.pps * 1.5), '+': () => TL.zoom(N.pps * 1.5), '-': () => TL.zoom(N.pps / 1.5),
-    };
-    const fn = keys[e.key];
-    if (fn) { e.preventDefault(); fn(); }
-  });
+  playKeys(() => $('#tab-sound').classList.contains('active'), () => stp, () => ({
+    s: TL.split, c: TL.split, d: TL.duplicate,
+    Delete: TL.deleteSelected, Backspace: TL.deleteSelected,
+    '=': () => TL.zoom(N.pps * 1.5), '+': () => TL.zoom(N.pps * 1.5), '-': () => TL.zoom(N.pps / 1.5),
+  }));
 }
 
 // for the headless UI checks (dev/): the live state
