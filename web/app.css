@@ -1677,8 +1677,9 @@ img.civ-blur, .civ-shot.civ-blur > * { filter: blur(22px) saturate(.6); transfor
 .st-ref .chips { grid-column: 1 / -1; }
 
 /* ---- the work area (workarea.js): a teal range along the top of a timeline's ruler ---- */
-.wa-band { position: absolute; left: 0; right: 0; top: 0; height: 9px; z-index: 3; cursor: crosshair; touch-action: none; }
-.wa-band:hover { background: color-mix(in srgb, var(--range) 16%, transparent); }
+.wa-band { position: absolute; left: 0; right: 0; top: 0; height: 9px; z-index: 3; cursor: crosshair; touch-action: none;
+  background: color-mix(in srgb, var(--range) 7%, transparent); }   /* (faintly there, so a finger finds it) */
+.wa-band:hover { background: color-mix(in srgb, var(--range) 18%, transparent); }
 .wa-bar { position: absolute; top: 1px; bottom: 1px; min-width: 2px; background: var(--range); border-radius: 2px; cursor: grab; }
 .wa-bar::before { content: ''; position: absolute; inset: -2px 0 -8px; }   /* (a taller target than the strip) */
 .wa-bar.off { background: color-mix(in srgb, var(--range) 22%, transparent); outline: 1px solid var(--range); outline-offset: -1px; }
