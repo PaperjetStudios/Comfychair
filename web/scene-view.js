@@ -196,7 +196,7 @@ function fixTarget(o, start) {
   const it = selItem();
   if (!it || !EVEN.has(it.type)) return;
   const s = [o.scale.x, o.scale.y, o.scale.z].find((v) => Math.abs(v - start.sy) > 1e-6) ?? start.sy;
-  o.scale.setScalar(Math.max(0.01, s));
+  o.scale.setScalar(Math.max(1e-4, s));
 }
 
 // each frame of a drag (and its settling): the object the gizmo holds is where the spring has it, so
@@ -213,7 +213,7 @@ function applyChange() {
   const d = THREE.MathUtils.radToDeg;
   write(o, namesFor(o), { x: m.position.x, y: m.position.y, z: m.position.z,
     rx: d(m.rotation.x), ry: d(m.rotation.y), rz: d(m.rotation.z),
-    sx: Math.max(0.01, m.scale.x), sy: Math.max(0.01, m.scale.y), sz: Math.max(0.01, m.scale.z) });
+    sx: Math.max(1e-4, m.scale.x), sy: Math.max(1e-4, m.scale.y), sz: Math.max(1e-4, m.scale.z) });
 }
 
 // the shot camera put where the proxy is, looking along it at what it looked at (same distance)
@@ -524,7 +524,7 @@ export function pose(f) {
     const v = current(o, namesFor(o), f);
     m.position.set(v.x, v.y, v.z);
     m.rotation.set(r(v.rx), r(v.ry), r(v.rz));
-    if (EVEN.has(o.type)) m.scale.setScalar(Math.max(0.01, v.sy));
+    if (EVEN.has(o.type)) m.scale.setScalar(Math.max(1e-4, v.sy));
     else m.scale.set(Math.max(0.01, v.sx), Math.max(0.01, v.sy), Math.max(0.01, v.sz));
     if (m.userData.rig) { FIGURE.setShape(m.userData.rig, o.shape, o.anatomy); FIGURE.applyPose(m.userData.rig, v.j, stepped(o, v.m, f), o.ground); FIGURE.setHidden(m.userData.rig, o.hide); }
     m.userData.atFrame?.(f);   // (a footage layer shows its frame, scene-track.js)

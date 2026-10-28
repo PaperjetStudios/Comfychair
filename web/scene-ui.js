@@ -85,7 +85,7 @@ function placeProps(o, cur) {
     xyz('Position (m)', [['x', 'X'], ['y', 'Up', { min: -5, max: 10 }], ['z', 'Z']], { min: -20, max: 20, step: 0.01 }),
     xyz('Rotation (°)', [['rx', 'X'], ['ry', 'Y'], ['rz', 'Z']], { digits: 0, min: -360, max: 360, step: 1 }),
     o.type === 'figure' ? num('Height (m)', () => cur().sy * FIGURE.heightOf(o.body, o.shape), (v) => even(Math.max(0.3, v) / FIGURE.heightOf(o.body, o.shape)), { min: 0.3, max: 2.5, step: 0.01 })
-      : EVEN.has(o.type) ? num('Scale', () => cur().sy, (v) => even(Math.max(0.001, v)), { min: 0.001, max: 20, step: 0.001, digits: 3 })
+      : EVEN.has(o.type) ? num('Scale', () => cur().sy, (v) => even(Math.max(0.0001, v)), { min: 0.0001, max: 20, step: 0.001, digits: 4 })
       : xyz('Size (m)', [['sx', 'Width'], ['sy', 'Height'], ['sz', 'Depth']], { min: 0.05, max: 20, step: 0.01 }),
     scaleProps(o),
     field('Pivot (where the gizmo turns it)', seg(pivotsFor(o), pivotsFor(o).some(([k]) => k === pivotOf(o)) ? pivotOf(o) : null,
