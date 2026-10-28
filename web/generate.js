@@ -1,7 +1,7 @@
 import {
   $, h, store, clamp, clamp01, clone, cycleIndex, api, toast, undoToast, openOverlay, openSheet, sheetStillOpen, nameSheet,
   button, iconBtn, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider,
-  insertAtCursor, toggle, textArea,
+  insertAtCursor, toggle, textArea, seedField as uiSeedField,
 } from './ui.js';
 import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
 import { clipLabel, clipUrl, openImagePicker, openVideoPicker, soundInput } from './media.js';
@@ -476,17 +476,8 @@ function numberField(f, isFloat) {
 }
 
 function seedField(f) {
-  const mode = S.seedMode[f.key] || 'random';
-  const input = h('input', { type: 'number', inputMode: 'numeric', min: 0, max: Number.MAX_SAFE_INTEGER, step: 1, value: S.values[f.key] });
-  input.addEventListener('change', () => { setVal(f.key, Math.max(0, parseInt(input.value || '0', 10))); });
-  const setMode = (m) => { S.seedMode[f.key] = m; persist(); modes.set(m); };
-  const modes = seg([['random', '🎲 Random'], ['fixed', 'Fixed'], ['increment', '+1 each run']], mode, setMode);
-  const last = S.lastSeed[f.key];
-  const el = field([f.label, h('span', { class: 'last-seed' }, last != null ? `last: ${last}` : '')],
-    h('div', { class: 'row' }, input,
-      button('↺ last', () => { if (S.lastSeed[f.key] != null) { input.value = S.lastSeed[f.key]; setVal(f.key, S.lastSeed[f.key]); setMode('fixed'); } },
-        { cls: 'small fixed', title: 'Use last seed' })),
-    modes);
+  const el = uiSeedField(f.label, { get: () => S.values[f.key], set: (v) => setVal(f.key, v),
+    mode: () => S.seedMode[f.key] || 'random', setMode: (m) => { S.seedMode[f.key] = m; persist(); }, last: () => S.lastSeed[f.key] ?? null });
   el.dataset.key = f.key;
   return el;
 }

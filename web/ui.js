@@ -394,6 +394,46 @@ export function toggle(label, checked, onChange = null, { help: tip = null, titl
   return el;
 }
 
+// The app's seed: 🎲 Random (a new one every run), Fixed, or +1 each run (increment), and ↺ last for the last
+// run's. get/set the number; mode()/setMode(m) 'random' | 'fixed' | 'increment'; last(): the last run's seed or null.
+// Typing a number fixes it; emptying the box goes back to Random. The caller sets data-key if it needs one.
+export function seedField(label, { get, set, mode, setMode, last = () => null, increment = true }) {
+  const show = () => { const v = get(); input.value = mode() === 'random' && !(v >= 0) ? '' : v; };
+  const pick = (m) => { setMode(m); modes.set(m); show(); };
+  const input = h('input', { type: 'number', inputMode: 'numeric', min: 0, max: Number.MAX_SAFE_INTEGER, step: 1, placeholder: 'random', 'aria-label': label });
+  input.addEventListener('change', () => {
+    if (input.value === '') return pick('random');
+    set(Math.max(0, parseInt(input.value, 10) || 0));
+    if (mode() === 'random') pick('fixed');
+  });
+  const modes = seg([['random', '🎲 Random'], ['fixed', 'Fixed'], ...(increment ? [['increment', '+1 each run']] : [])], mode(), pick);
+  const l = last();
+  const el = field([label, h('span', { class: 'last-seed' }, l != null ? `last: ${l}` : '')],
+    h('div', { class: 'row' }, input,
+      button('↺ last', () => { const v = last(); if (v == null) return; set(v); pick('fixed'); }, { cls: 'small fixed', title: 'Use the last run\'s seed' })),
+    modes);
+  show();
+  return el;
+}
+
+// A size picked from a list of [label, [w, h] | null]; one that isn't on the list shows as its own option
+export function sizeSelect(list, cur, onPick) {
+  const same = (s) => JSON.stringify(s ?? null) === JSON.stringify(cur ?? null);
+  const sel = h('select', {}, list.map(([l, s], i) => h('option', { value: i, selected: same(s) }, l)));
+  if (cur && !list.some(([, s]) => same(s))) sel.append(h('option', { value: 'custom', selected: true }, cur.join('×')));
+  sel.addEventListener('change', () => { if (sel.value !== 'custom') onPick(list[sel.value][1]); });
+  return sel;
+}
+
+// A colour well; set(hex) while it's being picked (live) and once it's chosen
+export function colorField(label, get, set, ...kids) {
+  const input = h('input', { type: 'color', value: get() || '#000000', 'aria-label': label });
+  input.addEventListener('input', () => set(input.value));
+  const el = field(label, input, ...kids);
+  el.input = input;
+  return el;
+}
+
 // A labelled setting: the label on the left, an optional note on the right (label: [text, note]).
 // A help(text) among the kids becomes an ⓘ after the label.
 export function field(label, ...kids) {

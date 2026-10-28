@@ -1,6 +1,6 @@
 import {
   $, h, store, api, clamp01, busy, toast, undoToast, openOverlay, sheetOpen, openSheet, closeSheet, button, iconBtn, actions,
-  seg, field, section, hint, propNum, layerRowsEl, panelTop, help, numSlider
+  seg, field, section, hint, propNum, layerRowsEl, panelTop, help, numSlider, colorField,
 } from './ui.js';
 import { ASPECT_PRESETS, S, inputUrl, switchTab, thumbUrl } from './core.js';
 import { openImagePicker, registerPickerSource, uploadImage } from './media.js';
@@ -714,14 +714,12 @@ function canvasProps() {
     }
     editorChanged();
   });
-  const bg = h('input', { type: 'color', value: E.bg });
-  bg.addEventListener('input', () => { E.bg = bg.value; persistEditor(); drawEditorCanvas(); });
   return section('Canvas', null,
     field('Size', sizeSeg),
     E.size ? h('div', { class: 'row' },
       editorNum('Width', E.size.w, (v) => { E.size.w = v; }, { min: 64, max: 8192, step: 8 }),
       editorNum('Height', E.size.h, (v) => { E.size.h = v; }, { min: 64, max: 8192, step: 8 })) : null,
-    field('Background', bg),
+    colorField('Background', () => E.bg, (c) => { E.bg = c; persistEditor(); drawEditorCanvas(); }),
     field('Arrange layers', seg([['row', 'Side by side'], ['column', 'Stacked'], ['grid', 'Grid']], null,
       (m) => { arrangeLayers(m); renderEditor(); }, { action: true, disabled: !E.layers.length })),
     h('div', { class: 'row' },

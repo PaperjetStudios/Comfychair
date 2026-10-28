@@ -1,6 +1,6 @@
 import {
   $, h, store, uid, api, toast, undoToast, clamp, openSheet, closeSheet, button, iconBtn, linkBtn, actions, fileButton, seg,
-  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, panelTop, toggle, textArea, pctFmt,
+  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, panelTop, toggle, textArea, pctFmt, colorField, sizeSelect,
 } from './ui.js';
 import { S, fmtT, inputUrl, thumbUrl } from './core.js';
 import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, soundToSoundTab, uploadImage, uploadMedia } from './media.js';
@@ -11,7 +11,7 @@ import { clipSoundFields, durationOf, timeline, wavePeaks } from './timeline.js'
 import * as COMP from './scene-comp.js';
 import { maximizable } from './layout.js';
 import { canTrack, openTrack } from './track.js';
-import { CLIP_FX, restyleLoras, runClipStep, sendToVfx } from './vfx.js';
+import { CLIP_FX, keyRangeFields, loraChoice, restyleLoras, runClipStep, sendToVfx } from './vfx.js';
 import { snap, snapOn, snapStep, snapNearest, normDeg, Weight, WEIGHT, DEAD_PX, deadzone, snapBar } from './gizmo.js';
 import { openCraftSheet, sendToCraft } from './craft.js';
 
@@ -865,9 +865,7 @@ function renderVideoPanel() {
         button('Delete clip', TL.deleteSelected, { cls: 'small danger', title: 'Delete' })));
   })() : null;
 
-  const sizeSel = h('select', {}, SIZES.map(([label, s], i) => h('option', { value: i, selected: JSON.stringify(s) === JSON.stringify(V.size) }, label)));
-  if (V.size && !SIZES.some(([, s]) => JSON.stringify(s) === JSON.stringify(V.size))) sizeSel.append(h('option', { value: 'custom', selected: true }, V.size.join('×')));
-  sizeSel.addEventListener('change', () => { V.size = SIZES[sizeSel.value]?.[1] || V.size; timelineChanged(); });
+  const sizeSel = sizeSelect(SIZES, V.size, (s) => { V.size = s; timelineChanged(); });
   const fpsSel = h('select', {}, [[0, 'Match first clip'], [16, '16'], [24, '24'], [25, '25'], [30, '30'], [60, '60']].map(([v, label]) =>
     h('option', { value: v, selected: V.fps === v }, label)));
   fpsSel.addEventListener('change', () => { V.fps = Number(fpsSel.value); timelineChanged(); });
@@ -910,14 +908,13 @@ function fxStepFields(it, st, i) {
       iconBtn('Earlier', '↑', () => move(-1)), iconBtn('Later', '↓', () => move(1)),
       iconBtn('Remove effect', '✕', () => { it.fx.steps.splice(i, 1); timelineChanged(); })),
     st.op === 'restyle' ? [
-      field('LoRA', h('select', { onchange: (e) => { st.lora = e.target.value; save(); } },
-        loras.map((o) => h('option', { value: o, selected: (st.lora || loras[0]) === o }, o.split('/').pop().replace(/^ltx-2\.\d-22b-ic-lora-|\.safetensors$/g, ''))))),
-      rangeField('Strength', () => st.strength ?? 1, (v) => { st.strength = v; }, { min: 0, max: 2, step: 0.05, onChange: save }),
+      loraChoice(loras, st.lora || loras[0], (name) => { st.lora = name; save(); },
+        { get: () => st.strength ?? 1, set: (v) => { st.strength = v; } }, { onStrength: save }),
       ta('prompt', 'Describe the result (for colourise, name the colours)')] : null,
     st.op === 'cleanplate' ? ta('prompt', 'Optional: what the empty scene looks like') : null,
     st.op === 'replace' ? [h('input', { type: 'text', value: st.target || '', placeholder: 'What to replace, e.g. "the woman"',
       oninput: (e) => { st.target = e.target.value; save(); } }), ta('prompt', 'Describe the shot with the new thing in it')] : null,
-    st.op === 'colorkey' ? field('Key colour', h('input', { type: 'color', value: st.color || '#00ff00', oninput: (e) => { st.color = e.target.value; save(); } })) : null,
+    st.op === 'colorkey' ? colorField('Key colour', () => st.color || '#00ff00', (c) => { st.color = c; save(); }) : null,
     st.op === 'upscale' ? field('Size', seg([['FullHD', 'Full HD'], ['4K', '4K']], st.outsize || 'FullHD', (v) => { st.outsize = v; save(); })) : null,
     LTX_OPS.has(st.op) ? field('Resolution', seg([[544, '544p'], [704, '704p'], [1088, '1088p']], st.res || 704, (v) => { st.res = Number(v); save(); })) : null);
 }
@@ -988,7 +985,7 @@ const canKey = (it) => it.src && (it.src.generation != null || it.src.media);
 function openKey(it) {
   const k = { mode: 'color', color: '#00ff00', similarity: 0.12, blend: 0.08, spill: 0.5, invert: false, matte: null };
   const frame = h('canvas', { class: 'key-frame' });
-  const swatch = h('input', { type: 'color', value: k.color, oninput: () => { k.color = swatch.value; } });
+  const swatch = colorField('Key colour', () => k.color, (c) => { k.color = c; });
   const m = V.els.get(it.id)?.el;
   if (m?.videoWidth) {   // the clip as it is under the playhead: tap it to take the screen colour
     frame.width = 320; frame.height = Math.round((320 * m.videoHeight) / m.videoWidth);
@@ -997,7 +994,7 @@ function openKey(it) {
       const r = frame.getBoundingClientRect();
       const [R, G, B] = frame.getContext('2d').getImageData(Math.floor(((e.clientX - r.left) / r.width) * frame.width),
         Math.floor(((e.clientY - r.top) / r.height) * frame.height), 1, 1).data;
-      k.color = swatch.value = '#' + [R, G, B].map((v) => v.toString(16).padStart(2, '0')).join('');
+      k.color = swatch.input.value = '#' + [R, G, B].map((v) => v.toString(16).padStart(2, '0')).join('');
     });
   }
   const matteLabel = h('span', { class: 'muted' }, 'none');
@@ -1007,10 +1004,8 @@ function openKey(it) {
     }, { badge: '▶' })));
   const colorFields = () => [
     frame.width ? field('Tap the screen colour', frame) : null,
-    field('Key colour', swatch),
-    rangeField('Similarity', () => k.similarity, (v) => { k.similarity = v; }, { min: 0.01, max: 0.6, step: 0.01, help: 'How close to the key colour a pixel must be to go clear. Raise it until the screen is gone.' }),
-    rangeField('Edge blend', () => k.blend, (v) => { k.blend = v; }, { min: 0, max: 0.5, step: 0.01, help: 'Softens the cut-out edge.' }),
-    rangeField('Spill removal', () => k.spill, (v) => { k.spill = v; }, { min: 0, max: 1, step: 0.05, help: 'Takes the green (or blue) cast off hair and edges.' }),
+    swatch,
+    ...keyRangeFields(k),
   ];
   const matteFields = () => [field('Matte clip', h('div', { class: 'row' }, matteLabel, button('Pick…', pickMatte, { cls: 'small' })))];
   const fieldsBox = h('div');

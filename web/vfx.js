@@ -1,4 +1,4 @@
-import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle, textArea, pctFmt } from './ui.js';
+import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle, textArea, pctFmt, colorField, seedField, sizeSelect } from './ui.js';
 import { S, inputUrl, thumbUrl, onServer, switchTab } from './core.js';
 import { bareSource, cardMedia, clipLabel, clipUrl, genLabel, openImagePicker, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
 import { hooks as genHooks } from './generate.js';
@@ -213,6 +213,31 @@ async function makeStartFrame() {
 }
 
 // an IC-LoRA a restyle can use: not the ones that come with their own pipeline (SDR to HDR, Alpha Gen, the other effects')
+// A LoRA's name without its folder, the IC-LoRA prefix and the extension
+export const loraName = (o) => o.split('/').pop().replace(/^ltx-2\.\d-22b-ic-lora-|\.safetensors$/g, '');
+// One LoRA picked from list, and its strength (the VFX tab and the Video tab's restyle step). none: a (none) choice.
+export function loraChoice(list, cur, onPick, strength, { none = false, onStrength = () => {} } = {}) {
+  const sel = h('select', { onchange: () => onPick(sel.value || null) },
+    none ? h('option', { value: '' }, '(none)') : null,
+    list.map((o) => h('option', { value: o, selected: cur === o }, loraName(o))));
+  return [field('LoRA', sel), strength ? rangeField('Strength', strength.get, strength.set, { min: 0, max: 2, step: 0.05, fmt: (v) => v.toFixed(2), onChange: onStrength }) : null];
+}
+// The colour key's sliders, the same in the VFX tab and the Video tab's Key… sheet
+export const keyRangeFields = (k, onChange) => [
+  rangeField('Similarity', () => k.similarity, (v) => { k.similarity = v; }, { min: 0.01, max: 0.6, step: 0.01, onChange,
+    help: 'How close to the key colour a pixel must be to go clear. Raise it until the screen is gone.' }),
+  rangeField('Edge blend', () => k.blend, (v) => { k.blend = v; }, { min: 0, max: 0.5, step: 0.01, onChange, help: 'Softens the cut-out edge.' }),
+  rangeField('Spill removal', () => k.spill, (v) => { k.spill = v; }, { min: 0, max: 1, step: 0.05, onChange,
+    help: 'Takes the green (or blue) cast off hair and edges.' }),
+];
+
+// the seed of this tab's newest finished take of effect e, or null
+function lastSeed(e) {
+  const f = roleField(tplOf(e), 'seed');
+  for (const id of [...T.results].reverse()) { const v = f && S.history.get(id)?.params?.[f.key]; if (v != null && v >= 0) return v; }
+  return null;
+}
+
 const restyleLora = (o) => /ic-lora/i.test(o) && !/sdr-to-hdr|alpha-gen|clean-plate|ingredients|layout|motion-track|in-outpaint|refine|upscaler/i.test(o);
 
 function lorasField(t) {
@@ -223,25 +248,17 @@ function lorasField(t) {
   const opts = f.options.filter((o) => /ltx/i.test(o) && (stack ? !/ic-lora|ripple/i.test(o) : restyleLora(o)));
   const list = opts.length ? opts : f.options;
   const cur = T.loras[0]?.name ?? (one ? f.value : null);
-  const sel = h('select', { onchange: () => { T.loras = sel.value ? [{ name: sel.value, strength: T.loras[0]?.strength ?? 1, enabled: true }] : []; changed(); } },
-    stack ? h('option', { value: '' }, '(none)') : null,
-    list.map((o) => h('option', { value: o, selected: cur === o }, o.split('/').pop())));
   if (one && !T.loras.length && cur) T.loras = [{ name: cur, strength: 1, enabled: true }];
-  return [field('LoRA', sel), T.loras[0] ? rangeField('Strength', () => T.loras[0].strength, (v) => { T.loras[0].strength = v; },
-    { min: 0, max: 2, step: 0.05, onChange: () => changed(false) }) : null];
+  return loraChoice(list, cur, (name) => { T.loras = name ? [{ name, strength: T.loras[0]?.strength ?? 1, enabled: true }] : []; changed(); },
+    T.loras[0] && { get: () => T.loras[0].strength, set: (v) => { T.loras[0].strength = v; } }, { none: !!stack, onStrength: () => changed(false) });
 }
 
 function keyFields() {
   const k = T.key;
-  const sw = h('input', { type: 'color', value: k.color, oninput: () => { k.color = sw.value; changed(false); } });
   return [
-    field('Key colour', sw, help('Or tap the screen colour on the preview (with Pick colour on).')),
+    colorField('Key colour', () => k.color, (c) => { k.color = c; changed(false); }, help('Or tap the screen colour on the preview (with Pick colour on).')),
     button(UI.draw === 'color' ? 'Picking: tap the preview' : 'Pick colour', () => { UI.draw = UI.draw === 'color' ? null : 'color'; render(); }, { cls: UI.draw === 'color' ? 'primary' : '' }),
-    rangeField('Similarity', () => k.similarity, (v) => { k.similarity = v; }, { min: 0.01, max: 0.6, step: 0.01, onChange: () => changed(false),
-      help: 'How close to the key colour a pixel must be to go clear. Raise it until the screen is gone.' }),
-    rangeField('Edge blend', () => k.blend, (v) => { k.blend = v; }, { min: 0, max: 0.5, step: 0.01, onChange: () => changed(false) }),
-    rangeField('Spill removal', () => k.spill, (v) => { k.spill = v; }, { min: 0, max: 1, step: 0.05, onChange: () => changed(false),
-      help: 'Takes the green (or blue) cast off hair and edges.' }),
+    ...keyRangeFields(k, () => changed(false)),
   ];
 }
 
@@ -363,11 +380,10 @@ function render() {
     ...(needs.has('blend') ? faceFields() : []),
     needs.has('outsize') ? field('Output size', seg([['FullHD', 'Full HD'], ['4K', '4K']], T.outsize || 'FullHD', (v) => { T.outsize = v; changed(false); }),
       help('4K is tiled: much slower, same memory.')) : null,
-    needs.has('size') ? field('Size', h('select', { onchange: (ev) => { T.size = SIZES[ev.target.value][1]; changed(false); } },
-      SIZES.map(([l, s], i) => h('option', { value: i, selected: JSON.stringify(s) === JSON.stringify(T.size) }, l)))) : null,
-    needs.has('seed') ? field('Seed', h('div', { class: 'row' },
-      h('input', { type: 'number', value: T.seed < 0 ? '' : T.seed, placeholder: 'random', min: 0,
-        onchange: (ev) => { T.seed = ev.target.value === '' ? -1 : Math.max(0, Math.floor(Number(ev.target.value))); changed(false); } }))) : null,
+    needs.has('size') ? field('Size', sizeSelect(SIZES, T.size, (s) => { T.size = s; changed(false); })) : null,
+    needs.has('seed') ? seedField('Seed', { get: () => T.seed, set: (v) => { T.seed = v; changed(false); }, increment: false,
+      mode: () => (T.seed < 0 ? 'random' : 'fixed'), setMode: (m) => { if (m === 'random') T.seed = -1; else if (T.seed < 0) T.seed = lastSeed(e) ?? 0; changed(false); },
+      last: () => lastSeed(e) }) : null,
     h('div', { class: 'row wrap' }, runBtn, e.job ? null : button('Open in Generate', openInGenerate,
       { disabled: !!missing, title: 'The same template and values in a new Generate tab, to change any setting there' })));
 

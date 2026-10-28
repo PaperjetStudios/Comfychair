@@ -6,7 +6,7 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as MG from './model-geom.js';
 import {
-  $, actions, api, button, closeSheet, field, h, hint, iconBtn, openSheet, section, seg, toast, uid, undoToast, help, numSlider
+  $, actions, api, button, closeSheet, field, h, hint, iconBtn, openSheet, section, seg, toast, uid, undoToast, help, numSlider, colorField,
 } from './ui.js';
 import { R, SC, TYPES, makers, newObject, save } from './scene-data.js';
 import { modeOf, registerMode } from './scene-modes.js';
@@ -339,11 +339,10 @@ function amount(label, get, set, { min, max, step = 0.01, digits = 3, done = nul
   amounts.push(show);
   return field(label, h('div', { class: 'mdl-amount' }, num));
 }
-const colorField = () => {
-  const c = h('input', { type: 'color', value: ED.data.color || MG.DEFAULT_COLOR, 'aria-label': 'Colour' });
-  c.addEventListener('input', () => liveEdit(() => { ED.data.color = c.value; }));
-  c.addEventListener('change', endLive);
-  return field('Colour', c);
+const modelColor = () => {
+  const el = colorField('Colour', () => ED.data.color || MG.DEFAULT_COLOR, (v) => liveEdit(() => { ED.data.color = v; }));
+  el.input.addEventListener('change', endLive);
+  return el;
 };
 const undoRow = () => h('div', { class: 'row mdl-top' },
   iconBtn('Back to the library', '←', close),
@@ -444,7 +443,7 @@ function lathePanel() {
       amount('Segments around', () => d.segments, (v) => liveEdit(() => { d.segments = Math.round(v); }), { min: 3, max: 64, step: 1, digits: 0, done: endLive }),
       amount('Sweep (°)', () => d.sweep, (v) => liveEdit(() => { d.sweep = Math.round(v); }), { min: 30, max: 360, step: 5, digits: 0, done: endLive }),
       h('div', { class: 'chips' }, [90, 180, 270, 360].map((a) => chip(`${a}°`, () => { edit(() => { d.sweep = a; }); renderCreate(); rebuildView(); }, d.sweep === a))),
-      colorField())];
+      modelColor())];
 }
 
 // ---- the mesh: faces to pick, Extrude and Inset ----
@@ -482,7 +481,7 @@ function meshPanel() {
       ED.tool === 'select' ? button('Delete selected faces', () => { edit(() => { const r = MG.deleteFaces(m, ED.sel); d.mesh = r.mesh; ED.sel = []; }); renderCreate(); rebuildView(); }, { cls: 'small danger', disabled: !n }) : null),
     section('Look', null,
       seg([['flat', 'Flat'], ['smooth', 'Smooth']], d.smooth ? 'smooth' : 'flat', (v) => { edit(() => { d.smooth = v === 'smooth'; }); rebuildView(); }),
-      colorField(),
+      modelColor(),
       hint(`${m.f.length} faces, ${m.v.length} points${MG.edgeStats(m).open ? ' · open (has holes)' : ''}`))];
 }
 

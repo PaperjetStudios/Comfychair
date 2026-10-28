@@ -2,7 +2,7 @@ import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import {
   $, actions, button, clamp, clone, closeSheet, field, h, iconBtn, layerRowsEl, numField, openSheet, panelTop, rangeField,
-  section, seg, sheetOpen, store, uid, undoToast, help, toggle,
+  section, seg, sheetOpen, store, uid, undoToast, help, toggle, sizeSelect,
 } from './ui.js';
 import {
   C, CAM, EVEN, FPS, HIST, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropHolds, dropKeys, holdStart, frames, framesFor, hasKeys, hooks, keyCount, keyTarget,
@@ -163,10 +163,7 @@ function roomProps() {
 function cameraProps() {
   const cam = SC.camera;
   const mm = (fov) => 12 / Math.tan(THREE.MathUtils.degToRad(fov) / 2);  // full-frame equivalent, from the vertical angle
-  const sizeSel = h('select', {}, ...SIZES.map(([w, hh]) => h('option', { value: `${w}x${hh}` }, `${w}×${hh}`)));
-  sizeSel.value = `${SC.width}x${SC.height}`;
-  if (sizeSel.value !== `${SC.width}x${SC.height}`) sizeSel.append(h('option', { value: `${SC.width}x${SC.height}`, selected: true }, `${SC.width}×${SC.height}`));
-  sizeSel.addEventListener('change', () => { [SC.width, SC.height] = sizeSel.value.split('x').map(Number); save(); fit(); renderPanel(); });
+  const sizeSel = sizeSelect(SIZES.map((s) => [s.join('×'), s]), [SC.width, SC.height], ([w, hh]) => { SC.width = w; SC.height = hh; save(); fit(); renderPanel(); });
   return section('Camera', null,
     field('Size', sizeSel), lengthProps(),
     slider('Lens', () => current(cam, CAM).fov, (v) => write(cam, CAM, { fov: v }),
