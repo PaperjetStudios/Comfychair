@@ -856,8 +856,7 @@ function imageField(f) {
   const crop = async () => {
     const img = new Image();
     img.src = inputUrl(v);
-    try { await img.decode(); } catch { return toast('Could not load the image', true); }
-    openCrop({ img, crop: cropped ? cropped.crop : FULL, onApply: (c) => {
+    openCrop({ img, crop: cropped ? cropped.crop : FULL, onApply: (c) => {   // (it opens at once and shows the picture loading)
       if (c.w > 0.999 && c.h > 0.999) delete S.imageCrop[f.key];
       else S.imageCrop[f.key] = { src: v, crop: c };
       if (mf && S.values[mf.key]?.name && !maskFits(S.values[mf.key], v, S.imageCrop[f.key]?.crop)) toast('The mask was cleared: it was painted on the old crop');

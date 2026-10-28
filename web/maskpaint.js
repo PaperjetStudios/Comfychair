@@ -1,4 +1,4 @@
-import { h, store, toast, clamp, openOverlay, button, iconBtn, seg, numSlider, help } from './ui.js';
+import { h, store, toast, clamp, openOverlay, button, iconBtn, seg, numSlider, help, loadingSheet, sheetStillOpen, closeSheet } from './ui.js';
 import { icon } from './icons.js';
 import { inputUrl } from './core.js';
 
@@ -39,7 +39,10 @@ export function maskBox(data, W, H) {
 
 export async function openMaskPainter({ picture, crop = null, mask = null, onDone }) {
   let img;
-  try { img = await loadImage(inputUrl(picture)); } catch { return toast('Could not load the picture', true); }
+  const seq = loadingSheet('Mask', 'Loading the picture…');   // (at once: a big picture takes a moment)
+  try { img = await loadImage(inputUrl(picture)); } catch { if (sheetStillOpen(seq)) closeSheet(); return toast('Could not load the picture', true); }
+  if (!sheetStillOpen(seq)) return;   // (closed while it loaded)
+  closeSheet();
   const c = crop || { x: 0, y: 0, w: 1, h: 1 };
   const sx = Math.round(c.x * img.naturalWidth), sy = Math.round(c.y * img.naturalHeight);
   const sw = Math.max(1, Math.round(c.w * img.naturalWidth)), sh = Math.max(1, Math.round(c.h * img.naturalHeight));

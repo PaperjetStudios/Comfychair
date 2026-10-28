@@ -290,6 +290,10 @@ export function closeSheet(viaBack = false) {
   if (viaBack !== true) overlayClosed(sheetBack);  // (used as a click handler too, so viaBack may be an event)
 }
 export const sheetStillOpen = (seq) => seq === SHEET.seq && sheetOpen();
+// A sheet that opens at once with a spinner while what it needs loads (a big picture, a server call): the caller
+// fills it with openSheet(...) once ready, if sheetStillOpen(seq) (the user may have closed it meanwhile).
+export const loadingSheet = (title, text = 'Loading…') =>
+  openSheet(h('h3', {}, title), h('div', { class: 'placeholder loading' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), text));
 
 // A sheet that asks for a name and saves: save(name) may throw (shown as a toast) and closes it on success
 export function nameSheet({ title, hint = null, placeholder = '', extra = null, saveLabel = 'Save', save }) {

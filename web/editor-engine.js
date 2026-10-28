@@ -1,5 +1,5 @@
 import {
-  h, api, clamp01, busy, toast, undoToast, sheetOpen, openSheet, closeSheet, button, iconBtn, actions,
+  h, api, clamp01, busy, toast, undoToast, sheetOpen, openSheet, closeSheet, loadingSheet, sheetStillOpen, button, iconBtn, actions,
   seg, field, section, hint, propNum, layerRowsEl, panelTop, help, colorField, rangeField, pctFmt, clamp,
 } from './ui.js';
 import { ASPECT_PRESETS, S, inputUrl, switchTab, thumbUrl } from './core.js';
@@ -994,7 +994,13 @@ export function aspectCrop(W, H, a) {
 }
 
 // Crop popup for a loaded image; onApply gets {x,y,w,h} as fractions of it.
-export function openCrop({ img, crop = FULL, onApply }) {
+// img: an Image (a picture still loading is fine: the sheet opens at once with a spinner and fills in when it's in)
+export async function openCrop({ img, crop = FULL, onApply }) {
+  if (!img.naturalWidth) {
+    const seq = loadingSheet('Crop', 'Loading the picture…');
+    try { await img.decode(); } catch { if (sheetStillOpen(seq)) closeSheet(); return toast('Could not load the image', true); }
+    if (!sheetStillOpen(seq)) return;   // (closed while it loaded)
+  }
   const W = img.naturalWidth, H = img.naturalHeight;
   let c = { ...crop };
   let aspect = null;   // width/height in pixels, null = free
