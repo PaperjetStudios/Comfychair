@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import accel, audioedit, civitai, clipimport, craft, delogo, h3upscale, posefind, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import projects, store
-from . import keyexpr, maskcomp, sceneasset
+from . import keyexpr, maskcomp, promptaid, sceneasset
 from . import templates as tpl
 from .comfy import Comfy, ComfyError
 
@@ -397,6 +397,7 @@ app.include_router(civitai.router)
 app.include_router(voice.router)
 app.include_router(craft.router)
 app.include_router(previews.router)
+app.include_router(promptaid.router)
 
 
 class TokenGate:
@@ -1051,6 +1052,7 @@ async def video_prep(body: dict = Body(...)):
 clipimport.media_entry = _media_entry  # cut clips land in the media library
 voice.media_entry = _media_entry      # so do cleaned voices and spoken lines
 voice.resolve_src = _timeline_path
+promptaid.read_input = input_bytes   # Describe reads any input picture
 tracking.resolve_src = _timeline_path  # motion tracking finds its clip the way the Video tab does
 craft.resolve_src = _timeline_path     # so do documents sent to PhotoCraft / EffectCraft
 craft.media_entry = _media_entry       # and what they bring back lands in the media library
