@@ -1,8 +1,8 @@
-// Node test for the key ops (web/scene-keyops.js) and sampling/mute/migration (web/scene-data.js). Run by test_keys.py.
+// Node test for the key ops (web/keys.js) and sampling/mute/migration (web/scene-data.js). Run by test_keys.py.
 import assert from 'node:assert/strict';
 globalThis.document = { addEventListener() {}, querySelector() { return null; } };
 globalThis.addEventListener = () => {};
-const K = await import('../web/scene-keyops.js');
+const K = await import('../web/keys.js');
 const D = await import('../web/scene-data.js');
 const F = await import('../web/figure.js');
 

@@ -1,6 +1,6 @@
 import * as FIGURE from './figure.js';
 import { toast, uid } from './ui.js';
-import { easeAt, isPoseCh, recordInto } from './scene-keyops.js';
+import { isPoseCh, putKey, recordInto, sampleKeys } from './keys.js';
 export { isPoseCh };
 
 export let C;  // app state and actions handed over by app.js (see sceneModule there)
@@ -165,18 +165,12 @@ export function keyChans(item, names, vals, from = null) {
 }
 
 // one channel at frame f
+// (keys.js sampleKeys: a joint's turn slerps, the pose's name steps half way, the rest blend as numbers)
+const stepAt = (a, b, e) => (e < 0.5 ? a : b);
 export function sampleChan(item, ch, f) {
   const list = item.chans?.[ch];
   if (!list || !list.length) return baseOf(item, ch);
-  if (f <= list[0].f) return list[0].v;
-  const last = list[list.length - 1];
-  if (f >= last.f) return last.v;
-  let lo = 0, hi = list.length - 1;   // list[lo].f <= f < list[hi].f
-  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (list[mid].f <= f) lo = mid; else hi = mid; }
-  const a = list[lo], b = list[hi], e = easeAt(a.ease || item.ease, (f - a.f) / (b.f - a.f));   // a key can set its own ease (smooth, linear, in, out, const)
-  if (ch.startsWith('j.')) return FIGURE.slerpQ(a.v, b.v, e);
-  if (ch === 'pn') return e < 0.5 ? a.v : b.v;
-  return a.v + (b.v - a.v) * e;
+  return sampleKeys(list, f, { ease: item.ease, lerp: ch.startsWith('j.') ? FIGURE.slerpQ : ch === 'pn' ? stepAt : undefined });
 }
 
 // an item's values at frame f: each channel eased between its own keys
@@ -201,14 +195,7 @@ export function sample(item, names, f) {
 }
 
 // put (or change) one channel's key at frame f; the key's ease stays unless one is given ('' clears it)
-export function setKey(item, ch, f, v, ease) {
-  const list = (chansOf(item)[ch] ||= []);
-  const k = list.find((x) => x.f === f);
-  if (k) { k.v = cloneV(v); if (ease !== undefined) { if (ease) k.ease = ease; else delete k.ease; } return k; }
-  const n = { f, v: cloneV(v), ...(ease ? { ease } : {}) };
-  list.push(n); list.sort((a, b) => a.f - b.f);
-  return n;
-}
+export const setKey = (item, ch, f, v, ease) => putKey(chansOf(item), ch, f, v, ease);
 // make a channel's base value v (what it falls back to once it has no keys)
 export function bakeBase(item, ch, v) {
   if (ch.startsWith('j.')) item.base.j = { ...item.base.j, [ch.slice(2)]: cloneV(v) };

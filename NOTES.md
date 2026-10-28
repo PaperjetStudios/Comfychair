@@ -141,8 +141,8 @@ If it doesn't come back (`ActiveState` isn't `active`), start it by hand without
 will then fail to start until that process is stopped, so stop it before the next
 `systemctl start`. Restart after any `app/*.py` change; `web/` changes are live on reload.
 
-### 3D key sheet (scene-keys.js, scene-keyops.js)
-- `scene-keyops.js` is the DOM-free key maths (move, scale around a frame, copy/paste, ease, snapshot/restore);
+### 3D key sheet (scene-keys.js, keys.js)
+- `keys.js` is the DOM-free key maths (move, scale around a frame, copy/paste, ease, snapshot/restore);
   `scene-keys.js` is the sheet (dope sheet, graph, selection, gestures, maximize, sheet height) and the
   bound API (`selectKeys, moveKeys, scaleKeys, copyKeys, pasteKeys, duplicateKeys, deleteKeys, setKeyEase`).
   A drag moves keys live from a snapshot and saves once on letting go: one undo step per gesture.
@@ -156,7 +156,7 @@ will then fail to start until that process is stopped, so stop it before the nex
   lets go). While a source holds and it plays, `write()` to an animated item (or any item with Record on) goes
   into `HOLD` per channel and `current()` shows it over the keys. When the last source lets go, `commitHolds()`
   keys the held channels at the hold's first frame (While playing ▸ Jump back on release, default on; the
-  playhead seeks back there) or the release frame; with REC (`R.record`) it writes `recordInto()` (scene-keyops.js)
+  playhead seeks back there) or the release frame; with REC (`R.record`) it writes `recordInto()` (keys.js)
   every 3 frames over the span held; with Auto key off an animated item gets a TEMP with `play: true` (only its
   changed channels, on every frame) until ◆ Key. `WP` (localStorage `deck.scene.whileplaying`) says what shows
   while playing: gizmo, joint dots, frustum, grid, key sheet follows playhead. Seek during play re-bases the clock.

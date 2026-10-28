@@ -17,7 +17,7 @@ import { busy, cancelRender, letGo, play, renderDepthVideo, renderPoseVideo, sav
 import { maxBar, renderKeys, renderTransport, wireSheetKeys } from './scene-keys.js';
 import { hasMode, modeDef, modeList, modeOf, modeSections } from './scene-modes.js';
 import { syncRef, toggleRef } from './scene-ref.js';
-import { keysPast, stretchAll } from './scene-keyops.js';
+import { keysPast, stretchAll } from './keys.js';
 
 // ---- UI ----------------------------------------------------------------------
 let statusText = '';

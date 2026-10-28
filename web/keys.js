@@ -1,4 +1,6 @@
-// Key editing without any DOM or scene: the sums behind the key sheet (scene-keys.js). A track is one
+// Keyframes, the one engine every animated thing uses (the 3D tab, the Video tab's clips, the Editor's layers):
+// a channel's keys [{ f, v, ease? }] sorted by frame, sampled and edited here without any DOM or scene.
+// The key editing is the sums behind the 3D key sheet (scene-keys.js). A track is one
 // channel of one item, { item, ch, id, kind }: .keys is that channel's list (item.chans[ch], sorted by f),
 // each key { f, v, ease? }. A selection is a Set of key objects (a summary diamond in the sheet is just
 // the keys under it). Nothing here saves: the caller does, once per gesture.
@@ -10,6 +12,39 @@ export const easeFn = {
   smooth: (t) => t * t * (3 - 2 * t), linear: (t) => t, in: (t) => t * t * t, out: (t) => 1 - (1 - t) ** 3, const: () => 0,
 };
 export const easeAt = (name, t) => (easeFn[name] || easeFn.smooth)(t);  // an unknown name (a newer file) reads as smooth
+
+// ---- sampling: a channel's value at frame f (held before its first key and after its last, eased between) ----
+// lerp(a, b, e) blends two values (numbers by default; the 3D tab's joints slerp, a pose name steps)
+export const lerpNum = (a, b, e) => a + (b - a) * e;
+export function sampleKeys(list, f, { base, ease = 'smooth', lerp = lerpNum } = {}) {
+  if (!list || !list.length) return base;
+  if (f <= list[0].f) return list[0].v;
+  const last = list[list.length - 1];
+  if (f >= last.f) return last.v;
+  let lo = 0, hi = list.length - 1;   // list[lo].f <= f < list[hi].f
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (list[mid].f <= f) lo = mid; else hi = mid; }
+  const a = list[lo], b = list[hi];
+  return lerp(a.v, b.v, easeAt(a.ease || ease, (f - a.f) / (b.f - a.f)));   // a key can set its own ease
+}
+// put (or change) the key at frame f in chans[ch]; its ease stays unless one is given ('' clears it)
+export function putKey(chans, ch, f, v, ease) {
+  const list = (chans[ch] ||= []);
+  const cv = Array.isArray(v) ? [...v] : v;
+  const k = list.find((x) => x.f === f);
+  if (k) { k.v = cv; if (ease !== undefined) { if (ease) k.ease = ease; else delete k.ease; } return k; }
+  const n = { f, v: cv, ...(ease ? { ease } : {}) };
+  list.push(n); list.sort(byF);
+  return n;
+}
+// take away chans[ch]'s key at frame f (the channel goes when it's the last)
+export function removeKey(chans, ch, f) {
+  const list = chans?.[ch];
+  if (!list) return;
+  const keep = list.filter((k) => k.f !== f);
+  if (keep.length) chans[ch] = keep; else delete chans[ch];
+}
+// the frame of chans[ch]'s next key after f (dir 1) or before it (-1), or undefined
+export const nextKey = (chans, ch, f, dir = 1) => { const l = chans?.[ch] || []; return dir > 0 ? l.find((k) => k.f > f)?.f : l.findLast((k) => k.f < f)?.f; };
 
 // a figure's pose channels: the pose's name, a parameter, one joint's turn; the rest is where it stands
 export const isPoseCh = (ch) => ch === 'pn' || ch.startsWith('j.') || ch.startsWith('m.');

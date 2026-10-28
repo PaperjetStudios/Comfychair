@@ -6,7 +6,7 @@ import {
 } from './scene-data.js';
 import {
   EASES, allKeys, bounds, copy, isScalar, kindOf, moveBy, paste, prune, remove, restore, scaleAround, setChan, setEase, snapshot, track
-} from './scene-keyops.js';
+} from './keys.js';
 import { changed, draw, pose, select } from './scene-view.js';
 import { busy, play, seek } from './scene-export.js';
 import { setAutoKey } from './scene-ui.js';
@@ -18,7 +18,7 @@ import { modeOf } from './scene-modes.js';
 // under it, and moving one moves all the keys at that frame. Tap a key to select it, drag it to move
 // the whole selection; drag empty space to box-select (a finger pans unless Box is on); the ruler scrubs;
 // two fingers (or Ctrl+wheel) zoom the time axis. Every gesture is ONE undo step: keys move live from a
-// snapshot (scene-keyops.js), and changed() saves once on letting go.
+// snapshot (keys.js), and changed() saves once on letting go.
 const PAD = 8, GP = 14;   // px at each end of a row; px above and below the graph's plot
 export const SEL = new Set();   // the selected key objects (an undo or a deleted layer drops them)
 const UI = { box: false, add: false, tool: 'move', mode: store.get('deck.scene.keymode', 'dope'), unit: store.get('deck.scene.keyunit', 's'),
