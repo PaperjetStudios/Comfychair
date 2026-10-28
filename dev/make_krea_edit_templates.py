@@ -86,7 +86,7 @@ def edit():
                             "of the room, lit by the room's light.",
                      image=["20", 0], image_b=["23", 0], grounding_px=768, system_prompt=""))
     g.add("40", node("VAEEncode", "Encode picture", pixels=["20", 0], vae=["3", 0]))
-    patch = node("Krea2EditModelPatch", "@4 Reference [ref_boost]", model=["5", 0], source_latent=["40", 0],
+    patch = node("Krea2EditModelPatch", "@4 Reference strength [ref_boost]", model=["5", 0], source_latent=["40", 0],
                  ref_boost=4.0, ref_boost_a=1.0, fit_mode="fit", vae=["3", 0], source_image=["20", 0],
                  source_image_b=["23", 0], target_latent=["40", 0], ref_position=BESIDE, ref_position_a=ALIGNED)
     # without a reference the picture is the last (only) one: keep it on the layout
@@ -106,7 +106,7 @@ def identity():
                      image=["20", 0], grounding_px=768, system_prompt=""))
     g.add("40", node("EmptySD3LatentImage", "@3 Size [width,height]", width=1024, height=1024, batch_size=1))
     # source_latent is required but unused: with vae + source_image the node fits the photo itself (no crop)
-    g.add("41", node("Krea2EditModelPatch", "@4 Reference [ref_boost]", model=["5", 0], source_latent=["40", 0],
+    g.add("41", node("Krea2EditModelPatch", "@4 Reference strength [ref_boost]", model=["5", 0], source_latent=["40", 0],
                      ref_boost=2.0, ref_boost_a=1.0, fit_mode="fit", vae=["3", 0], source_image=["20", 0],
                      target_latent=["40", 0], ref_position=BESIDE, ref_position_a=ALIGNED))
     finish(g, ["40", 0], "krea2_identity")
