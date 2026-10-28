@@ -339,6 +339,12 @@ function talkPromptOf() {
   const L = tk(), c = characterById(L.char);
   return talkPrompt({ who: c?.name, look: c?.look, text: L.text, delivery: L.delivery });
 }
+// the "prompt it makes" ⓘ, swapped for a new one as the line is typed (a redraw would take the box's focus)
+function talkInfo() {
+  const b = info(talkPromptOf(), 'The prompt it makes');
+  if (UI.talkInfo?.isConnected) UI.talkInfo.replaceWith(b);
+  return (UI.talkInfo = b);
+}
 async function talkVoices() {
   if (UI.voices) return;
   UI.voices = [];
@@ -379,14 +385,14 @@ function lineFields() {
     return el;
   };
   const del = h('input', { type: 'text', value: L.delivery || '', placeholder: 'calm, angry, whispering…', 'aria-label': 'How it is said' });
-  del.addEventListener('change', () => { L.delivery = del.value.trim(); changed(false); });
+  del.addEventListener('change', () => { L.delivery = del.value.trim(); changed(false); talkInfo(); });
   const stale = T.sound && L.said && L.said.key !== talkKey(L);
   return [
     cast.length ? field('Character', sel('Character', [['', 'None'], ...cast.filter((c) => c.name.trim()).map((c) => [c.id, c.name])], L.char, pickCharacter),
       help('Their main picture becomes the start image and their voice speaks the line; their look goes in the prompt.')) : null,
     field('Voice', vs.length ? sel('Voice', [['', 'Choose…'], ...vs.map((v) => [v.id, v.name])], L.voice, (v) => { L.voice = v; changed(); })
       : hint('No voices saved yet: make one in the Sound tab (Voice tools).')),
-    field('Line', textArea(() => L.text, (v) => { L.text = v; tabs?.changed(); }, { rows: 2, label: 'The line', placeholder: 'What they say' })),
+    field('Line', textArea(() => L.text, (v) => { L.text = v; tabs?.changed(); talkInfo(); }, { rows: 2, label: 'The line', placeholder: 'What they say' })),
     field('Delivery', del, help('IndexTTS-2 and Fish S2 act it out (Qwen ignores it). It also goes in the prompt.')),
     field('Engine', seg(TALK_ENGINES, L.engine || 'qwen', (v) => { L.engine = v; changed(false); }, { wrap: true })),
     h('div', { class: 'row wrap' },
@@ -429,7 +435,7 @@ function render() {
   const prompt = needs.has('prompt') ? section('Prompt', null,
     textArea(() => T.prompt, (v) => { T.prompt = v; tabs?.changed(); }, { rows: 4, label: 'Prompt',
       placeholder: e.id === 'mask' ? 'What to cut out, e.g. "the man in the red coat"' : needs.has('line') ? 'Leave empty for one made from the line' : 'Describe the result' }),
-    needs.has('line') ? info(talkPromptOf(), 'The prompt it makes') : null) : null;
+    needs.has('line') ? talkInfo() : null) : null;
 
   const settings = section('Settings', null,
     e.sd ? field('Pose from', seg([['dwpose', 'DWPose'], ['sdpose', 'SDPose']], T.poser || 'dwpose', (v) => { T.poser = v; changed(); }),
