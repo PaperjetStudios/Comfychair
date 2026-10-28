@@ -454,6 +454,7 @@ function fieldRange(f) {
   return [Number.isFinite(min) ? min : null, Number.isFinite(max) ? max : null];
 }
 
+const DENOISES = [0.6, 0.8, 0.9, 1.0];
 function numberField(f, isFloat) {
   const step = f.step || (isFloat ? 0.01 : 1);
   const dec = isFloat ? Math.max(0, (String(step).split('.')[1] || '').length) : 0;
@@ -468,14 +469,18 @@ function numberField(f, isFloat) {
   // with a known range the box is a slider (a bar behind the number); without one it still scrubs
   const input = hasRange ? numSlider({ min: lo, max: hi, step, value: S.values[f.key], digits: dec, label: f.label })
     : h('input', { type: 'number', inputMode: isFloat ? 'decimal' : 'numeric', step, min: lo ?? undefined, max: hi ?? undefined, value: S.values[f.key] });
+  // a denoise also has tapped presets (how much of the picture is made again)
+  const presets = f.input === 'denoise' && isFloat
+    ? chips(DENOISES.map((x) => [x, x.toFixed(1)]), Number(S.values[f.key]), (x) => sync(Number(x), null), { cls: 'denoise-presets' }) : null;
   const sync = (n, from) => {
     n = clamp(n); setVal(f.key, n);
     if (from !== input) input.set ? input.set(n) : (input.value = n);
+    presets?.set(n);
   };
   input.addEventListener('change', () => sync(parseFloat(input.value), input));
   input.addEventListener('input', () => { if (input.dataset.scrubbing) sync(parseFloat(input.value), input); });
   const bump = (dir) => sync(Number(S.values[f.key]) + dir * step, null);
-  return field([f.label, hasRange ? h('span', {}, `${lo}–${hi}`) : null], stepper(input, bump));
+  return field([f.label, hasRange ? h('span', {}, `${lo}–${hi}`) : null], stepper(input, bump), presets);
 }
 
 function seedField(f) {
@@ -851,7 +856,10 @@ function imageField(f) {
     thumb: cropped ? cropPreview(thumbUrl(cropped.src, 256), cropped.crop) : v ? h('img', { src: thumbUrl(v, 256), alt: v }) : null,
     pick, onClear: () => set(''), buttons: [
       v ? button('Crop…', crop) : null,
-      v && mf ? button('Mask…', () => paintMask(f, mf, v, cropped?.crop || null)) : null,
+      // an inpaint template runs on the mask alone: its painter is the main action until there is one
+      v && mf ? (mf.required && !mask?.name
+        ? button([icon('brush'), 'Paint area…'], () => paintMask(f, mf, v, cropped?.crop || null), { cls: 'small primary', 'data-paint': '1' })
+        : button('Mask…', () => paintMask(f, mf, v, cropped?.crop || null))) : null,
       button(v ? 'Draw on' : 'Draw', () => openSketch({ base: v || null, aspect: templateAspect(), onDone: set }))],
     below: [mpInput(() => S.imageMp[f.key], (n) => { S.imageMp[f.key] = n; persist(); }),
       v && mf && S.values[mf.key]?.name ? maskSettings(f, mf, v, cropped?.crop || null) : null] });
@@ -864,6 +872,10 @@ function imageField(f) {
 const FEATHERS = [[0, 'Hard'], [4, '4 px'], [8, '8 px'], [16, '16 px'], [32, '32 px'], [64, '64 px']];
 const GROWS = [[0, 'None'], [4, '4 px'], [8, '8 px'], [16, '16 px'], [32, '32 px']];
 const MASK_DEFAULT = { feather: 8, grow: 0, fit: false };
+// inpainting a small area at the model's full size is the point: Crop to mask starts on there
+const maskDefault = (mf) => (mf.required && mf.fit ? { ...MASK_DEFAULT, fit: true } : MASK_DEFAULT);
+// an inpaint template's mask not painted yet (generate() stops on it)
+const needsMask = () => (S.tpl?.fields || []).find((x) => x.kind === 'mask' && x.required && !S.values[x.key]?.name) || null;
 const maskFieldOf = (f) => (S.tpl?.fields || []).find((x) => x.kind === 'mask' && x.image_key === f.key) || null;
 const sameCrop = (a, b) => JSON.stringify(a || null) === JSON.stringify(b || null);
 const maskFits = (m, v, crop) => !!v && m.src === v && sameCrop(m.crop, crop);
@@ -871,7 +883,7 @@ const maskFits = (m, v, crop) => !!v && m.src === v && sameCrop(m.crop, crop);
 function paintMask(f, mf, v, crop) {
   const m = S.values[mf.key];
   openMaskPainter({ picture: v, crop, mask: m?.name || null, onDone: async (blob, box) => {
-    const keep = { ...MASK_DEFAULT, ...(m || {}) };
+    const keep = { ...maskDefault(mf), ...(m || {}) };
     if (!blob) {
       if (m?.name) toast('Nothing painted: the mask is off');
       setVal(mf.key, { ...keep, name: null, box: null, src: null, crop: null }); renderFields();
@@ -885,7 +897,7 @@ function paintMask(f, mf, v, crop) {
 }
 
 function maskSettings(f, mf, v, crop) {
-  const m = { ...MASK_DEFAULT, ...S.values[mf.key] };
+  const m = { ...maskDefault(mf), ...S.values[mf.key] };
   const put = (o) => { setVal(mf.key, { ...m, ...o }); renderFields(); };
   const remove = () => {
     const was = S.values[mf.key];
@@ -893,7 +905,9 @@ function maskSettings(f, mf, v, crop) {
     undoToast('Mask removed', () => { setVal(mf.key, was); renderFields(); });
   };
   const num = (x) => Number(x);
-  const what = mf.composite
+  const what = mf.required
+    ? 'The painted part is made again from the prompt (Denoise 1.0 starts it from scratch; lower keeps more of the shapes and colours that were there). Every result is put back onto this picture through the mask, so the rest stays exactly as it was. Paint a little past the edges of what should change.'
+    : mf.composite
     ? 'Only the painted part can change: every result is put back onto this picture through the mask, so the rest stays exactly as it was. If the result\'s shape differs from the picture, the picture is cropped from the middle to fit it first.'
     : 'The template takes the mask as its own mask input.';
   return h('div', { class: 'mask-set' },
@@ -1048,6 +1062,8 @@ export async function generate() {
   }
   const odd = S.tpl.fields.filter((f) => f.kind === 'text' && unmatchedBraces(values[f.key]));
   if (odd.length && !confirm(`${odd.map((f) => f.label).join(', ')}: the { } don't match, so some wildcard text would go to the model as written. Generate anyway?`)) return;
+  const nm = needsMask();
+  if (nm) return toast(S.values[nm.image_key] ? 'Paint the area to change first' : 'Pick a picture, then paint the area to change', true);
   const btn = $('#genBtn'); btn.disabled = true;
   if (hooks.flush && !(await hooks.flush())) toast("Couldn't save this tab yet; running anyway");   // the saved tab should match what runs
   notifyPrepare();  // inside the tap: browsers only allow sound and notification prompts from a gesture
