@@ -10,6 +10,7 @@ import { openCraftSheet, sendToCraft } from './craft.js';
 import { animated, anyKeys, keyTimes, keyedRange, refreshKeyed, value } from './keyed.js';
 import { putKey } from './keys.js';
 import { playKeys, transport } from './playback.js';
+import { keyJumps } from './timeline.js';
 import { workArea } from './workarea.js';
 import { frameSpan, playFrom, tickT } from './workarea-math.js';
 import { framesToClip } from './scene-comp.js';
@@ -133,7 +134,9 @@ export function createEditor(cfg) {
     if (!E.anim) { editorPause(); return; }
     if (!EA.tp) {
       EA.tp = transport(editorPlayer, { step: { by: () => 1 / (E.anim?.fps || 24), label: 'one frame' }, scrub: true, frames: true,
-        fps: () => E.anim?.fps || 24, loop: { get: () => EA.loop, set: (v) => { EA.loop = v; } }, area: WA });
+        fps: () => E.anim?.fps || 24, loop: { get: () => EA.loop, set: (v) => { EA.loop = v; } }, area: WA,
+        keys: keyJumps(() => (E.sel ? [E.sel] : E.layers).flatMap(keyTimes)),
+        length: { get: () => E.anim?.len || 0, set: (v) => { E.anim.len = v; E.t = Math.min(E.t, v); editorChanged(); }, min: 0.5, max: 60 } });
       const scrub = EA.tp.el.querySelector('.scrub');
       EA.keys = h('span', { class: 'anim-keys' });
       const wrap = h('span', { class: 'scrub-wrap' });

@@ -3,7 +3,7 @@ import * as FIGURE from './figure.js';
 import { C, FIG, FPS, OBJ, R, SC, TEMP, addKey, current, rawCurrent, dropKeys, frames, isPoseCh, keyFrames, newObject, putKeys, sameTab, sample, save, write } from './scene-data.js';
 import { button, clone, field, h, hint, iconBtn, nameSheet, section, seg, store, toast, uid, undoToast , help, toggle, chips, chip, icon } from './ui.js';
 import { HAND, changed, handMode, selectJoint } from './scene-view.js';
-import { renderPanel, slider } from './scene-ui.js';
+import { renderPanel, slider, withKeys } from './scene-ui.js';
 import { seek } from './scene-export.js';
 import { motionField } from './scene-motion.js';
 import { offsetField } from './scene-offset.js';
@@ -130,11 +130,11 @@ export function adjustTab(o, cur) {
           setM(m); changed();
         }, { on: !!cur().m?.[k] }))),
         on.map(([k, p]) => slider(p.label, () => cur().m?.[k] || 0, (v) => setM({ ...cur().m, [k]: v || 0.001 }),
-          { min: p.min, max: p.max, step: 1, fmt: (v) => `${Math.round(v)}${p.unit || '°'}` })),
+          { min: p.min, max: p.max, step: 1, fmt: (v) => `${Math.round(v)}${p.unit || '°'}`, keys: [o, FIG, [`m.${k}`]] })),
         g === 'Cycle' && on.length ? [
           toggle('Steps follow movement (feet don\'t slide)', o.stepsFollow !== false, (on) => { o.stepsFollow = on; changed(); }),
           o.stepsFollow === false ? slider('Step', () => cur().m?.phase || 0, (v) => setM({ ...cur().m, phase: v }),
-            { min: 0, max: 8, step: 0.01, fmt: (v) => `${v.toFixed(2)} strides` }) : null,
+            { min: 0, max: 8, step: 0.01, fmt: (v) => `${v.toFixed(2)} strides`, keys: [o, FIG, ['m.phase']] }) : null,
           o.stepsFollow === false ? help('Key Step 0 here and 6 later for six strides on the spot.') : null] : null);
     }),
     h('div', { class: 'row wrap' }, Object.keys(cur().m || {}).length ? button('All off', () => { setM({}); changed(); }) : null),
@@ -149,7 +149,7 @@ function paramSlider(o, cur, k, label = null) {
     const m = { ...cur().m };
     if (v) m[k] = v; else delete m[k];
     write(o, FIG, { m });
-  }, { min: p.min, max: p.max, step: 1, fmt: (v) => `${Math.round(v)}${p.unit || '°'}` });
+  }, { min: p.min, max: p.max, step: 1, fmt: (v) => `${Math.round(v)}${p.unit || '°'}`, keys: [o, FIG, [`m.${k}`]] });
 }
 
 // the hands: a pose for one or both (relaxed, open, fist...), each hand's curl toward a fist, and Hand
@@ -276,7 +276,7 @@ export function jointsTab(o, cur) {
   return [
     map,
     h('div', { class: 'row joint-head' }, iconBtn('Previous joint', '◀', () => step(-1)), h('b', { class: 'grow' }, label), iconBtn('Next joint', '▶', () => step(1))),
-    turn('Bend', 0), turn('Twist', 1), turn('Side', 2),
+    withKeys(field('Turn', turn('Bend', 0), turn('Twist', 1), turn('Side', 2)), label, o, FIG, [`j.${n}`]),
     toggle('Mirror edits to the other side', R.sym, (on) => { R.sym = on; }),
     h('div', { class: 'row wrap' },
       button('Reset joint', () => { const j = { ...cur().j }; delete j[n]; if (R.sym && opp) delete j[opp]; write(o, FIG, { j }); changed(); }),

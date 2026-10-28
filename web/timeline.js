@@ -84,6 +84,15 @@ export function clipKeys(TL, st, { fps, base, pause, seek, onKeys, live = {} }) 
   };
 }
 
+// The transport's ⧏ ⧐ (playback.js keys): the key time before / after t in times() (timeline seconds)
+export const keyJumps = (times) => ({
+  next: (t) => times().filter((x) => x > t + 1e-4).sort((a, b) => a - b)[0] ?? null,
+  prev: (t) => times().filter((x) => x < t - 1e-4).sort((a, b) => b - a)[0] ?? null,
+});
+// every key of these clips, in timeline time (a clip's keys are in its source time; only those it shows)
+export const clipKeyTimes = (TL, items) => items.flatMap((it) => keyTimes(it).filter((f) => f >= it.in - 1e-3 && f <= it.in + TL.len(it) + 1e-3)
+  .map((f) => it.at + f - it.in));
+
 const RULER_STEPS = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
 
 export function timeline(st, o) {

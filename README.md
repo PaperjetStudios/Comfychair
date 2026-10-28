@@ -630,16 +630,31 @@ ComfyUI's `input/comfydeck/mask/`; they stay out of the input pickers. The run's
 
 ## The work area (every timeline)
 
-Every timeline has a thin teal strip along the top of its ruler: the 3D key sheet (and its graph), Video, Sound and
-the Editor's animation bar. Drag along it to mark a range, drag its ends or slide it, double-tap it (or Alt+X) to
-clear it; I / O set the in / out point at the playhead (Alt+I / Alt+O in the Editor, where I and O pick paint tools).
-Ends snap to frames, and to keys or clip edges where that timeline snaps; Alt while dragging snaps to frames only.
+Every timeline can have a teal range along the top of its ruler (Blender's preview range): the 3D key sheet (and its
+graph), Video, Sound and the Editor's animation bar. **Range** in the transport opens its menu: keep the playhead in it
+(on / off), Start and End typed, In / Out at the playhead, the whole timeline, Clear. I / O set the in / out point at
+the playhead (Alt+I / Alt+O in the Editor, where I and O pick paint tools), Alt+X clears. On the ruler only the bar
+takes a touch: drag its ends or slide it, tap it to put the playhead there; the rest of the ruler always scrubs. Ends
+snap to frames, and to keys or clip edges where that timeline snaps; Alt while dragging snaps to frames only.
 
 While it's on, the playhead stays in it: play loops inside it (or stops at its out point with Loop off), stepping and
-scrubbing stop at its ends, and ⇤ / End go to them. **Range** in the transport switches that off without losing it.
-It's saved with the tab (3D scene, video edit, mix, Editor animation). Renders and exports (3D depth and pose,
-Export video, Export sound, Export clip) do only the range while **Range only** is on, which it is by default once
+scrubbing stop at its ends, and ⇤ / ⇥ go to them. It's saved with the tab (3D scene, video edit, mix, Editor
+animation). Renders and exports (3D depth and pose, Export video, Export sound, Export clip) do only the range while **Range only** is on, which it is by default once
 there's a range. The maths is `web/workarea-math.js`, tested by `tests/workarea.test.mjs`.
+
+## The transport (every timeline)
+
+Laid out like Blender's timeline header: ⇤ start, ⧏ previous key, ⏴ a frame back, Play / Pause, ⏵ a frame forward,
+⧐ next key, ⇥ end (of the range while it is on). Keys: Space, ← / → a frame (Shift: Video and Sound a second, 3D the
+start / end), ↑ / ↓ next / previous key, Home / End. Tap the time to type one (a frame number, `2.5s` or `m:ss`); the
+Editor's bar and the 3D key bar type the length beside it, and the 3D bar the current frame. The keys jumped to are the
+selected layer's or clip's, else every one's.
+
+In the 3D tab every animatable property in the panel (position, rotation, size, the camera's lens, height and roll, a
+figure's parameters and joints) has ◀ ◆ ▶ like Video and the Editor: ◆ keys just that property at the playhead, ◀ ▶
+jump between its keys, and its label is yellow on a key and green between keys. In the key sheet, selected keys show
+**Key at** and **Value** to type: the frame moves them (keeping their spacing), the value sets every selected number.
+In full screen with the settings panel out, the key bar stays clear of the panel.
 
 ## Story
 

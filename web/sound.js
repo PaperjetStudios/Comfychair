@@ -8,7 +8,7 @@ import { ROLES, queueRun, template, valuesByRole } from './make.js';
 import { bareSource, clipLabel, extractSound, openSoundPicker, openVideoPicker, outputCard, soundInput, soundSource, uploadMedia } from './media.js';
 import { waitJob } from './clipimport.js';
 import { TabSet } from './tabs.js';
-import { clipKeys, clipSoundFields, dragWindow, durationOf, timeline, wavePeaks } from './timeline.js';
+import { clipKeyTimes, clipKeys, clipSoundFields, dragWindow, durationOf, keyJumps, timeline, wavePeaks } from './timeline.js';
 import { refreshKeyed } from './keyed.js';
 import { fmtTime, playKeys, transport } from './playback.js';
 import { workArea } from './workarea.js';
@@ -693,6 +693,7 @@ export function wireSound() {
   stp = transport({ playing: () => N.playing, play: sndPlay, pause: sndPause, seek: sndSeek, t: () => N.t, len: seqEnd },
     { step: { by: 5, key: 0.1, back: '⏪', fwd: '⏩', label: '5 s', pause: false },
       loop: { get: () => N.loop, set: (on) => { N.loop = on; store.set('deck.sound.loop', on); } }, area: WA,
+      keys: keyJumps(() => clipKeyTimes(TL, TL.selItem() ? [TL.selItem()] : N.items)),
       extra: [h('button', { type: 'button', id: 'sndSplit', class: 'icon-btn', 'aria-label': 'Split at the playhead', title: 'Split at the playhead (S)', onclick: TL.split }, '✂'),
         h('button', { type: 'button', id: 'sndDel', class: 'icon-btn', 'aria-label': 'Delete the selected clip', title: 'Delete the selected clip (Del)', onclick: TL.deleteSelected }, '🗑')] });
   $('#sndTransport').replaceWith(stp.el);

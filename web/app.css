@@ -81,6 +81,13 @@ p { margin: 0; }
 .badge.running, .badge.queued { color: var(--accent); }
 .badge.error, .badge.interrupted { color: var(--bad); }
 .timecode { font: 14px var(--font); font-variant-numeric: tabular-nums; color: var(--muted); margin-left: auto; }
+button.timecode { background: none; border: 1px solid transparent; border-radius: var(--r); padding: 4px 6px; cursor: text; }
+button.timecode:hover, button.timecode:focus-visible { border-color: var(--line-2); color: var(--text); }
+.time-in { width: 9ch; margin-left: auto; font: 14px var(--font); font-variant-numeric: tabular-nums; }
+/* the transport's buttons (playback.js): Blender's order, Play wide enough for "Pause" so nothing moves when it changes */
+.tp-btns { display: inline-flex; gap: 4px; align-items: center; }
+.play-btn { min-width: 92px; justify-content: center; }
+.tp-len input { width: 72px; }
 
 /* ---- form controls ---- */
 select, input[type=number], input[type=text], input[type=search], input[type=password], textarea {
@@ -807,7 +814,15 @@ body:has(.text-pop:not(.hidden)) .toast { z-index: 63; }
 #sceneViewer { display: block; background: var(--stage-bg); }
 #sceneViewer canvas { width: auto; height: auto; max-width: none; max-height: none; object-fit: fill; touch-action: none; }
 .scene-transport { flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 6px; max-height: 60dvh; overflow-y: auto; overscroll-behavior: contain; }
-.scene-keybar { gap: 8px; align-items: center; }
+.scene-keybar { gap: 8px; align-items: center; flex-wrap: wrap; }
+.key-edit { display: inline-flex; gap: 6px; align-items: center; }
+.key-edit[hidden], .key-edit [hidden] { display: none; }
+.key-edit input { width: 84px; }
+/* full screen with the settings panel out: the key bar and sheet stay left of it */
+#tab-scene.panel-out .stage.maxed #sceneTransport { margin-right: var(--ov-w); }
+/* a property with keys (scene-ui.js withKeys): yellow on a key, green between keys (Blender's colours) */
+.keyed.k-here > .lbl > span:first-child { color: var(--accent); }
+.keyed.k-anim > .lbl > span:first-child { color: #6fbf73; }
 .scene-keybar > * { flex: none; }
 .scene-keybar .grow { flex: 1; }
 .scene-keybar .btn.pending { border-color: var(--accent); color: var(--accent); }
@@ -1682,16 +1697,13 @@ img.civ-blur, .civ-shot.civ-blur > * { filter: blur(22px) saturate(.6); transfor
 .st-ref .chips { grid-column: 1 / -1; }
 
 /* ---- the work area (workarea.js): a teal range along the top of a timeline's ruler ---- */
-.wa-band { position: absolute; left: 0; right: 0; top: 0; height: 9px; z-index: 3; cursor: crosshair; touch-action: none;
-  background: color-mix(in srgb, var(--range) 7%, transparent); }   /* (faintly there, so a finger finds it) */
-.wa-band:hover { background: color-mix(in srgb, var(--range) 18%, transparent); }
-.wa-bar { position: absolute; top: 1px; bottom: 1px; min-width: 2px; background: var(--range); border-radius: 2px; cursor: grab; }
-.wa-bar::before { content: ''; position: absolute; inset: -2px 0 -8px; }   /* (a taller target than the strip) */
+.wa-band { position: absolute; left: 0; right: 0; top: 0; height: 9px; z-index: 3; pointer-events: none; }   /* (only the bar takes a touch: the rest scrubs) */
+.wa-bar { position: absolute; top: 1px; bottom: 1px; min-width: 2px; background: var(--range); border-radius: 2px; cursor: grab; pointer-events: auto; touch-action: none; }
 .wa-bar.off { background: color-mix(in srgb, var(--range) 22%, transparent); outline: 1px solid var(--range); outline-offset: -1px; }
 .wa-bar.hot { filter: brightness(1.2); }
 .wa-h { position: absolute; top: -2px; bottom: -3px; width: 6px; background: var(--range); border-radius: 2px; cursor: ew-resize; z-index: 1; }
 .wa-h.in { left: -3px; } .wa-h.out { right: -3px; }
-.wa-h::after { content: ''; position: absolute; inset: -4px -9px -10px; }   /* about 24 px wide to grab */
+.wa-h::after { content: ''; position: absolute; inset: -4px -9px -2px; }   /* about 24 px wide to grab, not down into the ruler */
 .wa-h:hover, .wa-h.hot { background: #fff; box-shadow: 0 0 0 2px var(--range); }
 .wa-dim { position: absolute; top: 0; bottom: 0; background: #000a; pointer-events: none; z-index: 1; }
 .wa-dim[hidden], .wa-bar[hidden], .wa-tog[hidden] { display: none; }

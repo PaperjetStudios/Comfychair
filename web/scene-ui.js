@@ -5,8 +5,8 @@ import {
   section, seg, sheetOpen, store, uid, undoToast, help, toggle, sizeSelect, chip, info, toast, icon, iconize,
 } from './ui.js';
 import {
-  C, CAM, EVEN, FPS, HIST, camsOf, newCamera, setActiveCam, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropHolds, dropKeys, holdStart, frames, framesFor, hasKeys, hooks, keyCount, keyTarget,
-  namesFor, nextKeyFrame, pivotOf, pivotsFor, sameTab, save, selItem, setSC, write
+  C, CAM, EVEN, FPS, HIST, camsOf, newCamera, setActiveCam, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropHolds, dropKeys, holdStart, frames, framesFor, hasKeys, hooks, keyCount, addKey, bakeBase, sampleChan,
+  namesFor, pivotOf, pivotsFor, sameTab, save, selItem, setSC, write
 } from './scene-data.js';
 import { FIG_TABS, adjustTab, faceTab, handsTab, jointsTab, movesTab, partsTab, posesTab, promptProps } from './scene-pose.js';
 import {
@@ -15,7 +15,7 @@ import {
 } from './scene-view.js';
 import { ORIENTS, nextOrient } from './gizmo-orient.js';
 import { busy, cancelRender, letGo, play, renderColorVideo, renderDepthVideo, renderPoseVideo, saveFrame, seek, stopPlay } from './scene-export.js';
-import { AREA, maxBar, renderKeys, renderTransport, wireSheetKeys } from './scene-keys.js';
+import { AREA, jumpKey, maxBar, renderKeys, renderTransport, toEnd, toStart, wireSheetKeys } from './scene-keys.js';
 import { hasMode, modeDef, modeList, modeOf, modeSections } from './scene-modes.js';
 import { syncRef, toggleRef } from './scene-ref.js';
 import { keysPast, stretchAll } from './keys.js';
@@ -59,9 +59,38 @@ export function renderToolbar() {
 // the key sheet (dope sheet, graph, selection and key edits) is scene-keys.js
 export { renderKeys, renderTime, renderTransport } from './scene-keys.js';
 
-// a slider: the view follows while dragging, the change is saved on letting go
-export const slider = (label, get, set, opts) => rangeField(label, get, set,
-  { ...opts, onInput: () => { pose(R.f); draw(); }, onChange: () => { save(); renderKeys(); } });
+// a slider: the view follows while dragging, the change is saved on letting go. keys: [item, names, channels] adds
+// ◀ ◆ ▶ (keyBtns) to its label
+export const slider = (label, get, set, { keys = null, ...opts } = {}) => {
+  const el = rangeField(label, get, set, { ...opts, onInput: () => { pose(R.f); draw(); }, onChange: () => { save(); renderKeys(); } });
+  return keys ? withKeys(el, label, ...keys) : el;
+};
+
+// ◀ ◆ ▶ beside a property, as in the Video and Editor tabs (Blender's keyframe dot): ◆ keys only these channels at
+// the playhead with the values they show (filled: a key is here; lit: they are animated elsewhere), tapped on their
+// key takes it away; ◀ ▶ jump to their keys before / after the playhead. The label goes yellow on a key, green between.
+export function withKeys(el, label, item, names, chs) {
+  const lists = () => chs.map((ch) => item.chans?.[ch] || []);
+  const here = lists().length && lists().every((l) => l.some((k) => k.f === R.f));
+  const anim = lists().some((l) => l.length);
+  const frs = [...new Set(lists().flat().map((k) => k.f))].sort((a, b) => a - b);
+  const dia = iconBtn(here ? `Take away the ${label} key here` : anim ? `Key ${label} here` : `Animate ${label}: a key here`, here ? '◆' : '◇', () => {
+    if (here) {
+      for (const ch of chs) {   // (a channel losing its last key stays as it looks now)
+        const l = item.chans?.[ch];
+        if (l && l.every((k) => k.f === R.f)) bakeBase(item, ch, sampleChan(item, ch, R.f));
+      }
+      dropKeys(item, (f, ch) => f === R.f && chs.includes(ch));
+    } else addKey(item, names, null, new Set(chs));
+    changed();
+  });
+  dia.classList.toggle('on', anim);
+  const prev = frs.findLast((f) => f < R.f), next = frs.find((f) => f > R.f);
+  const jump = (f, dir) => iconBtn(`${dir < 0 ? 'Previous' : 'Next'} ${label} key`, dir < 0 ? '◀' : '▶', () => seek(f), { hidden: !anim, disabled: f == null });
+  el.querySelector('.lbl').append(h('span', { class: 'key-btns' }, jump(prev, -1), dia, jump(next, 1)));
+  el.classList.add('keyed', ...(here ? ['k-here'] : anim ? ['k-anim'] : []));
+  return el;
+}
 // a number slider (hold and pull it sideways: the view follows, the change is saved on letting go)
 const num = (label, get, set, opts = {}) => numField(label, get(), set,
   () => { if (opts.after) opts.after(); changed(); },
@@ -87,15 +116,16 @@ function placeProps(o, cur) {
   const even = (v) => write(o, names, { sx: v, sy: v, sz: v });
   const name = h('input', { type: 'text', value: o.name });
   name.addEventListener('change', () => { o.name = name.value.trim() || o.name; changed(); });
-  const xyz = (label, ks, opts) => field(label,
-    h('div', { class: 'row' }, ...ks.map(([k, l, o2]) => num(l, () => cur()[k], set(k), { ...opts, ...o2 }))));
+  const xyz = (label, ks, opts) => withKeys(field(label,
+    h('div', { class: 'row' }, ...ks.map(([k, l, o2]) => num(l, () => cur()[k], set(k), { ...opts, ...o2 })))), label, o, names, ks.map(([k]) => k));
+  const sizeKeys = (el, label) => withKeys(el, label, o, names, ['sx', 'sy', 'sz']);
   return [
     field('Name', name),
     o.type === 'figure' ? field('Body', seg(FIGURE.BODIES, FIGURE.bodyOf(o.body), (v) => { o.body = v; changed(); })) : null,
     xyz('Position (m)', [['x', 'X'], ['y', 'Up', { min: -5, max: 10 }], ['z', 'Z']], { min: -20, max: 20, step: 0.01 }),
     xyz('Rotation (°)', [['rx', 'X'], ['ry', 'Y'], ['rz', 'Z']], { digits: 0, min: -360, max: 360, step: 1 }),
-    o.type === 'figure' ? num('Height (m)', () => cur().sy * FIGURE.heightOf(o.body, o.shape), (v) => even(Math.max(0.3, v) / FIGURE.heightOf(o.body, o.shape)), { min: 0.3, max: 2.5, step: 0.01 })
-      : EVEN.has(o.type) ? num('Scale', () => cur().sy, (v) => even(Math.max(0.0001, v)), { min: 0.0001, max: 20, step: 0.001, digits: 4 })
+    o.type === 'figure' ? sizeKeys(num('Height (m)', () => cur().sy * FIGURE.heightOf(o.body, o.shape), (v) => even(Math.max(0.3, v) / FIGURE.heightOf(o.body, o.shape)), { min: 0.3, max: 2.5, step: 0.01 }), 'Height')
+      : EVEN.has(o.type) ? sizeKeys(num('Scale', () => cur().sy, (v) => even(Math.max(0.0001, v)), { min: 0.0001, max: 20, step: 0.001, digits: 4 }), 'Scale')
       : xyz('Size (m)', [['sx', 'Width'], ['sy', 'Height'], ['sz', 'Depth']], { min: 0.05, max: 20, step: 0.01 }),
     scaleProps(o),
     field('Pivot (where the gizmo turns it)', seg(pivotsFor(o), pivotsFor(o).some(([k]) => k === pivotOf(o)) ? pivotOf(o) : null,
@@ -199,11 +229,11 @@ function cameraProps() {
     camerasField(),
     field('Size', sizeSel), lengthProps(),
     slider('Lens', () => current(cam, CAM).fov, (v) => write(cam, CAM, { fov: v }),
-      { min: 12, max: 90, step: 0.5, fmt: (v) => `${Math.round(mm(v))} mm` }),
+      { min: 12, max: 90, step: 0.5, fmt: (v) => `${Math.round(mm(v))} mm`, keys: [cam, CAM, ['fov']] }),
     slider('Camera height', () => current(cam, CAM).py, (v) => write(cam, CAM, { py: v }),
-      { min: 0.1, max: 6, step: 0.01, fmt: (v) => `${v.toFixed(2)} m` }),
+      { min: 0.1, max: 6, step: 0.01, fmt: (v) => `${v.toFixed(2)} m`, keys: [cam, CAM, ['py']] }),
     slider('Roll', () => current(cam, CAM).roll, (v) => write(cam, CAM, { roll: v }),
-      { min: -180, max: 180, step: 0.5, fmt: (v) => `${v.toFixed(1)}°`,
+      { min: -180, max: 180, step: 0.5, fmt: (v) => `${v.toFixed(1)}°`, keys: [cam, CAM, ['roll']],
         help: 'Tilts the camera around the way it looks. Positive banks it clockwise, so the picture turns anticlockwise. Key it to roll the view; motion tracking sets it from footage that turns.' }),
     easeSeg(cam),
     h('div', { class: 'row wrap' },
@@ -240,7 +270,7 @@ const lengthChanged = () => { save(); refresh(); renderTransport(); renderPanel(
 const animated = () => [...camsOf(), ...SC.objects];
 const clampLen = (v) => Math.round(clamp(v, ...LEN) * 100) / 100;
 // a new length; when it would cut keys off the end, ask first: stretch the animation to fit, or cut them
-function newLength(v, mode = SC.lenMode) {
+export function newLength(v, mode = SC.lenMode) {
   const s = clampLen(v), cut = keysPast(animated(), framesFor(s));
   if (!cut) { setLength(s); SC.lenMode = mode; lengthChanged(); return; }
   openSheet(h('h3', {}, `Shorten to ${fmtSecs(s)} s?`),
@@ -453,11 +483,13 @@ export function wireKeys() {
     else if (e.key === 'Escape') { if (HAND.on) handMode(null); else if (R.joint) selectJoint(null); else select(null); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && R.sel) { e.preventDefault(); removeSelected(); }
     else if (e.key === ' ') { e.preventDefault(); play(); }
-    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {  // a frame; with Shift, to the next key
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {  // a frame; with Shift, to the start / end (Blender)
       e.preventDefault(); stopPlay();
-      const fwd = e.key === 'ArrowRight', [item] = keyTarget();
-      const k = e.shiftKey && item ? nextKeyFrame(item, R.f, fwd ? 1 : -1) : null;
-      seek(k != null ? k : e.shiftKey ? R.f : R.f + (fwd ? 1 : -1));
+      const fwd = e.key === 'ArrowRight';
+      if (e.shiftKey) { if (fwd) toEnd(); else toStart(); } else seek(R.f + (fwd ? 1 : -1));
     }
+    else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); jumpKey(e.key === 'ArrowUp' ? 1 : -1); }   // the next / previous key
+    else if (e.key === 'Home') { e.preventDefault(); toStart(); }
+    else if (e.key === 'End') { e.preventDefault(); toEnd(); }
   });
 }

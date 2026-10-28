@@ -35,6 +35,11 @@ const PATHS = {
   last: ['M18 5v14', 'M6 5l9 7-9 7z'],
   rewind: ['M11 6l-7 6 7 6z', 'M20 6l-7 6 7 6z'],
   forward: ['M13 6l7 6-7 6z', 'M4 6l7 6-7 6z'],
+  // a frame back / forward; the previous / next key (Blender's timeline)
+  stepback: ['M17 6v12', 'M13 6l-7 6 7 6z'],
+  stepfwd: ['M7 6v12', 'M11 6l7 6-7 6z'],
+  prevkey: ['M9 7l-6 5 6 5z', 'M16 7l5 5-5 5-5-5z'],
+  nextkey: ['M15 7l6 5-6 5z', 'M8 7l5 5-5 5-5-5z'],
   close: ['M6 6l12 12M18 6L6 18'],
   trash: ['M4 7h16', 'M10 11v6M14 11v6', 'M6 7l1 13h10l1-13', 'M9 7V4h6v3'],
   save: ['M5 3h11l3 3v15H5z', 'M8 3v5h7V3', 'M8 21v-7h8v7'],
@@ -130,7 +135,7 @@ const PATHS = {
 };
 // what used to be on the buttons -> its icon (filled: drawn solid, the "on" version of a shape)
 const GLYPHS = {
-  '▶': 'play', '▸': 'chevron', '◀': 'back', '❚': 'pause', '⏸': 'pause', '⏮': 'first', '⏭': 'last', '⇤': 'first', '⏪': 'rewind', '⏩': 'forward',
+  '▶': 'play', '▸': 'chevron', '◀': 'back', '❚': 'pause', '⏸': 'pause', '⏮': 'first', '⏭': 'last', '⇤': 'first', '⇥': 'last', '⏴': 'stepback', '⏵': 'stepfwd', '⧏': 'prevkey', '⧐': 'nextkey', '⏪': 'rewind', '⏩': 'forward',
   '✕': 'close', '⤫': 'close', '🗑': 'trash', '💾': 'save', '←': 'left', '→': 'right', '↑': 'up', '↓': 'down', '↗': 'upright', '⤒': 'totop',
   '✓': 'check', '☆': 'star', '★': 'star', '🎥': 'video', '🔊': 'sound', '🔇': 'mute', '✎': 'edit', '✂': 'cut', '↺': 'reset', '↶': 'undo',
   '↷': 'redo', '↻': 'refresh', '🔄': 'refresh', '🖼': 'image', '🎞': 'film', '↵': 'enter', '⚙': 'settings', '✋': 'hand', '🖐': 'hand', '♪': 'music',

@@ -7,7 +7,7 @@ import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, regi
 import { openGeneration } from './run.js';
 import { useInGenerate } from './editor.js';
 import { TabSet } from './tabs.js';
-import { clipKeys, clipSoundFields, durationOf, timeline, wavePeaks } from './timeline.js';
+import { clipKeyTimes, clipKeys, clipSoundFields, durationOf, keyJumps, timeline, wavePeaks } from './timeline.js';
 import { fmtTime, playKeys, transport } from './playback.js';
 import { workArea } from './workarea.js';
 import { cutItems, playFrom, tickT } from './workarea-math.js';
@@ -1169,7 +1169,7 @@ export function wireVideoTransport() {
     visible: () => $('#tab-video').classList.contains('active') });
   vtp = transport({ playing: () => V.playing, play: vidPlay, pause: vidPause, seek: vidSeek, t: () => V.t, len: seqEnd },
     { step: { by: () => 1 / fpsNow(), label: 'one frame' }, fps: fpsNow, loop: { get: () => V.loop, set: (on) => { V.loop = on; store.set('deck.video.loop', on); } },
-      area: WA, extra: [button('📷 Frame', snapshotFrame, { title: 'Save this frame as an image' }), h('span', { id: 'vidLoad', class: 'hint' })] });
+      area: WA, keys: keyJumps(() => clipKeyTimes(TL, TL.selItem() ? [TL.selItem()] : V.items)), extra: [button('📷 Frame', snapshotFrame, { title: 'Save this frame as an image' }), h('span', { id: 'vidLoad', class: 'hint' })] });
   $('#vidTransport').replaceWith(vtp.el);
   vidMax = fullScreen($('#tab-video'), { onChange: () => requestDraw() });
   $('#tlTools').replaceChildren(

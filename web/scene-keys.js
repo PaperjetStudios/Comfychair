@@ -1,6 +1,6 @@
 import * as FIGURE from './figure.js';
 import { fullScreen } from './layout.js';
-import { $, button, h, info as infoBtn, numSlider, seg, sheetOpen, store, toast, toggle, canvasFont, iconize } from './ui.js';
+import { $, button, h, iconBtn, info as infoBtn, numSlider, seg, sheetOpen, store, toast, toggle, canvasFont, iconize } from './ui.js';
 import { icon } from './icons.js';
 import {
   CAM, FPS, HOLD, OBJ, OFF, R, ROOM, SC, TEMP, TYPES, WP, addKey, bakeBase, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setKey, setMute
@@ -10,7 +10,7 @@ import {
 } from './keys.js';
 import { changed, draw, pose, select } from './scene-view.js';
 import { busy, play, seek } from './scene-export.js';
-import { setAutoKey } from './scene-ui.js';
+import { newLength, setAutoKey } from './scene-ui.js';
 import { modeOf } from './scene-modes.js';
 import { workArea } from './workarea.js';
 
@@ -75,7 +75,22 @@ export const AREA = workArea({
   pos: (f) => lanePos(f),
   points: () => (UI.snap ? [R.f, ...new Set(allTracks().flatMap((T) => T.keys.map((k) => k.f)))] : []),
   changed: () => { renderKeys(); renderTime(); },
+  unit: { show: (f) => f + 1, read: (n) => Math.round(n) - 1, step: 1, label: 'frame' },
 });
+
+// ---- Blender's timeline header: to the start / end (of the work area while it is on), the previous / next key, a frame
+// back / forward. Keys: the selected layer's, else every layer's on the sheet (the camera when nothing is selected).
+export function jumpKey(dir) {
+  const [it] = keyTarget();
+  const own = it ? keyFramesOf([it]) : [];
+  const fs = own.length ? own : keyFramesOf(shown().map((L) => L.item));
+  const f = dir > 0 ? fs.find((x) => x > R.f) : fs.findLast((x) => x < R.f);
+  if (f != null) seek(f);
+}
+const keyFramesOf = (items) => [...new Set(items.flatMap((it) => [...Object.values(it.chans || {}), ...Object.values(it.off?.chans || {})].flatMap((l) => l.map((k) => k.f))))]
+  .sort((a, b) => a - b);
+export const toStart = () => seek(AREA.bound()?.a ?? 0);
+export const toEnd = () => seek(AREA.bound()?.b ?? frames() - 1);
 
 // ---- graph channels ---------------------------------------------------------------------------
 function gLayer() {
@@ -357,7 +372,45 @@ export function duplicateKeys() {
 // ---- gestures -----------------------------------------------------------------------------------
 let G0 = null, nPtr = 0;
 const ptrs = new Map();
-const info = (t) => { const el = $('#sceneKeyInfo'); if (el) el.textContent = t ?? (SEL.size ? `${SEL.size} selected` : ''); };
+const info = (t) => { const el = $('#sceneKeyInfo'); if (el) el.textContent = t ?? (SEL.size ? `${SEL.size} selected` : ''); syncKeyEdit(); };
+
+// ---- the selected keys, typed (Blender's Active Keyframe): Frame moves them all by the difference from the first;
+// Value sets every selected key that holds a number (a joint's turn or a pose name has none to type)
+const KE = {};
+function keyEdit() {
+  KE.f = numSlider({ min: 1, max: 100000, step: 1, value: 1, label: 'Selected key frame' });
+  KE.v = numSlider({ min: -1e6, max: 1e6, step: 0.001, value: 0, label: 'Selected key value' });
+  KE.f.addEventListener('change', () => {
+    const ks = [...SEL], v = parseFloat(KE.f.value);
+    if (!ks.length || !Number.isFinite(v)) return;
+    const f0 = Math.min(...ks.map((k) => k.f)), d = Math.round(v) - 1 - f0;
+    if (d) { moveKeys(d); seek(f0 + d); }
+  });
+  KE.v.addEventListener('change', () => {
+    const ks = [...SEL].filter((k) => typeof k.v === 'number'), v = parseFloat(KE.v.value);
+    if (!ks.length || !Number.isFinite(v)) return;
+    ks.forEach((k) => { k.v = v; });
+    TEMP.clear(); gRange = null; done();
+  });
+  KE.vn = h('span', {}, 'Value');
+  KE.vl = h('label', { class: 'keynum', title: 'Type a value for the selected keys (metres, degrees, or the parameter\'s own units)' }, KE.vn, KE.v);
+  KE.el = h('span', { class: 'key-edit', hidden: true },
+    h('label', { class: 'keynum', title: 'Type a frame: the selected keys move there (the first of them, the rest keep their spacing)' }, 'Key at', KE.f), KE.vl);
+  return KE.el;
+}
+function syncKeyEdit() {
+  if (!KE.el?.isConnected) return;
+  const ks = [...SEL];
+  KE.el.hidden = !ks.length;
+  if (!ks.length) return;
+  if (document.activeElement !== KE.f) KE.f.set(Math.min(...ks.map((k) => k.f)) + 1);
+  const nums = ks.filter((k) => typeof k.v === 'number');
+  KE.vl.hidden = !nums.length;
+  if (!nums.length || document.activeElement === KE.v) return;
+  const same = nums.every((k) => Math.abs(k.v - nums[0].v) < 1e-9);
+  KE.v.set(nums[0].v);
+  KE.vn.textContent = same ? 'Value' : 'Value (mixed)';
+}
 
 function syncSelClasses() {
   for (const el of lanesEl().querySelectorAll('[data-key]')) { const d = diaOf(el); el.classList.toggle('sel', !!d && allSel(d)); }
@@ -618,6 +671,7 @@ function toolRow() {
     tool('🧲', () => { setUI('snap', !UI.snap); syncTools(); }, { name: 'Snap', on: () => UI.snap, title: 'dragging snaps to the playhead and to other keys' }),
     tool('⤢', () => { V.fit = true; renderKeys(); }, { name: 'Fit', title: 'show the whole clip' }),
     tool('⋯', (e) => openMenu(e.currentTarget), { name: 'More', cls: 'kt-more', title: 'select none, invert, duplicate, shift, scale, ruler' }),
+    keyEdit(),
     h('span', { id: 'sceneKeyInfo', class: 'hint keyinfo' }));
 }
 
@@ -726,7 +780,9 @@ function doubleTap(e, row) {
 
 export function renderTime() {
   const t = $('#sceneTime');
-  if (t) t.textContent = `${(R.f / FPS).toFixed(2)} s · ${R.f + 1}/${frames()}`;
+  if (t) t.textContent = `${(R.f / FPS).toFixed(2)} s`;
+  const fi = $('#sceneFrame');
+  if (fi && document.activeElement !== fi) fi.set(R.f + 1);
   const ph = $('#scenePlayhead');
   if (ph) ph.style.left = lanePos(R.f);
   // While playing, Key sheet follows: a zoomed-in sheet turns the page when the playhead leaves it
@@ -800,6 +856,19 @@ function grip() {
   return g;
 }
 
+// the playhead's frame and the scene's length, typed (Blender's current frame and End)
+function frameIn() {
+  const i = numSlider({ min: 1, max: frames(), step: 1, value: R.f + 1, label: 'Frame' });
+  i.id = 'sceneFrame';
+  i.addEventListener('change', () => { const v = parseFloat(i.value); if (Number.isFinite(v)) seek(v - 1); });
+  return h('label', { class: 'keynum', title: `The playhead's frame (1 to ${frames()})` }, 'Frame', i);
+}
+function lengthIn() {
+  const i = numSlider({ min: 2, max: 15, step: 0.5, value: SC.seconds, label: 'Length (s)' });
+  i.addEventListener('change', () => { const v = parseFloat(i.value); if (Number.isFinite(v) && Math.abs(v - SC.seconds) >= 0.005) newLength(v, 'custom'); });
+  return h('label', { class: 'keynum', title: `The scene's length in seconds (${frames()} frames); keys past a shorter end ask first` }, 'Length', i, 's');
+}
+
 export function renderTransport() {
   const lanes = h('div', { id: 'sceneLanes', class: 'sheet-lanes' });
   lanes.addEventListener('pointerdown', down);
@@ -811,7 +880,15 @@ export function renderTransport() {
   $('#sceneTransport').replaceChildren(
     h('div', { class: 'key-head' }, h('div', { class: 'row scene-keybar' },
       button('⚙', () => { const on = !store.get(TK, true); store.set(TK, on); applyTools(on); }, { id: 'sceneToolsBtn', cls: 'small kt', title: 'Show or hide the key tools', 'aria-label': 'Key tools' }),
-      button(R.playing ? '❚❚ Pause' : '▶ Play', play, { cls: 'small primary', title: 'Play / pause (Space)' }),
+      h('span', { class: 'tp-btns' },
+        iconBtn('Go to the start', '⇤', toStart, { title: 'Go to the start, of the range while it is on (Home)' }),
+        iconBtn('Previous key', '⧏', () => jumpKey(-1), { title: 'Jump to the previous key: the selected layer\'s, else any (↓)' }),
+        iconBtn('Back a frame', '⏴', () => seek(R.f - 1), { title: 'Back a frame (←)' }),
+        button(R.playing ? '❚❚ Pause' : '▶ Play', play, { cls: 'small primary play-btn', title: 'Play / pause (Space)' }),
+        iconBtn('Forward a frame', '⏵', () => seek(R.f + 1), { title: 'Forward a frame (→)' }),
+        iconBtn('Next key', '⧐', () => jumpKey(1), { title: 'Jump to the next key: the selected layer\'s, else any (↑)' }),
+        iconBtn('Go to the end', '⇥', toEnd, { title: 'Go to the end, of the range while it is on (End)' })),
+      frameIn(), lengthIn(),
       AREA.toggleBtn(),
       button('👁', (e) => openWP(e.currentTarget), { id: 'sceneWP', cls: 'small kt', title: 'While playing: what shows, and jumping back after an edit', 'aria-label': 'While playing' }),
       h('span', { id: 'sceneTime', class: 'timecode' }),

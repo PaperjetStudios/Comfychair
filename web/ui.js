@@ -314,6 +314,25 @@ export const button = (text, onclick, { cls = 'small', ...attrs } = {}) =>
 
 // A square button with a symbol; the label is read out and shown on hover. Taps don't reach the
 // row or card it sits in.
+// A small menu by a button (the key sheet's style): fixed to the viewport, over a pulled-out panel too, opening
+// upwards when there's no room below. A tap outside it (or on its button again) closes it. Returns close().
+let popEl = null, popFor = null;
+export function closePopover() { popEl?.remove(); popEl = null; popFor = null; removeEventListener('pointerdown', popAway, true); }
+function popAway(e) { if (popEl && !popEl.contains(e.target) && !popFor?.contains(e.target)) closePopover(); }
+export function popover(anchor, ...content) {
+  const again = popFor === anchor;
+  closePopover();
+  if (again) return closePopover;
+  popEl = h('div', { class: 'key-menu', role: 'dialog' }, ...content);
+  popFor = anchor;
+  document.body.append(popEl);
+  const r = anchor.getBoundingClientRect(), mh = popEl.offsetHeight, mw = popEl.offsetWidth;
+  const top = r.bottom + 4 + mh > innerHeight ? Math.max(4, r.top - 4 - mh) : r.bottom + 4;
+  Object.assign(popEl.style, { top: `${top}px`, left: `${Math.max(4, Math.min(innerWidth - mw - 4, r.left))}px` });
+  addEventListener('pointerdown', popAway, true);
+  return closePopover;
+}
+
 export const iconBtn = (label, text, fn, extra = {}) => h('button', { type: 'button', class: 'icon-btn', 'aria-label': label, title: label,
   ...extra, onclick: (e) => { e.stopPropagation(); fn(e); } }, iconize(text));
 
