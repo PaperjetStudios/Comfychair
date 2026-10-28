@@ -109,7 +109,40 @@ function load(p) {
   installState(t, p);
 }
 
-// ---- template change: this tab starts fresh for the new template (Undo puts it back) ----
+// ---- template change: the tab starts over for the new template, keeping (unless Keep prompt is off) what carries
+// across: the prompt and negative prompt, the pictures in order with their crops, the size and a fixed seed.
+// Undo puts the old template back as it was.
+const keepOn = () => store.get('deck.gen.keepOnSwitch', true);
+function carry(oldT, oldVals, oldState, t) {
+  const kept = [];
+  const text = (tp, neg) => (tp?.fields || []).find((x) => x.kind === 'text' && x.multiline && neg === /negative/i.test(`${x.input} ${x.group}`));
+  for (const neg of [false, true]) {
+    const a = text(oldT, neg), b = text(t, neg);
+    if (a && b && (oldVals[a.key] || '').trim()) { S.values[b.key] = oldVals[a.key]; kept.push(neg ? 'negative prompt' : 'prompt'); }
+  }
+  const imgs = (tp) => (tp?.fields || []).filter((x) => x.kind === 'image');
+  const [ia, ib] = [imgs(oldT), imgs(t)];
+  let pics = 0;
+  ia.forEach((f, i) => {
+    const g = ib[i];
+    if (!g || !oldVals[f.key]) return;
+    S.values[g.key] = oldVals[f.key];
+    if (oldState.imageCrop?.[f.key]) S.imageCrop[g.key] = oldState.imageCrop[f.key];
+    pics++;
+  });
+  if (pics) kept.push(pics > 1 ? 'pictures' : 'picture');
+  const pair = (tp) => { const w = (tp?.fields || []).find((x) => x.kind === 'int' && x.input === 'width'); return w && [w, tp.fields.find((x) => x.node === w.node && x.input === 'height')]; };
+  const [pa, pb] = [pair(oldT), pair(t)];
+  if (pa?.[1] && pb?.[1]) {
+    S.values[pb[0].key] = oldVals[pa[0].key]; S.values[pb[1].key] = oldVals[pa[1].key];
+    if (oldState.sizeMode?.[pa[0].key]) S.sizeMode[pb[0].key] = { ...oldState.sizeMode[pa[0].key] }; else delete S.sizeMode[pb[0].key];
+    kept.push('size');
+  }
+  const seed = (tp) => (tp?.fields || []).find((x) => x.kind === 'seed');
+  const [sa, sb] = [seed(oldT), seed(t)];
+  if (sa && sb && oldState.seedMode?.[sa.key] === 'fixed') { S.values[sb.key] = oldVals[sa.key]; S.seedMode[sb.key] = 'fixed'; kept.push('seed'); }
+  return kept;
+}
 function pick(id, over) {
   const t = tplById(id);
   if (!t || !tabs.active) { if (S.tpl) $('#tplSel').value = S.tpl.id; return; }
@@ -121,20 +154,29 @@ function pick(id, over) {
     renderFields(); persist();
     return;
   }
-  const before = dump();
+  const before = dump(), oldT = S.tpl, oldVals = { ...S.values };
+  const oldState = { imageCrop: clone(S.imageCrop || {}), sizeMode: clone(S.sizeMode || {}), seedMode: { ...(S.seedMode || {}) } };
   load({ v: 1, template: id, presetId: null, overrides: {}, builder: before.builder });   // the prompt builder follows you, as it always did
+  const kept = before.template && keepOn() ? carry(oldT, oldVals, oldState, t) : [];
+  if (kept.length && !over) renderFields();
   if (over) {
     for (const [k, v] of Object.entries(over)) if (k in S.values) S.values[k] = v;
     for (const f of t.fields) if (f.kind === 'seed' && over[f.key] !== undefined) S.seedMode[f.key] = 'fixed';
     renderFields();
   }
   persist();
-  if (before.template) undoToast(`${t.name}: this tab starts fresh`, () => { load(before); persist(); });
+  if (before.template) undoToast(kept.length ? `${t.name}: kept the ${kept.join(', ')}` : `${t.name}: this tab starts fresh`, () => { load(before); persist(); });
 }
 
 // ---- the tabs ----
 const mount = h('div', { id: 'genTabs', class: 'gen-tabs' });
 $('.tpl-row').before(mount);
+// Keep prompt: on, a template change carries the prompt, pictures, size and fixed seed over (see carry)
+const keepBtn = h('button', { type: 'button', class: 'btn small keep-btn' + (keepOn() ? ' on' : ''), 'aria-pressed': String(keepOn()),
+  title: 'On: changing the template keeps the prompt, negative prompt, pictures, size and a fixed seed. Off: the tab starts fresh.',
+  onclick: () => { const on = !keepOn(); store.set('deck.gen.keepOnSwitch', on); keepBtn.classList.toggle('on', on); keepBtn.setAttribute('aria-pressed', String(on)); } },
+  'Keep prompt');
+$('#tplSel').after(keepBtn);
 export const tabs = new TabSet({ kind: 'gen-tabs', mount, scope: 'project', newName: (n) => `Tab ${n}`,
   adapter: { empty, load, dump, migrate: (p) => (p && p.v === 1 && p.template ? p : empty()) }, seed, onSwitch: () => updatePicker() });
 const baseStart = tabs.start.bind(tabs);
