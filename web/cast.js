@@ -66,9 +66,15 @@ export function pictureTag(style, n) {
     case 'h3': return `<Picture ${n}>`;
     case 'klein': return `<ref_image_${n - 1}>`;
     case 'qwen': return `Picture ${n}`;
+    case 'krea': return kreaTag(n);
+    case 'moss': return `image ${n}`;
     default: return null;
   }
 }
+
+// Krea 2 edit: Qwen3-VL sees the picture being edited, then the reference; two references share that second image,
+// side by side
+export const kreaTag = (n) => (n <= 1 ? 'the first image' : n === 2 ? 'the second image' : 'the right half of the second image');
 
 // One line per character for a prompt: who they are and how they look, and their picture when the template has it
 // (pics: Map character id -> picture number). "Mara: a woman in a red coat (as in Picture 2)."

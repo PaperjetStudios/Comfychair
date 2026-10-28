@@ -1,0 +1,305 @@
+{
+ "1": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "moss_image_sft_int8_convrot.safetensors",
+   "weight_dtype": "default"
+  },
+  "_meta": {
+   "title": "@9 Model [unet_name]"
+  }
+ },
+ "2": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen3.5_9b_w4a8_gptq.safetensors",
+   "type": "moss_image",
+   "device": "default"
+  },
+  "_meta": {
+   "title": "Load CLIP"
+  }
+ },
+ "3": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "flux2-vae_small.safetensors"
+  },
+  "_meta": {
+   "title": "Load VAE"
+  }
+ },
+ "4": {
+  "class_type": "SkipLayerGuidanceDiTSimple",
+  "inputs": {
+   "model": [
+    "1",
+    0
+   ],
+   "double_layers": "",
+   "single_layers": "22",
+   "start_percent": 0.0,
+   "end_percent": 1.0
+  },
+  "_meta": {
+   "title": "Skip layer 22 on the negative pass"
+  }
+ },
+ "5": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "model": [
+    "4",
+    0
+   ],
+   "lora_name": "moss/moss_image_edit_lora_bf16.safetensors",
+   "strength_model": 1.0
+  },
+  "_meta": {
+   "title": "Moss-Image-Edit LoRA"
+  }
+ },
+ "6": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "model": [
+    "5",
+    0
+   ],
+   "lora_name": "none",
+   "strength_model": 1.0
+  },
+  "_meta": {
+   "title": "@6 LoRAs"
+  }
+ },
+ "20": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@2 Image to edit"
+  }
+ },
+ "21": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@3 References"
+  }
+ },
+ "24": {
+  "class_type": "ImageScaleToTotalPixels",
+  "inputs": {
+   "image": [
+    "21",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "megapixels": 1.0,
+   "resolution_steps": 16
+  },
+  "_meta": {
+   "title": "Reference 1 at 1 MP",
+   "deck_drop": true
+  }
+ },
+ "22": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@3 References"
+  }
+ },
+ "25": {
+  "class_type": "ImageScaleToTotalPixels",
+  "inputs": {
+   "image": [
+    "22",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "megapixels": 1.0,
+   "resolution_steps": 16
+  },
+  "_meta": {
+   "title": "Reference 2 at 1 MP",
+   "deck_drop": true
+  }
+ },
+ "23": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@3 References"
+  }
+ },
+ "26": {
+  "class_type": "ImageScaleToTotalPixels",
+  "inputs": {
+   "image": [
+    "23",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "megapixels": 1.0,
+   "resolution_steps": 16
+  },
+  "_meta": {
+   "title": "Reference 3 at 1 MP",
+   "deck_drop": true
+  }
+ },
+ "30": {
+  "class_type": "TextEncodeMOSSImageEdit",
+  "inputs": {
+   "clip": [
+    "2",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ],
+   "prompt": "Put the character from image 2 into image 1, standing in the middle of the room.",
+   "edit_format": "Moss-Image-Edit",
+   "image_strength": 1.0,
+   "images.image_0": [
+    "20",
+    0
+   ],
+   "images.image_1": [
+    "24",
+    0
+   ],
+   "images.image_2": [
+    "25",
+    0
+   ],
+   "images.image_3": [
+    "26",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "@1 Edit [prompt]"
+  }
+ },
+ "31": {
+  "class_type": "TextEncodeMOSSImageEdit",
+  "inputs": {
+   "clip": [
+    "2",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ],
+   "prompt": "",
+   "edit_format": "Moss-Image-Edit",
+   "image_strength": 1.0,
+   "images.image_0": [
+    "20",
+    0
+   ],
+   "images.image_1": [
+    "24",
+    0
+   ],
+   "images.image_2": [
+    "25",
+    0
+   ],
+   "images.image_3": [
+    "26",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Negative (same pictures)"
+  }
+ },
+ "40": {
+  "class_type": "VAEEncode",
+  "inputs": {
+   "pixels": [
+    "20",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Encode picture (size only, denoise 1)"
+  }
+ },
+ "50": {
+  "class_type": "KSampler",
+  "inputs": {
+   "seed": 0,
+   "steps": 30,
+   "cfg": 5.0,
+   "sampler_name": "euler",
+   "scheduler": "simple",
+   "denoise": 1.0,
+   "model": [
+    "6",
+    0
+   ],
+   "positive": [
+    "30",
+    0
+   ],
+   "negative": [
+    "31",
+    0
+   ],
+   "latent_image": [
+    "40",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "@5 Sampler [seed,steps,cfg]"
+  }
+ },
+ "51": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "50",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "VAE Decode"
+  }
+ },
+ "52": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "moss_edit",
+   "images": [
+    "51",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Save Image"
+  }
+ }
+}

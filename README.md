@@ -180,6 +180,7 @@ still lists; it fails when run. You only need the files of the templates you use
 | [ComfyUI_ProPainter_Nodes](https://github.com/daniabib/ComfyUI_ProPainter_Nodes) | VFX logo removal, Quality (patched, see below) |
 | [Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler) | H3 upscale (`POST /api/h3/upscale`) |
 | [Veda-on-ComfyUI](https://github.com/veda-sparse/Veda-on-ComfyUI) | optional Veda sparse attention for H3 (Advanced) |
+| [comfyui-krea2edit](https://github.com/lbouaraba/comfyui-krea2edit) (2.0+) | `deck-krea2-edit`, `deck-krea2-identity` |
 | `comfy_nodes/deck_*` (this repo) | face crop, pose smoothing, motion save, TAPNext++: symlink each into `custom_nodes` |
 
 Three packs carry local fixes, each marked `(ComfyChair patch)`; an update or reinstall drops them, so grep for the
@@ -191,7 +192,7 @@ marker afterwards and re-apply:
   so the templates use 448 for Large.
 - **ComfyUI_ProPainter_Nodes**: `propainter_nodes.py` `ProPainterInpaint` unloads ComfyUI's models before it runs.
 
-MiniMax H3, MOSS, Flux2/Klein, Qwen Image 2.1, SeedVR2, SAM 3D Body, SDPose, RT-DETR, MoGe and ACE-Step
+MiniMax H3, MOSS (and its edit node, ComfyUI after v0.42.4), Flux2/Klein, Qwen Image 2.1, SeedVR2, SAM 3D Body, SDPose, RT-DETR, MoGe and ACE-Step
 nodes are ComfyUI core: keep ComfyUI current.
 
 ### Models
@@ -254,9 +255,12 @@ IC-LoRAs, each for one template:
 | `deck-krea2-*` | `diffusion_models` | `krea2_turbo_fp8_scaled.safetensors` | 13 GB |
 | | `text_encoders` | `qwen3vl_4b_fp8_scaled.safetensors` | 4.9 GB |
 | | `vae` | `qwen_image_vae.safetensors` | 243 MB |
+| `deck-krea2-edit` | `loras/krea` | `krea2_general_edit_v2.safetensors` ([conradlocke/krea2-identity-edit](https://huggingface.co/conradlocke/krea2-identity-edit)) | 1.8 GB |
+| `deck-krea2-identity` | `loras/krea` | `krea2_identity_edit_v2.safetensors` (same repo) | 1.8 GB |
 | `deck-moss-*` | `diffusion_models` | `moss_image_sft_int8_convrot.safetensors` | 5.1 GB |
 | | `text_encoders` | `qwen3.5_9b_w4a8_gptq.safetensors` | 6.9 GB |
 | | `vae` | `flux2-vae_small.safetensors` | 238 MB |
+| `deck-moss-edit` | `loras/moss` | `moss_image_edit_lora_bf16.safetensors` ([PedroMarinhoDev/Moss-Image-Edit-ComfyUI](https://huggingface.co/PedroMarinhoDev/Moss-Image-Edit-ComfyUI)) | 297 MB |
 | `deck-klein3-edit` | `diffusion_models` | `flux3-image-klein-int8-convrot.safetensors` | 5.5 GB |
 | | `text_encoders` | `qwen3vl_4b_int8_convrot.safetensors` | 4.6 GB |
 | | `vae` | `flux2-vae.safetensors` | 321 MB |
@@ -489,7 +493,7 @@ shares them. The builder is one shared state for all templates (subjects carry o
 workflow), and **Prompt set** saves/cycles the whole thing (all subjects and parts) by name. Subjects are separate slots (+ Add subject), each cycling the same library of saved
 characters; the prompt gets "Subject 1: …", "Subject 2: …" labels added for you, and a slot can be tied
 to a reference picture ("(as in <Picture 2>)"). Tag chips above the prompt insert the model's reference tags at the cursor: H3
-`<Picture N>` (+ "Subject N" labels), Klein `<ref_image_N>` / `<obj_N>`, Qwen edit `Picture N`.
+`<Picture N>` (+ "Subject N" labels), Klein `<ref_image_N>` / `<obj_N>`, Qwen edit `Picture N`, Krea 2 edit `the first image` / `the second image`, MOSS edit `image N`.
 
 **Wildcards:** `{red|green|blue}` in any text field picks one option at random for every run, so a
 batch of 4 gets 4 different picks. Options can be empty (`{rainy |}`) and nest (`{a {big|small} dog|a cat}`);
@@ -574,6 +578,23 @@ takes up to two **References** (Picture 1, 2) to copy a look from. Both are 8-st
 1 MP). They come from `dev/make_inpaint_templates.py`. A template counts as inpaint when it has a LoadImageMask
 of its own and saves images (`maskcomp.fields` marks its Mask `required`).
 
+**Edit with references** (Krea 2 and MOSS, from `dev/make_krea_edit_templates.py` and `dev/make_moss_edit_template.py`):
+- `deck-krea2-edit`: Krea 2 turbo with the General Edit V2 LoRA. The picture to edit plus up to two **References**; the
+  prompt is an instruction ("Put the robot from the second image into the first image, standing by the window"). The
+  node pack takes two pictures, so two references go in side by side as one ("the right half of the second image").
+  **Ref boost** (tap 1–6, 4 is the card's value) is how hard it follows the reference (the picture, when there is none).
+  8 steps, about 20 s at 1 MP once loaded. The picture keeps its layout; a reference is placed beside the canvas, so a
+  person or object can be restaged into the scene.
+- `deck-krea2-identity`: Krea 2 turbo with the Identity Edit V2 LoRA: one photo of a person (or character) and a prompt
+  for the new scene, at any Size. Ref boost 2; higher keeps the face closer, lower lets it drift. Say how much of the
+  person shows ("full body", "sitting on a bench"): it tends to copy the photo's pose and crop otherwise.
+- `deck-moss-edit`: MOSS-Image SFT with the Moss-Image-Edit LoRA (chinoll) on ComfyUI's own Text Encode MOSS-Image Edit:
+  the picture and up to three references, named `image 1`, `image 2`… 30 steps at CFG 5. It follows the instruction
+  but redraws more of the picture than Krea. The LoRA's training project is GPLv3; the weights name no licence.
+`deck-krea2-inpaint` stays text-only: with the edit LoRA and a reference it fills the mask cleanly, but squeezes the
+subject into the painted shape (a mask that stops at the shoulders gives a headless figure); a painted mask on
+`deck-krea2-edit` (the masked-edit composite above, with Crop to mask) does that job.
+
 Masks are greyscale PNGs (white = change), saved by `POST /api/inputs/mask` under `data/inputs/mask/` and in
 ComfyUI's `input/comfydeck/mask/`; they stay out of the input pickers. The run's settings hold the mask as
 `<node>.__mask` = `{name, feather, grow, fit, box}`.
@@ -612,10 +633,10 @@ story is a tab saved in the project, like video edits.
   shot when the run ends, also after a reload. **From pictures** (the image picker) and **Upload** add frames too.
   Tap a frame to make it the shot's chosen one; the canvas button on a frame puts it on the canvas as a new layer.
 - **Refine** runs the shot's frame (the canvas, flattened) through an edit or image-to-image template (the story's
-  choice, or the shot's own: `deck-qwen21-edit` first, then Klein, Krea 2, Qwen and MOSS i2i). The prompt comes from the
+  choice, or the shot's own: `deck-qwen21-edit` first, then Klein, the Krea 2 and MOSS edits, then Krea 2, Qwen and MOSS i2i). The prompt comes from the
   shot (what we see, its characters' looks, the story's style; an edit model is asked to turn the picture into a
   finished frame, keeping the layout and camera), or write your own. Characters in the shot with a main picture go in as
-  the edit model's extra pictures, named in its syntax (`Picture 2`, `<ref_image_1>`). **Change** sets how far an
+  the edit model's extra pictures, named in its syntax (`Picture 2`, `<ref_image_1>`, `the second image`, `image 2`). **Change** sets how far an
   image-to-image template may go. A **mask** (painted over the frame, or the canvas's rectangle or lasso selection) keeps
   everything outside it as it was (the masked-edit composite, below). The results land in the shot's frames.
 - **Video** runs an image-to-video template (`deck-ltx-i2v` by default; any video template with a start picture and a
