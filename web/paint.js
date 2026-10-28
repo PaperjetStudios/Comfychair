@@ -732,7 +732,11 @@ export function createPaint(ctx) {
       setColor(S.c, false);
       return;
     }
-    const l = target();
+    let l = target();
+    if (!l) {   // nothing selected (another document was opened): the top layer that can take paint
+      l = [...E().layers].reverse().find((o) => o.img?.naturalWidth && o.x != null && !o.hidden && !o.locked) || null;
+      if (l) { E().sel = l; X.render(); }
+    }
     if (!canPaint(l)) return;
     if (P.tool === 'brush' || P.tool === 'eraser') beginStroke(e, l);
     else if (SHAPES.includes(P.tool)) beginShape(e, l);

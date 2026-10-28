@@ -42,7 +42,7 @@ export function fromSaved(saved) {
 }
 
 // cfg: { canvas, empty, size?, anim? (the animation bar; none: no animating), panel, panelParts(eng) (what the panel
-// shows), active() (on show, no sheet over it), onChange() (after every edit), docId() (for Undo across documents),
+// shows) or renderPanel(eng) (the host fills it), active() (on show, no sheet over it), onChange() (after every edit), docId() (for Undo across documents),
 // name() (for exports), initial (a saved payload), noLayers (the empty canvas's hint) }
 export function createEditor(cfg) {
   const E = fromSaved(cfg.initial || {});
@@ -417,7 +417,8 @@ export function createEditor(cfg) {
     cv.addEventListener('pointerdown', (e) => {
       if (!EV || EA.exporting) return;
       editorPause();
-      e.preventDefault(); cv.setPointerCapture(e.pointerId);
+      e.preventDefault();
+      try { cv.setPointerCapture(e.pointerId); } catch { /* the pointer is already gone */ }
       const p = point(e), sel = E.sel && ready(E.sel) ? E.sel : null;
       drag = null; EVheld = true;
       held = E.layers.map((l) => [l, l.x, l.y, l.scale, { ...l.crop }]);
@@ -553,7 +554,8 @@ export function createEditor(cfg) {
     E.layers.forEach(loadLayerImage);
     if (E.sel && !E.layers.includes(E.sel)) E.sel = null;
     if (!E.sel || !ready(E.sel)) E.cropping = false;
-    if (cfg.panel) cfg.panel.replaceChildren(...[].concat(cfg.panelParts(eng)).filter(Boolean));
+    if (cfg.renderPanel) cfg.renderPanel(eng);
+    else if (cfg.panel) cfg.panel.replaceChildren(...[].concat(cfg.panelParts(eng)).filter(Boolean));
     animBar();
     drawEditorCanvas();
     paint.sync();

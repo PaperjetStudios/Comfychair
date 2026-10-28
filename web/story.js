@@ -1,20 +1,29 @@
 import {
   $, h, store, uid, clone, api, toast, undoToast, button, iconBtn, seg, field, section, help, info, note, placeholder,
-  fileButton, textArea, chip, icon, openSheet, closeSheet, actions,
+  fileButton, textArea, chip, icon, openSheet, closeSheet, actions, openOverlay,
 } from './ui.js';
 import { S, inputUrl, isMine, onServer, previewUrl, switchTab, thumbUrl } from './core.js';
 import { ROLES, queueRun, roleField, template, valuesByRole } from './make.js';
-import { openImagePicker, uploadImage } from './media.js';
+import { clipUrl, openImagePicker, openVideoPicker, pickFrame, uploadImage } from './media.js';
 import { renderFields, setVal } from './generate.js';
 import { TabSet } from './tabs.js';
 import { fullScreen } from './layout.js';
+import { BLANK as COMP_BLANK, createEditor } from './editor-engine.js';
+import { openCompare } from './compare.js';
 
 // ---------------------------------------------------------------------------
 // story: a storyboard for writing a story down and sorting it out. A story is a title, notes (free writing or a
 // script) and scenes in order; a scene has a slug line, a summary and shots in order; a shot says what we see,
 // the action or dialogue, how it's framed, how long it runs, how far along it is, and has frames (pictures).
-// Two views of the same story: an outline (a list, for writing) and a board (cards with big frames, the classic
-// storyboard). Tap a shot to edit it in the side panel; drag the grip (pen or finger) or use the arrows to reorder.
+// Four views of the same story: the canvas (the shot big, to draw and lay out its frame, with its scene's shots as a
+// filmstrip under it), a board (cards with big frames, the classic storyboard), an outline (a list, for writing) and
+// the script (a screenplay page). Tap a shot to edit it in the side panel; drag the grip (pen or finger) or use the
+// arrows to reorder. The look-at-it-big view (lightbox) steps through every shot's frame, and compares two.
+//
+// A shot's frame is a composition (s.comp): the Editor's engine (editor-engine.js) mounted on the canvas view, with
+// its layers (pictures, frames from clips, drawings, blank canvases), brushes, selections and crop. Its flattened
+// picture is saved like a painted layer (/api/paint, named after its pixels) as s.canvas, and is the shot's frame
+// unless one of its other frames (pictures made for it) is picked.
 //
 // Frames come from an image template run on the shot's description plus the story's style line (make.js queueRun),
 // from pictures already here (the image picker) or from the device. A frame made for a shot lands on it when the run
@@ -41,11 +50,13 @@ const ROLE = {
   batchSize: (f) => f.kind === 'int' && f.input === 'batch_size',
 };
 
-const newShot = (o = {}) => ({ id: uid(), what: '', action: '', size: '', angle: '', move: '', dur: 3, status: 'idea', frames: [], pick: null, pending: [], ...o });
+const newShot = (o = {}) => ({ id: uid(), what: '', action: '', size: '', angle: '', move: '', dur: 3, status: 'idea', frames: [], pick: null, pending: [], comp: null, canvas: null, ...o });
 const newScene = (o = {}) => ({ id: uid(), slug: '', summary: '', collapsed: false, shots: [newShot()], ...o });
 const BLANK = () => ({ title: '', notes: '', style: '', aspect: '16:9', tpl: null, batch: 1, scenes: [newScene()] });
 let P = BLANK();
-const U = { sel: null, view: store.get('deck.story.view', 'outline') };
+const VIEWS = [['canvas', 'canvas', 'Canvas'], ['board', 'board', 'Board'], ['outline', 'list', 'Outline'], ['script', 'text', 'Script']];
+const U = { sel: null, doc: null, view: store.get('deck.story.view', 'canvas') };
+if (!VIEWS.some(([v]) => v === U.view)) U.view = 'canvas';
 
 let tabs = null, tabsReady = null;
 const ensureTabs = () => tabsReady || (tabsReady = tabs ? tabs.start() : Promise.resolve());
@@ -64,9 +75,13 @@ const allShots = () => P.scenes.flatMap((sc) => sc.shots);
 const ratio = () => (ASPECTS.find(([k]) => k === P.aspect) || ASPECTS[0])[1];
 const secs = (shots) => shots.reduce((t, s) => t + (+s.dur || 0), 0);
 const fmtSecs = (t) => (t >= 60 ? `${Math.floor(t / 60)}:${String(Math.round(t % 60)).padStart(2, '0')}` : `${t} s`);
-const chosen = (s) => s.frames.find((f) => f.id === s.pick) || s.frames[0] || null;
+// the canvas's flattened picture as a frame; the chosen frame is the canvas unless another frame is picked
+const canvasFrame = (s) => (s.canvas ? { id: 'canvas', input: s.canvas.name, canvas: true } : null);
+const chosen = (s) => (s.pick === 'canvas' ? canvasFrame(s) : null) || s.frames.find((f) => f.id === s.pick) || canvasFrame(s) || s.frames[0] || null;
+const framesOf = (s) => [canvasFrame(s), ...s.frames].filter(Boolean);
 const frameThumb = (f, px = 480) => (f.input ? thumbUrl(f.input, px) : previewUrl(f.url, px));
 const frameUrl = (f) => (f.input ? inputUrl(f.input) : f.url);
+const isPaint = (name) => /\/paint\/[0-9a-f]+\.png$/.test(name || '');
 const label3 = (list, v) => list.find(([k]) => k === v)?.[1] || '';
 const camText = (s) => [label3(SIZES, s.size), label3(ANGLES, s.angle), label3(MOVES, s.move)].filter(Boolean).join(' · ');
 
@@ -176,8 +191,15 @@ function deleteScene(sc) {
 }
 function select(id) {
   U.sel = id;
+  if (U.view === 'canvas' && id) { openShot(id); renderStage(); renderPanel(); return; }
   for (const el of document.querySelectorAll('#storyStage [data-kind="shot"]')) el.classList.toggle('sel', el.dataset.id === U.sel);
   renderPanel();
+}
+// the shot before or after the selected one, across scenes
+function step(d) {
+  const list = allShots(), i = list.findIndex((s) => s.id === U.sel);
+  const n = list[i < 0 ? 0 : Math.min(list.length - 1, Math.max(0, i + d))];
+  if (n && n.id !== U.sel) select(n.id);
 }
 
 // ---- frames ----
@@ -263,7 +285,16 @@ function removeFrame(s, f) {
 }
 
 // a frame as a picture in ComfyUI's input folder, which is what the image fields elsewhere take
+// (a painted picture lives only here, out of ComfyUI: it goes up as an input the first time it's needed)
+const UPLOADED = new Map();   // paint file -> its input name
 async function frameInput(f, { mp = 0, multiple = 1 } = {}) {
+  if (f.input && isPaint(f.input)) {
+    if (!UPLOADED.has(f.input)) {
+      const blob = await (await fetch(inputUrl(f.input))).blob();
+      UPLOADED.set(f.input, (await uploadImage(blob, { mp, source: 'story', filename: 'shot.png' })).name);
+    }
+    return UPLOADED.get(f.input);
+  }
   if (f.input) return f.input;
   const r = await api(`/api/generations/${f.gen}/to-input`, { method: 'POST', body: { index: f.index, frame: 'first', mp, multiple }, busy: 'Preparing the picture…' });
   return r.name;
@@ -288,8 +319,208 @@ async function toVfx(f, label) {
 async function toEditor(f) {
   try { const name = await frameInput(f); switchTab('editor'); await (await import('./editor.js')).addToEditor(name); } catch (e) { toast(e.message, true); }
 }
-function viewFrame(f) {
-  openSheet(h('h3', {}, 'Frame'), h('div', { class: 'media-big' }, h('img', { src: frameUrl(f), alt: '' })));
+
+// ---- the shot canvas: the Editor's engine on the canvas view, one composition per shot ----
+// CV.shot is the shot whose composition the engine holds. Every edit writes it back to the shot (s.comp); its picture
+// is drawn and saved a moment after the last one (and before another shot, story or project is opened).
+const CV = { viewer: null, canvas: null, empty: null, eng: null, shot: null, timer: 0, seq: 0, drawing: null };
+const RENDER_DELAY = 1500, RENDER_MAX = 2048;
+// a new canvas: the story's shape at about a megapixel, white
+const compSize = () => { const r = ratio(); return { w: Math.round(Math.sqrt(AREA * r) / 8) * 8, h: Math.round(Math.sqrt(AREA / r) / 8) * 8 }; };
+const blankComp = () => ({ ...COMP_BLANK(), size: compSize(), bg: '#ffffff' });
+
+function compChanged() {
+  const at = locate(CV.shot);
+  if (!at) return;
+  at.s.comp = CV.eng.dump();
+  persist();
+  clearTimeout(CV.timer);
+  CV.timer = setTimeout(renderCanvas, RENDER_DELAY);
+}
+// the composition flattened and saved as the shot's canvas picture (s.canvas), which becomes its frame
+async function renderCanvas() {
+  clearTimeout(CV.timer);
+  while (CV.drawing) await CV.drawing;
+  const at = locate(CV.shot);
+  if (!at || !at.s.comp) return;
+  if (CV.eng.loading()) { CV.timer = setTimeout(renderCanvas, 800); return; }   // pictures still loading
+  const s = at.s;
+  let cv = document.createElement('canvas');
+  if (!CV.eng.compose(cv)) {   // nothing left on it
+    if (s.canvas) { s.canvas = null; if (s.pick === 'canvas') s.pick = s.frames[0]?.id || null; persist(); refreshThumbs(); }
+    return;
+  }
+  if (Math.max(cv.width, cv.height) > RENDER_MAX) {
+    const k = RENDER_MAX / Math.max(cv.width, cv.height), small = document.createElement('canvas');
+    small.width = Math.round(cv.width * k); small.height = Math.round(cv.height * k);
+    const c = small.getContext('2d'); c.imageSmoothingQuality = 'high'; c.drawImage(cv, 0, 0, small.width, small.height);
+    cv = small;
+  }
+  CV.drawing = (async () => {
+    try {
+      const blob = await new Promise((res) => cv.toBlob(res, 'image/png'));
+      const r = await fetch('/api/paint', { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: blob });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const { name, width, height } = await r.json();
+      if (s.canvas?.name !== name || s.pick !== 'canvas') {
+        s.canvas = { name, w: width, h: height }; s.pick = 'canvas';
+        if (s.status === 'idea') s.status = 'drafted';
+        persist(); refreshThumbs();
+      }
+    } catch { CV.timer = setTimeout(renderCanvas, 5000); }   // offline: try again
+  })();
+  try { await CV.drawing; } finally { CV.drawing = null; }
+}
+// the open shot's last strokes and picture, saved (before leaving it)
+async function settleCanvas() {
+  if (!CV.eng || !CV.shot) return;
+  await CV.eng.paint.savePaint();
+  if (CV.timer) await renderCanvas();
+}
+
+// put shot id's composition on the canvas (the one there is saved first)
+async function openShot(id) {
+  if (!CV.eng || CV.shot === id) return;
+  const my = ++CV.seq;
+  await settleCanvas();
+  if (my !== CV.seq) return;   // another shot was asked for meanwhile
+  CV.shot = id;
+  const s = locate(id)?.s;
+  CV.eng.load(s?.comp ? { ...s.comp, size: s.comp.size || compSize() } : blankComp());
+  CV.eng.paint.reset();
+  CV.eng.zoom.reset();
+  drawEmpty();
+  if (shown() && U.view === 'canvas') CV.eng.render();
+}
+const canvasShot = () => locate(CV.shot)?.s || null;
+
+// a picture as a new layer: the first one covers the canvas, later ones go in the middle at their size or smaller
+async function addPicture(name, { label = null, cover = null } = {}) {
+  const s = canvasShot();
+  if (!s) return;
+  const E = CV.eng.E, f = E.size || compSize(), first = cover ?? !E.layers.length;
+  if (!E.size) E.size = f;
+  let o = {};
+  if (first) {
+    try {
+      const img = new Image(); img.src = inputUrl(name); await img.decode();
+      const k = Math.max(f.w / img.naturalWidth, f.h / img.naturalHeight);
+      o = { x: Math.round((f.w - img.naturalWidth * k) / 2), y: Math.round((f.h - img.naturalHeight * k) / 2), scale: k };
+    } catch { /* placed when it loads */ }
+  }
+  const l = CV.eng.addImage(name, { ...o, ...(label ? { label } : {}) });
+  CV.eng.E.sel = l;
+  CV.eng.render();
+}
+// draw over the shot's chosen frame: it goes on the canvas, with a see-through layer on top for the pen
+async function drawOnFrame(s) {
+  const f = chosen(s);
+  if (!f) return startBlank();
+  try {
+    const name = await frameInput(f);
+    await addPicture(name, { label: 'Frame', cover: true });
+    CV.eng.paint.addBlank({ ...CV.eng.E.size, fill: null });
+    CV.eng.paint.setTool('brush');
+  } catch (e) { toast(e.message, true); }
+}
+// one of the shot's frames on its canvas, as a new layer covering it (a refined or generated picture to keep working on)
+async function frameToCanvas(s, f) {
+  if (U.view !== 'canvas') { U.view = 'canvas'; store.set('deck.story.view', 'canvas'); }
+  U.sel = s.id;
+  renderStage(); renderPanel();
+  await openShot(s.id);
+  try { await addPicture(await frameInput(f), { label: 'Frame', cover: true }); } catch (e) { toast(e.message, true); }
+}
+function startBlank() {
+  if (!CV.eng.E.size) CV.eng.E.size = compSize();
+  CV.eng.paint.setTool('brush');   // (an empty canvas gets a white layer to paint on)
+}
+function addPictures() {
+  openImagePicker({ title: 'Add pictures to the shot', multi: true, mp: () => 0, onPick: (name) => addPicture(name) });
+}
+// any frame of any clip here (generated, imported or uploaded): scrub to it, it goes on the canvas
+function frameFromVideo() {
+  openVideoPicker({ title: 'Take a frame from a clip', onPick: async (v) => {
+    const url = clipUrl(v);
+    if (!url) return toast('That clip isn\'t loaded here yet', true);
+    const blob = await pickFrame({ url, title: 'Pick the frame' });
+    if (!blob) return;
+    try { await addPicture((await uploadImage(blob, { source: 'story', filename: 'frame.png' })).name, { label: 'Clip frame' }); } catch (e) { toast(e.message, true); }
+  } });
+}
+
+// what the canvas shows before anything is on it: the shot's frame (to draw over) or ways to start
+function drawEmpty() {
+  if (!CV.empty) return;
+  const s = canvasShot(), f = s && chosen(s);
+  CV.empty.replaceChildren(
+    f ? h('img', { src: frameThumb(f, 1024), alt: '', class: 'st-cv-frame' }) : h('span', { class: 'st-noframe' }, icon('image')),
+    s ? h('div', { class: 'row wrap st-cv-start' },
+      f ? button([icon('brush'), 'Draw on this frame'], () => drawOnFrame(s), { cls: 'small primary' }) : null,
+      button([icon('canvas'), 'Blank canvas'], startBlank, { cls: f ? 'small' : 'small primary' }),
+      button([icon('image'), 'Add pictures'], addPictures),
+      button([icon('film'), 'Frame from a clip'], frameFromVideo)) : h('span', {}, 'Tap a shot'));
+}
+
+function makeCanvas() {
+  CV.canvas = h('canvas', { class: 'hidden', 'aria-label': 'The shot\'s canvas' });
+  CV.empty = h('div', { class: 'placeholder st-cv-empty' });
+  CV.viewer = h('div', { class: 'viewer st-cv-viewer' }, CV.canvas, CV.empty);
+  CV.eng = createEditor({
+    canvas: CV.canvas, empty: CV.empty, panel: $('#storyBody'),
+    active: () => shown() && U.view === 'canvas',
+    onChange: compChanged,
+    docId: () => CV.shot,
+    elsewhere: 'That was on another shot',
+    name: () => { const at = locate(CV.shot); return at ? `Shot ${at.si + 1}.${at.i + 1}` : 'Shot'; },
+    renderPanel: fillPanel,
+  });
+}
+
+// ---- look at it big: one shot's frames full screen, stepping through the story; compare two ----
+function openLightbox(id = U.sel) {
+  const list = allShots().filter((s) => chosen(s));
+  if (!list.length) return toast('No shot has a frame yet', true);
+  let i = Math.max(0, list.findIndex((s) => s.id === id)), fi = null;
+  const img = h('img', { alt: '' }), title = h('b', { class: 'cmp-title' }), what = h('p', { class: 'st-lb-what' });
+  const strip = h('div', { class: 'st-lb-strip' });
+  const num = (s) => { const at = locate(s.id); return at ? `${at.si + 1}.${at.i + 1}` : ''; };
+  const draw = () => {
+    const s = list[i], fs = framesOf(s), f = fs.find((x) => x.id === fi) || chosen(s);
+    fi = f.id;
+    img.src = frameUrl(f);
+    const at = locate(s.id);
+    title.textContent = `Shot ${num(s)}${at?.sc.slug ? ` · ${at.sc.slug}` : ''}  (${i + 1} of ${list.length})`;
+    what.textContent = [s.what, s.action].filter((x) => x.trim()).join('  ·  ');
+    strip.replaceChildren(...(fs.length > 1 ? fs.map((x) => h('button', { type: 'button', class: `st-lb-thumb${x.id === fi ? ' on' : ''}`, 'aria-label': x.canvas ? 'The canvas' : 'A frame',
+      onclick: () => { fi = x.id; draw(); } }, h('img', { src: frameThumb(x, 160), alt: '' }), chosen(s) === x || chosen(s)?.id === x.id ? h('span', { class: 'st-frame-on' }, icon('check')) : null)) : []));
+  };
+  const go = (d) => { i = (i + d + list.length) % list.length; fi = null; draw(); };
+  const compare = () => {
+    const s = list[i], fs = framesOf(s), f = fs.find((x) => x.id === fi) || chosen(s);
+    const other = f.id !== chosen(s).id ? { s, f: chosen(s), label: `${num(s)} chosen` } : list.length > 1 ? { s: list[(i + 1) % list.length], f: chosen(list[(i + 1) % list.length]) } : null;
+    if (!other) return toast('Only one frame to look at', true);
+    openCompare([{ o: { url: frameUrl(f), kind: 'image' }, label: `${num(s)}${f.canvas ? ' canvas' : ''}` },
+      { o: { url: frameUrl(other.f), kind: 'image' }, label: other.label || num(other.s) }]);
+  };
+  const pick = () => { const s = list[i]; s.pick = fi; changed(); draw(); toast(`Shot ${num(s)}: frame chosen`); };
+  const el = h('div', { class: 'cmp-view st-lightbox', role: 'dialog', 'aria-modal': 'true' },
+    h('div', { class: 'cmp-top' }, title, h('span', { class: 'spacer' }),
+      button([icon('check'), 'Choose'], pick, { title: 'Make this the shot\'s frame' }),
+      button([icon('swap'), 'Compare'], compare, { title: 'This frame against the chosen one, or against the next shot' }),
+      iconBtn('Close', icon('close'), () => close())),
+    h('div', { class: 'st-lb-stage' }, img,
+      iconBtn('Previous shot', icon('left'), () => go(-1), { class: 'icon-btn st-lb-prev' }),
+      iconBtn('Next shot', icon('right'), () => go(1), { class: 'icon-btn st-lb-next' })),
+    h('div', { class: 'cmp-bottom st-lb-bottom' }, what, strip));
+  // a swipe sideways steps; arrows too
+  let x0 = null;
+  el.querySelector('.st-lb-stage').addEventListener('pointerdown', (e) => { x0 = e.clientX; });
+  el.querySelector('.st-lb-stage').addEventListener('pointerup', (e) => { if (x0 != null && Math.abs(e.clientX - x0) > 60) go(e.clientX < x0 ? 1 : -1); x0 = null; });
+  const key = (e) => { if (e.key === 'ArrowLeft') go(-1); else if (e.key === 'ArrowRight') go(1); else return; e.preventDefault(); };
+  document.addEventListener('keydown', key);
+  const close = openOverlay(el, { onClose: () => document.removeEventListener('keydown', key) });
+  draw();
 }
 
 // ---- the whole story at once ----
@@ -469,11 +700,86 @@ function sceneEl(sc, si, board) {
         h('button', { type: 'button', class: board ? 'st-add-card' : 'st-add-row', onclick: () => addShot(sc, sc.shots[sc.shots.length - 1]) }, icon('plus'), 'Shot'))]);
 }
 
+// ---- the canvas view: the selected shot big, its scene's shots as a filmstrip under it ----
+function canvasStage(st) {
+  if (!U.sel || !locate(U.sel)) U.sel = allShots()[0]?.id || null;
+  const at = locate(U.sel);
+  if (at && CV.shot !== at.s.id) openShot(at.s.id);
+  if (!at) return st.replaceChildren(placeholder('No shots yet'), h('div', { class: 'st-end' }, button([icon('plus'), 'Scene'], () => addScene(), { cls: 'small' })));
+  const { sc, si, s, i } = at, list = allShots(), k = list.indexOf(s);
+  const head = h('div', { class: 'st-cv-head' },
+    h('span', { class: 'st-num st-scene-num' }, `${si + 1}.${i + 1}`),
+    h('span', { class: 'st-cv-what', 'data-show': `${s.id}.what`, 'data-empty': 'What we see…' }, s.what || 'What we see…'),
+    statusDot(s),
+    iconBtn('Previous shot', icon('left'), () => step(-1), { disabled: k <= 0 }),
+    iconBtn('Next shot', icon('right'), () => step(1), { disabled: k >= list.length - 1 }),
+    iconBtn('Look at the frames big', icon('maximize'), () => openLightbox(s.id)));
+  // the scene's shots; the arrows at the ends go to the scene before or after
+  const tile = (x, j) => h('button', { type: 'button', class: `st-film-tile${x === s ? ' sel' : ''}`, 'data-id': x.id, 'aria-label': `Shot ${si + 1}.${j + 1}`,
+    title: x.what || `Shot ${si + 1}.${j + 1}`, onclick: () => select(x.id) },
+  h('span', { class: 'st-film-img', style: `aspect-ratio:${ratio()}` }, thumbOf(x)),
+  h('span', { class: 'st-film-meta' }, statusDot(x), `${si + 1}.${j + 1}`, h('span', { class: 'st-film-dur' }, `${x.dur} s`)));
+  const near = (d) => P.scenes[si + d]?.shots[0];
+  const film = h('div', { class: 'st-film', role: 'list', 'aria-label': `Scene ${si + 1}'s shots` },
+    h('div', { class: 'st-film-scene' },
+      iconBtn('The scene before', icon('left'), () => { const n = P.scenes[si - 1]; if (n?.shots.length) select(n.shots[n.shots.length - 1].id); }, { disabled: !near(-1) }),
+      h('span', { class: 'st-film-slug', title: sc.slug || `Scene ${si + 1}` }, h('b', {}, `${si + 1}`), ` ${sc.slug || 'Scene'}`),
+      iconBtn('The scene after', icon('right'), () => select(near(1).id), { disabled: !near(1) })),
+    sc.shots.map(tile),
+    h('button', { type: 'button', class: 'st-film-add', onclick: () => addShot(sc, sc.shots[sc.shots.length - 1]), 'aria-label': 'A shot at the end of the scene' }, icon('plus')));
+  drawEmpty();
+  st.replaceChildren(head, CV.viewer, film);
+  requestAnimationFrame(() => film.querySelector('.sel')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
+}
+// only the pictures changed (a canvas was saved): the strip and cards follow, the panel too unless something in it is
+// being typed in
+function refreshThumbs() {
+  if (!shown()) return;
+  if (U.view !== 'outline' || !document.activeElement?.closest('#storyStage')) renderStage();
+  if (!document.activeElement?.closest('#storyBody textarea, #storyBody input')) renderPanel();
+}
+
+// ---- the script view: a screenplay page (scene headings, action, the characters' lines) ----
+// A shot's action / dialogue is read line by line: "NAME: words" (or "@Name: words") is a line of dialogue, a line in
+// brackets on its own a parenthetical, anything else action.
+export function scriptLines(text) {
+  const out = [];
+  for (const raw of (text || '').split('\n')) {
+    const l = raw.trim();
+    if (!l) continue;
+    const m = l.match(/^@?([\p{L}][\p{L}\p{N} .'-]{0,30}?)\s*(\([^)]*\))?\s*:\s*(.+)$/u);
+    if (m && (m[1] === m[1].toUpperCase() || l.startsWith('@'))) out.push({ kind: 'line', who: m[1].trim(), paren: m[2] || '', text: m[3] });
+    else if (/^\(.*\)$/.test(l)) out.push({ kind: 'paren', text: l });
+    else out.push({ kind: 'action', text: l });
+  }
+  return out;
+}
+function scriptStage(st) {
+  const page = h('div', { class: 'st-script' },
+    h('h2', { class: 'st-sc-title' }, (P.title || tabs?.active?.name || 'Story').toUpperCase()),
+    P.scenes.map((sc, si) => [
+      h('h3', { class: 'st-sc-slug' }, `${si + 1}. ${(sc.slug || 'Scene').toUpperCase()}`),
+      sc.summary.trim() ? h('p', { class: 'st-sc-action st-sc-summary' }, sc.summary.trim()) : null,
+      sc.shots.map((s, i) => h('div', { class: `st-sc-shot${U.sel === s.id ? ' sel' : ''}`, 'data-kind': 'shot', 'data-id': s.id, onclick: () => select(s.id) },
+        h('span', { class: 'st-sc-num' }, `${si + 1}.${i + 1}`),
+        s.what.trim() ? h('p', { class: 'st-sc-action' }, s.what.trim()) : null,
+        scriptLines(s.action).map((ln) => (ln.kind === 'line'
+          ? h('div', { class: 'st-sc-line' }, h('p', { class: 'st-sc-who' }, ln.who.toUpperCase()),
+            ln.paren ? h('p', { class: 'st-sc-paren' }, ln.paren) : null, h('p', { class: 'st-sc-words' }, ln.text))
+          : h('p', { class: ln.kind === 'paren' ? 'st-sc-paren' : 'st-sc-action' }, ln.text))),
+        !s.what.trim() && !s.action.trim() ? h('p', { class: 'st-sc-action st-sc-empty' }, 'Nothing written for this shot yet') : null))]));
+  st.replaceChildren(page);
+}
+
 export function renderStage() {
   const st = $('#storyStage');
   if (!st) return;
   const board = U.view === 'board';
   st.classList.toggle('board', board);
+  st.classList.toggle('canvas', U.view === 'canvas');
+  st.classList.toggle('script', U.view === 'script');
+  if (U.view === 'canvas') { canvasStage(st); renderBar(); return; }
+  if (U.view === 'script') { scriptStage(st); renderBar(); return; }
   const head = board ? h('div', { class: 'st-head' }, h('b', { class: 'st-board-title', 'data-show': 'story.title', 'data-empty': tabs?.active?.name || 'Story' }, P.title || tabs?.active?.name || 'Story'))
     : h('div', { class: 'st-head' },
       bound(P, 'title', { line: true, placeholder: tabs?.active?.name || 'Title', label: 'Title', cls: 'st-title' }),
@@ -490,7 +796,7 @@ function renderBar() {
   if (!bar) return;
   const n = allShots().length, framed = allShots().filter(chosen).length;
   bar.replaceChildren(
-    seg([['outline', [icon('list'), 'Outline']], ['board', [icon('board'), 'Board']]], U.view, (v) => { U.view = v; store.set('deck.story.view', v); renderStage(); }),
+    seg(VIEWS.map(([v, ic, l]) => [v, [icon(ic), h('span', { class: 'st-bar-lbl' }, l)], l]), U.view, (v) => { U.view = v; store.set('deck.story.view', v); renderStage(); renderPanel(); }),
     barBtn('plus', 'Scene', () => addScene(), 'A new scene at the end'),
     barBtn('video', 'Shots to video', shotsToVideo, 'Every shot\'s chosen frame on the Video tab\'s timeline, in order, each for its length'),
     barBtn('copy', 'Copy as text', copyText, 'The outline as plain text'),
@@ -502,12 +808,16 @@ function shotSection(at) {
   const { sc, si, s, i } = at, n = `${si + 1}.${i + 1}`, f = chosen(s);
   const toggleChips = (list, key) => h('div', { class: 'chips' }, list.map(([v, l]) => chip(l, () => { s[key] = s[key] === v ? '' : v; changed(); }, { on: s[key] === v })));
   const t = storyTemplate();
+  const on = (fr) => fr.id === f?.id;
   const frames = h('div', { class: 'st-frames' },
-    s.frames.map((fr) => h('div', { class: `st-frame${fr === f ? ' on' : ''}`, style: `aspect-ratio:${ratio()}` },
-      h('button', { type: 'button', class: 'st-frame-img', 'aria-label': fr === f ? 'The chosen frame (tap to see it big)' : 'Choose this frame',
-        onclick: () => { if (fr === f) viewFrame(fr); else { s.pick = fr.id; changed(); } } }, h('img', { src: frameThumb(fr, 320), alt: '', loading: 'lazy' })),
-      fr === f ? h('span', { class: 'st-frame-on' }, icon('check')) : null,
-      iconBtn('Remove this frame', icon('close'), () => removeFrame(s, fr), { class: 'icon-btn st-frame-x' }))),
+    framesOf(s).map((fr) => h('div', { class: `st-frame${on(fr) ? ' on' : ''}`, style: `aspect-ratio:${ratio()}` },
+      h('button', { type: 'button', class: 'st-frame-img', 'aria-label': on(fr) ? 'The chosen frame (tap to see it big)' : 'Choose this frame',
+        onclick: () => { if (on(fr)) openLightbox(s.id); else { s.pick = fr.id; changed(); } } }, h('img', { src: frameThumb(fr, 320), alt: '', loading: 'lazy' })),
+      on(fr) ? h('span', { class: 'st-frame-on' }, icon('check')) : null,
+      fr.canvas ? h('span', { class: 'st-frame-tag' }, 'Canvas')
+        : h('div', { class: 'st-frame-btns' },
+          iconBtn('Put it on the canvas', icon('canvas'), () => frameToCanvas(s, fr), { class: 'icon-btn' }),
+          iconBtn('Remove this frame', icon('close'), () => removeFrame(s, fr), { class: 'icon-btn' })))),
     s.pending.map((id) => h('div', { class: 'st-frame st-frame-wait', style: `aspect-ratio:${ratio()}` },
       h('span', { class: 'st-spin' }), h('span', {}, S.history.get(id)?.status === 'running' ? 'Making…' : 'Waiting…'))));
   const lbl = `frame ${n}`;
@@ -519,8 +829,9 @@ function shotSection(at) {
     field('Camera move', toggleChips(MOVES, 'move')),
     field('Length', seg(DURS.map((d) => [d, `${d} s`]), s.dur, (v) => { s.dur = v; changed(); }, { wrap: true })),
     field('Status', seg(STATUS, s.status, (v) => { s.status = v; changed(); })),
-    field([`Frames`, h('span', {}, `${s.frames.length}`)],
-      help('Tap a frame to make it the shot\'s chosen one (the board shows it, Shots to video uses it); tap the chosen one to see it big.'),
+    U.view !== 'canvas' ? button([icon('canvas'), 'Open on the canvas'], () => { U.view = 'canvas'; store.set('deck.story.view', 'canvas'); select(s.id); }, { title: 'Draw and lay out this shot\'s frame' }) : null,
+    field([`Frames`, h('span', {}, `${framesOf(s).length}`)],
+      help('The canvas is the picture drawn and laid out on the canvas view. Tap a frame to make it the shot\'s chosen one (the board shows it, Shots to video uses it); tap the chosen one to see it big. The canvas button on a frame puts it on the canvas as a new layer.'),
       frames,
       h('div', { class: 'row wrap' },
         button([icon('sparkle'), 'Generate frame'], () => makeFrame(s), { cls: 'small primary', disabled: !t }),
@@ -561,12 +872,29 @@ function framesSection() {
     field('Frames per run', seg([1, 2, 3, 4].map((n) => [n, String(n)]), P.batch, (v) => { P.batch = v; persist(); renderPanel(); })));
 }
 
-export function renderPanel() {
+// The panel: the shot, then (on the canvas view) the canvas's tools, then the story's frame settings. The brush's
+// settings come first while painting. A redraw keeps the cursor in the box being typed in.
+function fillPanel() {
   const body = $('#storyBody');
   if (!body) return;
   const at = U.sel && locate(U.sel);
   if (!at) U.sel = null;
-  body.replaceChildren(...[at ? shotSection(at) : section('Shot', null, placeholder('Tap a shot to edit it here')), framesSection()].filter(Boolean));
+  const ed = U.view === 'canvas' && at && CV.shot === at.s.id ? CV.eng : null;
+  const parts = [ed?.paintProps(), at ? shotSection(at) : section('Shot', null, placeholder('Tap a shot to edit it here')),
+    ...(ed ? [section('Layers', null, ed.topRow([iconBtn('Frame from a clip', icon('film'), frameFromVideo, { class: 'icon-btn ico-btn' })]), ed.layerList()),
+      ed.layerProps(), ed.canvasProps()] : []),
+    framesSection()].filter(Boolean);
+  const a = document.activeElement, key = a && body.contains(a) ? a.dataset?.bind : null;
+  const range = key && 'selectionStart' in a ? [a.selectionStart, a.selectionEnd] : null;
+  body.replaceChildren(...parts);
+  if (key) {
+    const n = body.querySelector(`[data-bind="${key}"]`);
+    if (n) { n.focus({ preventScroll: true }); if (range) try { n.setSelectionRange(...range); } catch { /* not a text box */ } }
+  }
+}
+export function renderPanel() {
+  if (U.view === 'canvas' && CV.eng && CV.shot && CV.shot === U.sel) CV.eng.render();   // (it fills the panel, fillPanel)
+  else fillPanel();
 }
 
 export function renderStory() { renderStage(); renderPanel(); ensureTabs(); }
@@ -582,8 +910,10 @@ const adapter = {
   empty: BLANK,
   migrate,
   dump: () => P,
-  load(p) {
+  beforeLeave: settleCanvas,   // the open shot's strokes and picture are saved into the story being left
+  load(p, doc) {
     P = migrate(p);
+    if (U.doc !== doc?.id) { U.doc = doc?.id; CV.shot = null; ++CV.seq; clearTimeout(CV.timer); }   // another story: its shots' canvases
     if (!locate(U.sel)) U.sel = null;
     renderStage(); renderPanel();
     setTimeout(catchUp, 0);
@@ -595,6 +925,7 @@ export function wireStory() {
   $('#storyPanel').replaceChildren(mount, h('div', { id: 'storyBody', class: 'panel-body' }));
   tabs = new TabSet({ kind: 'story-tabs', mount, scope: 'project', newName: (n) => `Story ${n}`, adapter });
   fullScreen($('#tab-story'));
+  makeCanvas();
   // a frame run for a shot here ends: this device queued it, so this device files the pictures (another device
   // showing the same story gets them with the save); anything else just redraws its waiting tiles
   onServer('deck_generation', ({ data: g }) => {

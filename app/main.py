@@ -802,18 +802,20 @@ async def save_mask(request: Request):
     return {"name": name, "width": w, "height": h}
 
 
+PAINT_KINDS = ("edit-tabs", "story-tabs")   # the store kinds whose documents name paint files
 PAINT_NAME = re.compile(rf"{re.escape(PAINT_SUB)}/([0-9a-f]{{20}}\.png)")
 
 
 def prune_paint(max_age_days=30):
-    """Delete paint files older than a month that no Editor tab names: every project's and the library's
-    edit tabs, and their trashed copies still inside store.TRASH_DAYS (Undo can bring those back)."""
+    """Delete paint files older than a month that no Editor tab or story names: every project's and the library's
+    edit tabs and stories (a shot's canvas: its layers and its picture), and their trashed copies still inside
+    store.TRASH_DAYS (Undo can bring those back)."""
     folder = config.INPUT_DIR / PAINT_SUB
     if not folder.is_dir():
         return
     keep: set[str] = set()
     trash_cutoff = time.time_ns() - store.TRASH_DAYS * 86400 * 10**9
-    dirs = [config.LIBRARY_DIR / "edit-tabs", *config.PROJECTS_DIR.glob("*/.deck/edit-tabs")]
+    dirs = [config.LIBRARY_DIR / k for k in PAINT_KINDS] + [d for k in PAINT_KINDS for d in config.PROJECTS_DIR.glob(f"*/.deck/{k}")]
     for d in dirs:
         docs = list(d.glob("*.json"))
         for p in (d / ".trash").glob("*.json") if (d / ".trash").is_dir() else []:

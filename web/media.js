@@ -253,7 +253,7 @@ export function openImagePicker(opts) {
   };
 
   // This project: its uploads, editor saves and drawings plus everything it generated, newest first
-  const SOURCE = { upload: 'upload', editor: 'edit', drawing: 'drawing', crop: 'crop', snapshot: 'frame', scene: '3d', 'edit-tab': 'edit tab', 'video-tab': 'video edit' };
+  const SOURCE = { upload: 'upload', editor: 'edit', drawing: 'drawing', crop: 'crop', snapshot: 'frame', scene: '3d', 'edit-tab': 'edit tab', 'video-tab': 'video edit', story: 'story' };
   const projectCards = async () => {
     const items = inputs.project.filter((r) => r.source !== 'generation')
       .map((r) => ({ t: r.created, el: () => inputCard(r.name, SOURCE[r.source] || null) }));

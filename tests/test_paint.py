@@ -66,7 +66,7 @@ class Paint(unittest.TestCase):
             (folder / name).write_bytes(b"x")
             os.utime(folder / name, (age, age))
             return name
-        kept_tab, kept_lib, kept_trash, gone_trash, orphan = (paint(t) for t in ("a1", "b2", "c3", "d4", "e5"))
+        kept_tab, kept_lib, kept_trash, gone_trash, orphan, kept_story = (paint(t) for t in ("a1", "b2", "c3", "d4", "e5", "9f"))
         fresh = paint("f6", time.time())
 
         def doc(d, fname, layer):
@@ -75,12 +75,13 @@ class Paint(unittest.TestCase):
         tabs = config.PROJECTS_DIR / "Some project" / ".deck" / "edit-tabs"
         doc(tabs, "t1.json", kept_tab)
         doc(config.LIBRARY_DIR / "edit-tabs", "t2.json", kept_lib)
+        doc(config.PROJECTS_DIR / "Some project" / ".deck" / "story-tabs", "s1.json", kept_story)   # a shot's canvas
         now = time.time_ns()
         doc(tabs / ".trash", f"t3.{now - 5 * 86400 * 10**9}.json", kept_trash)     # trashed 5 days ago: can come back
         doc(tabs / ".trash", f"t4.{now - 40 * 86400 * 10**9}.json", gone_trash)    # trashed 40 days ago: gone for good
         main.prune_paint()
         left = {p.name for p in folder.glob("*.png")}
-        for n in (kept_tab, kept_lib, kept_trash, fresh):
+        for n in (kept_tab, kept_lib, kept_trash, fresh, kept_story):
             self.assertIn(n, left)
         for n in (gone_trash, orphan):
             self.assertNotIn(n, left)
