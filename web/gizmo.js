@@ -9,6 +9,9 @@ const saveSnap = () => store.set('deck.snap', snap);
 // Alt (desktop) turns snapping off for the length of a drag; a tablet has no modifier, so it uses the toggles
 export const snapOn = (key, ev) => !!snap[key] && !ev?.altKey;
 
+// A button on a viewer's gizmo bar (snapping, the hand tools): on shows it picked; an icon-only one is named by its title
+export const gzChip = (label, onclick, { on = false, title = null } = {}) =>
+  h('button', { type: 'button', class: 'gz-chip' + (on ? ' on' : ''), title, 'aria-label': label.length <= 2 ? title : null, onclick }, label);
 export const snapStep = (v, step) => Math.round(v / step) * step;
 // the smallest shift (d) that puts one of vals on one of targets within thr, and that target (at); null if none is that near
 export function snapNearest(vals, targets, thr) {
@@ -170,11 +173,9 @@ function chipBar(S, parts, onChange) {
     chips[p].textContent = S.snap[p] ? S.text[p]() : S.off[p];
     chips[p].classList.toggle('on', !!S.snap[p]); chips[p].setAttribute('aria-pressed', String(!!S.snap[p]));
   });
-  const chip = (p) => (chips[p] = h('button', { type: 'button', class: 'gz-chip', title: S.title[p],
-    onclick: () => { S.snap[p] = !S.snap[p]; S.save(); show(); onChange?.(); } }));
+  const chip = (p) => (chips[p] = gzChip('', () => { S.snap[p] = !S.snap[p]; S.save(); show(); onChange?.(); }, { title: S.title[p] }));
   const bar = h('div', { class: 'gz-bar' }, parts.map(chip),
-    h('button', { type: 'button', class: 'gz-chip', title: 'Snap settings', 'aria-label': 'Snap settings',
-      onclick: () => S.sheet(parts, () => { show(); onChange?.(); }) }, '⚙'));
+    gzChip('⚙', () => S.sheet(parts, () => { show(); onChange?.(); }), { title: 'Snap settings' }));
   show();
   return bar;
 }

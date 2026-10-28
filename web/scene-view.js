@@ -4,7 +4,7 @@ import * as THREE from './vendor/three.module.min.js';
 import { TransformControls } from './vendor/TransformControls.js';
 import * as FIGURE from './figure.js';
 import { $, api, busy as busyBar, clone, closeSheet, h, toast, undoToast } from './ui.js';
-import { smoothGizmo, snap3, snapBar3 } from './gizmo.js';
+import { gzChip, smoothGizmo, snap3, snapBar3 } from './gizmo.js';
 import {
   C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, WP, current, frames, holdStart, hooks, pathSig, makers, namesFor, newObject, newRoom, pivotOf, sample,
   sameTab, save, selItem, setSC, write
@@ -624,9 +624,8 @@ export function handMode(side) {
   const d = 0.3 * m.scale.y;
   aimFree(at.clone().addScaledVector(toPalm, d).toArray(), at.toArray());
   HAND.bar?.remove();
-  const chip = (label, on, fn) => h('button', { type: 'button', class: 'gz-chip' + (on ? ' on' : ''), onclick: fn }, label);
-  HAND.bar = h('div', { class: 'gz-bar hand-bar' }, chip('✋ Left hand', side === 'l', () => handMode('l')), chip('Right hand ✋', side === 'r', () => handMode('r')),
-    h('span', { class: 'gz-chip hand-tip' }, 'Drag a fingertip to curl it'), chip('Done', false, () => handMode(null)));
+  HAND.bar = h('div', { class: 'gz-bar hand-bar' }, gzChip('✋ Left hand', () => handMode('l'), { on: side === 'l' }), gzChip('Right hand ✋', () => handMode('r'), { on: side === 'r' }),
+    h('span', { class: 'gz-chip hand-tip' }, 'Drag a fingertip to curl it'), gzChip('Done', () => handMode(null)));
   viewer.append(HAND.bar);
   syncMeshes(); renderPanel(); draw();
 }

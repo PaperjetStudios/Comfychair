@@ -60,8 +60,8 @@ export function openVideoPicker({ title, onPick }) {
     let media = [];
     try { media = (await api('/api/media')).filter((m) => m.kind === 'video'); } catch { /* the outputs still show */ }
     const items = (await projectOutputs(['video'])).map(({ g, o, i, t }) =>
-      ({ t, el: () => mediaCard(mediaEl(o, { thumb: true }), genLabel(g), () => picked({ generation: g.id, index: i })) }));
-    for (const m of media) items.push({ t: m.created, el: () => mediaCard(mediaEl(m, { thumb: true }), m.label, () => picked({ media: m.name })) });
+      ({ t, el: () => mediaCard(cardMedia(o), genLabel(g), () => picked({ generation: g.id, index: i }), { badge: '▶' }) }));
+    for (const m of media) items.push({ t: m.created, el: () => mediaCard(cardMedia(m), m.label, () => picked({ media: m.name }), { badge: '▶' }) });
     items.sort((x, y) => y.t - x.t);
     return items.length ? items.slice(0, 300).map((x) => x.el()) : placeholder('No videos in this project yet. Generate one or upload a clip.');
   });
