@@ -1281,6 +1281,8 @@ body:has(.stage.maxed) .toast { z-index: 60; }
   border-radius: var(--r-sm); vertical-align: super; letter-spacing: .04em; }
 .lab .tab.active { transform-origin: 50% 40%; }
 .lab .topbar { position: relative; z-index: 6; }   /* (a leaning tab passes under it) */
+.lab .topbar { touch-action: pan-y; }   /* a sideways swipe along it travels (world.js), not scrolls */
+.lab nav.tabs { overflow-x: visible; }
 .world-map {
   position: fixed; z-index: 45; left: 50%; top: 72px; transform: translate(-50%, -8px) scale(.96); opacity: 0; pointer-events: none;
   display: flex; gap: 6px; padding: 8px; background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(8px);
@@ -1288,15 +1290,29 @@ body:has(.stage.maxed) .toast { z-index: 60; }
   transition: opacity .25s, transform .45s cubic-bezier(.34, 1.56, .64, 1);
 }
 .world-map.on { opacity: 1; transform: translate(-50%, 0) scale(1); }
-.wm-col { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 52px; padding: 6px 4px;
-  border-radius: var(--r); color: var(--muted); transition: background .2s, color .2s, transform .35s cubic-bezier(.34, 1.56, .64, 1); }
-.wm-col.here { background: var(--surface-2); color: var(--text); }
-.wm-col.to { color: var(--accent); transform: translateY(-3px) scale(1.08); }
-.wm-icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; display: block; }
-.wm-name { font-size: 10px; }
-.wm-sets { display: flex; flex-direction: column; gap: 3px; margin: 2px 0; }
-.wm-set { width: 18px; height: 5px; border-radius: 3px; background: var(--line-2); transition: background .2s, width .3s cubic-bezier(.34, 1.56, .64, 1); }
-.wm-set.to { background: var(--accent); width: 28px; }
+.wm-col { display: flex; flex-direction: column; gap: 3px; min-width: 120px; padding: 6px; border-radius: var(--r); color: var(--muted);
+  transition: background .2s, transform .35s cubic-bezier(.34, 1.56, .64, 1); }
+.wm-col.here { background: var(--surface-2); }
+.wm-col.to { transform: translateY(-3px) scale(1.04); }
+.wm-space { display: flex; align-items: center; gap: 6px; font-weight: 700; color: var(--text); padding: 2px 4px 4px; font-size: 13px; }
+.wm-col.to .wm-space { color: var(--accent); }
+.wm-tool { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--r-sm); font-size: 12px;
+  transition: background .2s, color .2s, transform .35s cubic-bezier(.34, 1.56, .64, 1); }
+.wm-tool.here { color: var(--text); background: var(--surface); }
+.wm-tool.to { color: var(--accent-ink); background: var(--accent); transform: translateX(3px); }
+.world-map svg { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+/* the three spaces in the top bar, then the tools of the open one */
+.spaces { display: flex; gap: 2px; padding: 2px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-lg); flex: none; }
+.space-btn { position: relative; display: flex; align-items: center; gap: 6px; min-height: 38px; padding: 0 12px; border: 0; background: none;
+  color: var(--muted); font-weight: 600; border-radius: var(--r); }
+.space-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.space-btn.on { background: var(--accent); color: var(--accent-ink); }
+.space-btn::after { content: ''; position: absolute; left: 0; bottom: 0; height: 3px; width: var(--run, 0%); background: var(--accent); transition: width .3s; }
+.lab nav.tabs button.off-space { display: none; }
+@media (min-width: 1240px) { .lab .tabs button .tab-label { display: inline; } }   /* (only the open space's tools show: room for their names) */
+@media (max-width: 900px) { .space-btn span { display: none; } }
+/* no sideways overscroll: Chrome would take a sideways swipe at the page's edge as Back / Forward */
+.lab, .lab body { overscroll-behavior-x: none; }
 /* a little physics: presses squash and spring back, sheets and toasts land with a bounce */
 .lab .btn, .lab .icon-btn, .lab .seg button, .lab .side-tab, .lab nav.tabs button, .lab .chip {
   transition: transform .42s cubic-bezier(.34, 1.8, .5, 1), background-color .15s, border-color .15s, color .15s;
