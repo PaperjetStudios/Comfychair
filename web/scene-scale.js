@@ -223,13 +223,12 @@ function custom(placeholder, set) {
   const n = h('input', { type: 'number', min: 0.01, step: 0.01, placeholder, 'aria-label': 'Custom length in metres', style: 'max-width:7em' });
   const go = () => { const v = parseFloat(n.value); if (v > 0) set(v); else toast('Type a length in metres', true); };
   n.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
-  return h('div', { class: 'row' }, n, h('span', { class: 'hint' }, 'm'), button('Set', go));
+  return h('div', { class: 'row', style: 'align-items:center' }, n, h('span', { class: 'hint' }, 'm'), button('Set', go, { style: 'flex:0 0 auto' }));
 }
 function realSheet(o, pts) {
   const d = dist(pts[0].toArray(), pts[1].toArray());
   const apply = (real, what) => { closeSheet(); clearMarks(); rescale(o, factorFor(d, real), `${what || fmtLen(real)} between the points`); };
-  const seq = openSheet(h('h3', {}, `Measured ${fmtLen(d)}`),
-    hint('What is that distance really?'),
+  const seq = openSheet(h('h3', {}, `Measured ${fmtLen(d)}: really?`),
     h('div', { class: 'chips' }, ...LENGTHS.map(([n, v]) => button(`${n} ${fmtLen(v)}`, () => apply(v, n)))),
     field('Custom', custom(fmtLen(d).replace(/ .*/, ''), (v) => apply(v))),
     actions(button('Measure again', () => { closeSheet(); startMeasure(o); }), button('Done', () => { closeSheet(); clearMarks(); })));
