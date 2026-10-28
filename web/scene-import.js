@@ -12,6 +12,8 @@ import { C, R, SC, newObject, namesFor, save, selItem, write } from './scene-dat
 import { addModeSection } from './scene-modes.js';
 import { LOADERS, activeCamera, controls, changed, draw, fit, lookThrough, passHooks, recentre, renderer, scene, select } from './scene-view.js';
 import { LIBRARY } from './scene-library.js';
+import { askHeight } from './scene-scale.js';
+import { fitForHeight, fmtLen, importFit, unitToMetres } from './scale-math.js';
 import {
   LEVELS, countLabel, fileOf, levelFor, levelName, makeChoices, placeAtCamera, previewLevel, previewUrl, renderUrl, setMakeChoices, setPlaceAtCamera,
   setPreviewLevel, setSharp, sharpOn
@@ -190,11 +192,16 @@ passHooks.push((pass) => {
 });
 
 // ---- importing --------------------------------------------------------------------------
-// big or tiny files (FBX is often in cm) come in at a usable size; the factor is kept in the layer
-const fitFor = (size, target) => {
-  const m = Math.max(size.x, size.y, size.z);
-  return m > 12 || m < 0.3 ? +(target / m).toPrecision(3) || 1 : 1;
-};
+// A file in a known unit (glTF: metres; FBX: its UnitScaleFactor) comes in at its true size. An unknown unit (OBJ, a
+// splat) or an absurd size (over 50 m, under 5 cm) asks how tall it is; dismissed, it comes in at a usable size (as
+// imports always did). The factor is kept in the layer (o.fit); saved scenes keep theirs.
+async function fitOf(o, kind, size, unit) {
+  const r = importFit(o.ext, [size.x, size.y, size.z], unit, kind === 'splat' ? 4 : 2);
+  if (!r.ask) return r.fit;
+  const known = unitToMetres(o.ext, unit), fileH = size.y * (known ?? 1);
+  const want = await askHeight(o.name, fileH, known == null);
+  return want ? fitForHeight(size.y, want) : r.fit;
+}
 
 async function upload(file, group) {
   const form = new FormData();
@@ -216,9 +223,11 @@ async function importOne(main, extras) {
   const o = newObject(kind, { x: +c.x.toFixed(2), z: +c.z.toFixed(2) });
   Object.assign(o, { name: main.name.replace(/\.\w+$/, '').replace(/[_]+/g, ' ').slice(0, 60) || 'Imported', url: up.url, file: up.name, ext });
   if (mtl && ext === 'obj') o.mtl = mtl;
-  let size;
+  let size, unit = null;
   if (kind === 'model') {
-    const s = stand(await loadModel(o));
+    const raw = await loadModel(o);
+    unit = raw.userData?.unitScaleFactor ?? null;   // (FBX: centimetres per unit)
+    const s = stand(raw);
     size = s.size; loaded.set(o.id, s.wrap);
   } else {
     const mesh = await loadSplat(o);
@@ -226,10 +235,10 @@ async function importOne(main, extras) {
     size = new THREE.Vector3(o.box[3] - o.box[0], o.box[4] - o.box[1], o.box[5] - o.box[2]);
     loaded.set(o.id, mesh);
   }
-  o.fit = fitFor(size, kind === 'splat' ? 4 : 2);
+  o.fit = await fitOf(o, kind, size, unit);
   o.base.sx = o.base.sy = o.base.sz = o.fit;
   SC.objects.push(o); save(); select(o.id);
-  toast(o.fit === 1 ? `${o.name} added` : `${o.name} added, scaled ×${o.fit} to a usable size`);
+  toast(`${o.name} added: ${fmtLen(size.y * o.fit)} tall${o.fit === 1 ? '' : ` (×${o.fit})`}`);
 }
 
 async function importFiles(files) {

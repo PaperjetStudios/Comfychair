@@ -443,6 +443,14 @@ under the view has a row per layer: drag a key along its row to retime it, tap a
 a frame, Shift+←/→ jump between keys). With **Auto key** off (K), a change to something animated is only
 held until ◆ Key or the playhead moves, so you can look around without touching the keys. ↶ / ↷ (Ctrl+Z,
 Ctrl+Shift+Z) undo and redo.
+**Real size**: the scene is in metres. Each object's settings show its **Real size** (height × width × depth).
+The person button on the view's bar puts a 1.8 m outline person beside what is selected, and the floor has
+faint metre marks; neither ever shows in a render. **Measure…** on an object: tap two points on it, then say
+what that distance really is (Person, Door, Table, Car or a number) and it is rescaled about its base (undo
+works; with keys, it keys the scale at the playhead). A photo's mesh or splat also has **Calibrate from a
+person**: the person in the source photo is found (on the CPU, only while ComfyUI's queue is empty) and the
+whole layer is scaled so they are 1.7 m, or the height you pick. Imported glTF comes in at its true size and
+FBX by its unit; OBJ, splats and absurd sizes ask "About how tall is it?".
 **Posable person**: a low-poly man or woman with joints (+ Add has both; **Place** switches one). The
 parts are smooth volumes on the joints, built in code (no mesh files), shaped to read in a depth render:
 chest, pelvis, shoulders, a face with nose, brows, eyes, ears and a jaw. Tap it to show its joint dots, tap

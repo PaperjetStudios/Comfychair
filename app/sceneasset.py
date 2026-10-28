@@ -2,6 +2,7 @@
 project's own folder: projects/<folder>/.deck/assets/<import id>/<file name>. One import can be several
 files (an OBJ with its MTL and textures, a glTF with its .bin) that share an import id, so their
 relative names keep working. They are served under /files/projects/ like every other project file."""
+import json
 import math
 import os
 import re
@@ -363,3 +364,55 @@ async def photo_splat(body: dict = Body(...)):
         return finish_splat(full, folder, group, preview, keep_full)
 
     return clipimport._start(work, "Making the splat")
+
+
+# ---- people in a photo: "Calibrate from a person" (a photo's mesh or splat scaled so a person in it is a real height) ----
+PERSON_WORKER = config.BASE_DIR / "look" / "person_worker.py"
+
+
+def _comfy_busy() -> bool:
+    """ComfyUI has something running or waiting (the detector then waits: it would slow a run down)."""
+    import httpx
+    try:
+        q = httpx.get(f"{config.COMFY_URL}/queue", timeout=5).json()
+        return bool(len(q.get("queue_running", [])) + len(q.get("queue_pending", [])))
+    except (httpx.HTTPError, ValueError):
+        return False
+
+
+def find_people(path: Path, py: Path, det: Path) -> dict:
+    """look/person_worker.py on the picture, in ComfyUI's venv on the CPU -> {w, h, people: [[x0, y0, x1, y1, score]]}."""
+    threads = str(max(1, (os.cpu_count() or 4) // 2))
+    r = subprocess.run([str(py), "-I", str(PERSON_WORKER), str(path), str(det), "--threads", threads], capture_output=True,
+                       text=True, timeout=180, env={**os.environ, "CUDA_VISIBLE_DEVICES": ""})
+    lines = [ln for ln in (r.stdout or "").splitlines() if ln.startswith("{")]
+    if not lines:
+        raise RuntimeError(((r.stderr or "").strip().splitlines() or ["the person finder gave nothing back"])[-1][:300])
+    out = json.loads(lines[-1])
+    if "error" in out:
+        raise RuntimeError(out["error"])
+    return out
+
+
+@router.post("/person")
+async def photo_person(body: dict = Body(...)):
+    """{image: an input name} -> {w, h, people: [[x0, y0, x1, y1, score], ...]}: the people in a photo (fractions of the
+    picture, the tallest first), found with DWPose's YOLOX on the CPU; refused (409) while ComfyUI's queue is busy."""
+    import asyncio
+    from . import looks
+    image = str((body or {}).get("image") or "")
+    if not image:
+        raise HTTPException(400, "This layer has no source picture")
+    s = looks.ClipScorer()   # (only its paths: ComfyUI's venv and DWPose's YOLOX-L)
+    if not s.py or not s.det:
+        raise HTTPException(503, "No person finder here (ComfyUI's venv or DWPose's yolox_l.onnx wasn't found)")
+    if await asyncio.to_thread(_comfy_busy):
+        raise HTTPException(409, "ComfyUI is busy: try again when its queue is empty, or measure instead")
+    try:
+        path = await looks._input_path(image)
+    except Exception as e:
+        raise HTTPException(404, f"The source picture is missing: {e}")
+    try:
+        return await asyncio.to_thread(find_people, path, s.py, s.det)
+    except Exception as e:
+        raise HTTPException(500, f"Finding people failed: {e}")

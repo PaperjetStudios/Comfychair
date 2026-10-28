@@ -19,7 +19,7 @@ import { standShift } from './splat-shape.js';
 // ---- geometry ----------------------------------------------------------------
 // A soft, featureless figure turned on a lathe: feet, legs as one column, hips, waist, chest,
 // neck and head in one smooth outline. Unit size (1 wide, 1 tall, base at y=0), scaled per object.
-const PERSON_PROFILE = [[0, 0], [0.27, 0], [0.29, 0.02], [0.25, 0.08], [0.28, 0.27], [0.36, 0.45], [0.4, 0.52],
+export const PERSON_PROFILE = [[0, 0], [0.27, 0], [0.29, 0.02], [0.25, 0.08], [0.28, 0.27], [0.36, 0.45], [0.4, 0.52],
   [0.33, 0.63], [0.44, 0.73], [0.5, 0.8], [0.4, 0.83], [0.11, 0.855], [0.12, 0.875], [0.18, 0.91], [0.185, 0.95],
   [0.13, 0.99], [0, 1]];
 let GEO;
@@ -207,7 +207,7 @@ function fixTarget(o, start) {
   const it = selItem();
   if (!it || !EVEN.has(it.type)) return;
   const s = [o.scale.x, o.scale.y, o.scale.z].find((v) => Math.abs(v - start.sy) > 1e-6) ?? start.sy;
-  o.scale.setScalar(Math.max(0.01, s));
+  o.scale.setScalar(Math.max(1e-4, s));
 }
 
 // each frame of a drag (and its settling): the object the gizmo holds is where the spring has it, so
@@ -224,7 +224,7 @@ function applyChange() {
   const d = THREE.MathUtils.radToDeg;
   write(o, namesFor(o), { x: m.position.x, y: m.position.y, z: m.position.z,
     rx: d(m.rotation.x), ry: d(m.rotation.y), rz: d(m.rotation.z),
-    sx: Math.max(0.01, m.scale.x), sy: Math.max(0.01, m.scale.y), sz: Math.max(0.01, m.scale.z) });
+    sx: Math.max(1e-4, m.scale.x), sy: Math.max(1e-4, m.scale.y), sz: Math.max(1e-4, m.scale.z) });
 }
 
 // the shot camera put where the proxy is, looking along it at what it looked at (same distance)
@@ -294,7 +294,8 @@ export function rebuildRoom() {
 }
 
 // What scene-import.js plugs in: LOADERS[type](o, group) fills a layer's group (imported models and
-// splats load on their own time), passHooks run before each draw with the pass ('depth' or 'color')
+// splats load on their own time), passHooks run before each draw with the pass ('depth' or 'color') and what the
+// draw is for (false: the view; else a render's kind)
 export const LOADERS = {};
 export const passHooks = [];
 
@@ -596,7 +597,7 @@ export function pose(f) {
     const v = current(o, namesFor(o), f);
     m.position.set(v.x, v.y, v.z);
     m.rotation.set(r(v.rx), r(v.ry), r(v.rz));
-    if (EVEN.has(o.type)) m.scale.setScalar(Math.max(0.01, v.sy));
+    if (EVEN.has(o.type)) m.scale.setScalar(Math.max(1e-4, v.sy));
     else m.scale.set(Math.max(0.01, v.sx), Math.max(0.01, v.sy), Math.max(0.01, v.sz));
     if (m.userData.rig) { FIGURE.setShape(m.userData.rig, o.shape, o.anatomy); FIGURE.applyPose(m.userData.rig, v.j, stepped(o, v.m, f), o.ground); FIGURE.setHidden(m.userData.rig, o.hide); }
     m.userData.atFrame?.(f);   // (a footage layer shows its frame, scene-track.js)
@@ -627,7 +628,7 @@ export function draw(forRender = false) {
   const live = !R.playing;   // (while it plays, the While-playing settings say what shows: WP)
   grid.visible = !forRender && !depth && !snap3.grid && (live || WP.grid);
   snapGrid.visible = !forRender && !depth && snap3.grid && (live || WP.grid);
-  for (const f of passHooks) f(depth || forRender === 'range' ? 'depth' : 'color');
+  for (const f of passHooks) f(depth || forRender === 'range' ? 'depth' : 'color', forRender);
   frustum.visible = wantFrustum() && !forRender && !depth && (live || WP.frustum);
   for (const x of OTHERS.values()) x.group.visible = frustum.visible;
   stage.visible = !onStage() && !forRender;
