@@ -321,3 +321,44 @@ console.log('record ok');
   assert.equal(K.keysPast([cam, fig], 100), 3); assert.equal(K.keysPast([cam, fig, none], 300), 0);
 }
 console.log('stretch ok');
+
+{ // curves: auto, clamp, bezier handles solved in time; old eases unchanged
+  const S = (l, f, ease = 'smooth') => K.sampleKeys(l, f, { ease });
+  const close = (a, b, e = 1e-6) => assert.ok(Math.abs(a - b) < e, `${a} != ${b}`);
+  const old = [{ f: 0, v: 0 }, { f: 10, v: 10 }];
+  close(S(old, 5), 5); close(S(old, 2), 10 * (0.04 * (3 - 0.4))); close(S([{ f: 0, v: 0, ease: 'linear' }, { f: 10, v: 10 }], 3), 3);
+  // auto through a straight line is the line (thirds: no solve), ends flat
+  const line = [0, 10, 20, 30].map((f) => ({ f, v: f * 2, ease: 'auto' }));
+  close(S(line, 15), 30); close(S(line, 12.5), 25);
+  assert.equal(K.handleOf(line, 0, 'to')[1], 0);   // an end key is flat
+  // auto overshoots a peak, clamp doesn't
+  const peak = (e) => [{ f: 0, v: 0, ease: e }, { f: 10, v: 10, ease: e }, { f: 12, v: 10, ease: e }, { f: 20, v: 0, ease: e }];
+  let maxA = -Infinity, maxC = -Infinity;
+  for (let f = 0; f <= 20; f += 0.25) { maxA = Math.max(maxA, S(peak('auto'), f)); maxC = Math.max(maxC, S(peak('clamp'), f)); }
+  assert.ok(maxA > 10.01); close(maxC, 10, 1e-9);
+  // the curve passes its keys exactly
+  for (const k of peak('clamp')) close(S(peak('clamp'), k.f), k.v);
+  // bezier: setEase keeps the curve where it was, then a dragged handle bends it; x solved in time (monotone in f)
+  const L = K.track({ chans: { x: peak('auto') } }, 'x'), before = [...Array(21)].map((_, f) => S(L.keys, f));
+  K.setEase(new Set(L.keys), 'bezier', [L]);
+  assert.ok(L.keys.every((k) => Array.isArray(k.ti) && Array.isArray(k.to)));
+  before.forEach((v, f) => close(S(L.keys, f), v, 1e-6));
+  K.moveHandle(L.keys, 1, 'to', 1.8, 6);   // aligned: the in handle turns to the same slope
+  close(L.keys[1].ti[1] / L.keys[1].ti[0], 6 / 1.8);
+  K.setBroken(new Set([L.keys[1]]), true); K.moveHandle(L.keys, 1, 'ti', -3, 0);
+  close(L.keys[1].to[1], 6);   // broken: the other stays
+  close(S(L.keys, 10), 10); close(S(L.keys, 12), 10);
+  // handles longer than the segment are shortened, the curve still a function of time
+  K.moveHandle(L.keys, 1, 'to', 50, 0); K.moveHandle(L.keys, 2, 'ti', -50, 0);
+  for (let f = 10; f <= 12; f += 0.1) assert.ok(Number.isFinite(S(L.keys, f)) && Math.abs(S(L.keys, f) - 10) < 1e-6);
+  // back to auto drops the handles
+  K.setEase(new Set(L.keys), 'auto', [L]); assert.ok(L.keys.every((k) => !k.ti && !k.to && !k.hb));
+  // joints (non-numbers) under a curve ease blend smooth
+  const q = [{ f: 0, v: 'a', ease: 'bezier' }, { f: 10, v: 'b' }];
+  assert.equal(K.sampleKeys(q, 4, { lerp: (a, b, e) => (e < 0.5 ? a : b) }), 'a');
+  // speed: 10k samples of a 500-key bezier channel
+  const big = [...Array(500)].map((_, i) => ({ f: i * 2, v: Math.sin(i / 7), ease: 'bezier', to: [0.5, 0.1], ti: [-0.9, -0.2] }));
+  const t0 = performance.now(); let s = 0; for (let i = 0; i < 10000; i++) s += S(big, (i * 0.0997) % 998);
+  assert.ok(Number.isFinite(s) && performance.now() - t0 < 200, `slow: ${performance.now() - t0} ms`);
+}
+console.log('curves ok');

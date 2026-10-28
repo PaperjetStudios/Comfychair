@@ -128,7 +128,7 @@ export const keyFrames = (item, only = () => true) => [...new Set(Object.entries
 // how many frames hold a key, for a layer's hint
 export const keyCount = (item) => keyFrames(item).length;
 // a string that changes when the item's position keys do (what a figure's step phase is cached on)
-export const pathSig = (o) => o.ease + ['x', 'z'].map((ch) => (o.chans?.[ch] || []).map((k) => `${k.f},${k.v},${k.ease || ''}`).join('|')).join('#');
+export const pathSig = (o) => o.ease + ['x', 'z'].map((ch) => (o.chans?.[ch] || []).map((k) => `${k.f},${k.v},${k.ease || ''},${k.ti || ''},${k.to || ''}`).join('|')).join('#');
 export const keyAt = (item, f) => Object.values(item.chans || {}).some((l) => l.some((k) => k.f === f));
 export const chanNames = (item, prefix) => Object.keys(item.chans || {}).filter((c) => c.startsWith(prefix));
 // the next key frame after (dir 1) or before (-1) f, on any channel

@@ -5,7 +5,7 @@ import {
   CAM, FPS, HOLD, OBJ, R, ROOM, SC, TEMP, TYPES, WP, addKey, bakeBase, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setKey, setMute
 } from './scene-data.js';
 import {
-  EASES, allKeys, bounds, copy, isScalar, kindOf, moveBy, paste, prune, remove, restore, scaleAround, setChan, setEase, snapshot, track
+  CURVES, EASES, allKeys, bounds, copy, handleOf, isScalar, kindOf, moveBy, moveHandle, paste, prune, remove, restore, scaleAround, setBroken, setChan, setEase, snapshot, track
 } from './keys.js';
 import { changed, draw, pose, select } from './scene-view.js';
 import { busy, play, seek } from './scene-export.js';
@@ -162,7 +162,9 @@ export function renderKeys() {
     ROWS = rowsNow();
     const rg = gRange || graphRange(graph, G.ch), n = span();
     const L = graph;
+    HS = handlesOn(L, ROWS[0].tracks[0].keys);
     const plot = h('div', { class: 'graph-plot' + (L.item.mute ? ' muted' : '') }, h('canvas', { class: 'graph-cv' }),
+      ...HS.map((x, i) => h('span', { class: 'khandle', 'data-h': i, title: `${x.side === 'ti' ? 'In' : 'Out'} handle${x.k.hb ? ' (broken)' : ''}` })),
       ...ROWS[0].dia.map((d, j) => keyEl(d, 0, j, `top:${yPos(rg, d.keys[0].v)}`)));
     body = [plot];
     $('#sceneNames').replaceChildren(
@@ -217,7 +219,7 @@ function layerSel(sh, L) {
 // a diamond: one channel's key, or (on a layer's or group's row) all the keys at that frame
 const easeOf = (d) => (d.keys.every((k) => (k.ease || '') === (d.keys[0].ease || '')) ? d.keys[0].ease : '');
 const allSel = (d) => d.keys.every((k) => SEL.has(k));
-const keyEl = (d, ri, j, style) => h('span', { class: `key e-${easeOf(d) || 'auto'}` + (d.keys.length > 1 ? ' sum' : '') + (allSel(d) ? ' sel' : '') + (d.f === R.f ? ' on' : ''),
+const keyEl = (d, ri, j, style) => h('span', { class: `key e-${easeOf(d) || 'def'}` + (d.keys.length > 1 ? ' sum' : '') + (allSel(d) ? ' sel' : '') + (d.f === R.f ? ' on' : ''),
   'data-key': j, 'data-l': ri, style: `left:${lanePos(d.f)};${style}`,
   title: `Key at ${(d.f / FPS).toFixed(2)} s · frame ${d.f + 1}${d.keys.length > 1 ? ` · ${d.keys.length} channels` : easeOf(d) ? ` · ${easeOf(d)}` : ''}` });
 
@@ -238,9 +240,35 @@ function drawGraph(plot, L, rg, n) {
   }
   c.strokeStyle = col('--accent', '#e9b44c'); c.lineWidth = 2; c.beginPath();
   const f0 = Math.max(0, Math.floor(V.a)), f1 = Math.min(n, Math.ceil(V.b));
-  // a constant segment steps; finer sampling than a frame isn't needed (keys sit on frames)
-  for (let f = f0; f <= f1; f++) { const v = sampleCh(L, G.ch, f); if (f === f0) c.moveTo(X(f), Y(v)); else c.lineTo(X(f), Y(v)); }
+  // a few px a step, so a bezier between keys a frame or two apart still shows its shape
+  const step = Math.min(1, Math.max(1 / 16, 3 / pxf()));
+  for (let f = f0; f <= f1 + 1e-9; f += step) { const v = sampleCh(L, G.ch, f); if (f === f0) c.moveTo(X(f), Y(v)); else c.lineTo(X(f), Y(v)); }
   c.stroke();
+  // the selected keys' handles: a line from the key, the dot at least MINH px out (a short one is drawn longer, same direction)
+  const els = plot.querySelectorAll('[data-h]');
+  c.strokeStyle = col('--muted', '#888'); c.lineWidth = 1.5;
+  HS.forEach((x, i) => {
+    const kx = X(x.k.f), ky = Y(x.k.v);
+    let hx = X(x.k.f + x.dt) - kx, hy = Y(x.k.v + x.dv) - ky;
+    const len = Math.hypot(hx, hy);
+    if (len < MINH) { const s = len > 1e-6 ? MINH / len : 0; hx = len > 1e-6 ? hx * s : (x.side === 'to' ? MINH : -MINH); hy *= s; }
+    c.beginPath(); c.moveTo(kx, ky); c.lineTo(kx + hx, ky + hy); c.stroke();
+    if (els[i]) Object.assign(els[i].style, { left: `${kx + hx}px`, top: `${ky + hy}px` });
+  });
+}
+// the handles on show: the selected keys' of the graph's channel, on the sides that have a curve
+const MINH = 30;
+let HS = [];
+function handlesOn(L, list) {
+  const out = [], segOf = (k) => k.ease || L.item.ease || 'smooth';
+  list.forEach((k, j) => {
+    if (!SEL.has(k) || typeof k.v !== 'number') return;
+    const sides = [];
+    if (j > 0 && CURVES.has(segOf(list[j - 1]))) sides.push(['ti', segOf(list[j - 1])]);
+    if (j < list.length - 1 && CURVES.has(segOf(k))) sides.push(['to', segOf(k)]);
+    for (const [side, mode] of sides) { const [dt, dv] = handleOf(list, j, side, mode); out.push({ k, j, side, mode, dt, dv }); }
+  });
+  return out;
 }
 
 // ---- selection API (the sheet's buttons and the keyboard go through these) ----------------------
@@ -264,7 +292,12 @@ export function deleteKeys() {
   }
   const c = remove(tracks, SEL); TEMP.clear(); done(); toast(`${c} key${c > 1 ? 's' : ''} deleted`);
 }
-export function setKeyEase(ease) { if (!SEL.size) return; setEase(SEL, ease); done(); }
+// an ease (or 'hb:1' / 'hb:0': break or align the handles) for every selected key
+export function setKeyEase(ease) {
+  if (!SEL.size) return;
+  if (ease === 'hb:1' || ease === 'hb:0') setBroken(SEL, ease === 'hb:1'); else setEase(SEL, ease, allTracks());
+  done();
+}
 
 // the clipboard is kept in memory and in localStorage, so a tab switch (another scene) still has it
 const CLIP = 'deck.scene.keyclip';
@@ -338,6 +371,12 @@ function down(e) {
     G0 = { ...base, type: 'scale', phx, d0: Math.max(24, Math.abs(e.clientX - phx)), snap: snapshot(allTracks()) };
     return;
   }
+  const hEl = t.closest('[data-h]');
+  if (hEl && HS[+hEl.dataset.h]) {  // a bezier handle: dragged by how far the pointer goes (a short one is drawn longer)
+    const x = HS[+hEl.dataset.h], T = gTrack();
+    G0 = { ...base, type: 'handle', x, T, dt0: x.dt, dv0: x.dv, snap: snapshot([T]) };
+    return;
+  }
   const row = keyEl2 ? ROWS[+keyEl2.dataset.l] : laneEl ? ROWS[+laneEl.dataset.track] : null, L = row?.L || null;
   if (keyEl2) {
     const keys = keyOf(keyEl2), was = keys.every((k) => SEL.has(k));
@@ -356,6 +395,7 @@ function down(e) {
 
 function abort() {
   const g = G0; G0 = null;
+  if (g?.type === 'handle' && g.moved) { restore(g.snap); pose(R.f); draw(); renderKeys(); }
   if (g && (g.type === 'key' || g.type === 'scale') && g.moved) { restore(g.snap); SEL.clear(); g.held.forEach((k) => SEL.add(k)); pose(R.f); draw(); renderKeys(); }
   if (g?.el) g.el.remove();
 }
@@ -395,6 +435,19 @@ function move(e) {
       if (cx >= x1 && cx <= x2 && cy >= y1 && cy <= y2) keyOf(el).forEach((k) => SEL.add(k));
     }
     syncSelClasses(); info();
+    return;
+  }
+  if (g.type === 'handle') {
+    if (!g.moved) { g.moved = true; gRange = graphRange(gLayer(), G.ch); }
+    restore(g.snap);
+    const rg = gRange, list = g.T.keys, j = list.indexOf(g.x.k);
+    if (j < 0) return;
+    let dt = g.dt0 + dx / pxf();
+    const dv = g.dv0 - dy / Math.max(40, $('.graph-plot').clientHeight - 2 * GP) * (rg.hi - rg.lo);
+    if (UI.snap && !e.altKey) { const r = Math.round(dt); dt = r || Math.sign(dt); }   // (snap: whole frames; Alt frees it)
+    moveHandle(list, j, g.x.side, dt, dv, g.x.mode);
+    info(`${g.x.side === 'ti' ? 'In' : 'Out'} ${dt.toFixed(1)} f · ${dv >= 0 ? '+' : ''}${dv.toFixed(2)}`);
+    pose(R.f); draw(); renderKeys();
     return;
   }
   // moving keys: from the snapshot each time, so the drag follows the pointer exactly
@@ -442,7 +495,7 @@ function up(e) {
     renderKeys(); info();
     return;
   }
-  if (g.type === 'scale') { if (g.moved) done(); info(); return; }
+  if (g.type === 'scale' || g.type === 'handle') { if (g.moved) done(); info(); return; }
   if (g.el) g.el.remove();
   if (!g.moved) {  // a tap on empty space: deselect (unless adding) and move the playhead
     if (!UI.add) SEL.clear();
@@ -530,7 +583,8 @@ function toolRow() {
     (() => {
       const s = h('select', { class: 'kt-ease', 'aria-label': 'Ease of the selected keys', title: 'Ease · how the selected keys blend into the next one',
         onchange: (e) => { const v = e.target.value; e.target.value = '~'; if (v !== '~') setKeyEase(v); } },
-      h('option', { value: '~' }, 'Ease…'), ...EASES.map(([v, l]) => h('option', { value: v }, l)));
+      h('option', { value: '~' }, 'Ease…'), h('optgroup', { label: 'Between keys' }, ...EASES.map(([v, l]) => h('option', { value: v }, l))),
+      h('optgroup', { label: 'Bezier handles' }, h('option', { value: 'hb:0' }, 'Aligned'), h('option', { value: 'hb:1' }, 'Broken')));
       tools.push([s, null, 'sel']);
       return s;
     })(),

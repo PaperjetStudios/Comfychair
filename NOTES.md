@@ -147,6 +147,11 @@ will then fail to start until that process is stopped, so stop it before the nex
   bound API (`selectKeys, moveKeys, scaleKeys, copyKeys, pasteKeys, duplicateKeys, deleteKeys, setKeyEase`).
   A drag moves keys live from a snapshot and saves once on letting go: one undo step per gesture.
 - A key's `ease` may now be `smooth | linear | in | out | const` (unknown names read as smooth); old files are unchanged.
+- Curves (2026-10-28): `ease` can also be `auto | clamp | bezier` (keys.js `CURVES`). A key may carry its own handles
+  `ti` / `to` = `[dt, dv]` (frames, channel units; `hb: true` = broken); without them `handleOf` works them out (auto:
+  Catmull-Rom slope, a third of the way; clamp: monotone). A segment is a cubic bezier solved in time; only numbers get
+  curves (joints and pose names under a curve ease blend smooth). The graph shows the selected keys' handles (drag them;
+  an auto key becomes Bezier; Snap rounds to whole frames). The video export (`keyexpr.py`) ignores these names.
 - **Mute** (`item.mute`, saved, `upgrade()` defaults it off): `current()`/`write()` in scene-data.js use values held
   in `MUTED` (not saved) instead of the keys, so a muted layer stays put and moving it writes no keys. Renders set
   `R.real` and use the real keys; Save frame is the picture on screen.

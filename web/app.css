@@ -964,12 +964,18 @@ button.sheet-caret { width: 22px; }
 .sheet-lanes .key.e-const { transform: none; }
 .sheet-lanes .key.e-in, .sheet-lanes .key.e-out { border-radius: 50%; transform: none; }
 .sheet-lanes .key.e-linear { transform: rotate(45deg) scale(.8); }
+.sheet-lanes .key.e-auto, .sheet-lanes .key.e-clamp, .sheet-lanes .key.e-bezier { border-radius: 40% 0; }
+/* a bezier handle in the graph: a small dot with a pen-sized target */
+.graph-plot .khandle { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: var(--surface); border: 2px solid var(--accent); cursor: grab; touch-action: none; }
+.graph-plot .khandle::after { content: ''; position: absolute; inset: -10px; border-radius: 50%; }
+.graph-plot .khandle:hover { background: var(--accent); }
 .sel-box { position: absolute; z-index: 4; border: 1px dashed var(--accent); background: var(--accent-soft); pointer-events: none; }
 @media (pointer: coarse) {
   .sheet-grip { height: 24px; }
   .mute-btn { width: 40px; font-size: 16px; }
   .graph-plot { top: 34px; }
   .graph-plot .key { width: 16px; height: 16px; margin: -8px 0 0 -8px; }
+  .graph-plot .khandle { width: 14px; height: 14px; margin: -7px 0 0 -7px; }
   .scene-sheet.graph { height: 280px; }
   .keynum input { min-height: 40px; }
   .btn.kt, .scene-keytools select { min-height: 38px; height: 38px; }
