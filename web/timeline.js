@@ -1,4 +1,5 @@
 import { $, h, store, uid, toast, undoToast, clamp, panFmt, pctFmt, rangeField } from './ui.js';
+import { keyTimes, keyedRange, setValue, value } from './keyed.js';
 
 // ---------------------------------------------------------------------------
 // The timeline the Video and Sound tabs share: clips on tracks, moved (also to another track) and
@@ -56,10 +57,29 @@ export function clipSoundFields(it, len, { onInput, onChange, level = true, pan 
   const fadeMax = Math.max(0.1, Math.min(10, len)), secs = (v) => `${v.toFixed(2)} s`;
   return [
     level ? r('Level', () => it.volume ?? 1, (v) => { it.volume = v; }, { min: 0, max: 2, step: 0.01, fmt: (v) => pctFmt(v) + levelNote(v) }, 'volume') : null,
-    pan ? r('Pan', () => it.pan || 0, (v) => { it.pan = v; }, { min: -1, max: 1, step: 0.05, fmt: panFmt }) : null,
+    pan ? r('Pan', () => it.pan || 0, (v) => { it.pan = v; }, { min: -1, max: 1, step: 0.05, fmt: panFmt }, 'pan') : null,
     r('Fade in', () => it.fadeIn || 0, (v) => { it.fadeIn = v; }, { min: 0, max: fadeMax, step: 0.05, fmt: secs }),
     r('Fade out', () => it.fadeOut || 0, (v) => { it.fadeOut = v; }, { min: 0, max: fadeMax, step: 0.05, fmt: secs }),
   ];
+}
+
+// A clip's animated properties (keyed.js, After Effects style), the same in Video and Sound. Its keys are in the
+// clip's own source time, so moving or trimming the clip keeps the animation on the picture or the sound.
+//   const K = clipKeys(TL, st, { fps() (keys land on these steps), base: { ch: unset value }, pause, seek, onKeys, live });
+//   K.prop(it, ch, t?) the value at timeline time t (default the playhead); K.setProp(it, ch, v) a change now;
+//   K.field(it, label, ch, opts) its slider with ◀ ◆ ▶; K.diamonds(it, pps, tc) its keys on the clip
+export function clipKeys(TL, st, { fps, base, pause, seek, onKeys, live = {} }) {
+  const clipT = (it, t = st.t) => { const f = fps(); return Math.round((it.in + clamp(t - it.at, 0, TL.len(it))) * f) / f; };
+  const baseOf = (it, ch) => it[ch] ?? base[ch];
+  return {
+    clipT,
+    prop: (it, ch, t = st.t) => value(it, ch, clipT(it, t), baseOf(it, ch)),
+    setProp: (it, ch, v) => setValue(it, ch, clipT(it), v, (x) => { it[ch] = x; }),
+    field: (it, label, ch, opts) => keyedRange(label, { item: it, ch, t: () => clipT(it), base: () => baseOf(it, ch),
+      setBase: (v) => { it[ch] = v; }, seek: (ct) => { pause(); seek(it.at + ct - it.in); }, onKeys, ...live, ...opts }),
+    diamonds: (it, pps, tc) => keyTimes(it).filter((f) => f >= it.in - 1e-3 && f <= it.in + TL.len(it) + 1e-3)
+      .map((f) => h('span', { class: 'tl-key', style: `left:${(f - it.in) * pps}px`, title: `Key at ${tc(it.at + f - it.in)}` })),
+  };
 }
 
 const RULER_STEPS = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];

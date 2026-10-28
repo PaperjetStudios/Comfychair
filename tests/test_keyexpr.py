@@ -80,5 +80,55 @@ class Render(unittest.TestCase):
         self.assertAlmostEqual(width, 120, delta=3)
 
 
+def levels(path: Path, t: float, d: Path):
+    """(left, right) loudness (RMS) of the 0.2 s from t."""
+    raw = d / "pcm.raw"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{t:.3f}", "-t", "0.2", "-i", str(path),
+                    "-f", "s16le", "-ac", "2", "-ar", "48000", str(raw)], check=True)
+    a = np.frombuffer(raw.read_bytes(), dtype=np.int16).reshape(-1, 2).astype(float) / 32768
+    return tuple(float(np.sqrt((a[:, c] ** 2).mean())) for c in (0, 1))
+
+
+@unittest.skipUnless(HAVE_FFMPEG, "needs ffmpeg")
+class SoundKeys(unittest.TestCase):
+    """The Sound tab's keyed level and pan (with its track's level and pan on them) in the mix."""
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp(prefix="deck-sndkeys-"))
+        self.tone = self.d / "tone.wav"
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:d=3", "-ac", "2", str(self.tone)], check=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def mix(self, chans, level=1.0, pan=0.0):
+        from app import audioedit
+        out = self.d / "mix.wav"
+        audioedit.render([{"path": str(self.tone), "kind": "audio", "track": "a1", "at": 0, "in": 0, "out": 3,
+                           "volume": level, "pan": pan, "chans": keyexpr.with_track(chans, level, pan)}], out)
+        return out
+
+    def test_keyed_level(self):
+        full = levels(self.mix(None), 1, self.d)[0]   # the tone unkeyed
+        out = self.mix({"volume": [{"f": 0, "v": 0, "ease": "linear"}, {"f": 2, "v": 1}]})
+        quiet, half, loud = (levels(out, t, self.d)[0] for t in (0.0, 0.9, 2.2))
+        self.assertLess(quiet, 0.1 * full)
+        self.assertAlmostEqual(loud / full, 1, delta=0.05)
+        self.assertAlmostEqual(half / loud, 0.5, delta=0.1)   # linear: half way by 1 s
+
+    def test_keyed_pan_and_track_level(self):
+        full = levels(self.mix(None), 1, self.d)[0]
+        out = self.mix({"pan": [{"f": 0, "v": -1, "ease": "linear"}, {"f": 2, "v": 1}]}, level=0.5)
+        l0, r0 = levels(out, 0.0, self.d)
+        l2, r2 = levels(out, 2.2, self.d)
+        self.assertLess(r0, 0.15 * l0)   # left at first…
+        self.assertLess(l2, 0.05 * r2)   # …right at the end
+        self.assertAlmostEqual(r2 / full, 0.5, delta=0.05)   # the track's level (half) is on the keys too
+
+    def test_with_track(self):
+        c = keyexpr.with_track({"volume": [{"f": 0, "v": 1}], "pan": [{"f": 0, "v": 0.8}], "x": [{"f": 0, "v": 2}]}, 0.5, 0.5)
+        self.assertEqual(c, {"volume": [{"f": 0.0, "v": 0.5}], "pan": [{"f": 0.0, "v": 1.0}]})
+        self.assertIsNone(keyexpr.with_track(None))
+
+
 if __name__ == "__main__":
     unittest.main()

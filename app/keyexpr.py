@@ -62,6 +62,22 @@ def keyed(it: dict, ch: str) -> list[dict] | None:
     return sorted(ks, key=lambda k: k["f"]) if ks else None
 
 
+def with_track(chans, level: float = 1.0, pan: float = 0.0) -> dict | None:
+    """A Sound clip's level and pan keys with its track's level (times) and pan (plus) on them, as the mix hears
+    them; only well-formed keys are kept."""
+    if not isinstance(chans, dict):
+        return None
+    out = {}
+    for ch, f in (("volume", lambda v: max(0.0, v * level)), ("pan", lambda v: max(-1.0, min(1.0, v + pan)))):
+        ks = chans.get(ch)
+        if isinstance(ks, list):
+            ks = [{"f": float(k["f"]), "v": f(float(k["v"])), **({"ease": k["ease"]} if k.get("ease") in EASES else {})}
+                  for k in ks if isinstance(k, dict) and "f" in k and "v" in k]
+            if ks:
+                out[ch] = ks
+    return out or None
+
+
 def span(keys: list[dict] | None, base: float) -> tuple[float, float]:
     """The lowest and highest the channel gets (eases stay between their keys' values)."""
     vs = [k["v"] for k in keys] if keys else [base]

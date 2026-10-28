@@ -90,16 +90,18 @@ then serves ComfyChair at `https://<box>.<tailnet>.ts.net` and prints how to ins
 deploy/tailscale-https.sh                 # :8190 → https://<box>.<tailnet>.ts.net
 ```
 
-**ComfyChair Lab**, the experimental copy (branch `lab`: travel with three fingers, things with a little
-physics), runs beside this one as its own app, with its own data:
+**ComfyChair Lab**, the experimental copy (branch `lab`: three main spaces, travel with three fingers,
+things with a little physics), runs beside this one as its own app, with its own data. It boots the same
+way: `comfyui.target` starts it with ComfyUI and ComfyChair (a drop-in, `comfyui.target.d/lab.conf`, so
+`install-services.sh` keeps it). Once, and again to update it:
 
 ```bash
-deploy/lab.sh            # check out the lab branch next to this one and run it on :8191
-deploy/lab.sh https      # serve it over Tailscale too → https://<box>.<tailnet>.ts.net:8443 (install it from there)
-deploy/lab.sh service    # or keep it running as a service (comfydeck-lab), like ComfyChair
+deploy/lab.sh https      # check out the lab branch beside this one (<this>-lab), start comfydeck-lab on :8191,
+                         # serve it at https://<box>.<tailnet>.ts.net:8443 (install it on the tablet from there)
+deploy/lab.sh            # later updates: pull the lab branch and restart it
+deploy/lab.sh off        # stop it and take it out of the boot
+journalctl -u comfydeck-lab -f
 ```
-
-Run `deploy/lab.sh` again (or `deploy/lab.sh service`) to update it.
 
 **Any second copy as its own app** (e.g. another branch next to the one you use): check it out
 next to this one and run it on another port with another name, then serve that port too. Each address
