@@ -362,3 +362,54 @@ console.log('stretch ok');
   assert.ok(Number.isFinite(s) && performance.now() - t0 < 200, `slow: ${performance.now() - t0} ms`);
 }
 console.log('curves ok');
+
+{ // the offset layer: shown on top of the keys, edits under it go back to key space, the gizmo on it, bake
+  const close = (a, b, e = 1e-6) => assert.ok(Math.abs(a - b) < e, `${a} != ${b}`);
+  const walk = [0, 10, 20].map((f) => ({ f, v: f / 10, ease: 'linear' }));   // walks 2 m along +X
+  const o = { id: 'w', type: 'figure', ease: 'smooth', base: { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 1, sy: 1, sz: 1, j: { lsho: [0, 0, 0, 1] } },
+    chans: { x: walk, ry: [{ f: 0, v: 0 }, { f: 20, v: 0 }] } };
+  D.setSC({ seconds: 6, camera: { base: {}, chans: {} }, objects: [o] }); D.R.autoKey = true; D.R.f = 0; D.R.real = false; D.TEMP.clear();
+  o.off = D.newOffset(o, 0);
+  assert.deepEqual(o.off.pv, [0, 0, 0]);
+  const keysBefore = strip(o.chans);
+  // turned 90° on Y around where it started: the walk now goes along -Z
+  D.setOffset(o, { ry: 90 });
+  let v = D.current(o, D.OBJ, 20);
+  close(v.x, 0); close(v.z, -2); close(v.ry, 90);
+  assert.deepEqual(strip(o.chans), keysBefore);   // the keys are untouched
+  assert.equal(D.sample(o, D.OBJ, 20).x, 2);
+  // the gizmo on the offset: put the figure at (5, 0, 5) at frame 10 → the whole path slides
+  D.R.offEdit = 'w'; D.R.f = 10;
+  D.write(o, D.FIG, { ...D.current(o, D.OBJ, 10), x: 5, z: 5 });
+  v = D.current(o, D.OBJ, 10); close(v.x, 5); close(v.z, 5);
+  v = D.current(o, D.OBJ, 20); close(v.x, 5); close(v.z, 4);   // one more metre along -Z
+  assert.deepEqual(strip(o.chans), keysBefore);
+  // scale it: twice the size, the path twice as long (from where it stands now)
+  D.write(o, D.FIG, { ...D.current(o, D.OBJ, 10), sx: 2, sy: 2, sz: 2 });
+  close(D.current(o, D.OBJ, 10).x, 5); close(D.current(o, D.OBJ, 20).z, 3); close(D.current(o, D.OBJ, 20).sy, 2);
+  // without offset editing, a move goes into the keys, in key space (shown 1 m further along -Z = 0.5 m of key X at 2x)
+  D.R.offEdit = null;
+  D.write(o, D.FIG, { z: D.current(o, D.OBJ, 10).z - 1 });
+  close(D.sample(o, D.OBJ, 10).x, 1.5); close(D.current(o, D.OBJ, 10).z, 4);
+  // a joint offset turns that joint on every frame, its keys kept
+  D.R.offEdit = 'w';
+  const q = [Math.sin(0.25), 0, 0, Math.cos(0.25)];
+  D.write(o, D.FIG, { j: { ...D.current(o, D.FIG).j, lsho: q } });
+  D.current(o, D.FIG, 0).j.lsho.forEach((x, i) => close(x, q[i]));
+  assert.deepEqual(o.base.j.lsho, [0, 0, 0, 1]);
+  // the offset keyed sparsely: two keys, it slides between them
+  D.R.f = 0; D.keyOffset(o); D.R.f = 20; D.setOffset(o, { x: D.offAt(o, 20).x + 1 });
+  close(D.offAt(o, 10).x - D.offAt(o, 0).x, 0.5, 1e-9);
+  // bake: what shows stays, the offset goes
+  const shown = [0, 4, 10, 15, 20].map((f) => strip(D.current(o, D.FIG, f)));
+  D.bakeOffset(o);
+  assert.ok(!o.off);
+  [0, 10, 20].forEach((f, i) => { const now = D.current(o, D.FIG, f), was = shown[[0, 2, 4][i]]; for (const k of D.OBJ) close(now[k], was[k], 1e-6); });
+  assert.ok(o.chans['j.lsho'] || o.base.j.lsho[0] > 0.1);
+  // a turn that isn't flat comes back as numbers near the keys' own (no 180 / x / 180 flip)
+  const b = { id: 'b', type: 'box', ease: 'smooth', base: { x: 0, y: 0, z: 0, rx: 10, ry: 170, rz: 0, sx: 1, sy: 1, sz: 1 }, chans: {} };
+  b.off = D.newOffset(b, 0); D.setOffset(b, { rx: 5 });
+  v = D.current(b, D.OBJ, 0); assert.ok(Math.abs(v.ry - 170) < 20, JSON.stringify(v));
+  D.R.offEdit = null;
+}
+console.log('offset ok');

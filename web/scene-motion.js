@@ -1,7 +1,7 @@
 // Motion made elsewhere onto a figure: text to motion and video mocap (ComfyUI templates that save a
 // motion .npz/.json), or a motion file. The server reads it (app/motion.py) into 22 joint positions per
 // frame; motion.js turns those into the figure's keys from the playhead.
-import { FIG, R, SC, current, dropKeys, frames, putKeys, sameTab } from './scene-data.js';
+import { FIG, R, SC, rawCurrent, dropKeys, frames, putKeys, sameTab } from './scene-data.js';
 import { api, button, clone, field, fileButton, h, help, hint, note, openSheet, closeSheet, rangeField, seg, store, toast, undoToast, toggle, textArea } from './ui.js';
 import { S, onServer } from './core.js';
 import { openVideoPicker } from './media.js';
@@ -21,7 +21,7 @@ const keepPlace = () => store.set('deck.scene.motionPlace', PLACE);
 function apply(id, m, label) {
   const o = SC.objects.find((x) => x.id === id);
   if (!o) return toast('That figure is gone', true);
-  const all = PLACE.from === 'all', f0 = all ? 0 : R.f, v = current(o, FIG), last = frames() - 1;
+  const all = PLACE.from === 'all', f0 = all ? 0 : R.f, v = rawCurrent(o, FIG), last = frames() - 1;
   const keys = toKeys(m, v, { f0, every: 2, maxF: last, travel: PLACE.path !== 'spot', rise: PLACE.rise, fit: PLACE.fit });
   if (keys.length < 2) return toast('No time left after the playhead: move it back', true);
   const before = clone(o), ok = sameTab(), end = keys[keys.length - 1].f;

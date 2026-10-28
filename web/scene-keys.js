@@ -2,7 +2,7 @@ import * as FIGURE from './figure.js';
 import { fullScreen } from './layout.js';
 import { $, button, h, info as infoBtn, numSlider, sheetOpen, store, toast, toggle, canvasFont } from './ui.js';
 import {
-  CAM, FPS, HOLD, OBJ, R, ROOM, SC, TEMP, TYPES, WP, addKey, bakeBase, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setKey, setMute
+  CAM, FPS, HOLD, OBJ, OFF, R, ROOM, SC, TEMP, TYPES, WP, addKey, bakeBase, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setKey, setMute
 } from './scene-data.js';
 import {
   CURVES, EASES, allKeys, bounds, copy, handleOf, isScalar, kindOf, moveBy, moveHandle, paste, prune, remove, restore, scaleAround, setBroken, setChan, setEase, snapshot, track
@@ -39,7 +39,10 @@ function chanIds(L) {
   const base = L.kind === 'figure' ? [...OBJ, 'pn', ...Object.keys(FIGURE.PARAMS).map((p) => `m.${p}`), ...JOINTS.map((j) => `j.${j}`)] : L.names;
   return [...new Set([...base, ...own])];
 }
-const tracksOf = (L) => chanIds(L).map((ch) => track(L.item, ch, { id: L.id, kind: L.kind }));
+// (an offset layer's channels are the layer's too: kind 'off', so a paste never mixes them with its keys)
+const offIds = (L) => (L.item.off ? [...new Set([...OFF, ...Object.keys(L.item.off.chans || {})])] : []);
+const offTracks = (L) => offIds(L).map((ch) => track(L.item.off, ch, { id: L.id, kind: 'off' }));
+const tracksOf = (L) => [...chanIds(L).map((ch) => track(L.item, ch, { id: L.id, kind: L.kind })), ...offTracks(L)];
 const allTracks = () => shown().flatMap(tracksOf);
 const gTrack = () => { const L = gLayer(); return L ? track(L.item, G.ch, { id: L.id, kind: L.kind }) : null; };
 
@@ -67,7 +70,7 @@ function gLayer() {
 // the numbers the graph can plot: a figure's parameters once keyed (a joint's turn is not one number)
 const channels = (L) => chanIds(L).filter((ch) => isScalar(ch) && !(ch.startsWith('m.') && !L.item.chans?.[ch]));
 const LABELS = { x: 'X', y: 'Up', z: 'Z', rx: 'Rot X', ry: 'Rot Y', rz: 'Rot Z', sx: 'Width', sy: 'Height', sz: 'Depth',
-  px: 'Cam X', py: 'Cam height', pz: 'Cam Z', tx: 'Aim X', ty: 'Aim Y', tz: 'Aim Z', fov: 'Lens', roll: 'Roll', pn: 'Pose name' };
+  px: 'Cam X', py: 'Cam height', pz: 'Cam Z', tx: 'Aim X', ty: 'Aim Y', tz: 'Aim Z', fov: 'Lens', roll: 'Roll', pn: 'Pose name', s: 'Scale' };
 const chLabel = (ch) => (ch.startsWith('m.') ? (FIGURE.PARAMS[ch.slice(2)]?.label || ch.slice(2)) : ch.startsWith('j.') ? (FIGURE.RIG_JOINTS[ch.slice(2)]?.[2] || ch.slice(2)) : LABELS[ch] || ch);
 const sampleCh = (L, ch, f) => sampleChan(L.item, ch, f);
 function graphRange(L, ch) {
@@ -91,11 +94,17 @@ function diamonds(tracks, own) {
 const LIMBS = [...FIGURE.PART_GROUPS, ['fingersL', 'L fingers', FIGURE.handJoints('l')], ['fingersR', 'R fingers', FIGURE.handJoints('r')]];
 // the rows of one layer (its channels, nested like Blender's: the pose under a "Pose" row, by limb)
 function layerRows(L) {
-  const T = new Map(tracksOf(L).map((t) => [t.ch, t])), get = (chs) => chs.map((c) => T.get(c)).filter(Boolean);
+  const T = new Map(tracksOf(L).filter((t) => t.kind !== 'off').map((t) => [t.ch, t])), get = (chs) => chs.map((c) => T.get(c)).filter(Boolean);
   const row = (t, label, depth, tracks, key = null) => ({ t, L, label, depth, key, tracks, dia: diamonds(tracks, t === 'chan') });
-  const rows = [row('item', L.label, 0, [...T.values()], `i:${L.id}`)];
+  const OT = offTracks(L);
+  const rows = [row('item', L.label, 0, [...T.values(), ...OT], `i:${L.id}`)];
   if (!OPEN.has(`i:${L.id}`)) return rows;
   const chan = (ch, depth) => row('chan', chLabel(ch), depth, [T.get(ch)]);
+  if (OT.length) {   // the offset layer: its own group, first (it moves everything under it)
+    const k = `o:${L.id}`;
+    rows.push(row('group', 'Offset', 1, OT, k));
+    if (OPEN.has(k)) for (const t of OT) rows.push(row('chan', chLabel(t.ch), 2, [t]));
+  }
   if (L.kind !== 'figure') { for (const ch of L.names) rows.push(chan(ch, 1)); return rows; }
   for (const ch of OBJ) rows.push(chan(ch, 1));
   const params = [...T.keys()].filter((c) => c.startsWith('m.') && T.get(c).keys.length);
@@ -610,7 +619,7 @@ function applyTools(on = store.get(TK, true)) {
 function insertKeys(row, f, v = null) {
   const item = row.L.item, names = row.L.names;
   const wide = row.t === 'item' || row.key?.startsWith('p:'), ok = wide ? new Set(keyChans(item, names, sample(item, names, f))) : null;
-  const made = row.tracks.filter((T) => !ok || ok.has(T.ch)).map((T) => setKey(item, T.ch, f, v ?? sampleChan(item, T.ch, f)));
+  const made = row.tracks.filter((T) => (T.kind === 'off' ? !wide : !ok || ok.has(T.ch))).map((T) => setKey(T.item, T.ch, f, v ?? sampleChan(T.item, T.ch, f)));
   TEMP.clear(); SEL.clear(); made.forEach((k) => SEL.add(k));
   done(); seek(f);
   return made;

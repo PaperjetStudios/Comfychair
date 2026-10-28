@@ -18,6 +18,7 @@ import { maxBar, renderKeys, renderTransport, wireSheetKeys } from './scene-keys
 import { hasMode, modeDef, modeList, modeOf, modeSections } from './scene-modes.js';
 import { syncRef, toggleRef } from './scene-ref.js';
 import { keysPast, stretchAll } from './keys.js';
+import { offsetField } from './scene-offset.js';
 
 // ---- UI ----------------------------------------------------------------------
 let statusText = '';
@@ -98,10 +99,11 @@ function placeProps(o, cur) {
       button('🎥 Camera to the photo\'s view', () => { lookThrough(o); changed(); }),
       help('The picture as a 3D mesh (MoGe). Keep camera moves small: nothing is behind what the picture shows. Render depth video, then use it with this picture as a reference.')] : null,
     easeSeg(o),
+    hasKeys(o) || o.off ? offsetField(o) : null,
     h('div', { class: 'row wrap' },
       button('Duplicate', () => {
         const c = { ...clone(o), id: uid(), name: `${o.name} copy` };
-        c.base.x += 0.6; (c.chans.x || []).forEach((k) => { k.v += 0.6; });
+        c.base.x += 0.6; (c.chans.x || []).forEach((k) => { k.v += 0.6; }); if (c.off) c.off.pv[0] += 0.6;
         SC.objects.push(c); save(); select(c.id);
       }),
       clearKeys(o, names)),

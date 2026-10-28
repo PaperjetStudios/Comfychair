@@ -1,3 +1,4 @@
+import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import { toast, uid } from './ui.js';
 import { isPoseCh, putKey, recordInto, sampleKeys } from './keys.js';
@@ -50,7 +51,7 @@ export const pivotOf = (o) => (pivotsFor(o).some(([k]) => k === o.pivot) || (o.t
 
 // ---- scene data ------------------------------------------------------------
 export let SC;   // the scene (persisted per project)
-export const R = { modeKey: null, free: false, f: 0, sel: null, joint: null, figTab: 'pose', poseCat: 'stand', mask: 'all', sym: false, speed: 1, inPlace: false, renders: {}, promptOff: new Set(), promptNames: false, mode: 'translate', playing: false, real: false, depth: false, autoKey: true, record: false, meshes: new Map(), room: [], applying: false, lastRender: null };
+export const R = { offEdit: null, modeKey: null, free: false, f: 0, sel: null, joint: null, figTab: 'pose', poseCat: 'stand', mask: 'all', sym: false, speed: 1, inPlace: false, renders: {}, promptOff: new Set(), promptNames: false, mode: 'translate', playing: false, real: false, depth: false, autoKey: true, record: false, meshes: new Map(), room: [], applying: false, lastRender: null };
 
 export const newRoom = () => ({ w: 8, d: 8, h: 2.8, walls: true, ceiling: true, hidden: false });
 export function defaultScene() {
@@ -261,8 +262,13 @@ export function setMute(item, on) {
   if (on) MUTED.set(item, { ...current(item, allNames(item), R.f) }); else MUTED.delete(item);
   item.mute = !!on;
 }
-// an item's values at frame f, with a held change on top
+// an item's values at frame f, with a held change and its offset layer on top (what shows)
 export function current(item, names, f = R.f) {
+  if (item.mute && !R.real) return pick(heldOf(item), names);
+  return applyOffset(item, rawCurrent(item, names, f), f);
+}
+// the same without the offset layer: what the keys hold
+export function rawCurrent(item, names, f = R.f) {
   if (item.mute && !R.real) return pick(heldOf(item), names);
   const t = hasKeys(item) ? TEMP.get(item) : null;
   // (a change held while it plays keeps only its own channels on top: the rest plays on)
@@ -359,11 +365,15 @@ function changedChans(item, names, vals, from) {
 // channel that stays put gets no key); else into its base
 export function write(item, names, vals) {
   if (item.mute && !R.real) { Object.assign(heldOf(item), vals); return; }
+  if (offOn(item)) {   // shown with its offset: the gizmo moves the offset, or the keys under it
+    if (R.offEdit === item.id) { writeOffset(item, names, vals); return; }
+    vals = removeOffset(item, vals);
+  }
   if (holding(item)) { holdWrite(item, names, vals); return; }
   if (!hasKeys(item)) { Object.assign(item.base, vals); return; }
   const from = sample(item, names, R.f);
   if (!R.autoKey) {
-    const v = { ...current(item, names), ...vals };
+    const v = { ...rawCurrent(item, names), ...vals };
     if (R.playing) return holdTemp(item, R.f, new Map(changedChans(item, names, v, from).map(([ch, x]) => [ch, cloneV(x)])));
     TEMP.set(item, { f: R.f, v, ch: new Set(changedChans(item, names, v, from).map(([ch]) => ch)) });
     return;
@@ -375,7 +385,7 @@ export function write(item, names, vals) {
 // (or when vals are given) every channel of names. only: a set of channels to limit it to.
 export function addKey(item, names, vals = null, only = null) {
   const held = TEMP.get(item);
-  if (!vals) { vals = current(item, names); if (!only && held && (held.f === R.f || held.play) && held.ch.size) only = held.ch; }
+  if (!vals) { vals = rawCurrent(item, names); if (!only && held && (held.f === R.f || held.play) && held.ch.size) only = held.ch; }
   TEMP.delete(item);
   if (!hasKeys(item)) Object.assign(item.base, vals);
   for (const ch of keyChans(item, names, vals)) if ((!only || only.has(ch)) && valOf(vals, ch) !== undefined) setKey(item, ch, R.f, valOf(vals, ch));
@@ -384,3 +394,119 @@ export function addKey(item, names, vals = null, only = null) {
 export const selItem = () => SC.objects.find((o) => o.id === R.sel) || null;
 // what ◆ Key acts on: the selected object, else the camera (the room isn't animated)
 export const keyTarget = () => { const o = selItem(); return o ? [o, namesFor(o)] : R.sel === ROOM ? [null, null] : [SC.camera, CAM]; };
+
+// ---- the offset layer (item.off): a move, slid, turned and scaled as a whole without touching its keys ----
+// { on, pv: [x, y, z] (what it turns and scales around: where the figure stood when it was made), ease,
+//   base: { x, y, z, rx, ry, rz, s, j: { joint: [x, y, z, w] } }, chans: like an item's, sparse }.
+// Shown = pv + turn × (keys' place − pv) × s + (x, y, z); the turn goes on before the keys' own, the size
+// multiplies; a joint's offset turns it in its parent's frame (off × key). Saved with the item, undoable.
+export const OFF = ['x', 'y', 'z', 'rx', 'ry', 'rz', 's'];
+export const OFFN = [...OFF, 'j'];
+export function newOffset(item, f = R.f) {
+  const v = sample(item, OBJ, f);
+  return { on: true, pv: [v.x, v.y, v.z], ease: 'smooth', base: { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, s: 1, j: {} }, chans: {} };
+}
+export const offOn = (item) => !!item.off && item.off.on !== false;
+export const offAt = (item, f = R.f) => sample(item.off, OFFN, f);
+const d2r = THREE.MathUtils.degToRad, r2d = THREE.MathUtils.radToDeg;
+const qOf = (v) => new THREE.Quaternion().setFromEuler(new THREE.Euler(d2r(v.rx || 0), d2r(v.ry || 0), d2r(v.rz || 0)));
+const Q4 = (a) => new THREE.Quaternion(...(a || IDENT));
+const flat = (v) => Math.abs(v.rx || 0) < 1e-6 && Math.abs(v.rz || 0) < 1e-6;
+// a turn as degrees near ref (the keys' own numbers), so a key at 170° doesn't come back as 180 / 10 / 180
+function nearEuler(q, ref) {
+  const e = new THREE.Euler().setFromQuaternion(q);
+  const unwrap = (a, r) => a + 360 * Math.round((r - a) / 360);
+  const opts = [[r2d(e.x), r2d(e.y), r2d(e.z)], [r2d(e.x) + 180, 180 - r2d(e.y), r2d(e.z) + 180]]
+    .map(([x, y, z]) => [unwrap(x, ref.rx || 0), unwrap(y, ref.ry || 0), unwrap(z, ref.rz || 0)]);
+  const dist = (a) => Math.abs(a[0] - (ref.rx || 0)) + Math.abs(a[1] - (ref.ry || 0)) + Math.abs(a[2] - (ref.rz || 0));
+  const [rx, ry, rz] = dist(opts[0]) <= dist(opts[1]) ? opts[0] : opts[1];
+  return { rx, ry, rz };
+}
+// the place and turn: keys' values v through offset o (back = the other way, shown to keys)
+function moveRoot(item, v, o, back) {
+  const pv = new THREE.Vector3(...item.off.pv), t = new THREE.Vector3(o.x, o.y, o.z), s = Math.max(1e-4, o.s ?? 1);
+  const P = new THREE.Vector3(v.x, v.y, v.z), out = {};
+  const yaw = flat(o) && flat(v);   // (the usual case: a plain turn on Y adds, exactly)
+  if (!back) {
+    P.sub(pv).multiplyScalar(s).applyQuaternion(qOf(o)).add(pv).add(t);
+    Object.assign(out, yaw ? { rx: v.rx, ry: v.ry + o.ry, rz: v.rz } : nearEuler(qOf(o).multiply(qOf(v)), v));
+  } else {
+    P.sub(t).sub(pv).applyQuaternion(qOf(o).invert()).divideScalar(s).add(pv);
+    Object.assign(out, yaw ? { rx: v.rx, ry: v.ry - o.ry, rz: v.rz } : nearEuler(qOf(o).invert().multiply(qOf(v)), v));
+  }
+  out.x = P.x; out.y = P.y; out.z = P.z;
+  for (const k of ['sx', 'sy', 'sz']) if (v[k] !== undefined) out[k] = back ? v[k] / s : v[k] * s;
+  return out;
+}
+const hasRoot = (v) => OBJ.some((k) => v[k] !== undefined);
+export function applyOffset(item, vals, f = R.f) {
+  if (!offOn(item)) return vals;
+  const o = offAt(item, f), out = { ...vals };
+  if (vals.x !== undefined && vals.ry !== undefined) Object.assign(out, moveRoot(item, vals, o, false));
+  if (vals.j && Object.keys(o.j || {}).length) {
+    out.j = { ...vals.j };
+    for (const [n, q] of Object.entries(o.j)) out.j[n] = Q4(q).multiply(Q4(vals.j[n])).toArray();
+  }
+  return out;
+}
+// shown values (some of them) back to what the keys would hold
+function removeOffset(item, vals) {
+  const o = offAt(item), out = { ...vals };
+  if (hasRoot(vals)) Object.assign(out, moveRoot(item, { ...current(item, OBJ), ...vals }, o, true));
+  if (vals.j) {
+    out.j = { ...vals.j };
+    for (const [n, q] of Object.entries(o.j || {})) if (vals.j[n]) out.j[n] = Q4(q).invert().multiply(Q4(vals.j[n])).toArray();
+  }
+  return out;
+}
+// the gizmo (or a number) on the offset: the offset that puts the item where it is asked to be at the playhead.
+// An animated offset gets a key there; a still one changes.
+export function writeOffset(item, names, vals) {
+  const O = item.off, o = offAt(item), next = {};
+  if (hasRoot(vals)) {
+    const raw = rawCurrent(item, OBJ), want = { ...current(item, OBJ), ...vals };
+    const s = Math.max(1e-4, want.sy / Math.max(1e-4, raw.sy));
+    const qo = flat(raw) && flat(want) ? qOf({ ry: want.ry - raw.ry }) : qOf(want).multiply(qOf(raw).invert());
+    const e = flat(raw) && flat(want) ? { rx: 0, ry: want.ry - raw.ry, rz: 0 } : nearEuler(qo, o);
+    const pv = new THREE.Vector3(...O.pv);
+    const t = new THREE.Vector3(want.x, want.y, want.z).sub(pv).sub(new THREE.Vector3(raw.x, raw.y, raw.z).sub(pv).multiplyScalar(s).applyQuaternion(qo));
+    Object.assign(next, { x: t.x, y: t.y, z: t.z, ...e, s });
+  }
+  if (vals.j) {
+    const raw = rawCurrent(item, ['j']).j || {}, shown = current(item, ['j']).j || {}, j = { ...(o.j || {}) };
+    for (const [n, q] of Object.entries(vals.j)) if (!sameVal(q, shown[n] ?? IDENT)) j[n] = Q4(q).multiply(Q4(raw[n]).invert()).toArray();
+    next.j = j;
+  }
+  setOffset(item, next);
+}
+// offset values (some of them) at the playhead: keyed when the offset is animated, else its base
+export function setOffset(item, vals) {
+  const O = item.off;
+  if (!hasKeys(O)) { const j = vals.j; Object.assign(O.base, vals); if (j) O.base.j = { ...j }; return; }
+  const from = offAt(item);
+  for (const [ch, v] of changedChans(O, OFFN, { ...from, ...vals }, from)) setKey(O, ch, R.f, v);
+}
+// ◆ on the offset: every one of its values at the playhead
+export function keyOffset(item) {
+  const O = item.off, v = offAt(item);
+  for (const ch of keyChans(O, OFFN, v)) setKey(O, ch, R.f, valOf(v, ch));
+}
+// Bake: the offset goes into the keys (each frame that has a key, on the item or the offset), then away.
+// A part with no keys on either side changes the base instead.
+export function bakeOffset(item) {
+  const O = item.off;
+  if (!O) return;
+  const names = namesFor(item), joints = [...new Set([...Object.keys(O.base.j || {}), ...chanNames(O, 'j.').map((c) => c.slice(2))])];
+  const rootKeyed = OBJ.some((ch) => item.chans?.[ch]?.length) || OFF.some((ch) => O.chans?.[ch]?.length);
+  const fs = [...new Set([...keyFrames(item), ...keyFrames(O)])].sort((a, b) => a - b);
+  const at = (f) => applyOffset(item, sample(item, names, f), f);
+  const shown = fs.map((f) => [f, at(f)]), still = at(fs[0] ?? 0);
+  if (rootKeyed) { for (const [f, v] of shown) for (const ch of OBJ) setKey(item, ch, f, v[ch]); }
+  else for (const ch of OBJ) item.base[ch] = still[ch];
+  for (const n of joints) {
+    if (item.chans?.[`j.${n}`]?.length || O.chans?.[`j.${n}`]?.length) for (const [f, v] of shown) setKey(item, `j.${n}`, f, v.j[n]);
+    else bakeBase(item, `j.${n}`, still.j?.[n] ?? IDENT);
+  }
+  delete item.off;
+  if (R.offEdit === item.id) R.offEdit = null;
+}

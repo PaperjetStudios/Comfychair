@@ -152,6 +152,11 @@ will then fail to start until that process is stopped, so stop it before the nex
   Catmull-Rom slope, a third of the way; clamp: monotone). A segment is a cubic bezier solved in time; only numbers get
   curves (joints and pose names under a curve ease blend smooth). The graph shows the selected keys' handles (drag them;
   an auto key becomes Bezier; Snap rounds to whole frames). The video export (`keyexpr.py`) ignores these names.
+- **Offset layer** (`item.off`, scene-data.js, panel in scene-offset.js): slides / turns / scales a whole animation (a mocap
+  move) around `off.pv` without touching its keys; joint offsets turn a limb in its parent's frame on every frame. Its own
+  sparse keys (`off.chans`, rows under "Offset" in the sheet, track kind `off`). `current()` shows it; `rawCurrent()` is key
+  space. `write()` takes it back out, or with `R.offEdit === item.id` the gizmo writes the offset (`writeOffset`).
+  `bakeOffset` keys it in at every frame that has a key. Compositions (`scene-offscreen.js`) apply it too.
 - **Mute** (`item.mute`, saved, `upgrade()` defaults it off): `current()`/`write()` in scene-data.js use values held
   in `MUTED` (not saved) instead of the keys, so a muted layer stays put and moving it writes no keys. Renders set
   `R.real` and use the real keys; Save frame is the picture on screen.
