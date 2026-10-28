@@ -3,13 +3,15 @@ import { button, h, iconBtn, seg, setIcon } from './ui.js';
 // ---------------------------------------------------------------------------
 // playback: the transport bar and keys every player shares (Video, Sound, VFX): ⇤ to the start, back and
 // forward a step, Play / Pause, Loop, a speed, the time and, for a player without a timeline, a scrub bar.
-// Keys while its tab is open: Space plays, ← / → step (Shift: a second), Home / End.
+// Keys while its tab is open: Space plays, ← / → step (Shift: a second), Home / End; with a work area I / O, Alt+X.
 //
 //   const tp = transport(player, { step, loop, rates, scrub, fps, frames, extra, timeId });
 //   player: { playing(), play(), pause(), seek(t), t(), len() }
 //   step: { by: seconds | () => seconds (the buttons), key (← / →, default by), back, fwd (icons), label ('one frame'),
 //     pause (false: keep playing through a step) }
 //   loop: { get, set } | null; rates: [[rate, label]] with rate: { get, set } | null
+//   area: the timeline's work area (workarea.js) or null: while it is on, stepping stays inside it and ⇤ / End go to
+//     its ends; its Range button sits after Loop, and playKeys adds its keys (I / O, Alt+X)
 //   bar.append(tp.el); tp.update() after a play, pause or seek from elsewhere; playKeys(() => tabOpen, tp, more)
 // ---------------------------------------------------------------------------
 
@@ -23,16 +25,17 @@ export function fmtTime(t, fps = 0) {
 }
 
 export function transport(p, { step, loop = null, rates = null, rate = null, scrub = false, fps = 0, frames = false, extra = [], timeId = null,
-  disabled = false } = {}) {
+  disabled = false, area = null } = {}) {
   const fpsNow = () => (typeof fps === 'function' ? fps() : fps);
   const val = (x) => (typeof x === 'function' ? x() : x);
   const small = () => val(step.by);
+  const inside = (t) => (area ? area.clamp(t) : t);
   const tp = {
-    small, keyStep: () => val(step.key ?? step.by),
+    small, keyStep: () => val(step.key ?? step.by), area,
     toggle: () => { if (p.playing()) p.pause(); else p.play(); tp.update(); },
-    nudge: (d) => { if (step.pause !== false) p.pause(); p.seek(Math.min(Math.max(0, p.t() + d), p.len() || Infinity)); tp.update(); },
-    toStart: () => { p.pause(); p.seek(0); tp.update(); },
-    toEnd: () => { p.pause(); p.seek(p.len()); tp.update(); },
+    nudge: (d) => { if (step.pause !== false) p.pause(); p.seek(inside(Math.min(Math.max(0, p.t() + d), p.len() || Infinity))); tp.update(); },
+    toStart: () => { p.pause(); p.seek(area?.bound()?.a ?? 0); tp.update(); },
+    toEnd: () => { p.pause(); p.seek(area?.bound()?.b ?? p.len()); tp.update(); },
   };
   const playBtn = button('▶ Play', tp.toggle, { cls: 'small primary', title: 'Play / pause (Space)', disabled });
   const time = h('span', { class: 'timecode', id: timeId });
@@ -52,11 +55,12 @@ export function transport(p, { step, loop = null, rates = null, rate = null, scr
   };
   tp.el = h('div', { class: 'transport' },
     bar ? h('div', { class: 'scrub-row' }, bar, time) : null,
-    iconBtn('Go to the start', '⇤', tp.toStart, { title: 'Go to the start (Home)' }),
+    iconBtn('Go to the start', '⇤', tp.toStart, { title: `Go to the start${area ? ' (of the range, while it is on)' : ''} (Home)` }),
     iconBtn(`Back ${step.label}`, step.back || '⏮', () => tp.nudge(-small()), { title: `Back ${step.label} (←)` }),
     playBtn,
     iconBtn(`Forward ${step.label}`, step.fwd || '⏭', () => tp.nudge(small()), { title: `Forward ${step.label} (→)` }),
     loopBtn,
+    area ? area.toggleBtn() : null,
     rates && rate ? seg(rates, rate.get(), (v) => rate.set(Number(v))) : null,
     ...extra,
     bar ? null : time);
@@ -69,6 +73,8 @@ export function playKeys(active, tpOf, more = () => ({})) {
   document.addEventListener('keydown', (e) => {
     const tp = tpOf();
     if (!tp || !active() || e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey) return;
+    const range = tp.area?.keyFn(e);   // the work area: I / O, Alt+X
+    if (range) { e.preventDefault(); range(); return; }
     const fn = {
       ' ': tp.toggle,
       ArrowLeft: () => tp.nudge(e.shiftKey ? -1 : -tp.keyStep()),

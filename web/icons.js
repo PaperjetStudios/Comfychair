@@ -118,6 +118,8 @@ const PATHS = {
   board: ['M3 4h8v6H3zM13 4h8v6h-8z', 'M3 14h8v6H3zM13 14h8v6h-8z'],
   story: ['M3 4h8v6H3zM13 4h8v6h-8z', 'M3 14h8M3 17.5h6M13 14h8M13 17.5h6'],
   text: ['M4 6h16M4 10h16M4 14h10M4 18h7'],
+  // the work area (a range on a timeline)
+  range: ['M7 5H4v14h3', 'M17 5h3v14h-3', 'M8 12h8'],
 };
 // what used to be on the buttons -> its icon (filled: drawn solid, the "on" version of a shape)
 const GLYPHS = {
