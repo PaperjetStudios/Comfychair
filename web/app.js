@@ -4,7 +4,7 @@
 // the pickers and core.js the shared state. The 3D tab (scene.js) loads on demand.
 
 import {
-  $, h, store, api, toast, overlayOpened, overlayClosed, openSheet, closeSheet, button, help, chip as uiChip, setIcon,
+  $, h, store, api, toast, overlayOpened, overlayClosed, openSheet, closeSheet, button, iconBtn, help, chip as uiChip, setIcon,
 } from './ui.js';
 import { S, loadProjects, setSwitchTab, setOpenProject, emitProject, onServer } from './core.js';
 import { generate, loadTemplates, selectTemplate, stop, wireTemplateFilter, wireZoom } from './generate.js';
@@ -19,6 +19,7 @@ import { B, closeGallery, pauseBoard, renderBoard } from './board.js';
 import { fullScreen, sideNav, wireSplitters } from './layout.js';
 import { loadPrefs, openPrefs } from './prefs.js';
 import { EDIT_PHRASES, IMAGE_PHRASES, VIDEO_PHRASES } from './phrases.js';
+import { openDescribe, openImprove, tplTarget } from './prompthelp.js';
 import './world.js';   // the spaces (Make, Edit, View), travel between tools, a map of where you are
 
 // ---------------------------------------------------------------------------
@@ -303,6 +304,18 @@ function insertPhrase(ta, text) {
   ta.dispatchEvent(new Event('input'));
 }
 
+// Which model a text box's prompt is for, for the prompt helper (prompthelp.js); null: not a prompt. The Generate
+// prompt follows its template; Story's shot boxes keep the family last picked in the helper (image or video).
+const STORY_PROMPTS = { what: 'image', rprompt: 'image', style: 'image', summary: 'image', vprompt: 'video' };
+function promptTarget(t) {
+  if (t._promptTarget) return t._promptTarget();
+  if (t.closest('.prompt-field')) return tplTarget();
+  const kind = t.closest('#storyPanel, #storyStage') && STORY_PROMPTS[(t.dataset.bind || '').split('.').pop()];
+  if (!kind) return null;
+  return kind === 'video' ? { media: 'video', family: 'ltx', i2v: true, remember: 'deck.storyVideoFamily' }
+    : { media: 'image', family: 'krea', remember: 'deck.storyImageFamily' };
+}
+
 // Touch screens: tapping a text box in a settings panel opens it in a popup at the top, sized to
 // the space above the on-screen keyboard. Typing goes straight through to the original box (as
 // input events), so everything listening to it keeps working.
@@ -361,8 +374,15 @@ function wireTextPopup() {
     }
     prev = state();
   });
+  // the prompt helper: its sheet shows over this box; a version it puts in is one more Undo step here
+  let target = null;
+  const helperIO = () => ({ get: () => ta.value, target,
+    set: (v) => { snap(); lastTyped = -Infinity; ta.value = v; ta.dispatchEvent(new Event('input')); ta.setSelectionRange(v.length, v.length); } });
+  const aid = h('span', { class: 'text-pop-aid' },
+    iconBtn('Improve this prompt', '✦', () => { ta.blur(); openImprove(helperIO()); }),
+    iconBtn('Describe a picture', '👁', () => { ta.blur(); openDescribe(helperIO()); }));
   const box = h('div', { class: 'text-pop hidden', role: 'dialog', 'aria-modal': 'true' },
-    h('div', { class: 'text-pop-bar' }, title, keys, undoBtn,
+    h('div', { class: 'text-pop-bar' }, title, aid, keys, undoBtn,
       button('Done', close, { cls: 'small primary' })),
     h('div', { class: 'text-pop-body' }, ta, tags));
   document.body.append(box);
@@ -386,6 +406,8 @@ function wireTextPopup() {
       || t.closest('.field')?.querySelector('.lbl')?.firstChild?.textContent || t.getAttribute('aria-label') || 'Text';
     ta.value = t.value;
     ta.placeholder = t.placeholder || '';
+    target = promptTarget(t);
+    aid.classList.toggle('hidden', !target);
     undo = []; lastTyped = -Infinity; undoBtn.disabled = true; prev = { v: ta.value, a: ta.value.length, b: ta.value.length };
     // the prompt's tag chips (<Picture 1>, <Subject 1>…) move in here; on touch screens the panel hides them
     const list = [...(t.closest('.prompt-field')?.querySelectorAll('.tag-chips .chip') || [])].map((c) => c.textContent);

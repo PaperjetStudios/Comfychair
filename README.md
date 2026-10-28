@@ -760,6 +760,31 @@ hf download rodrigomt/s2-pro-gguf s2-pro-q8_0.gguf tokenizer.json --local-dir mo
 Both licences are non-commercial: IndexTTS-2 is under the bilibili model licence, and Fish S2 Pro under the
 Fish Audio Research Licence.
 
+## Prompt helper
+
+The two buttons next to the Generate prompt's label (and in the bar of the touch-screen writing box, also for
+Story's shot prompts) call a small local model:
+
+- **Improve** (sparkle icon) rewrites the prompt for a model family and offers three versions. **Expand idea** turns
+  a single line into a whole scene. The family follows the template (Krea, Flux Klein, Qwen Image, MOSS, LTX, H3);
+  tap another to rewrite for it. Edit templates get an edit instruction; H3 keeps its subject lines, `[Shot N]`
+  timestamps, `<d></d>` speech and the two sound lines.
+- **Describe a picture** (eye icon) writes a prompt from any input or result, or only its style.
+
+Reference tags (`the first image`, `<Picture 1>`, `<ref_image_0>`, `Picture 1`, `image 1`, `<Subject 1>`),
+`@Name` mentions and `{a|b}` wildcards are kept as written. A version that lost one says so. Nothing changes until
+a version is tapped, and Undo puts the old prompt back.
+
+**Runtime** (`app/promptaid.py`): [Ollama](https://ollama.com) with `qwen3.5:4b` (vision, Q4_K_M, 3.3 GB in
+`~/.ollama/models`). When Ollama is installed but not running, ComfyChair starts `ollama serve` on
+127.0.0.1:11434 (its log is `data/tmp/ollama.log`). The settings are `DECK_OLLAMA_URL`, `DECK_PROMPT_MODEL`,
+`DECK_OLLAMA_BIN` and `DECK_PROMPT_VRAM_MB`.
+
+**Sharing the GPU**: Auto runs on the graphics card when ComfyUI's queue is empty (about 6 s for three versions).
+It takes the voice tools' GPU lock. ComfyUI's models are unloaded only when less than 5.5 GB is free. Ollama is
+told to unload the model when it's done (`keep_alive: 0`). While ComfyUI is busy, or a voice or 3D job holds the
+card, Auto uses the processor instead: about 45–60 s.
+
 ## PhotoCraft and EffectCraft
 
 Work can go to PhotoCraft and EffectCraft with its layers and tracks, to keep editing there
