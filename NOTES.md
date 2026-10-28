@@ -193,6 +193,23 @@ will then fail to start until that process is stopped, so stop it before the nex
   changed channels, on every frame) until ◆ Key. `WP` (localStorage `deck.scene.whileplaying`) says what shows
   while playing: gizmo, joint dots, frustum, grid, key sheet follows playhead. Seek during play re-bases the clock.
 
+### Splats: preview levels, size, trim, placement (2026-10-28)
+- **Levels** (`app/sceneasset.py make_levels`, `web/splat-levels.js`): `<base>_light/_medium/_dense.ply` (150k/300k/600k, only
+  the ones lighter than the full set; Gaussians grown by (n/keep)^¼, at most 1.4) beside `<base>_full.ply` (photo splats) or
+  the imported file. The layer keeps `levels: [{k, url, n}]`; the view loads the level picked on this device
+  (`deck.scene.splatLevel`, default Light on touch, Dense otherwise), renders (`x.full`: Render colour video, the Video tab's
+  export of a colour scene clip) load the full set. `POST /api/scene/splat/levels {url, trim?}` makes them for older
+  splats and imports. `o.box` never changes with the level, so nothing moves. Sharp (`deck.scene.splatSharp`) lets a touch
+  screen draw splats at full pixel ratio (scene-view.js `fit`).
+- **Size and trim** (`web/splat-shape.js`): a Spark `objectModifier` on each SplatMesh scales every Gaussian (`o.grow`,
+  renders only with `o.growRenders`) and zeroes the opacity outside `o.trim` (`{on, c, r, near, renders}` in file units).
+  Uniforms only change, so it is live. Cut the previews asks the server for levels of only what the trim keeps
+  (`<base>_t<tag>_<level>.ply`; `o.trim.made` / `kept`). The full set is never cut: renders trim it with the modifier.
+- **Placement**: a photo's splat or MoGe mesh stands centred on the floor at the origin; `o.view.pos` is the photo's camera
+  in the object's space (`standShift` / `photoShift`) and `lookThrough` uses it. Without `o.view` (older layers, or Place
+  at the camera instead, `deck.scene.placeAtCamera`) the object's origin is the photo's camera. Re-centre converts one.
+- Headless Chrome here is SwiftShader: a 825k splat takes ~6 s a draw, so render tests use a ~120k one.
+
 ### Compositions: 3D scenes as video clips (scene-comp.js, scene-offscreen.js)
 - A video clip `{ kind: 'scene', src: { scene: <scene-tabs id>, look: color|clay|depth|pose }, nat: [w, h], dur }` is only a
   link: the scene is read from the store (`scene-comp.js`) and rebuilt when a `store` event for `scene-tabs` arrives (debounced
