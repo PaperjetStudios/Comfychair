@@ -108,6 +108,12 @@ const PATHS = {
   hexagon: ['M12 3l8 4.5v9L12 21l-8-4.5v-9z'],
   cloud: ['M7 18a4.5 4.5 0 0 1-.6-9A6 6 0 0 1 18 8.5a4.8 4.8 0 0 1-.5 9.5z'],
   contrast: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z', 'M12 3v18'],
+  // the Story tab
+  grip: ['M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01'],
+  list: ['M9 6h11M9 12h11M9 18h11', 'M4 6h.01M4 12h.01M4 18h.01'],
+  board: ['M3 4h8v6H3zM13 4h8v6h-8z', 'M3 14h8v6H3zM13 14h8v6h-8z'],
+  story: ['M3 4h8v6H3zM13 4h8v6h-8z', 'M3 14h8M3 17.5h6M13 14h8M13 17.5h6'],
+  text: ['M4 6h16M4 10h16M4 14h10M4 18h7'],
 };
 // what used to be on the buttons -> its icon (filled: drawn solid, the "on" version of a shape)
 const GLYPHS = {

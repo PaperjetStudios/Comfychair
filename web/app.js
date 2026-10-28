@@ -1,6 +1,6 @@
 // ComfyChair tablet UI. Plain ES modules, no build step. This is the entry point: projects, tab switching and
 // wiring. The panels live in generate.js (templates, prompt, saved settings, preview, zoom), run.js (websocket,
-// history, the queue), editor.js (+ sketch pad), video.js (timeline), vfx.js (VFX effects), board.js (board + gallery); media.js has
+// history, the queue), editor.js (+ sketch pad), video.js (timeline), vfx.js (VFX effects), story.js (storyboard), board.js (board + gallery); media.js has
 // the pickers and core.js the shared state. The 3D tab (scene.js) loads on demand.
 
 import {
@@ -14,6 +14,7 @@ import { renderEditor } from './editor.js';
 import { renderVideo, vidPause, wireVideoTransport } from './video.js';
 import { renderVfx, vfxPause, wireVfx } from './vfx.js';
 import { renderSound, sndPause, wireSound } from './sound.js';
+import { renderStory, wireStory } from './story.js';
 import { B, closeGallery, pauseBoard, renderBoard } from './board.js';
 import { fullScreen, sideNav, wireSplitters } from './layout.js';
 import { loadPrefs, openPrefs } from './prefs.js';
@@ -85,10 +86,11 @@ function switchTab(name) {
   if (name === 'video') renderVideo(); else vidPause();
   if (name === 'vfx') renderVfx(); else vfxPause();
   if (name === 'sound') renderSound(); else sndPause();
+  if (name === 'story') renderStory();
   if (name === 'board') renderBoard(); else { closeGallery(); pauseBoard(); }
   if (name === 'scene') sceneModule().then((m) => m.show()).catch((e) => { console.error(e); toast(`3D view: ${e.message}${whereFrom(e)}`, true); });
   else if (sceneMod) sceneMod.hide();
-  $('.actionbar').classList.toggle('hidden', ['editor', 'video', 'sound', 'vfx', 'board', 'scene'].includes(name));
+  $('.actionbar').classList.toggle('hidden', ['story', 'editor', 'video', 'sound', 'vfx', 'board', 'scene'].includes(name));
 }
 // where an error came from: its first two places in our files (file:line), short enough for a toast on a tablet
 function whereFrom(e) {
@@ -153,6 +155,7 @@ function wireLayout() {
   sideNav($('#videoPanel'), 'video', sectionTargets($('#videoPanel')));
   sideNav($('#vfxPanel'), 'vfx', sectionTargets($('#vfxPanel')));
   sideNav($('#soundPanel'), 'sound', sectionTargets($('#soundPanel')));
+  sideNav($('#storyPanel'), 'story', sectionTargets($('#storyPanel')));
   sideNav($('#scenePanel'), 'scene', sectionTargets($('#scenePanel')));
 }
 // the .section blocks that sit directly in a panel's body (not ones nested inside another)
@@ -407,6 +410,7 @@ function wireTextPopup() {
   wireVideoTransport();
   wireVfx();
   wireSound();
+  wireStory();
   wireZoom();
   wireFullscreen();
   try { const s = await api('/api/status', { timeout: 8000 }); setConn(s.comfy_connected); checkUiVersion(s.ui_version); } catch { /* server down: the socket keeps retrying */ }
