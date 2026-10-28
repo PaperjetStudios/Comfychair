@@ -182,10 +182,12 @@ function openSoundSheet(g, i) {
 // Box select: drag across the board to select the tiles under the box. In select mode a mouse or pen drag starts it
 // (a pen doesn't scroll the board then), and so does a finger with Drag to select on; otherwise a finger starts it
 // with a long press and keeps going without lifting (then the page doesn't scroll).
-const BOX = { on: false, x0: 0, y0: 0, base: null, el: null, id: null, sc: null, raf: 0, last: null };
+// The box's start is pinned to the board's content (y0 in scrolled pixels), so it stretches as the board scrolls under
+// it: by the edge auto-scroll, a finger (while a pen draws the box), a second finger, or the wheel.
+const BOX = { on: false, x0: 0, y0: 0, base: null, el: null, id: null, type: null, sc: null, raf: 0, last: null };
 function boxStart(e) {
   const sc = document.getElementById('tab-board');
-  Object.assign(BOX, { on: true, x0: e.clientX, y0: e.clientY + sc.scrollTop, base: new Set(B.sel), id: e.pointerId, sc, last: e });
+  Object.assign(BOX, { on: true, x0: e.clientX, y0: e.clientY + sc.scrollTop, base: new Set(B.sel), id: e.pointerId, type: e.pointerType, sc, last: e });
   BOX.el ||= h('div', { class: 'board-box' });
   document.body.append(BOX.el);
   B.longPressed = true;   // the click that ends the drag isn't a tap on a tile
@@ -206,12 +208,20 @@ function boxMove(e) {
   for (const t of document.querySelectorAll('#board .tile[data-key]')) t.classList.toggle('sel', sel.has(t.dataset.key));
   const bar = $('#boardBar .board-sel');
   if (bar) bar.replaceWith(boardSelBar());
-  // near the top or bottom: scroll, and keep selecting while the finger rests there
-  const sr = BOX.sc.getBoundingClientRect(), edge = 60;
+  // near (or past) the top or bottom: scroll, faster the deeper in, and keep selecting while the pen rests there
+  const sr = BOX.sc.getBoundingClientRect(), edge = Math.min(110, sr.height / 4);
   const dy = e.clientY < sr.top + edge ? -(sr.top + edge - e.clientY) : e.clientY > sr.bottom - edge ? e.clientY - (sr.bottom - edge) : 0;
   cancelAnimationFrame(BOX.raf);
-  if (dy) BOX.raf = requestAnimationFrame(() => { BOX.sc.scrollTop += dy / 3; boxMove(BOX.last); });
+  if (dy) {
+    BOX.raf = requestAnimationFrame(() => {
+      const before = BOX.sc.scrollTop;
+      BOX.sc.scrollTop += Math.sign(dy) * Math.min(40, 2 + (Math.abs(dy) / edge) ** 1.5 * 24);
+      if (BOX.sc.scrollTop !== before) boxMove(BOX.last);   // (at the very top or bottom it stops)
+    });
+  }
 }
+// the board scrolled under the box (any cause): stretch it to where the pen is now
+const boxFollow = () => { if (BOX.on && BOX.last) boxMove(BOX.last); };
 function boxEnd() {
   if (!BOX.on) return;
   BOX.on = false; cancelAnimationFrame(BOX.raf); BOX.el?.remove();
@@ -229,15 +239,20 @@ function wireBoxSelect() {
     if (BOX.on) { if (e.pointerId === BOX.id) boxMove(e); return; }
     if (!down || e.pointerId !== down.id || Math.hypot(e.clientX - down.x, e.clientY - down.y) < 12) return;
     // a mouse or pen drag in select mode (a finger too with Drag to select on), or any drag right after a long press
-    if ((B.selecting && (down.type !== 'touch' || B.boxDrag)) || B.longPressed) boxStart({ clientX: down.x, clientY: down.y, pointerId: e.pointerId }), boxMove(e);
+    if ((B.selecting && (down.type !== 'touch' || B.boxDrag)) || B.longPressed) boxStart({ clientX: down.x, clientY: down.y, pointerId: e.pointerId, pointerType: down.type }), boxMove(e);
     else down = null;   // a finger that moves before the long press is scrolling
   });
-  const up = (e) => { if (e.pointerType === 'touch') touches = Math.max(0, touches - 1); down = null; boxEnd(); };
+  // only the pointer drawing the box ends it (another finger lifting, from scrolling, doesn't)
+  const up = (e) => { if (e.pointerType === 'touch') touches = Math.max(0, touches - 1); down = null; if (!BOX.on || e.pointerId === BOX.id) boxEnd(); };
   window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
-  // while box-selecting with a finger, the page mustn't scroll under it; in select mode a pen (or a finger with Drag
-  // to select on) never scrolls it, so its drag is a box from the start (the first move is stopped, not the tap)
+  document.getElementById('tab-board').addEventListener('scroll', boxFollow, { passive: true });
+  // The board mustn't scroll under the pen or finger drawing a box, but other fingers may scroll it meanwhile (a
+  // finger while a pen draws, a second finger while a finger draws). In select mode a pen (or a finger with Drag to
+  // select on) never scrolls it, so its drag is a box from the start (the first move is stopped, not the tap).
   document.addEventListener('touchmove', (e) => {
-    if (BOX.on || (B.selecting && e.target.closest?.('#board') && ((B.boxDrag && e.touches.length === 1) || [...e.touches].some((t) => t.touchType === 'stylus')))) e.preventDefault();
+    const ts = [...e.touches], pens = ts.filter((t) => t.touchType === 'stylus').length, fingers = ts.length - pens;
+    const drawing = BOX.on && (BOX.type === 'pen' ? fingers === 0 : BOX.type === 'touch' ? ts.length === 1 : true);
+    if (drawing || (!BOX.on && B.selecting && e.target.closest?.('#board') && ((B.boxDrag && ts.length === 1) || pens))) e.preventDefault();
   }, { passive: false });
 }
 
