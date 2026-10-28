@@ -833,6 +833,30 @@ function animProps() {
       { cls: 'small', title: 'Back to a still: the layers stay as they are at the playhead (their keys are kept for next time)' }));
 }
 
+// a fixed canvas: a shape and megapixels tapped (sides a multiple of 8); Custom types the sides
+const CANVAS_MP = [0.25, 0.5, 1, 1.5, 2, 4, 8];
+function fixedSizeFields() {
+  const { w, h: hh } = E.size, mp = Math.round((w * hh) / 1e4) / 100;
+  const near = ASPECT_PRESETS.find(([, a]) => Math.abs(w / hh / a - 1) < 0.03);
+  const shape = E.sizeShape || (near ? near[0] : 'custom');
+  const apply = (k, m) => {
+    E.sizeShape = k;
+    const a = (ASPECT_PRESETS.find(([x]) => x === k) || [])[1];
+    if (a) E.size = { w: Math.round(Math.sqrt(m * 1e6 * a) / 8) * 8, h: Math.round(Math.sqrt((m * 1e6) / a) / 8) * 8 };
+    editorChanged();
+  };
+  return [
+    field(['Shape', h('span', {}, `${w}×${hh} · ${mp} MP`)],
+      seg([...ASPECT_PRESETS.map(([k]) => [k, k]), ['custom', 'Custom']], shape, (k) => apply(k, mp), { wrap: true })),
+    shape === 'custom'
+      ? h('div', { class: 'row' },
+        editorNum('Width', w, (v) => { E.size.w = v; }, { min: 64, max: 8192, step: 8 }),
+        editorNum('Height', hh, (v) => { E.size.h = v; }, { min: 64, max: 8192, step: 8 }))
+      : field('Megapixels', seg(CANVAS_MP.map((v) => [v, `${v}`]), CANVAS_MP.find((v) => Math.abs(v - mp) < 0.03) ?? null,
+        (m) => apply(shape, m), { wrap: true })),
+  ];
+}
+
 function canvasProps() {
   const sizeSeg = seg([['fit', 'Fit layers'], ['fixed', 'Fixed size']], E.size ? 'fixed' : 'fit', (v) => {
     if (v === 'fit') {
@@ -843,9 +867,7 @@ function canvasProps() {
   });
   return section('Canvas', null,
     field('Size', sizeSeg),
-    E.size ? h('div', { class: 'row' },
-      editorNum('Width', E.size.w, (v) => { E.size.w = v; }, { min: 64, max: 8192, step: 8 }),
-      editorNum('Height', E.size.h, (v) => { E.size.h = v; }, { min: 64, max: 8192, step: 8 })) : null,
+    E.size ? fixedSizeFields() : null,
     colorField('Background', () => E.bg, (c) => { E.bg = c; persistEditor(); drawEditorCanvas(); }),
     field('Arrange layers', seg([['row', 'Side by side'], ['column', 'Stacked'], ['grid', 'Grid']], null,
       (m) => { arrangeLayers(m); renderEditor(); }, { action: true, disabled: !E.layers.length })),

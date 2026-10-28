@@ -366,6 +366,7 @@ function inputDims(name, onLoad) {
   return null;
 }
 
+const MP_STEPS = [0.25, 0.4, 0.5, 0.75, 1, 1.5, 2, 3, 4];
 function sizeField(fw, fh) {
   const step = Math.max(fw.step || 8, fh.step || 8, 16);  // 16 suits every latent; resize nodes allow 1
   const lim = (n, f) => Math.min(f.max ?? Infinity, Math.max(f.min ?? step, n));
@@ -388,7 +389,6 @@ function sizeField(fw, fh) {
   }
   const readout = h('span', {});
   const custom = h('div', { class: 'size-custom' }, numberField(fw, false), numberField(fh, false));
-  const mpIn = h('input', { type: 'number', inputMode: 'decimal', min: 0.05, max: 16, step: 0.05, value: m.mp });
   const showReadout = () => {
     const w = S.values[fw.key], hh = S.values[fh.key];
     readout.textContent = m.aspect === 'image' && !imageAspect() ? 'matches the image once one is set'
@@ -413,11 +413,10 @@ function sizeField(fw, fh) {
     mpRow.classList.toggle('hidden', isCustom);
     showReadout();
   };
-  const setMp = (n) => { m.mp = Math.min(16, Math.max(0.05, Math.round(n * 100) / 100)); mpIn.value = m.mp; applyPreset(); };
-  mpIn.addEventListener('change', () => setMp(parseFloat(mpIn.value) || m.mp));
+  // megapixels: tapped, not typed (Custom types the sides themselves)
+  const setMp = (n) => { m.mp = Math.min(16, Math.max(0.05, Math.round(n * 100) / 100)); applyPreset(); };
   const mpRow = field(['Megapixels', h('span', {}, `sides snap to ${step}`)],
-    stepper(mpIn, (d) => setMp(m.mp + d * 0.05), 'megapixels'),
-    seg([0.25, 0.4, 0.5, 1, 2].map((v) => [v, `${v}`]), null, setMp, { action: true }));
+    seg(MP_STEPS.map((v) => [v, `${v}`]), m.mp, setMp, { wrap: true }));
   // custom width/height edits go through numberField's own setVal; keep the readout in step
   custom.addEventListener('change', () => setTimeout(showReadout));
   custom.addEventListener('click', () => setTimeout(showReadout));
