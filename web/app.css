@@ -1118,7 +1118,6 @@ button.sheet-caret { width: 22px; }
 .vfx-stage.drawing .vfx-media { cursor: crosshair; }
 .vfx-group { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .vfx-group-name { font-size: 12px; opacity: .7; }
-.vfx-still { max-width: 100%; max-height: 160px; border-radius: 6px; display: block; }
 .vfx-results .card.picked { outline: 2px solid var(--accent, #4c8dff); }
 .fx-step { border: 1px solid var(--line, #333); border-radius: 8px; padding: 8px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px; }
 .fx-step textarea, .fx-step input[type=text] { width: 100%; }

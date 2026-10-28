@@ -434,6 +434,20 @@ export function colorField(label, get, set, ...kids) {
   return el;
 }
 
+// The buttons of every picked-thing input (a picture, a clip, a sound): Choose… while there's none, then
+// Change… and Clear (clear: null for none); more after them.
+export const pickButtons = (has, pick, clear, more = []) => h('div', { class: 'row wrap' },
+  button(has ? 'Change…' : 'Choose…', pick, { cls: has ? 'small' : 'small primary' }), has && clear ? button('Clear', clear) : null, ...more);
+
+// A picked picture: its thumbnail (tap it to pick another) beside the pick buttons; buttons: more after them,
+// below: under them (e.g. a size box), tip: an ⓘ after the label. thumb: the picture (null: none yet).
+export function imageInput({ label, name, thumb, pick, onClear, buttons = [], below = null, tip = null }) {
+  return field([label, h('span', {}, thumb ? name : 'none')], tip ? help(tip) : null,
+    h('div', { class: 'imgfield' },
+      h('button', { type: 'button', class: 'thumb', onclick: pick, 'aria-label': `Choose ${label}` }, thumb || h('span', { class: 'hint' }, '+ picture')),
+      h('div', { class: 'actions' }, pickButtons(!!thumb, pick, onClear, buttons), below)));
+}
+
 // A labelled setting: the label on the left, an optional note on the right (label: [text, note]).
 // A help(text) among the kids becomes an ⓘ after the label.
 export function field(label, ...kids) {

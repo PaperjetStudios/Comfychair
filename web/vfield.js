@@ -1,7 +1,7 @@
 // The player + trim + crop widget of a template's video field (generate.js videoField builds the rest).
 // It never redraws the field: edits report through onChange(trim|null, crop|null) when a drag or a
 // typed number ends. trim = {start, len} in seconds; crop = {x, y, w, h} fractions of the frame.
-import { api, button, clamp, clamp01, field, h, iconBtn, seg } from './ui.js';
+import { api, button, clamp, clamp01, field, h, iconBtn, pickButtons, seg } from './ui.js';
 import { ASPECTS, aspectCrop, cropSpan } from './editor.js';
 
 const FULL = { x: 0, y: 0, w: 1, h: 1 };
@@ -329,17 +329,16 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
 // editor, e.g. a matte); pick(): open the picker; onChange(value | null) for a pick or Clear, onEdit(value) for a
 // trim or crop; buttons: more after Clear; below: under the editor. The element's refresh() redraws the numbers.
 export function clipInput({ label, value, url, name, pick, onChange, onEdit = onChange, loader, budget, buttons = [], below = null }) {
-  const clear = value ? button('Clear', () => onChange(null)) : null;
+  const row = pickButtons(!!value, pick, () => onChange(null), buttons);
   if (!value || !url) {
-    const el = field([label, h('span', {}, value ? name : 'none')],
-      h('div', { class: 'row wrap' }, button(value ? 'Change…' : 'Choose…', pick, { cls: value ? '' : 'primary' }), clear, ...buttons));
+    const el = field([label, h('span', {}, value ? name : 'none')], row);
     el.refresh = () => {};
     return el;
   }
   const { trim, crop, ...src } = value;
   const ed = videoEditor({ url, source: src, trim, crop, loader, budget,
     onChange: (t, c) => onEdit({ ...src, ...(t && { trim: t }), ...(c && { crop: c }) }) });
-  const el = field([label, h('span', {}, name)], ed, below, h('div', { class: 'row wrap' }, button('Change…', pick), clear, ...buttons));
+  const el = field([label, h('span', {}, name)], ed, below, row);
   el.refresh = () => ed.refresh();
   return el;
 }

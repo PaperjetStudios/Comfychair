@@ -1,5 +1,5 @@
 import {
-  $, h, store, api, toast, openSheet, closeSheet, button, iconBtn, actions, fileButton, seg, placeholder, note, mediaCard, field,
+  $, h, store, api, toast, openSheet, closeSheet, button, iconBtn, actions, fileButton, seg, placeholder, note, mediaCard, field, pickButtons,
 } from './ui.js';
 import { S, PICKER_SOURCES as SOURCES, previewUrl, switchTab, thumbUrl } from './core.js';
 import { loadHistory } from './run.js';
@@ -121,7 +121,7 @@ export function soundInput(value, onChange, { title = 'Pick a sound', label = 'S
   const pick = () => openSoundPicker({ title, onPick: (v) => { value = v; onChange(v); draw(); } });
   const draw = async () => {
     if (!value) {
-      box.replaceChildren(field([label, h('span', {}, 'none')], h('div', { class: 'row wrap' }, button('Choose…', pick, { cls: 'small primary' }))));
+      box.replaceChildren(field([label, h('span', {}, 'none')], pickButtons(false, pick, null)));
       return;
     }
     const src = await soundSource(value);
@@ -139,8 +139,7 @@ export function soundInput(value, onChange, { title = 'Pick a sound', label = 'S
       { cls: 'small', title: 'Start the cut where the player is' });
     box.replaceChildren(field([label, h('span', {}, src ? `${src.label}${src.kind === 'video' ? ' (its sound)' : ''}` : '')], player,
       h('div', { class: 'sound-cut' }, h('label', {}, 'Start (s)', start), h('label', {}, 'Length (s)', len), fromHere),
-      h('div', { class: 'row wrap' }, button('Choose…', pick, { cls: 'small' }),
-        button('Clear', () => { value = null; onChange(null); draw(); }, { cls: 'small' }))));
+      pickButtons(true, pick, () => { value = null; onChange(null); draw(); })));
   };
   draw();
   return box;

@@ -1,7 +1,7 @@
 import {
   $, h, store, clamp, clamp01, clone, cycleIndex, api, toast, undoToast, openOverlay, openSheet, sheetStillOpen, nameSheet,
   button, iconBtn, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider,
-  insertAtCursor, toggle, textArea, seedField as uiSeedField,
+  insertAtCursor, toggle, textArea, seedField as uiSeedField, imageInput,
 } from './ui.js';
 import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
 import { clipLabel, clipUrl, openImagePicker, openVideoPicker, soundInput } from './media.js';
@@ -812,16 +812,6 @@ function cropPreview(src, c) {
     h('img', { class: 'kept', src, alt: '', style: `clip-path:inset(${pct(c.y)} ${pct(1 - c.x - c.w)} ${pct(1 - c.y - c.h)} ${pct(c.x)})` }));
 }
 
-// An image or video input: a thumbnail to tap, its buttons beside it, and extra (the MP box) under them
-function mediaInput(f, caption, thumb, pick, buttons, extra = null) {
-  const el = field([f.label, h('span', {}, caption)],
-    h('div', { class: 'imgfield' },
-      h('button', { type: 'button', class: 'thumb', onclick: pick, 'aria-label': `Choose ${f.kind}` }, thumb),
-      h('div', { class: 'actions' }, h('div', { class: 'row wrap' }, button('Choose…', pick), buttons), extra)));
-  el.dataset.key = f.key;
-  return el;
-}
-
 function imageField(f) {
   const v = S.values[f.key];
   if (S.imageMp[f.key] == null) S.imageMp[f.key] = f.mp ?? 1;
@@ -850,14 +840,14 @@ function imageField(f) {
     } });
   };
   const set = (name) => { setVal(f.key, name); renderFields(); };
-  return mediaInput(f, v ? String(v).split('/').pop() + (cropped ? ' · cropped' : '') : 'empty',
-    cropped ? cropPreview(thumbUrl(cropped.src, 256), cropped.crop)
-      : v ? h('img', { src: thumbUrl(v, 256), alt: v }) : h('span', { class: 'hint' }, '+ image'),
-    pick, [
+  const el = imageInput({ label: f.label, name: v ? String(v).split('/').pop() + (cropped ? ' · cropped' : '') : '',
+    thumb: cropped ? cropPreview(thumbUrl(cropped.src, 256), cropped.crop) : v ? h('img', { src: thumbUrl(v, 256), alt: v }) : null,
+    pick, onClear: () => set(''), buttons: [
       v ? button('Crop…', crop) : null,
-      button(v ? 'Draw on' : 'Draw', () => openSketch({ base: v || null, aspect: templateAspect(), onDone: set })),
-      v ? button('Clear', () => set('')) : null],
-    mpInput(() => S.imageMp[f.key], (n) => { S.imageMp[f.key] = n; persist(); }));
+      button(v ? 'Draw on' : 'Draw', () => openSketch({ base: v || null, aspect: templateAspect(), onDone: set }))],
+    below: mpInput(() => S.imageMp[f.key], (n) => { S.imageMp[f.key] = n; persist(); }) });
+  el.dataset.key = f.key;
+  return el;
 }
 
 // A video input (VHS_LoadVideoPath): the value is the clip's source, {generation, index} for an
