@@ -103,7 +103,7 @@ LOADERS.splat = (o, group, x = {}) => {
     holder.add(mesh);
     // the depth render can't use splats: a box of the same size stands in (see passHooks below)
     const proxy = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), clayMat);
-    proxy.visible = false;
+    proxy.visible = false; proxy.userData.pickProxy = true;   // (the view-centre pivot aims at it: scene-view.js pivotToView)
     const box = o.box || splatBox(mesh);
     const fit = () => {  // the holder and box for the current flip: standing on the floor, centred
       const f = o.flip ? -1 : 1, [x0, y0, z0, x1, y1, z1] = box;

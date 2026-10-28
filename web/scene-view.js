@@ -3,8 +3,9 @@ import { OrbitControls } from './vendor/OrbitControls.js';
 import * as THREE from './vendor/three.module.min.js';
 import { TransformControls } from './vendor/TransformControls.js';
 import * as FIGURE from './figure.js';
-import { $, api, busy as busyBar, canvasFont, clone, closeSheet, h, toast, undoToast } from './ui.js';
+import { $, api, busy as busyBar, canvasFont, clone, closeSheet, h, store, toast, undoToast } from './ui.js';
 import { gzChip, smoothGizmo, snap3, snapBar3 } from './gizmo.js';
+import { ORIENTS, centrePoint, follow, frameQuat, orientOf, relQuat, spaceOf } from './gizmo-orient.js';
 import {
   C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, WP, current, frames, holdStart, hooks, pathSig, makers, namesFor, newObject, newRoom, pivotOf, sample,
   sameTab, save, selItem, setActiveCam, setSC, write
@@ -49,9 +50,17 @@ const dotSel = new THREE.MeshBasicMaterial({ color: 0xff4c8a, depthTest: false, 
 // what the gizmo drags in the director view: the shot camera itself (keeps its distance to what it looks at)
 const camProxy = new THREE.Object3D();
 const ikTarget = new THREE.Object3D();  // what the gizmo drags when a hand or foot is moved (IK)
-// what the gizmo holds for a whole object: at its pivot, turned and scaled with it. pivotAt is the
-// pivot in the object's own space, kept still while dragging.
+// what the gizmo holds for a whole object: at its pivot, scaled with it and turned like the gizmo's axes (the
+// object's own turn in World and Local, the view's in View: gizmo-orient.js). pivotAt is the pivot in the object's own
+// space, kept still while dragging; pivotRel the object's turn relative to the stand-in's.
 const pivot = new THREE.Object3D(), pivotAt = new THREE.Vector3();
+let pivotRel = [0, 0, 0, 1];
+// the shot camera's pivot in the director view (in its own space: the camera itself unless moved) and its turn
+// relative to camProxy's
+let camAt = [0, 0, 0], camRel = [0, 0, 0, 1];
+// "Pivot at the view centre": a stand-in pivot for one thing (an object, or the active camera) until reset or the
+// selection changes; at is in the thing's own space. Not saved: the thing's data keeps its own origin and pivot.
+let tmpPivot = null;
 // (the skinning chunks pose an imported character's bones; plain meshes pass through them)
 const VERT = `#include <skinning_pars_vertex>
 varying float vz;
@@ -95,6 +104,7 @@ export function setup() {
   camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.05, 500);
   camera.layers.enable(1);  // layer 1: a figure's joint dots (picked on their own, never rendered out)
   scene.add(ikTarget, pivot, camProxy);
+  R.orient = orientOf(store.get('deck.scene.orient', 'world'));   // the gizmo's axes (this device's choice)
 
   controls = new OrbitControls(camera, canvas);
   controls.enableDamping = false;
@@ -104,7 +114,7 @@ export function setup() {
     if (R.applying) return;
     applyRoll(camera, current(SC.camera, CAM).roll);
     if (R.playing) write(SC.camera, CAM, readCamera());
-    draw();
+    followView(); draw();
   });
   controls.addEventListener('end', () => {
     const c = readCamera(), was = current(SC.camera, CAM);
@@ -121,7 +131,7 @@ export function setup() {
   viewControls = new OrbitControls(viewCam, canvas);
   viewControls.enableDamping = false; viewControls.enabled = false;
   viewControls.target.set(0, 1, 0); viewControls.update();
-  viewControls.addEventListener('change', () => draw());
+  viewControls.addEventListener('change', () => { followView(); draw(); });
   shotCam = new THREE.PerspectiveCamera(45, 16 / 9, 0.3, 3);  // (only drawn: short, so the frustum stays small)
   frustum = new THREE.CameraHelper(shotCam); frustum.visible = false; scene.add(frustum);
   stage = new THREE.Mesh(new THREE.CircleGeometry(2, 64).rotateX(-Math.PI / 2), floorMat);  // Create object's floor
@@ -205,9 +215,9 @@ function applyChange() {
   if (!o || !m) return;
   if (R.joint) return jointChanged(o);
   const p = pivot;
-  // the object follows the pivot: turned and scaled around it
-  m.quaternion.copy(p.quaternion); m.scale.copy(p.scale);
-  m.position.copy(p.position).sub(pivotAt.clone().multiply(p.scale).applyQuaternion(p.quaternion));
+  // the object follows the pivot: turned (relative to it) and scaled around it
+  const t = follow(p.position.toArray(), p.quaternion.toArray(), pivotRel, pivotAt.toArray(), p.scale.toArray());
+  m.quaternion.fromArray(t.q); m.scale.copy(p.scale); m.position.fromArray(t.p);
   const d = THREE.MathUtils.radToDeg;
   write(o, namesFor(o), { x: m.position.x, y: m.position.y, z: m.position.z,
     rx: d(m.rotation.x), ry: d(m.rotation.y), rz: d(m.rotation.z),
@@ -215,15 +225,23 @@ function applyChange() {
 }
 
 // the shot camera put where the proxy is, looking along it at what it looked at (same distance)
+// (at the camera, or at its stand-in pivot; turned like the gizmo's axes, camRel being the camera's turn relative to it)
 function placeCamProxy() {
-  camProxy.position.copy(camera.position); camProxy.quaternion.copy(camera.quaternion); camProxy.scale.set(1, 1, 1);
+  camera.updateMatrixWorld();
+  camAt = tmpPivot?.item === SC.camera ? tmpPivot.at : [0, 0, 0];
+  camProxy.position.copy(camera.localToWorld(new THREE.Vector3(...camAt)));
+  camProxy.quaternion.fromArray(frameQuat(R.orient, 'translate', camera.quaternion.toArray(), activeCamera().quaternion.toArray()));
+  camProxy.scale.set(1, 1, 1);
+  camRel = relQuat(camProxy.quaternion.toArray(), camera.quaternion.toArray());
   camProxy.userData.d = Math.max(0.5, camera.position.distanceTo(controls.target));
   camProxy.updateMatrixWorld();
 }
 function camChanged() {
-  const p = camProxy.position, t = new THREE.Vector3(0, 0, -1).applyQuaternion(camProxy.quaternion).multiplyScalar(camProxy.userData.d).add(p);
-  // the roll is what is left of the proxy's turn once it is aimed level (applyRoll's sign)
-  const lvl = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(p, t, camera.up)), dq = lvl.invert().multiply(camProxy.quaternion);
+  const at = follow(camProxy.position.toArray(), camProxy.quaternion.toArray(), camRel, camAt);
+  const p = new THREE.Vector3(...at.p), q = new THREE.Quaternion(...at.q);
+  const t = new THREE.Vector3(0, 0, -1).applyQuaternion(q).multiplyScalar(camProxy.userData.d).add(p);
+  // the roll is what is left of the camera's turn once it is aimed level (applyRoll's sign)
+  const lvl = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(p, t, camera.up)), dq = lvl.invert().multiply(q);
   const c = { px: p.x, py: p.y, pz: p.z, tx: t.x, ty: t.y, tz: t.z, fov: camera.fov, roll: -THREE.MathUtils.radToDeg(2 * Math.atan2(dq.z, dq.w)) };
   if (c.roll < -180) c.roll += 360; else if (c.roll > 180) c.roll -= 360;
   write(SC.camera, CAM, { px: c.px, py: c.py, pz: c.pz, tx: c.tx, ty: c.ty, tz: c.tz, roll: c.roll });
@@ -396,6 +414,8 @@ function placeIkTarget() {
   if (!rig) return;
   rig.root.updateMatrixWorld(true);
   rig.bones[R.joint].getWorldPosition(ikTarget.position);
+  // (a hand or foot has no turn of its own to drag along: World and Local are the world's axes, View the view's)
+  if (R.orient === 'view') ikTarget.quaternion.copy(activeCamera().quaternion); else ikTarget.quaternion.identity();
   ikTarget.updateMatrixWorld();
 }
 // the selected object's pivot, in its own space (the figure's pose and the photo's mesh move it)
@@ -415,10 +435,58 @@ function pivotPoint(o, m) {
 function placePivot() {
   const o = selItem(), m = o && R.meshes.get(o.id);
   if (!m) return;
-  pivotAt.copy(pivotPoint(o, m));
+  if (tmpPivot?.item === o) { m.updateMatrixWorld(true); pivotAt.fromArray(tmpPivot.at); } else pivotAt.copy(pivotPoint(o, m));
   pivot.position.copy(m.localToWorld(pivotAt.clone()));
-  pivot.quaternion.copy(m.quaternion); pivot.scale.copy(m.scale);
+  pivot.quaternion.fromArray(frameQuat(R.orient, R.mode, m.quaternion.toArray(), activeCamera().quaternion.toArray()));
+  pivotRel = relQuat(pivot.quaternion.toArray(), m.quaternion.toArray());
+  pivot.scale.copy(m.scale);
   pivot.updateMatrixWorld();
+}
+// View axes follow the view: put the gizmo's stand-in back each time the view moves (not while a handle is held)
+function followView() {
+  if (R.orient !== 'view' || !gizmo?.object || gizmo.dragging || smooth?.settling()) return;
+  if (gizmo.object === pivot) placePivot();
+  else if (gizmo.object === ikTarget) placeIkTarget();
+  else if (gizmo.object === camProxy) placeCamProxy();
+}
+
+// ---- the gizmo's axes (World / Local / View, remembered on this device) and its stand-in pivot
+export function setOrient(k) {
+  R.orient = orientOf(k); store.set('deck.scene.orient', R.orient);
+  refresh(); renderToolbar();
+}
+export const orientLabel = () => (ORIENTS.find(([k]) => k === R.orient) || ORIENTS[0])[1];
+// what "Pivot at the view centre" can move: the selected object (not a joint) or, in the director view, the camera
+const pivotItem = () => (camGizmo() ? SC.camera : !R.joint && !HAND.on && gizmo?.object === pivot ? selItem() : null);
+export const canPivot = () => !!pivotItem();
+export const pivotMoved = () => !!tmpPivot && tmpPivot.item === pivotItem();
+// the gizmo's pivot to where the middle of the view meets the thing (or as far along that line as its pivot was), so
+// it turns and scales around what is being looked at
+export function pivotToView() {
+  const it = pivotItem();
+  if (!it) return;
+  const cam = activeCamera();
+  cam.updateMatrixWorld();
+  ray.setFromCamera(new THREE.Vector2(0, 0), cam);
+  const r = ray.ray, cut = (xs) => xs.find((x) => x.object.visible || x.object.userData.pickProxy);
+  if (it === SC.camera) {   // (the shot camera: around what the free view looks at)
+    const hit = cut(ray.intersectObjects(visibleMeshes(), true));
+    const pt = centrePoint(r.origin.toArray(), r.direction.toArray(), hit?.point.toArray() ?? null, controls.target.toArray());
+    camera.updateMatrixWorld();
+    tmpPivot = { item: it, at: camera.worldToLocal(new THREE.Vector3(...pt)).toArray() };
+  } else {
+    const m = R.meshes.get(it.id);
+    if (!m) return;
+    m.updateMatrixWorld(true);
+    const hit = cut(ray.intersectObject(m, true));
+    const pt = centrePoint(r.origin.toArray(), r.direction.toArray(), hit?.point.toArray() ?? null, pivot.position.toArray());
+    tmpPivot = { item: it, at: m.worldToLocal(new THREE.Vector3(...pt)).toArray() };
+  }
+  refresh(); renderToolbar();
+}
+export function resetPivot() {
+  if (!tmpPivot) return;
+  tmpPivot = null; refresh(); renderToolbar();
 }
 function jointChanged(o) {
   const rig = selRig();
@@ -456,9 +524,11 @@ export function syncMeshes() {
   if (R.joint && !m?.userData.rig) R.joint = null;
   const target = HAND.on ? null : !m ? (R.free && wantFrustum() ? camProxy : null) : !R.joint ? pivot : jointMode() === 'translate' ? ikTarget : m.userData.rig.bones[R.joint];
   if (target) {
-    if (gizmo.object !== target) { gizmo.attach(target); if (target === camProxy) placeCamProxy(); }
+    const was = gizmo.object;
     gizmo.setMode(R.joint ? jointMode() : target === camProxy && R.mode === 'scale' ? 'translate' : R.mode);
-    gizmo.setSpace(R.joint && jointMode() === 'rotate' ? 'local' : 'world');
+    // (a joint turns on its own axes; everything else as picked: World, Local or View)
+    gizmo.setSpace(R.joint && jointMode() === 'rotate' ? 'local' : spaceOf(R.orient));
+    if (was !== target) { gizmo.attach(target); if (target === camProxy) placeCamProxy(); }
   } else gizmo.detach();
 }
 
@@ -593,6 +663,7 @@ function jointAt(e) {
 // ---- selection, layers ------------------------------------------------------------
 export function select(id) {
   if (HAND.on && id !== R.sel) handMode(null);
+  if (id !== R.sel) tmpPivot = null;
   R.sel = modeOf().select ? id : null; R.joint = null; refresh(); renderToolbar(); renderKeys(); renderPanel();
 }
 
