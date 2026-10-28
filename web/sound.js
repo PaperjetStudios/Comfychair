@@ -11,6 +11,7 @@ import { TabSet } from './tabs.js';
 import { clipSoundFields, dragWindow, durationOf, timeline, wavePeaks } from './timeline.js';
 import { fmtTime, playKeys, transport } from './playback.js';
 import { resultActions } from './useas.js';
+import { maximizable } from './layout.js';
 
 // ---------------------------------------------------------------------------
 // sound: a multi-track sound editor laid out like the Video tab. Tracks mix (mute, solo, level, pan),
@@ -659,6 +660,7 @@ export function wireSound() {
       extra: [h('button', { type: 'button', id: 'sndSplit', class: 'icon-btn', 'aria-label': 'Split at the playhead', title: 'Split at the playhead (S)', onclick: TL.split }, '✂'),
         h('button', { type: 'button', id: 'sndDel', class: 'icon-btn', 'aria-label': 'Delete the selected clip', title: 'Delete the selected clip (Del)', onclick: TL.deleteSelected }, '🗑')] });
   $('#sndTransport').replaceWith(stp.el);
+  const max = maximizable($('#tab-sound .stage'), $('#tab-sound .viewer'), { onChange: () => drawStage() });
   $('#sndTools').replaceChildren(
     button('✂ Split', TL.split, { title: 'Split at playhead (S)' }),
     button('🗑 Delete', TL.deleteSelected, { title: 'Delete selected clip (Del)' }),
@@ -669,7 +671,7 @@ export function wireSound() {
   wireTimeline();
   onServer('deck_generation', ({ data }) => { if (N.gens.includes(data?.id) && $('#tab-sound').classList.contains('active')) setTimeout(renderPanel, 0); });
   playKeys(() => $('#tab-sound').classList.contains('active'), () => stp, () => ({
-    s: TL.split, c: TL.split, d: TL.duplicate,
+    s: TL.split, c: TL.split, d: TL.duplicate, f: max.toggle,
     Delete: TL.deleteSelected, Backspace: TL.deleteSelected,
     '=': () => TL.zoom(N.pps * 1.5), '+': () => TL.zoom(N.pps * 1.5), '-': () => TL.zoom(N.pps / 1.5),
   }));

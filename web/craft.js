@@ -10,15 +10,14 @@ const when = (t) => (t ? new Date(t * 1000).toLocaleString([], { dateStyle: 'sho
 
 // kind: photo | video | vfx | generation; body as app/craft.py takes it
 export async function sendToCraft(kind, body, btn = null) {
-  const was = btn?.textContent;
-  if (btn) { btn.disabled = true; btn.textContent = 'Building…'; }
+  if (btn) btn.disabled = true;
   try {
-    const d = await api(`/api/craft/${kind}`, { method: 'POST', body: { project_id: S.project, ...body } });
+    const d = await api(`/api/craft/${kind}`, { method: 'POST', body: { project_id: S.project, ...body }, busy: 'Building…' });
     toast(`Opened in ${APP[d.app]} on the computer. Save there, then Bring back.`, false,
       { label: 'Craft documents', fn: () => openCraftSheet() });
     return d;
   } catch (e) { toast(`Couldn't open it: ${e.message}`, true); return null; }
-  finally { if (btn) { btn.disabled = false; btn.textContent = was; } }
+  finally { if (btn) btn.disabled = false; }
 }
 
 // What a brought-back file can go on to: pictures into the Editor or as an input, clips onto the timeline

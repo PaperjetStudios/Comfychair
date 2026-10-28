@@ -137,7 +137,11 @@ function wireLayout() {
   wireSplitters();
   for (const id of ['generate', 'editor']) {
     const tab = $(`#tab-${id}`);
-    maximizable(tab.querySelector('.stage'), tab.querySelector('.viewer'));
+    const max = maximizable(tab.querySelector('.stage'), tab.querySelector('.viewer'));
+    document.addEventListener('keydown', (e) => {   // f: full screen, as in the players (playback.js playKeys)
+      if (e.key !== 'f' || !tab.classList.contains('active') || e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey) return;
+      e.preventDefault(); max.toggle();
+    });
   }
   sideNav($('#tab-generate .panel'), 'generate', () => [...document.querySelectorAll('#fields > details.group')]
     .map((el) => ({ el, label: el.querySelector(':scope > summary')?.textContent || '' })));

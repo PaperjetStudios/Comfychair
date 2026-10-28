@@ -855,7 +855,6 @@ details.desc[open] summary { margin-bottom: 6px; }
 @media (hover: hover) { .tabchip:hover:not(.on) { border-color: var(--line-2); background: var(--surface-3); } }
 
 /* generate tabs */
-.gen-tabs { margin-bottom: 8px; }
 .preset-btn { flex: 0 1 44%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .preset-btn.on { border-color: var(--accent); }
 .preset-list { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
@@ -866,11 +865,10 @@ details.desc[open] summary { margin-bottom: 6px; }
 .ovr-btn { border: 0; background: transparent; color: var(--accent); font-size: var(--fs-xs); padding: 2px 4px; cursor: pointer; }
 
 /* editor tabs */
-.editor-tabs { margin-bottom: 10px; }
 .frame-bar { align-items: center; justify-content: space-between; }
 .frame-bar .hint { margin: 0; }
 /* video tabs */
-.vid-tabs { position: sticky; top: 0; z-index: 3; background: var(--surface); padding: 2px 0 6px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
+.tab-strip { position: sticky; top: 0; z-index: 3; background: var(--surface); padding: 2px 0 6px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
 .viewer .gizmo { touch-action: none; z-index: 2; }
 .gz-bar { position: absolute; left: 8px; top: 8px; z-index: 3; display: flex; gap: 4px; flex-wrap: wrap; max-width: calc(100% - 16px); }
 .gz-chip {
@@ -1054,7 +1052,7 @@ button.sheet-caret { width: 22px; }
 @media (hover: hover) { .side-tab:hover:not(.on) { background: var(--surface-2); color: var(--text); } }
 @media (pointer: coarse) { .side-tab { width: 40px; height: 40px; } }
 .nav-off { display: none !important; }
-.panel.has-nav > .scene-head, .panel.has-nav > .vid-tabs { margin-left: 0; }
+.panel.has-nav > .scene-head, .panel.has-nav > .tab-strip { margin-left: 0; }
 
 /* ---- maximize: one ⛶ on every viewer; the stage is pinned over the page (and goes real full screen) ---- */
 .max-btn {

@@ -30,6 +30,7 @@ export class TabSet {
     this.row.addEventListener('touchmove', (e) => { if (this.drag?.started && e.cancelable) e.preventDefault(); }, { passive: false });
     this.state = h('button', { type: 'button', class: 'tabs-state hidden', onclick: () => this.conflict && this.showConflict() });
     this.plus = h('button', { type: 'button', class: 'icon-btn tab-plus', 'aria-label': 'New tab', title: 'New tab', onclick: () => this.create() }, '＋');
+    this.mount.classList.add('tab-strip');   // (every panel's strip looks and stays put the same: app.css)
     this.mount.replaceChildren(h('div', { class: 'tabstrip' }, this.row, this.plus, this.state));
 
     onServer('store', (m) => this.onStore(m));

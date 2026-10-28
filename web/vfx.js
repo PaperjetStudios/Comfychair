@@ -1050,9 +1050,9 @@ export function wireVfx() {
       dump: () => ({ ...T }),
       load(payload) { T = { ...BLANK(), ...payload }; UI.srcInfo = null; UI.draw = null; UI.cmp = null; render(); },
     } });
-  maximizable($('#tab-vfx .stage'), $('#tab-vfx .viewer'), { onChange: () => sizeOverlay() });
+  const max = maximizable($('#tab-vfx .stage'), $('#tab-vfx .viewer'), { onChange: () => sizeOverlay() });
   addEventListener('resize', () => { if ($('#tab-vfx').classList.contains('active')) { sizeOverlay(); layoutCanvas(); } });
-  playKeys(() => $('#tab-vfx').classList.contains('active'), () => vtp);
+  playKeys(() => $('#tab-vfx').classList.contains('active'), () => vtp, () => ({ f: max.toggle }));
   // a result finishing (or failing) redraws its card
   onServer('deck_generation', (m) => { const id = m.data?.id; if (T.results.includes(id)) { setTimeout(render, 0); } });
 }

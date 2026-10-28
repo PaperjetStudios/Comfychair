@@ -1014,15 +1014,15 @@ function openKey(it) {
   };
   const go = button('Key clip', async () => {
     if (k.mode === 'matte' && !k.matte) return toast('Pick a matte clip first', true);
-    go.disabled = true; go.textContent = 'Keying…';
+    go.disabled = true;
     try {
-      const g = await api('/api/video/key', { method: 'POST', body: { source: it.src, mode: k.mode, matte: k.matte, color: k.color,
+      const g = await api('/api/video/key', { method: 'POST', busy: 'Keying…', body: { source: it.src, mode: k.mode, matte: k.matte, color: k.color,
         similarity: k.similarity, blend: k.blend, spill: k.spill, invert: k.invert, project_id: S.project }, timeout: 900000 });
       const o = g.outputs[0], was = { src: it.src, url: it.url, label: it.label };
       Object.assign(it, { src: { generation: g.id, index: 0 }, url: o.url, label: `${it.label} (keyed)` });
       closeSheet(); timelineChanged();
       undoToast('Keyed: lower tracks show through', () => { Object.assign(it, was); timelineChanged(); });
-    } catch (e) { toast('Keying failed: ' + e.message, true); go.disabled = false; go.textContent = 'Key clip'; }
+    } catch (e) { toast('Keying failed: ' + e.message, true); go.disabled = false; }
   }, { cls: 'primary' });
   const sheet = () => [h('h3', {}, 'Key ' + it.label),
     help('Makes a copy of the clip with see-through parts and puts it in this clip\'s place (sound kept). Put the clip on a track above the background.'),
@@ -1058,15 +1058,16 @@ async function timelineBody(btn) {
 
 async function exportVideo(btn) {
   vidPause();
-  btn.disabled = true; btn.textContent = 'Rendering…';
+  const label = btn.textContent;   // (3D scene clips show their render progress on it)
+  btn.disabled = true;
   try {
     const body = await timelineBody(btn);
-    btn.textContent = 'Rendering…';
-    const g = await api('/api/video/render', { method: 'POST', body });
+    btn.textContent = label;
+    const g = await api('/api/video/render', { method: 'POST', body, busy: 'Rendering…' });
     S.history.set(g.id, g);
     openGeneration(g.id);
   } catch (e) { toast('Export failed: ' + e.message, true); }
-  finally { btn.disabled = false; btn.textContent = 'Export video'; }
+  finally { btn.disabled = false; btn.textContent = label; }
 }
 
 // The timeline as an EffectCraft comp: a layer per clip, stacked by track, with its timing, framing and fades
