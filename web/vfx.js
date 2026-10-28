@@ -761,7 +761,7 @@ async function openInGenerate() {
 }
 
 async function runKey(e) {
-  const body = { source: bare(T.source), mode: e.id === 'colorkey' ? 'color' : 'matte', project_id: S.project };
+  const body = { source: bare(T.source), trim: T.source.trim || null, mode: e.id === 'colorkey' ? 'color' : 'matte', project_id: S.project };
   if (e.id === 'colorkey') Object.assign(body, T.key);
   else Object.assign(body, { matte: bare(T.matte), invert: T.key.invert });
   try {

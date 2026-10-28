@@ -546,7 +546,7 @@ export function openGeneration(id) {
   ] : isScene ? [
     button('Open in 3D', async () => { closeSheet(); switchTab('scene'); (await sceneModule()).open(g.params.scene, g.id); }, primary),
     button('Use in H3 control', () => { closeSheet(); useControlVideo(g, g.params.scene || {}); }),
-  ] : isEdit ? [] : [
+  ] : isEdit || !S.templates.some((t) => t.id === g.template) ? [] : [   // key, matte, imports…: no template to run again
     button('Replay & edit', () => { reuse(g); closeSheet(); }, primary),
     button('Run again', () => runAgain(g)),
   ];
