@@ -18,7 +18,7 @@ import { openCompare } from './compare.js';
 // Videos play (muted) while on screen; sounds show their waveform.
 // ---------------------------------------------------------------------------
 export const B = { filter: store.get('deck.board.filter', 'all'), size: store.get('deck.board.size', 240), loadedFor: undefined,
-  selecting: false, sel: new Set(), longPressed: false,   // sel: "<generation id>:<output index>"
+  selecting: false, sel: new Set(), longPressed: false, boxDrag: store.get('deck.board.boxDrag', false),   // sel: "<generation id>:<output index>"
   marked: new Set(store.get('deck.board.marked', [])) };  // generation ids marked for deletion
 const boardVideos = new IntersectionObserver((entries) => {
   for (const e of entries) {
@@ -179,8 +179,9 @@ function openSoundSheet(g, i) {
 }
 
 // ---- board selection: pick tiles, then make a new edit from them, put them on the timeline, or delete
-// Box select: drag across the board to select the tiles under the box. A mouse drag starts it in select mode;
-// a finger (or pen) starts it with a long press and keeps going without lifting (then the page doesn't scroll).
+// Box select: drag across the board to select the tiles under the box. In select mode a mouse or pen drag starts it
+// (a pen doesn't scroll the board then), and so does a finger with Drag to select on; otherwise a finger starts it
+// with a long press and keeps going without lifting (then the page doesn't scroll).
 const BOX = { on: false, x0: 0, y0: 0, base: null, el: null, id: null, sc: null, raf: 0, last: null };
 function boxStart(e) {
   const sc = document.getElementById('tab-board');
@@ -219,20 +220,25 @@ function boxEnd() {
 function wireBoxSelect() {
   const board = document.getElementById('board');
   let down = null;
+  let touches = 0;   // (fingers on the board: two scroll, even with Drag to select on)
   board.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'touch' && ++touches > 1) { down = null; return; }
     down = e.button === 0 || e.pointerType !== 'mouse' ? { x: e.clientX, y: e.clientY, id: e.pointerId, type: e.pointerType, t: Date.now() } : null;
   });
   window.addEventListener('pointermove', (e) => {
     if (BOX.on) { if (e.pointerId === BOX.id) boxMove(e); return; }
     if (!down || e.pointerId !== down.id || Math.hypot(e.clientX - down.x, e.clientY - down.y) < 12) return;
-    // a mouse drag in select mode, or any drag right after a long press
-    if ((down.type === 'mouse' && B.selecting) || B.longPressed) boxStart({ clientX: down.x, clientY: down.y, pointerId: e.pointerId }), boxMove(e);
+    // a mouse or pen drag in select mode (a finger too with Drag to select on), or any drag right after a long press
+    if ((B.selecting && (down.type !== 'touch' || B.boxDrag)) || B.longPressed) boxStart({ clientX: down.x, clientY: down.y, pointerId: e.pointerId }), boxMove(e);
     else down = null;   // a finger that moves before the long press is scrolling
   });
-  const up = () => { down = null; boxEnd(); };
+  const up = (e) => { if (e.pointerType === 'touch') touches = Math.max(0, touches - 1); down = null; boxEnd(); };
   window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
-  // while box-selecting with a finger, the page mustn't scroll under it
-  document.addEventListener('touchmove', (e) => { if (BOX.on) e.preventDefault(); }, { passive: false });
+  // while box-selecting with a finger, the page mustn't scroll under it; in select mode a pen (or a finger with Drag
+  // to select on) never scrolls it, so its drag is a box from the start (the first move is stopped, not the tap)
+  document.addEventListener('touchmove', (e) => {
+    if (BOX.on || (B.selecting && e.target.closest?.('#board') && ((B.boxDrag && e.touches.length === 1) || [...e.touches].some((t) => t.touchType === 'stylus')))) e.preventDefault();
+  }, { passive: false });
 }
 
 function setBoardSelecting(on) {
@@ -258,6 +264,8 @@ function boardSelBar() {
   const visibleKeys = () => [...$('#board').querySelectorAll('.tile[data-key]')].map((t) => t.dataset.key);
   return h('div', { class: 'board-sel' },
     h('b', {}, n ? `${n} selected` : 'Tap tiles to select'),
+    button('Drag to select', () => { B.boxDrag = !B.boxDrag; store.set('deck.board.boxDrag', B.boxDrag); renderBoard(); },
+      { cls: 'small' + (B.boxDrag ? ' on' : ''), title: 'On: a finger dragged across the board selects the tiles under it (scroll with two fingers or the scroll bar). A pen always does.' }),
     button('All', () => { visibleKeys().forEach((k) => B.sel.add(k)); renderBoard(); }),
     n ? button('None', () => { B.sel.clear(); renderBoard(); }) : null,
     button(`New edit${images ? ` (${images})` : ''}`, boardToEditor, { cls: 'small primary', disabled: !images }),
