@@ -1,7 +1,7 @@
 """Write the Sound tab's music template (templates/deck-ace-music.json). Sound effects come from
 dev/make_ltx_templates.py (deck-ltx-t2a).
 
-Run: python3 dev/make_sound_templates.py   (then ↻ templates in ComfyDeck)
+Run: python3 dev/make_sound_templates.py   (then ↻ templates in ComfyChair)
 
 ACE-Step 1.5 turbo, after ComfyUI's own example (audio_ace_step_1_5_checkpoint): the all-in-one checkpoint
 (Comfy-Org/ace_step_1.5_ComfyUI_files, checkpoints/ace_step_1.5_turbo_aio.safetensors, 9.3 GB), AuraFlow shift 3,

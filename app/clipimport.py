@@ -66,7 +66,7 @@ def _roots() -> list[Path]:
 def _inside_roots(path: str) -> Path:
     p = Path(path).expanduser().resolve()
     if not any(p == r or p.is_relative_to(r) for r in _roots()):
-        raise HTTPException(403, "That folder isn't one ComfyDeck may read (see DECK_CLIP_ROOTS)")
+        raise HTTPException(403, "That folder isn't one ComfyChair may read (see DECK_CLIP_ROOTS)")
     return p
 
 
@@ -528,7 +528,7 @@ async def browse(path: str = ""):
     try:
         entries = sorted(p.iterdir(), key=lambda e: e.name.lower())
     except PermissionError:
-        raise HTTPException(403, "ComfyDeck can't read that folder")
+        raise HTTPException(403, "ComfyChair can't read that folder")
     for e in entries:
         if e.name.startswith("."):
             continue

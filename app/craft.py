@@ -1,4 +1,4 @@
-"""Open ComfyDeck work in PhotoCraft and EffectCraft with its layers and tracks, and bring the result back.
+"""Open ComfyChair work in PhotoCraft and EffectCraft with its layers and tracks, and bring the result back.
 
   POST /api/craft/photo        an Editor edit: {project_id, title, canvas: {w, h, bg}, layers: [{src, crop, rect,
                                hidden, name}]} (bottom layer first; crop in fractions of the image, rect in canvas px)
@@ -228,7 +228,7 @@ def new_doc(kind: str, project_id, title: str) -> tuple[str, Path]:
     folder = craft_dir() / cid
     (folder / "footage").mkdir(parents=True)
     _save_meta(folder, {"id": cid, "kind": kind, "app": "photocraft" if kind in ("photo", "image") else "effectcraft",
-                        "project_id": project_id, "title": str(title or "ComfyDeck edit")[:120], "created": time.time(),
+                        "project_id": project_id, "title": str(title or "ComfyChair edit")[:120], "created": time.time(),
                         "back": []})
     return cid, folder
 

@@ -1,7 +1,7 @@
-"""ComfyDeck: save generated or captured human motion where ComfyDeck finds it.
+"""ComfyChair: save generated or captured human motion where ComfyChair finds it.
 
 Deck Save Motion takes HY-Motion's motion data (ComfyUI-HY-Motion1) and writes the first 22 joints per frame
-as a JSON file in the output folder, listed as a node output, so ComfyDeck's 3D tab can put it on a figure
+as a JSON file in the output folder, listed as a node output, so ComfyChair's 3D tab can put it on a figure
 (app/motion.py reads it). HY-Motion's own Save NPZ writes a file but doesn't list it as an output.
 Deck Save Body Motion does the same for a person in a video, from SAM 3D Body's pose data (video mocap).
 """
@@ -21,7 +21,7 @@ class DeckSaveMotion:
     RETURN_TYPES = ()
     FUNCTION = "save"
     OUTPUT_NODE = True
-    CATEGORY = "ComfyDeck"
+    CATEGORY = "ComfyChair"
 
     def save(self, motion_data, filename_prefix):
         k3d = motion_data.output_dict["keypoints3d"]
@@ -101,7 +101,7 @@ class DeckSaveBodyMotion:
     RETURN_TYPES = ()
     FUNCTION = "save"
     OUTPUT_NODE = True
-    CATEGORY = "ComfyDeck"
+    CATEGORY = "ComfyChair"
 
     def save(self, mhr_pose_data, fps, person, filename_prefix):
         frames = body_frames(mhr_pose_data, int(person))

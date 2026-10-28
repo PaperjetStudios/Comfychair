@@ -134,7 +134,7 @@ export async function api(path, { method = 'GET', body, form, timeout = form ? 3
     r = form ? await xhrSend(path, method, form, ctl.signal, b) : await fetch(path, opts);
     text = await r.text();
   } catch (e) {
-    throw new Error(e.name === 'AbortError' ? 'ComfyDeck didn\'t answer in time (is the server running?)' : 'Can\'t reach ComfyDeck (is the server running and on this network?)');
+    throw new Error(e.name === 'AbortError' ? 'ComfyChair didn\'t answer in time (is the server running?)' : 'Can\'t reach ComfyChair (is the server running and on this network?)');
   } finally { clearTimeout(timer); b?.done(); }
   let data; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
   if (!r.ok) {

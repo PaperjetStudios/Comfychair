@@ -1,6 +1,6 @@
 """Write the VFX tab's LTX-2.5 templates (templates/deck-ltx-*.json) from shared pieces.
 
-Run: python3 dev/make_ltx_templates.py   (then ↻ templates in ComfyDeck)
+Run: python3 dev/make_ltx_templates.py   (then ↻ templates in ComfyChair)
 
 The graphs follow Lightricks' ComfyUI-LTXVideo 2.5 examples (distilled, single stage, 8 sigmas, CFG 1) with
 the int8 transformer and text encoder, tiled decode tuned for 12 GB, and @-titled fields named the way the

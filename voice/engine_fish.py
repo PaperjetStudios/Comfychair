@@ -6,7 +6,7 @@ voices without a transcript can't be used here (Listen fills it in).
     python engine_fish.py '<json>'   {"lines": [{"text", "ref": wav, "ref_text", "out": wav, "delivery"}]}
 
 Same protocol as worker.py: "@progress p label" lines, then one JSON line {"ok": true, "lines": [{"out", "seconds"}]}.
-Runs with ComfyDeck's own Python (it only needs httpx); s2.cpp runs as a local server for the whole dialogue, so the
+Runs with ComfyChair's own Python (it only needs httpx); s2.cpp runs as a local server for the whole dialogue, so the
 model loads once. DECK_FISH_S2: the folder with s2.cpp/build/s2 and models/s2/ (s2-pro-q8_0.gguf, tokenizer.json).
 """
 import json

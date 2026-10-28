@@ -1,7 +1,7 @@
-"""ComfyDeck: TAPNext++ point tracking as a ComfyUI node.
+"""ComfyChair: TAPNext++ point tracking as a ComfyUI node.
 
 Deck TAPNext++ Track takes a video (IMAGE batch) and points to follow (JSON, pixels, each with the frame
-it is picked on), or a grid, and writes the tracks as a JSON file in the output folder (ComfyDeck's
+it is picked on), or a grid, and writes the tracks as a JSON file in the output folder (ComfyChair's
 motion tracking reads it). Points picked on a later frame are tracked forwards and backwards from there.
 
 The checkpoint (tapnextpp_ckpt.pt, Apache 2.0, google-deepmind/tapnet) goes in models/tapnet/ next to
@@ -91,7 +91,7 @@ class DeckTAPNextTrack:
     RETURN_NAMES = ("tracks",)
     FUNCTION = "track"
     OUTPUT_NODE = True
-    CATEGORY = "ComfyDeck"
+    CATEGORY = "ComfyChair"
 
     def track(self, images, checkpoint, points, grid, filename_prefix):
         frames = (images.clamp(0, 1).cpu().numpy() * 255).astype(np.uint8)

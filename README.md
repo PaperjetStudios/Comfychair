@@ -1,10 +1,10 @@
-# ComfyDeck
+# ComfyChair
 
-A touch-first front end for ComfyUI. ComfyUI runs headless on your Linux box; ComfyDeck serves a
+A touch-first front end for ComfyUI. ComfyUI runs headless on your Linux box; ComfyChair serves a
 tablet-friendly page on your LAN and drives ComfyUI through its API.
 
 ```
-tablet ──http/ws──▶ ComfyDeck :8190 ──http/ws──▶ ComfyUI :8188 (can stay on 127.0.0.1)
+tablet ──http/ws──▶ ComfyChair :8190 ──http/ws──▶ ComfyUI :8188 (can stay on 127.0.0.1)
 ```
 
 **v1 (this scaffold):** template system, generate screen with live (animated) sampler previews,
@@ -49,10 +49,10 @@ cd ~/comfydeck
 
 Open `http://<linux-box-ip>:8190` on the tablet, then "Add to Home screen" for fullscreen.
 
-ComfyUI no longer needs `--listen`: ComfyDeck proxies everything, so ComfyUI can stay on
+ComfyUI no longer needs `--listen`: ComfyChair proxies everything, so ComfyUI can stay on
 localhost. Keep `--listen` if you still want the normal ComfyUI UI from other machines.
 
-**Previews:** ComfyDeck asks ComfyUI for live previews on every run, so no launch flag is needed.
+**Previews:** ComfyChair asks ComfyUI for live previews on every run, so no launch flag is needed.
 Images use TAESD when a decoder for the model is in `models/vae_approx` (`taef2_decoder` for
 Flux2/MOSS/Klein, `taeh3-comfy` for MiniMax H3), otherwise latent2rgb. Video runs default to
 VideoHelperSuite's animated preview (low-res, shows motion); **Advanced → Live preview** switches
@@ -61,7 +61,7 @@ Krea2 (Wan latent) and Qwen Image 2.1 (RGBA TAE) currently crash ComfyUI's TAESD
 don't put `lighttaew2_1` or `taeqi2_1_decoder` in `vae_approx`.
 
 **Run on boot (terminal-only mode):** `deploy/` has the systemd units. The "ComfyUI" GRUB entry
-boots `comfyui.target`: no desktop, ComfyUI plus ComfyDeck. Install or update them with:
+boots `comfyui.target`: no desktop, ComfyUI plus ComfyChair. Install or update them with:
 
 ```bash
 sudo bash deploy/install-services.sh        # backs up the old units, installs, reloads systemd
@@ -72,12 +72,12 @@ Before starting, ComfyUI waits up to 90 s for the drive(s) its extra model folde
 the `base_path`s in `extra_model_paths.yaml` and matches them to `/etc/fstab`, so moving the models
 again needs no change here. It retries the mount, then starts anyway, so a missing drive only costs
 you the models on it. The models are on NTFS (`/mnt/data`): if Windows ever runs on that disk, turn
-off Fast Startup there, or ntfs-3g can refuse to mount it. ComfyDeck reconnects to ComfyUI on
+off Fast Startup there, or ntfs-3g can refuse to mount it. ComfyChair reconnects to ComfyUI on
 its own, so the start order between them doesn't matter.
 
 **HTTPS (optional, recommended):** over HTTPS the tablet can use the real screen wake-lock, show
-"done" notifications, and install ComfyDeck as an app (with an offline page when the box is off).
-Over plain http ComfyDeck keeps the screen on during runs with a tiny silent video instead, and
+"done" notifications, and install ComfyChair as an app (with an offline page when the box is off).
+Over plain http ComfyChair keeps the screen on during runs with a tiny silent video instead, and
 signals a finished run with a chime and a ✓ in the tab title. To make a certificate with openssl:
 
 ```bash
@@ -102,7 +102,7 @@ limit), and only that piece is saved, as h264 + aac in `data/media`.
   3 days, leftovers after 1 h, and the least recently used first once the folder passes 4 GB.
 - *Link*: anything [yt-dlp](https://github.com/yt-dlp/yt-dlp) reads. `./run.sh` installs it into the venv;
   keep it current (`.venv/bin/pip install -U yt-dlp`), because sites change often. The preview is a small
-  stream relayed through ComfyDeck while a small whole-video copy downloads (a few seconds for a 10-minute
+  stream relayed through ComfyChair while a small whole-video copy downloads (a few seconds for a 10-minute
   video); once it's in, the player switches to it and seeking is instant. The cut seeks into the full-quality stream, so only the chosen part is
   downloaded. Sites that only stream in pieces (HLS) get a small preview copy first (videos up to 20 min).
 - *This PC*: browses your home folder and mounted drives. Set `DECK_CLIP_ROOTS` (paths joined with `:`)
@@ -145,7 +145,7 @@ still lists; it fails when run. You only need the files of the templates you use
 | [Veda-on-ComfyUI](https://github.com/veda-sparse/Veda-on-ComfyUI) | optional Veda sparse attention for H3 (Advanced) |
 | `comfy_nodes/deck_*` (this repo) | face crop, pose smoothing, motion save, TAPNext++: symlink each into `custom_nodes` |
 
-Three packs carry local fixes, each marked `(ComfyDeck patch)`; an update or reinstall drops them, so grep for the
+Three packs carry local fixes, each marked `(ComfyChair patch)`; an update or reinstall drops them, so grep for the
 marker afterwards and re-apply:
 - **comfy_env** (in ComfyUI's venv, used by ComfyUI-SAM3), `isolation/workers/{_persistent_worker.py,_ipc_shared.py,_ipc_parent.py}`:
   sends empty arrays and tensors over the IPC. Without it SAM3 fails with "cannot mmap an empty file".
@@ -363,7 +363,7 @@ To install:
    `extra_model_paths.yaml` count too, for example `/mnt/data/ComfyUI/models/tapnet/`.
 3. Restart ComfyUI.
 
-The Track motion sheet then offers **Tracker: TAPNext++**. ComfyDeck cuts the clip to about 640 px wide
+The Track motion sheet then offers **Tracker: TAPNext++**. ComfyChair cuts the clip to about 640 px wide
 and queues it on ComfyUI, so it waits behind any running generation. A 20×20 grid of points (inside the
 track box, outside the ignore box) is followed through every frame. The camera is fitted to those tracks
 the same way as with Simple tracking.
@@ -629,7 +629,7 @@ copy goes to `output/comfydeck/<project name>/`. Generations made without a proj
 `Unsorted/`. Older installs that used `data/generations/<id>/` are moved over on startup.
 
 When ComfyUI's folder is on the same machine (`../ComfyUI` by default, or `DECK_COMFY_DIR`),
-deleting a generation also deletes ComfyUI's copy (only if it's the same size as ComfyDeck's), and
+deleting a generation also deletes ComfyUI's copy (only if it's the same size as ComfyChair's), and
 one-off crop files unused for 30 days are cleared from its input folder. `DECK_COMFY_DIR=""` turns
 that off.
 
@@ -643,12 +643,12 @@ shows that project's own images and generations first.
 COMFY_URL=http://127.0.0.1:8199 DECK_DATA=/tmp/deckdev ./run.sh
 ```
 
-The mock can run beside the real ComfyDeck: use another port and data folder (e.g.
+The mock can run beside the real ComfyChair: use another port and data folder (e.g.
 `--port 8191`, `DECK_DATA=/tmp/deckdev`) and nothing touches the live one.
 
 ### Debugging the websocket
 
-The ⋯ button shows message counts plus any messages ComfyDeck doesn't handle. Use it to see
+The ⋯ button shows message counts plus any messages ComfyChair doesn't handle. Use it to see
 what a custom node sends. Binary previews are decoded by finding the JPEG/PNG/WebP header in
 the payload, so differently framed preview messages still work.
 

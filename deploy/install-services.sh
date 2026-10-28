@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install the boot services: the "ComfyUI" GRUB entry (systemd.unit=comfyui.target) then starts
-# ComfyUI and ComfyDeck with no desktop. Run with:  sudo bash deploy/install-services.sh
+# ComfyUI and ComfyChair with no desktop. Run with:  sudo bash deploy/install-services.sh
 set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "Run this with sudo."; exit 1; }
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

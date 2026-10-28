@@ -1,4 +1,4 @@
-"""ComfyDeck's voice worker: runs in its own venv (DECK_VOICE_PY, default ~/Programs/comfydeck-voice/.venv),
+"""ComfyChair's voice worker: runs in its own venv (DECK_VOICE_PY, default ~/Programs/comfydeck-voice/.venv),
 so its torch and models never touch ComfyUI's. app/voice.py starts one run per job:
 
     python worker.py '<json>'      (prints progress lines "@progress 0.42 label", then one JSON result line)

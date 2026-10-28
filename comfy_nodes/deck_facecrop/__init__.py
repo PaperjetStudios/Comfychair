@@ -1,4 +1,4 @@
-"""ComfyDeck: follow a face through a clip, crop it square, and put a re-rendered crop back.
+"""ComfyChair: follow a face through a clip, crop it square, and put a re-rendered crop back.
 
 Deck Face Crop takes the clip and a mask that marks the face on each frame (DWPose face points are enough: only
 their extent is used). Frames without a face hold or interpolate the box of their neighbours, the square has one
@@ -89,7 +89,7 @@ class DeckFaceCrop:
     RETURN_TYPES = ("IMAGE", "DECK_CROP")
     RETURN_NAMES = ("crops", "crop_info")
     FUNCTION = "crop"
-    CATEGORY = "ComfyDeck"
+    CATEGORY = "ComfyChair"
 
     def crop(self, images, mask, scale, size, smooth):
         n, H, W, _ = images.shape
@@ -137,7 +137,7 @@ class DeckFaceUncrop:
 
     RETURN_TYPES = ("IMAGE",)
     FUNCTION = "uncrop"
-    CATEGORY = "ComfyDeck"
+    CATEGORY = "ComfyChair"
 
     def uncrop(self, images, crops, crop_info, feather, shape="face", grow=1.05, chin=0.82):
         side, pad = crop_info["side"], crop_info["side"]

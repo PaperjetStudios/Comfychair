@@ -1,4 +1,4 @@
-// Import a clip: cut a piece out of an online video (a link), a video file on the PC running ComfyDeck, or
+// Import a clip: cut a piece out of an online video (a link), a video file on the PC running ComfyChair, or
 // a file on this device, and save it to the media library (every video picker offers it). The piece is
 // chosen with the same player/trim/crop widget as a template's video field (vfield.js), plus marks for
 // long videos. Links and PC files are cut by the server (app/clipimport.py). Device files are cut here
@@ -188,7 +188,7 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
     const paste = button('Paste', async () => {
       if (!(navigator.clipboard?.readText && await fromClipboard(false))) {
         url.focus(); url.select();
-        toast('Long-press the box and choose Paste (one-tap paste needs ComfyDeck on HTTPS)');
+        toast('Long-press the box and choose Paste (one-tap paste needs ComfyChair on HTTPS)');
       }
     }, { cls: 'small' });
     body.replaceChildren(h('div', { class: 'row clip-url' }, url, paste, button('Load', load, { cls: 'small primary' })), out);

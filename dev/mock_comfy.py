@@ -1,4 +1,4 @@
-"""A fake ComfyUI for working on ComfyDeck's UI without a GPU.
+"""A fake ComfyUI for working on ComfyChair's UI without a GPU.
 
     python dev/mock_comfy.py --port 8199 [--animated]
     COMFY_URL=http://127.0.0.1:8199 ./run.sh
@@ -161,7 +161,7 @@ async def object_info():
 
 
 @app.get("/object_info/{name}")
-async def object_info_one(name: str):  # ComfyDeck lists input images through /object_info/LoadImage
+async def object_info_one(name: str):  # ComfyChair lists input images through /object_info/LoadImage
     return {name: OBJECT_INFO[name]} if name in OBJECT_INFO else {}
 
 

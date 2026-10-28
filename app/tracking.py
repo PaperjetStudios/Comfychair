@@ -49,7 +49,7 @@ def _libs():
         import cv2
         import numpy as np
     except ImportError:
-        raise MissingDeps("Motion tracking needs numpy and OpenCV: run `pip install numpy opencv-python-headless` in ComfyDeck's environment, then restart it.")
+        raise MissingDeps("Motion tracking needs numpy and OpenCV: run `pip install numpy opencv-python-headless` in ComfyChair's environment, then restart it.")
     return cv2, np
 
 

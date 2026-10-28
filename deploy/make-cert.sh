@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Make a local HTTPS certificate for ComfyDeck with plain openssl (no mkcert needed).
+# Make a local HTTPS certificate for ComfyChair with plain openssl (no mkcert needed).
 #
 # HTTPS lets the tablet keep the screen on during runs (Wake Lock), show "done" notifications and
-# install ComfyDeck as a proper app. It creates, in certs/:
+# install ComfyChair as a proper app. It creates, in certs/:
 #   comfydeck-ca.crt   a private certificate authority: install this ONE file on each tablet
 #   deck.pem, deck-key.pem   the server certificate for this box's IPs and hostname
 #
@@ -14,7 +14,7 @@ cd certs
 
 if [ ! -f comfydeck-ca.key ]; then
   openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -sha256 \
-    -keyout comfydeck-ca.key -out comfydeck-ca.crt -subj "/CN=ComfyDeck local CA" \
+    -keyout comfydeck-ca.key -out comfydeck-ca.crt -subj "/CN=ComfyChair local CA" \
     -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
   chmod 600 comfydeck-ca.key
   echo "Made a new local CA: certs/comfydeck-ca.crt"
@@ -43,7 +43,7 @@ Next:
     iPad:    open it, Settings > General > VPN & Device Management > install it, then
              Settings > General > About > Certificate Trust Settings > switch it on.
     Android: Settings > Security > Encryption & credentials > Install a certificate > CA certificate.
- 2. Start ComfyDeck with HTTPS:
+ 2. Start ComfyChair with HTTPS:
       SSL_CERT=certs/deck.pem SSL_KEY=certs/deck-key.pem ./run.sh
     or for the service, add to deploy/comfydeck.service under [Service]:
       Environment=SSL_CERT=/home/kb/Programs/comfydeck/certs/deck.pem

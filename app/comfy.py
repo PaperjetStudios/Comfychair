@@ -123,7 +123,7 @@ class Comfy:
                 self._ws = None
 
     async def _check_listening(self, since: float):
-        """ComfyUI forgets a client id when any socket using it closes (e.g. a second ComfyDeck run on
+        """ComfyUI forgets a client id when any socket using it closes (e.g. a second ComfyChair run on
         the same data dir), leaving ours open and answering pings but sent nothing: no progress, no
         previews. Queueing always broadcasts a status message, so if none arrives, reconnect."""
         await asyncio.sleep(5)

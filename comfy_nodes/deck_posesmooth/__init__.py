@@ -1,4 +1,4 @@
-"""ComfyDeck: steady DWPose over a clip.
+"""ComfyChair: steady DWPose over a clip.
 
 Deck Pose Smooth takes DWPose's keypoints (the POSE_KEYPOINT output of the DWPose Estimator in
 comfyui_controlnet_aux) or SDPose's (SDPose Keypoint Extractor; points under Min score count as not found), steadies them over the whole clip (smooth.py: people followed from frame to frame,
@@ -51,7 +51,7 @@ class DeckPoseSmooth:
 
     RETURN_TYPES = ("IMAGE", "POSE_KEYPOINT")
     FUNCTION = "run"
-    CATEGORY = "ComfyDeck"
+    CATEGORY = "ComfyChair"
 
     def run(self, pose_keypoint, image, smoothing, max_gap, draw_hands, draw_face, min_score=0.3):
         from custom_controlnet_aux.dwpose import decode_json_as_poses, draw_poses   # comfyui_controlnet_aux

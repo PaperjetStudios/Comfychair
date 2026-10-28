@@ -1,4 +1,4 @@
-"""ComfyDeck server: a touch-first front end that drives ComfyUI through its API."""
+"""ComfyChair server: a touch-first front end that drives ComfyUI through its API."""
 import asyncio
 import hashlib
 import json
@@ -246,7 +246,7 @@ async def finalize(pid: str):
 
 
 async def reconcile_loop():
-    """Safety net for missed websocket events (e.g. ComfyDeck restarted mid-run). A run that ComfyUI
+    """Safety net for missed websocket events (e.g. ComfyChair restarted mid-run). A run that ComfyUI
     has neither queued nor finished was lost (ComfyUI restarted mid-run), so it's marked interrupted
     instead of showing as running forever."""
     lost_since: dict[str, float] = {}
@@ -282,7 +282,7 @@ async def reconcile_loop():
 def comfy_copy(g: dict, o: dict, ours: Path) -> Path | None:
     """ComfyUI's own copy of an output (in its output folder), if it's on this machine. Newer outputs
     record where it is; for older ones it's looked up by name. Either way it only counts if it's
-    the same size as ComfyDeck's copy, so a different file that happens to share the name is kept."""
+    the same size as ComfyChair's copy, so a different file that happens to share the name is kept."""
     out = config.COMFY_OUTPUT_DIR
     if not out or not ours.is_file():
         return None
@@ -340,20 +340,20 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(audioedit.prune)
     for g in db.pending_generations():  # Video-tab renders run inside a request: a restart ends them
         if g["prompt_id"].startswith("edit-"):
-            db.update_generation(g["id"], status="error", error="ComfyDeck restarted during the render", finished=time.time())
+            db.update_generation(g["id"], status="error", error="ComfyChair restarted during the render", finished=time.time())
     comfy.listeners.add(on_comfy)
     await comfy.start()
     task = asyncio.create_task(reconcile_loop())
     sweeper = asyncio.create_task(clipimport.sweeper())   # the clip importer's previews and leftovers
     asyncio.create_task(asyncio.to_thread(backfill_durations))
-    log.info("ComfyDeck ready. ComfyUI at %s", config.COMFY_URL)
+    log.info("ComfyChair ready. ComfyUI at %s", config.COMFY_URL)
     yield
     task.cancel()
     sweeper.cancel()
     await comfy.stop()
 
 
-app = FastAPI(title="ComfyDeck", lifespan=lifespan)
+app = FastAPI(title="ComfyChair", lifespan=lifespan)
 store.notify = broadcast  # the JSON document store (tabs, presets, objects...) tells every device when it saves
 projects.notify = broadcast  # project list changes (made, renamed, reordered, copied, deleted)
 projects.comfy_copy = comfy_copy
@@ -393,7 +393,7 @@ class TokenGate:
             return await send({"type": "http.response.body", "body": b""})
         if scope["type"] == "websocket":
             return await send({"type": "websocket.close", "code": 4401})
-        body = b"ComfyDeck needs its access link: open http://<this box>:8190/?token=<DECK_TOKEN> once on this device."
+        body = b"ComfyChair needs its access link: open http://<this box>:8190/?token=<DECK_TOKEN> once on this device."
         await send({"type": "http.response.start", "status": 401, "headers": [(b"content-type", b"text/plain; charset=utf-8")]})
         await send({"type": "http.response.body", "body": body})
 
@@ -645,7 +645,7 @@ async def upload(file: UploadFile = File(...), mp: float = Form(0), multiple: in
 
 
 async def input_bytes(name: str) -> bytes:
-    """An image in ComfyUI's input folder (ComfyDeck's own uploads come from the local copies)."""
+    """An image in ComfyUI's input folder (ComfyChair's own uploads come from the local copies)."""
     sub, _, fname = name.rpartition("/")
     local = config.INPUT_DIR / Path(fname).name
     if sub == config.COMFY_INPUT_SUBFOLDER and local.is_file():
@@ -1463,7 +1463,7 @@ async def jobs():
     for pos, pid in enumerate(order):
         g = db.get_by_prompt(pid)
         if not g:
-            active.append({"prompt_id": pid, "template": "(started outside ComfyDeck)", "status": "running" if pos == 0 and q.get("queue_running") else "queued"})
+            active.append({"prompt_id": pid, "template": "(started outside ComfyChair)", "status": "running" if pos == 0 and q.get("queue_running") else "queued"})
             continue
         running = g["status"] == "running" or (pos == 0 and bool(q.get("queue_running")))
         active.append({**g, "status": "running" if running else "queued", "position": pos,
@@ -1517,7 +1517,7 @@ async def pin_generation(gid: int, body: dict = Body(default={})):
 @app.get("/api/inputs")
 async def list_inputs(project_id: str = ""):
     """{"project": inputs made for this project (newest first, with when), "all": every input image}.
-    ComfyUI's own list skips subfolders, so ComfyDeck's uploads come from the local copies."""
+    ComfyUI's own list skips subfolders, so ComfyChair's uploads come from the local copies."""
     names = await comfy.input_images()
     prefix = config.COMFY_INPUT_SUBFOLDER + "/"
     local = sorted((p for p in config.INPUT_DIR.iterdir() if p.is_file()), key=lambda p: p.stat().st_mtime, reverse=True)

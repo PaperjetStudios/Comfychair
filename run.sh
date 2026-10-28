@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Start ComfyDeck. First run creates a virtualenv and installs dependencies.
+# Start ComfyChair. First run creates a virtualenv and installs dependencies.
 #
 #   COMFY_URL=http://127.0.0.1:8188   where ComfyUI is running (default)
-#   DECK_HOST=0.0.0.0 DECK_PORT=8190  where ComfyDeck listens (default: all interfaces, 8190)
+#   DECK_HOST=0.0.0.0 DECK_PORT=8190  where ComfyChair listens (default: all interfaces, 8190)
 #   SSL_CERT=... SSL_KEY=...          optional HTTPS (enables screen wake-lock + PWA install on tablets)
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -25,5 +25,5 @@ else
 fi
 
 IP=$(hostname -I 2>/dev/null | awk '{print $1}')
-echo "ComfyDeck → ${SCHEME}://${IP:-localhost}:${PORT}   (ComfyUI: ${COMFY_URL:-http://127.0.0.1:8188})"
+echo "ComfyChair → ${SCHEME}://${IP:-localhost}:${PORT}   (ComfyUI: ${COMFY_URL:-http://127.0.0.1:8188})"
 exec .venv/bin/uvicorn app.main:app --host "$HOST" --port "$PORT" "${ARGS[@]}"

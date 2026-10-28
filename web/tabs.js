@@ -291,7 +291,7 @@ export class TabSet {
   // PUT a new document; if the id already exists (two devices seeding at once) use the server's copy
   async create1({ id = uid() + uid(), name, payload, order }) {
     const r = await this.put(id, { rev: 0, name, payload, ...(order != null ? { order } : {}) });
-    if (r.net) throw new Error('Can\'t reach ComfyDeck (is the server running and on this network?)');
+    if (r.net) throw new Error('Can\'t reach ComfyChair (is the server running and on this network?)');
     if (r.ok) { this.upsert(r.data); return r.data; }
     if (r.status === 409 && r.data?.doc) { this.upsert(r.data.doc); return r.data.doc; }
     throw new Error(r.data?.detail || `Couldn't create the tab (${r.status})`);

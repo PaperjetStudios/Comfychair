@@ -1,4 +1,4 @@
-// ComfyDeck tablet UI. Plain ES modules, no build step. This is the entry point: projects, tab switching and
+// ComfyChair tablet UI. Plain ES modules, no build step. This is the entry point: projects, tab switching and
 // wiring. The panels live in generate.js (templates, prompt, saved settings, preview, zoom), run.js (websocket,
 // history, the queue), editor.js (+ sketch pad), video.js (timeline), vfx.js (VFX effects), board.js (board + gallery); media.js has
 // the pickers and core.js the shared state. The 3D tab (scene.js) loads on demand.

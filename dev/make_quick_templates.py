@@ -1,7 +1,7 @@
 """Write the VFX tab's Quick templates: a depth map of a picture or a clip (Video Depth Anything,
 ComfyUI-Video-Depth-Anything). Remove watermark has no template: app/delogo.py builds its workflow.
 
-Run: python3 dev/make_quick_templates.py   (then ↻ templates in ComfyDeck)
+Run: python3 dev/make_quick_templates.py   (then ↻ templates in ComfyChair)
 
 Shares the graph helpers of make_ltx_templates.py. Field titles follow web/vfx.js ROLES (README "VFX templates").
 """

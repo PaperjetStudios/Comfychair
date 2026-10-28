@@ -1,4 +1,4 @@
-# ComfyDeck review notes (2026-10-24)
+# ComfyChair review notes (2026-10-24)
 
 A review of the whole codebase from the point of view of "run ComfyUI from a tablet on the LAN",
 and what was done about each point (branch `tablet-fixes`). There was no XSS to fix: the UI never
@@ -35,7 +35,7 @@ Tablet use
   (`web/keepawake.mp4`).
 - **Done signals**: a chime (on runs over 15 s, or when the tab is hidden), vibration, ✓ in the tab
   title, and a system notification over HTTPS (through the service worker on Android).
-- **Connection banner**: tells "can't reach ComfyDeck" apart from "ComfyUI not connected". `api()`
+- **Connection banner**: tells "can't reach ComfyChair" apart from "ComfyUI not connected". `api()`
   times out (30 s by default, longer for uploads, generate and LoRA lookups) with a clear message.
 - **Back gesture** closes the top sheet, sketch pad, box editor or text popup instead of leaving the
   app. Sketch and boxes ask before discarding changes, and leaving the page with a drawing warns.
@@ -76,11 +76,11 @@ Server and setup
 Housekeeping (second pass)
 - **Deleting a generation also deletes ComfyUI's copy** in `ComfyUI/output/`. New outputs record
   where ComfyUI put them; older ones are found by name. Either way the file is only deleted if it's
-  the same size as ComfyDeck's copy, and never outside the output folder.
+  the same size as ComfyChair's copy, and never outside the output folder.
 - **Old crop files are cleared**: `crop_*.png` in `ComfyUI/input/comfydeck/` that haven't been used
   for 30 days are removed at startup. Replaying a cropped run older than that needs the crop redone.
 - **Outputs are streamed to disk** while saving (`comfy.download`) instead of held in memory.
-- ComfyUI's folder defaults to `../ComfyUI` next to ComfyDeck; `DECK_COMFY_DIR` overrides it, and
+- ComfyUI's folder defaults to `../ComfyUI` next to ComfyChair; `DECK_COMFY_DIR` overrides it, and
   `DECK_COMFY_DIR=""` turns this housekeeping off (the test stack runs that way).
 
 ## 3D poser rework (2026-10-25)

@@ -95,7 +95,7 @@ def remove_folder(p: Path | None):
 
 
 def sweep():
-    """Leftovers of a duplicate that was cut off (ComfyDeck stopped mid-copy). Run at startup."""
+    """Leftovers of a duplicate that was cut off (ComfyChair stopped mid-copy). Run at startup."""
     for p in config.PROJECTS_DIR.glob(f"{TMP_PREFIX}*"):
         if p.is_dir() and not p.is_symlink():
             shutil.rmtree(p, ignore_errors=True)

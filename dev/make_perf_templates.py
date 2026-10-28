@@ -1,6 +1,6 @@
 """Write the VFX tab's Performance templates (character replacement, driving a still with a performance).
 
-Run: python3 dev/make_perf_templates.py   (then ↻ templates in ComfyDeck)
+Run: python3 dev/make_perf_templates.py   (then ↻ templates in ComfyChair)
 
 Shares the graph helpers of make_ltx_templates.py. Field titles follow web/vfx.js ROLES (README "VFX templates").
 """

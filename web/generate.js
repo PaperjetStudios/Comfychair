@@ -34,7 +34,7 @@ export async function loadTemplates(refresh = false) {
   fillTemplates();
   if (!S.templates.length) {
     $('#fields').replaceChildren(failed
-      ? note(`Couldn't load templates: ${failed.message}. They load by themselves once ComfyDeck answers.`, 'err')
+      ? note(`Couldn't load templates: ${failed.message}. They load by themselves once ComfyChair answers.`, 'err')
       : note('No templates yet. Export a workflow from ComfyUI with Workflow → Export (API), tag nodes with @, and put it in the templates/ folder.', 'warn'));
     return;
   }

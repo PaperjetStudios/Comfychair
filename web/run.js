@@ -298,18 +298,18 @@ export function onResume() {
   else syncWithServer();
 }
 
-// Two separate things can be down: ComfyDeck itself (no socket) or ComfyUI behind it.
+// Two separate things can be down: ComfyChair itself (no socket) or ComfyUI behind it.
 function setServer(on) { S.serverUp = on; showConn(); }
 export function setConn(on) { S.connected = on; showConn(); }
 function showConn() {
   const server = S.serverUp !== false, comfy = S.connected;
   $('#connDot').classList.toggle('on', server && comfy);
-  $('#connDot').title = !server ? 'Can\'t reach ComfyDeck' : comfy ? 'ComfyUI connected' : 'ComfyUI not connected';
+  $('#connDot').title = !server ? 'Can\'t reach ComfyChair' : comfy ? 'ComfyUI connected' : 'ComfyUI not connected';
   const banner = $('#connBanner');
   // a blip while reconnecting isn't worth a banner; only say something once it lasts
   clearTimeout(showConn.t);
-  const text = !server ? 'Can\'t reach ComfyDeck. Reconnecting… (is the server running and the tablet on the same Wi-Fi?)'
-    : !comfy ? 'ComfyDeck is up, but ComfyUI isn\'t connected. It reconnects by itself once ComfyUI is running.' : '';
+  const text = !server ? 'Can\'t reach ComfyChair. Reconnecting… (is the server running and the tablet on the same Wi-Fi?)'
+    : !comfy ? 'ComfyChair is up, but ComfyUI isn\'t connected. It reconnects by itself once ComfyUI is running.' : '';
   if (!text) { banner.classList.add('hidden'); return; }
   showConn.t = setTimeout(() => { banner.textContent = text; banner.classList.remove('hidden'); }, WS.everOpen || !server ? 2500 : 0);
 }
@@ -321,7 +321,7 @@ export function checkUiVersion(v) {
   if (v == null) return;
   if (uiVersion == null) { uiVersion = v; return; }
   if (v === uiVersion || $('#toast .update-act')) return;
-  toast('ComfyDeck has been updated', false, { label: '↻ Reload', fn: () => location.reload(), stay: true });
+  toast('ComfyChair has been updated', false, { label: '↻ Reload', fn: () => location.reload(), stay: true });
   $('#toast .toast-act')?.classList.add('update-act');
 }
 

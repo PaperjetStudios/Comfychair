@@ -32,7 +32,7 @@ _busy = asyncio.Semaphore(2)
 
 
 def source(url: str) -> Path:
-    """The file behind one of ComfyDeck's /files/ URLs (never outside those folders)."""
+    """The file behind one of ComfyChair's /files/ URLs (never outside those folders)."""
     path = unquote(url.split("?", 1)[0].split("#", 1)[0])
     for prefix, root in ROOTS.items():
         if path.startswith(prefix):

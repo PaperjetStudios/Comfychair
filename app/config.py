@@ -4,8 +4,8 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Where ComfyUI is running. ComfyDeck proxies everything, so ComfyUI itself can stay on
-# 127.0.0.1 (no --listen needed) while the tablet only talks to ComfyDeck.
+# Where ComfyUI is running. ComfyChair proxies everything, so ComfyUI itself can stay on
+# 127.0.0.1 (no --listen needed) while the tablet only talks to ComfyChair.
 COMFY_URL = os.environ.get("COMFY_URL", "http://127.0.0.1:8188").rstrip("/")
 
 # Live previews while sampling: taesd | latent2rgb | auto | none (video runs add VHS animation)
@@ -29,10 +29,10 @@ SCENE_CLIP_DIR = DATA_DIR / "tmp" / "sceneclips"  # 3D compositions rendered for
 # http://<box>:8190/?token=<token> once on each device and a cookie remembers it.
 TOKEN = os.environ.get("DECK_TOKEN", "")
 
-# Subfolder inside ComfyUI's input/ directory that ComfyDeck uploads into.
+# Subfolder inside ComfyUI's input/ directory that ComfyChair uploads into.
 COMFY_INPUT_SUBFOLDER = os.environ.get("DECK_COMFY_SUBFOLDER", "comfydeck")
 
-# ComfyUI's own folder, when it's on this machine (default: a ComfyUI folder next to ComfyDeck's).
+# ComfyUI's own folder, when it's on this machine (default: a ComfyUI folder next to ComfyChair's).
 # Only used for housekeeping: deleting a generation also deletes ComfyUI's copy of its outputs, and
 # old one-off crop files are cleared from its input folder. Set DECK_COMFY_DIR="" to turn that off.
 _comfy_dir = os.environ.get("DECK_COMFY_DIR", str(BASE_DIR.parent / "ComfyUI"))
