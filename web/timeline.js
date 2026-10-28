@@ -76,7 +76,7 @@ export function clipKeys(TL, st, { fps, base, pause, seek, onKeys, live = {} }) 
     prop: (it, ch, t = st.t) => value(it, ch, clipT(it, t), baseOf(it, ch)),
     setProp: (it, ch, v) => setValue(it, ch, clipT(it), v, (x) => { it[ch] = x; }),
     field: (it, label, ch, opts) => keyedRange(label, { item: it, ch, t: () => clipT(it), base: () => baseOf(it, ch),
-      setBase: (v) => { it[ch] = v; }, seek: (ct) => { pause(); seek(it.at + ct - it.in); }, onKeys, ...live, ...opts }),
+      setBase: (v) => { it[ch] = v; }, seek: (ct) => { pause(); seek(it.at + ct - it.in); }, onKeys, def: base[ch], ...live, ...opts }),
     diamonds: (it, pps, tc) => keyTimes(it).filter((f) => f >= it.in - 1e-3 && f <= it.in + TL.len(it) + 1e-3)
       .map((f) => h('span', { class: 'tl-key', style: `left:${(f - it.in) * pps}px`, title: `Key at ${tc(it.at + f - it.in)}` })),
   };

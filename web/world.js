@@ -7,7 +7,7 @@ import { switchTab } from './core.js';
 //   Edit  (Editor, Video, Sound)    where made things are put together in space and time
 //   View  (Board, History)          where everything made is seen and sent on
 // One finger touches things, two move the surface (zoom, pan), three move you: sideways to the space next
-// door, up and down through the tools in this one. The tab follows the fingers and springs into place, and a
+// door, up and down through the tools in this one. The tab follows the fingers, then slides on to the next, and a
 // map shows where you are while you travel. A sideways swipe along the top bar travels too, and Alt + arrows.
 //
 // Swipes stay clear of the tablet's own: a three-finger swipe that starts at a screen edge (where Android's
@@ -61,38 +61,30 @@ function go(si) {
   travelTo(to, { axis: 'x', dir: si > from ? 1 : -1 });
 }
 
-// ---- a spring: x eases to `to` with a little overshoot; v is the speed it starts with (px/s) ----
-function spring(from, to, frame, { k = 240, c = 21, v = 0 } = {}) {
-  return new Promise((done) => {
-    let x = from, t0 = performance.now();
-    const step = (now) => {
-      const dt = Math.min(0.032, (now - t0) / 1000);
-      t0 = now;
-      v += (-k * (x - to) - c * v) * dt;
-      x += v * dt;
-      if (Math.abs(x - to) < 0.4 && Math.abs(v) < 8) { frame(to); done(); return; }
-      frame(x);
-      requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
-  });
-}
-
-// the tab leans into the move, as if the spaces sat round you and the tools stood one above the other
-function lean(el, dx, dy = 0) {
+// ---- moving a tab: only translate and opacity, so the compositor does it smoothly even while a tab is busy ----
+const SLIDE = 56;   // px a tool slides as it goes and as the next one comes (with a fade: the move reads, nothing flies)
+const shift = (axis, d) => (d ? `translate${axis === 'x' ? 'X' : 'Y'}(${d}px)` : 'none');
+// held under the fingers: d along the axis, fading a little the further it goes
+function hold(el, axis, d) {
   if (!el) return;
-  const fx = dx / (el.clientWidth || innerWidth), fy = dy / (el.clientHeight || innerHeight);
-  el.style.transform = dx || dy
-    ? `perspective(1400px) translate(${dx}px, ${dy}px) rotateY(${-fx * 10}deg) rotateX(${fy * 8}deg) scale(${1 - Math.min(0.08, (Math.abs(fx) + Math.abs(fy)) * 0.08)})`
-    : '';
+  el.style.transform = d ? shift(axis, d) : '';
+  el.style.opacity = d ? String(1 - 0.45 * Math.min(1, Math.abs(d) / (roomOf(axis, el) * 0.5))) : '';
+}
+// let go short of travelling: back it springs, with a little overshoot
+function settle(el, axis, d) {
+  hold(el, axis, 0);
+  if (!el || !d) return Promise.resolve();
+  return el.animate([{ transform: shift(axis, d) }, { transform: 'none' }], { duration: 320, easing: 'cubic-bezier(.34, 1.56, .64, 1)' })
+    .finished.catch(() => {});
 }
 
 // ---- the map: a column per space with its tools; where you are, and where you'd land, light up ----
 const map = h('div', { class: 'world-map', 'aria-hidden': 'true' });
 let mapTimer = 0;
+let drawn = '';   // (the map as last built: rebuilt only when it changes, not on every finger move)
 function showMap(target = tabNow()) {
   const here = tabNow();
-  map.replaceChildren(...SPACES.map((s, i) => h('div', { class: `wm-col${spaceOf(here) === i ? ' here' : ''}${spaceOf(target) === i ? ' to' : ''}` },
+  if (drawn !== (drawn = `${here}>${target}`) || !map.classList.contains('on')) map.replaceChildren(...SPACES.map((s, i) => h('div', { class: `wm-col${spaceOf(here) === i ? ' here' : ''}${spaceOf(target) === i ? ' to' : ''}` },
     h('span', { class: 'wm-space' }, svgIcon(s.icon), s.name),
     ...tabsIn(i).map((t) => h('span', { class: `wm-tool${t === here ? ' here' : ''}${t === target ? ' to' : ''}` },
       btnOf(t).querySelector('svg')?.cloneNode(true) || '', btnOf(t).title)))));
@@ -101,7 +93,7 @@ function showMap(target = tabNow()) {
 }
 const hideMap = (after = 900) => { clearTimeout(mapTimer); mapTimer = setTimeout(() => map.classList.remove('on'), after); };
 
-// ---- travel: the old tab swings away along the move, the new one springs in from the other side ----
+// ---- travel: the old tab slides a little along the move and fades, the new one slides in after it ----
 let moving = false;
 // where a move lands: sideways ±1 a space (at its last tool), up / down ±1 a tool in this space (null: the edge)
 function landing(axis, dir) {
@@ -111,49 +103,61 @@ function landing(axis, dir) {
   const ts = tabsIn(si), j = ts.indexOf(tab) + dir;
   return j >= 0 && j < ts.length ? ts[j] : null;
 }
-const along = (axis, el) => (x) => (axis === 'x' ? lean(el, x, 0) : lean(el, 0, x));
-async function travel(axis, dir, { d = 0, v = 0 } = {}) {
+async function travel(axis, dir, { d = 0 } = {}) {
   const el = tabEl(), to = landing(axis, dir);
   if (moving || !el) return;
-  if (!to) { showMap(); await spring(d, 0, along(axis, el), { v }); hideMap(); return; }   // the edge of the world: it gives, then settles
-  return travelTo(to, { axis, dir, d, v });
+  if (!to) { showMap(); await settle(el, axis, d); hideMap(); return; }   // the edge of the world: it gives, then settles
+  return travelTo(to, { axis, dir, d });
 }
-async function travelTo(to, { axis = 'x', dir = 1, d = 0, v = 0 } = {}) {
+async function travelTo(to, { axis = 'x', dir = 1, d = 0 } = {}) {
   const el = tabEl();
   if (moving || !el) return;
   moving = true;
   showMap(to);
-  const size = axis === 'x' ? el.clientWidth || innerWidth : el.clientHeight || innerHeight;
-  await spring(d, -dir * size * 0.4, along(axis, el), { k: 520, c: 40, v });   // the old one swings away…
-  lean(el, 0);
+  const out = el.animate([{ transform: shift(axis, d), opacity: el.style.opacity || 1 }, { transform: shift(axis, d - dir * SLIDE), opacity: 0 }],
+    { duration: 120, easing: 'cubic-bezier(.4, 0, 1, 1)', fill: 'forwards' });
+  await out.finished.catch(() => {});
+  hold(el, axis, 0);
   switchTab(to);
+  out.cancel();   // (the old tab is hidden now: no flash back)
   showMap(to);
-  await spring(dir * size * 0.3, 0, along(axis, tabEl()));                   // …and the next springs in
+  // the new tab draws itself hidden first (its first frame is the heavy one), then slides in on the compositor
+  const nu = tabEl();
+  if (nu) nu.style.opacity = '0';
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  if (nu) nu.style.opacity = '';
+  if (nu) await nu.animate([{ transform: shift(axis, dir * SLIDE), opacity: 0 }, { transform: 'none', opacity: 1 }],
+    { duration: 240, easing: 'cubic-bezier(0, 0, .2, 1)' }).finished.catch(() => {});
   moving = false;
   hideMap();
 }
 
 // ---- three fingers: follow them, then travel (or spring back) when they lift ----
-const P = new Map();   // touch pointers down: id -> { x, y, x0, target }
-let G = null;          // the gesture: { x0, y0, axis, dx, dy, shown, trail }
-const mid = () => {
+// Counted with touch events, not pointer events: when two fingers land a moment early the browser starts its own
+// scroll and cancels their pointers, but their touches still count. The page can't pinch-zoom (index.html), so
+// those two fingers can't start a zoom of the whole app either. A pen is never one of the fingers.
+const fingers = (e) => [...e.touches].filter((t) => t.touchType !== 'stylus');
+const X0 = new Map();     // touch id -> where it landed (x), for the edge check
+const PT = new Map();     // touch pointer id -> what it landed on (to call off its drag when travel starts)
+let G = null;             // the gesture: { x0, y0, axis, dx, dy, shown, trail }
+const mid = (ts) => {
   let x = 0, y = 0;
-  for (const p of P.values()) { x += p.x; y += p.y; }
-  return { x: x / P.size, y: y / P.size };
+  for (const t of ts) { x += t.clientX; y += t.clientY; }
+  return { x: x / ts.length, y: y / ts.length };
 };
-const nearEdge = () => [...P.values()].some((p) => p.x0 < EDGE || p.x0 > innerWidth - EDGE);
-function begin() {
-  const m = mid();
+const nearEdge = (ts) => ts.some((t) => { const x0 = X0.get(t.identifier) ?? t.clientX; return x0 < EDGE || x0 > innerWidth - EDGE; });
+function begin(ts) {
+  const m = mid(ts);
   G = { x0: m.x, y0: m.y, axis: null, dx: 0, dy: 0, shown: 0, trail: [] };
   // the fingers that landed first were a drag or a pinch: call it off (as the browser does for its own gestures)
-  for (const [id, p] of P) p.target?.dispatchEvent(new PointerEvent('pointercancel', { pointerId: id, pointerType: 'touch', bubbles: true }));
+  for (const [id, target] of PT) target?.dispatchEvent(new PointerEvent('pointercancel', { pointerId: id, pointerType: 'touch', bubbles: true }));
   showMap();
 }
 // how far the tab gives up or down before it travels: less the further you pull (it stays in reach)
 const give = (d, room) => room * 0.3 * Math.tanh(d / (room * 0.3));
 const roomOf = (axis, el) => (axis === 'x' ? el.clientWidth || innerWidth : el.clientHeight || innerHeight);
-function follow() {
-  const m = mid(), el = tabEl(), now = performance.now();
+function follow(ts) {
+  const m = mid(ts), el = tabEl(), now = performance.now();
   const dx = m.x - G.x0, dy = m.y - G.y0;
   if (!G.axis && Math.hypot(dx, dy) > 18) G.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
   G.dx = dx; G.dy = dy;
@@ -162,7 +166,7 @@ function follow() {
   if (!el || moving || !G.axis) return;
   const d = G.axis === 'x' ? dx : dy, to = landing(G.axis, d < 0 ? 1 : -1);
   G.shown = !to ? d * 0.25 : G.axis === 'x' ? d : give(d, roomOf('y', el));   // rubber band at the edges of the world
-  along(G.axis, el)(G.shown);
+  hold(el, G.axis, G.shown);
   showMap(Math.abs(d) > 50 && to ? to : tabNow());
 }
 // px/s along the axis over the last ~0.1 s
@@ -176,33 +180,35 @@ function finish() {
   G = null;
   if (!el || !g.axis) { hideMap(300); return; }
   const d = g.axis === 'x' ? g.dx : g.dy, v = speed(g);
-  if (Math.abs(d) > roomOf(g.axis, el) * 0.15 || Math.abs(v) > 800) travel(g.axis, d < 0 ? 1 : -1, { d: g.shown, v: v * 0.4 });
-  else spring(g.shown, 0, along(g.axis, el)).then(() => hideMap());   // not far enough: back it goes
+  if (Math.abs(d) > roomOf(g.axis, el) * 0.12 || Math.abs(v) > 600) travel(g.axis, d < 0 ? 1 : -1, { d: g.shown });
+  else settle(el, g.axis, g.shown).then(() => hideMap());   // not far enough: back it goes
 }
 
-const own = (e) => { if (G) { e.stopPropagation(); if (e.cancelable) e.preventDefault(); } };
-addEventListener('pointerdown', (e) => {
-  if (e.pointerType !== 'touch') return;
-  P.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, target: e.target });
-  if (P.size === FINGERS && !G && !nearEdge() && !document.querySelector('.sheet:not(.hidden), .overlay:not(.hidden)')) begin();
-  own(e);
-}, true);
-addEventListener('pointermove', (e) => {
-  const p = P.get(e.pointerId);
-  if (!p) return;
-  p.x = e.clientX; p.y = e.clientY;
-  if (G) { follow(); own(e); }
-}, true);
+const T = { capture: true, passive: false };
+addEventListener('touchstart', (e) => {
+  for (const t of e.changedTouches) X0.set(t.identifier, t.clientX);
+  const ts = fingers(e);
+  if (!G && ts.length >= FINGERS && !nearEdge(ts) && !document.querySelector('.sheet:not(.hidden), .overlay:not(.hidden)')) begin(ts);
+  if (G && e.cancelable) e.preventDefault();   // (no scroll, no click: these fingers are travelling)
+}, T);
+addEventListener('touchmove', (e) => {
+  if (!G) return;
+  if (e.cancelable) e.preventDefault();
+  const ts = fingers(e);
+  if (ts.length >= FINGERS) follow(ts);
+}, T);
 const lift = (e) => {
-  if (!P.has(e.pointerId)) return;
-  const was = !!G;
-  P.delete(e.pointerId);
-  if (was) { own(e); finish(); }
+  for (const t of e.changedTouches) X0.delete(t.identifier);
+  if (G && fingers(e).length < FINGERS) finish();   // the first finger up ends it, where the fingers were
 };
-addEventListener('pointerup', lift, true);
-addEventListener('pointercancel', (e) => { if (e.isTrusted) lift(e); }, true);   // (not the cancels begin() sends)
-// while travelling, the page underneath doesn't scroll or zoom
-addEventListener('touchmove', (e) => { if (G && e.cancelable) e.preventDefault(); }, { capture: true, passive: false });
+addEventListener('touchend', lift, T);
+addEventListener('touchcancel', lift, T);
+// while travelling, the tab's own pointer handlers hear nothing from the fingers
+const own = (e) => { if (G && e.pointerType === 'touch') { e.stopPropagation(); if (e.cancelable) e.preventDefault(); } };
+addEventListener('pointerdown', (e) => { if (e.pointerType === 'touch') PT.set(e.pointerId, e.target); own(e); }, true);
+addEventListener('pointermove', own, true);
+addEventListener('pointerup', (e) => { PT.delete(e.pointerId); own(e); }, true);
+addEventListener('pointercancel', (e) => { if (e.isTrusted) PT.delete(e.pointerId); }, true);   // (not the cancels begin() sends)
 
 // ---- one finger along the top bar travels sideways too (a tap there is still a tap) ----
 function wireBarSwipe(topbar) {

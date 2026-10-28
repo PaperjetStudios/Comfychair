@@ -1265,10 +1265,15 @@ body:has(.stage.maxed) .toast { z-index: 60; }
 
 /* ---- animated properties (keyed.js): ◀ ◆ ▶ beside a slider, diamonds on the clip ---- */
 .keyed .lbl { align-items: center; }
-.key-btns { display: inline-flex; gap: 2px; margin-left: 6px; }
-.key-btns .icon-btn { min-width: 28px; min-height: 28px; padding: 0; font-size: 13px; color: var(--muted); }
-.key-btns .icon-btn.on, .key-btns .icon-btn.on:hover { background: transparent; color: var(--accent); font-size: 16px; }
-@media (pointer: coarse) { .key-btns .icon-btn { min-width: 34px; min-height: 34px; } }
+/* (small and flat, hung into the label's line: the row stays one line tall and the sliders keep their room) */
+.key-btns { display: inline-flex; align-items: center; gap: 0; margin: -6px -4px -6px 0; padding-left: 8px; }
+.keyed .lbl > span:first-child { margin-right: auto; }
+.key-btns .icon-btn { min-width: 28px; min-height: 26px; padding: 0; font-size: 11px; color: var(--muted); background: transparent; border-color: transparent; }
+.key-btns .icon-btn.on, .key-btns .icon-btn.on:hover { background: transparent; color: var(--accent); font-size: 15px; }
+.key-btns .key-reset { font-size: 15px; margin-right: 4px; }
+.key-btns [hidden] { display: none; }   /* (.icon-btn's display would show them anyway) */
+@media (pointer: coarse) { .key-btns .icon-btn { min-width: 32px; min-height: 30px; } }
+.keyed + .keyed { margin-top: 4px; }
 .anim-bar { padding: 6px 10px 8px; border-top: 1px solid var(--line); }
 .anim-bar .scrub-wrap { position: relative; flex: 1; min-width: 0; display: flex; }
 .anim-bar .scrub-wrap .scrub { flex: 1; }
@@ -1279,13 +1284,12 @@ body:has(.stage.maxed) .toast { z-index: 60; }
 /* ---- ComfyChair Lab (world.js): travel by three fingers, a map of where you are, and things with a little give ---- */
 .lab-badge { margin-left: 4px; padding: 1px 4px; font-size: 10px; font-weight: 700; color: var(--accent-ink); background: var(--accent);
   border-radius: var(--r-sm); vertical-align: super; letter-spacing: .04em; }
-.lab .tab.active { transform-origin: 50% 40%; }
-.lab .topbar { position: relative; z-index: 6; }   /* (a leaning tab passes under it) */
+.lab .topbar { position: relative; z-index: 6; }   /* (a sliding tab passes under it) */
 .lab .topbar { touch-action: pan-y; }   /* a sideways swipe along it travels (world.js), not scrolls */
 .lab nav.tabs { overflow-x: visible; }
 .world-map {
   position: fixed; z-index: 45; left: 50%; top: 72px; transform: translate(-50%, -8px) scale(.96); opacity: 0; pointer-events: none;
-  display: flex; gap: 6px; padding: 8px; background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(8px);
+  display: flex; gap: 6px; padding: 8px; background: var(--surface);   /* (no backdrop blur: redrawn every frame over a moving tab, it stutters) */
   border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow);
   transition: opacity .25s, transform .45s cubic-bezier(.34, 1.56, .64, 1);
 }

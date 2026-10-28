@@ -27,7 +27,8 @@ export const keyTimes = (item) => [...new Set(Object.values(item.chans || {}).fl
 // base(): the plain value, setBase(v) sets it; seek(t): move the playhead to the item's time t; onKeys(): keys changed.
 // direct: setBase(v) takes every change and the caller keys it (the Editor: a layer holds its pose at the playhead
 // and keys whatever moved, so a scale about the centre keys the position too).
-export function keyedRange(label, { item, ch, t, base, setBase, seek, onKeys, onInput, onChange, direct = false, ...opts }) {
+// def: the property's default; ↺ (shown once it's changed or animated) takes its keys away and puts it back there.
+export function keyedRange(label, { item, ch, t, base, setBase, seek, onKeys, onInput, onChange, direct = false, def = null, ...opts }) {
   const cur = () => (direct ? base() : value(item, ch, t(), base()));
   const el = rangeField(label, cur, (v) => (direct ? setBase(v) : setValue(item, ch, t(), v, setBase)),
     { ...opts, onInput, onChange });
@@ -46,13 +47,22 @@ export function keyedRange(label, { item, ch, t, base, setBase, seek, onKeys, on
     diamond.classList.toggle('on', on);
     diamond.title = here ? `Take away this ${label} key` : on ? `Key ${label} here` : `Animate ${label}: a key here`;
     prev.hidden = next.hidden = !on;
+    if (reset) reset.hidden = !on && Math.abs(cur() - def) < 1e-9;
   };
   const lbl = el.querySelector('.lbl'), readout = lbl.lastElementChild;   // (rangeField's value, right of the label)
-  lbl.append(h('span', { class: 'key-btns' }, prev, diamond, next));
-  el.classList.add('keyed');
-  // the playhead moved: show the value there (not while the slider is being dragged or typed in)
   const input = el.querySelector('input');
   const fmt = opts.fmt || ((v) => v.toFixed(2));
+  const reset = def == null ? null : iconBtn(`Reset ${label}: no keys, back to ${fmt(def)}`, '↺', () => {
+    if (item.chans?.[ch]) { delete item.chans[ch]; if (!Object.keys(item.chans).length) delete item.chans; }
+    setBase(def);
+    input.set?.(def); if (readout) readout.textContent = fmt(cur());
+    paint(); onInput?.(); onKeys?.(); onChange?.();
+  });
+  reset?.classList.add('key-reset');
+  lbl.append(h('span', { class: 'key-btns' }, reset, prev, diamond, next));
+  el.classList.add('keyed');
+  input.addEventListener('change', () => paint());   // (↺ shows once the value moves off its default)
+  // the playhead moved: show the value there (not while the slider is being dragged or typed in)
   el.refresh = () => {
     if (animated(item, ch) && document.activeElement !== input && !input.dataset.scrubbing) {
       const v = cur();
