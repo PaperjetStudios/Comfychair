@@ -20,6 +20,8 @@ const BRUSHES = {
   marker: { label: 'Marker', size: 28, opacity: 0.55, flow: 1, hard: 0.9, spacing: 0.06, pSize: 0.25, pAlpha: 0, tilt: null },
   eraser: { label: 'Eraser', size: 40, opacity: 1, flow: 1, hard: 0.7, spacing: 0.08, pSize: 0.5, pAlpha: 0, tilt: null },
 };
+const OTHER = { shape: { size: 6, opacity: 1 }, fill: { opacity: 1 } };   // the shapes' line width, the fill's strength
+const SHAPES = ['line', 'rect', 'ellipse'];
 const BLEND = { normal: 'source-over', multiply: 'multiply', screen: 'screen', overlay: 'overlay', add: 'lighter' };
 export const BLENDS = [['normal', 'Normal'], ['multiply', 'Multiply'], ['screen', 'Screen'], ['overlay', 'Overlay'], ['add', 'Add']];
 export const blendOp = (l) => BLEND[l.blend] || 'source-over';
@@ -28,6 +30,8 @@ export const blendOp = (l) => BLEND[l.blend] || 'source-over';
 const TOOLS = [
   ['move', 'Move, resize and crop layers', 'v'],
   ['brush', 'Brush', 'b'], ['eraser', 'Eraser', 'e'],
+  ['line', 'Line', 'l'], ['rect', 'Rectangle', 'r'], ['ellipse', 'Ellipse', 'o'],
+  ['fill', 'Fill', 'g'], ['pick', 'Colour picker', 'i'],
 ];
 const KEYS = Object.fromEntries(TOOLS.map(([t, , k]) => [k, t]));
 
@@ -39,10 +43,14 @@ export const P = {
   set: store.get('deck.paint.set', {}),   // per brush: { size, opacity } as last used
   recent: store.get('deck.paint.recent', []),
   penOnly: false,   // fingers don't draw: on once a pen touches the canvas
+  shapeFill: store.get('deck.paint.shapeFill', false),   // rectangles and ellipses filled, not outlined
+  constrain: false,   // square / circle / lines at 45° (also Shift, or a finger held down while the pen draws)
+  tol: store.get('deck.paint.tol', 0.12), fillAll: store.get('deck.paint.fillAll', false),   // the fill: how alike, which pixels it looks at
+  back: 'brush',   // the tool the colour picker goes back to
 };
 export const painting = () => P.tool !== 'move';
-const brushKey = () => (P.tool === 'eraser' ? 'eraser' : P.brush);
-const bset = (k = brushKey()) => ({ ...BRUSHES[k], ...(P.set[k] || {}) });
+const brushKey = () => (P.tool === 'eraser' ? 'eraser' : P.tool === 'brush' ? P.brush : SHAPES.includes(P.tool) ? 'shape' : P.tool === 'fill' ? 'fill' : P.brush);
+const bset = (k = brushKey()) => ({ ...(BRUSHES[k] || OTHER[k]), ...(P.set[k] || {}) });
 function setBrush(k, o) { P.set[k] = { ...(P.set[k] || {}), ...o }; store.set('deck.paint.set', P.set); }
 
 let X = null;   // the editor's side: { E, canvas(), viewer(), toCanvas(e), view(), zoom, frame(), redraw(), render(), changed(), active() }
@@ -205,15 +213,133 @@ function sample(e, l) {
   q.t = pen ? clamp(Math.hypot(e.tiltX || 0, e.tiltY || 0) / 60, 0, 1) : 0;
   return q;
 }
-function beginStroke(e, l) {
-  const cv = layerCanvas(l), b = bset();
+// an empty buffer, and the live copy the layer is drawn from until the stroke is laid down
+function openBuffers(l) {
+  const cv = layerCanvas(l);
   const buf = scratch('buf', cv.width, cv.height), live = scratch('live', cv.width, cv.height);
   buf.ctx.clearRect(0, 0, cv.width, cv.height);
   live.ctx.globalCompositeOperation = 'source-over'; live.ctx.globalAlpha = 1;
   live.ctx.clearRect(0, 0, cv.width, cv.height); live.ctx.drawImage(cv, 0, 0);
   l.live = live.cv;
-  S = { l, id: e.pointerId, type: e.pointerType, b, erase: P.tool === 'eraser', bb: null, sm: null, last: null, carry: 0, raw: null, frame: 0 };
+}
+function beginStroke(e, l) {
+  openBuffers(l);
+  S = { l, id: e.pointerId, type: e.pointerType, b: bset(), erase: P.tool === 'eraser', bb: null, sm: null, last: null, carry: 0, raw: null, frame: 0 };
   moveStroke(e);
+}
+
+// ---- shapes: drawn whole into the buffer on every move, from where the pen went down to where it is ----
+function beginShape(e, l) {
+  openBuffers(l);
+  const q = toLayer(l, X.toCanvas(e));
+  S = { l, id: e.pointerId, type: e.pointerType, b: bset('shape'), erase: false, bb: null, frame: 0, shape: P.tool, a: q, z: q, shift: e.shiftKey };
+  drawShape();
+}
+function moveShape(e) {
+  S.z = toLayer(S.l, X.toCanvas(e)); S.shift = e.shiftKey;
+  drawShape();
+}
+function drawShape() {
+  const c = SCR.buf.ctx, lw = Math.max(0.5, S.b.size / S.l.scale), filled = P.shapeFill && S.shape !== 'line';
+  if (S.bb) { const o = intBox(S.bb, S.l.img); c.clearRect(o.x, o.y, o.w, o.h); }
+  const { x: x0, y: y0 } = S.a;
+  let { x: x1, y: y1 } = S.z;
+  if (P.constrain || S.shift || touches.size) {   // a finger held down while the pen draws constrains too
+    if (S.shape === 'line') {
+      const ang = Math.round(Math.atan2(y1 - y0, x1 - x0) / (Math.PI / 4)) * (Math.PI / 4), d = Math.hypot(x1 - x0, y1 - y0);
+      x1 = x0 + Math.cos(ang) * d; y1 = y0 + Math.sin(ang) * d;
+    } else {
+      const s = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+      x1 = x0 + Math.sign(x1 - x0 || 1) * s; y1 = y0 + Math.sign(y1 - y0 || 1) * s;
+    }
+  }
+  const x = Math.min(x0, x1), y = Math.min(y0, y1), w = Math.abs(x1 - x0), hh = Math.abs(y1 - y0);
+  c.save();
+  c.globalAlpha = 1; c.strokeStyle = c.fillStyle = P.color; c.lineWidth = lw;
+  c.lineCap = 'round'; c.lineJoin = S.shape === 'rect' ? 'miter' : 'round';
+  c.beginPath();
+  if (S.shape === 'line') { c.moveTo(x0, y0); c.lineTo(x1, y1); } else if (S.shape === 'rect') c.rect(x, y, w, hh);
+  else c.ellipse(x + w / 2, y + hh / 2, w / 2, hh / 2, 0, 0, Math.PI * 2);
+  if (filled) c.fill(); else c.stroke();
+  c.restore();
+  const pad = lw + 2, bb = { x: x - pad, y: y - pad, w: w + 2 * pad, h: hh + 2 * pad };
+  S.bb = S.bb ? union(S.bb, bb) : bb;
+  if (!S.frame) S.frame = requestAnimationFrame(showStroke);
+}
+
+// ---- fill: the pixels joined to the tapped one that look like it, on this layer or as all the layers show it ----
+export function flood(img, W, H, x0, y0, tol) {
+  const d = img.data, t = Math.round(clamp(tol, 0, 1) * 255), i0 = (y0 * W + x0) * 4;
+  const r0 = d[i0], g0 = d[i0 + 1], b0 = d[i0 + 2], a0 = d[i0 + 3];
+  const mask = new Uint8Array(W * H);
+  const like = (p) => { const i = p * 4; return !mask[p] && Math.abs(d[i] - r0) <= t && Math.abs(d[i + 1] - g0) <= t && Math.abs(d[i + 2] - b0) <= t && Math.abs(d[i + 3] - a0) <= t; };
+  let x1 = x0, x2 = x0, y1 = y0, y2 = y0;
+  const stack = [x0, y0];
+  while (stack.length) {   // scanlines: fill a run, then look for runs above and below it
+    const y = stack.pop(), x = stack.pop(), row = y * W;
+    if (!like(row + x)) continue;
+    let l = x, r = x;
+    while (l > 0 && like(row + l - 1)) l--;
+    while (r < W - 1 && like(row + r + 1)) r++;
+    mask.fill(1, row + l, row + r + 1);
+    x1 = Math.min(x1, l); x2 = Math.max(x2, r); y1 = Math.min(y1, y); y2 = Math.max(y2, y);
+    for (const ny of [y - 1, y + 1]) {
+      if (ny < 0 || ny >= H) continue;
+      let open = false;
+      for (let i = l; i <= r; i++) {
+        const ok = like(ny * W + i);
+        if (ok && !open) stack.push(i, ny);
+        open = ok;
+      }
+    }
+  }
+  // grow it a pixel, so it tucks under the soft edge of the lines around it
+  const grown = mask.slice();
+  for (let y = Math.max(0, y1 - 1); y <= Math.min(H - 1, y2 + 1); y++) {
+    for (let x = Math.max(0, x1 - 1); x <= Math.min(W - 1, x2 + 1); x++) {
+      const p = y * W + x;
+      if (mask[p]) continue;
+      if ((x > 0 && mask[p - 1]) || (x < W - 1 && mask[p + 1]) || (y > 0 && mask[p - W]) || (y < H - 1 && mask[p + W])) grown[p] = 1;
+    }
+  }
+  const bx = Math.max(0, x1 - 1), by = Math.max(0, y1 - 1);
+  return { mask: grown, bb: { x: bx, y: by, w: Math.min(W - 1, x2 + 1) - bx + 1, h: Math.min(H - 1, y2 + 1) - by + 1 } };
+}
+function fillAt(e, l) {
+  const cv = layerCanvas(l), W = cv.width, H = cv.height;
+  const q = toLayer(l, X.toCanvas(e)), x = Math.floor(q.x), y = Math.floor(q.y);
+  if (x < 0 || y < 0 || x >= W || y >= H) { toast('Tap inside the layer to fill it', true); return; }
+  let src;
+  if (P.fillAll) {   // what every layer shows there, drawn in this layer's pixels
+    const s = scratch('sample', W, H), k = 1 / l.scale;
+    s.ctx.setTransform(1, 0, 0, 1, 0, 0); s.ctx.clearRect(0, 0, W, H);
+    s.ctx.setTransform(k, 0, 0, k, -l.x * k + l.crop.x * W, -l.y * k + l.crop.y * H);
+    X.composite(s.ctx);
+    s.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    src = s.ctx.getImageData(0, 0, W, H);
+  } else src = cv.getContext('2d').getImageData(0, 0, W, H);
+  const { mask, bb } = flood(src, W, H, x, y, P.tol);
+  const buf = scratch('buf', W, H), img = buf.ctx.createImageData(bb.w, bb.h), n = parseInt(P.color.slice(1), 16);
+  for (let yy = 0; yy < bb.h; yy++) {
+    for (let xx = 0; xx < bb.w; xx++) {
+      if (!mask[(bb.y + yy) * W + bb.x + xx]) continue;
+      const i = (yy * bb.w + xx) * 4;
+      img.data[i] = n >> 16; img.data[i + 1] = (n >> 8) & 255; img.data[i + 2] = n & 255; img.data[i + 3] = 255;
+    }
+  }
+  buf.ctx.clearRect(0, 0, W, H);
+  buf.ctx.putImageData(img, bb.x, bb.y);
+  change(l, bb, (c) => laydown(c, buf.cv, bb, { b: bset('fill'), erase: false }));
+  X.redraw();
+}
+
+// ---- the colour picker: the colour on screen under the pen (every layer, as shown) ----
+function colorAt(e) {
+  const cv = X.canvas(), r = cv.getBoundingClientRect();
+  const x = clamp(Math.floor((e.clientX - r.left) * cv.width / r.width), 0, cv.width - 1);
+  const y = clamp(Math.floor((e.clientY - r.top) * cv.height / r.height), 0, cv.height - 1);
+  const d = cv.getContext('2d').getImageData(x, y, 1, 1).data;
+  return `#${[d[0], d[1], d[2]].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
 }
 function moveStroke(e) {
   const evs = e.getCoalescedEvents?.() || [];
@@ -268,10 +394,10 @@ const intBox = (bb, cv) => {
   return { x, y, w: clamp(Math.ceil(bb.x + bb.w), 0, cv.width) - x, h: clamp(Math.ceil(bb.y + bb.h), 0, cv.height) - y };
 };
 // the buffer put onto ctx (the layer, or its live copy) at the brush's opacity
-function laydown(c, src, bb) {
+function laydown(c, src, bb, o = S) {
   if (bb.w < 1 || bb.h < 1) return;
-  c.globalAlpha = S.b.opacity;
-  c.globalCompositeOperation = S.erase ? 'destination-out' : 'source-over';
+  c.globalAlpha = o.b.opacity;
+  c.globalCompositeOperation = o.erase ? 'destination-out' : 'source-over';
   c.drawImage(src, bb.x, bb.y, bb.w, bb.h, bb.x, bb.y, bb.w, bb.h);
   c.globalAlpha = 1; c.globalCompositeOperation = 'source-over';
 }
@@ -292,13 +418,14 @@ function endStroke() {
   if (S.raw && S.sm) lineTo(S.raw);   // the stabiliser catches up with where the pen lifted
   const s = S, bb = s.bb;
   S = null; s.l.live = null;
-  if (bb) change(s.l, bb, (c) => { S = s; laydown(c, SCR.buf.cv, intBox(bb, s.l.img)); S = null; });
+  if (bb) change(s.l, bb, (c) => laydown(c, SCR.buf.cv, intBox(bb, s.l.img), s));
   X.redraw();
 }
 function cancelStroke() {
   if (!S) return;
   cancelAnimationFrame(S.frame);
-  S.l.live = null; S = null;
+  if (S.l) S.l.live = null;
+  S = null;
   X.redraw();
 }
 
@@ -341,13 +468,21 @@ function onDown(e) {
       if (!G) startGesture(); else G.n = Math.max(G.n, touches.size);
       return;
     }
+    if (S?.shape && S.type !== 'touch') { drawShape(); return; }   // a finger held while the pen draws a shape: constrained
     if (P.penOnly) return;
   }
   if (S || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  try { X.canvas().setPointerCapture(e.pointerId); } catch { /* already gone */ }
+  if (P.tool === 'pick' || e.altKey) {   // the picker (Alt with any tool picks once)
+    S = { pick: true, id: e.pointerId, type: e.pointerType, c: colorAt(e) };
+    setColor(S.c, false);
+    return;
+  }
   const l = target();
   if (!canPaint(l)) return;
-  try { X.canvas().setPointerCapture(e.pointerId); } catch { /* already gone */ }
   if (P.tool === 'brush' || P.tool === 'eraser') beginStroke(e, l);
+  else if (SHAPES.includes(P.tool)) beginShape(e, l);
+  else if (P.tool === 'fill') fillAt(e, l);
 }
 function onMove(e) {
   if (!painting()) return;
@@ -355,20 +490,29 @@ function onMove(e) {
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (G) { moveGesture(); return; }
   }
-  if (S && e.pointerId === S.id) { e.stopImmediatePropagation(); moveStroke(e); }
+  if (S && e.pointerId === S.id) {
+    e.stopImmediatePropagation();
+    if (S.pick) { S.c = colorAt(e); setColor(S.c, false); } else if (S.shape) moveShape(e); else moveStroke(e);
+  }
   if (e.pointerType !== 'touch') showRing(e);
 }
 function onUp(e) {
   if (!painting()) return;
   e.stopImmediatePropagation();
-  if (e.pointerType === 'touch') endTouch(e.pointerId);
-  if (S && e.pointerId === S.id) { if (e.type === 'pointercancel') cancelStroke(); else endStroke(); }
+  if (e.pointerType === 'touch') { endTouch(e.pointerId); if (S?.shape) drawShape(); }
+  if (!S || e.pointerId !== S.id) return;
+  if (S.pick) {
+    const c = S.c; S = null;
+    setColor(c);
+    if (P.tool === 'pick') setTool(P.back);   // back to what it was picking a colour for
+    else X.render();
+  } else if (e.type === 'pointercancel') cancelStroke(); else endStroke();
 }
 
 // the brush outline under a hovering pen (or the mouse)
 let ring = null;
 function showRing(e) {
-  if (!ring || !(P.tool === 'brush' || P.tool === 'eraser')) return hideRing();
+  if (!ring || !(P.tool === 'brush' || P.tool === 'eraser' || SHAPES.includes(P.tool))) return hideRing();
   const v = X.view(), l = target();
   if (!v) return hideRing();
   const r = X.viewer().getBoundingClientRect(), d = Math.max(4, bset().size * v.s);
@@ -388,15 +532,17 @@ function syncStrip() {
   strip.querySelector('[data-act=fit]').classList.toggle('hidden', !X.zoom.zoomed());
   const sw = strip.querySelector('.paint-color');
   sw.style.setProperty('--c', P.color); sw.querySelector('input').value = P.color;
+  X.canvas().style.cursor = painting() ? 'crosshair' : '';
 }
 export function setTool(t) {
   if (t === P.tool) return;
   cancelStroke();
+  if (t === 'pick' && P.tool !== 'move') P.back = P.tool;
   P.tool = t;
   const e = E();
   e.cropping = false;
   if (t === 'move') X.zoom.reset();
-  else if (!target()) {   // something to paint on: the top layer that can be, or a new white canvas
+  else if (!target() && t !== 'pick') {   // something to paint on: the top layer that can be, or a new white canvas
     const l = [...e.layers].reverse().find((o) => o.img?.naturalWidth && o.x != null && !o.hidden && !o.locked);
     if (l) e.sel = l;
     else if (!e.layers.length) addBlank({ ...(X.frame() || { w: 1024, h: 1024 }), fill: '#ffffff' });
@@ -407,7 +553,7 @@ export function setTool(t) {
 export function setColor(c, keep = true) {
   P.color = c; store.set('deck.paint.color', c);
   if (keep) { P.recent = [c, ...P.recent.filter((x) => x !== c)].slice(0, 8); store.set('deck.paint.recent', P.recent); }
-  if (P.tool === 'eraser' || P.tool === 'move') { P.tool = 'brush'; X.render(); }
+  if (P.tool === 'eraser' || P.tool === 'move') setTool('brush');
   syncStrip();
 }
 function buildStrip() {
@@ -433,23 +579,47 @@ export function paintProps() {
   if (!painting()) return null;
   const l = target();
   const k = brushKey();
-  const keepB = (o) => { setBrush(k, o); };
+  const t = P.tool, keepB = (o) => { setBrush(k, o); };
   const swatches = h('div', { class: 'swatches' }, [...new Set([...P.recent, ...SWATCHES])].slice(0, 16).map((c) =>
     h('button', { type: 'button', style: `background:${c}`, class: c === P.color ? 'on' : '', 'aria-label': `Colour ${c}`, onclick: () => { setColor(c); X.render(); } })));
-  return section(P.tool === 'eraser' ? 'Eraser' : 'Brush', () => setTool('move'),
-    hint(l ? `On ${l.label || l.name?.split('/').pop() || 'the new canvas'}${l.locked ? ' (locked)' : ''}` : 'Pick a layer to paint on', 'layer-title'),
-    P.tool === 'brush' ? field('Brush', seg(Object.entries(BRUSHES).filter(([id]) => id !== 'eraser').map(([id, o]) => [id, o.label]), P.brush, (v) => {
-      P.brush = v; store.set('deck.paint.brush', v); X.render();
-    }, { wrap: true })) : null,
-    rangeField('Size', () => bset(k).size, (v) => keepB({ size: Math.round(v) }), { min: 1, max: 400, step: 1, fmt: (v) => `${Math.round(v)} px` }),
-    rangeField(P.tool === 'eraser' ? 'Strength' : 'Opacity', () => bset(k).opacity, (v) => keepB({ opacity: clamp(v, 0.01, 1) }),
-      { min: 0.01, max: 1, step: 0.01, fmt: pctFmt }),
-    rangeField('Smoothing', () => P.smooth, (v) => { P.smooth = clamp(v, 0, 1); store.set('deck.paint.smooth', P.smooth); }, { min: 0, max: 1, step: 0.01, fmt: pctFmt }),
-    P.tool !== 'eraser' ? colorField('Colour', () => P.color, (c) => setColor(c, false), swatches) : null,
-    h('div', { class: 'row wrap' },
-      button('Pen only', () => { P.penOnly = !P.penOnly; X.render(); }, { cls: `small${P.penOnly ? ' on' : ''}`, title: 'Fingers pan and zoom, and don\'t paint' }),
-      button('Blank canvas', blankSheet, { title: 'A new empty layer to paint on' })),
-    help('The pen paints: press harder for a wider or stronger line, tilt a pencil to shade. Once the pen has touched the canvas, fingers stop painting (Pen only). Two fingers pan and zoom; tap with two fingers to undo, three to redo. [ and ] change the size. Smoothing steadies the line (it trails the pen a little).'));
+  const toggle = (label, on, flip, title) => button(label, () => { flip(); X.render(); }, { cls: `small${on ? ' on' : ''}`, title });
+  const size = (label) => rangeField(label, () => bset(k).size, (v) => keepB({ size: Math.round(v) }), { min: 1, max: 400, step: 1, fmt: (v) => `${Math.round(v)} px` });
+  const opacity = (label = 'Opacity') => rangeField(label, () => bset(k).opacity, (v) => keepB({ opacity: clamp(v, 0.01, 1) }), { min: 0.01, max: 1, step: 0.01, fmt: pctFmt });
+  const colour = colorField('Colour', () => P.color, (c) => setColor(c, false), swatches);
+  const penOnly = toggle('Pen only', P.penOnly, () => { P.penOnly = !P.penOnly; }, 'Fingers pan and zoom, and don\'t paint');
+  const on = t === 'pick' ? null : hint(l ? `On ${l.label || l.name?.split('/').pop() || 'the new canvas'}${l.locked ? ' (locked)' : ''}` : 'Pick a layer to paint on', 'layer-title');
+  const done = () => setTool('move');
+  const gestures = 'Two fingers pan and zoom; tap with two fingers to undo, three to redo.';
+  if (t === 'brush' || t === 'eraser') {
+    return section(t === 'eraser' ? 'Eraser' : 'Brush', done, on,
+      t === 'brush' ? field('Brush', seg(Object.entries(BRUSHES).filter(([id]) => id !== 'eraser').map(([id, o]) => [id, o.label]), P.brush, (v) => {
+        P.brush = v; store.set('deck.paint.brush', v); X.render();
+      }, { wrap: true })) : null,
+      size('Size'), opacity(t === 'eraser' ? 'Strength' : 'Opacity'),
+      rangeField('Smoothing', () => P.smooth, (v) => { P.smooth = clamp(v, 0, 1); store.set('deck.paint.smooth', P.smooth); }, { min: 0, max: 1, step: 0.01, fmt: pctFmt }),
+      t === 'brush' ? colour : null,
+      h('div', { class: 'row wrap' }, penOnly, button('Blank canvas', blankSheet, { title: 'A new empty layer to paint on' })),
+      help(`The pen paints: press harder for a wider or stronger line, tilt a pencil to shade. Once the pen has touched the canvas, fingers stop painting (Pen only). ${gestures} [ and ] change the size; Alt picks a colour. Smoothing steadies the line (it trails the pen a little).`));
+  }
+  if (SHAPES.includes(t)) {
+    return section('Shapes', done, on,
+      t !== 'line' ? field('Draw', seg([[false, 'Outline'], [true, 'Filled']], P.shapeFill, (v) => { P.shapeFill = v === true || v === 'true'; store.set('deck.paint.shapeFill', P.shapeFill); X.render(); })) : null,
+      t === 'line' || !P.shapeFill ? size('Line width') : null, opacity(),
+      colour,
+      h('div', { class: 'row wrap' },
+        toggle(t === 'line' ? 'Snap to 45°' : 'Square / circle', P.constrain, () => { P.constrain = !P.constrain; }, 'Also: hold Shift, or rest a finger on the screen while the pen draws'),
+        penOnly),
+      help(`Drag from one corner to the other (a line from end to end). Hold Shift, or rest a finger on the screen while the pen draws, for a square, a circle or a line at 45°. ${gestures}`));
+  }
+  if (t === 'fill') {
+    return section('Fill', done, on,
+      rangeField('Tolerance', () => P.tol, (v) => { P.tol = clamp(v, 0, 1); store.set('deck.paint.tol', P.tol); }, { min: 0, max: 1, step: 0.01, fmt: pctFmt }),
+      field('Look at', seg([[false, 'This layer'], [true, 'All layers']], P.fillAll, (v) => { P.fillAll = v === true || v === 'true'; store.set('deck.paint.fillAll', P.fillAll); })),
+      opacity(), colour, penOnly,
+      help(`Tap to fill the area of like colour around that point. Tolerance: how different a colour can be and still count. All layers: fills on this layer, up to the lines you see on the others (draw lines on one layer, colour on another). ${gestures}`));
+  }
+  return section('Colour picker', done, colour,
+    help('Touch the canvas and slide to pick the colour under the pen; it goes back to the tool you had. With a brush, shape or fill, hold Alt and click to pick without switching.'));
 }
 
 // ---- keys: tool letters, [ ] for the size, Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y ----

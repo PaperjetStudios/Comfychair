@@ -695,6 +695,7 @@ function wireEditor() {
   cv.parentElement.append(...bindPaint({
     E, canvas: () => cv, viewer: () => cv.parentElement, view: () => EV, zoom: viewZoom, frame: editorFrame,
     toCanvas: (e) => point(e), redraw: drawEditorCanvas, render: renderEditor, changed: persistEditor,
+    composite: (c) => { const f = editorFrame(); if (f) { c.fillStyle = E.bg; c.fillRect(f.x, f.y, f.w, f.h); } visibleLayers().forEach((l) => drawLayer(c, l)); },
     active: () => $('#tab-editor').classList.contains('active') && !sheetOpen() && !EA.exporting,
   }));
 
