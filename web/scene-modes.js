@@ -7,7 +7,7 @@ import { SC } from './scene-data.js';
 //
 //   registerMode({ key, label, icon, hint, panel, select, stage, view, lanes, frustum, enter, exit })
 //     key      'edit' | 'camera' | 'create' | a new one; icon: its button on the 3D view (label / hint: its tooltip)
-//     panel()  the nodes of the panel
+//     panel()  the nodes of the panel; out() the ones after the plug-in sections (what it makes: render, prompt)
 //     select   objects can be picked on the stage and in the list (default true)
 //     stage    'scene' shows the scene, 'empty' an empty modelling stage (default 'scene')
 //     view     'shot' looks through the shot camera (orbiting writes its keys), 'free' is a free view

@@ -1,15 +1,15 @@
 import { aimFree } from './scene-view.js';
-import { cameraPanel, editPanel } from './scene-ui.js';
+import { cameraPanel, editOut, editPanel, renderProps } from './scene-ui.js';
 import { hint, section } from './ui.js';
 import { registerMode } from './scene-modes.js';
 
 // The three modes (see scene-modes.js for what a mode can say)
 export function registerBuiltins() {
-  registerMode({ key: 'edit', label: 'Edit scene', icon: '✎', hint: 'Edit scene mode: place and arrange scene contents', panel: editPanel,
+  registerMode({ key: 'edit', label: 'Edit scene', icon: '✎', hint: 'Edit scene mode: place and arrange scene contents', panel: editPanel, out: editOut,
     frustum: true });   // (the director view draws the camera here too)
 
   registerMode({ key: 'camera', label: 'Camera', icon: '🎥', hint: 'Camera directing / animation mode: block out and animate the camera through the scene',
-    panel: cameraPanel, select: false, lanes: 'camera', frustum: true });
+    panel: cameraPanel, out: () => renderProps(), select: false, lanes: 'camera', frustum: true });
 
   // an empty stage; the modelling tools plug in with addModeSection('create', build)
   registerMode({ key: 'create', label: 'Create object', icon: '⬢', hint: 'Create object mode: basic modelling for simple shapes only',

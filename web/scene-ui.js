@@ -264,7 +264,7 @@ function lengthProps() {
       onChange: () => { if (Math.abs(want - SC.seconds) < 0.005) return; newLength(want, 'custom'); } }), stretch];
 }
 
-function renderProps() {
+export function renderProps() {
   const figs = SC.objects.some((o) => o.type === 'figure' && !o.hidden);
   const use = (g, what) => button(`Use ${what} #${g.id} in H3 control`, () => C.useControlVideo(g, SC));
   return section('Render', null,
@@ -338,7 +338,7 @@ export function renderPanel() {
   const body = $('#sceneBody');
   if (!body || !SC) return;
   const def = modeOf();
-  body.replaceChildren(h('div', { class: 'panel-body' }, def.panel(), modeSections(def.key).map((build) => build())));
+  body.replaceChildren(h('div', { class: 'panel-body' }, def.panel(), modeSections(def.key).map((build) => build()), def.out?.()));
 }
 
 export function editPanel() {
@@ -349,9 +349,10 @@ export function editPanel() {
       undoToast('Scene cleared (the camera stays)', () => { if (ok()) { setSC(before); rebuildRoom(); changed(); } });
     } : null),
     layerList(),
-    selItem() ? objectProps(selItem()) : R.sel === ROOM && SC.room ? roomProps() : cameraProps(),
-    renderProps(), promptProps()];
+    selItem() ? objectProps(selItem()) : R.sel === ROOM && SC.room ? roomProps() : cameraProps()];
 }
+// what the scene makes, last in the panel (after the reference and imports)
+export const editOut = () => [promptProps(), renderProps()];
 
 // the camera on its own: seen through its lens (orbiting writes its keys), or from a free view of the room
 export function cameraPanel() {
@@ -361,7 +362,7 @@ export function cameraPanel() {
       R.free ? [help('Look around freely: the camera is drawn as a frustum and orbiting here leaves it alone. Set the camera from what you see when it is framed.'),
         button('🎥 Camera to this view', () => { cameraFromView(); changed(); })]
         : help('You see what the camera sees: drag empty space to orbit it, two fingers to pan and zoom.')),
-    cameraProps(), renderProps()];
+    cameraProps()];
 }
 
 

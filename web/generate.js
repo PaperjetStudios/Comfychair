@@ -136,7 +136,7 @@ export function renderFields() {
   shownTpl = t.id;
   const ae = document.activeElement, fe = ae && root.contains(ae) ? ae.closest('.field[data-key]') : null;
   const at = fe ? { key: fe.dataset.key, i: [...fe.querySelectorAll(ae.tagName)].indexOf(ae), s: ae.selectionStart, e: ae.selectionEnd } : null;
-  root.replaceChildren(shotBar(), ...groups);
+  root.replaceChildren(...groups, shotBar());   // (the panel order, app-wide: what goes in, how it's made, then the saved shots)
   hooks.decorate?.();
   if (panel) panel.scrollTop = y;
   if (at && at.i >= 0) {

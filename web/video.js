@@ -1,6 +1,6 @@
 import {
   $, h, store, uid, api, toast, undoToast, clamp, openSheet, closeSheet, button, iconBtn, linkBtn, actions, fileButton, seg,
-  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, panelTop, toggle, textArea, pctFmt, colorField, sizeSelect, canvasFont,
+  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, toggle, textArea, pctFmt, colorField, sizeSelect, canvasFont,
 } from './ui.js';
 import { S, fmtT, inputUrl, thumbUrl } from './core.js';
 import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, soundToSoundTab, uploadImage, uploadMedia } from './media.js';
@@ -870,26 +870,28 @@ function renderVideoPanel() {
   fpsSel.addEventListener('change', () => { V.fps = Number(fpsSel.value); timelineChanged(); });
   const exportBtn = button('Export video', () => exportVideo(exportBtn), { cls: 'primary' });
 
+  const clearAll = () => {
+    if (!confirm('Remove every clip from the timeline?')) return;
+    V.items = []; V.sel = null; vidSeek(0); timelineChanged();
+  };
+  // the panel order, app-wide: add (and Clear all), the selected thing, how it's made, then what it makes
   $('#vidBody').replaceChildren(h('div', { class: 'panel-body' },
-    h('div', { class: 'row wrap' },
+    h('div', { class: 'row wrap panel-top' },
       button('+ Clips', addFromHistory, { cls: 'small primary' }),
       button('+ Images', addImages),
       button('+ Sound / files', addMediaFiles),
-      button('+ 3D scene…', addScene, { title: 'A 3D tab as a live clip' })),
+      button('+ 3D scene…', addScene, { title: 'A 3D tab as a live clip' }),
+      V.items.length ? button('Clear all', clearAll, { cls: 'small ghost' }) : null),
     clip || (V.items.length
       ? help('Tap a clip to edit it. Drag clips to move them (also onto other tracks), drag their ends to trim, and overlap two clips on a track to cross-fade. Higher video tracks draw on top.')
       : hint('Add generated clips, images or sound. They line up on V1 / A1; drag them onto V2 to layer them over V1.')),
     section('Sequence', null,
       hint(`${seqSize().join('×')} · ${V.fps || 'auto'} fps · ${fmtT(seqEnd())}`, 'section-sub'),
-      h('div', { class: 'grid-2' }, field('Frame size', sizeSel), field('Frame rate', fpsSel)),
-      V.items.length ? panelTop(exportBtn, () => {
-        if (!confirm('Remove every clip from the timeline?')) return;
-        V.items = []; V.sel = null; vidSeek(0); timelineChanged();
-      }) : null,
-      V.items.length ? help('The export lands in History.') : null,
-      V.items.length ? h('div', { class: 'row wrap' },
+      h('div', { class: 'grid-2' }, field('Frame size', sizeSel), field('Frame rate', fpsSel))),
+    V.items.length ? section('Export', null, help('The export lands in History.'),
+      h('div', { class: 'row wrap' }, exportBtn,
         button('Open in EffectCraft', (ev) => craftVideo(ev.currentTarget), { cls: 'small', title: 'Each clip as a layer in a comp, to keep editing on the computer' }),
-        button('Craft documents…', () => openCraftSheet(), { cls: 'small' })) : null)));
+        button('Craft documents…', () => openCraftSheet(), { cls: 'small' }))) : null));
 }
 
 // ---- effects: a stack of LTX / keying steps run on the clip's range and baked into a new clip ----

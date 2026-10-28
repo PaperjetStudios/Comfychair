@@ -619,7 +619,7 @@ function renderPanel() {
         h('div', { class: 'row wrap' }, linkBtn('Download', m.url, { download: m.name }),
           button('Add to the mix', () => addSource({ media: m.name })))))) : null);
 
-  body.replaceChildren(...[add, clip, track, voiceSection(), makerSection(), out].filter(Boolean));
+  body.replaceChildren(...[add, clip, track, makerSection(), voiceSection(), out].filter(Boolean));   // (add, the selected thing, making, then the export)
 }
 
 async function exportSound() {

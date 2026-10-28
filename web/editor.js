@@ -614,7 +614,7 @@ export function renderEditor() {
         });
       } : null),
       layerList(),
-      E.sel ? layerProps(E.sel) : canvasProps()));
+      E.sel ? layerProps(E.sel) : null, canvasProps(), exportProps()));   // (the panel order, app-wide)
   drawEditorCanvas();
 }
 
@@ -724,14 +724,19 @@ function canvasProps() {
       (m) => { arrangeLayers(m); renderEditor(); }, { action: true, disabled: !E.layers.length })),
     h('div', { class: 'row' },
       editorNum('Grid columns', E.cols, (v) => { E.cols = v; }, { min: 1, max: 12 }),
-      editorNum('Gap (px)', E.gap, (v) => { E.gap = v; }, { min: 0, max: 400 })),
+      editorNum('Gap (px)', E.gap, (v) => { E.gap = v; }, { min: 0, max: 400 })));
+}
+
+// what the edit makes: a picture to use as an input, a download, or a PhotoCraft document
+function exportProps() {
+  if (!E.layers.length) return null;
+  return section('Export', null,
     mpInput(() => E.mp, (n) => { E.mp = n; persistEditor(); }),
-    h('div', { class: 'row' },
-      button('Save as input', saveEditor, { cls: 'primary' }),
-      button('Download', downloadEditor, { cls: '' })),
     h('div', { class: 'row wrap' },
-      button('Open in PhotoCraft', (ev) => craftEditor(ev.currentTarget), { cls: 'small', title: 'Every layer as its own layer, to keep editing on the computer' }),
-      button('Craft documents…', () => openCraftSheet(), { cls: 'small' })));
+      button('Save as input', saveEditor, { cls: 'small primary' }),
+      button('Download', downloadEditor),
+      button('Open in PhotoCraft', (ev) => craftEditor(ev.currentTarget), { title: 'Every layer as its own layer, to keep editing on the computer' }),
+      button('Craft documents…', () => openCraftSheet())));
 }
 
 // The edit as a layered PhotoCraft document: each layer cropped as here and placed where it sits on the canvas
