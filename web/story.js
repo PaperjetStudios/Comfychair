@@ -11,7 +11,7 @@ import { fullScreen } from './layout.js';
 import { BLANK as COMP_BLANK, createEditor } from './editor-engine.js';
 import { openCompare } from './compare.js';
 import { addPicture as addCharPicture, castSection, characterById, characterSection, characters, mainPicture, mentionBox, onCharacters } from './characters.js';
-import { castLines, mentioned, plain, speakerOf } from './cast.js';
+import { castLines, dialogueLines, findCharacter, mentioned, pictureTag, plain, speakerOf } from './cast.js';
 
 // ---------------------------------------------------------------------------
 // story: a storyboard for writing a story down and sorting it out. A story is a title, notes (free writing or a
@@ -52,12 +52,14 @@ const ROLE = {
   batchSize: (f) => f.kind === 'int' && f.input === 'batch_size',
 };
 
-const newShot = (o = {}) => ({ id: uid(), what: '', action: '', size: '', angle: '', move: '', dur: 3, status: 'idea', frames: [], pick: null, pending: [], comp: null, canvas: null, ...o });
+const newShot = (o = {}) => ({ id: uid(), what: '', action: '', size: '', angle: '', move: '', dur: 3, status: 'idea', frames: [], pick: null, pending: [], comp: null, canvas: null,
+  clips: [], clip: null, vpending: [], mask: null, voice: null, rtpl: null, rprompt: '', vtpl: null, vprompt: '', toNext: true, ...o });
 const newScene = (o = {}) => ({ id: uid(), slug: '', summary: '', collapsed: false, shots: [newShot()], ...o });
-const BLANK = () => ({ title: '', notes: '', style: '', aspect: '16:9', tpl: null, batch: 1, scenes: [newScene()] });
+const BLANK = () => ({ title: '', notes: '', style: '', aspect: '16:9', tpl: null, batch: 1, scenes: [newScene()],
+  refine: { tpl: null, change: 0.55, batch: 2 }, video: { tpl: null, engine: 'qwen' } });
 let P = BLANK();
 const VIEWS = [['canvas', 'canvas', 'Canvas'], ['board', 'board', 'Board'], ['outline', 'list', 'Outline'], ['script', 'text', 'Script']];
-const U = { sel: null, doc: null, char: null, view: store.get('deck.story.view', 'canvas') };
+const U = { sel: null, doc: null, char: null, speaking: null, view: store.get('deck.story.view', 'canvas') };
 if (!VIEWS.some(([v]) => v === U.view)) U.view = 'canvas';
 
 let tabs = null, tabsReady = null;
@@ -148,7 +150,7 @@ function moveScene(sc, d) {
 }
 const copyShot = (s) => {
   const c = clone(s);
-  c.id = uid(); c.pending = [];
+  c.id = uid(); c.pending = []; c.vpending = [];
   c.frames = c.frames.map((f) => ({ ...f, id: uid(), was: f.id }));
   c.pick = c.frames.find((f) => f.was === s.pick)?.id || null;
   c.frames.forEach((f) => delete f.was);
@@ -239,6 +241,7 @@ async function makeFrame(s) {
 // a run for a shot ended: its pictures become frames (once), and the run stops waiting on it
 function settle(s, g) {
   s.pending = s.pending.filter((id) => id !== g.id);
+  s.vpending = s.vpending.filter((id) => id !== g.id);
   if (g.status === 'done') {
     const have = new Set(s.frames.filter((f) => f.gen === g.id).map((f) => f.index));
     const fresh = g.outputs.map((o, index) => ({ o, index })).filter(({ o, index }) => o.kind === 'image' && !have.has(index))
@@ -246,12 +249,17 @@ function settle(s, g) {
     s.frames.push(...fresh);
     if (fresh.length && !s.frames.some((f) => f.id === s.pick)) s.pick = fresh[0].id;
     if (fresh.length && s.status === 'idea') s.status = 'drafted';
+    const haveC = new Set(s.clips.filter((c) => c.gen === g.id).map((c) => c.index));
+    const clips = g.outputs.map((o, index) => ({ o, index })).filter(({ o, index }) => o.kind === 'video' && !haveC.has(index))
+      .map(({ o, index }) => ({ id: uid(), gen: g.id, index, url: o.url }));
+    s.clips.push(...clips);
+    if (clips.length) { s.clip = clips[0].id; s.status = 'made'; }
   }
 }
-const pendingShot = (gid) => allShots().find((s) => s.pending.includes(gid));
+const pendingShot = (gid) => allShots().find((s) => s.pending.includes(gid) || s.vpending.includes(gid));
 // runs that ended while this story wasn't open (or on another device): look them up once it is
 async function catchUp() {
-  const tab = tabs?.active?.id, ids = allShots().flatMap((s) => s.pending);
+  const tab = tabs?.active?.id, ids = allShots().flatMap((s) => [...s.pending, ...s.vpending]);
   if (!ids.length) return;
   let any = false;
   for (const id of ids) {
@@ -529,16 +537,275 @@ function openLightbox(id = U.sel) {
   draw();
 }
 
+// ---- refine and video: templates found by what their fields are for ----
+// main: the picture a template works from (an edit's Image to edit, an i2i's Source, a video's Start image); end:
+// a video's last frame; references: the edit and H3 models' extra pictures (a character's main picture goes there)
+const RROLE = {
+  ...ROLES,
+  prompt: (f) => f.kind === 'text' && !/negative/i.test(`${f.group} ${f.label} ${f.input}`)
+    && (/prompt/i.test(f.group) || /prompt/i.test(f.label) || (/edit/i.test(f.group) && /^(prompt|text)$/.test(f.input))),
+  width: (f) => f.kind === 'int' && (f.input === 'width' || /^width$/i.test(f.group)),
+  height: (f) => f.kind === 'int' && (f.input === 'height' || /^height$/i.test(f.group)),
+  main: (f) => f.kind === 'image' && !/reference|end image|last frame|character|mask|inpaint/i.test(`${f.group} ${f.label}`),
+  end: (f) => f.kind === 'image' && /end image|last frame/i.test(f.group),
+  denoise: (f) => f.kind === 'float' && f.input === 'denoise',
+};
+const refFields = (t) => t.fields.filter((f) => f.kind === 'image' && /reference/i.test(f.group));
+// a picture field's number in the prompt's syntax (Picture 2 is the template's second picture)
+const picNumber = (t, f) => t.fields.filter((x) => x.kind === 'image' && !/mask|inpaint/i.test(`${x.group} ${x.label}`)).indexOf(f) + 1;
+const usable = (t, media) => !t.error && t.media === media && roleField(t, 'main', RROLE) && roleField(t, 'prompt', RROLE) && !t.fields.some((f) => f.kind === 'video');
+const refineTemplates = () => S.templates.filter((t) => usable(t, 'image'));
+const videoTemplates = () => S.templates.filter((t) => usable(t, 'video'));
+const REFINE_FIRST = ['deck-qwen21-edit', 'deck-klein3-edit', 'deck-krea2-i2i', 'deck-qwen21-i2i', 'deck-moss-i2i'];
+const VIDEO_FIRST = ['deck-ltx-i2v', 'deck-ltx-flf2v', 'deck-h3-i2v'];
+const pickOf = (ts, want, first) => ts.find((t) => t.id === want) || first.map((id) => ts.find((t) => t.id === id)).find(Boolean) || ts[0] || null;
+const refineTemplate = (s) => pickOf(refineTemplates(), s.rtpl || P.refine.tpl, REFINE_FIRST);
+const videoTemplate = (s) => pickOf(videoTemplates(), s.vtpl || P.video.tpl, VIDEO_FIRST);
+const isEdit = (t) => /edit/i.test(roleField(t, 'main', RROLE)?.group || '');
+const CHANGE = [[0.35, 'A little'], [0.55, 'Some'], [0.75, 'A lot'], [0.9, 'Most']];
+const CAMERA = { static: 'The camera holds still.', pan: 'The camera pans.', tilt: 'The camera tilts.', push: 'The camera slowly pushes in.',
+  pull: 'The camera slowly pulls back.', track: 'The camera tracks with the movement.', handheld: 'Handheld camera.', crane: 'A rising crane shot.', zoom: 'The camera zooms in.' };
+
+// the shot's characters' main pictures into the template's reference pictures, in order: Map character id -> picture
+// number (for the prompt). values gets the pictures.
+function castPictures(t, s, values) {
+  const pics = new Map(), slots = refFields(t).filter((f) => !values[f.key]);
+  for (const c of castOf(s)) {
+    const m = mainPicture(c), f = m && slots.shift();
+    if (!f) continue;
+    values[f.key] = m;
+    pics.set(c.id, picNumber(t, f));
+  }
+  return pics;
+}
+// what a refine asks for, unless the shot has its own words
+function refinePrompt(s, t, pics = new Map()) {
+  const cast = characters(), what = plain(s.what.trim(), cast).replace(/[.\s]+$/, ''), style = P.style.trim().replace(/[.\s]+$/, '');
+  const lines = castLines(castOf(s), { style: t?.tag_style, pics });
+  if (t && isEdit(t)) {
+    const it = pictureTag(t.tag_style, 1) || 'this picture';
+    return [`Turn ${it} into a finished, detailed frame${what ? `: ${what}` : ''}. Keep the layout, the poses and the camera.`,
+      style ? `Style: ${style}.` : '', ...lines].filter(Boolean).join('\n');
+  }
+  return [[[SIZES.find(([k]) => k === s.size)?.[2], ANGLES.find(([k]) => k === s.angle)?.[2]].filter(Boolean).join(', '), what, style].filter(Boolean).join(', '),
+    ...lines].join('\n');
+}
+// what a video asks for: what we see, what happens and is said, the camera, who's who, the style
+function videoPrompt(s, t, pics = new Map()) {
+  const cast = characters(), h3 = t?.tag_style === 'h3';
+  const said = s.action.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
+    const sp = speakerOf(l);
+    if (sp && sp.text.trim()) {
+      const who = findCharacter(cast, sp.who)?.name.trim() || sp.who, how = sp.paren.replace(/[()]/g, '').trim();
+      const words = plain(sp.text.trim(), cast);
+      return h3 ? `${who}${how ? ` (${how})` : ''} says <d>${words}</d>` : `${who} says${how ? `, ${how},` : ''} "${words}"`;
+    }
+    return plain(l, cast);
+  }).map((x) => (/[.!?"'>]\s*$/.test(x) ? x.trim() : x.replace(/[.\s]*$/, '.')));
+  return [plain(s.what.trim(), cast).replace(/[.\s]*$/, '.'), ...said, CAMERA[s.move] || '',
+    ...castLines(castOf(s), { style: t?.tag_style, pics }), P.style.trim() ? `Style: ${P.style.trim().replace(/[.\s]+$/, '')}.` : '']
+    .filter((x) => x && x !== '.').join(' ');
+}
+// a width and height for the template at the story's shape: about as many pixels as its own default, on its step
+function sizeFor(t, step = 32) {
+  const w = roleField(t, 'width', RROLE), hh = roleField(t, 'height', RROLE);
+  if (!w || !hh) return {};
+  const area = (+w.value || 1024) * (+hh.value || 576), r = ratio(), fit = (f, v) => Math.min(f.max ?? 1e5, Math.max(f.min ?? 64, v));
+  return { width: fit(w, Math.round(Math.sqrt(area * r) / step) * step), height: fit(hh, Math.round(Math.sqrt(area / r) / step) * step) };
+}
+const nextShot = (s) => { const l = allShots(); return l[l.indexOf(s) + 1] || null; };
+const lineKey = (s) => dialogueLines(s.action, characters()).filter((l) => l.c?.voice).map((l) => `${l.c.voice}|${l.paren}|${l.text}`).join('\n');
+
+// ---- refine: the shot's frame (the canvas, flattened) through an edit or image-to-image template ----
+async function refineShot(s) {
+  const t = refineTemplate(s);
+  if (!t) return toast('No image-to-image or edit template is installed', true);
+  if (CV.shot === s.id) await settleCanvas();   // the canvas as it is now
+  const f = chosen(s);
+  if (!f) return toast('Draw on the canvas or add a frame first', true);
+  try {
+    const main = roleField(t, 'main', RROLE), values = {};
+    values[main.key] = await frameInput(f, { mp: 0, multiple: 16 });
+    const pics = castPictures(t, s, values);
+    const prompt = s.rprompt.trim() ? plain(s.rprompt.trim(), characters()) : refinePrompt(s, t, pics);
+    const [w, hh] = frameSize(t);
+    Object.assign(values, valuesByRole(t, { prompt, seed: -1, width: w, height: hh, denoise: P.refine.change }, RROLE));
+    const mf = t.fields.find((x) => x.kind === 'mask' && x.image_key === main.key);
+    if (s.mask?.name && mf) values[mf.key] = { feather: 8, grow: 0, fit: false, name: s.mask.name, box: s.mask.box || null, src: values[main.key], crop: null };
+    const gens = await queueRun({ template: t.id, values, batch: P.refine.batch });
+    s.pending.push(...gens.map((g) => g.id));
+    changed();
+    toast(`Refining (#${gens[0].id}${gens.length > 1 ? '…' : ''}): the results land in the shot's frames`);
+  } catch (e) { toast(e.message, true); }
+}
+// a mask over the shot's frame for a refine: painted (maskpaint.js), or the canvas's selection
+async function paintRefineMask(s) {
+  if (CV.shot === s.id) await settleCanvas();
+  const f = chosen(s);
+  if (!f) return toast('Draw on the canvas or add a frame first', true);
+  const picture = f.input || await frameInput(f);
+  const { openMaskPainter } = await import('./maskpaint.js');
+  openMaskPainter({ picture, mask: s.mask?.src === picture ? s.mask.name : null, onDone: async (blob, box) => {
+    if (!blob) { s.mask = null; changed(); return; }
+    s.mask = { ...(await saveMask(blob)), box, src: picture };
+    changed();
+  } });
+}
+async function saveMask(blob) {
+  const r = await fetch('/api/inputs/mask', { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: blob });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
+  return { name: (await r.json()).name };
+}
+async function selectionToMask(s) {
+  const m = CV.shot === s.id && CV.eng.paint.selectionMask(CV.eng.frame());
+  if (!m) return toast('Select a part of the canvas first (the rectangle or lasso tool)', true);
+  await settleCanvas();
+  try {
+    const blob = await new Promise((res) => m.toBlob(res, 'image/png'));
+    s.mask = { ...(await saveMask(blob)), box: null, src: chosen(s)?.input || null };
+    changed();
+    toast('The selection is the refine\'s mask');
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---- video: the shot's frame (and the next one's, for a first-to-last template) through an image-to-video template ----
+async function speakLines(s) {
+  const lines = dialogueLines(s.action, characters()), voiced = lines.filter((l) => l.c?.voice);
+  if (!voiced.length) return toast('No line here is said by a character with a voice (Characters, Voice)', true);
+  const at = locate(s.id), n = at ? `${at.si + 1}.${at.i + 1}` : 'shot';
+  U.speaking = s.id; renderPanel();
+  try {
+    const { waitJob } = await import('./clipimport.js');
+    const r = await waitJob(await api('/api/voice/speak', { method: 'POST', busy: false, body: {
+      lines: voiced.map((l) => ({ voice: l.c.voice, text: l.text, delivery: l.paren.replace(/[()]/g, '').trim() || null })),
+      engine: P.video.engine || 'qwen', name: `shot-${n}` } }), (p, l) => { const el = $('#stSpeaking'); if (el) el.textContent = `${l || 'Speaking'}… ${Math.round((p || 0) * 100)}%`; });
+    let m = r.lines[0], seconds = m.seconds;
+    if (r.lines.length > 1) {   // one sound: the lines in order, a breath apart
+      let t = 0;
+      const items = r.lines.map((x) => { const it = { track: 'a', src: { media: x.name }, at: t, in: 0, out: x.seconds }; t += x.seconds + 0.3; return it; });
+      m = await api('/api/sound/render', { method: 'POST', timeout: 300000, busy: 'Joining the lines…', body: { tracks: [{ id: 'a' }], items, name: `shot-${n}-lines`, format: 'wav' } });
+      seconds = m.duration;
+    }
+    s.voice = { media: m.name, url: m.url, seconds, key: lineKey(s) };
+    if (voiced.length < lines.length) toast(`${lines.length - voiced.length} line${lines.length - voiced.length > 1 ? 's' : ''} left out: no voice for ${[...new Set(lines.filter((l) => !l.c?.voice).map((l) => l.who))].join(', ')}`, true);
+    changed();
+  } catch (e) { toast(e.message, true); } finally { U.speaking = null; renderPanel(); }
+}
+async function makeVideo(s) {
+  const t = videoTemplate(s);
+  if (!t) return toast('No image-to-video template is installed', true);
+  if (CV.shot === s.id) await settleCanvas();
+  const f = chosen(s);
+  if (!f) return toast('The shot needs a frame first: draw one, or make one', true);
+  const sound = roleField(t, 'sound', RROLE), voice = roleField(t, 'voice', RROLE), end = roleField(t, 'end', RROLE);
+  const vo = s.voice && s.voice.key === lineKey(s) ? s.voice : null;
+  if (sound && !vo) return toast(`${t.name || t.id} plays to a sound: speak the shot's lines first`, true);
+  try {
+    const values = {};
+    values[roleField(t, 'main', RROLE).key] = await frameInput(f, { mp: 0, multiple: 16 });
+    const nx = nextShot(s);
+    if (end && s.toNext && nx && chosen(nx)) values[end.key] = await frameInput(chosen(nx), { mp: 0, multiple: 16 });
+    const pics = castPictures(t, s, values);
+    if (vo && sound) values[sound.key] = { media: vo.media };
+    if (vo && voice) values[voice.key] = { media: vo.media };
+    const prompt = s.vprompt.trim() ? plain(s.vprompt.trim(), characters()) : videoPrompt(s, t, pics);
+    const len = Math.max(+s.dur || 3, vo ? Math.ceil(vo.seconds + 0.5) : 0);
+    Object.assign(values, valuesByRole(t, { prompt, seed: -1, len, ...sizeFor(t) }, RROLE));
+    const gens = await queueRun({ template: t.id, values });
+    s.vpending.push(...gens.map((g) => g.id));
+    changed();
+    toast(`Making the video (#${gens[0].id}): it lands on the shot`);
+  } catch (e) { toast(e.message, true); }
+}
+const clipOf = (s) => s.clips.find((c) => c.id === s.clip) || s.clips[0] || null;
+function playClip(c) {
+  openSheet(h('h3', {}, `Clip #${c.gen}`), h('div', { class: 'media-big' }, h('video', { src: c.url, controls: true, autoplay: true, loop: true, playsInline: true })));
+}
+
+// the refine and video sections of the panel
+const tplSelect = (list, cur, own, set, label) => {
+  const sel = h('select', { 'aria-label': label },
+    h('option', { value: '', selected: !own }, `The story's (${cur?.name || cur?.id || 'none'})`),
+    list.map((x) => h('option', { value: x.id, selected: own === x.id }, x.name || x.id)));
+  sel.addEventListener('change', () => set(sel.value || null));
+  return sel;
+};
+function refineSection(at) {
+  const { s } = at, t = refineTemplate(s), f = chosen(s), ts = refineTemplates();
+  if (!ts.length) return section('Refine', null, note('No image-to-image or edit template is installed.'));
+  const story = pickOf(ts, P.refine.tpl, REFINE_FIRST), denoise = t && roleField(t, 'denoise', RROLE);
+  const mf = t && t.fields.find((x) => x.kind === 'mask');
+  const mask = s.mask?.name ? h('div', { class: 'row' },
+    h('button', { type: 'button', class: 'mask-thumb', title: 'Edit the mask', 'aria-label': 'Edit the mask', onclick: () => paintRefineMask(s) }, h('img', { src: thumbUrl(s.mask.name, 128), alt: '' })),
+    s.mask.src && f && s.mask.src !== f.input ? hint('Painted on an older picture') : null,
+    iconBtn('Remove the mask', icon('trash'), () => { s.mask = null; changed(); })) : null;
+  const pics = new Map(), probe = {};
+  if (t) castPictures(t, s, probe).forEach((v, k) => pics.set(k, v));
+  return section('Refine', null,
+    help('Runs the shot\'s frame (the canvas, flattened) through an edit or image-to-image template, with the shot\'s words, its characters\' looks and pictures, and the story\'s style. The pictures it makes land in the shot\'s frames: choose one, or put it on the canvas as a new layer to keep working.'),
+    field('Template', tplSelect(ts, story, s.rtpl, (v) => { s.rtpl = v; changed(); }, 'Refine template')),
+    mf ? field('Mask', help('Only the masked part changes; the rest of the frame stays as it is.'),
+      mask, h('div', { class: 'row wrap' },
+        button([icon('brush'), s.mask ? 'Paint again' : 'Paint a mask'], () => paintRefineMask(s), { disabled: !f }),
+        U.view === 'canvas' ? button([icon('select'), 'The selection'], () => selectionToMask(s), { title: 'What is selected on the canvas (rectangle or lasso)' }) : null)) : null,
+    denoise ? field('Change', seg(CHANGE, CHANGE.find(([v]) => Math.abs(v - P.refine.change) < 0.01)?.[0] ?? null, (v) => { P.refine.change = +v; persist(); renderPanel(); }, { wrap: true })) : null,
+    field('Prompt', bound(s, 'rprompt', { rows: 2, placeholder: 'Leave empty for one made from the shot', label: 'Refine prompt', mention: true }),
+      info(refinePrompt(s, t, pics), 'The prompt it makes')),
+    field('Pictures per run', seg([1, 2, 3, 4].map((n) => [n, String(n)]), P.refine.batch, (v) => { P.refine.batch = +v; persist(); renderPanel(); })),
+    button([icon('sparkle'), 'Refine'], () => refineShot(s), { cls: 'primary', disabled: !f || !t, title: f ? '' : 'Draw on the canvas or add a frame first' }));
+}
+function videoSection(at) {
+  const { s } = at, t = videoTemplate(s), ts = videoTemplates();
+  if (!ts.length) return section('Video', null, note('No image-to-video template is installed.'));
+  const story = pickOf(ts, P.video.tpl, VIDEO_FIRST), end = t && roleField(t, 'end', RROLE), nx = nextShot(s);
+  const sound = t && roleField(t, 'sound', RROLE), voice = t && roleField(t, 'voice', RROLE);
+  const lines = dialogueLines(s.action, characters()), voiced = lines.filter((l) => l.c?.voice);
+  const vo = s.voice && s.voice.key === lineKey(s) ? s.voice : null;
+  const clips = h('div', { class: 'st-frames' },
+    s.clips.map((c) => h('div', { class: `st-frame${c === clipOf(s) ? ' on' : ''}`, style: `aspect-ratio:${ratio()}` },
+      h('button', { type: 'button', class: 'st-frame-img', 'aria-label': c === clipOf(s) ? 'Play the clip' : 'Use this clip',
+        onclick: () => { if (c === clipOf(s)) playClip(c); else { s.clip = c.id; changed(); } } }, h('img', { src: previewUrl(c.url, 320), alt: '', loading: 'lazy' })),
+      c === clipOf(s) ? h('span', { class: 'st-frame-on' }, icon('check')) : null,
+      h('span', { class: 'st-frame-tag' }, icon('play')),
+      iconBtn('Remove this clip', icon('close'), () => withUndo('Removed the clip', () => { s.clips = s.clips.filter((x) => x !== c); if (s.clip === c.id) s.clip = s.clips[0]?.id || null; }), { class: 'icon-btn st-frame-x' }))),
+    s.vpending.map((id) => h('div', { class: 'st-frame st-frame-wait', style: `aspect-ratio:${ratio()}` },
+      h('span', { class: 'st-spin' }), h('span', {}, S.history.get(id)?.status === 'running' ? 'Making…' : 'Waiting…'))));
+  const pics = new Map();
+  if (t) castPictures(t, s, {}).forEach((v, k) => pics.set(k, v));
+  return section('Video', null,
+    help('Makes the shot move: its frame as the first frame of an image-to-video template, with a prompt from what we see, the action and the lines, the camera move and the characters, for the shot\'s length. The clips land here; Shots to video uses the chosen one.'),
+    field('Template', tplSelect(ts, story, s.vtpl, (v) => { s.vtpl = v; changed(); }, 'Video template')),
+    end ? field('Last frame', toggleBtn('End on the next shot\'s frame', s.toNext, (v) => { s.toNext = v; changed(); }),
+      !nx || !chosen(nx) ? hint(nx ? 'The next shot has no frame yet' : 'This is the last shot') : null) : null,
+    lines.length ? field('Lines', h('div', { class: 'st-lines' }, lines.map((l) => h('div', { class: 'st-line' },
+      h('b', {}, l.who), h('span', {}, l.text), l.c?.voice ? h('span', { class: 'ch-voice', title: 'Has a voice' }, icon('mic')) : h('span', { class: 'hint' }, 'no voice')))),
+    voiced.length ? h('div', { class: 'row wrap' },
+      button([icon('mic'), vo ? 'Speak them again' : 'Speak the lines'], () => speakLines(s), { disabled: U.speaking === s.id }),
+      seg([['qwen', 'Qwen'], ['index', 'IndexTTS-2'], ['fish', 'Fish S2']], P.video.engine || 'qwen', (v) => { P.video.engine = v; persist(); }, { wrap: true })) : null,
+    U.speaking === s.id ? h('p', { id: 'stSpeaking', class: 'hint' }, 'Speaking…') : null,
+    vo ? h('audio', { src: vo.url, controls: true, preload: 'none', class: 'ch-audio' }) : null,
+    vo && !sound && !voice ? hint('This template takes no sound: the lines go in the prompt only.') : null,
+    sound && !vo ? note(`${t.name || t.id} plays to a sound: speak the lines first.`) : null,
+    help('Their lines in the shot\'s action ("MARA: words") are spoken in their characters\' voices with the Sound tab\'s engines, then given to templates that take a sound (a2v: the video plays to it) or a voice.')) : null,
+    field('Prompt', bound(s, 'vprompt', { rows: 2, placeholder: 'Leave empty for one made from the shot', label: 'Video prompt', mention: true }),
+      info(videoPrompt(s, t, pics), 'The prompt it makes')),
+    field([`Clips`, h('span', {}, `${s.clips.length}`)], clips),
+    button([icon('video'), 'Make the video'], () => makeVideo(s), { cls: 'primary', disabled: !chosen(s) || !t || (sound && !vo),
+      title: `${t?.name || t?.id || ''}, ${Math.max(+s.dur || 3, vo ? Math.ceil(vo.seconds + 0.5) : 0)} s` }));
+}
+const toggleBtn = (label, on, set) => h('button', { type: 'button', class: `btn small${on ? ' on' : ''}`, 'aria-pressed': String(!!on), onclick: () => set(!on) }, label);
+
 // ---- the whole story at once ----
 async function shotsToVideo() {
   const list = [];
-  P.scenes.forEach((sc, si) => sc.shots.forEach((s, i) => { const f = chosen(s); if (f) list.push({ s, f, n: `${si + 1}.${i + 1}`, sc }); }));
+  P.scenes.forEach((sc, si) => sc.shots.forEach((s, i) => { const f = chosen(s), c = clipOf(s); if (f || c) list.push({ s, f, c, n: `${si + 1}.${i + 1}`, sc }); }));
   if (!list.length) return toast('No shot has a frame yet', true);
   const missing = allShots().length - list.length;
   try {
     const { addToTimeline } = await import('./video.js');
     switchTab('video');
-    for (const { s, f, n, sc } of list) {
+    for (const { s, f, c, n, sc } of list) {
+      if (c) { await addToTimeline({ kind: 'video', src: { generation: c.gen, index: c.index }, url: c.url, label: `${n}${sc.slug ? ` ${sc.slug}` : ''}` }); continue; }
       await addToTimeline({ kind: 'image', src: f.input ? { input: f.input } : { generation: f.gen, index: f.index }, url: frameUrl(f),
         thumb: frameThumb(f, 160), label: `${n}${sc.slug ? ` ${sc.slug}` : ''}`, len: +s.dur || 3 });
     }
@@ -806,7 +1073,7 @@ function renderBar() {
   bar.replaceChildren(
     seg(VIEWS.map(([v, ic, l]) => [v, [icon(ic), h('span', { class: 'st-bar-lbl' }, l)], l]), U.view, (v) => { U.view = v; store.set('deck.story.view', v); renderStage(); renderPanel(); }),
     barBtn('plus', 'Scene', () => addScene(), 'A new scene at the end'),
-    barBtn('video', 'Shots to video', shotsToVideo, 'Every shot\'s chosen frame on the Video tab\'s timeline, in order, each for its length'),
+    barBtn('video', 'Shots to video', shotsToVideo, 'Every shot\'s clip, or its chosen frame for its length, on the Video tab\'s timeline in order'),
     barBtn('copy', 'Copy as text', copyText, 'The outline as plain text'),
     h('span', { class: 'timecode' }, `${P.scenes.length} sc · ${n} shots · ${framed}/${n} framed · ${fmtSecs(secs(allShots()))}`));
 }
@@ -911,6 +1178,7 @@ function fillPanel() {
   const parts = [ed?.paintProps(), at ? shotSection(at) : section('Shot', null, placeholder('Tap a shot to edit it here')),
     ...(ed ? [section('Layers', null, ed.topRow([iconBtn('Frame from a clip', icon('film'), frameFromVideo, { class: 'icon-btn ico-btn' })]), ed.layerList()),
       ed.layerProps(), ed.canvasProps()] : []),
+    at ? refineSection(at) : null, at ? videoSection(at) : null,
     castSection({ open: U.char, onOpen: openCharacter }),
     U.char && characterById(U.char) ? characterSection(characterById(U.char), { done: () => openCharacter(null),
       extra: at && chosen(at.s) ? [button([icon('canvas'), 'The shot\'s frame'], () => frameToCharacter(characterById(U.char), at.s), { title: 'Add this shot\'s frame as one of their pictures' })] : [] }) : null,
@@ -933,9 +1201,10 @@ export function renderStory() { renderStage(); renderPanel(); ensureTabs(); }
 // ---- tabs: each story is a document in the project folder ----
 function migrate(p) {
   const d = BLANK();
-  const shot = (s) => ({ ...newShot(), ...s, frames: Array.isArray(s.frames) ? s.frames : [], pending: Array.isArray(s.pending) ? s.pending : [] });
+  const arr = (x) => (Array.isArray(x) ? x : []);
+  const shot = (s) => ({ ...newShot(), ...s, frames: arr(s.frames), pending: arr(s.pending), clips: arr(s.clips), vpending: arr(s.vpending) });
   const scenes = (Array.isArray(p.scenes) ? p.scenes : []).map((sc) => ({ ...newScene(), ...sc, shots: (sc.shots || []).map(shot) }));
-  return { ...d, ...p, scenes: scenes.length ? scenes : d.scenes };
+  return { ...d, ...p, scenes: scenes.length ? scenes : d.scenes, refine: { ...d.refine, ...(p.refine || {}) }, video: { ...d.video, ...(p.video || {}) } };
 }
 const adapter = {
   empty: BLANK,
