@@ -1130,7 +1130,8 @@ button.sheet-caret { width: 22px; }
 /* clip importer (clipimport.js) */
 .clip-import { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
 /* Save clip stays in reach at the foot of the sheet, under the long editor */
-.clip-import .actions { position: sticky; bottom: 0; z-index: 3; background: var(--surface); padding: 8px 0; border-top: 1px solid var(--line); }
+.clip-import .clip-save { position: sticky; bottom: 0; z-index: 3; display: grid; gap: 8px; background: var(--surface); padding: 8px 0; border-top: 1px solid var(--line); }
+.clip-import .clip-save .actions { margin: 0; }
 .clip-url { gap: 8px; }
 .clip-url input { flex: 1; min-width: 0; }
 .clip-files { display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow-y: auto; }

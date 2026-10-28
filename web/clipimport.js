@@ -4,7 +4,7 @@
 // long videos. Links and PC files are cut by the server (app/clipimport.py). Device files are cut here
 // with ffmpeg.wasm as a stream copy (no re-encode, only the needed bytes are read from the file) and only
 // that piece is uploaded; the server then re-encodes it from the exact start.
-import { api, button, closeSheet, field, fileButton, h, hint, note, openSheet, placeholder, seg, store, toast, toggle } from './ui.js';
+import { api, button, closeSheet, field, fileButton, h, help, hint, note, openSheet, placeholder, seg, store, toast, toggle } from './ui.js';
 import { videoEditor } from './vfield.js';
 import { S } from './core.js';
 
@@ -90,7 +90,7 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
   openSheet(h('h3', {}, title), h('div', { class: 'row wrap' }, tabs, keep, projectBox), body);
 
   const sizeField = () => field('Size', seg(SIZES.map(([v, l]) => [v, l]), size, (v) => { size = Number(v); store.set('deck.clipImport.size', size); }),
-    hint('Largest height kept. Original keeps the full picture.'));
+    help('Largest height kept. Original keeps the full picture.'));
   const nameInput = (v) => h('input', { type: 'text', value: v || '', placeholder: 'Name', 'aria-label': 'Clip name' });
   const bar = h('div', { class: 'clip-progress hidden' }, h('div', { class: 'clip-progress-fill' }), h('span', { class: 'hint' }));
   const progress = (p, label) => {
@@ -127,6 +127,14 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
     return b;
   };
 
+  // the clip's settings and Save go in the editor's side column (beside the picture on a wide screen, under it on a
+  // narrow one), so they're in view without scrolling past the editor
+  // (size, name, progress and Save: one block, pinned to the foot of the sheet)
+  const withSide = (ed, size, name, progress, save, ...more) => {
+    ed.append(h('div', { class: 'clip-save' }, size, name, progress, save), ...more.filter(Boolean));
+    return ed;
+  };
+
   // ---- a link ----
   const showLink = () => {
     const url = h('input', { type: 'url', placeholder: 'https://youtube.com/watch?v=… or a Reddit, X, Vimeo link', 'aria-label': 'Video link',
@@ -156,14 +164,13 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
       const smooth = h('p', { class: 'hint' }, L.cache ? 'Seeking is slow until the smooth preview is in: downloading…' : '');
       out.replaceChildren(
         h('p', { class: 'hint' }, [L.title, L.uploader, fmtDur(L.duration || 0), top ? `up to ${top}p` : null].filter(Boolean).join(' · ')),
-        ed, smooth,
-        hint('The preview is small; the saved clip is cut from the full-quality video and only that part is downloaded.'),
-        sizeField(), field('Name', name), bar,
-        h('div', { class: 'actions' }, saveBtn(async () => {
-          const { start, end } = span(L.duration);
-          return waitJob(await api(`/api/clip/link/${L.id}/cut`, { method: 'POST', busy: false,
-            body: { start, end, height: size || null, crop: cut?.crop, name: name.value.trim() || L.title, sound: soundOnly } }), progress);
-        })));
+        withSide(ed, sizeField(), field('Name', name), bar,
+          h('div', { class: 'actions' }, saveBtn(async () => {
+            const { start, end } = span(L.duration);
+            return waitJob(await api(`/api/clip/link/${L.id}/cut`, { method: 'POST', busy: false,
+              body: { start, end, height: size || null, crop: cut?.crop, name: name.value.trim() || L.title, sound: soundOnly } }), progress);
+          })), smooth,
+          hint('The preview is small; the saved clip is cut from the full-quality video and only that part is downloaded.')));
       if (L.cache) {   // after the editor is on the page: the job stops once it's gone
         waitJob({ job: L.cache }, (p) => { smooth.textContent = `Seeking is slow until the smooth preview is in: ${Math.round(p * 100)}%`; }, () => ed.isConnected)
           .then((r) => { if (r && ed.isConnected) { ed.swap(r.video); smooth.textContent = 'Smooth preview in: seeking is instant now.'; } })
@@ -231,15 +238,14 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
       const proxied = url.startsWith('/api/clip/tmp/');
       out.replaceChildren(
         h('p', { class: 'hint' }, `${x.name} · ${info.width}×${info.height} · ${+info.fps.toFixed(2)} fps · ${fmtDur(info.duration)} · ${fmtSize(x.size)}`),
-        editor({ url, info: Promise.resolve(info), duration: info.duration, onError: () => cant.classList.remove('hidden') }),
-        cant, proxied ? hint('Showing the preview copy; the clip is cut from the original.')
-          : h('div', { class: 'row' }, proxyBtn, hint('Seeking slow or jumpy (4K, long files)? A small copy seeks instantly.')),
-        sizeField(), field('Name', name), bar,
-        h('div', { class: 'actions' }, saveBtn(async () => {
-          const { start, end } = span(info.duration);
-          return waitJob(await api('/api/clip/file/cut', { method: 'POST', busy: false,
-            body: { path: x.path, start, end, height: size || null, crop: cut?.crop, name: name.value.trim() || x.name, sound: soundOnly } }), progress);
-        })));
+        withSide(editor({ url, info: Promise.resolve(info), duration: info.duration, onError: () => cant.classList.remove('hidden') }),
+          sizeField(), field('Name', name), bar,
+          h('div', { class: 'actions' }, saveBtn(async () => {
+            const { start, end } = span(info.duration);
+            return waitJob(await api('/api/clip/file/cut', { method: 'POST', busy: false,
+              body: { path: x.path, start, end, height: size || null, crop: cut?.crop, name: name.value.trim() || x.name, sound: soundOnly } }), progress);
+          })), cant, proxied ? hint('Showing the preview copy; the clip is cut from the original.')
+            : h('div', { class: 'row' }, proxyBtn, hint('Seeking slow or jumpy (4K, long files)? A small copy seeks instantly.'))));
     };
     draw(`/api/clip/file?path=${encodeURIComponent(x.path)}`);
   };
@@ -265,8 +271,8 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
     const cant = h('div', { class: 'hidden' }, note("This browser can't play that file here. Copy it to the PC and use the This PC tab.", 'warn'));
     out.replaceChildren(
       h('p', { class: 'hint' }, `${fl.name} · ${fmtSize(fl.size)}`),
-      editor({ url: objUrl, info: meta, duration: 0, onError: () => cant.classList.remove('hidden') }),
-      cant, sizeField(), field('Name', name), bar,
+      withSide(editor({ url: objUrl, info: meta, duration: 0, onError: () => cant.classList.remove('hidden') }),
+      sizeField(), field('Name', name), bar,
       h('div', { class: 'actions' }, saveBtn(async () => {
         await meta;
         const { start, end } = span(dur);
@@ -287,7 +293,7 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
         form.append('name', name.value.trim() || fl.name);
         if (soundOnly) form.append('sound', 'true');
         return waitJob(await api('/api/clip/upload', { method: 'POST', form, busy: false }), progress);
-      })));
+      }))), cant);
   };
 
   const show = () => { cut = null; ({ link: showLink, pc: () => showPc(), device: showDevice })[tab](); };
