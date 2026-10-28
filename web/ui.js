@@ -442,11 +442,14 @@ export const hint = (text, cls = '') => h('p', { class: `hint ${cls}`.trim() }, 
 export const placeholder = (text) => h('div', { class: 'placeholder' }, text);
 export const note = (text, kind = 'warn') => h('div', { class: `note ${kind}` }, text);
 
+export const pctFmt = (v) => `${Math.round(v * 100)}%`;
+export const panFmt = (v) => (Math.abs(v) < 0.01 ? 'centre' : v < 0 ? `${Math.round(-v * 100)}% left` : `${Math.round(v * 100)}% right`);
+
 // A slider (numSlider) with its value shown beside the label. onInput runs while dragging, onChange
 // once it's let go or typed.
-export function rangeField(label, get, set, { min, max, step, fmt = (v) => v.toFixed(2), onInput = null, onChange = null, help: tip = null }) {
+export function rangeField(label, get, set, { min, max, step, digits = null, fmt = (v) => v.toFixed(2), onInput = null, onChange = null, help: tip = null }) {
   const val = h('span', {}, fmt(get()));
-  const r = numSlider({ min, max, step, value: get(), label });
+  const r = numSlider({ min, max, step, digits, value: get(), label });
   const take = () => { set(parseFloat(r.value)); val.textContent = fmt(get()); };
   r.addEventListener('input', () => { if (r.dataset.scrubbing) { take(); onInput?.(); } });
   r.addEventListener('change', () => { take(); onInput?.(); onChange?.(); });

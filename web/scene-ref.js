@@ -6,7 +6,7 @@ import { C, FPS, R, SC, hooks, save } from './scene-data.js';
 import { canvas, viewer } from './scene-view.js';
 import { renderPanel, renderToolbar, setSceneMode } from './scene-ui.js';
 import { addModeSection, modeOf } from './scene-modes.js';
-import { button, clamp, h, help, rangeField, section, toast, toggle } from './ui.js';
+import { button, clamp, h, help, rangeField, section, toast, toggle, pctFmt } from './ui.js';
 import { inputUrl } from './core.js';
 import { openVideoPicker, soundSource } from './media.js';
 
@@ -93,7 +93,7 @@ function build() {
   return section('Reference', null,
     ref ? h('p', { class: 'hint' }, `${ref.kind === 'video' ? '🎞' : '🖼'} ${ref.label || ''}`) : null,
     ref ? toggle('Show over the view', ref.on !== false, (on) => { ref.on = on; save(); syncRef(); renderToolbar(); }) : null,
-    ref ? rangeField('Opacity', () => ref.opacity ?? 0.5, (v) => { ref.opacity = v; }, { min: 0.05, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%`,
+    ref ? rangeField('Opacity', () => ref.opacity ?? 0.5, (v) => { ref.opacity = v; }, { min: 0.05, max: 1, step: 0.05, fmt: pctFmt,
       onChange: () => save() }) : null,
     pick,
     help('A picture or clip over the shot frame, to line the camera and the people up with. A clip follows the playhead. It is only on screen: renders, saved frames and exports leave it out. ◫ on the view shows or hides it.'));

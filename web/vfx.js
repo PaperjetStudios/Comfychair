@@ -1,4 +1,4 @@
-import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle, textArea } from './ui.js';
+import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle, textArea, pctFmt } from './ui.js';
 import { S, inputUrl, thumbUrl, onServer, switchTab } from './core.js';
 import { bareSource, cardMedia, clipLabel, clipUrl, genLabel, openImagePicker, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
 import { hooks as genHooks } from './generate.js';
@@ -539,9 +539,9 @@ function canvasFields() {
     field('Canvas', seg(ASPECTS.map(([v, l]) => [v, l]), ASPECTS.some(([v]) => Math.abs(v - (c.aspect || 0)) < 1e-6) ? c.aspect : 0,
       (v) => { c.aspect = Number(v); changed(); }, { wrap: true }),
       help('Its shape. The clip keeps its own resolution at size 1; the frame grows around it.')),
-    num('scale', 'Clip size', { min: 0.3, max: 1.5, step: 0.01, fmt: (v) => `${Math.round(v * 100)}%`, help: '100% fits the clip inside the canvas. Drag the clip on the preview to move it.' }),
-    num('cx', 'Across', { min: 0, max: 1, step: 0.01, fmt: (v) => `${Math.round(v * 100)}%` }),
-    num('cy', 'Up / down', { min: 0, max: 1, step: 0.01, fmt: (v) => `${Math.round(v * 100)}%` }),
+    num('scale', 'Clip size', { min: 0.3, max: 1.5, step: 0.01, fmt: pctFmt, help: '100% fits the clip inside the canvas. Drag the clip on the preview to move it.' }),
+    num('cx', 'Across', { min: 0, max: 1, step: 0.01, fmt: pctFmt }),
+    num('cy', 'Up / down', { min: 0, max: 1, step: 0.01, fmt: pctFmt }),
     button('Centre', () => { Object.assign(c, { scale: c.scale, cx: 0.5, cy: 0.5 }); changed(); }, { cls: 'small' }),
   ];
 }

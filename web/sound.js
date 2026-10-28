@@ -1,6 +1,6 @@
 import {
   $, h, store, uid, api, toast, undoToast, clamp, button, iconBtn, linkBtn, seg, field, section, hint, help, info, note,
-  placeholder, numSlider, fileButton, rangeField, insertAtCursor, toggle, textArea,
+  placeholder, fileButton, rangeField, insertAtCursor, panFmt, pctFmt, toggle, textArea,
 } from './ui.js';
 import { DELIVERY, INLINE_TAGS, parseScript, withDelivery, withName } from './dialogue.js';
 import { S, onServer } from './core.js';
@@ -8,7 +8,7 @@ import { ROLES, queueRun, template, valuesByRole } from './make.js';
 import { bareSource, extractSound, openSoundPicker, soundInput, soundSource, uploadMedia } from './media.js';
 import { waitJob } from './clipimport.js';
 import { TabSet } from './tabs.js';
-import { dragWindow, durationOf, timeline, wavePeaks } from './timeline.js';
+import { clipSoundFields, dragWindow, durationOf, timeline, wavePeaks } from './timeline.js';
 
 // ---------------------------------------------------------------------------
 // sound: a multi-track sound editor laid out like the Video tab. Tracks mix (mute, solo, level, pan),
@@ -350,13 +350,9 @@ function makerSection() {
   const t = S.templates.find((x) => x.id === mk.tpl);
   const prompt = textArea(() => G.prompt, (v) => { G.prompt = v; }, { rows: 3, placeholder: mk.placeholder, label: mk.label });
   const lyrics = mk.lyrics ? textArea(() => G.lyrics, (v) => { G.lyrics = v; }, { rows: 5, placeholder: '[verse]\n…\n[chorus]\n…', label: 'Lyrics' }) : null;
-  const len = numSlider({ min: 1, max: mk.maxLen, step: 0.5, value: G.len ?? mk.len, digits: 1, label: 'Length (s)' });
   const keyF = t?.fields.find(ROLE.key);
-  const bpm = mk.lyrics ? numSlider({ min: 40, max: 220, step: 1, value: G.bpm, digits: 0, label: 'BPM' }) : null;
-  bpm?.addEventListener('change', () => { G.bpm = parseInt(bpm.value, 10); });
   const key = mk.lyrics && keyF ? h('select', {}, keyF.options.map((o) => h('option', { value: o, selected: o === (G.key || keyF.value) }, o))) : null;
   key?.addEventListener('change', () => { G.key = key.value; });
-  len.addEventListener('change', () => { G.len = parseFloat(len.value); });
   const results = N.gens.slice(-6).reverse().map((id) => S.history.get(id)).filter(Boolean).map((g) => {
     const i = g.outputs.findIndex((o) => o.kind === 'audio'), o = g.outputs[i];
     return h('div', { class: 'snd-export' },
@@ -369,7 +365,9 @@ function makerSection() {
     help(mk.help),
     t ? null : note(`Template ${mk.tpl} isn't installed yet${mk.id === 'music' ? ': it needs the ACE-Step 1.5 models (see README, Sound tab)' : ''}.`),
     field(mk.lyrics ? 'Style' : 'Description', prompt), lyrics ? field('Lyrics (optional)', lyrics) : null,
-    field('Length (s)', len), bpm ? field('BPM', bpm) : null, key ? field('Key', key) : null,
+    rangeField('Length', () => G.len ?? mk.len, (v) => { G.len = v; }, { min: 1, max: mk.maxLen, step: 0.5, digits: 1, fmt: (v) => `${v} s` }),
+    mk.lyrics ? rangeField('BPM', () => G.bpm, (v) => { G.bpm = Math.round(v); }, { min: 40, max: 220, step: 1, digits: 0, fmt: (v) => `${Math.round(v)}` }) : null,
+    key ? field('Key', key) : null,
     h('div', { class: 'row wrap' }, button('✦ Make it', makeSound, { cls: 'primary', disabled: !t })),
     results.length ? h('div', { class: 'snd-exports' }, results) : null);
 }
@@ -568,16 +566,8 @@ function renderPanel() {
   if (!body) return;
   const it = selItem(), tr = it && trackOf(it);
   $('#sndDel').disabled = !it;
-  const num = (label, get, set, opts, after = () => {}) => {
-    const r = numSlider({ ...opts, value: get(), label });
-    const val = h('span', {}, opts.fmt ? opts.fmt(get()) : '');
-    const take = () => { set(parseFloat(r.value)); if (opts.fmt) val.textContent = opts.fmt(get()); syncMedia(); drawStage(); };
-    r.addEventListener('input', () => { if (r.dataset.scrubbing) take(); });
-    r.addEventListener('change', () => { take(); after(); changed(); });
-    return field([label, val], r);
-  };
-  const pct = (v) => `${Math.round(v * 100)}%`;
-  const panFmt = (v) => (Math.abs(v) < 0.01 ? 'centre' : v < 0 ? `${Math.round(-v * 100)}% left` : `${Math.round(v * 100)}% right`);
+  const live = { onInput: () => { syncMedia(); drawStage(); }, onChange: () => changed() };
+  const num = (label, get, set, opts) => rangeField(label, get, set, { digits: 2, ...opts, ...live });
 
   const add = section('Add sound', null,
     h('div', { class: 'row wrap' },
@@ -590,10 +580,7 @@ function renderPanel() {
     hint('A clip\'s sound plays straight from the clip. To keep it as a file of its own, select it and Save its sound.'));
 
   const clip = it ? section(`Clip · ${it.label}`, () => { N.sel = null; renderTimeline(); renderPanel(); },
-    num('Level', () => it.volume ?? 1, (v) => { it.volume = v; }, { min: 0, max: 2, step: 0.01, digits: 2, fmt: pct }),
-    num('Pan', () => it.pan || 0, (v) => { it.pan = v; }, { min: -1, max: 1, step: 0.05, digits: 2, fmt: panFmt }),
-    num('Fade in (s)', () => it.fadeIn || 0, (v) => { it.fadeIn = v; }, { min: 0, max: Math.max(0.1, Math.min(10, itLen(it))), step: 0.05, digits: 2 }),
-    num('Fade out (s)', () => it.fadeOut || 0, (v) => { it.fadeOut = v; }, { min: 0, max: Math.max(0.1, Math.min(10, itLen(it))), step: 0.05, digits: 2 }),
+    clipSoundFields(it, itLen(it), { pan: true, ...live }),
     h('p', { class: 'hint' }, `At ${tc(it.at)} · ${itLen(it).toFixed(2)} s, from ${tc(it.in)} of the source`),
     h('div', { class: 'row wrap' },
       button('✂ Split', TL.split), button('⧉ Duplicate', TL.duplicate),
@@ -609,8 +596,8 @@ function renderPanel() {
     h('div', { class: 'row wrap' }, button('🎙 Make a voice from this clip', () => voiceFromClip(it), { cls: 'primary' }))) : null;
 
   const track = tr ? section(`Track · ${trackName(tr)}`, null,
-    num('Track level', () => tr.volume ?? 1, (v) => { tr.volume = v; }, { min: 0, max: 2, step: 0.01, digits: 2, fmt: pct }),
-    num('Track pan', () => tr.pan || 0, (v) => { tr.pan = v; }, { min: -1, max: 1, step: 0.05, digits: 2, fmt: panFmt })) : null;
+    num('Track level', () => tr.volume ?? 1, (v) => { tr.volume = v; }, { min: 0, max: 2, step: 0.01, fmt: pctFmt }),
+    num('Track pan', () => tr.pan || 0, (v) => { tr.pan = v; }, { min: -1, max: 1, step: 0.05, fmt: panFmt })) : null;
 
   const nameIn = h('input', { type: 'text', value: N.out.name || tabs?.active?.name || '', placeholder: tabs?.active?.name || 'Mix', 'aria-label': 'File name' });
   nameIn.addEventListener('change', () => { N.out.name = nameIn.value.trim(); persist(); });
@@ -619,7 +606,7 @@ function renderPanel() {
     field('Name', nameIn),
     field('Format', seg([['m4a', 'M4A'], ['wav', 'WAV'], ['mp3', 'MP3'], ['flac', 'FLAC']], N.out.format,
       (v) => { N.out.format = v; store.set('deck.sound.format', v); persist(); })),
-    num('Master level', () => N.out.gain, (v) => { N.out.gain = v; }, { min: 0, max: 2, step: 0.01, digits: 2, fmt: pct }),
+    num('Master level', () => N.out.gain, (v) => { N.out.gain = v; }, { min: 0, max: 2, step: 0.01, fmt: pctFmt }),
     toggle('Even out the loudness (−16 LUFS, for speech and streaming)', N.out.normalize, (on) => { N.out.normalize = on; persist(); }),
     h('div', { class: 'row wrap' }, button('⤓ Export sound', exportSound, { cls: 'primary' })),
     N.exports.length ? h('div', { class: 'snd-exports' }, N.exports.slice(-3).reverse().map((m) =>

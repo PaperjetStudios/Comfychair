@@ -1,4 +1,4 @@
-import { $, h, store, uid, toast, undoToast, clamp } from './ui.js';
+import { $, h, store, uid, toast, undoToast, clamp, panFmt, pctFmt, rangeField } from './ui.js';
 
 // ---------------------------------------------------------------------------
 // The timeline the Video and Sound tabs share: clips on tracks, moved (also to another track) and
@@ -45,6 +45,19 @@ export async function wavePeaks(url, rate, { normalize = false } = {}) {
   }
   if (normalize) { const top = peaks.reduce((m, v) => Math.max(m, v), 0) || 1; peaks = peaks.map((v) => v / top); }
   return { peaks, rate };
+}
+
+// A clip's level, pan and fades, the same sliders in the Video and Sound tabs. onInput: while dragging (a live
+// preview); onChange: once it's let go or typed. levelNote(v): more after the level's value.
+export function clipSoundFields(it, len, { onInput, onChange, level = true, pan = false, levelNote = () => '' }) {
+  const r = (label, get, set, o) => rangeField(label, get, set, { digits: 2, ...o, onInput, onChange });
+  const fadeMax = Math.max(0.1, Math.min(10, len)), secs = (v) => `${v.toFixed(2)} s`;
+  return [
+    level ? r('Level', () => it.volume ?? 1, (v) => { it.volume = v; }, { min: 0, max: 2, step: 0.01, fmt: (v) => pctFmt(v) + levelNote(v) }) : null,
+    pan ? r('Pan', () => it.pan || 0, (v) => { it.pan = v; }, { min: -1, max: 1, step: 0.05, fmt: panFmt }) : null,
+    r('Fade in', () => it.fadeIn || 0, (v) => { it.fadeIn = v; }, { min: 0, max: fadeMax, step: 0.05, fmt: secs }),
+    r('Fade out', () => it.fadeOut || 0, (v) => { it.fadeOut = v; }, { min: 0, max: fadeMax, step: 0.05, fmt: secs }),
+  ];
 }
 
 const RULER_STEPS = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];

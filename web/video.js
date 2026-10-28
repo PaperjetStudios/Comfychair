@@ -1,13 +1,13 @@
 import {
   $, h, store, uid, api, toast, undoToast, clamp, openSheet, closeSheet, button, iconBtn, linkBtn, actions, fileButton, seg,
-  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, panelTop, toggle, textArea,
+  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, panelTop, toggle, textArea, pctFmt,
 } from './ui.js';
 import { S, fmtT, inputUrl, thumbUrl } from './core.js';
 import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, soundToSoundTab, uploadImage, uploadMedia } from './media.js';
 import { openGeneration } from './run.js';
 import { useInGenerate } from './editor.js';
 import { TabSet } from './tabs.js';
-import { durationOf, timeline, wavePeaks } from './timeline.js';
+import { clipSoundFields, durationOf, timeline, wavePeaks } from './timeline.js';
 import * as COMP from './scene-comp.js';
 import { maximizable } from './layout.js';
 import { canTrack, openTrack } from './track.js';
@@ -798,8 +798,8 @@ function addMediaFiles() {
 }
 
 // ---- inspector panel ----
-// a number box for a clip setting: dragged like a slider it shows on the timeline as it goes
-const numField = (label, get, set, { step = 0.04, min = 0, max = 600 } = {}) =>
+// a clip's time as a number box (an open range: no bar); dragged like a slider it shows on the timeline as it goes
+const timeBox = (label, get, set, { step = 0.04, min = 0, max = 600 } = {}) =>
   propNum(label, Number(get()).toFixed(2), set, timelineChanged, { step, min, max, live: () => { renderTimeline(); syncMedia(); requestDraw(); } });
 
 const clipRange = (label, get, set, opts) => rangeField(label, get, set,
@@ -820,7 +820,7 @@ function sceneFields(it) {
 
 // framing: the same numbers the handles on the preview change (and that follow them while dragging)
 function xformFields(it) {
-  const pct = (v) => `${Math.round(v * 100)}%`, g = geom(it);
+  const pct = pctFmt, g = geom(it);
   const anchorEnd = () => { syncInspector(); persistTimeline(); };   // moving the anchor re-pins position, so show that too
   return [
     field('Framing', seg([['fit', 'Fit'], ['fill', 'Fill']], it.fit || 'fit', (k) => { it.fit = k; timelineChanged(); })),
@@ -836,17 +836,14 @@ function xformFields(it) {
 
 function renderVideoPanel() {
   const it = selItem();
-  const pct = (v) => `${Math.round(v * 100)}%`;
+  const pct = pctFmt;
   const clip = it ? (() => {
     const len = itLen(it), tr = trackOf(it);
-    const fields = [numField('Starts at (s)', () => it.at, (v) => { it.at = Math.max(0, v); })];
-    if (it.kind === 'image') fields.push(numField('Duration (s)', () => len, (v) => { it.out = Math.max(MIN_LEN, v); }, { min: MIN_LEN, max: 60 }));
+    const fields = [timeBox('Starts at (s)', () => it.at, (v) => { it.at = Math.max(0, v); })];
+    if (it.kind === 'image') fields.push(timeBox('Duration (s)', () => len, (v) => { it.out = Math.max(MIN_LEN, v); }, { min: MIN_LEN, max: 60 }));
     else fields.push(
-      numField('In (s)', () => it.in, (v) => { it.in = Math.max(0, Math.min(v, (it.out ?? it.dur) - MIN_LEN)); }, { max: it.dur || undefined }),
-      numField('Out (s)', () => it.out ?? it.dur, (v) => { it.out = Math.max(it.in + MIN_LEN, it.dur ? Math.min(v, it.dur) : v); }, { max: it.dur || undefined }));
-    fields.push(
-      numField('Fade in (s)', () => it.fadeIn || 0, (v) => { it.fadeIn = Math.max(0, Math.min(v, len)); }, { step: 0.1, max: Math.max(0.1, len) }),
-      numField('Fade out (s)', () => it.fadeOut || 0, (v) => { it.fadeOut = Math.max(0, Math.min(v, len)); }, { step: 0.1, max: Math.max(0.1, len) }));
+      timeBox('In (s)', () => it.in, (v) => { it.in = Math.max(0, Math.min(v, (it.out ?? it.dur) - MIN_LEN)); }, { max: it.dur || undefined }),
+      timeBox('Out (s)', () => it.out ?? it.dur, (v) => { it.out = Math.max(it.in + MIN_LEN, it.dur ? Math.min(v, it.dur) : v); }, { max: it.dur || undefined }));
     return section(it.label, null,
       hint(`${it.kind} on ${tr ? trackName(tr) : '?'} · ${fmtT(len)}${it.dur ? ` of ${fmtT(it.dur)}` : ''}`, 'section-sub'),
       h('div', { class: 'grid-2' }, fields),
@@ -854,8 +851,8 @@ function renderVideoPanel() {
         clipRange('Opacity', () => it.opacity ?? 1, (v) => { it.opacity = v; }, { min: 0, max: 1, step: 0.01, fmt: pct })] : null,
       it.kind === 'scene' ? sceneFields(it) : null,
       it.kind === 'video' && canKey(it.fx?.orig || it) ? fxFields(it) : null,
-      it.kind !== 'image' && it.kind !== 'scene' ? clipRange('Volume', () => it.volume ?? 1, (v) => { it.volume = v; }, { min: 0, max: 2, step: 0.01,
-        fmt: (v) => pct(v) + (v > 1 ? ' (preview plays at 100%)' : '') }) : null,
+      clipSoundFields(it, len, { level: it.kind !== 'image' && it.kind !== 'scene', levelNote: (v) => (v > 1 ? ' (preview plays at 100%)' : ''),
+        onInput: () => { renderTimeline(); syncMedia(); requestDraw(); }, onChange: persistTimeline }),
       h('div', { class: 'row wrap' },
         button('✂ Split at playhead', TL.split, { title: 'S' }),
         button('⤫ Cross-fade with previous', () => TL.crossfadePrev(it)),
