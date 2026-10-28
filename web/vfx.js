@@ -8,6 +8,7 @@ import { addToEditor, useInGenerate } from './editor.js';
 import { addToTimeline } from './video.js';
 import { clipInput } from './vfield.js';
 import { resultActions } from './useas.js';
+import { sideTag, wipeLine } from './compare.js';
 import { playKeys, transport } from './playback.js';
 import { TabSet } from './tabs.js';
 import { maximizable } from './layout.js';
@@ -822,8 +823,8 @@ function drawViewer() {
     V.still = stillMode && T.first ? h('img', { src: inputUrl(T.first), class: 'vfx-a', alt: '' }) : null;
     V.ov = side || canvasMode ? null : h('canvas', { class: 'vfx-ov' });
     const base = V.a || V.still;
-    const tags = V.a && V.b ? [h('span', { class: 'vfx-tag left' }, cmpUrl ? genLabel(cmp) : 'Source'), h('span', { class: 'vfx-tag right' }, genLabel(res))] : [];
-    const media = h('div', { class: `vfx-media${side ? ' side' : ''}` }, base, V.b, V.ov, ...tags);
+    const tags = V.a && V.b ? [sideTag(cmpUrl ? genLabel(cmp) : 'Source', 'l'), sideTag(genLabel(res), 'r')] : [];
+    const media = V.media = h('div', { class: `vfx-media${side ? ' side' : ''}` }, base, V.b, V.ov, V.a && V.b && !side ? wipeLine() : null, ...tags);
     if (V.a && V.b && !side) setWipe(UI.wipe);
     stage.replaceChildren(canvasMode ? canvasView(V.a) : base || V.b ? media : placeholder('Choose a source clip or a start image'));
     const fit = () => sizeOverlay();
@@ -860,9 +861,6 @@ function paintOverlay() {
   const ctx = cv.getContext('2d'), W = cv.width, H = cv.height;
   ctx.clearRect(0, 0, W, H);
   const e = fx(T.op);
-  if (V.a && V.b) {   // the wipe line
-    ctx.fillStyle = '#fff'; ctx.fillRect(Math.round(UI.wipe * W) - 1, 0, 2, H);
-  }
   if (e.needs.includes('points')) {
     const dot = (p, col) => { ctx.beginPath(); ctx.arc(p.x * W, p.y * H, 7, 0, Math.PI * 2); ctx.fillStyle = col; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#000'; ctx.stroke(); };
     T.points.positive.forEach((p) => dot(p, '#43a047'));
@@ -978,6 +976,7 @@ function setWipe(x) {
   UI.wipe = x;   // each side clipped, so a see-through result shows the checkerboard, not the source under it
   if (V.b) V.b.style.clipPath = `inset(0 0 0 ${x * 100}%)`;
   if (V.a && V.b) V.a.style.clipPath = `inset(0 ${(1 - x) * 100}% 0 0)`;
+  V.media?.style.setProperty('--w', `${x * 100}%`);   // the line (compare.js wipeLine)
   paintOverlay();
 }
 

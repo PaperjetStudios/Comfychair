@@ -186,5 +186,16 @@ The tabs that did the same job twice now share it:
   copy keeps it). Generate's `S.pendingParent` is gone.
 - **Inputs**: `vfield.js clipInput` is the clip field Generate and VFX show; `media.js bareSource / clipUrl / clipLabel`
   are the one way to read a clip or sound source. `gizmo.js snapNearest` is the Editor's and the Video gizmo's snap.
+- **Controls** (`web/ui.js`): `toggle`, `textArea`, `seedField`, `sizeSelect`, `colorField`, `chip` / `chips`,
+  `pickButtons` + `imageInput` (and `vfield.js clipInput`, `media.js soundInput`), `rangeField` with `pctFmt` / `panFmt`.
+  `timeline.js clipSoundFields` is a clip's level, pan and fades; `vfx.js loraChoice` / `keyRangeFields` the one-LoRA
+  picker and the colour key's sliders; `gizmo.js gzChip` a gizmo bar button. A new control goes in one of these first.
+- **Players** (`web/playback.js`): `transport` (the bar), `playKeys` (Space, arrows, Home / End, plus the tab's own;
+  `f` is full screen everywhere) and `fmtTime`. `layout.js zoomPan` is the pinch / wheel / double-tap zoom.
+- **Takes**: `media.js outputCard` draws a run (History, VFX, Sound makers); `useas.js resultActions` is the row under a
+  picked take. `compare.js wipeLine` / `sideTag` are the wipe's line and labels in Compare and VFX. Every TabSet
+  strip is `.tab-strip`.
+- Still separate on purpose: the 3D tab's play bar (it carries Auto key, REC and the key sheet), the Board's tiles
+  (pin / mark / select), and the wipe *gestures* in VFX (its canvas also takes points, paths and boxes).
 - Module cycles: `make.js` ↔ `run.js` ↔ `generate.js` import each other. Keep top-level code in them free of the others'
   `const`s (read them inside functions), or a load order change throws "before initialization".

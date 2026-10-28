@@ -5,6 +5,11 @@ import { h, button, iconBtn, seg, store, clamp01, openOverlay } from './ui.js';
 // other) or side by side. Two clips play together, the right one kept on the left one's clock.
 // items: [{ o: {url, kind}, label }, …] (the first two are used)
 // ---------------------------------------------------------------------------
+// the wipe's line with its grip, and a side's name over the picture: Compare and the VFX tab's wipe draw these the
+// same (the line sits at the --w of the box it's in)
+export const wipeLine = () => h('div', { class: 'cmp-line' }, h('span', { class: 'cmp-grip' }, '⇆'));
+export const sideTag = (label, side) => h('span', { class: `cmp-tag ${side}` }, label);
+
 const C = { layout: store.get('deck.compare.layout', 'wipe'), wipe: 0.5, sound: 'off' };   // sound: off | l | r
 
 export function openCompare(items) {
@@ -32,7 +37,7 @@ export function openCompare(items) {
     for (const [m, side] of [[A, 'l'], [B, 'r']]) if (m?.tagName === 'VIDEO') m.muted = C.sound !== side;
     clock().play?.().catch(() => {});
   };
-  const tag = (x, side) => h('span', { class: `cmp-tag ${side}` }, x.label);
+  const tag = (x, side) => sideTag(x.label, side);
 
   function build() {
     A?.pause?.(); B?.pause?.();
@@ -40,8 +45,7 @@ export function openCompare(items) {
     const wipe = C.layout === 'wipe';
     stage.classList.toggle('side', !wipe);
     if (wipe) {
-      const box = h('div', { class: 'cmp-box' }, h('div', { class: 'cmp-a' }, A), h('div', { class: 'cmp-b' }, B),
-        h('div', { class: 'cmp-line' }, h('span', { class: 'cmp-grip' }, '⇆')), tag(a, 'l'), tag(b, 'r'));
+      const box = h('div', { class: 'cmp-box' }, h('div', { class: 'cmp-a' }, A), h('div', { class: 'cmp-b' }, B), wipeLine(), tag(a, 'l'), tag(b, 'r'));
       stage.replaceChildren(box);
     } else {
       stage.replaceChildren(h('div', { class: 'cmp-cell' }, A, tag(a, 'l')), h('div', { class: 'cmp-cell' }, B, tag(b, 'r')));
