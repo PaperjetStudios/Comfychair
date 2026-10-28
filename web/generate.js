@@ -14,6 +14,7 @@ import { PREFS } from './prefs.js';
 import { FULL, openCrop, openSketch, templateAspect } from './editor.js';
 import { openMaskPainter } from './maskpaint.js';
 import { icon } from './icons.js';
+import { kreaTag } from './cast.js';
 
 // ---------------------------------------------------------------------------
 // templates + fields
@@ -440,7 +441,7 @@ const stepper = (input, bump, what = '') => h('div', { class: 'stepper' },
 const REALISTIC = [[/^steps$/, 1, 100], [/^cfg$/, 0, 20], [/denoise/, 0, 1], [/_percent$/, 0, 1], [/strength/, 0, 2],
   [/^(width|height)$/, 64, 4096], [/^shift$/, 0, 20], [/^(fps|frame_rate|force_rate)$/, 0, 60], [/^batch_size$/, 1, 16],
   [/megapixel/i, 0.05, 16], [/second/i, 1, 20], [/^(length|frames?|num_frames)$/, 1, 481], [/^crf$/, 0, 51],
-  [/per_row|columns|^rows$/, 1, 16], [/spacing|gap|padding|margin|border/, 0, 256]];
+  [/per_row|columns|^rows$/, 1, 16], [/spacing|gap|padding|margin|border/, 0, 256], [/^ref_boost/, 0, 10]];
 function fieldRange(f) {
   const r = REALISTIC.find(([re]) => re.test(f.input) || re.test(f.label || ''));
   let min = f.min, max = f.max;
@@ -454,7 +455,8 @@ function fieldRange(f) {
   return [Number.isFinite(min) ? min : null, Number.isFinite(max) ? max : null];
 }
 
-const DENOISES = [0.6, 0.8, 0.9, 1.0];
+// tapped presets for some numbers: how much of the picture is made again; how hard a Krea edit follows its picture
+const PRESETS = { denoise: [0.6, 0.8, 0.9, 1.0], ref_boost: [1, 2, 3, 4, 6], ref_boost_a: [1, 2, 3, 4, 6] };
 function numberField(f, isFloat) {
   const step = f.step || (isFloat ? 0.01 : 1);
   const dec = isFloat ? Math.max(0, (String(step).split('.')[1] || '').length) : 0;
@@ -469,9 +471,10 @@ function numberField(f, isFloat) {
   // with a known range the box is a slider (a bar behind the number); without one it still scrubs
   const input = hasRange ? numSlider({ min: lo, max: hi, step, value: S.values[f.key], digits: dec, label: f.label })
     : h('input', { type: 'number', inputMode: isFloat ? 'decimal' : 'numeric', step, min: lo ?? undefined, max: hi ?? undefined, value: S.values[f.key] });
-  // a denoise also has tapped presets (how much of the picture is made again)
-  const presets = f.input === 'denoise' && isFloat
-    ? chips(DENOISES.map((x) => [x, x.toFixed(1)]), Number(S.values[f.key]), (x) => sync(Number(x), null), { cls: 'denoise-presets' }) : null;
+  // some numbers also have tapped presets (PRESETS)
+  const taps = isFloat && PRESETS[f.input];
+  const presets = taps
+    ? chips(taps.map((x) => [x, f.input === 'denoise' ? x.toFixed(1) : String(x)]), Number(S.values[f.key]), (x) => sync(Number(x), null), { cls: 'denoise-presets' }) : null;
   const sync = (n, from) => {
     n = clamp(n); setVal(f.key, n);
     if (from !== input) input.set ? input.set(n) : (input.value = n);
@@ -545,6 +548,8 @@ function promptTags() {
     case 'h3': return [...n(images).map((i) => `<Picture ${i}>`), ...n(3).map(subjectTag)];
     case 'klein': return [...n(images, 0).map((i) => `<ref_image_${i}>`), ...n(boxes).map((i) => `<obj_${i}>`)];
     case 'qwen': return n(images).map((i) => `Picture ${i}`);
+    case 'krea': return n(images).map(kreaTag);
+    case 'moss': return n(images).map((i) => `image ${i}`);
     default: return [];
   }
 }
@@ -555,6 +560,8 @@ function pictureTag(n) {
     case 'h3': return `<Picture ${n}>`;
     case 'klein': return `<ref_image_${n - 1}>`;
     case 'qwen': return `Picture ${n}`;
+    case 'krea': return kreaTag(n);
+    case 'moss': return `image ${n}`;
     default: return null;
   }
 }
