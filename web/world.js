@@ -6,13 +6,10 @@ import { switchTab } from './core.js';
 //   Make  (Story, Generate, VFX, 3D) where things get made: written down and sorted, then a process, its inputs, a big GO
 //   Edit  (Editor, Video, Sound)    where made things are put together in space and time
 //   View  (Board, History)          where everything made is seen and sent on
-// One finger touches things, two move the surface (zoom, pan), three move you: sideways to the space next
-// door, up and down through the tools in this one. The tab follows the fingers, then slides on to the next, and a
-// map shows where you are while you travel. A sideways swipe along the top bar travels too, and Alt + arrows.
-//
-// Swipes stay clear of the tablet's own: a three-finger swipe that starts at a screen edge (where Android's
-// back gesture lives) is left alone, the page never overscrolls sideways (Chrome's swipe back / forward), and
-// if Back does fire with nothing open, it goes to the tool you were on before instead of leaving the app.
+// The spaces' buttons and their tools' tabs move you (the tab slides on to the next, and a map shows where you
+// are); so do a sideways swipe along the top bar and Alt + arrows. (Three-finger travel was taken out: it got in
+// the way of the 3D view's own finger gestures.) The page never overscrolls sideways (Chrome's swipe back /
+// forward), and if Back fires with nothing open, it goes to the tool you were on before instead of leaving the app.
 //
 // The tabs themselves stay their own modules: this only moves between them.
 // ---------------------------------------------------------------------------
@@ -21,8 +18,6 @@ const SPACES = [
   { id: 'edit', name: 'Edit', tabs: ['editor', 'video', 'sound'], icon: ['M4 6h10M4 12h16M4 18h7', 'M17 4v4M14 16v4'] },
   { id: 'view', name: 'View', tabs: ['board', 'history'], icon: ['M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z', 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6'] },
 ];
-const FINGERS = 3;
-const EDGE = 32;   // px from the left / right edge: Android's back gesture starts there
 
 const btnOf = (tab) => document.querySelector(`nav.tabs button[data-tab="${tab}"]`);
 const tabNow = () => document.querySelector('nav.tabs button.active')?.dataset.tab;
@@ -132,83 +127,7 @@ async function travelTo(to, { axis = 'x', dir = 1, d = 0 } = {}) {
   hideMap();
 }
 
-// ---- three fingers: follow them, then travel (or spring back) when they lift ----
-// Counted with touch events, not pointer events: when two fingers land a moment early the browser starts its own
-// scroll and cancels their pointers, but their touches still count. The page can't pinch-zoom (index.html), so
-// those two fingers can't start a zoom of the whole app either. A pen is never one of the fingers.
-const fingers = (e) => [...e.touches].filter((t) => t.touchType !== 'stylus');
-const X0 = new Map();     // touch id -> where it landed (x), for the edge check
-const PT = new Map();     // touch pointer id -> what it landed on (to call off its drag when travel starts)
-let G = null;             // the gesture: { x0, y0, axis, dx, dy, shown, trail }
-const mid = (ts) => {
-  let x = 0, y = 0;
-  for (const t of ts) { x += t.clientX; y += t.clientY; }
-  return { x: x / ts.length, y: y / ts.length };
-};
-const nearEdge = (ts) => ts.some((t) => { const x0 = X0.get(t.identifier) ?? t.clientX; return x0 < EDGE || x0 > innerWidth - EDGE; });
-function begin(ts) {
-  const m = mid(ts);
-  G = { x0: m.x, y0: m.y, axis: null, dx: 0, dy: 0, shown: 0, trail: [] };
-  // the fingers that landed first were a drag or a pinch: call it off (as the browser does for its own gestures)
-  for (const [id, target] of PT) target?.dispatchEvent(new PointerEvent('pointercancel', { pointerId: id, pointerType: 'touch', bubbles: true }));
-  showMap();
-}
-// how far the tab gives up or down before it travels: less the further you pull (it stays in reach)
-const give = (d, room) => room * 0.3 * Math.tanh(d / (room * 0.3));
 const roomOf = (axis, el) => (axis === 'x' ? el.clientWidth || innerWidth : el.clientHeight || innerHeight);
-function follow(ts) {
-  const m = mid(ts), el = tabEl(), now = performance.now();
-  const dx = m.x - G.x0, dy = m.y - G.y0;
-  if (!G.axis && Math.hypot(dx, dy) > 18) G.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
-  G.dx = dx; G.dy = dy;
-  G.trail.push({ t: now, dx, dy });
-  while (G.trail.length > 2 && now - G.trail[0].t > 120) G.trail.shift();   // (the last ~0.1 s: how fast the flick is)
-  if (!el || moving || !G.axis) return;
-  const d = G.axis === 'x' ? dx : dy, to = landing(G.axis, d < 0 ? 1 : -1);
-  G.shown = !to ? d * 0.25 : G.axis === 'x' ? d : give(d, roomOf('y', el));   // rubber band at the edges of the world
-  hold(el, G.axis, G.shown);
-  showMap(Math.abs(d) > 50 && to ? to : tabNow());
-}
-// px/s along the axis over the last ~0.1 s
-function speed(g) {
-  const a = g.trail[0], b = g.trail[g.trail.length - 1], dt = b && b.t - a.t;
-  if (!dt || dt < 30) return 0;
-  return ((g.axis === 'x' ? b.dx - a.dx : b.dy - a.dy) / dt) * 1000;
-}
-function finish() {
-  const g = G, el = tabEl();
-  G = null;
-  if (!el || !g.axis) { hideMap(300); return; }
-  const d = g.axis === 'x' ? g.dx : g.dy, v = speed(g);
-  if (Math.abs(d) > roomOf(g.axis, el) * 0.12 || Math.abs(v) > 600) travel(g.axis, d < 0 ? 1 : -1, { d: g.shown });
-  else settle(el, g.axis, g.shown).then(() => hideMap());   // not far enough: back it goes
-}
-
-const T = { capture: true, passive: false };
-addEventListener('touchstart', (e) => {
-  for (const t of e.changedTouches) X0.set(t.identifier, t.clientX);
-  const ts = fingers(e);
-  if (!G && ts.length >= FINGERS && !nearEdge(ts) && !document.querySelector('.sheet:not(.hidden), .overlay:not(.hidden)')) begin(ts);
-  if (G && e.cancelable) e.preventDefault();   // (no scroll, no click: these fingers are travelling)
-}, T);
-addEventListener('touchmove', (e) => {
-  if (!G) return;
-  if (e.cancelable) e.preventDefault();
-  const ts = fingers(e);
-  if (ts.length >= FINGERS) follow(ts);
-}, T);
-const lift = (e) => {
-  for (const t of e.changedTouches) X0.delete(t.identifier);
-  if (G && fingers(e).length < FINGERS) finish();   // the first finger up ends it, where the fingers were
-};
-addEventListener('touchend', lift, T);
-addEventListener('touchcancel', lift, T);
-// while travelling, the tab's own pointer handlers hear nothing from the fingers
-const own = (e) => { if (G && e.pointerType === 'touch') { e.stopPropagation(); if (e.cancelable) e.preventDefault(); } };
-addEventListener('pointerdown', (e) => { if (e.pointerType === 'touch') PT.set(e.pointerId, e.target); own(e); }, true);
-addEventListener('pointermove', own, true);
-addEventListener('pointerup', (e) => { PT.delete(e.pointerId); own(e); }, true);
-addEventListener('pointercancel', (e) => { if (e.isTrusted) PT.delete(e.pointerId); }, true);   // (not the cancels begin() sends)
 
 // ---- one finger along the top bar travels sideways too (a tap there is still a tap) ----
 function wireBarSwipe(topbar) {
@@ -241,7 +160,7 @@ addEventListener('popstate', (e) => {
   if (prev) {
     const a = spaceOf(prev), b = spaceOf(here);
     travelTo(prev, a === b ? { axis: 'y', dir: tabsIn(a).indexOf(prev) > tabsIn(a).indexOf(here) ? 1 : -1 } : { axis: 'x', dir: a > b ? 1 : -1 });
-  } else toast('ComfyChair stays open: swipe with three fingers (away from the edges) to move around');
+  } else toast('ComfyChair stays open: use the spaces and tabs at the top to move around');
 });
 
 // ---- keys: Alt + ← → between spaces, Alt + ↑ ↓ between the tools in one ----
