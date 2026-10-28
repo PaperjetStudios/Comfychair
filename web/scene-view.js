@@ -729,6 +729,19 @@ export function setFree(on) {
 // aim the free view at a point from where
 export function aimFree(at, target) { viewCam.position.set(...at); viewControls.target.set(...target); viewControls.update(); draw(); }
 // the shot camera set to what the free view sees (its lens stays)
+// where a new camera starts: the view you're looking through in the director view; else a step back and up from
+// the active camera (on top of it, it was easy to lose, and it inherited wherever that camera had been sent)
+export function newCameraPose() {
+  if (R.free) {
+    const p = viewCam.position, t = viewControls.target;
+    return { px: p.x, py: p.y, pz: p.z, tx: t.x, ty: t.y, tz: t.z, fov: viewCam.fov, roll: 0 };
+  }
+  const c = current(SC.camera, CAM), back = new THREE.Vector3(c.px - c.tx, c.py - c.ty, c.pz - c.tz);
+  const d = back.length() || 1;
+  back.setLength(Math.max(0.5, d * 0.25));
+  return { ...c, px: c.px + back.x, py: c.py + back.y + 0.3, pz: c.pz + back.z, roll: 0 };
+}
+
 export function cameraFromView() {
   const p = viewCam.position, t = viewControls.target;
   write(SC.camera, CAM, { px: p.x, py: p.y, pz: p.z, tx: t.x, ty: t.y, tz: t.z, roll: 0 });

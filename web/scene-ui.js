@@ -10,7 +10,7 @@ import {
 } from './scene-data.js';
 import { FIG_TABS, adjustTab, faceTab, handsTab, jointsTab, movesTab, partsTab, posesTab, promptProps } from './scene-pose.js';
 import {
-  HAND, addObject, camGizmo, cameraFromView, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, makeSplatHere, pose, rebuildRoom, refresh,
+  HAND, addObject, camGizmo, cameraFromView, newCameraPose, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, makeSplatHere, pose, rebuildRoom, refresh,
   removeLayer, removeSelected, select, selectJoint, setFree, setMode, syncMeshes, viewer
 } from './scene-view.js';
 import { busy, cancelRender, letGo, play, renderDepthVideo, renderPoseVideo, saveFrame, seek, stopPlay } from './scene-export.js';
@@ -171,10 +171,11 @@ function camerasField() {
     h('span', { class: 'grow' }, c.name, h('span', { class: 'hint' }, keyCount(c) ? ` · ${keyCount(c)} keys` : '')),
     button('Make active', () => { setActiveCam(c); changed(); }, { title: `Look through ${c.name}` }),
     button('Delete', () => { SC.cams = SC.cams.filter((x) => x !== c); changed(); }, { cls: 'small danger', 'aria-label': `Delete ${c.name}` })));
-  return field(['Cameras', info('The view, renders and the scene as a video clip look through the active camera. Each camera keeps its own keys (the others show in the key sheet too); make one active to move it with the view. New camera starts where the active one is now.')],
+  return field(['Cameras', info('The view, renders and the scene as a video clip look through the active camera. Each camera keeps its own keys (the others show in the key sheet too); make one active to move it with the view. New camera starts at the view you see in the director view, or a step behind the active camera.')],
     h('div', { class: 'row' }, name, h('span', { class: 'chip on' }, 'Active')),
     ...others,
-    button('New camera', () => { const c = newCamera(); SC.cams.push(SC.camera); SC.camera = c; changed(); toast(`${c.name} is active`); }, { title: 'A new camera here, made active' }));
+    button('New camera', () => { const c = newCamera(); c.base = { ...c.base, ...newCameraPose() }; SC.cams.push(SC.camera); SC.camera = c; changed(); toast(`${c.name} is active`); },
+      { title: 'A new camera, made active: at the view you see in the director view, else a step behind the active camera' }));
 }
 
 function cameraProps() {
