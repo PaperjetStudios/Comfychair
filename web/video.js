@@ -717,6 +717,7 @@ export async function addToTimeline(media) {
   await ensureTabs();   // the tab must be open, or its clips would replace this one
   if (media.kind !== 'image' && !media.dur) media.dur = await durationOf(media.url, media.kind === 'audio' ? 'audio' : 'video');
   const it = newItem(media, targetTrack(media.kind));
+  if (media.kind === 'image' && media.len > 0) it.out = Math.max(MIN_LEN, media.len);   // (a storyboard shot's length)
   it.at = TL.trackEnd(it.track);
   V.items.push(it); V.sel = it.id;
   timelineChanged();
