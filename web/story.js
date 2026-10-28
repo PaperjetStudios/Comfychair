@@ -11,6 +11,7 @@ import { fullScreen } from './layout.js';
 import { BLANK as COMP_BLANK, createEditor } from './editor-engine.js';
 import { openCompare } from './compare.js';
 import { addPicture as addCharPicture, castSection, characterById, characterSection, characters, mainPicture, mentionBox, onCharacters } from './characters.js';
+import { TALK_HINT, TALK_TPL } from './talk.js';
 import { castLines, dialogueLines, findCharacter, mentioned, pictureTag, plain, speakerOf } from './cast.js';
 
 // ---------------------------------------------------------------------------
@@ -691,8 +692,17 @@ async function speakLines(s) {
     changed();
   } catch (e) { toast(e.message, true); } finally { U.speaking = null; renderPanel(); }
 }
-async function makeVideo(s) {
-  const t = videoTemplate(s);
+// Talking shot (web/talk.js): the shot's lines spoken (when they aren't yet) and its frame made to say them, lips in
+// time, with deck-ltx-a2v whatever the shot's video template is
+async function talkingShot(s) {
+  const t = S.templates.find((x) => x.id === TALK_TPL && !x.error);
+  if (!t) return toast(`${TALK_TPL} isn't installed`, true);
+  const said = () => s.voice && s.voice.key === lineKey(s);
+  if (!said()) await speakLines(s);
+  if (said()) await makeVideo(s, t, TALK_HINT);
+}
+async function makeVideo(s, tt = null, extra = '') {
+  const t = tt || videoTemplate(s);
   if (!t) return toast('No image-to-video template is installed', true);
   if (CV.shot === s.id) await settleCanvas();
   const f = chosen(s);
@@ -708,7 +718,7 @@ async function makeVideo(s) {
     const pics = castPictures(t, s, values);
     if (vo && sound) values[sound.key] = { media: vo.media };
     if (vo && voice) values[voice.key] = { media: vo.media };
-    const prompt = s.vprompt.trim() ? plain(s.vprompt.trim(), characters()) : videoPrompt(s, t, pics);
+    const prompt = s.vprompt.trim() ? plain(s.vprompt.trim(), characters()) : [videoPrompt(s, t, pics), extra].filter(Boolean).join(' ');
     const len = Math.max(+s.dur || 3, vo ? Math.ceil(vo.seconds + 0.5) : 0);
     Object.assign(values, valuesByRole(t, { prompt, seed: -1, len, ...sizeFor(t) }, RROLE));
     const gens = await queueRun({ template: t.id, values });
@@ -781,6 +791,8 @@ function videoSection(at) {
       h('b', {}, l.who), h('span', {}, l.text), l.c?.voice ? h('span', { class: 'ch-voice', title: 'Has a voice' }, icon('mic')) : h('span', { class: 'hint' }, 'no voice')))),
     voiced.length ? h('div', { class: 'row wrap' },
       button([icon('mic'), vo ? 'Speak them again' : 'Speak the lines'], () => speakLines(s), { disabled: U.speaking === s.id }),
+      button([icon('person'), 'Talking shot'], () => talkingShot(s), { disabled: U.speaking === s.id || !chosen(s),
+        title: 'The frame says the lines, lips in time (Sound to video), whatever the template above' }),
       seg([['qwen', 'Qwen'], ['index', 'IndexTTS-2'], ['fish', 'Fish S2']], P.video.engine || 'qwen', (v) => { P.video.engine = v; persist(); }, { wrap: true })) : null,
     U.speaking === s.id ? h('p', { id: 'stSpeaking', class: 'hint' }, 'Speaking…') : null,
     vo ? h('audio', { src: vo.url, controls: true, preload: 'none', class: 'ch-audio' }) : null,
