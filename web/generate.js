@@ -16,6 +16,7 @@ import { openMaskPainter } from './maskpaint.js';
 import { icon } from './icons.js';
 import { kreaTag } from './cast.js';
 import { openCivitai } from './civitai.js';
+import { openDescribe, openImprove, tplTarget } from './prompthelp.js';
 
 // ---------------------------------------------------------------------------
 // templates + fields
@@ -788,7 +789,15 @@ function promptField(f) {
     st.on = !st.on; saveBuilder(); redraw();
   });
   if (st.on) loadSnippets().then(draw); else draw();
-  const el = field([f.label, mode], body);
+  // the prompt helper (prompthelp.js): a version picked from the builder becomes the plain prompt (Undo brings it back)
+  const io = { get: () => S.values[f.key] || '', target: tplTarget(),
+    set: (v) => { if (st.on) { st.on = false; saveBuilder(); } setVal(f.key, v); redraw(); },
+    snapshot: () => ({ on: st.on, v: S.values[f.key] || '' }),
+    restore: (x) => { st.on = x.on; saveBuilder(); if (!x.on) setVal(f.key, x.v); redraw(); } };
+  const aid = h('span', { class: 'pa-btns' + (io.target ? '' : ' hidden') },
+    iconBtn('Improve this prompt', '✦', () => openImprove(io)),
+    iconBtn('Describe a picture', '👁', () => openDescribe(io)));
+  const el = field([f.label, h('span', { class: 'pa-head' }, aid, mode)], body);
   el.classList.add('prompt-field');
   return el;
 }

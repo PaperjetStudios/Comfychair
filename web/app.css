@@ -659,6 +659,24 @@ svg.ico.filled path { fill: currentColor; }
 .text-pop-head.open::after { content: "▾"; }
 .text-pop-group { display: flex; flex-direction: column; gap: 6px; }
 .text-pop-tags .chip { border-radius: var(--r); padding: 10px 6px; font: 13px var(--font); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; }
+/* a sheet opened from the writing box (the prompt helper, its picture picker) and toasts show over it */
+body:has(.text-pop:not(.hidden)) .backdrop { z-index: 61; }
+body:has(.text-pop:not(.hidden)) .sheet { z-index: 62; }
+body:has(.text-pop:not(.hidden)) .toast { z-index: 63; }
+.text-pop-aid { display: flex; gap: 4px; }
+
+/* ---- prompt helper (prompthelp.js) ---- */
+.pa-head { display: flex; align-items: center; gap: 4px; }
+.pa-btns { display: inline-flex; gap: 2px; }
+.pa-btns .icon-btn { min-width: 36px; min-height: 36px; }
+.pa-results { display: grid; gap: 10px; }
+.pa-card { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface-2); }
+.pa-text { white-space: pre-wrap; line-height: 1.5; cursor: pointer; font-size: 15px; }
+.pa-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+.pa-acts .btn { flex: none; min-width: 96px; }
+.pa-fams .chip { font-size: 13px; }
+.pa-pic { max-height: 120px; max-width: 200px; border-radius: var(--r); object-fit: contain; align-self: flex-start; }
+.pa-wait { padding: 24px 8px; }
 /* touch screens get the tag chips in the text popup instead */
 @media (pointer: coarse) { .prompt-field .tag-chips { display: none; } }
 
