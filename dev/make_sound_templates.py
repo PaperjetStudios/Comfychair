@@ -40,7 +40,28 @@ def ace_music():
     }
 
 
-TEMPLATES = {"deck-ace-music": ace_music}
+def mmaudio_foley():
+    """A clip to its sound (foley, effects, ambience) with MMAudio large 44k v2: the clip's picture at 8 fps and
+    25 fps (Deck MMAudio Sampler, comfy_nodes/deck_mmaudio), a prompt and a negative prompt to steer it. Trained on
+    8 s; longer works but drifts. Saved as FLAC, as long as the clip (or Length)."""
+    return {
+        "src": node("VHS_LoadVideoPath", "@1 Source video [video]", video="", force_rate=0, custom_width=0, custom_height=384,
+                    frame_load_cap=0, skip_first_frames=0, select_every_nth=1),
+        "info": node("VHS_VideoInfoLoaded", video_info=["src", 3]),
+        "secs": node("PrimitiveFloat", "@3 Length (seconds)", value=8.0),
+        "prompt": node("PrimitiveStringMultiline", "@2 Prompt", value=""),
+        "negp": node("PrimitiveStringMultiline", "@4 Negative prompt", value="music, speech, talking, singing"),
+        "model": node("MMAudioModelLoader", mmaudio_model="mmaudio_large_44k_v2_fp16.safetensors", base_precision="fp16"),
+        "feat": node("MMAudioFeatureUtilsLoader", vae_model="mmaudio_vae_44k_fp16.safetensors",
+                     synchformer_model="mmaudio_synchformer_fp16.safetensors", clip_model="apple_DFN5B-CLIP-ViT-H-14-384_fp16.safetensors",
+                     mode="44k", precision="fp16"),
+        "run": node("DeckMMAudioSampler", "@8 Seed [seed]", mmaudio_model=["model", 0], feature_utils=["feat", 0], images=["src", 0],
+                    fps=["info", 0], duration=["secs", 0], steps=25, cfg=4.5, seed=42, prompt=["prompt", 0], negative_prompt=["negp", 0]),
+        "save": node("SaveAudioAdvanced", audio=["run", 0], filename_prefix="deck/mmaudio-foley", format="flac"),
+    }
+
+
+TEMPLATES = {"deck-ace-music": ace_music, "deck-mmaudio-foley": mmaudio_foley}
 
 if __name__ == "__main__":
     for name, make in TEMPLATES.items():

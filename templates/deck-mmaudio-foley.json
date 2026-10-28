@@ -1,0 +1,120 @@
+{
+ "src": {
+  "class_type": "VHS_LoadVideoPath",
+  "inputs": {
+   "video": "",
+   "force_rate": 0,
+   "custom_width": 0,
+   "custom_height": 384,
+   "frame_load_cap": 0,
+   "skip_first_frames": 0,
+   "select_every_nth": 1
+  },
+  "_meta": {
+   "title": "@1 Source video [video]"
+  }
+ },
+ "info": {
+  "class_type": "VHS_VideoInfoLoaded",
+  "inputs": {
+   "video_info": [
+    "src",
+    3
+   ]
+  }
+ },
+ "secs": {
+  "class_type": "PrimitiveFloat",
+  "inputs": {
+   "value": 8.0
+  },
+  "_meta": {
+   "title": "@3 Length (seconds)"
+  }
+ },
+ "prompt": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": ""
+  },
+  "_meta": {
+   "title": "@2 Prompt"
+  }
+ },
+ "negp": {
+  "class_type": "PrimitiveStringMultiline",
+  "inputs": {
+   "value": "music, speech, talking, singing"
+  },
+  "_meta": {
+   "title": "@4 Negative prompt"
+  }
+ },
+ "model": {
+  "class_type": "MMAudioModelLoader",
+  "inputs": {
+   "mmaudio_model": "mmaudio_large_44k_v2_fp16.safetensors",
+   "base_precision": "fp16"
+  }
+ },
+ "feat": {
+  "class_type": "MMAudioFeatureUtilsLoader",
+  "inputs": {
+   "vae_model": "mmaudio_vae_44k_fp16.safetensors",
+   "synchformer_model": "mmaudio_synchformer_fp16.safetensors",
+   "clip_model": "apple_DFN5B-CLIP-ViT-H-14-384_fp16.safetensors",
+   "mode": "44k",
+   "precision": "fp16"
+  }
+ },
+ "run": {
+  "class_type": "DeckMMAudioSampler",
+  "inputs": {
+   "mmaudio_model": [
+    "model",
+    0
+   ],
+   "feature_utils": [
+    "feat",
+    0
+   ],
+   "images": [
+    "src",
+    0
+   ],
+   "fps": [
+    "info",
+    0
+   ],
+   "duration": [
+    "secs",
+    0
+   ],
+   "steps": 25,
+   "cfg": 4.5,
+   "seed": 42,
+   "prompt": [
+    "prompt",
+    0
+   ],
+   "negative_prompt": [
+    "negp",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "@8 Seed [seed]"
+  }
+ },
+ "save": {
+  "class_type": "SaveAudioAdvanced",
+  "inputs": {
+   "audio": [
+    "run",
+    0
+   ],
+   "filename_prefix": "deck/mmaudio-foley",
+   "format": "flac"
+  }
+ }
+}

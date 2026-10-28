@@ -5,7 +5,7 @@ import {
 import { DELIVERY, INLINE_TAGS, parseScript, withDelivery, withName } from './dialogue.js';
 import { S, onServer } from './core.js';
 import { ROLES, queueRun, template, valuesByRole } from './make.js';
-import { bareSource, extractSound, openSoundPicker, outputCard, soundInput, soundSource, uploadMedia } from './media.js';
+import { bareSource, clipLabel, extractSound, openSoundPicker, openVideoPicker, outputCard, soundInput, soundSource, uploadMedia } from './media.js';
 import { waitJob } from './clipimport.js';
 import { TabSet } from './tabs.js';
 import { clipKeys, clipSoundFields, dragWindow, durationOf, timeline, wavePeaks } from './timeline.js';
@@ -309,13 +309,15 @@ function wireTimeline() {
 }
 // ---- adding ----
 // A sound source picked anywhere goes after the last clip on the selected clip's track (or A1), at the playhead when it's past that
-async function addSource(src) {
+// at: a time to put it at instead (on the first track with room there, or a new one)
+async function addSource(src, at = null) {
   const s = await soundSource(src);
   if (!s) return toast('That sound is gone', true);
-  const sel = selItem(), track = sel?.track || N.tracks[0]?.id || addTrack();
-  const it = newItem({ kind: s.kind === 'video' ? 'video' : 'audio', src: bareSource(src),
-    url: s.url, label: s.label, dur: await durationOf(s.url) }, track);
-  it.at = Math.max(TL.trackEnd(track), sel ? 0 : N.t);
+  const dur = await durationOf(s.url), sel = selItem();
+  const free = at != null && N.tracks.find((t) => !N.items.some((x) => x.track === t.id && x.at < at + dur && itEnd(x) > at));
+  const track = at != null ? free?.id || addTrack() : sel?.track || N.tracks[0]?.id || addTrack();
+  const it = newItem({ kind: s.kind === 'video' ? 'video' : 'audio', src: bareSource(src), url: s.url, label: s.label, dur }, track);
+  it.at = at != null ? at : Math.max(TL.trackEnd(track), sel ? 0 : N.t);
   if (src.trim) { it.in = src.trim.start || 0; if (src.trim.len) it.out = it.in + src.trim.len; }
   N.items.push(it); N.sel = it.id;
   changed();
@@ -327,11 +329,15 @@ const MAKERS = [
   { id: 'sfx', label: 'Sound effect', tpl: 'deck-ltx-t2a', len: 8, maxLen: 20,
     placeholder: 'e.g. heavy rain on a tin roof, distant thunder, a dog barks twice',
     help: 'Effects, ambience and foley from a description (LTX-2.5, audio only). Name the sounds, the place and how near they are.' },
+  { id: 'foley', label: 'Sound from clip', tpl: 'deck-mmaudio-foley', len: 8, maxLen: 30, clip: true,
+    placeholder: 'Optional: what to hear, e.g. footsteps on wet gravel, wind',
+    help: 'Sound for a clip, made from its picture (MMAudio): footsteps, impacts, ambience, timed to what happens. Use the selected clip or pick one; the prompt steers it and the negative prompt keeps things out (music and speech by default). Best up to 8 s; longer clips work but drift. Add to the mix puts it under the clip.' },
   { id: 'music', label: 'Music', tpl: 'deck-ace-music', len: 60, maxLen: 240,
     placeholder: 'Style tags, e.g. lo-fi hip hop, warm piano, vinyl crackle, 80 bpm', lyrics: true,
     help: 'Songs or instrumentals from style tags (ACE-Step 1.5). Add lyrics with [verse] / [chorus] lines, or leave them empty for an instrumental.' },
 ];
-const G = { op: store.get('deck.sound.maker', 'sfx'), prompt: '', lyrics: '', len: null, seed: -1, bpm: 90, key: null, showing: null };   // showing: the take picked
+const G = { op: store.get('deck.sound.maker', 'sfx'), prompt: '', lyrics: '', len: null, seed: -1, bpm: 90, key: null, showing: null,
+  clip: null, clipAt: {} };   // clip: Sound from clip's source {src, at?}; clipAt: generation id -> where its clip sits   // showing: the take picked
 // the makers' fields by role: make.js ROLES, with a music template's tags, lyrics, BPM and key
 const ROLE = {
   prompt: (f) => f.kind === 'text' && (/prompt|tags/i.test(f.group) || f.input === 'tags') && !/negative|lyrics/i.test(f.group) && f.input !== 'lyrics',
@@ -344,11 +350,14 @@ async function makeSound() {
   const mk = MAKERS.find((m) => m.id === G.op) || MAKERS[0];
   const t = template(mk.tpl);
   if (!t) return toast(`Template ${mk.tpl} isn't installed yet`, true);
-  if (!G.prompt.trim()) return toast('Describe the sound first', true);
-  const values = valuesByRole(t, { prompt: G.prompt, seed: G.seed, ...(mk.lyrics && { lyrics: G.lyrics, bpm: G.bpm, key: G.key }) }, { ...ROLES, ...ROLE });
+  if (mk.clip && !G.clip) return toast('Choose the clip first', true);
+  if (!mk.clip && !G.prompt.trim()) return toast('Describe the sound first', true);
+  const values = valuesByRole(t, { prompt: G.prompt, seed: G.seed, ...(mk.lyrics && { lyrics: G.lyrics, bpm: G.bpm, key: G.key }),
+    ...(mk.clip && { source: G.clip.src }) }, { ...ROLES, ...ROLE });
   for (const f of t.fields.filter(ROLE.len)) values[f.key] = G.len ?? mk.len;   // (music: the encoder's and the latent's length)
   try {
     const gens = await queueRun({ template: t.id, values });
+    if (mk.clip && G.clip.at != null) for (const g of gens) G.clipAt[g.id] = G.clip.at;
     N.gens.push(...gens.map((g) => g.id));
     persist(); renderPanel();
     toast(`Queued ${mk.label.toLowerCase()} as #${gens[0].id}`);
@@ -369,12 +378,18 @@ function makerSection() {
   const results = gens.length ? [h('div', { class: 'grid gallery' }, gens.map((g) =>
     outputCard(g, { kind: 'audio', picked: g.id === G.showing, onPick: () => { G.showing = G.showing === g.id ? null : g.id; renderPanel(); } }))),
   picked ? h('audio', { src: picked.outputs[pi].url, controls: true, autoplay: true, class: 'take-player' }) : null,
-  picked ? resultActions(picked, { kind: 'audio', first: [button('Add to the mix', () => addSource({ generation: picked.id, index: pi }), { cls: 'small primary' })] }) : null] : [];
+  picked ? resultActions(picked, { kind: 'audio', first: [button('Add to the mix', () => addSource({ generation: picked.id, index: pi }, G.clipAt[picked.id] ?? null), { cls: 'small primary' })] }) : null] : [];
+  // Sound from clip: the selected clip on the timeline (its trim and place), or one picked
+  const sel = selItem();
+  const clipRow = mk.clip ? field('Clip', h('div', { class: 'row wrap' },
+    h('span', { class: 'grow' }, G.clip ? clipLabel(G.clip.src) : 'None yet'),
+    sel?.kind === 'video' ? button('Use the selected clip', () => { G.clip = { src: srcOf(sel), at: sel.at }; renderPanel(); }) : null,
+    button('Pick…', () => openVideoPicker({ title: 'The clip to make sound for', onPick: (v) => { G.clip = { src: v }; renderPanel(); } })))) : null;
   return section('Make a sound', null,
     seg(MAKERS.map((m) => [m.id, m.label]), G.op, (v) => { G.op = v; G.len = null; store.set('deck.sound.maker', v); renderPanel(); }),
     help(mk.help),
     t ? null : note(`Template ${mk.tpl} isn't installed yet${mk.id === 'music' ? ': it needs the ACE-Step 1.5 models (see README, Sound tab)' : ''}.`),
-    field(mk.lyrics ? 'Style' : 'Description', prompt), lyrics ? field('Lyrics (optional)', lyrics) : null,
+    clipRow, field(mk.lyrics ? 'Style' : mk.clip ? 'Prompt (optional)' : 'Description', prompt), lyrics ? field('Lyrics (optional)', lyrics) : null,
     rangeField('Length', () => G.len ?? mk.len, (v) => { G.len = v; }, { min: 1, max: mk.maxLen, step: 0.5, digits: 1, fmt: (v) => `${v} s` }),
     mk.lyrics ? rangeField('BPM', () => G.bpm, (v) => { G.bpm = Math.round(v); }, { min: 40, max: 220, step: 1, digits: 0, fmt: (v) => `${Math.round(v)}` }) : null,
     key ? field('Key', key) : null,
