@@ -15,7 +15,7 @@ if [ ! -x .venv/bin/uvicorn ]; then
 fi
 
 HOST="${DECK_HOST:-0.0.0.0}"
-PORT="${DECK_PORT:-8190}"
+PORT="${DECK_PORT:-8191}"   # (the lab branch: beside ComfyChair on 8190)
 ARGS=()
 if [[ -n "${SSL_CERT:-}" && -n "${SSL_KEY:-}" ]]; then
   ARGS+=(--ssl-certfile "$SSL_CERT" --ssl-keyfile "$SSL_KEY")

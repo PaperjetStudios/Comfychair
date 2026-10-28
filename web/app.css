@@ -1275,3 +1275,36 @@ body:has(.stage.maxed) .toast { z-index: 60; }
 .anim-bar .tl-key { bottom: -4px; }
 .tl-key { position: absolute; bottom: 3px; width: 9px; height: 9px; margin-left: -4.5px; background: var(--accent); transform: rotate(45deg);
   border: 1px solid #000a; pointer-events: none; z-index: 1; }
+
+/* ---- ComfyChair Lab (world.js): travel by three fingers, a map of where you are, and things with a little give ---- */
+.lab-badge { margin-left: 4px; padding: 1px 4px; font-size: 10px; font-weight: 700; color: var(--accent-ink); background: var(--accent);
+  border-radius: var(--r-sm); vertical-align: super; letter-spacing: .04em; }
+.lab .tab.active { transform-origin: 50% 40%; }
+.lab .topbar { position: relative; z-index: 6; }   /* (a leaning tab passes under it) */
+.world-map {
+  position: fixed; z-index: 45; left: 50%; top: 72px; transform: translate(-50%, -8px) scale(.96); opacity: 0; pointer-events: none;
+  display: flex; gap: 6px; padding: 8px; background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(8px);
+  border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow);
+  transition: opacity .25s, transform .45s cubic-bezier(.34, 1.56, .64, 1);
+}
+.world-map.on { opacity: 1; transform: translate(-50%, 0) scale(1); }
+.wm-col { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 52px; padding: 6px 4px;
+  border-radius: var(--r); color: var(--muted); transition: background .2s, color .2s, transform .35s cubic-bezier(.34, 1.56, .64, 1); }
+.wm-col.here { background: var(--surface-2); color: var(--text); }
+.wm-col.to { color: var(--accent); transform: translateY(-3px) scale(1.08); }
+.wm-icon svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; display: block; }
+.wm-name { font-size: 10px; }
+.wm-sets { display: flex; flex-direction: column; gap: 3px; margin: 2px 0; }
+.wm-set { width: 18px; height: 5px; border-radius: 3px; background: var(--line-2); transition: background .2s, width .3s cubic-bezier(.34, 1.56, .64, 1); }
+.wm-set.to { background: var(--accent); width: 28px; }
+/* a little physics: presses squash and spring back, sheets and toasts land with a bounce */
+.lab .btn, .lab .icon-btn, .lab .seg button, .lab .side-tab, .lab nav.tabs button, .lab .chip {
+  transition: transform .42s cubic-bezier(.34, 1.8, .5, 1), background-color .15s, border-color .15s, color .15s;
+}
+.lab .btn:active:not(:disabled), .lab .icon-btn:active:not(:disabled), .lab .seg button:active:not(:disabled),
+.lab .side-tab:active, .lab nav.tabs button:active, .lab .chip:active { transform: scale(.92); transition-duration: .07s; }
+.lab .sheet:not(.hidden) { animation: lab-sheet .5s cubic-bezier(.34, 1.4, .64, 1); }
+@keyframes lab-sheet { from { transform: translate(-50%, 40px); opacity: .4; } to { transform: translate(-50%, 0); opacity: 1; } }
+.lab .toast { animation: lab-toast .45s cubic-bezier(.34, 1.7, .64, 1); }
+@keyframes lab-toast { from { transform: translate(-50%, 16px) scale(.9); opacity: 0; } to { transform: translate(-50%, 0) scale(1); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .lab * { animation: none !important; transition: none !important; } }

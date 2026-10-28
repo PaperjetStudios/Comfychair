@@ -1624,7 +1624,7 @@ class AppFiles(StaticFiles):
         return r
 
 
-APP_NAME = os.environ.get("DECK_NAME", "ComfyChair")   # a second copy (another port) installs as its own app by this name
+APP_NAME = os.environ.get("DECK_NAME", "ComfyChair Lab")   # (the lab branch: its own app by default) a second copy (another port) installs as its own app by this name
 
 
 @app.get("/manifest.webmanifest", include_in_schema=False)
