@@ -1,3 +1,15 @@
+/* The installed monospace font (whichever the device has), with its line metrics evened out: capitals sit in the
+   middle of a button whatever the font. Android's (Noto / Droid Sans Mono) keeps a tall gap above the letters,
+   so text sat low in every button on the tablet. Ascent minus cap height = descent, so caps centre. */
+@font-face { font-family: "Deck Mono"; font-weight: 100 500; ascent-override: 92%; descent-override: 22%; line-gap-override: 0%;
+  src: local("JetBrains Mono"), local("JetBrainsMono-Regular"), local("Cascadia Mono"), local("Roboto Mono"), local("RobotoMono-Regular"),
+    local("SF Mono"), local("Menlo"), local("Consolas"), local("Noto Sans Mono Regular"), local("NotoSansMono-Regular"), local("Droid Sans Mono"),
+    local("DroidSansMono"), local("DejaVu Sans Mono"), local("DejaVuSansMono"), local("Ubuntu Mono Regular"), local("Liberation Mono"); }
+@font-face { font-family: "Deck Mono"; font-weight: 600 900; ascent-override: 92%; descent-override: 22%; line-gap-override: 0%;
+  src: local("JetBrains Mono Bold"), local("JetBrainsMono-Bold"), local("Cascadia Mono Bold"), local("Roboto Mono Bold"), local("RobotoMono-Bold"),
+    local("SF Mono Bold"), local("Menlo Bold"), local("Consolas Bold"), local("Noto Sans Mono Bold"), local("NotoSansMono-Bold"),
+    local("Droid Sans Mono"), local("DejaVu Sans Mono Bold"), local("DejaVuSansMono-Bold"), local("Ubuntu Mono Bold"), local("Liberation Mono Bold"); }
+
 /* ComfyChair. Tokens first: every colour, radius and shadow below comes from these. */
 :root {
   --bg: #0f1115;
@@ -22,7 +34,7 @@
   --r-sm: 2px;                   /* chips inside controls, badges */
   --r: 3px;                      /* buttons, inputs, rows, chips */
   --r-lg: 5px;                   /* sections, cards, the viewer, sheets */
-  --font: ui-monospace, "JetBrains Mono", "Cascadia Mono", "Roboto Mono", "SF Mono", Menlo, Consolas, "Droid Sans Mono", monospace;
+  --font: "Deck Mono", ui-monospace, "JetBrains Mono", "Cascadia Mono", "Roboto Mono", "SF Mono", Menlo, Consolas, "Droid Sans Mono", monospace;
   --shadow: 0 8px 30px #0008;
   --shadow-sm: 0 4px 16px #0008;
   --fs-xs: 12px;
@@ -246,6 +258,7 @@ main { min-height: 0; position: relative; }
 .panel-body { display: grid; gap: var(--gap); }
 .panel-top > .btn.ghost { flex: none; }
 .tpl-row { display: flex; gap: 8px; margin-bottom: 10px; }
+.keep-toggle { margin: -4px 0 10px; font-size: var(--fs-sm); color: var(--muted); min-height: 32px; }
 .tpl-filter { margin-bottom: 6px; }
 .tpl-filter select { flex: 1; min-width: 0; font-size: 0.9em; }
 #tplNotes { display: grid; gap: 6px; margin-bottom: 10px; }
@@ -1114,7 +1127,7 @@ button.sheet-caret { width: 22px; }
 .panel .section, .panel details.group { scroll-margin-top: 8px; }
 .side-nav {
   position: sticky; top: 0; align-self: start; z-index: 4; display: flex; flex-direction: column; gap: 2px; padding: 3px;
-  margin: calc(-1 * var(--gap)) 0 0 calc(-1 * var(--gap)); padding-top: calc(var(--gap) + 3px);
+  margin: calc(-1 * var(--gap)) 0 0 calc(-1 * var(--gap)); padding-top: calc(var(--gap) + 3px); padding-bottom: calc(var(--gap) + 3px);
   background: var(--bg); border-right: 1px solid var(--line); max-height: 100dvh; overflow-y: auto; scrollbar-width: none;
 }
 .side-tab {

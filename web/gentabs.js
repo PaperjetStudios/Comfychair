@@ -8,7 +8,7 @@
 //   effective = { ...template defaults, ...preset.values, ...tab.overrides }
 // S.values stays the working copy every field edits; persist() calls hooks.edited(), which re-derives
 // the overrides from it (so an edit back to the inherited value drops the override) and saves the tab.
-import { $, h, api, toast, undoToast, openSheet, closeSheet, nameSheet, sheetOpen, button, actions, store, uid, clone , help } from './ui.js';
+import { $, h, api, toast, undoToast, openSheet, closeSheet, nameSheet, sheetOpen, button, actions, store, uid, clone , help, toggle } from './ui.js';
 import { S, onServer, onProject } from './core.js';
 import { TabSet } from './tabs.js';
 import { hooks, installState, mainPromptKey, persist, renderFields, stateKey } from './generate.js';
@@ -172,11 +172,10 @@ function pick(id, over) {
 const mount = h('div', { id: 'genTabs', class: 'gen-tabs' });
 $('.tpl-row').before(mount);
 // Keep prompt: on, a template change carries the prompt, pictures, size and fixed seed over (see carry)
-const keepBtn = h('button', { type: 'button', class: 'btn small keep-btn' + (keepOn() ? ' on' : ''), 'aria-pressed': String(keepOn()),
-  title: 'On: changing the template keeps the prompt, negative prompt, pictures, size and a fixed seed. Off: the tab starts fresh.',
-  onclick: () => { const on = !keepOn(); store.set('deck.gen.keepOnSwitch', on); keepBtn.classList.toggle('on', on); keepBtn.setAttribute('aria-pressed', String(on)); } },
-  'Keep prompt');
-$('#tplSel').after(keepBtn);
+const keepBtn = toggle('Keep the prompt and pictures when the template changes', keepOn(), (on) => store.set('deck.gen.keepOnSwitch', on));
+keepBtn.classList.add('keep-toggle');
+keepBtn.title = 'On: a new template keeps the prompt, negative prompt, pictures, size and a fixed seed. Off: the tab starts fresh.';
+$('.tpl-row:not(.tpl-filter)').after(keepBtn);
 export const tabs = new TabSet({ kind: 'gen-tabs', mount, scope: 'project', newName: (n) => `Tab ${n}`,
   adapter: { empty, load, dump, migrate: (p) => (p && p.v === 1 && p.template ? p : empty()) }, seed, onSwitch: () => updatePicker() });
 const baseStart = tabs.start.bind(tabs);
