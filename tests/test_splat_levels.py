@@ -74,10 +74,11 @@ class Levels(unittest.TestCase):
         np.testing.assert_allclose(light[:, :3], data[200:, :3])
         # grown a little to close the gaps
         g = sa.grow_for(300, 100)
-        self.assertTrue(1.0 < g <= 1.15)
+        self.assertTrue(1.0 < g <= 1.4)
         np.testing.assert_allclose(light[:, 7], data[200:, 7] + np.log(g), rtol=1e-5)
         self.assertEqual(sa.grow_for(300, 300), 1.0)
-        self.assertEqual(sa.grow_for(10_000_000, 1), 1.15)
+        self.assertEqual(sa.grow_for(10_000_000, 1), 1.4)
+        self.assertAlmostEqual(sa.grow_for(600, 300), 2 ** 0.25, places=3)
         # the box is the middle 99% of the full set
         x0, y0, z0, x1, y1, z1 = made["box"]
         self.assertTrue(0 <= x0 < 0.1 and 1.9 < x1 <= 2 and 2.8 < z1 <= 3, made["box"])

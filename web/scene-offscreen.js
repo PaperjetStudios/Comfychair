@@ -27,9 +27,11 @@ function glr() {
 
 let nextId = 1;
 export class Stage {
-  // payload: the scene as saved in a scene-tabs document (a copy is made)
-  constructor(payload) {
+  // payload: the scene as saved in a scene-tabs document (a copy is made). full: splats load their full set (a
+  // render); otherwise the preview level picked on this device, as the 3D view (the Video tab's live preview)
+  constructor(payload, { full = false } = {}) {
     const sc = this.sc = upgrade(structuredClone(payload));
+    this.full = full;
     this.id = nextId++; this.version = 0; this.onChange = null;   // version moves when what's drawn could differ
     this.frames = framesFor(sc.seconds); this.dur = this.frames / FPS;
     this.w = sc.width; this.h = sc.height;
@@ -59,7 +61,7 @@ export class Stage {
 
   // a layer's three.js object, as the panel's makeObject builds it (without selection, gizmo or picking)
   make(o) {
-    const x = { mine: (_, g) => this.meshes.get(o.id) === g, draw: () => this.loaded(o.id), lib: () => this.sparkLib() };
+    const x = { mine: (_, g) => this.meshes.get(o.id) === g, draw: () => this.loaded(o.id), lib: () => this.sparkLib(), full: this.full };
     let m;
     if (o.type === 'figure') {
       const rig = FIGURE.buildFigure(figClay, hidden, o.body);
@@ -194,8 +196,15 @@ export class Stage {
     const go = () => { this.version++; this.onChange?.(); if (++n < 4) this.timer = setTimeout(go, 120 * n); };
     this.timer = setTimeout(go, 80);
   }
-  // for an export: the splat sort needs time between a camera move and the picture
-  async settle() { if (this.hasSplat) await sleep(140); }
+  // for an export: the splat sort needs time between a camera move and the picture. At least 140 ms, then until
+  // Spark has no update or sort under way (a full set's sort takes longer), up to 3 s
+  async settle() {
+    if (!this.hasSplat) return;
+    await sleep(140);
+    const sp = this.spark, v = sp?.defaultView, t0 = performance.now();
+    const busy = () => (sp?.pendingUpdate && sp.pendingUpdate.timeoutId !== -1) || v?.sorting || v?.pending;
+    while (busy() && performance.now() - t0 < 3000) await sleep(20);
+  }
 
   // near and far of the whole clip, measured once (as scene-export.js measureRange does, on every few frames)
   depthRange() {

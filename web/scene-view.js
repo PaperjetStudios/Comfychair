@@ -12,6 +12,7 @@ import {
 import { letGo } from './scene-export.js';
 import { modeOf } from './scene-modes.js';
 import { renderKeys, renderPanel, renderToolbar, setSceneMode } from './scene-ui.js';
+import { sharpOn } from './splat-levels.js';
 
 // ---- geometry ----------------------------------------------------------------
 // A soft, featureless figure turned on a lathe: feet, legs as one column, hips, waist, chest,
@@ -243,8 +244,9 @@ export function fit() {
   if (!vw || !vh) return;
   const a = SC.width / SC.height;
   const w = Math.min(vw, vh * a), hh = w / a;
-  // a splat in view on a touch screen: drawn at 1x (a tablet's 2-3x is 4-9x the work, and splats are soft anyway)
-  const splats = matchMedia('(pointer: coarse)').matches && [...R.meshes.values()].some((m) => m.userData.splat && m.visible);
+  // a splat in view on a touch screen: drawn at 1x (a tablet's 2-3x is 4-9x the work, and splats are soft anyway),
+  // unless the splat panel's Sharp is on
+  const splats = matchMedia('(pointer: coarse)').matches && !sharpOn() && [...R.meshes.values()].some((m) => m.userData.splat && m.visible);
   const dpr = splats ? 1 : Math.min(window.devicePixelRatio || 1, 2);
   canvas.style.width = `${w}px`; canvas.style.height = `${hh}px`;
   canvas.style.left = `${(vw - w) / 2}px`; canvas.style.top = `${(vh - hh) / 2}px`;

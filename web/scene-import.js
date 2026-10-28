@@ -7,11 +7,14 @@
 // folder (POST /api/scene/asset); the layer only holds its URL.
 import * as THREE from './vendor/three.module.min.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
-import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip } from './ui.js';
+import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip, field, seg, info } from './ui.js';
 import { C, R, SC, newObject, namesFor, save, selItem, write } from './scene-data.js';
 import { addModeSection } from './scene-modes.js';
 import { LOADERS, controls, changed, draw, fit, passHooks, renderer, scene, select } from './scene-view.js';
 import { LIBRARY } from './scene-library.js';
+import {
+  LEVELS, countLabel, fileOf, levelFor, levelName, makeChoices, previewLevel, previewUrl, renderUrl, setMakeChoices, setPreviewLevel, setSharp, sharpOn
+} from './splat-levels.js';
 
 const MODELS = new Set(['glb', 'gltf', 'obj', 'fbx']);
 const SPLATS = new Set(['ply', 'splat', 'ksplat', 'spz']);
@@ -75,11 +78,16 @@ async function sparkOf() {
   if (!spark) { spark = new lib.SparkRenderer({ renderer }); scene.add(spark); }
   return lib;
 }
-async function loadSplat(o, x = {}) {
+// Which file: the view loads the preview level picked on this device (splat-levels.js), a render (x.full) the
+// full set or the densest level kept. A layer without levels (older, or .spz/.splat) has only its url.
+const coarse = () => matchMedia('(pointer: coarse)').matches;
+const splatUrl = (o, x = {}) => (x.full ? renderUrl(o) : previewUrl(o, previewLevel(coarse())));
+async function loadSplat(o, x = {}, url = splatUrl(o, x)) {
   const lib = x.lib ? await x.lib() : await sparkOf();
-  const mesh = new lib.SplatMesh({ url: o.url, fileName: o.file || undefined });
+  const mesh = new lib.SplatMesh({ url, fileName: (url === o.url ? o.file : fileOf(url)) || undefined });
   await mesh.initialized;
   mesh.raycast = () => {};  // picking uses the box (the splats are far too many to ray-test)
+  mesh.userData.url = url;
   return mesh;
 }
 // where the splat is: the middle 99% of its centres per axis, so a few stray floaters don't count
@@ -118,11 +126,32 @@ LOADERS.splat = (o, group, x = {}) => {
     };
     fit();
     group.add(holder, proxy);
-    group.userData.splat = { fit, proxy };
-    group.userData.dispose = () => { holder.remove(mesh); mesh.dispose(); };  // (the layer is gone: free its buffers)
+    const sp = group.userData.splat = { fit, proxy, holder, mesh, url: mesh.userData.url };
+    group.userData.dispose = () => { holder.remove(sp.mesh); sp.mesh.dispose(); sp.mesh = null; };  // (the layer is gone: free its buffers)
     tagPicks(o, group); redraw();
   }).catch((e) => toast(`${o.name}: ${e.message}`, true));
 };
+
+// The preview level changed (or the layer got levels): each splat layer whose file differs loads the new one, and
+// the old mesh is let go once the new one is in. The box stays the layer's own (o.box), so nothing moves.
+const swapping = new Map();   // layer id: the url on its way in
+export function applySplatLevels() {
+  for (const o of SC.objects) {
+    if (o.type !== 'splat') continue;
+    const group = R.meshes.get(o.id), sp = group?.userData.splat;
+    const url = splatUrl(o);
+    if (!sp || (swapping.get(o.id) ?? sp.url) === url) continue;
+    swapping.set(o.id, url);
+    loadSplat(o, {}, url).then((mesh) => {
+      if (swapping.get(o.id) !== url || !mine(o, group) || !sp.mesh) { mesh.dispose(); return; }
+      const old = sp.mesh;
+      sp.holder.remove(old); old.dispose();
+      sp.holder.add(mesh); sp.mesh = mesh; sp.url = url;
+      draw();
+    }).catch((e) => toast(`${o.name}: ${e.message}`, true))
+      .finally(() => { if (swapping.get(o.id) === url) swapping.delete(o.id); });
+  }
+}
 
 // A SparkRenderer only draws when drawn again after its sort lands, which our draw-on-demand view
 // doesn't do by itself: a few more draws follow each one (not while they're the follow-ups).
@@ -255,22 +284,71 @@ function itemSection(o) {
     hint(`${o.file || o.name}${o.fit && o.fit !== 1 ? ` · fitted ×${o.fit}` : ''}`),
     o.type === 'model' ? toggle('Plain clay look (ignore its colours and textures)', o.clay, (on) => { o.clay = on; applyClay(R.meshes.get(o.id), o.clay); save(); draw(); }) : null,
     o.type === 'splat' ? toggle('Upside down (turn it over: many splat files are y-down)', o.flip, (on) => { set('flip', on); R.meshes.get(o.id)?.userData.splat?.fit(); draw(); }) : null,
+    o.type === 'splat' ? previewFields(o) : null,
     button('Back to fitted size', () => { const f = o.fit || 1; write(o, namesFor(o), { sx: f, sy: f, sz: f }); changed(); }),
     o.type === 'splat' ? help('Splats can\'t be drawn as depth: renders (and the ◐ Depth view) use a box the size of the splat in its place.') : null);
 }
 
+// ---- splat preview: which level the view shows (this device's choice, for every splat), and lighter levels on demand ----
+function previewFields(o) {
+  const facts = hint('');
+  const showFacts = () => {
+    const lv = levelFor(o, previewLevel(coarse())), full = levelFor(o, 'full');
+    facts.textContent = !lv ? 'One file: no lighter previews yet'
+      : `Showing ${levelName(lv.k)} · ${countLabel(lv.n)} of ${countLabel(full?.n)} · renders use ${full.k === 'full' ? 'the full set' : levelName(full.k)}`;
+  };
+  showFacts();
+  const has = new Set((o.levels || []).map((v) => v.k));
+  const opts = LEVELS.map(([k, label, n]) => [k, label, has.size && !has.has(k) ? `${label}: this splat has no such level (the next lighter one shows)` : `${label}${Number.isFinite(n) ? ` (${countLabel(n)})` : ''}`]);
+  const out = [
+    field(['Splat preview', info('How many of its Gaussians the 3D view draws, on this device, for every splat. Light is quick on a tablet; Full is every one. Renders (colour video, the Video tab\'s export) always use the full set.')],
+      seg(opts, previewLevel(coarse()), (k) => { setPreviewLevel(k); applySplatLevels(); showFacts(); })),
+    facts,
+  ];
+  if (coarse()) out.push(toggle('Sharp (full screen resolution with splats)', sharpOn(), (on) => { setSharp(on); fit(); },
+    { help: 'Off: while a splat is in view, the 3D view draws at 1 pixel per screen point, which is far quicker on a tablet. On: every pixel, sharper but slower.' }));
+  if (!o.levels?.length && /\.ply$/i.test(fileOf(o.url))) {
+    out.push(button('Make lighter previews', async () => {
+      try {
+        const r = await api('/api/scene/splat/levels', { method: 'POST', body: { url: o.url }, busy: 'Making lighter previews…' });
+        if (!r.levels.some((v) => v.k !== 'full')) return toast(`It has only ${countLabel(r.n)} Gaussians: already light`);
+        o.levels = r.levels; o.box ||= r.box;
+        changed(); applySplatLevels();
+        toast(`Previews made: ${r.levels.map((v) => `${levelName(v.k)} ${countLabel(v.n)}`).join(', ')}`);
+      } catch (e) { toast(e.message, true); }
+    }, { title: 'Lighter copies of this splat for the 3D view (the full set stays for renders)' }));
+  }
+  return out;
+}
+
 // ---- a picture as a splat (SHARP, POST /api/scene/splat): where the shot camera is, seen through the photo's lens ----
-export async function makeSplat(name, { lookThrough, camera, busyBar }) {
+// First a small sheet: the preview density (this device's, as the layer panel's Splat preview) and whether the
+// full set is kept for renders. These are remembered per device.
+export function makeSplat(name, ctx) {
+  const ch = { ...makeChoices(coarse()), preview: previewLevel(coarse()) };
+  const keep = toggle('Keep the full set for renders', ch.keepFull, (on) => { ch.keepFull = on; },
+    { help: 'On: renders (colour video, the Video tab\'s export) use every Gaussian SHARP made, about 1.2M. Off: only the previews are kept, and renders use the densest of them (smaller files).' });
+  openSheet(h('h3', {}, 'Photo as a splat'),
+    help('SHARP turns the picture into about 1.2 million Gaussians. The 3D view shows a lighter preview of them; you can change it later in the splat\'s panel.'),
+    field('Preview density', seg(LEVELS.map(([k, label, n]) => [k, label, Number.isFinite(n) ? `${label}: about ${countLabel(n)} Gaussians` : `${label}: every Gaussian`]),
+      ch.preview, (k) => { ch.preview = k; })),
+    keep,
+    actions(button('Cancel', closeSheet), button('Make the splat', () => {
+      closeSheet(); setMakeChoices(ch); setPreviewLevel(ch.preview); runSplat(name, ch, ctx);
+    }, { cls: 'primary' })));
+}
+
+async function runSplat(name, ch, { lookThrough, camera, busyBar }) {
   const bar = busyBar('Making a splat from the picture…');
   try {
     const { waitJob } = await import('./clipimport.js');
-    const r = await waitJob(await api('/api/scene/splat', { method: 'POST', body: { image: name, project_id: C.S.project }, busy: false }));
+    const r = await waitJob(await api('/api/scene/splat', { method: 'POST', body: { image: name, project_id: C.S.project, preview: ch.preview, keep_full: ch.keepFull }, busy: false }));
     const d = THREE.MathUtils.radToDeg, c = camera;
     const o = newObject('splat', { x: c.position.x, y: c.position.y, z: c.position.z, rx: d(c.rotation.x), ry: d(c.rotation.y), rz: d(c.rotation.z) });
     Object.assign(o, { name: `Splat of ${name.split('/').pop().replace(/\.\w+$/, '')}`.slice(0, 60), url: r.url, file: r.name, ext: 'ply',
-      flip: true, cam: true, image: name, fov: r.lens?.fov || 50 });
+      flip: true, cam: true, image: name, fov: r.lens?.fov || 50, levels: r.levels || undefined });
     const mesh = await loadSplat(o);
-    o.box = splatBox(mesh).map((v) => +v.toFixed(3));
+    o.box = r.box || splatBox(mesh).map((v) => +v.toFixed(3));   // (the full set's, so every level sits the same)
     o.dist = +Math.max(0.3, (o.box[2] + o.box[5]) / 2).toFixed(3);   // (its middle, straight ahead of the photo's camera)
     loaded.set(o.id, mesh);
     SC.objects.push(o); save(); select(o.id);

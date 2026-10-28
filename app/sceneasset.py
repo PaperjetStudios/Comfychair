@@ -135,9 +135,10 @@ def _visible_order(props, data):
 
 
 def grow_for(n: int, keep: int) -> float:
-    """How much a preview's Gaussians grow to close the gaps the left-out ones leave: more the fewer are kept,
-    at most 1.15 (1.0 when nothing is left out)."""
-    return 1.0 if keep >= n else round(min(1.15, (n / keep) ** (1 / 12)), 4)
+    """How much a preview's Gaussians grow to close the gaps the left-out ones leave: the fourth root of how many
+    times fewer there are, at most 1.4 (1.0 when nothing is left out). On a synthetic splat thinned 5.5×, 1.1 left it
+    see-through and 1.3-1.5 filled it; 1.2M → 150k gives 1.4, → 600k 1.19."""
+    return 1.0 if keep >= n else round(min(1.4, (n / keep) ** 0.25), 4)
 
 
 def _thinned(props, data, order, keep: int, grow: float = 1.0):

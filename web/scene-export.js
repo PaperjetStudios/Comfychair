@@ -145,6 +145,43 @@ export async function renderDepthVideo() {
   }
 }
 
+// The shot as it looks (the colour look: models, photos, splats), the camera's move over the scene's length, at the
+// scene's size and frame rate. Drawn by a stage of its own (scene-offscreen.js) so splats use their full set at
+// full resolution whatever this device previews, and each frame waits for Spark's sort before it is kept.
+export async function renderColorVideo() {
+  if (busy || !canRender()) return false;
+  busy = true; stopAsked = false; stopPlay(); TEMP.clear(); renderPanel();
+  const W = SC.width, H = SC.height, bar = busyBar('Rendering colour frames…');
+  cancelToast('Rendering the colour video…');
+  let stage = null;
+  try {
+    const { Stage } = await import('./scene-offscreen.js');
+    stage = new Stage(JSON.parse(JSON.stringify(SC)), { full: true });
+    setStatus('Loading the full splats…');
+    await stage.whenReady(120000);
+    checkStop();
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const form = new FormData();
+    for (let f = 0; f < frames(); f++) {
+      stage.draw('color', f, cv);
+      if (stage.hasSplat) { await stage.settle(); stage.draw('color', f, cv); }
+      form.append('frames', await new Promise((res) => cv.toBlob(res, 'image/png')), `f${String(f).padStart(5, '0')}.png`);
+      if (f % 12 === 0) setStatus(`Rendering ${f + 1}/${frames()}…`);
+      bar.set(null, (f + 1) / frames());
+      checkStop();
+    }
+    await sendVideo(form, 'color', 0);
+    return true;
+  } catch (e) {
+    if (e instanceof Cancelled) cancelled(); else { setStatus(''); toast(e.message, true); }
+    return false;
+  } finally {
+    stage?.dispose();
+    bar.done();
+    busy = false; stopAsked = false; refresh(); renderPanel();
+  }
+}
+
 async function sendVideo(form, kind, blur) {
   form.append('fps', FPS); form.append('blur', blur); form.append('kind', kind); form.append('scene', JSON.stringify(SC));
   if (C.S.project != null) form.append('project_id', C.S.project);
@@ -155,10 +192,11 @@ async function sendVideo(form, kind, blur) {
     try { await api(`/api/generations/${g.id}`, { method: 'DELETE' }); } catch { /* it stays in History */ }
     checkStop();
   }
+  const what = kind === 'pose' ? 'Pose video' : kind === 'color' ? 'Colour video' : 'Depth video';
+  setStatus(`${what} #${g.id} is in History`);
+  if (kind === 'color') return toast(`${what} saved`);
   R.lastRender = g;
   R.renders[kind] = R.lastRender;
-  const what = kind === 'pose' ? 'Pose video' : 'Depth video';
-  setStatus(`${what} #${R.lastRender.id} is in History`);
   toast(`${what} saved`, false, { label: 'Use in H3 control', fn: () => C.useControlVideo(R.lastRender, SC) });
 }
 
