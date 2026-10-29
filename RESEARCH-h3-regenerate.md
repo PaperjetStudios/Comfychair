@@ -92,14 +92,52 @@ gains the same way.
 5. **README**: the node pack and its four files go in the custom-node and model tables, with a note that it
    needs 32 GB and Sage 2 / CUDA 13 for 2K (1080P otherwise).
 
+## On this box: 12 GB VRAM, 64 GB RAM
+
+Your templates already run `Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8` (about 21 GB) with ComfyUI moving
+weights between system RAM and the card, and H3 Upscale's 1.5× second pass. So a 1080P-class second pass on
+12 GB is already proven here. Activations at the bigger frame size are the limit, not the weights. The
+Regenerate parts and what to do about each:
+
+| Part | As released | For 12 GB |
+|---|---|---|
+| Refiner LoRA | 12.5 GB, **FP32, rank 576** (three adapters stacked along the rank axis) | **cast to bf16** (half the size, no quality change), or **cut the rank down** with SVD (to 128 or 64, about 1–1.5 GB); see below |
+| Turbo inside the merge | LightX2V FL2VA Turbo | you already run `minimax_h3_ref2v_turbo_8step…`; a rank-cut that keeps only the refiner and sharpness parts and leaves your turbo LoRA in place is worth trying |
+| Fast VAE | 6.5 GB, non-causal, 24 layers | probably heavier than your int8 video VAE. Keep your VAE with tiled decode first, and only try the fast one if decoding is slow |
+| Text encoder | Qwen3-VL 32B NVFP4, 15.7 GB | already in use; make sure it unloads after encoding (RAM headroom: base 21 + LoRA 6 + VAE 5 + encoder 16 is close to 64 GB) |
+| Target | 1080P / 2K | **1080P** (or our existing 1.5×). 2K filled 32 GB on a 5090, so it's out of reach on 12 GB without tiling in time |
+
+**Shrinking the LoRA** (one-off script, `dev/shrink_lora.py`): load the safetensors, then
+1. cast to bf16 and save (always worth doing);
+2. optionally, for each layer, rebuild ΔW = B·A and keep the top r singular values (r = 128 / 64), saving A′ and B′.
+
+Compare 768→1080P on the same 3 clips at full rank, r128 and r64 (faces, fine texture, time per clip). If the
+three adapters can be told apart by rank slices (check the model card or metadata for the split), drop the
+Turbo slice and keep ours.
+
+**Settings for 12 GB:**
+- Standard (2 steps from 0.7) and 1080P;
+- `--reserve-vram` / dynamic VRAM as you run now;
+- SageAttention if it's in your ComfyUI (the Advanced group already offers it);
+- clips cut in time like the SeedVR2 path (`chunks that fit in VRAM`) if 1080P × 10 s runs out of memory.
+
+**Plan change for 12 GB:** build the Regenerate mode with **Target: 1.5× / 1080P** only, behind a check for the
+LoRA file. Let the LoRA file be chosen from `loras/` (so a bf16 or rank-cut copy can be picked), and keep 2K
+hidden unless a card over 24 GB is found.
+
+**The video you linked:** YouTube (and NVIDIA's page) can't be reached from this session, so I couldn't watch
+it or read its description. If it shows a smaller build (a GGUF, a lite LoRA, a rank-cut file), send its title
+or the Hugging Face link and I'll fold it in.
+
 ## Questions to settle first
 - Does the int8 base you run match the one they tested (FL2VA vs the ref2va used by `deck-h3-ref2v`)? The LoRA
   is trained on the FL2VA base. Test whether it works on ref2v runs.
-- What GPU and VRAM is the box? That decides whether 2K is on by default or only 1080P.
 - What is the licence of the latent upscaler repo (`LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler`)? It isn't
   stated, but it's already in use here.
 
 ## Sources
+- Base H3 GGUF and low-VRAM notes: https://huggingface.co/Abiray/MiniMax-H3-Pruned-GGUF · https://github.com/wildminder/awesome-minimax-H3/blob/main/guides/minimax-h3-performance.md
+- Model card (LoRA: FP32, rank 576): https://huggingface.co/Efficient-Large-Model/Open-H3-Regenerate-2K
 - NVIDIA project page (not reachable from here): https://nvlabs.github.io/Sana/Open-H3-Regenerate-2K/
 - ComfyUI Wiki news: https://comfyui-wiki.com/en/news/2026-10-27-open-h3-regenerate-2k
 - Test report with files, nodes and timings: https://github.com/inkseq/h3-studio/issues/795
