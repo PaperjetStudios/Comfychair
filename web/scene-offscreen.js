@@ -10,6 +10,7 @@ import * as FIGURE from './figure.js';
 import { CAM, EVEN, applyOffset, applyRoll, FPS, OBJ, TYPES, framesFor, makers, namesFor, pathSig, sample, upgrade } from './scene-data.js';
 import { LOADERS, RANGE, depthMat, floorMat, geometries, photoScene, rangeMat, setRange, wallMat } from './scene-view.js';
 import { applyClay } from './scene-import.js';
+import { depthLook, renderDepth, splatDepths, splatMeshes } from './splat-depth.js';
 
 export const LOOKS = [['color', 'Color'], ['clay', 'Clay'], ['depth', 'Depth'], ['pose', 'Pose']];
 export const ready = typeof SCENE.show;   // (keeps the import above in use: it is for its side effects)
@@ -86,7 +87,7 @@ export class Stage {
   }
 
   async sparkLib() {
-    const lib = await (SPARK ||= import('./vendor/spark.module.js'));
+    const lib = this.lib = await (SPARK ||= import('./vendor/spark.module.js'));
     if (!this.spark) { this.spark = new lib.SparkRenderer({ renderer: glr() }); this.scene.add(this.spark); }
     return lib;
   }
@@ -112,7 +113,7 @@ export class Stage {
   setLook(look) {
     if (this.look === look) return;
     this.look = look;
-    const proxy = look === 'depth' || look === 'clay';   // a splat can't be clayed or depth-drawn: its box stands in
+    const proxy = look === 'clay';   // a splat can't be clayed: its box stands in (depth colours it: splat-depth.js)
     this.scene.overrideMaterial = look === 'depth' ? depthMat : null;
     this.scene.background = new THREE.Color(look === 'depth' ? 0x000000 : BG);
     for (const o of this.sc.objects) {
@@ -123,8 +124,9 @@ export class Stage {
       if (m.userData.own) m.material = look === 'clay' ? clay : m.userData.own;   // an object layer keeps its colour except in clay
       const sp = m.userData.splat;
       if (sp) for (const c of m.children) c.visible = c === sp.proxy ? proxy : !proxy;
+      if (sp?.mesh && this.lib) depthLook(this.lib, sp.mesh, look === 'depth');
     }
-    if (this.spark) this.spark.visible = !proxy;
+    if (this.spark) this.spark.visible = !proxy && look !== 'depth';   // (depth draws it in a pass of its own)
   }
 
   // ---- the scene at frame f (24 per second; between frames is fine), as the panel's pose() sets it
@@ -180,7 +182,7 @@ export class Stage {
     const gl = glr();
     if (gl.domElement.width !== W || gl.domElement.height !== H) gl.setSize(W, H, false);
     if (range) setRange(range);
-    gl.render(this.scene, this.camera);
+    if (look === 'depth') renderDepth(gl, this.scene, this.camera, this.hasSplat ? this.spark : null); else gl.render(this.scene, this.camera);
     cv.getContext('2d').drawImage(gl.domElement, 0, 0);
     if (look === 'color' && this.hasSplat) this.kick(`${f}|${W}`);
   }
@@ -232,6 +234,7 @@ export class Stage {
         if (buf[i + 3] < 128) continue;
         zs.push((buf[i] / 255 + buf[i + 1] / 65025 + buf[i + 2] / 16581375) * RANGE);
       }
+      for (const z of splatDepths(splatMeshes(this.meshes.values()), this.camera)) zs.push(z);   // (rangeMat can't draw splats)
       samples.push(zs);
     }
     gl.setRenderTarget(null); gl.setClearColor(0x000000, 1); rt.dispose();

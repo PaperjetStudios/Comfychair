@@ -15,6 +15,9 @@ import { modeOf } from './scene-modes.js';
 import { renderKeys, renderPanel, renderToolbar, setSceneMode } from './scene-ui.js';
 import { placeAtCamera, sharpOn } from './splat-levels.js';
 import { standShift } from './splat-shape.js';
+import { renderDepth, setSplatRange, splatDepths, splatMeshes } from './splat-depth.js';
+// the SparkRenderer once scene-import.js has made one (a depth picture draws the splats in a pass of their own)
+export const SPLAT_PASS = { spark: null };
 
 // ---- geometry ----------------------------------------------------------------
 // A soft, featureless figure turned on a lathe: feet, legs as one column, hips, waist, chest,
@@ -640,8 +643,8 @@ export function draw(forRender = false) {
     for (const d of m.userData.tips || []) { d.visible = dots && HAND.on && id === R.sel && d.userData.side === HAND.side; d.material = d.userData.finger === HAND.drag?.finger ? dotSel : dotMat; }
   }
   if (!forRender) {
-    if (depth) setRange(roughRange());
-    renderer.render(scene, R.free ? viewCam : camera);
+    if (depth) { setRange(roughRange()); renderDepth(renderer, scene, R.free ? viewCam : camera, SPLAT_PASS.spark); }
+    else renderer.render(scene, R.free ? viewCam : camera);
   }
 }
 
@@ -656,12 +659,16 @@ const visibleMeshes = () => [...[...R.meshes.values()].filter((m) => m.visible),
 function roughRange() {
   const box = new THREE.Box3();
   for (const m of visibleMeshes()) box.expandByObject(m);
-  if (box.isEmpty()) return [0.3, 10];
+  // splats: their sampled centres in view (the box around a splat layer doesn't hold its points)
+  const zs = splatDepths(splatMeshes(R.meshes.values()), camera).sort((a, b) => a - b);
+  const sn = zs.length ? zs[Math.floor(zs.length * 0.01)] : Infinity, sf = zs.length ? zs[Math.floor(zs.length * 0.99)] : 0;
+  if (box.isEmpty() && !zs.length) return [0.3, 10];
   const p = camera.position, corners = [];
-  for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) corners.push(p.distanceTo(new THREE.Vector3(x, y, z)));
-  return [Math.max(0.3, box.distanceToPoint(p) * 0.8 || 0.3), Math.max(...corners, 1)];
+  if (!box.isEmpty()) for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) corners.push(p.distanceTo(new THREE.Vector3(x, y, z)));
+  const near = Math.min(box.isEmpty() ? Infinity : box.distanceToPoint(p) * 0.8 || 0.3, sn * 0.9);
+  return [Math.max(0.3, near), Math.max(...corners, sf * 1.05, 1)];
 }
-export function setRange([near, far]) { depthMat.uniforms.near.value = near; depthMat.uniforms.far.value = far; }
+export function setRange([near, far]) { depthMat.uniforms.near.value = near; depthMat.uniforms.far.value = far; setSplatRange([near, far]); }
 
 const ray = new THREE.Raycaster();
 function hitAt(e) {

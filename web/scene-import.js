@@ -10,7 +10,7 @@ import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip, field, seg, info, rangeField } from './ui.js';
 import { C, R, SC, newObject, namesFor, save, selItem, write } from './scene-data.js';
 import { addModeSection } from './scene-modes.js';
-import { LOADERS, activeCamera, controls, changed, draw, fit, lookThrough, passHooks, recentre, renderer, scene, select } from './scene-view.js';
+import { LOADERS, SPLAT_PASS, activeCamera, controls, changed, draw, fit, lookThrough, passHooks, recentre, renderer, scene, select } from './scene-view.js';
 import { LIBRARY } from './scene-library.js';
 import { askHeight } from './scene-scale.js';
 import { fitForHeight, fmtLen, importFit, unitToMetres } from './scale-math.js';
@@ -18,6 +18,7 @@ import {
   LEVELS, countLabel, fileOf, levelFor, levelName, makeChoices, placeAtCamera, previewLevel, previewUrl, renderUrl, setMakeChoices, setPlaceAtCamera,
   setPreviewLevel, setSharp, sharpOn
 } from './splat-levels.js';
+import { depthLook } from './splat-depth.js';
 import {
   GROWS, fillFactor, keptShare, medianOf, pickAlong, reachOf, samplePoints, sameTrim, shapeMesh, standShift, trimBody, trimSphere
 } from './splat-shape.js';
@@ -77,11 +78,12 @@ LOADERS.model = (o, group, x = {}) => {
 };
 
 // ---- splats: Spark (vendor/spark.module.js) draws them through one SparkRenderer in the scene ----
-let sparkLib = null, spark = null;
+let sparkLib = null, spark = null, sparkMod = null;
+export const sparkNow = () => spark;   // (the depth pass draws it on its own: splat-depth.js renderDepth)
 async function sparkOf() {
   sparkLib ||= import('./vendor/spark.module.js');
-  const lib = await sparkLib;
-  if (!spark) { spark = new lib.SparkRenderer({ renderer }); scene.add(spark); }
+  const lib = sparkMod = await sparkLib;
+  if (!spark) { spark = SPLAT_PASS.spark = new lib.SparkRenderer({ renderer }); scene.add(spark); }
   return lib;
 }
 // Which file: the view loads the preview level picked on this device (splat-levels.js), a render (x.full) the
@@ -167,23 +169,34 @@ export function applySplatLevels() {
 let kicking = false, kickTimer = 0;
 const hasSplat = () => [...R.meshes.values()].some((m) => m.userData.splat && m.visible);
 let hadSplat = false;  // (the draw after the last one went also needs following, to wipe it)
+// While Spark is still working (a big set's rebuild after a new look or depth range, its sort), it goes on drawing
+// every 100 ms, up to 5 s, and once more when it is done.
+const sparkBusy = () => !!spark && (!!(spark.pendingUpdate && spark.pendingUpdate.timeoutId !== -1) || !!spark.defaultView?.sorting || !!spark.defaultView?.pending);
 function kick() {
   clearTimeout(kickTimer);
-  let n = 0;
+  let n = 0, idle = 0;
   const go = () => {
     kicking = true; try { draw(); } finally { kicking = false; }
-    if (++n < 4) kickTimer = setTimeout(go, 120 * n);
+    n++;
+    if (sparkBusy()) idle = 0; else idle++;
+    if (n < 4 || (idle < 2 && n < 50)) kickTimer = setTimeout(go, n < 4 ? 120 * n : 100);
   };
   kickTimer = setTimeout(go, 80);
 }
-passHooks.push((pass) => {
+passHooks.push((pass, forRender) => {
+  // depth: each splat coloured by its depth, drawn by renderDepth (splat-depth.js) over the meshes; measuring
+  // the range (rangeMat) its box stands in
+  const range = forRender === 'range';
+  let turned = false;
   for (const m of R.meshes.values()) {
     const sp = m.userData.splat;
     if (!sp) continue;
-    sp.proxy.visible = pass === 'depth';
+    sp.proxy.visible = false;   // (near and far count the splat's own points: splat-depth.js splatDepths)
     if (sp.sphere && pass === 'depth') sp.sphere.visible = false;
+    if (sparkMod && sp.mesh && depthLook(sparkMod, sp.mesh, pass === 'depth' && !range)) turned = true;
   }
   if (spark) spark.visible = pass !== 'depth';
+  if (turned && !forRender && !kicking) kick();   // (the splats come back in their new colours a moment later)
   if (pass !== 'color' || kicking || !spark) return;
   const has = hasSplat();
   if (has || hadSplat) kick();

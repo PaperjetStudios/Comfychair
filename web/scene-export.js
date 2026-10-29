@@ -2,8 +2,9 @@ import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import { C, FPS, R, SC, TEMP, commitHolds, frames, holdEnd, recordFrame, settleTemp } from './scene-data.js';
 import {
-  RANGE, camera, draw, fit, floorMat, paint, pose, rangeMat, refresh, renderer, scene, setRange, wallMat
+  RANGE, SPLAT_PASS, camera, draw, fit, floorMat, paint, pose, rangeMat, refresh, renderer, scene, setRange, wallMat
 } from './scene-view.js';
+import { renderDepth, splatDepths, splatMeshes } from './splat-depth.js';
 import { api, busy as busyBar, toast } from './ui.js';
 import { modeOf } from './scene-modes.js';
 import { renderKeys, renderPanel, renderTime, renderTransport, setStatus } from './scene-ui.js';
@@ -83,6 +84,7 @@ function measureRanges() {
       if (buf[i + 3] < 128) continue;  // nothing drawn here
       zs.push(decodeDepth(buf[i], buf[i + 1], buf[i + 2]) * RANGE);
     }
+    for (const z of splatDepths(splatMeshes(R.meshes.values()), camera)) zs.push(z);   // (rangeMat can't draw splats)
     samples.push(zs);
   }
   renderer.setRenderTarget(null); rt.dispose();
@@ -141,7 +143,7 @@ export async function renderDepthVideo() {
     for (let k = 0; k < count; k++) {
       pose(first + k);
       setRange(ranges[k]);
-      renderer.setRenderTarget(rt); renderer.render(scene, camera); renderer.setRenderTarget(null);
+      renderer.setRenderTarget(rt); renderDepth(renderer, scene, camera, SPLAT_PASS.spark); renderer.setRenderTarget(null);
       form.append('frames', await targetToBlob(rt, W, H, true), `f${String(k).padStart(5, '0')}.png`);
       if (k % 12 === 0) setStatus(`Rendering ${k + 1}/${count}…`);
       bar.set(null, (k + 1) / count);
