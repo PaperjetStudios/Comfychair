@@ -116,9 +116,7 @@ Regenerate parts and what to do about each:
 | `DrakenZA/Open-H3-Regenerate-2K-ComfyUI` | an experimental ComfyUI conversion, loading not checked by its author | | skip for now |
 
 Both are community conversions, not NVIDIA's. Both are ordinary ComfyUI LoRAs, so `LoraLoaderModelOnly` loads
-them like the LoRAs in the templates, maybe without the node pack's special loader. Check whether the "sharp curve"
-and timestep table are still needed: father558's merge probably bakes in Sharp; Kijai's refiner-only probably
-doesn't use it.
+them like the LoRAs in the templates, maybe without the node pack's special loader. For the sharp curve file and timestep table, see *The Sharp curve branches* below.
 
 **What to try first on 12 GB:** father558 r128 (2 GB, nothing else in the chain), then Kijai r384 with your own
 `minimax_h3_ref2v_turbo_8step…`. Run the same 3 clips (faces, fine texture, motion), 768P → 1.5× / 1080P,
@@ -138,6 +136,59 @@ hidden unless a card over 24 GB is found.
 it or read its description. If it shows a smaller build (a GGUF, a lite LoRA, a rank-cut file), send its title
 or the Hugging Face link and I'll fold it in.
 
+## The Sharp curve branches (`sharp_curve_branches.safetensors`, 1.2 GB)
+
+**What they are:** LMS Sharp v1.0 (the sharpening LoRA from `Alissonerdx/Minimax-H3-ComfyUI`) has two parts:
+- **Linear part:** an ordinary LoRA on the model's linear layers. It's **already folded into the merged LoRA**
+  (NVIDIA's `adapters.py`: the merge is "the exact rank-concatenation of the refiner, LightX2V FL2VA Turbo v1.2 and
+  LMS Sharp v1.0", with B·A equal to the sum of the three).
+- **Curve part:** **50 extra branches**, one per block, on each block's AdaLN projection (the timestep modulation,
+  not the picture). Their input isn't the layer's input. It's an **8-number curve of the timestep**, read from the
+  base model's `adaln_t_table` (1025 × 8, interpolated at t·1024). Each block gets
+  `adaln_out += strength · curve_B · (curve_A · c(t))`. That's why they can't be a plain LoRA file, and why the
+  32 KB timestep table has to come from the base checkpoint.
+
+**Do they do anything? Probably not, in this release.**
+- **The claim:** the vLLM-Omni pull request (#9562, open) says the up factors (`curve_B`) are **all zero in all 50
+  blocks**, "so they contribute nothing". Its reference outputs with and without them were **bit-identical**. Its
+  loader refuses a bundle whose branches aren't zero, and it says the `adaln_t_table` isn't needed. Its
+  reviewers didn't dispute this, though none re-ran it.
+- **NVIDIA's code** (`open_h3/adapters.py`) and the **Songssx ComfyUI pack** apply the branches as live modules,
+  without checking or measuring. They neither confirm nor contradict the claim.
+- **If it's right:** the 1.2 GB file and the timestep table can be skipped entirely. The merged LoRA, and the
+  rank-cut copies made from it, already carry all of Sharp's real effect.
+
+**Check it on your box** (seconds, reads only the B tensors; in ComfyUI's venv):
+```bash
+python -c "from safetensors import safe_open as o; f=o('sharp_curve_branches.safetensors','pt'); print(max(f.get_tensor(k).abs().max().item() for k in f.keys() if 'curve_B' in k))"
+```
+`0.0` means it's inert: leave it out. Anything else: keep it, and use a loader that applies it (below).
+
+**What the smaller LoRAs mean for Sharp:**
+- **father558 r128** is cut from the merge, so it has Sharp's linear part, rank-reduced along with the rest.
+- **Kijai r384** is the refiner only: **no Sharp and no Turbo**. Add the standalone LMS Sharp LoRA if you want it
+  (`Alissonerdx/Minimax-H3-ComfyUI`, `minimax_h3_lms_v1.0_r64`; check the file name), plus your turbo LoRA.
+- Neither carries the curve part. If the check prints 0, nothing is lost.
+
+**Loaders, if it isn't zero:**
+- **Songssx `ComfyUI-OpenH3-Regenerate2K`** (MIT): `OpenH3RegenerateModelPatch` (main LoRA + curve branches, one
+  `strength` for both, default 1.0), `OpenH3RegenerateSigmas`, `OpenH3LockAudioForRefine` (noise mask: video
+  redrawn, audio kept). The curve file goes in `models/open_h3_regenerate/lora/`, not `models/loras`.
+- It **hard-checks** that the timestep table matches `minimax_h3_ref2va_pruned_int8_convrot` (sha256), so it
+  refuses other bases. **Your base is `Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8`, a community merge**: its
+  table may differ, and the pack would refuse it.
+- `cicalooo/ComfyUI-H3-PowerLoraStack` warns that a curve LoRA can load silently on a base with a different
+  curve bake and come out wrong (cos −0.375 measured).
+
+  All the more reason to confirm the branches are zero and skip them.
+
+**The exact schedules** (Songssx `OpenH3RegenerateSigmas`, from NVIDIA's release):
+- 3 steps: `0.909375, 0.857142…, 0.666666…, 0`
+- 2 steps: `0.7, 0.494117…, 0`
+
+Our `app/h3upscale.py` `LADDER` (0.6316, 0.3158, 0) was tuned for the plain upscaler. In Regenerate mode use
+these exact values, plus the Enhanced 3 steps from 0.8 that the h3-studio test settled on to keep faces.
+
 ## Questions to settle first
 - Does the int8 base you run match the one they tested (FL2VA vs the ref2va used by `deck-h3-ref2v`)? The LoRA
   is trained on the FL2VA base. Test whether it works on ref2v runs.
@@ -145,6 +196,7 @@ or the Hugging Face link and I'll fold it in.
   stated, but it's already in use here.
 
 ## Sources
+- Sharp curve: https://github.com/vllm-project/vllm-omni/pull/9562 · https://github.com/NVlabs/Sana/blob/sol-engine/models/Open-H3-Regenerate-2K/open_h3/adapters.py · https://github.com/Songssx/ComfyUI-OpenH3-Regenerate2K · https://github.com/cicalooo/ComfyUI-H3-PowerLoraStack
 - Smaller LoRAs: https://huggingface.co/Kijai/MiniMax-H3-experimental/blob/main/loras/minimax_h3_open_regenerate_2k_refiner_rank_384_bf16.safetensors · https://huggingface.co/father558/H3-Open-Regenerate-2K-ComfyUI-r128 · https://huggingface.co/DrakenZA/Open-H3-Regenerate-2K-ComfyUI
 - NVlabs PR: https://github.com/NVlabs/Sana/pull/555
 - Base H3 GGUF and low-VRAM notes: https://huggingface.co/Abiray/MiniMax-H3-Pruned-GGUF · https://github.com/wildminder/awesome-minimax-H3/blob/main/guides/minimax-h3-performance.md
