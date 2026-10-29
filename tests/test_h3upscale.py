@@ -50,6 +50,66 @@ class Build(unittest.TestCase):
         wf, _ = up.build(self.wf("deck-h3-ref2v"), "/c.mp4", 768, 448, 1.5, strength=0.8)
         self.assertEqual(wf["up_sigmas"]["inputs"]["sigmas"], "0.8000, 0.6316, 0.3158, 0.0000")
 
+    def test_regen_uses_its_own_schedule(self):
+        self.assertEqual(up.regen_sigmas("standard"), "0.7000, 0.4941, 0.0000")
+        self.assertEqual(up.regen_sigmas("enhanced"), "0.8000, 0.6667, 0.0000")
+        self.assertEqual(up.regen_sigmas("whatever"), "0.7000, 0.4941, 0.0000")
+        wf, _ = up.build(self.wf("deck-h3-ref2v"), "/c.mp4", 768, 448,
+                         regen={"lora": "reg.safetensors", "has_turbo": False, "quality": "standard"})
+        self.assertEqual(wf["up_sigmas"]["inputs"]["sigmas"], "0.7000, 0.4941, 0.0000")
+        self.assertEqual(wf["up_sigmas"]["_meta"]["title"], "Regenerate from 0.70")
+
+    def test_regen_loads_the_refiner_after_the_run_chain(self):
+        wf, _ = up.build(self.wf("deck-h3-ref2v"), "/c.mp4", 768, 448,
+                         regen={"lora": "reg.safetensors", "has_turbo": False, "quality": "standard"})
+        self.assertIn("up_lora", wf)
+        lora = wf["up_lora"]["inputs"]
+        self.assertEqual(lora["lora_name"], "reg.safetensors")
+        self.assertEqual(lora["strength_model"], 1.0)
+        self.assertEqual(wf["up_guide"]["inputs"]["model"], ["up_lora", 0])
+        self.assertIn("30", wf, "a refiner-only file keeps the run's turbo LoRA")
+
+    def test_regen_merge_drops_the_run_turbo(self):
+        src = self.wf("deck-h3-ref2v")
+        wf, _ = up.build(src, "/c.mp4", 768, 448,
+                         regen={"lora": "merge.safetensors", "has_turbo": True, "quality": "enhanced"})
+        self.assertNotIn("30", wf, "the merged refiner has Turbo inside")
+        self.assertIn("6", wf, "the run's own character/style LoRAs stay")
+        self.assertEqual(wf["up_guide"]["inputs"]["model"], ["up_lora", 0])
+        # its users took the turbo's own model input, so the graph has no dangling link
+        for node in wf.values():
+            for k, v in node.get("inputs", {}).items():
+                if isinstance(v, list) and len(v) == 2 and isinstance(v[0], str):
+                    self.assertIn(v[0], wf, f"{k} points at a dropped node {v[0]}")
+        self.assertEqual(wf["up_sigmas"]["inputs"]["sigmas"], "0.8000, 0.6667, 0.0000")
+
+    def test_regen_target_size(self):
+        wf, (w, h) = up.build(self.wf("deck-h3-ref2v"), "/c.mp4", 768, 448, size=(1856, 1088),
+                              regen={"lora": "reg.safetensors", "has_turbo": False, "quality": "standard"})
+        self.assertEqual((w, h), (1856, 1088))
+        self.assertEqual((wf["up_scale"]["inputs"]["mode.width"], wf["up_scale"]["inputs"]["mode.height"]), (1856, 1088))
+
+    def test_regen_needs_a_lora(self):
+        with self.assertRaises(ValueError):
+            up.build(self.wf("deck-h3-ref2v"), "/c.mp4", 768, 448, regen={"quality": "standard"})
+
+    def test_1080p_preset(self):
+        self.assertEqual(up.fit_1080p(768, 448), (1856, 1088))
+        w, h = up.fit_1080p(1280, 720)
+        self.assertEqual((w, h), (1920, 1088))
+        self.assertLessEqual(w, 1920)
+
+    def test_which_regen_loras_have_turbo(self):
+        oi = {"LoraLoaderModelOnly": {"input": {"required": {"lora_name": [[
+            "minimax_h3_open_regenerate_2k_r128_comfyui_bf16.safetensors",
+            "minimax_h3_open_regenerate_2k_refiner_rank_384_bf16.safetensors",
+            "other.safetensors"], {}]}}}}
+        got = {x["name"]: x["has_turbo"] for x in up.regen_loras(oi)}
+        self.assertTrue(got["minimax_h3_open_regenerate_2k_r128_comfyui_bf16.safetensors"])
+        self.assertFalse(got["minimax_h3_open_regenerate_2k_refiner_rank_384_bf16.safetensors"])
+        self.assertNotIn("other.safetensors", got)
+        self.assertEqual(up.regen_loras(None), [])
+
     def test_not_h3(self):
         with self.assertRaises(ValueError):
             up.build(self.wf("deck-ltx-t2v"), "/x.mp4", 768, 448)

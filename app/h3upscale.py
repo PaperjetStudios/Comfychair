@@ -10,10 +10,15 @@ on the frame size, so it is reused; image-to-video's carries its keyframes at th
 again at the new size.
 """
 import copy
+import re
 
 UPSCALER = "minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors"
 LADDER = (0.6316, 0.3158, 0.0)   # the pack examples' second pass, below where it starts
 STRENGTHS = {"light": 0.6316, "medium": 0.8, "strong": 0.9035}
+# Open-H3-Regenerate's second pass (RESEARCH-h3-regenerate.md): NVIDIA's 2-step schedule, and the report's 3-point
+# start at 0.8. The refiner LoRA is trained for exactly this pass, so it needs far fewer steps than the plain upscaler.
+REGEN_SIGMAS = {"standard": (0.7, 0.494118, 0.0), "enhanced": (0.8, 0.666667, 0.0)}
+TURBO_RE = re.compile(r"turbo|lightx2v|distill|\d+[-_ ]?steps?", re.I)
 SAMPLER = "euler"
 SIZE_FREE = {"MiniMaxH3ReferenceToVideo"}   # conditioning that doesn't depend on the frame size
 OUTPUTS = {"VHS_VideoCombine", "SaveVideo", "SaveImage", "PreviewImage", "SaveAnimatedWEBP", "SaveWEBM", "CreateVideo",
@@ -58,9 +63,68 @@ def sigmas(strength: float) -> str:
     return ", ".join(f"{x:.4f}" for x in (strength, *(x for x in LADDER if x < strength - 0.01)))
 
 
+def regen_sigmas(quality: str = "standard") -> str:
+    """Open-H3-Regenerate's own schedule (Standard 2 steps or Enhanced from 0.8), never the upscaler's ladder."""
+    return ", ".join(f"{x:.4f}" for x in REGEN_SIGMAS.get(quality, REGEN_SIGMAS["standard"]))
+
+
+def fit_1080p(width: int, height: int) -> tuple[int, int]:
+    """The largest 32-aligned frame within 1920x1080 with the clip's aspect (the Regenerate 1080P preset)."""
+    k = min(1920 / max(1, width), 1080 / max(1, height), 2.5)
+    return max(64, round(width * k / 32) * 32), max(64, round(height * k / 32) * 32)
+
+
+def regen_loras(oi: dict | None) -> list[dict]:
+    """The Open-H3-Regenerate LoRAs ComfyUI can load, and whether each has Turbo inside (a merged file, so the
+    run's own turbo LoRA must come out; Kijai's refiner-only file keeps it)."""
+    spec = (((oi or {}).get("LoraLoaderModelOnly") or {}).get("input") or {}).get("required") or {}
+    names = (spec.get("lora_name") or [[], {}])[0]
+    out = []
+    for n in names:
+        low = str(n).lower()
+        if "regenerate" not in low:
+            continue
+        out.append({"name": n, "has_turbo": not ("refiner" in low or "rank_384" in low)})
+    return out
+
+
+def _chain(wf: dict, link) -> list[str]:
+    """The LoRA nodes feeding a model link, nearest first."""
+    out = []
+    while is_link(link):
+        node = wf.get(link[0])
+        if not node:
+            break
+        out.append(link[0])
+        link = node.get("inputs", {}).get("model")
+    return out
+
+
+def drop_turbo(wf: dict, link) -> None:
+    """Take turbo/lightning LoRAs out of the model chain: whatever used their model takes their own input instead.
+    A refiner that has Turbo merged in must not run on top of the run's turbo LoRA (it would double the distill)."""
+    for nid in _chain(wf, link):
+        node = wf.get(nid)
+        if not node or node.get("class_type") not in ("LoraLoaderModelOnly", "LoraLoader"):
+            continue
+        if not TURBO_RE.search(str(node["inputs"].get("lora_name", ""))):
+            continue
+        if any(is_link(v) and v[0] == nid and v[1] == 1 for o in wf.values() for v in o.get("inputs", {}).values()):
+            continue   # its clip output is in use: leave the node alone
+        inner = node["inputs"].get("model")
+        for o in wf.values():
+            for k, v in list(o.get("inputs", {}).items()):
+                if is_link(v) and v[0] == nid and v[1] == 0:
+                    o["inputs"][k] = inner
+        del wf[nid]
+
+
 def build(workflow: dict, video: str, width: int, height: int, scale: float = 1.5, prefix: str = "comfydeck/h3up",
-          fps: float = 24, strength: float = STRENGTHS["strong"]) -> tuple[dict, tuple[int, int]]:
-    """(the second-pass workflow, its frame size). video: the finished clip's path; width/height its frame size."""
+          fps: float = 24, strength: float = STRENGTHS["strong"], regen: dict | None = None,
+          size: tuple[int, int] | None = None) -> tuple[dict, tuple[int, int]]:
+    """(the second-pass workflow, its frame size). video: the finished clip's path; width/height its frame size.
+    regen: {lora, has_turbo, quality} runs Open-H3-Regenerate's refiner instead of the plain upscaler's ladder;
+    size: an exact target (the 1080P preset), else the frame is scaled by `scale`."""
     wf = copy.deepcopy(workflow)
     h3 = h3_node(wf)
     if not h3:
@@ -71,7 +135,12 @@ def build(workflow: dict, video: str, width: int, height: int, scale: float = 1.
         raise ValueError("This run's guider isn't the usual one: it can't be upscaled here")
     model, noise = guider["inputs"]["model"], s["noise"]
     vae = wf[h3]["inputs"]["vae"]
-    W, H = target_size(width, height, scale)
+    W, H = size or target_size(width, height, scale)
+    if regen and not regen.get("lora"):
+        raise ValueError("Regenerate needs a refiner LoRA")
+    if regen and regen.get("has_turbo"):   # the merge has Turbo inside: the run's own would double it
+        drop_turbo(wf, model)
+        model = guider["inputs"]["model"]
 
     for nid in [k for k, n in wf.items() if n.get("class_type") in OUTPUTS]:   # the first pass's outputs
         del wf[nid]
@@ -93,7 +162,10 @@ def build(workflow: dict, video: str, width: int, height: int, scale: float = 1.
         # the sound part of the latent: the run's own empty one (the clip's real sound goes on at the end)
         "up_split": ("LTXVSeparateAVLatent", None, dict(av_latent=[cond_src, 1])),
         "up_av": ("LTXVConcatAVLatent", None, dict(video_latent=["up_scale", 0], audio_latent=["up_split", 1])),
-        "up_sigmas": ("ManualSigmas", f"Second pass from {strength:.2f}", dict(sigmas=sigmas(strength))),
+        "up_sigmas": ("ManualSigmas",
+                      f"Regenerate from {REGEN_SIGMAS.get(regen.get('quality'), REGEN_SIGMAS['standard'])[0]:.2f}"
+                      if regen else f"Second pass from {strength:.2f}",
+                      dict(sigmas=regen_sigmas(regen.get("quality")) if regen else sigmas(strength))),
         "up_sampler": ("KSamplerSelect", None, dict(sampler_name=SAMPLER)),
         "up_guide": ("BasicGuider", None, dict(model=model, conditioning=[cond_src, 0])),
         "up_run": ("SamplerCustomAdvanced", None, dict(noise=noise, guider=["up_guide", 0], sampler=["up_sampler", 0],
@@ -104,6 +176,10 @@ def build(workflow: dict, video: str, width: int, height: int, scale: float = 1.
                                                    crf=19, save_metadata=True, trim_to_audio=False, pingpong=False,
                                                    save_output=True)),
     }
+    if regen:   # the refiner LoRA goes last in the model chain, so it sees the run's own LoRAs
+        add["up_lora"] = ("LoraLoaderModelOnly", "Open-H3-Regenerate refiner",
+                          dict(model=model, lora_name=regen["lora"], strength_model=float(regen.get("strength") or 1.0)))
+        add["up_guide"] = ("BasicGuider", None, dict(model=["up_lora", 0], conditioning=[cond_src, 0]))
     for nid, (cls, title, inputs) in add.items():
         wf[nid] = {"class_type": cls, "inputs": inputs, **({"_meta": {"title": title}} if title else {})}
     return wf, (W, H)
