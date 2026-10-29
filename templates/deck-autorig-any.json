@@ -1,0 +1,40 @@
+{
+ "mesh": {
+  "class_type": "UniRigLoadMesh",
+  "inputs": {
+   "source_folder": "input",
+   "file_path": ""
+  },
+  "_meta": {
+   "title": "@1 Model [file_path]"
+  }
+ },
+ "model": {
+  "class_type": "UniRigLoadModel",
+  "inputs": {
+   "precision": "auto",
+   "attn_backend": "auto"
+  }
+ },
+ "rig": {
+  "class_type": "UniRigAutoRig",
+  "inputs": {
+   "trimesh": ["mesh", 0],
+   "model": ["model", 0],
+   "skeleton_template": "articulationxl",
+   "fbx_name": "",
+   "target_face_count": 50000,
+   "debug": false
+  },
+  "_meta": {
+   "title": "@2 Faces [target_face_count]"
+  }
+ },
+ "save": {
+  "class_type": "DeckSaveRig",
+  "inputs": {
+   "rig_path": ["rig", 0],
+   "filename_prefix": "deck/rig"
+  }
+ }
+}

@@ -1,0 +1,40 @@
+{
+ "mesh": {
+  "class_type": "UniRigLoadMesh",
+  "inputs": {
+   "source_folder": "input",
+   "file_path": ""
+  },
+  "_meta": {
+   "title": "@1 Model [file_path]"
+  }
+ },
+ "model": {
+  "class_type": "MIALoadModel",
+  "inputs": {
+   "precision": "auto",
+   "attn_backend": "auto"
+  }
+ },
+ "rig": {
+  "class_type": "MIAAutoRig",
+  "inputs": {
+   "trimesh": ["mesh", 0],
+   "model": ["model", 0],
+   "fbx_name": "",
+   "no_fingers": false,
+   "use_normal": false,
+   "reset_to_rest": true
+  },
+  "_meta": {
+   "title": "@2 No fingers [no_fingers]"
+  }
+ },
+ "save": {
+  "class_type": "DeckSaveRig",
+  "inputs": {
+   "rig_path": ["rig", 0],
+   "filename_prefix": "deck/rig"
+  }
+ }
+}
