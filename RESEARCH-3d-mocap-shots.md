@@ -9,7 +9,8 @@ third-party listings. Check each repo's LICENSE before relying on it.
   which turns MHR70 keypoints plus camera translation into 22 SMPL joint *positions*, filling in the spine and
   head (`comfy_nodes/deck_motion`). `web/motion.js` then fits them onto a figure as keys.
 - **3D tab**: imports glb/gltf/obj/fbx and splats (`scene-import.js`), builds Photo in 3D with MoGe (a depth
-  shell, not an object), and models by hand (`scene-model.js`). There's one camera, `SC.camera`, with keys.
+  shell, not an object), and models by hand (`scene-model.js`). Update: `main` now has several cameras (one
+  active), mocap "With its camera", per-frame depth ranges and a Story tab, so see `PLAN-3d-mocap-shots.md`.
 - **Prompts**: H3's `[Shot N] At mm:ss.mmm, the camera cuts to …` is already supported (`web/app.js:240`,
   `deck-h3-charsheet`). `scene-pose.js` writes "Prompt from the poses".
 

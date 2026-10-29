@@ -1,6 +1,8 @@
 # Implementation plan: shots, better mocap, photo → 3D, auto-rig
 
-A plan to hand to an LLM coding agent, one phase per session. The background research is in
+A plan to hand to an LLM coding agent, one phase per session. Checked against `main` at `58356d6` (2026-10-29):
+there are already several cameras, mocap "With its camera", per-frame depth ranges and the Story tab, and the
+phases build on them. The background research is in
 `RESEARCH-3d-mocap-shots.md`. Each phase stands on its own, can be merged on its own, and ends with tests and
 a README update. **Do the phases in order**: later ones assume the earlier ones.
 
@@ -47,143 +49,134 @@ Hard rules taken from `NOTES.md`:
 
 ---
 
-## Phase 1: several cameras, a keyable active camera, and a shot-list prompt
+## Phase 1: a keyable active camera (cuts) and a shot-list prompt
 
-**Goal:** a scene has any number of cameras. A **Shots** row in the key sheet says which camera is live from
-which frame (step keys, no blending). The view, the depth, pose and clay renders, and scene compositions all
-use the live camera. A **Prompt from the shots** section writes `[Shot N] At mm:ss.mmm, the camera cuts to …`
-per cut. No models are needed.
+**Already on `main`** (read `NOTES.md` "several cameras" and "Mocap with its camera" first):
+- `SC.camera` is the *active* camera and `SC.cams` holds the others (`camsOf()`, `newCamera()`,
+  `setActiveCam()` swap them). Every camera has `id` and `name`. Camera panel ▸ Cameras handles rename, New,
+  Make active and Delete.
+- In the director view the other cameras show as outlines (`scene-view.js` `OTHERS`), and tapping one makes
+  it active. The other cameras have key sheet rows (`L.other`).
+- Depth renders get their own near and far per frame (`web/depth-range.js` `frameRanges`, mode `follow`).
+- The **Story** tab has scenes and shots, with words for shot size, angle and move (`web/story.js` `SIZES`,
+  `ANGLES`, `MOVES`) and "Shots to video".
+
+**What's missing (this phase):** the active camera can't change *over time*. Add **cuts**: a Shots row in the
+key sheet that says which camera is live from which frame. The view during playback, the depth, pose and clay
+renders, and scene compositions follow the cuts. Add a **Prompt from the shots** section that writes
+`[Shot N] At mm:ss.mmm, the camera cuts to …`, using the same words as Story. No models are needed.
 
 ### 1.1 Data (`web/scene-data.js`)
-Keep `SC.camera` as **camera 1**, so old scenes and the ~25 places that use it keep working. Add:
-
 ```js
-SC.cams = [ { id, name, base: {px,py,pz,tx,ty,tz,fov,roll}, chans: {}, ease: 'smooth', mute: false } ]  // cameras 2..n
-SC.cuts = [ { f, cam } ]   // sorted by f; cam = a camera id, 'main' for SC.camera. Empty or missing means SC.camera throughout
-SC.camera.id = 'main'      // set in upgrade() if missing; SC.camera.name defaults to 'Camera 1'
+SC.cuts = [ { f, cam } ]   // sorted by f; cam = a camera id. Empty or missing: SC.camera throughout, as today
 ```
+- `camById(id)` searches `camsOf()`.
+- `liveCam(f)` returns the camera of the last cut at or before `f` (the first cut's camera before it). With
+  no cuts, or a cut whose camera was deleted, it returns `SC.camera`.
+- `shots()` returns `[{ i, f0, f1, cam }]`, the frame ranges between cuts, clipped to `frames()`.
+  Neighbouring cuts to the same camera merge.
+- `upgrade()` defaults to `cuts: []`. Deleting a camera (scene-ui.js Cameras) also drops its cuts. Undo
+  covers both, because `save()` snapshots the scene.
+- **What "active" means with cuts:** `SC.camera` stays the camera you **edit** (the moves, the gizmo, ◆ Key
+  on the camera, the orbit). What the view **shows** while playing or scrubbing is `liveCam(f)`, unless you're
+  editing a camera: in Camera mode or with the camera layer selected, you see the camera you edit. Add a
+  toolbar toggle **View: Cut / Editing camera** (`R.viewCut`, kept per device) so you can choose. Renders
+  always use `liveCam(f)`.
+  `setActiveCam()` keeps working unchanged: it picks which camera you edit.
 
-Add helpers next to `keyTarget`:
-- `allCams()` returns `[SC.camera, ...(SC.cams || [])]`. `camById(id)` returns the camera with that id, or
-  `SC.camera`.
-- `liveCam(f)` is the camera of the last cut at or before `f` (the first cut's camera before it; `SC.camera`
-  with no cuts).
-- `R.cam`: the camera being edited (id, not saved, like `R.sel`). `editCam()` returns `camById(R.cam)`.
-- `shots()` returns `[{ i, f0, f1, cam }]`, the frame ranges between cuts, clipped to `frames()`. Cuts at the
-  same camera as the one before them are merged.
-- `upgrade()` defaults to `cams: []` and `cuts: []` and sets `SC.camera.id = 'main'`, then migrates each extra
-  camera's keys with `migrateKeys(c, CAM)`.
-- `allNames(item)` (used by mute and TEMP) has to return `CAM` for **any** camera: test
-  `allCams().includes(item)`.
-- `keyTarget()`: when nothing is selected, it returns `[editCam(), CAM]` instead of `[SC.camera, CAM]`.
+### 1.2 Showing and rendering through the live camera
+- `scene-view.js` `pose(f)` puts up `current(shownCam(f), CAM, f)`, where `shownCam(f)` is:
+  - `liveCam(f)` when `R.real`, or when `R.viewCut` is on and you're not editing a camera;
+  - otherwise `SC.camera`.
 
-### 1.2 What the view shows (`web/scene-view.js`)
-- `pose(f)` calls `putCamera(current(viewCam(f), CAM, f))`, where `viewCam(f)` is:
-  - `editCam()` in Camera mode (or while the camera layer is selected), so that you see the camera you're
-    editing;
-  - otherwise `liveCam(f)`, so playback shows the cut.
-
-  Add a toggle to the toolbar's camera chip, **"View: Live cut / This camera"** (`R.viewLive`, not saved,
-  default live), and use it to choose.
-- Every `write(SC.camera, CAM, …)` / `current(SC.camera, CAM)` in this file (orbit `change`/`end`,
-  `placeCamProxy`, `readCamera`, `cameraFromView`, `aimFree`, photos placing the camera) acts on the
-  **camera on show**. Add `shownCam()` = the camera `pose()` last put up, and replace `SC.camera` with it in
-  these places. Grep `SC.camera` across `web/scene-*.js` and change each one deliberately:
-  `scene-camera.js` moves, `scene-keys.js` rows, `scene-ui.js` layer list, `scene-library.js`,
-  `scene-offscreen.js`.
-- In the director (free) view, draw a frustum for **each** camera: the live one bright, the others dim. Tap
-  a frustum to edit that camera.
-
-### 1.3 Layer list, key sheet and camera panel
-- **Layer list** (`scene-ui.js`): one row per camera (🎥 *Camera 1*, *Camera 2* …) above the room, with
-  rename (`nameSheet`), ◉ mute, delete (not camera 1; Undo through `undoToast`; delete that camera's cuts
-  too), and **＋ Camera**. The new camera copies the camera on show at the playhead (base = its current
-  values, no keys).
-- **Key sheet** (`scene-keys.js`): a **Shots** row first, then a row per camera. Each cut key is drawn as a
-  coloured block from its frame to the next cut, labelled with the camera's name.
-  - ◆ on the Shots row (or **✂ Cut here** in the Camera panel) writes `{ f: R.f, cam: editCam().id }`,
-    replacing any cut at that frame.
-  - Dragging a cut retimes it. The existing key selection, move, delete and copy work on it too. Store cuts
-    as a channel-like list so `keys.js` `putKey`/`removeKey` and the drag code can handle them. Treat them
-    as **`const` ease** (it exists already) and never interpolate them.
-  - **Tapping a block** makes that camera the edited one and seeks into the shot.
-- **Camera panel** (Camera mode, `scene-camera.js` / `scene-builtin.js`): a camera picker (`seg` or chips)
-  at the top that sets `R.cam`. The existing moves apply to `editCam()`. Add **Shot length** to show the
-  shot under the playhead (`f0–f1`, in seconds).
-
-### 1.4 Renders and compositions
-- `scene-export.js` `renderDepthVideo`, `renderPoseVideo` and `measureRange`: after `pose(f)`, put up
-  `liveCam(f)`. That's simplest if `pose(f)` already uses the live camera whenever `R.real` is set, so make
-  `viewCam(f)` return `liveCam(f)` when `R.real`. `saveFrame` keeps the camera on show.
-- **Depth range:** `measureRange` measures over all frames with the live camera, so the range is shared
-  across shots. Add **Range per shot** (`SC.rangePerShot`), which measures and normalises each shot on its
-  own, because a close-up and a wide shot need different ranges. Pass a per-frame range to `setRange`.
-- `scene-offscreen.js` `Stage`: use the same `liveCam(f)` so a scene clip in the Video tab cuts too. Keep the
-  helpers DOM-free so the offscreen stage can import them from scene-data.js.
-- Option **Render: One take / Each shot** (`SC.renderShots`):
+  The orbit and gizmo code that writes to `SC.camera` must only run while the shown camera *is*
+  `SC.camera`. When it isn't, a drag on the view orbits the free/director view or does nothing. Pick one
+  behaviour, say it in the toolbar hint, and grep every `SC.camera` in `web/scene-*.js` to check each place.
+- `scene-export.js`: the depth, pose and range passes get the camera per frame through `pose(f)`.
+  `depth-range.js` `frameRanges` gains `breaks: [frames]`, so its smoothing never reaches across a cut: a
+  close-up and a wide shot each get their own range from the first frame. Pass the cut frames when rendering.
+  Add a test in `tests/depth_range.test.mjs`.
+- `scene-offscreen.js` `Stage` (scene clips in the Video tab) uses `liveCam(f)` too. Keep `liveCam` and
+  `shots` DOM-free so the stage can import them.
+- **Render: One take / Each shot** (`SC.renderShots`):
   - *One take* is today's single video, now with hard cuts.
-  - *Each shot* renders one video per shot (same kind, that shot's frames). They're labelled
-    `Shot N · Camera X` and sent to `/api/scene/render` one after another. The toast then offers
-    **Shots to Video tab**, which places the takes on the Video timeline at their cut times (see the
-    Video tab's add-clip code in `web/video.js` / `timeline.js`).
+  - *Each shot* renders one video per shot (that shot's frames, its camera), labelled
+    `Shot N · <camera name>`. The toast offers **Shots to Video tab**: copy how Story's "Shots to video" lays
+    clips on the timeline, and share that code instead of writing it a second time.
 
-### 1.5 Prompt from the shots (new `web/scene-shots.js`, a section next to Prompt from the poses)
-Each shot is described from the scene, as pure, testable functions with no DOM, in `web/shot-words.js`:
-- **Subject**: the visible figures (and named objects) whose bounding box is mostly inside the camera's
-  frustum in the middle frame of the shot. Project their `Box3` corners with the shot's camera
-  (three.js runs in node).
-- **Size**, from the main subject's height on screen ÷ frame height (h):
-  - h > 1.6 extreme close-up (face only)
-  - 0.9–1.6 close-up
-  - 0.6–0.9 medium close-up
-  - 0.4–0.6 medium shot
-  - 0.25–0.4 full shot
-  - below 0.25 wide shot
-  - no subject: establishing / wide shot of the room
+### 1.3 Key sheet and panel
+- **Shots row** (`scene-keys.js`, first row, its own track kind `cut`): each cut is drawn as a block from its
+  frame to the next cut, coloured per camera and labelled with the camera's name.
+  - ◆ on the row, or **✂ Cut to this camera here** in Camera panel ▸ Cameras (one button per camera),
+    writes `{ f: R.f, cam }` and replaces any cut on that frame.
+  - Dragging retimes a cut, and the existing selection, move, delete, copy and paste work on it. Store the
+    cuts so `keys.js` can move them like keys, with `const` ease, never blended.
+  - **Tapping a block** makes that camera the one you edit (`setActiveCam`) and seeks into the shot.
+- **Cameras section**: show each camera's shots (e.g. "Shot 2 · 00:04–00:07"). Add **Shot under the
+  playhead** to the camera panel.
 
-  Tune the thresholds with test scenes.
-- **Angle**, from the pitch of (target − position): above +25° low angle, −10° to +10° eye level, below −25°
-  high angle, below −60° overhead. |roll| > 8° adds "Dutch angle".
-- **Movement**: compare the camera at f0 and f1 (and halfway, to tell an orbit from a truck):
-  - |Δfov| > 3° → zoom in/out
-  - distance to the target changes → dolly in/out (push in if the fov changes too)
-  - the angle around the target changes with the distance held → orbit left/right
-  - the position moves sideways with the target → truck
-  - only the target moves → pan/tilt
-  - Δy → pedestal/crane
-  - keys every few frames with small noise → handheld
-  - nothing → static
+### 1.4 Prompt from the shots (`web/shot-words.js` pure, `web/scene-shots.js` the section)
+- **One vocabulary**: move `SIZES`, `ANGLES` and `MOVES` out of `story.js` into `web/shot-words.js`, and
+  import them in both places. The 3D tab then describes a shot with the same words a Story shot uses.
+- Work each shot out from the scene, with pure functions that have node tests (three.js runs in node):
+  - **Subjects**: the visible figures and named objects whose box is mostly in the camera's view in the
+    middle frame of the shot.
+  - **Size**: the main subject's height on screen ÷ frame height (h):
+    - h > 1.6 extreme close-up
+    - 0.9–1.6 close-up
+    - 0.4–0.9 medium
+    - below 0.4 wide (Story has these four)
+    - no subject: wide
 
-  Where `scene-camera.js` `writeMove` was used, store the move id on the start key (`k.mv = id`), and
-  prefer it over guessing.
-- **Action**: run `promptItems()` from `scene-pose.js`, limited to pose keys inside `[f0, f1]`. Export a
-  version that takes a frame range.
-- **Line**: for shot 1, `[Shot 1] A {size}, {angle}, of {subjects}{, the camera {move}}. {action}`; for later
-  shots, `[Shot N] At {mm:ss.mmm}, the camera cuts to a {size} …`. Reuse the timestamp format in
-  `web/app.js:240` and move it into `shot-words.js` as `stamp(sec)` so both use one function.
-- **Timecode display**: the shot list shows SMPTE `HH:MM:SS:FF` from **Start timecode** (`SC.tcStart`,
-  default `01:00:00:00`). The prompt **always** uses clip-relative `mm:ss.mmm`.
-- **Model check**: warn when the length isn't between 4 and 15 s (H3), when cuts are under 1 s apart, and
-  above 10 cuts. A **Format** `seg` offers H3 (timestamps) or LTX (no timestamps: "Shot 1: … Hard cut to
-  shot 2: …", with transitions named). Keep it to 2–4 shots for LTX.
-- UI: the same chip list as Prompt from the poses (tap to leave a shot out; long-press edits its text,
-  stored as `SC.shotText[cutF]`), plus Copy and **Add to Generate prompt** (`C.addToPrompt`).
+    Tune the thresholds with test scenes.
+  - **Angle**, from the pitch to the target: low, eye level, high or overhead. |roll| > 8° gives Dutch.
+    Reuse Story's `ANGLES` keys.
+  - **Move**, comparing the camera at f0, halfway and f1:
+    - Δfov → zoom
+    - distance to target changes → push or pull
+    - turns around the target at a steady distance → orbit (say "the camera circles")
+    - sideways with its target → track
+    - only the target moves → pan or tilt
+    - Δy → crane
+    - dense noisy keys → handheld
+    - nothing → static
 
-### 1.6 Tests and done-when
-- `tests/shots.test.mjs` (with a `tests/test_shots.py` wrapper):
-  - `liveCam` and `shots` with no cuts, one cut, cuts out of order, and a cut past the end;
+    If `scene-camera.js` `writeMove` wrote the keys, record the move id on the start key (`k.mv = id`) and
+    prefer it over guessing.
+  - **Action**: `promptItems()` in `scene-pose.js`, limited to pose keys in `[f0, f1]`. Export a version that
+    takes a frame range.
+- **Lines**:
+  - shot 1: `[Shot 1] A {size}, {angle}, of {subjects}{; the camera {move}}. {action}`
+  - later shots: `[Shot N] At {mm:ss.mmm}, the camera cuts to a {size} …`
+
+  Move the stamp code from `web/app.js` (the "[Shot N] At mm:ss.mmm" helper, ~line 262) into
+  `shot-words.js` as `stamp(sec)` and use it in both places.
+- **Timecode**: the shot list shows SMPTE `HH:MM:SS:FF` from **Start timecode** (`SC.tcStart`, default
+  `01:00:00:00`). The prompt always uses clip-relative `mm:ss.mmm`.
+- **Checks and formats**: warn when the clip is outside 4–15 s (H3), when cuts are under 1 s apart, or when
+  there are more than 10 cuts. A **Format** `seg` offers H3 (timestamps) or LTX (no timestamps:
+  "Shot 1: … Hard cut to shot 2: …", 2–4 shots).
+- **UI**: chips like Prompt from the poses (tap to leave a shot out, long-press to edit its line, stored in
+  `SC.shotText[cut id]`). Then **Copy**, **Add to Generate prompt** (`C.addToPrompt`) and **To Story**,
+  which adds one Story shot per cut with size, angle, move and length filled in, the line as its
+  description, and a clay frame from that camera as its frame. Look at how Story creates shots
+  (`newShot`) and frames.
+
+### 1.5 Tests and done-when
+- `tests/shots.test.mjs` (with a Python wrapper like `tests/test_keys.py`):
+  - `liveCam`/`shots` with no cuts, out-of-order cuts, a cut past the end, and a deleted camera;
   - `stamp`;
-  - size and angle words for fixed camera and figure setups;
-  - movement words for each `MOVES` id (build the keys with `writeMove`);
-  - an old scene (no `cams`/`cuts`) upgrades and renders as before.
+  - size and angle for fixed setups;
+  - move words for each `MOVES` id (keys built with `writeMove`);
+  - a scene from before this phase upgrades and renders through `SC.camera` as before.
 - Browser check:
-  1. add two cameras and key cuts;
-  2. play: the view cuts;
-  3. render a depth video: frames cut at the right frames;
-  4. the shot prompt reads correctly;
-  5. undo and redo through all of it;
-  6. load a scene saved before this phase.
-- README: a **Shots** paragraph under the 3D tab section.
+  1. two cameras plus cuts;
+  2. playback cuts;
+  3. a depth render cuts at the right frames, with a fresh range per shot;
+  4. the shot prompt and To Story;
+  5. undo and redo;
+  6. an old scene.
+- README: a **Shots** paragraph in the 3D section. NOTES: how cuts, `SC.camera` and `liveCam` relate.
 
 ---
 
@@ -226,18 +219,14 @@ Expose them as options on `/api/motion/from` and `/api/motion/file`, with the de
 `clean: {smooth, bones, feet, ground}`. The "Where it goes" sheet in `scene-motion.js` gets a
 **Clean-up** row of toggles (Steady, Keep bone lengths, Plant feet) saved in `PLACE`.
 
-### 2.3 Take out the camera's movement
-- In the **Motion from video** sheet, add **Camera in the clip: Still / Moving (track it first)**.
-- *Moving* first runs the existing Track motion (`app/tracking.py` simple or TAPNext++) on the same clip and
-  range. Find the track result format and the function that turns it into a camera (`web/track-math.js`
-  `sceneFromTrack`). That gives per-frame pan, tilt, roll and zoom (a rotation-only camera).
-- Send the per-frame camera rotation (and the fov if zoomed) with the motion request. In `clean()`, before
-  normalising, turn each frame's joints, which are in camera space, by the inverse of that frame's camera
-  rotation. The person's travel and turn are then in world space for a panning or tilting camera. A camera
-  that physically moves (dolly, handheld walking) isn't fixed by this: say so in the help text and point to
-  Phase 6.
-- Add the option **Also bring the camera move into the scene**: key the scene camera with the tracked move
-  as well (the Track motion flow already does this), so the figure and camera line up as in the clip.
+### 2.3 Camera in the clip: already done for turning cameras
+`main` has **Moves ▸ From video ▸ With its camera** (`scene-motion.js` `applyWithCamera`, `motion.js` `toWorld`,
+`space` from `app/motion.py`, and `focal` from Deck Save Body Motion). It tracks the clip, adds a Mocap camera with
+the footage behind it, and places the body in the world through it, for pan, tilt, roll and zoom only.
+**Match its proportions** is done too. In this phase:
+- make the 2.2 clean-up run **after** `toWorld`, so feet are planted in world space, not camera space
+  (otherwise a pan makes a planted foot look as if it's sliding);
+- in the sheet's help, say that a camera that physically moves (dolly, handheld walking) needs Phase 6.
 
 ### 2.4 Head, hands and fingers onto the figure (`web/motion.js`)
 - `worldTurns`:
@@ -443,8 +432,9 @@ keys.
 - `templates/deck-mocap-world.json`, shaped like `deck-mocap.json`.
 - In the **Motion from video** sheet: **Camera in the clip: Still / Panning (track) / Moving (world
   mocap)**. Moving uses this template when it's installed; otherwise it's disabled with a note.
-- The output also has the **camera path** in world space. Offer **Bring the camera into the scene**: key the
-  scene camera with it (position, look direction, fov), so the figure and camera line up with the clip.
+- The output also has the **camera path** in world space. Reuse `applyWithCamera`'s flow (Mocap camera +
+  backdrop, made active), but key the camera's *position* as well as its turn, from GEM-X's camera instead of
+  the tracker.
 - Phase 2 clean-up runs on this too (contacts especially).
 - **Alternative if GEM-X won't install**: GVHMR through `ComfyUI-MotionCapture` (PozzettiAndrea). Write a
   saver for its SMPL output and check its licence.
