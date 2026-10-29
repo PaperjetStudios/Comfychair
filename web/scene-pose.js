@@ -1,6 +1,6 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
-import { C, FIG, FPS, OBJ, R, SC, TEMP, addKey, current, rawCurrent, dropKeys, frames, isPoseCh, keyFrames, newObject, putKeys, sameTab, sample, save, write } from './scene-data.js';
+import { C, FIG, FPS, OBJ, R, SC, TEMP, addKey, current, isPosable, rawCurrent, dropKeys, frames, isPoseCh, keyFrames, newObject, putKeys, sameTab, sample, save, write } from './scene-data.js';
 import { button, clone, field, h, hint, iconBtn, nameSheet, section, seg, store, toast, uid, undoToast , help, toggle, chips, chip, icon } from './ui.js';
 import { HAND, changed, handMode, selectJoint } from './scene-view.js';
 import { renderPanel, slider, withKeys } from './scene-ui.js';
@@ -50,7 +50,7 @@ function takePose(o, j, { m = undefined, name = null, mask = R.mask } = {}) {
 // two people: this figure and the nearest other one (a new one when there's none), placed together
 function takePair(o, key) {
   const p = FIGURE.pair(key), v = current(o, FIG), s = v.sy, r = THREE.MathUtils.degToRad(v.ry);
-  const others = SC.objects.filter((x) => x.type === 'figure' && x !== o && !x.hidden);
+  const others = SC.objects.filter((x) => isPosable(x) && x !== o && !x.hidden);
   const dist = (x) => { const w = current(x, OBJ); return Math.hypot(w.x - v.x, w.z - v.z); };
   let b = others.sort((x, y) => dist(x) - dist(y))[0];
   if (!b) { b = newObject('figure'); SC.objects.push(b); }
@@ -313,12 +313,14 @@ export function partsTab(o) {
 }
 
 // ---- a prompt from the poses: who does what, in order, as H3's <Subject N> (or the figures' names)
-function promptItems() {
-  const figs = SC.objects.filter((o) => o.type === 'figure' && !o.hidden);
+// range: [f0, f1] keeps only pose keys inside it (a shot). With none, a ranged call says nothing.
+export function promptItems(range = null) {
+  const inside = (f) => range == null || (f >= range[0] && f <= range[1]);
+  const figs = SC.objects.filter((o) => isPosable(o) && !o.hidden);
   const tag = (o) => (R.promptNames ? o.name : `<Subject ${figs.indexOf(o) + 1}>`);
   const items = [];
   for (const o of figs) {
-    const pf = keyFrames(o, isPoseCh), states = pf.length ? pf.map((f) => sample(o, ['m', 'pn'], f)) : [o.base];
+    const pf = keyFrames(o, isPoseCh).filter(inside), states = pf.length ? pf.map((f) => sample(o, ['m', 'pn'], f)) : (range ? [] : [o.base]);
     let last = null, said = new Set();  // params already said for this figure: only changes are worth a word
     for (const k of states) {
       const words = [];
@@ -342,7 +344,7 @@ function promptItems() {
   }
   return items;
 }
-function promptText(items) {
+export function promptText(items) {
   const out = [];
   let cur = null;
   for (const it of items.filter((x) => !R.promptOff.has(x.id))) {

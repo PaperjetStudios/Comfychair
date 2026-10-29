@@ -151,15 +151,38 @@ function sceneTargets(g, o, src, label, toInput, go) {
     }), go('Make a 3D photo', async () => {
       const { name } = await toInput();
       (await scene()).makePhoto(name);
-    }, { title: 'Turns the picture into a mesh in the scene (MoGe, runs in ComfyUI)' })];
+    }, { title: 'Turns the picture into a mesh in the scene (MoGe, runs in ComfyUI)' }),
+    go('Make a 3D object', async () => {
+      const { name } = await toInput();
+      await scene();
+      (await import('./scene-import.js')).openObjectSheet(name, label);
+    }, { title: 'Pixal3D: a textured model from this photo (or its other views), in the 3D scene' })];
   }
   if (k === 'video') {
-    return [g.template === '3d scene' ? go('Open its scene in 3D', async () => (await scene()).open(g.params.scene, g.id)) : null,
+    return [go('Finish with H3', async () => (await run()).finishWithH3(g, index),
+        { title: 'Into deck-h3-refine with Regenerate on: the refiner LoRA draws it again at 1080P (LTX clips and scene renders too)' }),
+      g.template === '3d scene' ? go('Open its scene in 3D', async () => (await scene()).open(g.params.scene, g.id)) : null,
       go('Reference clip', async () => (await scene()).useAsRef({ kind: 'video', src, url: o.url, label })),
       go('Track motion (a 3D camera)', async () => (await import('./track.js')).openTrack({ src, url: o.url, label }),
         { title: 'Follow the picture\'s movement and make a 3D camera from it' })].filter(Boolean);
   }
   if (k === 'motion') return [go('Put on a figure', async () => (await scene()).motionOnto(src, label), { title: 'Onto the selected person (or the first) in the 3D scene, from the playhead' })];
-  if (k === 'mesh' && /\.glb$/i.test(o.filename)) return [go('Add to the 3D scene', async () => (await scene()).addPhoto(g))];
+  if (k === 'mesh' && /\.glb$/i.test(o.filename)) {
+    // a MoGe photo mesh keeps its camera and picture; any other GLB is a model layer
+    const photo = g.template === '3d photo';
+    return [go('Add to the 3D scene', async () => {
+      if (photo) return (await scene()).addPhoto(g);
+      await scene();
+      await (await import('./scene-import.js')).addModel(o.url, label, { gen: g.id, index });
+    }, { title: photo ? 'As a photo mesh, with the picture\'s camera' : 'As a model layer, fitted and standing on the floor at the middle' }),
+    go('Rig it as a person', async () => {
+      await scene();
+      await (await import('./scene-import.js')).rigRun(g.id, index, label, 'deck-autorig-human');
+    }, { title: 'Make It Animatable gives it a skeleton the 3D tab\'s poses, moves and mocap drive' }),
+    go('Rig it as a thing', async () => {
+      await scene();
+      await (await import('./scene-import.js')).rigRun(g.id, index, label, 'deck-autorig-any', { skinned: true });
+    }, { title: 'UniRig: a skeleton for an animal or a prop, keyed bone by bone in the Bones panel' })];
+  }
   return [];
 }

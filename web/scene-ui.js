@@ -5,10 +5,13 @@ import {
   section, seg, sheetOpen, store, uid, undoToast, help, toggle, sizeSelect, chip, info, toast, icon, iconize, numSlider, popover, closePopover,
 } from './ui.js';
 import {
-  C, CAM, EVEN, FPS, HIST, camsOf, newCamera, setActiveCam, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropHolds, dropKeys, holdStart, frames, framesFor, hasKeys, hooks, keyCount, addKey, bakeBase, sampleChan,
-  namesFor, pivotOf, pivotsFor, sameTab, save, selItem, setSC, write
+  C, CAM, EVEN, FPS, HIST, camsOf, cutTo, dropCuts, newCamera, setActiveCam, shots, stretchCuts, trimCuts, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropHolds, dropKeys, holdStart, frames, framesFor, hasKeys, hooks, keyCount, addKey, bakeBase, sampleChan,
+  namesFor, pivotOf, pivotsFor, sameTab, save, selItem, setSC, write, isPosable, isBoneKeyed
 } from './scene-data.js';
 import { FIG_TABS, adjustTab, faceTab, handsTab, jointsTab, movesTab, partsTab, posesTab, promptProps } from './scene-pose.js';
+import { shotProps } from './scene-shots.js';
+import { rigProps } from './scene-rig.js';
+import { boneProps } from './scene-skin.js';
 import {
   HAND, addObject, camGizmo, cameraFromView, canPivot, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, makeSplatHere, newCameraPose, orientLabel,
   pivotMoved, pivotToView, pose, rebuildRoom, recentre, refresh, removeLayer, removeSelected, resetPivot, select, selectJoint, setFree, setMode, setOrient, syncMeshes, viewer
@@ -54,6 +57,14 @@ export function renderToolbar() {
   fb.classList.toggle('hidden', fixed);
   fb.classList.toggle('on', R.free); fb.setAttribute('aria-pressed', R.free);
   fb.title = R.free ? 'Director view: back to looking through the camera (V)' : 'Director view: look around the scene freely, the camera drawn in it (V)';
+  const vb = tb.querySelector('[data-viewcut]');
+  if (vb) {
+    vb.classList.toggle('on', !!R.viewCut); vb.setAttribute('aria-pressed', !!R.viewCut);
+    vb.textContent = R.viewCut ? 'Cut' : 'Cam';
+    vb.title = R.viewCut
+      ? 'View: Cut. Playback follows the shot list. With the camera selected, or in Camera mode, you still see the camera you edit. A drag does nothing while another camera is on show: switch to Cam to move it. Renders always follow the cuts.'
+      : 'View: the camera you edit. Renders still follow the cuts.';
+  }
   syncUndo();
 }
 
@@ -102,12 +113,13 @@ const clearKeys = (item, names) => (hasKeys(item) ? button('Clear keys', () => {
 function objectProps(o) {
   const names = namesFor(o);
   const cur = () => current(o, names);
-  if (o.type !== 'figure') return section(TYPES[o.type].label, () => select(null), placeProps(o, cur));
+  if (!isPosable(o)) return section(TYPES[o.type].label, () => select(null), placeProps(o, cur), isBoneKeyed(o) ? boneProps(o) : null);
   // a figure: its pose tools in tabs, big enough for fingers
   const tab = FIG_TABS.some(([k]) => k === R.figTab) ? R.figTab : 'pose';
   return section(o.name, () => select(null),
     seg(FIG_TABS, tab, (v) => { R.figTab = v; store.set('deck.scene.figtab', v); renderPanel(); }, { wrap: true }),
-    { pose: posesTab, adjust: adjustTab, hands: handsTab, face: faceTab, move: movesTab, joint: jointsTab, parts: partsTab, place: placeProps }[tab](o, cur));
+    { pose: posesTab, adjust: adjustTab, hands: handsTab, face: faceTab, move: movesTab, joint: jointsTab, parts: partsTab, place: placeProps }[tab](o, cur),
+    o.type === 'rigged' ? rigProps(o) : null);
 }
 
 // where it is, how big, its pivot; duplicate and delete
@@ -205,18 +217,24 @@ function roomProps() {
     help('Keep the walls about where the real ones should be: H3 sizes the room from them. Hide it (◉) for an open space.'));
 }
 
-// the scene's cameras: one is active (the view, the renders and a composition's clip look through it); the others
-// keep their own keys until made active. Old scenes have the one.
+// the scene's cameras: one is active (the one you edit). The picture while the clip plays, and every render, follow
+// the shot list. The others keep their own keys until made active. Old scenes have the one.
 function camerasField() {
   const name = h('input', { type: 'text', value: SC.camera.name || 'Camera', 'aria-label': 'Active camera name' });
   name.addEventListener('change', () => { SC.camera.name = name.value.trim() || SC.camera.name; changed(); });
-  const others = (SC.cams || []).map((c) => h('div', { class: 'row cam-row' },
-    h('span', { class: 'grow' }, c.name, h('span', { class: 'hint' }, keyCount(c) ? ` · ${keyCount(c)} keys` : '')),
-    button('Make active', () => { setActiveCam(c); changed(); }, { title: `Look through ${c.name}` }),
-    button('Delete', () => { SC.cams = SC.cams.filter((x) => x !== c); changed(); }, { cls: 'small danger', 'aria-label': `Delete ${c.name}` })));
-  return field(['Cameras', info('The view, renders and the scene as a video clip look through the active camera. Each camera keeps its own keys (the others show in the key sheet too); make one active to move it with the view. New camera starts at the view you see in the director view, or a step behind the active camera.')],
-    h('div', { class: 'row' }, name, h('span', { class: 'chip on' }, 'Active')),
-    ...others,
+  const clock = (f) => { const t = f / FPS; return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(Math.floor(t % 60)).padStart(2, '0')}`; };
+  const shotLine = (c) => shots().filter((s) => s.cam === c).map((s) => `Shot ${s.i} · ${clock(s.f0)}–${clock(s.f1 + 1)}`).join(', ');
+  const here = shots().find((s) => R.f >= s.f0 && R.f <= s.f1);
+  const row = (c, active) => h('div', { class: 'row cam-row wrap' },
+    active ? name : h('span', { class: 'grow' }, c.name),
+    h('span', { class: 'hint grow' }, shotLine(c) || (keyCount(c) ? `${keyCount(c)} keys` : '')),
+    active ? h('span', { class: 'chip on' }, 'Active') : button('Make active', () => { setActiveCam(c); changed(); }, { title: `Look through ${c.name}` }),
+    button('Cut here', () => { cutTo(c); changed(); toast(`Cut to ${c.name}`); }, { title: 'Cut to this camera at the playhead' }),
+    active ? null : button('Delete', () => { SC.cams = SC.cams.filter((x) => x !== c); dropCuts((x) => x.cam === c.id); changed(); }, { cls: 'small danger', 'aria-label': `Delete ${c.name}` }));
+  return field(['Cameras', info('The camera you edit is the active one: its moves, its gizmo, ◆ Key. The picture while the clip plays, and every render, follow the Shots row. Cut here writes a cut at the playhead. The first cut\'s camera is the shot from the start. New camera starts at the view you see in the director view, or a step behind the active camera.')],
+    row(SC.camera, true),
+    ...(SC.cams || []).map((c) => row(c, false)),
+    here ? h('p', { class: 'hint' }, `Shot under the playhead: ${here.i} · ${here.cam.name}`) : null,
     button('New camera', () => { const c = newCamera(); c.base = { ...c.base, ...newCameraPose() }; SC.cams.push(SC.camera); SC.camera = c; changed(); toast(`${c.name} is active`); },
       { title: 'A new camera, made active: at the view you see in the director view, else a step behind the active camera' }));
 }
@@ -274,7 +292,7 @@ function cameraProps() {
     h('div', { class: 'row wrap' },
       clearKeys(cam, CAM),
       button('Reset view', () => { write(cam, CAM, { ...defaultScene().camera.base }); changed(); })),
-    help('The view is the camera: drag empty space to orbit, two fingers to pan and zoom. With keys and Auto key on, each move sets a key at the playhead; with Auto key off it is only a look around until ◆ Key.'));
+    help('The view is the camera: drag empty space to orbit, two fingers to pan and zoom. With keys and Auto key on, each move sets a key at the playhead; with Auto key off it is only a look around until ◆ Key. Cut on the toolbar follows the shot list while the clip plays. While another camera is on show, a drag does not move this one.'));
 }
 
 // ---- the video's length: the Generate panel's video template's (Match generate), or set here (Custom).
@@ -299,6 +317,7 @@ function setLength(v) {
   SC.seconds = Math.round(clamp(v, ...LEN) * 100) / 100;
   const n = frames();
   for (const it of [...camsOf(), ...SC.objects]) dropKeys(it, (f) => f >= n);
+  trimCuts(n);
   R.f = Math.min(R.f, n - 1);
 }
 const lengthChanged = () => { save(); refresh(); renderTransport(); renderPanel(); renderToolbar(); };
@@ -306,7 +325,7 @@ const animated = () => [...camsOf(), ...SC.objects];
 const clampLen = (v) => Math.round(clamp(v, ...LEN) * 100) / 100;
 // a new length; when it would cut keys off the end, ask first: stretch the animation to fit, or cut them
 export function newLength(v, mode = SC.lenMode) {
-  const s = clampLen(v), cut = keysPast(animated(), framesFor(s));
+  const s = clampLen(v), cut = keysPast(animated(), framesFor(s)) + (SC.cuts || []).filter((c) => c.f >= framesFor(s)).length;
   if (!cut) { setLength(s); SC.lenMode = mode; lengthChanged(); return; }
   openSheet(h('h3', {}, `Shorten to ${fmtSecs(s)} s?`),
     h('p', {}, `${cut} key${cut > 1 ? 's are' : ' is'} past ${fmtSecs(s)} s.`),
@@ -319,6 +338,7 @@ function stretchTo(v, mode = 'custom') {
   const s = clampLen(v), before = clone(SC), ok = sameTab(), was = SC.seconds, from = frames();
   SC.seconds = s;
   stretchAll(animated(), from, frames());
+  stretchCuts(from, frames());
   setLength(s); SC.lenMode = mode; TEMP.clear();
   lengthChanged();
   undoToast(`Keys stretched ×${(s / was).toFixed(2)} to ${fmtSecs(s)} s`, () => {
@@ -367,7 +387,9 @@ export function renderProps() {
   return section('Render', null,
     slider('Soften edges', () => SC.blur, (v) => { SC.blur = v; }, { min: 0, max: 12, step: 0.5, fmt: (v) => (v ? `${v} px` : 'off') }),
     help('Blurs the depth so H3 copies the shapes less literally. Use with deck-h3-ctrl2v (strength 1, end 0.4).'),
-    field(['Depth range', info('Follow the shot: each moment gets its own near and far (eased over about a second), so the depth keeps its contrast when the camera travels. Whole clip: one near and far for the whole clip (steady greys, but a long camera move squeezes part of it into a few greys, and depth control lets go there).')],
+    field('Render', seg([['take', 'One take'], ['each', 'Each shot']], SC.renderShots === 'each' ? 'each' : 'take', (v) => { SC.renderShots = v; save(); }),
+      help('One take is a single video, with the cuts in it. Each shot renders one video per shot. The toast can lay those on the Video timeline.')),
+    field(['Depth range', info('Follow the shot: each moment gets its own near and far (eased over about a second), so the depth keeps its contrast when the camera travels. A cut starts that range again. Whole clip: one near and far for the whole clip (steady greys, but a long camera move squeezes part of it into a few greys, and depth control lets go there).')],
       seg([['follow', 'Follow the shot'], ['clip', 'Whole clip']], SC.depthRange === 'clip' ? 'clip' : 'follow', (v) => { SC.depthRange = v; save(); })),
     busy ? h('div', { class: 'row wrap' }, button('✕ Cancel render', cancelRender, { cls: 'small danger', title: 'Stop the render: nothing is saved' }))
       : h('div', { class: 'row wrap' },
@@ -394,7 +416,12 @@ function openAdd() {
       }, 'Turn a picture into a 3D mesh (MoGe in ComfyUI) for camera moves'),
       chip('Photo as a splat…', () => {
         closeSheet(); C.openImagePicker({ title: 'Picture to turn into a splat', onPick: (name) => makeSplatHere(name) });
-      }, 'Turn a picture into Gaussian splats (Apple SHARP): softer and more lifelike than the mesh, for small camera moves')));
+      }, 'Turn a picture into Gaussian splats (Apple SHARP): softer and more lifelike than the mesh, for small camera moves'),
+      chip('🧊 Object from photos…', async () => {
+        closeSheet();
+        const { openObjectSheet } = await import('./scene-import.js');   // (scene-view imports this panel: no top-level import)
+        C.openImagePicker({ title: 'Picture of the object', onPick: (name) => openObjectSheet(name, name) });
+      }, 'Pixal3D: a textured model from one photo, or four of its views')));
 }
 
 // ---- history, modes -----------------------------------------------------------------------
@@ -455,7 +482,7 @@ export function editPanel() {
     selItem() ? objectProps(selItem()) : R.sel === ROOM && SC.room ? roomProps() : cameraProps()];
 }
 // what the scene makes, last in the panel (after the reference and imports)
-export const editOut = () => [promptProps(), renderProps()];
+export const editOut = () => [promptProps(), shotProps(), renderProps()];
 
 // the camera on its own: seen through its lens (orbiting writes its keys), or from a free view of the room
 export function cameraPanel() {
@@ -490,6 +517,8 @@ export function buildToolbar() {
       title: 'Reset pivot: back to its own (Pivot in the panel)' }, icon('pivot-reset')),
     h('span', { class: 'sep' })),
     h('button', { type: 'button', class: 'ico', 'data-free': '', 'aria-label': 'Director view', onclick: toggleFree }, icon('compass')),
+    h('button', { type: 'button', class: 'ico', 'data-viewcut': '', 'aria-label': 'View cuts',
+      onclick: () => { R.viewCut = !R.viewCut; store.set('deck.scene.viewcut', R.viewCut); pose(R.f); draw(); renderToolbar(); } }, 'Cut'),
     h('button', { type: 'button', class: 'ico', 'data-overlays': '', 'aria-label': 'Overlays', title: 'Overlays: depth, reference picture, scale person',
       onclick: (e) => overlayMenu(e.currentTarget) }, icon('contrast'))));
   viewer.append(h('button', { type: 'button', class: 'max-btn hud-btn', id: 'sceneHud', onclick: () => setHud(!hudOff()) }));

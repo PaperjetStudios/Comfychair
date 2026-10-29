@@ -21,10 +21,13 @@ import { registerBuiltins } from './scene-builtin.js';
 import { initModel } from './scene-model.js';
 import { registerCamera } from './scene-camera.js';
 import { registerImport } from './scene-import.js';
+import { setBoneDrag, setBonePick } from './scene-view.js';
+import { onBoneDrag, onBoneDragEnd, onBonePick } from './scene-skin.js';
 import { registerRef } from './scene-ref.js';
 import './scene-track.js';   // the footage and track-point layers a motion track makes
 export { addModeSection, registerMode } from './scene-modes.js';
 export { addPhoto, makePhoto } from './scene-view.js';
+export { addModel, openObjectSheet } from './scene-import.js';
 export { useAsRef } from './scene-ref.js';
 export { motionOnto } from './scene-motion.js';
 
@@ -32,6 +35,8 @@ registerCamera();     // camera moves (a section of Camera mode)
 registerBuiltins();   // (the dependencies have run by now; a mode registered later goes after them)
 initModel();          // Create object's tools replace the placeholder panel
 registerImport({ newTab });  // models, splats and starter scenes (scene-import.js)
+setBonePick(onBonePick);    // a skinned model's bone dots are picked in the view (scene-view.js)
+setBoneDrag({ move: onBoneDrag, end: onBoneDragEnd });   // ...and dragged: the chain reaches (ik.js)
 registerRef();        // a reference picture or clip over the view (Edit scene and Camera)
 
 // ---- tabs: each 3D scene is a document in the project folder ----

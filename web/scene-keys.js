@@ -3,7 +3,7 @@ import { fullScreen } from './layout.js';
 import { $, button, h, iconBtn, info as infoBtn, numSlider, seg, sheetOpen, store, toast, toggle, canvasFont, iconize } from './ui.js';
 import { icon } from './icons.js';
 import {
-  CAM, FPS, HOLD, OBJ, OFF, R, ROOM, SC, TEMP, TYPES, WP, addKey, bakeBase, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setKey, setMute
+  CAM, FPS, HOLD, OBJ, OFF, R, ROOM, SC, TEMP, TYPES, WP, addKey, bakeBase, camById, camsOf, cutTo, cutTrack, dropCuts, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setActiveCam, setKey, setMute
 } from './scene-data.js';
 import {
   CURVES, EASES, allKeys, bounds, copy, handleOf, isScalar, kindOf, moveBy, moveHandle, paste, prune, quatDeg, reduceKeys, remove, restore, scaleAround, setBroken, setChan, setEase, snapshot, track
@@ -29,11 +29,13 @@ const OPEN = new Set(store.get('deck.scene.keyopen', []));   // the rows that ar
 const G = { ch: 'py' };  // the graph's channel
 const V = { a: 0, b: 1, fit: true };   // the frames on show
 
-// the active camera, then the others (other: they key here, but the view moves only the active one), then the objects
-const layers = () => [{ item: SC.camera, id: null, kind: 'cam', names: CAM, label: `🎥 ${SC.cams?.length ? SC.camera.name : 'Camera'}` },
+// the shot row (which camera is live), then the active camera, then the others, then the objects
+const cutItem = { id: 'cuts', mute: false, hidden: false, name: 'Shots', chans: {} };
+const layers = () => [{ item: cutItem, id: 'cuts', kind: 'cut', names: ['cut'], label: 'Shots' },
+  { item: SC.camera, id: null, kind: 'cam', names: CAM, label: `🎥 ${SC.cams?.length ? SC.camera.name : 'Camera'}` },
   ...(SC.cams || []).map((c) => ({ item: c, id: `cam:${c.id}`, kind: 'cam', names: CAM, label: `🎥 ${c.name}`, other: true })),
   ...SC.objects.map((o) => ({ item: o, id: o.id, kind: kindOf(o), names: namesFor(o), label: `${TYPES[o.type].icon} ${o.name}` }))];
-const shown = () => (modeOf().lanes === 'camera' ? layers().filter((L) => L.kind === 'cam') : layers());
+const shown = () => (modeOf().lanes === 'camera' ? layers().filter((L) => L.kind === 'cam' || L.kind === 'cut') : layers());
 const span = () => Math.max(1, frames() - 1);
 
 // every channel a layer can have: one track each (a channel with no keys has an empty one, for paste and the like)
@@ -46,7 +48,7 @@ function chanIds(L) {
 // (an offset layer's channels are the layer's too: kind 'off', so a paste never mixes them with its keys)
 const offIds = (L) => (L.item.off ? [...new Set([...OFF, ...Object.keys(L.item.off.chans || {})])] : []);
 const offTracks = (L) => offIds(L).map((ch) => track(L.item.off, ch, { id: L.id, kind: 'off' }));
-const tracksOf = (L) => [...chanIds(L).map((ch) => track(L.item, ch, { id: L.id, kind: L.kind })), ...offTracks(L)];
+const tracksOf = (L) => (L.kind === 'cut' ? [cutTrack()] : [...chanIds(L).map((ch) => track(L.item, ch, { id: L.id, kind: L.kind })), ...offTracks(L)]);
 const allTracks = () => shown().flatMap(tracksOf);
 const gTrack = () => { const L = gLayer(); return L ? track(L.item, G.ch, { id: L.id, kind: L.kind }) : null; };
 
@@ -94,7 +96,7 @@ export const toEnd = () => seek(AREA.bound()?.b ?? frames() - 1);
 
 // ---- graph channels ---------------------------------------------------------------------------
 function gLayer() {
-  const [it] = keyTarget(), sh = shown();
+  const [it] = keyTarget(), sh = shown().filter((L) => L.kind !== 'cut');
   return sh.find((L) => L.item === (it || SC.camera)) || sh[0];
 }
 // the numbers the graph can plot: a figure's parameters once keyed (a joint's turn is not one number)
@@ -124,6 +126,10 @@ function diamonds(tracks, own) {
 const LIMBS = [...FIGURE.PART_GROUPS, ['fingersL', 'L fingers', FIGURE.handJoints('l')], ['fingersR', 'R fingers', FIGURE.handJoints('r')]];
 // the rows of one layer (its channels, nested like Blender's: the pose under a "Pose" row, by limb)
 function layerRows(L) {
+  if (L.kind === 'cut') {
+    const T = cutTrack(), keys = [...T.keys].sort((a, b) => a.f - b.f);
+    return [{ t: 'item', L, label: L.label, depth: 0, key: null, tracks: [T], cut: true, dia: keys.map((k) => ({ f: k.f, keys: [k] })) }];
+  }
   const T = new Map(tracksOf(L).filter((t) => t.kind !== 'off').map((t) => [t.ch, t])), get = (chs) => chs.map((c) => T.get(c)).filter(Boolean);
   const row = (t, label, depth, tracks, key = null) => ({ t, L, label, depth, key, tracks, dia: diamonds(tracks, t === 'chan') });
   const OT = offTracks(L);
@@ -218,27 +224,40 @@ export function renderKeys() {
       const caret = r.key ? h('button', { type: 'button', class: 'sheet-caret', 'aria-expanded': OPEN.has(r.key), 'aria-label': `${OPEN.has(r.key) ? 'Close' : 'Open'} ${r.label}`,
         onpointerdown: (e) => e.stopPropagation(), onclick: (e) => { e.stopPropagation(); toggleOpen(r.key); } }, iconize(OPEN.has(r.key) ? '▾' : '▸')) : h('span', { class: 'sheet-caret' });
       const name = h('button', { type: 'button', class: 'sheet-name' + (mine && (r.t === 'item' || (r.t === 'chan' && r.tracks[0].ch === G.ch)) ? ' sel' : '') + off, title: r.label,
-        onclick: () => { if (r.t === 'chan' && isScalar(r.tracks[0].ch)) { G.ch = r.tracks[0].ch; gRange = null; } select(L.other ? null : L.id); } }, iconize(r.label));
-      return h('div', { class: `sheet-name-row ${r.t}`, style: pad }, r.t === 'item' ? muteBtn(L) : null, caret, name);
+        onclick: () => { if (L.kind === 'cut') { select('cuts'); return; } if (r.t === 'chan' && isScalar(r.tracks[0].ch)) { G.ch = r.tracks[0].ch; gRange = null; } select(L.other ? null : L.id); } }, iconize(r.label));
+      return h('div', { class: `sheet-name-row ${r.t}`, style: pad }, r.t === 'item' && L.kind !== 'cut' ? muteBtn(L) : null, caret, name);
     };
     $('#sceneNames').replaceChildren(h('div', { class: 'sheet-head' }), ...ROWS.map(nameRow));
     lanes.replaceChildren(ruler(),
-      ...ROWS.map((r, i) => h('div', { class: `sheet-lane ${r.t}` + (r.L.id === R.sel ? ' sel' : '') + (r.L.item.mute ? ' muted' : ''), 'data-track': i },
-        r.t !== 'chan' && r.dia.length > 1 ? h('span', { class: 'span', style: `left:${lanePos(r.dia[0].f)};`
-          + `width:calc((100% - ${2 * PAD}px) * ${(r.dia[r.dia.length - 1].f - r.dia[0].f) / (V.b - V.a)})` }) : null,
-        ...r.dia.map((d, j) => keyEl(d, i, j, '')))),
+      ...ROWS.map((r, i) => h('div', { class: `sheet-lane ${r.t}` + (r.cut ? ' cut' : '') + (r.L.id === R.sel ? ' sel' : '') + (r.L.item.mute ? ' muted' : ''), 'data-track': i },
+        r.cut ? cutBlocks(r, i) : [
+          r.t !== 'chan' && r.dia.length > 1 ? h('span', { class: 'span', style: `left:${lanePos(r.dia[0].f)};`
+            + `width:calc((100% - ${2 * PAD}px) * ${(r.dia[r.dia.length - 1].f - r.dia[0].f) / (V.b - V.a)})` }) : null,
+          ...r.dia.map((d, j) => keyEl(d, i, j, ''))])),
       h('div', { id: 'scenePlayhead', class: 'playhead', style: `left:${lanePos(R.f)}` }));
   }
   if (G0 && G0.type === 'box' && G0.el) lanes.append(G0.el);
   if (sheet && st) sheet.scrollTop = st;
   syncTools();
   const [item] = keyTarget();
-  const add = $('#sceneAddKey'), del = $('#sceneDelKey');
-  if (add) add.disabled = !item;
-  if (del) del.disabled = !item || !keyAt(item, R.f);
+  const add = $('#sceneAddKey'), del = $('#sceneDelKey'), shots = R.sel === 'cuts';
+  if (add) add.disabled = shots ? false : !item;
+  if (del) del.disabled = shots ? !(SC.cuts || []).some((c) => c.f === R.f) : !item || !keyAt(item, R.f);
   if (add) add.classList.toggle('pending', !!item && TEMP.has(item));  // a held change to keep
   const lbl = $('#sceneKeyFor');
-  if (lbl) lbl.textContent = selItem() ? selItem().name : R.sel === ROOM ? 'Room (not animated)' : 'Camera';
+  if (lbl) lbl.textContent = shots ? 'Shots' : selItem() ? selItem().name : R.sel === ROOM ? 'Room (not animated)' : 'Camera';
+}
+const CUT_COLORS = ['#e9b44c', '#7eb6ff', '#8fd18a', '#f09a7a', '#d2a4f0', '#f0d36a'];
+// a cut is a block from its frame to the next cut, in that camera's colour
+function cutBlocks(r, ri) {
+  const keys = r.dia.map((d) => d.keys[0]), end = span();
+  return keys.map((k, i) => {
+    const f1 = i + 1 < keys.length ? keys[i + 1].f : end, cam = camById(k.cam);
+    const w = Math.max(0.4, f1 - k.f), col = CUT_COLORS[Math.max(0, camsOf().indexOf(cam)) % CUT_COLORS.length];
+    return h('button', { type: 'button', class: 'cut-block' + (SEL.has(k) ? ' sel' : ''), 'data-key': i, 'data-l': ri,
+      style: `left:${lanePos(k.f)};width:calc((100% - ${2 * PAD}px) * ${w / (V.b - V.a)});background:${col}`,
+      title: `${cam?.name || 'Missing camera'} · ${(k.f / FPS).toFixed(2)} s` }, cam?.name || '?');
+  });
 }
 
 // Mute: the layer ignores its keys on screen and stays where it is (renders still use the keys); one undo step
@@ -327,7 +346,7 @@ export function deleteKeys() {
   if (!SEL.size) return;
   const tracks = allTracks();
   for (const T of tracks) {  // a channel that loses its last key stays as it looks now (like Clear keys)
-    if (T.keys.length && T.keys.every((k) => SEL.has(k))) bakeBase(T.item, T.ch, sampleChan(T.item, T.ch, R.f));
+    if (T.kind !== 'cut' && T.keys.length && T.keys.every((k) => SEL.has(k))) bakeBase(T.item, T.ch, sampleChan(T.item, T.ch, R.f));
   }
   const c = remove(tracks, SEL); TEMP.clear(); done(); toast(`${c} key${c > 1 ? 's' : ''} deleted`);
 }
@@ -335,6 +354,7 @@ export function deleteKeys() {
 export function setKeyEase(ease) {
   if (!SEL.size) return;
   if (ease === 'hb:1' || ease === 'hb:0') setBroken(SEL, ease === 'hb:1'); else setEase(SEL, ease, allTracks());
+  for (const k of SEL) if (k.cam) k.ease = 'const';   // a cut never blends
   done();
 }
 
@@ -459,10 +479,10 @@ function down(e) {
     const keys = keyOf(keyEl2), was = keys.every((k) => SEL.has(k));
     if (UI.add) { if (!was) keys.forEach((k) => SEL.add(k)); } else if (!was) { SEL.clear(); keys.forEach((k) => SEL.add(k)); }
     G0 = { ...base, type: 'key', keys, was, L, row };
-    if (L && L.id !== R.sel && UI.mode !== 'graph') select(L.other ? null : L.id); else renderKeys();
+    if (L && L.id !== R.sel && UI.mode !== 'graph') select(L.kind === 'cut' ? 'cuts' : L.other ? null : L.id); else renderKeys();
     return;
   }
-  if (L && L.id !== R.sel && UI.mode !== 'graph') select(L.other ? null : L.id);
+  if (L && L.id !== R.sel && UI.mode !== 'graph') select(L.kind === 'cut' ? 'cuts' : L.other ? null : L.id);
   // empty space: a finger pans (unless Box is on); a mouse or pen draws a box
   const box = e.pointerType === 'touch' ? UI.box : true;
   const sheet = $('#sceneSheet');
@@ -568,6 +588,11 @@ function up(e) {
   if (g.type === 'scrub') return;
   if (g.type === 'key') {
     if (g.moved) { done(); info(); return; }
+    if (g.row?.cut && !UI.add) {
+      const cam = camById(g.keys[0].cam);
+      if (cam && cam !== SC.camera) setActiveCam(cam);
+      seek(g.keys[0].f); changed(); return;
+    }
     if (UI.add) { if (g.was) g.keys.forEach((k) => SEL.delete(k)); } else { SEL.clear(); g.keys.forEach((k) => SEL.add(k)); seek(g.keys[0].f); }
     renderKeys(); info();
     return;
@@ -754,6 +779,10 @@ function applyTools(on = store.get(TK, true)) {
 // ---- adding keys by hand (double-tap): keys on the row's channels with the values they have there, so nothing
 // moves. A channel's row keys that channel, a limb's row its joints, a layer's row (and Pose) what ◆ Key would.
 function insertKeys(row, f, v = null) {
+  if (row?.L?.kind === 'cut') {
+    const k = cutTo(SC.camera, f);
+    TEMP.clear(); SEL.clear(); SEL.add(k); done(); seek(f); return [k];
+  }
   const item = row.L.item, names = row.L.names;
   const wide = row.t === 'item' || row.key?.startsWith('p:'), ok = wide ? new Set(keyChans(item, names, sample(item, names, f))) : null;
   const made = row.tracks.filter((T) => (T.kind === 'off' ? !wide : !ok || ok.has(T.ch))).map((T) => setKey(T.item, T.ch, f, v ?? sampleChan(T.item, T.ch, f)));
@@ -899,10 +928,12 @@ export function renderTransport() {
         title: 'Record: while it plays, what you hold (gizmo, slider, orbit) is keyed every few frames over the time you hold it' }),
       h('span', { class: 'hint' }, 'Key: ', h('b', { id: 'sceneKeyFor' })),
       button('◆ Key', () => {
+        if (R.sel === 'cuts') { cutTo(SC.camera); changed(); return; }
         const [item, names] = keyTarget(); if (!item) return;
         addKey(item, names); changed();
-      }, { id: 'sceneAddKey', title: 'Keyframe at the playhead' }),
+      }, { id: 'sceneAddKey', title: 'Keyframe at the playhead. On the Shots row, cut to the camera you edit.' }),
       button('✕ Key', () => {
+        if (R.sel === 'cuts') { dropCuts((c) => c.f === R.f); changed(); return; }
         const [item] = keyTarget(); if (!item) return;
         dropKeys(item, (f) => f === R.f); changed();
       }, { id: 'sceneDelKey', title: 'Remove the key at the playhead' })),

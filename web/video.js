@@ -730,6 +730,12 @@ export async function addToTimeline(media) {
   timelineChanged();
   return it;
 }
+// several clips, in order, on the timeline (Story's Shots to video, and the 3D tab's Each shot)
+export async function layOnTimeline(list) {
+  const made = [];
+  for (const media of list) made.push(await addToTimeline(media));
+  return made;
+}
 
 // A card that adds its clip to the timeline on every tap (the sheet stays open)
 const addCard = (o, label, media) => mediaCard(cardMedia(o), label, async (c) => {

@@ -3,8 +3,10 @@
 A plan to hand to an LLM coding agent, one phase per session. Checked against `main` at `58356d6` (2026-10-29):
 there are already several cameras, mocap "With its camera", per-frame depth ranges and the Story tab, and the
 phases build on them. The background research is in
-`RESEARCH-3d-mocap-shots.md`. Each phase stands on its own, can be merged on its own, and ends with tests and
-a README update. **Do the phases in order**: later ones assume the earlier ones.
+`RESEARCH-3d-mocap-shots.md` (phases 1–6) and `RESEARCH-h3-regenerate.md` (phase 7, finishing H3 drafts).
+Each phase stands on its own, can be merged on its own, and ends with tests and a README update.
+**Do the phases in order**: later ones assume the earlier ones, except phase 7, which only needs the H3 pipeline
+that is already on `main`.
 
 ---
 
@@ -443,15 +445,109 @@ keys.
 
 ---
 
+## Phase 7: finish drafts with Open-H3-Regenerate (the Regenerate second pass)
+
+**Goal:** turn a quick H3 draft into a sharp take at 1080P, in a few denoising steps, without losing faces or lip sync.
+The research is in `RESEARCH-h3-regenerate.md`; this phase is the build order for it. Nothing else in the plan depends
+on it, and it can be merged on its own.
+
+`app/h3upscale.py` (**Upscale** on an H3 run) already encodes the finished clip, enlarges its latent with
+`MinimaxH3LatentUpscaler3D` and samples again from part-way (`LADDER`, `STRENGTHS`, the run's own prompt, LoRAs,
+references and sound). Open-H3-Regenerate adds the **refiner LoRA** (trained for exactly this second pass), a **gentler
+schedule** (2 steps from 0.7, where our `strong` 0.9035 is the point the report saw faces drift) and an optional fast
+VAE. `templates/deck-h3-refine.json` (**Use as → Refine with H3**) is the same shape and gains the same way.
+
+**What this box can do (12 GB VRAM, 64 GB RAM):** 1080P-class second passes already work here; 2K filled 32 GB on a
+5090, so **2K stays hidden** unless a card over 24 GB is found. Use one of the smaller community LoRAs, not NVIDIA's
+12.5 GB FP32 rank-576 file:
+
+| File | What it is | Where |
+|---|---|---|
+| `minimax_h3_open_regenerate_2k_r128_comfyui_bf16.safetensors` (2.0 GB) | the whole merge (refiner + Turbo + Sharp); **drop the run's turbo LoRA** | `father558/H3-Open-Regenerate-2K-ComfyUI` |
+| `minimax_h3_open_regenerate_2k_refiner_rank_384_bf16.safetensors` (5.9 GB) | refiner only; **keep the run's turbo LoRA** | `Kijai/MiniMax-H3-experimental` |
+
+Both are ordinary ComfyUI LoRAs (`LoraLoaderModelOnly`), not NVIDIA's curve-aware format. **The father558 repo asked for
+a token on this box** (the Hugging Face API answered "Invalid username or password"), so Kijai's public refiner is the one
+that installs without one; the merge is worth trying when a token is available. The agent must try both on the same three
+clips (faces, fine texture, motion) and make the winner the default.
+
+### 7.1 Check what is installed
+- Look for the pack's nodes with `/object_info`: `OpenH3RegenRefineLatent` (with `audio_mode` `silence` / `draft audio`),
+  a LoRA loader taking `lora_name`, `curve_name` and `curve_table`, `OpenH3VideoToPrompt`, `BlockSparseAttention`, the
+  latent upscaler's `1080p` / `2k` presets, and a fast VAE decode. These names come from a third-party report: **check
+  them before wiring anything**.
+- Candidate packs: `rdh9616/ComfyUI-Open-H3-Regenerate` (Apache-2.0, the one the report used) and
+  `Songssx/ComfyUI-OpenH3-Regenerate2K` (MIT, needs `models/open_h3_regenerate/lora/` and **hard-checks the base
+  checkpoint's sha** against `minimax_h3_ref2va_pruned_int8_convrot`, so it may refuse this install's community merge).
+  Prefer the first; the second only if its check passes or is patched.
+- **The Sharp curve branches are probably inert.** Check NVIDIA's file before downloading 1.2 GB:
+  `python -c "from safetensors import safe_open as o; f=o('sharp_curve_branches.safetensors','pt'); print(max(f.get_tensor(k).abs().max().item() for k in f.keys() if 'curve_B' in k))"`
+  in ComfyUI's venv. `0.0` means skip the file and the 32 KB timestep table; anything else means only a curve-aware
+  loader applies it, and the pack above is that loader.
+- Licences: the refiner LoRA and fast VAE are MiniMax H3 Community Licence; record them, and the latent upscaler's
+  unstated one, in the README models table.
+
+### 7.2 Regenerate in H3 Upscale (`app/h3upscale.py`, the sheet in `web/run.js` ~708)
+- **Quality**: *Upscale (as now)* / *Regenerate (Open-H3)*. Show Regenerate only when the chosen LoRA file is in
+  `models/loras` (and the pack's nodes, if its loader is needed); otherwise say what's missing, the way `main.py`'s
+  MoGe check does.
+- **Target**: `1.5×` (as now) and `1080P` presets; **2K hidden** below 24 GB of VRAM (ComfyUI's `/system_stats` gives
+  `vram_total`; `/api/status` does not carry it yet, so add it there or read it in the sheet). Convert 1080P to a size
+  with the same 32-pixel rounding as `target_size`.
+- **Strength**: *Standard* = 2 steps, sigmas `0.7, 0.494117, 0`; *Enhanced* = 3 steps starting at `0.8` — confirm the
+  exact list against the pack's `OpenH3RegenerateSigmas` (NVIDIA's 3-step ladder is `0.909375, 0.857142…, 0.666666…, 0`;
+  the report's 0.8 start may replace its first two values). Cap the start σ at 0.8 in this mode; `sigmas()` stays for
+  Upscale. Add `REGEN_SIGMAS` and a `regen` branch to `build()` rather than a second builder.
+- `build(..., regen=...)`:
+  - load the chosen LoRA with `LoraLoaderModelOnly` after the run's model chain, at strength 1.0;
+  - drop the run's **turbo LoRA only when the file carries Turbo inside** (the r128 merge does; Kijai's r384 does not);
+    keep character/style LoRAs for now, and test whether they fight the refiner;
+  - if the pack's `OpenH3RegenRefineLatent` (or whatever the example workflow wires) is used, give it
+    `audio_mode = draft audio` and the clip's sound, so lips stay in sync;
+  - keep the existing VAE and tiled decode on 12 GB; the 6.5 GB fast VAE is an option to test, not a default.
+- Tests in `tests/test_h3upscale.py`: the Regenerate graph has the refiner LoRA and the exact sigmas; the run's turbo
+  LoRA is present with r384 and gone with r128; the clip's sound is connected; `regen` off leaves today's graph
+  byte-for-byte the same.
+
+### 7.3 Regenerate in `deck-h3-refine`
+- Add a `@N Regenerate LoRA` stack to the template, **off by default**, and a `@N Regenerate` toggle that switches the
+  sigma schedule. When it is on and the file carries Turbo, drop the `@Turbo LoRA` (it would double the distill).
+- Try it on a 3D render with the depth hold on (and with it off): the gentler 0.7 start may make the hold unnecessary.
+- If it holds up, the same mode finishes splats and scene colour renders at 1080P.
+
+### 7.4 Draft, then finish (the workflow this exists for)
+- Draft fast at 768P (512P/576P drafts are supported; try one for speed), pick the good takes, then **Finish**:
+  - Board: select takes → **Finish** (queue Regenerate runs with `make.js` `queueRun`, one per take);
+  - Story: **Finish takes** on a scene — every shot's chosen take, queued the same way.
+- The finished clip is a child of its draft (lineage already records that), and **Shots to video** prefers a finished
+  take over its draft (Story's clip choice).
+
+### 7.5 Other models' drafts
+- `deck-h3-refine` already encodes any clip into H3's latent, so try Regenerate on an **LTX** clip and a scene render.
+  If faces and motion hold, add **Finish with H3** to Use as for every clip, not just H3 runs.
+
+### 7.6 Done-when
+- Tests: `tests/test_h3upscale.py` (the graph cases above) and, if the pack's nodes are used, a small test that the
+  template's `@Regenerate` group is skipped when off (the existing empty-node rules in `app/templates.py`).
+- By hand, on this box: three clips (faces, fine texture, motion), 768P → 1.5×/1080P, Standard 2 steps, r128 versus
+  r384, with times and a face-by-face comparison in `NOTES.md`. 2K stays untested here (needs >24 GB).
+- README: the node pack and its files in the custom-node and model tables; a **Finish a take** paragraph; the 2K
+  caveat. NOTES: how the Regenerate graph differs from Upscale, and the Sharp-curve check's result.
+
 ## Model and node checklist (fill in during each phase, then copy to the README tables)
 
-| Phase | Thing | Where it goes | Check |
+| Phase | Thing | Where it goes | Checked |
 |---|---|---|---|
-| 2 | SAM 3D Body hand refinement | (same model) | speed with it on |
-| 2 | Native SAM 3D Body nodes | ComfyUI core | class names |
-| 3 | Pixal3D (single + multi-view) | ComfyUI core; weights folder? | names, VRAM, licence |
-| 3 | TRELLIS.2 | ComfyUI core | names, VRAM |
-| 4 | Make-It-Animatable | custom node pack? | licence, output format |
-| 4/5 | UniRig skeleton + skin | `ComfyUI-UniRig`, `models/unirig` | textures dropped; skeleton input for re-skin |
-| 6 | GEM-X | `deck_gemx` (new), weights `nvidia/GEM-X` | licence, install, VRAM |
-| 6 alt | GVHMR | `ComfyUI-MotionCapture` | licence |
+| 2 | SAM 3D Body hand refinement | (same model) | on by default; native `SAM3DBody_*` nodes; hands/face now stored |
+| 2 | Native SAM 3D Body nodes | ComfyUI core | `SAM3DBody_Loader/Predict/Smooth`, `RTDETR_detect` |
+| 3 | Pixal3D (single + multi-view) | ComfyUI core | `Pixal3DConditioning`, `Pixal3DMultiViewConditioning`, `Save3DAdvanced`; 5.2 GB int8; multi-view fov 20; a CPU pass is hours, so the by-hand check waits for the GPU |
+| 3 | TRELLIS.2 | ComfyUI core | `Trellis2Conditioning/ShapeStage/TextureStage/UpsampleStage`, `VaeDecode*Trellis*`; 4.9 GB |
+| 4 | Make-It-Animatable | `ComfyUI-UniRig` (isolated pixi env) | `MIAAutoRig` writes an FBX; ~13 min on CPU for a character; licence to confirm |
+| 4/5 | UniRig skeleton + skin | `ComfyUI-UniRig` | `UniRigAutoRig`, `UniRigExtractSkeletonNew`, `UniRigApplySkinningMLNew`; its mesh list is fixed at ComfyUI startup |
+| 6 | GEM-X | none installed | no ComfyUI node exists; the pip package needs torch 2.10 + CUDA, so not installed here |
+| 6 alt | GVHMR | `ComfyUI-MotionCapture` | not installed |
+| 7 | Open-H3-Regenerate refiner LoRA (r128 merge, Turbo inside) | `loras` (`father558`) | repo asks for a Hugging Face token |
+| 7 | Open-H3-Regenerate refiner-only LoRA (r384) | `loras` (`Kijai`) | installed: 5.6 GB, 416 tensors, refiner-only |
+| 7 | Sharp curve branches + timestep table | `open_h3_regenerate/lora/` (Songssx only) | not downloaded; check `curve_B` first |
+| 7 | Fast H3 VAE (non-causal, 24 layers) | `vae` | not downloaded; the standard decode is what the tests use |
+| 7 | Open-H3-Regenerate node pack | `rdh9616/ComfyUI-Open-H3-Regenerate` | not needed: the LoRAs work in plain `LoraLoaderModelOnly` |

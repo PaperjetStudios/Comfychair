@@ -8,8 +8,17 @@
 const pct = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))))];
 
 // samples: per frame, the depths seen (any array of numbers; empty when nothing was in view).
-// Returns [near, far] per frame.
-export function frameRanges(samples, { mode = 'follow', window = 12, lo = 0.01, hi = 0.99 } = {}) {
+// Returns [near, far] per frame. breaks: sample indexes a cut falls on. Smoothing never crosses one,
+// so a close-up and a wide shot each keep their own range.
+export function frameRanges(samples, opts = {}) {
+  const breaks = [...new Set((opts.breaks || []).map((b) => Math.round(b)).filter((b) => b > 0 && b < samples.length))].sort((a, b) => a - b);
+  if (!breaks.length || opts.mode === 'clip') return rangesOf(samples, opts);
+  const out = [];
+  let from = 0;
+  for (const b of [...breaks, samples.length]) { out.push(...rangesOf(samples.slice(from, b), opts)); from = b; }
+  return out;
+}
+function rangesOf(samples, { mode = 'follow', window = 12, lo = 0.01, hi = 0.99 } = {}) {
   const n = samples.length;
   const per = samples.map((s) => {
     if (!s || !s.length) return null;

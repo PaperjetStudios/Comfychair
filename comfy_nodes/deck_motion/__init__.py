@@ -63,30 +63,99 @@ def mhr_to_smpl22(k):
                      head, p["lsho"], p["rsho"], p["lelb"], p["relb"], p["lwri"], p["rwri"]])
 
 
-def body_frames(pose_data, person=0):
-    """[(22, 3) y-up world joints or None per frame] for one person: keypoints + camera translation, y and z flipped
-    (camera space has y down and z away). Frames where the person isn't found are filled from their neighbours."""
+# MHR70 hands (sam_3d_body metadata): right 21–41 and left 42–62. Each finger is tip, first, second, third
+# joint, then the wrist. third is the knuckle. Stored knuckle → tip, wrist first, so the figure's three
+# joints are the angles between consecutive segments.
+_FINGERS = ("thumb", "index", "middle", "ring", "pinky")
+_LOGGED = False
+
+
+def _np_of(x):
     import numpy as np
-    out = []
-    for people in pose_data.get("frames") or []:
-        if person < len(people) and people[person].get("pred_keypoints_3d") is not None:
-            d = people[person]
-            k = np.asarray(d["pred_keypoints_3d"].cpu() if hasattr(d["pred_keypoints_3d"], "cpu") else d["pred_keypoints_3d"], dtype=np.float64)
-            t = d.get("pred_cam_t")
-            t = np.zeros(3) if t is None else np.asarray(t.cpu() if hasattr(t, "cpu") else t, dtype=np.float64).reshape(3)
-            j = mhr_to_smpl22(k.reshape(-1, 3)) + t
-            out.append(j * np.array([1.0, -1.0, -1.0]))
-        else:
-            out.append(None)
-    known = [i for i, f in enumerate(out) if f is not None]
+    if x is None:
+        return None
+    return np.asarray(x.cpu() if hasattr(x, "cpu") else x, dtype=np.float64)
+
+
+def hands_of(k):
+    """(70, 3) keypoints → {l, r: 21 points}, wrist then four points per finger, knuckle to tip. None if the hands aren't there."""
+    import numpy as np
+    k = np.asarray(k, dtype=np.float64).reshape(-1, 3)
+    if k.shape[0] < 63:
+        return None
+    def block(start):
+        pts = [k[start + 20]]
+        for f in range(5):
+            b = start + f * 4
+            pts.extend([k[b + 3], k[b + 2], k[b + 1], k[b]])
+        return pts
+    return {"r": block(21), "l": block(42)}
+
+
+def _fill_series(rows):
+    """None gaps filled from the nearest frames, held at the ends. rows are arrays of the same shape."""
+    import numpy as np
+    known = [i for i, f in enumerate(rows) if f is not None]
     if not known:
-        raise ValueError("Deck Save Body Motion: no person found in any frame (try a clip where the whole body shows)")
-    for i in range(len(out)):   # gaps: linear between the nearest found frames, held at the ends
+        return None
+    out = list(rows)
+    for i in range(len(out)):
         if out[i] is None:
             a = max((k for k in known if k < i), default=None)
             b = min((k for k in known if k > i), default=None)
             out[i] = out[b] if a is None else out[a] if b is None else out[a] + (out[b] - out[a]) * ((i - a) / (b - a))
     return out
+
+
+def body_pack(pose_data, person=0):
+    """One person: 22 joints, and when the 70 keypoints are there the hands, the face (nose, eyes, ears) and cam_t.
+    All of them are keypoints + camera translation, then y and z flipped (camera space has y down and z away)."""
+    import numpy as np
+    global _LOGGED
+    flip = np.array([1.0, -1.0, -1.0])
+    joints, hands_l, hands_r, face, cam, rots = [], [], [], [], [], []
+    saw_hands = False
+    for people in pose_data.get("frames") or []:
+        d = people[person] if person < len(people) else None
+        k = _np_of(d.get("pred_keypoints_3d")) if d else None
+        if k is None:
+            joints.append(None); hands_l.append(None); hands_r.append(None); face.append(None); cam.append(None); rots.append(None)
+            continue
+        if not _LOGGED:
+            _LOGGED = True
+            print("Deck Save Body Motion keys:", sorted(d.keys()))
+        k = k.reshape(-1, 3)
+        t = _np_of(d.get("pred_cam_t"))
+        t = np.zeros(3) if t is None else t.reshape(-1)[:3]
+        joints.append((mhr_to_smpl22(k) + t) * flip)
+        h = hands_of(k)
+        if h:
+            saw_hands = True
+            hands_l.append(np.stack([(p + t) * flip for p in h["l"]]))
+            hands_r.append(np.stack([(p + t) * flip for p in h["r"]]))
+            face.append(np.stack([(k[i] + t) * flip for i in (0, 1, 2, 3, 4)]))
+        else:
+            hands_l.append(None); hands_r.append(None); face.append(None)
+        cam.append(t * flip)
+        r = _np_of(d.get("pred_global_rots"))
+        rots.append(r.reshape(-1) if r is not None and r.size <= 2000 else None)
+    known = [i for i, f in enumerate(joints) if f is not None]
+    if not known:
+        raise ValueError("Deck Save Body Motion: no person found in any frame (try a clip where the whole body shows)")
+    joints = _fill_series(joints)
+    pack = {"frames": joints, "cam_t": _fill_series(cam)}
+    if saw_hands:
+        pack["hands"] = {"l": _fill_series(hands_l), "r": _fill_series(hands_r)}
+        pack["face"] = _fill_series(face)
+    got = _fill_series(rots)
+    if got is not None:
+        pack["rots"] = got
+    return pack
+
+
+def body_frames(pose_data, person=0):
+    """[(22, 3) y-up joints per frame] for one person. Frames where the person isn't found are filled."""
+    return body_pack(pose_data, person)["frames"]
 
 
 def body_focal(pose_data, person=0):
@@ -117,9 +186,15 @@ class DeckSaveBodyMotion:
     CATEGORY = "ComfyChair"
 
     def save(self, mhr_pose_data, fps, person, filename_prefix):
-        frames = body_frames(mhr_pose_data, int(person))
-        data = {"fps": float(fps), "frames": [[[round(float(c), 4) for c in p] for p in f] for f in frames],
-                "source": "sam3d-body"}
+        pack = body_pack(mhr_pose_data, int(person))
+        rnd = lambda a: [[[round(float(c), 4) for c in p] for p in f] for f in a]
+        data = {"fps": float(fps), "frames": rnd(pack["frames"]), "source": "sam3d-body",
+                "cam_t": [[round(float(c), 4) for c in t] for t in pack["cam_t"]]}
+        if pack.get("hands"):
+            data["hands"] = {s: rnd(pack["hands"][s]) for s in ("l", "r")}
+            data["face"] = rnd(pack["face"])
+        if pack.get("rots") is not None:
+            data["rots"] = [[round(float(c), 4) for c in r] for r in pack["rots"]]
         focal = body_focal(mhr_pose_data, int(person))
         if focal:   # (the lens SAM 3D Body assumed, in pixels: the 3D tab's mocap camera uses it)
             data["focal"] = round(focal, 2)

@@ -14,6 +14,7 @@ import { addPicture as addCharPicture, castSection, characterById, characterSect
 import { TALK_HINT, TALK_TPL } from './talk.js';
 import { castLines, dialogueLines, findCharacter, mentioned, packPictures, pictureTag, plain, refPicture, speakerOf, viewLabel, VIEWS as LOOK_VIEWS, wantedView } from './cast.js';
 import { registerUndo } from './undo-dock.js';
+import { ANGLES, MOVES, SIZES } from './shot-words.js';
 
 // ---------------------------------------------------------------------------
 // story: a storyboard for writing a story down and sorting it out. A story is a title, notes (free writing or a
@@ -36,12 +37,6 @@ import { registerUndo } from './undo-dock.js';
 // timeline in order, each for its shot's length.
 // ---------------------------------------------------------------------------
 
-const SIZES = [['wide', 'Wide', 'wide shot'], ['medium', 'Medium', 'medium shot'], ['close', 'Close', 'close-up'], ['ecu', 'Extreme close', 'extreme close-up']];
-const ANGLES = [['eye', 'Eye level', 'eye level'], ['low', 'Low', 'low angle'], ['high', 'High', 'high angle'], ['over', 'Overhead', 'overhead shot'],
-  ['dutch', 'Dutch', 'dutch angle'], ['pov', 'POV', 'point of view shot'], ['ots', 'Over shoulder', 'over-the-shoulder shot'],
-  ['side', 'Profile', 'side view, in profile'], ['back', 'From behind', 'seen from behind']];
-const MOVES = [['static', 'Static'], ['pan', 'Pan'], ['tilt', 'Tilt'], ['push', 'Push in'], ['pull', 'Pull back'], ['track', 'Track'],
-  ['handheld', 'Handheld'], ['crane', 'Crane'], ['zoom', 'Zoom']];
 const DURS = [1, 2, 3, 4, 5, 6, 8, 10];
 const STATUS = [['idea', 'Idea'], ['drafted', 'Drafted'], ['made', 'Made']];
 const ASPECTS = [['16:9', 16 / 9], ['2.39:1', 2.39], ['4:3', 4 / 3], ['1:1', 1], ['9:16', 9 / 16]];
@@ -255,7 +250,8 @@ function settle(s, g) {
     if (fresh.length && s.status === 'idea') s.status = 'drafted';
     const haveC = new Set(s.clips.filter((c) => c.gen === g.id).map((c) => c.index));
     const clips = g.outputs.map((o, index) => ({ o, index })).filter(({ o, index }) => o.kind === 'video' && !haveC.has(index))
-      .map(({ o, index }) => ({ id: uid(), gen: g.id, index, url: o.url }));
+      .map(({ o, index }) => ({ id: uid(), gen: g.id, index, url: o.url,
+        ...(g.template === 'h3 regenerate' ? { regen: true } : {}) }));
     s.clips.push(...clips);
     if (clips.length) { s.clip = clips[0].id; s.status = 'made'; }
   }
@@ -762,7 +758,12 @@ async function makeVideo(s, tt = null, extra = '') {
     toast(`Making the video (#${gens[0].id}): it lands on the shot`);
   } catch (e) { toast(e.message, true); }
 }
-const clipOf = (s) => s.clips.find((c) => c.id === s.clip) || s.clips[0] || null;
+// a shot's clip: the chosen one, or a finished take (a Regenerate) when the chosen one is still a draft
+const clipOf = (s) => {
+  const pick = s.clips.find((c) => c.id === s.clip);
+  if (pick?.regen) return pick;
+  return pick || s.clips.find((c) => c.regen) || s.clips[0] || null;
+};
 function playClip(c) {
   openSheet(h('h3', {}, `Clip #${c.gen}`), h('div', { class: 'media-big' }, h('video', { src: c.url, controls: true, autoplay: true, loop: true, playsInline: true })));
 }
@@ -861,19 +862,42 @@ function refsField(s, t) {
 const toggleBtn = (label, on, set) => h('button', { type: 'button', class: `btn small${on ? ' on' : ''}`, 'aria-pressed': String(!!on), onclick: () => set(!on) }, label);
 
 // ---- the whole story at once ----
+// Every shot's clip drawn again at 1080P with Open-H3-Regenerate's refiner LoRA; the finished clips land as each
+// shot's chosen clip when they end (settle marks them regen), so Shots to video takes them over the drafts.
+async function finishTakes() {
+  const list = allShots().map((s) => ({ s, c: clipOf(s) })).filter((x) => x.c && x.c.gen != null && !x.c.regen);
+  if (!list.length) return toast('No shot has a clip yet', true);
+  let info;
+  try { info = await api('/api/h3/regen', { busy: false }); } catch (e) { return toast(e.message, true); }
+  if (!info.available) return toast(info.reason || 'Regenerate needs its refiner LoRA in models/loras', true);
+  const lora = info.loras[0].name;
+  let n = 0;
+  for (const { s, c } of list) {
+    try {
+      const run = await api('/api/h3/upscale', { method: 'POST', busy: false,
+        body: { generation: c.gen, index: c.index ?? 0, scale: 1.5, strength: 'strong',
+                regen: { quality: 'standard', lora, target: '1080p' } } });
+      S.history.set(run.id, run);
+      s.vpending = [...(s.vpending || []), run.id];
+      n++;
+    } catch (e) { toast(`#${c.gen}: ${e.message}`, true); }
+  }
+  changed();
+  if (n) toast(`${n} shot${n === 1 ? '' : 's'} finishing at 1080P`);
+}
+
 async function shotsToVideo() {
   const list = [];
   P.scenes.forEach((sc, si) => sc.shots.forEach((s, i) => { const f = chosen(s), c = clipOf(s); if (f || c) list.push({ s, f, c, n: `${si + 1}.${i + 1}`, sc }); }));
   if (!list.length) return toast('No shot has a frame yet', true);
   const missing = allShots().length - list.length;
   try {
-    const { addToTimeline } = await import('./video.js');
+    const { layOnTimeline } = await import('./video.js');
     switchTab('video');
-    for (const { s, f, c, n, sc } of list) {
-      if (c) { await addToTimeline({ kind: 'video', src: { generation: c.gen, index: c.index }, url: c.url, label: `${n}${sc.slug ? ` ${sc.slug}` : ''}` }); continue; }
-      await addToTimeline({ kind: 'image', src: f.input ? { input: f.input } : { generation: f.gen, index: f.index }, url: frameUrl(f),
-        thumb: frameThumb(f, 160), label: `${n}${sc.slug ? ` ${sc.slug}` : ''}`, len: +s.dur || 3 });
-    }
+    await layOnTimeline(list.map(({ s, f, c, n, sc }) => (c
+      ? { kind: 'video', src: { generation: c.gen, index: c.index }, url: c.url, label: `${n}${sc.slug ? ` ${sc.slug}` : ''}` }
+      : { kind: 'image', src: f.input ? { input: f.input } : { generation: f.gen, index: f.index }, url: frameUrl(f),
+        thumb: frameThumb(f, 160), label: `${n}${sc.slug ? ` ${sc.slug}` : ''}`, len: +s.dur || 3 })));
     toast(`${list.length} shot${list.length === 1 ? '' : 's'} on the Video timeline (${fmtSecs(secs(list.map((x) => x.s)))})${missing ? `; ${missing} without a frame left out` : ''}`);
   } catch (e) { toast(e.message, true); }
 }
@@ -1139,6 +1163,7 @@ function renderBar() {
     seg(VIEWS.map(([v, ic, l]) => [v, [icon(ic), h('span', { class: 'st-bar-lbl' }, l)], l]), U.view, (v) => { U.view = v; store.set('deck.story.view', v); renderStage(); renderPanel(); }),
     barBtn('plus', 'Scene', () => addScene(), 'A new scene at the end'),
     barBtn('video', 'Shots to video', shotsToVideo, 'Every shot\'s clip, or its chosen frame for its length, on the Video tab\'s timeline in order'),
+    barBtn('sparkle', 'Finish takes', finishTakes, 'Draw every shot\'s clip again at 1080P with Open-H3-Regenerate (its refiner LoRA in models/loras)'),
     barBtn('copy', 'Copy as text', copyText, 'The outline as plain text'),
     h('span', { class: 'timecode' }, `${P.scenes.length} sc · ${n} shots · ${framed}/${n} framed · ${fmtSecs(secs(allShots()))}`));
 }
@@ -1304,6 +1329,22 @@ export function wireStory() {
       changed();
     } else if (shown()) setTimeout(() => { renderStage(); renderPanel(); }, 0);
   });
+}
+
+// shots from the 3D tab: one Story shot each, on the last scene (a blank first shot is replaced)
+export function addBoardShots(rows) {
+  let sc = P.scenes[P.scenes.length - 1];
+  if (!sc) { sc = newScene(); sc.shots = []; P.scenes.push(sc); }
+  const only = sc.shots[0];
+  if (sc.shots.length === 1 && only && !only.what && !only.action && !only.frames.length && !only.size) sc.shots = [];
+  for (const r of rows) {
+    const s = newShot({ size: r.size || '', angle: r.angle || '', move: r.move || '', dur: Math.max(1, Math.round(r.dur || 3)), what: r.what || '', action: r.action || '' });
+    if (r.frame) { const fr = { id: uid(), input: r.frame }; s.frames.push(fr); s.pick = fr.id; }
+    sc.shots.push(s);
+  }
+  if (!sc.shots.length) sc.shots.push(newShot());
+  U.sel = sc.shots[sc.shots.length - 1]?.id || null;
+  changed();
 }
 
 // for the headless UI checks (dev/): the live state

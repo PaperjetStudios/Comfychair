@@ -178,10 +178,11 @@ still lists; it fails when run. You only need the files of the templates you use
 | [ComfyUI-Video-Depth-Anything](https://github.com/yuvraj108c/ComfyUI-Video-Depth-Anything) | `deck-depth-image`, `deck-depth-video` (patched, see below) |
 | [ComfyUI-HY-Motion1](https://github.com/jtydhr88/ComfyUI-HY-Motion1) | `deck-motion-text` |
 | [ComfyUI_ProPainter_Nodes](https://github.com/daniabib/ComfyUI_ProPainter_Nodes) | VFX logo removal, Quality (patched, see below) |
+| [ComfyUI-UniRig](https://github.com/PozzettiAndrea/ComfyUI-UniRig) | auto-rig: `deck-autorig-human` (Make It Animatable) and `-any` (UniRig); its own pixi env with a bundled Blender (`install.py`), and it downloads the checkpoints on first use |
 | [Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler) | H3 upscale (`POST /api/h3/upscale`) |
 | [Veda-on-ComfyUI](https://github.com/veda-sparse/Veda-on-ComfyUI) | optional Veda sparse attention for H3 (Advanced) |
 | [comfyui-krea2edit](https://github.com/lbouaraba/comfyui-krea2edit) (2.0+) | `deck-krea2-edit`, `deck-krea2-identity` |
-| `comfy_nodes/deck_*` (this repo) | face crop, pose smoothing, motion save, TAPNext++: symlink each into `custom_nodes` |
+| `comfy_nodes/deck_*` (this repo) | face crop, pose smoothing, motion save, TAPNext++, rig save: symlink each into `custom_nodes` |
 
 Three packs carry local fixes, each marked `(ComfyChair patch)`; an update or reinstall drops them, so grep for the
 marker afterwards and re-apply:
@@ -234,6 +235,7 @@ IC-LoRAs, each for one template:
 | `loras/h3` | `minimax_h3_turbo_v4_step600_pruned_comfyui.safetensors` (`deck-h3-i2v`, `deck-h3-flf2v`) | 592 MB |
 | `controlnet` | `minimax_h3_fun_controlnet_union_pruned_int8_convrot.safetensors` (`deck-h3-ctrl2v`, `deck-h3-drive*`) | 2.2 GB |
 | `latent_upscale_models` | `minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors` (H3 upscale) | 659 MB |
+| `loras` | `minimax_h3_open_regenerate_2k_refiner_rank_384_bf16.safetensors` (Regenerate; refiner only, keeps the turbo LoRA) | 5.6 GB |
 | `veda` | `minimax_h3_r2va_veda_preview_fp8.safetensors`, `minimax_h3_t2va_veda_8nfe_600step_preview_fp8.safetensors` (optional) | 263 MB each |
 | `vae_approx` | `taeh3-comfy` (optional, sharper previews) | |
 
@@ -290,6 +292,15 @@ IC-LoRAs, each for one template:
 | `deck-sam3-video-mask` | `sam3` | `sam3.safetensors` | |
 | `deck-motion-text` | `HY-Motion` | `HY-Motion-1.0-Lite` and `ckpts/Qwen3-8B` (the pack's layout) | |
 | 3D tab, Photo in 3D | `geometry_estimation` | `moge_3_vitl_fp16.safetensors` (from `Comfy-Org/MoGe`) | |
+| `deck-3d-object` | `diffusion_models` | `pixal3d_int8_convrot.safetensors` | 5.2 GB |
+| `deck-3d-object-trellis` | `diffusion_models` | `trellis_2_int8_convrot.safetensors` | 4.9 GB |
+| both 3D object templates | `vae` | `trellis_2_shape_vae_bf16.safetensors` | 1.0 GB |
+| both (textures) | `vae` | `trellis_2_texture_vae_bf16.safetensors` | 904 MB |
+| both | `clip_vision` | `dino_v3_L_naf_fp32.safetensors` | 1.13 GB |
+| `deck-3d-object` (its FOV) | `geometry_estimation` | `moge_2_vitl_normal_fp16.safetensors` | 631 MB |
+| both (cut out) | `background_removal` | `birefnet.safetensors` | 424 MB |
+| `deck-autorig-human` | `mia` (the pack downloads) | `pose.pth`, `bw.pth`, `bw_normal.pth`, `joints.pth`, `joints_coarse.pth` | ~2.2 GB |
+| `deck-autorig-any` | `unirig` (the pack downloads) | its checkpoint | |
 | VFX tracking (TAPNext++) | `tapnet` | `tapnextpp_ckpt.pt` | 2.4 GB |
 | VFX logo removal | `propainter` (or the pack's `weights/`) | `ProPainter.pth`, `raft-things.pth`, `recurrent_flow_completion.pth` | |
 
@@ -444,12 +455,51 @@ a frame, Shift+←/→ to the start / end, ↑/↓ jump between keys). With **Au
 held until ◆ Key or the playhead moves, so you can look around without touching the keys. ↶ / ↷ (Ctrl+Z,
 Ctrl+Shift+Z) undo and redo (in the top bar).
 
+**Shots.** More than one camera, and the clip cuts between them. The **Shots** row on the key sheet is a block per
+cut, coloured by camera: **Cut here** (or ◆ while that row is selected) cuts to the camera you are editing at the
+playhead. While the clip plays, the view follows the shot list (**Cut** on the toolbar; **Cam** stays on the camera
+you are editing, which is also what a drag orbits). A render follows the cuts either way. **One take** is one video;
+**Each shot** is one video per shot, labelled Shot N. **Prompt from the shots** writes a line per cut in the same
+words as the Story tab (wide, close, low angle, the camera pushes in). Tap a chip to leave that shot out, hold it to
+edit the line. **To Story** adds one Story shot per cut, with a clay frame.
+
+**Objects from a photo.** **Use as → Make a 3D object** (or **+ Add → Object from photos…**) turns a picture into a
+textured model with Pixal3D. **From this photo only** reads the front view; **Make its views first** renders an orbit
+sheet of the object and takes its four sides (front, left, back, right) for a rounder model; **Pick…** takes pictures of
+your own from those sides. The mesh comes in as a model layer, fitted and standing on the floor in the middle of the
+scene. Its fields are **Cut out** (BiRefNet, on), **Detail** (sampling steps), **Texture** (off leaves the plain shape),
+**Seed** and **Texture resolution**. `deck-3d-object-trellis` does the same with TRELLIS.2, to compare.
+
+**Rigged models.** A model made from a photo, or an import, can be **rigged** as a person (the model layer's
+**🦴 Rig it as a person**): Make It Animatable gives it the posable figure's skeleton, and it then lands in the scene as a
+**rigged layer** that takes every pose, Pair, Move, IK, Hands, Face and mocap feature, and renders in depth and pose
+videos. Its bones are matched by name (Mixamo, Rigify) or by where they sit; the panel says how many follow and which
+joints are missing, and can re-map or turn it 180°. "Rig anything" (UniRig) is the general case for animals and props. If a joint gets no bone, the layer's panel lists
+it and lets you map one (or point a joint at another bone), and **Re-map the bones** starts over. ComfyUI reads its list of meshes when it starts:
+a model made in this session needs one ComfyUI restart before the rig can find it.
+
+**Skinned models.** A model rigged with UniRig — an animal, a prop — lands as a **skinned layer**, posed bone by bone:
+**Bones** in its panel picks a bone, three sliders turn it, and **Turn it** keeps that turn at the playhead (a key when the
+layer has keys; with Auto key off, ◆ Key keeps it). **Key every bone** keys the whole skeleton where it stands, so single
+bones can move from there; **Put it back** returns one bone to the model's bind pose. **Drag a bone dot** in the view and
+the chain up to that bone reaches for the pointer (the shoulder, elbow and wrist solve together), keyed at the playhead;
+let go to keep it. **Mirror the bones** turns the whole pose onto the other side (Left/Right bones swap, centre bones
+mirror in place) for both keys and the resting pose. **Name** renames a bone (and the keys it holds) in the model and the
+layer (the name is kept in the layer and put back when the file loads again), and **Forget this bone** drops that one
+bone's keys and resting turn, back to the model's bind pose. **Add a bone** and **Delete this bone** change the skeleton
+and weight the mesh again with the nearest four bones (a simple re-skin, not a heat-diffusion one: look at the result). Get one with **Rig anything** on a
+model layer, **Use as → Rig it as a thing**, or **Key its own bones** on an import that already has a skeleton.
+
+
 **Refining a render** (`deck-h3-refine`): **Use as → Refine with H3** on any clip (a splat camera move rendered as colour
 video, a 3D render) loads it into a template that encodes it into H3's latent, enlarges it with the H3 latent upscaler
 (**Upscale**, 1 keeps the size) and samples it again from part-way (**Strength**: Denoise and Steps), conditioned on the
 prompt and up to four **References** (the splat's source photo first). An optional **Depth video** of the same camera
 (the 3D tab's depth render) is resized to match and applied as H3's Fun ControlNet (**Depth hold**), so a stronger pass
 can clean up without moving the room. The clip is trimmed to H3's frame grid (17k+5 frames at 24 fps); no sound.
+**Regenerate** (off) adds the Open-H3-Regenerate refiner LoRA (**Regenerate LoRA**, after the turbo LoRA) and switches the
+sampler to its own **Standard** schedule (2 steps from 0.70), so **Strength** is ignored while it is on; leave the turbo
+LoRA off with a merged refiner, or on with the refiner-only file.
 **Real size**: the scene is in metres. Each object's settings show its **Real size** (height × width × depth).
 The person button on the view's bar puts a 1.8 m outline person beside what is selected, and the floor has
 faint metre marks; neither ever shows in a render. **Measure…** on an object: tap two points on it, then say
@@ -473,8 +523,20 @@ look and blink, mouth open, smile or frown, brows), **Moves** (one tap keys a wa
 jump, sit down, push-ups, wave… from the playhead), **Joints** (a body map and sliders) and **Place**
 (planted on the floor, the pivot the gizmo turns it around). A pose is keyed like anything else; the
 fingers are joints of their own (three per finger, a row per hand in the key sheet) and blend between keys.
+**Moves ▸ From video** copies a person's movement from a clip onto the figure. Clean-up is on: steadier
+joints, bone lengths held, feet planted. When the capture has hands and a face, those move the fingers and
+the head. **With its camera** keeps a body still while the camera pans; a camera that travels is not solved.
 **Render pose video** draws the posable people as OpenPose stick figures for a pose control video, with
 each hand's 21 points and the face's 68 (DWPose's layout; the face points follow the expression; either
+**Regenerate a take.** On a finished H3 run, **Upscale (H3)…** offers **Regenerate**: the Open-H3-Regenerate refiner
+LoRA draws the clip again at **1.5×** or **1080P**, in **Standard** (2 steps from 0.70) or **Enhanced** (from 0.80), and
+the clip's own sound goes back in, so speech stays in sync. It sharpens more than the plain upscale and holds faces
+better than Strong. The mode shows only when its LoRA is in `models/loras` — Kijai's refiner (5.6 GB) keeps the run's
+turbo LoRA; the 2 GB merged file needs a Hugging Face token. 2K needs a card over 24 GB; 1080P is the most this box
+should draw. Whole clips at once: on the **Board** select clips and tap **Finish**; in the **Story** bar **Finish takes**
+draws every shot's clip again, and the finished take becomes that shot's clip (**Shots to video** takes it over the
+draft). **Use as → Finish with H3** does the same for any clip — an LTX take, a scene render — loading it into
+`deck-h3-refine` with Regenerate already on.
 can be turned off under Render; **Render both** makes the depth and pose videos of the same shot). **Prompt from the poses** writes
 what each `<Subject N>` does, in order, to copy or add to the Generate prompt.
 **🖼 Photo in 3D…** (in + Add) turns a picture into a mesh with MoGe in ComfyUI (a model from

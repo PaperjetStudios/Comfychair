@@ -130,6 +130,9 @@ export function writeMove(cam, id, p, { f0, f1, ease, around = null }) {
     dropKeys(cam, (f) => f > f0 && f < f1);
     putKeys(cam, [{ f: f0, ...start, ease }, { f: f1, ...end }], CAM);
   }
+  let mark = null;   // the shot list prefers this over guessing the move (a zoom may not key position)
+  for (const list of Object.values(cam.chans || {})) { const k = list.find((x) => x.f === f0); if (k) { mark = k; break; } }
+  if (mark) mark.mv = id;
   return true;
 }
 

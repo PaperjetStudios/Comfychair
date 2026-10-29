@@ -89,4 +89,49 @@ assert.equal(F.shapeFor({ legs: 9 }).legs, F.shapeRange('legs')[1]);
 assert.deepEqual(F.shapeFor({ legs: 1, arms: NaN }), {});
 const hy = F.hipsHeight('man', { legs: 30 });
 assert.ok(Math.abs(hy - (0.95 + 0.86 * 0.09)) < 1e-9);
+// without hands or a face the keys are the 22-joint pose, and the head still copies the neck
+{
+  const bare = M.toKeys({ fps: 24, frames: [still, still] }, { x: 0, y: 0, z: 0, ry: 0, sy: 1, j: {}, m: {} }, { every: 1 });
+  const posed = M.localPose(M.worldTurns(still));
+  for (const n of Object.keys(posed)) assert.deepEqual(bare[0].j[n], posed[n], n);
+  assert.equal(bare[0].j.lindex1, undefined);
+  const W = M.worldTurns(still);
+  assert.ok(W.head.angleTo(W.neck) < 1e-8);
+}
+
+// the face aims the head: ears across, nose forward. A nose to the side yaws it.
+{
+  const face = [[0, 1.65, 0.12], [0.03, 1.68, 0.08], [-0.03, 1.68, 0.08], [0.08, 1.65, 0], [-0.08, 1.65, 0]];
+  const look = new THREE.Vector3(0, 0, 1).applyQuaternion(M.worldTurns(still, { face }).head);
+  assert.ok(look.z > 0.8 && Math.abs(look.x) < 0.3, `head looks along ${look.toArray()}`);
+  const yawed = [[0.12, 1.65, 0], [0.04, 1.68, 0.03], [0.04, 1.68, -0.03], [0, 1.65, -0.08], [0, 1.65, 0.08]];
+  const turned = M.worldTurns(still, { face: yawed }).head;
+  assert.ok(M.worldTurns(still).head.angleTo(turned) > 0.4, 'a turned face turns the head');
+}
+
+// a straight finger stays straight; bending the index curls that joint and turns the hand off the elbow
+{
+  const hand = (side, bend) => {
+    const sx = side === 'l' ? 1 : -1, H = [[0, 0, 0]];
+    for (let fi = 0; fi < 5; fi++) {
+      const x = sx * (fi - 2) * 0.02;
+      for (let k = 1; k <= 4; k++) H.push([x, -0.02 * k, 0]);
+    }
+    if (bend) { const o = 5, x = H[o][0]; H[o + 1] = [x, -0.04, 0]; H[o + 2] = [x, -0.04, 0.02]; H[o + 3] = [x, -0.04, 0.04]; }
+    return H;
+  };
+  const straight = M.fingerPose({ l: hand('l', false), r: hand('r', false) });
+  assert.ok(Math.abs(straight.lindex2[3]) > 0.99, `straight w ${straight.lindex2[3]}`);
+  const curled = M.fingerPose({ l: hand('l', true), r: hand('r', false) });
+  const deg = 2 * Math.acos(Math.min(1, Math.abs(curled.lindex2[3]))) * 180 / Math.PI;
+  assert.ok(deg > 20, `index curl ${deg.toFixed(1)}°`);
+  assert.ok(Math.abs(curled.lmiddle2[3]) > 0.99, 'the other fingers stay straight');
+  const W0 = M.worldTurns(still), W1 = M.worldTurns(still, { hands: { l: hand('l', true), r: hand('r', false) } });
+  assert.ok(W0.lhand.angleTo(W0.lelb) < 1e-8);
+  assert.ok(W1.lhand.angleTo(W1.lelb) > 0.05, 'the hand no longer copies the elbow');
+  const keyed = M.toKeys({ fps: 24, frames: [still, still], hands: { l: [hand('l', true), hand('l', true)], r: [hand('r', false), hand('r', false)] } },
+    { x: 0, y: 0, z: 0, ry: 0, sy: 1, j: {}, m: {} }, { every: 1 });
+  assert.ok(keyed[0].j.lindex2, 'finger keys are written');
+}
+
 console.log('motion ok');

@@ -263,6 +263,178 @@ async function importFiles(files) {
   }
 }
 
+// ---- a 3D object from photos (Pixal3D; TRELLIS.2 for comparing) -----------------------------
+// The templates save a GLB (dev/make_3d_object_templates.py builds them from ComfyUI's own workflow);
+// the sheet runs one and adds the mesh as a model layer.
+const OBJECT_TPL = 'deck-3d-object';
+const OBJECT_MULTI = 'deck-3d-object-multi';
+const SHEET_TPL = 'deck-h3-objectsheet';
+const SHEET_FRAMES = [4, 54, 96, 120];   // the sheet's orbit: front, side, back, other side
+
+// a model file already on the server (a run's GLB) as a model layer, fitted and standing on the floor
+// at the middle of the scene, the way an import lands
+export async function addModel(url, name = 'Model', { gen = null, index = 0 } = {}) {
+  const o = newObject('model', { x: 0, y: 0, z: 0 });
+  Object.assign(o, { name: String(name || 'Model').slice(0, 60), url, ext: extOf(url), gen, genIndex: index });
+  const raw = await loadModel(o);
+  const s = stand(raw);
+  o.fit = await fitOf(o, 'model', s.size, null);
+  o.base.sx = o.base.sy = o.base.sz = o.fit;
+  SC.objects.push(o);
+  save(); select(o.id);
+  toast(`${o.name} added: ${fmtLen(s.size.y * o.fit)} tall`);
+  return o;
+}
+
+// the picture field a group holds (Front, Back…), for the template's field keys
+async function objectValues(templateId, groups) {
+  const { template } = await import('./make.js');
+  const t = template(templateId);
+  if (!t) throw new Error(`Template ${templateId} isn't installed`);
+  if (t.error) throw new Error(t.error);
+  const values = {};
+  for (const [group, name] of Object.entries(groups)) {
+    if (!name) continue;
+    const f = t.fields.find((x) => x.kind === 'image' && x.group === group);
+    if (f) values[f.key] = name;
+  }
+  return { t, values };
+}
+
+async function objectRun(templateId, values, what) {
+  const { queueRun, waitGen } = await import('./make.js');
+  const [g] = await queueRun({ template: templateId, values });
+  toast(`${what}: queued as #${g.id}. It takes a while on the GPU.`);
+  const done = await waitGen(g.id);
+  return done?.outputs ? done : api(`/api/generations/${g.id}`, { busy: false });
+}
+
+const glbOf = (g) => (g?.outputs || []).find((o) => /\.glb$/i.test(o.filename));
+
+async function land(g, label) {
+  const out = glbOf(g);
+  if (!out) throw new Error('That run made no 3D model (a GLB)');
+  await addModel(out.url, label);
+}
+
+// one photo: the front view
+async function makeFromPhoto(name, label) {
+  try {
+    const { values } = await objectValues(OBJECT_TPL, { Front: name });
+    await land(await objectRun(OBJECT_TPL, values, 'The 3D object'), label);
+    closeSheet();
+  } catch (e) { toast(e.message, true); }
+}
+
+// the object sheet first (an orbit: front, side, back, other side), then the four views
+async function makeFromViews(name, label) {
+  try {
+    const { t, values } = await objectValues(SHEET_TPL, {});
+    const ref = t.fields.find((f) => f.kind === 'image' && f.group === 'References');
+    if (!ref) throw new Error('The object sheet has no picture field');
+    values[ref.key] = name;
+    const g = await objectRun(SHEET_TPL, values, 'Its views');
+    const out = (g.outputs || []).find((o) => o.kind === 'video');
+    if (!out) throw new Error('The sheet made no clip to take its views from');
+    const idx = g.outputs.indexOf(out), views = [];
+    for (const f of SHEET_FRAMES) {
+      views.push((await api(`/api/generations/${g.id}/to-input`, { method: 'POST', body: { index: idx, frame: f } })).name);
+    }
+    // (the sheet turns to the character's left first: side = left, other side = right)
+    const { values: mv } = await objectValues(OBJECT_MULTI, { Front: views[0], Left: views[1], Back: views[2], Right: views[3] });
+    await land(await objectRun(OBJECT_MULTI, mv, 'The 3D object'), label);
+    closeSheet();
+  } catch (e) { toast(e.message, true); }
+}
+
+// the other views picked from the inputs
+async function makeFromPicked(picks, label) {
+  try {
+    const { values } = await objectValues(OBJECT_MULTI, picks);
+    await land(await objectRun(OBJECT_MULTI, values, 'The 3D object'), label);
+    closeSheet();
+  } catch (e) { toast(e.message, true); }
+}
+
+// an imported model with its own skeleton, keyed bone by bone (no figure)
+async function useOwnSkin(o) {
+  const { addSkinned } = await import('./scene-skin.js');
+  try {
+    const made = await addSkinned(o.url, o.name, { gen: o.gen, index: o.genIndex || 0 });
+    toast(`${made.name}: key its bones in the panel`);
+  } catch (e) { toast(e.message, true); }
+}
+
+// an imported model that already has a skeleton (Mixamo, an FBX from UniRig): drive its bones directly
+async function useOwnRig(o) {
+  const { addRigged } = await import('./scene-rig.js');
+  try {
+    const made = await addRigged(o.url, o.name, { gen: o.gen, index: o.genIndex || 0 });
+    toast(`${made.name}: its own skeleton drives it now`);
+  } catch (e) { toast(e.message, true); }
+}
+
+// Rig a run's mesh: the mesh goes into ComfyUI's input folder, an auto-rig template (Make It Animatable
+// for people, UniRig for anything else) returns a skinned model, and that becomes a rigged layer that
+// takes the figure's poses.
+export async function rigRun(generation, index, name, template = 'deck-autorig-human', { skinned = false } = {}) {
+  const { template: tpl2, queueRun, waitGen } = await import('./make.js');
+  const t = tpl2(template);
+  if (!t) return toast(`Rigging needs the UniRig nodes (ComfyUI-UniRig) and the ${template} template`, true);
+  const up = await api('/api/scene/mesh', { method: 'POST', busy: 'Sending the model to ComfyUI…',
+    body: { generation, index } });
+  const f = t.fields.find((x) => x.input === 'file_path');
+  if (f && Array.isArray(f.options) && f.options.length && !f.options.includes(up.file_path)) {
+    toast('ComfyUI built its mesh list at startup: restart ComfyUI once, then rig it again', true);
+    return null;
+  }
+  const [g] = await queueRun({ template, values: f ? { [f.key]: up.file_path } : {} });
+  toast(`${name || 'The model'}: rigging queued as #${g.id}. It takes a while.`);
+  const done = await waitGen(g.id);
+  const file = (done.outputs || []).find((x) => /\.(fbx|glb)$/i.test(x.filename));
+  if (!file) throw new Error('The rig made no model file');
+  if (skinned) {
+    const { addSkinned } = await import('./scene-skin.js');
+    return addSkinned(file.url, name || 'Skinned', { gen: done.id });
+  }
+  const { addRigged } = await import('./scene-rig.js');
+  return addRigged(file.url, name || 'Rigged', { gen: done.id });
+}
+
+export async function rigModel(o, template, opts = {}) {
+  if (!o || o.type !== 'model') return toast('Pick a model layer first', true);
+  if (o.gen == null) return toast('Rig a model that came from a run (or made from a photo)', true);
+  try { await rigRun(o.gen, o.genIndex || 0, o.name, template, opts); }
+  catch (e) { toast(e.message, true); }
+}
+
+// the sheet: one photo, or its other views made or picked
+export function openObjectSheet(name, label = '') {
+  const picks = { Front: name, Back: null, Left: null, Right: null };
+  const pick = (role) => {
+    closeSheet();
+    C.openImagePicker({ title: `The ${role.toLowerCase()} view`, onPick: (n) => { picks[role] = n; openObjectSheet(name, label); } });
+  };
+  const n = Object.values(picks).filter(Boolean).length;
+  openSheet(h('h3', {}, 'Make a 3D object'),
+    hint(label ? `From ${label}` : 'From a picture'),
+    section('One photo', null,
+      button('From this photo only', () => makeFromPhoto(picks.Front, label || picks.Front), { cls: 'primary',
+        title: 'Pixal3D makes a model from the front view alone (quickest)' }),
+      help('Pixal3D turns the picture into a textured GLB and adds it to the scene, standing on the floor at the middle.')),
+    section('Its other views', null,
+      ...['Back', 'Left', 'Right'].map((role) => h('div', { class: 'row' },
+        h('span', { class: 'grow' }, role, h('span', { class: 'hint' }, picks[role] ? ` · ${picks[role]}` : '')),
+        button('Pick…', () => pick(role), { cls: 'small' }))),
+      h('div', { class: 'row wrap' },
+        button('Make its views first', () => makeFromViews(picks.Front, label || picks.Front),
+          { title: 'An orbit sheet of the object (front, side, back, other side), then a model from those four views' }),
+        button(`Make it from ${n} view${n === 1 ? '' : 's'}`, () => makeFromPicked(picks, label || picks.Front),
+          { disabled: n < 2, cls: n < 2 ? '' : 'primary' })),
+      help('Four views 90° apart, the object the same size in each, on a plain background, work best. The sheet makes them from one photo; or pick photos of your own.')),
+    actions(button('Cancel', closeSheet)));
+}
+
 // ---- scene templates ----------------------------------------------------------------------
 // Built-in ones (scene-library.js) and the user's own: saved in the library for every project (the
 // one place a scene is kept outside the project folder, since a template is meant to be reused).
@@ -317,6 +489,15 @@ function itemSection(o) {
   return section(o.type === 'splat' ? 'Imported splat' : 'Imported model', null,
     hint(`${o.file || o.name}${o.fit && o.fit !== 1 ? ` · fitted ×${o.fit}` : ''}`),
     o.type === 'model' ? toggle('Plain clay look (ignore its colours and textures)', o.clay, (on) => { o.clay = on; applyClay(R.meshes.get(o.id), o.clay); save(); draw(); }) : null,
+    o.type === 'model' ? h('div', { class: 'row wrap' },
+      button('🦴 Rig it as a person', () => rigModel(o), { cls: 'small',
+        title: 'Make It Animatable gives it the figure\'s skeleton, so poses, moves and mocap drive it' }),
+      button('Use its own skeleton', () => useOwnRig(o), { cls: 'small',
+        title: 'An import that already has bones (Mixamo, UniRig) needs no rigging run: the figure drives those bones' }),
+      button('Rig anything', () => rigModel(o, 'deck-autorig-any', { skinned: true }), { cls: 'small',
+        title: 'UniRig: a skeleton for an animal or a prop; its bones are then keyed in the Bones panel' }),
+      button('Key its own bones', () => useOwnSkin(o), { cls: 'small',
+        title: 'An import that already has a skeleton: no rigging run, key its bones directly' })) : null,
     o.type === 'splat' ? toggle('Upside down (turn it over: many splat files are y-down)', o.flip, (on) => { set('flip', on); R.meshes.get(o.id)?.userData.splat?.fit(); draw(); }) : null,
     o.type === 'splat' && o.cam ? h('div', { class: 'row wrap' },
       button('🎥 Camera to the photo\'s view', () => { lookThrough(o); changed(); }),

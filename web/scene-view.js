@@ -7,7 +7,7 @@ import { $, api, busy as busyBar, canvasFont, clone, closeSheet, h, store, toast
 import { gzChip, smoothGizmo, snap3, snapMenu3 } from './gizmo.js';
 import { ORIENTS, centrePoint, follow, frameQuat, orientOf, relQuat, spaceOf } from './gizmo-orient.js';
 import {
-  C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, WP, current, frames, holdStart, hooks, pathSig, makers, namesFor, newObject, newRoom, pivotOf, sample,
+  C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, WP, current, frames, holdStart, hooks, liveCam, pathSig, makers, namesFor, newObject, newRoom, pivotOf, sample,
   sameTab, save, selItem, setActiveCam, setSC, write
 } from './scene-data.js';
 import { letGo } from './scene-export.js';
@@ -110,18 +110,21 @@ export function setup() {
   camera.layers.enable(1);  // layer 1: a figure's joint dots (picked on their own, never rendered out)
   scene.add(ikTarget, pivot, camProxy);
   R.orient = orientOf(store.get('deck.scene.orient', 'world'));   // the gizmo's axes (this device's choice)
+  R.viewCut = store.get('deck.scene.viewcut', true) !== false;   // the picture follows the cuts, unless you are editing a camera
+  R.shotFmt = store.get('deck.scene.shotfmt', 'h3') === 'ltx' ? 'ltx' : 'h3';
 
   controls = new OrbitControls(camera, canvas);
   controls.enableDamping = false;
   // (orbiting aims the camera level: the roll goes back on). While it plays, the orbit is held over the camera's keys.
   controls.addEventListener('start', () => holdStart('orbit'));
   controls.addEventListener('change', () => {
-    if (R.applying) return;
+    if (R.applying || shownCam(R.f) !== SC.camera) return;   // a cut's camera is only looked through: dragging it does not move the one you edit
     applyRoll(camera, current(SC.camera, CAM).roll);
     if (R.playing) write(SC.camera, CAM, readCamera());
     followView(); draw();
   });
   controls.addEventListener('end', () => {
+    if (shownCam(R.f) !== SC.camera) { letGo('orbit'); return; }
     const c = readCamera(), was = current(SC.camera, CAM);
     if (CAM.some((n) => Math.abs(c[n] - was[n]) >= 1e-6)) {  // (a tap, not a move: no key)
       write(SC.camera, CAM, c);  // with auto key off on an animated camera, only held (see TEMP)
@@ -168,13 +171,53 @@ export function setup() {
   // object again switches the gizmo between Move, Rotate and Scale. On a selected figure, a tap on
   // a joint dot picks the joint; a tap on its body goes back to the whole figure.
   let down = null;
-  canvas.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, onGizmo: gizmo.dragging || gizmo.axis != null }; });
+  // a bone dot under the pointer starts a reach: a camera-facing plane through the bone, the orbit held
+  const BDRAG = { on: false, id: null, bone: null, pid: null, plane: new THREE.Plane(), p: new THREE.Vector3() };
+  function planeHit(e) {
+    const r = canvas.getBoundingClientRect();
+    ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), activeCamera());
+    return ray.ray.intersectPlane(BDRAG.plane, BDRAG.p);
+  }
+  function boneDragEnd() {
+    if (!BDRAG.on) return;
+    BDRAG.on = false;
+    controls.enabled = true;
+    boneDrag?.end(BDRAG.id, BDRAG.bone);
+    holdEnd('bonedrag');
+  }
+  canvas.addEventListener('pointerdown', (e) => {
+    const bone = !HAND.on && (e.button === 0 || e.pointerType !== 'mouse') && !gizmo.dragging && gizmo.axis == null ? boneDotAt(e) : null;
+    const dot = bone && (R.meshes.get(R.sel)?.userData.dots || []).find((x) => x.userData.joint === bone);
+    if (dot) {
+      const w = dot.getWorldPosition(new THREE.Vector3());
+      BDRAG.plane.setFromNormalAndCoplanarPoint(activeCamera().getWorldDirection(new THREE.Vector3()).negate(), w);
+      Object.assign(BDRAG, { on: true, id: R.sel, bone, pid: e.pointerId });
+      controls.enabled = false;
+      holdStart('bonedrag');
+      bonePick?.(R.sel, bone);
+      down = null;
+      return;
+    }
+    down = { x: e.clientX, y: e.clientY, onGizmo: gizmo.dragging || gizmo.axis != null };
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!BDRAG.on) return;
+    const p = planeHit(e);
+    if (p) boneDrag?.move(BDRAG.id, BDRAG.bone, p);
+  });
+  canvas.addEventListener('pointercancel', boneDragEnd);
+  // letting go outside the canvas (or the window losing the pointer) ends the reach too, or the orbit stays off
+  window.addEventListener('pointerup', (e) => { if (BDRAG.on && e.pointerId === BDRAG.pid) boneDragEnd(); });
+  window.addEventListener('pointercancel', (e) => { if (BDRAG.on && e.pointerId === BDRAG.pid) boneDragEnd(); });
   canvas.addEventListener('pointerup', (e) => {
+    if (BDRAG.on) { boneDragEnd(); down = null; return; }
     if (HAND.on) { down = null; return; }   // (Hand mode keeps the figure: a tap doesn't change what's selected)
     if (!down || down.onGizmo || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down = null; return; }
     down = null;
     const joint = jointAt(e);
     if (joint) return selectJoint(joint);
+    const bone = boneDotAt(e);
+    if (bone) { bonePick?.(R.sel, bone); return; }
     const other = otherCamAt(e);
     if (other) { setActiveCam(other); R.sel = null; changed(); toast(`${other.name} is active`); return; }
     const id = hitAt(e);
@@ -301,6 +344,12 @@ export function rebuildRoom() {
 // draw is for (false: the view; else a render's kind)
 export const LOADERS = {};
 export const passHooks = [];
+// a skinned model's bone dots are picked here; scene.js hands the layer and bone to scene-skin.js
+let bonePick = null;
+export const setBonePick = (fn) => { bonePick = fn; };
+// ...and dragging one reaches for the pointer (scene-skin.js solves the chain with web/ik.js)
+let boneDrag = null;
+export const setBoneDrag = (h) => { boneDrag = h; };
 
 // a layer's three.js object: a mesh, a figure's rig (userData.rig, its root group), or a group the
 // photo's mesh loads into
@@ -321,7 +370,7 @@ function makeObject(o) {
 }
 export function paint(m, on) {  // a photo keeps its picture
   if (m.userData.paint) return m.userData.paint(on);   // (an object layer keeps its own colour)
-  if (m.userData.rig) for (const p of m.userData.rig.meshes) p.material = on ? figSel : figClay;
+  if (m.userData.rig && !m.userData.skin) for (const p of m.userData.rig.meshes) p.material = on ? figSel : figClay;
   else if (m.isMesh) m.material = on ? claySel : clay;
 }
 
@@ -605,11 +654,30 @@ export function pose(f) {
     if (m.userData.rig) { FIGURE.setShape(m.userData.rig, o.shape, o.anatomy); FIGURE.applyPose(m.userData.rig, v.j, stepped(o, v.m, f), o.ground); FIGURE.setHidden(m.userData.rig, o.hide); }
     m.userData.atFrame?.(f);   // (a footage layer shows its frame, scene-track.js)
   }
-  putCamera(current(SC.camera, CAM, f));
+  // the director view's frustum stays the camera you edit; a render, and the shot view, follow the cuts
+  const camItem = R.free && !R.real ? SC.camera : shownCam(f);
+  putCamera(current(camItem, CAM, f));
+  if (!R.real) syncShotOrbit();
   if (gizmo.dragging || smooth?.settling()) return;   // (a held handle keeps its own place)
   if (gizmo.object === ikTarget) placeIkTarget();
   if (gizmo.object === pivot) placePivot();
   if (gizmo.object === camProxy) placeCamProxy();
+}
+// editing a camera: Camera mode, or the camera layer selected (not while it plays, and not the Shots row)
+function editingCamera() {
+  if (R.playing || R.real || R.sel === 'cuts') return false;
+  return modeOf().key === 'camera' || R.sel == null;
+}
+// the camera the picture is drawn through. Renders always follow the cuts. The Cut / Cam toggle
+// (R.viewCut) does too, unless you are editing a camera: then you see the one you edit.
+export function shownCam(f = R.f) {
+  if (R.real || (R.viewCut && !editingCamera())) return liveCam(f);
+  return SC.camera;
+}
+// orbit writes the camera you edit only while that camera is the one on show
+function syncShotOrbit() {
+  if (!controls || R.free) return;
+  if (!gizmo?.dragging) controls.enabled = shownCam(R.f) === SC.camera;
 }
 function putCamera(c) {
   R.applying = true;
@@ -641,6 +709,7 @@ export function draw(forRender = false) {
   for (const [id, m] of R.meshes) {
     for (const d of m.userData.rig?.dots || []) { d.visible = dots && id === R.sel && !HAND.on; d.material = d.userData.joint === R.joint ? dotSel : dotMat; }
     for (const d of m.userData.tips || []) { d.visible = dots && HAND.on && id === R.sel && d.userData.side === HAND.side; d.material = d.userData.finger === HAND.drag?.finger ? dotSel : dotMat; }
+    for (const d of m.userData.dots || []) { d.visible = dots && id === R.sel; d.material = d.userData.joint === m.userData.pickedBone ? dotSel : dotMat; }
   }
   if (!forRender) {
     if (depth) { setRange(roughRange()); renderDepth(renderer, scene, R.free ? viewCam : camera, SPLAT_PASS.spark); }
@@ -703,12 +772,33 @@ function jointAt(e) {
   const front = ray.intersectObjects(visibleMeshes().filter((m) => m !== rig.root), true).find((x) => x.object.visible);
   return front && front.distance < best.depth ? null : best.joint;
 }
+// a skinned model's bone dot under the pointer (the same reach and depth test as a figure's joint dots)
+function boneDotAt(e) {
+  if (dotsOff()) return null;
+  const m = R.sel && R.meshes.get(R.sel);
+  const dots = m?.userData.dots;
+  if (!dots?.length) return null;
+  const r = canvas.getBoundingClientRect(), reach = e.pointerType === 'touch' ? 28 : 18;
+  let best = null;
+  for (const d of dots) {
+    const w = d.getWorldPosition(new THREE.Vector3()), v = w.clone().project(activeCamera());
+    if (v.z > 1) continue;
+    const dist = Math.hypot(r.left + (v.x + 1) / 2 * r.width - e.clientX, r.top + (1 - v.y) / 2 * r.height - e.clientY);
+    const depth = activeCamera().position.distanceTo(w);
+    if (dist < reach && (!best || depth < best.depth)) best = { joint: d.userData.joint, depth };
+  }
+  if (!best) return null;
+  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), activeCamera());
+  const front = ray.intersectObjects(visibleMeshes().filter((m2) => m2 !== m), true).find((x) => x.object.visible);
+  return front && front.distance < best.depth ? null : best.joint;
+}
 
 // ---- selection, layers ------------------------------------------------------------
 export function select(id) {
   if (HAND.on && id !== R.sel) handMode(null);
   if (id !== R.sel) tmpPivot = null;
-  R.sel = modeOf().select ? id : null; R.joint = null; refresh(); renderToolbar(); renderKeys(); renderPanel();
+  const allow = modeOf().select || id === 'cuts' || id == null;   // the Shots row can be picked in Camera mode too
+  R.sel = allow ? id : null; R.joint = null; refresh(); renderToolbar(); renderKeys(); renderPanel();
 }
 
 // ---- Hand mode: the view closes in on one hand of the selected figure (the free view, so the shot
@@ -838,7 +928,7 @@ export function setFree(on) {
   controls.enabled = !on; viewControls.enabled = !!on;
   gizmo.camera = on ? viewCam : camera;   // the handles are picked and sized from what is on show
   syncMeshes();   // (the camera gets its own gizmo in the director view)
-  if (R.free) pose(R.f);   // (puts the frustum where the camera is now)
+  pose(R.f);   // the frustum is the camera you edit; the shot view follows the cuts
   draw(); renderToolbar();
 }
 // aim the free view at a point from where

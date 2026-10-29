@@ -7,7 +7,7 @@ import * as THREE from './vendor/three.module.min.js';
 import { frameRanges } from './depth-range.js';
 import * as SCENE from './scene.js';   // (its layer types register when it loads; it is not initialised here, so no panel appears)
 import * as FIGURE from './figure.js';
-import { CAM, EVEN, applyOffset, applyRoll, FPS, OBJ, TYPES, framesFor, makers, namesFor, pathSig, sample, upgrade } from './scene-data.js';
+import { CAM, EVEN, applyOffset, applyRoll, FPS, OBJ, TYPES, framesFor, liveCam, makers, namesFor, pathSig, sample, shots, upgrade } from './scene-data.js';
 import { LOADERS, RANGE, depthMat, floorMat, geometries, photoScene, rangeMat, setRange, wallMat } from './scene-view.js';
 import { applyClay } from './scene-import.js';
 import { depthLook, renderDepth, splatDepths, splatMeshes } from './splat-depth.js';
@@ -145,7 +145,7 @@ export class Stage {
       if (m.userData.rig) { FIGURE.setShape(m.userData.rig, o.shape, o.anatomy); FIGURE.applyPose(m.userData.rig, v.j, this.stepped(o, v.m, f), o.ground); FIGURE.setHidden(m.userData.rig, o.hide); }
       m.userData.atFrame?.(f);
     }
-    const c = sample(this.sc.camera, CAM, f);
+    const c = sample(liveCam(f, this.sc), CAM, f);   // the cut at this frame, or the active camera when there are none
     this.camera.position.set(c.px, c.py, c.pz);
     this.camera.lookAt(c.tx, c.ty, c.tz);
     applyRoll(this.camera, c.roll);
@@ -240,7 +240,8 @@ export class Stage {
     gl.setRenderTarget(null); gl.setClearColor(0x000000, 1); rt.dispose();
     this.scene.background = bg; this.scene.overrideMaterial = over;
     const fps = this.sc.fps || 24;
-    const r = frameRanges(samples, { mode: this.sc.depthRange === 'clip' ? 'clip' : 'follow', window: Math.max(1, Math.round(fps / 2 / step)) });
+    const breaks = shots(this.sc).slice(1).map((s) => Math.round(s.f0 / step)).filter((i) => i > 0 && i < samples.length);
+    const r = frameRanges(samples, { mode: this.sc.depthRange === 'clip' ? 'clip' : 'follow', window: Math.max(1, Math.round(fps / 2 / step)), breaks });
     this.range = Array.from({ length: this.frames }, (_, f) => r[Math.min(r.length - 1, Math.round(f / step))]);
     return this.range;
   }

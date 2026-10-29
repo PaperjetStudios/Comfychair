@@ -104,7 +104,7 @@ export const nextKey = (chans, ch, f, dir = 1) => { const l = chans?.[ch] || [];
 
 // a figure's pose channels: the pose's name, a parameter, one joint's turn; the rest is where it stands
 export const isPoseCh = (ch) => ch === 'pn' || ch.startsWith('j.') || ch.startsWith('m.');
-export const kindOf = (o) => (!o ? 'cam' : o.type === 'figure' ? 'figure' : 'obj');  // photos and boxes share the OBJ values
+export const kindOf = (o) => (!o ? 'cam' : o.type === 'figure' || o.type === 'rigged' ? 'figure' : 'obj');  // photos and boxes share the OBJ values
 
 const num = (v, d = 0) => (Number.isFinite(v) ? v : d);
 const clampF = (f, n) => Math.max(0, Math.min(n - 1, Math.round(num(f))));

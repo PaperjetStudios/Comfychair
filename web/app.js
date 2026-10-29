@@ -19,6 +19,7 @@ import { B, closeGallery, pauseBoard, renderBoard } from './board.js';
 import { fullScreen, sideNav, wireSplitters } from './layout.js';
 import { loadPrefs, openPrefs } from './prefs.js';
 import { EDIT_PHRASES, IMAGE_PHRASES, VIDEO_PHRASES } from './phrases.js';
+import { stamp } from './shot-words.js';
 import { openDescribe, openImprove, tplTarget } from './prompthelp.js';
 import { wireUndoDock } from './undo-dock.js';
 import './world.js';   // the spaces (Make, Edit, View), travel between tools, a map of where you are
@@ -266,8 +267,7 @@ function nextShot(text) {
   const times = [...text.matchAll(/\bAt (\d+):(\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]) * 60 + Number(m[2]));
   const n = Math.max(...nums) + 1;
   const t = (times.length ? times[times.length - 1] : 0) + 3;
-  const stamp = `${String(Math.floor(t / 60)).padStart(2, '0')}:${(t % 60).toFixed(3).padStart(6, '0')}`;
-  return `↵[Shot ${n}] At ${stamp}, the camera cuts to §`;
+  return `↵[Shot ${n}] At ${stamp(t)}, the camera cuts to §`;
 }
 
 // Insert a phrase at the cursor; "§" in it marks where the cursor goes, else after the phrase.

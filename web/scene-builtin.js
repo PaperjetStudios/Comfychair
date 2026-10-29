@@ -1,5 +1,6 @@
 import { aimFree } from './scene-view.js';
 import { cameraPanel, editOut, editPanel, renderProps } from './scene-ui.js';
+import { shotProps } from './scene-shots.js';
 import { hint, section } from './ui.js';
 import { registerMode } from './scene-modes.js';
 
@@ -9,7 +10,7 @@ export function registerBuiltins() {
     frustum: true });   // (the director view draws the camera here too)
 
   registerMode({ key: 'camera', label: 'Camera', icon: '🎥', hint: 'Camera directing / animation mode: block out and animate the camera through the scene',
-    panel: cameraPanel, out: () => renderProps(), select: false, lanes: 'camera', frustum: true });
+    panel: cameraPanel, out: () => [shotProps(), renderProps()], select: false, lanes: 'camera', frustum: true });
 
   // an empty stage; the modelling tools plug in with addModeSection('create', build)
   registerMode({ key: 'create', label: 'Create object', icon: '⬢', hint: 'Create object mode: basic modelling for simple shapes only',

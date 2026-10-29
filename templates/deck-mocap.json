@@ -101,9 +101,12 @@
     "boxes",
     0
    ],
-   "run_hand_refinement": false,
+   "run_hand_refinement": true,
    "fov": 0.0,
    "batch_size": 32
+  },
+  "_meta": {
+   "title": "@5 Hands [run_hand_refinement]"
   }
  },
  "smooth": {
@@ -132,6 +135,9 @@
    "fps": 24.0,
    "person": 0,
    "filename_prefix": "deck/mocap"
+  },
+  "_meta": {
+   "title": "@6 Person [person]"
   }
  }
 }

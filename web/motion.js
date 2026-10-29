@@ -2,9 +2,10 @@
 // per frame in the SMPL / HumanML3D 22-joint order, in metres, y up, the body facing +Z with its left on
 // +X (the same frame as figure.js). Each figure joint's turn is rebuilt from where its bone points
 // (and, for arms and legs, which way the elbow or knee bends), so the source's T-pose rest and bone
-// lengths don't matter. Hands and the head keep no twist of their own (22 joints don't say).
+// lengths don't matter. With a capture's hands and face (MHR70), the head, the wrists and the fingers
+// get their own turn; without them the head copies the neck and the hands copy the elbows, as before.
 import * as THREE from './vendor/three.module.min.js';
-import { JOINTS, restOffsets, shapeFor } from './figure.js';
+import { FINGERS, JOINTS, mirrorQ, restOffsets, shapeFor } from './figure.js';
 import { basis as camBasis } from './track-math.js';
 
 export const SMPL22 = ['pelvis', 'lhip', 'rhip', 'spine1', 'lknee', 'rknee', 'spine2', 'lankle', 'rankle', 'spine3', 'ltoe', 'rtoe',
@@ -14,7 +15,7 @@ export const FPS_OUT = 24;
 const LEG = Math.abs(JOINTS.lknee[1][1]) + Math.abs(JOINTS.lfoot[1][1]);   // our hip to ankle, metres
 const HIP_Y = JOINTS.hips[1][1];
 
-const v3 = (a) => new THREE.Vector3(a[0], a[1], a[2]);
+const v3 = (a) => (a?.isVector3 ? a.clone() : new THREE.Vector3(a[0], a[1], a[2]));
 const sub = (a, b) => v3(a).sub(v3(b));
 
 // the turn taking rest axes (d0 along the bone, p0 a second direction) onto d, p
@@ -41,8 +42,21 @@ function bend(root, mid, end, fallback) {
 const UP = new THREE.Vector3(0, 1, 0), DOWN = new THREE.Vector3(0, -1, 0), FWD = new THREE.Vector3(0, 0, 1), BACK = new THREE.Vector3(0, 0, -1);
 const LEFT = new THREE.Vector3(1, 0, 0);
 
-// world turns of every figure joint for one frame of 22 points
-export function worldTurns(P) {
+// half of the twist about `axis` (the bone) moves onto the parent, so a turned hand rolls the forearm too
+function shareTwist(parent, child, axis) {
+  const ax = axis.clone().normalize();
+  if (!Number.isFinite(ax.x)) return;
+  const rel = parent.clone().invert().multiply(child);
+  const dot = rel.x * ax.x + rel.y * ax.y + rel.z * ax.z;
+  const tw = new THREE.Quaternion(ax.x * dot, ax.y * dot, ax.z * dot, rel.w);
+  if (tw.lengthSq() < 1e-8) return;
+  tw.normalize();
+  parent.multiply(tw.slerp(new THREE.Quaternion(), 0.5));
+}
+
+// world turns of every figure joint for one frame of 22 points.
+// face: [nose, leye, reye, lear, rear]. hands: {l, r} of 21 points, wrist then knuckle→tip per finger.
+export function worldTurns(P, { face = null, hands = null } = {}) {
   const W = {};
   // pelvis: left from the hip joints, up from the pelvis to the lower spine
   W.hips = aim(LEFT, UP, sub(P[I.lhip], P[I.rhip]), sub(P[I.spine1], P[I.pelvis]));
@@ -54,12 +68,24 @@ export function worldTurns(P) {
   const chestFwd = FWD.clone().applyQuaternion(W.chest);
   W.neck = aim(UP, FWD, sub(P[I.head], P[I.neck]), chestFwd);
   W.head = W.neck.clone();
+  if (face && face.length >= 5) {
+    const earL = sub(face[3], face[4]), nose = sub(face[0], v3(face[3]).add(v3(face[4])).multiplyScalar(0.5));
+    if (earL.length() > 1e-4 && nose.length() > 1e-4) W.head = aim(LEFT, FWD, earL, nose);
+  }
   for (const s of ['l', 'r']) {
     const sho = P[I[`${s}sho`]], elb = P[I[`${s}elb`]], wr = P[I[`${s}wrist`]];
     const armBend = bend(sho, elb, wr, BACK.clone().applyQuaternion(W.chest));   // elbows bend back (IK in figure.js)
     W[`${s}sho`] = aim(DOWN, BACK, sub(elb, sho), armBend);
     W[`${s}elb`] = aim(DOWN, BACK, sub(wr, elb), armBend);
     W[`${s}hand`] = W[`${s}elb`].clone();
+    const H = hands?.[s];
+    if (H && H.length >= 21) {
+      const along = sub(H[9], H[0]), across = sub(H[5], H[17]);
+      if (along.length() > 1e-4 && across.length() > 1e-4) {
+        W[`${s}hand`] = aim(DOWN, BACK, along, across);
+        shareTwist(W[`${s}elb`], W[`${s}hand`], sub(wr, elb));
+      }
+    }
     const hip = P[I[`${s}hip`]], knee = P[I[`${s}knee`]], ank = P[I[`${s}ankle`]], toe = P[I[`${s}toe`]];
     const legBend = bend(hip, knee, ank, FWD.clone().applyQuaternion(W.hips));     // knees bend forward
     W[`${s}hip`] = aim(DOWN, FWD, sub(knee, hip), legBend);
@@ -68,6 +94,41 @@ export function worldTurns(P) {
     W[`${s}foot`] = aim(FWD, UP, sub(toe, ank), shinUp);
   }
   return W;
+}
+
+// the angle between two bone directions, signed by which side of `palm` the bend falls on (degrees)
+function bendDeg(a, b, palm) {
+  const A = a.clone().normalize(), B = b.clone().normalize();
+  if (!Number.isFinite(A.x) || !Number.isFinite(B.x)) return 0;
+  const ang = Math.acos(THREE.MathUtils.clamp(A.dot(B), -1, 1)) * 180 / Math.PI;
+  const sign = Math.sign(new THREE.Vector3().crossVectors(A, B).dot(palm)) || 1;
+  return ang * sign;
+}
+
+// finger joints from a capture's hands ({l, r} of 21 points). Curl is +X, the same turns the Hands tab writes.
+// A straight finger is the identity. Old motion without hands leaves the fingers as they were.
+export function fingerPose(hands) {
+  const out = {};
+  for (const s of ['l', 'r']) {
+    const H = hands?.[s];
+    if (!H || H.length < 21) continue;
+    const wrist = v3(H[0]);
+    const along = sub(H[9], H[0]), across = sub(H[5], H[17]);
+    let palm = new THREE.Vector3().crossVectors(along, across);
+    if (palm.lengthSq() < 1e-8) palm.set(0, 0, s === 'l' ? -1 : 1);
+    palm.normalize();
+    FINGERS.forEach(([name], fi) => {
+      const o = 1 + fi * 4;
+      const chain = [wrist, v3(H[o]), v3(H[o + 1]), v3(H[o + 2]), v3(H[o + 3])];
+      for (let j = 0; j < 3; j++) {
+        const deg = bendDeg(chain[j + 1].clone().sub(chain[j]), chain[j + 2].clone().sub(chain[j + 1]), palm);
+        const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(deg * Math.PI / 180, 0, 0));
+        const arr = q.toArray().map((x) => Math.round(x * 1e5) / 1e5);
+        out[`${s}${name}${j + 1}`] = s === 'l' ? arr : mirrorQ(arr);
+      }
+    });
+  }
+  return out;
 }
 
 // world turns to each joint's own (local) turn, as [x, y, z, w]
@@ -98,16 +159,24 @@ export function resample(frames, fps) {
 // normalised it and says how (space: normalised = m · given + t). Put back through a camera per frame
 // (camAt(i): the scene camera's values px..tz, roll at 24 fps frame i), the body lands where that camera saw
 // it in the world: a shot that pans keeps a body that stands still standing still. Returns { fps: 24, frames }.
+function throughCam(p, M, t, eye, b) {
+  const q = [p[0] - t[0], p[1] - t[1], p[2] - t[2]];
+  const r = [0, 1, 2].map((j) => q[0] * M[0][j] + q[1] * M[1][j] + q[2] * M[2][j]);   // (M is a turn: its inverse is its transpose)
+  return [0, 1, 2].map((k) => eye[k] + r[0] * b.x[k] + r[1] * b.y[k] + r[2] * b.z[k]);
+}
 export function toWorld(motion, camAt) {
-  const frames = resample(motion.frames, motion.fps || 20), { m: M, t } = motion.space;
-  return { fps: FPS_OUT, frames: frames.map((P, i) => {
+  const fps = motion.fps || 20;
+  const frames = resample(motion.frames, fps), { m: M, t } = motion.space;
+  const side = (pts) => pts ? resample(pts, fps) : null;
+  const hl = side(motion.hands?.l), hr = side(motion.hands?.r), face = side(motion.face);
+  const camPts = (P, i) => {
     const c = camAt(i), eye = [c.px, c.py, c.pz], b = camBasis(eye, [c.tx, c.ty, c.tz], c.roll || 0);
-    return P.map((p) => {
-      const q = [p[0] - t[0], p[1] - t[1], p[2] - t[2]];
-      const r = [0, 1, 2].map((j) => q[0] * M[0][j] + q[1] * M[1][j] + q[2] * M[2][j]);   // (M is a turn: its inverse is its transpose)
-      return [0, 1, 2].map((k) => eye[k] + r[0] * b.x[k] + r[1] * b.y[k] + r[2] * b.z[k]);
-    });
-  }) };
+    return P.map((p) => throughCam(p, M, t, eye, b));
+  };
+  const out = { fps: FPS_OUT, frames: frames.map((P, i) => camPts(P, i)) };
+  if (hl && hr) out.hands = { l: hl.map(camPts), r: hr.map(camPts) };
+  if (face) out.face = face.map(camPts);
+  return out;
 }
 
 // motion { fps, frames: [[22 x [x,y,z]]...] } as figure keys from frame f0, every `every` frames.
@@ -118,8 +187,12 @@ export function toWorld(motion, camAt) {
 // scale: the clip's metres times this (instead of fit and the figure's size); hipY: where the figure's hips joint
 // stands above its root (a shaped figure's own; else the plain body's at its size).
 export function toKeys(motion, base, { f0 = 0, every = 2, maxF = Infinity, travel = true, rise = true, fit = true, scale = null, hipY = null } = {}) {
-  const frames = resample(motion.frames, motion.fps || 20);
+  const fpsIn = motion.fps || 20;
+  const frames = resample(motion.frames, fpsIn);
   if (!frames.length) return [];
+  const faces = motion.face ? resample(motion.face, fpsIn) : null;
+  const hl = motion.hands?.l ? resample(motion.hands.l, fpsIn) : null;
+  const hr = motion.hands?.r ? resample(motion.hands.r, fpsIn) : null;
   const s = scale ?? (fit ? LEG / (legLength(frames[0]) || LEG) : 1) * (base.sy || 1), hy = hipY ?? HIP_Y * (base.sy || 1);
   const yaw = THREE.MathUtils.degToRad(base.ry || 0), turn = new THREE.Quaternion().setFromAxisAngle(UP, yaw);
   const p0 = v3(frames[0][I.pelvis]);
@@ -129,9 +202,10 @@ export function toKeys(motion, base, { f0 = 0, every = 2, maxF = Infinity, trave
     if (f > maxF) break;
     if (i % every && i !== frames.length - 1) continue;
     const P = frames[i];
-    const W = worldTurns(P);   // (the figure's own ry turns these with it; only the path needs turning)
+    const hands = hl ? { l: hl[i], r: hr[i] } : null;
+    const W = worldTurns(P, { face: faces?.[i] || null, hands });   // (the figure's own ry turns these with it; only the path needs turning)
     const at = travel ? v3(P[I.pelvis]).sub(p0).setY(0).multiplyScalar(s).applyQuaternion(turn) : new THREE.Vector3();
-    keys.push({ ...base, f, j: localPose(W), x: base.x + at.x, z: base.z + at.z,
+    keys.push({ ...base, f, j: { ...localPose(W), ...(hands ? fingerPose(hands) : {}) }, x: base.x + at.x, z: base.z + at.z,
       y: rise ? P[I.pelvis][1] * s - hy : base.y || 0, ease: 'linear', m: {} });
   }
   return keys;

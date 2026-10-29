@@ -872,7 +872,7 @@ async def crop_input(body: dict = Body(...)):
 
 @app.post("/api/generations/{gid}/to-input")
 async def generation_to_input(gid: int, body: dict = Body(default={})):
-    """Send an output (or the first/last frame of a video) back to ComfyUI as an input image."""
+    """Send an output (or a frame of a video: "first", "last" or an index like 96) back to ComfyUI as an input image."""
     g = db.get_generation(gid)
     if not g or not g["outputs"]:
         raise HTTPException(404, "No outputs")
@@ -1160,6 +1160,20 @@ async def pose_find(body: dict = Body(...)):
     return await asyncio.to_thread(posefind.find, gens, src, trim, crop, poser, secs, clip_secs, measure)
 
 
+@app.get("/api/h3/regen")
+async def h3_regen_options():
+    """Whether Open-H3-Regenerate can run: its LoRAs in `models/loras` (and whether each has Turbo inside)."""
+    oi = await object_info_or_none()
+    if oi is None:
+        return {"available": False, "loras": [], "reason": "ComfyUI is offline"}
+    loras = h3upscale.regen_loras(oi)
+    if not loras:
+        return {"available": False, "loras": [],
+                "reason": "No Open-H3-Regenerate LoRA in models/loras: add the r128 merge (2 GB) or Kijai's refiner "
+                          "(5.9 GB) and restart ComfyUI"}
+    return {"available": True, "loras": loras, "reason": ""}
+
+
 @app.post("/api/h3/upscale")
 async def h3_upscale(body: dict = Body(...)):
     """A finished MiniMax H3 clip ({generation, index, scale, strength: light|medium|strong}) sampled again bigger, with the same run's prompt,
@@ -1186,10 +1200,24 @@ async def h3_upscale(body: dict = Body(...)):
     strength = h3upscale.STRENGTHS.get(str(body.get("strength") or "strong"))
     if strength is None:
         raise HTTPException(400, "Strength is light, medium or strong")
+    regen_in = body.get("regen") if isinstance(body.get("regen"), dict) else None
+    regen, size = None, None
+    if regen_in:
+        quality = str(regen_in.get("quality") or "standard")
+        if quality not in h3upscale.REGEN_SIGMAS:
+            raise HTTPException(400, "Regenerate's quality is standard or enhanced")
+        lora = str(regen_in.get("lora") or "")
+        hit = next((x for x in h3upscale.regen_loras(oi) if x["name"] == lora), None)
+        if not hit:
+            raise HTTPException(400, "Pick an Open-H3-Regenerate LoRA: none of those in models/loras was chosen")
+        regen = {"lora": hit["name"], "has_turbo": hit["has_turbo"], "quality": quality}
+        if str(regen_in.get("target") or "") == "1080p":
+            size = h3upscale.fit_1080p(info["width"], info["height"])
     folder = db.project_folder(g["project_id"])
     try:
         wf, (w, h) = h3upscale.build(wf0, str(path), info["width"], info["height"], scale,
-                                     f"{config.COMFY_INPUT_SUBFOLDER}/{folder}/h3up", info.get("fps") or 24, strength)
+                                     f"{config.COMFY_INPUT_SUBFOLDER}/{folder}/h3up", info.get("fps") or 24, strength,
+                                     regen=regen, size=size)
     except ValueError as e:
         raise HTTPException(400, str(e))
     try:
@@ -1197,9 +1225,9 @@ async def h3_upscale(body: dict = Body(...)):
     except ComfyError as e:
         raise HTTPException(400, str(e))
     params = {"source": {"generation": g["id"], "index": idx}, "scale": scale, "strength": body.get("strength") or "strong",
-              "frame": f"{w}×{h}",
+              "frame": f"{w}×{h}", "regen": ({"lora": regen["lora"], "quality": regen["quality"]} if regen else None),
               "from": f"{info['width']}×{info['height']}", "template": g["template"]}
-    gid = db.create_generation(g["project_id"], "h3 upscale", params, wf, res["prompt_id"],
+    gid = db.create_generation(g["project_id"], "h3 upscale" if not regen else "h3 regenerate", params, wf, res["prompt_id"],
                                {"generation": g["id"], "index": idx, "frame": None})
     await push_gen(gid)
     return db.get_generation(gid)
@@ -1471,21 +1499,35 @@ async def audio_lay(body: dict = Body(...)):
     return db.get_generation(gid)
 
 
+def _motion_clean(m, opts):
+    """Video mocap is cleaned unless the caller says otherwise. Feet are planted later, in the world
+    (the 3D tab asks again after a camera pan is undone), so a default clean here is steady + bone lengths."""
+    if opts is None and m.get("source") == "sam3d-body":
+        opts = {"smooth": True, "bones": True}
+    if not opts:
+        return m
+    return motion.apply_clean(m, opts)
+
+
 @app.post("/api/motion/file")
-async def motion_file(file: UploadFile = File(...)):
-    """A motion file (.npz / .json with 22+ joint positions per frame) as the 3D tab's motion (app/motion.py)."""
+async def motion_file(file: UploadFile = File(...), smooth: str = Form(""), bones: str = Form("")):
+    """A motion file (.npz / .json with 22+ joint positions per frame) as the 3D tab's motion (app/motion.py).
+    smooth and bones are "0" or "1"; left out, a video mocap is steadied and its bone lengths held."""
     data = await file.read()
     if len(data) > 64 * 1024 * 1024:
         raise HTTPException(400, "That motion file is too big")
     try:
-        return await asyncio.to_thread(motion.read, data, file.filename or "motion.npz")
+        m = await asyncio.to_thread(motion.read, data, file.filename or "motion.npz")
+        opts = None if smooth == "" and bones == "" else {"smooth": smooth == "1", "bones": bones == "1"}
+        return await asyncio.to_thread(_motion_clean, m, opts)
     except Exception as e:
         raise HTTPException(400, f"Couldn't read that motion: {e}")
 
 
 @app.post("/api/motion/from")
 async def motion_from(body: dict = Body(...)):
-    """A generation's motion output ({generation, index}): text-to-motion and mocap templates save .npz/.json."""
+    """A generation's motion output ({generation, index}): text-to-motion and mocap templates save .npz/.json.
+    clean: {smooth, bones} (feet and ground are /api/motion/clean, after the body is in the world)."""
     g = db.get_generation(int(body.get("generation", -1)))
     if not g:
         raise HTTPException(404, "No such generation")
@@ -1495,9 +1537,23 @@ async def motion_from(body: dict = Body(...)):
     if not o:
         raise HTTPException(400, "That run has no motion file")
     try:
-        return await asyncio.to_thread(motion.read, output_file(g, o).read_bytes(), o["filename"])
+        m = await asyncio.to_thread(motion.read, output_file(g, o).read_bytes(), o["filename"])
+        return await asyncio.to_thread(_motion_clean, m, body.get("clean") if "clean" in body else None)
     except Exception as e:
         raise HTTPException(400, f"Couldn't read that motion: {e}")
+
+
+@app.post("/api/motion/clean")
+async def motion_clean(body: dict = Body(...)):
+    """Plant feet and level the floor on frames that are already in the world ({fps, frames, clean, hands?, face?})."""
+    frames = body.get("frames")
+    if not isinstance(frames, list) or len(frames) < 2:
+        raise HTTPException(400, "Nothing to clean")
+    try:
+        m = {"fps": body.get("fps") or 24, "frames": frames, "hands": body.get("hands"), "face": body.get("face")}
+        return await asyncio.to_thread(motion.apply_clean, m, body.get("clean") or {})
+    except Exception as e:
+        raise HTTPException(400, f"Couldn't clean that motion: {e}")
 
 
 @app.post("/api/scene/render")
@@ -1588,6 +1644,32 @@ async def scene_clip(frames: list[UploadFile] = File(...), token: str = Form(...
         raise HTTPException(400, r.stderr[-500:] or "ffmpeg failed")
     await asyncio.to_thread(_sweep_scene_clips)
     return {"clip": out.name, "frames": n, "duration": round(n / fps, 3)}
+
+
+@app.post("/api/scene/mesh")
+async def scene_mesh(body: dict = Body(...)):
+    """Copy a run's mesh into ComfyUI's input folder, where the auto-rig templates load it from
+    (UniRigLoadMesh reads ComfyUI's input; the 3D tab's Rig it buttons call this first)."""
+    g = db.get_generation(int((body or {}).get("generation", -1)))
+    if not g:
+        raise HTTPException(404, "No such generation")
+    idx = int(body.get("index", 0))
+    if not 0 <= idx < len(g["outputs"]):
+        raise HTTPException(400, "Bad output index")
+    if not config.COMFY_INPUT_DIR:
+        raise HTTPException(503, "ComfyUI's folder isn't here: set DECK_COMFY_DIR to it")
+    src = output_file(g, g["outputs"][idx])
+    if not src.is_file():
+        raise HTTPException(404, "That file is gone")
+    # UniRig's mesh loader lists ComfyUI's input/3d folder (and the input root), and only those: a run's
+    # mesh goes there under its own name
+    folder = config.COMFY_INPUT_DIR / "3d"
+    folder.mkdir(parents=True, exist_ok=True)
+    name = re.sub(r"[^\w.\-]+", "_", src.name)[:80] or "model.glb"
+    dest = folder / name
+    if not dest.exists() or dest.stat().st_size != src.stat().st_size:
+        await asyncio.to_thread(shutil.copyfile, src, dest)
+    return {"file_path": f"3d/{name}", "name": name}
 
 
 @app.post("/api/scene/photo")

@@ -98,17 +98,26 @@ def ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
 
 
-def frame_from_video(path: Path, which: str = "last") -> bytes:
+def frame_from_video(path: Path, which: str | int = "last") -> bytes:
+    """A clip's first or last frame, or the frame at an index (0-based, as shot lists count them)."""
     if not ffmpeg_available():
         raise RuntimeError("ffmpeg isn't installed (sudo apt install ffmpeg)")
+    which = int(which) if str(which).strip().isdigit() else which
     with tempfile.TemporaryDirectory() as td:
         out = Path(td) / "frame.png"
-        if which == "first":
+        if isinstance(which, int):
+            if which < 0:
+                raise RuntimeError("A frame can't be negative")
+            cmd = ["ffmpeg", "-v", "error", "-y", "-i", str(path), "-vf", f"select=eq(n\\,{which})",
+                   "-frames:v", "1", str(out)]
+        elif which == "first":
             cmd = ["ffmpeg", "-v", "error", "-y", "-i", str(path), "-frames:v", "1", str(out)]
         else:  # decode the last second and keep overwriting: the file left is the final frame
             cmd = ["ffmpeg", "-v", "error", "-y", "-sseof", "-1", "-i", str(path), "-update", "1", str(out)]
         subprocess.run(cmd, check=True, capture_output=True, timeout=60)
-        if not out.exists():  # very short clips can fail -sseof; fall back to a full decode
+        if isinstance(which, int) and not out.exists():
+            raise RuntimeError(f"The clip has no frame {which}")
+        if not out.exists() and not isinstance(which, int):  # very short clips can fail -sseof; fall back to a full decode
             cmd = ["ffmpeg", "-v", "error", "-y", "-i", str(path), "-update", "1", str(out)]
             subprocess.run(cmd, check=True, capture_output=True, timeout=120)
         return out.read_bytes()

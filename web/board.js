@@ -272,10 +272,34 @@ function boardSelected() {   // [{g, o, i}] in board order
   return [...B.sel].map((k) => { const [id, i] = k.split(':').map(Number); const g = S.history.get(id); return g && g.outputs[i] ? { g, o: g.outputs[i], i } : null; })
     .filter(Boolean).sort((a, b) => b.g.id - a.g.id || a.i - b.i);
 }
+// The selected clips drawn again at 1080P by Open-H3-Regenerate (its refiner LoRA); each lands on the Board as a new
+// take, a child of its draft. The 1080P second pass is 2 steps from 0.70 and keeps the clip's sound.
+async function boardFinish() {
+  const clips = boardSelected().filter(({ o }) => o.kind === 'video');
+  if (!clips.length) return toast('Select a clip first', true);
+  let info;
+  try { info = await api('/api/h3/regen', { busy: false }); } catch (e) { return toast(e.message, true); }
+  if (!info.available) return toast(info.reason || 'Regenerate needs its refiner LoRA in models/loras', true);
+  const lora = info.loras[0].name;
+  let n = 0;
+  for (const { g, i } of clips) {
+    try {
+      const run = await api('/api/h3/upscale', { method: 'POST', busy: false,
+        body: { generation: g.id, index: i, scale: 1.5, strength: 'strong',
+                regen: { quality: 'standard', lora, target: '1080p' } } });
+      S.history.set(run.id, run);
+      boardChanged(run);
+      n++;
+    } catch (e) { toast(`#${g.id}: ${e.message}`, true); }
+  }
+  if (n) toast(`${n} finish${n === 1 ? '' : 'es'} queued`);
+}
+
 function boardSelBar() {
   if (!B.selecting) return h('span', { class: 'board-sel hidden' });
   const n = B.sel.size, items = boardSelected(), images = items.filter((x) => x.o.kind === 'image').length;
   const comparable = n === 2 && items.every((x) => x.o.kind !== 'audio');
+  const videos = items.filter((x) => x.o.kind === 'video').length;
   const visibleKeys = () => [...$('#board').querySelectorAll('.tile[data-key]')].map((t) => t.dataset.key);
   return h('div', { class: 'board-sel' },
     h('b', {}, n ? `${n} selected` : 'Tap tiles to select'),
@@ -286,6 +310,8 @@ function boardSelBar() {
     button(`New edit${images ? ` (${images})` : ''}`, boardToEditor, { cls: 'small primary', disabled: !images }),
     button('Compare', boardCompare, { disabled: !comparable, title: 'Select two pictures or clips to see them side by side or wipe between them' }),
     button('To video', boardToVideo, { disabled: !n }),
+    button('Finish', boardFinish, { disabled: !videos,
+      title: 'Draw the selected clips again at 1080P with Open-H3-Regenerate (its refiner LoRA in models/loras)' }),
     button('Delete', boardDelete, { cls: 'small danger', disabled: !n }));
 }
 

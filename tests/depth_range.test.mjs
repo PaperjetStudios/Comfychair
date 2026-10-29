@@ -26,4 +26,12 @@ const gap = frames((i) => (i === 3 ? [] : spread(2, 3)), 6);
 assert.deepEqual(frameRanges(gap)[3], frameRanges(gap)[2]);
 // nothing at all: a sane default
 assert.deepEqual(frameRanges([[], []])[0], [0.3, 10]);
+// a cut between a close subject and a far one: smoothing must not reach across it
+const cut = frames((i) => (i < 40 ? spread(1, 2) : spread(8, 10)), 80);
+const across = frameRanges(cut, { window: 30 });
+const split = frameRanges(cut, { window: 30, breaks: [40] });
+assert.ok(split[20][1] < 3, 'before the cut the far shot does not set the range');
+assert.ok(across[20][1] > split[20][1], 'without a break the window reaches across');
+assert.ok(split[50][0] > 5, 'after the cut the close shot does not set the range');
+
 console.log('depth_range ok');

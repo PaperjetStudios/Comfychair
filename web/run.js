@@ -1,6 +1,6 @@
 import {
   $, h, store, api, toast, SHEET, sheetOpen, openSheet, closeSheet, button, linkBtn, actions, hint, placeholder, note,
-  mediaCard, seg, setIcon,
+  mediaCard, seg, setIcon, field,
 } from './ui.js';
 import { S, fmtT, isMine, loadProjects, switchTab, emitServer } from './core.js';
 import { genLabel, mediaEl, openImagePicker, outputCard, uploadImage } from './media.js';
@@ -611,6 +611,19 @@ export async function useRefineClip(g, index = 0, depth = null) {
   toast(`Clip #${g.id} set: add references (the splat's photo first) and Generate`);
 }
 
+// Any clip into deck-h3-refine with Regenerate already on (its refiner LoRA and 0.70 schedule): the finished take
+// works for LTX clips and scene renders too, not only H3's own runs.
+export async function finishWithH3(g, index = 0) {
+  await useRefineClip(g, index);
+  const info = await api('/api/h3/regen', { busy: false }).catch(() => null);
+  const lora = info?.loras?.[0]?.name;
+  setVal('rgon.value', true);
+  if (lora) setVal('rglora.__loras', [{ name: lora, strength: 1.0, enabled: true }]);
+  renderFields();
+  if (!info?.available) toast(info?.reason || 'Add an Open-H3-Regenerate LoRA to models/loras first', true);
+  else toast('Regenerate is on: Generate to finish this clip at 1080P');
+}
+
 // Load a past generation's settings into Generate to edit: prompt (and its builder parts), seed,
 // images, LoRAs, sizes. The seed is set to Fixed so you get the same result until you change it.
 // A run made in the VFX tab opens there instead, as a new tab with that run's effect, inputs and settings.
@@ -695,26 +708,54 @@ export async function openJobs() {
   refresh();
 }
 
-// A finished H3 clip sampled again bigger (app/h3upscale.py): the run's own prompt, LoRAs, references and seed
-export function openH3Upscale(g, idx) {
+// A finished H3 clip sampled again bigger (app/h3upscale.py), or finished with Open-H3-Regenerate's refiner LoRA:
+// its own 2/3-step schedule (RESEARCH-h3-regenerate.md), the clip's sound kept so lips stay in sync.
+export async function openH3Upscale(g, idx) {
   const o = g.outputs[idx], w = o.width || 0, hgt = o.height || 0;
-  let scale = 1.5, strength = 'medium';
-  const size = (s) => (w ? `${Math.round((w * s) / 32) * 32}×${Math.round((hgt * s) / 32) * 32}` : `${s}×`);
-  const info = h('div', { class: 'hint' });
-  const show = () => { info.textContent = `${w ? `${w}×${hgt} → ` : ''}${size(scale)}. Bigger takes longer and needs more memory: 1.5× is the safe choice on 12 GB.`; };
-  const go = button('Upscale', async () => {
-    go.disabled = true;
-    try {
-      const n = await api('/api/h3/upscale', { method: 'POST', body: { generation: g.id, index: idx, scale, strength } });
-      S.history.set(n.id, n); closeSheet(); openGeneration(n.id);
-    } catch (e) { toast(e.message, true); go.disabled = false; }
-  }, { cls: 'primary' });
-  show();
-  openSheet(h('h3', {}, `Upscale #${g.id}`),
-    hint('Encodes the clip, makes its latent bigger with the MiniMax H3 latent upscaler, and samples it again with this run\'s own prompt, LoRAs, references and seed. The sound is the clip\'s own.'),
-    seg([[1.25, '1.25×'], [1.5, '1.5×'], [2, '2×']], scale, (v) => { scale = v; show(); }), info,
-    h('div', { class: 'lbl' }, 'Strength'),
-    seg([['light', 'Light'], ['medium', 'Medium'], ['strong', 'Strong']], strength, (v) => { strength = v; }),
-    hint('Light keeps faces and poses closest to the clip and sharpens least (2 steps). Strong sharpens most but can change faces and hands (3 steps from 0.90).'),
-    h('div', { class: 'row' }, go));
+  let info = { available: false, loras: [], reason: 'ComfyUI is offline' };
+  try { info = await api('/api/h3/regen', { busy: false }); } catch { /* keep the reason */ }
+  let quality = 'upscale', scale = 1.5, strength = 'medium', regenStrength = 'standard', target = '1080p';
+  let lora = info.loras[0]?.name || '';
+  const scaled = (s) => (w ? [Math.round((w * s) / 32) * 32, Math.round((hgt * s) / 32) * 32] : null);
+  const fit1080 = () => { if (!w || !hgt) return null; const k = Math.min(1920 / w, 1080 / hgt, 2.5); return [Math.round((w * k) / 32) * 32, Math.round((hgt * k) / 32) * 32]; };
+  const say = (dims) => (w ? `${w}×${hgt} → ${dims ? `${dims[0]}×${dims[1]}` : '…'}` : '');
+  const draw = () => {
+    const up = quality === 'upscale';
+    const dims = up ? scaled(scale) : target === '1080p' ? fit1080() : scaled(1.5);
+    const l = info.loras.find((x) => x.name === lora) || info.loras[0];
+    const go = button(up ? 'Upscale' : 'Regenerate', async () => {
+      go.disabled = true;
+      try {
+        const body = { generation: g.id, index: idx, scale: up ? scale : 1.5, strength };
+        if (!up) body.regen = { quality: regenStrength, lora, target: target === '1080p' ? '1080p' : 'scale' };
+        const n = await api('/api/h3/upscale', { method: 'POST', body });
+        S.history.set(n.id, n); closeSheet(); openGeneration(n.id);
+      } catch (e) { toast(e.message, true); go.disabled = false; }
+    }, { cls: 'primary' });
+    openSheet(h('h3', {}, `${up ? 'Upscale' : 'Regenerate'} #${g.id}`),
+      info.available ? seg([['upscale', 'Upscale'], ['regen', 'Regenerate']], quality, (v) => { quality = v; draw(); })
+        : seg([['upscale', 'Upscale']], 'upscale', () => {}),
+      !info.available ? hint(info.reason) : null,
+      up ? [
+        seg([[1.25, '1.25×'], [1.5, '1.5×'], [2, '2×']], scale, (v) => { scale = v; draw(); }),
+        hint(`${say(dims)}. Bigger takes longer and needs more memory: 1.5× is the safe choice on 12 GB.`),
+        h('div', { class: 'lbl' }, 'Strength'),
+        seg([['light', 'Light'], ['medium', 'Medium'], ['strong', 'Strong']], strength, (v) => { strength = v; draw(); }),
+        hint('Light keeps faces and poses closest to the clip and sharpens least (2 steps). Strong sharpens most but can change faces and hands (3 steps from 0.90).'),
+        hint('Regenerate (when its refiner LoRA is installed) sharpens more in 2 steps and holds faces better than Strong.'),
+      ] : [
+        seg([['1.5', '1.5×'], ['1080p', '1080P']], target, (v) => { target = v; draw(); }),
+        hint(`${say(dims)}. 1080P is as big as this box should draw; 2K needs a card over 24 GB.`),
+        h('div', { class: 'lbl' }, 'Strength'),
+        seg([['standard', 'Standard (2 steps)'], ['enhanced', 'Enhanced (3)']], regenStrength, (v) => { regenStrength = v; draw(); }),
+        hint('Standard starts at 0.70 and is the recommended one; Enhanced starts at 0.80. The clip\'s sound goes in, so speech stays in sync.'),
+        info.loras.length > 1 ? field('Refiner', h('select', { 'aria-label': 'Refiner LoRA',
+          onchange: (e) => { lora = e.target.value; draw(); } },
+          ...info.loras.map((x) => h('option', { value: x.name, selected: x.name === lora }, x.name.split('/').pop())))) : null,
+        l ? hint(l.has_turbo ? 'This file has Turbo inside: the run\'s own turbo LoRA is left out of the second pass.'
+          : 'Refiner only: the run\'s turbo LoRA stays in the chain.') : hint('No refiner LoRA found.'),
+      ],
+      h('div', { class: 'row' }, go));
+  };
+  draw();
 }

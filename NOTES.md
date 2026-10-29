@@ -189,6 +189,12 @@ will then fail to start until that process is stopped, so stop it before the nex
   Cameras: rename, New camera, Make active, Delete.
   In the director view the others are drawn as grey outlines with their names (scene-view.js `OTHERS`, `syncOthers`,
   never rendered); a tap on an outline or its name (`otherCamAt`, pen 18 px / finger 28 px) makes that camera active.
+- **Shots** (2026-10-29): `SC.camera` is the camera you edit. `liveCam(f)` (`scene-data.js`) is the camera the picture and
+  renders use; `shownCam` (`scene-view.js`) is that, unless you are looking through the camera you edit (Camera mode, or
+  the camera layer selected, and not playing) and **Cut** on the toolbar is on (`R.viewCut`, `deck.scene.viewcut`). A drag
+  does nothing while another camera is on show. Cuts are a step row on the key sheet (`SC.cuts`, kind `cut`, ease always
+  constant). `SC.renderShots` is `take` (one clip) or `each` (one video per shot). The words are `web/shot-words.js`,
+  shared with the Story tab. An older scene has no cuts: the active camera throughout.
 - **Mocap with its camera** (Moves ▸ From video ▸ With its camera): the clip is also tracked (`/api/track`, Simple) and
   `applyWithCamera` (scene-motion.js) adds "Mocap camera" (`sceneFromTrack`, lens from the capture's `focal` px when
   saved, else 35 mm) + its footage backdrop (`at` = start frame), makes it active, and puts the body in the world through
@@ -199,6 +205,15 @@ will then fail to start until that process is stopped, so stop it before the nex
   lengths) and sets the figure's size (sy) and its legs / arms / torso / shoulders / hips / neck shape % (`figure.js
   shapeFor`, shapeFactors inverted; neck only half way, a capture's head is rough); the keys then take the clip's metres
   (`toKeys` `scale: 1`, `hipY` from `hipsHeight`). Tested by building a shaped figure from the result and comparing lengths.
+- **Mocap clean-up** (2026-10-29): `app/motion.py clean` is opt-in (`read()` still only normalises, so `space` undoes
+  that). Steady (One Euro) and Keep bone lengths run in that normalised frame. Plant feet and the ground run after the
+  body is in the world (`POST /api/motion/clean`, scene-motion.js `planted`), so a pan is not planted in camera space.
+  Defaults on for sam3d-body. `Deck Save Body Motion` also writes hands, face and `cam_t` when the 70 MHR points are
+  there (right hand 21–41, left 42–62: wrist last in each block, fingers thumb→pinky as tip, first, second, third joint;
+  the file stores wrist, then knuckle→tip). `run_hand_refinement` is on in `deck-mocap.json`. The video sheet has a
+  Person number (0 is the first); the template already uses the native SAM 3D Body nodes, so there is no second
+  template. Hands aim the wrist and put about half the twist on the elbow; finger curl is the angle between segments
+  (`motion.js fingerPose`). Three real clips were not checked: ComfyUI was not running.
 - **Mute** (`item.mute`, saved, `upgrade()` defaults it off): `current()`/`write()` in scene-data.js use values held
   in `MUTED` (not saved) instead of the keys, so a muted layer stays put and moving it writes no keys. Renders set
   `R.real` and use the real keys; Save frame is the picture on screen.
@@ -330,3 +345,174 @@ The tabs that did the same job twice now share it:
 - **Story canvas**: a shot's composition is `s.comp` (an editor payload); its flattened picture is saved through
   `/api/paint` as `s.canvas` (paint files named by story-tabs are kept by `prune_paint`). Characters are the
   `characters` store kind (`web/characters.js`), mentions and prompt lines in `web/cast.js` (node tests).
+
+### 3D objects from photos (2026-10-29; dev/make_3d_object_templates.py)
+- **Built, not typed by hand.** `dev/ui_to_api.py` converts a ComfyUI UI workflow to API format against a live
+  `/object_info` (widget order, `control_after_generate`, image-upload widgets, dynamic combos), and
+  `dev/make_3d_object_templates.py` turns ComfyUI's official `3d_pixal3d_trellis2_image_to_model.json` into the three
+  templates. Re-run both when ComfyUI's workflow changes.
+- **Branches are pruned.** ComfyUI evaluates every node a prompt links, and the official workflow switches at run time
+  (both a Pixal3D and a TRELLIS.2 5 GB UNET). The generator resolves each `ComfySwitchNode` to one side, then keeps only
+  the save node's ancestors.
+- Preview nodes pass their picture on: the generator hands their link to the node that showed it and drops them, so a run
+  saves only the model.
+- **Dropped:** `RemeshMesh`, `DecimateMesh`, `GetMeshInfo` and the AO/normal bakes (dynamic-combo widgets do not map
+  one-to-one to API inputs). The mesh goes `VoxelToMesh → MeshSmoothNormals → UnwrapMesh → BakeTextureFromVoxel →
+  ApplyTextureToMesh → MeshSmoothNormals → MeshToFile3D`, so a model has base colour, metal and roughness but no baked
+  AO or normal map.
+- **Fields.** `@1 Front`; `@2 Cut out` (`ComfySwitchNode` between the picture's own mask and BiRefNet); `@3 Detail (steps)`
+  and `@6 Seed` are `PrimitiveInt`s linked into all four samplers' `steps`/`seed` (a widget input takes a link);
+  `@4 Texture resolution` is the `PrimitiveInt` behind `UnwrapMesh.resolution` and `BakeTextureFromVoxel.texture_size`;
+  `@5 Texture` is a `LazySwitchKJ` (KJNodes, `{"lazy": true}`) choosing the textured mesh or the plain smoothed one, so
+  with it off the texture stage and bake do not run.
+- **Multi-view.** Four `LoadImage → RemoveBackground → ImageCropToMask` (1024², pad 1.1: the rig's framing) into
+  `Pixal3DMultiViewConditioning` at fov 20. Each view's two preprocessing nodes carry `_meta.deck_drop` +
+  `deck_follow_on`, so an empty view takes its chain with it and the conditioning's optional input unplugs.
+- **The sheet's views.** `/api/generations/{id}/to-input` takes a frame **index** (`frame: 96`) as well as `first`/`last`
+  (`imageprep.frame_from_video` selects frame n); `scene-import.js` takes the object sheet's frames 4, 54, 96, 120 as
+  front, left, back, right. Which side comes first on a real sheet has not been checked with a GPU.
+- **Where a GLB goes.** `useas.js` sends a `template === '3d photo'` GLB to `addPhoto` (MoGe's camera and picture) and any
+  other GLB to `scene-import.js addModel`: a `model` layer at the world's middle, fitted like an import (glTF metres, so
+  no height question), selected.
+
+### Rigged models (2026-10-29; web/scene-rig.js, web/rig-map.js)
+- **One kind of layer, the figure's values.** `rigged` is in `TYPES`/`EVEN` (scene-data.js) and `isPosable(o)` covers it,
+  so `namesFor` gives it `FIG` and every pose, Pair, Move, IK, Hands and mocap path works unchanged. The places that
+  checked `type === 'figure'` one by one now use `isPosable` where the behaviour is a posable body's (keys.js `kindOf`,
+  the pose render, pairs, prompts, mocap targets, the pivot). `paint()` leaves a rigged layer's own materials alone.
+- **A hidden figure rig drives the skin.** `makeRigged` builds a `figure.js` rig in the layer's group (its volumes set
+  invisible, its joint dots kept) and the view poses it like any figure. `group.userData.atFrame` then copies each mapped
+  bone's turn: `bone.local = parentWorld⁻¹ · (figureJointWorld · restQ[bone])`, parents first with
+  `updateWorldMatrix(false, false)`. `restQ` is `figureBindWorld⁻¹ · modelBindWorld`, measured once against a spare rig in
+  `BIND` (the layer's own rig may already be posed when the file arrives). The hips bone also takes the figure hips'
+  rise and fall (in its parent's space), so a crouch or a jump moves the model.
+- **The map** (`rig-map.js`, node-tested): names first (Mixamo `mixamorig:LeftArm`, Rigify `DEF-spine`, case, prefixes and
+  separators cleaned off), then each remaining body joint takes the nearest free bone by where it sits, in the layer's
+  metres (the model is scaled to the hidden figure's height, feet on the floor, centred). Fingers map by name only.
+- **Where the model comes from.** `ComfyUI-UniRig` (installed here) gives `MIAAutoRig` (people) and `UniRigAutoRig`
+  (anything); both return a *path* to an FBX, which is not a file output. `comfy_nodes/deck_rigsave` (`DeckSaveRig`) copies
+  that file into the output folder and lists it, so the run's outputs hold the rigged model. `templates/deck-autorig-human`
+  and `-any` load the mesh with `UniRigLoadMesh`, which reads ComfyUI's **input** folder: `POST /api/scene/mesh
+  {generation, index}` copies a run's GLB there and returns the `file_path` the template's `@1 Model` field takes.
+- **The mesh list is built at startup.** `UniRigLoadMesh`'s `file_path` options are read from ComfyUI's
+  `input/3d` (and the input root) when the class is imported, and `/prompt` validates against that list, so a mesh
+  written there after startup is rejected. `POST /api/scene/mesh` copies a run's GLB into `input/3d` and `rigRun`
+  says so (restart ComfyUI once) when the template's field does not list it. Fixing this properly needs a loader that
+  takes a path, inside UniRig's isolated comfy-env (its `TRIMESH` type does not cross environments).
+- **Checked:** a synthetic skinned GLB (a 3-bone box) takes the figure's poses exactly — the Spine bone ends at the
+  figure's own quaternion and the mesh bends. A **real Make It Animatable run** (13 min on the CPU) proves the whole
+  path: `DeckSaveRig` saved the FBX, the 3D tab loaded it, and **47 Mixamo bones** drove it. `norm()` had to learn that
+  FBXLoader drops the colon (`mixamorigHips`). The first test looked spiky only because its input was a torn MoGe photo
+  mesh; with a proper character mesh the model stands in T-pose and folds correctly when a strong pose (`Touch toes`)
+  is applied. No FBX→GLB conversion is needed.
+- **Not built yet:** Fit joints / Re-skin (4.4). The compositions (`scene-offscreen.js`) still build figures themselves,
+  so a rigged layer in a Video composition falls back to a plain object until that path learns the type.
+
+### Generic bone keys, phase 5 groundwork (2026-10-29; scene-data.js `b.` channels)
+- A joint's turn (`j.<name>`) and a bone's (`b.<name>`) are the same kind of value, so the channel code now asks
+  `isQuatCh(ch)` instead of testing for `j.` in each place: `baseOf`, `valOf`, `keyChans`, `sampleChan` (both slerp),
+  `sample` (both give a bag by name), `bakeBase` and the playback `overlay`. A layer's values decide which bag it has:
+  `namesFor` gives a `skinned` layer `BONE = [...OBJ, 'b']`; figures and rigged models keep `FIG`; everything else `OBJ`.
+- `tests/skin_channels.test.mjs`: two bone keys slerp to a unit quaternion, `sample()` returns the bone bag, `bakeBase`
+  writes `base.b`, and a whole-item key never touches a bone channel.
+- **This is groundwork, not a feature yet:** no UI creates a `skinned` layer, and the key sheet has no bone rows. Next
+  for Phase 5 is `web/scene-skin.js` (load a generic skinned GLB/FBX, drive its bones from `b.` at `pose(f)`), bone dots
+  with CCD IK (`web/ik.js`), and the refine-skeleton tools.
+
+### Skinned models (2026-10-29; web/scene-skin.js, `b.` channels)
+- **The layer.** `skinned` (scene-data.js TYPES/EVEN) holds `OBJ + b` (`BONE`); `makers.skinned` loads a GLB/FBX,
+  fits it to a usable size (`scale-math.importFit`, glTF metres, FBX's own unit) and stands it on the floor at the
+  middle. It keeps `group.userData.skin = { order (parents first), rest (bind local quats), skinned }` and an `atFrame`
+  that applies only the bones that have a `b.` value, so an unkeyed bone keeps the bind pose. The bone list is saved as
+  `o.bones` so the panel still lists them while the file loads.
+- **Authoring.** The **Bones** panel picks a bone, turns it by three slider degrees composed onto what the bone has at
+  the playhead, and writes it with `write(o, BONE, { b: { bone: q } })` — the base turn when the layer has no keys, a key
+  at the playhead once it has (Auto key off: held until ◆ Key). **Key every bone** writes the whole skeleton then
+  `addKey(..., only b.*)` so it keys bones and not the layer transform; **Put it back** writes the saved bind turn.
+- **Bone dots.** A skinned layer gets a dot per bone (a 0.035 m sphere on layer 1, so it is picked but never rendered
+  out) placed in the layer's space each frame (`apply` converts the bones' world positions through the layer's inverse
+  matrix). `scene-view.js` draws them for the selected layer (`userData.dots`), highlights the picked one, and
+  `boneDotAt()` picks them with the figure dots' reach and depth rules; `scene.js` wires `setBonePick(onBonePick)`, and
+  picking sets the panel's bone (`SK.bone`) and the layer's `userData.pickedBone`.
+- **CCD** (`web/ik.js`, node-tested): `reach(bones, target)` turns a root→end chain from the end backwards, composing a
+  world-space swing per bone and converting it to a local turn (a rootless bone takes the world turn); it stops on the
+  tolerance or the iteration cap and returns `{bones: [{name, q}], distance, iterations}` — the `q`s are what gets keyed
+  as `b.<bone>`. `error()` and `chainTo()` are there for the drag.
+- **The drag.** A pointer down on a selected layer's dot disables the orbit, makes a camera-facing plane through the
+  bone and holds a `bonedrag` (for playback); `pointermove` intersects that plane and `scene-skin.onBoneDrag` takes the
+  chain (`ik.chainTo`), solves it (`ik.reach`, 8 passes) and writes `b.<bone>` for the playhead; letting go saves once
+  (one undo step). `setBoneDrag({move, end})` is wired in scene.js.
+- **Mirror** (`rig-map.js oppositeBone` + `mirrorChans`, node-tested): every `b.` channel swaps to the other side's bone
+  (Mixamo Left/Right, `.L/.R`, `_L/-L`, or a lowercase limb name; never `root`) with its turn mirrored by `figure.js`'s
+  `mirrorQ` (x same, y and z flipped); a centre bone mirrors in place. Frames, eases and non-bone channels are kept. The
+  panel's **Mirror the bones** applies it and saves once.
+- **Rename and forget** (5.3, in the Bones panel): `renameBone` sets `bone.name` (the three.js skeleton), the layer's
+  saved `o.bones`, the `b.<name>` channel keys and `base.b`, and the dot's `userData.joint`; a name already taken is
+  refused. `forgetBone` deletes that one bone's channel and resting turn and puts the bone back to `skin.rest`'s bind
+  turn (its weights are untouched).
+- **Add / delete + re-skin** (`web/reskin.js`, node-tested): adding a bone under the picked one (half way to its first
+  child) or deleting one (children keep their world place; a root can't go) rebuilds `s.order`, the layer's `o.bones`,
+  the bone dots and the channels, then re-weights every skinned mesh: `weightsFor` gives each vertex the nearest four bone
+  points with a 1/d⁴ falloff (normalised), `skeletonFrom` takes the inverses of the bones' current world matrices as the
+  new bind, and `reskinMesh` writes `skinIndex`/`skinWeight` and rebinds. It is a simple nearest-bone skin, not a
+  heat-diffusion one, so an edited skeleton can look rough.
+- **Renames survive a reload**: the file keeps its own bone names, so `attach` puts the layer's saved `o.bones` names back
+  by index after loading (a file with a different bone count leaves them alone).
+- **Not built yet:** a key-sheet row per bone chain — the sheet shows the layer row only.
+
+### World mocap, phase 6 findings (2026-10-29)
+- **No ComfyUI node exists for GEM-X.** `billwuhao/ComfyUI_gemmax` is a translation pack (GemmaX2), unrelated to NVlabs'
+  motion model. So the plan's `comfy_nodes/deck_gemx` is still the route.
+- **GEM-X itself is pip-installable** (`pip install -e '.[video,hand]'`, `gem-infer motion-video`), but needs Python
+  3.10+, **torch 2.10**, SOMA 0.3.3 plus its assets, the nvidia/GEM-X body checkpoints, a YOLOX detector, and (for
+  practical speed) CUDA. This checkout is CPU-only inside this session, and GEM-X's `requirements.txt` pulls torch,
+  warp-lang, chumpy and more, so it is not installed here.
+- Its Body Motion output is SOMA parameters plus camera-space and world-space joints; the saver still has to map SOMA's
+  **77** joints onto the SMPL 22 + hands + face (`{fps, frames, hands, face, cam_t}`, the Phase 2 format). The 77 joint
+  order is in SOMA's own package/docs, not in GEM-X's README; read it when installing rather than guessing.
+- **What is already ready for it:** `app/motion.py read` + `/api/motion/clean` (feet/ground), `applyWithCamera` (Mocap
+  camera + backdrop, a body that stays put under a pan), and the Phase 2 hand/face extras. The world path still needs
+  the camera's **position** keys and the sheet's **Camera in the clip: Still / Panning / Moving** choice.
+
+### Open-H3-Regenerate in H3 Upscale (2026-10-29; app/h3upscale.py `regen`, `web/run.js`)
+- **The mode.** `build(..., regen={lora, has_turbo, quality}, size=...)` puts a `LoraLoaderModelOnly` last in the run's
+  model chain (`up_guide` reads `["up_lora", 0]`), and uses its own `REGEN_SIGMAS`: Standard `0.7, 0.494118, 0`,
+  Enhanced `0.8, 0.666667, 0` (`regen_sigmas()`); the plain upscaler's `sigmas()`/`LADDER` is untouched.
+- **Turbo.** `drop_turbo()` walks the guider's model chain and, when the refiner file is a **merge** (`has_turbo`), hands
+  each user of the turbo LoRA that node's own model input and deletes it. A refiner-only file (Kijai) keeps the run's
+  turbo. `regen_loras(oi)` finds LoRAs with `regenerate` in the name and marks a merge (`refiner`/`rank_384` means only).
+- **1080P.** `fit_1080p(w, h)` fits the frame's aspect inside 1920×1080 on a 32-pixel grid, capped at 2.5×; `build` takes
+  the exact `size`, so the upscaler's `target dimensions` mode gets it.
+- **Endpoint.** `GET /api/h3/regen` says whether a Regenerate LoRA is installed (`{available, loras, reason}`);
+  `POST /api/h3/upscale` takes `regen: {quality, lora, target: "1080p"|"scale"}`, validates the LoRA against that list
+  and the quality before queueing, and records `regen` in the run's params (template `h3 regenerate`).
+- **Sheet.** `openH3Upscale` is async (it asks `/api/h3/regen` first), shows **Upscale / Regenerate** only when a LoRA
+  exists (otherwise the reason), and in Regenerate shows Target `1.5× / 1080P`, Strength `Standard / Enhanced`, a refiner
+  picker when there are several, and whether the chosen file has Turbo inside.
+- **Tests:** `tests/test_h3upscale.py` (11): the LoRA node and guide link, turbo dropped only for a merge (no dangling
+  links), exact sigmas and titles, the 1080P fit, `regen_loras`'s merge/refiner marking, and the unchanged Upscale graph.
+- **Not done here:** a real Regenerate run (the 5.6 GB LoRA was still downloading, and a CPU H3 pass at 1080P is not a
+  test); Phase 7.3's `deck-h3-refine` group (its sampler graph is not the upscale shape, so it needs its own wiring).
+
+### Regenerate in deck-h3-refine (2026-10-29)
+- The refine graph's sigmas come from `BasicScheduler` (`@7 Strength`, denoise/steps), not the upscale builder, so the
+  template carries its own switch: `rglora` (`@8 Regenerate LoRA`, a `LoraLoaderModelOnly` between the turbo LoRA and
+  the ControlNet apply), `rgon` (`@9 Regenerate`, a `PrimitiveBoolean`, off), `rgsig` (`ManualSigmas` at the Standard
+  `0.7000, 0.4941, 0.0000`) and `rgsw` (`ComfySwitchNode`: off → `BasicScheduler`, on → `rgsig`), with the sampler's
+  `sigmas` reading `rgsw`. An empty refiner stack is bypassed by `templates.py`'s LoRA rules, so `51.model` falls back
+  to the turbo's model and the switch still routes the schedule.
+- Enhance/LTX drafts use the same template, so they get Regenerate with no extra code. `tests/test_h3_refine_template.py`
+  checks the wiring, the empty-stack bypass and a refiner in the chain.
+
+### Finish a take: Board and Story (2026-10-29; phase 7.4)
+- **Board.** The selection bar's **Finish** takes the selected clips (`boardSelected()` filtered to videos) and POSTs
+  `/api/h3/upscale` with `regen: {quality: "standard", lora, target: "1080p"}` for each, one at a time, adding each run to
+  `S.history` and calling `boardChanged(run)` so it appears as a new take. A selection with no clips leaves it disabled.
+- **Story.** **Finish takes** in the bar maps every shot to `clipOf(s)` (skipping clips already `regen`), queues the same
+  run, and pushes its id onto `s.vpending`, so the existing `settle()` attaches the finished clip when it lands. Clips
+  from a run whose template is `h3 regenerate` are marked `regen`, and `clipOf` returns a `regen` clip over a draft — so
+  **Shots to video** takes the finished one even if the draft was the chosen clip.
+- Both check `/api/h3/regen` first and say what is missing instead of queueing. `README` has the user-facing paragraph.
+- **7.5, other models' drafts.** `run.js finishWithH3(g, index)` opens `deck-h3-refine` through `useRefineClip` and then
+  sets the template's `rgon.value` to true and `rglora.__loras` to the installed refiner, so any clip (an LTX take, a
+  scene render) can be finished the same way; Use as offers it for every video, H3's own or not.

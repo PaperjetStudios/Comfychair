@@ -1,6 +1,6 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
-import { C, FPS, R, SC, TEMP, commitHolds, frames, holdEnd, recordFrame, settleTemp } from './scene-data.js';
+import { C, FPS, R, SC, TEMP, commitHolds, frames, holdEnd, recordFrame, settleTemp, shots } from './scene-data.js';
 import {
   RANGE, SPLAT_PASS, camera, draw, fit, floorMat, paint, pose, rangeMat, refresh, renderer, scene, setRange, wallMat
 } from './scene-view.js';
@@ -14,8 +14,13 @@ import { frameRanges } from './depth-range.js';
 
 // the work area (scene-keys.js AREA, SC.range in frames) while it is on: play loops in it, seeks stay in it
 const area = () => bound(SC.range, frames() - 1, 0);
-// the frames a render covers: { first, count } (Range only: the work area's, its last frame included)
-const renderSpan = () => frameSpan(AREA.exportRange(), frames(), 1, true);
+// one shot of an Each-shot render, else the work area (Range only) or the whole clip
+let clip = null;
+const renderSpan = () => clip || frameSpan(AREA.exportRange(), frames(), 1, true);
+// sample indexes where a cut falls, so a depth range never smooths across it
+function cutBreaks(first, count) {
+  return shots().map((s) => s.f0 - first).filter((i) => i > 0 && i < count);
+}
 
 // ---- playback ----------------------------------------------------------------------
 // Everything stays live while it plays: an edit is held over the keys while the user holds it
@@ -90,7 +95,7 @@ function measureRanges() {
   renderer.setRenderTarget(null); rt.dispose();
   scene.background = bg;
   if (!samples.some((z) => z.length)) throw new Error('Nothing in view');
-  return frameRanges(samples, { mode: SC.depthRange === 'clip' ? 'clip' : 'follow', window: Math.round(FPS / 2) });
+  return frameRanges(samples, { mode: SC.depthRange === 'clip' ? 'clip' : 'follow', window: Math.round(FPS / 2), breaks: cutBreaks(first, count) });
 }
 
 function targetToBlob(rt, W, H, gray) {
@@ -129,8 +134,10 @@ function canRender() {
 }
 
 // true once it is saved (false: cancelled, failed or not started)
-export async function renderDepthVideo() {
+export async function renderDepthVideo(part = null) {
+  if (part == null && SC.renderShots === 'each') return renderEach(renderDepthVideo);
   if (busy || !canRender()) return false;
+  clip = part ? { first: part.f0, count: part.f1 - part.f0 + 1 } : null;
   busy = true; stopAsked = false; R.real = true; stopPlay(); TEMP.clear(); renderPanel();  // only what's keyed goes in the render (mute is ignored)
   const keep = R.f, W = SC.width, H = SC.height, bar = busyBar('Rendering depth frames…');
   cancelToast('Rendering the depth video…');
@@ -150,12 +157,13 @@ export async function renderDepthVideo() {
       if (stopAsked) { rt.dispose(); checkStop(); }
     }
     rt.dispose();
-    await sendVideo(form, 'depth', SC.blur);
+    await sendVideo(form, 'depth', SC.blur, { quiet: !!part, label: part ? `Shot ${part.i} · ${part.cam.name}` : '' });
     return true;
   } catch (e) {
     if (e instanceof Cancelled) cancelled(); else { setStatus(''); toast(e.message, true); }
     return false;
   } finally {
+    clip = null;
     bar.done();
     busy = false; stopAsked = false; R.real = false; R.f = keep; fit(); refresh(); renderPanel();
   }
@@ -164,8 +172,10 @@ export async function renderDepthVideo() {
 // The shot as it looks (the colour look: models, photos, splats), the camera's move over the scene's length, at the
 // scene's size and frame rate. Drawn by a stage of its own (scene-offscreen.js) so splats use their full set at
 // full resolution whatever this device previews, and each frame waits for Spark's sort before it is kept.
-export async function renderColorVideo() {
+export async function renderColorVideo(part = null) {
+  if (part == null && SC.renderShots === 'each') return renderEach(renderColorVideo);
   if (busy || !canRender()) return false;
+  clip = part ? { first: part.f0, count: part.f1 - part.f0 + 1 } : null;
   busy = true; stopAsked = false; stopPlay(); TEMP.clear(); renderPanel();
   const W = SC.width, H = SC.height, bar = busyBar('Rendering colour frames…');
   cancelToast('Rendering the colour video…');
@@ -187,19 +197,52 @@ export async function renderColorVideo() {
       bar.set(null, (i + 1) / count);
       checkStop();
     }
-    await sendVideo(form, 'color', 0);
+    await sendVideo(form, 'color', 0, { quiet: !!part, label: part ? `Shot ${part.i} · ${part.cam.name}` : '' });
     return true;
   } catch (e) {
     if (e instanceof Cancelled) cancelled(); else { setStatus(''); toast(e.message, true); }
     return false;
   } finally {
+    clip = null;
     stage?.dispose();
     bar.done();
     busy = false; stopAsked = false; refresh(); renderPanel();
   }
 }
 
-async function sendVideo(form, kind, blur) {
+// Each shot: one video per shot. One take: today's single video, with the cuts in it.
+function shotParts() {
+  if (SC.renderShots !== 'each') return [null];
+  return shots().filter((s) => s.f1 - s.f0 >= 1);
+}
+async function renderEach(fn) {
+  if (busy || !canRender()) return false;
+  const list = shotParts();
+  if (!list.length) { toast('No shot is long enough to render: a shot needs 2 frames', true); return false; }
+  const made = [];
+  for (const s of list) {
+    const ok = await fn(s);
+    if (!ok) return false;
+    made.push({ s, g: R.lastRender });
+  }
+  toast(`${made.length} shot${made.length === 1 ? '' : 's'} saved`, false, { label: 'Shots to Video tab', fn: () => layShotVideos(made) });
+  return true;
+}
+async function layShotVideos(made) {
+  const { layOnTimeline } = await import('./video.js');
+  const { switchTab } = await import('./core.js');
+  switchTab('video');
+  const list = [];
+  for (const { s, g } of made) {
+    const o = g?.outputs?.[0];
+    if (!o?.url) continue;
+    list.push({ kind: 'video', src: { generation: g.id, index: 0 }, url: o.url, label: `Shot ${s.i} · ${s.cam.name}`, dur: o.duration || 0 });
+  }
+  await layOnTimeline(list);
+  toast(`${list.length} shot${list.length === 1 ? '' : 's'} on the Video timeline`);
+}
+
+async function sendVideo(form, kind, blur, { quiet = false, label = '' } = {}) {
   form.append('fps', FPS); form.append('blur', blur); form.append('kind', kind); form.append('scene', JSON.stringify(SC));
   if (C.S.project != null) form.append('project_id', C.S.project);
   checkStop();
@@ -209,19 +252,24 @@ async function sendVideo(form, kind, blur) {
     try { await api(`/api/generations/${g.id}`, { method: 'DELETE' }); } catch { /* it stays in History */ }
     checkStop();
   }
-  const what = kind === 'pose' ? 'Pose video' : kind === 'color' ? 'Colour video' : 'Depth video';
+  const what = label || (kind === 'pose' ? 'Pose video' : kind === 'color' ? 'Colour video' : 'Depth video');
   setStatus(`${what} #${g.id} is in History`);
-  if (kind === 'color') return toast(`${what} saved`);
   R.lastRender = g;
-  R.renders[kind] = R.lastRender;
-  toast(`${what} saved`, false, { label: 'Use in H3 control', fn: () => C.useControlVideo(R.lastRender, SC) });
+  if (kind !== 'color') R.renders[kind] = R.lastRender;
+  if (!quiet) {
+    if (kind === 'color') toast(`${what} saved`);
+    else toast(`${what} saved`, false, { label: 'Use in H3 control', fn: () => C.useControlVideo(g, SC) });
+  }
+  return g;
 }
 
 // the posable people as OpenPose stick figures (COCO 18, the colours ControlNet pose models expect), with
 // their hands' 21 points and the face's 68 unless the scene leaves them out (SC.poseHands, SC.poseFace)
-export async function renderPoseVideo() {
-  const figs = SC.objects.filter((o) => o.type === 'figure' && !o.hidden);
+export async function renderPoseVideo(part = null) {
+  const figs = SC.objects.filter((o) => (o.type === 'figure' || o.type === 'rigged') && !o.hidden);
+  if (part == null && SC.renderShots === 'each') return renderEach(renderPoseVideo);
   if (busy || !figs.length || !canRender()) return false;
+  clip = part ? { first: part.f0, count: part.f1 - part.f0 + 1 } : null;
   busy = true; stopAsked = false; R.real = true; stopPlay(); TEMP.clear(); renderPanel();
   const keep = R.f, W = SC.width, H = SC.height, bar = busyBar('Rendering pose frames…');
   cancelToast('Rendering the pose video…');
@@ -241,20 +289,21 @@ export async function renderPoseVideo() {
       bar.set(null, (k + 1) / count);
       checkStop();
     }
-    await sendVideo(form, 'pose', 0);
+    await sendVideo(form, 'pose', 0, { quiet: !!part, label: part ? `Shot ${part.i} · ${part.cam.name}` : '' });
     return true;
   } catch (e) {
     if (e instanceof Cancelled) cancelled(); else { setStatus(''); toast(e.message, true); }
     return false;
   } finally {
+    clip = null;
     bar.done();
     busy = false; stopAsked = false; R.real = false; R.f = keep; fit(); refresh(); renderPanel();
   }
 }
 
-// a lit clay frame at the output size, as an input image (a start frame to restyle, for example)
-export async function saveFrame() {
-  if (!canRender()) return;
+// a lit clay frame at the output size, as a PNG blob (the view stays where the caller posed it)
+export async function clayBlob() {
+  if (!renderer) return null;
   const W = SC.width, H = SC.height;
   const rt = new THREE.WebGLRenderTarget(W, H, { colorSpace: THREE.SRGBColorSpace });
   const wasDepth = R.depth; R.depth = false;
@@ -265,7 +314,13 @@ export async function saveFrame() {
   renderer.setRenderTarget(rt); renderer.render(scene, camera); renderer.setRenderTarget(null);
   const blob = await targetToBlob(rt, W, H, false);
   rt.dispose();
-  R.depth = wasDepth; fit(); refresh();
+  R.depth = wasDepth;
+  return blob;
+}
+export async function saveFrame() {
+  if (!canRender()) return;
+  const blob = await clayBlob();
+  fit(); refresh();
   // a moment to take back a tap by mistake before it is kept (an input image can't be deleted after)
   let stop = false;
   toast('Saving the frame…', false, { label: '✕ Cancel', fn: () => { stop = true; toast('Frame not saved'); }, stay: true });

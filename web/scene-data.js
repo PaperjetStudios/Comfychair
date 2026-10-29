@@ -26,38 +26,51 @@ export const TYPES = {
   photo: { label: 'Photo', icon: '🖼', size: [1, 1, 1] },
   // imported files (scene-import.js): scaled evenly, the layer also holds url, name, ext
   model: { label: 'Model', icon: '🗿', size: [1, 1, 1] },
+  // a skinned model driven by the posable figure's own joints (scene-rig.js)
+  rigged: { label: 'Rigged model', icon: '🦴', size: [1, 1, 1] },
+  // a generic skinned model: its own bones are keyed (b.<bone> channels) and posed bone by bone
+  skinned: { label: 'Skinned model', icon: '🦴', size: [1, 1, 1] },
   splat: { label: 'Splat', icon: '☁', size: [1, 1, 1] },
 };
-export const EVEN = new Set(['figure', 'photo', 'model', 'splat']);
+export const EVEN = new Set(['figure', 'photo', 'model', 'splat', 'rigged', 'skinned']);
 // how a layer type that lives in its own module builds its three.js object: makers[type](layer) (scene-model.js: object)
 export const makers = {};
 // what's valued: a figure's values also hold its pose (j: joint rotations, m: parameters on top)
 export const FIG = [...OBJ, 'j', 'm', 'pn'];  // pn: the pose's name, for a prompt
-export const namesFor = (o) => (o.type === 'figure' ? FIG : OBJ);
+// a posable layer (a figure, or a model rigged to one: scene-rig.js) holds FIG
+export const isPosable = (o) => o?.type === 'figure' || o?.type === 'rigged';
+// a generic skinned model (scene-skin.js) keys its own bones: b.<bone>, the same quaternions j.<joint> are
+export const BONE = [...OBJ, 'b'];
+export const isBoneKeyed = (o) => o?.type === 'skinned';
+export const namesFor = (o) => (isPosable(o) ? FIG : isBoneKeyed(o) ? BONE : OBJ);
+// a joint's turn (j.) and a bone's (b.) are quaternions: both slerp and both live in a bag by name
+export const isQuatCh = (ch) => ch.startsWith('j.') || ch.startsWith('b.');
 // the gizmo's modes: [mode, icon, shortcut, name]
 export const MODES = [['translate', '✥', 'w', 'Move'], ['rotate', '⟳', 'e', 'Rotate'], ['scale', '⤢', 'r', 'Scale']];
 export const ROOM = 'room';  // R.sel for the room; null is the camera
 // where the gizmo sits on an object (what it turns and scales around), in the object's own space
 const PIVOTS = {
   figure: [['feet', 'Feet'], ['hips', 'Hips'], ['com', 'Centre of mass'], ['head', 'Head']],
+  rigged: [['feet', 'Feet'], ['hips', 'Hips'], ['com', 'Centre of mass'], ['head', 'Head']],
   photo: [['origin', 'Lens'], ['center', 'Centre']],
   model: [['base', 'Base'], ['center', 'Centre']],
   splat: [['base', 'Base'], ['center', 'Centre']],
   other: [['base', 'Base'], ['center', 'Centre'], ['top', 'Top']],
 };
 export const pivotsFor = (o) => PIVOTS[o.type] || PIVOTS.other;
-export const pivotOf = (o) => (pivotsFor(o).some(([k]) => k === o.pivot) || (o.type === 'figure' && FIGURE.JOINTS[o.pivot]) ? o.pivot
-  : o.type === 'figure' ? 'hips' : o.type === 'photo' ? 'center' : 'base');
+export const pivotOf = (o) => (pivotsFor(o).some(([k]) => k === o.pivot) || (isPosable(o) && FIGURE.JOINTS[o.pivot]) ? o.pivot
+  : isPosable(o) ? 'hips' : o.type === 'photo' ? 'center' : 'base');
 
 // ---- scene data ------------------------------------------------------------
 export let SC;   // the scene (persisted per project)
-export const R = { offEdit: null, modeKey: null, free: false, f: 0, sel: null, joint: null, figTab: 'pose', poseCat: 'stand', mask: 'all', sym: false, speed: 1, inPlace: false, renders: {}, promptOff: new Set(), promptNames: false, mode: 'translate', playing: false, real: false, depth: false, autoKey: true, record: false, meshes: new Map(), room: [], applying: false, lastRender: null };
+export const R = { offEdit: null, modeKey: null, free: false, f: 0, sel: null, joint: null, figTab: 'pose', poseCat: 'stand', mask: 'all', sym: false, speed: 1, inPlace: false, renders: {}, promptOff: new Set(), promptNames: false, shotOff: new Set(), shotFmt: 'h3', viewCut: true, mode: 'translate', playing: false, real: false, depth: false, autoKey: true, record: false, meshes: new Map(), room: [], applying: false, lastRender: null };
 
 export const newRoom = () => ({ w: 8, d: 8, h: 2.8, walls: true, ceiling: true, hidden: false });
 export function defaultScene() {
   return {
     v: 1, width: 768, height: 448, seconds: 6, lenMode: 'match', blur: 2, room: newRoom(),
     camera: { id: 'cam0', name: 'Camera', base: { px: 0, py: 1.6, pz: 5, tx: 0, ty: 1, tz: 0, fov: 45, roll: 0 }, chans: {}, ease: 'smooth' }, cams: [],
+    cuts: [], shotText: {}, tcStart: '01:00:00:00', renderShots: 'take',
     objects: [newObject('person', { x: 0, z: 0 }, [])],
   };
 }
@@ -67,7 +80,7 @@ export function newObject(type, at = {}, others = SC.objects) {
   const n = others.filter((o) => o.type === type).length + 1;
   const o = { id: uid(), type, name: `${t.label} ${n}`, ease: 'smooth', chans: {}, hidden: false,
     base: { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: t.size[0], sy: t.size[1], sz: t.size[2], ...at } };
-  if (type === 'figure') { o.base.j = { ...FIGURE.preset('stand').j, ...FIGURE.handPose('relaxed', 'l'), ...FIGURE.handPose('relaxed', 'r') }; o.ground = true; }
+  if (isPosable(o)) { o.base.j = { ...FIGURE.preset('stand').j, ...FIGURE.handPose('relaxed', 'l'), ...FIGURE.handPose('relaxed', 'r') }; o.ground = true; }
   return o;
 }
 
@@ -82,10 +95,16 @@ export function upgrade(sc) {
   for (const o of sc.objects) {
     migrateKeys(o, namesFor(o));
     o.base = { rx: 0, rz: 0, ...o.base }; o.hidden = !!o.hidden; o.mute = !!o.mute;
-    if (o.type === 'figure' && o.ground == null) o.ground = false;  // planted on the floor: older figures kept their own height
+    if (isPosable(o) && o.ground == null) o.ground = false;  // planted on the floor: older figures kept their own height
   }
   if (sc.camera) sc.camera.mute = !!sc.camera.mute;  // muted layers ignore their keys on screen (not in renders)
   if (sc.room) sc.room = { ceiling: false, hidden: false, ...sc.room };
+  // cuts (2026-10-29): which camera is live from which frame. Missing on an older scene: the active camera throughout.
+  sc.cuts = Array.isArray(sc.cuts) ? sc.cuts.filter((c) => c && Number.isFinite(+c.f) && c.cam).map((c) => ({ id: c.id || uid(), f: Math.round(+c.f), cam: String(c.cam), ease: 'const' })) : [];
+  sc.cuts.sort((a, b) => a.f - b.f);
+  if (!sc.shotText || typeof sc.shotText !== 'object' || Array.isArray(sc.shotText)) sc.shotText = {};
+  if (typeof sc.tcStart !== 'string' || !/^\d+:\d+:\d+:\d+$/.test(sc.tcStart)) sc.tcStart = '01:00:00:00';
+  if (sc.renderShots !== 'each') sc.renderShots = 'take';
   return sc;
 }
 
@@ -95,6 +114,83 @@ export const camsOf = (sc = SC) => [sc.camera, ...(sc.cams || [])].filter(Boolea
 export function newCamera(name = `Camera ${camsOf().length + 1}`, from = SC.camera) {
   return { id: uid(), name, base: { ...current(from, CAM) }, chans: {}, ease: 'smooth', mute: false };
 }
+export const camById = (id, sc = SC) => camsOf(sc).find((c) => c.id === id) || null;
+
+// the camera the picture uses at frame f. No cuts, or a cut whose camera was deleted: the active camera.
+// Before the first cut, that cut's camera (it holds, the way a key holds before its first frame).
+export function liveCam(f, sc = SC) {
+  const cuts = [...(sc?.cuts || [])].filter((c) => c && camById(c.cam, sc)).sort((a, b) => a.f - b.f);
+  if (!cuts.length || !sc?.camera) return sc?.camera || null;
+  let pick = cuts[0];
+  for (const c of cuts) if (c.f <= f) pick = c;
+  return camById(pick.cam, sc) || sc.camera;
+}
+
+// one entry per run of the same camera, clipped to the clip: { i, f0, f1, cam, id } (f0 and f1 inclusive)
+export function shots(sc = SC) {
+  const n = Math.max(1, framesFor(sc?.seconds || 0));
+  const last = n - 1;
+  if (!sc?.camera) return [];
+  const cuts = [...(sc.cuts || [])].filter((c) => c && camById(c.cam, sc)).sort((a, b) => a.f - b.f);
+  const bounds = [0];
+  for (const c of cuts) {
+    if (c.f <= 0 || c.f > last) continue;
+    if (liveCam(c.f - 1, sc).id !== liveCam(c.f, sc).id) bounds.push(c.f);
+  }
+  const out = [];
+  for (let i = 0; i < bounds.length; i++) {
+    const f0 = bounds[i], f1 = i + 1 < bounds.length ? bounds[i + 1] - 1 : last;
+    const cam = liveCam(f0, sc);
+    const cut = [...cuts].reverse().find((c) => c.f <= f0) || null;
+    out.push({ i: out.length + 1, f0, f1, cam, id: cut?.id || null });
+  }
+  return out;
+}
+
+// cut to cam at frame f (the playhead when f is left out). A cut already on that frame is replaced.
+export function cutTo(cam, f = R.f) {
+  const cuts = (SC.cuts ||= []);
+  const at = Math.max(0, Math.min(frames() - 1, Math.round(f)));
+  const i = cuts.findIndex((c) => c.f === at);
+  const row = { id: i >= 0 ? cuts[i].id : uid(), f: at, cam: cam.id, ease: 'const' };
+  if (i >= 0) cuts[i] = row; else cuts.push(row);
+  cuts.sort((a, b) => a.f - b.f);
+  return row;
+}
+// drop cuts that point at a camera, or that sit at or past frame n (a shorter clip)
+export function dropCuts(test) {
+  if (!SC.cuts) return;
+  SC.cuts = SC.cuts.filter((c) => !test(c));
+}
+export function trimCuts(n) { dropCuts((c) => c.f >= n); }
+// the same stretch as keys.js stretchAll, for the shot row
+export function stretchCuts(from, to) {
+  if (!SC.cuts?.length) return;
+  const k = to / Math.max(1, from);
+  for (const c of SC.cuts) c.f = Math.max(0, Math.min(Math.max(0, to - 1), Math.round(c.f * k)));
+  const by = new Map();
+  for (const c of SC.cuts) by.set(c.f, c);
+  SC.cuts = [...by.values()].sort((a, b) => a.f - b.f);
+}
+
+// the shot row as a keys.js track (kind 'cut'): the keys are the cuts, ease stays constant, never blended
+export function cutTrack(sc = SC) {
+  if (!Array.isArray(sc.cuts)) sc.cuts = [];
+  return {
+    item: sc, ch: 'cut', id: 'cuts', kind: 'cut',
+    get keys() { return sc.cuts; },
+    set keys(v) {
+      const seen = new Set();
+      for (const k of v) {
+        k.ease = 'const';
+        if (!k.id || seen.has(k.id)) k.id = uid();
+        seen.add(k.id);
+      }
+      sc.cuts = v;
+    },
+  };
+}
+
 // make one of SC.cams the active camera (the one it replaces joins the others, in its place)
 export function setActiveCam(cam) {
   const i = (SC.cams ||= []).indexOf(cam);
@@ -157,13 +253,13 @@ export const nextKeyFrame = (item, f, dir = 1) => (dir > 0 ? keyFrames(item).fin
 
 // what a channel holds without keys
 export function baseOf(item, ch) {
-  if (ch.startsWith('j.')) return item.base.j?.[ch.slice(2)] ?? IDENT;
+  if (isQuatCh(ch)) return (item.base[ch[0]] || {})[ch.slice(2)] ?? IDENT;
   if (ch.startsWith('m.')) return item.base.m?.[ch.slice(2)] || 0;
   return item.base[ch] ?? (ch === 'roll' ? 0 : undefined);   // (the camera's roll, missing in older scenes, is 0)
 }
 // a channel's value in a set of values { x, j: {...}, m: {...}, pn } (an unset joint is at rest, a parameter off)
 export function valOf(vals, ch) {
-  if (ch.startsWith('j.')) return vals.j?.[ch.slice(2)] ?? IDENT;
+  if (isQuatCh(ch)) return (vals[ch[0]] || {})[ch.slice(2)] ?? IDENT;
   if (ch.startsWith('m.')) return vals.m?.[ch.slice(2)] || 0;
   return vals[ch];
 }
@@ -178,7 +274,7 @@ const cloneV = (v) => (Array.isArray(v) ? [...v] : v);
 export function keyChans(item, names, vals, from = null) {
   const out = [];
   for (const n of names) {
-    if (n === 'j') for (const jn of new Set([...Object.keys(vals.j || {}), ...Object.keys(from?.j || {}), ...chanNames(item, 'j.').map((c) => c.slice(2))])) out.push(`j.${jn}`);
+    if (n === 'j' || n === 'b') for (const jn of new Set([...Object.keys(vals[n] || {}), ...Object.keys(from?.[n] || {}), ...chanNames(item, `${n}.`).map((c) => c.slice(2))])) out.push(`${n}.${jn}`);
     else if (n === 'm') for (const p of new Set([...Object.keys(vals.m || {}), ...Object.keys(from?.m || {}), ...chanNames(item, 'm.').map((c) => c.slice(2))])) out.push(`m.${p}`);
     else if (vals[n] !== undefined) out.push(n);
   }
@@ -191,19 +287,19 @@ const stepAt = (a, b, e) => (e < 0.5 ? a : b);
 export function sampleChan(item, ch, f) {
   const list = item.chans?.[ch];
   if (!list || !list.length) return baseOf(item, ch);
-  return sampleKeys(list, f, { ease: item.ease, lerp: ch.startsWith('j.') ? FIGURE.slerpQ : ch === 'pn' ? stepAt : undefined });
+  return sampleKeys(list, f, { ease: item.ease, lerp: isQuatCh(ch) ? FIGURE.slerpQ : ch === 'pn' ? stepAt : undefined });
 }
 
 // an item's values at frame f: each channel eased between its own keys
 export function sample(item, names, f) {
   const out = {};
   for (const n of names) {
-    if (n === 'j') {
-      const jk = chanNames(item, 'j.');
-      if (!jk.length) { out.j = item.base.j; continue; }
-      const j = {};
-      for (const jn of new Set([...Object.keys(item.base.j || {}), ...jk.map((c) => c.slice(2))])) j[jn] = sampleChan(item, `j.${jn}`, f);
-      out.j = j;
+    if (n === 'j' || n === 'b') {
+      const jk = chanNames(item, `${n}.`);
+      if (!jk.length) { out[n] = item.base[n]; continue; }
+      const bag = {};
+      for (const jn of new Set([...Object.keys(item.base[n] || {}), ...jk.map((c) => c.slice(2))])) bag[jn] = sampleChan(item, `${n}.${jn}`, f);
+      out[n] = bag;
     } else if (n === 'm') {
       const mk = chanNames(item, 'm.');
       if (!mk.length) { out.m = item.base.m; continue; }
@@ -219,7 +315,7 @@ export function sample(item, names, f) {
 export const setKey = (item, ch, f, v, ease) => putKey(chansOf(item), ch, f, v, ease);
 // make a channel's base value v (what it falls back to once it has no keys)
 export function bakeBase(item, ch, v) {
-  if (ch.startsWith('j.')) item.base.j = { ...item.base.j, [ch.slice(2)]: cloneV(v) };
+  if (isQuatCh(ch)) item.base[ch[0]] = { ...item.base[ch[0]], [ch.slice(2)]: cloneV(v) };
   else if (ch.startsWith('m.')) item.base.m = { ...item.base.m, [ch.slice(2)]: v };
   else item.base[ch] = v;
 }
@@ -312,7 +408,7 @@ export const REC_EVERY = 3;   // a recorded key every 3 frames (8 a second)
 function overlay(out, ch, names) {
   const o = { ...out };
   for (const [c, v] of ch) {
-    if (c.startsWith('j.')) { if (names.includes('j')) { if (o.j === out.j) o.j = { ...out.j }; o.j[c.slice(2)] = v; } }
+    if (isQuatCh(c)) { const bag = c[0]; if (names.includes(bag)) { if (o[bag] === out[bag]) o[bag] = { ...out[bag] }; o[bag][c.slice(2)] = v; } }
     else if (c.startsWith('m.')) { if (names.includes('m')) { if (o.m === out.m) o.m = { ...out.m }; if (v) o.m[c.slice(2)] = v; else delete o.m[c.slice(2)]; } }
     else if (names.includes(c)) o[c] = v;
   }
