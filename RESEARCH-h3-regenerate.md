@@ -101,19 +101,28 @@ Regenerate parts and what to do about each:
 
 | Part | As released | For 12 GB |
 |---|---|---|
-| Refiner LoRA | 12.5 GB, **FP32, rank 576** (three adapters stacked along the rank axis) | **cast to bf16** (half the size, no quality change), or **cut the rank down** with SVD (to 128 or 64, about 1–1.5 GB); see below |
-| Turbo inside the merge | LightX2V FL2VA Turbo | you already run `minimax_h3_ref2v_turbo_8step…`; a rank-cut that keeps only the refiner and sharpness parts and leaves your turbo LoRA in place is worth trying |
+| Refiner LoRA | 12.5 GB, **FP32, rank 576** (three adapters stacked along the rank axis) | use one of the **smaller copies already on Hugging Face** (below): 2 GB or 5.9 GB in bf16 |
+| Turbo inside the merge | LightX2V FL2VA Turbo | Kijai's refiner-only file leaves it out, so your own `minimax_h3_ref2v_turbo_8step…` stays in |
 | Fast VAE | 6.5 GB, non-causal, 24 layers | probably heavier than your int8 video VAE. Keep your VAE with tiled decode first, and only try the fast one if decoding is slow |
 | Text encoder | Qwen3-VL 32B NVFP4, 15.7 GB | already in use; make sure it unloads after encoding (RAM headroom: base 21 + LoRA 6 + VAE 5 + encoder 16 is close to 64 GB) |
 | Target | 1080P / 2K | **1080P** (or our existing 1.5×). 2K filled 32 GB on a 5090, so it's out of reach on 12 GB without tiling in time |
 
-**Shrinking the LoRA** (one-off script, `dev/shrink_lora.py`): load the safetensors, then
-1. cast to bf16 and save (always worth doing);
-2. optionally, for each layer, rebuild ΔW = B·A and keep the top r singular values (r = 128 / 64), saving A′ and B′.
+**Smaller LoRAs already on Hugging Face** (no script needed):
 
-Compare 768→1080P on the same 3 clips at full rank, r128 and r64 (faces, fine texture, time per clip). If the
-three adapters can be told apart by rank slices (check the model card or metadata for the split), drop the
-Turbo slice and keep ours.
+| File | What's in it | Size | How to use it |
+|---|---|---|---|
+| `Kijai/MiniMax-H3-experimental` → `loras/minimax_h3_open_regenerate_2k_refiner_rank_384_bf16.safetensors` | the **refiner on its own**, rank 384, bf16 | 5.9 GB | keep **your own turbo LoRA** in the chain (Kijai split it out "so it can be paired with other distills") |
+| `father558/H3-Open-Regenerate-2K-ComfyUI-r128` → `minimax_h3_open_regenerate_2k_r128_comfyui_bf16.safetensors` | the **whole merge** (refiner + Turbo + Sharp), SVD-cut to rank 128 (fused qkv at 384), bf16 | 2.0 GB | **drop your turbo LoRA**, since it's inside; strength 1.0 (alpha = rank) |
+| `DrakenZA/Open-H3-Regenerate-2K-ComfyUI` | an experimental ComfyUI conversion, loading not checked by its author | | skip for now |
+
+Both are community conversions, not NVIDIA's. Both are ordinary ComfyUI LoRAs, so `LoraLoaderModelOnly` loads
+them like the LoRAs in the templates, maybe without the node pack's special loader. Check whether the "sharp curve"
+and timestep table are still needed: father558's merge probably bakes in Sharp; Kijai's refiner-only probably
+doesn't use it.
+
+**What to try first on 12 GB:** father558 r128 (2 GB, nothing else in the chain), then Kijai r384 with your own
+`minimax_h3_ref2v_turbo_8step…`. Run the same 3 clips (faces, fine texture, motion), 768P → 1.5× / 1080P,
+Standard 2 steps, and compare time and faces. Then make the winner the default LoRA in Regenerate mode.
 
 **Settings for 12 GB:**
 - Standard (2 steps from 0.7) and 1080P;
@@ -122,7 +131,7 @@ Turbo slice and keep ours.
 - clips cut in time like the SeedVR2 path (`chunks that fit in VRAM`) if 1080P × 10 s runs out of memory.
 
 **Plan change for 12 GB:** build the Regenerate mode with **Target: 1.5× / 1080P** only, behind a check for the
-LoRA file. Let the LoRA file be chosen from `loras/` (so a bf16 or rank-cut copy can be picked), and keep 2K
+LoRA file. Let the LoRA file be chosen from `loras/` (the default is whichever of the two smaller files wins the test; it knows whether that file has turbo built in, and drops the run's turbo LoRA only if it does), and keep 2K
 hidden unless a card over 24 GB is found.
 
 **The video you linked:** YouTube (and NVIDIA's page) can't be reached from this session, so I couldn't watch
@@ -136,6 +145,8 @@ or the Hugging Face link and I'll fold it in.
   stated, but it's already in use here.
 
 ## Sources
+- Smaller LoRAs: https://huggingface.co/Kijai/MiniMax-H3-experimental/blob/main/loras/minimax_h3_open_regenerate_2k_refiner_rank_384_bf16.safetensors · https://huggingface.co/father558/H3-Open-Regenerate-2K-ComfyUI-r128 · https://huggingface.co/DrakenZA/Open-H3-Regenerate-2K-ComfyUI
+- NVlabs PR: https://github.com/NVlabs/Sana/pull/555
 - Base H3 GGUF and low-VRAM notes: https://huggingface.co/Abiray/MiniMax-H3-Pruned-GGUF · https://github.com/wildminder/awesome-minimax-H3/blob/main/guides/minimax-h3-performance.md
 - Model card (LoRA: FP32, rank 576): https://huggingface.co/Efficient-Large-Model/Open-H3-Regenerate-2K
 - NVIDIA project page (not reachable from here): https://nvlabs.github.io/Sana/Open-H3-Regenerate-2K/
