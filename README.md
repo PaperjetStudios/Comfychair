@@ -170,7 +170,7 @@ still lists; it fails when run. You only need the files of the templates you use
 | [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) | video load/save in most video templates, animated previews |
 | [ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes) | `ImageResizeKJv2`, LTX guide nodes |
 | [ComfyUI-LTXVideo](https://github.com/Lightricks/ComfyUI-LTXVideo) | `deck-ltx-*` IC-LoRA, tiling, inpaint, tracks, audio-only |
-| [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) | `deck-klein9b-edit` (GGUF text encoder) |
+| [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) | `deck-klein9b-*` (GGUF text encoder) |
 | [comfyui_controlnet_aux](https://github.com/Fannovel16/comfyui_controlnet_aux) | DWPose in `deck-pose-video`, `deck-h3-drive`, `deck-h3-faceswap`, `deck-ltx-drive` |
 | [ComfyUI-UtilsCollection](https://github.com/silveroxides/ComfyUI-UtilsCollection) | `UC_StitchImageGrid` |
 | [ComfyUI-Viggle-Animate-H3](https://github.com/Saganaki22/ComfyUI-Viggle-Animate-H3) | `deck-h3-animate`, `deck-h3-faceswap` |
@@ -263,10 +263,10 @@ IC-LoRAs, each for one template:
 | | `text_encoders` | `qwen3.5_9b_w4a8_gptq.safetensors` | 6.9 GB |
 | | `vae` | `flux2-vae_small.safetensors` | 238 MB |
 | `deck-moss-edit` | `loras/moss` | `moss_image_edit_lora_bf16.safetensors` ([PedroMarinhoDev/Moss-Image-Edit-ComfyUI](https://huggingface.co/PedroMarinhoDev/Moss-Image-Edit-ComfyUI)) | 297 MB |
-| `deck-klein3-edit` | `diffusion_models` | `flux3-image-klein-int8-convrot.safetensors` | 5.5 GB |
+| `deck-klein3-*` | `diffusion_models` | `flux3-image-klein-int8-convrot.safetensors` | 5.5 GB |
 | | `text_encoders` | `qwen3vl_4b_int8_convrot.safetensors` | 4.6 GB |
 | | `vae` | `flux2-vae.safetensors` | 321 MB |
-| `deck-klein9b-edit` | `diffusion_models` | `flux-2-klein-9b-fp8.safetensors` | 8.8 GB |
+| `deck-klein9b-*` | `diffusion_models` | `flux-2-klein-9b-fp8.safetensors` | 8.8 GB |
 | | `text_encoders` | `Qwen3-8B-Q8_0.gguf` | 8.2 GB |
 | | `vae` | `flux2-vae.safetensors` | 321 MB |
 | previews | `vae_approx` | `taef2_decoder` (optional, Flux2/MOSS/Klein) | |
