@@ -40,15 +40,59 @@ function rigLibrary(o) {
 
 const extOf = (url) => (String(url).split(/[?#]/)[0].match(/\.(\w+)$/) || [])[1]?.toLowerCase() || '';
 
-// the figure's rest (bind) world turns, once: the model's bind pose is measured against these, and the
-// view may already have posed the layer's own rig by the time its file loads
+// the figure's rest (bind) turns and places, once, in its own frame (the layer group's: the hidden rig sits at
+// its root): the model's bind pose is measured against these, and the view may already have posed the layer's
+// own rig by the time its file loads
 const BIND = (() => {
   const r = FIGURE.buildFigure(hideMat, dotMat, 'man');
   r.root.updateMatrixWorld(true);
-  const q = {};
-  for (const n of Object.keys(r.bones)) q[n] = r.bones[n].getWorldQuaternion(new THREE.Quaternion());
-  return q;
+  const q = {}, p = {};
+  for (const n of Object.keys(r.bones)) {
+    q[n] = r.bones[n].getWorldQuaternion(new THREE.Quaternion());
+    p[n] = r.bones[n].getWorldPosition(new THREE.Vector3());
+  }
+  return { q, p };
 })();
+// which way a joint points: toward this child (a hand toward its middle finger, the hips up the spine), else the
+// first of its children the model has
+const AIM = { hips: 'spine', chest: 'neck', lhand: 'lmiddle1', rhand: 'rmiddle1' };
+const KIDS = {};
+for (const [n, [parent]] of Object.entries(FIGURE.RIG_JOINTS)) if (parent) (KIDS[parent] ||= []).push(n);
+
+// the turn that swings a bone's bind direction (toward the bone its child joint maps to) onto the figure's rest
+// direction for the same limb, in the layer group's frame. Without it a model bound in a T- or A-pose keeps that
+// pose on top of every figure pose (arms 90° or 45° too high), as the figure rests with its arms down.
+function swingFor(b, joint, boneOf, group) {
+  const kids = KIDS[joint] || [];
+  const order = AIM[joint] ? [AIM[joint], ...kids] : kids;
+  for (const k of order) {
+    const c = boneOf.get(k);
+    if (!c || !BIND.p[k] || !isBelow(c, b)) continue;
+    const from = group.worldToLocal(c.getWorldPosition(V1)).sub(group.worldToLocal(b.getWorldPosition(V2)));
+    const to = V3.copy(BIND.p[k]).sub(BIND.p[joint]);
+    if (from.lengthSq() < 1e-12 || to.lengthSq() < 1e-12) return new THREE.Quaternion();
+    return new THREE.Quaternion().setFromUnitVectors(from.normalize(), to.normalize());
+  }
+  return new THREE.Quaternion();   // an end bone (the head, a foot, a fingertip): its bind turn as it is
+}
+const isBelow = (c, b) => { for (let p = c.parent; p; p = p.parent) if (p === b) return true; return false; };
+
+// the rest offset per bone ({bone name: joint} map, bones by name, the layer group): figure rest -> model bind
+// swung onto the figure's rest direction, both in the group's frame (sync multiplies it by the joint's world
+// turn, which carries the group's own)
+export function restOffsets(map, byName, group) {
+  const restQ = new Map();
+  const boneOf = new Map(Object.entries(map).filter(([n]) => byName.has(n)).map(([n, j]) => [j, byName.get(n)]));
+  group.updateMatrixWorld(true);
+  const toGroup = group.getWorldQuaternion(new THREE.Quaternion()).invert();
+  for (const [name, joint] of Object.entries(map)) {
+    const b = byName.get(name), qf = BIND.q[joint];
+    if (!b || !qf) continue;
+    const bind = toGroup.clone().multiply(b.getWorldQuaternion(new THREE.Quaternion()));
+    restQ.set(name, qf.clone().invert().multiply(swingFor(b, joint, boneOf, group)).multiply(bind));
+  }
+  return restQ;
+}
 
 // a skinned model file as three.js objects, in its bind pose
 async function loadFile(o) {
@@ -97,13 +141,7 @@ async function attach(o, group) {
   if (!o.map || !Object.keys(o.map).length) o.map = mapBones(places, { positions: restPositions(o.body || 'man'), tolerance: 0.14 });
   const byName = new Map(bones.map((b) => [b.name, b]));
 
-  // the rest offset per bone: figure rest -> model bind (world space)
-  const restQ = new Map();
-  for (const [name, joint] of Object.entries(o.map)) {
-    const b = byName.get(name), qf = BIND[joint];
-    if (!b || !qf) continue;
-    restQ.set(name, qf.clone().invert().multiply(b.getWorldQuaternion(new THREE.Quaternion())));
-  }
+  const restQ = restOffsets(o.map, byName, group);
   // parents before children, so a bone's parent world turn is this frame's
   const order = [];
   const walk = (b) => { order.push(b); for (const c of b.children) if (c.isBone) walk(c); };
@@ -161,6 +199,8 @@ export function makeRigged(o) {
   group.add(rig.root);
   group.userData.rig = rig;
   group.userData.atFrame = () => sync(o, group);
+  // (selecting it paints nothing: the view's figure clay on the hidden rig showed it once the skin had loaded)
+  group.userData.paint = () => {};
   group.userData.dispose = () => { group.userData.gone = true; disposeTree(group.userData.file); };
   attach(o, group)
     .then((r) => {

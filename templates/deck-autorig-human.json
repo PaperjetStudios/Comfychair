@@ -38,10 +38,10 @@
    "fbx_name": "",
    "no_fingers": false,
    "use_normal": false,
-   "reset_to_rest": true
+   "reset_to_rest": false
   },
   "_meta": {
-   "title": "@2 No fingers [no_fingers]"
+   "title": "@2 Rig [no_fingers,reset_to_rest]"
   }
  },
  "save": {
