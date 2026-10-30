@@ -250,6 +250,11 @@ def add_input(name: str, project_id, source: str = "upload"):
        (name, project_id, source, time.time()))
 
 
+def delete_input(name: str):
+    _q("DELETE FROM inputs WHERE name=?", (name,))
+    _q("DELETE FROM input_origins WHERE name=?", (name,))
+
+
 def set_input_origin(name: str, origin: dict | None):
     if origin and origin.get("generation") is not None:
         _q("INSERT OR REPLACE INTO input_origins(name, origin) VALUES (?,?)", (name, json.dumps(origin)))

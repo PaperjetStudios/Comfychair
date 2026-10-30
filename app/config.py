@@ -33,12 +33,13 @@ TOKEN = os.environ.get("DECK_TOKEN", "")
 COMFY_INPUT_SUBFOLDER = os.environ.get("DECK_COMFY_SUBFOLDER", "comfydeck")
 
 # ComfyUI's own folder, when it's on this machine (default: a ComfyUI folder next to ComfyChair's).
-# Only used for housekeeping: deleting a generation also deletes ComfyUI's copy of its outputs, and
-# old one-off crop files are cleared from its input folder. Set DECK_COMFY_DIR="" to turn that off.
+# Only used for housekeeping (app/storage.py): ComfyUI keeps no copy of a run's outputs once ComfyChair has its
+# own, deleting a run or a picture removes ComfyUI's copies too, and old one-off crops leave its input folder. Set DECK_COMFY_DIR="" to turn that off.
 _comfy_dir = os.environ.get("DECK_COMFY_DIR", str(BASE_DIR.parent / "ComfyUI"))
 COMFY_DIR = Path(_comfy_dir).resolve() if _comfy_dir and Path(_comfy_dir).is_dir() else None
 COMFY_OUTPUT_DIR = COMFY_DIR / "output" if COMFY_DIR and (COMFY_DIR / "output").is_dir() else None
 COMFY_INPUT_DIR = COMFY_DIR / "input" if COMFY_DIR and (COMFY_DIR / "input").is_dir() else None
+COMFY_TEMP_DIR = COMFY_DIR / "temp" if COMFY_DIR else None   # (ComfyUI makes it when it starts)
 
 for d in (DATA_DIR, TEMPLATES_DIR, GEN_DIR, PROJECTS_DIR, LIBRARY_DIR, INPUT_DIR, THUMB_DIR, MEDIA_DIR, SCENE_CLIP_DIR, VIDEOPREP_DIR):
     d.mkdir(parents=True, exist_ok=True)

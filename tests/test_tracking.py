@@ -195,10 +195,14 @@ class TapJob(unittest.TestCase):
             async def view(self, filename, subfolder="", type_="output"):
                 return self.payload, "application/json"
 
+            async def forget(self, pid):   # (the run leaves ComfyUI's history: storage.py)
+                seen["forgot"] = pid
+
         fake = Fake()
         with mock.patch.object(tracking, "comfy", fake), mock.patch.object(tracking.config, "DATA_DIR", td):
             r = asyncio.run(tracking.analyse_tapnext(src, atlas_path=td / "a.jpg"))
         self.assertTrue(fake.clip_exists)
+        self.assertEqual(seen.get("forgot"), "p1")
         self.assertFalse(list((td / "tmp" / "track").glob("*.mp4")))   # the cut clip is cleaned up
         self.assertEqual((r["method"], r["n"], r["lost"]), ("tapnext", 10, 0))
         self.assertAlmostEqual(r["frames"][-1]["tx"], 36.0, delta=0.5)   # 9 x 4 px at full size (320 wide = analysis width)

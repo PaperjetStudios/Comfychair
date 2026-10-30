@@ -237,6 +237,7 @@ export function openImagePicker(opts) {
   if (tab !== 'project' && tab !== 'all' && !SOURCES.has(tab)) tab = 'project';
   let q = '';
   let inputs = null;
+  let deleting = false;   // Delete… on: a tap on a picture deletes it (every copy, after a confirm)
   const search = h('input', { type: 'text', placeholder: 'Filter by name…' });
 
   const picked = (name, info, card) => {
@@ -245,8 +246,15 @@ export function openImagePicker(opts) {
     if (card) card.classList.add('picked');
     toast('Added');
   };
+  const removeInput = async (n) => {
+    if (!confirm(`Delete ${n.split('/').pop()} for good? Every copy goes (here and in ComfyUI), and its thumbnails.`)) return;
+    try {
+      await api(`/api/inputs?name=${encodeURIComponent(n)}`, { method: 'DELETE' });
+      inputs = null; toast('Deleted'); draw();
+    } catch (e) { toast(e.message, true); }
+  };
   const inputCard = (n, badge) => mediaCard(h('img', { src: thumbUrl(n), alt: n, loading: 'lazy' }), n.split('/').pop(),
-    (c) => picked(n, { name: n }, c), { badge });
+    (c) => (deleting ? removeInput(n) : picked(n, { name: n }, c)), { badge: deleting ? '🗑' : badge });
   const fromHistory = async (g, i, c) => {
     try {
       const r = await api(`/api/generations/${g.id}/to-input`, { method: 'POST',
@@ -324,6 +332,8 @@ export function openImagePicker(opts) {
     currentEditReady() ? button('Current edit', useCurrentEdit, { cls: 'small primary', title: 'Export the picture open in the Editor right now and use it' }) : null,
     fileButton('Upload…', onFiles, { accept: 'image/*', multiple: multi, cls: 'small primary' }),
     fileButton('📷 Camera', onFiles, { accept: 'image/*', capture: 'environment' }),
+    button('Delete…', (e) => { deleting = !deleting; e.currentTarget.classList.toggle('on', deleting); draw(); },
+      { cls: 'small danger', title: 'Tap pictures to delete them for good (uploads and saved pictures, not History)' }),
     multi ? button('Done', closeSheet) : null], async () => {
     search.classList.toggle('hidden', tab !== 'all');
     if (SOURCES.has(tab)) return sourceCards(SOURCES.get(tab));

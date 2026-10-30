@@ -1,9 +1,11 @@
 """ComfyChair: publish a rigged model where ComfyChair finds it.
 
 UniRig and Make It Animatable write a rigged FBX to disk and pass its path along as a string, so the run
-reports no file of its own. Deck Save Rig copies that file into the output folder and lists it as an
+reports no file of its own. Deck Save Rig moves that file into the output folder and lists it as an
 output, so Use as -> Rig as a person can bring it into the 3D scene (scene-rig.js loads it with the
-figure's skeleton driving its bones).
+figure's skeleton driving its bones). What the rigger wrote beside it under the same name (Make It
+Animatable's GLB twin and the .fbm texture folder) is deleted: ComfyChair keeps the one copy it collects,
+and ComfyUI keeps none (app/storage.py).
 """
 import os
 import shutil
@@ -44,7 +46,12 @@ class DeckSaveRig:
         folder, name, counter, sub, _ = folder_paths.get_save_image_path(filename_prefix, out_dir)
         os.makedirs(folder, exist_ok=True)
         fname = f"{name}_{counter:05}_{uuid.uuid4().hex[:4]}{ext}"
-        shutil.copyfile(path, os.path.join(folder, fname))
+        shutil.move(path, os.path.join(folder, fname))
+        stem, where = os.path.splitext(os.path.basename(path))[0], os.path.dirname(path)
+        for other in os.listdir(where):   # (the rigger's twins: same name, another extension, and the texture folder)
+            if os.path.splitext(other)[0] == stem or other == stem + ".fbm":
+                q = os.path.join(where, other)
+                shutil.rmtree(q, ignore_errors=True) if os.path.isdir(q) else os.remove(q)
         return {"ui": {"files": [{"filename": fname, "subfolder": sub, "type": "output"}]}}
 
 

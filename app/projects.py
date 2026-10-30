@@ -24,7 +24,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Body, HTTPException
 
-from . import config, db
+from . import config, db, storage
 
 log = logging.getLogger("comfydeck.projects")
 router = APIRouter(prefix="/api/projects")
@@ -333,6 +333,7 @@ async def delete(pid: int, confirm: str = ""):
     if pid in _busy_ids():
         raise HTTPException(409, "That project is being copied: wait for the copy to finish")
     folder = p.get("folder")
+    pictures = [r["name"] for r in db.project_inputs(pid)]
     # another project naming the same folder (only possible in a hand-edited database): keep the files
     shared = folder and any((q.get("folder") or "").lower() == folder.lower() for q in db.list_projects() if q["id"] != pid)
     try:
@@ -345,13 +346,14 @@ async def delete(pid: int, confirm: str = ""):
     def files():
         for g in gens:   # ComfyUI's own copies of the outputs (only where recorded, and the same size as ours)
             for o in g["outputs"]:
+                ours = config.PROJECTS_DIR / o["path"] if o.get("path") else config.GEN_DIR / str(g["id"]) / o["filename"]
+                storage.drop_caches(ours.resolve())   # (its thumbnails and previews)
                 if not o.get("comfy"):   # (older outputs are looked up by name, which needs the project row: leave them)
                     continue
-                ours = config.PROJECTS_DIR / o["path"] if o.get("path") else config.GEN_DIR / str(g["id"]) / o["filename"]
                 try:
                     theirs = comfy_copy(g, o, ours) if comfy_copy else None
                     if theirs:
-                        theirs.unlink(missing_ok=True)
+                        storage.remove(storage.family(theirs))
                 except OSError:
                     pass
             old = config.GEN_DIR / str(g["id"])
@@ -359,6 +361,9 @@ async def delete(pid: int, confirm: str = ""):
                 shutil.rmtree(old, ignore_errors=True)
         if not shared:
             remove_folder(project_dir(folder))
+        for name in pictures:   # its pictures, every copy, unless another project's runs or tabs use them (storage.py)
+            if not storage.input_used(name):
+                storage.delete_input(name)
     try:
         await asyncio.to_thread(files)
     except Exception as e:  # noqa: BLE001

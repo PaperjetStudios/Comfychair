@@ -28,6 +28,23 @@ def is_video(workflow: dict) -> bool:
                for n in workflow.values())
 
 
+def once(workflow: dict) -> dict:
+    """Make this run's saved files its own: every filename_prefix gets a run-<token>/ folder and an auto-rigger's
+    fbx_name the token. ComfyChair deletes ComfyUI's copies once it has its own (storage.py), so a repeated prompt
+    must save again rather than be answered from ComfyUI's cache with files that are gone. (Only the save nodes
+    and riggers run again: everything before them stays cached.)"""
+    token = uuid.uuid4().hex[:8]
+    for node in workflow.values():
+        ins = node.get("inputs") or {}
+        fp = ins.get("filename_prefix")
+        if isinstance(fp, str) and "/run-" not in fp:
+            head, _, base = fp.rpartition("/")
+            ins["filename_prefix"] = f"{head}/run-{token}/{base}" if head else f"run-{token}/{base}"
+        if "fbx_name" in ins and not ins["fbx_name"]:
+            ins["fbx_name"] = f"deck_{token}"
+    return workflow
+
+
 class ComfyError(Exception):
     def __init__(self, payload):
         self.payload = payload
@@ -175,6 +192,7 @@ class Comfy:
 
     async def queue(self, workflow: dict, preview: str | None = None) -> dict:
         await self._free_on_model_change(workflow)
+        once(workflow)
         # Live sampler previews: ComfyUI sends none unless asked. Images use "taesd" (the tiny
         # decoders in models/vae_approx, else latent2rgb). Video uses latent2rgb with VHS's animated
         # preview switch, read from the workflow extras where the desktop UI puts it: the video TAE
@@ -225,6 +243,13 @@ class Comfy:
         r = await self.http.get(f"/history/{prompt_id}")
         r.raise_for_status()
         return r.json()
+
+    async def forget(self, prompt_id: str):
+        """Take a finished run out of ComfyUI's history (it holds the prompt and the output names until a restart)."""
+        try:
+            await self.http.post("/history", json={"delete": [prompt_id]})
+        except httpx.HTTPError:
+            pass
 
     async def view(self, filename: str, subfolder: str = "", type_: str = "output"):
         r = await self.http.get("/view", params={"filename": filename, "subfolder": subfolder, "type": type_})

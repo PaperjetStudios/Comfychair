@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import accel, audioedit, civitai, clipimport, craft, delogo, h3upscale, posefind, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
-from . import projects, store
+from . import projects, storage, store
 from . import keyexpr, looks, maskcomp, promptaid, sceneasset
 from . import templates as tpl
 from .comfy import Comfy, ComfyError
@@ -207,7 +207,8 @@ def migrate_outputs():
             log.info("moved outputs of #%s into %s", g["id"], db.project_folder(g["project_id"]))
 
 
-def _collect_outputs(outputs: dict) -> list[dict]:
+def _collect_outputs(outputs: dict, every: bool = False) -> list[dict]:
+    """The files a run reported to keep (every=True: all of them, previews in ComfyUI's temp folder too)."""
     items = []
     for node_id, out in (outputs or {}).items():
         for key, vals in (out or {}).items():
@@ -217,7 +218,20 @@ def _collect_outputs(outputs: dict) -> list[dict]:
                 if isinstance(it, dict) and "filename" in it:
                     items.append({**it, "node": node_id, "key": key})
     saved = [i for i in items if i.get("type") == "output"]
-    return saved or items  # templates that only use Preview nodes still get their images kept
+    return items if every else saved or items  # templates that only use Preview nodes still get their images kept
+
+
+async def tidy_comfy(pid: str, reported: list[dict], saved: list[Path], wf: dict | None):
+    """After a run (storage.py's rules): ComfyUI keeps no copy of what ComfyChair saved, nor the files it wrote
+    beside them; an auto-rig's mesh copy leaves its input folder; the run leaves ComfyUI's history."""
+    try:
+        if reported:
+            await asyncio.to_thread(storage.drop_comfy_outputs, reported, saved)
+        if p := storage.rig_input(wf):
+            p.unlink(missing_ok=True)
+        await comfy.forget(pid)
+    except Exception:  # noqa: BLE001  (housekeeping never fails a run)
+        log.warning("tidying ComfyUI after %s failed", pid, exc_info=True)
 
 
 async def finalize(pid: str):
@@ -250,8 +264,9 @@ async def finalize(pid: str):
                 if isinstance(m, list) and len(m) == 2 and m[0] == "execution_error":
                     msg = m[1].get("exception_message", msg)
             db.update_generation(gid, status="error", error=msg, finished=time.time())
+            await tidy_comfy(pid, [], [], db.get_workflow(gid))
             return
-        saved, used, wf = [], set(), db.get_workflow(gid)
+        saved, used, wf, got = [], set(), db.get_workflow(gid), []
         for it in _collect_outputs(entry.get("outputs")):
             name = re.sub(r"[^\w.\-]", "_", Path(it["filename"]).name)
             while name in used:
@@ -260,10 +275,12 @@ async def finalize(pid: str):
             path, rel = new_output(g, name)
             src = {"filename": it["filename"], "subfolder": it.get("subfolder", ""), "type": it.get("type", "output")}
             await comfy.download(src["filename"], src["subfolder"], src["type"], path)
-            # "comfy": where ComfyUI keeps its own copy, so deleting the generation can remove that too
+            got.append(path)
+            # "comfy": where ComfyUI kept its own copy (gone once tidy_comfy has run; older runs still have one)
             cls = ((wf or {}).get(str(it["node"])) or {}).get("class_type", "")   # (what saved it: a motion node's .json)
             saved.append({"filename": name, "path": rel, "kind": imageprep.kind_of(name, cls), "node": it["node"], "comfy": src})
         db.update_generation(gid, status="done", outputs=saved, finished=time.time())
+        await tidy_comfy(pid, _collect_outputs(entry.get("outputs"), every=True), got, wf)
     except Exception as e:
         log.exception("finalize failed for %s", pid)
         if gid:
@@ -685,13 +702,20 @@ async def delete_generation(gid: int):
     if not g:
         raise HTTPException(404)
     db.delete_generation(gid)
-    for o in g["outputs"]:
-        ours = output_file(g, o)
-        theirs = comfy_copy(g, o, ours)
-        if theirs:
-            theirs.unlink(missing_ok=True)
-        ours.unlink(missing_ok=True)
+    for o in g["outputs"]:   # every copy (storage.py): ours, ComfyUI's (older runs still have one) and what it wrote
+        ours = output_file(g, o)   # beside it, a mesh copied in for rigging, and the thumbnails and previews of it
+        gone = [ours]
+        if theirs := comfy_copy(g, o, ours):
+            gone += storage.family(theirs)
+        if config.COMFY_INPUT_DIR and ours.is_file():
+            copy = config.COMFY_INPUT_DIR / "3d" / (re.sub(r"[^\w.\-]+", "_", ours.name)[:80] or "model.glb")
+            if copy.is_file() and copy.stat().st_size == ours.stat().st_size:
+                gone.append(copy)
+        storage.drop_caches(ours.resolve())
+        storage.remove(gone)
     shutil.rmtree(config.GEN_DIR / str(gid), ignore_errors=True)
+    if g.get("prompt_id") and not g["prompt_id"].startswith("edit-"):
+        await comfy.forget(g["prompt_id"])
     await broadcast({"type": "deck_generation_deleted", "data": {"id": gid}})
     return {"ok": True}
 
@@ -1867,6 +1891,32 @@ async def list_inputs(project_id: str = ""):
             "all": [prefix + p.name for p in local] + [n for n in names if not n.startswith(prefix)]}
 
 
+@app.get("/api/storage/sweep")
+async def storage_sweep_list():
+    """What a clean-up would delete (storage.sweep): ComfyUI's leftover copies of ComfyChair's files and old
+    thumbnails, with sizes. Nothing is deleted."""
+    r = await asyncio.to_thread(storage.sweep)
+    return {**r, "items": r["items"][:500]}
+
+
+@app.post("/api/storage/sweep")
+async def storage_sweep():
+    """Delete what storage_sweep_list lists (files under ten minutes old and sole copies are left)."""
+    r = await asyncio.to_thread(storage.sweep, True)
+    return {"count": r["count"], "freed": r["freed"]}
+
+
+@app.delete("/api/inputs")
+async def delete_input(name: str):
+    """A picture, for good: ComfyChair's copy, ComfyUI's, its thumbnails and its row (storage.delete_input). Runs
+    that used it keep their record; running them again needs another picture."""
+    if not name.startswith(config.COMFY_INPUT_SUBFOLDER + "/") or ".." in name.split("/"):
+        raise HTTPException(400, "That isn't one of ComfyChair's pictures")
+    freed = await asyncio.to_thread(storage.delete_input, name)
+    await broadcast({"type": "deck_input_deleted", "data": {"name": name}})
+    return {"ok": True, "freed": freed}
+
+
 @app.get("/api/input")
 async def input_image(name: str, thumb: int = 0):
     """Preview of an image in ComfyUI's input folder. thumb=N returns a cached JPEG at most N px wide."""
@@ -1874,8 +1924,7 @@ async def input_image(name: str, thumb: int = 0):
     local = local_input(name)
     if thumb:
         thumb = max(64, min(thumb, 1024))
-        key = hashlib.sha1(f"{name}:{thumb}".encode()).hexdigest()[:20]
-        cached = config.THUMB_DIR / f"{key}.jpg"
+        cached = config.THUMB_DIR / f"{storage.tag(name)}-{thumb}.jpg"   # (storage.drop_caches finds it by the name)
         if not cached.is_file():
             if local:
                 data = local.read_bytes()

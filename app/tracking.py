@@ -21,7 +21,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Body, HTTPException
 
-from . import config, db, videoedit
+from . import config, db, storage, videoedit
 
 router = APIRouter(prefix="/api/track")
 resolve_src = None  # async (src dict, tmp dir) -> (path, kind); main.py sets it to the Video tab's source lookup
@@ -294,6 +294,8 @@ async def analyse_tapnext(path, start=0.0, end=None, region=None, exclude=None, 
             raise ValueError("TAPNext++ gave no tracks")
         data, _ = await comfy.view(f["filename"], f.get("subfolder", ""), f.get("type", "output"))
         res = json.loads(data)
+        storage.remove([p] if (p := storage.comfy_path(f)) else [])   # (ComfyUI keeps nothing: storage.py)
+        await comfy.forget(pid)
     finally:
         clip.unlink(missing_ok=True)
 

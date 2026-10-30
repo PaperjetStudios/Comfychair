@@ -20,8 +20,32 @@ export function projectsSection(back) {
   draw();
   refresh();
   return section('Projects', null,
-    help('Drag ⠿ (or use ↑ ↓) to change the order of the project picker. ✎ renames (the folder on disk keeps its name). ⧉ makes a copy with all its files, saved tabs and history; a big project takes a while and you can keep working. 🗑 deletes a project, its history and its files on disk for good.'),
-    P.list);
+    help('Drag ⠿ (or use ↑ ↓) to change the order of the project picker. ✎ renames (the folder on disk keeps its name). ⧉ makes a copy with all its files, saved tabs and history; a big project takes a while and you can keep working. 🗑 deletes a project, its history and its files on disk for good, with its pictures unless another project uses them.'),
+    P.list,
+    button('Clean up leftovers…', cleanUp, { title: 'Copies ComfyUI kept of ComfyChair\'s files, and old thumbnails: see them, then delete them' }));
+}
+
+// Settings → Projects → Clean up leftovers: what ComfyUI still holds of ComfyChair's (copies of outputs, models
+// copied in for rigging) and old thumbnails, grouped with sizes; one button deletes them (app/storage.py).
+async function cleanUp() {
+  let r;
+  try { r = await api('/api/storage/sweep', { busy: 'Looking…' }); } catch (e) { return toast(e.message, true); }
+  if (!r.count) { toast('Nothing left over'); return; }
+  const groups = new Map();
+  for (const it of r.items) {
+    const g = groups.get(it.why) || { n: 0, bytes: 0 };
+    g.n++; g.bytes += it.bytes; groups.set(it.why, g);
+  }
+  openSheet(h('h3', {}, 'Clean up leftovers'),
+    h('ul', {}, ...[...groups].map(([why, g]) => h('li', {}, `${why}: ${g.n} file${g.n === 1 ? '' : 's'}, ${fmtBytes(g.bytes)}`))),
+    note('ComfyChair keeps its own copy of everything in History; these are extra copies and caches. A file ComfyChair has no other copy of is never listed, nor anything made in the last ten minutes.'),
+    actions(button(`Delete ${r.count} file${r.count === 1 ? '' : 's'} (${fmtBytes(r.bytes)})`, async () => {
+      try {
+        const d = await api('/api/storage/sweep', { method: 'POST', busy: 'Deleting…' });
+        toast(`Deleted ${d.count} files, ${fmtBytes(d.freed)} freed`);
+      } catch (e) { toast(e.message, true); }
+      closeSheet(); P.back?.();
+    }, { cls: 'danger' }), button('Back', () => { closeSheet(); P.back?.(); }, { cls: 'ghost' })));
 }
 
 async function refresh() {

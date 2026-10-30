@@ -17,7 +17,7 @@ from urllib.parse import unquote
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from . import config, imageprep, videoedit
+from . import config, imageprep, storage, videoedit
 
 router = APIRouter()
 DIR = config.THUMB_DIR / "previews"
@@ -44,8 +44,9 @@ def source(url: str) -> Path:
 
 def _key(p: Path, w: int, kind: str) -> Path:
     st = p.stat()
-    h = hashlib.sha1(f"{p}:{st.st_size}:{st.st_mtime_ns}:{w}:{kind}".encode()).hexdigest()[:20]
-    return DIR / f"{h}.{ {'still': 'jpg', 'clip': 'mp4', 'wave': 'png'}[kind] }"
+    h = hashlib.sha1(f"{p}:{st.st_size}:{st.st_mtime_ns}:{w}:{kind}".encode()).hexdigest()[:12]
+    # (it starts with the source's tag, so deleting the source deletes its previews: storage.drop_caches)
+    return DIR / f"{storage.tag(p)}-{h}.{ {'still': 'jpg', 'clip': 'mp4', 'wave': 'png'}[kind] }"
 
 
 def make_still(p: Path, out: Path, w: int):
