@@ -1,5 +1,5 @@
 import {
-  $, h, store, api, toast, openSheet, closeSheet, button, iconBtn, actions, fileButton, seg, placeholder, note, mediaCard, field, pickButtons,
+  $, h, store, api, toast, openSheet, closeSheet, sheetStillOpen, button, iconBtn, actions, fileButton, seg, placeholder, note, mediaCard, field, pickButtons,
 } from './ui.js';
 import { fmtTime } from './playback.js';
 import { cardPicture, kindTile } from './kinds.js';
@@ -42,9 +42,59 @@ export function pickerSheet(title, bar, load) {
     try { const cards = await load(); grid.replaceChildren(...[cards].flat()); }
     catch (e) { grid.replaceChildren(note(e.message, 'err')); }
   };
-  openSheet(h('h3', {}, title), h('div', { class: 'picker-bar' }, bar), grid);
+  draw.seq = openSheet(h('h3', {}, title), h('div', { class: 'picker-bar' }, bar), grid);
   draw();
   return draw;
+}
+
+// Pictures dropped on an open picker sheet (from the desktop or another window) go to give(files). One listener on
+// the sheet; DROP is the open picker's, live while its sheet is (sheetStillOpen).
+let DROP = null;
+function dropPictures(seq, give) {
+  DROP = { seq, give };
+  const el = $('#sheet');
+  if (el.dataset.drop) return;
+  el.dataset.drop = '1';
+  const live = (e) => DROP && sheetStillOpen(DROP.seq) && [...(e.dataTransfer?.types || [])].includes('Files');
+  el.addEventListener('dragover', (e) => { if (!live(e)) return; e.preventDefault(); el.classList.add('dropping'); });
+  el.addEventListener('dragleave', (e) => { if (!el.contains(e.relatedTarget)) el.classList.remove('dropping'); });
+  el.addEventListener('drop', (e) => {
+    el.classList.remove('dropping');
+    if (!live(e)) return;
+    e.preventDefault();
+    const fs = [...e.dataTransfer.files].filter((f) => f.type.startsWith('image/'));
+    if (fs.length) DROP.give(fs); else toast('Drop a picture (PNG, JPG, WebP…)', true);
+  });
+}
+
+// The webcam, where the camera button can't ask for it (a desktop browser ignores capture and opens the file
+// chooser): a live view and Take picture. onFile(PNG File); Cancel runs back(). The camera goes off when the sheet
+// does, however it closes.
+const desktop = () => matchMedia('(pointer: fine)').matches;
+const hasWebcam = async () => {
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) return false;   // (HTTPS only)
+  try { return (await navigator.mediaDevices.enumerateDevices()).some((d) => d.kind === 'videoinput'); } catch { return false; }
+};
+async function takePhoto({ onFile, back }) {
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false }); }
+  catch (e) { toast(e.name === 'NotAllowedError' ? 'The browser wasn\'t allowed to use the camera' : `Can't open the camera: ${e.message}`, true); return; }
+  const v = h('video', { muted: true, playsInline: true, autoplay: true, class: 'frame-video' });
+  v.srcObject = stream;
+  const stop = () => { clearInterval(watch); stream.getTracks().forEach((t) => t.stop()); };
+  const watch = setInterval(() => { if (!v.isConnected || v.closest('.hidden')) stop(); }, 500);
+  const take = () => {
+    if (!v.videoWidth) return toast('The camera is still starting', true);
+    const cv = document.createElement('canvas');
+    cv.width = v.videoWidth; cv.height = v.videoHeight;
+    cv.getContext('2d').drawImage(v, 0, 0);
+    cv.toBlob((b) => {
+      if (!b) return toast('Couldn\'t take the picture', true);
+      stop(); closeSheet(); onFile(new File([b], `camera-${Date.now()}.png`, { type: 'image/png' }));
+    }, 'image/png');
+  };
+  openSheet(h('h3', {}, 'Camera'), h('div', { class: 'media-big' }, v),
+    actions(button('Take picture', take, { cls: 'primary' }), button('Cancel', () => { stop(); back(); }, { cls: 'ghost' })));
 }
 
 export const uploadMedia = (file) => { const form = new FormData(); form.append('file', file); return api('/api/media', { method: 'POST', form }); };
@@ -199,8 +249,9 @@ export function registerPickerSource(src) { SOURCES.set(src.key, src); }
 const currentEditReady = () => !!CURRENT.eng?.E.layers.some((l) => !l.hidden && !l.mask);
 
 // Scrub a video and take one frame: a sheet with the clip, a slider and frame steps.
-// Resolves a PNG Blob of the shown frame, or null on Cancel (Back, if given, runs after).
-export function pickFrame({ url, title = 'Pick a frame', fps = 24, back = null }) {
+// Resolves a PNG Blob of the shown frame, or null on Cancel (Back, if given, runs after). grab(t), if given, makes
+// the frame instead (a Blob for the time shown: the link still takes it from the full-quality video).
+export function pickFrame({ url, title = 'Pick a frame', fps = 24, back = null, grab = null }) {
   return new Promise((resolve) => {
     const v = h('video', { src: `${url}#t=0.001`, muted: true, playsInline: true, preload: 'auto', class: 'frame-video' });
     const slider = h('input', { type: 'range', min: 0, max: 0, step: 'any', value: 0, 'aria-label': 'Time' });
@@ -215,6 +266,11 @@ export function pickFrame({ url, title = 'Pick a frame', fps = 24, back = null }
     const use = async () => {
       if (!v.videoWidth) return toast('The video is still loading', true);
       if (v.seeking) await new Promise((r) => v.addEventListener('seeked', r, { once: true }));
+      if (grab) {
+        v.pause();
+        toast('Taking the frame…');
+        try { return done(await grab(v.currentTime)); } catch (e) { return toast(e.message, true); }
+      }
       const cv = document.createElement('canvas');
       cv.width = v.videoWidth; cv.height = v.videoHeight;
       cv.getContext('2d').drawImage(v, 0, 0);
@@ -264,7 +320,7 @@ export function openImagePicker(opts) {
   };
 
   // This project: its uploads, editor saves and drawings plus everything it generated, newest first
-  const SOURCE = { upload: 'upload', editor: 'edit', drawing: 'drawing', crop: 'crop', snapshot: 'frame', scene: '3d', 'edit-tab': 'edit tab', 'video-tab': 'video edit', story: 'story' };
+  const SOURCE = { upload: 'upload', editor: 'edit', drawing: 'drawing', crop: 'crop', snapshot: 'frame', scene: '3d', 'edit-tab': 'edit tab', 'video-tab': 'video edit', story: 'story', link: 'link', camera: 'camera' };
   const projectCards = async () => {
     const items = inputs.project.filter((r) => r.source !== 'generation')
       .map((r) => ({ t: r.created, el: () => inputCard(r.name, SOURCE[r.source] || null) }));
@@ -306,11 +362,11 @@ export function openImagePicker(opts) {
 
   const projName = (S.projects.find((p) => p.id === S.project) || {}).name || 'This project';
   const tabs = seg([['project', projName], ['all', 'All inputs'], ...[...SOURCES.values()].map((x) => [x.key, x.label])], tab, (t) => { tab = t; store.set('deck.pickerTab2', t); draw(); });
-  const onFiles = async (files) => {
+  const onFiles = async (files, source = 'upload') => {
     toast(`Uploading ${files.length}…`);
     for (const fl of files) {
       try {
-        const r = await uploadImage(fl, { mp: mp(), source: 'upload' });
+        const r = await uploadImage(fl, { mp: mp(), source });
         inputs = null;
         picked(r.name, r, null);
         if (!multi) return;
@@ -329,10 +385,17 @@ export function openImagePicker(opts) {
       picked(r.name, r, null);
     } catch (e) { toast(`Couldn't export the edit: ${e.message}`, true); }
   };
-  const draw = pickerSheet(title, [tabs,
+  const reopen = () => openImagePicker(opts);
+  const webcam = button('📷 Camera', () => takePhoto({ back: reopen, onFile: async (f) => { await onFiles([f], 'camera'); if (multi) reopen(); } }),
+    { cls: 'small hidden', title: 'Take a picture with the webcam' });
+  if (desktop()) hasWebcam().then((y) => webcam.classList.toggle('hidden', !y));
+  const draw = pickerSheet(title, [tabs, h('span', { class: 'picker-break' }),
     currentEditReady() ? button('Current edit', useCurrentEdit, { cls: 'small primary', title: 'Export the picture open in the Editor right now and use it' }) : null,
     fileButton('Upload…', onFiles, { accept: 'image/*', multiple: multi, cls: 'small primary' }),
-    fileButton('📷 Camera', onFiles, { accept: 'image/*', capture: 'environment' }),
+    desktop() ? webcam : fileButton('📷 Camera', (fs) => onFiles(fs, 'camera'), { accept: 'image/*', capture: 'environment' }),
+    button('From a video link…', () => import('./clipimport.js').then((m) => m.openLinkStill({ back: reopen,
+      onFrame: async (blob) => { await onFiles([new File([blob], 'link.png', { type: 'image/png' })], 'link'); if (multi) reopen(); } })),
+    { cls: 'small', title: 'A frame from a YouTube (or other) video' }),
     button('Delete…', (e) => { deleting = !deleting; e.currentTarget.classList.toggle('on', deleting); draw(); },
       { cls: 'small danger', title: 'Tap pictures to delete them for good (uploads and saved pictures, not History)' }),
     multi ? button('Done', closeSheet) : null], async () => {
@@ -342,6 +405,7 @@ export function openImagePicker(opts) {
     return tab === 'project' ? projectCards() : allCards();
   });
   search.addEventListener('input', () => { q = search.value.toLowerCase(); draw(); });
+  dropPictures(draw.seq, onFiles);
   $('#sheet .picker-bar').after(search);
   search.classList.toggle('hidden', tab !== 'all');
 }

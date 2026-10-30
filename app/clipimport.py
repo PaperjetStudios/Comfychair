@@ -27,7 +27,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, Body, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from . import config, videoedit
 
@@ -504,6 +504,32 @@ def _stream_inputs(info: dict) -> tuple[list[tuple[str, list[str]]], str | None]
     if len(fmts) > 1:
         return inputs, "1:a:0?"
     return inputs, "0:a:0?"
+
+
+@router.post("/link/{lid}/still")
+async def link_still(lid: str, body: dict = Body(...)):
+    """One frame at {t} seconds from the full-quality video, as a PNG (the picture picker's still from a link:
+    the preview the user scrubbed is small). Nothing is kept: only that frame's piece is fetched."""
+    link = _link(lid)
+    try:
+        t = max(0.0, float(body.get("t") or 0))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "t is the time in seconds")
+
+    def grab() -> bytes:
+        info = _ytdlp(link["url"], "-f", "bv*/b", "-S", "res,vcodec:h264")
+        src, opts = _stream_inputs(info)[0][0]
+        r = subprocess.run(["ffmpeg", "-v", "error", *opts, "-ss", f"{t:.3f}", "-i", src, "-map", "0:v:0", "-frames:v", "1",
+                            "-f", "image2pipe", "-c:v", "png", "-"], capture_output=True, timeout=180)
+        if r.returncode or not r.stdout:
+            raise HTTPException(502, "Couldn't take that frame: " + (r.stderr.decode(errors="ignore").strip().splitlines() or ["no picture"])[-1])
+        return r.stdout
+
+    try:
+        png = await asyncio.to_thread(grab)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "The site was too slow sending that frame: try again")
+    return Response(png, media_type="image/png")
 
 
 @router.post("/link/{lid}/cut")

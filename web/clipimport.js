@@ -7,6 +7,7 @@
 import { api, button, closeSheet, field, fileButton, h, help, hint, note, openSheet, placeholder, seg, store, toast, toggle } from './ui.js';
 import { videoEditor } from './vfield.js';
 import { S } from './core.js';
+import { pickFrame } from './media.js';
 
 const SIZES = [[0, 'Original'], [1080, '1080p'], [720, '720p'], [480, '480p']];
 const FIRST_LEN = 10;   // a new clip starts with its first 10 s chosen
@@ -298,4 +299,51 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
 
   const show = () => { cut = null; ({ link: showLink, pc: () => showPc(), device: showDevice })[tab](); };
   show();
+}
+
+// A still from a video link, for the picture picker: the link loads as above, the preview is scrubbed in pickFrame,
+// and the frame itself comes from the full-quality video (POST /link/{id}/still), not the small preview.
+// onFrame(PNG Blob); Back or Cancel runs back().
+export function openLinkStill({ onFrame, back }) {
+  const url = h('input', { type: 'url', placeholder: 'https://youtube.com/watch?v=… or a Reddit, X, Vimeo link', 'aria-label': 'Video link',
+    value: store.get('deck.clipImport.url', '') });
+  const out = h('div', {});
+  const load = async () => {
+    const u = url.value.trim();
+    if (!u) return toast('Paste a link first', true);
+    store.set('deck.clipImport.url', u);
+    out.replaceChildren(placeholder('Reading the link…'));
+    let L;
+    try {
+      L = await api('/api/clip/link', { method: 'POST', body: { url: u }, busy: false });
+      if (!L.preview) {
+        out.replaceChildren(placeholder('This site only streams in pieces: making a small preview copy…'));
+        L = await waitJob(await api(`/api/clip/link/${L.id}/preview`, { method: 'POST', busy: false }), null, () => out.isConnected);
+      }
+    } catch (e) { return out.replaceChildren(note(e.message, 'err')); }
+    if (!L || !out.isConnected) return;
+    const grab = async (t) => {
+      const r = await fetch(`/api/clip/link/${L.id}/still`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ t }) });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `The server answered ${r.status}`);
+      return r.blob();
+    };
+    const f = await pickFrame({ url: L.preview.video, title: L.title, fps: L.fps || 30, back, grab });
+    if (f) onFrame(f);
+  };
+  url.addEventListener('keydown', (e) => { if (e.key === 'Enter') load(); });
+  const fromClipboard = async (quiet) => {   // (HTTPS only, as in the importer)
+    try {
+      const t = (await navigator.clipboard.readText()).trim();
+      if (/^https?:\/\/\S+$/.test(t)) { if (t !== url.value.trim()) { url.value = t; load(); } }
+      else if (!quiet) toast('The clipboard has no link in it', true);
+      return true;
+    } catch { return false; }
+  };
+  const paste = button('Paste', async () => {
+    if (!(navigator.clipboard?.readText && await fromClipboard(false))) { url.focus(); url.select(); toast('Long-press the box and choose Paste'); }
+  }, { cls: 'small' });
+  openSheet(h('h3', {}, 'A still from a video link'), h('div', { class: 'row clip-url' }, url, paste, button('Load', load, { cls: 'small primary' })),
+    hint('Scrub to the frame you want. It\'s taken from the full-quality video, not the small preview.'), out,
+    h('div', { class: 'actions' }, button('Back', () => back(), { cls: 'ghost' })));
+  if (window.isSecureContext && navigator.clipboard?.readText) fromClipboard(true);
 }
