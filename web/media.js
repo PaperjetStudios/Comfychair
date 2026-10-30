@@ -269,7 +269,8 @@ export function openImagePicker(opts) {
     const items = inputs.project.filter((r) => r.source !== 'generation')
       .map((r) => ({ t: r.created, el: () => inputCard(r.name, SOURCE[r.source] || null) }));
     for (const { g, o, i, t } of await projectOutputs(['image', 'video'])) {
-      items.push({ t, el: () => mediaCard(mediaEl(o, { thumb: true }), genLabel(g), (c) => fromHistory(g, i, c),
+      items.push({ t, el: () => mediaCard(mediaEl(o, { thumb: true }), genLabel(g),
+        (c) => (deleting ? toast('That one is in History: delete it there') : fromHistory(g, i, c)),
         { badge: o.kind === 'video' ? 'last frame' : null }) });
     }
     items.sort((x, y) => y.t - x.t);
