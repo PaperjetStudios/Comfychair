@@ -66,12 +66,13 @@ export let SC;   // the scene (persisted per project)
 export const R = { offEdit: null, modeKey: null, free: false, f: 0, sel: null, joint: null, figTab: 'pose', poseCat: 'stand', mask: 'all', sym: false, speed: 1, inPlace: false, renders: {}, promptOff: new Set(), promptNames: false, shotOff: new Set(), shotFmt: 'h3', viewCut: true, mode: 'translate', playing: false, real: false, depth: false, autoKey: true, record: false, meshes: new Map(), room: [], applying: false, lastRender: null };
 
 export const newRoom = () => ({ w: 8, d: 8, h: 2.8, walls: true, ceiling: true, hidden: false });
+// a new scene starts empty, as Clear all leaves it (no layers, no room; the camera stays)
 export function defaultScene() {
   return {
-    v: 1, width: 768, height: 448, seconds: 6, lenMode: 'match', blur: 2, room: newRoom(),
+    v: 1, width: 768, height: 448, seconds: 6, lenMode: 'match', blur: 2, room: null,
     camera: { id: 'cam0', name: 'Camera', base: { px: 0, py: 1.6, pz: 5, tx: 0, ty: 1, tz: 0, fov: 45, roll: 0 }, chans: {}, ease: 'smooth' }, cams: [],
     cuts: [], shotText: {}, tcStart: '01:00:00:00', renderShots: 'take',
-    objects: [newObject('person', { x: 0, z: 0 }, [])],
+    objects: [],
   };
 }
 
