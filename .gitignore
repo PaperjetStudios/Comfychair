@@ -12,3 +12,33 @@ certs/
 *.pth
 *.onnx
 *.bin
+# the user's pictures, videos and meshes stay on this PC: never commit them (scratch runs live in .check/)
+.check/
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.bmp
+*.tif
+*.tiff
+*.exr
+*.mp4
+*.webm
+*.mov
+*.mkv
+*.wav
+*.mp3
+*.flac
+*.glb
+*.gltf
+*.fbx
+*.obj
+*.ply
+*.splat
+*.spz
+# except the app's own icons and the keep-awake clip
+!web/apple-touch-icon.png
+!web/icon-192.png
+!web/icon-512.png
+!web/keepawake.mp4
