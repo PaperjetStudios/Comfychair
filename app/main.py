@@ -592,6 +592,7 @@ async def generate(body: dict = Body(...)):
         run = maskcomp.prefill(run, flist, t.workflow)   # a mask input of the template's own takes the painted mask
         wf = editsize.inject(accel.inject(tpl.apply(t.workflow, run), run), run, flist)
         wf = maskcomp.inject(wf, run, flist, await _mask_dims(run, flist))
+        wf = h3upscale.drop_turbo_under_regen(wf)
         folder = db.project_folder(project_id)
         for node in wf.values():  # ComfyUI's own copy goes to output/comfydeck/<project>/ too
             fp = node["inputs"].get("filename_prefix")

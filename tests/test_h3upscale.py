@@ -52,7 +52,7 @@ class Build(unittest.TestCase):
 
     def test_regen_uses_its_own_schedule(self):
         self.assertEqual(up.regen_sigmas("standard"), "0.7000, 0.4941, 0.0000")
-        self.assertEqual(up.regen_sigmas("enhanced"), "0.8000, 0.6667, 0.0000")
+        self.assertEqual(up.regen_sigmas("enhanced"), "0.8000, 0.6857, 0.4800, 0.0000")
         self.assertEqual(up.regen_sigmas("whatever"), "0.7000, 0.4941, 0.0000")
         wf, _ = up.build(self.wf("deck-h3-ref2v"), "/c.mp4", 768, 448,
                          regen={"lora": "reg.safetensors", "has_turbo": False, "quality": "standard"})
@@ -81,7 +81,7 @@ class Build(unittest.TestCase):
             for k, v in node.get("inputs", {}).items():
                 if isinstance(v, list) and len(v) == 2 and isinstance(v[0], str):
                     self.assertIn(v[0], wf, f"{k} points at a dropped node {v[0]}")
-        self.assertEqual(wf["up_sigmas"]["inputs"]["sigmas"], "0.8000, 0.6667, 0.0000")
+        self.assertEqual(wf["up_sigmas"]["inputs"]["sigmas"], "0.8000, 0.6857, 0.4800, 0.0000")
 
     def test_regen_target_size(self):
         wf, (w, h) = up.build(self.wf("deck-h3-ref2v"), "/c.mp4", 768, 448, size=(1856, 1088),
@@ -113,6 +113,18 @@ class Build(unittest.TestCase):
     def test_not_h3(self):
         with self.assertRaises(ValueError):
             up.build(self.wf("deck-ltx-t2v"), "/x.mp4", 768, 448)
+
+    def test_refine_drops_turbo_under_a_merged_regen(self):
+        wf = self.wf("deck-h3-refine")
+        wf["rglora"]["inputs"]["lora_name"] = "H3-Open-Regenerate-2K-ComfyUI-r128.safetensors"
+        up.drop_turbo_under_regen(wf)
+        self.assertNotIn("30", wf)
+        self.assertEqual(wf["rglora"]["inputs"]["model"], ["6", 0])
+        wf = self.wf("deck-h3-refine")   # the refiner-only file keeps the run's turbo LoRA
+        wf["rglora"]["inputs"]["lora_name"] = "minimax_h3_open_regenerate_2k_refiner_rank_384_bf16.safetensors"
+        up.drop_turbo_under_regen(wf)
+        self.assertIn("30", wf)
+        self.assertEqual(wf["rglora"]["inputs"]["model"], ["30", 0])
 
 
 if __name__ == "__main__":

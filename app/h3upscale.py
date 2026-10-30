@@ -15,9 +15,10 @@ import re
 UPSCALER = "minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors"
 LADDER = (0.6316, 0.3158, 0.0)   # the pack examples' second pass, below where it starts
 STRENGTHS = {"light": 0.6316, "medium": 0.8, "strong": 0.9035}
-# Open-H3-Regenerate's second pass (RESEARCH-h3-regenerate.md): NVIDIA's 2-step schedule, and the report's 3-point
-# start at 0.8. The refiner LoRA is trained for exactly this pass, so it needs far fewer steps than the plain upscaler.
-REGEN_SIGMAS = {"standard": (0.7, 0.494118, 0.0), "enhanced": (0.8, 0.666667, 0.0)}
+# Open-H3-Regenerate's second pass (RESEARCH-h3-regenerate.md): NVIDIA's 2-step schedule, and Enhanced's 3 steps from
+# 0.8 on the refiner's shift-6 grid (rdh9616 ComfyUI-Open-H3-Regenerate shifted_grid(0.8, 3), the h3-studio test).
+# The refiner LoRA is trained for exactly this pass, so it needs far fewer steps than the plain upscaler.
+REGEN_SIGMAS = {"standard": (0.7, 0.494118, 0.0), "enhanced": (0.8, 0.685714, 0.48, 0.0)}
 TURBO_RE = re.compile(r"turbo|lightx2v|distill|\d+[-_ ]?steps?", re.I)
 SAMPLER = "euler"
 SIZE_FREE = {"MiniMaxH3ReferenceToVideo"}   # conditioning that doesn't depend on the frame size
@@ -84,8 +85,14 @@ def regen_loras(oi: dict | None) -> list[dict]:
         low = str(n).lower()
         if "regenerate" not in low:
             continue
-        out.append({"name": n, "has_turbo": not ("refiner" in low or "rank_384" in low)})
+        out.append({"name": n, "has_turbo": has_turbo(n)})
     return out
+
+
+def has_turbo(name: str) -> bool:
+    """A Regenerate LoRA with Turbo merged in (not Kijai's refiner-only file)."""
+    low = str(name).lower()
+    return not ("refiner" in low or "rank_384" in low)
 
 
 def _chain(wf: dict, link) -> list[str]:
@@ -117,6 +124,16 @@ def drop_turbo(wf: dict, link) -> None:
                 if is_link(v) and v[0] == nid and v[1] == 0:
                     o["inputs"][k] = inner
         del wf[nid]
+
+
+def drop_turbo_under_regen(wf: dict) -> dict:
+    """Any template's run (Refine, Finish with H3): a Regenerate LoRA that has Turbo inside takes the turbo LoRAs
+    beneath it out of the chain, as build() does for the upscale pass."""
+    for node in list(wf.values()):
+        name = str(node.get("inputs", {}).get("lora_name", ""))
+        if node.get("class_type") in ("LoraLoaderModelOnly", "LoraLoader") and "regenerate" in name.lower() and has_turbo(name):
+            drop_turbo(wf, node["inputs"].get("model"))
+    return wf
 
 
 def build(workflow: dict, video: str, width: int, height: int, scale: float = 1.5, prefix: str = "comfydeck/h3up",
