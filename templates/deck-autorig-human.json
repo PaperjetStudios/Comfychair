@@ -1,12 +1,26 @@
 {
+ "meshpath": {
+  "class_type": "PrimitiveString",
+  "inputs": {
+   "value": ""
+  },
+  "_meta": {
+   "title": "@1 Model [value]"
+  }
+ },
+ "meshany": {
+  "class_type": "LazySwitchKJ",
+  "inputs": {
+   "switch": true,
+   "on_true": ["meshpath", 0],
+   "on_false": ["meshpath", 0]
+  }
+ },
  "mesh": {
   "class_type": "UniRigLoadMesh",
   "inputs": {
    "source_folder": "input",
-   "file_path": ""
-  },
-  "_meta": {
-   "title": "@1 Model [file_path]"
+   "file_path": ["meshany", 0]
   }
  },
  "model": {

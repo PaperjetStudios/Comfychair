@@ -424,11 +424,7 @@ export async function rigRun(generation, index, name, template = 'deck-autorig-h
   if (!t) return toast(`Rigging needs the UniRig nodes (ComfyUI-UniRig) and the ${template} template`, true);
   const up = await api('/api/scene/mesh', { method: 'POST', busy: 'Sending the model to ComfyUI…',
     body: { generation, index } });
-  const f = t.fields.find((x) => x.input === 'file_path');
-  if (f && Array.isArray(f.options) && f.options.length && !f.options.includes(up.file_path)) {
-    toast('ComfyUI built its mesh list at startup: restart ComfyUI once, then rig it again', true);
-    return null;
-  }
+  const f = t.fields.find((x) => x.group === 'Model');   // the mesh's path (a text field: no list to be on)
   const [g] = await queueRun({ template, values: f ? { [f.key]: up.file_path } : {} });
   toast(`${name || 'The model'}: rigging queued as #${g.id}. It takes a while.`);
   const done = await waitGen(g.id);
