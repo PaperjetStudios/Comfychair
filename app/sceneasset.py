@@ -293,7 +293,7 @@ def _ply_lens(path: Path) -> dict:
     sizes = {"float": 4, "uint": 4, "int": 4, "uchar": 1, "char": 1, "ushort": 2, "short": 2, "double": 8}
     with path.open("rb") as f:
         elems, cur = [], None
-        while (line := f.readline().decode("ascii", "replace").strip()) != "end_header":
+        while (raw := f.readline()) and (line := raw.decode("ascii", "replace").strip()) != "end_header":
             p = line.split()
             if p[:1] == ["element"]:
                 cur = [p[1], int(p[2]), []]; elems.append(cur)
@@ -301,10 +301,12 @@ def _ply_lens(path: Path) -> dict:
                 cur[2].append(p[1])
         data = {}
         for name, n, props in elems:
-            raw = f.read(n * sum(sizes[t] for t in props))
-            if name in ("intrinsic", "image_size"):
-                fmt = "".join({"float": "f", "uint": "I", "int": "i"}[t] for t in props) * n
-                data[name] = struct.unpack("<" + fmt, raw)
+            size = n * sum(sizes[t] for t in props)
+            if name not in ("intrinsic", "image_size"):
+                f.seek(size, 1)   # (the Gaussians: skipped, not read)
+                continue
+            fmt = "".join({"float": "f", "uint": "I", "int": "i"}[t] for t in props) * n
+            data[name] = struct.unpack("<" + fmt, f.read(size))
     k, wh = data.get("intrinsic"), data.get("image_size")
     if not k or not wh:
         return {}

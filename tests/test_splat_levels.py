@@ -146,6 +146,17 @@ class Levels(unittest.TestCase):
         self.assertEqual(sa.pick_level(lv, "full")["k"], "full")
         self.assertEqual(sa.pick_level([{"k": "medium"}, {"k": "full"}], "light")["k"], "medium")
 
+    def test_photo_splat_keeps_the_near_subject(self):
+        # a small Gaussian 1 m from the photo's camera and a big one 60 m away (the sky): plain size ranks the sky
+        # first; seen from the camera the near one is bigger
+        data = np.zeros((2, len(PROPS)), dtype="<f4")
+        data[:, PROPS.index("opacity")] = 3.0
+        data[0, PROPS.index("z")], data[1, PROPS.index("z")] = -1.0, -60.0
+        for k in ("scale_0", "scale_1", "scale_2"):
+            data[0, PROPS.index(k)], data[1, PROPS.index(k)] = np.log(0.05), np.log(1.0)
+        self.assertEqual(list(sa._visible_order(PROPS, data)), [1, 0])
+        self.assertEqual(list(sa._visible_order(PROPS, data, camera=True)), [0, 1])
+
     def test_finish_splat_keep_and_drop_full(self):
         for keep in (True, False):
             d = self.d / str(keep); d.mkdir()
