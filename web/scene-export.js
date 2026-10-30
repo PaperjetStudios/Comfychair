@@ -98,7 +98,10 @@ function measureRanges() {
   return frameRanges(samples, { mode: SC.depthRange === 'clip' ? 'clip' : 'follow', window: Math.round(FPS / 2), breaks: cutBreaks(first, count) });
 }
 
-function targetToBlob(rt, W, H, gray) {
+// floor (the objects-only pass): what was drawn is at least this grey and nothing else is, so the server can tell a
+// far object from the empty background when it lays the objects over the picture's depth (/api/scene/depth-combine)
+const DEPTH_FLOOR = 40;
+function targetToBlob(rt, W, H, gray, floor = 0) {
   const buf = new Uint8Array(W * H * 4);
   renderer.readRenderTargetPixels(rt, 0, 0, W, H, buf);
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
@@ -107,18 +110,16 @@ function targetToBlob(rt, W, H, gray) {
   for (let y = 0; y < H; y++) {  // WebGL rows run bottom-up
     const src = (H - 1 - y) * W * 4, dst = y * W * 4;
     for (let x = 0; x < W * 4; x += 4) {
-      img.data[dst + x] = buf[src + x];
-      img.data[dst + x + 1] = gray ? buf[src + x] : buf[src + x + 1];
-      img.data[dst + x + 2] = gray ? buf[src + x] : buf[src + x + 2];
+      const v = floor ? (buf[src + x + 3] < 128 ? 0 : Math.max(floor, buf[src + x])) : buf[src + x];
+      img.data[dst + x] = v;
+      img.data[dst + x + 1] = gray ? v : buf[src + x + 1];
+      img.data[dst + x + 2] = gray ? v : buf[src + x + 2];
       img.data[dst + x + 3] = 255;
     }
   }
   ctx.putImageData(img, 0, 0);
   return new Promise((res) => cv.toBlob(res, 'image/png'));
 }
-
-// the first place in our own code an error came from, for a toast: " (at scene-export.js:292)"
-const where = (e) => { const m = String(e?.stack || '').split('\n').slice(1).map((l) => l.match(/\/([\w.-]+\.js)[^:]*:(\d+)/)).find(Boolean); return m ? ` (at ${m[1]}:${m[2]})` : ''; };
 
 export let busy = false;
 // A render under way can be stopped (✕ Cancel on the panel or in its toast): the frame loop checks
@@ -143,32 +144,33 @@ export async function renderDepthVideo(part = null, { objectsOnly = false } = {}
   if (busy || !canRender()) return false;
   clip = part ? { first: part.f0, count: part.f1 - part.f0 + 1 } : null;
   busy = true; stopAsked = false; R.real = true; stopPlay(); TEMP.clear(); renderPanel();  // only what's keyed goes in the render (mute is ignored)
-  const keep = R.f, W = SC.width, H = SC.height, bar = busyBar('Rendering depth frames…');
+  const keep = R.f, bg = scene.background, W = SC.width, H = SC.height, bar = busyBar('Rendering depth frames…');
   cancelToast('Rendering the depth video…');
   try {
     if (objectsOnly) for (const m of R.meshes.values()) if (m.userData.splat) { m.userData.hid = m.visible; m.visible = false; }   // (splats come from the picture)
     const ranges = measureRanges();
     const rt = new THREE.WebGLRenderTarget(W, H, { colorSpace: THREE.NoColorSpace });
     draw('depth');
+    if (objectsOnly) { scene.background = null; renderer.setClearColor(0x000000, 0); }   // clear stays see-through: alpha marks the objects
     camera.aspect = W / H; camera.updateProjectionMatrix();
     const form = new FormData(), { first, count } = renderSpan();
     for (let k = 0; k < count; k++) {
       pose(first + k);
       setRange(ranges[k]);
       renderer.setRenderTarget(rt); renderDepth(renderer, scene, camera, objectsOnly ? null : SPLAT_PASS.spark); renderer.setRenderTarget(null);
-      form.append('frames', await targetToBlob(rt, W, H, true), `f${String(k).padStart(5, '0')}.png`);
+      form.append('frames', await targetToBlob(rt, W, H, true, objectsOnly ? DEPTH_FLOOR : 0), `f${String(k).padStart(5, '0')}.png`);
       if (k % 12 === 0) setStatus(`Rendering ${k + 1}/${count}…`);
       bar.set(null, (k + 1) / count);
       if (stopAsked) { rt.dispose(); checkStop(); }
     }
     rt.dispose();
-    await sendVideo(form, 'depth', SC.blur, { quiet: !!part, label: part ? `Shot ${part.i} · ${part.cam.name}` : '' });
+    await sendVideo(form, 'depth', SC.blur, { quiet: !!part || objectsOnly, label: part ? `Shot ${part.i} · ${part.cam.name}` : '' });
     return true;
   } catch (e) {
     if (e instanceof Cancelled) cancelled(); else { setStatus(''); toast(e.message, true); }
     return false;
   } finally {
-    clip = null;
+    clip = null; scene.background = bg;
     for (const m of R.meshes.values()) if ('hid' in m.userData) { m.visible = m.userData.hid; delete m.userData.hid; }
     bar.done();
     busy = false; stopAsked = false; R.real = false; R.f = keep; fit(); refresh(); renderPanel();
@@ -245,7 +247,7 @@ export async function renderColorVideo(part = null) {
     await sendVideo(form, 'color', 0, { quiet: !!part, label: part ? `Shot ${part.i} · ${part.cam.name}` : '' });
     return true;
   } catch (e) {
-    if (e instanceof Cancelled) cancelled(); else { setStatus(''); console.error(e); toast(`Colour render failed while ${phase}: ${e.message}${where(e)}`, true); }
+    if (e instanceof Cancelled) cancelled(); else { setStatus(''); console.error(e); toast(`Colour render failed while ${phase}: ${e.message}`, true); }
     return false;
   } finally {
     clip = null;

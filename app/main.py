@@ -1601,10 +1601,14 @@ async def scene_render(frames: list[UploadFile] = File(...), fps: float = Form(2
 async def scene_depth_combine(body: dict = Body(...)):
     """{picture: generation id, geometry: generation id} -> a depth video made of the geometry render's pixels where it
     drew something (the 3D objects, exact) and the picture's estimated depth everywhere else (what a splat shows).
-    The picture's depth is scaled to the geometry video's size."""
+    The geometry render is the objects-only pass: black where nothing is drawn, every object at least DEPTH_FLOOR.
+    The picture's depth is scaled and retimed to the geometry video; the result is as long as the shorter of the two."""
     gens = []
     for key in ("picture", "geometry"):
-        g = db.get_generation(int(body.get(key) or 0))
+        try:
+            g = db.get_generation(int(body.get(key) or 0))
+        except (TypeError, ValueError):
+            g = None
         o = next((x for x in (g or {}).get("outputs", []) if x.get("kind") == "video"), None)
         if not g or not o:
             raise HTTPException(400, f"The {key} depth needs a finished video")
@@ -1612,21 +1616,32 @@ async def scene_depth_combine(body: dict = Body(...)):
     (pg, pic), (gg, geo) = gens
     if not imageprep.ffmpeg_available():
         raise HTTPException(400, "ffmpeg isn't installed (sudo apt install ffmpeg)")
+    try:
+        fps = (await asyncio.to_thread(videoedit.probe, geo))["fps"]
+    except (subprocess.SubprocessError, OSError, ValueError, KeyError) as e:
+        raise HTTPException(400, f"Couldn't read the geometry depth: {e}")
     params = {"kind": "depth", "combined": {"picture": pg["id"], "geometry": gg["id"]}, "scene": (gg.get("params") or {}).get("scene")}
     gid = db.create_generation(gg["project_id"], "3d scene", params, {}, f"scene-{uuid.uuid4().hex}", None)
     db.update_generation(gid, status="running")
     await push_gen(gid)
-    out, rel = new_output(db.get_generation(gid), "depth.mp4")
-    vf = ("[1:v][0:v]scale2ref[b][a];[a][b]blend=all_expr='if(gt(A,6),A,B)',"
-          "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p")
-    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(geo), "-i", str(pic), "-filter_complex", vf,
-           *videoedit.h264(12), "-an", "-movflags", "+faststart", str(out)]
-    r = await asyncio.to_thread(videoedit.run_ffmpeg, cmd, text=True)
-    if r.returncode:
-        out.unlink(missing_ok=True)
-        db.update_generation(gid, status="error", error=r.stderr[-500:], finished=time.time())
+    out = None
+    try:
+        out, rel = new_output(db.get_generation(gid), "depth.mp4")
+        # luma only (grey in, grey out): limited-range black is Y 16, the floor lands near Y 50, so 32 splits them
+        vf = (f"[0:v]format=gray[g0];[1:v]fps={fps:.6f},format=gray[p0];[p0][g0]scale2ref[b][a];"
+              "[a][b]blend=all_expr='if(gt(A,32),A,B)':shortest=1,"
+              "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p")
+        cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(geo), "-i", str(pic), "-filter_complex", vf,
+               *videoedit.h264(12), "-an", "-movflags", "+faststart", str(out)]
+        r = await asyncio.to_thread(videoedit.run_ffmpeg, cmd, text=True)
+        if r.returncode:
+            raise RuntimeError(r.stderr[-500:] or "ffmpeg failed")
+    except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+        if out:
+            out.unlink(missing_ok=True)
+        db.update_generation(gid, status="error", error=str(e)[-500:], finished=time.time())
         await push_gen(gid)
-        raise HTTPException(400, r.stderr[-500:] or "ffmpeg failed")
+        raise HTTPException(400, str(e)[-500:])
     dur = next((x.get("duration") for x in gg["outputs"] if x.get("kind") == "video"), None)
     db.update_generation(gid, status="done", finished=time.time(),
                          outputs=[{"filename": out.name, "path": rel, "kind": "video", "node": "scene", **({"duration": dur} if dur else {})}])
