@@ -452,15 +452,14 @@ export async function rigModel(o, template, opts = {}) {
 // the sheet: one photo, or its other views made or picked
 let viewBoxes = {};   // the views marked on the sheet picture (fractions); reset when the picture changes
 let viewBoxesOf = null;
-export function openObjectSheet(name, label = '') {
-  const picks = { Front: name, Back: null, Left: null, Right: null };
+export function openObjectSheet(name, label = '', picks = { Front: name, Back: null, Left: null, Right: null }) {
   if (viewBoxesOf !== name) { viewBoxes = {}; viewBoxesOf = name; }
-  const again = () => openObjectSheet(name, label);
+  const again = () => openObjectSheet(name, label, picks);   // (the views picked so far stay)
   const num = (key, min, max) => h('input', { type: 'number', min, max, value: OBJ[key], placeholder: key === 'seed' ? 'random' : null,
     onchange: (e) => { OBJ[key] = e.target.value === '' && key === 'seed' ? '' : Math.max(min, Math.min(max, Math.round(+e.target.value || min))); } });
   const pick = (role) => {
     closeSheet();
-    C.openImagePicker({ title: `The ${role.toLowerCase()} view`, onPick: (n) => { picks[role] = n; openObjectSheet(name, label); } });
+    C.openImagePicker({ title: `The ${role.toLowerCase()} view`, onPick: (n) => { picks[role] = n; again(); } });
   };
   const n = Object.values(picks).filter(Boolean).length;
   openSheet(h('h3', {}, 'Make a 3D object'),
