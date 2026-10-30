@@ -13,7 +13,7 @@ import { importFit } from './scale-math.js';
 import { button, field, h, help, hint, numSlider, section, toast } from './ui.js';
 import { chainTo, reach } from './ik.js';
 import { mirrorChans } from './rig-map.js';
-import { boneOrder, reskinAll } from './reskin.js';
+import { boneOrder, disposeTree, reskinAll } from './reskin.js';
 
 const gltf = new GLTFLoader();
 const extOf = (url) => (String(url).split(/[?#]/)[0].match(/\.(\w+)$/) || [])[1]?.toLowerCase() || '';
@@ -38,8 +38,56 @@ function fitFor(o, size, unit) {
   return r.ask ? Math.min(4, 2 / big) : r.fit;
 }
 
+// The layer's own edits to the file's skeleton, o.skel = { names: {key: name}, adds: [{ key, name, parent, pos }],
+// dels: [key] }, kept by each bone's stable key: its name in the file (name#2 for a second of that name) or the
+// +key an added bone was given. Put back on load in that order (adds, deletes, names), so it is the same skeleton.
+const keyOf = (b) => b.userData.skKey;
+const skelOf = (o) => (o.skel ||= { names: {}, adds: [], dels: [] });
+function keyFile(order) {
+  const seen = {};
+  for (const b of order) {
+    const n = seen[b.name] = (seen[b.name] || 0) + 1;
+    b.userData.skKey = n > 1 ? `${b.name}#${n}` : b.name;
+  }
+}
+// the saved edits onto the file's bones; returns the bones in order and whether the skeleton changed shape
+function replay(o, order) {
+  const k = o.skel, byKey = new Map(order.map((b) => [keyOf(b), b]));
+  let shaped = false;
+  for (const a of k.adds || []) {
+    const p = byKey.get(a.parent);
+    if (!p || byKey.has(a.key)) continue;
+    const b = new THREE.Bone();
+    b.name = a.name || a.key.slice(1);
+    b.userData.skKey = a.key;
+    b.position.fromArray(a.pos || [0, 0.05, 0]);
+    p.add(b);
+    byKey.set(a.key, b);
+    shaped = true;
+  }
+  for (const key of k.dels || []) {
+    const b = byKey.get(key);
+    if (!b?.parent?.isBone) continue;
+    for (const c of [...b.children]) if (c.isBone) b.parent.attach(c);
+    b.removeFromParent();
+    byKey.delete(key);
+    shaped = true;
+  }
+  for (const [key, name] of Object.entries(k.names || {})) { const b = byKey.get(key); if (b && name) b.name = name; }
+  const live = new Set(byKey.values());
+  return { order: boneOrder(order.filter((b) => live.has(b))), shaped };
+}
+
+// every bone at its resting turn (the pose the mesh is bound in), world matrices current: re-skin from here
+function toRest(s) {
+  for (const b of s.order) { const q = s.rest.get(b.name); if (q) b.quaternion.copy(q); }
+  for (const b of s.order) if (!b.parent?.isBone) b.updateWorldMatrix(true, true);
+}
+
 async function attach(o, group) {
   const obj = await loadFile(o);
+  if (group.userData.gone) { disposeTree(obj); return null; }   // the layer went while it loaded
+  group.userData.file = obj;
   obj.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(obj);
   const size = box.getSize(new THREE.Vector3());
@@ -59,11 +107,18 @@ async function attach(o, group) {
   if (!skinned.length) throw new Error('that model has no skeleton to key');
   const bones = skinned[0].skeleton.bones;
   // parents before children, as posed in a frame
-  const order = [];
-  const walk = (b) => { order.push(b); for (const c of b.children) if (c.isBone) walk(c); };
-  for (const b of bones) if (!b.parent || !b.parent.isBone) walk(b);
-  // a renamed bone is only in the layer (the file keeps its own names): put the saved names back by their place
-  if (Array.isArray(o.bones) && o.bones.length === order.length) order.forEach((b, i) => { if (o.bones[i]) b.name = o.bones[i]; });
+  let order = boneOrder(bones);
+  keyFile(order);
+  if (o.skel) {   // the layer's added, deleted and renamed bones (the file keeps its own)
+    const r = replay(o, order);
+    order = r.order;
+    if (r.shaped) { obj.updateMatrixWorld(true); reskinAll(skinned, order); }
+  } else if (Array.isArray(o.bones) && o.bones.length === order.length) {
+    // an older layer kept its renames by place: put them back, and keep them by key from now on
+    const names = {};
+    order.forEach((b, i) => { const n = o.bones[i]; if (n && n !== b.name) { names[keyOf(b)] = n; b.name = n; } });
+    if (Object.keys(names).length) o.skel = { names, adds: [], dels: [] };
+  }
   const rest = new Map(order.map((b) => [b.name, b.quaternion.clone()]));
   group.userData.skin = { order, rest, skinned };
   // a dot per bone, in the layer's own space (layer 1: picked on their own, never rendered out)
@@ -113,9 +168,10 @@ export async function onBoneDrag(id, bone, target) {
   if (!o || !s || !bone) return;
   const chain = chainTo(s.order, bone);
   if (chain.length < 2) return;
-  const r = reach(chain, new THREE.Vector3(target.x, target.y, target.z), { iterations: 8, tolerance: 0.006 });
+  // the top bone (it carries the whole model) stays put unless it is all the chain has; every bone turned is written
+  const r = reach(chain.length > 2 ? chain.slice(1) : chain, new THREE.Vector3(target.x, target.y, target.z), { iterations: 8, tolerance: 0.006 });
   const bag = {};
-  for (const b of r.bones) if (b.name !== chain[0].name) bag[b.name] = b.q;   // the root turns too, but not when it is the layer
+  for (const b of r.bones) bag[b.name] = b.q;
   if (!Object.keys(bag).length) return;
   write(o, BONE, { b: bag });
   SK.bone = bone;
@@ -157,8 +213,10 @@ function rebuildDots(o, group, s) {
 export function makeSkinned(o) {
   const group = new THREE.Group();
   group.userData.atFrame = (f) => apply(o, group, f);
+  group.userData.dispose = () => { group.userData.gone = true; disposeTree(group.userData.file); };
   attach(o, group)
     .then((n) => {
+      if (n == null) return;
       toast(`${o.name}: ${n} bones to key`);
       save();
     })
@@ -255,6 +313,8 @@ function renameBone(o, to) {
   const bone = s.order.find((b) => b.name === old);
   if (!bone) return;
   bone.name = name;
+  skelOf(o).names[keyOf(bone)] = name;
+  if (s.rest.has(old)) { s.rest.set(name, s.rest.get(old)); s.rest.delete(old); }
   if (Array.isArray(o.bones)) o.bones = o.bones.map((n) => (n === old ? name : n));
   const chans = { ...(o.chans || {}) };
   if (chans[`b.${old}`]) { chans[`b.${name}`] = chans[`b.${old}`]; delete chans[`b.${old}`]; }
@@ -280,17 +340,24 @@ function addBone(o) {
   if (!parent) return;
   let name = `${parent.name}_2`;
   for (let i = 3; s.order.some((b) => b.name === name); i++) name = `${parent.name}_${i}`;
+  const k = skelOf(o);
+  let key = `+${name}`;
+  for (let i = 2; k.adds.some((a) => a.key === key); i++) key = `+${name}~${i}`;
+  toRest(s);   // weights are matched in the bind pose, not the frame's
   const b = new THREE.Bone();
   b.name = name;
+  b.userData.skKey = key;
   const child = parent.children.find((c) => c.isBone);
   if (child) b.position.copy(child.position).multiplyScalar(0.5);
   else b.position.set(0, 0.05, 0);
   parent.add(b);
+  k.adds.push({ key, name, parent: keyOf(parent), pos: b.position.toArray() });
   s.order = boneOrder(s.order);
   s.rest.set(name, b.quaternion.clone());
   o.bones = s.order.map((x) => x.name);
   rebuildDots(o, group, s);
   reskinAll(s.skinned, s.order);
+  apply(o, group, R.f);   // back to the frame's pose
   SK.bone = name;
   save();
   import('./scene-view.js').then((v) => { v.pose(R.f); v.draw(); });
@@ -306,10 +373,14 @@ function deleteBone(o) {
   if (!b.parent || !b.parent.isBone) return toast('A root bone can\'t be deleted', true);
   if (!confirm(`Delete the bone ${b.name}? The mesh is re-skinned to the bones that are left.`)) return;
   const name = b.name;
-  for (const c of [...b.children]) if (c.isBone) b.parent.attach(c);
+  toRest(s);   // weights are matched in the bind pose, not the frame's
+  const kids = b.children.filter((c) => c.isBone);
+  for (const c of kids) b.parent.attach(c);
   b.removeFromParent();
+  skelOf(o).dels.push(keyOf(b));
   s.order = boneOrder(s.order.filter((x) => x !== b));
   s.rest.delete(name);
+  for (const c of kids) s.rest.set(c.name, c.quaternion.clone());   // their rest is now under the new parent
   const chans = { ...(o.chans || {}) };
   delete chans[`b.${name}`];
   o.chans = chans;
@@ -321,6 +392,7 @@ function deleteBone(o) {
   o.bones = s.order.map((x) => x.name);
   reskinAll(s.skinned, s.order);
   rebuildDots(o, group, s);
+  apply(o, group, R.f);   // back to the frame's pose
   SK.bone = s.order[0]?.name || null;
   save();
   import('./scene-view.js').then((v) => { v.pose(R.f); v.draw(); });

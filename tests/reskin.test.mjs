@@ -46,4 +46,23 @@ assert.equal(best, 2, `the middle vertex goes to the middle bone (${ids} @ ${com
 assert.deepEqual(R.boneOrder([b1, b2, root]).map((b) => b.name), ['root', 'b1', 'b2']);
 assert.equal(R.boneOrder([]).length, 0);
 assert.equal(R.reskinAll([], [root]), 0);
+
+// two meshes on one skeleton: re-skinned onto one new skeleton, the old one freed once
+{
+  const oldSk = new THREE.Skeleton([root, b1]);
+  let freed = 0;
+  oldSk.dispose = () => { freed++; };
+  const ms = [0, 1].map(() => { const m = new THREE.SkinnedMesh(meshGeo.clone(), new THREE.MeshBasicMaterial()); m.bind(oldSk, m.matrixWorld); return m; });
+  assert.equal(R.reskinAll(ms, [root, b1, b2]), 2);
+  assert.equal(freed, 1);
+  assert.ok(ms[0].skeleton === ms[1].skeleton && ms[0].skeleton !== oldSk);
+  // a whole model freed: geometry, material, its texture, skeleton
+  const tex = new THREE.Texture(), mat = new THREE.MeshBasicMaterial({ map: tex }), m2 = ms[0];
+  m2.material = mat;
+  const hits = [];
+  for (const [x, n] of [[m2.geometry, 'geo'], [mat, 'mat'], [tex, 'tex'], [m2.skeleton, 'skel']]) x.dispose = () => hits.push(n);
+  const holder = new THREE.Group(); holder.add(m2);
+  R.disposeTree(holder);
+  assert.deepEqual(hits.sort(), ['geo', 'mat', 'skel', 'tex']);
+}
 console.log('reskin ok');

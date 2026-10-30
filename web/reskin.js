@@ -42,23 +42,45 @@ export function skeletonFrom(bones) {
   return new THREE.Skeleton(bones, inv);
 }
 
-// rewrite one skinned mesh's weights and bind it to the new bones (its geometry is shared with any copy)
-export function reskinMesh(mesh, bones, opts = {}) {
+// rewrite one skinned mesh's weights and bind it to the new bones (its geometry is shared with any copy).
+// The bones must stand in the pose the geometry was modelled in (the bind/rest pose), not a posed frame.
+export function reskinMesh(mesh, bones, opts = {}, skeleton = null) {
   if (!mesh.isSkinnedMesh || !bones?.length) return null;
   mesh.updateWorldMatrix(true, false);
   const { idx, w } = weightsFor(mesh.geometry, mesh.matrixWorld, bones, opts);
   mesh.geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(idx, 4));
   mesh.geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(w, 4));
-  const skeleton = skeletonFrom(bones);
+  skeleton ||= skeletonFrom(bones);
   mesh.bind(skeleton, mesh.matrixWorld.clone());
   return skeleton;
 }
 
-// every skinned mesh in a layer bound to the same bones (returns how many were re-skinned)
+// every skinned mesh in a layer bound to one new skeleton of these bones; the old skeletons are freed
+// (their bone textures). Returns how many were re-skinned.
 export function reskinAll(skinned, bones, opts = {}) {
+  if (!bones?.length) return 0;
+  const skeleton = skeletonFrom(bones), old = new Set();
   let n = 0;
-  for (const m of skinned || []) if (reskinMesh(m, bones, opts)) n++;
+  for (const m of skinned || []) {
+    const was = m.skeleton;
+    if (reskinMesh(m, bones, opts, skeleton)) { n++; if (was) old.add(was); }
+  }
+  for (const s of old) if (s !== skeleton) s.dispose();
   return n;
+}
+
+// a loaded model's GPU side freed: its geometries, materials, their textures and its skeletons
+export function disposeTree(root) {
+  const seen = new Set();
+  const once = (x) => { if (x?.dispose && !seen.has(x)) { seen.add(x); x.dispose(); } };
+  root?.traverse((c) => {
+    once(c.geometry);
+    for (const m of [].concat(c.material || [])) {
+      for (const v of Object.values(m)) if (v?.isTexture) once(v);
+      once(m);
+    }
+    if (c.isSkinnedMesh) once(c.skeleton);
+  });
 }
 
 // the bones in parents-before-children order, from the ones that have no bone parent

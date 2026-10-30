@@ -11,6 +11,7 @@ import { GLTFLoader } from './vendor/GLTFLoader.js';
 import * as FIGURE from './figure.js';
 import { R, SC, TYPES, makers, newObject, save } from './scene-data.js';
 import { mapBones, restPositions } from './rig-map.js';
+import { disposeTree } from './reskin.js';
 import { button, h, help, hint, section, store, toast, toggle } from './ui.js';
 
 const hideMat = new THREE.MeshBasicMaterial({ visible: false });   // the hidden rig's own volumes
@@ -56,17 +57,20 @@ async function loadFile(o) {
   return (await gltf.loadAsync(o.url)).scene;
 }
 
-// where each bone sits in the layer's own metres (the wrapper's scale taken out), for guessing a map
+// where each bone sits in the layer's own metres (the wrapper's fit to the figure's height and its turn kept, so
+// it compares with the figure's rest places whatever unit the file is in), for guessing a map
 function bonePlaces(bones, wrap) {
   return bones.map((b) => {
     b.getWorldPosition(V1);
-    wrap.worldToLocal(V1);
+    wrap.worldToLocal(V1).applyMatrix4(wrap.matrix);
     return { name: b.name, pos: [V1.x, V1.y, V1.z] };
   });
 }
 
 async function attach(o, group) {
   const obj = await loadFile(o);
+  if (group.userData.gone) { disposeTree(obj); return null; }   // the layer went while it loaded
+  group.userData.file = obj;
   obj.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(obj);
   const tall = Math.max(1e-4, box.max.y - box.min.y);
@@ -90,7 +94,7 @@ async function attach(o, group) {
 
   // the map: known names (Mixamo, Rigify…), then the nearest bone for what is left
   const places = bonePlaces(bones, wrap);
-  if (!o.map || !Object.keys(o.map).length) o.map = mapBones(places, { positions: restPositions('man'), tolerance: 0.14 });
+  if (!o.map || !Object.keys(o.map).length) o.map = mapBones(places, { positions: restPositions(o.body || 'man'), tolerance: 0.14 });
   const byName = new Map(bones.map((b) => [b.name, b]));
 
   // the rest offset per bone: figure rest -> model bind (world space)
@@ -157,9 +161,10 @@ export function makeRigged(o) {
   group.add(rig.root);
   group.userData.rig = rig;
   group.userData.atFrame = () => sync(o, group);
+  group.userData.dispose = () => { group.userData.gone = true; disposeTree(group.userData.file); };
   attach(o, group)
     .then((r) => {
-      if (!group.parent) return;
+      if (!r || !group.parent) return;
       toast(`${o.name}: ${r.mapped} bones follow the figure${r.missing > 0 ? ` (${r.missing} need a map)` : ''}`);
       save();
     })
@@ -229,6 +234,6 @@ export function rigProps(o) {
 async function rebuild(o) {
   save();
   const m = R.meshes.get(o.id);
-  if (m) { m.parent?.remove(m); R.meshes.delete(o.id); }
+  if (m) { m.parent?.remove(m); R.meshes.delete(o.id); m.userData.dispose?.(); }
   (await import('./scene-view.js')).refresh();
 }
