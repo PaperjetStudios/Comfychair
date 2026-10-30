@@ -134,4 +134,20 @@ assert.ok(Math.abs(hy - (0.95 + 0.86 * 0.09)) < 1e-9);
   assert.ok(keyed[0].j.lindex2, 'finger keys are written');
 }
 
+// a forearm held out sideways with the hand rolled about it: the elbow takes some roll and still points down the forearm
+{
+  const arm = still.map((p) => [...p]);
+  arm[20] = [arm[18][0] + 0.25, arm[18][1], arm[18][2]];   // lwrist out along +X from lelb
+  const fore = new THREE.Vector3(1, 0, 0), wr = new THREE.Vector3(...arm[20]);
+  const W0 = M.worldTurns(arm);
+  const across = new THREE.Vector3(0, 0, -1).applyQuaternion(W0.lelb).applyAxisAngle(fore, Math.PI / 2);
+  const at = (a, c) => wr.clone().addScaledVector(fore, a).addScaledVector(across, c).toArray();
+  const H = Array.from({ length: 21 }, () => at(0.1, 0));
+  H[0] = at(0, 0); H[5] = at(0.1, 0.03); H[17] = at(0.1, -0.03);
+  const W1 = M.worldTurns(arm, { hands: { l: H } });
+  const down = new THREE.Vector3(0, -1, 0).applyQuaternion(W1.lelb);
+  assert.ok(down.angleTo(fore) < 1e-3, `the forearm still runs along the bone (${down.angleTo(fore).toFixed(4)} rad off)`);
+  assert.ok(W1.lelb.angleTo(W0.lelb) > 0.3, `half the hand's roll goes onto the elbow (${W1.lelb.angleTo(W0.lelb).toFixed(3)})`);
+}
+
 console.log('motion ok');

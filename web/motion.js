@@ -42,7 +42,8 @@ function bend(root, mid, end, fallback) {
 const UP = new THREE.Vector3(0, 1, 0), DOWN = new THREE.Vector3(0, -1, 0), FWD = new THREE.Vector3(0, 0, 1), BACK = new THREE.Vector3(0, 0, -1);
 const LEFT = new THREE.Vector3(1, 0, 0);
 
-// half of the twist about `axis` (the bone) moves onto the parent, so a turned hand rolls the forearm too
+// half of the twist about `axis` (the bone, in the parent's own frame) moves onto the parent, so a turned hand
+// rolls the forearm too
 function shareTwist(parent, child, axis) {
   const ax = axis.clone().normalize();
   if (!Number.isFinite(ax.x)) return;
@@ -83,7 +84,7 @@ export function worldTurns(P, { face = null, hands = null } = {}) {
       const along = sub(H[9], H[0]), across = sub(H[5], H[17]);
       if (along.length() > 1e-4 && across.length() > 1e-4) {
         W[`${s}hand`] = aim(DOWN, BACK, along, across);
-        shareTwist(W[`${s}elb`], W[`${s}hand`], sub(wr, elb));
+        shareTwist(W[`${s}elb`], W[`${s}hand`], DOWN);   // (the forearm in the elbow's own frame: aim() put it along DOWN)
       }
     }
     const hip = P[I[`${s}hip`]], knee = P[I[`${s}knee`]], ank = P[I[`${s}ankle`]], toe = P[I[`${s}toe`]];
