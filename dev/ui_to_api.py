@@ -107,6 +107,13 @@ def validate(api, oi):
                 known[name] = spec
                 if group == "required":
                     required[name] = spec
+                if _type_of(spec) == "COMFY_DYNAMICCOMBO_V3":   # the picked option's own inputs, as "combo.input"
+                    pick = next((o for o in _opts(spec).get("options", []) if o["key"] == inputs.get(name)), None)
+                    for g in ("required", "optional"):
+                        for sub, sspec in (pick or {}).get("inputs", {}).get(g, {}).items():
+                            known[f"{name}.{sub}"] = sspec
+                            if g == "required":
+                                required[f"{name}.{sub}"] = sspec
         for name, v in inputs.items():
             if name not in known:
                 bad.append(f"{nid} {cls}: unknown input {name!r}")

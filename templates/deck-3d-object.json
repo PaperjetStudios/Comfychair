@@ -154,6 +154,17 @@
    ]
   }
  },
+ "186": {
+  "class_type": "DecimateMesh",
+  "inputs": {
+   "mesh": [
+    "241",
+    0
+   ],
+   "placement_mode": "midpoint",
+   "target_face_count": 200000
+  }
+ },
  "192": {
   "_meta": {
    "deck_drop": true,
@@ -222,9 +233,36 @@
     "147",
     1
    ],
+   "normal_map": [
+    "224",
+    0
+   ],
+   "occlusion": [
+    "233",
+    0
+   ],
    "roughness": [
     "147",
     2
+   ]
+  }
+ },
+ "224": {
+  "class_type": "BakeNormalMapFromMesh",
+  "inputs": {
+   "cage_distance": 0.05,
+   "high_poly": [
+    "241",
+    0
+   ],
+   "ignore_backfaces": true,
+   "low_poly": [
+    "196",
+    0
+   ],
+   "resolution": [
+    "288",
+    0
    ]
   }
  },
@@ -255,10 +293,25 @@
     "seed",
     0
    ],
-   "steps": [
-    "steps",
+   "steps": 12
+  }
+ },
+ "233": {
+  "class_type": "BakeAmbientOcclusion",
+  "inputs": {
+   "bias": 0.01,
+   "high_poly": [
+    "241",
     0
-   ]
+   ],
+   "low_poly": [
+    "196",
+    0
+   ],
+   "max_distance": 0.71,
+   "resolution": 1024,
+   "samples": 64,
+   "strength": 1
   }
  },
  "238": {
@@ -266,9 +319,28 @@
   "inputs": {
    "crease_angle": 180,
    "mesh": [
-    "4",
+    "186",
     0
    ]
+  }
+ },
+ "241": {
+  "class_type": "RemeshMesh",
+  "inputs": {
+   "band": 1.0,
+   "drop_small_components": 0.01,
+   "fix_poles": false,
+   "mesh": [
+    "92",
+    0
+   ],
+   "precluster_max_verts": 20000000,
+   "project_back": 0.0,
+   "resolution": 768,
+   "sign_mode": "solid",
+   "sign_mode.fill": 20.0,
+   "sign_mode.qef": false,
+   "smooth_iters": 20
   }
  },
  "242": {
@@ -336,7 +408,7 @@
   },
   "class_type": "PrimitiveInt",
   "inputs": {
-   "value": 4096
+   "value": 2048
   }
  },
  "298": {
@@ -429,17 +501,6 @@
    ],
    "viewport_state": "",
    "width": 1024
-  }
- },
- "4": {
-  "class_type": "VoxelToMesh",
-  "inputs": {
-   "algorithm": "basic",
-   "threshold": 0.6,
-   "voxel": [
-    "119",
-    0
-   ]
   }
  },
  "55": {

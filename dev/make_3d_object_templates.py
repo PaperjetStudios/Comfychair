@@ -78,11 +78,19 @@ def build(ui, oi, variant):
     if pixal:
         drop(40, 299)
 
-    # AO and normal maps need the remesh/decimate chain: leave them out (base colour, metal and roughness stay)
-    drop(224, 233, 226, 235, 241, 186, 202)
-    api["238"]["inputs"]["mesh"] = ["4", 0]
-    api["210"]["inputs"].pop("occlusion", None)
-    api["210"]["inputs"].pop("normal_map", None)
+    # the model is the full shape decode (92), remeshed and decimated as in ComfyUI's workflow; node 4 is only
+    # the 32-voxel structure preview. ui_to_api can't read RemeshMesh's sign_mode combo, so it is written here.
+    api["241"] = node("RemeshMesh", mesh=["92", 0], resolution=768, sign_mode="solid", **{"sign_mode.fill": 20.0,
+                      "sign_mode.qef": False}, band=1.0, project_back=0.0, fix_poles=False, smooth_iters=20,
+                      drop_small_components=0.01, precluster_max_verts=20_000_000)
+    api["186"]["inputs"]["mesh"] = ["241", 0]
+    # tuned on this PC: 200k faces + 2048 maps look the same as 700k + 4096 in the 3D tab, at half the file and time
+    api["186"]["inputs"]["target_face_count"] = 200_000
+    api["288"]["inputs"]["value"] = 2048
+    drop(202, 226, 235)
+    api["210"]["inputs"]["normal_map"] = ["224", 0]
+    api["210"]["inputs"]["occlusion"] = ["233", 0]
+    api["224"]["inputs"]["resolution"] = ["288", 0]
 
     # a view left empty takes its own background removal and crop with it (an optional multi-view input)
     follow = []
@@ -101,7 +109,7 @@ def build(ui, oi, variant):
     api["steps"] = node("PrimitiveInt", value=20)
     for ks in ("3", "18", "23", "12"):
         api[ks]["inputs"]["seed"] = ["seed", 0]
-        api[ks]["inputs"]["steps"] = ["steps", 0] if ks in ("18", "23") else api[ks]["inputs"].get("steps", 12)
+        api[ks]["inputs"]["steps"] = ["steps", 0] if ks == "18" else api[ks]["inputs"].get("steps", 12)
 
     # Texture on/off: a lazy switch, so the texture stage and its bake do not run when it is off
     api["tex"] = node("PrimitiveBoolean", value=True)

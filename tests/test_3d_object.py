@@ -83,3 +83,38 @@ def test_single_front_is_required():
     assert not any(n["class_type"] == "LoadImage" for n in wf.values())
     for nid, name, src, slot in links(wf):
         assert src in wf, f"{nid}.{name} points at {src}"
+
+
+def _upstream(wf, nid):
+    """The class types a node's MESH comes through, nearest first."""
+    out = []
+    while nid in wf:
+        node = wf[nid]
+        out.append(node["class_type"])
+        src = node["inputs"].get("mesh") or node["inputs"].get("voxel")
+        if not (isinstance(src, list) and len(src) == 2):
+            break
+        nid = src[0]
+    return out
+
+
+def test_the_model_is_the_full_shape_not_the_voxel_preview():
+    # VoxelToMesh on the 32-voxel structure decode is a blocky preview: the saved model must be the full shape decode,
+    # remeshed and decimated, with and without the texture
+    for tid in ("deck-3d-object", "deck-3d-object-multi", "deck-3d-object-trellis"):
+        wf = load(tid).workflow
+        for start in ("196", "plainfile"):
+            chain = _upstream(wf, start)
+            assert "VoxelToMesh" not in chain, (tid, start, chain)
+            assert chain[-3:] == ["DecimateMesh", "RemeshMesh", "VaeDecodeShapeTrellis"], (tid, start, chain)
+
+
+def test_rig_mesh_path_skips_the_startup_list():
+    # UniRig's isolated loader lists input/3d only when ComfyUI starts: a typed file_path sent after that is refused,
+    # so the path comes through an any-type switch from a text field
+    for tid in ("deck-autorig-human", "deck-autorig-any"):
+        t = load(tid)
+        src = t.workflow["mesh"]["inputs"]["file_path"]
+        assert isinstance(src, list) and t.workflow[src[0]]["class_type"] == "LazySwitchKJ", tid
+        model = [f for f in _describe(t) if f["group"] == "Model"]
+        assert [f["kind"] for f in model] == ["text"], tid
