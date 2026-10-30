@@ -98,3 +98,5 @@ export function emitProject() { for (const fn of [...PROJECT]) { try { fn(S.proj
 // Image-picker sources registered by panels (media.js registerPickerSource). Lives here, not in media.js,
 // because panels register while the import cycle is still being evaluated and media.js may not have run yet.
 export const PICKER_SOURCES = new Map();
+// The open Editor tab's engine, for the picker's Current edit button (same reason: set during the import cycle)
+export const CURRENT_EDIT = { eng: null };

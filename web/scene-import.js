@@ -7,7 +7,7 @@
 // folder (POST /api/scene/asset); the layer only holds its URL.
 import * as THREE from './vendor/three.module.min.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
-import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip, field, seg, info, rangeField } from './ui.js';
+import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip, field, seg, info, rangeField, mediaCard, placeholder } from './ui.js';
 import { C, R, SC, newObject, namesFor, save, selItem, write } from './scene-data.js';
 import { addModeSection } from './scene-modes.js';
 import { LOADERS, SPLAT_PASS, activeCamera, controls, changed, draw, fit, lookThrough, passHooks, recentre, renderer, scene, select } from './scene-view.js';
@@ -269,6 +269,9 @@ async function importFiles(files) {
 const OBJECT_TPL = 'deck-3d-object';
 const OBJECT_MULTI = 'deck-3d-object-multi';
 const SHEET_TPL = 'deck-h3-objectsheet';
+// what the sheet sets on the template's own fields (by their group name); a blank seed is a fresh one each run
+const OBJ = { steps: 20, seed: '', tex: true, res: 4096, cut: true };
+const OBJ_FIELDS = { steps: 'Detail (steps)', seed: 'Seed', tex: 'Texture', res: 'Texture resolution', cut: 'Cut out' };
 const SHEET_FRAMES = [4, 54, 96, 120];   // the sheet's orbit: front, side, back, other side
 
 // a model file already on the server (a run's GLB) as a model layer, fitted and standing on the floor
@@ -286,6 +289,23 @@ export async function addModel(url, name = 'Model', { gen = null, index = 0 } = 
   return o;
 }
 
+// a splat file already on the server (a run's), fitted and centred the way an import lands
+export async function addSplat(url, name = 'Splat', { gen = null, index = 0 } = {}) {
+  const c = controls.target;
+  const o = newObject('splat', { x: +c.x.toFixed(2), z: +c.z.toFixed(2) });
+  const ext = extOf(url);
+  Object.assign(o, { name: String(name || 'Splat').slice(0, 60), url, ext, gen, genIndex: index });
+  const mesh = await loadSplat(o);
+  o.box = splatBox(mesh).map((v) => +v.toFixed(3)); o.flip = flipFor(ext);
+  const size = new THREE.Vector3(o.box[3] - o.box[0], o.box[4] - o.box[1], o.box[5] - o.box[2]);
+  loaded.set(o.id, mesh);
+  o.fit = await fitOf(o, 'splat', size, null);
+  o.base.sx = o.base.sy = o.base.sz = o.fit;
+  SC.objects.push(o); save(); select(o.id);
+  toast(`${o.name} added: ${fmtLen(size.y * o.fit)} tall${o.fit === 1 ? '' : ` (×${o.fit})`}`);
+  return o;
+}
+
 // the picture field a group holds (Front, Back…), for the template's field keys
 async function objectValues(templateId, groups) {
   const { template } = await import('./make.js');
@@ -297,6 +317,13 @@ async function objectValues(templateId, groups) {
     if (!name) continue;
     const f = t.fields.find((x) => x.kind === 'image' && x.group === group);
     if (f) values[f.key] = name;
+  }
+  if (templateId === OBJECT_TPL || templateId === OBJECT_MULTI) {
+    const seed = OBJ.seed === '' ? Math.floor(Math.random() * 2 ** 31) : Number(OBJ.seed);
+    for (const [k, group] of Object.entries(OBJ_FIELDS)) {
+      const f = t.fields.find((x) => x.group === group && x.kind !== 'image');
+      if (f) values[f.key] = k === 'seed' ? seed : OBJ[k];
+    }
   }
   return { t, values };
 }
@@ -344,6 +371,20 @@ async function makeFromViews(name, label) {
     const { values: mv } = await objectValues(OBJECT_MULTI, { Front: views[0], Left: views[1], Back: views[2], Right: views[3] });
     await land(await objectRun(OBJECT_MULTI, mv, 'The 3D object'), label);
     closeSheet();
+  } catch (e) { toast(e.message, true); }
+}
+
+// one picture holding several views (a character sheet): each marked box is cropped out as its own view
+async function makeFromBoxes(name, label, boxes) {
+  try {
+    const picks = {};
+    for (const [view, b] of Object.entries(boxes)) {
+      const r = await api('/api/inputs/crop', { method: 'POST', body: { name, multiple: 1, crop: b } });
+      picks[view] = r.name;
+    }
+    if (Object.keys(picks).length < 2) throw new Error('Mark at least two views');
+    if (!picks.Front) throw new Error('Mark the Front view');
+    await makeFromPicked(picks, label);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -409,8 +450,14 @@ export async function rigModel(o, template, opts = {}) {
 }
 
 // the sheet: one photo, or its other views made or picked
+let viewBoxes = {};   // the views marked on the sheet picture (fractions); reset when the picture changes
+let viewBoxesOf = null;
 export function openObjectSheet(name, label = '') {
   const picks = { Front: name, Back: null, Left: null, Right: null };
+  if (viewBoxesOf !== name) { viewBoxes = {}; viewBoxesOf = name; }
+  const again = () => openObjectSheet(name, label);
+  const num = (key, min, max) => h('input', { type: 'number', min, max, value: OBJ[key], placeholder: key === 'seed' ? 'random' : null,
+    onchange: (e) => { OBJ[key] = e.target.value === '' && key === 'seed' ? '' : Math.max(min, Math.min(max, Math.round(+e.target.value || min))); } });
   const pick = (role) => {
     closeSheet();
     C.openImagePicker({ title: `The ${role.toLowerCase()} view`, onPick: (n) => { picks[role] = n; openObjectSheet(name, label); } });
@@ -432,6 +479,21 @@ export function openObjectSheet(name, label = '') {
         button(`Make it from ${n} view${n === 1 ? '' : 's'}`, () => makeFromPicked(picks, label || picks.Front),
           { disabled: n < 2, cls: n < 2 ? '' : 'primary' })),
       help('Four views 90° apart, the object the same size in each, on a plain background, work best. The sheet makes them from one photo; or pick photos of your own.')),
+    section('A character sheet', null,
+      h('div', { class: 'row wrap' }, h('span', { class: 'grow' }, Object.keys(viewBoxes).length ? `Marked: ${Object.keys(viewBoxes).join(', ')}` : 'Several views in one picture'),
+        button('Mark the views…', () => {
+          closeSheet();
+          import('./view-boxes.js').then((m) => m.openViewBoxes({ image: picks.Front, boxes: viewBoxes, onDone: (b) => { viewBoxes = b; viewBoxesOf = name; again(); } }));
+        }, { cls: 'small' })),
+      button('Make it from the marked views', () => makeFromBoxes(picks.Front, label || picks.Front, viewBoxes),
+        { disabled: Object.keys(viewBoxes).length < 2, cls: Object.keys(viewBoxes).length < 2 ? '' : 'primary' }),
+      help('For one picture that holds the views, however they are laid out: draw a box round each (Front, Left, Back, Right), or start from equal columns. Each box is cut out as its own view. Left is the character\'s left.')),
+    section('Settings', null,
+      field('Detail (steps)', num('steps', 4, 60)),
+      field('Seed', num('seed', 0, 2 ** 31 - 1)),
+      field('Texture resolution', seg([[1024, '1K'], [2048, '2K'], [4096, '4K']], OBJ.res, (v) => { OBJ.res = v; })),
+      toggle('Texture', OBJ.tex, (v) => { OBJ.tex = v; }, { help: 'Off makes the shape alone, much quicker' }),
+      toggle('Cut out the object (one photo)', OBJ.cut, (v) => { OBJ.cut = v; }, { help: 'Removes the background before making the model from one photo. Turn off when the photo is already cut out.' })),
     actions(button('Cancel', closeSheet)));
 }
 
@@ -479,7 +541,7 @@ function saveAsTemplate() {
 function sourcesSection() {
   return section('Import and templates', null,
     h('div', { class: 'row wrap' },
-      fileButton('📦 Import model or splat…', importFiles, { accept: ACCEPT, multiple: true, cls: 'small primary' }),
+      importButton(),
       button('🏠 New scene from template…', openTemplates)),
     help('Models: glb, gltf, fbx, obj (pick its .mtl and textures too). Splats: ply, splat, ksplat, spz. Files are kept in this project\'s folder.'));
 }
@@ -499,6 +561,11 @@ function itemSection(o) {
       button('Key its own bones', () => useOwnSkin(o), { cls: 'small',
         title: 'An import that already has a skeleton: no rigging run, key its bones directly' })) : null,
     o.type === 'splat' ? toggle('Upside down (turn it over: many splat files are y-down)', o.flip, (on) => { set('flip', on); R.meshes.get(o.id)?.userData.splat?.fit(); draw(); }) : null,
+    o.type === 'splat' && o.image ? h('div', { class: 'row wrap' },
+      button('Make it again…', async () => {
+        const { camera } = await import('./scene-view.js');
+        makeSplat(o.image, { lookThrough, camera, busyBar: (await import('./ui.js')).busy }, o);
+      }, { cls: 'small', title: 'Run SHARP on the photo again with other choices (preview density, scene shape); the layer keeps its place' })) : null,
     o.type === 'splat' && o.cam ? h('div', { class: 'row wrap' },
       button('🎥 Camera to the photo\'s view', () => { lookThrough(o); changed(); }),
       o.view ? null : button('Re-centre', () => recentre(o), { title: 'Stand it centred at the middle of the scene, on the floor and upright; the camera moves to the photo\'s view' })) : null,
@@ -646,27 +713,52 @@ async function remakeLevels(o, trim) {
 // ---- a picture as a splat (SHARP, POST /api/scene/splat): where the shot camera is, seen through the photo's lens ----
 // First a small sheet: the preview density (this device's, as the layer panel's Splat preview) and whether the
 // full set is kept for renders. These are remembered per device.
-export function makeSplat(name, ctx) {
-  const ch = { ...makeChoices(coarse()), preview: previewLevel(coarse()) };
+// Make the scene's picture the photo's shape (long side kept, sides in steps of 16): SHARP keeps the photo's own
+// lens and shape, and a scene of another shape shows the splat as a strip, or cut off
+function matchSceneTo(w, h) {
+  if (!w || !h) return;
+  const long = Math.max(SC.width, SC.height), r = w / h;
+  const [W, H] = r >= 1 ? [long, long / r] : [long * r, long];
+  SC.width = Math.max(64, Math.round(W / 16) * 16); SC.height = Math.max(64, Math.round(H / 16) * 16);
+}
+export function makeSplat(name, ctx, redo = null) {
+  const ch = { ...makeChoices(coarse()), preview: previewLevel(coarse()), match: !redo };
   const keep = toggle('Keep the full set for renders', ch.keepFull, (on) => { ch.keepFull = on; },
     { help: 'On: renders (colour video, the Video tab\'s export) use every Gaussian SHARP made, about 1.2M. Off: only the previews are kept, and renders use the densest of them (smaller files).' });
-  openSheet(h('h3', {}, 'Photo as a splat'),
-    help('SHARP turns the picture into about 1.2 million Gaussians. The 3D view shows a lighter preview of them; you can change it later in the splat\'s panel.'),
+  openSheet(h('h3', {}, redo ? 'Make this splat again' : 'Photo as a splat'),
+    help('SHARP turns the picture into about 1.2 million Gaussians. The 3D view shows a lighter preview of them; you can change it later in the splat\'s panel. Any picture size or shape works (SHARP looks at it at 1536 px square whatever it is); sharp, well-lit photos about 1000 px or more on the short side do best, and a very small one gives a soft splat.'),
     field('Preview density', seg(LEVELS.map(([k, label, n]) => [k, label, Number.isFinite(n) ? `${label}: about ${countLabel(n)} Gaussians` : `${label}: every Gaussian`]),
       ch.preview, (k) => { ch.preview = k; })),
     keep,
-    toggle('Place at the camera instead', placeAtCamera(), (on) => setPlaceAtCamera(on),
+    toggle('Make the scene the photo\'s shape', ch.match, (on) => { ch.match = on; },
+      { help: 'The splat has the photo\'s own lens and shape. In a scene of another shape (a tall photo in a wide scene) it shows as a strip, or cut off. On: the scene\'s picture size changes to the photo\'s shape, keeping its longer side.' }),
+    redo ? null : toggle('Place at the camera instead', placeAtCamera(), (on) => setPlaceAtCamera(on),
       { help: 'Off: the splat stands centred at the middle of the scene, on the floor, and the shot camera moves to where the photo was taken. On: the splat goes where the shot camera is now (the camera stays).' }),
     actions(button('Cancel', closeSheet), button('Make the splat', () => {
-      closeSheet(); setMakeChoices(ch); setPreviewLevel(ch.preview); runSplat(name, ch, ctx);
+      closeSheet(); setMakeChoices(ch); setPreviewLevel(ch.preview); runSplat(name, ch, ctx, redo);
     }, { cls: 'primary' })));
 }
 
-async function runSplat(name, ch, { lookThrough, camera, busyBar }) {
-  const bar = busyBar('Making a splat from the picture…');
+async function runSplat(name, ch, { lookThrough, camera, busyBar }, redo = null) {
+  const bar = busyBar(redo ? 'Making the splat again…' : 'Making a splat from the picture…');
   try {
     const { waitJob } = await import('./clipimport.js');
     const r = await waitJob(await api('/api/scene/splat', { method: 'POST', body: { image: name, project_id: C.S.project, preview: ch.preview, keep_full: ch.keepFull }, busy: false }));
+    if (ch.match) matchSceneTo(r.lens?.width, r.lens?.height);
+    if (redo) {   // the same layer (where it stands, its keys and trim), with the new splat in it
+      const old = R.meshes.get(redo.id);
+      if (old) { scene.remove(old); R.meshes.delete(redo.id); old.userData.dispose?.(); }
+      loaded.delete(redo.id);
+      Object.assign(redo, { url: r.url, file: r.name, fov: r.lens?.fov || redo.fov, levels: r.levels || undefined, box: r.box });
+      const mesh = await loadSplat(redo);
+      redo.box = r.box || splatBox(mesh).map((v) => +v.toFixed(3));
+      redo.dist = +Math.max(0.3, (redo.box[2] + redo.box[5]) / 2).toFixed(3);
+      if (redo.view) redo.view = { pos: standShift(redo.box, redo.flip) };
+      loaded.set(redo.id, mesh);
+      changed(); fit();
+      toast('Splat made again');
+      return;
+    }
     const d = THREE.MathUtils.radToDeg, c = camera, here = placeAtCamera();
     const o = newObject('splat', here ? { x: c.position.x, y: c.position.y, z: c.position.z, rx: d(c.rotation.x), ry: d(c.rotation.y), rz: d(c.rotation.z) } : {});
     Object.assign(o, { name: `Splat of ${name.split('/').pop().replace(/\.\w+$/, '')}`.slice(0, 60), url: r.url, file: r.name, ext: 'ply',
@@ -677,13 +769,43 @@ async function runSplat(name, ch, { lookThrough, camera, busyBar }) {
     if (!here) o.view = { pos: standShift(o.box, o.flip) };   // (centred on the floor: the photo's camera is there)
     loaded.set(o.id, mesh);
     SC.objects.push(o); save(); select(o.id);
-    lookThrough(o);
+    lookThrough(o); fit();
     toast('Splat added: small camera moves look best (nothing is behind what the picture shows)');
   } catch (e) { toast(e.message, true); } finally { bar.done(); }
 }
 
+// Import: a file from this device (the tablet's own file chooser), or a model or splat this project already made
+export async function openImportSheet() {
+  const { projectOutputs, genLabel } = await import('./media.js');
+  const { cardPicture } = await import('./kinds.js');
+  const grid = h('div', { class: 'grid gallery' }, placeholder('Loading…'));
+  openSheet(h('h3', {}, 'Import a model or splat'),
+    h('div', { class: 'row wrap' },
+      fileButton('From this device…', (fs) => { closeSheet(); importFiles(fs); }, { accept: ACCEPT, multiple: true, cls: 'small primary', paste: false }),
+      hint('glb, gltf, fbx, obj (pick its .mtl and textures too), or ply, splat, ksplat, spz')),
+    h('h3', {}, 'Made in this project'), grid);
+  const items = (await projectOutputs(['mesh', 'splat'])).filter(({ g, o }) => g.template !== '3d photo' && (MODELS.has(extOf(o.filename)) || SPLATS.has(extOf(o.filename))));
+  const take = async ({ g, o, i }) => {
+    try {
+      closeSheet();
+      if (o.kind === 'splat' || SPLATS.has(extOf(o.filename))) await addSplat(o.url, genLabel(g), { gen: g.id, index: i });
+      else await addModel(o.url, genLabel(g), { gen: g.id, index: i });
+    } catch (e) { toast(e.message, true); }
+  };
+  grid.replaceChildren(...(items.length ? items.slice(0, 300).map((it) => mediaCard(cardPicture(it.o, it.g), genLabel(it.g), () => take(it), { badge: it.o.kind === 'splat' ? 'splat' : null }))
+    : [placeholder('No models or splats made in this project yet.')]));
+}
+export const importButton = (cls = 'small primary') => button('📦 Import model or splat…', openImportSheet, { cls });
+
 export function registerImport({ newTab }) {
   hostNewTab = newTab;
+  // files dropped on the 3D view come in as layers, like the chooser's
+  const view = document.getElementById('sceneViewer');
+  if (view) {
+    const files = (e) => e.dataTransfer?.types?.includes('Files');
+    view.addEventListener('dragover', (e) => { if (files(e)) e.preventDefault(); });
+    view.addEventListener('drop', (e) => { if (!files(e)) return; e.preventDefault(); importFiles([...e.dataTransfer.files]); });
+  }
   addModeSection('edit', () => {
     const o = selItem();
     return [o && (o.type === 'model' || o.type === 'splat') ? itemSection(o) : null, sourcesSection()];

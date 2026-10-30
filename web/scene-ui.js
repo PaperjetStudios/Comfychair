@@ -1,7 +1,7 @@
 import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import {
-  $, actions, button, clamp, clone, closeSheet, field, h, iconBtn, layerRowsEl, numField, openSheet, panelTop, rangeField,
+  $, actions, button, clamp, clone, closeSheet, field, h, hint, iconBtn, layerRowsEl, numField, openSheet, panelTop, rangeField,
   section, seg, sheetOpen, store, uid, undoToast, help, toggle, sizeSelect, chip, info, toast, icon, iconize, numSlider, popover, closePopover,
 } from './ui.js';
 import {
@@ -391,12 +391,14 @@ export function renderProps() {
       help('One take is a single video, with the cuts in it. Each shot renders one video per shot. The toast can lay those on the Video timeline.')),
     field(['Depth range', info('Follow the shot: each moment gets its own near and far (eased over about a second), so the depth keeps its contrast when the camera travels. A cut starts that range again. Whole clip: one near and far for the whole clip (steady greys, but a long camera move squeezes part of it into a few greys, and depth control lets go there).')],
       seg([['follow', 'Follow the shot'], ['clip', 'Whole clip']], SC.depthRange === 'clip' ? 'clip' : 'follow', (v) => { SC.depthRange = v; save(); })),
+    field(['Depth from', info('The 3D shapes: depth worked out exactly from the objects (a splat is only a box). The picture: the shot is rendered in colour first (splats at their full set, everything in view) and Video Depth Anything estimates its depth, so a splat gets real depth, but it is an estimate and takes longer. Both: the picture\'s depth, with the 3D objects\' exact depth laid over it.')],
+      seg([['geometry', '3D shapes'], ['picture', 'The picture'], ['combo', 'Both']], SC.depthFrom || 'geometry', (v) => { SC.depthFrom = v; save(); renderPanel(); })),
     busy ? h('div', { class: 'row wrap' }, button('✕ Cancel render', cancelRender, { cls: 'small danger', title: 'Stop the render: nothing is saved' }))
       : h('div', { class: 'row wrap' },
-        button('Render depth video', renderDepthVideo, { cls: 'small primary' }),
-        figs ? button('Render pose video', renderPoseVideo, { title: 'The posable people as OpenPose stick figures' }) : null,
+        button('Render depth video', () => renderDepthVideo(), { cls: 'small primary' }),
+        figs ? button('Render pose video', () => renderPoseVideo(), { title: 'The posable people as OpenPose stick figures' }) : null,
         figs ? button('Render both', async () => { if (await renderDepthVideo()) await renderPoseVideo(); }, { title: 'A depth video and a pose video of the same shot' }) : null,
-        button('🎞 Render colour video', renderColorVideo, { title: 'The shot as it looks, over the scene\'s length, at its size: splats at their full set' }),
+        button('🎞 Render colour video', () => renderColorVideo(), { title: 'The shot as it looks, over the scene\'s length, at its size: splats at their full set' }),
         button('📷 Save frame', saveFrame), AREA.onlyToggle()),   // (Range only: the key sheet's work area)
     figs ? h('div', { class: 'row wrap' }, ...[['poseHands', 'Hands in the pose video'], ['poseFace', 'Face points in the pose video']].map(([k, l]) =>
       toggle(l, SC[k] !== false, (on) => { SC[k] = on; save(); }))) : null,
@@ -405,8 +407,11 @@ export function renderProps() {
     h('p', { id: 'sceneStatus', class: 'hint' }, statusText));
 }
 
-function openAdd() {
+async function openAdd() {
+  const { importButton } = await import('./scene-import.js');   // (scene-view imports this panel: no top-level import)
   openSheet(h('h3', {}, 'Add to the scene'),
+    h('div', { class: 'row wrap' }, importButton(),
+      hint('glb, gltf, fbx, obj (with its .mtl and textures) or a splat: ply, splat, ksplat, spz. You can also drop the files on the 3D view.')),
     h('div', { class: 'chips' }, ...Object.entries(TYPES).filter(([t, d]) => !['photo', 'model', 'splat'].includes(t) && !d.hide).flatMap(([t, d]) => (t === 'figure'
       ? FIGURE.BODIES.map(([b, l]) => chip(`${d.icon} ${d.label} (${l.toLowerCase()})`, () => addObject(t, { body: b })))
       : [chip(`${d.icon} ${d.label}`, () => addObject(t))])),

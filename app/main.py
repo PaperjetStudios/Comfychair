@@ -1596,6 +1596,43 @@ async def scene_render(frames: list[UploadFile] = File(...), fps: float = Form(2
     return db.get_generation(gid)
 
 
+@app.post("/api/scene/depth-combine")
+async def scene_depth_combine(body: dict = Body(...)):
+    """{picture: generation id, geometry: generation id} -> a depth video made of the geometry render's pixels where it
+    drew something (the 3D objects, exact) and the picture's estimated depth everywhere else (what a splat shows).
+    The picture's depth is scaled to the geometry video's size."""
+    gens = []
+    for key in ("picture", "geometry"):
+        g = db.get_generation(int(body.get(key) or 0))
+        o = next((x for x in (g or {}).get("outputs", []) if x.get("kind") == "video"), None)
+        if not g or not o:
+            raise HTTPException(400, f"The {key} depth needs a finished video")
+        gens.append((g, output_file(g, o)))
+    (pg, pic), (gg, geo) = gens
+    if not imageprep.ffmpeg_available():
+        raise HTTPException(400, "ffmpeg isn't installed (sudo apt install ffmpeg)")
+    params = {"kind": "depth", "combined": {"picture": pg["id"], "geometry": gg["id"]}, "scene": (gg.get("params") or {}).get("scene")}
+    gid = db.create_generation(gg["project_id"], "3d scene", params, {}, f"scene-{uuid.uuid4().hex}", None)
+    db.update_generation(gid, status="running")
+    await push_gen(gid)
+    out, rel = new_output(db.get_generation(gid), "depth.mp4")
+    vf = ("[1:v][0:v]scale2ref[b][a];[a][b]blend=all_expr='if(gt(A,6),A,B)',"
+          "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p")
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(geo), "-i", str(pic), "-filter_complex", vf,
+           *videoedit.h264(12), "-an", "-movflags", "+faststart", str(out)]
+    r = await asyncio.to_thread(videoedit.run_ffmpeg, cmd, text=True)
+    if r.returncode:
+        out.unlink(missing_ok=True)
+        db.update_generation(gid, status="error", error=r.stderr[-500:], finished=time.time())
+        await push_gen(gid)
+        raise HTTPException(400, r.stderr[-500:] or "ffmpeg failed")
+    dur = next((x.get("duration") for x in gg["outputs"] if x.get("kind") == "video"), None)
+    db.update_generation(gid, status="done", finished=time.time(),
+                         outputs=[{"filename": out.name, "path": rel, "kind": "video", "node": "scene", **({"duration": dur} if dur else {})}])
+    await push_gen(gid)
+    return db.get_generation(gid)
+
+
 SCENE_CLIP_TTL = 24 * 3600
 CLIP_TOKEN = re.compile(r"[0-9a-f]{8,32}")
 

@@ -19,7 +19,9 @@ import { openCompare } from './compare.js';
 // ---------------------------------------------------------------------------
 export const B = { filter: store.get('deck.board.filter', 'all'), size: store.get('deck.board.size', 240), loadedFor: undefined,
   selecting: false, sel: new Set(), longPressed: false, boxDrag: store.get('deck.board.boxDrag', false),   // sel: "<generation id>:<output index>"
-  marked: new Set(store.get('deck.board.marked', [])) };  // generation ids marked for deletion
+  marked: new Set(store.get('deck.board.marked', [])),
+  from: null, to: null,   // a date and time range (seconds), either end open
+  folded: new Set(store.get('deck.board.folded', [])) };   // days folded shut  // generation ids marked for deletion
 const boardVideos = new IntersectionObserver((entries) => {
   for (const e of entries) {
     if (e.isIntersecting && !GAL.el) e.target.play().catch(() => {}); else e.target.pause();
@@ -52,19 +54,21 @@ export async function renderBoard() {
   const delMarked = h('span', { class: 'hidden' });   // filled in once the project's generations are loaded
   const importBtn = button('⤓ Import clip', () => import('./clipimport.js').then((m) => m.openClipImport({ onSaved: clipImported })),
     { title: 'Cut a piece out of a YouTube/Reddit link, or a big video file, into the media library' });
-  bar.replaceChildren(filterSeg, h('label', { class: 'board-size' }, 'Size', size), selBtn, importBtn, delMarked, count, boardSelBar());
+  bar.replaceChildren(filterSeg, h('label', { class: 'board-size' }, 'Size', size), selBtn, importBtn, delMarked, count, rangeBar(), boardSelBar());
   $('#board').style.setProperty('--tile', `${B.size}px`);
 
   if (B.loadedFor !== S.project) {
     $('#board').replaceChildren(placeholder('Loading…'));
     try { await loadAllProjectGenerations(); } catch (e) { toast(e.message, true); }
   }
-  const tiles = boardItems().map(({ g, o, i }) => boardTile(g, o, i));
+  const items = boardItems();
+  const tiles = items.map(({ g, o, i }) => boardTile(g, o, i));
   pauseBoard();
-  $('#board').replaceChildren(...(tiles.length ? tiles : [placeholder(
-    B.filter === 'pinned' ? 'Nothing pinned yet. Tap ☆ on any tile.'
-      : B.filter === 'marked' ? 'Nothing marked. Mark things for deletion in the gallery (tap a tile).'
-        : 'Nothing generated in this project yet.')]));
+  $('#board').replaceChildren(...(tiles.length ? dayGroups(items, tiles) : [placeholder(
+    B.from != null || B.to != null ? 'Nothing in that date range.'
+      : B.filter === 'pinned' ? 'Nothing pinned yet. Tap ☆ on any tile.'
+        : B.filter === 'marked' ? 'Nothing marked. Mark things for deletion in the gallery (tap a tile).'
+          : 'Nothing generated in this project yet.')]));
   $('#board').querySelectorAll('video').forEach((v) => boardVideos.observe(v));
   count.textContent = `${tiles.length} item${tiles.length === 1 ? '' : 's'}`;
   const nMarked = markedGens().length;
@@ -80,6 +84,8 @@ function boardItems() {
   for (const g of gens) {
     if (B.filter === 'pinned' && !g.pinned) continue;
     if (B.filter === 'marked' && !B.marked.has(g.id)) continue;
+    const t = genTime(g);
+    if ((B.from != null && t < B.from) || (B.to != null && t > B.to)) continue;
     g.outputs.forEach((o, i) => {
       const k = kindOf(o);
       if (k === 'file') return;
@@ -88,6 +94,62 @@ function boardItems() {
     });
   }
   return items;
+}
+
+// ---- dates: the board in day folders, and a date and time range to narrow it
+const genTime = (g) => g.finished || g.created || 0;
+const dayKey = (t) => { const d = new Date(t * 1000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const dayStart = (key) => new Date(`${key}T00:00:00`).getTime() / 1000;
+function dayName(key) {
+  const today = dayKey(Date.now() / 1000), yest = dayKey(Date.now() / 1000 - 86400);
+  if (key === today) return 'Today';
+  if (key === yest) return 'Yesterday';
+  return new Date(`${key}T12:00:00`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: key.slice(0, 4) === today.slice(0, 4) ? undefined : 'numeric' });
+}
+const timeText = (t) => t == null ? '' : new Date(t * 1000 - new Date(t * 1000).getTimezoneOffset() * 60000).toISOString().slice(0, 16);   // (datetime-local's local time)
+
+// each day is a folder: a header with its count, Select day, and fold; the tiles are newest first inside it
+function dayGroups(items, tiles) {
+  const days = new Map();
+  items.forEach((it, n) => {
+    const k = dayKey(genTime(it.g));
+    if (!days.has(k)) days.set(k, []);
+    days.get(k).push({ it, tile: tiles[n] });
+  });
+  return [...days].map(([k, rows]) => {
+    const shut = B.folded.has(k);
+    const head = h('div', { class: 'board-day-head' },
+      button(shut ? '▸' : '▾', () => {
+        if (B.folded.has(k)) B.folded.delete(k); else B.folded.add(k);
+        store.set('deck.board.folded', [...B.folded]); renderBoard();
+      }, { cls: 'small ghost', title: shut ? 'Open this day' : 'Fold this day' }),
+      h('b', {}, dayName(k)), h('span', { class: 'hint' }, `${rows.length} item${rows.length === 1 ? '' : 's'}`),
+      h('span', { class: 'grow' }),
+      button('Select day', () => {
+        if (!B.selecting) setBoardSelecting(true);
+        rows.forEach(({ it }) => B.sel.add(it.key));
+        renderBoard();
+      }, { cls: 'small', title: 'Select everything from this day (within the date range, if one is set)' }),
+      button('Only this day', () => { B.from = dayStart(k); B.to = dayStart(k) + 86400 - 1; renderBoard(); }, { cls: 'small ghost' }));
+    return h('section', { class: 'board-day' }, head, shut ? null : h('div', { class: 'board-day-grid' }, rows.map((r) => r.tile)));
+  });
+}
+
+// From and To (date and time), quick ranges, and Clear
+function rangeBar() {
+  const now = () => Date.now() / 1000;
+  const set = (from, to) => { B.from = from; B.to = to; renderBoard(); };
+  const input = (label, key) => h('label', { class: 'board-range-end' }, label,
+    h('input', { type: 'datetime-local', value: timeText(B[key]),
+      onchange: (e) => { const v = e.target.value ? new Date(e.target.value).getTime() / 1000 : null; B[key] = key === 'to' && v != null ? v + 59 : v; renderBoard(); } }));
+  const todayStart = dayStart(dayKey(now()));
+  return h('div', { class: 'board-range' }, h('span', { class: 'hint' }, 'Date range'),
+    input('From', 'from'), input('To', 'to'),
+    button('Last hour', () => set(now() - 3600, null), { cls: 'small' }),
+    button('Today', () => set(todayStart, null), { cls: 'small' }),
+    button('Yesterday', () => set(todayStart - 86400, todayStart - 1), { cls: 'small' }),
+    button('7 days', () => set(todayStart - 6 * 86400, null), { cls: 'small' }),
+    B.from != null || B.to != null ? button('Clear range', () => set(null, null), { cls: 'small ghost' }) : null);
 }
 
 async function togglePin(g) {

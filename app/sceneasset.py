@@ -127,12 +127,26 @@ def _write_ply(dst: Path, props, data):
     tmp.replace(dst)
 
 
-def _visible_order(props, data):
-    """The Gaussians' indices, most visible (opacity × size) first."""
+def _visible_order(props, data, camera=False):
+    """The Gaussians' indices, most visible first: opacity × size. With `camera` (a photo's splat, whose origin is
+    the photo's camera) the size counts as seen from there, divided by the distance: opacity × (size / distance)².
+    Without it a photo's sky and sea (big Gaussians, far away) crowd out the subject (tiny ones, near), and the
+    light and medium previews hold only the background."""
     import numpy as np
     opacity = 1 / (1 + np.exp(-data[:, props.index("opacity")].astype("f8")))
     size = np.exp(data[:, [props.index("scale_0"), props.index("scale_1"), props.index("scale_2")]].astype("f8")).prod(1) ** (1 / 3)
-    return np.argsort(-(opacity * size), kind="stable")
+    if camera:
+        dist = np.sqrt((data[:, [props.index("x"), props.index("y"), props.index("z")]].astype("f8") ** 2).sum(1))
+        size = size / np.maximum(dist, 0.05)
+    return np.argsort(-(opacity * size ** (2 if camera else 1)), kind="stable")
+
+
+def _is_photo(path: Path) -> bool:
+    """A splat SHARP made from a photo: it carries the photo's camera (its origin), which an imported splat has not."""
+    try:
+        return bool(_ply_lens(path))
+    except (OSError, ValueError, KeyError, struct.error):
+        return False
 
 
 def grow_for(n: int, keep: int) -> float:
@@ -157,7 +171,7 @@ def thin_splat(src: Path, dst: Path, keep: int = SPLAT_MAX):
     """Write src's Gaussians to dst, at most `keep` of them: the most visible (opacity × size) first. Only the vertex
     element is written (SHARP's camera elements after it are read by _ply_lens from the full file)."""
     props, data = _read_ply(src)
-    _write_ply(dst, props, _thinned(props, data, _visible_order(props, data), keep) if len(data) > keep else data)
+    _write_ply(dst, props, _thinned(props, data, _visible_order(props, data, _is_photo(src)), keep) if len(data) > keep else data)
 
 
 def splat_box(props, data) -> list:
@@ -212,7 +226,7 @@ def make_levels(full: Path, base: str, grow: bool = True, trim: dict | None = No
         if not len(data):
             raise ValueError("That trim leaves nothing: make the radius bigger")
     kept = len(data)
-    order = _visible_order(props, data) if kept > LEVELS[0][1] else None
+    order = _visible_order(props, data, _is_photo(full)) if kept > LEVELS[0][1] else None
     prefix = f"{base}_t{trim_tag(trim)}" if trim else base
     levels = {}
     for k, keep in LEVELS:

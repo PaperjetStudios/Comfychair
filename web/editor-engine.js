@@ -1,6 +1,6 @@
 import {
   h, api, clamp01, busy, toast, undoToast, sheetOpen, openSheet, closeSheet, loadingSheet, sheetStillOpen, button, iconBtn, actions,
-  seg, field, section, hint, propNum, layerRowsEl, panelTop, help, colorField, rangeField, pctFmt, clamp,
+  seg, field, section, hint, toggle, propNum, layerRowsEl, panelTop, help, colorField, rangeField, pctFmt, clamp,
 } from './ui.js';
 import { ASPECT_PRESETS, S, inputUrl, switchTab, thumbUrl } from './core.js';
 import { openImagePicker, uploadImage } from './media.js';
@@ -18,6 +18,7 @@ import { openGeneration } from './run.js';
 import { BLENDS, blendOp, createPaint, isCanvas } from './paint.js';
 import { icon } from './icons.js';
 import * as G from './layer-geom.js';
+import { inpaintSection } from './inpaint.js';
 
 // ---------------------------------------------------------------------------
 // editor: a simple Photoshop-style layer stack for cropping images and putting them together
@@ -37,7 +38,7 @@ export function fromSaved(saved) {
   // the last one is drawn on top. size: a fixed {w,h} canvas, or null to fit around the layers. anim: see below.
   e.layers = (saved.layers || []).map((l) => ({ name: l.name, crop: { ...(l.crop || FULL) },
     x: l.x, y: l.y, scale: l.x == null ? 1 : l.scale, opacity: l.opacity ?? 1, hidden: !!l.hidden,
-    blend: l.blend || 'normal', locked: !!l.locked, ...(l.label ? { label: l.label } : {}),
+    blend: l.blend || 'normal', locked: !!l.locked, ...(l.label ? { label: l.label } : {}), ...(l.mask ? { mask: true } : {}), ...(l.draft ? { draft: true } : {}), ...(l.canvas ? { canvas: true } : {}), ...(l.clip ? { clip: true } : {}),
     ...(l.rotation ? { rotation: +l.rotation } : {}), ...(l.flipX ? { flipX: true } : {}), ...(l.flipY ? { flipY: true } : {}),
     ...(l.chans ? { chans: structuredClone(l.chans) } : {}) }));
   // The old auto-layout editor kept no positions: lay its images out once they load, in the same
@@ -63,7 +64,7 @@ export function createEditor(cfg) {
   // until its first save, a moment later: it's left out until then.)
   const dumpEditor = () => ({ v: 2, size: E.size, cols: E.cols, gap: E.gap, bg: E.bg, mp: E.mp, snap: E.snap, arrange: E.arrange, anim: E.anim,
     layers: E.layers.filter((l) => l.name).map((l) => ({ name: l.name, crop: l.crop, x: l.x, y: l.y, scale: l.scale, opacity: l.opacity, hidden: l.hidden,
-      blend: l.blend || 'normal', locked: !!l.locked, label: l.label || null, chans: l.chans || null,
+      blend: l.blend || 'normal', locked: !!l.locked, label: l.label || null, chans: l.chans || null, ...(l.mask ? { mask: true } : {}), ...(l.draft ? { draft: true } : {}), ...(l.canvas ? { canvas: true } : {}), ...(l.clip ? { clip: true } : {}),
       ...(l.rotation ? { rotation: l.rotation } : {}), ...(l.flipX ? { flipX: true } : {}), ...(l.flipY ? { flipY: true } : {}) })) });
   // every edit ends up here: an animated layer keys what moved, then the host saves (the Editor tab's tab and still)
   function persistEditor() { keyPose(); cfg.onChange?.(); }
@@ -199,7 +200,11 @@ export function createEditor(cfg) {
     const x = Math.min(...rs.map((r) => r.x)), y = Math.min(...rs.map((r) => r.y));
     return { x, y, w: Math.max(...rs.map((r) => r.x + r.w)) - x, h: Math.max(...rs.map((r) => r.y + r.h)) - y };
   }
-  const visibleLayers = () => E.layers.filter((l) => ready(l) && !l.hidden);
+  // (an inpaint draft, l.draft, shows but is left out of what is sent and saved until the Inpaint panel keeps it)
+  // (an inpaint mask layer, l.mask, is a red tint over the canvas for the Inpaint panel: never part of the picture)
+  // a painted canvas (or the inpaint mask) is resized, never turned or cropped; layers and other objects keep those
+  const plain = (l) => !!(l && (l.canvas || l.mask || (l.label && /^Canvas \d+$/.test(l.label) && isCanvas(l))));   // (a canvas made before the flag has its numbered name)
+  const visibleLayers = () => E.layers.filter((l) => ready(l) && !l.hidden && !l.mask);
 
   // The output area: the fixed size, or just big enough for every visible layer
   function editorFrame() {
@@ -221,6 +226,27 @@ export function createEditor(cfg) {
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
     if (t) ctx.restore();
   }
+  // A canvas with Clip on is like overflow: hidden. The layers above it whose middle is over it are drawn only where the
+  // canvas is (the nearest such canvas below a layer is the one that holds it)
+  function clipOf(list, i) {
+    const l = list[i], c = G.centre(l);
+    for (let j = i - 1; j >= 0; j--) {
+      const o = list[j];
+      if (!o.clip || o.hidden) continue;
+      const r = G.layerRect(o);
+      if (c.x >= r.x && c.x <= r.x + r.w && c.y >= r.y && c.y <= r.y + r.h) return r;
+    }
+    return null;
+  }
+  function drawStack(ctx, list) {
+    list.forEach((l, i) => {
+      const r = clipOf(list, i);
+      if (!r) return drawLayer(ctx, l);
+      ctx.save(); ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
+      drawLayer(ctx, l);
+      ctx.restore();
+    });
+  }
   // move a layer so the box round it starts at x, y
   function placeBounds(l, x, y) {
     const b = bounds(l);
@@ -228,15 +254,39 @@ export function createEditor(cfg) {
   }
 
   function composeEditor(target) {
-    const f = editorFrame(), vis = visibleLayers();
+    const f = editorFrame(), vis = visibleLayers().filter((l) => !l.draft);   // (an inpaint draft is not part of the picture until kept)
     if (!f || !vis.length) return false;
     target.width = f.w; target.height = f.h;
     const ctx2 = target.getContext('2d');
     ctx2.imageSmoothingQuality = 'high';
     ctx2.fillStyle = E.bg; ctx2.fillRect(0, 0, f.w, f.h);
     ctx2.translate(-f.x, -f.y);
-    vis.forEach((l) => drawLayer(ctx2, l));
+    drawStack(ctx2, vis);
     return true;
+  }
+
+  // The inpaint mask layers as a greyscale picture the frame's size (white = change), or null when nothing is painted.
+  // box: the painted part as fractions of the frame; cover: the share of the frame it covers
+  function composeMask() {
+    const f = editorFrame(), ms = E.layers.filter((l) => l.mask && ready(l) && !l.hidden);
+    if (!f || !ms.length) return null;
+    const a = document.createElement('canvas');
+    a.width = f.w; a.height = f.h;
+    const c = a.getContext('2d');
+    c.translate(-f.x, -f.y);
+    ms.forEach((l) => drawLayer(c, { ...l, opacity: 1, blend: 'normal', live: null }));
+    const d = c.getImageData(0, 0, f.w, f.h), p = d.data;
+    let x0 = f.w, y0 = f.h, x1 = -1, y1 = -1, n = 0;
+    for (let y = 0; y < f.h; y++) for (let x = 0; x < f.w; x++) {
+      const i = (y * f.w + x) * 4, v = Math.min(255, p[i + 3] * 8);   // (a soft, light or half-opacity stroke still counts: any ink is mask)
+      p[i] = p[i + 1] = p[i + 2] = v; p[i + 3] = 255;
+      if (v > 16) { n++; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
+    if (!n) return null;
+    const out = document.createElement('canvas');
+    out.width = f.w; out.height = f.h;
+    out.getContext('2d').putImageData(d, 0, 0);
+    return { canvas: out, box: { x: x0 / f.w, y: y0 / f.h, w: (x1 - x0 + 1) / f.w, h: (y1 - y0 + 1) / f.h }, cover: n / (f.w * f.h) };
   }
 
   // One-off layouts: matching heights side by side (or in a grid), matching widths when stacked,
@@ -385,12 +435,13 @@ export function createEditor(cfg) {
     ctx.fillStyle = css.getPropertyValue('--stage-bg').trim() || '#14161c'; ctx.fillRect(0, 0, w, hh);
     ctx.save(); ctx.translate(ox, oy); ctx.scale(s, s);
     if (f) { ctx.fillStyle = E.bg; ctx.fillRect(f.x, f.y, f.w, f.h); }
-    visibleLayers().forEach((l) => drawLayer(ctx, l));
+    drawStack(ctx, E.layers.filter((l) => ready(l) && !l.hidden));
     ctx.restore();
     if (E.size && f) {   // shade whatever hangs off a fixed-size canvas
       const fr = scr(f);
       ctx.fillStyle = '#000a'; ctx.beginPath(); ctx.rect(0, 0, w, hh); ctx.rect(fr.x, fr.y, fr.w, fr.h); ctx.fill('evenodd');
     }
+    if (!paint.painting()) paint.paintOverlay(ctx);   // (a selection stays visible under the Move tool)
     const sel = E.sel && ready(E.sel) ? E.sel : null;
     if (!sel) return;
     if (paint.painting()) {   // the layer being painted: a thin outline, no handles
@@ -410,7 +461,7 @@ export function createEditor(cfg) {
       ctx.restore();
       ctx.save(); ctx.translate(ox, oy); ctx.scale(s, s); drawLayer(ctx, sel); ctx.restore();
     }
-    drawBox(ctx, sel, accent, { rotate: !E.cropping && !sel.locked, crop: E.cropping });
+    drawBox(ctx, sel, accent, { rotate: !E.cropping && !sel.locked && !plain(sel), crop: E.cropping });
     ctx.strokeStyle = '#ff3df2'; ctx.lineWidth = 1;
     for (const g of E.guides) {
       ctx.beginPath();
@@ -419,7 +470,7 @@ export function createEditor(cfg) {
       ctx.stroke();
     }
     const tb = screenBox(E.cropping ? imageBounds(sel) : bounds(sel));
-    if (!E.cropping && !sel.locked) { const { rot } = boxPoints(sel); tb.y = Math.min(tb.y, rot.y - 12); tb.h += screenBox(bounds(sel)).y - tb.y; }   // (clear of the rotate handle)
+    if (!E.cropping && !sel.locked && !plain(sel)) { const { rot } = boxPoints(sel); tb.y = Math.min(tb.y, rot.y - 12); tb.h += screenBox(bounds(sel)).y - tb.y; }   // (clear of the rotate handle)
     placeEditorToolbar(tb, w, hh);
   }
 
@@ -429,6 +480,7 @@ export function createEditor(cfg) {
     bar.classList.remove('hidden');
     for (const b of bar.querySelectorAll('[data-mode]')) b.classList.toggle('on', (b.dataset.mode === 'crop') === E.cropping);
     bar.querySelector('[data-snap]').classList.toggle('on', E.snap);
+    bar.querySelector('[data-mode=crop]').classList.toggle('hidden', plain(E.sel));
     const bw = bar.offsetWidth, bh = bar.offsetHeight, m = 6, clear = 18;   // clear the corner handles
     let top = r.y - bh - clear;
     if (top < m) top = r.y + r.h + clear;
@@ -437,7 +489,7 @@ export function createEditor(cfg) {
   }
 
   function setEditorMode(crop) {
-    if (!E.sel || E.cropping === crop) return;
+    if (!E.sel || E.cropping === crop || (crop && plain(E.sel))) return;
     E.cropping = crop;
     if (crop) E.aspect = null;
     renderEditor();
@@ -487,7 +539,7 @@ export function createEditor(cfg) {
         else { EVheld = false; E.cropping = false; renderEditor(); }   // tapping outside the image finishes the crop
         return;
       }
-      if (sel && !sel.locked && onRotate(p, sel)) {   // the round handle above the box turns it about its centre
+      if (sel && !sel.locked && !plain(sel) && onRotate(p, sel)) {   // the round handle above the box turns it about its centre
         const c = G.centre(sel);
         drag = { rotate: true, l: sel, c, a0: Math.atan2(p.y - c.y, p.x - c.x), r0: sel.rotation || 0 };
         return;
@@ -510,7 +562,7 @@ export function createEditor(cfg) {
       const now = performance.now();
       if (hit === lastTap.l && now - lastTap.t < 350) {
         lastTap = { t: 0, l: null }; EVheld = false;
-        E.sel = hit; E.cropping = true; E.aspect = null; renderEditor();
+        E.sel = hit; E.cropping = !plain(hit); E.aspect = null; renderEditor();
         return;
       }
       lastTap = { t: now, l: hit };
@@ -521,12 +573,29 @@ export function createEditor(cfg) {
       if (!drag) return;
       const p = point(e);
       if (drag.crop) {
-        const l = E.sel, W = l.img.naturalWidth, H = l.img.naturalHeight, raw = frac(l, p);
-        const q = { x: clamp01(raw.x), y: clamp01(raw.y) };
+        const l = E.sel, W = l.img.naturalWidth, H = l.img.naturalHeight;
+        // (with Snap on, the crop's edges pull to the canvas and the other layers, like a layer's own edges do)
+        const snapping = E.snap && !e.altKey, t = snapping ? snapTargets(l) : null, thr = SNAP / EV.s;
+        E.guides = [];
+        let pp = p;
+        if (snapping && !drag.move) {   // the corner being dragged
+          const sx = snapNearest([p.x], t.xs, thr), sy = snapNearest([p.y], t.ys, thr);
+          pp = { x: sx ? sx.at : p.x, y: sy ? sy.at : p.y };
+          if (sx) E.guides.push({ x: sx.at });
+          if (sy) E.guides.push({ y: sy.at });
+        }
+        const raw = frac(l, pp), q = { x: clamp01(raw.x), y: clamp01(raw.y) };
         const c = drag.move
           ? { ...drag.c0, x: Math.min(1 - drag.c0.w, Math.max(0, drag.c0.x + q.x - drag.q0.x)),
             y: Math.min(1 - drag.c0.h, Math.max(0, drag.c0.y + q.y - drag.q0.y)) }
           : cropSpan(W, H, E.aspect, drag.fx, drag.fy, q.x, q.y);
+        if (snapping && drag.move && !G.turned(l)) {   // the kept part's edges and middle, on the canvas
+          const ox = l.x - l.crop.x * W * l.scale, oy = l.y - l.crop.y * H * l.scale, kw = W * l.scale, kh = H * l.scale;
+          const xs = [c.x, c.x + c.w / 2, c.x + c.w].map((f) => ox + f * kw), ys = [c.y, c.y + c.h / 2, c.y + c.h].map((f) => oy + f * kh);
+          const sx = snapNearest(xs, t.xs, thr), sy = snapNearest(ys, t.ys, thr);
+          if (sx) { c.x = Math.min(1 - c.w, Math.max(0, c.x + sx.d / kw)); E.guides.push({ x: sx.at }); }
+          if (sy) { c.y = Math.min(1 - c.h, Math.max(0, c.y + sy.d / kh)); E.guides.push({ y: sy.at }); }
+        }
         setLayerCrop(l, c);
       } else if (drag.rotate) {
         // snapping pulls to 15° steps nearby; Shift always steps by 15°; Alt is free
@@ -593,7 +662,10 @@ export function createEditor(cfg) {
     paint = createPaint({
       E, canvas: () => cv, viewer: () => cv.parentElement, view: () => EV, zoom: viewZoom, frame: editorFrame,
       toCanvas: (e) => point(e), cancelDrag, redraw: drawEditorCanvas, render: renderEditor, changed: persistEditor,
-      composite: (c) => { const f = editorFrame(); if (f) { c.fillStyle = E.bg; c.fillRect(f.x, f.y, f.w, f.h); } visibleLayers().forEach((l) => drawLayer(c, l)); },
+      hit: (p) => [...visibleLayers()].reverse().find((l) => G.insideLayer(l, p)) || null,
+      snapOn: () => E.snap,
+      snaps: () => { const rs = visibleLayers().map(bounds), f = editorFrame(); if (f) rs.push(f); return { xs: rs.flatMap((r) => [r.x, r.x + r.w / 2, r.x + r.w]), ys: rs.flatMap((r) => [r.y, r.y + r.h / 2, r.y + r.h]) }; },
+      composite: (c) => { const f = editorFrame(); if (f) { c.fillStyle = E.bg; c.fillRect(f.x, f.y, f.w, f.h); } drawStack(c, visibleLayers()); },
       active: () => cfg.active() && !sheetOpen() && !EA.exporting,
     });
     cv.parentElement.append(...paint.els);
@@ -606,7 +678,7 @@ export function createEditor(cfg) {
       const nudge = (dx, dy) => { if (E.cropping || !ready(l)) return; l.x += dx; l.y += dy; persistEditor(); };
       const keys = {
         Escape: () => { if (E.cropping) E.cropping = false; else E.sel = null; },
-        v: () => { E.cropping = false; }, c: () => { E.cropping = true; E.aspect = null; },
+        v: () => { E.cropping = false; }, c: () => { if (!plain(l)) { E.cropping = true; E.aspect = null; } },
         Enter: () => { E.cropping = false; },
         Delete: () => removeLayer(l), Backspace: () => removeLayer(l),
         ArrowLeft: () => nudge(-n, 0), ArrowRight: () => nudge(n, 0), ArrowUp: () => nudge(0, -n), ArrowDown: () => nudge(0, n),
@@ -671,10 +743,10 @@ export function createEditor(cfg) {
   // Top of the list is drawn on top; tap a row to select that layer
   function layerList() {
     if (!E.layers.length) return hint('Add images from your inputs, generations or device, then tap one on the canvas to move, resize or crop it.');
-    const move = (l, d) => {
-      const i = E.layers.indexOf(l), j = i + d;
-      if (j < 0 || j >= E.layers.length) return;
-      [E.layers[i], E.layers[j]] = [E.layers[j], E.layers[i]];
+    // (the list shows the top layer first: a place in it is the same place counted from the other end)
+    const reorder = (from, to) => {
+      const n = E.layers.length, [l] = E.layers.splice(n - 1 - from, 1);
+      E.layers.splice(n - 1 - to, 0, l);
       editorChanged();
     };
     return layerRowsEl([...E.layers].reverse().map((l) => {
@@ -683,7 +755,10 @@ export function createEditor(cfg) {
       return {
         sel: l === E.sel, off: l.hidden || l.broken,
         // (painting the selected layer: tapping it again keeps it, so the brush always has a layer)
-        onclick: () => { E.sel = l === E.sel && !paint.painting() ? null : l; E.cropping = false; renderEditor(); },
+        onclick: (ev) => {
+          if (ev?.ctrlKey || ev?.metaKey) { paint.selectLayer(l, ev.shiftKey ? 'add' : ev.altKey ? 'sub' : 'new'); return; }   // Ctrl-tap: its pixels become the selection
+          E.sel = l === E.sel && !paint.painting() ? null : l; E.cropping = false; renderEditor();
+        },
         thumb: isCanvas(l) ? canvasThumb(l.img) : h('img', { src: thumbUrl(l.name, 160), alt: '' }),
         name: layerName(l),
         hint: l.broken ? 'could not load' : !r ? 'loading…'
@@ -692,10 +767,9 @@ export function createEditor(cfg) {
           l.locked ? h('button', { type: 'button', class: 'icon-btn ico-btn on', 'aria-label': 'Unlock', title: 'Locked: tap to unlock',
             onclick: (e) => { e.stopPropagation(); l.locked = false; editorChanged(); } }, icon('lock')) : null,
           iconBtn(l.hidden ? 'Show' : 'Hide', l.hidden ? '◌' : '◉', () => { l.hidden = !l.hidden; editorChanged(); }),
-          iconBtn('Bring forward', '↑', () => move(l, 1)),
-          iconBtn('Send backward', '↓', () => move(l, -1))],
+          iconBtn('Delete layer', icon('trash'), () => { removeLayer(l); renderEditor(); })],
       };
-    }));
+    }), { onReorder: reorder });
   }
 
   function layerProps(l) {
@@ -729,6 +803,7 @@ export function createEditor(cfg) {
       const n = layerRect(l);
       l.x = Math.round(cx - n.w / 2); l.y = Math.round(cy - n.h / 2);
     };
+    const flat = plain(l);
     const fr = editorFrame() || r;   // X / Y drag over the canvas and as much again either side (E.size is null when it fits the layers)
     // X, Y, Scale and Opacity: sliders, with ◀ ◆ ▶ to key them while animating (keyed.js; the layer keys its own pose)
     const prop = (label, ch, set, opts) => (E.anim
@@ -741,9 +816,9 @@ export function createEditor(cfg) {
       prop('X', 'x', (v) => { l.x = Math.round(v); }, { ...px, min: Math.floor(fr.x - fr.w), max: Math.ceil(fr.x + fr.w * 2) }),
       prop('Y', 'y', (v) => { l.y = Math.round(v); }, { ...px, min: Math.floor(fr.y - fr.h), max: Math.ceil(fr.y + fr.h * 2) }),
       prop('Scale', 'scale', (v) => setScale(Math.max(0.01, v)), { min: 0.01, max: 4, step: 0.01, fmt: pctFmt, def: 1 }),
-      prop('Rotation', 'rotation', (v) => setRotation(v), { min: -180, max: 180, step: 1, fmt: (v) => `${Math.round(v)}°`, def: 0 }),
+      flat ? null : prop('Rotation', 'rotation', (v) => setRotation(v), { min: -180, max: 180, step: 1, fmt: (v) => `${Math.round(v)}°`, def: 0 }),
       h('div', { class: 'row wrap ed-turns' },
-        iconBtn('Turn a quarter left', icon('rotl'), () => quarter(-90)), iconBtn('Turn a quarter right', icon('rotr'), () => quarter(90)),
+        flat ? null : iconBtn('Turn a quarter left', icon('rotl'), () => quarter(-90)), flat ? null : iconBtn('Turn a quarter right', icon('rotr'), () => quarter(90)),
         h('button', { type: 'button', class: `icon-btn${l.flipX ? ' on' : ''}`, 'aria-label': 'Mirror left to right', title: 'Mirror left to right', 'aria-pressed': String(!!l.flipX), onclick: () => flip('flipX') }, icon('fliph')),
         h('button', { type: 'button', class: `icon-btn${l.flipY ? ' on' : ''}`, 'aria-label': 'Mirror top to bottom', title: 'Mirror top to bottom', 'aria-pressed': String(!!l.flipY), onclick: () => flip('flipY') }, icon('flipv')),
         !E.anim && l.rotation ? iconBtn('No turn', icon('reset'), () => { setRotation(0); editorChanged(); }) : null),
@@ -754,12 +829,52 @@ export function createEditor(cfg) {
           onclick: () => { l.locked = !l.locked; editorChanged(); } }, icon(l.locked ? 'lock' : 'unlock'), l.locked ? 'Locked' : 'Lock')),
       hint(`${Math.round(r.w)}×${Math.round(r.h)} px on the canvas · ${Math.round(c.w * W)}×${Math.round(c.h * H)} px of the image`),
       h('div', { class: 'row wrap' },
-        button('Crop', () => { paint.setTool('move'); E.cropping = true; E.aspect = null; renderEditor(); }),
-        cropped ? button('Reset crop', () => { setLayerCrop(l, { ...FULL }); editorChanged(); }) : null,
+        flat ? null : button('Crop', () => { paint.setTool('move'); E.cropping = true; E.aspect = null; renderEditor(); }),
+        cropped && !flat ? button('Reset crop', () => { setLayerCrop(l, { ...FULL }); editorChanged(); }) : null,
         button('100%', () => { setScale(1); editorChanged(); })),
+      flat && isCanvas(l) ? canvasSizeFields(l) : null,
       alignControls(l),
       del,
-      help('Drag it on the canvas to move it, a corner to resize, or the round handle above it to turn it (it pulls to 15° steps; Shift steps by 15°, Alt turns freely); it snaps to the canvas and other layers (hold Alt, or turn off Snap, to place it freely). Switch to Crop in the toolbar above it (or double-tap).'));
+      help('Drag it on the canvas to move it, a corner to resize, or the round handle above it to turn it (it pulls to 15° steps; Shift steps by 15°, Alt turns freely); it snaps to the canvas and other layers (hold Alt, or turn off Snap, to place it freely). Switch to Crop in the toolbar above it (or double-tap).' + (flat ? ' A canvas is resized (below), not turned or cropped.' : '')));
+  }
+
+  // A painted canvas's size in its own pixels, any width and height; the anchor says which part stays put
+  function canvasSizeFields(l) {
+    const cw = l.img.width, ch = l.img.height, d = { w: cw, h: ch, ax: 0.5, ay: 0.5 };
+    const grid = h('div', { class: 'anchor-grid', role: 'group', 'aria-label': 'Anchor' });
+    const drawGrid = () => grid.replaceChildren(...[0, 0.5, 1].flatMap((ay) => [0, 0.5, 1].map((ax) =>
+      h('button', { type: 'button', class: ax === d.ax && ay === d.ay ? 'on' : '', 'aria-label': `Anchor ${ay === 0 ? 'top' : ay === 1 ? 'bottom' : 'middle'} ${ax === 0 ? 'left' : ax === 1 ? 'right' : 'centre'}`,
+        onclick: () => { d.ax = ax; d.ay = ay; drawGrid(); } }))));
+    drawGrid();
+    const clip = toggle('Hide what hangs over it', !!l.clip, (on) => { l.clip = on; editorChanged(); },
+      { help: 'Like overflow: hidden. Layers above this canvas whose middle is over it are shown only where the canvas is; drag one out past the middle and it is free again.' });
+    return field('Canvas size', clip, h('div', { class: 'row wrap' },
+      propNum('Width', cw, (v) => { d.w = Math.round(v); }, () => {}, { min: 1, max: 8192, step: 1 }),
+      propNum('Height', ch, (v) => { d.h = Math.round(v); }, () => {}, { min: 1, max: 8192, step: 1 }),
+      grid,
+      button('Resize', () => { paint.resizeCanvasLayer(l, d.w, d.h, d.ax, d.ay); }, { cls: 'small primary', title: 'Change the canvas\'s size; the pixels stay where the anchor holds them, new parts are see-through' })));
+  }
+
+  // Crop the whole picture (every layer): the canvas becomes the part kept, fixed at that size
+  async function cropCanvas() {
+    const f = editorFrame();
+    if (!f) return toast('Add some images first', true);
+    if (E.anim) return toast('An animation keeps its canvas', true);
+    const full = document.createElement('canvas');
+    composeEditor(full);
+    const k = Math.min(1, 1600 / Math.max(full.width, full.height)), prev = document.createElement('canvas');
+    prev.width = Math.max(1, Math.round(full.width * k)); prev.height = Math.max(1, Math.round(full.height * k));
+    prev.getContext('2d').drawImage(full, 0, 0, prev.width, prev.height);
+    const img = new Image();
+    img.src = prev.toDataURL('image/jpeg', 0.85);
+    openCrop({ img, crop: FULL, onApply: (c) => {
+      const nx = Math.round(f.x + c.x * f.w), ny = Math.round(f.y + c.y * f.h), nw = Math.max(1, Math.round(c.w * f.w)), nh = Math.max(1, Math.round(c.h * f.h));
+      if (nw === f.w && nh === f.h) return;
+      for (const l of E.layers) { l.x -= nx; l.y -= ny; }   // (the kept part's corner becomes the origin)
+      E.size = { w: nw, h: nh }; E.sizeShape = null;
+      editorChanged();
+      toast(`Cropped to ${nw}×${nh}: Fit layers brings the rest back into view`);
+    } });
   }
 
   // Align buttons: 0 / 0.5 / 1 = start / centre / end of the align frame, per axis
@@ -828,6 +943,7 @@ export function createEditor(cfg) {
     return section('Canvas', null,
       field('Size', sizeSeg),
       E.size ? fixedSizeFields() : null,
+      button('Crop canvas…', cropCanvas, { disabled: !E.layers.some((l) => !l.mask), title: 'Crop the whole picture: every layer, together' }),
       colorField('Background', () => E.bg, (c) => { E.bg = c; persistEditor(); drawEditorCanvas(); }),
       field('Arrange layers', seg([['row', 'Side by side'], ['column', 'Stacked'], ['grid', 'Grid']], null,
         (m) => { arrangeLayers(m); renderEditor(); }, { action: true, disabled: !E.layers.length })),
@@ -949,11 +1065,12 @@ export function createEditor(cfg) {
   }
   const eng = {
     E, render: renderEditor, draw: drawEditorCanvas, changed: persistEditor, load, dump: dumpEditor, compose: composeEditor,
-    blob: editorBlob, frame: editorFrame, ready, loading: () => E.layers.some((l) => !l.broken && !ready(l)), addImage, pause: editorPause,
+    blob: editorBlob, frame: editorFrame, composeMask, drawLayer, bounds, layerRect, ready, loading: () => E.layers.some((l) => !l.broken && !ready(l)), addImage, pause: editorPause,
     zoom: viewZoom, get paint() { return paint; },
     // the panel's parts, for the host to lay out
     topRow, layerList, layerProps: () => (E.sel ? layerProps(E.sel) : null), animProps, canvasProps, exportProps,
     paintProps: () => paint.paintProps(),
+    inpaintProps: () => inpaintSection(eng),
   };
   wireEditor();
   return eng;

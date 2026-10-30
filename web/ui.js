@@ -1,4 +1,4 @@
-import { iconize } from './icons.js';
+import { iconize, icon } from './icons.js';
 export { icon, iconize, setIcon } from './icons.js';
 // Shared UI building blocks for app.js and scene.js: the element helper, storage, the API client
 // with its busy bar, toasts, overlays and the bottom sheet, and the small widgets every panel is
@@ -343,11 +343,30 @@ export const linkBtn = (text, href, attrs = {}) => h('a', { class: 'btn small', 
 // A row of buttons, as at the bottom of a sheet
 export const actions = (...kids) => h('div', { class: 'actions' }, kids);
 
-// A button that opens the file chooser (or the camera, with capture) and hands over the files picked
-export function fileButton(text, onFiles, { accept, multiple = false, capture = null, cls = 'small' } = {}) {
+// A button that opens the file chooser (or the camera, with capture) and hands over the files picked.
+// Image buttons also take a paste (Ctrl+V anywhere while the button is on screen, or the Paste button, which
+// needs HTTPS to read the clipboard): paste: false turns that off.
+export function fileButton(text, onFiles, { accept, multiple = false, capture = null, cls = 'small', paste = !capture && /^image\//.test(accept || '') } = {}) {
   const input = h('input', { type: 'file', accept, multiple, capture, class: 'hidden' });
   input.addEventListener('change', () => { const fs = [...input.files]; input.value = ''; if (fs.length) onFiles(fs); });
-  return h('span', { class: 'file-btn' }, button(text, () => input.click(), { cls }), input);
+  const wrap = h('span', { class: 'file-btn' }, button(text, () => input.click(), { cls }), input);
+  if (!paste) return wrap;
+  const named = (b, i) => b.name ? b : new File([b], `pasted-${Date.now()}${i ? `-${i}` : ''}.${(b.type.split('/')[1] || 'png').replace('jpeg', 'jpg')}`, { type: b.type });
+  const give = (blobs) => { const fs = blobs.filter((b) => b.type.startsWith('image/')).map(named); if (!fs.length) return false; onFiles(multiple ? fs : fs.slice(0, 1)); return true; };
+  const onPaste = (e) => {
+    if (!wrap.isConnected) return removeEventListener('paste', onPaste);
+    if (wrap.closest('.hidden') || (sheetOpen() && !sheetEl().contains(wrap)) || /^(INPUT|TEXTAREA)$/.test(e.target?.tagName) || e.target?.isContentEditable) return;
+    if (give([...(e.clipboardData?.files || [])])) e.preventDefault();
+  };
+  addEventListener('paste', onPaste);
+  if (navigator.clipboard?.read) wrap.append(button('Paste', async () => {
+    try {
+      const blobs = [];
+      for (const it of await navigator.clipboard.read()) { const t = it.types.find((x) => x.startsWith('image/')); if (t) blobs.push(await it.getType(t)); }
+      if (!give(blobs)) toast('No picture on the clipboard', true);
+    } catch { toast('Can\'t read the clipboard here: press Ctrl+V instead', true); }
+  }, { cls, title: 'Use a picture from the clipboard' }));
+  return wrap;
 }
 
 // Segmented control. options: [[value, label, title?]]. The tapped one lights up (el.set(v) does
@@ -592,12 +611,43 @@ export const cycleBar = ({ title, what, prev, next, buttons = [], pos, cls = '' 
   h('div', { class: `part-head ${cls}`.trim() }, h('b', {}, title),
     iconBtn(`Previous ${what}`, '◀', prev), iconBtn(`Next ${what}`, '▶', next), buttons, pos);
 
-// rows: [{ thumb (element), name, hint, sel, off, onclick, buttons: [elements] }]
-export const layerRowsEl = (rows) => h('div', { class: 'layers' }, rows.map((r) =>
-  h('div', { class: 'layer-row' + (r.sel ? ' sel' : '') + (r.off ? ' off' : ''), onclick: r.onclick },
-    h('span', { class: 'thumb' }, r.thumb),
-    h('div', { class: 'layer-name' }, h('span', {}, r.name), h('span', { class: 'hint' }, r.hint || '')),
-    h('div', { class: 'layer-btns' }, r.buttons || []))));
+// rows: [{ thumb (element), name, hint, sel, off, onclick, buttons: [elements] }]. onReorder(from, to): the rows (in the order
+// given) get a grip to drag by, and a row dropped on another's place calls it with both positions.
+export function layerRowsEl(rows, { onReorder = null } = {}) {
+  const list = h('div', { class: 'layers' });
+  const grip = (i) => {
+    const g = h('span', { class: 'layer-grip', title: 'Drag to reorder', 'aria-label': 'Drag to reorder', role: 'button' }, icon('grip'));
+    g.addEventListener('click', (e) => e.stopPropagation());
+    g.addEventListener('pointerdown', (e) => {
+      if (e.button) return;
+      e.preventDefault(); e.stopPropagation();
+      const els = [...list.children], row = els[i];
+      let to = i;
+      g.setPointerCapture(e.pointerId);
+      row.classList.add('dragging');
+      const over = (ev) => {
+        to = els.findIndex((r) => ev.clientY < r.getBoundingClientRect().top + r.offsetHeight / 2);
+        if (to < 0) to = els.length - 1; else if (to > i) to--;   // (dropped below its own place: the slot above that row)
+        els.forEach((r, k) => r.classList.toggle('drop-before', k === to && to < i));
+        els.forEach((r, k) => r.classList.toggle('drop-after', k === to && to > i));
+      };
+      const end = (ev) => {
+        g.removeEventListener('pointermove', over); g.removeEventListener('pointerup', end); g.removeEventListener('pointercancel', end);
+        els.forEach((r) => r.classList.remove('dragging', 'drop-before', 'drop-after'));
+        if (ev.type === 'pointerup' && to !== i) onReorder(i, to);
+      };
+      g.addEventListener('pointermove', over); g.addEventListener('pointerup', end); g.addEventListener('pointercancel', end);
+    });
+    return g;
+  };
+  list.append(...rows.map((r, i) =>
+    h('div', { class: 'layer-row' + (onReorder ? ' reorder' : '') + (r.sel ? ' sel' : '') + (r.off ? ' off' : ''), onclick: r.onclick },
+      onReorder ? grip(i) : null,
+      h('span', { class: 'thumb' }, r.thumb),
+      h('div', { class: 'layer-name' }, h('span', {}, r.name), h('span', { class: 'hint' }, r.hint || '')),
+      h('div', { class: 'layer-btns' }, r.buttons || []))));
+  return list;
+}
 
 // The panel's top row: the main action and, when there's something to clear, Clear all
 export const panelTop = (main, clear = null) => h('div', { class: 'row panel-top' }, main,

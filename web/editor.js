@@ -1,5 +1,5 @@
 import { $, h, store, api, toast, openOverlay, button, iconBtn, seg, numSlider } from './ui.js';
-import { ASPECT_PRESETS, S, inputUrl, switchTab } from './core.js';
+import { ASPECT_PRESETS, CURRENT_EDIT, S, inputUrl, switchTab } from './core.js';
 import { registerPickerSource, uploadImage } from './media.js';
 import { TabSet } from './tabs.js';
 import { SWATCHES } from './paint.js';
@@ -157,7 +157,7 @@ const ED = createEditor({
   name: () => tabs?.active?.name,
   beforeRender: () => { if (!tabs.started) tabs.start(); },
   panelParts: (ed) => h('div', { class: 'panel-body' }, tabMount, ed.topRow(),
-    ed.layerList(), ed.paintProps(), ed.layerProps(), ed.animProps(), ed.canvasProps(), ed.exportProps()),   // (the panel order, app-wide)
+    ed.layerList(), ed.paintProps(), ed.inpaintProps(), ed.layerProps(), ed.animProps(), ed.canvasProps(), ed.exportProps()),   // (the panel order, app-wide)
 });
 export const { E } = ED;
 export const persistEditor = () => ED.changed();
@@ -217,6 +217,8 @@ async function stillNow() {
     if (r && !r.ok && r.status !== 404) console.warn('still not saved:', r.status);   // 404: the tab is gone
   } catch { stillDue = true; }   // offline: the next edit tries again
 }
+
+CURRENT_EDIT.eng = ED;   // (the picker's Current edit button)
 
 // Saved edits as a source in every image picker (media.js registerPickerSource)
 registerPickerSource({ key: 'edit-tabs', label: 'Saved edits',

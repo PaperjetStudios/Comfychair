@@ -3,7 +3,7 @@ import {
 } from './ui.js';
 import { fmtTime } from './playback.js';
 import { cardPicture, kindTile } from './kinds.js';
-import { S, PICKER_SOURCES as SOURCES, previewUrl, switchTab, thumbUrl } from './core.js';
+import { S, CURRENT_EDIT as CURRENT, PICKER_SOURCES as SOURCES, previewUrl, switchTab, thumbUrl } from './core.js';
 import { fmtDur, loadHistory, runTime } from './run.js';
 
 // This project's finished outputs of the given kinds, newest first: [{ g, o, i, t }]
@@ -195,6 +195,9 @@ export async function soundToSoundTab(source, { trim = null, name = null } = {})
 // ---------------------------------------------------------------------------
 export function registerPickerSource(src) { SOURCES.set(src.key, src); }
 
+// The open Editor tab, for the picker's "Current edit" button: the edit as it is now, exported and picked at once
+const currentEditReady = () => !!CURRENT.eng?.E.layers.some((l) => !l.hidden && !l.mask);
+
 // Scrub a video and take one frame: a sheet with the clip, a slider and frame steps.
 // Resolves a PNG Blob of the shown frame, or null on Cancel (Back, if given, runs after).
 export function pickFrame({ url, title = 'Pick a frame', fps = 24, back = null }) {
@@ -306,7 +309,19 @@ export function openImagePicker(opts) {
     }
     draw();
   };
+  const useCurrentEdit = async () => {
+    const eng = CURRENT.eng;
+    if (eng.loading()) return toast('The edit\'s images are still loading', true);
+    try {
+      const blob = await eng.blob();
+      if (!blob) return toast('The edit has no pictures yet', true);
+      const r = await uploadImage(blob, { mp: mp(), source: 'editor', filename: 'editor.png' });
+      inputs = null;
+      picked(r.name, r, null);
+    } catch (e) { toast(`Couldn't export the edit: ${e.message}`, true); }
+  };
   const draw = pickerSheet(title, [tabs,
+    currentEditReady() ? button('Current edit', useCurrentEdit, { cls: 'small primary', title: 'Export the picture open in the Editor right now and use it' }) : null,
     fileButton('Upload…', onFiles, { accept: 'image/*', multiple: multi, cls: 'small primary' }),
     fileButton('📷 Camera', onFiles, { accept: 'image/*', capture: 'environment' }),
     multi ? button('Done', closeSheet) : null], async () => {

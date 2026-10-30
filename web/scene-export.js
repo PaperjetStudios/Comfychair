@@ -117,6 +117,9 @@ function targetToBlob(rt, W, H, gray) {
   return new Promise((res) => cv.toBlob(res, 'image/png'));
 }
 
+// the first place in our own code an error came from, for a toast: " (at scene-export.js:292)"
+const where = (e) => { const m = String(e?.stack || '').split('\n').slice(1).map((l) => l.match(/\/([\w.-]+\.js)[^:]*:(\d+)/)).find(Boolean); return m ? ` (at ${m[1]}:${m[2]})` : ''; };
+
 export let busy = false;
 // A render under way can be stopped (✕ Cancel on the panel or in its toast): the frame loop checks
 // between frames. Stopped while encoding, the clip the server made is deleted. Nothing is kept either way.
@@ -134,7 +137,8 @@ function canRender() {
 }
 
 // true once it is saved (false: cancelled, failed or not started)
-export async function renderDepthVideo(part = null) {
+export async function renderDepthVideo(part = null, { objectsOnly = false } = {}) {
+  if (!objectsOnly && (SC.depthFrom === 'picture' || SC.depthFrom === 'combo')) return depthFromPicture(part);
   if (part == null && SC.renderShots === 'each') return renderEach(renderDepthVideo);
   if (busy || !canRender()) return false;
   clip = part ? { first: part.f0, count: part.f1 - part.f0 + 1 } : null;
@@ -142,6 +146,7 @@ export async function renderDepthVideo(part = null) {
   const keep = R.f, W = SC.width, H = SC.height, bar = busyBar('Rendering depth frames…');
   cancelToast('Rendering the depth video…');
   try {
+    if (objectsOnly) for (const m of R.meshes.values()) if (m.userData.splat) { m.userData.hid = m.visible; m.visible = false; }   // (splats come from the picture)
     const ranges = measureRanges();
     const rt = new THREE.WebGLRenderTarget(W, H, { colorSpace: THREE.NoColorSpace });
     draw('depth');
@@ -150,7 +155,7 @@ export async function renderDepthVideo(part = null) {
     for (let k = 0; k < count; k++) {
       pose(first + k);
       setRange(ranges[k]);
-      renderer.setRenderTarget(rt); renderDepth(renderer, scene, camera, SPLAT_PASS.spark); renderer.setRenderTarget(null);
+      renderer.setRenderTarget(rt); renderDepth(renderer, scene, camera, objectsOnly ? null : SPLAT_PASS.spark); renderer.setRenderTarget(null);
       form.append('frames', await targetToBlob(rt, W, H, true), `f${String(k).padStart(5, '0')}.png`);
       if (k % 12 === 0) setStatus(`Rendering ${k + 1}/${count}…`);
       bar.set(null, (k + 1) / count);
@@ -164,9 +169,46 @@ export async function renderDepthVideo(part = null) {
     return false;
   } finally {
     clip = null;
+    for (const m of R.meshes.values()) if ('hid' in m.userData) { m.visible = m.userData.hid; delete m.userData.hid; }
     bar.done();
     busy = false; stopAsked = false; R.real = false; R.f = keep; fit(); refresh(); renderPanel();
   }
+}
+
+// Depth from what the picture shows: the colour video (splats at their full set, models, figures: whatever is in the
+// view) goes through Video Depth Anything, which estimates the depth of every frame. "combo" then lays the exact
+// depth of the 3D objects over that (their pixels win; the splat and the rest keep the estimate).
+async function depthFromPicture(part = null) {
+  if (part == null && SC.renderShots === 'each') return renderEach(depthFromPicture);
+  const combo = SC.depthFrom === 'combo';
+  const { template, queueRun, waitGen } = await import('./make.js');
+  const t = template('deck-depth-video');
+  if (!t) { toast('Depth from the picture needs the deck-depth-video template (Video Depth Anything in ComfyUI)', true); return false; }
+  if (!await renderColorVideo(part)) return false;
+  const color = R.lastRender;
+  const src = t.fields.find((f) => f.kind === 'video'), secs = t.fields.find((f) => /length|seconds/i.test(f.label) && (f.kind === 'float' || f.kind === 'int'));
+  try {
+    const n = part ? part.f1 - part.f0 + 1 : renderSpan().count;
+    const values = { [src.key]: { generation: color.id, index: 0 }, ...(secs && { [secs.key]: Math.max(0.1, n / FPS) }) };
+    setStatus('Estimating depth from the picture…'); toast('Estimating the depth from the picture…');
+    const [g] = await queueRun({ template: 'deck-depth-video', values });
+    let done = await waitGen(g.id);
+    if (combo) {
+      setStatus('Drawing the 3D objects’ depth…');
+      const prev = R.lastRender;
+      if (!await renderDepthVideo(part, { objectsOnly: true })) return false;
+      const geo = R.lastRender === prev ? null : R.lastRender;
+      if (geo) done = await api('/api/scene/depth-combine', { method: 'POST', body: { picture: done.id, geometry: geo.id } });
+    }
+    R.lastRender = R.renders.depth = done;
+    setStatus(`Depth video #${done.id} is in History`);
+    toast(combo ? 'Depth from the picture, with the 3D objects laid in, saved' : 'Depth from the picture saved', false,
+      { label: 'Use in H3 control', fn: () => C.useControlVideo(done, SC) });
+    return true;
+  } catch (e) {
+    if (!(e instanceof Cancelled)) { setStatus(''); toast(e.message, true); }
+    return false;
+  } finally { renderPanel(); }
 }
 
 // The shot as it looks (the colour look: models, photos, splats), the camera's move over the scene's length, at the
@@ -179,13 +221,15 @@ export async function renderColorVideo(part = null) {
   busy = true; stopAsked = false; stopPlay(); TEMP.clear(); renderPanel();
   const W = SC.width, H = SC.height, bar = busyBar('Rendering colour frames…');
   cancelToast('Rendering the colour video…');
-  let stage = null;
+  let stage = null, phase = 'starting';
   try {
+    phase = 'loading the scene';
     const { Stage } = await import('./scene-offscreen.js');
     stage = new Stage(JSON.parse(JSON.stringify(SC)), { full: true });
     setStatus('Loading the full splats…');
     await stage.whenReady(120000);
     checkStop();
+    phase = 'drawing the frames';
     const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
     const form = new FormData(), { first, count } = renderSpan();   // (Range only: the work area's frames)
     for (let i = 0; i < count; i++) {
@@ -197,10 +241,11 @@ export async function renderColorVideo(part = null) {
       bar.set(null, (i + 1) / count);
       checkStop();
     }
+    phase = 'encoding';
     await sendVideo(form, 'color', 0, { quiet: !!part, label: part ? `Shot ${part.i} · ${part.cam.name}` : '' });
     return true;
   } catch (e) {
-    if (e instanceof Cancelled) cancelled(); else { setStatus(''); toast(e.message, true); }
+    if (e instanceof Cancelled) cancelled(); else { setStatus(''); console.error(e); toast(`Colour render failed while ${phase}: ${e.message}${where(e)}`, true); }
     return false;
   } finally {
     clip = null;
