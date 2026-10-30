@@ -23,6 +23,13 @@
   - It covers only ComfyChair's own folders in ComfyUI.
   - It never takes a file ComfyChair has no other copy of.
 
+## The UI
+
+- Help text goes only behind an ⓘ button (`ui.js` `info()`, `help()`, `withHelp()`). Never show inline descriptions.
+- Every new panel or area uses `layout.js`: `wireSplitters()` for resizable areas, `maximizable()` for a full-screen
+  toggle and `sideNav()` for a side panel's icon tabs.
+- Every transform gets a grid and snapping (`gizmo.js` `snap`/`snapBar`, `snap3`/`snapBar3`).
+
 ## Working on it
 
 - Tests never touch the live `data/` folder. Run them with a scratch `DECK_DATA`:
