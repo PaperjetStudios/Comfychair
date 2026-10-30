@@ -1,7 +1,7 @@
 // The player + trim + crop widget of a template's video field (generate.js videoField builds the rest).
 // It never redraws the field: edits report through onChange(trim|null, crop|null) when a drag or a
 // typed number ends. trim = {start, len} in seconds; crop = {x, y, w, h} fractions of the frame.
-import { api, button, clamp, clamp01, field, h, iconBtn, pickButtons, seg, setIcon } from './ui.js';
+import { api, button, clamp, clamp01, field, h, iconBtn, pickButtons, seg, setIcon, store } from './ui.js';
 import { fmtTime } from './playback.js';
 import { ASPECTS, aspectCrop, cropSpan } from './editor.js';
 
@@ -14,6 +14,14 @@ const probe = (source) => {
   return probes.get(k);
 };
 const fmt = (t) => fmtTime(t);
+// a typed time: 90, 1:30, 1:02:03.5 -> seconds (NaN if it isn't one)
+export const parseTime = (s) => {
+  const p = String(s).trim().split(':');
+  if (!p[0] || p.length > 3 || p.some((x) => !/^\d+(\.\d*)?$/.test(x))) return NaN;
+  return p.reduce((a, x) => a * 60 + Number(x), 0);
+};
+const STEPS = [['f', '1f', 'One frame'], [1, '1s'], [5, '5s'], [10, '10s'], [30, '30s'], [60, '1m', 'One minute'], [300, '5m', 'Five minutes']];
+const STRIP_N = 16;   // stills in the film strip
 const isFull = (c) => c.w > 1 - EPS && c.h > 1 - EPS;
 
 // opts: url, source ({generation,index} | {media}), trim, crop (as saved), loader() -> { rate (force_rate, 0 = the clip's),
@@ -116,6 +124,7 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
     Object.assign(range.style, { left: pos(t0), width: `${(dur ? clamp01((e - t0) / dur) : 1) * 100}%` });
     Object.assign(grip.style, { left: range.style.left, width: range.style.width });
     hin.style.left = pos(t0); hout.style.left = pos(e); head.style.left = pos(shownT());
+    if (cells.length && dur) { const k = Math.min(cells.length - 1, Math.floor(shownT() / dur * cells.length)); cells.forEach((c, i) => c.cell.classList.toggle('on', i === k)); }
     drawFine();
   };
   const tick = () => {   // rAF while playing: stay inside the trim
@@ -162,6 +171,23 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
     setAt(grab, clamp01((e.clientX - r.left) / r.width) * dur);
   };
   track.addEventListener('pointermove', move);
+  // marks, with a mouse or pen hovering: the time under the pointer, and the strip's nearest still
+  const tip = h('div', { class: 'vf-tip hidden' }, h('canvas', { width: 160, height: 90 }), h('span', {}));
+  if (marks) {
+    track.append(tip);
+    track.addEventListener('pointermove', (e) => {
+      if (grab || e.pointerType === 'touch' || !dur) return;
+      const r = track.getBoundingClientRect(), x = clamp01((e.clientX - r.left) / r.width), t = x * dur;
+      tip.classList.remove('hidden');
+      tip.style.left = `${x * 100}%`;
+      tip.lastChild.textContent = fmt(t);
+      const cell = cells[Math.min(cells.length - 1, Math.floor(x * cells.length))];
+      const cv = tip.firstChild;
+      cv.classList.toggle('hidden', !cell?.done);
+      if (cell?.done) { cv.height = cell.cv.height; cv.getContext('2d').drawImage(cell.cv, 0, 0); }
+    });
+    track.addEventListener('pointerleave', () => tip.classList.add('hidden'));
+  }
   const release = () => { if (grab && grab !== 'seek') commit(); grab = null; recenter(); drawFine(); };
   track.addEventListener('pointerup', release); track.addEventListener('pointercancel', release);
 
@@ -269,19 +295,62 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
     t0 = Math.min(t0, Math.max(0, dur - 0.04));
     v.currentTime = t0 || 0.001;
     nums(); drawTrack(); info(); drawCrop();
+    makeStrip(v.currentSrc || url);
   });
   (infoP || probe(source)).then((p) => { fps = p.fps || 24; if (p.duration) dur = p.duration; if (t1 === Infinity && dur) t1 = dur; nums(); drawTrack(); info(); }).catch(() => { /* the element's own duration does */ });
 
-  // ---- marks: frame steps, in/out at the playhead, play the selection, keys ----
+  // ---- film strip (marks): stills across the whole video, made by a second player seeking in the background
+  // (a link's preview streams, so they fill in one by one); a tap goes there ----
+  let cells = [], stripFor = '';
+  const strip = h('div', { class: 'vf-strip' });
+  const makeStrip = async (src) => {
+    if (!marks || !dur || stripFor === src) return;
+    stripFor = src;
+    cells = Array.from({ length: STRIP_N }, (_, i) => {
+      const t = (i + 0.5) * dur / STRIP_N, cv = h('canvas', { width: 160, height: 90 });
+      return { t, cv, done: false, cell: h('button', { type: 'button', class: 'vf-cell', title: `Go to ${fmt(t)}`, onclick: () => { v.pause(); focus = 'head'; seek(t); } }, cv) };
+    });
+    strip.replaceChildren(...cells.map((c) => c.cell));
+    const p = h('video', { src, muted: true, preload: 'auto', playsInline: true });
+    await new Promise((r) => { p.addEventListener('loadedmetadata', r, { once: true }); p.addEventListener('error', r, { once: true }); });
+    for (const [i, c] of (p.videoWidth ? cells : []).entries()) {
+      if (stripFor !== src || (i && !el.isConnected)) break;
+      p.currentTime = c.t;
+      await new Promise((r) => { p.addEventListener('seeked', r, { once: true }); setTimeout(r, 10000); });
+      c.cv.height = Math.round(160 * p.videoHeight / p.videoWidth);
+      c.cv.getContext('2d').drawImage(p, 0, 0, c.cv.width, c.cv.height);
+      c.done = true;
+    }
+    p.removeAttribute('src'); p.load();
+  };
+
+  // ---- marks: steps of a chosen size, in/out at the playhead, play the selection, speed, go to a time, keys ----
+  let stepBy = store.get('deck.vf.step', 1);
+  const stepSize = () => (stepBy === 'f' ? f() : Number(stepBy));
+  const stepSeg = seg(STEPS, stepBy, (x) => { stepBy = x === 'f' ? 'f' : Number(x); store.set('deck.vf.step', stepBy); });
+  stepSeg.classList.add('vf-steps');
+  stepSeg.title = 'Step size for ◀ ▶ and the arrow keys';
+  const speed = seg([[0.5, '½×'], [1, '1×'], [2, '2×'], [4, '4×']], 1, (x) => { v.playbackRate = Number(x); if (snd) snd.playbackRate = Number(x); });
+  const goTo = h('input', { type: 'text', inputMode: 'decimal', placeholder: 'Go to 12:34', 'aria-label': 'Go to a time', class: 'vf-goto' });
+  goTo.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    e.stopPropagation();
+    const t = parseTime(goTo.value);
+    if (!Number.isFinite(t)) return goTo.select();
+    v.pause(); focus = 'head'; seek(Math.min(t, dur || t)); goTo.value = ''; goTo.blur();
+  });
   const setIn = () => { v.pause(); t0 = clamp(frame(shownT()), 0, Math.max(0, dur - f())); if (end() <= t0 + f()) t1 = dur; focus = 'in'; nums(); drawTrack(); info(); commit(); };
   const setOut = () => { v.pause(); t1 = clamp(frame(shownT()), t0 + f(), dur); focus = 'out'; nums(); drawTrack(); info(); commit(); };
   const step = (n) => { v.pause(); focus = 'head'; seek(frame(shownT()) + n); };
   const playSel = () => { want = null; v.currentTime = t0; focus = 'head'; v.play().catch(() => {}); };
-  const markBar = marks ? h('div', { class: 'vf-bar vf-marks' },
-    iconBtn('Back one frame (←)', '◀', () => step(-f())),
-    iconBtn('Forward one frame (→)', '▶', () => step(f())),
-    button('Set in (I)', setIn), button('Set out (O)', setOut),
-    button('▶ Selection (P)', playSel, { cls: 'small primary', title: 'Play from in to out (loops while 🔁 is on)' })) : null;
+  const markBar = marks ? h('div', { class: 'vf-markbox' },
+    h('div', { class: 'vf-bar vf-marks' },
+      iconBtn('Back a step (←; Shift: a frame)', '◀', () => step(-stepSize())), stepSeg,
+      iconBtn('Forward a step (→; Shift: a frame)', '▶', () => step(stepSize()))),
+    h('div', { class: 'vf-bar vf-marks' },
+      button('Set in (I)', setIn), button('Set out (O)', setOut),
+      button('▶ Selection (P)', playSel, { cls: 'small primary', title: 'Play from in to out (loops while 🔁 is on)' }),
+      speed, goTo)) : null;
 
   // a length in one tap: from the start (moved back if the clip ends first); then slide it with the lit part
   const lenTap = (L) => {
@@ -295,7 +364,7 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
   const el = h('div', { class: 'vf', ...(marks && { tabindex: 0 }) },
     h('div', { class: 'crop-stage vf-stage' }, wrap),
     h('div', { class: 'vf-bar' }, play, time, mute, loopBtn, cropBtn), markBar, snd,
-    cropBar, track, lenBar, marks ? fineBox : null,
+    cropBar, marks ? h('div', { class: 'vf-stripbox' }, strip) : null, track, lenBar, marks ? fineBox : null,
     h('div', { class: 'vf-nums' }, fields.map((x) => x.el), fitBtn),
     infoEl);
   drawCrop(); nums(); drawTrack(); info();
@@ -305,13 +374,14 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
     const t = shownT(), playing = !v.paused;
     if (snd) { snd.pause(); snd.remove(); snd = null; }
     v.src = u;
-    v.addEventListener('loadedmetadata', () => { v.currentTime = t; if (playing) v.play().catch(() => {}); }, { once: true });
+    v.addEventListener('loadedmetadata', () => { v.currentTime = t; v.playbackRate = Number(speed?.querySelector('.on')?.dataset.v || 1); if (playing) v.play().catch(() => {}); }, { once: true });
+    if (cells.some((c) => !c.done)) { stripFor = ''; makeStrip(u); }   // (the local copy fills the strip faster)
   };
-  if (marks) {   // keys while the editor has focus: ← → a frame (Shift: a second), I / O set in / out, P plays the selection, Space plays
+  if (marks) {   // keys while the editor has focus: ← → a step of the chosen size (Shift: a frame), I / O set in / out, P plays the selection, Space plays
     el.addEventListener('keydown', (e) => {
       if (e.target.closest('input, textarea, select')) return;
       const k = e.key.toLowerCase();
-      if (k === 'arrowleft' || k === 'arrowright') step((k === 'arrowleft' ? -1 : 1) * (e.shiftKey ? 1 : f()));
+      if (k === 'arrowleft' || k === 'arrowright') step((k === 'arrowleft' ? -1 : 1) * (e.shiftKey ? f() : stepSize()));
       else if (k === 'i') setIn();
       else if (k === 'o') setOut();
       else if (k === 'p') playSel();
