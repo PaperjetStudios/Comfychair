@@ -1,6 +1,6 @@
 import { api } from './ui.js';
-import { S, addMine, onServer } from './core.js';
-import { RUN, onGeneration, syncWithServer } from './run.js';
+import { S, addMine, onServer, emitServer } from './core.js';
+import { RUN } from './run-state.js';
 
 // ---------------------------------------------------------------------------
 // make: the one way a template run starts. Generate, VFX, the Video tab's clip effects, the Sound tab's
@@ -66,10 +66,10 @@ export function adoptGenerations(gens) {
     addMine(g.prompt_id);
     const seen = S.history.get(g.id);
     if (!seen) S.history.set(g.id, g);   // never overwrite a newer status that came over the socket
-    else if (seen.status === 'done' || seen.status === 'error') { S.history.delete(g.id); onGeneration(seen); }  // show it now
+    else if (seen.status === 'done' || seen.status === 'error') { S.history.delete(g.id); emitServer({ type: 'adopt_generation', data: seen }); }  // show it now
     if (g.prompt_id === S.activePid && RUN.pid !== S.activePid) missed = true;
   }
-  if (missed) syncWithServer();
+  if (missed) emitServer({ type: 'sync_requested' });
 }
 
 // Queue a template: values by field key (missing ones take the template's), parent only to override the

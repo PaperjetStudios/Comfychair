@@ -4,7 +4,8 @@ import {
 import { fmtTime } from './playback.js';
 import { cardPicture, kindTile } from './kinds.js';
 import { S, CURRENT_EDIT as CURRENT, PICKER_SOURCES as SOURCES, previewUrl, switchTab, thumbUrl } from './core.js';
-import { fmtDur, loadHistory, runTime } from './run.js';
+import { fmtDur, runTime } from './run-state.js';
+import { fetchHistory as loadHistory } from './generation-data.js';
 
 // This project's finished outputs of the given kinds, newest first: [{ g, o, i, t }]
 export async function projectOutputs(kinds) {

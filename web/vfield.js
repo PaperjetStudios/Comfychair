@@ -3,7 +3,7 @@
 // typed number ends. trim = {start, len} in seconds; crop = {x, y, w, h} fractions of the frame.
 import { api, button, clamp, clamp01, field, h, iconBtn, pickButtons, seg, setIcon, store } from './ui.js';
 import { fmtTime } from './playback.js';
-import { ASPECTS, aspectCrop, cropSpan } from './editor.js';
+import { ASPECTS, aspectCrop, cropSpan } from './crop-geometry.js';
 
 const FULL = { x: 0, y: 0, w: 1, h: 1 };
 const EPS = 0.001;

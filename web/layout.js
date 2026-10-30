@@ -162,19 +162,28 @@ const navIcon = (label) => {
 
 export function sideNav(panel, name, find) {
   const strip = h('nav', { class: 'side-nav', 'aria-label': 'Jump to a group of settings' });
+  const select = h('select', { 'aria-label': `${name} settings section`, onchange: () => pick(Number(select.value)) });
+  const jump = h('label', { class: 'section-jump' }, h('span', {}, 'Section'), select);
   let sig = '', busy = false, queued = false, targets = [];
-  // the group in view: the last one whose top has scrolled up past the panel's top third
+  // The current group sits just below the sticky section picker.
   const spy = () => {
     const r = panel.getBoundingClientRect(), atEnd = panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 4;
-    const line = atEnd ? r.bottom - 40 : r.top + panel.clientHeight / 3;   // at the end the last groups can't reach the top
-    let cur = targets[0]?.label ?? '';
-    if (panel.scrollTop > 4) for (const t of targets) if (t.el.getBoundingClientRect().top <= line) cur = t.label;
-    for (const b of strip.children) b.classList.toggle('on', b.dataset.g === cur);
+    const line = atEnd ? r.bottom - 40 : r.top + jump.offsetHeight + 12;   // at the end the last groups can't reach the top
+    let cur = 0;
+    if (panel.scrollTop > 4) targets.forEach((t, i) => { if (t.el.getBoundingClientRect().top <= line) cur = i; });
+    select.value = String(cur);
+    for (const [i, b] of [...strip.children].entries()) {
+      b.classList.toggle('on', i === cur);
+      if (i === cur) b.setAttribute('aria-current', 'location'); else b.removeAttribute('aria-current');
+    }
   };
   // tap a group: scroll to it (a closed one opens); every group stays on show
-  const pick = (t) => {
+  const pick = (i) => {
+    const t = targets[i];
+    if (!t) return;
     if (t.el.tagName === 'DETAILS') t.el.open = true;
-    t.el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    const top = panel.scrollTop + t.el.getBoundingClientRect().top - panel.getBoundingClientRect().top - jump.offsetHeight - 10;
+    panel.scrollTo({ top: Math.max(0, top), behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
   };
   const refresh = () => {
     queued = false; busy = true;
@@ -182,15 +191,16 @@ export function sideNav(panel, name, find) {
     const on = targets.length > 1;
     panel.classList.toggle('has-nav', on);
     if (on) {
-      if (strip.parentNode !== panel) panel.prepend(strip);
+      if (strip.parentNode !== panel || jump.parentNode !== panel) panel.prepend(strip, jump);
       const s = targets.map((t) => t.label).join('\n');
       if (s !== sig) {
         sig = s;
-        strip.replaceChildren(...targets.map((t) => h('button', { type: 'button', class: 'side-tab', 'data-g': t.label, title: t.label, 'aria-label': t.label,
-          onclick: () => pick(targets.find((x) => x.label === t.label) || t) }, navIcon(t.label))));
+        strip.replaceChildren(...targets.map((t, i) => h('button', { type: 'button', class: 'side-tab', title: t.label, 'aria-label': t.label,
+          onclick: () => pick(i) }, navIcon(t.label))));
+        select.replaceChildren(...targets.map((t, i) => h('option', { value: i }, t.label)));
       }
       spy();
-    } else { strip.remove(); sig = ''; }
+    } else { strip.remove(); jump.remove(); sig = ''; }
     obs.takeRecords(); busy = false;
   };
   panel.addEventListener('scroll', () => requestAnimationFrame(spy), { passive: true });

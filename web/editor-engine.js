@@ -1,11 +1,12 @@
+import { ASPECTS, FULL, aspectCrop, cropSpan } from './crop-geometry.js';
+export { ASPECTS, FULL, aspectCrop, cropSpan } from './crop-geometry.js';
 import {
   h, api, clamp01, busy, toast, undoToast, sheetOpen, openSheet, closeSheet, loadingSheet, sheetStillOpen, button, iconBtn, actions,
-  seg, field, section, hint, toggle, propNum, layerRowsEl, panelTop, help, colorField, rangeField, pctFmt, clamp,
+  seg, field, section, hint, toggle, propNum, layerRowsEl, panelTop, help, colorField, rangeField, pctFmt, clamp, mpInput,
 } from './ui.js';
 import { ASPECT_PRESETS, S, inputUrl, switchTab, thumbUrl } from './core.js';
 import { openImagePicker, uploadImage } from './media.js';
 import { snapNearest } from './gizmo.js';
-import { mpInput, persist, renderFields } from './generate.js';
 import { openCraftSheet, sendToCraft } from './craft.js';
 import { animated, anyKeys, keyTimes, keyedRange, refreshKeyed, value } from './keyed.js';
 import { putKey } from './keys.js';
@@ -14,7 +15,6 @@ import { keyJumps } from './timeline.js';
 import { workArea } from './workarea.js';
 import { frameSpan, playFrom, tickT } from './workarea-math.js';
 import { framesToClip } from './scene-comp.js';
-import { openGeneration } from './run.js';
 import { BLENDS, blendOp, createPaint, isCanvas } from './paint.js';
 import { icon } from './icons.js';
 import * as G from './layer-geom.js';
@@ -27,7 +27,6 @@ import { inpaintSection } from './inpaint.js';
 // The engine is made once per host with createEditor(): the Editor tab (editor.js, its edit tabs) and the Story
 // tab's shot canvas (story.js, one composition per shot) each have their own state, view, painter and undo.
 // ---------------------------------------------------------------------------
-export const FULL = { x: 0, y: 0, w: 1, h: 1 };
 export const BLANK = () => ({ v: 2, size: null, cols: 2, gap: 0, bg: '#000000', mp: 0, snap: true, arrange: null, anim: null, layers: [] });
 // a saved payload (an edit tab, or the old `deck.editor`) as editor state
 export function fromSaved(saved) {
@@ -1029,7 +1028,7 @@ export function createEditor(cfg) {
       const blob = await editorBlob();
       if (!blob) return toast('Add some images first', true);
       const r = await uploadImage(blob, { mp: E.mp, source: 'editor', filename: 'editor.png' });
-      useInGenerate(r.name, `Saved ${r.width}×${r.height}`);
+      (await import('./generate.js')).useInGenerate(r.name, `Saved ${r.width}×${r.height}`);
     } catch (e) { toast('Save failed: ' + e.message, true); }
     finally { b.done(); }
   }
@@ -1054,7 +1053,7 @@ export function createEditor(cfg) {
         items: [{ track: 'v1', at: 0, in: 0, out: made.duration, name: cfg.name?.() || 'Edit', src: { clip: made.clip },
           x: 0, y: 0, scale: 1, fit: 'fit', opacity: 1, volume: 1 }] } });
       S.history.set(g.id, g);
-      openGeneration(g.id);
+      (await import('./run.js')).openGeneration(g.id);
     } catch (e) { toast('Export failed: ' + e.message, true); }
     finally { EA.exporting = false; poseAt(E.t = t0); drawEditorCanvas(); btn.disabled = false; btn.textContent = label; }
   }
@@ -1084,43 +1083,6 @@ export function createEditor(cfg) {
   };
   wireEditor();
   return eng;
-}
-
-// Offer the saved image to one of the current template's image inputs.
-export function useInGenerate(name, msg) {
-  const fields = (S.tpl?.fields || []).filter((f) => f.kind === 'image');
-  const go = (f) => {
-    S.values[f.key] = name; persist(); renderFields(); closeSheet(); switchTab('generate');
-    toast(`Set ${f.group} · ${f.label}`);
-  };
-  openSheet(h('h3', {}, msg),
-    h('div', { class: 'media-big' }, h('img', { src: inputUrl(name), alt: '' })),
-    hint(`It's now in your input images as ${name}.`, 'sheet-hint'),
-    fields.length ? actions(fields.map((f) => button(`Use for ${f.group} · ${f.label}`, () => go(f)))) : null,
-    actions(button('Keep editing', closeSheet, { cls: 'small ghost' })));
-}
-
-export const ASPECTS = [['Free', null], ...ASPECT_PRESETS];
-
-// Crop rectangle (fractions of a W×H image) from a fixed corner (fx,fy) to the pointer, respecting
-// the aspect lock (width/height in pixels, null = free) and the image bounds
-export function cropSpan(W, H, aspect, fx, fy, px, py) {
-  let w = Math.abs(px - fx), hh = Math.abs(py - fy);
-  if (aspect) {
-    const maxW = px < fx ? fx : 1 - fx, maxH = py < fy ? fy : 1 - fy;
-    hh = (w * W) / (aspect * H);
-    if (hh > maxH) { hh = maxH; w = (hh * aspect * H) / W; }
-    if (w > maxW) { w = maxW; hh = (w * W) / (aspect * H); }
-  }
-  w = Math.max(w, 0.02); hh = Math.max(hh, 0.02);
-  return { x: px < fx ? fx - w : fx, y: py < fy ? fy - hh : fy, w, h: hh };
-}
-
-// the largest centred crop with that aspect
-export function aspectCrop(W, H, a) {
-  let w = 1, hh = W / (a * H);
-  if (hh > 1) { hh = 1; w = (a * H) / W; }
-  return { x: (1 - w) / 2, y: (1 - hh) / 2, w, h: hh };
 }
 
 // Crop popup for a loaded image; onApply gets {x,y,w,h} as fractions of it.

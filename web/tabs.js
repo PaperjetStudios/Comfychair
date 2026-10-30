@@ -27,6 +27,14 @@ export class TabSet {
     this.inflight = null; this.timer = 0; this.conflict = null; this.offline = false;
     this.loading = false; this.drag = null; this.started = false; this.refreshSeq = 0; this.switchSeq = 0;
     this.row = h('div', { class: 'tabrow', role: 'tablist' });
+    this.row.setAttribute('aria-label', 'Documents');
+    this.row.addEventListener('keydown', (e) => {
+      const buttons = [...this.row.querySelectorAll('.tab-switch')], at = buttons.indexOf(e.target);
+      if (at < 0) return;
+      const to = { ArrowLeft: (at - 1 + buttons.length) % buttons.length, ArrowRight: (at + 1) % buttons.length, Home: 0, End: buttons.length - 1 }[e.key];
+      if (to == null) return;
+      e.preventDefault(); buttons[to].focus(); buttons[to].click();
+    });
     // while a tab is lifted for dragging, the strip must not scroll under the finger
     this.row.addEventListener('touchmove', (e) => { if (this.drag?.started && e.cancelable) e.preventDefault(); }, { passive: false });
     this.state = h('button', { type: 'button', class: 'tabs-state hidden', onclick: () => this.conflict && this.showConflict() });
@@ -52,10 +60,46 @@ export class TabSet {
   // ---- starting / project switch ----
   // Load (or reload, for the current project) the list and open the remembered tab. Flushes the old
   // project's tab first, to the old project's folder (this.pid is only replaced after).
-  async start() {
+  start() {
+    const pid = this.scope === 'global' ? null : (S.project ?? null);
+    if (this.starting && this.requestedPid === pid) return this.starting;
+    this.requestedPid = pid;
+    const pending = this.load();
+    this.starting = pending;
+    pending.finally(() => { if (this.starting === pending) this.starting = null; });
+    return pending;
+  }
+  async ready() {
+    if (this.starting) await this.starting;
+    else if (!this.active) await this.start();
+    if (!this.active) throw new Error('This document has not loaded. Retry before editing.');
+  }
+  // Block every editor surface until its saved document is ready, including project switches.
+  gate(message = null) {
+    const host = this.host || this.mount.closest('.tab');
+    if (!host) return;
+    this.host = host;
+    if (!message) {
+      for (const [el, inert] of this.blocked || []) el.inert = inert;
+      this.blocked = null; this.loadStatus?.remove();
+      host.removeAttribute('aria-busy');
+      return;
+    }
+    if (!this.loadStatus) this.loadStatus = h('div', { class: 'document-loading', role: 'status', 'aria-live': 'polite' });
+    if (!this.blocked) this.blocked = new Map();
+    const surfaces = [...host.children];
+    if (host.id === 'tab-generate') surfaces.push(document.querySelector('.actionbar'));
+    for (const el of surfaces) if (el && el !== this.loadStatus && !this.blocked.has(el)) { this.blocked.set(el, el.inert); el.inert = true; }
+    host.setAttribute('aria-busy', 'true');
+    this.loadStatus.replaceChildren(h('span', {}, message), this.offline ? button('Retry', () => this.start()) : null);
+    host.append(this.loadStatus);
+  }
+  async load() {
     this.started = true;
-    await this.flush();
     const ep = ++this.epoch;
+    this.setOffline(false); this.gate('Loading document…');
+    await this.flush();
+    if (ep !== this.epoch) return;
     clearTimeout(this.timer);
     this.pid = this.scope === 'global' ? null : (S.project ?? null);
     this.active = null; this.conflict = null; this.pendingName = null; this.setDirty(false);
@@ -77,10 +121,12 @@ export class TabSet {
       }
       this.setOffline(false);
       this.open(doc);
+      this.gate();
     } catch (e) {
       if (ep !== this.epoch) return;
       this.setOffline(true);   // ws_open retries start() once the server is back
       this.render();
+      this.gate(`Could not load document: ${e.message}`);
     }
   }
 
@@ -356,13 +402,15 @@ export class TabSet {
   render() {
     if (this.drag?.started) { this.drag.stale = true; return; }
     const a = this.active;
+    const focused = this.row.contains(document.activeElement);
     this.row.replaceChildren(...this.docs.map((d) => {
       const on = a?.id === d.id;
-      return h('div', { class: 'tabchip' + (on ? ' on' : ''), 'data-id': d.id, role: 'tab', 'aria-selected': on, tabindex: 0,
-        onclick: () => { if (this.justDragged) return; this.switchTo(d.id); },
+      return h('div', { class: 'tabchip' + (on ? ' on' : ''), 'data-id': d.id, role: 'presentation',
         onpointerdown: (e) => this.dragStart(e, d.id) },
-      h('span', { class: 'tab-name' }, on ? a.name : d.name),
-      on ? h('span', { class: 'tab-dot' + (this.dirty ? ' on' : '') }) : null,
+      h('button', { type: 'button', class: 'tab-switch', role: 'tab', 'aria-selected': String(on), tabIndex: on ? 0 : -1,
+        onclick: () => { if (!this.justDragged) this.switchTo(d.id); } },
+        h('span', { class: 'tab-name' }, on ? a.name : d.name),
+        on ? h('span', { class: 'tab-dot' + (this.dirty ? ' on' : '') }) : null),
       on ? h('button', { type: 'button', class: 'tab-more', 'aria-label': 'Tab options', onclick: (e) => { e.stopPropagation(); this.menu(); } }, '⋯') : null);
     }));
     // keep the open tab in view by scrolling the strip itself: scrollIntoView also scrolls every scrolling
@@ -374,6 +422,7 @@ export class TabSet {
       else if (left + on.offsetWidth > r.scrollLeft + r.clientWidth) r.scrollLeft = left + on.offsetWidth - r.clientWidth;
     }
     this.showState();
+    if (focused) this.row.querySelector('.tabchip.on .tab-switch')?.focus({ preventScroll: true });
   }
 
   // Drag to reorder. Mouse: after moving a few pixels. Touch: after holding still for a moment (a

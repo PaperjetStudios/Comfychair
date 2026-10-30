@@ -1,11 +1,13 @@
 import {
   $, h, store, clamp, clamp01, clone, cycleIndex, api, toast, undoToast, openOverlay, openSheet, sheetStillOpen, nameSheet,
-  button, iconBtn, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider,
+  button, iconBtn, mpInput, actions, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider,
   insertAtCursor, toggle, textArea, seedField as uiSeedField, imageInput, chips, chip,
 } from './ui.js';
 import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
 import { clipLabel, clipUrl, openImagePicker, openVideoPicker, soundInput } from './media.js';
-import { RUN, fmtDur, notifyPrepare, openJobs } from './run.js';
+import { RUN, fmtDur } from './run-state.js';
+import { notifyPrepare, keepAwake } from './notifications.js';
+export { keepAwake } from './notifications.js';
 import { queueRun } from './make.js';
 import { zoomPan } from './layout.js';
 
@@ -819,15 +821,6 @@ function boolField(f) {
   return el;
 }
 
-export function mpInput(get, set) {
-  const input = h('input', { type: 'number', inputMode: 'decimal', min: 0, max: 16, step: 0.05, value: get() });
-  input.addEventListener('change', () => {
-    const n = clamp(parseFloat(input.value) || 0, 0, 16);
-    input.value = n; set(n);
-  });
-  return h('label', { class: 'mp' }, h('span', {}, 'Max MP'), input, info('0 = keep size'));
-}
-
 // the whole image greyed out, with the cropped part in colour on top
 function cropPreview(src, c) {
   const pct = (n) => `${(n * 100).toFixed(2)}%`;
@@ -1079,6 +1072,7 @@ function fieldBody(f) {
 // generate / stop
 // ---------------------------------------------------------------------------
 export async function generate() {
+  if ($('#tab-generate').hasAttribute('aria-busy')) return;
   if (!S.tpl || S.tpl.error) return toast('Pick a working template first', true);
   const values = {};
   for (const f of S.tpl.fields) {
@@ -1151,7 +1145,7 @@ function refreshSeedLabels() {
 // tablet's. Long runs ask first: Stop sits right next to Generate.
 export async function stop(pid = RUN.pid, { ask = true } = {}) {
   if (!pid) {
-    if (S.activePid) { toast('That run is from another device: stop it from the Queue'); openJobs(); }
+    if (S.activePid) { toast('That run is from another device: stop it from the Queue'); import('./run.js').then((m) => m.openJobs()); }
     else toast('Nothing of yours is running');
     return;
   }
@@ -1166,31 +1160,6 @@ export async function stop(pid = RUN.pid, { ask = true } = {}) {
 // Keep the screen on while runs are going, so the tablet doesn't sleep and drop the connection. The
 // Wake Lock API needs HTTPS; over plain http a tiny silent looping video does the same job on most
 // tablets (it has to be started from a tap, which Generate is).
-let wakeLock = null, wakeVideo = null;
-export async function keepAwake(on) {
-  if (on && navigator.wakeLock && isSecureContext) {
-    try {
-      if (!wakeLock) {
-        wakeLock = await navigator.wakeLock.request('screen');
-        wakeLock.addEventListener('release', () => { wakeLock = null; });
-      }
-      return;
-    } catch { /* fall back to the video */ }
-  }
-  if (on) {
-    if (!wakeVideo) {
-      wakeVideo = h('video', { src: 'keepawake.mp4', muted: true, loop: true, playsInline: true, class: 'keep-awake', 'aria-hidden': 'true' });
-      wakeVideo.setAttribute('playsinline', '');
-      document.body.append(wakeVideo);
-    }
-    wakeVideo.play().catch(() => { /* not from a tap; the next Generate tries again */ });
-  } else {
-    try { if (wakeLock) await wakeLock.release(); } catch { /* already gone */ }
-    wakeLock = null;
-    if (wakeVideo) wakeVideo.pause();
-  }
-}
-
 // ---------------------------------------------------------------------------
 // layout boxes: tell layout-aware models (MOSS, Flux3 Klein) what goes where.
 // Stored as fractions of the canvas, so they fit any output size.
@@ -1378,4 +1347,18 @@ export function wireZoom() {
   $('#zoomIn').addEventListener('click', () => zp.zoomBy(1.5));
   $('#zoomOut').addEventListener('click', () => zp.zoomBy(1 / 1.5));
   $('#zoomReset').addEventListener('click', zp.reset);
+}
+
+// Offer the saved image to one of the current template's image inputs.
+export function useInGenerate(name, msg) {
+  const fields = (S.tpl?.fields || []).filter((f) => f.kind === 'image');
+  const go = (f) => {
+    S.values[f.key] = name; persist(); renderFields(); closeSheet(); switchTab('generate');
+    toast(`Set ${f.group} · ${f.label}`);
+  };
+  openSheet(h('h3', {}, msg),
+    h('div', { class: 'media-big' }, h('img', { src: inputUrl(name), alt: '' })),
+    hint(`It's now in your input images as ${name}.`, 'sheet-hint'),
+    fields.length ? actions(fields.map((f) => button(`Use for ${f.group} · ${f.label}`, () => go(f)))) : null,
+    actions(button('Keep editing', closeSheet, { cls: 'small ghost' })));
 }

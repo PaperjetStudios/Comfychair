@@ -1,5 +1,5 @@
-import { h, toast } from './ui.js';
-import { switchTab } from './core.js';
+import { h } from './ui.js';
+import { switchTab, onNavigate, wireTabKeys } from './navigation.js';
 
 // ---------------------------------------------------------------------------
 // world: the app as a small world of three spaces you move around in.
@@ -25,7 +25,6 @@ const spaceOf = (tab) => SPACES.findIndex((s) => s.tabs.includes(tab));
 const tabsIn = (si) => SPACES[si].tabs.filter((t) => btnOf(t));
 const tabEl = () => document.querySelector('.tab.active');
 const last = {};          // space id -> the tool last open there (where travelling back to it lands)
-const been = [];          // the tools visited, for Back
 const svgIcon = (paths) => {
   const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('aria-hidden', 'true');
@@ -41,8 +40,7 @@ function paint() {
   const tab = tabNow(), si = spaceOf(tab), nav = document.querySelector('nav.tabs');
   if (si < 0) return;
   last[SPACES[si].id] = tab;
-  if (been[been.length - 1] !== tab) { been.push(tab); if (been.length > 40) been.shift(); }
-  [...bar.children].forEach((b, i) => { b.classList.toggle('on', i === si); b.setAttribute('aria-selected', String(i === si)); });
+  [...bar.children].forEach((b, i) => { b.classList.toggle('on', i === si); b.setAttribute('aria-selected', String(i === si)); b.tabIndex = i === si ? 0 : -1; });
   for (const b of nav.querySelectorAll('button[data-tab]')) b.classList.toggle('off-space', spaceOf(b.dataset.tab) !== si);
   // a run going on in Generate shows on Make while you're elsewhere
   const run = btnOf('generate')?.style.getPropertyValue('--run') || '';
@@ -57,6 +55,7 @@ function go(si) {
 }
 
 // ---- moving a tab: only translate and opacity, so the compositor does it smoothly even while a tab is busy ----
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 const SLIDE = 56;   // px a tool slides as it goes and as the next one comes (with a fade: the move reads, nothing flies)
 const shift = (axis, d) => (d ? `translate${axis === 'x' ? 'X' : 'Y'}(${d}px)` : 'none');
 // held under the fingers: d along the axis, fading a little the further it goes
@@ -68,7 +67,7 @@ function hold(el, axis, d) {
 // let go short of travelling: back it springs, with a little overshoot
 function settle(el, axis, d) {
   hold(el, axis, 0);
-  if (!el || !d) return Promise.resolve();
+  if (!el || !d || reducedMotion()) return Promise.resolve();
   return el.animate([{ transform: shift(axis, d) }, { transform: 'none' }], { duration: 320, easing: 'cubic-bezier(.34, 1.56, .64, 1)' })
     .finished.catch(() => {});
 }
@@ -107,6 +106,7 @@ async function travel(axis, dir, { d = 0 } = {}) {
 async function travelTo(to, { axis = 'x', dir = 1, d = 0 } = {}) {
   const el = tabEl();
   if (moving || !el) return;
+  if (reducedMotion()) { switchTab(to); return; }
   moving = true;
   showMap(to);
   const out = el.animate([{ transform: shift(axis, d), opacity: el.style.opacity || 1 }, { transform: shift(axis, d - dir * SLIDE), opacity: 0 }],
@@ -147,25 +147,9 @@ function wireBarSwipe(topbar) {
   topbar.addEventListener('click', (e) => { if (swiped) { swiped = false; e.stopPropagation(); e.preventDefault(); } }, true);
 }
 
-// ---- Back with nothing open (Android's edge swipe, the back button): the tool before, never out of the app ----
-// ui.js gives each open sheet its own history entry, so Back closes those first; under them sits this one floor.
-const FLOOR = { world: 1 };
-if (history.state?.world !== 1) history.pushState(FLOOR, '');
-addEventListener('popstate', (e) => {
-  if (e.state) return;   // (a sheet closing: ui.js)
-  history.pushState(FLOOR, '');
-  const here = tabNow();
-  while (been.length && been[been.length - 1] === here) been.pop();
-  const prev = been.pop();
-  if (prev) {
-    const a = spaceOf(prev), b = spaceOf(here);
-    travelTo(prev, a === b ? { axis: 'y', dir: tabsIn(a).indexOf(prev) > tabsIn(a).indexOf(here) ? 1 : -1 } : { axis: 'x', dir: a > b ? 1 : -1 });
-  } else toast('ComfyChair stays open: use the spaces and tabs at the top to move around');
-});
-
 // ---- keys: Alt + ← → between spaces, Alt + ↑ ↓ between the tools in one ----
 addEventListener('keydown', (e) => {
-  if (!e.altKey || e.ctrlKey || e.metaKey || e.target.closest?.('input, textarea, select')) return;
+  if (e.defaultPrevented || !e.altKey || e.ctrlKey || e.metaKey || e.target.closest?.('input, textarea, select, [role=dialog]')) return;
   const fn = { ArrowLeft: () => travel('x', -1), ArrowRight: () => travel('x', 1), ArrowUp: () => travel('y', -1), ArrowDown: () => travel('y', 1) }[e.key];
   if (fn) { e.preventDefault(); fn(); }
 });
@@ -175,5 +159,7 @@ document.body.append(map);
 const nav = document.querySelector('nav.tabs');
 nav.before(bar);
 wireBarSwipe(document.querySelector('.topbar'));
-new MutationObserver(paint).observe(nav, { subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+wireTabKeys(bar);
+onNavigate(paint);
+new MutationObserver(paint).observe(nav, { subtree: true, attributes: true, attributeFilter: ['style'] });
 paint();

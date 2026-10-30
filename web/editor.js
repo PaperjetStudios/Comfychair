@@ -6,7 +6,7 @@ import { SWATCHES } from './paint.js';
 import { BLANK, createEditor } from './editor-engine.js';
 import { registerUndo } from './undo-dock.js';
 
-export { ASPECTS, FULL, aspectCrop, cropSpan, openCrop, useInGenerate } from './editor-engine.js';
+export { ASPECTS, FULL, aspectCrop, cropSpan, openCrop } from './editor-engine.js';
 
 // ---------------------------------------------------------------------------
 // sketch pad: draw an image (e.g. the source for image-to-image) with a pen or finger.
@@ -163,7 +163,7 @@ export const { E } = ED;
 export const persistEditor = () => ED.changed();
 export const renderEditor = () => ED.render();
 
-tabs = new TabSet({ kind: 'edit-tabs', mount: tabMount, newName: (n) => `Edit ${n}`, seed: () => (store.get(SEEDED, false) ? null : ED.dump()),
+tabs = new TabSet({ kind: 'edit-tabs', mount: tabMount, host: $('#tab-editor'), newName: (n) => `Edit ${n}`, seed: () => (store.get(SEEDED, false) ? null : ED.dump()),
   adapter: {
     empty: BLANK,
     dump: () => ED.dump(),
@@ -181,10 +181,7 @@ tabs = new TabSet({ kind: 'edit-tabs', mount: tabMount, newName: (n) => `Edit ${
 
 // Resolves once a tab is open (or after ~8 s, e.g. offline), so other panels can write into the current tab
 // without the first load replacing their change.
-export async function editorTabsReady() {
-  if (!tabs.started) tabs.start();
-  for (let i = 0; i < 160 && !(tabs.active && E.tab?.id === tabs.active.id); i++) await new Promise((r) => setTimeout(r, 50));
-}
+export const editorTabsReady = () => tabs.ready();
 
 // ---- the still: a picture of the composite, kept beside the tab so pickers can show it ----
 const STILL_DELAY = 4000, STILL_MAX = 2048;
@@ -240,3 +237,5 @@ export async function addToEditor(name) {
   switchTab('editor');
   toast('Added to the Editor: Save as input when done');
 }
+
+export async function useInGenerate(...args) { return (await import('./generate.js')).useInGenerate(...args); }

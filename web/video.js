@@ -5,7 +5,6 @@ import {
 import { S, fmtT, inputUrl, thumbUrl } from './core.js';
 import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, soundToSoundTab, uploadImage, uploadMedia } from './media.js';
 import { openGeneration } from './run.js';
-import { useInGenerate } from './editor.js';
 import { TabSet } from './tabs.js';
 import { clipKeyTimes, clipKeys, clipSoundFields, durationOf, keyJumps, timeline, wavePeaks } from './timeline.js';
 import { fmtTime, playKeys, transport } from './playback.js';
@@ -15,7 +14,7 @@ import { refreshKeyed } from './keyed.js';
 import * as COMP from './scene-comp.js';
 import { fullScreen } from './layout.js';
 import { canTrack, openTrack } from './track.js';
-import { CLIP_FX, keyRangeFields, loraChoice, restyleLoras, runClipStep, sendToVfx } from './vfx.js';
+import { CLIP_FX, keyRangeFields, loraChoice, restyleLoras, runClipStep } from './clip-effects.js';
 import { snap, snapOn, snapStep, snapNearest, normDeg, Weight, WEIGHT, DEAD_PX, deadzone, snapBar } from './gizmo.js';
 import { openCraftSheet, sendToCraft } from './craft.js';
 
@@ -66,9 +65,9 @@ function legacyTimeline() {
 // ---- tabs: each video edit is a document in the project folder ----
 const migrateEdit = (p) => ({ tracks: p.tracks?.length ? p.tracks : defaultTracks(), items: p.items || [], size: p.size || null, fps: p.fps || 0,
   range: p.range || null });   // range: the work area (workarea.js), seconds
-let tabs = null, tabsReady = null;
+let tabs = null;
 let vtp = null;   // the transport bar (playback.js)
-const ensureTabs = () => tabsReady || (tabsReady = tabs ? tabs.start() : Promise.resolve());
+const ensureTabs = () => tabs.ready();
 
 // the timeline changed: save it (the tab flushes ~1 s later, or at once on Export / leaving)
 function persistTimeline() { tabs?.changed(); }
@@ -709,7 +708,7 @@ function timelineChanged() {
   persistTimeline(); renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw();
 }
 
-export function renderVideo() { renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw(); ensureTabs(); COMP.refresh(); }
+export function renderVideo() { renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw(); ensureTabs().catch(() => {}); COMP.refresh(); }
 
 // ---- editing ----
 function targetTrack(kind) {
@@ -887,7 +886,7 @@ function renderVideoPanel() {
       h('div', { class: 'row wrap' },
         button('✂ Split at playhead', TL.split, { title: 'S' }),
         button('⤫ Cross-fade with previous', () => TL.crossfadePrev(it)),
-        it.kind === 'video' && canKey(it) ? button('VFX…', () => sendToVfx(it.src, { label: it.label, trim: { start: it.in, len: (it.out ?? it.dur) - it.in } }), { title: 'Open this clip in the VFX tab' }) : null,
+        it.kind === 'video' && canKey(it) ? button('VFX…', async () => (await import('./vfx.js')).sendToVfx(it.src, { label: it.label, trim: { start: it.in, len: (it.out ?? it.dur) - it.in } }), { title: 'Open this clip in the VFX tab' }) : null,
         it.kind === 'video' ? button('Sound → Sound tab', () => soundToSoundTab(it.src, { trim: { start: it.in || 0, len: itLen(it) }, name: `${it.label}-sound` }),
           { title: 'This clip\'s sound (the part on the timeline) on the Sound tab\'s timeline' }) : null,
         it.kind === 'video' && canKey(it) ? button('Key…', () => openKey(it), { title: 'Cut out a green screen, or use a matte, so lower tracks show through' }) : null,
@@ -1145,7 +1144,7 @@ async function snapshotFrame() {
       button('Save as input', async () => {
         try {
           const r = await uploadImage(blob, { mp: 0, source: 'snapshot', filename: name });
-          useInGenerate(r.name, `Saved ${r.width}×${r.height}`);
+          (await import('./generate.js')).useInGenerate(r.name, `Saved ${r.width}×${r.height}`);
         } catch (e) { toast('Save failed: ' + e.message, true); }
       }, { cls: 'small primary' }),
       linkBtn('Download', url, { download: name }),

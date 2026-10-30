@@ -44,10 +44,12 @@
   --fs: 15px;
   --tap: 46px;
   --tap-sm: 38px;
+  --touch-target: 0px;          /* touch controls share one minimum, including compact exceptions */
   --gap: 12px;
   --panel-w: 430px;
   color-scheme: dark;
 }
+@media (pointer: coarse) { :root { --touch-target: 44px; } }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }   /* Android Chrome would scale text up and push sidebars wider */
@@ -980,6 +982,10 @@ body:has(.text-pop:not(.hidden)) .toast { z-index: 63; }
 .tabchip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; padding-right: 4px; }
 .tabchip.shifting { transition: transform .15s; }
 .tabchip.lift { transition: none; z-index: 2; box-shadow: var(--shadow-sm); opacity: .92; }
+.tab-switch { display: inline-flex; align-items: center; gap: 6px; min-width: var(--touch-target); min-height: inherit; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; font: inherit; }
+.tab { position: relative; }
+.document-loading { position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--gap); padding: 24px; background: var(--surface); text-align: center; }
+.actionbar[inert] { opacity: .5; }
 .tab-name { overflow: hidden; text-overflow: ellipsis; }
 .tab-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-ink); flex: none; display: none; }
 .tab-dot.on { display: block; }
@@ -1185,6 +1191,12 @@ button.sheet-caret { width: 22px; }
 .panel.has-nav { display: grid; grid-template-columns: 40px minmax(0, 1fr); column-gap: 8px; align-content: start; grid-auto-rows: max-content; }
 .panel.has-nav > * { grid-column: 2; min-width: 0; }
 .panel.has-nav > .side-nav { grid-column: 1; grid-row: 1 / span 99; }
+.section-jump {
+  position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px;
+  padding: 0 0 8px; background: var(--surface); min-width: 0;
+}
+.section-jump > span { flex: none; font-size: var(--fs-xs); color: var(--muted); }
+.section-jump > select { min-width: 0; }
 /* a section the side strip jumps to lands with its heading in view */
 .panel .section, .panel details.group { scroll-margin-top: 8px; }
 .side-nav {
@@ -1193,7 +1205,7 @@ button.sheet-caret { width: 22px; }
   background: var(--bg); border-right: 1px solid var(--line); max-height: 100dvh; overflow-y: auto; scrollbar-width: none;
 }
 .side-tab {
-  position: relative; display: grid; place-items: center; width: 38px; height: 38px; padding: 0; border: 0; border-radius: var(--r-sm);
+  position: relative; display: grid; place-items: center; width: max(38px, var(--touch-target)); height: max(38px, var(--touch-target)); padding: 0; border: 0; border-radius: var(--r-sm);
   background: transparent; color: var(--muted); cursor: pointer; flex: none; transition: background .15s, color .15s;
 }
 .side-tab svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
@@ -1201,7 +1213,6 @@ button.sheet-caret { width: 22px; }
 .side-tab.on { background: var(--surface-2); color: var(--accent); }
 .side-tab.on::before { content: ''; position: absolute; left: -3px; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--accent); }
 @media (hover: hover) { .side-tab:hover:not(.on) { background: var(--surface-2); color: var(--text); } }
-@media (pointer: coarse) { .side-tab { width: 40px; height: 40px; } }
 .panel.has-nav > .scene-head, .panel.has-nav > .tab-strip { margin-left: 0; }
 
 /* ---- maximize: one ⛶ on every viewer; the stage is pinned over the page (and goes real full screen) ---- */
@@ -1260,8 +1271,6 @@ button.sheet-caret { width: 22px; }
 .vfx-media.side { display: flex; gap: 4px; align-items: center; }
 .vfx-media.side > video { position: static; max-width: calc(50cqw - 2px); clip-path: none !important; }
 .vfx-stage.drawing .vfx-media { cursor: crosshair; }
-.vfx-group { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
-.vfx-group-name { font-size: 12px; opacity: .7; }
 .vfx-results .card.picked { outline: 2px solid var(--accent, #4c8dff); }
 .fx-step { border: 1px solid var(--line, #333); border-radius: var(--r); padding: 8px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px; }
 .fx-step textarea, .fx-step input[type=text] { width: 100%; }
@@ -1334,23 +1343,23 @@ button.sheet-caret { width: 22px; }
 .craft-doc { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--line, #2a2f3a); border-radius: var(--r); }
 .craft-doc .row { align-items: center; gap: 8px; }
 
-/* ---- sidebars: denser than the rest of the page (tablet sidebars were cramped), touch targets kept ≥ ~38px ---- */
+/* ---- sidebars: compact on desktop, larger controls for touch ---- */
 .panel { --gap: 10px; font-size: 14px; }
 .panel .section { padding: 10px 12px 12px; gap: 10px; }
 .panel .section-title { min-height: 26px; }
 .panel .field { gap: 4px; }
 .panel .lbl, .panel .hint { font-size: var(--fs-xs); }
-.panel .btn { min-height: 40px; padding: 0 14px; }
-.panel .btn.small { min-height: 34px; padding: 0 10px; font-size: 13px; }
-.panel .seg button { min-height: 36px; padding: 0 6px; font-size: 13px; line-height: 1.2; }
+.panel .btn { min-height: max(40px, var(--touch-target)); padding: 0 14px; }
+.panel .btn.small { min-height: max(34px, var(--touch-target)); padding: 0 10px; font-size: 13px; }
+.panel .seg button { min-height: max(36px, var(--touch-target)); padding: 0 6px; font-size: 13px; line-height: 1.2; }
 .panel .seg.wrap button { min-width: 76px; padding: 4px 6px; }
-.panel select, .panel input[type=number], .panel input[type=text], .panel textarea { min-height: 38px; padding-top: 6px; padding-bottom: 6px; font-size: 14px; }
-.panel .tabchip { min-height: 34px; padding: 0 12px; font-size: 14px; }
-.panel .tab-more { min-width: 30px; min-height: 30px; }
+.panel select, .panel input[type=number], .panel input[type=text], .panel textarea { min-height: max(38px, var(--touch-target)); padding-top: 6px; padding-bottom: 6px; font-size: 14px; }
+.panel .tabchip { min-height: max(34px, var(--touch-target)); padding: 0 12px; font-size: 14px; }
+.panel .tab-more { min-width: max(30px, var(--touch-target)); min-height: max(30px, var(--touch-target)); }
+.panel .icon-btn { min-width: max(38px, var(--touch-target)); min-height: max(38px, var(--touch-target)); }
 @media (pointer: coarse) {
-  .panel .seg button { min-height: 40px; }
-  .panel .btn.small { min-height: 38px; }
-  .panel .tabchip { min-height: 38px; }
+  .panel.has-nav { grid-template-columns: 44px minmax(0, 1fr); }
+  .tabs button, .spaces .space-btn { min-height: 44px; }
 }
 
 
@@ -1430,11 +1439,11 @@ body:has(.stage.maxed) .toast { z-index: 60; }
 /* (small and flat, hung into the label's line: the row stays one line tall and the sliders keep their room) */
 .key-btns { display: inline-flex; align-items: center; gap: 0; margin: -6px -4px -6px 0; padding-left: 8px; }
 .keyed .lbl > span:first-child { margin-right: auto; }
-.key-btns .icon-btn { min-width: 28px; min-height: 26px; padding: 0; font-size: 11px; color: var(--muted); background: transparent; border-color: transparent; }
+.key-btns .icon-btn { min-width: max(28px, var(--touch-target)); min-height: max(26px, var(--touch-target)); padding: 0; font-size: 11px; color: var(--muted); background: transparent; border-color: transparent; }
 .key-btns .icon-btn.on, .key-btns .icon-btn.on:hover { background: transparent; color: var(--accent); font-size: 15px; }
 .key-btns .key-reset { font-size: 15px; margin-right: 4px; }
 .key-btns [hidden] { display: none; }   /* (.icon-btn's display would show them anyway) */
-@media (pointer: coarse) { .key-btns .icon-btn { min-width: 32px; min-height: 30px; } }
+@media (pointer: coarse) { .key-btns { gap: 2px; margin: 0; padding-left: 4px; } }
 .keyed + .keyed { margin-top: 4px; }
 .anim-bar { padding: 6px 10px 8px; border-top: 1px solid var(--line); }
 .anim-bar .scrub-wrap { position: relative; flex: 1; min-width: 0; display: flex; }

@@ -1,4 +1,7 @@
 import { iconize, icon } from './icons.js';
+import { overlayOpened, overlayClosed } from './history.js';
+import { modalFocus } from './modal.js';
+export { overlayOpened, overlayClosed } from './history.js';
 export { icon, iconize, setIcon } from './icons.js';
 // Shared UI building blocks for app.js and scene.js: the element helper, storage, the API client
 // with its busy bar, toasts, overlays and the bottom sheet, and the small widgets every panel is
@@ -226,21 +229,6 @@ export const undoToast = (msg, fn) => toast(msg, false, { label: '↶ Undo', fn 
 // back gesture (and the browser's back) closes the top overlay instead of leaving the app.
 // close(true) is called when it was closed by going back.
 // ---------------------------------------------------------------------------
-const OV = [];
-let popSkip = 0;
-export function overlayOpened(close) { OV.push(close); history.pushState({ deckOverlay: OV.length }, ''); }
-export function overlayClosed(close) {
-  const i = OV.lastIndexOf(close);
-  if (i < 0) return;
-  OV.splice(i, 1);
-  popSkip++; history.back();
-}
-addEventListener('popstate', () => {
-  if (popSkip) { popSkip--; return; }
-  const close = OV.pop();
-  if (close && close(true) === false) { OV.push(close); history.pushState({ deckOverlay: OV.length }, ''); }  // it said no (unsaved work)
-});
-
 // A full-screen editor (sketch pad, layout boxes): shown over everything, closed by its own buttons
 // or the back gesture. With dirty() true, closing (or leaving the page) asks first.
 // Returns close(viaBack, saved); it returns false when the user chose to stay.
@@ -248,11 +236,14 @@ export function openOverlay(el, { dirty = () => false, ask = 'Throw away your ch
   const guard = (e) => { if (dirty()) { e.preventDefault(); e.returnValue = ''; } };
   addEventListener('beforeunload', guard);
   document.body.append(el);
+  el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true');
+  const focus = modalFocus(el);
   const close = (viaBack = false, saved = false) => {
     if (!saved && dirty() && !confirm(ask)) return false;
     onClose?.();
     removeEventListener('beforeunload', guard);
     el.remove();
+    focus.close();
     if (!viaBack) overlayClosed(back);
     return true;
   };
@@ -266,6 +257,7 @@ export function openOverlay(el, { dirty = () => false, ask = 'Throw away your ch
 // still the one showing; SHEET.gen is the generation a details sheet shows (it redraws on updates).
 // ---------------------------------------------------------------------------
 export const SHEET = { seq: 0, gen: null };
+let sheetFocus = null;
 const sheetEl = () => $('#sheet');
 export const sheetOpen = () => !sheetEl().classList.contains('hidden');
 export function openSheet(...content) {
@@ -279,6 +271,10 @@ export function openSheet(...content) {
     h('button', { type: 'button', class: 'icon-btn close', onclick: () => closeSheet(), 'aria-label': 'Close' }, '✕'),
     ...(head && infos.length ? rest : content.flat(Infinity).filter((c) => c != null && c !== false)));
   sheetEl().classList.remove('hidden'); $('#sheetBackdrop').classList.remove('hidden');
+  if (head) { head.id = 'sheet-title'; sheetEl().setAttribute('aria-labelledby', head.id); sheetEl().removeAttribute('aria-label'); }
+  else { sheetEl().removeAttribute('aria-labelledby'); sheetEl().setAttribute('aria-label', 'Dialog'); }
+  if (!wasOpen) sheetFocus = modalFocus(sheetEl(), { exclude: [$('#sheetBackdrop')] });
+  else if (!sheetEl().contains(document.activeElement)) sheetFocus?.focus();
   if (!wasOpen) overlayOpened(sheetBack);
   return SHEET.seq;
 }
@@ -288,6 +284,7 @@ export function closeSheet(viaBack = false) {
   SHEET.gen = null;
   sheetEl().querySelectorAll('video').forEach((v) => v.pause());
   sheetEl().classList.add('hidden'); $('#sheetBackdrop').classList.add('hidden');
+  sheetFocus?.close(); sheetFocus = null;
   if (viaBack !== true) overlayClosed(sheetBack);  // (used as a click handler too, so viaBack may be an event)
 }
 export const sheetStillOpen = (seq) => seq === SHEET.seq && sheetOpen();
@@ -662,3 +659,12 @@ export function layerRowsEl(rows, { onReorder = null } = {}) {
 // The panel's top row: the main action and, when there's something to clear, Clear all
 export const panelTop = (main, clear = null) => h('div', { class: 'row panel-top' }, main,
   clear ? button('Clear all', clear, { cls: 'ghost' }) : null);
+
+export function mpInput(get, set) {
+  const input = h('input', { type: 'number', inputMode: 'decimal', min: 0, max: 16, step: 0.05, value: get() });
+  input.addEventListener('change', () => {
+    const n = clamp(parseFloat(input.value) || 0, 0, 16);
+    input.value = n; set(n);
+  });
+  return h('label', { class: 'mp' }, h('span', {}, 'Max MP'), input, info('0 = keep size'));
+}

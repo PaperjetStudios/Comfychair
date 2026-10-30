@@ -5,7 +5,7 @@
 // There is no list of the app's files to keep up to date: every page, module, style and icon the app
 // loads is kept as it loads (modules come as name.js?v=<ui_version>, app/main.py module_js), and a
 // module of an older version is dropped when the new one arrives, so the cache holds one version.
-const CACHE = 'comfydeck-shell-v13';
+const CACHE = 'comfydeck-shell-v14';
 const SHELL = ['/', 'index.html', 'app.css', 'manifest.webmanifest', 'icon.svg', 'icon-192.png'];
 
 self.addEventListener('install', (e) => {
@@ -13,7 +13,7 @@ self.addEventListener('install', (e) => {
 });
 
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k.startsWith('comfydeck-shell-') && k !== CACHE).map((k) => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 
@@ -22,7 +22,11 @@ const isApp = (url) => url.origin === location.origin && !url.pathname.startsWit
 async function keep(req, res) {
   const c = await caches.open(CACHE), v = new URL(req.url).searchParams.get('v');
   if (v) {   // a new version of the modules: forget the old ones
-    for (const k of await c.keys()) { const o = new URL(k.url).searchParams.get('v'); if (o && o !== v) await c.delete(k); }
+    const path = new URL(req.url).pathname;
+    for (const k of await c.keys()) {
+      const old = new URL(k.url);
+      if (old.pathname === path && old.searchParams.get('v') && old.searchParams.get('v') !== v) await c.delete(k);
+    }
   }
   await c.put(req, res);
 }

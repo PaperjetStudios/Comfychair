@@ -4,7 +4,7 @@ import {
 } from './ui.js';
 import { fmtTime } from './playback.js';
 import { bareSource, extractSound, genLabel, soundInput, soundToSoundTab } from './media.js';
-import { S, switchTab } from './core.js';
+import { S, switchTab, onServer } from './core.js';
 import { openGeneration } from './run.js';
 import { openUseAs } from './useas.js';
 import { E, FULL, editorTabsReady, persistEditor, renderEditor } from './editor.js';
@@ -668,3 +668,11 @@ document.addEventListener('keydown', (e) => {
 });
 
 export function pauseBoard() { document.querySelectorAll('#board video').forEach((v) => { boardVideos.unobserve(v); v.pause(); }); }
+
+onServer('generation_updated', ({ data: g }) => {
+  if ($('#tab-board').classList.contains('active') && (g.status === 'done' || 'pinned' in g)) boardChanged(g);
+});
+onServer('deck_generation_deleted', ({ data }) => {
+  document.querySelectorAll(`#board .tile[data-gen="${data.id}"]`).forEach((t) => { B.sel.delete(t.dataset.key); t.remove(); });
+  if (GAL.el) galleryRefresh();
+});

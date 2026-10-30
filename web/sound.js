@@ -38,9 +38,9 @@ function newItem({ kind, src, url, label, dur = 0 }, track) {
   return { id: uid(), track, kind, src, url, label, dur, at: 0, in: 0, out: dur || null, volume: 1, pan: 0, fadeIn: 0, fadeOut: 0 };
 }
 
-let tabs = null, tabsReady = null;
+let tabs = null;
 let stp = null;   // the transport bar (playback.js)
-const ensureTabs = () => tabsReady || (tabsReady = tabs ? tabs.start() : Promise.resolve());
+const ensureTabs = () => tabs.ready();
 const persist = () => tabs?.changed();
 
 const TL = timeline(N, { el: '#sndTimeline', headW: HEAD_W, minLen: MIN_LEN, zoom: [2, 600], ppsKey: 'deck.sound.pps',
@@ -274,7 +274,7 @@ function renderTimeline() {
 function addTrack() { const id = `a${uid()}`; N.tracks.push({ id }); return id; }
 function changed() { persist(); renderTimeline(); renderPanel(); syncMedia(); }
 
-export function renderSound() { renderTimeline(); renderPanel(); syncMedia(); ensureTabs(); }
+export function renderSound() { renderTimeline(); renderPanel(); syncMedia(); ensureTabs().catch(() => {}); }
 
 // ---- gestures ----
 // The stage, as the timeline: a clip under the pointer and what a drag there does (null: empty space).

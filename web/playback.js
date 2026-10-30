@@ -123,7 +123,8 @@ export function transport(p, { step, loop = null, rates = null, rate = null, scr
 export function playKeys(active, tpOf, more = () => ({})) {
   document.addEventListener('keydown', (e) => {
     const tp = tpOf();
-    if (!tp || !active() || e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey) return;
+    if (e.defaultPrevented || !tp || !active() || document.querySelector('.tab.active[aria-busy=true]') ||
+      e.target.closest('input, textarea, select, button, [role=tab], [role=dialog]') || e.ctrlKey || e.metaKey) return;
     const range = tp.area?.keyFn(e);   // the work area: I / O, Alt+X
     if (range) { e.preventDefault(); range(); return; }
     const fn = {

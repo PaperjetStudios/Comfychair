@@ -40,8 +40,8 @@ setBoneDrag({ move: onBoneDrag, end: onBoneDragEnd });   // ...and dragged: the 
 registerRef();        // a reference picture or clip over the view (Edit scene and Camera)
 
 // ---- tabs: each 3D scene is a document in the project folder ----
-let ready = false, tabs = null, tabsReady = null;
-const ensureTabs = () => tabsReady || (tabsReady = tabs ? tabs.start() : Promise.resolve());
+let ready = false, tabs = null;
+const ensureTabs = () => tabs.ready();
 
 // What this device kept before scenes became tabs (localStorage): moved into the first tab once (the key stays)
 function legacyScene() {
@@ -86,7 +86,7 @@ export function init(helpers) {
 export function show() {
   boot();
   showAll();
-  ensureTabs().then(() => syncLength());
+  ensureTabs().then(() => syncLength()).catch(() => {});
 }
 
 export function hide() { if (ready) { stopPlay(); tabs?.flush(); } }
@@ -116,4 +116,3 @@ export async function open(scene, from = null, name = null) {
     tabs.open(await tabs.create1({ name, payload: upgrade(clone(scene)), order: tabs.active.order + 0.5 }));
   } catch (e) { toast(e.message, true); }
 }
-

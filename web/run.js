@@ -1,53 +1,21 @@
+import { fetchHistory as loadHistory } from './generation-data.js';
+import { RUN, runTime, fmtDur } from './run-state.js';
+export { RUN, runTime, fmtDur } from './run-state.js';
+import { notifyPrepare, notifyDone, keepAwake } from './notifications.js';
+export { notifyPrepare } from './notifications.js';
 import {
   $, h, store, api, toast, SHEET, sheetOpen, openSheet, closeSheet, button, linkBtn, actions, hint, placeholder, note,
   mediaCard, seg, setIcon, field,
 } from './ui.js';
-import { S, fmtT, isMine, loadProjects, switchTab, emitServer } from './core.js';
+import { S, fmtT, isMine, loadProjects, switchTab, emitServer, onServer } from './core.js';
 import { genLabel, mediaEl, openImagePicker, outputCard, uploadImage } from './media.js';
 import { factsOf, isMedia, kindDef, kindTile } from './kinds.js';
-import { addToPrompt, builderState, keepAwake, loadTemplates, renderFields, saveBuilder, selectTemplate, setVal, stop } from './generate.js';
-import { B, GAL, boardChanged, galleryRefresh } from './board.js';
+import { addToPrompt, builderState, loadTemplates, renderFields, saveBuilder, selectTemplate, setVal, stop } from './generate.js';
 import { queueRun } from './make.js';
 
 // ---------------------------------------------------------------------------
 // "it's done": a chime, ✓ in the tab title, and a system notification where allowed (HTTPS)
 // ---------------------------------------------------------------------------
-let audioCtx = null;
-export function notifyPrepare() {
-  try { audioCtx ||= new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch { /* no audio */ }
-  if (window.Notification && isSecureContext && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
-}
-function chime(ok = true) {
-  if (!audioCtx || store.get('deck.chime', true) === false) return;
-  const t = audioCtx.currentTime;
-  (ok ? [660, 880] : [440, 330]).forEach((f, i) => {
-    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-    o.frequency.value = f; o.type = 'sine';
-    g.gain.setValueAtTime(0.0001, t + i * 0.16);
-    g.gain.exponentialRampToValueAtTime(0.25, t + i * 0.16 + 0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.16 + 0.3);
-    o.connect(g).connect(audioCtx.destination);
-    o.start(t + i * 0.16); o.stop(t + i * 0.16 + 0.32);
-  });
-}
-const BASE_TITLE = document.title;
-function notifyDone(g) {
-  const ok = g.status === 'done';
-  const took = runTime(g);
-  if (took == null || took > 15 || document.hidden) chime(ok);  // quick image runs stay quiet while you watch
-  try { navigator.vibrate?.(ok ? 60 : [80, 60, 80]); } catch { /* not supported */ }
-  if (document.hidden) {
-    document.title = `${ok ? '✓ Done' : '✕ Failed'} · ${BASE_TITLE}`;
-    if (window.Notification && Notification.permission === 'granted') {
-      const title = ok ? `#${g.id} is done` : `#${g.id} failed`;
-      const opts = { body: ok ? `${g.template}${took ? ` · ${fmtDur(took)}` : ''}` : (g.error || ''), tag: 'comfydeck', icon: 'icon-192.png' };
-      // Android only shows notifications through the service worker
-      (navigator.serviceWorker?.controller ? navigator.serviceWorker.ready.then((r) => r.showNotification(title, opts))
-        : Promise.resolve().then(() => new Notification(title, opts))).catch(() => { /* not allowed here */ });
-    }
-  }
-}
-
 // ---------------------------------------------------------------------------
 // live preview (canvas) + output viewer
 // ---------------------------------------------------------------------------
@@ -172,7 +140,7 @@ export function runChip(value, max, text) {
 // ---------------------------------------------------------------------------
 // run stages: "Loading models → Encoding prompt → Sampling 13/20 → Decoding → Saving" with timings
 // ---------------------------------------------------------------------------
-export const RUN = { pid: null, stages: [], current: null, title: '', step: null, t0: 0, stageT0: 0, done: new Set(), timer: 0 };
+
 
 // elapsed / stages: picking up a run that was already going (after a reload or a dropped connection)
 function runStart(pid, { elapsed = 0, stages = [] } = {}) {
@@ -446,8 +414,7 @@ function onMessage(m) {
     case 'deck_generation': onGeneration(d); emitServer({ type: 'deck_generation', data: d }); break;   // (the VFX tab follows its runs)
     case 'deck_generation_deleted':
       S.history.delete(d.id); removeCard(d.id);
-      document.querySelectorAll(`#board .tile[data-gen="${d.id}"]`).forEach((t) => { B.sel.delete(t.dataset.key); t.remove(); });
-      if (GAL.el) galleryRefresh();
+      emitServer({ type: 'deck_generation_deleted', data: d });
       break;
     case 'progress_state': case 'executed': case 'execution_success': case 'deck_projects': case 'deck_project_job': break;
     default: logDebug(`${m.type} ${JSON.stringify(d).slice(0, 300)}`);
@@ -472,23 +439,15 @@ export function onGeneration(g) {
     notifyDone(g);
   }
   if ($('#tab-history').classList.contains('active')) updateCard(g);
-  if ($('#tab-board').classList.contains('active') && (g.status === 'done' || 'pinned' in g)) boardChanged(g);
+  emitServer({ type: 'generation_updated', data: g });
   if (SHEET.gen === g.id && sheetOpen()) openGeneration(g.id);
 }
 
 // ---------------------------------------------------------------------------
 // history
 // ---------------------------------------------------------------------------
-export async function loadHistory(more = false) {
-  const items = [...S.history.values()].filter((g) => g.project_id === S.project);
-  const before = more && items.length ? Math.min(...items.map((g) => g.id)) : null;
-  try {
-    const rows = await api(`/api/generations?limit=60${S.project != null ? `&project_id=${S.project}` : ''}${before ? `&before=${before}` : ''}`);
-    for (const g of rows) S.history.set(g.id, g);
-    S.historyDone = rows.length < 60;
-  } catch (e) { toast(e.message, true); }
-  renderHistory();
-}
+export { fetchHistory as loadHistory } from './generation-data.js';
+onServer('history_loaded', renderHistory);
 
 function renderHistory() {
   const items = [...S.history.values()].filter((g) => g.project_id === S.project).sort((a, b) => b.id - a.id);
@@ -661,13 +620,6 @@ async function runAgain(g) {
 // ---------------------------------------------------------------------------
 // queue: what's running and waiting, how long things take, ETA from recent runs of the same template
 // ---------------------------------------------------------------------------
-export const runTime = (g) => (g.finished ? g.finished - (g.started || g.created) : null);
-export function fmtDur(sec) {
-  if (sec == null || !isFinite(sec)) return '–';
-  sec = Math.max(0, Math.round(sec));
-  return sec < 60 ? `${sec}s` : sec < 3600 ? `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, '0')}s`
-    : `${Math.floor(sec / 3600)}h ${String(Math.floor(sec / 60) % 60).padStart(2, '0')}m`;
-}
 
 let jobsTimer = null;
 export async function openJobs() {
@@ -759,3 +711,6 @@ export async function openH3Upscale(g, idx) {
   };
   draw();
 }
+
+onServer('adopt_generation', ({ data }) => onGeneration(data));
+onServer('sync_requested', () => syncWithServer());

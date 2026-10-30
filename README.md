@@ -613,6 +613,11 @@ While a run is going, the strip under the progress bar shows its stages (loading
 images, encoding prompt, sampling, decoding, saving) with step counts and times. Drag the bar between
 the preview and the settings to resize them (double-tap resets).
 
+Settings panels with several groups have a **Section** picker at the top: choose a group by name,
+or use the icon strip beside it. The picker follows the group in view as you scroll. On touch screens,
+sidebar buttons and fields use larger targets; desktop keeps its compact spacing. In **VFX**, the
+**Effect** picker groups the available effects and leaves room for the source and settings below it.
+
 **Queue** (top bar): running and waiting jobs with elapsed time and an ETA from recent runs of the
 same template, Stop/Cancel, and recent run times. History shows how long each run took; **Replay &
 edit** loads a run's settings (prompt and builder parts, fixed seed, images, LoRAs) into Generate,
@@ -950,7 +955,8 @@ Editor, an input, the timeline or VFX. The apps are found on `PATH`; set `DECK_P
 ## Layout
 
 ```
-app/main.py        API routes, websocket fan-out, saving outputs, reconcile loop
+app/main.py        application wiring, generation API, websocket fan-out, saving outputs, reconcile loop
+app/routes/        video, effects, audio, scene, library and app-shell HTTP routers
 app/comfy.py       ComfyUI HTTP + websocket client
 app/civitai.py     Civitai LoRA search + downloads, the API key (data/secrets.json)
 app/templates.py   @-tag parsing, field typing from /object_info, LoRA chain splicing
@@ -961,6 +967,12 @@ app/voice.py       the voice tools' jobs and saved voices; voice/worker.py runs 
 web/               the tablet UI (vanilla JS, no build step)
 web/ui.js          shared UI kit: h(), api(), toasts, sheets, overlays and the widgets every panel uses
                    (button, iconBtn, seg, field, section, numSlider, rangeField, propNum, mediaCard, cycleBar…)
+web/navigation.js  screen state and visits; web/history.js owns browser history and overlay Back behavior
+web/modal.js       dialog focus, nested focus scopes and background isolation
+web/run-state.js   generation progress and timing; web/generation-data.js queries saved generations
+web/notifications.js  device notifications, chime and screen wake lock
+web/clip-effects.js   clip-effect operations shared by the Video and VFX tabs
+web/crop-geometry.js  crop geometry shared by image and video inputs
 web/app.js         Generate, Editor, Video, Board, History; web/scene.js the 3D tab (loaded on demand)
 web/paint.js       the Editor's painting (brushes, shapes, fill, selections, undo); web/icons.js line icons
 web/sound.js       the Sound tab; web/compare.js the Board's compare view
@@ -995,6 +1007,26 @@ COMFY_URL=http://127.0.0.1:8199 DECK_DATA=/tmp/deckdev ./run.sh
 
 The mock can run beside the real ComfyChair: use another port and data folder (e.g.
 `--port 8191`, `DECK_DATA=/tmp/deckdev`) and nothing touches the live one.
+
+### Regression checks
+
+```bash
+DECK_DATA=$(mktemp -d) DECK_COMFY_DIR="" .venv/bin/python -m pytest -q tests
+node --test tests/*.test.mjs
+```
+
+Optional browser checks use Playwright as a development tool; the app still has no JavaScript build step:
+
+```bash
+npm install --no-save --package-lock=false playwright@1.64.1
+npx playwright install chromium
+node dev/check_browser.mjs
+```
+
+The browser script starts its own mock ComfyUI and app on temporary local ports, with a fresh data folder.
+It checks delayed and failed document loads, project switches, keyboard tabs, nested dialogs, focus restoration,
+Back navigation and reduced motion. It never connects to the live app. `DECK_PYTHON` and `DECK_CHROME` can
+select another Python or Chromium executable; `DECK_PLAYWRIGHT` can name an existing Playwright module URL.
 
 ### Debugging the websocket
 

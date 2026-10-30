@@ -60,8 +60,8 @@ const VIEWS = [['canvas', 'canvas', 'Canvas'], ['board', 'board', 'Board'], ['ou
 const U = { sel: null, doc: null, char: null, speaking: null, view: store.get('deck.story.view', 'canvas') };
 if (!VIEWS.some(([v]) => v === U.view)) U.view = 'canvas';
 
-let tabs = null, tabsReady = null;
-const ensureTabs = () => tabsReady || (tabsReady = tabs ? tabs.start() : Promise.resolve());
+let tabs = null;
+const ensureTabs = () => tabs.ready();
 const persist = () => tabs?.changed();
 const shown = () => $('#tab-story')?.classList.contains('active');
 
@@ -1287,7 +1287,7 @@ export function renderPanel() {
   else fillPanel();
 }
 
-export function renderStory() { renderStage(); renderPanel(); ensureTabs(); }
+export function renderStory() { renderStage(); renderPanel(); ensureTabs().catch(() => {}); }
 
 // ---- tabs: each story is a document in the project folder ----
 function migrate(p) {
