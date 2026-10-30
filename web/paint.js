@@ -2,7 +2,7 @@ import { h, store, toast, clamp, seg, field, section, help, rangeField, button, 
 import { icon } from './icons.js';
 import { ASPECT_PRESETS } from './core.js';
 import { snapNearest } from './gizmo.js';
-import { apply, bounds, canvasToImage, imageToCanvas, invert, layerMatrix } from './layer-geom.js';
+import { apply, bounds, canvasToImage, imageToCanvas, invert, layerMatrix, mul } from './layer-geom.js';
 
 // ---------------------------------------------------------------------------
 // Painting in the Editor: brushes with pen pressure and tilt, an eraser, blank canvas layers, undo.
@@ -553,8 +553,11 @@ export function createPaint(ctx) {
   // tool is picked, Place or Deselect (undo puts them back). ----
   const newCanvas = (w, hh) => { const c = document.createElement('canvas'); c.width = w; c.height = hh; return c; };
   const ID = [1, 0, 0, 1, 0, 0];
-  function alphaBox(cv) {   // the box round the pixels that are at all selected, or null
-    const w = cv.width, hh = cv.height, d = cv.getContext('2d').getImageData(0, 0, w, hh).data;
+  // the box round the pixels that are at all selected, or null; only box r (cv px) is read when given
+  function alphaBox(cv, r) {
+    const a = intBox(r || { x: 0, y: 0, w: cv.width, h: cv.height }, cv);
+    if (a.w < 1 || a.h < 1) return null;
+    const w = a.w, hh = a.h, d = cv.getContext('2d').getImageData(a.x, a.y, w, hh).data;
     let x0 = w, y0 = hh, x1 = -1, y1 = -1;
     for (let y = 0; y < hh; y++) {
       const row = y * w * 4;
@@ -566,40 +569,56 @@ export function createPaint(ctx) {
         y1 = y;
       }
     }
-    return x1 < 0 ? null : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+    return x1 < 0 ? null : { x: a.x + x0, y: a.y + y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
   }
-  // the area selections live in: the canvas and every layer, with a margin
+  const pad = (b, n) => ({ x: b.x - n, y: b.y - n, w: b.w + 2 * n, h: b.h + 2 * n });
+  const grid = (b) => { const x = Math.floor(b.x), y = Math.floor(b.y); return { x, y, w: Math.ceil(b.x + b.w) - x, h: Math.ceil(b.y + b.h) - y }; };
+  const boxThrough = (M, b) => {   // the box round b's corners through M
+    const ps = [[b.x, b.y], [b.x + b.w, b.y], [b.x, b.y + b.h], [b.x + b.w, b.y + b.h]].map(([x, y]) => apply(M, { x, y }));
+    const x = Math.min(...ps.map((p) => p.x)), y = Math.min(...ps.map((p) => p.y));
+    return { x, y, w: Math.max(...ps.map((p) => p.x)) - x, h: Math.max(...ps.map((p) => p.y)) - y };
+  };
+  // a selection's canvas stays under ~16M px (iOS Safari's canvas limit is 16.7M): a box too big shrinks round keep's centre
+  const SEL_AREA = 16e6, SEL_SIDE = 8192;
+  function capBox(r, keep = r) {
+    let w = Math.min(r.w, SEL_SIDE), hh = Math.min(r.h, SEL_SIDE);
+    const k = Math.min(1, Math.sqrt(SEL_AREA / (w * hh)));
+    w = Math.max(32, Math.floor(w * k)); hh = Math.max(32, Math.floor(hh * k));
+    const cx = keep.x + keep.w / 2, cy = keep.y + keep.h / 2;
+    return { x: Math.round(clamp(cx - w / 2, r.x, Math.max(r.x, r.x + r.w - w))), y: Math.round(clamp(cy - hh / 2, r.y, Math.max(r.y, r.y + r.h - hh))), w, h: hh };
+  }
+  // the area selections live in: the canvas and every layer, with a margin (capped round the canvas)
   function workspace() {
     const rs = E().layers.filter((l) => l.img?.naturalWidth && l.x != null && !l.mask).map(bounds), f = X.frame();
     if (f) rs.push(f);
     if (!rs.length) rs.push({ x: 0, y: 0, w: 1024, h: 1024 });
-    const x = Math.floor(Math.min(...rs.map((r) => r.x))) - 16, y = Math.floor(Math.min(...rs.map((r) => r.y))) - 16;
-    return { x, y, w: clamp(Math.ceil(Math.max(...rs.map((r) => r.x + r.w))) + 16 - x, 32, 8192), h: clamp(Math.ceil(Math.max(...rs.map((r) => r.y + r.h))) + 16 - y, 32, 8192) };
+    const u = grid(pad(rs.reduce(union), 16));
+    return capBox({ ...u, w: Math.max(32, u.w), h: Math.max(32, u.h) }, f || u);
   }
-  // a selection just changed: its box is looked up again (and it goes when nothing is left)
-  function settleSel(s) {
+  // a selection just changed: its box is looked up again (and it goes when nothing is left); in: canvas px it can't be outside of
+  function settleSel(s, within) {
     s.rev++; s.cache.clear(); s.outline = null;
-    const b = alphaBox(s.m);
+    const b = alphaBox(s.m, within && pad({ ...within, x: within.x - s.ox, y: within.y - s.oy }, 2));
     if (!b) { P.sel = null; return; }
     s.cb = { x: b.x + s.ox, y: b.y + s.oy, w: b.w, h: b.h };
     P.sel = s;
   }
-  // combine a shape (draw(ctx, ox, oy) fills it white on the selection's canvas) with the selection by op
-  function applyShape(draw, op) {
-    let s = P.sel;
-    if (!s || op === 'new') {
-      commitFloat();
+  // combine a shape (draw(ctx, ox, oy) fills it white on the selection's canvas; box: canvas px round it) with the selection by op
+  function applyShape(draw, op, box) {
+    commitFloat();
+    let s = op === 'new' ? null : P.sel;
+    if (!s) {
       const b = workspace();
       s = { m: newCanvas(b.w, b.h), ox: b.x, oy: b.y, rev: 0, cb: null, cache: new Map(), float: null, outline: null };
       op = 'add';
-    } else commitFloat();
+    } else if (op === 'add' && box && !(box.x >= s.ox && box.y >= s.oy && box.x + box.w <= s.ox + s.m.width && box.y + box.h <= s.oy + s.m.height)) transform(s, ID, box);   // (room for it)
     const shape = newCanvas(s.m.width, s.m.height), sc = shape.getContext('2d');
     sc.fillStyle = '#fff'; sc.save(); draw(sc, s.ox, s.oy); sc.restore();
     const c = s.m.getContext('2d');
     c.globalCompositeOperation = op === 'sub' ? 'destination-out' : op === 'int' ? 'destination-in' : 'source-over';
     c.drawImage(shape, 0, 0);
     c.globalCompositeOperation = 'source-over';
-    settleSel(s);
+    settleSel(s, !box ? null : op === 'add' ? (s.cb ? union(s.cb, box) : box) : s.cb);
   }
   const polyShape = (poly) => (c, ox, oy) => { c.beginPath(); poly.forEach((p, i) => (i ? c.lineTo(p.x - ox, p.y - oy) : c.moveTo(p.x - ox, p.y - oy))); c.closePath(); c.fill(); };
   // a layer's pixels (not its see-through parts) as a selection
@@ -612,7 +631,7 @@ export function createPaint(ctx) {
       tc.drawImage(l.live || l.img, c.x * W, c.y * H, c.w * W, c.h * H, c.x * W, c.y * H, c.w * W, c.h * H);
       tc.setTransform(1, 0, 0, 1, 0, 0); tc.globalCompositeOperation = 'source-in'; tc.fillStyle = '#fff'; tc.fillRect(0, 0, tmp.width, tmp.height);
       sc.drawImage(tmp, 0, 0);
-    }, op);
+    }, op, bounds(l));
     X.render();
   }
   const invertCanvas = (m) => { const n = newCanvas(m.width, m.height), c = n.getContext('2d'); c.fillStyle = '#fff'; c.fillRect(0, 0, n.width, n.height); c.globalCompositeOperation = 'destination-out'; c.drawImage(m, 0, 0); return n; };
@@ -622,11 +641,14 @@ export function createPaint(ctx) {
     c.drawImage(m, 0, 0);
     return n;
   }
-  // the selection's canvas moved / scaled by T (canvas px -> canvas px)
-  function transformed(s, T) {
-    const n = newCanvas(s.m.width, s.m.height), c = n.getContext('2d');
-    c.translate(-s.ox, -s.oy); c.transform(...T); c.drawImage(s.m, s.ox, s.oy);
-    return n;
+  // the selection's canvas moved / scaled by T (canvas px -> canvas px) onto a new one that holds where it went (and the
+  // box extra, canvas px); gives its box after T
+  function transform(s, T, extra) {
+    const tb = boxThrough(T, s.cb), r = capBox(grid(union(union(workspace(), pad(tb, 16)), extra ? pad(extra, 16) : tb)), tb);
+    const n = newCanvas(r.w, r.h), c = n.getContext('2d');
+    c.translate(-r.x, -r.y); c.transform(...T); c.drawImage(s.m, s.ox, s.oy);
+    Object.assign(s, { m: n, ox: r.x, oy: r.y });
+    return tb;
   }
   // the selection as seen from layer l's own pixels: { mask (the layer's size, white inside), bb (layer px box; w 0: none) }
   function layerSel(l) {
@@ -636,8 +658,9 @@ export function createPaint(ctx) {
     const hit = s.cache.get(l);
     if (hit?.key === key) return hit;
     const cv = layerCanvas(l), mask = newCanvas(cv.width, cv.height), c = mask.getContext('2d');
-    c.setTransform(...invert(layerMatrix(l))); c.drawImage(s.m, s.ox, s.oy);
-    const b = alphaBox(mask), out = { key, mask, bb: b ? intBox(b, cv) : { x: 0, y: 0, w: 0, h: 0 } };
+    const Mi = invert(layerMatrix(l));
+    c.setTransform(...Mi); c.drawImage(s.m, s.ox, s.oy);
+    const b = alphaBox(mask, pad(boxThrough(Mi, s.cb), 2)), out = { key, mask, bb: b ? intBox(b, cv) : { x: 0, y: 0, w: 0, h: 0 } };
     s.cache.set(l, out);
     return out;
   }
@@ -663,7 +686,7 @@ export function createPaint(ctx) {
     holed.globalCompositeOperation = 'source-over';
     holed.clearRect(0, 0, cv.width, cv.height); holed.drawImage(cv, 0, 0);
     holed.globalCompositeOperation = 'destination-out'; holed.drawImage(ls.mask, 0, 0); holed.globalCompositeOperation = 'source-over';
-    s.float = { l, cv: f, mask: ls.mask, src: { ...bb }, x: bb.x, y: bb.y, w: bb.w, h: bb.h, T: ID };
+    s.float = { l, cv: f, mask: ls.mask, src: { ...bb }, A: ID, T: ID };
     showFloat(s);
     return true;
   }
@@ -672,16 +695,15 @@ export function createPaint(ctx) {
     live.globalCompositeOperation = 'source-over'; live.globalAlpha = 1;
     live.clearRect(0, 0, cv.width, cv.height);
     live.drawImage(SCR.holed.cv, 0, 0);
-    live.drawImage(f.cv, f.x, f.y, f.w, f.h);
+    live.save(); live.setTransform(...f.A); live.drawImage(f.cv, f.src.x, f.src.y); live.restore();
     f.l.live = live.canvas;
     X.redraw();
   }
-  // the lifted pixels' box after T: the corners of where they were, through the layer and T and back
-  function floatRect(f, T) {
-    const M = layerMatrix(f.l), Mi = invert(M), b = f.src;
-    const ps = [[b.x, b.y], [b.x + b.w, b.y], [b.x, b.y + b.h], [b.x + b.w, b.y + b.h]].map(([x, y]) => apply(Mi, apply(T, apply(M, { x, y }))));
-    const x = Math.min(...ps.map((p) => p.x)), y = Math.min(...ps.map((p) => p.y));
-    return { x, y, w: Math.max(2, Math.max(...ps.map((p) => p.x)) - x), h: Math.max(2, Math.max(...ps.map((p) => p.y)) - y) };
+  // T (canvas px) as the lifted pixels see it, in their layer's own pixels (on a turned layer a scale can shear);
+  // a move alone stays on whole pixels
+  function floatMatrix(f, T) {
+    const M = layerMatrix(f.l), A = mul(invert(M), mul(T, M));
+    return Math.abs(A[0] - 1) + Math.abs(A[1]) + Math.abs(A[2]) + Math.abs(A[3] - 1) < 1e-6 ? [1, 0, 0, 1, Math.round(A[4]), Math.round(A[5])] : A;
   }
   function commitFloat() {
     const s = P.sel;
@@ -691,11 +713,10 @@ export function createPaint(ctx) {
     if (E().layers.includes(l)) {
       change(l, { x: 0, y: 0, w: l.img.width, h: l.img.height }, (c) => {
         c.globalCompositeOperation = 'destination-out'; c.drawImage(f.mask, 0, 0);
-        c.globalCompositeOperation = 'source-over'; c.drawImage(f.cv, Math.round(f.x), Math.round(f.y), f.w, f.h);
+        c.globalCompositeOperation = 'source-over'; c.setTransform(...f.A); c.drawImage(f.cv, f.src.x, f.src.y);
       });
     }
-    s.m = transformed(s, f.T);   // the selection stays on the pixels, where they are now
-    settleSel(s);
+    settleSel(s, transform(s, f.T));   // the selection stays on the pixels, where they are now
     X.redraw();
   }
   function cancelFloat() {
@@ -707,7 +728,7 @@ export function createPaint(ctx) {
   function dropSel() {
     if (!P.sel) return;
     commitFloat();
-    if (P.sel) P.last = P.sel.m, P.lastAt = { ox: P.sel.ox, oy: P.sel.oy };   // (Reselect)
+    if (P.sel) P.last = P.sel.m, P.lastAt = { ox: P.sel.ox, oy: P.sel.oy, cb: P.sel.cb };   // (Reselect)
     P.sel = null;
     X.redraw();
   }
@@ -715,7 +736,7 @@ export function createPaint(ctx) {
     if (!P.last) return;
     const s = { m: P.last, ox: P.lastAt.ox, oy: P.lastAt.oy, rev: 0, cb: null, cache: new Map(), float: null, outline: null };
     P.last = null;
-    settleSel(s);
+    settleSel(s, P.lastAt.cb);
     X.render();
   }
   const selHit = (s, p) => {
@@ -783,7 +804,7 @@ export function createPaint(ctx) {
         const [dx, dy] = snapBox(S.c0, p.x - S.p0.x, p.y - S.p0.y);
         S.T = [1, 0, 0, 1, dx, dy];
       }
-      if (S.pixels && s.float) { const r = floatRect(s.float, S.T); Object.assign(s.float, r, { T: S.T }); showFloat(s); } else X.redraw();
+      if (S.pixels && s.float) { Object.assign(s.float, { A: floatMatrix(s.float, S.T), T: S.T }); showFloat(s); } else X.redraw();
       return;
     }
     if (P.tool !== 'lasso') P.guides = [];
@@ -799,7 +820,7 @@ export function createPaint(ctx) {
     S = null;
     if (d.mv) {
       const s = P.sel;
-      if (!d.pixels && s) { s.m = transformed(s, d.T); settleSel(s); }
+      if (!d.pixels && s) settleSel(s, transform(s, d.T));
       syncStrip(); X.render();
       return;
     }
@@ -812,7 +833,7 @@ export function createPaint(ctx) {
     }
     const r = polyBox(poly), v = X.view();
     if (poly.length < 3 || r.w * v.s < 4 || r.h * v.s < 4) { if (d.op === 'new') dropSel(); }   // a tap: nothing selected (a tap deselects, as in Photoshop)
-    else applyShape(polyShape(poly), d.op);
+    else applyShape(polyShape(poly), d.op, r);
     X.render();
   }
   function polyBox(poly) {
@@ -824,7 +845,7 @@ export function createPaint(ctx) {
   function selAction(kind, arg) {
     if (kind === 'all') {
       const f = X.frame() || (target() && bounds(target()));
-      if (f) applyShape((c, ox, oy) => c.fillRect(f.x - ox, f.y - oy, f.w, f.h), 'new');
+      if (f) applyShape((c, ox, oy) => c.fillRect(f.x - ox, f.y - oy, f.w, f.h), 'new', f);
       return X.render();
     }
     if (kind === 'reselect') return reselect();
@@ -861,13 +882,13 @@ export function createPaint(ctx) {
       rc.drawImage(s.m, 0, 0); rc.globalCompositeOperation = 'source-in'; rc.fillStyle = MASK_RED; rc.fillRect(0, 0, red.width, red.height);
       change(m, { x: 0, y: 0, w: m.img.width, h: m.img.height }, (c) => {
         c.globalCompositeOperation = kind === 'tomask' ? 'source-over' : 'destination-out';
-        c.drawImage(red, s.ox - m.x, s.oy - m.y);
+        c.setTransform(...invert(layerMatrix(m))); c.drawImage(red, s.ox, s.oy);   // (through the mask layer's own place and scale)
       });
       if (kind === 'tomask') toast('Added to the inpaint mask (Inpaint panel)');
     } else if (kind === 'invert') {
       s.m = invertCanvas(s.m); settleSel(s);
     } else if (kind === 'grow' || kind === 'shrink' || kind === 'feather') {
-      const r = Math.max(1, arg || P.selAmt);
+      const r = Math.max(1, arg || P.selAmt), cb = s.cb;
       if (kind === 'grow') s.m = dilate(s.m, r);
       else if (kind === 'shrink') s.m = invertCanvas(dilate(invertCanvas(s.m), r));
       else {
@@ -876,7 +897,7 @@ export function createPaint(ctx) {
         c.filter = `blur(${r / 2}px)`; c.drawImage(s.m, 0, 0);
         s.m = n;
       }
-      settleSel(s);
+      settleSel(s, kind === 'shrink' ? cb : pad(cb, kind === 'grow' ? r : 2 * r));
     }
     X.render();
   }
@@ -899,7 +920,7 @@ export function createPaint(ctx) {
     const v = X.view();
     if (!v) return;
     const s = P.sel, drawing = S?.select && S.poly ? S : null;
-    if (!s && !drawing) return;
+    if (!s && !drawing) { selBar?.classList.add('hidden'); return; }
     ctx.save();
     ctx.translate(v.ox, v.oy); ctx.scale(v.s, v.s);
     const T = S?.mv ? S.T : s?.float ? s.float.T : ID;
@@ -976,7 +997,7 @@ export function createPaint(ctx) {
   function fireLong(e) {
     LP = null;
     const l = X.hit?.(X.toCanvas(e));
-    if (!l) return;
+    if (!l || S?.mv) return;   // (a pen resting before it moves or scales the selection)
     X.cancelDrag(); cancelStroke(); S = null;
     E().sel = l;
     swallow = e.pointerId;
@@ -988,7 +1009,7 @@ export function createPaint(ctx) {
     const cv = X.canvas();
     cv.addEventListener('pointerdown', (e) => {
       stopLP();
-      if (!X.active() || (e.pointerType === 'mouse' && e.button !== 0) || !['move', 'select', 'lasso'].includes(P.tool) || touches.size > 1 || e.ctrlKey) return;
+      if (!X.active() || (e.pointerType === 'mouse' && e.button !== 0) || !['select', 'lasso'].includes(P.tool) || touches.size > 1 || e.ctrlKey) return;
       LP = { id: e.pointerId, x: e.clientX, y: e.clientY, t: setTimeout(() => fireLong(e), 520) };
     }, true);
     cv.addEventListener('pointermove', (e) => { if (LP && LP.id === e.pointerId && Math.hypot(e.clientX - LP.x, e.clientY - LP.y) > 8) stopLP(); }, true);
@@ -1311,6 +1332,6 @@ export function createPaint(ctx) {
   return {
     P, els: buildStrip(), painting, paintProps, paintOverlay, sync: syncStrip, savePaint, unsavedPaint, setTool, setColor,
     blankSheet, addBlank, dropSel, undo, redo, selectionMask, maskLayer, paintMask, hasSel: () => !!P.sel, selAction, selectLayer, resizeCanvasLayer, maskOp, growMask,
-    reset() { cancelStroke(); dropSel(); U.undo = []; U.redo = []; U.bytes = 0; syncStrip(); },   // another document: its undo goes
+    reset() { cancelStroke(); dropSel(); P.last = null; U.undo = []; U.redo = []; U.bytes = 0; syncStrip(); },   // another document: its undo goes
   };
 }

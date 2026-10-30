@@ -1,6 +1,6 @@
 // Mark the views on one picture (a character sheet): a box per view, drawn, moved or resized on the picture.
 // The boxes are fractions of the picture, { Front: {x, y, w, h}, … }; onDone gets them.
-import { button, clamp01, h, hint, openOverlay, seg } from './ui.js';
+import { button, clamp01, field, h, help, openOverlay, seg } from './ui.js';
 import { inputUrl } from './core.js';
 
 export const VIEWS = ['Front', 'Left', 'Back', 'Right'];
@@ -28,18 +28,17 @@ export function openViewBoxes({ image, boxes = {}, onDone }) {
       style: `left:${bs[v].x * 100}%;top:${bs[v].y * 100}%;width:${bs[v].w * 100}%;height:${bs[v].h * 100}%` },
       h('span', { class: 'bx-num' }, v), h('span', { class: 'bx-handle', 'data-v': v }))));
     list.replaceChildren(
-      h('div', { class: 'field' }, h('div', { class: 'lbl' }, h('span', {}, 'Drag on the picture to mark')),
-        seg(VIEWS.map((v) => [v, bs[v] ? `${v} ✓` : v]), cur, (v) => { cur = v; draw(); }, { wrap: true })),
-      hint(`Marking: ${cur}. Drag on empty space to draw its box (a new drag replaces it); drag a box to move it, its corner to resize. Left is the character's left.`),
+      field(`Marking: ${cur}`, seg(VIEWS.map((v) => [v, bs[v] ? `${v} ✓` : v]), cur, (v) => { cur = v; draw(); }, { wrap: true }),
+        help('Drag on empty space on the picture to draw the picked view\'s box (a new drag replaces it); drag a box to move it, its corner to resize. Left is the character\'s left.')),
       ...VIEWS.filter((v) => bs[v]).map((v) => h('div', { class: 'row' }, h('b', { class: 'grow' }, v),
         button('Clear', () => { delete bs[v]; draw(); }, { cls: 'small ghost' }))),
-      h('div', { class: 'row wrap' }, hint('Or start from equal columns:'),
+      field('Equal columns', help('Starts over: every box is replaced by full-height columns, left to right.'), h('div', { class: 'row wrap' },
         ...[[2, ['Front', 'Back']], [3, ['Front', 'Left', 'Back']], [4, ['Front', 'Left', 'Back', 'Right']]].map(([n, names]) =>
           button(`${n} columns`, () => {
             for (const v of VIEWS) delete bs[v];
             names.forEach((v, i) => { bs[v] = { x: i / n, y: 0, w: 1 / n, h: 1 }; });
             draw();
-          }, { cls: 'small' }))));
+          }, { cls: 'small' })))));
   };
 
   let drag = null;

@@ -266,10 +266,20 @@ export function createEditor(cfg) {
   }
 
   // The inpaint mask layers as a greyscale picture the frame's size (white = change), or null when nothing is painted.
-  // box: the painted part as fractions of the frame; cover: the share of the frame it covers
+  // box: the painted part as fractions of the frame; cover: the share of the frame it covers.
+  // Kept until the frame or a mask layer (its pixels, place, size) changes: the Inpaint panel asks on every render
+  let maskMemo = { key: null, out: null };
+  const ids = new WeakMap();
+  let lastId = 0;
+  const idOf = (o) => { if (!ids.has(o)) ids.set(o, ++lastId); return ids.get(o); };
   function composeMask() {
     const f = editorFrame(), ms = E.layers.filter((l) => l.mask && ready(l) && !l.hidden);
     if (!f || !ms.length) return null;
+    const key = [f.x, f.y, f.w, f.h, ...ms.map((l) => [idOf(l), idOf(l.img), l.paintRev || 0, l.x, l.y, l.scale, l.rotation || 0, l.flipX ? 1 : 0, l.flipY ? 1 : 0, l.crop.x, l.crop.y, l.crop.w, l.crop.h].join(','))].join('|');
+    if (maskMemo.key !== key) maskMemo = { key, out: maskOf(f, ms) };
+    return maskMemo.out;
+  }
+  function maskOf(f, ms) {
     const a = document.createElement('canvas');
     a.width = f.w; a.height = f.h;
     const c = a.getContext('2d');

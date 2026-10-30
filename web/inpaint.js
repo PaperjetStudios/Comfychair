@@ -167,12 +167,13 @@ export function inpaintSection(eng) {
       button('Invert', () => eng.paint.maskOp('invert'), { disabled: !mask }),
       button('Clear', () => eng.paint.maskOp('clear'), { disabled: !mask }),
       button('Extend…', () => extendSheet(eng), { title: 'Grow the canvas and mark the new part' })),
-    hint(cover ? `Mask covers ${Math.max(1, Math.round(cover.cover * 100))}% of the picture` : 'Nothing marked yet. Paint the mask, or use the Select tools (M, A) and Add selection.'),
+    hint(cover ? `Mask covers ${Math.max(1, Math.round(cover.cover * 100))}% of the picture` : 'Nothing marked yet'),
     ts.length ? field('Prompt', textArea(() => ST.prompt, (v) => { ST.prompt = v; save(); }, { rows: 2, placeholder: 'What should be there: "a red leather jacket", not "make it red"' })) : null,
     ts.length > 1 ? field('Model', seg(ts.map((x) => [x.id, x.name || x.id]), t.id, (v) => { ST.tpl = v; save(); }, { wrap: true })) : null,
     ts.length ? rangeField('Denoise', () => ST.denoise, (v) => { ST.denoise = v; save(); }, { min: 0.3, max: 1, step: 0.05, fmt: (v) => v.toFixed(2),
       help: '1.0 redraws the area from scratch (use it to extend or remove things). 0.6 to 0.8 keeps shapes and colours.' }) : null,
-    mask ? rangeField('Mask visibility', () => mask.opacity, (v) => { mask.opacity = v; eng.render(); }, { min: 0.1, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%`, onChange: () => eng.changed(),
+    mask ? rangeField('Mask visibility', () => mask.opacity, (v) => { mask.opacity = v; }, { min: 0.1, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%`,
+      onInput: () => eng.draw(), onChange: () => { eng.changed(); eng.render(); },   // (the canvas alone while dragging: a render rebuilds this slider)
       help: 'Only how strongly the red shows while you edit. The area sent to redraw is always the full mask, whatever the brush opacity or this.' }) : null,
     stepsField(t) ? rangeField('Steps', () => ST.steps || stepsField(t).value, (v) => { ST.steps = Math.round(v); save(); }, { min: 2, max: 40, step: 1, fmt: (v) => String(Math.round(v)),
       help: 'Sampling steps. Turbo models are made for about 8; more can add detail, or change nothing.' }) : null,
@@ -187,5 +188,5 @@ export function inpaintSection(eng) {
       button(FLIGHT.size ? 'Fill again' : 'Fill', () => fill(eng), { cls: 'small primary', disabled: !ts.length || !cover }),
       FLIGHT.size ? hint(`${FLIGHT.size} on its way…`) : null),
     ts.length ? null : hint('No inpaint template is installed (deck-krea2-inpaint).'),
-    help('Paint the area to redraw (red), describe what should be there, and Fill: the rest of the picture comes back untouched and the result is a draft on top. Fill as often as you like: drafts are not sent. Keep the one you want as a layer. Extend grows the canvas and marks the new part for you.'));
+    help('Paint the area to redraw (red), or mark it with the Select tools (M, A) and Add selection; describe what should be there, and Fill: the rest of the picture comes back untouched and the result is a draft on top. Fill as often as you like: drafts are not sent. Keep the one you want as a layer. Extend grows the canvas and marks the new part for you.'));
 }

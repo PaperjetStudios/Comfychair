@@ -343,6 +343,19 @@ export const linkBtn = (text, href, attrs = {}) => h('a', { class: 'btn small', 
 // A row of buttons, as at the bottom of a sheet
 export const actions = (...kids) => h('div', { class: 'actions' }, kids);
 
+// the image file buttons that take a paste: one listener, and only the newest one on screen gets it
+let PASTES = [], pasteOn = false;
+function onPaste(e) {
+  PASTES = PASTES.filter((p) => p.ref.deref()?.isConnected);   // (as before: off the page at a paste, it's done)
+  if (/^(INPUT|TEXTAREA)$/.test(e.target?.tagName) || e.target?.isContentEditable) return;
+  for (let i = PASTES.length - 1; i >= 0; i--) {
+    const wrap = PASTES[i].ref.deref(), give = PASTES[i].give;
+    if (wrap.closest('.hidden') || (sheetOpen() && !sheetEl().contains(wrap))) continue;
+    if (give([...(e.clipboardData?.files || [])])) e.preventDefault();
+    return;
+  }
+}
+
 // A button that opens the file chooser (or the camera, with capture) and hands over the files picked.
 // Image buttons also take a paste (Ctrl+V anywhere while the button is on screen, or the Paste button, which
 // needs HTTPS to read the clipboard): paste: false turns that off.
@@ -353,12 +366,9 @@ export function fileButton(text, onFiles, { accept, multiple = false, capture = 
   if (!paste) return wrap;
   const named = (b, i) => b.name ? b : new File([b], `pasted-${Date.now()}${i ? `-${i}` : ''}.${(b.type.split('/')[1] || 'png').replace('jpeg', 'jpg')}`, { type: b.type });
   const give = (blobs) => { const fs = blobs.filter((b) => b.type.startsWith('image/')).map(named); if (!fs.length) return false; onFiles(multiple ? fs : fs.slice(0, 1)); return true; };
-  const onPaste = (e) => {
-    if (!wrap.isConnected) return removeEventListener('paste', onPaste);
-    if (wrap.closest('.hidden') || (sheetOpen() && !sheetEl().contains(wrap)) || /^(INPUT|TEXTAREA)$/.test(e.target?.tagName) || e.target?.isContentEditable) return;
-    if (give([...(e.clipboardData?.files || [])])) e.preventDefault();
-  };
-  addEventListener('paste', onPaste);
+  PASTES = PASTES.filter((p) => p.ref.deref());
+  PASTES.push({ ref: new WeakRef(wrap), give });
+  if (!pasteOn) { pasteOn = true; addEventListener('paste', onPaste); }
   if (navigator.clipboard?.read) wrap.append(button('Paste', async () => {
     try {
       const blobs = [];
