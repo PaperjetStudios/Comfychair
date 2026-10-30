@@ -31,7 +31,15 @@ class DeckSaveRig:
             path = os.path.join(folder_paths.get_output_directory(), path)
         if not path or not os.path.isfile(path):
             raise FileNotFoundError(f"Deck Save Rig: no file at {path or '(nothing)'}")
-        ext = os.path.splitext(path)[1].lower() or ".fbx"
+        # only a model the auto-rig nodes wrote (ComfyUI's output or temp folder): /view would serve any other file
+        real = os.path.realpath(path)
+        roots = [os.path.realpath(folder_paths.get_output_directory()), os.path.realpath(folder_paths.get_temp_directory())]
+        if not any(os.path.commonpath([real, r]) == r for r in roots):
+            raise ValueError("Deck Save Rig: the rig must be in ComfyUI's output or temp folder")
+        ext = os.path.splitext(real)[1].lower()
+        if ext not in (".fbx", ".glb", ".gltf"):
+            raise ValueError(f"Deck Save Rig: {ext or 'no extension'} isn't a rigged model (FBX, GLB or glTF)")
+        path = real
         out_dir = folder_paths.get_output_directory()
         folder, name, counter, sub, _ = folder_paths.get_save_image_path(filename_prefix, out_dir)
         os.makedirs(folder, exist_ok=True)
