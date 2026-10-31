@@ -136,6 +136,76 @@ async def video_render(body: dict = Body(...)):
     return db.get_generation(gid)
 
 
+@router.post("/api/video/stabilise")
+async def video_stabilise(body: dict = Body(...)):
+    """A stabilised copy of a clip (its motion from Track motion: body.track) as a new video in History, with the
+    source's sound for the same span."""
+    from .. import stabilise
+    if not imageprep.ffmpeg_available():
+        raise HTTPException(400, "ffmpeg isn't installed (sudo apt install ffmpeg)")
+    try:
+        stabilise._libs()
+    except stabilise.MissingDeps as e:
+        raise HTTPException(400, str(e))
+    track = body.get("track") or {}
+    if not isinstance(track, dict) or len(track.get("frames") or []) < 2 or len(track.get("size") or []) < 2:
+        raise HTTPException(400, "Track the clip's motion first")
+    try:
+        sigma = float(body.get("sigma", 2) if body.get("sigma") is not None else 2)
+        start = max(0.0, float(body.get("start") or 0))
+        end = float(body["end"]) if body.get("end") is not None else None
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Smoothing, start and end must be numbers")
+    if not 0 <= sigma <= 30:
+        raise HTTPException(400, "Smoothing must be between 0 and 30 frames")
+    mode = body.get("mode") or "smooth"
+    if mode not in ("smooth", "lock"):
+        raise HTTPException(400, "Mode must be smooth or lock")
+    zoom = body.get("zoom", "auto")
+    if zoom is None:
+        zoom = "auto"
+    if zoom not in ("auto", "none"):
+        try:
+            zoom = float(zoom)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Zoom must be auto, none or a number")
+        if not 0.5 <= zoom <= 3:
+            raise HTTPException(400, "Zoom must be between 0.5 and 3")
+    roll = body.get("roll", True) is not False
+    src = body.get("src") or {}
+    with tempfile.TemporaryDirectory() as td:
+        path, kind = await services.timeline_path(src, Path(td))
+        if kind != "video":
+            raise HTTPException(400, "Pick a video to stabilise")
+        if end is None:
+            end = start + len(track["frames"]) / float(track.get("fps") or 24)
+        params = {"mode": mode, "sigma": sigma, "zoom": zoom, "span": f"{start:.2f}–{end:.2f}"}
+        if not roll:
+            params["roll"] = False
+        if body.get("label"):
+            params["label"] = str(body["label"])[:120]
+        parent = None
+        if src.get("generation") is not None:
+            params["clip"] = {"generation": src["generation"], "index": src.get("index", 0), "start": start, "end": end}
+            parent = {"generation": src["generation"], "index": src.get("index", 0), "frame": None}
+        gid = db.create_generation(body.get("project_id"), "stabilise", params, {}, f"stabilise-{uuid.uuid4().hex}", parent)
+        db.update_generation(gid, status="running")
+        await services.push_gen(gid)
+        out, rel = services.new_output(db.get_generation(gid), "stable.mp4")
+        try:
+            info = await asyncio.to_thread(stabilise.render, path, out, track, start, end, sigma, mode, roll, zoom)
+        except Exception as e:
+            out.unlink(missing_ok=True)
+            db.update_generation(gid, status="error", error=str(e), finished=time.time())
+            await services.push_gen(gid)
+            raise HTTPException(400, str(e))
+    db.update_generation(gid, status="done", finished=time.time(),
+                         outputs=[{"filename": out.name, "path": rel, "kind": "video", "node": "stabilise",
+                                   "duration": round(info["duration"], 2), "width": info["width"], "height": info["height"]}])
+    await services.push_gen(gid)
+    return db.get_generation(gid)
+
+
 async def crop_png(data: bytes, crop: dict | None, mp: float = 0, multiple: int = 1):
     """A picture cut to crop ({x, y, w, h} fractions) and sized (imageprep.prep): (png, width, height). /api/crop and
     /api/inputs/crop both cut pictures with it."""

@@ -9,6 +9,8 @@ at the picture's centre. Works on a ~640 px wide copy; numpy and OpenCV load onl
 
 method "tapnext" follows a grid of points with TAPNext++ instead (a ComfyUI node, comfy_nodes/deck_tapnext,
 run through ComfyUI's queue so it waits for the GPU), then fits the same transforms to those tracks.
+
+POST /api/track/solve runs app/solve.py instead: the camera in 3D from the same tracks plus MoGe or Depth Anything 3.
 """
 import asyncio
 import json
@@ -88,10 +90,11 @@ def _frames(path, info, start, n, tw, th):
         p.stdout.close()
 
 
-def analyse(path, start=0.0, end=None, region=None, exclude=None, progress=None, cancel=None, atlas_path=None):
+def analyse(path, start=0.0, end=None, region=None, exclude=None, progress=None, cancel=None, atlas_path=None, full=False):
     """Track a clip. Returns {v, fps, size, start, n, frames: [{tx, ty, rot, scale}], tracks, lost, atlas}.
     tx, ty: where the first frame's centre has moved to, in the clip's own pixels (right and down are
-    positive); rot: degrees clockwise; scale: >1 is zoomed in. All measured from the first frame."""
+    positive); rot: degrees clockwise; scale: >1 is zoomed in. All measured from the first frame.
+    full=True adds "_full" (every point's whole track, for the camera solve: _full_tracks); never sent as JSON."""
     cv2, np = _libs()
     info = videoedit.probe(Path(path))
     if not info["video"] or not info["width"]:
@@ -192,11 +195,25 @@ def analyse(path, start=0.0, end=None, region=None, exclude=None, progress=None,
             f[key] = round(f[key], 4)
     res = {"v": 1, "fps": round(fps, 4), "size": [W, H], "start": round(start, 3), "n": count, "frames": out,
            "tracks": tracks, "lost": lost, "region": region, "exclude": exclude}
+    if full:
+        T = np.zeros((len(paths), count, 2), np.float32)
+        V = np.zeros((len(paths), count), bool)
+        for q, p in enumerate(paths.values()):
+            f0, run = p[0], p[1:]
+            T[q, f0:f0 + len(run)] = run
+            V[q, f0:f0 + len(run)] = True
+        res["_full"] = _full_tracks(T, V, tw, th)
     if atlas_path:
         res["atlas"] = _atlas(cv2, np, thumbs, count, step, tw / th, atlas_path)
     if progress:
         progress(1.0)
     return res
+
+
+def _full_tracks(T, V, tw, th):
+    """Every followed point's whole track: T (Q, N, 2) positions in analysis pixels (tw x th, the clip scaled
+    to TRACK_W), V (Q, N) where it was seen. In memory only (app/solve.py): the route never sends it."""
+    return {"T": T, "V": V, "tw": tw, "th": th}
 
 
 def _fit(cv2, np, P, V, k, tw, th):
@@ -234,8 +251,8 @@ def _queries(np, tw, th, region, exclude):
 
 
 async def analyse_tapnext(path, start=0.0, end=None, region=None, exclude=None, progress=None, cancel=None, atlas_path=None,
-                          checkpoint="tapnextpp_ckpt.pt"):
-    """analyse() with TAPNext++ tracks from ComfyUI. Same result shape (plus "method")."""
+                          checkpoint="tapnextpp_ckpt.pt", full=False):
+    """analyse() with TAPNext++ tracks from ComfyUI. Same result shape (plus "method", and "_full" with full=True)."""
     cv2, np = _libs()
     info = videoedit.probe(Path(path))
     if not info["video"] or not info["width"]:
@@ -294,7 +311,7 @@ async def analyse_tapnext(path, start=0.0, end=None, region=None, exclude=None, 
             raise ValueError("TAPNext++ gave no tracks")
         data, _ = await comfy.view(f["filename"], f.get("subfolder", ""), f.get("type", "output"))
         res = json.loads(data)
-        storage.remove([p] if (p := storage.comfy_path(f)) else [])   # (ComfyUI keeps nothing: storage.py)
+        storage.drop_comfy_read([f])   # (ComfyUI keeps nothing, not even the run's folder: storage.py)
         await comfy.forget(pid)
     finally:
         clip.unlink(missing_ok=True)
@@ -325,6 +342,8 @@ async def analyse_tapnext(path, start=0.0, end=None, region=None, exclude=None, 
             fr[key] = round(fr[key], 4)
     result = {"v": 1, "fps": round(fps, 4), "size": [W, H], "start": round(start, 3), "n": count, "frames": out,
               "tracks": tracks, "lost": lost, "region": region, "exclude": exclude, "method": "tapnext"}
+    if full:
+        result["_full"] = _full_tracks(T, V, tw, th)
     if atlas_path:
         step = max(1, math.ceil(count / ATLAS_FRAMES))
         thumbs = await asyncio.to_thread(lambda: [np.frombuffer(raw, np.uint8).reshape(th, tw, 3).copy()
@@ -419,6 +438,66 @@ async def start(body: dict = Body(...)):
     return {"job": jid}
 
 
+async def _run_solve(job, kw):
+    from . import solve
+    try:
+        job["result"] = await solve.solve(progress=lambda p: job.update(progress=p), cancel=lambda: job["cancel"], **kw)
+        job["state"] = "done"
+    except InterruptedError:
+        job["state"] = "error"; job["error"] = "Stopped"
+    except Exception as e:  # shown to the user as is
+        job["state"] = "error"; job["error"] = str(e) or e.__class__.__name__
+    job["progress"] = 1.0
+
+
+@router.post("/solve")
+async def start_solve(body: dict = Body(...)):
+    """The camera in 3D (app/solve.py): {src, project_id, start, end, region, exclude, method: pnp | da3,
+    tracker: klt | tapnext, views (da3: 8..64 frames), model (da3's checkpoint)} -> {job}, polled like a track."""
+    try:
+        _libs()
+    except MissingDeps as e:
+        raise HTTPException(400, str(e))
+    if comfy is None:
+        raise HTTPException(400, "ComfyUI isn't connected")
+    method, tracker = body.get("method") or "pnp", body.get("tracker") or "klt"
+    if method not in ("pnp", "da3"):
+        raise HTTPException(400, "method is pnp or da3")
+    if tracker not in ("klt", "tapnext"):
+        raise HTTPException(400, "tracker is klt or tapnext")
+    try:
+        views = int(body.get("views") or 32)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "views is a number of frames")
+    if not 8 <= views <= 64:
+        raise HTTPException(400, "views is 8 to 64 frames")
+    model = body.get("model") or "depth_anything_3_small.safetensors"
+    if not isinstance(model, str) or "/" in model or "\\" in model or ".." in model or not model.endswith((".safetensors", ".pt", ".pth")):
+        raise HTTPException(400, "model is a checkpoint file name")
+    pid = body.get("project_id")
+    if pid is not None and not any(p["id"] == pid for p in db.list_projects()):
+        raise HTTPException(404, "No such project")
+    try:
+        _box(body.get("region")); _box(body.get("exclude"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        path, kind = await resolve_src(body.get("src") or {}, Path(td))
+    if kind != "video":
+        raise HTTPException(400, "Pick a video to solve")
+    kw = {"path": path, "start": body.get("start") or 0, "end": body.get("end"), "region": body.get("region"),
+          "exclude": body.get("exclude"), "method": method, "tracker": tracker, "views": views, "model": model}
+    job = {"state": "running", "progress": 0.0, "cancel": False, "t": time.time()}
+    jid = uuid.uuid4().hex[:12]
+    with _lock:
+        for old in [k for k, j in JOBS.items() if j["state"] != "running" and time.time() - j["t"] > 3600]:
+            del JOBS[old]
+        JOBS[jid] = job
+    job["task"] = asyncio.create_task(_run_solve(job, kw))   # (kept, so the task isn't collected mid-run)
+    return {"job": jid}
+
+
 @router.get("/{jid}")
 async def status(jid: str):
     job = JOBS.get(jid)
@@ -426,7 +505,7 @@ async def status(jid: str):
         raise HTTPException(404, "No such tracking job")
     out = {"state": job["state"], "progress": round(job["progress"], 3), "error": job.get("error")}
     if job["state"] == "done":
-        res = dict(job["result"])
+        res = {k: v for k, v in job["result"].items() if k != "_full"}
         if "atlas" in res:
             res["atlas"] = {**res["atlas"], "url": job["url"]}
         out["result"] = res

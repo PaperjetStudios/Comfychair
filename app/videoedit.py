@@ -67,7 +67,7 @@ def timeline_items(items: list[dict], min_len: float, still_len: float = 3.0) ->
 
 
 def probe(path: Path) -> dict:
-    """{"width", "height" (as shown: a rotation tag is applied), "rotation", "duration", "fps", "video", "audio", "alpha"}
+    """{"width", "height" (as shown: a rotation tag is applied), "rotation", "duration", "fps", "video", "audio", "alpha", "vcodec", "acodec"}
     for a video, image or audio file.
     "alpha" is a VP9/VP8 webm carrying an alpha channel (what key() writes)."""
     r = subprocess.run(
@@ -95,6 +95,8 @@ def probe(path: Path) -> dict:
         "width": w, "height": h, "rotation": rot,
         "duration": float(info["format"].get("duration") or (v or {}).get("duration") or 0),
         "fps": fps, "video": bool(v),
+        "vcodec": (v or {}).get("codec_name") or "",
+        "acodec": next((s.get("codec_name") or "" for s in info["streams"] if s["codec_type"] == "audio"), ""),
         "audio": any(s["codec_type"] == "audio" for s in info["streams"]),
         "alpha": bool(v) and v.get("codec_name") in ("vp9", "vp8")
                  and str((v.get("tags") or {}).get("alpha_mode") or (v.get("tags") or {}).get("ALPHA_MODE")) == "1",

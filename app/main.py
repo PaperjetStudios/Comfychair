@@ -24,7 +24,8 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import accel, audioedit, civitai, clipimport, craft, delogo, h3upscale, posefind, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
-from . import projects, storage, store
+from . import projects, storage, store, network
+from . import playable
 from . import keyexpr, looks, maskcomp, promptaid, sceneasset
 from . import templates as tpl
 from .comfy import Comfy, ComfyError
@@ -461,6 +462,7 @@ app.include_router(projects.router)
 app.include_router(store.router)
 app.include_router(sceneasset.router)
 app.include_router(tracking.router)
+app.include_router(network.router)
 app.include_router(clipimport.router)
 app.include_router(civitai.router)
 app.include_router(voice.router)
@@ -981,8 +983,12 @@ MEDIA_KINDS = {ext: k for k in ("video", "audio", "image") for ext in imageprep.
 
 
 def _media_entry(p: Path) -> dict:
-    return {"name": p.name, "url": f"/files/media/{quote(p.name)}", "kind": MEDIA_KINDS[p.suffix.lower()],
-            "label": p.name.split("_", 1)[-1], "created": p.stat().st_mtime}
+    e = {"name": p.name, "url": f"/files/media/{quote(p.name)}", "kind": MEDIA_KINDS[p.suffix.lower()],
+         "label": p.name.split("_", 1)[-1], "created": p.stat().st_mtime}
+    play = playable.path_for(p.name)
+    if play.is_file():   # a clip the browser can't play: the player gets the copy, the original stays for ffmpeg
+        e["source"], e["url"] = e["url"], f"/files/playable/{quote(play.name)}"
+    return e
 
 
 @app.get("/api/media")
@@ -1001,7 +1007,20 @@ async def upload_media(file: UploadFile = File(...)):
     path = config.MEDIA_DIR / f"{uuid.uuid4().hex[:8]}_{safe}{ext}"
     with path.open("wb") as f:
         shutil.copyfileobj(file.file, f)
+    if MEDIA_KINDS[ext] == "video":
+        await asyncio.to_thread(playable.ensure, path)
     return _media_entry(path)
+
+
+@app.delete("/api/media")
+async def delete_media(name: str):
+    """A media-library file and every cache made from it (its browser-playable copy, thumbnails, previews)."""
+    path = config.MEDIA_DIR / Path(name).name
+    if not path.is_file():
+        raise HTTPException(404, "That file is gone")
+    path.unlink()
+    storage.drop_caches(path.name, path.resolve())
+    return {"ok": True}
 
 
 @app.post("/api/media/to-project")

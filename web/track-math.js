@@ -102,12 +102,21 @@ const BD = ['x', 'y', 'z', 'rx', 'ry', 'rz', 'sx', 'sy', 'sz'];
 // placed in the scene (type 'trackpts') that stay put as the camera moves. Everything in the scene is
 // a pure function of the camera, so keys are thinned together and the card and camera stay in step.
 export function sceneFromTrack(track, opts = {}) {
-  const { lens = 35, points = true, dist = 6, atlas = track.atlas, name = 'Footage' } = opts;
-  const [W, H] = track.size, aspect = W / H, fps = track.fps || 24;
+  const { points = true, dist = 6, atlas = track.atlas, name = 'Footage' } = opts;
+  const [W, H] = track.size, fps = track.fps || 24;
   const rows = cameraRows(track, opts);
+  const pts = points && track.tracks?.length ? trackPoints(track, rows, W / H, dist) : [];
+  return sceneOf(rows, { W, H, fps, atlas, name, pts });
+}
+
+// The scene around a list of camera rows (one per clip frame at `fps`): resampled to 24 fps, thinned, the footage
+// card (when there is an atlas: clipFps its frame rate, at the scene frame the atlas's first tile belongs to) and
+// the points. room: the 3D tab's room, hidden unless a floor is known.
+function sceneOf(rows, { W, H, fps, atlas, name = 'Footage', pts = [], clipFps = fps, at = 0, floor = false }) {
+  const aspect = W / H;
   // the scene runs at 24 fps: resample the clip's frames onto it
   const n = Math.max(2, Math.round((rows.length - 1) * SCENE_FPS / fps) + 1);
-  const at = (i) => {
+  const lerpAt = (i) => {
     const p = Math.min(rows.length - 1, i * fps / SCENE_FPS), a = Math.floor(p), b = Math.min(rows.length - 1, a + 1), t = p - a;
     const o = {};
     for (const k of Object.keys(rows[a])) o[k] = rows[a][k] + (rows[b][k] - rows[a][k]) * t;
@@ -115,7 +124,7 @@ export function sceneFromTrack(track, opts = {}) {
   };
   const both = [];
   for (let f = 0; f < n; f++) {
-    const c = at(f), b = backdropAt(c, aspect);
+    const c = lerpAt(f), b = backdropAt(c, aspect);
     both.push({ f, ...c, ...Object.fromEntries(BD.map((k) => ['b' + k, b[k]])) });
   }
   const kept = thin(both, TOL);
@@ -128,15 +137,78 @@ export function sceneFromTrack(track, opts = {}) {
   const first = both[0], zero = { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 1, sy: 1, sz: 1 };
   if (atlas) objects.push({ id: 'bd0track', type: 'backdrop', name, ease: 'linear', hidden: false, mute: false,
     keys: bdKeys, base: { ...zero, ...Object.fromEntries(BD.map((k) => [k, first['b' + k]])) },
-    url: atlas.url, cols: atlas.cols, rows: atlas.rows, count: atlas.count, step: atlas.step, clipFps: fps });
-  if (points && track.tracks?.length) {
-    const pts = trackPoints(track, rows, aspect, dist);
-    if (pts.length) objects.push({ id: 'pt0track', type: 'trackpts', name: 'Tracked points', ease: 'smooth', hidden: false, mute: false, keys: [], base: zero, pts });
-  }
+    url: atlas.url, cols: atlas.cols, rows: atlas.rows, count: atlas.count, step: atlas.step, clipFps, ...(at ? { at } : {}) });
+  if (pts.length) objects.push({ id: 'pt0track', type: 'trackpts', name: 'Tracked points', ease: 'smooth', hidden: false, mute: false, keys: [], base: zero, pts });
   return {
-    v: 1, width, height, seconds, blur: 2, room: { w: 8, d: 8, h: 2.8, walls: false, ceiling: false, hidden: true },
+    v: 1, width, height, seconds, blur: 2, room: { w: 8, d: 8, h: 2.8, walls: false, ceiling: false, hidden: !floor },
     camera: { base: { ...camKeys[0] }, keys: camKeys, ease: 'linear' }, objects,
   };
+}
+
+// ---- a solved camera (app server's solve: cams camera-to-world in OpenCV axes, x right, y down, z forward;
+// world = camera 0's frame) into the 3D tab's y-up world ----
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const col = (c, j) => [c[j], c[4 + j], c[8 + j]];   // column j of a row-major 3x4
+const median = (a) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[s.length >> 1] : 0; };
+
+// The three.js axes written in cv coordinates (B: ex, ey, ez), the cv point that becomes the floor origin under
+// camera 0 (o) and the scale (s). Up is the floor's normal (or camera 0's up), forward is camera 0's view laid flat.
+// pnp is metric: s = scale. da3 has no units: s = scale x whatever puts camera 0 1.5 above the floor (no floor: the
+// points' median distance becomes `dist`). With no floor camera 0 is put 1.5 above the (unseen) floor.
+export function worldFromSolve(solve, { scale = 1, dist = 6 } = {}) {
+  const fl = solve.floor;
+  const U = fl ? norm(fl.n) : [0, -1, 0];
+  const F = norm(sub([0, 0, 1], U.map((u) => u * U[2])));
+  const B = { ex: cross(F, U), ey: U, ez: F.map((v) => -v) };
+  const h = fl ? fl.d / (Math.hypot(...fl.n) || 1) : 0;   // camera 0 (the world origin) is this far above the floor
+  let auto = 1;
+  if (solve.metric === false) {
+    if (fl && h > 1e-6) auto = 1.5 / h;
+    else { const m = median((solve.pts || []).map((p) => Math.hypot(...p))); if (m > 1e-6) auto = dist / m; }
+  }
+  const s = (scale || 1) * auto;
+  const o = fl && h > 0 ? U.map((u) => -u * h) : U.map((u) => -u * 1.5 / s);
+  return { B, o, s };
+}
+
+// a cv world point into the 3D tab: Bᵀ(P − o)·s, moved so the room's origin is 6 m in front of camera 0
+export function toThree(P, { B, o, s }) {
+  const d = sub(P, o);
+  return [dot(B.ex, d) * s, dot(B.ey, d) * s, dot(B.ez, d) * s + CAM0.pz];
+}
+const dirThree = (v, { B }) => [dot(B.ex, v), dot(B.ey, v), dot(B.ez, v)];
+
+// One camera row per solved frame (px py pz tx ty tz fov roll), like cameraRows. roll is what makes `basis`
+// give the solved camera's up; it is unwrapped so keys don't jump between +180 and -180.
+export function solveRows(solve, opts = {}) {
+  const world = opts.world || worldFromSolve(solve, opts);
+  const fy = solve.K[1], H = solve.size[1];
+  const fov = 2 * Math.atan(H / (2 * fy)) * R2D;
+  let last = 0;
+  return solve.cams.map((c) => {
+    const eye = toThree(col(c, 3), world);
+    const fwd = norm(dirThree(col(c, 2), world)), up = dirThree(col(c, 1), world).map((v) => -v);
+    const tg = [eye[0] + fwd[0] * 10, eye[1] + fwd[1] * 10, eye[2] + fwd[2] * 10];
+    const lv = basis(eye, tg, 0);
+    let roll = Math.atan2(dot(up, lv.x), dot(up, lv.y)) * R2D;
+    roll += 360 * Math.round((last - roll) / 360);
+    last = roll;
+    return { px: eye[0], py: eye[1], pz: eye[2], tx: tg[0], ty: tg[1], tz: tg[2], fov, roll };
+  });
+}
+
+// A new 3D scene's data from a solve, the same shape as sceneFromTrack's. track (optional): the motion track of
+// the same clip, for its footage picture (atlas); the card is shifted if the two start at different times.
+export function sceneFromSolve(solve, track = null, opts = {}) {
+  const { points = true, name = 'Footage' } = opts;
+  const atlas = opts.atlas ?? track?.atlas;
+  const world = worldFromSolve(solve, opts);
+  const rows = solveRows(solve, { ...opts, world });
+  const [W, H] = solve.size, fps = solve.fps || 24;
+  const pts = points ? (solve.pts || []).map((p) => toThree(p, world).map((x) => Math.round(x * 1000) / 1000)) : [];
+  const at = atlas && track ? Math.round(((track.start || 0) - (solve.start || 0)) * SCENE_FPS) : 0;
+  return sceneOf(rows, { W, H, fps, atlas, name, pts, clipFps: track?.fps || fps, at, floor: !!solve.floor });
 }
 
 // each shown track's first point, put on the ray it was seen along at its first frame, `dist` from that camera: a point

@@ -103,6 +103,14 @@ its own, so the start order between them doesn't matter.
 Over plain http ComfyChair keeps the screen on during runs with a tiny silent video instead, and
 signals a finished run with a chime and a ✓ in the tab title.
 
+**Settings → Network** lists the addresses ComfyChair answers on (LAN, Tailscale, `<host>.local`), each with a QR
+code to scan from the tablet, the Tailscale state, whether the certificate covers the current address, and a
+button to download the CA certificate for a new tablet. The LAN address changes with the Wi-Fi network; a
+Tailscale address does not.
+
+**Uploaded .mov files** that the browser can't play (HEVC, ProRes, PCM sound) get a playable H.264 copy in
+`tmp/playable/` beside the original; processing always uses the original, and the copy goes with the file.
+
 Free, on your own network, all from the text console: the box makes its own certificate and the tablet
 trusts it once you install one small file on it. One command does it all, and it stays on across reboots
 (the services start on HTTPS and renew the certificate themselves, also when the box's IP changes):
@@ -457,6 +465,21 @@ The Track motion sheet then offers **Tracker: TAPNext++**. ComfyChair cuts the c
 and queues it on ComfyUI, so it waits behind any running generation. A 20×20 grid of points (inside the
 track box, outside the ignore box) is followed through every frame. The camera is fitted to those tracks
 the same way as with Simple tracking.
+
+**Stabilise** (in the Track motion sheet, after a track): Smooth keeps the hand-held feel and removes the shake
+(its own Smoothing, in frames), Lock cancels all the motion like a tripod. Correct roll can be turned off; Auto zoom
+crops just enough to hide the empty borders (capped at 1.3×, so a clip that drifts further still shows some).
+The result lands in History as a `stabilise` item with the clip's sound for that span.
+
+**Solve 3D camera**: the plain track gives a camera that only turns and zooms. Two solves give a camera that
+also moves, so objects placed in the 3D tab hold their place on a dolly or walking shot. **PnP + MoGe** lifts the
+tracked points to metres with MoGe's depth of the first frame and fits every frame's camera to them
+(metric, so a 1.8 m figure is the right size; drifts on long shots since the depth comes from one frame).
+**Depth Anything 3** runs DA3 in multi-view mode on 8–64 sampled frames (`depth_anything_3_small` or `_base`
+in `geometry_estimation/`) and interpolates the cameras between them (consistent, relative scale: the Scale
+slider sets it, by default so the camera starts 1.5 m above the found floor). Both find the floor plane so the
+3D room's floor matches the footage. They need `comfy_nodes/deck_solve` linked into ComfyUI's `custom_nodes`.
+Choose the method under Solve 3D camera, Solve, then Create 3D scene.
 
 **Character sheets** (`deck-h3-charsheet`): give it a picture of a character as Reference 1 and it
 makes a 12 s portrait clip: a 6 s orbit on a grey studio backdrop, then cuts at 6, 7.5, 9 and 10.5 s to

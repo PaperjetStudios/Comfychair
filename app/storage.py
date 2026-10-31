@@ -23,7 +23,8 @@ from . import config, db
 log = logging.getLogger("comfydeck.storage")
 
 PREVIEW_DIR = config.THUMB_DIR / "previews"
-CACHE_DIRS = (config.THUMB_DIR, PREVIEW_DIR, config.VIDEOPREP_DIR)   # (VIDEOPREP_DIR: /api/video/canvas's <tag>-canvas_*.mp4)
+CACHE_DIRS = (config.THUMB_DIR, PREVIEW_DIR, config.VIDEOPREP_DIR, config.PLAYABLE_DIR)   # (PLAYABLE_DIR: playable.py's <tag>-play.mp4; VIDEOPREP_DIR: /api/video/canvas's <tag>-canvas_*.mp4)
+SOLVE_FRAME = re.compile(r"^solve_[0-9a-f]{12}\.png$")   # app/solve.py's first frame for MoGe, in input/comfydeck
 RIG_COPY = re.compile(r"^\d{5}_[\w.\-]+\.(glb|gltf|fbx|obj|ply|stl)$", re.I)   # /api/scene/mesh's copies in input/3d
 FRESH = 600   # a file this new (seconds) may be a run still writing: the sweep leaves it
 
@@ -115,6 +116,12 @@ def drop_comfy_outputs(items: list[dict], saved: list[Path]) -> int:
     is on disk (if one is missing or empty nothing is deleted: ComfyUI's may be the only copy)."""
     if not saved or not all(p.is_file() and p.stat().st_size > 0 for p in saved):
         return 0
+    return drop_comfy_read(items)
+
+
+def drop_comfy_read(items: list[dict]) -> int:
+    """ComfyUI's copies of reported outputs ComfyChair only reads and keeps nowhere (a node's JSON answer, such as
+    app/solve.py's geometry), their family, and the run's own folder once it's empty."""
     # (previews in ComfyUI's temp folder stay: it empties that itself when it starts, and a preview node has no
     # file name to make unique, so a repeated run is answered with the same temp files)
     paths = {q for it in items if it.get("type", "output") == "output" and (p := comfy_path(it)) for q in family(p)}
@@ -123,6 +130,14 @@ def drop_comfy_outputs(items: list[dict], saved: list[Path]) -> int:
         if d.name.startswith("run-") and _inside(d, config.COMFY_OUTPUT_DIR) and d.is_dir() and not any(d.iterdir()):
             d.rmdir()
     return freed
+
+
+def comfy_input(name: str) -> Path | None:
+    """ComfyUI's input file for a name upload_image returned (subfolder/name), if it's inside its input folder."""
+    if not config.COMFY_INPUT_DIR or not name:
+        return None
+    p = config.COMFY_INPUT_DIR / name
+    return p if _inside(p, config.COMFY_INPUT_DIR) else None
 
 
 def rig_input(wf: dict | None) -> Path | None:
@@ -228,6 +243,10 @@ def sweep(do: bool = False) -> dict:
         for p in sorted((config.COMFY_INPUT_DIR / "3d").iterdir()):
             if p.is_file() and RIG_COPY.match(p.name):
                 add(p, "a model copied in for rigging")
+    if config.COMFY_INPUT_DIR and (config.COMFY_INPUT_DIR / config.COMFY_INPUT_SUBFOLDER).is_dir():
+        for p in sorted((config.COMFY_INPUT_DIR / config.COMFY_INPUT_SUBFOLDER).iterdir()):
+            if p.is_file() and SOLVE_FRAME.match(p.name):
+                add(p, "a frame copied in for a camera solve")
     for d in (config.THUMB_DIR, PREVIEW_DIR):
         for p in sorted(d.glob("*")):
             if p.is_file() and not re.match(r"^[0-9a-f]{12}-", p.name):

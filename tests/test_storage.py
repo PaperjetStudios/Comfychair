@@ -80,6 +80,20 @@ class Storage(unittest.TestCase):
         self.assertTrue(other.exists(), "another run's file stays")
         self.assertTrue(preview.exists(), "ComfyUI empties its temp folder itself")
 
+    def test_a_camera_solve_leaves_nothing(self):
+        # app/solve.py: its first frame goes from ComfyUI's input once read, its JSON answer (read, kept nowhere) and
+        # the run's folder from the output; a frame left by a crash is swept
+        answer = touch(self.out / config.COMFY_INPUT_SUBFOLDER / "solve" / "run-s1" / "moge_00001_.json")
+        storage.drop_comfy_read([{"filename": answer.name, "subfolder": f"{config.COMFY_INPUT_SUBFOLDER}/solve/run-s1", "type": "output"}])
+        self.assertFalse(answer.exists() or answer.parent.exists())
+        frame = touch(self.inp / config.COMFY_INPUT_SUBFOLDER / "solve_0123456789ab.png")
+        self.assertEqual(storage.comfy_input(f"{config.COMFY_INPUT_SUBFOLDER}/{frame.name}"), frame)
+        self.assertIsNone(storage.comfy_input("../outside.png"))
+        picture = touch(self.inp / config.COMFY_INPUT_SUBFOLDER / "holiday.png")
+        listed = {Path(i["path"]) for i in storage.sweep()["items"]}
+        self.assertIn(frame, listed)
+        self.assertNotIn(picture, listed, "a picture's copy isn't the solve's")
+
     def test_a_queued_run_saves_into_its_own_folder(self):
         wf = {"1": {"class_type": "SaveImage", "inputs": {"filename_prefix": "comfydeck/P/krea2"}},
               "2": {"class_type": "MIAAutoRig", "inputs": {"fbx_name": ""}},
@@ -135,6 +149,14 @@ class Storage(unittest.TestCase):
         with TestClient(main.app) as c:
             self.assertEqual(c.delete(f"/api/projects/{self.pid}", params={"confirm": name}).status_code, 200)
         self.assertFalse(any(p.exists() for p in files))
+
+    def test_deleting_a_clip_takes_its_playable_copy(self):
+        copy = touch(config.PLAYABLE_DIR / f"{storage.tag('abcd1234_clip.mov')}-play.mp4")
+        other = touch(config.PLAYABLE_DIR / f"{storage.tag('other.mov')}-play.mp4")
+        self.addCleanup(other.unlink, missing_ok=True)
+        storage.drop_caches("abcd1234_clip.mov")
+        self.assertFalse(copy.exists())
+        self.assertTrue(other.exists())
 
     def test_deleting_a_picture(self):
         name = f"{config.COMFY_INPUT_SUBFOLDER}/pic{time.time_ns()}.png"

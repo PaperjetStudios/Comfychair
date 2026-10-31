@@ -1,7 +1,7 @@
 // App-wide settings: one document in the global store (library/prefs/app.json), so every device and
 // project shares them. PREFS holds the values (defaults until loaded); setPref saves; other devices'
 // changes arrive as `store` messages. openPrefs() is the ⚙ sheet; its Projects section is projects.js.
-import { h, api, toast, openSheet, help, toggle, section, field, seg, button } from './ui.js';
+import { h, api, toast, openSheet, help, toggle, section, field, seg, button, hint, note, linkBtn } from './ui.js';
 import { onServer } from './core.js';
 import { projectsSection } from './projects.js';
 
@@ -42,6 +42,7 @@ export function openPrefs() {
     help('These apply on every device and in every project.'),
     TOGGLES.map(([k, label, tip]) => toggle(label, PREFS[k], (on) => setPref(k, on), { help: tip })),
     civitaiSection(),
+    networkSection(),
     projectsSection(openPrefs));
 }
 
@@ -86,4 +87,39 @@ function keyField(status, content, ...kids) {
     b.setAttribute('aria-expanded', String(!tip.classList.toggle('hidden')));
   });
   return field([['API key', b], status], tip, ...kids);
+}
+
+// Network: how to reach ComfyChair from a tablet. The LAN address changes with the Wi-Fi network; the Tailscale one does not.
+function networkSection() {
+  const body = h('div', {}, hint('Loading…'));
+  api('/api/network').then((n) => body.replaceChildren(...networkRows(n))).catch((e) => body.replaceChildren(note(e.message)));
+  return section('Network', null,
+    help('The address a tablet uses changes when this PC joins another Wi-Fi network, so a saved address or home-screen icon can stop working. The Tailscale address stays the same on every network. The .local name often survives a change too.'),
+    body);
+}
+
+function networkRows(n) {
+  const kinds = { lan: 'Wi-Fi / LAN', tailscale: 'Tailscale', mdns: 'Name' };
+  const rows = n.addresses.map((a) => field(kinds[a.kind] + (a.iface && a.kind === 'lan' ? ` (${a.iface})` : ''),
+    h('div', { class: 'row wrap' },
+      h('a', { href: a.url, target: '_blank', rel: 'noopener' }, a.url),
+      button('QR', () => showQr(a.url), { cls: 'small' }))));
+  if (n.tailscale?.state === 'NeedsMachineAuth')
+    rows.push(note('Tailscale is waiting for this machine to be approved in your Tailscale admin console; once approved its address works from any network'));
+  if (n.cert) {
+    rows.push(field('Certificate', hint(n.cert.expires ? `Expires ${new Date(n.cert.expires).toLocaleDateString()}` : 'Expiry unknown')));
+    if (!n.cert.covers) rows.push(note("The certificate doesn't cover the current address. Restarting ComfyChair renews it."));
+  }
+  if (n.ca) rows.push(field('CA certificate', linkBtn('Download CA certificate', '/api/network/ca', { download: 'comfydeck-ca.crt' }),
+    help('Install this once on each tablet so HTTPS works: Android: Settings > Security > Encryption & credentials > Install a certificate > CA certificate. iPad: open the file, then Settings > General > VPN & Device Management, install it, then Settings > General > About > Certificate Trust Settings.')));
+  return rows;
+}
+
+// A QR code for one address, big enough to scan from a phone; Back returns to the settings sheet
+function showQr(url) {
+  openSheet(h('h3', {}, 'Scan to open'),
+    h('div', { class: 'row', style: 'justify-content:center' },
+      h('img', { src: `/api/network/qr.svg?url=${encodeURIComponent(url)}`, alt: `QR code for ${url}`, style: 'width:min(80vw,360px);height:auto;background:#fff;border-radius:8px' })),
+    h('div', { class: 'row', style: 'justify-content:center' }, h('a', { href: url, target: '_blank', rel: 'noopener' }, url)),
+    button('Back', openPrefs, { cls: 'small ghost' }));
 }

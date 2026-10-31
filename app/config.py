@@ -23,6 +23,7 @@ INPUT_DIR = DATA_DIR / "inputs"      # local copies of every image sent to Comfy
 THUMB_DIR = DATA_DIR / "thumbs"      # cached JPEG thumbnails for the input gallery
 MEDIA_DIR = DATA_DIR / "media"       # music, voice-overs and outside clips uploaded for the Video tab
 VIDEOPREP_DIR = DATA_DIR / "tmp" / "videoprep"  # trimmed/cropped copies of video inputs (see videoprep.py)
+PLAYABLE_DIR = DATA_DIR / "tmp" / "playable"  # H.264/AAC copies of uploaded clips the browser cannot play (see playable.py)
 SCENE_CLIP_DIR = DATA_DIR / "tmp" / "sceneclips"  # 3D compositions rendered for a video export (temporary, see main.py)
 
 # Optional access token. When set, every page, file and API call needs it: open
@@ -41,5 +42,5 @@ COMFY_OUTPUT_DIR = COMFY_DIR / "output" if COMFY_DIR and (COMFY_DIR / "output").
 COMFY_INPUT_DIR = COMFY_DIR / "input" if COMFY_DIR and (COMFY_DIR / "input").is_dir() else None
 COMFY_TEMP_DIR = COMFY_DIR / "temp" if COMFY_DIR else None   # (ComfyUI makes it when it starts)
 
-for d in (DATA_DIR, TEMPLATES_DIR, GEN_DIR, PROJECTS_DIR, LIBRARY_DIR, INPUT_DIR, THUMB_DIR, MEDIA_DIR, SCENE_CLIP_DIR, VIDEOPREP_DIR):
+for d in (DATA_DIR, TEMPLATES_DIR, GEN_DIR, PROJECTS_DIR, LIBRARY_DIR, INPUT_DIR, THUMB_DIR, MEDIA_DIR, SCENE_CLIP_DIR, VIDEOPREP_DIR, PLAYABLE_DIR):
     d.mkdir(parents=True, exist_ok=True)

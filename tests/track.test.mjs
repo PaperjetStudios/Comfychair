@@ -96,3 +96,90 @@ assert.ok(Math.abs(ss.objects[0].keys.at(-1).rz) > 5, 'card rolled');
 const bent = Array.from({ length: 21 }, (_, i) => ({ f: i, v: i < 10 ? i : 10 - (i - 10) }));
 assert.deepEqual(T.thin(bent, { v: 0.1 }).map((r) => r.f), [0, 10, 20]);
 console.log('track math ok');
+
+// ---- a solved camera (sceneFromSolve): cv axes (x right, y down, z forward), cams camera-to-world 3x4 ----
+const K = [500, 500, 320, 180];
+const matMul = (A, B) => A.map((r) => [0, 1, 2].map((j) => r[0] * B[0][j] + r[1] * B[1][j] + r[2] * B[2][j]));
+const Rx = (a) => [[1, 0, 0], [0, Math.cos(a), -Math.sin(a)], [0, Math.sin(a), Math.cos(a)]];
+const Ry = (a) => [[Math.cos(a), 0, Math.sin(a)], [0, 1, 0], [-Math.sin(a), 0, Math.cos(a)]];
+const Rz = (a) => [[Math.cos(a), -Math.sin(a), 0], [Math.sin(a), Math.cos(a), 0], [0, 0, 1]];
+const cam34 = (R, t) => [R[0][0], R[0][1], R[0][2], t[0], R[1][0], R[1][1], R[1][2], t[1], R[2][0], R[2][1], R[2][2], t[2]];
+// cv projection of world point X by camera row c: Xc = Rᵀ(X − t)
+function cvProject(c, X) {
+  const d = [X[0] - c[3], X[1] - c[7], X[2] - c[11]];
+  const xc = c[0] * d[0] + c[4] * d[1] + c[8] * d[2], yc = c[1] * d[0] + c[5] * d[1] + c[9] * d[2], zc = c[2] * d[0] + c[6] * d[1] + c[10] * d[2];
+  return [K[0] * xc / zc + K[2], K[1] * yc / zc + K[3]];
+}
+let seed = 7;
+const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+// 30 cameras moving right, yawing right and rolling a little; 50 points in front, 20 of them on the floor (y = 1.5)
+const cams = Array.from({ length: 30 }, (_, i) => cam34(matMul(Ry(0.6 * i * D2R), Rz(0.4 * i * D2R)), [0.04 * i, 0.01 * i, 0.02 * i]));
+const pts = Array.from({ length: 50 }, (_, i) => (i < 20 ? [rnd() * 4 - 2, 1.5, 3 + rnd() * 6] : [rnd() * 4 - 2, rnd() * 2 - 1, 4 + rnd() * 6]));
+const solve = { v: 1, method: 'pnp', fps: 24, n: 30, size: [W, H], start: 0, K, cams, pts, floor: { n: [0, -1, 0], d: 1.5 }, metric: true, quality: { used: 50, err: 0.3, lost: 0 } };
+const srows = T.solveRows(solve);
+// (a) camera 0: 1.5 above the floor, 6 back, looking down -Z, level, the lens's fov
+const c0 = srows[0];
+assert.ok(Math.hypot(c0.px, c0.py - 1.5, c0.pz - 6) < 1e-9, `cam0 ${c0.px} ${c0.py} ${c0.pz}`);
+assert.ok(Math.abs(c0.tx - c0.px) < 1e-9 && Math.abs(c0.ty - c0.py) < 1e-9 && c0.tz < c0.pz);
+assert.ok(Math.abs(c0.roll) < 1e-9);
+assert.ok(Math.abs(c0.fov - 2 * Math.atan(180 / 500) / D2R) < 1e-9);
+// (b) the three camera sees every point where the cv camera does (pins the axis change and roll's sign)
+const world3 = T.worldFromSolve(solve);
+for (const i of [0, 7, 15, 29]) {
+  assert.ok(Math.abs(srows[i].roll - 0.4 * i) < 1e-6 || i === 0, `roll ${i}: ${srows[i].roll}`);
+  for (const X of pts.slice(0, 50).filter((_, j) => j % 5 === 0)) {
+    const want = cvProject(cams[i], X), got = project(srows[i], T.toThree(X, world3));
+    assert.ok(Math.hypot(got[0] - want[0], got[1] - want[1]) < 0.5, `frame ${i}: ${got} vs ${want}`);
+  }
+}
+// (c) camera 0 pitched down 10 deg: the floor (in its frame) tilts with it, floor points still land on y = 0
+{
+  const R0 = Rx(-10 * D2R);   // camera 0 to level: its z axis points down (+y) a little
+  const lvl = (X) => [0, 1, 2].map((r) => R0[0][r] * X[0] + R0[1][r] * X[1] + R0[2][r] * X[2]);   // level point to camera 0: R0ᵀX
+  const n = lvl([0, -1, 0]);
+  const fpts = pts.slice(0, 20).map(lvl);
+  const tilted = { ...solve, cams: [cam34([[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0, 0, 0]), ...cams.slice(1)], pts: fpts, floor: { n, d: 1.5 } };
+  const w = T.worldFromSolve(tilted);
+  for (const X of fpts) assert.ok(Math.abs(T.toThree(X, w)[1]) < 1e-9, `floor point y ${T.toThree(X, w)[1]}`);
+  const r = T.solveRows(tilted)[0];
+  assert.ok(Math.abs(r.py - 1.5) < 1e-9 && Math.abs(r.px) < 1e-9 && Math.abs(r.pz - 6) < 1e-9);
+  assert.ok(Math.abs(Math.atan2(r.ty - r.py, Math.hypot(r.tx - r.px, r.tz - r.pz)) / D2R + 10) < 1e-6, 'looks 10 deg down');
+  assert.ok(Math.abs(r.roll) < 1e-9);
+  for (const X of fpts.slice(0, 5)) {   // and projects back to the same pixels
+    const want = cvProject(tilted.cams[0], X), got = project(r, T.toThree(X, w));
+    assert.ok(Math.hypot(got[0] - want[0], got[1] - want[1]) < 0.5);
+  }
+}
+// (d) da3 has no units: the floor 3.7 below camera 0 still puts it 1.5 up (and Scale multiplies)
+{
+  const k = 3.7 / 1.5, big = { ...solve, method: 'da3', metric: false, floor: { n: [0, -1, 0], d: 3.7 },
+    cams: cams.map((c) => c.map((v, j) => (j % 4 === 3 ? v * k : v))), pts: pts.map((p) => p.map((v) => v * k)) };
+  assert.ok(Math.abs(T.solveRows(big)[0].py - 1.5) < 1e-9);
+  assert.ok(Math.abs(T.solveRows(big, { scale: 2 })[0].py - 3) < 1e-9);
+  const sr2 = T.solveRows(big);   // same pixels as the metric solve
+  for (const i of [5, 29]) assert.ok(Math.hypot(sr2[i].px - srows[i].px, sr2[i].py - srows[i].py, sr2[i].pz - srows[i].pz) < 1e-6);
+  // no floor: the points' median distance becomes `dist`, camera 0 sits at 1.5
+  const nf = { ...big, floor: null };
+  const wn = T.worldFromSolve(nf, { dist: 6 });
+  const med = [...nf.pts.map((p) => Math.hypot(...p))].sort((x, y) => x - y)[25];
+  assert.ok(Math.abs(med * wn.s - 6) < 1e-9 && Math.abs(T.solveRows(nf, { dist: 6 })[0].py - 1.5) < 1e-9);
+}
+// (e) the scene: with a track's atlas a footage card (shifted to the solve's start) and the points; the room's floor shown
+{
+  const track = { size: [W, H], fps: 24, start: 0.5, atlas: { url: '/x.jpg', cols: 8, rows: 4, count: 30, step: 1 } };
+  const s1 = T.sceneFromSolve({ ...solve, start: 1 }, track, {});
+  assert.equal(s1.objects.map((o) => o.type).join(), 'backdrop,trackpts');
+  assert.equal(s1.objects[0].at, -12);
+  assert.equal(s1.objects[1].pts.length, 50);
+  assert.equal(s1.room.hidden, false);
+  assert.equal(s1.camera.keys[0].f, 0);
+  assert.equal(s1.camera.keys.at(-1).f, 29);
+  assert.equal(s1.objects[0].keys.length, s1.camera.keys.length);
+  assert.ok(Math.abs(s1.camera.base.py - 1.5) < 1e-9);
+  const s2 = T.sceneFromSolve({ ...solve, floor: null }, { size: [W, H], fps: 24 }, { points: true });
+  assert.equal(s2.objects.map((o) => o.type).join(), 'trackpts');
+  assert.equal(s2.room.hidden, true);
+  const s3 = T.sceneFromSolve(solve, null, { points: false });
+  assert.equal(s3.objects.length, 0);
+}
+console.log('solve math ok');
