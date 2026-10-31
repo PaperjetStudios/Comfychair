@@ -32,6 +32,13 @@ assert.equal(W.playFrom(4, null, 10, 0.01), 4);
 assert.deepEqual(W.tickT(3, r, 10, true), { t: 3, wrap: false, stop: false });
 assert.deepEqual(W.tickT(5.2, r, 10, true), { t: 2, wrap: true, stop: false });
 assert.deepEqual(W.tickT(5.2, r, 10, false), { t: 5, wrap: false, stop: true });
+// playSeek: the clip leading the clock is not seeked while it plays on, but is after the playhead loops back
+// (else the picture plays on past the out point while the playhead starts again at the in point)
+assert.equal(W.playSeek(5.2, 3.0, { master: true }), false);
+assert.equal(W.playSeek(5.2, 3.0, { master: true, jump: true }), true);
+assert.equal(W.playSeek(3.2, 3.0), false);                 // small drift: left alone
+assert.equal(W.playSeek(3.5, 3.0), true);
+assert.equal(W.playSeek(3.2, 3.0, { jump: true }), true);  // a short loop still lands on its frame
 assert.deepEqual(W.tickT(10.1, null, 10, true), { t: 0, wrap: true, stop: false });
 assert.deepEqual(W.tickT(10.1, null, 10, false), { t: 10, wrap: false, stop: true });
 assert.deepEqual(W.tickT(0.5, r, 10, true), { t: 2, wrap: false, stop: false });   // jumped in before the in point

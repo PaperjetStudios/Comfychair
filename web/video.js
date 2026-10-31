@@ -9,7 +9,7 @@ import { TabSet } from './tabs.js';
 import { clipKeyTimes, clipKeys, clipSoundFields, durationOf, keyJumps, timeline, wavePeaks } from './timeline.js';
 import { fmtTime, playKeys, transport } from './playback.js';
 import { workArea } from './workarea.js';
-import { cutItems, playFrom, tickT } from './workarea-math.js';
+import { cutItems, playFrom, playSeek, tickT } from './workarea-math.js';
 import { refreshKeyed } from './keyed.js';
 import * as COMP from './scene-comp.js';
 import { fullScreen } from './layout.js';
@@ -181,7 +181,7 @@ function pruneEls() {
   COMP.forget(new Set(V.items.map((i) => i.id)));
 }
 
-function syncMedia() {
+function syncMedia(jump = false) {   // jump: the playhead just jumped (loop, seek), so every clip follows
   for (const it of V.items) {
     if (it.kind === 'scene') { if (!V.els.has(it.id)) V.els.set(it.id, { el: COMP.canvasFor(it), url: null, src: null }); continue; }   // (drawn only when it's on show: drawFrame)
     if (it.kind === 'image') { mediaFor(it); continue; }
@@ -198,7 +198,7 @@ function syncMedia() {
     el.volume = clamp(vol * fadeGain(it, V.t, true), 0, 1);
     if (V.playing) {
       if (el.paused) startMedia(el, want);
-      else if (it.id !== V.master && Math.abs(el.currentTime - want) > 0.35) el.currentTime = want;
+      else if (playSeek(el.currentTime, want, { master: it.id === V.master, jump })) el.currentTime = want;
     } else {
       if (!el.paused) el.pause();
       if (Math.abs(el.currentTime - want) > 0.01) el.currentTime = want;
@@ -689,17 +689,18 @@ function vidTick() {
   if (mt != null && Math.abs(mt - (performance.now() - V.clock) / 1000) < 0.5) V.clock = performance.now() - mt * 1000;
   V.t = (performance.now() - V.clock) / 1000;
   const step = tickT(V.t, WA.bound(), seqEnd(), V.loop);   // (inside the work area while it is on)
-  if (step.t !== V.t) {
+  const jump = step.t !== V.t;
+  if (jump) {
     V.t = step.t; V.clock = performance.now() - V.t * 1000;
     if (step.stop) { vidPause(); updatePlayhead(); return; }
   }
-  syncMedia(); drawFrame(); updatePlayhead(true);
+  syncMedia(jump); drawFrame(); updatePlayhead(true);
   requestAnimationFrame(vidTick);
 }
 function vidSeek(t) {
   V.t = WA.clamp(Math.max(0, t));
   if (V.playing) V.clock = performance.now() - V.t * 1000;
-  syncMedia(); requestDraw(); updatePlayhead();
+  syncMedia(V.playing); requestDraw(); updatePlayhead();
 }
 function showPlayState() { vtp?.update(); }
 

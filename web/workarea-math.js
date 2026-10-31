@@ -44,6 +44,12 @@ export function tickT(t, r, len, loop, inclusive = false) {
   return { t, wrap: false, stop: false };
 }
 
+// Whether a playing clip at cur must be seeked to want. The master clip leads the clock, so it is left alone
+// while it plays on; after a jump of the playhead (a loop back to the in point, a seek) every clip goes to its
+// new time, the master too, or it plays on from where it was while the playhead starts again.
+export const playSeek = (cur, want, { master = false, jump = false } = {}) =>
+  Math.abs(cur - want) > (jump ? 0.05 : master ? Infinity : 0.35);
+
 // Snap t onto the nearest point within tol, else onto the step grid (step 0: no grid)
 export function snapT(t, { step = 0, points = [], tol = 0 } = {}) {
   let best = null, d = tol;
