@@ -45,8 +45,11 @@ async function onBinary(buf) {
   // VHS animated previews: [type][1][1][frame index][16-byte node id][jpeg]. Each frame goes in its
   // slot so the clip plays in order; frames refresh in place as sampling goes on.
   const dv = new DataView(buf);
-  if (P.anim && off === 32 && dv.getUint32(4) === 1 && dv.getUint32(8) === 1) {
-    const i = dv.getUint32(12) % Math.max(1, P.anim.length);
+  if (off === 32 && dv.getUint32(4) === 1 && dv.getUint32(8) === 1) {
+    // after a reload the VHS_latentpreview message is gone: the header alone says it's animated, so grow the clip as slots arrive
+    P.anim ||= { length: 1, rate: 8 };
+    P.anim.length = Math.max(P.anim.length, dv.getUint32(12) + 1);
+    const i = dv.getUint32(12) % P.anim.length;
     if (P.frames[i]) P.frames[i].close();
     P.frames[i] = bmp;
   } else {  // a single still preview
@@ -320,6 +323,7 @@ export function syncWithServer() {
           $('#viewerMedia').replaceChildren(); $('#outStrip').replaceChildren();
         }
         keepAwake(true);
+        if (WS.sock?.readyState === 1) WS.sock.send('preview');   // the server's copy of its last previews, now that activePid is ours
       } else if (RUN.pid) runEnd();   // it ended while we weren't listening; the result is fetched below
       showBusy();
       // results we missed: fetch them, and show ours if it's newer than what's in the viewer

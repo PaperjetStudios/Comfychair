@@ -143,10 +143,55 @@ def _workflow_for(pid: str) -> dict:
     return running_wf[pid]
 
 
+# The running job's last live previews, so a page that reloads (or a tablet that wakes) gets them at once instead of
+# waiting for the next step, and knows the animated layout: VideoHelperSuite's one VHS_latentpreview message and a frame per
+# slot ([type][1][1][frame index][16-byte node id][jpeg]), or a single still. Kept for the prompt that is executing only.
+LIVE = {"pid": None, "meta": None, "frames": {}, "still": None}
+
+
+def _live_reset(pid):
+    LIVE.update(pid=pid, meta=None, frames={}, still=None)
+
+
+def _live_frame(payload: bytes):
+    if len(payload) >= 32 and int.from_bytes(payload[4:8], "big") == 1 and int.from_bytes(payload[8:12], "big") == 1:
+        LIVE["frames"][int.from_bytes(payload[12:16], "big")] = payload   # one slot of an animated preview
+        LIVE["still"] = None
+    else:
+        LIVE["still"], LIVE["frames"] = payload, {}
+
+
+async def live_replay(ws: WebSocket):
+    """The cached previews to one client, after it has resynced (its active prompt is set, so it keeps them)."""
+    if not LIVE["pid"]:
+        return
+    try:
+        if LIVE["meta"]:
+            await ws.send_text(json.dumps(LIVE["meta"]))
+        for i in sorted(LIVE["frames"]):
+            await ws.send_bytes(LIVE["frames"][i])
+        if LIVE["still"]:
+            await ws.send_bytes(LIVE["still"])
+    except Exception:  # noqa: BLE001  (the socket closed: its onclose cleans up)
+        pass
+
+
 async def on_comfy(kind, payload):
     if kind == "binary":  # live sampler previews: forward untouched
+        if LIVE["pid"]:
+            _live_frame(payload)
         await broadcast(payload)
         return
+    t, pid = payload.get("type"), (payload.get("data") or {}).get("prompt_id")
+    if t == "execution_start" and pid:
+        _live_reset(pid)
+    elif t == "VHS_latentpreview" and (pid or LIVE["pid"]):
+        if pid and pid != LIVE["pid"]:
+            _live_reset(pid)
+        LIVE["meta"] = payload
+    elif t in ("execution_success", "execution_error", "execution_interrupted") or (t == "executing" and (payload.get("data") or {}).get("node") is None):
+        if pid == LIVE["pid"]:
+            _live_reset(None)
     await broadcast(payload)
     t = payload.get("type")
     data = payload.get("data") or {}
@@ -492,7 +537,9 @@ async def ws_endpoint(ws: WebSocket):
     await ws.send_text(json.dumps({"type": "deck_comfy_status", "data": {"connected": comfy.connected}}))
     try:
         while True:
-            await ws.receive_text()  # we don't expect messages; this just keeps the socket alive
+            msg = await ws.receive_text()  # pings keep the socket alive; "preview" asks for the running job's last previews
+            if msg == "preview":
+                await live_replay(ws)
     except WebSocketDisconnect:
         pass
     finally:
