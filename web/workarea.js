@@ -25,6 +25,7 @@ import * as M from './workarea-math.js';
 //   unit: { show(t) the number typed for time t, read(n) back, step, label } (default seconds)
 //
 //   ruler.append(...W.el()); W.bound() the range the playhead is bound to (or null); W.clamp(t);
+//   o.menuExtra(close) (optional): nodes added to the Range menu while a range is set
 //   W.toggleBtn() for the transport; W.keyFn(e) the key's action or null; W.onlyToggle() / W.exportRange() for exports
 // ---------------------------------------------------------------------------
 
@@ -164,6 +165,7 @@ export function workArea(o) {
         num('End', cur.b, (t) => commit(M.dragEnd(cur, 'b', t, L, minLen())))),
       h('div', { class: 'row wrap' }, act(`In here (${o.alt ? 'Alt+I' : 'I'})`, W.setIn), act(`Out here (${o.alt ? 'Alt+O' : 'O'})`, W.setOut),
         act('Whole timeline', () => commit({ a: 0, b: L, on: true }))),
+      ...(r ? o.menuExtra?.(closePopover) || [] : []),
       r ? button('Clear (Alt+X)', () => { closePopover(); W.clear(); }, { cls: 'small ghost danger' }) : null);
   };
   function syncBtn(b) {

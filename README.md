@@ -480,6 +480,7 @@ in `geometry_estimation/`) and interpolates the cameras between them (consistent
 slider sets it, by default so the camera starts 1.5 m above the found floor). Both find the floor plane so the
 3D room's floor matches the footage. They need `comfy_nodes/deck_solve` linked into ComfyUI's `custom_nodes`.
 Choose the method under Solve 3D camera, Solve, then Create 3D scene.
+To track only part of a clip, set a **Range** on the Video tab's ruler (I / O, or the Range button) and use **Range → Track motion on the range**, or the clip's own **Track motion** button: the sheet opens with Start and End on the part of the clip inside the range.
 
 **Character sheets** (`deck-h3-charsheet`): give it a picture of a character as Reference 1 and it
 makes a 12 s portrait clip: a 6 s orbit on a grey studio backdrop, then cuts at 6, 7.5, 9 and 10.5 s to

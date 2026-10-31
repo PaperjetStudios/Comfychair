@@ -90,7 +90,30 @@ const tc = (t) => fmtTime(t, fpsNow());   // m:ss:ff
 // the work area: a range on the ruler the playhead is bound to (workarea.js), saved with the edit
 const WA = workArea({ get: () => V.range, set: (r) => { V.range = r; persistTimeline(); }, len: () => seqEnd(),
   ...TL.areaGeom, t: () => V.t, seek: (t) => vidSeek(t), step: () => 1 / fpsNow(), minLen: () => 1 / fpsNow(),
-  changed: () => { renderTimeline(); renderVideoPanel(); vtp?.update(); } });
+  changed: () => { renderTimeline(); renderVideoPanel(); vtp?.update(); },
+  menuExtra: (close) => {   // Track motion on what the range covers, without picking a clip first
+    const it = rangeClip();
+    return [it ? button('Track motion on the range', () => { close(); trackClip(it); },
+      { cls: 'small', title: `Follow the picture's movement in the range (${it.label})` }) : null];
+  } });
+
+// Track motion for a clip: its source span, cut to the work area when there is one (the part of the clip inside it)
+function trackClip(it) {
+  const s = it.in || 0, e = it.out ?? it.dur, r = WA.stored();
+  let from = s, to = it.out ?? undefined;
+  if (r) {
+    const a = Math.max(it.at, r.a), b = Math.min(it.at + itLen(it), r.b);
+    if (b - a > 1e-3) { from = +(s + a - it.at).toFixed(4); to = +(s + b - it.at).toFixed(4); }
+  }
+  openTrack({ src: it.src, url: it.url, label: it.label, from, to: to ?? e });
+}
+// the clip a range's Track motion uses: a picked one that touches the range, else the one at the playhead, else the first
+function rangeClip() {
+  const r = WA.stored();
+  if (!r) return null;
+  const hit = V.items.filter((it) => it.kind === 'video' && canTrack(it.src) && it.at < r.b - 1e-9 && it.at + itLen(it) > r.a + 1e-9);
+  return hit.find((it) => it.id === V.sel) || hit.find((it) => it.at <= V.t && V.t < it.at + itLen(it)) || hit[0] || null;
+}
 
 // ---- animated properties (timeline.js clipKeys): a clip's keys are in its own source time, on the sequence's frames ----
 const PROPS = { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, volume: 1 };   // what an unset property is
@@ -979,7 +1002,7 @@ function renderVideoPanel() {
         it.kind === 'video' ? button('Sound → Sound tab', () => soundToSoundTab(it.src, { trim: { start: it.in || 0, len: itLen(it) }, name: `${it.label}-sound` }),
           { title: 'This clip\'s sound (the part on the timeline) on the Sound tab\'s timeline' }) : null,
         it.kind === 'video' && canKey(it) ? button('Colour key…', () => openKey(it), { title: 'Cut out a green screen, or use a matte, so lower tracks show through' }) : null,
-        it.kind === 'video' && canTrack(it.src) ? button('Track motion', () => openTrack({ src: it.src, url: it.url, label: it.label, from: it.in, to: it.out ?? undefined }), { title: 'Follow the picture\'s movement and make a 3D camera from it' }) : null,
+        it.kind === 'video' && canTrack(it.src) ? button('Track motion', () => trackClip(it), { title: 'Follow the picture\'s movement and make a 3D camera from it. With a range set, only the part of this clip inside it' }) : null,
         isVisual(it) ? button('Reset framing', () => { Object.assign(it, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); delete it.rotation; delete it.anchor; for (const ch of ['x', 'y', 'scale', 'rotation', 'opacity']) delete it.chans?.[ch]; timelineChanged(); }) : null,
         button('Delete clip', TL.deleteSelected, { cls: 'small danger', title: 'Delete' })));
   })() : null;
