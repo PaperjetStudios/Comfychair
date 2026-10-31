@@ -8,6 +8,7 @@ import math
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -138,8 +139,13 @@ class Pnp(unittest.TestCase):
         V[:5, 20:23] = True   # five seen: not enough
         got, q = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0)
         self.assertEqual(q["lost"], 3)
-        np.testing.assert_allclose(got[22], got[19])
         self.assertLess(np.linalg.norm(got[30][:, 3] - cams[30][:, 3]), 0.02)   # and picks up again
+        got, q = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0, ba=False)
+        self.assertEqual(q["lost"], 3)
+        np.testing.assert_allclose(got[22], got[19])
+        got, q = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0)   # the bundle adjustment places them from the five
+        for f in (20, 21, 22):                                        # and the motion prior
+            self.assertLess(np.linalg.norm(got[f][:, 3] - cams[f][:, 3]), 0.01, f)
 
     def test_analysis_scale(self):
         X, cams, T, V = scene(noise=0)
@@ -274,6 +280,13 @@ class Anchors(unittest.TestCase):
         np.testing.assert_allclose(got, X2[ids], atol=1e-6)
         ids, _ = solve.da3_lift(T, V, 1.0, 1.0, K, W, H, idx, cams[idx], [flat])   # (an old export: view 0 only)
         self.assertEqual(len(ids), 0)
+        # and the bundle adjustment's depth priors: every track seen on views 1 and 2, at their grid's depth
+        pr = solve.da3_priors(T, V, 1.0, 1.0, W, H, idx, [flat, flat * 2, flat])
+        self.assertEqual([p["f"] for p in pr], [20])   # (view 1, frame 10: nothing seen there)
+        self.assertTrue(V[pr[0]["q"], 20].all())
+        self.assertGreater(len(pr[0]["q"]), 0.9 * V[:, 20].sum())
+        np.testing.assert_allclose(pr[0]["z"], 5.0)
+        self.assertEqual(solve.da3_priors(T, V, 1.0, 1.0, W, H, idx, [flat]), [])
 
     def test_cloud(self):
         P = np.random.default_rng(0).uniform(1, 5, (90, 160, 3))
@@ -387,6 +400,96 @@ class Geom(unittest.TestCase):
         ex = geom.da3_export(depth, w2c, intr, 10, 50, conf=conf)
         kept = np.mean([v is not None for v in ex["depth"]["values"]])
         self.assertTrue(0.7 < kept < 0.9, kept)
+
+
+def ba_scene(n_frames, n_pts, seed=1, noise=0.5):
+    """A camera walking sideways and yawing (0.3° a frame at 60 frames) past n_pts points 3..8 m away, seen
+    with noise px: (X, cams, T, V)."""
+    rng = np.random.default_rng(seed)
+    k = 60 / n_frames
+    cams = np.array([np.concatenate([rot(0, 0.3 * i * k, 0), np.array([[0.01], [0], [0.005]]) * i * k], axis=1)
+                     for i in range(n_frames)])
+    X = in_view(n_pts, rng)
+    T, V = np.zeros((n_pts, n_frames, 2)), np.zeros((n_pts, n_frames), bool)
+    for f, c in enumerate(cams):
+        Xc = (X - c[:, 3]) @ c[:, :3]
+        uu, vv = K[0] * Xc[:, 0] / Xc[:, 2] + K[2], K[1] * Xc[:, 1] / Xc[:, 2] + K[3]
+        T[:, f] = np.stack([uu, vv], 1) + rng.normal(0, noise, (n_pts, 2))
+        V[:, f] = (Xc[:, 2] > 0.1) & (uu >= 0) & (uu < W) & (vv >= 0) & (vv < H)
+    return X, cams, T, V
+
+
+def depth_priors(X, cams, V, frames):
+    """MoGe-like depth (exact) of the points seen on each of frames, as bundle_adjust's anchors."""
+    out = []
+    for f in frames:
+        q = np.where(V[:, f])[0]
+        out.append({"f": f, "q": q, "z": ((X[q] - cams[f][:, 3]) @ cams[f][:, :3])[:, 2]})
+    return out
+
+
+@unittest.skipUnless(cv2, "needs numpy and opencv")
+class BundleAdjust(unittest.TestCase):
+    def test_poses_and_scale_come_back(self):
+        X, cams, T, V = ba_scene(60, 200)
+        rng = np.random.default_rng(7)
+        init = cams.copy()
+        for f in range(1, 60):   # every pose 5 cm and 2° off, and the points 1.3x too far
+            d, a = rng.normal(size=3), rng.normal(size=3)
+            init[f][:, :3] = cv2.Rodrigues(a / np.linalg.norm(a) * math.radians(2))[0] @ cams[f][:, :3]
+            init[f][:, 3] += d / np.linalg.norm(d) * 0.05
+        got, Xg, info = solve.bundle_adjust(init, X * 1.3, T, V, K, 1.0, anchors=depth_priors(X, cams, V, (0, 30)))
+        np.testing.assert_allclose(got[0], cams[0], atol=1e-12)   # (camera 0 is held)
+        for f in range(60):
+            self.assertLess(np.linalg.norm(got[f][:, 3] - cams[f][:, 3]), 0.01, f)
+            self.assertLess(angle(got[f][:, :3], cams[f][:, :3]), 0.2, f)
+        self.assertLess(abs(np.median(np.linalg.norm(Xg, axis=1) / np.linalg.norm(X, axis=1)) - 1), 0.02)
+        self.assertLess(info["err"], 1.0)
+
+    def test_tracks_without_3d_are_left_alone(self):
+        X, cams, T, V = ba_scene(20, 60)
+        Xn = X.copy()
+        Xn[:10] = np.nan
+        got, Xg, _ = solve.bundle_adjust(cams, Xn, T, V, K, 1.0, anchors=depth_priors(X, cams, V, (0,)))
+        self.assertTrue(np.isnan(Xg[:10]).all())
+        self.assertLess(np.abs(Xg[10:] - X[10:]).max(), 0.1)
+
+    def test_sparsity(self):
+        oc, op = np.array([0, 1, 2, 2]), np.array([0, 0, 1, 2])
+        A = solve.ba_sparsity(3, 3, oc, op, pc=[0, 2], pp=[1, 2])
+        self.assertEqual(A.shape, (2 * 4 + 2 + 3 * 1, 6 * 2 + 3 * 3))   # (camera 0 has no columns)
+        D = A.toarray()
+        np.testing.assert_array_equal(D[0:2, :12], 0)        # an observation in camera 0: its point only
+        np.testing.assert_array_equal(D[0:2, 12:15], 1)
+        np.testing.assert_array_equal(D[2:4, 0:6], 1)        # camera 1 (columns 0..5) and point 0
+        np.testing.assert_array_equal(D[2:4, 6:12], 0)
+        self.assertEqual(D[8].sum(), 3)                       # camera 0's depth prior: its point only
+        self.assertEqual(D[9, 6:12].sum() + D[9, 12:].sum(), 6 + 3)
+        np.testing.assert_array_equal(D[10:13, 0:3], 0)       # the motion prior: the centres (3..5) only
+        np.testing.assert_array_equal(D[10:13, [3, 4, 5]], np.eye(3))
+
+    def test_a_long_clip_is_quick(self):
+        X, cams, T, V = ba_scene(360, 400)
+        t = time.time()
+        got, _, info = solve.bundle_adjust(cams, X * 1.1, T, V, K, 1.0, anchors=depth_priors(X, cams, V, (0, 180)))
+        self.assertLess(time.time() - t, 10)
+        self.assertLess(info["err"], 1.0)
+
+    def test_solve_reports_it(self):
+        X, cams, T, V = scene()
+        got, q = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0)
+        self.assertIsNotNone(q["ba_err"])
+        self.assertLess(q["ba_err"], 0.5)
+        for f in range(N):
+            self.assertLess(np.linalg.norm(got[f][:, 3] - cams[f][:, 3]), 0.02, f)
+        _, q = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0, ba=False)
+        self.assertIsNone(q["ba_err"])
+
+    def test_repeatable(self):
+        X, cams, T, V = scene(noise=0.5)
+        a, _ = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0)
+        b, _ = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0)
+        np.testing.assert_array_equal(a, b)
 
 
 @unittest.skipUnless(cv2 and subprocess.run(["which", "ffmpeg"], capture_output=True).returncode == 0, "needs opencv and ffmpeg")

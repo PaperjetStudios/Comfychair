@@ -8,8 +8,10 @@ Tracks rarely last a clip, so tracks that start later get 3D too: from a few lat
 where the tracks with 3D thin out, all run at once, fitted to the solve by a similarity on shared points or
 placed by their frame's camera), triangulated from two solved frames once the camera has moved enough, put
 on the latest anchor's depth, or, last, given their 3D neighbours' depth. Tracks the
-cameras don't agree with (water, a person) are dropped and the frames solved again; the positions are lightly
-smoothed. method "da3": Depth Anything 3 places the cameras of a few dozen evenly spaced frames together
+cameras don't agree with (water, a person) are dropped and the frames solved again; then every camera and point
+is refined together (bundle_adjust: reprojection under a Huber loss, the scale held by weak priors towards each
+anchor's depth, a weak motion prior), and the positions are lightly smoothed. Each frame's PnP is already pulled
+towards the steady move of the frames before (far points barely pin a position). method "da3": Depth Anything 3 places the cameras of a few dozen evenly spaced frames together
 (multi-view) and gives each view's depth (no real scale); each track takes its position from the first view
 it's seen on, and every frame is then solved as above, DA3's interpolated camera standing in where a frame
 can't be solved. Both also give "cloud": the first frame's depth as coloured points.
@@ -136,9 +138,11 @@ def _c2w(cv2, np, rvec, tvec):
     return np.concatenate([R.T, (-R.T @ t)[:, None]], axis=1)
 
 
-def _pnp_pass(cv2, np, T, V, Xw, have, skip, Km, kx, ky, thr, prior, grow, anchor=None, anchors=()):
+def _pnp_pass(cv2, np, T, V, Xw, have, skip, Km, kx, ky, thr, prior, grow, anchor=None, anchors=(), motion_w=0.0):
     """One run through the frames (see solve_pnp). Xw (Q, 3) / have (Q,) are updated with the points the later
-    anchors, triangulation, the anchor's depth and the neighbours give."""
+    anchors, triangulation, the anchor's depth and the neighbours give. motion_w: each frame's pose is pulled
+    towards where the last two put it (bundle_adjust's motion prior, only backwards), so far-off points that
+    hardly pin the position don't make it jump (and the points lifted from it go wrong)."""
     Q, N = T.shape[:2]
     UV = to_clip(np, T, kx, ky)   # (Q, N, 2) clip px
     Kinv = np.linalg.inv(Km)
@@ -174,7 +178,30 @@ def _pnp_pass(cv2, np, T, V, Xw, have, skip, Km, kx, ky, thr, prior, grow, ancho
             return None
         inl = inl.ravel()
         r, t = cv2.solvePnPRefineLM(obj[inl], img[inl], Km, None, r, t)
+        if motion_w > 0 and len(solved) > 1 and np.isfinite(r).all() and np.isfinite(t).all():
+            r, t = steady(f, obj[inl], img[inl], r, t)
         return (r, t) if np.isfinite(r).all() and np.isfinite(t).all() else None
+
+    def steady(f, obj, img, r, t):
+        """The pose refined with the motion prior: reprojection (clip px) plus motion_w px per unit of the centre's
+        miss from the constant-speed guess over the points' median depth (spread over the frames since)."""
+        from scipy.optimize import least_squares
+        Rp, tp = predicted(f)
+        Cp = -Rp.T @ tp
+        R = cv2.Rodrigues(r)[0]
+        z = (obj @ R.T + t.reshape(3))[:, 2]
+        w = motion_w / max(float(np.median(z[z > 0])) if (z > 0).any() else 1.0, 1e-9) / (f - solved[-1])
+
+        def res(p):
+            Rr = cv2.Rodrigues(p[:3])[0]
+            Xc = (obj - p[3:]) @ Rr.T
+            zc = np.maximum(Xc[:, 2], 1e-9)
+            e = np.c_[Km[0, 0] * Xc[:, 0] / zc + Km[0, 2], Km[1, 1] * Xc[:, 1] / zc + Km[1, 2]] - img
+            return np.concatenate([e.ravel(), w * (p[3:] - Cp)])
+
+        p = least_squares(res, np.r_[r.ravel(), -R.T @ t.reshape(3)], method="lm", max_nfev=100).x
+        Rr = cv2.Rodrigues(p[:3])[0]
+        return p[:3].reshape(3, 1), (-Rr @ p[3:]).reshape(3, 1)
 
     def predicted(f):
         """World-to-camera for frame f from the last solved frames, moving on at their speed."""
@@ -401,19 +428,27 @@ def _onto_anchor(np, anchor, Rf, tf, uv, Kinv, steps=96):
     return out
 
 
-def solve_pnp(T, V, X, ids, K, k_scale, prior=None, grow=True, thr=None, anchor=None, smooth=0.0, anchors=()):
+def solve_pnp(T, V, X, ids, K, k_scale, prior=None, grow=True, thr=None, anchor=None, smooth=0.0, anchors=(), priors=(),
+              ba=True):
     """Camera-to-world 3x4 for every frame from tracks T (Q, N, 2, analysis px) seen where V (Q, N), of which
     tracks ids have world positions X (M, 3). K [fx, fy, cx, cy] in clip pixels; k_scale: analysis to clip
     pixels (a number or (kx, ky)). Frame 0 is the identity. A frame with under 6 points seen, or no solve,
-    keeps the previous pose (or prior's, cameras to start each frame from) and counts as lost.
+    keeps the previous pose (or prior's, cameras to start each frame from) and counts as lost (with ba, the
+    bundle adjustment then places it from what it sees and the motion prior).
     Tracks that appear later are triangulated from two solved frames (grow), and tracks the cameras don't
     agree with (a wave, a person walking: over 2x the threshold on the median frame) are dropped and the
     frames solved again (kept only if that loses no more frames). With anchor (frame 0's depth grid, see
     _onto_anchor), tracks that never part enough to triangulate are put on frame 0's depth instead; anchors:
     later frames' MoGe points ({"f", "q", "Xc", "grid"}, see _place_anchor) join where they're reached. smooth: a
     Gaussian over the positions (frames, sigma), for the jitter a few far points leave.
-    Returns (cams (N, 3, 4), {"used", "lost", "ids", "X"}): ids/X the points used."""
+    ba: then all cameras and points are refined together (bundle_adjust, before the smoothing), the scale held by
+    the depth the points were given: frame 0's (X's z for the ids seen there), each later anchor's, and priors
+    ([{"f", "q", "z"}], more of the same, e.g. DA3's other views); tracks still off by over 2x the threshold
+    are then dropped and it runs once more.
+    Returns (cams (N, 3, 4), {"used", "lost", "ids", "X", "ba_err"}): ids/X the points used; ba_err the median
+    reprojection error after the bundle adjustment (None without it)."""
     cv2, np = tracking._libs()
+    cv2.setRNGSeed(0)   # (RANSAC: the same clip solves the same way every time)
     kx, ky = (k_scale, k_scale) if isinstance(k_scale, (int, float)) else k_scale
     Km = np.array([[K[0], 0, K[2]], [0, K[1], K[3]], [0, 0, 1]], np.float64)
     if thr is None:
@@ -425,7 +460,8 @@ def solve_pnp(T, V, X, ids, K, k_scale, prior=None, grow=True, thr=None, anchor=
     for rnd in range(3):
         Xw, have = np.full((Q, 3), np.nan), np.zeros(Q, bool)
         Xw[ids], have[ids] = np.asarray(X, np.float64), True
-        cams, good, lost = _pnp_pass(cv2, np, T, V, Xw, have, skip.copy(), Km, kx, ky, thr, prior, grow, anchor, anchors)
+        cams, good, lost = _pnp_pass(cv2, np, T, V, Xw, have, skip.copy(), Km, kx, ky, thr, prior, grow, anchor, anchors,
+                                     motion_w=PNP_MOTION_W if ba else 0.0)
         if best is not None and lost > best[3]:   # (the dropped tracks were holding frames up: keep the last round)
             break
         best = (cams, Xw, have & ~skip, lost, good)
@@ -435,6 +471,23 @@ def solve_pnp(T, V, X, ids, K, k_scale, prior=None, grow=True, thr=None, anchor=
             break
         skip |= bad
     cams, Xw, use, lost, good = best
+    ba_err = None
+    if ba and use.sum() >= MIN_VIS:
+        ids = np.asarray(ids, np.int64)
+        z0 = np.asarray(X, np.float64).reshape(-1, 3)[:, 2]
+        seen0 = V[ids, 0]
+        deps = [{"f": 0, "q": ids[seen0], "z": z0[seen0]}]
+        deps += [{"f": int(a["f"]), "q": np.asarray(a["q"]), "z": np.asarray(a["Xc"], np.float64)[:, 2]} for a in anchors]
+        deps += list(priors or ())
+        Xb = np.where(use[:, None], Xw, np.nan)
+        for rnd in range(2):
+            cams, Xb, info = bundle_adjust(cams, Xb, T, V, K, (kx, ky), anchors=deps, huber=thr)
+            bad = use & (track_err(cams, Xb, T, V, K, (kx, ky)) > 2 * thr)   # (what still doesn't fit: once more without it)
+            if rnd or not bad.any() or (use & ~bad).sum() < MIN_VIS:
+                break
+            use = use & ~bad
+            Xb[bad] = np.nan
+        Xw, ba_err = Xb, info["err"]
     if smooth > 0:
         cams = cams.copy()
         sm = _gauss(np, cams[:, :, 3], smooth)
@@ -462,7 +515,7 @@ def solve_pnp(T, V, X, ids, K, k_scale, prior=None, grow=True, thr=None, anchor=
             Rw2c = U @ np.diag([1, 1, np.linalg.det(U @ Vt)]) @ Vt
             cams[f][:, :3] = Rw2c.T
     keep = np.where(use)[0]
-    return cams, {"used": int(len(keep)), "lost": lost, "ids": keep, "X": Xw[keep]}
+    return cams, {"used": int(len(keep)), "lost": lost, "ids": keep, "X": Xw[keep], "ba_err": ba_err}
 
 
 def _gauss(np, A, sigma):
@@ -491,6 +544,155 @@ def track_err(cams, Xw, T, V, K, k_scale):
         e = np.where(V & (Xc[..., 2] > 0) & np.isfinite(e), e, np.nan)
         out = np.nanmedian(np.where(np.isnan(e).all(1, keepdims=True), np.inf, e), axis=1)
     return np.where(np.isfinite(out), out, np.inf)
+
+
+# ---- bundle adjustment: all the cameras and points together, so the scale holds over the clip ----
+BA_PRIOR_W = 50.0    # depth prior: clip px per unit of relative depth error (10 % off the anchor's depth costs 5 px)
+BA_SMOOTH_W = 2000.0  # motion prior: clip px per unit of a camera centre's second difference over the scene depth
+PNP_MOTION_W = 5000.0  # the same, per frame while solving (a 1 cm miss from the steady guess at 10 m costs 5 px)
+BA_NFEV = 20         # least_squares evaluations (each a sparse Jacobian), over its two reweighting rounds
+
+
+def _rodrigues(np, r):
+    """Rotation matrices (n, 3, 3) for the Rodrigues vectors in the rows of r (vectorised cv2.Rodrigues)."""
+    th = np.linalg.norm(r, axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        k = np.where(th[:, None] > 1e-12, r / th[:, None], 0.0)
+    c, s = np.cos(th)[:, None, None], np.sin(th)[:, None, None]
+    Kx = np.zeros((len(r), 3, 3))
+    Kx[:, 0, 1], Kx[:, 0, 2], Kx[:, 1, 2] = -k[:, 2], k[:, 1], -k[:, 0]
+    Kx[:, 1, 0], Kx[:, 2, 0], Kx[:, 2, 1] = k[:, 2], -k[:, 1], k[:, 0]
+    return c * np.eye(3) + s * Kx + (1 - c) * k[:, :, None] * k[:, None, :]
+
+
+def ba_sparsity(ncams, npts, oc, op, pc=(), pp=(), smooth=True):
+    """The Jacobian's pattern for bundle_adjust (scipy.sparse lil): 2 rows per observation (camera oc, point op), 1
+    per depth prior (camera pc, point pp), then 3 per inner frame of the motion prior; columns 6 per camera
+    1..ncams-1 (its Rodrigues turn, then its centre; camera 0 is held: it has none) and 3 per point. The motion
+    prior depends on the centres only (fewer column groups for the finite differences)."""
+    import numpy as np
+    from scipy.sparse import coo_matrix
+    oc, op, pc, pp = (np.asarray(a, np.int64).ravel() for a in (oc, op, pc, pp))
+    nco = 6 * (ncams - 1)
+    rows, cols = [], []
+
+    def cam(r, c, which=range(6)):   # (rows r depend on camera c's numbers `which`, if it has them)
+        m, w = c > 0, np.asarray(list(which))
+        rows.append(np.repeat(r[m], len(w))); cols.append((6 * (c[m] - 1))[:, None].repeat(len(w), 1).ravel() + np.tile(w, m.sum()))
+
+    def pt(r, p):
+        rows.append(np.repeat(r, 3)); cols.append(nco + (3 * p)[:, None].repeat(3, 1).ravel() + np.tile(np.arange(3), len(p)))
+
+    n0 = 2 * len(oc)
+    for d in (0, 1):
+        r = 2 * np.arange(len(oc)) + d
+        cam(r, oc); pt(r, op)
+    r = n0 + np.arange(len(pc))
+    cam(r, pc); pt(r, pp)
+    n1 = n0 + len(pc)
+    nsm = max(0, ncams - 2) if smooth else 0
+    for d in range(3):
+        r = n1 + 3 * np.arange(nsm) + d
+        for o in (0, 1, 2):
+            cam(r, np.arange(nsm) + o, (3 + d,))
+    nrows = n1 + 3 * nsm
+    rr, cc = (np.concatenate(a) if a else np.zeros(0, np.int64) for a in (rows, cols))
+    return coo_matrix((np.ones(len(rr)), (rr, cc)), shape=(nrows, nco + 3 * npts)).tolil()
+
+
+def bundle_adjust(cams, X, T, V, K, k_scale, anchors=None, prior_w=BA_PRIOR_W, huber=3.0, smooth_w=BA_SMOOTH_W,
+                  max_nfev=BA_NFEV):
+    """All camera poses (camera-to-world (N, 3, 4); camera 0 held) and 3D points (X (Q, 3), NaN rows: tracks not
+    in the solve) refined together to fit the tracks T (Q, N, 2, analysis px) where V (Q, N): reprojection errors
+    in clip px under a Huber loss (huber: its knee, px), sparse Jacobian (scipy least_squares, trf). The scale,
+    which reprojection can't see, is held by weak depth priors: anchors [{"f": frame, "q": tracks, "z": the
+    depth each has in that frame's camera}] (MoGe's metres, or DA3's units) pull each point's depth in that
+    camera towards it (prior_w px per unit of relative error). A weak motion prior (the camera centres' second
+    difference over the median scene depth, smooth_w px per unit) keeps frames with few points from jumping.
+    Returns (cams, X, info {"err": median reprojection px, "nfev", "time"})."""
+    cv2, np = tracking._libs()
+    from scipy.optimize import least_squares
+    t0 = time.time()
+    kx, ky = (k_scale, k_scale) if isinstance(k_scale, (int, float)) else k_scale
+    cams, X = np.asarray(cams, np.float64), np.asarray(X, np.float64)
+    T, V = np.asarray(T, np.float64), np.asarray(V, bool)
+    N = len(cams)
+    pts = np.where(np.isfinite(X).all(axis=1))[0]
+    M = len(pts)
+    slot = np.full(len(X), -1)
+    slot[pts] = np.arange(M)
+    UV = to_clip(np, T, kx, ky)
+    op, oc = np.nonzero(V[pts])          # observations: point slot, frame
+    uv = UV[pts[op], oc]
+    pc, pp, pz = [], [], []
+    for a in anchors or ():
+        q, z = np.asarray(a["q"], np.int64), np.asarray(a["z"], np.float64)
+        ok = (slot[q] >= 0) & np.isfinite(z) & (z > 0)
+        pc.append(np.full(ok.sum(), int(a["f"]))); pp.append(slot[q[ok]]); pz.append(z[ok])
+    pc, pp, pz = (np.concatenate(v) if v else np.zeros(0) for v in (pc, pp, pz))
+    pc, pp = pc.astype(np.int64), pp.astype(np.int64)
+    if not M or not len(oc):
+        return cams, X, {"err": None, "nfev": 0, "time": 0.0}
+    # each camera as its world-to-camera turn (Rodrigues) and its centre
+    r0, c0 = np.zeros((N, 3)), cams[:, :, 3].copy()
+    for f in range(N):
+        r0[f] = cv2.Rodrigues(cams[f][:, :3].T)[0].ravel()
+    z0 = X[pts, 2]
+    zref = float(np.median(np.abs(pz))) if len(pz) else float(np.median(np.abs(z0[z0 > 0]))) if (z0 > 0).any() else 1.0
+    zeps = 1e-3 * zref
+    fx, fy, cx, cy = K
+    nsm = N - 2 if smooth_w > 0 else 0
+    sw = smooth_w / zref
+
+    def unpack(x):
+        c = x[:6 * (N - 1)].reshape(N - 1, 6)
+        r = np.vstack([r0[:1], c[:, :3]])
+        t = np.vstack([c0[:1], c[:, 3:]])
+        return r, t, x[6 * (N - 1):].reshape(M, 3)
+
+    def raw(x):
+        """(reprojection errors (n_obs, 2), depth prior residuals, motion residuals), unweighted by the loss."""
+        r, t, P = unpack(x)
+        R = _rodrigues(np, r)   # (t: the centres)
+        Xc = np.einsum("nij,nj->ni", R[oc], P[op] - t[oc])
+        z = np.maximum(Xc[:, 2], zeps)
+        e = np.empty((len(oc), 2))
+        e[:, 0] = fx * Xc[:, 0] / z + cx - uv[:, 0]
+        e[:, 1] = fy * Xc[:, 1] / z + cy - uv[:, 1]
+        d = prior_w * (np.einsum("nj,nj->n", R[pc, 2], P[pp] - t[pc]) - pz) / pz if len(pc) else np.zeros(0)
+        if nsm > 0:
+            m = sw * (t[:-2] - 2 * t[1:-1] + t[2:]).ravel()
+        else:
+            m = np.zeros(0)
+        return e, d, m
+
+    # the Huber loss by reweighting (IRLS): weights from the current errors (an observation's 2D error as one), then
+    # plain least squares; scipy's own robust loss crawls when most errors start beyond the knee
+    A = ba_sparsity(N, M, oc, op, pc, pp, smooth=nsm > 0)
+    x = np.concatenate([np.hstack([r0[1:], c0[1:]]).ravel(), X[pts].ravel()])
+    nfev = 0
+    for rnd in range(2):
+        e, d, _ = raw(x)
+        we = np.sqrt(np.minimum(1.0, huber / np.maximum(np.hypot(e[:, 0], e[:, 1]), 1e-9)))[:, None]
+        wd = np.sqrt(np.minimum(1.0, huber / np.maximum(np.abs(d), 1e-9)))
+
+        def fun(x, we=we, wd=wd):
+            e, d, m = raw(x)
+            return np.concatenate([(e * we).ravel(), d * wd, m])
+
+        kw = dict(method="trf", x_scale="jac", max_nfev=max(5, max_nfev // 2), tr_solver="lsmr", ftol=1e-5,
+                  tr_options={"regularize": False, "maxiter": 100})   # (lsmr: regularised it needs twice the iterations;
+        # and capped, as an ill-posed real problem (lost frames, points seen from one place) would run to thousands)
+        res = least_squares(fun, x, jac_sparsity=A, **kw)
+        x, nfev = res.x, nfev + res.nfev
+    r, t, P = unpack(x)
+    out = cams.copy()
+    for f in range(1, N):
+        out[f] = np.concatenate([cv2.Rodrigues(r[f])[0].T, t[f][:, None]], axis=1)
+    Xo = X.copy()
+    Xo[pts] = P
+    e = np.hypot(*raw(x)[0].T)
+    return out, Xo, {"err": float(np.median(e)), "nfev": int(nfev), "time": time.time() - t0}
 
 
 def reproj_err(cams, X, ids, T, V, K, k_scale):
@@ -732,7 +934,7 @@ async def _pnp(path, start, W, H, T, V, kx, ky, oi, progress, cancel, smooth=0.0
     P = np.array([[np.nan] * 3 if p is None else p for p in gr["points"]], np.float64).reshape(gr["rows"], gr["cols"], 3)
     pc = cloud(np, P, img0[..., ::-1]) if img0 is not None else []
     return {"K": K, "cams": cams, "X": q["X"], "ids": q["ids"], "floor": floor_from_grid(ex["grid"]), "metric": True,
-            "lost": q["lost"], "anchors": len(frames), "cloud": pc}
+            "lost": q["lost"], "anchors": len(frames), "cloud": pc, "ba_err": q.get("ba_err")}
 
 
 def da3_lift(T, V, kx, ky, K, W, H, idx, views, grids):
@@ -759,6 +961,23 @@ def da3_lift(T, V, kx, ky, K, W, H, idx, views, grids):
         X.extend((Xc @ R.T + t).tolist())
         have[q[ok]] = True
     return np.array(ids, np.int64), np.array(X, np.float64).reshape(-1, 3)
+
+
+def da3_priors(T, V, kx, ky, W, H, idx, grids):
+    """The bundle adjustment's depth priors from DA3's views after the first (view 0's are the lifted points'
+    own): [{"f", "q", "z"}], every track seen on view j's frame with its depth there (grids[j], DA3's units)."""
+    _, np = tracking._libs()
+    UV = to_clip(np, T, kx, ky)
+    out = []
+    for j, G in enumerate(grids[1:], 1):
+        f = int(idx[j])
+        q = np.where(V[:, f])[0]
+        rows, cols = G.shape
+        z = _grid_z(np, G, (UV[q, f, 0] + 0.5) * cols / W - 0.5, (UV[q, f, 1] + 0.5) * rows / H - 0.5)
+        ok = np.isfinite(z) & (z > 0)
+        if ok.any():
+            out.append({"f": f, "q": q[ok], "z": z[ok]})
+    return out
 
 
 def cloud(np, P, img, most=MAX_CLOUD):
@@ -851,14 +1070,15 @@ async def _da3(path, start, W, H, T, V, kx, ky, views, model, oi, progress, canc
     # each frame is solved from the tracks against view 0's depth instead, starting from (and, when lost, keeping)
     # DA3's camera for it
     anchor = {"Z": D, "K": [float(v) for v in Ki], "size": (wi, hi)}
+    priors = da3_priors(T, V, kx, ky, W, H, idx, grids)
     cams, q = await asyncio.to_thread(lambda: solve_pnp(T, V, np.array(X), np.array(ids, np.int64), K, (kx, ky), prior=cams,
-                                                        anchor=anchor, smooth=smooth))
+                                                        anchor=anchor, smooth=smooth, priors=priors))
     gp = grid_xyz(dg, [float(v) for v in Ki])
     P = np.array([[np.nan] * 3 if p is None else p for p in gp["points"]], np.float64).reshape(gp["rows"], gp["cols"], 3)
     img = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
     pc = cloud(np, P, img[..., ::-1]) if img is not None else []
     return {"K": K, "cams": cams, "X": q["X"], "ids": q["ids"], "floor": floor, "metric": False, "lost": q["lost"],
-            "anchors": len(grids), "cloud": pc}
+            "anchors": len(grids), "cloud": pc, "ba_err": q.get("ba_err")}
 
 
 async def solve(path, start=0.0, end=None, region=None, exclude=None, method="pnp", tracker="klt", views=32,
@@ -920,7 +1140,8 @@ async def solve(path, start=0.0, end=None, region=None, exclude=None, method="pn
            "floor": {"n": [round(v, 5) for v in fl["n"]], "d": round(fl["d"], 5)} if fl else None,
            "metric": s["metric"],
            "quality": {"used": int(len(s["ids"])), "err": None if err is None else round(err, 3), "lost": int(s["lost"]),
-                       "drift": drift(s["cams"], fl, X), "anchors": int(s.get("anchors", 1))},
+                       "drift": drift(s["cams"], fl, X), "anchors": int(s.get("anchors", 1)),
+                       "ba_err": None if s.get("ba_err") is None else round(float(s["ba_err"]), 3)},
            "cloud": s.get("cloud") or [],
            "cost": round(time.time() - t_start, 2)}
     if progress:
