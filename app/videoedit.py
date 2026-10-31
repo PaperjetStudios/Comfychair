@@ -434,8 +434,9 @@ def canvas_plan(src_w: int, src_h: int, aspect: float, scale: float = 1.0, cx: f
     return {"W": W, "H": H, "w": w, "h": h, "x": round(cx * W - w / 2), "y": round(cy * H - h / 2)}
 
 
-def canvas_clip(src: Path, out_video: Path, out_mask: Path, plan: dict, trim: dict | None = None):
-    """The clip placed on its canvas (black around it) and the matching mask (white = to paint, black = the clip)."""
+def canvas_clip(src: Path, out_video: Path, out_mask: Path, plan: dict, trim: dict | None = None, crop=None):
+    """The clip placed on its canvas (black around it) and the matching mask (white = to paint, black = the clip).
+    crop: (x, y, w, h) px of the source to place (videoprep.norm_crop), or None for all of it."""
     W, H, w, h, x, y = (plan[k] for k in ("W", "H", "w", "h", "x", "y"))
     info = probe(src)
     cut = []
@@ -443,7 +444,8 @@ def canvas_clip(src: Path, out_video: Path, out_mask: Path, plan: dict, trim: di
         cut = ["-ss", f"{max(0.0, float(trim.get('start') or 0)):.3f}"] + (["-t", f"{float(trim['len']):.3f}"] if trim.get("len") else [])
     dur = float(trim["len"]) if trim and trim.get("len") else max(0.04, info["duration"] - float((trim or {}).get("start") or 0))
     fps = info["fps"] or 24
-    fc = (f"color=c=black:s={W}x{H}:r={fps:g}:d={dur:.3f}[bg];[0:v]scale={w}:{h},setsar=1,format=yuv420p[c];"
+    cut_box = f"crop={crop[2]}:{crop[3]}:{crop[0]}:{crop[1]}," if crop else ""
+    fc = (f"color=c=black:s={W}x{H}:r={fps:g}:d={dur:.3f}[bg];[0:v]{cut_box}scale={w}:{h},setsar=1,format=yuv420p[c];"
           f"[bg][c]overlay=x={x}:y={y}:shortest=1,format=yuv420p[v];"
           f"color=c=white:s={W}x{H}:r={fps:g}:d={dur:.3f}[mw];color=c=black:s={w}x{h}:r={fps:g}:d={dur:.3f}[mb];"
           f"[mw][mb]overlay=x={x}:y={y},format=yuv420p[m]")

@@ -13,7 +13,9 @@ export function loraChoice(list, cur, onPick, strength, { none = false, onStreng
     list.map((o) => h('option', { value: o, selected: cur === o }, loraName(o))));
   return [field('LoRA', sel), strength ? rangeField('Strength', strength.get, strength.set, { min: 0, max: 2, step: 0.05, fmt: (v) => v.toFixed(2), onChange: onStrength }) : null];
 }
-// The colour key's sliders, the same in the VFX tab and the Video tab's Key… sheet
+// The colour key's settings as they start, and its sliders: the same in the VFX tab, the Video tab's Colour key… sheet
+// and its Colour key effect step
+export const KEY_DEFAULT = { similarity: 0.12, blend: 0.08, spill: 0.5, invert: false };
 export const keyRangeFields = (k, onChange) => [
   rangeField('Similarity', () => k.similarity, (v) => { k.similarity = v; }, { min: 0.01, max: 0.6, step: 0.01, onChange,
     help: 'How close to the key colour a pixel must be to go clear. Raise it until the screen is gone.' }),
@@ -25,7 +27,7 @@ export const keyRangeFields = (k, onChange) => [
 export const restyleLora = (o) => /ic-lora/i.test(o) && !/sdr-to-hdr|alpha-gen|clean-plate|ingredients|layout|motion-track|in-outpaint|refine|upscaler/i.test(o);
 
 // ---- effects on Video clips (video.js): one step of a clip's effect stack, run and waited for ----
-// A step is { op, prompt, lora, strength, res, outsize, target, color }. source is a clip source
+// A step is { op, prompt, lora, strength, res, outsize, target, color, similarity, blend, spill, invert }. source is a clip source
 // ({generation, index} | {media}) with an optional trim {start, len} (seconds). Resolves with
 // { generation, index, url, dur } of the step's result.
 export const CLIP_FX = [
@@ -67,7 +69,8 @@ export async function runClipStep(step, source, secs) {
       return outOf(await key({ mode: 'matte', matte: { generation: matte.generation, index: matte.index } }));
     }
     case 'colorkey':
-      return outOf(await key({ mode: 'color', color: step.color || '#00ff00', similarity: step.similarity ?? 0.12, blend: 0.08, spill: 0.5 }));
+      return outOf(await key({ mode: 'color', color: step.color || '#00ff00', ...KEY_DEFAULT,
+        ...Object.fromEntries(Object.keys(KEY_DEFAULT).filter((k) => step[k] != null).map((k) => [k, step[k]])) }));
     default:
       throw new Error(`Unknown effect ${step.op}`);
   }

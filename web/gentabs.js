@@ -200,12 +200,12 @@ hooks.edited = () => {
 hooks.decorate = () => { decorate(); updatePicker(); };
 hooks.openShot = async (p, name) => {
   const t = tplById(p.workflow);
-  if (!t) return toast('That shot\'s template isn\'t available', true);
+  if (!t) return toast('That setup\'s template isn\'t available', true);
   if (!tabs.active || !(await tabs.leave())) return;
   const values = {};
   for (const f of t.fields) values[f.key] = validFor(f, p.values?.[f.key]) ? p.values[f.key] : f.value;
   const b = p.builder ? { ...clone(p.builder), on: true } : null;
-  try { tabs.open(await tabs.create1({ name: String(name || 'Shot').slice(0, 120), payload: payloadFor(t, values, { ...p, builder: b }), order: tabs.active.order + 0.5 })); }
+  try { tabs.open(await tabs.create1({ name: String(name || 'Setup').slice(0, 120), payload: payloadFor(t, values, { ...p, builder: b }), order: tabs.active.order + 0.5 })); }
   catch (e) { toast(e.message, true); }
 };
 
@@ -216,7 +216,7 @@ const pairKeys = (t, f) => {   // width and height are one control
   return q ? [f.key, q.key] : [f.key];
 };
 function decorate() {
-  const root = $('#fields');
+  const root = $('#tab-generate');   // (the sidebar's fields and the pane over the viewer)
   if (!root || !S.tpl) return;
   root.querySelectorAll('.ovr-btn').forEach((b) => b.remove());
   root.querySelectorAll('.field.ovr').forEach((e) => e.classList.remove('ovr'));
@@ -229,8 +229,8 @@ function decorate() {
     const el = keys.map((k) => root.querySelector(`.field[data-key="${CSS.escape(k)}"]`)).find(Boolean);
     if (!el || el.classList.contains('ovr')) continue;
     el.classList.add('ovr');
-    (el.querySelector('.lbl') || el).append(h('button', { type: 'button', class: 'ovr-btn', title: `Back to the preset's ${f.label}`,
-      onclick: () => resetFields(keys) }, '↺ preset'));
+    (el.querySelector('.lbl') || el).append(h('button', { type: 'button', class: 'ovr-btn', title: `Back to the default's ${f.label}`,
+      onclick: () => resetFields(keys) }, '↺ default'));
   }
 }
 function resetFields(keys) {
@@ -240,12 +240,12 @@ function resetFields(keys) {
 }
 
 // ---- the preset picker, beside the template picker ----
-const pbtn = h('button', { type: 'button', class: 'btn small ghost preset-btn', title: 'Presets: what this tab inherits its settings from', onclick: () => presetSheet() });
+const pbtn = h('button', { type: 'button', class: 'btn small ghost preset-btn', title: 'Defaults: what this tab inherits its settings from', onclick: () => presetSheet() });
 $('#tplSel').after(pbtn);
 function updatePicker() {
   if (!S.tpl) return;
   const p = presetOf(cur.presetId), n = p && p.template === S.tpl.id ? changedKeys().length : 0;
-  pbtn.textContent = `${p ? p.name : 'No preset'}${n ? ` · ${n} changed` : ''}`;
+  pbtn.textContent = `${p ? p.name : 'No default'}${n ? ` · ${n} changed` : ''}`;
   pbtn.classList.toggle('on', !!p);
 }
 const mine = () => [...presets.values()].filter((p) => p.template === S.tpl?.id).sort((a, b) => a.name.localeCompare(b.name));
@@ -258,13 +258,13 @@ function presetSheet() {
     h('button', { type: 'button', class: 'preset-pick', onclick: () => { closeSheet(); setPreset(id); } }, (cur.presetId === id ? '✓ ' : '') + name),
     id ? h('button', { type: 'button', class: 'icon-btn', title: 'Rename', 'aria-label': `Rename ${name}`, onclick: () => renamePreset(id) }, '✎') : null,
     id ? h('button', { type: 'button', class: 'icon-btn', title: 'Delete', 'aria-label': `Delete ${name}`, onclick: () => deletePreset(id) }, '🗑') : null);
-  openSheet(h('h3', {}, `Presets · ${S.tpl.name}`),
-    help('A tab inherits its settings from one preset and remembers only what you change. Change the preset and every tab that hasn\'t changed that setting follows. The prompt, seed and images stay with the tab.'),
-    h('div', { class: 'preset-list' }, row(null, 'No preset'), ...list.map((p) => row(p.id, p.name))),
+  openSheet(h('h3', {}, `Defaults · ${S.tpl.name}`),
+    help('A tab inherits its settings from one default and remembers only what you change. Change the default and every tab that hasn\'t changed that setting follows. The prompt, seed and images stay with the tab.'),
+    h('div', { class: 'preset-list' }, row(null, 'No default'), ...list.map((p) => row(p.id, p.name))),
     actions(
       n && pr ? button(`Save ${n} change${n > 1 ? 's' : ''} into "${pr.name}"`, () => { closeSheet(); saveIntoPreset(); }, { cls: 'primary' }) : null,
-      button('Save this tab as a new preset', () => newPresetSheet(), { cls: n && pr ? '' : 'primary' }),
-      n && pr ? button(`Reset ${n} to the preset`, () => { closeSheet(); resetFields(changedKeys()); }, { cls: 'ghost' }) : null));
+      button('Save this tab as a new default', () => newPresetSheet(), { cls: n && pr ? '' : 'primary' }),
+      n && pr ? button(`Reset ${n} to the default`, () => { closeSheet(); resetFields(changedKeys()); }, { cls: 'ghost' }) : null));
 }
 
 // Pick a preset: its settings replace this tab's (prompt, seed and images stay). None: the tab keeps what it shows.
@@ -280,34 +280,34 @@ function setPreset(id) {
     renderFields();
   } else { cur.presetId = null; renderFields(); }
   persist();
-  undoToast(id ? `Settings from "${presetOf(id).name}"` : 'Preset detached: values unchanged', () => { load(before); persist(); });
+  undoToast(id ? `Settings from "${presetOf(id).name}"` : 'Default detached: values unchanged', () => { load(before); persist(); });
 }
 
 async function saveIntoPreset() {
   const p = presets.get(cur.presetId);
   if (!p) return;
   const r = await pput(p.id, { rev: p.rev, name: p.name, payload: { v: 1, template: p.template, values: settingValues(S.tpl, S.values) } });
-  if (!r.ok) { toast(r.status === 409 ? 'That preset changed on another device: it was reloaded, try again' : 'Couldn\'t save the preset', true); loadPresets(); return; }
+  if (!r.ok) { toast(r.status === 409 ? 'That default changed on another device: it was reloaded, try again' : 'Couldn\'t save the default', true); loadPresets(); return; }
   remember(toPreset(r.data));
   cur.overrides = diff();
   tabs.changed(); decorate(); updatePicker();
   toast(`Saved into "${p.name}"`);
 }
 function newPresetSheet() {
-  nameSheet({ title: 'New preset', placeholder: 'Name, e.g. "Fast draft"', hint: `Saves this tab's settings for ${S.tpl.name}.`, save: async (name) => {
+  nameSheet({ title: 'New default', placeholder: 'Name, e.g. "Fast draft"', hint: `Saves this tab's settings for ${S.tpl.name}.`, save: async (name) => {
     if (!name) throw new Error('Type a name');
     const id = uid() + uid(), t = S.tpl;
     const r = await pput(id, { rev: 0, name: name.slice(0, 120), payload: { v: 1, template: t.id, values: settingValues(t, S.values) } });
-    if (!r.ok) throw new Error('Couldn\'t save the preset');
+    if (!r.ok) throw new Error('Couldn\'t save the default');
     remember(toPreset(r.data));
     cur.presetId = id; cur.overrides = diff();
     tabs.changed(); renderFields();
-    toast(`Preset "${name}" made; this tab uses it`);
+    toast(`Default "${name}" made; this tab uses it`);
   } });
 }
 function renamePreset(id) {
   const p = presets.get(id);
-  nameSheet({ title: 'Rename preset', placeholder: p.name, saveLabel: 'Rename', save: async (name) => {
+  nameSheet({ title: 'Rename default', placeholder: p.name, saveLabel: 'Rename', save: async (name) => {
     if (!name) throw new Error('Type a name');
     const r = await pput(id, { rev: p.rev, name: name.slice(0, 120), payload: { v: 1, template: p.template, values: p.values } });
     if (!r.ok) { loadPresets(); throw new Error(r.status === 409 ? 'Changed on another device: reloaded, try again' : 'Couldn\'t rename'); }
@@ -385,7 +385,7 @@ async function countUsers(id) {
   return n;
 }
 
-const typing = () => !!document.activeElement?.closest?.('#fields') || sheetOpen();
+const typing = () => !!document.activeElement?.closest?.('#fields, .basics-pane') || sheetOpen();
 let idle = 0;
 function redrawWhenIdle() {
   clearTimeout(idle);

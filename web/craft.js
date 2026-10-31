@@ -23,7 +23,7 @@ export async function sendToCraft(kind, body, btn = null) {
 // What a brought-back file can go on to: pictures into the Editor or as an input, clips onto the timeline
 function nextSteps(entry) {
   if (entry.kind === 'image') {
-    return [button('Add to Editor', async () => {
+    return [button('Add to the Image tab', async () => {
       const { name } = await api('/api/craft/input', { method: 'POST', body: { name: entry.name, project_id: S.project } });
       closeSheet(); (await import('./editor.js')).addToEditor(name);
     }, { cls: 'small primary' }),
@@ -68,7 +68,7 @@ export async function openCraftSheet() {
   const draw = async () => {
     try {
       const docs = await api(`/api/craft?project_id=${encodeURIComponent(S.project ?? '')}`, { busy: false });
-      list.replaceChildren(...(docs.length ? docs.map((d) => docRow(d, draw)) : [placeholder('Nothing sent yet: use Open in PhotoCraft / EffectCraft in the Editor, Video, VFX or a result.')]));
+      list.replaceChildren(...(docs.length ? docs.map((d) => docRow(d, draw)) : [placeholder('Nothing sent yet: use Open in PhotoCraft / EffectCraft in the Image, Video or VFX tab or a result.')]));
     } catch (e) { list.replaceChildren(placeholder(e.message)); }
   };
   draw();

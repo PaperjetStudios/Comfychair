@@ -620,8 +620,8 @@ function renderPanel() {
     clipSoundFields(it, itLen(it), { pan: true, ...live, keyed: (label, ch, o) => K.field(it, label, ch, o) }),
     h('p', { class: 'hint' }, `At ${tc(it.at)} · ${itLen(it).toFixed(2)} s, from ${tc(it.in)} of the source`),
     h('div', { class: 'row wrap' },
-      button('✂ Split', TL.split), button('⧉ Duplicate', TL.duplicate),
-      button('⤫ Cross-fade', () => TL.crossfadePrev(it), { title: 'Overlap with the clip before it on its track' }),
+      button('✂ Split at playhead', TL.split), button('⧉ Duplicate', TL.duplicate),
+      button('⤫ Cross-fade with previous', () => TL.crossfadePrev(it), { title: 'Overlap with the clip before it on its track' }),
       button('🗑 Delete', TL.deleteSelected, { cls: 'small danger' })),
     h('div', { class: 'row wrap' },
       button('💾 Save its sound', async () => {

@@ -14,8 +14,8 @@ import { refreshKeyed } from './keyed.js';
 import * as COMP from './scene-comp.js';
 import { fullScreen } from './layout.js';
 import { canTrack, openTrack } from './track.js';
-import { CLIP_FX, keyRangeFields, loraChoice, restyleLoras, runClipStep } from './clip-effects.js';
-import { snap, snapOn, snapStep, snapNearest, normDeg, Weight, WEIGHT, DEAD_PX, deadzone, snapBar } from './gizmo.js';
+import { CLIP_FX, KEY_DEFAULT, keyRangeFields, loraChoice, restyleLoras, runClipStep } from './clip-effects.js';
+import { snap, snapOn, snapStep, snapNearest, normDeg, Weight, WEIGHT, DEAD_PX, deadzone, snapBar, gzChip } from './gizmo.js';
 import { openCraftSheet, sendToCraft } from './craft.js';
 
 // ---------------------------------------------------------------------------
@@ -23,7 +23,7 @@ import { openCraftSheet, sendToCraft } from './craft.js';
 // clips that overlap on one track cross-fade. The preview composites the clips on a canvas;
 // Export sends the same timeline to the server, which renders it with ffmpeg into History.
 // ---------------------------------------------------------------------------
-const COMP_LOOKS = [['color', 'Color'], ['clay', 'Clay'], ['depth', 'Depth'], ['pose', 'Pose']];   // how a scene clip can be drawn (scene-offscreen.js LOOKS)
+const COMP_LOOKS = [['color', 'Colour'], ['clay', 'Clay'], ['depth', 'Depth'], ['pose', 'Pose']];   // how a scene clip can be drawn (scene-offscreen.js LOOKS)
 const HEAD_W = 84;    // track header column (px)
 const LANE_H = 52;
 const MIN_LEN = 0.1;
@@ -314,7 +314,81 @@ const CORNERS = [[0, 0], [1, 0], [1, 1], [0, 1]];
 
 function gview() {
   const r = G.cv.getBoundingClientRect(), [W, H] = seqSize(), k = Math.min(r.width / W, r.height / H) || 1;
-  return { r, W, H, k, ox: (r.width - W * k) / 2, oy: (r.height - H * k) / 2 };
+  return { r, W, H, k: k * VZ.z, ox: ((r.width - W * k) / 2) * VZ.z + VZ.tx, oy: ((r.height - H * k) / 2) * VZ.z + VZ.ty };
+}
+
+// ---- the view: zoom and pan the preview as in the Image tab. The wheel zooms about the pointer, two fingers pan and
+// zoom, and the middle button or a mouse drag on the dark area round the picture pans (Space stays play here). Fit
+// (shown while zoomed) puts it back. VZ is on top of the fit: screen = fitted * z + t (a CSS transform on the frame's canvas).
+const VZ = { z: 1, tx: 0, ty: 0 };
+const vzoomed = () => VZ.z !== 1 || VZ.tx !== 0 || VZ.ty !== 0;
+function setView(z, tx, ty) {
+  Object.assign(VZ, { z, tx, ty });
+  const cv = $('#vidCanvas');
+  cv.style.transformOrigin = '0 0';
+  cv.style.transform = vzoomed() ? `translate(${tx}px, ${ty}px) scale(${z})` : '';
+  G.fit?.classList.toggle('hidden', !vzoomed());
+  drawGizmo();
+}
+const fitView = () => setView(1, 0, 0);
+function zoomAt(f, px, py) {   // (px, py: viewer px) stays put
+  const z = clamp(VZ.z * f, 0.1, 40);
+  setView(z, px - ((px - VZ.tx) * z) / VZ.z, py - ((py - VZ.ty) * z) / VZ.z);
+}
+const PAN = { pan: null, touches: new Map(), pinch: null };
+function panStart(e) {
+  PAN.pan = { id: e.pointerId, x: e.clientX, y: e.clientY, tx: VZ.tx, ty: VZ.ty };
+  try { G.cv.setPointerCapture(e.pointerId); } catch { /* pointer gone */ }
+  G.cv.style.cursor = 'grabbing';
+}
+// a second finger turns a drag into a pinch: what the first finger moved goes back
+function dropDrag() {
+  const d = G.drag;
+  if (!d) return;
+  d.w.cancel();
+  for (const k of Object.keys(d.it)) delete d.it[k];
+  Object.assign(d.it, d.before);
+  G.drag = null; G.guides = [];
+  syncInspector(); persistTimeline(); requestDraw();
+}
+// pointerdown, before the handles: true when the view took it
+function viewDown(e) {
+  if (e.pointerType === 'touch') {
+    PAN.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (PAN.touches.size === 2) {
+      dropDrag();
+      const [a, b] = [...PAN.touches.values()];
+      PAN.pinch = { m: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, d: Math.max(10, Math.hypot(a.x - b.x, a.y - b.y)), v: { ...VZ } };
+      for (const id of PAN.touches.keys()) try { G.cv.setPointerCapture(id); } catch { /* pointer gone */ }
+    }
+    return PAN.touches.size > 1;
+  }
+  if (e.button === 1) { e.preventDefault(); panStart(e); return true; }
+  return false;
+}
+function viewMove(e) {
+  if (PAN.touches.has(e.pointerId)) PAN.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (PAN.pinch && PAN.touches.size >= 2) {
+    const [a, b] = [...PAN.touches.values()], P = PAN.pinch, r = G.cv.getBoundingClientRect();
+    const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, z = clamp(P.v.z * Math.hypot(a.x - b.x, a.y - b.y) / P.d, 0.1, 40);
+    const bx = (P.m.x - r.left - P.v.tx) / P.v.z, by = (P.m.y - r.top - P.v.ty) / P.v.z;   // the fitted point under the fingers' start
+    setView(z, m.x - r.left - bx * z, m.y - r.top - by * z);
+    return true;
+  }
+  if (PAN.pan && e.pointerId === PAN.pan.id) {
+    setView(VZ.z, PAN.pan.tx + e.clientX - PAN.pan.x, PAN.pan.ty + e.clientY - PAN.pan.y);
+    return true;
+  }
+  return false;
+}
+function viewUp(e) {
+  const wasTouch = PAN.touches.delete(e.pointerId);
+  if (PAN.pinch) {
+    if (PAN.touches.size < 2) PAN.pinch = null;
+    return true;   // (the finger left over doesn't start a drag)
+  }
+  if (PAN.pan && e.pointerId === PAN.pan.id) { PAN.pan = null; G.cv.style.cursor = ''; return true; }
+  return wasTouch && PAN.touches.size > 0;
 }
 const scr = (v, [x, y]) => [v.ox + x * v.k, v.oy + y * v.k];
 const unscr = (v, sx, sy) => [(sx - v.ox) / v.k, (sy - v.oy) / v.k];
@@ -461,13 +535,17 @@ function snapScale(g, s, ev) {
 
 // ---- pointer ----
 function gizmoDown(e) {
+  if (viewDown(e)) return;
   if (G.drag || (e.pointerType === 'mouse' && e.button > 0)) return;
   G.settling?.w.finish();
   const r = G.cv.getBoundingClientRect(), sx = e.clientX - r.left, sy = e.clientY - r.top;
   let it = gizmoClip(), hit = it && gizmoHit(it, sx, sy, e.pointerType);
   if (!hit) {
     it = pickAt(sx, sy);
-    if (!it) return;
+    if (!it) {   // the dark area round the picture: a mouse or pen drag pans the view
+      if (e.pointerType !== 'touch' && e.button === 0) panStart(e);
+      return;
+    }
     V.sel = it.id; hit = 'move';
     renderTimeline(); renderVideoPanel();
   }
@@ -481,7 +559,7 @@ function gizmoStart(it, hit, e, sx, sy) {
   if (!g) return;
   const kind = hit === 'move' ? 'move' : hit === 'rotate' ? 'rotate' : hit === 'anchor' ? 'anchor' : 'scale';
   const o = { scale: prop(it, 'scale') || 1, rot: prop(it, 'rotation') };
-  const P = scr(v, [g.px, g.py]), d = { id: e.pointerId, it, hit, kind, g, o, sx, sy, P, d0: Math.max(Math.hypot(sx - P[0], sy - P[1]), 14), acc: 0, last: Math.atan2(sy - P[1], sx - P[0]) };
+  const P = scr(v, [g.px, g.py]), d = { id: e.pointerId, it, before: structuredClone(it), hit, kind, g, o, sx, sy, P, d0: Math.max(Math.hypot(sx - P[0], sy - P[1]), 14), acc: 0, last: Math.atan2(sy - P[1], sx - P[0]) };
   const chans = {
     move: { px: [g.px, WEIGHT.move], py: [g.py, WEIGHT.move] }, anchor: { px: [g.px, WEIGHT.anchor], py: [g.py, WEIGHT.anchor] },
     scale: { r: [1, WEIGHT.scale] }, rotate: { a: [o.rot, WEIGHT.rotate] },
@@ -500,6 +578,7 @@ function gizmoStart(it, hit, e, sx, sy) {
 }
 
 function gizmoMove(e) {
+  if (viewMove(e)) return;
   const d = G.drag;
   if (!d) {   // hovering (a pen above the glass, or a mouse): light up the handle under it before it's touched
     if (e.pointerType === 'touch') return;
@@ -550,6 +629,7 @@ function snapAnchor(g, v, [x, y], ev) {
 }
 
 function gizmoUp(e) {
+  if (viewUp(e)) return;
   const d = G.drag;
   if (!d || e.pointerId !== d.id) return;
   G.drag = null;
@@ -563,7 +643,15 @@ function wireGizmo() {
   const viewer = $('#vidCanvas').parentElement;
   G.cv = h('canvas', { id: 'vidGizmo', class: 'gizmo' });
   const bar = snapBar(['edges', 'grid', 'rot', 'scale'], () => requestDraw());
+  G.fit = gzChip('Fit', fitView, { title: 'Fit the frame in view' });
+  G.fit.classList.add('hidden');
+  bar.append(G.fit);
   viewer.append(G.cv, bar);
+  G.cv.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const r = G.cv.getBoundingClientRect();
+    zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
   G.cv.addEventListener('pointerdown', gizmoDown);
   G.cv.addEventListener('pointermove', gizmoMove);
   G.cv.addEventListener('pointerup', gizmoUp);
@@ -889,7 +977,7 @@ function renderVideoPanel() {
         it.kind === 'video' && canKey(it) ? button('VFX…', async () => (await import('./vfx.js')).sendToVfx(it.src, { label: it.label, trim: { start: it.in, len: (it.out ?? it.dur) - it.in } }), { title: 'Open this clip in the VFX tab' }) : null,
         it.kind === 'video' ? button('Sound → Sound tab', () => soundToSoundTab(it.src, { trim: { start: it.in || 0, len: itLen(it) }, name: `${it.label}-sound` }),
           { title: 'This clip\'s sound (the part on the timeline) on the Sound tab\'s timeline' }) : null,
-        it.kind === 'video' && canKey(it) ? button('Key…', () => openKey(it), { title: 'Cut out a green screen, or use a matte, so lower tracks show through' }) : null,
+        it.kind === 'video' && canKey(it) ? button('Colour key…', () => openKey(it), { title: 'Cut out a green screen, or use a matte, so lower tracks show through' }) : null,
         it.kind === 'video' && canTrack(it.src) ? button('Track motion', () => openTrack({ src: it.src, url: it.url, label: it.label, from: it.in, to: it.out ?? undefined }), { title: 'Follow the picture\'s movement and make a 3D camera from it' }) : null,
         isVisual(it) ? button('Reset framing', () => { Object.assign(it, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); delete it.rotation; delete it.anchor; for (const ch of ['x', 'y', 'scale', 'rotation', 'opacity']) delete it.chans?.[ch]; timelineChanged(); }) : null,
         button('Delete clip', TL.deleteSelected, { cls: 'small danger', title: 'Delete' })));
@@ -946,7 +1034,9 @@ function fxStepFields(it, st, i) {
     st.op === 'cleanplate' ? ta('prompt', 'Optional: what the empty scene looks like') : null,
     st.op === 'replace' ? [h('input', { type: 'text', value: st.target || '', placeholder: 'What to replace, e.g. "the woman"',
       oninput: (e) => { st.target = e.target.value; save(); } }), ta('prompt', 'Describe the shot with the new thing in it')] : null,
-    st.op === 'colorkey' ? colorField('Key colour', () => st.color || '#00ff00', (c) => { st.color = c; save(); }) : null,
+    st.op === 'colorkey' ? [colorField('Key colour', () => st.color || '#00ff00', (c) => { st.color = c; save(); }),
+      ...keyRangeFields(Object.assign(st, { ...KEY_DEFAULT, ...st }), save),   // (a step saved before these keeps the defaults)
+      toggle('Invert (keep what\'s black)', !!st.invert, (on) => { st.invert = on; save(); })] : null,
     st.op === 'upscale' ? field('Size', seg([['FullHD', 'Full HD'], ['4K', '4K']], st.outsize || 'FullHD', (v) => { st.outsize = v; save(); })) : null,
     LTX_OPS.has(st.op) ? field('Resolution', seg([[544, '544p'], [704, '704p'], [1088, '1088p']], st.res || 704, (v) => { st.res = Number(v); save(); })) : null);
 }
@@ -1015,7 +1105,7 @@ async function bakeFx(id) {
 const canKey = (it) => it.src && (it.src.generation != null || it.src.media);
 
 function openKey(it) {
-  const k = { mode: 'color', color: '#00ff00', similarity: 0.12, blend: 0.08, spill: 0.5, invert: false, matte: null };
+  const k = { mode: 'color', color: '#00ff00', ...KEY_DEFAULT, matte: null };
   const frame = h('canvas', { class: 'key-frame' });
   const swatch = colorField('Key colour', () => k.color, (c) => { k.color = c; });
   const m = V.els.get(it.id)?.el;
@@ -1030,7 +1120,7 @@ function openKey(it) {
     });
   }
   const matteLabel = h('span', { class: 'muted' }, 'none');
-  const pickMatte = () => pickerSheet('Pick a matte', [help('White keeps the picture, black lets lower tracks show. Alpha Gen and mask runs make these.', 'grow'), button('Cancel', () => openKey(it))],
+  const pickMatte = () => pickerSheet('Pick a matte', [help('White keeps the picture, black lets lower tracks show. Cut out (Alpha Gen) and Mask (SAM3) runs make these.', 'grow'), button('Cancel', () => openKey(it))],
     async () => (await projectOutputs(['video'])).map(({ g, o, i }) => mediaCard(cardMedia(o), genLabel(g), () => {
       k.matte = { generation: g.id, index: i }; k.matteLabel = genLabel(g); body(); openSheet(...sheet());
     }, { badge: '▶' })));
@@ -1174,7 +1264,7 @@ export function wireVideoTransport() {
     visible: () => $('#tab-video').classList.contains('active') });
   vtp = transport({ playing: () => V.playing, play: vidPlay, pause: vidPause, seek: vidSeek, t: () => V.t, len: seqEnd },
     { step: { by: () => 1 / fpsNow(), label: 'one frame' }, fps: fpsNow, loop: { get: () => V.loop, set: (on) => { V.loop = on; store.set('deck.video.loop', on); } },
-      area: WA, keys: keyJumps(() => clipKeyTimes(TL, TL.selItem() ? [TL.selItem()] : V.items)), extra: [button('📷 Frame', snapshotFrame, { title: 'Save this frame as an image' }), h('span', { id: 'vidLoad', class: 'hint' })] });
+      area: WA, keys: keyJumps(() => clipKeyTimes(TL, TL.selItem() ? [TL.selItem()] : V.items)), extra: [button('📷 Save frame', snapshotFrame, { title: 'Save this frame as an image' }), h('span', { id: 'vidLoad', class: 'hint' })] });
   $('#vidTransport').replaceWith(vtp.el);
   vidMax = fullScreen($('#tab-video'), { onChange: () => requestDraw() });
   $('#tlTools').replaceChildren(

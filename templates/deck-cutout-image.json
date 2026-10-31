@@ -1,0 +1,50 @@
+{
+ "img": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@1 Picture [image]",
+   "deck_keep_size": true
+  }
+ },
+ "bgm": {
+  "class_type": "LoadBackgroundRemovalModel",
+  "inputs": {
+   "bg_removal_name": "birefnet.safetensors"
+  }
+ },
+ "bg": {
+  "class_type": "RemoveBackground",
+  "inputs": {
+   "bg_removal_model": [
+    "bgm",
+    0
+   ],
+   "image": [
+    "img",
+    0
+   ]
+  }
+ },
+ "grey": {
+  "class_type": "MaskToImage",
+  "inputs": {
+   "mask": [
+    "bg",
+    0
+   ]
+  }
+ },
+ "save": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "grey",
+    0
+   ],
+   "filename_prefix": "deck/matte"
+  }
+ }
+}

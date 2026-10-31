@@ -19,6 +19,7 @@ import { BLENDS, blendOp, createPaint, isCanvas } from './paint.js';
 import { icon } from './icons.js';
 import * as G from './layer-geom.js';
 import { inpaintSection } from './inpaint.js';
+import { imageToolsSection } from './imagetools.js';
 
 // ---------------------------------------------------------------------------
 // editor: a simple Photoshop-style layer stack for cropping images and putting them together
@@ -27,7 +28,7 @@ import { inpaintSection } from './inpaint.js';
 // The engine is made once per host with createEditor(): the Editor tab (editor.js, its edit tabs) and the Story
 // tab's shot canvas (story.js, one composition per shot) each have their own state, view, painter and undo.
 // ---------------------------------------------------------------------------
-export const BLANK = () => ({ v: 2, size: null, cols: 2, gap: 0, bg: '#000000', mp: 0, snap: true, arrange: null, anim: null, layers: [] });
+export const BLANK = () => ({ v: 2, size: null, cols: 2, gap: 0, bg: '#000000', clear: false, out: 1, mp: 0, snap: true, arrange: null, anim: null, items: [], layers: [] });
 // a saved payload (an edit tab, or the old `deck.editor`) as editor state
 export function fromSaved(saved) {
   const e = { ...BLANK(), ...saved, arrange: saved.arrange || null };
@@ -44,6 +45,8 @@ export function fromSaved(saved) {
   // order (its first image was leftmost, so it goes to the top of the list).
   if (saved.v !== 2 && e.layers.length) { e.arrange = saved.layout || 'row'; e.layers.reverse(); }
   delete e.layout;
+  // items: boxes drawn for the Inpaint panel's Add item, { x, y, w, h } canvas px, desc (what goes there), ref (a picture to match, optional)
+  e.items = (saved.items || []).map((i) => ({ x: i.x, y: i.y, w: i.w, h: i.h, desc: i.desc || '', ref: i.ref || '' }));
   return e;
 }
 
@@ -52,7 +55,8 @@ export function fromSaved(saved) {
 // name() (for exports), initial (a saved payload), noLayers (the empty canvas's hint) }
 export function createEditor(cfg) {
   const E = fromSaved(cfg.initial || {});
-  E.sel = null; E.cropping = false; E.aspect = null; E.guides = [];   // guides: snap lines {x} or {y} while dragging
+  E.multi = []; E.pickMode = false;   // multi: the layers selected along with E.sel (pickMode: a tap adds or drops a layer, for a screen with no Shift)
+  E.sel = null; E.cropping = false; E.aspect = null; E.guides = []; E.itemDraw = false; E.itemSel = -1;   // itemDraw: the next drag draws an item box   // guides: snap lines {x} or {y} while dragging
   E.t = 0;   // the playhead, seconds (an animation)
   E.tab = null;   // the document this state belongs to (the Editor tab's: { id, qs })
   const $cv = cfg.canvas;
@@ -61,7 +65,7 @@ export function createEditor(cfg) {
   // What a tab stores: the editor's settings and its layers (input image names + crop/position), all small.
   // (Layers only ever name input images, so nothing here is a data URL or a blob. A new blank canvas has no file
   // until its first save, a moment later: it's left out until then.)
-  const dumpEditor = () => ({ v: 2, size: E.size, cols: E.cols, gap: E.gap, bg: E.bg, mp: E.mp, snap: E.snap, arrange: E.arrange, anim: E.anim,
+  const dumpEditor = () => ({ v: 2, size: E.size, cols: E.cols, gap: E.gap, bg: E.bg, clear: !!E.clear, out: E.out || 1, mp: E.mp, snap: E.snap, arrange: E.arrange, anim: E.anim, items: E.items,
     layers: E.layers.filter((l) => l.name).map((l) => ({ name: l.name, crop: l.crop, x: l.x, y: l.y, scale: l.scale, opacity: l.opacity, hidden: l.hidden,
       blend: l.blend || 'normal', locked: !!l.locked, label: l.label || null, chans: l.chans || null, ...(l.mask ? { mask: true } : {}), ...(l.draft ? { draft: true } : {}), ...(l.canvas ? { canvas: true } : {}), ...(l.clip ? { clip: true } : {}),
       ...(l.rotation ? { rotation: l.rotation } : {}), ...(l.flipX ? { flipX: true } : {}), ...(l.flipY ? { flipY: true } : {}) })) });
@@ -150,7 +154,42 @@ export function createEditor(cfg) {
     if (!EA.keys || !E.anim) return;
     const times = [...new Set((E.sel ? [E.sel] : E.layers).flatMap(keyTimes))];
     EA.keys.replaceChildren(...times.filter((f) => f <= E.anim.len).map((f) =>
-      h('span', { class: 'tl-key', style: `left:${(f / E.anim.len) * 100}%` })));
+      h('span', { class: 'tl-key grab', style: `left:${(f / E.anim.len) * 100}%`, title: 'Drag to move this key (every property keyed here) to another time. Tap to go to it.',
+        onpointerdown: (e) => dragKeys(e, f) })));
+  }
+  // Drag a diamond along the bar: every key at that time, on the layers shown, moves with it (to a frame; a key already
+  // there is replaced). A tap only goes to it.
+  function dragKeys(e, f0) {
+    if (e.button) return;
+    e.preventDefault(); e.stopPropagation();
+    const layers = E.sel ? [E.sel] : E.layers, same = (f) => Math.abs(f - f0) < 1e-3;
+    const snap = layers.map((l) => ({ l, chans: l.chans ? JSON.parse(JSON.stringify(l.chans)) : null }));
+    const x0 = e.clientX;
+    let moved = false;
+    const at = (ev) => clamp(atFrame(WA.at(ev.clientX)), 0, E.anim.len);
+    const apply = (t) => {
+      for (const { l, chans } of snap) {
+        if (!chans) continue;
+        const out = {};
+        for (const [ch, list] of Object.entries(chans)) {
+          const mv = list.filter((k) => same(k.f)).map((k) => ({ ...k, f: t }));
+          out[ch] = [...list.filter((k) => !same(k.f) && Math.abs(k.f - t) > 1e-3), ...mv].sort((a, b) => a.f - b.f);
+        }
+        l.chans = out;
+      }
+    };
+    const move = (ev) => {
+      if (!moved && Math.abs(ev.clientX - x0) < 4) return;
+      moved = true;
+      apply(at(ev));
+      poseAt(E.t); drawEditorCanvas(); paintAnimKeys(); refreshKeyed(cfg.panel);
+    };
+    const up = (ev) => {
+      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
+      if (!moved) { editorSeek(f0); return; }
+      editorChanged();
+    };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
   }
   // Start animating: the canvas becomes a fixed size (if it fit the layers) and the playhead goes to the start
   function startAnim() {
@@ -252,13 +291,25 @@ export function createEditor(cfg) {
     l.x += x - b.x; l.y += y - b.y;
   }
 
-  function composeEditor(target) {
+  // clear: leave the background see-through (a download keeps its alpha; what is sent to a model stays opaque)
+  // a transparency guide over the frame (drawn on screen only)
+  function chequer(ctx, f, scale) {
+    const n = 16 / scale;
+    ctx.save(); ctx.beginPath(); ctx.rect(f.x, f.y, f.w, f.h); ctx.clip();
+    ctx.fillStyle = '#9a9a9a'; ctx.fillRect(f.x, f.y, f.w, f.h); ctx.fillStyle = '#c8c8c8';
+    for (let y = 0, r = 0; y < f.h; y += n, r++) for (let x = (r % 2) * n; x < f.w; x += n * 2) ctx.fillRect(f.x + x, f.y + y, n, n);
+    ctx.restore();
+  }
+
+  // k: the size of the result as a multiple of the canvas (an export at 2× draws every layer twice as big: an upscaled layer's extra detail shows)
+  function composeEditor(target, clear = false, k = 1) {
     const f = editorFrame(), vis = visibleLayers().filter((l) => !l.draft);   // (an inpaint draft is not part of the picture until kept)
     if (!f || !vis.length) return false;
-    target.width = f.w; target.height = f.h;
+    target.width = Math.round(f.w * k); target.height = Math.round(f.h * k);
     const ctx2 = target.getContext('2d');
     ctx2.imageSmoothingQuality = 'high';
-    ctx2.fillStyle = E.bg; ctx2.fillRect(0, 0, f.w, f.h);
+    ctx2.scale(target.width / f.w, target.height / f.h);
+    if (!clear) { ctx2.fillStyle = E.bg; ctx2.fillRect(0, 0, f.w, f.h); }
     ctx2.translate(-f.x, -f.y);
     drawStack(ctx2, vis);
     return true;
@@ -443,7 +494,7 @@ export function createEditor(cfg) {
     ctx.imageSmoothingQuality = 'high';
     ctx.fillStyle = css.getPropertyValue('--stage-bg').trim() || '#14161c'; ctx.fillRect(0, 0, w, hh);
     ctx.save(); ctx.translate(ox, oy); ctx.scale(s, s);
-    if (f) { ctx.fillStyle = E.bg; ctx.fillRect(f.x, f.y, f.w, f.h); }
+    if (f) { ctx.fillStyle = E.bg; ctx.fillRect(f.x, f.y, f.w, f.h); if (E.clear) chequer(ctx, f, s); }
     drawStack(ctx, E.layers.filter((l) => ready(l) && !l.hidden));
     ctx.restore();
     if (E.size && f) {   // shade whatever hangs off a fixed-size canvas
@@ -451,14 +502,30 @@ export function createEditor(cfg) {
       ctx.fillStyle = '#000a'; ctx.beginPath(); ctx.rect(0, 0, w, hh); ctx.rect(fr.x, fr.y, fr.w, fr.h); ctx.fill('evenodd');
     }
     if (!paint.painting()) paint.paintOverlay(ctx);   // (a selection stays visible under the Move tool)
+    E.items.forEach((it, i) => {   // the boxes of the Inpaint panel's items, numbered like <obj_N> in the prompt
+      const r = scr(it), on = i === E.itemSel;
+      ctx.lineWidth = on ? 3 : 2; ctx.strokeStyle = '#2ee6d6'; ctx.fillStyle = '#2ee6d622';
+      ctx.fillRect(r.x, r.y, r.w, r.h); ctx.strokeRect(r.x, r.y, r.w, r.h);
+      ctx.font = '600 13px system-ui, sans-serif';
+      const tag = String(i + 1), tw = ctx.measureText(tag).width + 10;
+      ctx.fillStyle = '#2ee6d6'; ctx.fillRect(r.x, r.y, tw, 20);
+      ctx.fillStyle = '#000'; ctx.fillText(tag, r.x + 5, r.y + 15);
+    });
     const sel = E.sel && ready(E.sel) ? E.sel : null;
     if (!sel) return;
+    for (const m of E.multi) {   // the others selected with it: an outline
+      if (!ready(m)) continue;
+      const { pts } = boxPoints(m);
+      ctx.strokeStyle = accent; ctx.globalAlpha = 0.8; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]);
+      ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.closePath(); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+    }
     if (paint.painting()) {   // the layer being painted: a thin outline, no handles
       const { pts } = boxPoints(sel);
-      ctx.setLineDash([4, 4]); ctx.strokeStyle = accent; ctx.lineWidth = 1;
+      ctx.strokeStyle = accent; ctx.globalAlpha = 0.5; ctx.lineWidth = 1;
       ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(Math.round(q.x) + 0.5, Math.round(q.y) + 0.5) : ctx.moveTo(Math.round(q.x) + 0.5, Math.round(q.y) + 0.5)));
       ctx.closePath(); ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
       paint.paintOverlay(ctx);
       return;
     }
@@ -520,6 +587,15 @@ export function createEditor(cfg) {
       return i < 0 ? null : ['nw', 'ne', 'se', 'sw'][i];
     };
     const onRotate = (p, l) => { const q = scrOf(p), { rot } = boxPoints(l); return Math.hypot(rot.x - q.x, rot.y - q.y) < HANDLE; };
+    // a point on the canvas pulled to the frame's and the layers' edges and middles (Snap on; Alt skips it)
+    const snapPoint = (p, e) => {
+      E.guides = [];
+      if (!E.snap || e.altKey) return { x: Math.round(p.x), y: Math.round(p.y) };
+      const t = snapTargets(null), thr = SNAP / EV.s, sx = snapNearest([p.x], t.xs, thr), sy = snapNearest([p.y], t.ys, thr);
+      if (sx) E.guides.push({ x: sx.at });
+      if (sy) E.guides.push({ y: sy.at });
+      return { x: Math.round(sx ? sx.at : p.x), y: Math.round(sy ? sy.at : p.y) };
+    };
     // where the pointer is on the selected layer's image, as fractions of it
     const frac = (l, p) => { const q = G.canvasToImage(l, p); return { x: q.x / l.img.naturalWidth, y: q.y / l.img.naturalHeight }; };
     let drag = null, lastTap = { t: 0, l: null }, held = [];
@@ -531,6 +607,34 @@ export function createEditor(cfg) {
       lastTap = { t: 0, l: null };   // (a pinch's first finger isn't half a double-tap)
       drawEditorCanvas();
     };
+    // Panning like Photoshop: the middle button, Space and a drag, or a drag on the empty dark area (in Move mode). Registered
+    // first and in the capture phase so it comes before the paint tools' handlers
+    let pan = null, spaceHeld = false;
+    const inField = (e) => /^(INPUT|TEXTAREA|SELECT|BUTTON|A)$/.test(e.target?.tagName || '') || e.target?.isContentEditable;
+    document.addEventListener('keydown', (e) => { if (e.code === 'Space' && !inField(e) && cfg.active()) { spaceHeld = true; if (!e.repeat) cv.style.cursor = 'grab'; e.preventDefault(); } });
+    document.addEventListener('keyup', (e) => { if (e.code === 'Space') { spaceHeld = false; if (!pan) cv.style.cursor = ''; } });
+    const startPan = (e) => {
+      const v = viewZoom.get();
+      pan = { id: e.pointerId, x: e.clientX, y: e.clientY, v };
+      try { cv.setPointerCapture(e.pointerId); } catch { /* the pointer is already gone */ }
+      cv.style.cursor = 'grabbing';
+    };
+    cv.addEventListener('pointerdown', (e) => {
+      if (!EV || EA.exporting || e.pointerType === 'touch') return;
+      if (e.button === 1 || (e.button === 0 && spaceHeld)) { e.stopImmediatePropagation(); e.preventDefault(); startPan(e); }
+    }, true);
+    cv.addEventListener('pointermove', (e) => {
+      if (!pan || e.pointerId !== pan.id) return;
+      e.stopImmediatePropagation(); pan.moved = true;
+      viewZoom.set(pan.v.z, pan.v.tx + e.clientX - pan.x, pan.v.ty + e.clientY - pan.y);
+    }, true);
+    const endPan = (e) => {
+      if (!pan || e.pointerId !== pan.id) return;
+      const tap = pan.tap && !pan.moved;
+      pan = null;
+      if (tap && E.sel) { E.sel = null; renderEditor(); }
+      cv.style.cursor = spaceHeld ? 'grab' : ''; e.stopImmediatePropagation(); };
+    cv.addEventListener('pointerup', endPan, true); cv.addEventListener('pointercancel', endPan, true);
     cv.addEventListener('pointerdown', (e) => {
       if (!EV || EA.exporting) return;
       editorPause();
@@ -539,6 +643,12 @@ export function createEditor(cfg) {
       const p = point(e), sel = E.sel && ready(E.sel) ? E.sel : null;
       drag = null; EVheld = true;
       held = E.layers.map((l) => [l, l.x, l.y, l.scale, { ...l.crop }, l.rotation || 0]);
+      if (E.itemDraw && e.button === 0) {   // a new item box from the corner pressed
+        const q = snapPoint(p, e), it = { x: q.x, y: q.y, w: 0, h: 0, desc: '', ref: '' };
+        E.items.push(it); E.itemSel = E.items.length - 1;
+        drag = { item: it, p0: q };
+        return;
+      }
       if (sel && E.cropping) {   // (in the image's own fractions, so a turned layer crops the same)
         const c = sel.crop, k = corner(p, sel, true), raw = frac(sel, p);
         const q = { x: clamp01(raw.x), y: clamp01(raw.y) };
@@ -567,21 +677,33 @@ export function createEditor(cfg) {
         return;
       }
       const hit = visibleLayers().reverse().find((l) => !l.locked && G.insideLayer(l, p));   // (a locked layer is picked from the list)
-      if (!hit) { EVheld = false; if (E.sel) { E.sel = null; renderEditor(); } return; }
+      if (!hit) {   // the empty dark area: a drag pans the view; a tap deselects
+        EVheld = false;
+        if (e.pointerType !== 'touch' && e.button === 0) { startPan(e); pan.tap = E.sel; }
+        else if (E.sel) { E.sel = null; renderEditor(); }
+        return;
+      }
       const now = performance.now();
       if (hit === lastTap.l && now - lastTap.t < 350) {
         lastTap = { t: 0, l: null }; EVheld = false;
         E.sel = hit; E.cropping = !plain(hit); E.aspect = null; renderEditor();
         return;
       }
+      if (e.shiftKey || E.pickMode) { EVheld = false; togglePick(hit); renderEditor(); return; }
       lastTap = { t: now, l: hit };
+      const group = picked();
       drag = { l: hit, p0: p, x0: hit.x, y0: hit.y };
-      if (E.sel !== hit) { E.sel = hit; renderEditor(); }
+      if (group.length > 1 && group.includes(hit)) drag.group = group.filter((m) => m !== hit && !m.locked).map((m) => [m, m.x, m.y]);   // (the selection moves together)
+      else if (E.sel !== hit || E.multi.length) { pickOnly(hit); renderEditor(); }
     });
     cv.addEventListener('pointermove', (e) => {
       if (!drag) return;
       const p = point(e);
-      if (drag.crop) {
+      if (drag.item) {
+        const q = snapPoint(p, e), it = drag.item;
+        it.x = Math.round(Math.min(drag.p0.x, q.x)); it.y = Math.round(Math.min(drag.p0.y, q.y));
+        it.w = Math.round(Math.abs(q.x - drag.p0.x)); it.h = Math.round(Math.abs(q.y - drag.p0.y));
+      } else if (drag.crop) {
         const l = E.sel, W = l.img.naturalWidth, H = l.img.naturalHeight;
         // (with Snap on, the crop's edges pull to the canvas and the other layers, like a layer's own edges do)
         const snapping = E.snap && !e.altKey, t = snapping ? snapTargets(l) : null, thr = SNAP / EV.s;
@@ -649,12 +771,17 @@ export function createEditor(cfg) {
           if (sx) { l.x = Math.round(l.x + sx.d); E.guides.push({ x: sx.at }); }
           if (sy) { l.y = Math.round(l.y + sy.d); E.guides.push({ y: sy.at }); }
         }
+        for (const [m, mx, my] of drag.group || []) { m.x = mx + (l.x - drag.x0); m.y = my + (l.y - drag.y0); }
       }
       drag.moved = true;
       drawEditorCanvas();
     });
     const end = () => {
       const moved = drag && drag.moved;
+      if (drag?.item) {   // a box too small to mean anything was a click: gone
+        const it = drag.item;
+        if (it.w < 8 || it.h < 8) { E.items.splice(E.items.indexOf(it), 1); E.itemSel = -1; } else E.itemDraw = false;
+      }
       drag = null; EVheld = false; E.guides = [];
       if (moved) { lastTap = { t: 0, l: null }; persistEditor(); }
       renderEditor();
@@ -686,7 +813,7 @@ export function createEditor(cfg) {
       const l = E.sel, n = e.shiftKey ? 10 : 1;
       const nudge = (dx, dy) => { if (E.cropping || !ready(l)) return; l.x += dx; l.y += dy; persistEditor(); };
       const keys = {
-        Escape: () => { if (E.cropping) E.cropping = false; else E.sel = null; },
+        Escape: () => { if (E.cropping) E.cropping = false; else if (E.multi.length) E.multi = []; else E.sel = null; },
         v: () => { E.cropping = false; }, c: () => { if (!plain(l)) { E.cropping = true; E.aspect = null; } },
         Enter: () => { E.cropping = false; },
         Delete: () => removeLayer(l), Backspace: () => removeLayer(l),
@@ -715,7 +842,9 @@ export function createEditor(cfg) {
   function renderEditor() {
     cfg.beforeRender?.();
     E.layers.forEach(loadLayerImage);
-    if (E.sel && !E.layers.includes(E.sel)) E.sel = null;
+    if (E.sel && !E.layers.includes(E.sel)) { E.sel = E.multi.find((l) => E.layers.includes(l)) || null; E.multi = E.multi.filter((l) => l !== E.sel); }
+    E.multi = E.multi.filter((l) => E.layers.includes(l) && l !== E.sel);
+    if (!E.sel) { E.multi = []; E.pickMode = false; }
     if (!E.sel || !ready(E.sel)) E.cropping = false;
     if (cfg.renderPanel) cfg.renderPanel(eng);
     else if (cfg.panel) cfg.panel.replaceChildren(...[].concat(cfg.panelParts(eng)).filter(Boolean));
@@ -749,6 +878,17 @@ export function createEditor(cfg) {
     return cv;
   }
 
+  // ---- several layers at once: E.sel is the first, E.multi the rest; edits in the panel go to all of them ----
+  const picked = () => (E.sel ? [E.sel, ...E.multi.filter((l) => l !== E.sel && E.layers.includes(l))] : []);
+  function togglePick(l) {
+    const all = picked();
+    if (!all.length) E.sel = l;
+    else if (all.includes(l)) { const rest = all.filter((o) => o !== l); E.sel = rest[0] || null; E.multi = rest.slice(1); }
+    else E.multi = [...all.slice(1), l];
+    E.cropping = false;
+  }
+  const pickOnly = (l) => { E.sel = l; E.multi = []; E.cropping = false; };
+
   // Top of the list is drawn on top; tap a row to select that layer
   function layerList() {
     if (!E.layers.length) return hint('Add images from your inputs, generations or device, then tap one on the canvas to move, resize or crop it.');
@@ -758,15 +898,25 @@ export function createEditor(cfg) {
       E.layers.splice(n - 1 - to, 0, l);
       editorChanged();
     };
-    return layerRowsEl([...E.layers].reverse().map((l) => {
+    const several = picked();
+    const bar = h('div', { class: 'row wrap layer-pick' },
+      h('button', { type: 'button', class: `btn small${E.pickMode ? ' on' : ''}`, 'aria-pressed': String(!!E.pickMode),
+        title: 'Taps on the list and the canvas add or drop layers from the selection (or hold Shift)',
+        onclick: () => { E.pickMode = !E.pickMode; renderEditor(); } }, 'Select several'),
+      button('All', () => { const vis = E.layers.filter((l) => !l.mask && !l.draft); E.sel = vis[vis.length - 1] || null; E.multi = vis.slice(0, -1); renderEditor(); }, { cls: 'small' }),
+      several.length ? button('None', () => { E.sel = null; E.multi = []; E.pickMode = false; renderEditor(); }, { cls: 'small' }) : null,
+      several.length > 1 ? hint(`${several.length} selected`) : null);
+    const list = layerRowsEl([...E.layers].reverse().map((l) => {
       const r = ready(l) ? layerRect(l) : null, cropped = l.crop.w < 0.999 || l.crop.h < 0.999;
       const blend = l.blend && l.blend !== 'normal' ? ` · ${BLENDS.find(([v]) => v === l.blend)?.[1].toLowerCase()}` : '';
       return {
-        sel: l === E.sel, off: l.hidden || l.broken,
+        sel: several.includes(l), off: l.hidden || l.broken,
         // (painting the selected layer: tapping it again keeps it, so the brush always has a layer)
         onclick: (ev) => {
           if (ev?.ctrlKey || ev?.metaKey) { paint.selectLayer(l, ev.shiftKey ? 'add' : ev.altKey ? 'sub' : 'new'); return; }   // Ctrl-tap: its pixels become the selection
-          E.sel = l === E.sel && !paint.painting() ? null : l; E.cropping = false; renderEditor();
+          if (ev?.shiftKey || E.pickMode) { togglePick(l); renderEditor(); return; }
+          if (l === E.sel && !E.multi.length && !paint.painting()) { E.sel = null; E.cropping = false; } else pickOnly(l);
+          renderEditor();
         },
         thumb: isCanvas(l) ? canvasThumb(l.img) : h('img', { src: thumbUrl(l.name, 160), alt: '' }),
         name: layerName(l),
@@ -779,6 +929,70 @@ export function createEditor(cfg) {
           iconBtn('Delete layer', icon('trash'), () => { removeLayer(l); renderEditor(); })],
       };
     }), { onReorder: reorder });
+    return h('div', {}, bar, list);
+  }
+
+  // The panel for two or more selected layers: each change goes to every one of them
+  function groupProps(ls) {
+    const done = () => { E.sel = null; E.multi = []; E.pickMode = false; renderEditor(); };
+    const each = (fn) => { for (const l of ls) if (ready(l)) fn(l); editorChanged(); };
+    const bx = unionRect(ls.filter(ready).map(bounds));
+    const f = E.size ? editorFrame() : bx;
+    const mixed = (get) => new Set(ls.map(get)).size > 1;
+    const same = (get, d) => (mixed(get) ? d : get(ls[0]));
+    const aligner = (axis) => (k) => each((l) => {
+      const r = bounds(l);
+      if (axis === 'x') l.x += Math.round(f.x + (f.w - r.w) * k - r.x); else l.y += Math.round(f.y + (f.h - r.h) * k - r.y);
+    });
+    // spread the layers so the gaps between them are equal (the outermost two stay where they are)
+    const spread = (axis) => {
+      const k = axis === 'x' ? ['x', 'w'] : ['y', 'h'], rs = ls.filter(ready).map((l) => [l, bounds(l)]).sort((a, b) => a[1][k[0]] - b[1][k[0]]);
+      if (rs.length < 3) return toast('Spread needs three or more layers', true);
+      const first = rs[0][1], last = rs[rs.length - 1][1], total = last[k[0]] + last[k[1]] - first[k[0]];
+      const gap = (total - rs.reduce((a, [, r]) => a + r[k[1]], 0)) / (rs.length - 1);
+      let at = first[k[0]];
+      for (const [l, r] of rs) { l[k[0]] = Math.round(l[k[0]] + at - r[k[0]]); at += r[k[1]] + gap; }
+      editorChanged();
+    };
+    const scaleBy = (m) => each((l) => {
+      const r = layerRect(l), cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+      l.scale = Math.max(0.01, l.scale * m);
+      const n = layerRect(l); l.x = Math.round(cx - n.w / 2); l.y = Math.round(cy - n.h / 2);
+    });
+    const turn = (d) => each((l) => {
+      if (plain(l)) return;
+      const c0 = G.centre(l); l.rotation = G.snapAngle((l.rotation || 0) + d); const c1 = G.centre(l); l.x += c0.x - c1.x; l.y += c0.y - c1.y;
+    });
+    const nudge = (dx, dy) => each((l) => { l.x += dx; l.y += dy; });
+    const allOn = (k) => ls.every((l) => l[k]);
+    return section(`${ls.length} layers`, done,
+      hint(ls.map(layerName).join(', '), 'layer-title'),
+      rangeField('Opacity', () => same((l) => l.opacity ?? 1, 1), (v) => { for (const l of ls) l.opacity = clamp(v, 0, 1); },
+        { min: 0, max: 1, step: 0.01, fmt: pctFmt, def: 1, onInput: drawEditorCanvas, onChange: editorChanged }),
+      field('Blend', seg(BLENDS, mixed((l) => l.blend || 'normal') ? null : (ls[0].blend || 'normal'), (v) => each((l) => { l.blend = v; }), { wrap: true })),
+      field('Size', h('div', { class: 'row wrap' }, button('Bigger ×1.1', () => scaleBy(1.1), { cls: 'small' }), button('Smaller ×0.9', () => scaleBy(0.9), { cls: 'small' }),
+        button('100%', () => each((l) => { const r = layerRect(l), cx = r.x + r.w / 2, cy = r.y + r.h / 2; l.scale = 1; const n = layerRect(l); l.x = Math.round(cx - n.w / 2); l.y = Math.round(cy - n.h / 2); }), { cls: 'small' }),
+        button('Match the first', () => { const w = layerRect(ls[0]).w; each((l) => { const r = layerRect(l), cx = r.x + r.w / 2, cy = r.y + r.h / 2; l.scale = Math.max(0.01, l.scale * w / r.w); const n = layerRect(l); l.x = Math.round(cx - n.w / 2); l.y = Math.round(cy - n.h / 2); }); }, { cls: 'small', title: 'Every layer the first one\'s width on the canvas' }))),
+      h('div', { class: 'row wrap ed-turns' },
+        iconBtn('Turn a quarter left', icon('rotl'), () => turn(-90)), iconBtn('Turn a quarter right', icon('rotr'), () => turn(90)),
+        iconBtn('Mirror left to right', icon('fliph'), () => each((l) => { l.flipX = !l.flipX; })), iconBtn('Mirror top to bottom', icon('flipv'), () => each((l) => { l.flipY = !l.flipY; }))),
+      field('Move all', h('div', { class: 'row wrap' }, ...[['◀', -10, 0], ['▲', 0, -10], ['▼', 0, 10], ['▶', 10, 0]].map(([t, dx, dy]) => button(t, () => nudge(dx, dy), { cls: 'small', title: `Nudge every layer ${Math.abs(dx || dy)} px` })))),
+      field(E.size ? 'Align to canvas' : 'Align to each other',
+        seg([[0, '⇤ Left'], [0.5, '↔ Centre'], [1, 'Right ⇥']], null, aligner('x'), { action: true }),
+        seg([[0, '⤒ Top'], [0.5, '↕ Middle'], [1, 'Bottom ⤓']], null, aligner('y'), { action: true })),
+      field('Spread evenly', h('div', { class: 'row wrap' }, button('Across', () => spread('x'), { cls: 'small' }), button('Down', () => spread('y'), { cls: 'small' }))),
+      h('div', { class: 'row wrap' },
+        button(allOn('hidden') ? 'Show all' : 'Hide all', () => { const on = !allOn('hidden'); each((l) => { l.hidden = on; }); }, { cls: 'small' }),
+        button(allOn('locked') ? 'Unlock all' : 'Lock all', () => { const on = !allOn('locked'); each((l) => { l.locked = on; }); }, { cls: 'small' }),
+        button(`Delete ${ls.length} layers`, () => {
+          const before = E.layers, tid = docId();
+          E.layers = E.layers.filter((l) => !ls.includes(l)); E.sel = null; E.multi = []; persistEditor(); renderEditor();
+          undoToast(`${ls.length} layers removed`, () => {
+            if (docId() !== tid) return toast(cfg.elsewhere || 'Those layers were in another edit tab', true);
+            E.layers = before; persistEditor(); renderEditor();
+          });
+        }, { cls: 'small danger' })),
+      help('Drag any selected layer on the canvas to move them all. Opacity, Blend and the buttons change every selected layer; the Image tools panel runs on each one in turn. Select one layer to edit it alone.'));
   }
 
   function layerProps(l) {
@@ -954,6 +1168,8 @@ export function createEditor(cfg) {
       E.size ? fixedSizeFields() : null,
       button('Crop canvas…', cropCanvas, { disabled: !E.layers.some((l) => !l.mask), title: 'Crop the whole picture: every layer, together' }),
       colorField('Background', () => E.bg, (c) => { E.bg = c; persistEditor(); drawEditorCanvas(); }),
+      toggle('See-through background (Download as a PNG with alpha)', E.clear, (on) => { E.clear = on; persistEditor(); drawEditorCanvas(); },
+        { help: 'Download leaves the background out, so only the layers show and the rest is transparent. The checks on the canvas are only a guide. Saving to Generate and sending to a model stay on the Background colour.' }),
       field('Arrange layers', seg([['row', 'Side by side'], ['column', 'Stacked'], ['grid', 'Grid']], null,
         (m) => { arrangeLayers(m); renderEditor(); }, { action: true, disabled: !E.layers.length })),
       h('div', { class: 'row' },
@@ -967,6 +1183,8 @@ export function createEditor(cfg) {
     return section('Export', null,
       E.anim ? h('div', { class: 'row wrap' }, button('Export clip', (ev) => exportEditorClip(ev.currentTarget), { cls: 'primary', title: 'The animation as a video in History' }),
         WA.onlyToggle()) : null,
+      field(['Export size', h('span', {}, (() => { const f = editorFrame(); return f ? `${Math.round(f.w * (E.out || 1))}×${Math.round(f.h * (E.out || 1))}` : ''; })())],
+        seg([[1, '1×'], [2, '2×'], [3, '3×'], [4, '4×']], E.out || 1, (v) => { E.out = v; persistEditor(); renderEditor(); })),
       mpInput(() => E.mp, (n) => { E.mp = n; persistEditor(); }),
       h('div', { class: 'row wrap' },
         button(E.anim ? 'Save this frame as input' : 'Save as input', saveEditor, { cls: E.anim ? 'small' : 'small primary' }),
@@ -1016,16 +1234,16 @@ export function createEditor(cfg) {
     } });
   }
 
-  function editorBlob() {
+  function editorBlob(clear = false, k = 1) {
     const cv = document.createElement('canvas');
-    if (!composeEditor(cv)) return Promise.resolve(null);
+    if (!composeEditor(cv, clear, k)) return Promise.resolve(null);
     return new Promise((res) => cv.toBlob(res, 'image/png'));
   }
 
   async function saveEditor() {
     const b = busy('Putting the image together…');   // big layers take a moment to draw and encode
     try {
-      const blob = await editorBlob();
+      const blob = await editorBlob(false, E.out || 1);
       if (!blob) return toast('Add some images first', true);
       const r = await uploadImage(blob, { mp: E.mp, source: 'editor', filename: 'editor.png' });
       (await import('./generate.js')).useInGenerate(r.name, `Saved ${r.width}×${r.height}`);
@@ -1059,7 +1277,7 @@ export function createEditor(cfg) {
   }
 
   async function downloadEditor() {
-    const blob = await editorBlob();
+    const blob = await editorBlob(E.clear, E.out || 1);
     if (!blob) return toast('Add some images first', true);
     const a = h('a', { href: URL.createObjectURL(blob), download: `comfydeck_${Date.now()}.png` });
     a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
@@ -1069,7 +1287,7 @@ export function createEditor(cfg) {
   // another document in this host: its state, posed at the start, nothing selected
   function load(payload) {
     editorPause();
-    Object.assign(E, fromSaved(payload || {}), { sel: null, cropping: false, aspect: null, guides: [], t: 0 });
+    Object.assign(E, fromSaved(payload || {}), { sel: null, multi: [], pickMode: false, cropping: false, aspect: null, guides: [], t: 0 });
     poseAt(0);
   }
   const eng = {
@@ -1077,17 +1295,18 @@ export function createEditor(cfg) {
     blob: editorBlob, frame: editorFrame, composeMask, drawLayer, bounds, layerRect, ready, loading: () => E.layers.some((l) => !l.broken && !ready(l)), addImage, pause: editorPause,
     zoom: viewZoom, get paint() { return paint; },
     // the panel's parts, for the host to lay out
-    topRow, layerList, layerProps: () => (E.sel ? layerProps(E.sel) : null), animProps, canvasProps, exportProps,
+    topRow, layerList, layerProps: () => (picked().length > 1 ? groupProps(picked()) : E.sel ? layerProps(E.sel) : null), picked, animProps, canvasProps, exportProps,
     paintProps: () => paint.paintProps(),
     inpaintProps: () => inpaintSection(eng),
+    toolsProps: () => imageToolsSection(eng),
   };
   wireEditor();
   return eng;
 }
 
-// Crop popup for a loaded image; onApply gets {x,y,w,h} as fractions of it.
+// Crop popup for a loaded image; onApply gets {x,y,w,h} as fractions of it; onCancel runs after Cancel.
 // img: an Image (a picture still loading is fine: the sheet opens at once with a spinner and fills in when it's in)
-export async function openCrop({ img, crop = FULL, onApply }) {
+export async function openCrop({ img, crop = FULL, onApply, onCancel = null }) {
   if (!img.naturalWidth) {
     const seq = loadingSheet('Crop', 'Loading the picture…');
     try { await img.decode(); } catch { if (sheetStillOpen(seq)) closeSheet(); return toast('Could not load the image', true); }
@@ -1138,6 +1357,6 @@ export async function openCrop({ img, crop = FULL, onApply }) {
     actions(
       button('Apply', () => { closeSheet(); onApply(c); }, { cls: 'small primary' }),
       button('Reset', () => { c = { ...FULL }; setAspect(null); }),
-      button('Cancel', closeSheet, { cls: 'small ghost' }), info));
+      button('Cancel', () => { closeSheet(); onCancel?.(); }, { cls: 'small ghost' }), info));
   draw();
 }

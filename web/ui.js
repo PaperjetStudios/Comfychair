@@ -130,11 +130,14 @@ export function numSlider({ min, max, step = 0.01, value, digits = null, label =
 // slow lookups pass a longer one. An error's .data holds the server's detail when it's an object.
 // busy: what the progress bar says while it runs (default: a guess from the path for anything that
 // isn't a GET; false for none). Uploads go through XHR so the bar can show how much has been sent.
-export async function api(path, { method = 'GET', body, form, timeout = form ? 300000 : 30000, busy: label } = {}) {
+// signal: an AbortSignal that stops the request (it then fails with "Stopped").
+export async function api(path, { method = 'GET', body, form, timeout = form ? 300000 : 30000, busy: label, signal } = {}) {
   if (label === undefined) label = method === 'GET' ? false : busyLabel(method, path);
   const b = label ? busy(label) : null;
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeout);
+  signal?.addEventListener('abort', () => ctl.abort());
+  if (signal?.aborted) ctl.abort();
   const opts = { method, headers: {}, signal: ctl.signal };
   if (form) opts.body = form;
   else if (body !== undefined) { opts.body = JSON.stringify(body); opts.headers['Content-Type'] = 'application/json'; }
@@ -143,6 +146,7 @@ export async function api(path, { method = 'GET', body, form, timeout = form ? 3
     r = form ? await xhrSend(path, method, form, ctl.signal, b) : await fetch(path, opts);
     text = await r.text();
   } catch (e) {
+    if (signal?.aborted) throw new Error('Stopped');
     throw new Error(e.name === 'AbortError' ? 'ComfyChair didn\'t answer in time (is the server running?)' : 'Can\'t reach ComfyChair (is the server running and on this network?)');
   } finally { clearTimeout(timer); b?.done(); }
   let data; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
@@ -263,6 +267,7 @@ export const sheetOpen = () => !sheetEl().classList.contains('hidden');
 export function openSheet(...content) {
   SHEET.gen = null;
   SHEET.seq++;
+  sheetEl().classList.remove('picker-full');   // (the image picker sets it again once its sheet is up)
   const wasOpen = sheetOpen();
   const [rest, infos] = splitHelp(content);
   const head = rest.find((c) => c.tagName === 'H3');

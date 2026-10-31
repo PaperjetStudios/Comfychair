@@ -1,5 +1,5 @@
 import { h, api, toast, openSheet, closeSheet, button, section, linkBtn, chip, hint, setIcon } from './ui.js';
-import { S, inputUrl, switchTab } from './core.js';
+import { S, inputUrl, previewUrl, switchTab, thumbUrl } from './core.js';
 import { genLabel } from './media.js';
 import { renderFields, selectTemplate, setVal } from './generate.js';
 import { factsOf, kindDef, kindOf } from './kinds.js';
@@ -28,7 +28,8 @@ export function takeButtons(g, i, { details = false, onDeleted = null } = {}) {
       (await import('./board.js')).boardChanged(r);
     } catch (e) { toast(e.message, true); }
   }, { title: 'Keep it at hand: the Board\'s ★ Pinned' });
-  return [o && hasPlaces(o) ? button('Use as…', () => openUseAs(g, i), { title: 'Every place it can go: Generate, VFX, Video, Sound, the Editor, 3D' }) : null,
+  return [o && ['image', 'video'].includes(kindOf(o)) ? button('Compare…', () => pickCompare(g, i), { title: 'Wipe or put side by side with a picture it was made from, or another take' }) : null,
+    o && hasPlaces(o) ? button('Use as…', () => openUseAs(g, i), { title: 'Every place it can go: Generate, VFX, Video, Sound, the Image tab, 3D' }) : null,
     pin,
     details ? button('Details', async () => (await import('./run.js')).openGeneration(g.id)) : null,
     o ? linkBtn('Download', o.url, { download: o.filename }) : null,
@@ -36,6 +37,27 @@ export function takeButtons(g, i, { details = false, onDeleted = null } = {}) {
       if (!confirm(`Delete generation #${g.id} and its files?`)) return;
       try { await api(`/api/generations/${g.id}`, { method: 'DELETE' }); onDeleted?.(); } catch (e) { toast(e.message, true); }
     }, { cls: 'small danger' })].filter(Boolean);
+}
+
+// Compare… : what this take can be set against (the pictures it was made from, then other takes of its kind, newest
+// first), as a grid of thumbs; a pick opens compare.js (wipe or side by side) with this take on the left.
+function pickCompare(g, i) {
+  const o = g.outputs[i], k = kindOf(o), mine = { o, label: genLabel(g) };
+  const t = S.templates.find((x) => x.id === g.template);
+  const made = (t?.fields || []).filter((f) => f.kind === 'image' && typeof g.params[f.key] === 'string' && g.params[f.key])
+    .map((f) => ({ thumb: thumbUrl(g.params[f.key], 240), side: { o: { url: inputUrl(g.params[f.key]), kind: 'image' }, label: f.label || 'Input picture' }, name: f.label || 'Input' }));
+  const takes = [...S.history.values()].filter((x) => x.id !== g.id && x.status === 'done' && x.project_id === g.project_id)
+    .sort((a, b) => b.id - a.id)
+    .flatMap((x) => x.outputs.filter((y) => kindOf(y) === k).slice(0, 1).map((y) => ({ thumb: previewUrl(y.url, 240), side: { o: y, label: genLabel(x) }, name: genLabel(x) })))
+    .slice(0, 24);
+  const cell = (c) => h('button', { type: 'button', class: 'cmp-pick', title: c.name, onclick: async () => {
+    closeSheet();
+    (await import('./compare.js')).openCompare([mine, c.side]);
+  } }, h('img', { src: c.thumb, alt: '', loading: 'lazy' }), h('span', {}, c.name));
+  openSheet(h('h3', {}, 'Compare with…'),
+    made.length ? section('Made from', null, h('div', { class: 'cmp-picks' }, made.map(cell))) : null,
+    takes.length ? section('Other takes', null, h('div', { class: 'cmp-picks' }, takes.map(cell))) : null,
+    made.length || takes.length ? null : hint('Nothing to compare it with yet.'));
 }
 
 // Every place a finished output can go, by its kind (kinds.js), grouped by tab. Picking one sets it there and
@@ -68,13 +90,13 @@ export function openUseAs(g, index, { before = null } = {}) {
       toast(`${label} is on the Sound tab`);
     })] : k === 'video' ? [go('Its sound onto the timeline', async () =>
       (await import('./media.js')).soundToSoundTab(src, { name: `${g.id}-${g.template}-sound` }), { title: 'Take the clip\'s sound out and put it on the Sound tab\'s timeline' })] : []],
-    ['Editor', k === 'image' ? [go('Open in the Editor', async () => (await import('./editor.js')).addToEditor((await toInput()).name))]
-      : k === 'video' ? [go('First frame in the Editor', async () => (await import('./editor.js')).addToEditor((await toInput('first')).name)),
-        go('Last frame in the Editor', async () => (await import('./editor.js')).addToEditor((await toInput('last')).name))] : []],
+    ['Image', k === 'image' ? [go('Open in the Image tab', async () => (await import('./editor.js')).addToEditor((await toInput()).name))]
+      : k === 'video' ? [go('First frame in the Image tab', async () => (await import('./editor.js')).addToEditor((await toInput('first')).name)),
+        go('Last frame in the Image tab', async () => (await import('./editor.js')).addToEditor((await toInput('last')).name))] : []],
     ['3D', sceneTargets(g, o, src, label, toInput, go)],
     ['Other templates that take it', otherTemplates(k, src, toInput, go)],
     ['More', [
-      g.template === '3d scene' && g.params?.kind !== 'color' ? go('Control video for H3', async () => (await run()).useControlVideo(g, g.params.scene || {}), { title: 'Into deck-h3-ctrl2v: its control video, size and length' }) : null,
+      ctrl3d(g) ? go('Control video for H3', async () => (await run()).useControlVideo(g, g.params.scene || g.params.__face?.scene || {}), { title: 'Into deck-h3-ctrl2v: its control video, size and length' }) : null,
       k === 'video' ? go('Refine with H3', async () => (await run()).useRefineClip(g, index), { title: 'Into deck-h3-refine: H3 draws the clip again from part-way, sharper, with your references (a splat or 3D render)' }) : null,
       k === 'video' && /^deck-h3-/.test(g.template) ? go('Upscale (H3)…', async () => (await run()).openH3Upscale(g, index), { title: 'Sample it again bigger, with this run\'s own prompt, LoRAs and references' }) : null,
       k === 'image' || k === 'video' ? go(k === 'image' ? 'Open in PhotoCraft' : 'Open in EffectCraft',
@@ -85,6 +107,10 @@ export function openUseAs(g, index, { before = null } = {}) {
     ...(groups.length ? groups.map(([tab, btns]) => section(tab, null, h('div', { class: 'row wrap use-as' }, btns)))
       : [hint('Nothing takes this kind of file yet: Download has it.')]));
 }
+
+// a 3D tab render that can steer H3: a depth or pose render, or a depth from the picture (deck-depth-video, run from
+// the 3D tab: scene-export.js marks it params.__face { kind: '3d', scene })
+const ctrl3d = (g) => (g.template === '3d scene' && g.params?.kind !== 'color') || (g.template === 'deck-depth-video' && g.params?.__face?.kind === '3d');
 
 // The templates (other than Generate's) with a field of this kind: picking one opens it with the output in that field
 function otherTemplates(kind, src, toInput, go) {
@@ -148,7 +174,7 @@ function sceneTargets(g, o, src, label, toInput, go) {
     return [go('Reference picture', async () => {
       const { name } = await toInput();
       (await scene()).useAsRef({ kind: 'image', name, url: inputUrl(name), label });
-    }), go('Make a 3D photo', async () => {
+    }), go('Photo in 3D', async () => {
       const { name } = await toInput();
       (await scene()).makePhoto(name);
     }, { title: 'Turns the picture into a mesh in the scene (MoGe, runs in ComfyUI)' }),
@@ -179,7 +205,7 @@ function sceneTargets(g, o, src, label, toInput, go) {
       await scene();
       await (await import('./scene-import.js')).rigRun(g.id, index, label, 'deck-autorig-human');
     }, { title: 'Make It Animatable gives it a skeleton the 3D tab\'s poses, moves and mocap drive' }),
-    go('Rig it as a thing', async () => {
+    go('Rig anything', async () => {
       await scene();
       await (await import('./scene-import.js')).rigRun(g.id, index, label, 'deck-autorig-any', { skinned: true });
     }, { title: 'UniRig: a skeleton for an animal or a prop, keyed bone by bone in the Bones panel' })];

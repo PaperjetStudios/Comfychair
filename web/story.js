@@ -11,7 +11,10 @@ import { fullScreen } from './layout.js';
 import { BLANK as COMP_BLANK, createEditor } from './editor-engine.js';
 import { openCompare } from './compare.js';
 import { addPicture as addCharPicture, castSection, characterById, characterSection, characters, mainPicture, mentionBox, onCharacters } from './characters.js';
-import { TALK_HINT, TALK_TPL } from './talk.js';
+import { TALK_TPL, talkPrompt, talkSeconds } from './talk.js';
+import { MASK_DEFAULT } from './maskpaint.js';
+import { isH3Run } from './board.js';
+import { finishWithH3 } from './run.js';
 import { castLines, dialogueLines, findCharacter, mentioned, packPictures, pictureTag, plain, refPicture, speakerOf, viewLabel, VIEWS as LOOK_VIEWS, wantedView } from './cast.js';
 import { registerUndo } from './undo-dock.js';
 import { ANGLES, MOVES, SIZES } from './shot-words.js';
@@ -56,7 +59,7 @@ const newScene = (o = {}) => ({ id: uid(), slug: '', summary: '', collapsed: fal
 const BLANK = () => ({ title: '', notes: '', style: '', aspect: '16:9', tpl: null, batch: 1, scenes: [newScene()],
   refine: { tpl: null, change: 0.55, batch: 2 }, video: { tpl: null, engine: 'qwen' } });
 let P = BLANK();
-const VIEWS = [['canvas', 'canvas', 'Canvas'], ['board', 'board', 'Board'], ['outline', 'list', 'Outline'], ['script', 'text', 'Script']];
+const VIEWS = [['canvas', 'canvas', 'Canvas'], ['board', 'board', 'Storyboard'], ['outline', 'list', 'Outline'], ['script', 'text', 'Script']];
 const U = { sel: null, doc: null, char: null, speaking: null, view: store.get('deck.story.view', 'canvas') };
 if (!VIEWS.some(([v]) => v === U.view)) U.view = 'canvas';
 
@@ -638,18 +641,18 @@ async function refineShot(s, { stronger = false } = {}) {
     const bf = stronger && boostField(t);
     if (bf) values[bf.key] = Math.min(bf.max ?? 6, 6, (+bf.value || 4) + 2);
     const mf = t.fields.find((x) => x.kind === 'mask' && x.image_key === main.key);
-    if (s.mask?.name && mf) values[mf.key] = { feather: 8, grow: 0, fit: false, name: s.mask.name, box: s.mask.box || null, src: values[main.key], crop: null };
+    if (s.mask?.name && mf) values[mf.key] = { ...MASK_DEFAULT, name: s.mask.name, box: s.mask.box || null, src: values[main.key], crop: null };
     const gens = await queueRun({ template: t.id, values, batch: P.refine.batch });
     s.pending.push(...gens.map((g) => g.id));
     changed();
-    toast(`Refining (#${gens[0].id}${gens.length > 1 ? '…' : ''})${bf ? `, Reference strength ${values[bf.key]}` : ''}: the results land in the shot's frames`);
+    toast(`Redrawing (#${gens[0].id}${gens.length > 1 ? '…' : ''})${bf ? `, Reference strength ${values[bf.key]}` : ''}: the results land in the shot's frames`);
   } catch (e) { toast(e.message, true); }
 }
 const STRONG_TPL = 'deck-krea2-edit';
 const boostField = (t) => t?.fields.find((f) => f.kind === 'float' && f.input === 'ref_boost') || null;
 
 // ---- the look check: a new frame of a shot with characters is compared to their look packs (app/looks.py) ----
-// f.look: { character id: { score, look, colour, drift } }; a drifted one is flagged on the frame and in Refine
+// f.look: { character id: { score, look, colour, drift } }; a drifted one is flagged on the frame and in Redraw
 const LOOK = { status: null };
 async function lookStatus() {
   if (!LOOK.status) LOOK.status = api('/api/looks/status', { busy: false }).catch(() => ({ ready: false, why: 'offline' }));
@@ -663,7 +666,7 @@ async function checkLooks(s, frames) {
       const r = await api('/api/looks/check', { method: 'POST', busy: false, timeout: 180000, body: { image: { generation: f.gen, index: f.index }, characters: cast } });
       f.look = r.results;
       const bad = Object.entries(r.results).filter(([, v]) => v.drift).map(([id]) => characterById(id)?.name).filter(Boolean);
-      if (bad.length) toast(`Look drifted on a frame: ${bad.join(', ')} (Refine can redo it with a stronger reference)`, true);
+      if (bad.length) toast(`Look drifted on a frame: ${bad.join(', ')} (Redraw can redo it with a stronger reference)`, true);
       changed();
     } catch (e) { console.warn('look check', e); return; }
   }
@@ -696,7 +699,7 @@ async function selectionToMask(s) {
     const blob = await new Promise((res) => m.toBlob(res, 'image/png'));
     s.mask = { ...(await saveMask(blob)), box: null, src: chosen(s)?.input || null };
     changed();
-    toast('The selection is the refine\'s mask');
+    toast('The selection is the redraw\'s mask');
   } catch (e) { toast(e.message, true); }
 }
 
@@ -730,9 +733,10 @@ async function talkingShot(s) {
   if (!t) return toast(`${TALK_TPL} isn't installed`, true);
   const said = () => s.voice && s.voice.key === lineKey(s);
   if (!said()) await speakLines(s);
-  if (said()) await makeVideo(s, t, TALK_HINT);
+  if (said()) await makeVideo(s, t, { talk: true });
 }
-async function makeVideo(s, tt = null, extra = '') {
+// talk: a talking shot (talk.js's prompt and length: the shot's words, then what keeps the lips with them)
+async function makeVideo(s, tt = null, { talk = false } = {}) {
   const t = tt || videoTemplate(s);
   if (!t) return toast('No image-to-video template is installed', true);
   if (CV.shot === s.id) await settleCanvas();
@@ -749,8 +753,8 @@ async function makeVideo(s, tt = null, extra = '') {
     const pics = castPictures(t, s, values);
     if (vo && sound) values[sound.key] = { media: vo.media };
     if (vo && voice) values[voice.key] = { media: vo.media };
-    const prompt = s.vprompt.trim() ? plain(s.vprompt.trim(), characters()) : [videoPrompt(s, t, pics), extra].filter(Boolean).join(' ');
-    const len = Math.max(+s.dur || 3, vo ? Math.ceil(vo.seconds + 0.5) : 0);
+    const prompt = s.vprompt.trim() ? plain(s.vprompt.trim(), characters()) : talk ? talkPrompt({ said: videoPrompt(s, t, pics) }) : videoPrompt(s, t, pics);
+    const len = talk && vo ? talkSeconds(vo.seconds, roleField(t, 'len', RROLE)?.max || 20) : Math.max(+s.dur || 3, vo ? Math.ceil(vo.seconds + 0.5) : 0);
     Object.assign(values, valuesByRole(t, { prompt, seed: -1, len, ...sizeFor(t) }, RROLE));
     const gens = await queueRun({ template: t.id, values });
     s.vpending.push(...gens.map((g) => g.id));
@@ -778,7 +782,7 @@ const tplSelect = (list, cur, own, set, label) => {
 };
 function refineSection(at) {
   const { s } = at, t = refineTemplate(s), f = chosen(s), ts = refineTemplates();
-  if (!ts.length) return section('Refine', null, note('No image-to-image or edit template is installed.'));
+  if (!ts.length) return section('Redraw', null, note('No image-to-image or edit template is installed.'));
   const story = pickOf(ts, P.refine.tpl, REFINE_FIRST), denoise = t && roleField(t, 'denoise', RROLE);
   const mf = t && t.fields.find((x) => x.kind === 'mask');
   const mask = s.mask?.name ? h('div', { class: 'row' },
@@ -787,9 +791,9 @@ function refineSection(at) {
     iconBtn('Remove the mask', icon('trash'), () => { s.mask = null; changed(); })) : null;
   const pics = new Map(), probe = {};
   if (t) castPictures(t, s, probe).forEach((v, k) => pics.set(k, v));
-  return section('Refine', null,
+  return section('Redraw', null,
     help('Runs the shot\'s frame (the canvas, flattened) through an edit or image-to-image template, with the shot\'s words, its characters\' looks and pictures, and the story\'s style. The pictures it makes land in the shot\'s frames: choose one, or put it on the canvas as a new layer to keep working.'),
-    field('Template', tplSelect(ts, story, s.rtpl, (v) => { s.rtpl = v; changed(); }, 'Refine template')),
+    field('Template', tplSelect(ts, story, s.rtpl, (v) => { s.rtpl = v; changed(); }, 'Redraw template')),
     refsField(s, t),
     drifted(f) ? field('Look', note(`The look drifted: ${lookNote(f)}`),
       button([icon('refresh'), 'Redo with stronger reference'], () => refineShot(s, { stronger: true }), { cls: 'small primary', disabled: !t })) : null,
@@ -798,10 +802,10 @@ function refineSection(at) {
         button([icon('brush'), s.mask ? 'Paint again' : 'Paint a mask'], () => paintRefineMask(s), { disabled: !f }),
         U.view === 'canvas' ? button([icon('select'), 'The selection'], () => selectionToMask(s), { title: 'What is selected on the canvas (rectangle or lasso)' }) : null)) : null,
     denoise ? field('Change', seg(CHANGE, CHANGE.find(([v]) => Math.abs(v - P.refine.change) < 0.01)?.[0] ?? null, (v) => { P.refine.change = +v; persist(); renderPanel(); }, { wrap: true })) : null,
-    field('Prompt', bound(s, 'rprompt', { rows: 2, placeholder: 'Leave empty for one made from the shot', label: 'Refine prompt', mention: true }),
+    field('Prompt', bound(s, 'rprompt', { rows: 2, placeholder: 'Leave empty for one made from the shot', label: 'Redraw prompt', mention: true }),
       info(refinePrompt(s, t, pics), 'The prompt it makes')),
     field('Pictures per run', seg([1, 2, 3, 4].map((n) => [n, String(n)]), P.refine.batch, (v) => { P.refine.batch = +v; persist(); renderPanel(); })),
-    button([icon('sparkle'), 'Refine'], () => refineShot(s), { cls: 'primary', disabled: !f || !t, title: f ? '' : 'Draw on the canvas or add a frame first' }));
+    button([icon('sparkle'), 'Redraw'], () => refineShot(s), { cls: 'primary', disabled: !f || !t, title: f ? '' : 'Draw on the canvas or add a frame first' }));
 }
 function videoSection(at) {
   const { s } = at, t = videoTemplate(s), ts = videoTemplates();
@@ -864,26 +868,38 @@ const toggleBtn = (label, on, set) => h('button', { type: 'button', class: `btn 
 // ---- the whole story at once ----
 // Every shot's clip drawn again at 1080P with Open-H3-Regenerate's refiner LoRA; the finished clips land as each
 // shot's chosen clip when they end (settle marks them regen), so Shots to video takes them over the drafts.
+// Only H3 runs finish in place (board.js isH3Run): one other clip is set up in Generate (Use as → Finish with H3).
 async function finishTakes() {
-  const list = allShots().map((s) => ({ s, c: clipOf(s) })).filter((x) => x.c && x.c.gen != null && !x.c.regen);
-  if (!list.length) return toast('No shot has a clip yet', true);
-  let info;
-  try { info = await api('/api/h3/regen', { busy: false }); } catch (e) { return toast(e.message, true); }
-  if (!info.available) return toast(info.reason || 'Regenerate needs its refiner LoRA in models/loras', true);
-  const lora = info.loras[0].name;
+  const all = allShots().map((s) => ({ s, c: clipOf(s) })).filter((x) => x.c && x.c.gen != null && !x.c.regen);
+  if (!all.length) return toast('No shot has a clip yet', true);
+  const gen = async (id) => S.history.get(id) || api(`/api/generations/${id}`, { busy: false }).catch(() => null);
+  const list = [], other = [];
+  for (const x of all) (isH3Run(await gen(x.c.gen)) ? list : other).push(x);
+  if (other.length > 1) toast(`${other.length} clips aren't H3 runs: use Use as → Finish with H3 on each`, true);
   let n = 0;
-  for (const { s, c } of list) {
-    try {
-      const run = await api('/api/h3/upscale', { method: 'POST', busy: false,
-        body: { generation: c.gen, index: c.index ?? 0, scale: 1.5, strength: 'strong',
-                regen: { quality: 'standard', lora, target: '1080p' } } });
-      S.history.set(run.id, run);
-      s.vpending = [...(s.vpending || []), run.id];
-      n++;
-    } catch (e) { toast(`#${c.gen}: ${e.message}`, true); }
+  if (list.length) {
+    let info;
+    try { info = await api('/api/h3/regen', { busy: false }); } catch (e) { return toast(e.message, true); }
+    if (!info.available) return toast(info.reason || 'Regenerate needs its refiner LoRA in models/loras', true);
+    const lora = info.loras[0].name;
+    for (const { s, c } of list) {
+      try {
+        const run = await api('/api/h3/upscale', { method: 'POST', busy: false,   // (strength is unused while regen is on)
+          body: { generation: c.gen, index: c.index ?? 0, scale: 1.5, strength: 'medium',
+                  regen: { quality: 'standard', lora, target: '1080p' } } });
+        S.history.set(run.id, run);
+        s.vpending = [...(s.vpending || []), run.id];
+        n++;
+      } catch (e) { toast(`#${c.gen}: ${e.message}`, true); }
+    }
+    changed();
   }
-  changed();
-  if (n) toast(`${n} shot${n === 1 ? '' : 's'} finishing at 1080P`);
+  if (other.length === 1) {
+    const g = await gen(other[0].c.gen);
+    if (!g) return toast(`#${other[0].c.gen} is gone`, true);
+    await finishWithH3(g, other[0].c.index ?? 0);
+    if (n) toast(`${n} shot${n === 1 ? '' : 's'} finishing at 1080P; #${g.id} is set up in Generate`);
+  } else if (n) toast(`${n} shot${n === 1 ? '' : 's'} finishing at 1080P`);
 }
 
 async function shotsToVideo() {
@@ -1198,7 +1214,7 @@ function shotSection(at) {
     field('Status', seg(STATUS, s.status, (v) => { s.status = v; changed(); })),
     U.view !== 'canvas' ? button([icon('canvas'), 'Open on the canvas'], () => { U.view = 'canvas'; store.set('deck.story.view', 'canvas'); select(s.id); }, { title: 'Draw and lay out this shot\'s frame' }) : null,
     field([`Frames`, h('span', {}, `${framesOf(s).length}`)],
-      help('The canvas is the picture drawn and laid out on the canvas view. Tap a frame to make it the shot\'s chosen one (the board shows it, Shots to video uses it); tap the chosen one to see it big. The canvas button on a frame puts it on the canvas as a new layer.'),
+      help('The canvas is the picture drawn and laid out on the canvas view. Tap a frame to make it the shot\'s chosen one (the storyboard shows it, Shots to video uses it); tap the chosen one to see it big. The canvas button on a frame puts it on the canvas as a new layer.'),
       frames,
       h('div', { class: 'row wrap' },
         button([icon('sparkle'), 'Generate frame'], () => makeFrame(s), { cls: 'small primary', disabled: !t }),
@@ -1209,7 +1225,7 @@ function shotSection(at) {
     f ? field('Send the chosen frame', h('div', { class: 'row wrap' },
       button('To Generate', () => toGenerate(f, lbl), { title: 'Into the picture field of the template open in Generate' }),
       button('To VFX', () => toVfx(f, lbl), { title: 'The VFX tab\'s start image' }),
-      button('To the Editor', () => toEditor(f)))) : null,
+      button('To the Image tab', () => toEditor(f)))) : null,
     h('div', { class: 'row wrap st-shot-btns' },
       button([icon('up'), 'Up'], () => moveShot(s.id, -1)), button([icon('down'), 'Down'], () => moveShot(s.id, 1)),
       button([icon('plus'), 'Shot after'], () => addShot(sc, s)),

@@ -7,41 +7,58 @@ tablet-friendly page on your LAN and drives ComfyUI through its API.
 tablet ──http/ws──▶ ComfyChair :8190 ──http/ws──▶ ComfyUI :8188 (can stay on 127.0.0.1)
 ```
 
-**v1 (this scaffold):** template system, generate screen with live (animated) sampler previews,
-LoRA stacks, image upload with megapixel cap, projects, history with full lineage, reuse settings,
-send any output (or a video's first/last frame) back in as an input. **Editor** tab: crop images and
-join them side by side, stacked or in a grid, then save the result as an input. It paints too: the
-tool strip on the left of its canvas has pressure and tilt brushes (pencil, ink, airbrush, marker), an
-eraser, line / rectangle / ellipse, bucket fill, a colour picker and rectangle / lasso selections, on
-any layer or on a **Blank canvas**; layers get blend modes and a lock, and turn and mirror (the round handle above
-the selected layer turns it about its centre, pulling to 15 degree steps; Shift steps by 15, Alt turns freely; the
-layer panel has a Rotation slider, quarter turns and mirrors). Any image field
-has **Draw**: a full-screen sketch pad with pen pressure and palm rejection (once a pen touches it,
-finger touches are ignored), e.g. to sketch the source for the `-i2i` templates. **Video** tab: trim
-generated clips, order them and export one video (ffmpeg); the result lands in History. **Board**:
-every image, video and sound in the project as a pin board, with pins, filters and a tile-size slider (sounds show their
-waveform; tap one for a player). **Use as…** (in the Board's gallery, key U, and in History) lists every place an output
-fits: the Generate template's fields of its kind (a clip also gives its first or last frame to image fields and its sound
-to sound fields), the VFX tab's source, matte, start image, sound or voice, the Video and Sound timelines, the Editor, and
-the 3D tab's reference or a 3D photo.
-**☑ Select** (or long-press a tile) picks several: **New edit** puts the images in the Editor as a
-fresh layout (Undo brings the old one back), **To video** adds them to the timeline, **Delete**
-removes their generations (it asks first). **⤓ Import clip** (also "From a link or big file…" in every
-video picker) cuts a piece out of a YouTube/Reddit/X/Vimeo link, a video file on the PC, or a file on
-the device, and saves it to the media library (see *Importing clips* under Setup).
-**Compare** (select two tiles on the Board) shows them full screen as a wipe (drag the line: the split shows as a
-percentage) or side by side, two clips playing in step. **Sound** tab: a multi-track sound editor (see *Sound* below).
-Every slider is a number box with a bar behind it: hold it, then pull sideways to change it (a swipe scrolls past it), or
-tap to type.
-**Story** tab: a storyboard of scenes and shots: draw each shot's frame on a canvas, refine it, make it a video, with the project's characters (see *Story* below).
-**3D** tab: block out a shot with soft mannequins, boxes and a room, keyframe them and the camera, and
-render it as a depth video for `deck-h3-ctrl2v` (see below).
-The preview pinch/wheel-zooms, the picker has a camera button, and ⛶ goes full screen.
-**⚙ Settings → Projects** lists every project with its size on disk and number of generations: drag ⠿ (or ↑/↓) to
-change the picker's order, ✎ renames, ⧉ duplicates (files, saved tabs and history, copied in the background) and 🗑
-deletes a project with its history and files for good (type its name to confirm).
+**What it does:** a template system, live (animated) sampler previews, LoRA stacks, projects and a history with full
+lineage, plus editors for images, video and sound, a 3D blocking tab and a storyboard. The top bar groups the tabs into
+three spaces: **Make** (Story, Generate, VFX, 3D), **Edit** (Image, Video, Sound) and **View** (Board, History). Tap a
+space to go to it and its tools' tabs follow; a sideways swipe along the top bar or Alt + the arrow keys moves between
+them. Every slider is a number box with a bar behind it: hold it, then pull sideways to change it (a swipe scrolls past
+it), or tap to type. The preview pinch/wheel-zooms, the picker has a camera button, and ⛶ goes full screen.
 
-**Next:** crop/compose tool (character sheets) → scenes/shots/takes → editor tab → extend/bridge shots.
+**Story** is a storyboard of scenes and shots: draw each shot's frame on a canvas, redraw it, make it a video, with the
+project's characters (see *Story* below).
+
+**Generate** runs a template: set its pictures, prompt, LoRA stack, size and seed and watch the sampler's preview.
+Uploads have a megapixel cap. Reuse a run's settings, or send any output (or a video's first or last frame) back in as
+an input. Any image field has **Draw**: a full-screen sketch pad with pen pressure and palm rejection (once a pen
+touches it, finger touches are ignored), e.g. to sketch the source for the `-i2i` templates.
+
+**Image** crops images and joins them side by side, stacked or in a grid, then saves the result as an input. It paints
+too: the tool strip on the left of its canvas has pressure and tilt brushes (pencil, ink, airbrush, marker), an eraser,
+line / rectangle / ellipse, bucket fill, a colour picker and rectangle / lasso selections, on any layer or on a
+**Blank canvas**. Layers get blend modes and a lock, and turn and mirror: the round handle above the selected layer
+turns it about its centre, pulling to 15 degree steps (Shift steps by 15, Alt turns freely), and the layer panel has a
+Rotation slider, quarter turns and mirrors. **Image tools** and **Inpaint and extend** are described below.
+
+**Video** trims generated clips, orders them and exports one video (ffmpeg); the result lands in History.
+**⤓ Import clip** (also "From a link or big file…" in every video picker) cuts a piece out of a YouTube/Reddit/X/Vimeo
+link, a video file on the PC, or a file on the device, and saves it to the media library (see *Importing clips* under
+Setup).
+
+**Sound** is a multi-track sound editor (see *Sound* below).
+
+**VFX** runs one effect per tab (Effect 1, Effect 2…) on a clip or a still, with LTX-2.5 and friends: control maps,
+restyles, mattes and keying, replace and remove, text and sound to video, performance transfer (see *VFX templates*
+under *Making templates*).
+
+**3D** blocks out a shot with soft mannequins, boxes and a room, keyframes them and the camera, and renders it as a
+depth, pose or colour video, e.g. for `deck-h3-ctrl2v` (see below).
+
+**Board** shows every image, video and sound in the project as a pin board, with pins, filters and a tile-size slider
+(sounds show their waveform; tap one for a player). **Use as…** (in the Board's gallery, key U, and in History) lists
+every place an output fits: the Generate template's fields of its kind (a clip also gives its first or last frame to
+image fields and its sound to sound fields), the VFX tab's source, matte, start image, sound or voice, the Video and
+Sound timelines, the Image tab, and the 3D tab's reference or a 3D photo. **☑ Select** (or long-press a tile) picks
+several: **New edit** opens a new Image tab with the images, **To video** adds them to the timeline, **Delete** removes
+their generations (it asks first). In the gallery, **✎ Edit here** puts an image in the open Image tab (Undo brings the
+old layers back). **Compare** (select two tiles) shows them full screen as a wipe (drag the line: the split shows as a
+percentage) or side by side, two clips playing in step.
+
+**History** lists every run with its prompt, settings and lineage. **Replay & edit** loads a run's settings into
+Generate and **Run again** re-queues it unchanged.
+
+**Settings** (⚙) holds, among other things, **Projects**: every project with its size on disk and number of
+generations. Drag ⠿ (or ↑/↓) to change the picker's order, ✎ renames, ⧉ duplicates (files, saved tabs and history,
+copied in the background) and 🗑 deletes a project with its history and files for good (type its name to confirm).
 
 ---
 
@@ -102,8 +119,8 @@ Then open `https://<box-ip>:8190` on the tablet and ⋮ → Install app. Give th
 
 (`deploy/tailscale-https.sh` does the same through Tailscale, for reaching the box away from home.)
 
-**ComfyChair Lab**, the experimental copy (branch `lab`: three main spaces, travel with three fingers,
-things with a little physics), runs beside this one as its own app, with its own data. It boots the same
+**ComfyChair Lab**, the experimental copy (branch `lab`: things with a little physics; the three spaces and their
+travel are in the main app now), runs beside this one as its own app, with its own data. It boots the same
 way: `comfyui.target` starts it with ComfyUI and ComfyChair (a drop-in, `comfyui.target.d/lab.conf`, so
 `install-services.sh` keeps it), and it uses ComfyChair's HTTPS certificate. Once, and again to update it:
 
@@ -182,7 +199,9 @@ still lists; it fails when run. You only need the files of the templates you use
 | [Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler) | H3 upscale (`POST /api/h3/upscale`) |
 | [Veda-on-ComfyUI](https://github.com/veda-sparse/Veda-on-ComfyUI) | optional Veda sparse attention for H3 (Advanced) |
 | [comfyui-krea2edit](https://github.com/lbouaraba/comfyui-krea2edit) (2.0+) | `deck-krea2-edit`, `deck-krea2-identity` |
-| `comfy_nodes/deck_*` (this repo) | face crop, pose smoothing, motion save, TAPNext++, rig save: symlink each into `custom_nodes` |
+| [ComfyUI-MMAudio](https://github.com/kijai/ComfyUI-MMAudio) | `deck-mmaudio-foley` (with `comfy_nodes/deck_mmaudio`) |
+| [ComfyUI-Idol](https://github.com/Nynxz/ComfyUI-Idol) | `deck-3d-object-splat` |
+| `comfy_nodes/deck_*` (this repo) | face crop, pose smoothing, motion save, TAPNext++, rig save, MMAudio sampler: symlink each into `custom_nodes` |
 
 Three packs carry local fixes, each marked `(ComfyChair patch)`; an update or reinstall drops them, so grep for the
 marker afterwards and re-apply:
@@ -299,6 +318,9 @@ IC-LoRAs, each for one template:
 | both | `clip_vision` | `dino_v3_L_naf_fp32.safetensors` | 1.13 GB |
 | `deck-3d-object` (its FOV) | `geometry_estimation` | `moge_2_vitl_normal_fp16.safetensors` | 631 MB |
 | both (cut out) | `background_removal` | `birefnet.safetensors` | 424 MB |
+| `deck-3d-object-splat` (Idol) | `diffusion_models` | `idol_fp16.safetensors` | 741 MB |
+| `deck-3d-object-splat` | `vae` | `idol_decoder_fp16.safetensors`, `flux2-vae.safetensors` | 576 MB |
+| `deck-3d-object-splat` | `clip_vision` | `dino_v3_vit_h.safetensors` | 1.68 GB |
 | `deck-autorig-human` | `mia` (the pack downloads) | `pose.pth`, `bw.pth`, `bw_normal.pth`, `joints.pth`, `joints_coarse.pth` | ~2.2 GB |
 | `deck-autorig-any` | `unirig` (the pack downloads) | its checkpoint | |
 | VFX tracking (TAPNext++) | `tapnet` | `tapnextpp_ckpt.pt` | 2.4 GB |
@@ -309,6 +331,9 @@ IC-LoRAs, each for one template:
 | Template | Folder | File | Size |
 |---|---|---|---|
 | `deck-ace-music` | `checkpoints` | `ace_step_1.5_turbo_aio.safetensors` | 9.4 GB |
+| `deck-mmaudio-foley` | `mmaudio` | `mmaudio_large_44k_v2_fp16.safetensors` | 2.06 GB |
+| `deck-mmaudio-foley` | `mmaudio` | `mmaudio_vae_44k_fp16.safetensors`, `mmaudio_synchformer_fp16.safetensors` | 611 + 475 MB |
+| `deck-mmaudio-foley` | `mmaudio` | `apple_DFN5B-CLIP-ViT-H-14-384_fp16.safetensors` | 1.97 GB |
 
 `deck-ltx-t2a` and `deck-ltx-a2v` use the LTX files above. The voice tools keep their own models outside
 ComfyUI (see *Voice tools*).
@@ -327,7 +352,7 @@ ComfyUI (see *Voice tools*).
 |---|---|
 | `@Prompt` | every widget on that node (types, ranges and dropdowns come from ComfyUI) |
 | `@Sampler [seed,steps,cfg]` | only the listed inputs |
-| `@1 Prompt` | a leading number sets the group's position |
+| `@1 Prompt` | a leading number orders the group among groups of the same kind (see below) |
 | `@LoRAs` on a **LoraLoader** or **LoraLoaderModelOnly** | a LoRA stack: add/remove/disable, strength sliders. At run time the node is chained N times, or bypassed if the stack is empty |
 | `@Start frame` on a **LoadImage** | image picker: a gallery of input images and generated outputs, plus upload (with megapixel cap). Left empty, the node is removed and whatever it fed is unplugged, so it works for optional inputs (reference images, first/last frames) |
 | the same `@References` title on several nodes | one group; the fields are numbered (Image 1, Image 2…) |
@@ -337,8 +362,10 @@ A **Primitive** node (`PrimitiveInt`, `PrimitiveFloat`…) shows as one number l
 
 **VFX templates** (the **VFX** tab). Each effect runs one template by id (`deck-ltx-ripple`,
 `deck-ltx-v2v-lora`, `deck-ltx-alpha`, `deck-sam3-video-mask`, `deck-ltx-cleanplate`, `deck-ltx-t2v`,
-`deck-ltx-layout`, `deck-ltx-tracks`, `deck-ltx-ingredients`, `deck-ltx-upscale`; see `EFFECTS` in
-`web/vfx.js`). An effect whose template is missing shows a note instead of Run. The tab fills these
+`deck-ltx-layout`, `deck-ltx-tracks`, `deck-ltx-ingredients`, `deck-ltx-upscale`; Quick: `deck-depth-video`,
+`deck-canny-video`, `deck-scribble-video`; Replace and Extend frame: `deck-ltx-inpaint`; Sound to video and Talking
+shot: `deck-ltx-a2v`; Cut out (Alpha Gen) on a masked area: `deck-ltx-alpha-crop`; Drive a still, reading the pose
+with SDPose: `deck-h3-drive-sd`, `deck-ltx-drive-sd`; see `EFFECTS` in `web/vfx.js`). An effect whose template is missing shows a note instead of Run. The tab fills these
 tagged fields, found by kind and group name (`ROLES` in `web/vfx.js`):
 
 | Node title | Filled with |
@@ -406,12 +433,12 @@ templates use it (`@12 Pose smoothing`). Link it like the others
 (`ln -s ~/Programs/comfydeck/comfy_nodes/deck_posesmooth ~/Programs/ComfyUI/custom_nodes/deck_posesmooth`) and
 restart ComfyUI.
 
-**Refine matte** (VFX → Key, `POST /api/video/matte`) cleans up a matte or mask, or combines two (SAM3's and
-Alpha Gen's, say): Either, Both, First minus second or Average, then grow / shrink, fill holes, steady over
+**Clean up matte** (VFX → Matte, `POST /api/video/matte`) cleans up a matte or mask, or combines two (the SAM3 mask
+and the **Cut out (Alpha Gen)** matte, say): Either, Both, First minus second or Average, then grow / shrink, fill holes, steady over
 frames, edge levels, feather and invert. It runs with ffmpeg on the server (`videoedit.matte_filters`) and lands in
 History as a new matte for Apply matte or Clean plate.
 
-**Keying** needs no template: the Video tab's **Key…** button on a clip, and the VFX tab's **Colour key**
+**Keying** needs no template: the Video tab's **Colour key…** button on a clip, and the VFX tab's **Colour key**
 and **Apply matte** effects, call `POST /api/video/key`. It writes a VP9 webm with alpha into History.
 The Video preview and its export put a keyed clip over the tracks below it.
 
@@ -439,11 +466,12 @@ one from each close-up (`162,198,234,270`), 4 per row.
 Pick the sheet as a reference in `deck-h3-ref2v` for the next video. With a fixed seed the same
 character gives the same sheet; if the orbit runs fast or slow, change **Sheet frames** (frame = seconds × 24).
 The length is fixed, so changing the shot timestamps in the prompt also means changing the frames.
+Shorter sheets for a model of the upper body, same inputs and settings: `deck-h3-charsheet-bust` (8 s, 6 pictures, 3 per row: front, side, back, other side, then close-ups of the face front and three-quarter) and `deck-h3-charsheet-bust4` (5.5 s, 4 pictures: front, side, back, face front). The camera frames head to mid-waist the whole way. They come from `dev/make_bust_sheet_templates.py`; frames are untested on a GPU, so change **Sheet frames** if the orbit lands off.
 `deck-h3-objectsheet` is the same for props and other objects: the close-ups are front, three-quarter,
 the top (high angle) and a small detail.
 
 **Blocking a shot** (`deck-h3-ctrl2v` + the **3D** tab): ref2v plus H3's Fun ControlNet, driven by a
-control video. The 3D tab works like the Editor: **+ Add** people (soft, featureless mannequins), boxes,
+control video. The 3D tab works like the Image tab: **+ Add** people (soft, featureless mannequins), boxes,
 balls, cylinders, walls or a room; the layer list holds the Camera, the Room and the objects (◉ hides
 one), and under it are the selected layer's settings. Everything but the camera can be deleted (with
 Undo). Tap an object to select it and get a gizmo; tap it again (or W / E / R, or the toolbar) to switch
@@ -464,42 +492,18 @@ words as the Story tab (wide, close, low angle, the camera pushes in). Tap a chi
 edit the line. **To Story** adds one Story shot per cut, with a clay frame.
 
 **Objects from a photo.** **Use as → Make a 3D object** (or **+ Add → Object from photos…**) turns a picture into a
-textured model with Pixal3D. **From this photo only** reads the front view; **Make its views first** renders an orbit
-sheet of the object and takes its four sides (front, left, back, right) for a rounder model; **Pick…** takes pictures of
-your own from those sides. The mesh comes in as a model layer, fitted and standing on the floor in the middle of the
+textured model with Pixal3D. The sheet is a board of four slots (Front, Left, Back, Right): tap a slot to pick a photo for it
+(the picker can crop it first), or **Split one picture…** to draw a box round each view of a character sheet. One filled slot
+makes the model from that photo alone (**Make its other views first** renders an orbit sheet and takes the four sides);
+two or more are used together for a rounder model. The mesh comes in as a model layer, fitted and standing on the floor in the middle of the
 scene. Its fields are **Cut out** (BiRefNet, on), **Detail** (sampling steps), **Texture** (off leaves the plain shape),
-**Seed** and **Texture resolution**. `deck-3d-object-trellis` does the same with TRELLIS.2, to compare.
+**Seed** and **Texture resolution**. When `deck-3d-object-trellis` is installed, **Model (one photo)** switches between
+Pixal3D and TRELLIS.2, to compare. Two or more views run `deck-3d-object-multi`, which always uses Pixal3D.
+With one photo, **Make a splat (Idol)** (`deck-3d-object-splat`) makes a Gaussian splat of the object instead, with the
+sides the photo doesn't show; turn on **The picture is a photograph** for a camera photo, off for a render. It
+lands as a splat layer. **Photo as a splat (SHARP)…** (in + Add, `POST /api/scene/splat`) turns a picture into a splat
+placed where the shot camera is, seen through the photo's lens.
 
-**Rigged models.** A model made from a photo, or an import, can be **rigged** as a person (the model layer's
-**🦴 Rig it as a person**): Make It Animatable gives it the posable figure's skeleton, and it then lands in the scene as a
-**rigged layer** that takes every pose, Pair, Move, IK, Hands, Face and mocap feature, and renders in depth and pose
-videos. Its bones are matched by name (Mixamo, Rigify) or by where they sit; the panel says how many follow and which
-joints are missing, and can re-map or turn it 180°. "Rig anything" (UniRig) is the general case for animals and props. If a joint gets no bone, the layer's panel lists
-it and lets you map one (or point a joint at another bone), and **Re-map the bones** starts over. ComfyUI reads its list of meshes when it starts:
-a model made in this session needs one ComfyUI restart before the rig can find it.
-
-**Skinned models.** A model rigged with UniRig — an animal, a prop — lands as a **skinned layer**, posed bone by bone:
-**Bones** in its panel picks a bone, three sliders turn it, and **Turn it** keeps that turn at the playhead (a key when the
-layer has keys; with Auto key off, ◆ Key keeps it). **Key every bone** keys the whole skeleton where it stands, so single
-bones can move from there; **Put it back** returns one bone to the model's bind pose. **Drag a bone dot** in the view and
-the chain up to that bone reaches for the pointer (the shoulder, elbow and wrist solve together), keyed at the playhead;
-let go to keep it. **Mirror the bones** turns the whole pose onto the other side (Left/Right bones swap, centre bones
-mirror in place) for both keys and the resting pose. **Name** renames a bone (and the keys it holds) in the model and the
-layer (the name is kept in the layer and put back when the file loads again), and **Forget this bone** drops that one
-bone's keys and resting turn, back to the model's bind pose. **Add a bone** and **Delete this bone** change the skeleton
-and weight the mesh again with the nearest four bones (a simple re-skin, not a heat-diffusion one: look at the result). Get one with **Rig anything** on a
-model layer, **Use as → Rig it as a thing**, or **Key its own bones** on an import that already has a skeleton.
-
-
-**Refining a render** (`deck-h3-refine`): **Use as → Refine with H3** on any clip (a splat camera move rendered as colour
-video, a 3D render) loads it into a template that encodes it into H3's latent, enlarges it with the H3 latent upscaler
-(**Upscale**, 1 keeps the size) and samples it again from part-way (**Strength**: Denoise and Steps), conditioned on the
-prompt and up to four **References** (the splat's source photo first). An optional **Depth video** of the same camera
-(the 3D tab's depth render) is resized to match and applied as H3's Fun ControlNet (**Depth hold**), so a stronger pass
-can clean up without moving the room. The clip is trimmed to H3's frame grid (17k+5 frames at 24 fps); no sound.
-**Regenerate** (off) adds the Open-H3-Regenerate refiner LoRA (**Regenerate LoRA**, after the turbo LoRA) and switches the
-sampler to its own **Standard** schedule (2 steps from 0.70), so **Strength** is ignored while it is on; leave the turbo
-LoRA off with a merged refiner, or on with the refiner-only file.
 **Real size**: the scene is in metres. Each object's settings show its **Real size** (height × width × depth).
 The person button on the view's bar puts a 1.8 m outline person beside what is selected, and the floor has
 faint metre marks; neither ever shows in a render. **Measure…** on an object: tap two points on it, then say
@@ -526,30 +530,90 @@ fingers are joints of their own (three per finger, a row per hand in the key she
 **Moves ▸ From video** copies a person's movement from a clip onto the figure. Clean-up is on: steadier
 joints, bone lengths held, feet planted. When the capture has hands and a face, those move the fingers and
 the head. **With its camera** keeps a body still while the camera pans; a camera that travels is not solved.
-**Render pose video** draws the posable people as OpenPose stick figures for a pose control video, with
-each hand's 21 points and the face's 68 (DWPose's layout; the face points follow the expression; either
-**Regenerate a take.** On a finished H3 run, **Upscale (H3)…** offers **Regenerate**: the Open-H3-Regenerate refiner
-LoRA draws the clip again at **1.5×** or **1080P**, in **Standard** (2 steps from 0.70) or **Enhanced** (from 0.80), and
-the clip's own sound goes back in, so speech stays in sync. It sharpens more than the plain upscale and holds faces
-better than Strong. The mode shows only when its LoRA is in `models/loras` — Kijai's refiner (5.6 GB) keeps the run's
-turbo LoRA; the 2 GB merged file needs a Hugging Face token. 2K needs a card over 24 GB; 1080P is the most this box
-should draw. Whole clips at once: on the **Board** select clips and tap **Finish**; in the **Story** bar **Finish takes**
-draws every shot's clip again, and the finished take becomes that shot's clip (**Shots to video** takes it over the
-draft). **Use as → Finish with H3** does the same for any clip — an LTX take, a scene render — loading it into
-`deck-h3-refine` with Regenerate already on.
-can be turned off under Render; **Render both** makes the depth and pose videos of the same shot). **Prompt from the poses** writes
+The pose video draws the posable people as OpenPose stick figures for a pose control video, with
+each hand's 21 points and the face's 68 (DWPose's layout; the face points follow the expression; **Hands** and
+**Face points** can each be turned off in the Render sheet). **Prompt from the poses** writes
 what each `<Subject N>` does, in order, to copy or add to the Generate prompt.
 **🖼 Photo in 3D…** (in + Add) turns a picture into a mesh with MoGe in ComfyUI (a model from
 `Comfy-Org/MoGe` in `ComfyUI/models/geometry_estimation`) and puts it where the shot camera is, seen
 through the photo's lens; key a small camera move and render the depth video. The mesh is also in
 History (**Add to 3D**).
-**Render depth video** puts the clip in History (near = white, far = black, the range fixed over the
-clip), and **Use in H3 control** opens `deck-h3-ctrl2v` with it, the size and the length set. Strength 1
-with End 0.4 keeps the layout and camera move but lets H3 draw real people and furniture; ending later
-copies the blockout's shapes (and overrides the references), lower strength loses the camera. Keep the
-walls about where the real ones should be: H3 sizes the room from them. **Soften edges** blurs the
-depth so the shapes are followed less literally. **📷 Save frame** saves a lit clay frame as an input.
-The control video is fitted to the output's size (centre crop) and length (the last frame is held).
+
+**🎬 Render…** opens one sheet. Tick the videos to make: **Depth**, **Pose** (when a posable person is in the scene)
+and **Colour**. They run one after another over the same shot, and a cancelled or failed one stops the rest.
+**One take** is one video with the cuts in it; **Each shot** is one video per shot, labelled Shot N. Depth has
+**Depth range** (**Follow the shot**: each moment gets its own near and far, eased over about a second, and a cut
+starts again; **Whole clip**: one near and far for the whole clip, so a long camera move squeezes part of it into a few
+greys), **Depth from** (**3D shapes**: exact depth from the objects, where a splat is only a box; **The picture**: the
+shot is rendered in colour and Video Depth Anything estimates its depth, so a splat gets real depth, but slower;
+**Both**: the picture's depth with the objects' exact depth laid over it) and **Soften edges**, which blurs the depth
+so the shapes are followed less literally. Pose has the **Hands** and **Face points** toggles.
+
+The depth video goes to History (near = white, far = black), and **Use in H3 control** opens `deck-h3-ctrl2v` with it,
+the size and the length set. Strength 1 with End 0.4 keeps the layout and camera move but lets H3 draw real people and
+furniture; ending later copies the blockout's shapes (and overrides the references), lower strength loses the camera.
+Keep the walls about where the real ones should be: H3 sizes the room from them. The control video is fitted to the
+output's size (centre crop) and length (the last frame is held). **📷 Save frame** saves a lit clay frame as an
+input; **Save depth frame** and **Save pose frame** save the depth or the stick figures of the current frame as a
+picture.
+
+**Rigged models.** A model made from a photo, or an import, can be **rigged** as a person (the model layer's
+**🦴 Rig it as a person**): Make It Animatable gives it the posable figure's skeleton, and it then lands in the scene as a
+**rigged layer** that takes every pose, Pair, Move, IK, Hands, Face and mocap feature, and renders in depth and pose
+videos. Its bones are matched by name (Mixamo, Rigify) or by where they sit; the panel says how many follow and which
+joints are missing, and can re-map or turn it 180°. **Rig anything** (UniRig) is the general case for animals and props. If a joint gets no bone, the layer's panel lists
+it and lets you map one (or point a joint at another bone), and **Re-map the bones** starts over. ComfyUI reads its list of meshes when it starts:
+a model made in this session needs one ComfyUI restart before the rig can find it.
+
+**Skinned models.** A model rigged with UniRig — an animal, a prop — lands as a **skinned layer**, posed bone by bone:
+**Bones** in its panel picks a bone, three sliders turn it, and **Turn it** keeps that turn at the playhead (a key when the
+layer has keys; with Auto key off, ◆ Key keeps it). **Key every bone** keys the whole skeleton where it stands, so single
+bones can move from there; **Put it back** returns one bone to the model's bind pose. **Drag a bone dot** in the view and
+the chain up to that bone reaches for the pointer (the shoulder, elbow and wrist solve together), keyed at the playhead;
+let go to keep it. **Mirror the bones** turns the whole pose onto the other side (Left/Right bones swap, centre bones
+mirror in place) for both keys and the resting pose. **Name** renames a bone (and the keys it holds) in the model and the
+layer (the name is kept in the layer and put back when the file loads again), and **Forget this bone** drops that one
+bone's keys and resting turn, back to the model's bind pose. **Add a bone** and **Delete this bone** change the skeleton
+and weight the mesh again with the nearest four bones (a simple re-skin, not a heat-diffusion one: look at the result). Get one with **Rig anything** on a
+model layer, **Use as → Rig anything**, or **Key its own bones** on an import that already has a skeleton.
+
+**Refining a render** (`deck-h3-refine`): **Use as → Refine with H3** on any clip (a splat camera move rendered as colour
+video, a 3D render) loads it into a template that encodes it into H3's latent, enlarges it with the H3 latent upscaler
+(**Upscale**, 1 keeps the size) and samples it again from part-way (**Strength**: Denoise and Steps), conditioned on the
+prompt and up to four **References** (the splat's source photo first). An optional **Depth video** of the same camera
+(the 3D tab's depth render) is resized to match and applied as H3's Fun ControlNet (**Depth hold**), so a stronger pass
+can clean up without moving the room. The clip is trimmed to H3's frame grid (17k+5 frames at 24 fps); no sound of its own (Board **Finish**, Story **Finish takes** and the History sheet go through `POST /api/h3/upscale`, which puts the clip's own sound back; see below).
+**Regenerate** (off) adds the Open-H3-Regenerate refiner LoRA (**Regenerate LoRA**, after the turbo LoRA) and switches the
+sampler to its own schedule, so **Strength** is ignored while it is on: **Standard** is 2 steps from 0.70, **Enhanced**
+starts from 0.80. The LoRA draws the clip again at **1.5×** or **1080P**, and the clip's own sound goes back in, so
+speech stays in sync. It sharpens more than the plain upscale and holds faces better than Strong. The mode shows only
+when its LoRA is in `models/loras`: Kijai's refiner (5.6 GB) keeps the run's turbo LoRA on, and the 2 GB merged
+file needs it off and a Hugging Face token to download. 2K needs a card over 24 GB; 1080P is the most this box
+should draw.
+
+On a finished H3 run, **Upscale (H3)…** offers the same Regenerate. For whole clips at once, select them on the
+**Board** and tap **Finish**, or tap **Finish takes** in the **Story** bar: each shot's clip is drawn again, and the
+finished take becomes that shot's clip (**Shots to video** takes it over the draft). Both work in place on H3 runs.
+A single clip from another model (an LTX take, a scene render) goes through **Use as → Finish with H3** instead,
+loaded into `deck-h3-refine` with Regenerate already on; several such clips are refused.
+
+**Image tools** (Image tab, panel **Image tools**; the same idea as the VFX tab's effects). Pick a tool, then **Run**.
+It works on the selected picture layer, or on the whole picture when none is selected, and the result lands as a layer
+on top.
+- **Maps:** **Depth map**, **Canny edges**, **Scribble** and **Pose**. Depth has **Detail** (Fine: the Large model,
+  sharpest; Fast: the Small one, about five times quicker). Canny and Scribble have **Amount** (More lines, Normal,
+  Fewer). Pose can read with DWPose (CPU) or SDPose (GPU, holds up better on hard poses, up to 2 people). These
+  templates are the VFX tab's Quick effects too: `web/maps.js` names them once for both.
+- **Cut out and mask:** **Auto mask: the subject** (BiRefNet) and **Auto mask: by words** (SAM3; name what to find),
+  as a cut-out layer or straight into the inpaint mask.
+- **Upscale:** quality (SeedVR2) or fast (4x-UltraSharp), at 2×, 3× or 4×, hiding the original if you like.
+- **Detail pass:** draws the picture again with more fine detail and the same layout, with Klein 9B, Klein 3, Krea 2
+  or Qwen 2.1 (their i2i templates, with a **Strength** and a prompt of their own) or SeedVR2. The models differ a
+  lot by subject: try two on the same picture.
+
+Templates: `deck-cutout-image` and `deck-mask-image` (made by `dev/make_image_tool_templates.py`), and the depth,
+Canny, scribble, pose and upscale picture templates. Run on the GPU only once so far: the mask and upscale results
+were not checked there.
 
 **Upscaling:** `deck-upscale-image` / `deck-upscale-video` use SeedVR2 7B (sharp, int8) in one step,
 `deck-upscale-video-fast` the 3B, `deck-upscale-image-fast` a 4× GAN model (4x-UltraSharp) then a
@@ -598,11 +662,16 @@ back the wildcards, **Run again** repeats the same picks. On a tablet the text p
 **{ }** starts a group (or wraps the selected text as its first option), **|** adds an option, and
 **}→** jumps past the end of the group.
 
-**Shots** (the bar above the groups) save the whole template: the prompt and its builder parts, the
-images and crops, LoRAs and every setting. ◀ ▶ load the previous/next shot (Undo brings back what you
+**Setups** (the bar above the groups) save the whole template: the prompt and its builder parts, the
+images and crops, LoRAs and every setting. ◀ ▶ load the previous/next setup (Undo brings back what you
 had), 💾 saves over the loaded one, ＋ saves a new one, 🗑 deletes it, ↺ goes back to the template's own
 prompt and settings (the tablet otherwise keeps what you last typed, even after the template file
 changes). They're per workflow and stored on the server.
+
+**Defaults** (the button on each Generate tab) set what the tab inherits its settings from: a tab keeps only the
+values you change, and changing the default moves every tab that hasn't changed that setting. The prompt, seed and
+images stay with the tab. The sheet saves the tab as a new default, saves its changes into the current one, or resets
+the tab to it.
 
 **Presets** sit at the top of each settings group (Seed, Sampler, LoRAs, Turbo LoRA, size…) and keep
 only that group's numbers and choices, not prompts or images: ◀ ▶ cycle, 💾 save over the one shown, ＋ save new, 🗑 delete. The first entry is always the template's
@@ -628,8 +697,14 @@ Kitchen INT8, or plain PyTorch), live preview type for video, and Veda sparse at
 These are inserted in front of the sampler at run time; templates don't need extra nodes.
 
 Seeds get Random / Fixed / +1 modes automatically (any `seed` or `noise_seed` input).
-Without an explicit order number, groups are ordered prompts → images → LoRAs → sampler →
-size → model loaders.
+The client sorts the groups by their name, in this order: prompt, inputs (pictures, clips, references), LoRAs,
+control (control, denoise, strength, upscale, colour, look), size and length, everything else, model, **Advanced**.
+A leading number only orders groups within one of those kinds, and groups the list doesn't know keep the template's
+order.
+
+The settings used every run (size, length, frames, fps, batch and seed) leave the sidebar for a **basics pane** over
+the viewer. A button beside ⛶ opens it (`basicsPane` in `web/layout.js`; `isBasic` in `web/generate.js` picks the
+fields).
 
 **A typical image-to-video template** might tag:
 `@1 Prompt`, `@2 Negative`, `@3 Start frame` (LoadImage), `@4 LoRAs` (LoraLoaderModelOnly after the
@@ -640,6 +715,14 @@ If a template looks wrong, open a generation in History → **Workflow JSON** an
 desktop ComfyUI. It's the exact graph that ran, with LoRAs expanded.
 
 ### Masked edits
+
+The Image tab's **Inpaint and extend** panel does the same on the canvas. Mark the area to redraw with **Paint mask**
+(a red brush on its own layer), **Add selection** (a rectangle or lasso selection joins the mask), **Invert**, **Clear**
+or **Mask outside** (everything of the canvas outside the selected layer). **Add item** draws a box for something new:
+describe it, and optionally give a picture to match (Flux 3 Klein places each box). **Extend…** grows the canvas and
+marks the new part. Then describe what should be there, pick the Model (default `deck-klein3-inpaint`, then
+`deck-klein9b-inpaint`, `deck-krea2-inpaint`, `deck-qwen21-inpaint`), set Denoise, Crop to mask, Edge softness and
+Grow, and tap **Fill**. The rest of the picture comes back untouched.
 
 On an image template (the `-edit` and `-i2i` ones), the first picture has **Mask…**: a full-screen painter
 over the picture as cropped. Paint what the edit may change; it shows as a red tint. The pen paints (press
@@ -666,7 +749,7 @@ size. It falls back to the whole picture when the box would be most of it.
 A template with a mask input of its own gets the painted mask too: a **LoadImageMask** (read from the red
 channel), or a `@… mask` / `@… inpaint` picture left empty.
 
-**Inpainting** (the **Inpaint** model filter): `deck-krea2-inpaint` (the default choice) and `deck-qwen21-inpaint`
+**Inpainting** (the **Inpaint** model filter): `deck-klein3-inpaint` (the default choice), `deck-klein9b-inpaint`, `deck-krea2-inpaint` and `deck-qwen21-inpaint`
 make the painted area again from the prompt, instead of editing the whole picture. The picture is encoded, the
 mask (grown 16 px and softened) becomes the latent's noise mask, and Differential Diffusion blends its edge; then
 the result goes back onto the picture through the mask as above. Their picture shows **Paint area…** as its main
@@ -674,20 +757,21 @@ button, and a run without a mask stops with "Paint the area to change first" (th
 Crop to mask starts on. **Denoise** (tap 0.6 / 0.8 / 0.9 / 1.0, any denoise field has these): 0.9 is the default;
 1.0 starts from pure noise and also redraws the background inside a loose mask, 0.6–0.8 keeps the old shapes and
 colours (a recolour, a change of material). Describe what should be in the area, not an instruction ("a red
-leather jacket", not "make the jacket red"). Krea gives the fills closest to the rest of the picture; Qwen
-takes up to two **References** (Picture 1, 2) to copy a look from. Both are 8-step turbo models (about 10 s at
-1 MP). They come from `dev/make_inpaint_templates.py`. A template counts as inpaint when it has a LoadImageMask
+leather jacket", not "make the jacket red"). The Klein pair (Klein 3: 16 steps; Klein 9B: 4) draws the best extensions and takes
+reference slots for things to add, never the picture itself. Krea gives the fills closest to the rest of the picture;
+Qwen takes up to two **References** (Picture 1, 2) to copy a look from. Krea and Qwen are 8-step turbo models (about
+10 s at 1 MP). They come from `dev/make_inpaint_templates.py`. A template counts as inpaint when it has a LoadImageMask
 of its own and saves images (`maskcomp.fields` marks its Mask `required`).
 
 **Edit with references** (Krea 2 and MOSS, from `dev/make_krea_edit_templates.py` and `dev/make_moss_edit_template.py`):
 - `deck-krea2-edit`: Krea 2 turbo with the General Edit V2 LoRA. The picture to edit plus up to two **References**; the
   prompt is an instruction ("Put the robot from the second image into the first image, standing by the window"). The
   node pack takes two pictures, so two references go in side by side as one ("the right half of the second image").
-  **Ref boost** (tap 1–6, 4 is the card's value) is how hard it follows the reference (the picture, when there is none).
+  **Reference strength** (tap 1–6, 4 is the card's value) is how hard it follows the reference (the picture, when there is none).
   8 steps, about 20 s at 1 MP once loaded. The picture keeps its layout; a reference is placed beside the canvas, so a
   person or object can be restaged into the scene.
 - `deck-krea2-identity`: Krea 2 turbo with the Identity Edit V2 LoRA: one photo of a person (or character) and a prompt
-  for the new scene, at any Size. Ref boost 2; higher keeps the face closer, lower lets it drift. Say how much of the
+  for the new scene, at any Size. Reference strength 2; higher keeps the face closer, lower lets it drift. Say how much of the
   person shows ("full body", "sitting on a bench"): it tends to copy the photo's pose and crop otherwise.
 - `deck-moss-edit`: MOSS-Image SFT with the Moss-Image-Edit LoRA (chinoll) on ComfyUI's own Text Encode MOSS-Image Edit:
   the picture and up to three references, named `image 1`, `image 2`… 30 steps at CFG 5. It follows the instruction
@@ -695,6 +779,13 @@ of its own and saves images (`maskcomp.fields` marks its Mask `required`).
 `deck-krea2-inpaint` stays text-only: with the edit LoRA and a reference it fills the mask cleanly, but squeezes the
 subject into the painted shape (a mask that stops at the shoulders gives a headless figure); a painted mask on
 `deck-krea2-edit` (the masked-edit composite above, with Crop to mask) does that job.
+
+**Control picture** (`deck-klein3-control`, `deck-klein9b-control`, `deck-qwen21-control`, from
+`dev/make_control_templates.py`): a depth, edge, scribble or pose picture steers a new picture. None of these models
+has a ControlNet, so each is the model's edit template with its first picture read as a map: the shapes, edges and
+distances stay where they are, and the prompt says what they become. The reference slots stay, for a look or a person
+to borrow. Make the maps in the Image tab's **Image tools**, the VFX tab's Quick effects (from a picture) or the 3D
+tab (**Save depth frame**, **Save pose frame**). Krea 2 and MOSS are left out: their edit modes give the map back.
 
 Masks are greyscale PNGs (white = change), saved by `POST /api/inputs/mask` under `data/inputs/mask/` and in
 ComfyUI's `input/comfydeck/mask/`; they stay out of the input pickers. The run's settings hold the mask as
@@ -705,14 +796,14 @@ ComfyUI's `input/comfydeck/mask/`; they stay out of the input pickers. The run's
 ## The work area (every timeline)
 
 Every timeline can have a teal range along the top of its ruler (Blender's preview range): the 3D key sheet (and its
-graph), Video, Sound and the Editor's animation bar. **Range** in the transport opens its menu: keep the playhead in it
+graph), Video, Sound and the Image tab's animation bar. **Range** in the transport opens its menu: keep the playhead in it
 (on / off), Start and End typed, In / Out at the playhead, the whole timeline, Clear. I / O set the in / out point at
-the playhead (Alt+I / Alt+O in the Editor, where I and O pick paint tools), Alt+X clears. On the ruler only the bar
+the playhead (Alt+I / Alt+O in the Image tab, where I and O pick paint tools), Alt+X clears. On the ruler only the bar
 takes a touch: drag its ends or slide it, tap it to put the playhead there; the rest of the ruler always scrubs. Ends
 snap to frames, and to keys or clip edges where that timeline snaps; Alt while dragging snaps to frames only.
 
 While it's on, the playhead stays in it: play loops inside it (or stops at its out point with Loop off), stepping and
-scrubbing stop at its ends, and ⇤ / ⇥ go to them. It's saved with the tab (3D scene, video edit, mix, Editor
+scrubbing stop at its ends, and ⇤ / ⇥ go to them. It's saved with the tab (3D scene, video edit, mix, Image tab
 animation). Renders and exports (3D depth and pose, Export video, Export sound, Export clip) do only the range while **Range only** is on, which it is by default once
 there's a range. The maths is `web/workarea-math.js`, tested by `tests/workarea.test.mjs`.
 
@@ -721,11 +812,11 @@ there's a range. The maths is `web/workarea-math.js`, tested by `tests/workarea.
 Laid out like Blender's timeline header: ⇤ start, ⧏ previous key, ⏴ a frame back, Play / Pause, ⏵ a frame forward,
 ⧐ next key, ⇥ end (of the range while it is on). Keys: Space, ← / → a frame (Shift: Video and Sound a second, 3D the
 start / end), ↑ / ↓ next / previous key, Home / End. Tap the time to type one (a frame number, `2.5s` or `m:ss`); the
-Editor's bar and the 3D key bar type the length beside it, and the 3D bar the current frame. The keys jumped to are the
+Image tab's bar and the 3D key bar type the length beside it, and the 3D bar the current frame. The keys jumped to are the
 selected layer's or clip's, else every one's.
 
 In the 3D tab every animatable property in the panel (position, rotation, size, the camera's lens, height and roll, a
-figure's parameters and joints) has ◀ ◆ ▶ like Video and the Editor: ◆ keys just that property at the playhead, ◀ ▶
+figure's parameters and joints) has ◀ ◆ ▶ like Video and the Image tab: ◆ keys just that property at the playhead, ◀ ▶
 jump between its keys, and its label is yellow on a key and green between keys. In the key sheet, selected keys show
 **Key at** and **Value** to type: the frame moves them (keeping their spacing), the value sets every selected number.
 In full screen with the settings panel out, the key bar stays clear of the panel.
@@ -740,7 +831,7 @@ boxes with their axis inside, X red, Y (up) green, Z blue: type a value, or hold
 (1 cm, half a degree, 5 mm a pixel; Shift on a mouse is ten times finer); a double-tap puts one back. The chain on
 Size locks its proportions.
 
-**Undo / Redo** sit in the top bar for the open tab (3D, and the Editor's and Story's painting; `web/undo-dock.js`),
+**Undo / Redo** sit in the top bar for the open tab (3D, and the Image tab's and Story's painting; `web/undo-dock.js`),
 and float at the top of a full-screen view.
 
 ## Story
@@ -754,7 +845,7 @@ story is a tab saved in the project, like video edits.
 - Four views of the same story (the bar under the stage):
   - **Canvas**: the selected shot big, to draw and lay out its frame, with its scene's shots as a filmstrip under it (tap
     one to open it; the arrows at the ends go to the scene before or after; the plus adds a shot).
-  - **Board**: the shots as cards with big frames. **Outline**: the list, for writing (type straight into each shot).
+  - **Storyboard**: the shots as cards with big frames. **Outline**: the list, for writing (type straight into each shot).
   - **Script**: a screenplay page: scene headings, what we see as action, and the lines (`MARA: words`, `@Mara (quietly):
     words`) as character cues and dialogue. Tap a shot to edit it.
   Tap a shot to edit it in the side panel. Drag the grip (pen, finger or mouse) to reorder shots, also into another
@@ -762,7 +853,7 @@ story is a tab saved in the project, like video edits.
   delete; deletes have Undo. The expand button over the canvas looks at the frames big: every shot's frame in turn
   (arrows, a swipe, or the keys), a shot's other frames under it, **Choose** and **Compare** (a wipe or side by side,
   against the chosen frame or the next shot).
-- **The shot's canvas** is the Editor's own engine, in the Story tab: layers, brushes with pressure and tilt, shapes,
+- **The shot's canvas** is the Image tab's own engine, in the Story tab: layers, brushes with pressure and tilt, shapes,
   fill, selections, crop, turning and mirroring, blank canvases, blend modes, lock and undo, the same tool strip and
   gestures. Start from the shot's frame (**Draw on this frame** puts it under a see-through layer), a **Blank
   canvas**, **Add pictures** (this project's pictures and outputs, any input, saved edits, uploads) or **Frame from a
@@ -774,8 +865,8 @@ story is a tab saved in the project, like video edits.
   plus the story's **Style** line, at the story's **Shape** (about a megapixel), 1-4 per run. The pictures land on the
   shot when the run ends, also after a reload. **From pictures** (the image picker) and **Upload** add frames too.
   Tap a frame to make it the shot's chosen one; the canvas button on a frame puts it on the canvas as a new layer.
-- **Refine** runs the shot's frame (the canvas, flattened) through an edit or image-to-image template (the story's
-  choice, or the shot's own: `deck-qwen21-edit` first, then Klein, the Krea 2 and MOSS edits, then Krea 2, Qwen and MOSS i2i). The prompt comes from the
+- **Redraw** runs the shot's frame (the canvas, flattened) through an edit or image-to-image template (the story's
+  choice, or the shot's own: `deck-krea2-edit` first, then `deck-klein3-edit`, `deck-qwen21-edit` and `deck-moss-edit`, then the Krea 2, Qwen and MOSS i2i templates). The prompt comes from the
   shot (what we see, its characters' looks, the story's style; an edit model is asked to turn the picture into a
   finished frame, keeping the layout and camera), or write your own. Characters in the shot with a main picture go in as
   the edit model's extra pictures, named in its syntax (`Picture 2`, `<ref_image_1>`, `the second image`, `image 2`). **Change** sets how far an
@@ -789,7 +880,7 @@ story is a tab saved in the project, like video edits.
   joined into one sound, and given to a template that plays to a sound (`deck-ltx-a2v`) or takes a voice; the clip is
   made at least as long as the lines. The clips land on the shot; tap one to choose it, the chosen one to play it.
 - The chosen frame goes **To Generate** (the open template's picture field), **To VFX** (the start image) or **To the
-  Editor**. **Shots to video** puts every shot on the Video tab's timeline in order: its chosen clip, or its chosen frame
+  Image tab**. **Shots to video** puts every shot on the Video tab's timeline in order: its chosen clip, or its chosen frame
   for its length. **Copy as text** copies the outline as plain text.
 
 ### Characters
@@ -799,8 +890,8 @@ A character has a name, who they are, their **look** (what prompts say about the
 every time), reference **pictures** (tap one to make it the main one; **The shot's frame** adds the selected shot's
 frame), a **voice** from the Sound tab's voice library, and notes. Write `@` and a name in a shot, a scene summary or
 the story's notes: matching characters show as chips under the box (and in the text popup on a tablet). A shot shows
-who is in it (named with `@`, or speaking a line); Generate frame, Refine and Video add each one's look to the prompt,
-Refine and the H3 reference templates get their picture (below), and their lines are spoken in their voice.
+who is in it (named with `@`, or speaking a line); Generate frame, Redraw and Video add each one's look to the prompt,
+Redraw and the H3 reference templates get their picture (below), and their lines are spoken in their voice.
 
 **Look pack** (in the character): five views, **Front**, **Three-quarter**, **Side**, **Back** and **Face**, each optional.
 **Make the views** draws the missing ones from the main picture with `deck-krea2-identity` (Reference strength 4,
@@ -810,17 +901,17 @@ pictures instead. **Character sheet** puts the kept views side by side on light 
 (`POST /api/looks/sheet`). A back view keeps the back of the outfit but the identity LoRA may still turn a face to the
 camera: make it again or pick one.
 
-**Which picture a shot uses**: Refine and Video give each character the view the shot's camera wants: a Close or
+**Which picture a shot uses**: Redraw and Video give each character the view the shot's camera wants: a Close or
 Extreme close shot the face, the **Profile** angle (or "in profile", "from the side") the side, **From behind** (or
 "walks away", "from behind") the back, a medium shot the three-quarter, otherwise the front, falling back to a near view
-and then the main picture. Refine's **Reference pictures** shows the pick per character and takes another (a view, the
+and then the main picture. Redraw's **Reference pictures** shows the pick per character and takes another (a view, the
 sheet or the main picture) for that shot.
 
 **Look check**: when a frame lands on a shot with characters, the server compares it with their packs
 (`app/looks.py`): the DFN5B CLIP ViT-H-14 image tower that ComfyUI-MMAudio already keeps in `models/mmaudio`, run in
 ComfyUI's venv on the CPU (no VRAM; about 7 s to start, 1–3 s a picture), on each person DWPose's YOLOX finds, plus a
 hue match of their middle (a jacket that changed colour). Below 0.75 look or 0.6 colours (`DECK_LOOK_MIN`,
-`DECK_COLOUR_MIN`) the frame shows **Look drifted**, and Refine offers **Redo with stronger reference** (Reference
+`DECK_COLOUR_MIN`) the frame shows **Look drifted**, and Redraw offers **Redo with stronger reference** (Reference
 strength 2 higher, up to 6; a template without one uses `deck-krea2-edit`). It catches another person or a changed
 outfit colour; a changed head of the same colours can pass. `DECK_LOOK_SCORER=none` turns it off; `DECK_LOOK_PY`,
 `DECK_LOOK_MODEL` and `DECK_LOOK_DET` point at the venv, the CLIP file and the detector when ComfyUI is elsewhere.
@@ -845,6 +936,7 @@ Templates that use sound:
 | Template | What it does |
 |---|---|
 | `deck-ltx-t2a` | Sound effects, ambience and foley from a description (LTX-2.5 audio only; no extra models). Sound tab → *Make a sound*. |
+| `deck-mmaudio-foley` | **Sound from clip** (Sound tab → *Make a sound*): sound for a clip made from its picture (MMAudio): footsteps, impacts, ambience, timed to what happens. The prompt steers it and keeps music and speech out. Best up to 8 s. |
 | `deck-ace-music` | Music, with or without lyrics (ACE-Step 1.5 turbo, `checkpoints/ace_step_1.5_turbo_aio.safetensors`, 9.3 GB from `Comfy-Org/ace_step_1.5_ComfyUI_files`). Sound tab → *Make a sound* → Music. Written by `dev/make_sound_templates.py`. |
 | `deck-ltx-a2v` | **Sound to video** (VFX → Generate): a clip that moves to a sound (lips follow speech, movement follows music), optionally from a start image. The sound is frozen while the picture is made, and kept. |
 | `deck-ltx-t2v` | now has an optional **Voice**: ~5 s of someone speaking, whose voice the clip's speech takes on (`LTXVReferenceAudio`). |
@@ -936,7 +1028,7 @@ card, Auto uses the processor instead: about 45–60 s.
 Work can go to PhotoCraft and EffectCraft with its layers and tracks, to keep editing there
 (`app/craft.py`, `web/craft.js`):
 
-- **Editor → Open in PhotoCraft:** one smart object per layer, cropped, placed and scaled as on the canvas,
+- **Image tab → Open in PhotoCraft:** one smart object per layer, cropped, placed and scaled as on the canvas,
   with its name and visibility.
 - **Video → Open in EffectCraft:** one comp at the sequence's size and rate. Each clip is a layer with its
   start, trim, position, scale, rotation and opacity. Fades become keyframes, sound levels are in dB, and
@@ -949,36 +1041,116 @@ Documents live in `data/craft/<id>/` and open on this computer's screen. PhotoCr
 EffectCraft opens each in a window of its own, started with `--control <port>`, so unsaved work in
 another window is never touched. Save there, then **Bring back** (in **Craft documents…**) renders the
 saved version into the media library: PNG, MP4, or WebM with transparency. From there it goes into the
-Editor, an input, the timeline or VFX. The apps are found on `PATH`; set `DECK_PHOTOCRAFT`,
+Image tab, an input, the timeline or VFX. The apps are found on `PATH`; set `DECK_PHOTOCRAFT`,
 `DECK_PHOTOCRAFT_CLI`, `DECK_EFFECTCRAFT` or `DECK_EFFECTCRAFT_CLI` to use others.
 
 ## Layout
 
 ```
-app/main.py        application wiring, generation API, websocket fan-out, saving outputs, reconcile loop
-app/routes/        video, effects, audio, scene, library and app-shell HTTP routers
-app/comfy.py       ComfyUI HTTP + websocket client
-app/civitai.py     Civitai LoRA search + downloads, the API key (data/secrets.json)
-app/templates.py   @-tag parsing, field typing from /object_info, LoRA chain splicing
-app/imageprep.py   crop, megapixel cap, snap to multiple-of-N, video/gif frame grabs
-app/db.py          SQLite: projects + generations (params, exact workflow, parent lineage)
-app/audioedit.py   sound with ffmpeg: extract, the Sound tab's mixdown, laying a sound on a clip
-app/voice.py       the voice tools' jobs and saved voices; voice/worker.py runs in its own venv
-web/               the tablet UI (vanilla JS, no build step)
-web/ui.js          shared UI kit: h(), api(), toasts, sheets, overlays and the widgets every panel uses
-                   (button, iconBtn, seg, field, section, numSlider, rangeField, propNum, mediaCard, cycleBar…)
-web/navigation.js  screen state and visits; web/history.js owns browser history and overlay Back behavior
-web/modal.js       dialog focus, nested focus scopes and background isolation
-web/run-state.js   generation progress and timing; web/generation-data.js queries saved generations
-web/notifications.js  device notifications, chime and screen wake lock
-web/clip-effects.js   clip-effect operations shared by the Video and VFX tabs
-web/crop-geometry.js  crop geometry shared by image and video inputs
-web/app.js         Generate, Editor, Video, Board, History; web/scene.js the 3D tab (loaded on demand)
-web/paint.js       the Editor's painting (brushes, shapes, fill, selections, undo); web/icons.js line icons
-web/sound.js       the Sound tab; web/compare.js the Board's compare view
-web/workarea.js    the work area every timeline shares (web/workarea-math.js: its pure maths)
-web/story.js       the Story tab (storyboard: scenes, shots, frames)
-web/app.css        styles; colours, radii and shadows come from the tokens at the top
+app/main.py          application wiring, generation API, websocket fan-out, saving outputs, reconcile loop
+app/routes/          HTTP routers by feature: audio, effects, library, scene, video, web (the app shell); context.py
+                     holds what they share
+app/accel.py         the Advanced group every template gets: attention backend, live preview, Veda
+app/audioedit.py     sound with ffmpeg: extract, the Sound tab's mixdown, laying a sound on a clip
+app/civitai.py       Civitai LoRA search + downloads, the API key (data/secrets.json)
+app/clipimport.py    Import clip: a piece of an online video, a PC file or a device file
+app/comfy.py         ComfyUI HTTP + websocket client
+app/config.py        runtime configuration and its environment variables
+app/craft.py         open work in PhotoCraft and EffectCraft, bring the result back
+app/db.py            SQLite: projects + generations (params, exact workflow, parent lineage)
+app/delogo.py        Remove watermark (VFX Quick effect)
+app/editsize.py      the Size picker for templates whose output takes its size from the first image
+app/h3upscale.py     upscale and Regenerate a finished H3 clip with its own run's settings
+app/imageprep.py     crop, megapixel cap, snap to multiple-of-N, video/gif frame grabs
+app/keyexpr.py       keyframe curves for renders, in Python and as an ffmpeg expression
+app/looks.py         characters' look packs and the look-drift check
+app/maskcomp.py      masked edits: put the result back through the painted mask
+app/motion.py        human motion files as the 3D tab's motion
+app/posefind.py      which finished Pose preview belongs to a clip
+app/previews.py      light previews of saved outputs for grids
+app/projects.py      list, create, rename, reorder, duplicate and delete projects
+app/promptaid.py     prompt helper: a small local model through Ollama
+app/sceneasset.py    files imported into the 3D tab (models, splats) and what they refer to
+app/stages.py        friendly progress stages for a run
+app/storage.py      where ComfyChair's files go, and making sure they go away when deleted
+app/store.py         a small JSON document store: saved tabs, presets, created 3D objects, scenes
+app/templates.py     @-tag parsing, field typing from /object_info, LoRA chain splicing
+app/tracking.py      simple motion tracking of a clip
+app/videoedit.py     render the Video tab's timeline with ffmpeg; key and matte filters
+app/videoprep.py     trim / crop a video input before ComfyUI loads it
+app/voice.py         the voice tools' jobs and saved voices; voice/worker.py runs in its own venv
+app/wildcards.py     prompt wildcards {a|b|c}
+web/                 the tablet UI (vanilla JS, no build step); web/vendor/ has the third-party libraries
+web/app.js           entry point: wires the modules, projects, tab switching
+web/ui.js            shared UI kit: h(), api(), toasts, sheets, overlays and the widgets every panel uses
+                     (button, iconBtn, seg, field, section, numSlider, rangeField, propNum, mediaCard, cycleBar…)
+web/core.js          shared state S, saved snippets, input-image URLs
+web/navigation.js    screen state and visits; web/history.js owns browser history and overlay Back behavior
+web/world.js         the three spaces (Make, Edit, View) and moving between them
+web/layout.js        splitters, maximizable, side navigation, the basics pane
+web/tabs.js          the tab system every panel uses
+web/modal.js         dialog focus, nested focus scopes and background isolation
+web/prefs.js         app-wide settings document
+web/projects.js      Settings → Projects
+web/notifications.js device notifications, chime and screen wake lock
+web/sw.js            service worker (HTTPS only)
+web/run-state.js     generation progress and timing; web/generation-data.js queries saved generations
+web/run.js           live preview and output viewer
+web/make.js          the one way a template run starts
+web/kinds.js         what each kind of thing is called and how it is drawn
+web/generate.js      Generate: templates and fields, group order, the basics pane
+web/gentabs.js       Generate tabs, Defaults
+web/phrases.js       prompt phrase chips
+web/prompthelp.js    prompt helper panel
+web/civitai.js       Civitai LoRA browser
+web/vfield.js        the player + trim + crop widget of a video field
+web/maskpaint.js     the mask painter for edits
+web/useas.js         Use as…: every place an output can go
+web/story.js         Story (storyboard: scenes, shots, frames); web/cast.js, web/characters.js, web/shot-words.js: characters and shot words
+web/talk.js          talking shots
+web/dialogue.js      dialogue scripts for the voice tools
+web/editor-engine.js the Image tab's layer stack; web/editor.js the sketch pad (Draw); web/layer-geom.js its layer geometry
+web/paint.js         the Image tab's painting (brushes, shapes, fill, selections, undo); web/icons.js line icons
+web/imagetools.js    Image tools; web/maps.js the control-map templates shared with the VFX tab
+web/inpaint.js       Inpaint and extend
+web/view-boxes.js    mark the views on one picture (a character sheet)
+web/video.js         the Video tab; web/clip-effects.js clip effects shared with VFX; web/clipimport.js Import clip
+web/timeline.js      the timeline the Video and Sound tabs share
+web/workarea.js      the work area every timeline shares (web/workarea-math.js: its pure maths)
+web/playback.js      the transport bar and keys every player shares
+web/keys.js          the keyframe engine; web/keyed.js animatable properties for clips and layers
+web/gizmo.js         transform gizmos with grid and snapping; web/gizmo-orient.js axes and pivot maths
+web/crop-geometry.js crop geometry shared by image and video inputs
+web/undo-dock.js     Undo / Redo for the open tab
+web/sound.js         the Sound tab
+web/vfx.js           the VFX tab
+web/track.js         motion tracking sheet; web/track-math.js its maths
+web/craft.js         send work to PhotoCraft and EffectCraft
+web/board.js         the Board; web/compare.js its compare view; web/media.js lists a project's outputs
+web/scene.js         the 3D tab (loaded on demand)
+web/scene-ui.js      the 3D panel: object settings, Render sheet
+web/scene-data.js    camera and scene data sums
+web/scene-modes.js   the 3D panel's modes (Edit scene, Camera, Create object); web/scene-builtin.js the three built in
+web/scene-view.js    the stage: geometry, lights and the soft figure
+web/scene-keys.js    the key sheet (dope sheet and graph editor)
+web/scene-camera.js  camera moves; web/scene-shots.js the Shots row and Prompt from the shots
+web/scene-export.js  depth, pose and colour renders
+web/scene-import.js  imported models, splats, objects from photos
+web/scene-library.js starter scenes
+web/scene-model.js   Create object: lathe and other basic modelling; web/model-geom.js its geometry
+web/scene-motion.js  motion made elsewhere onto a figure (text to motion, video mocap); web/motion.js the data
+web/scene-offscreen.js a 3D scene drawn on its own for the Video tab's compositions; web/scene-comp.js compositions
+web/scene-offset.js  the offset layer's panel
+web/scene-pose.js    a figure's pose tabs
+web/scene-ref.js     a reference picture or clip over the 3D view
+web/scene-rig.js     rigged models; web/rig-map.js maps a skeleton onto the figure
+web/scene-skin.js    skinned models; web/reskin.js re-skins after a bone is added or deleted
+web/scene-scale.js   real size; web/scale-math.js its maths
+web/scene-track.js   the layers a motion track makes
+web/figure.js        the posable person; web/ik.js its CCD inverse kinematics
+web/depth-range.js   near and far of a depth render from sampled depths
+web/splat-depth.js   splats in a depth picture; web/splat-levels.js preview levels; web/splat-shape.js size and trim
+web/app.css          styles; colours, radii and shadows come from the tokens at the top
 templates/         your workflow templates
 data/              database, projects/ (saved outputs), local copies of inputs (git-ignored)
 dev/mock_comfy.py  fake ComfyUI for UI work without a GPU

@@ -11,11 +11,13 @@ export const TALK_HINT = 'Their lips move in time with every word; natural small
 
 const end = (s) => String(s || '').trim().replace(/[.\s]+$/, '');
 
-// the prompt for a talking shot: who (a name, else "The person"), their look, the line in quotes, how it is said
-export function talkPrompt({ who = '', look = '', text = '', delivery = '', scene = '' } = {}) {
+// the prompt for a talking shot: who (a name, else "The person"), their look, the line in quotes, how it is said.
+// said: the words of a shot that already say who says what (Story's), used as they are in place of that sentence
+export function talkPrompt({ who = '', look = '', text = '', delivery = '', scene = '', said = '' } = {}) {
   const name = end(who) || 'The person', words = String(text || '').trim().replace(/"/g, '\'');
   const how = end(delivery);
   return [scene ? `${end(scene)}.` : '',
+    String(said || '').trim() ||
     `${name}${end(look) ? `, ${end(look)},` : ''} looks into the camera and speaks${how ? `, ${how}` : ''}${words ? `, saying: "${words}"` : '.'}`,
     TALK_HINT].filter(Boolean).join(' ');
 }

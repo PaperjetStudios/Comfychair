@@ -5,9 +5,9 @@ import {
 import { fmtTime } from './playback.js';
 import { bareSource, extractSound, genLabel, soundInput, soundToSoundTab } from './media.js';
 import { S, switchTab, onServer } from './core.js';
-import { openGeneration } from './run.js';
+import { finishWithH3, openGeneration } from './run.js';
 import { openUseAs } from './useas.js';
-import { E, FULL, editorTabsReady, persistEditor, renderEditor } from './editor.js';
+import { E, FULL, editorTabsReady, newEditTab, openCrop, persistEditor, renderEditor } from './editor.js';
 import { addToTimeline } from './video.js';
 import { maximizable, zoomPan } from './layout.js';
 import { cardPicture, kindDef, kindOf, kindTile, waveArt } from './kinds.js';
@@ -240,6 +240,37 @@ function openSoundSheet(g, i) {
       h('div', { class: 'row wrap' }, button('Make the clip', lay, { cls: 'primary' }))));
 }
 
+// ---- a cropped copy of a picture or clip (a new item in History, beside the original): a picture in the crop popup,
+// a clip in the video field's player (its Crop button, and its trim too)
+function openCropCopy(g, i) {
+  const o = g.outputs[i], source = { generation: g.id, index: i };
+  const make = async (crop, trim = null) => {
+    try {
+      const out = await api('/api/crop', { method: 'POST', timeout: 3600000, busy: o.kind === 'video' ? 'Cropping the clip…' : 'Cropping…',
+        body: { source, crop, trim, project_id: S.project } });
+      toast(`Made #${out.id}, a cropped copy`);
+      S.history.set(out.id, out);
+      if (GAL.el) galleryRefresh(); else renderBoard();
+      return true;
+    } catch (e) { toast(e.message, true); return false; }
+  };
+  if (o.kind === 'image') {
+    const img = new Image();
+    img.src = o.url;
+    return openCrop({ img, crop: FULL, onApply: (c) => make(c) });
+  }
+  import('./vfield.js').then(({ videoEditor }) => {
+    let trim = null, crop = null;
+    const ed = videoEditor({ url: o.url, source, trim: null, crop: null, onChange: (t, c) => { trim = t; crop = c; } });
+    const go = button('Make the cropped copy', async () => {
+      go.disabled = true;
+      if (await make(crop, trim)) closeSheet();
+      go.disabled = false;
+    }, { cls: 'primary' });
+    openSheet(h('h3', {}, `Crop · ${genLabel(g)}`), ed, h('div', { class: 'actions' }, go, button('Cancel', closeSheet, { cls: 'small ghost' })));
+  });
+}
+
 // ---- board selection: pick tiles, then make a new edit from them, put them on the timeline, or delete
 // Box select: drag across the board to select the tiles under the box. In select mode a mouse or pen drag starts it
 // (a pen doesn't scroll the board then), and so does a finger with Drag to select on; otherwise a finger starts it
@@ -336,25 +367,36 @@ function boardSelected() {   // [{g, o, i}] in board order
 }
 // The selected clips drawn again at 1080P by Open-H3-Regenerate (its refiner LoRA); each lands on the Board as a new
 // take, a child of its draft. The 1080P second pass is 2 steps from 0.70 and keeps the clip's sound.
+// Only MiniMax H3 runs can be finished in place (/api/h3/upscale reads the run's own workflow): one other clip goes
+// the Use as → Finish with H3 way (deck-h3-refine with Regenerate on, in Generate); more than one can't.
+export const isH3Run = (g) => /^deck-h3-|^h3 (upscale|regenerate)$/.test(g?.template || '');
 async function boardFinish() {
-  const clips = boardSelected().filter(({ o }) => o.kind === 'video');
-  if (!clips.length) return toast('Select a clip first', true);
-  let info;
-  try { info = await api('/api/h3/regen', { busy: false }); } catch (e) { return toast(e.message, true); }
-  if (!info.available) return toast(info.reason || 'Regenerate needs its refiner LoRA in models/loras', true);
-  const lora = info.loras[0].name;
+  const all = boardSelected().filter(({ o }) => o.kind === 'video');
+  if (!all.length) return toast('Select a clip first', true);
+  const clips = all.filter(({ g }) => isH3Run(g)), other = all.filter(({ g }) => !isH3Run(g));
+  if (other.length > 1) toast(`${other.length} clips aren't H3 runs: use Use as → Finish with H3 on each`, true);
   let n = 0;
-  for (const { g, i } of clips) {
-    try {
-      const run = await api('/api/h3/upscale', { method: 'POST', busy: false,
-        body: { generation: g.id, index: i, scale: 1.5, strength: 'strong',
-                regen: { quality: 'standard', lora, target: '1080p' } } });
-      S.history.set(run.id, run);
-      boardChanged(run);
-      n++;
-    } catch (e) { toast(`#${g.id}: ${e.message}`, true); }
+  if (clips.length) {
+    let info;
+    try { info = await api('/api/h3/regen', { busy: false }); } catch (e) { return toast(e.message, true); }
+    if (!info.available) return toast(info.reason || 'Regenerate needs its refiner LoRA in models/loras', true);
+    const lora = info.loras[0].name;
+    for (const { g, i } of clips) {
+      try {
+        const run = await api('/api/h3/upscale', { method: 'POST', busy: false,   // (strength is unused while regen is on)
+          body: { generation: g.id, index: i, scale: 1.5, strength: 'medium',
+                  regen: { quality: 'standard', lora, target: '1080p' } } });
+        S.history.set(run.id, run);
+        boardChanged(run);
+        n++;
+      } catch (e) { toast(`#${g.id}: ${e.message}`, true); }
+    }
   }
-  if (n) toast(`${n} finish${n === 1 ? '' : 'es'} queued`);
+  if (other.length === 1) {
+    setBoardSelecting(false);
+    await finishWithH3(other[0].g, other[0].i);
+    if (n) toast(`${n} finish${n === 1 ? '' : 'es'} queued; #${other[0].g.id} is set up in Generate`);
+  } else if (n) toast(`${n} finish${n === 1 ? '' : 'es'} queued`);
 }
 
 function boardSelBar() {
@@ -377,19 +419,20 @@ function boardSelBar() {
     button('Delete', boardDelete, { cls: 'small danger', disabled: !n }));
 }
 
-// A clip from the importer is in the media library (not a generation, so not on the board): offer where to use it
-function clipImported(e) {
-  toast(`${e.label} is in the media library`, false, { label: 'Open in VFX', fn: () => import('./vfx.js').then((m) => m.sendToVfx({ media: e.name }, { label: e.label })) });
+// A clip from the importer is in the media library, and on the board too when "Add to this project" was on: offer
+// where to use it
+function clipImported(e, { project = null } = {}) {
+  toast(`${e.label} is in the media library${project ? ' and on the Board' : ' (not on the Board)'}`, false, { label: 'Open in VFX', fn: () => import('./vfx.js').then((m) => m.sendToVfx({ media: e.name }, { label: e.label })) });
 }
 
 // The selected images as a fresh Editor layout (side by side, or a grid for more than 3).
-// Whatever was in the Editor can be brought back with Undo.
+// New edit puts them in a new Image tab; Edit here replaces the open tab's layers (Undo brings them back).
 function boardCompare() {
   const items = boardSelected().reverse();   // older on the left
   if (items.length === 2 && items.every((x) => x.o.kind !== 'audio')) openCompare(items.map(({ g, o }) => ({ o, label: genLabel(g) })));
 }
-async function boardToEditor() { return itemsToEditor(boardSelected()); }
-async function itemsToEditor(all) {
+async function boardToEditor() { return itemsToEditor(boardSelected(), { newTab: true }); }
+async function itemsToEditor(all, { newTab = false } = {}) {
   const items = all.filter((x) => x.o.kind === 'image');
   if (!items.length) return toast('Select some images first', true);
   toast(`Preparing ${items.length} image${items.length > 1 ? 's' : ''}…`);
@@ -402,6 +445,7 @@ async function itemsToEditor(all) {
   }
   if (!names.length) return;
   await editorTabsReady();   // a first visit loads the tab's saved state; write after it, not before
+  if (newTab && !await newEditTab()) return toast('Couldn\'t open a new Image tab', true);
   const before = { layers: E.layers, arrange: E.arrange, size: E.size };
   E.layers = names.reverse().map((name) => ({ name, crop: { ...FULL }, scale: 1, hidden: false }));  // first selected on top of the list
   E.sel = null; E.cropping = false; E.size = null;
@@ -411,7 +455,8 @@ async function itemsToEditor(all) {
   setBoardSelecting(false);
   switchTab('editor');
   const tid = E.tab?.id;
-  if (before.layers.length) undoToast(`New edit with ${names.length} image${names.length > 1 ? 's' : ''}`, () => {
+  if (newTab) toast(`New edit with ${names.length} image${names.length > 1 ? 's' : ''}`);
+  else if (before.layers.length) undoToast(`Edit here with ${names.length} image${names.length > 1 ? 's' : ''}`, () => {
     if (E.tab?.id !== tid) return toast('That edit is in another tab', true);
     Object.assign(E, before); persistEditor(); renderEditor();
   });
@@ -610,8 +655,9 @@ function galleryRender(newMedia = false) {
   el.querySelector('.gal-actions').replaceChildren(...[
     button(g.pinned ? '★ Pinned' : '☆ Pin', () => togglePin(g), { cls: 'small' + (g.pinned ? ' on' : ''), title: 'P' }),
     button(marked ? '🗑 Marked' : '🗑 Mark', () => { toggleMarked(g.id); boardChanged(g); }, { cls: 'small' + (marked ? ' danger on' : ''), title: 'D' }),
-    o.kind === 'image' ? button('✎ Edit', () => { closeGallery(); itemsToEditor([cur]); }, { title: 'E' }) : null,
-    button('Use as…', () => openUseAs(g, i, { before: () => closeGallery() }), { cls: 'small primary', title: 'U: send it to Generate, VFX, Video, Sound, the Editor or 3D' }),
+    o.kind === 'image' ? button('✎ Edit here', () => { closeGallery(); itemsToEditor([cur]); }, { title: 'E: replaces the open Image tab\'s layers (Undo brings them back)' }) : null,
+    button('Use as…', () => openUseAs(g, i, { before: () => closeGallery() }), { cls: 'small primary', title: 'U: send it to Generate, VFX, Video, Sound, the Image tab or 3D' }),
+    o.kind === 'image' || o.kind === 'video' ? button('✂ Crop', () => openCropCopy(g, i), { title: 'Make a cropped copy' }) : null,
     o.kind === 'video' ? button('♪ Sound', () => openSoundSheet(g, i), { title: 'Take the sound out, or put a sound on this clip' }) : null,
     button('Details', () => openGeneration(g.id)),
     linkBtn('Download', o.url, { download: o.filename }),

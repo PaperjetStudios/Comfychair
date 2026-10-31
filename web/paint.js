@@ -2,7 +2,7 @@ import { h, store, toast, clamp, seg, field, section, help, rangeField, button, 
 import { icon } from './icons.js';
 import { ASPECT_PRESETS } from './core.js';
 import { snapNearest } from './gizmo.js';
-import { apply, bounds, canvasToImage, imageToCanvas, invert, layerMatrix, mul } from './layer-geom.js';
+import { apply, bounds, canvasToImage, corners, imageToCanvas, invert, layerMatrix, mul } from './layer-geom.js';
 
 // ---------------------------------------------------------------------------
 // Painting in the Editor: brushes with pen pressure and tilt, an eraser, blank canvas layers, undo.
@@ -241,6 +241,45 @@ export function createPaint(ctx) {
     for (const r of rects) c.fillRect(r.x - f.x, r.y - f.y, r.w, r.h);
     Object.assign(l, { img: cv, x: f.x, y: f.y, scale: 1, hidden: false, crop: { x: 0, y: 0, w: 1, h: 1 } });
     dirty(l, 200);
+  }
+
+  // the inpaint mask takes in what a matte (a canvas, white = keep) covers, drawn into rect r (canvas px): auto masking
+  function maskFromMatte(matte, r) {
+    const f = X.frame();
+    if (!f) return false;
+    const cv = makeCanvas(f.w, f.h), c = cv.getContext('2d');
+    let l = maskLayerOf();
+    if (l) c.drawImage(l.img, l.x - f.x, l.y - f.y);
+    const tmp = makeCanvas(f.w, f.h), t = tmp.getContext('2d');
+    t.drawImage(matte, r.x - f.x, r.y - f.y, r.w, r.h);
+    const d = t.getImageData(0, 0, f.w, f.h), p = d.data;
+    for (let i = 0; i < p.length; i += 4) { const on = p[i] > 127; p[i] = 255; p[i + 1] = 45; p[i + 2] = 45; p[i + 3] = on ? 255 : 0; }   // (MASK_RED)
+    t.putImageData(d, 0, 0);
+    c.drawImage(tmp, 0, 0);
+    if (!l) { l = { name: null, label: 'Inpaint mask', mask: true, crop: { x: 0, y: 0, w: 1, h: 1 }, x: f.x, y: f.y, scale: 1, opacity: 0.55, hidden: false, blend: 'normal' }; E().layers.push(l); }
+    Object.assign(l, { img: cv, x: f.x, y: f.y, scale: 1, hidden: false, crop: { x: 0, y: 0, w: 1, h: 1 } });
+    dirty(l, 200);
+    X.changed(); X.render();
+    return true;
+  }
+
+  // the mask becomes everything of the canvas frame outside layer l, with `over` px of l's edge inside it, so the redraw blends in
+  function maskOutside(l, over = 0) {
+    const f = X.frame();
+    if (!f || !l?.img?.naturalWidth) return false;
+    const cv = makeCanvas(f.w, f.h), c = cv.getContext('2d');
+    const pts = corners(l).map((q) => ({ x: q.x - f.x, y: q.y - f.y }));
+    const path = () => { c.beginPath(); pts.forEach((q, i) => (i ? c.lineTo(q.x, q.y) : c.moveTo(q.x, q.y))); c.closePath(); };
+    c.fillStyle = MASK_RED; c.fillRect(0, 0, f.w, f.h);
+    c.globalCompositeOperation = 'destination-out'; path(); c.fill();
+    c.globalCompositeOperation = 'source-over';
+    if (over > 0) { c.save(); path(); c.clip(); c.strokeStyle = MASK_RED; c.lineWidth = over * 2; path(); c.stroke(); c.restore(); }
+    let m = maskLayerOf();
+    if (!m) { m = { name: null, label: 'Inpaint mask', mask: true, crop: { x: 0, y: 0, w: 1, h: 1 }, x: f.x, y: f.y, scale: 1, opacity: 0.55, hidden: false, blend: 'normal' }; E().layers.push(m); }
+    Object.assign(m, { img: cv, x: f.x, y: f.y, scale: 1, hidden: false, crop: { x: 0, y: 0, w: 1, h: 1 } });
+    dirty(m, 200);
+    X.changed(); X.render();
+    return true;
   }
 
   // A painted canvas given a new size (Photoshop's Canvas Size): its pixels stay where they are, anchored by (ax, ay)
@@ -1331,7 +1370,7 @@ export function createPaint(ctx) {
   }
   return {
     P, els: buildStrip(), painting, paintProps, paintOverlay, sync: syncStrip, savePaint, unsavedPaint, setTool, setColor,
-    blankSheet, addBlank, dropSel, undo, redo, selectionMask, maskLayer, paintMask, hasSel: () => !!P.sel, selAction, selectLayer, resizeCanvasLayer, maskOp, growMask,
+    blankSheet, addBlank, dropSel, undo, redo, selectionMask, maskLayer, paintMask, hasSel: () => !!P.sel, selAction, selectLayer, resizeCanvasLayer, maskOp, growMask, maskOutside, maskFromMatte,
     reset() { cancelStroke(); dropSel(); P.last = null; U.undo = []; U.redo = []; U.bytes = 0; syncStrip(); },   // another document: its undo goes
   };
 }

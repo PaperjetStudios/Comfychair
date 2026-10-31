@@ -79,6 +79,31 @@ export function wireSplitters() {
   }
 }
 
+// heightGrip: a grip above an area that sets its height by dragging up (taller) or down (shorter), a pull all the way
+// down shuts it. Double-tap puts it back; arrow keys too. size() is its height now, set(px | null) applies it (null: the default).
+export function heightGrip(grip, { size, set, max = () => innerHeight * 0.6 }) {
+  const to = (px) => set(px < 36 ? 0 : Math.round(Math.min(max(), px)));
+  let lastTap = 0;
+  grip.tabIndex = 0;
+  grip.addEventListener('pointerdown', (e) => {
+    if (e.button > 0) return;
+    if (Date.now() - lastTap < 300) { lastTap = 0; set(null); return; }
+    lastTap = Date.now();
+    e.preventDefault();
+    try { grip.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
+    const y0 = e.clientY, h0 = size();
+    grip.classList.add('dragging');
+    const move = (ev) => to(h0 + y0 - ev.clientY);
+    const up = () => { grip.classList.remove('dragging'); grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', up); };
+    grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
+  });
+  grip.addEventListener('keydown', (e) => {
+    const d = { ArrowUp: 1, ArrowDown: -1 }[e.key];
+    if (!d) return;
+    e.preventDefault(); to(size() + d * 48);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // maximize: the same ⛶ button, top right of the viewer, in every panel. Real Fullscreen API where
 // there is one (Esc leaves it), else the stage is pinned over the page (Esc / back leaves it).
@@ -128,12 +153,41 @@ document.addEventListener('keydown', (e) => {
 }, true);
 
 // ---------------------------------------------------------------------------
+// basicsPane: the settings used every run (size, length, seed ...) live in a pane over the viewer, not in
+// the sidebar. An icon button beside the ⛶ opens and closes it; open or shut is kept per device, per panel.
+//   const pane = basicsPane(viewer, 'generate');   pane.body: where the fields go; pane.sync(): hide the button when empty
+// ---------------------------------------------------------------------------
+export function basicsPane(viewer, id, { title = 'Size, length and seed' } = {}) {
+  const key = `deck.basics.${id}`;
+  let open = store.get(key, false) === true;
+  const body = h('div', { class: 'basics-body' });
+  const pane = h('div', { class: 'basics-pane hidden', role: 'region', 'aria-label': title }, body);
+  const btn = h('button', { type: 'button', class: 'max-btn basics-btn', 'aria-label': title, 'aria-pressed': 'false', title }, '');
+  btn.append(svg(['M4 7h9M17 7h3M4 17h3M11 17h9', 'M15 4v6M9 14v6']));   // two sliders
+  const show = () => {
+    const has = body.childNodes.length > 0;
+    btn.classList.toggle('hidden', !has);
+    pane.classList.toggle('hidden', !has || !open);
+    btn.classList.toggle('on', open); btn.setAttribute('aria-pressed', open);
+  };
+  btn.addEventListener('click', (e) => { e.stopPropagation(); open = !open; store.set(key, open); show(); });
+  for (const ev of ['pointerdown', 'wheel', 'dblclick']) {   // the viewer underneath pans, zooms and draws
+    btn.addEventListener(ev, (e) => e.stopPropagation());
+    pane.addEventListener(ev, (e) => e.stopPropagation());
+  }
+  viewer.append(btn, pane);
+  show();
+  return { body, btn, pane, sync: show };
+}
+
+// ---------------------------------------------------------------------------
 // sidebar icon tabs (Blender's Properties editor): a column of icon buttons at the left of a
 // panel that shows one parameter group at a time, or all of them. Navigation only: the groups
 // themselves stay where they are. sideNav watches the panel, so it follows every redraw.
 // find() -> [{ el, label }] for the groups there are now.
 // ---------------------------------------------------------------------------
 const ICONS = [
+  [/image tools/i, ['M5 19L16 8', 'M14 6l4 4', 'M18 3v3M16.5 4.5h3M6 5v2M5 6h2']],   // (a wand)
   [/prompt|text|caption|subject|negative/i, ['M4 6h16M4 12h16M4 18h10']],
   [/image|picture|photo|input|reference|source/i, ['M3 5h18v14H3z', 'M3 16l5-5 4 4 3-3 6 6', 'M9 9.5h.01']],
   [/video|clip|movie|frames?/i, ['M3 5h18v14H3z', 'M8 5v14M16 5v14M3 10h5M3 14h5M16 10h5M16 14h5']],
@@ -152,6 +206,12 @@ const ICONS = [
   [/advanced|more|other|extra|setting|option|misc/i, ['M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6', 'M19 12l2-1-1-3-2.2.5-1.3-1.3.5-2.2-3-1-1 2h-1.8l-1-2-3 1 .5 2.2-1.3 1.3L4 8l-1 3 2 1v1.8l-2 1 1 3 2.2-.5 1.3 1.3-.5 2.2 3 1 1-2h1.8l1 2 3-1-.5-2.2 1.3-1.3 2.2.5 1-3-2-1z']],
   [/brush|eraser|shapes|fill|selection/i, ['M18.5 3.5a2.1 2.1 0 0 1 3 3L12 16l-3-3z', 'M9 13c-2.8 0-4.5 1.8-4.5 4.3 0 1.5-.9 2.4-2.5 2.7 2.2 1.4 5 1.3 6.9-.3 1.4-1.2 2.1-2.6 2.1-3.7']],
   [/animat/i, ['M12 4l8 8-8 8-8-8z']],
+  [/bones?|skelet|rig/i, ['M7 4a2 2 0 1 1 3 1.7L14 10a2 2 0 1 1 1.7 3L20 17a2 2 0 1 1-3 1.7L13 14a2 2 0 1 1-1.7-3L7 7']],
+  [/depth|profile|spin|faces?|look|surface|mesh/i, ['M12 3l8 4.5v9L12 21l-8-4.5v-9z', 'M12 12l8-4.5M12 12v9M12 12L4 7.5']],
+  [/effects?|filter|glow|magic/i, ['M12 3l1.8 4.6L18.5 9l-4.7 1.6L12 15l-1.8-4.4L5.5 9l4.7-1.4z', 'M18 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z']],
+  [/inpaint|extend|outpaint|mask/i, ['M3 5h18v14H3z', 'M8 9h8v6H8z']],
+  [/projects?|folder|civitai/i, ['M3 6h6l2 2h10v11H3z']],
+  [/colou?r|palette|picker/i, ['M12 3a9 9 0 1 0 0 18c1.5 0 2-1 1.5-2s0-2 1.5-2h2a3 3 0 0 0 3-3c0-6-4-11-8-11z', 'M8 11h.01M12 8h.01M16 11h.01']],
   [/refine|improve|enhance|finish/i, ['M12 3l1.8 4.6L18.5 9l-4.7 1.6L12 15l-1.8-4.4L5.5 9l4.7-1.4z', 'M5 21l4-4']],
 ];
 const navIcon = (label) => {
@@ -159,6 +219,14 @@ const navIcon = (label) => {
   if (m) return svg(m[1]);
   return h('span', { class: 'nav-letter' }, (label.match(/[\p{L}\p{N}]/u) || ['•'])[0].toUpperCase());   // no icon for it: its first letter
 };
+
+// sideNav's usual find: a panel's groups, the .section blocks (ui.js section()) and Generate's <details class="group">
+// that sit directly in it (not ones nested inside another), each with its title
+const GROUP_SEL = '.section, details.group';
+const groupLabel = (el) => (el.matches('details') ? el.querySelector(':scope > summary') : el.querySelector(':scope > .section-title > span'));
+export const sectionTargets = (panel) => () => [...panel.querySelectorAll(GROUP_SEL)]
+  .filter((el) => !el.parentElement.closest(GROUP_SEL) && groupLabel(el))
+  .map((el) => ({ el, label: groupLabel(el).textContent || '' }));
 
 export function sideNav(panel, name, find) {
   const strip = h('nav', { class: 'side-nav', 'aria-label': 'Jump to a group of settings' });
@@ -311,7 +379,16 @@ export function zoomPan(viewer, layer, { min = 1, max = 8, snapOne = false, canZ
 // edge. It is the same live panel, pinned by CSS (.tab.view-max), so nothing moves or rebuilds. Tap the handle
 // to show or hide it, drag it to size it, or back past the edge to put it away. Kept per device, per tab.
 //   const max = fullScreen(tab, { viewer, title, onChange });   // max: maximizable's { toggle, exit, on, btn }
+// The f key toggles it in every tab that has one (as in the players): a tab whose own keys take f first (playback.js
+// playKeys, which marks the key handled) is left to them.
 // ---------------------------------------------------------------------------
+const FULL = new Map();   // tab element -> its fullScreen
+window.addEventListener('keydown', (e) => {   // (on window: it runs after every document listener, so it sees theirs)
+  if (e.key !== 'f' || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target.closest?.('input, textarea, select, [contenteditable], [role=dialog]')) return;
+  const max = [...FULL].find(([tab]) => tab.classList.contains('active'))?.[1];
+  if (max) { e.preventDefault(); max.toggle(); }
+});
 export function fullScreen(tab, { viewer = tab.querySelector('.viewer'), title = 'Full screen', onChange = null } = {}) {
   const key = `deck.pull.${tab.id}`;
   const P = { open: store.get(`${key}.open`, false) === true, w: +store.get(`${key}.w`, 380) || 380 };
@@ -350,6 +427,8 @@ export function fullScreen(tab, { viewer = tab.querySelector('.viewer'), title =
   hd.addEventListener('click', (e) => { e.stopPropagation(); if (e.detail === 0) { P.open = !P.open; keep(); } });   // (a key; a tap is done on letting go)
   const stage = tab.querySelector('.stage');
   stage.append(hd);
-  return maximizable(stage, viewer, { title, native: document.documentElement,
+  const max = maximizable(stage, viewer, { title, native: document.documentElement,
     onChange: (on) => { tab.classList.toggle('view-max', on); apply(); onChange?.(on); } });
+  FULL.set(tab, max);
+  return max;
 }

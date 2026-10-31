@@ -166,6 +166,18 @@ def pose_preview(model="dwpose"):
     return g
 
 
+def pose_image(model="dwpose"):
+    """A picture's pose (body, hands, face) as a PNG, at the picture's own size: the still take on Pose preview."""
+    g = G()
+    g.add("img", {**node("LoadImage", image=""), "_meta": {"title": "@1 Picture [image]", "deck_keep_size": True}})
+    g.add("size", node("GetImageSize", image=["img", 0]))
+    math(g, "W", "a", "width", a=["size", 0], b=["size", 1])
+    math(g, "H", "b", "height", a=["size", 0], b=["size", 1])
+    pose_frames(g, ["img", 0], model=model)
+    g.add("save", node("SaveImage", images=["posers", 0], filename_prefix="deck/pose"))
+    return g
+
+
 def ltx_drive(model="dwpose"):
     """LTX-2.5 take on Drive a still: the character image is the first frame, and the clip's DWPose (body, hands, face)
     guides the motion through the union-control IC-LoRA (an LTX-2.3 LoRA; ref0.5, so the guide is half size and
@@ -288,6 +300,8 @@ TEMPLATES = {
     "deck-pose-video": pose_preview,
     "deck-mocap": mocap,
     "deck-pose-sdpose": lambda: pose_preview("sdpose"),
+    "deck-pose-image": pose_image,
+    "deck-pose-sdpose-image": lambda: pose_image("sdpose"),
     "deck-ltx-drive": ltx_drive,
     "deck-ltx-drive-sd": lambda: ltx_drive("sdpose"),
     # the drives on a ready pose video (from either poser): the VFX tab runs these when the clip has one

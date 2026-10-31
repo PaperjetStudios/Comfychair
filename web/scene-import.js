@@ -7,7 +7,8 @@
 // folder (POST /api/scene/asset); the layer only holds its URL.
 import * as THREE from './vendor/three.module.min.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
-import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip, field, seg, info, rangeField, mediaCard, placeholder } from './ui.js';
+import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip, field, seg, info, rangeField, mediaCard, placeholder, iconBtn } from './ui.js';
+import { thumbUrl } from './core.js';
 import { C, R, SC, newObject, namesFor, save, selItem, write } from './scene-data.js';
 import { addModeSection } from './scene-modes.js';
 import { LOADERS, SPLAT_PASS, activeCamera, controls, changed, draw, fit, lookThrough, passHooks, recentre, renderer, scene, select } from './scene-view.js';
@@ -267,12 +268,17 @@ async function importFiles(files) {
 // The templates save a GLB (dev/make_3d_object_templates.py builds them from ComfyUI's own workflow);
 // the sheet runs one and adds the mesh as a model layer.
 const OBJECT_TPL = 'deck-3d-object';
+const OBJECT_TRELLIS = 'deck-3d-object-trellis';   // TRELLIS.2 from one photo: the same fields as Pixal3D's
 const OBJECT_MULTI = 'deck-3d-object-multi';
 const SHEET_TPL = 'deck-h3-objectsheet';
+const SPLAT_TPL = 'deck-3d-object-splat';   // Idol: a gaussian splat of one object from one picture, unseen sides included
 // what the sheet sets on the template's own fields (by their group name); a blank seed is a fresh one each run
-const OBJ = { steps: 20, seed: '', tex: true, res: 4096, cut: true };
+const OBJ = { steps: 20, seed: '', tex: true, res: 4096, cut: true, photo: false, model: 'pixal' };
 const OBJ_FIELDS = { steps: 'Detail (steps)', seed: 'Seed', tex: 'Texture', res: 'Texture resolution', cut: 'Cut out' };
 const SHEET_FRAMES = [4, 54, 96, 120];   // the sheet's orbit: front, side, back, other side
+const hasTrellis = () => C.S.templates.some((t) => t.id === OBJECT_TRELLIS && !t.error);
+// the one-photo model: TRELLIS.2 when picked (and installed), else Pixal3D
+const photoTpl = () => (OBJ.model === 'trellis' && hasTrellis() ? OBJECT_TRELLIS : OBJECT_TPL);
 
 // a model file already on the server (a run's GLB) as a model layer, fitted and standing on the floor
 // at the middle of the scene, the way an import lands
@@ -318,7 +324,7 @@ async function objectValues(templateId, groups) {
     const f = t.fields.find((x) => x.kind === 'image' && x.group === group);
     if (f) values[f.key] = name;
   }
-  if (templateId === OBJECT_TPL || templateId === OBJECT_MULTI) {
+  if (templateId === OBJECT_TPL || templateId === OBJECT_TRELLIS || templateId === OBJECT_MULTI) {
     const seed = OBJ.seed === '' ? Math.floor(Math.random() * 2 ** 31) : Number(OBJ.seed);
     for (const [k, group] of Object.entries(OBJ_FIELDS)) {
       const f = t.fields.find((x) => x.group === group && x.kind !== 'image');
@@ -344,11 +350,27 @@ async function land(g, label) {
   await addModel(out.url, label);
 }
 
+// one picture of an object as a splat (Idol): the splat file lands as a splat layer
+async function makeIdolSplat(name, label) {
+  try {
+    const { t, values } = await objectValues(SPLAT_TPL, { 'Object picture': name });
+    const set = (group, v) => { const f = t.fields.find((x) => x.group === group && x.kind !== 'image'); if (f) values[f.key] = v; };
+    set('It is a photograph', OBJ.photo);
+    set('Seed', OBJ.seed === '' ? Math.floor(Math.random() * 2 ** 31) : Number(OBJ.seed));
+    const g = await objectRun(SPLAT_TPL, values, 'The splat');
+    const i = (g.outputs || []).findIndex((o) => o.kind === 'splat' || /\.(ply|spz|ksplat|splat)$/i.test(o.filename));
+    if (i < 0) throw new Error('That run made no splat file');
+    await addSplat(g.outputs[i].url, label, { gen: g.id, index: i });
+    closeSheet();
+  } catch (e) { toast(e.message, true); }
+}
+
 // one photo: the front view
 async function makeFromPhoto(name, label) {
   try {
-    const { values } = await objectValues(OBJECT_TPL, { Front: name });
-    await land(await objectRun(OBJECT_TPL, values, 'The 3D object'), label);
+    const tpl = photoTpl();
+    const { values } = await objectValues(tpl, { Front: name });
+    await land(await objectRun(tpl, values, 'The 3D object'), label);
     closeSheet();
   } catch (e) { toast(e.message, true); }
 }
@@ -371,20 +393,6 @@ async function makeFromViews(name, label) {
     const { values: mv } = await objectValues(OBJECT_MULTI, { Front: views[0], Left: views[1], Back: views[2], Right: views[3] });
     await land(await objectRun(OBJECT_MULTI, mv, 'The 3D object'), label);
     closeSheet();
-  } catch (e) { toast(e.message, true); }
-}
-
-// one picture holding several views (a character sheet): each marked box is cropped out as its own view
-async function makeFromBoxes(name, label, boxes) {
-  try {
-    const picks = {};
-    for (const [view, b] of Object.entries(boxes)) {
-      const r = await api('/api/inputs/crop', { method: 'POST', body: { name, multiple: 1, crop: b } });
-      picks[view] = r.name;
-    }
-    if (Object.keys(picks).length < 2) throw new Error('Mark at least two views');
-    if (!picks.Front) throw new Error('Mark the Front view');
-    await makeFromPicked(picks, label);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -445,11 +453,10 @@ export async function rigModel(o, template, opts = {}) {
   catch (e) { toast(e.message, true); }
 }
 
-// the sheet: one photo, or its other views made or picked
-let viewBoxes = {};   // the views marked on the sheet picture (fractions); reset when the picture changes
-let viewBoxesOf = null;
-export function openObjectSheet(name, label = '', picks = { Front: name, Back: null, Left: null, Right: null }) {
-  if (viewBoxesOf !== name) { viewBoxes = {}; viewBoxesOf = name; }
+// the sheet: a board of the four views (Front, Left, Back, Right). A slot takes any photo (the picker crops too), one
+// picture can be split across the slots, and what is filled decides the run: one photo alone, or the views together.
+const VIEW_ROLES = ['Front', 'Left', 'Back', 'Right'];
+export function openObjectSheet(name, label = '', picks = { Front: name }) {
   const again = () => openObjectSheet(name, label, picks);   // (the views picked so far stay)
   const num = (key, min, max) => h('input', { type: 'number', min, max, value: OBJ[key], placeholder: key === 'seed' ? 'random' : null,
     onchange: (e) => { OBJ[key] = e.target.value === '' && key === 'seed' ? '' : Math.max(min, Math.min(max, Math.round(+e.target.value || min))); } });
@@ -457,37 +464,45 @@ export function openObjectSheet(name, label = '', picks = { Front: name, Back: n
     closeSheet();
     C.openImagePicker({ title: `The ${role.toLowerCase()} view`, onPick: (n) => { picks[role] = n; again(); } });
   };
-  const n = Object.values(picks).filter(Boolean).length;
+  // one picture holding several views (a character sheet): a box round each, cut out into its slot
+  const split = () => {
+    closeSheet();
+    C.openImagePicker({ title: 'A picture with several views', onPick: (src) => import('./view-boxes.js').then((m) => m.openViewBoxes({ image: src, boxes: {},
+      onDone: async (boxes) => {
+        try {
+          for (const [view, box] of Object.entries(boxes)) picks[view] = (await api('/api/inputs/crop', { method: 'POST', body: { name: src, multiple: 1, crop: box } })).name;
+        } catch (e) { toast(e.message, true); }
+        again();
+      },
+      onCancel: again })) });
+  };
+  const filled = VIEW_ROLES.filter((r) => picks[r]), n = filled.length, only = picks[filled[0]];
+  const slot = (role) => h('div', { class: `obj-slot${picks[role] ? ' filled' : ''}` },
+    h('button', { type: 'button', class: 'obj-slot-pic', 'aria-label': `${role}: ${picks[role] ? 'change' : 'pick'} the picture`, onclick: () => pick(role) },
+      picks[role] ? h('img', { src: thumbUrl(picks[role], 320), alt: '' }) : h('span', { class: 'obj-slot-plus' }, '+')),
+    h('div', { class: 'obj-slot-bar' }, h('span', {}, role),
+      picks[role] ? iconBtn(`Clear ${role}`, '✕', () => { delete picks[role]; again(); }) : null));
   openSheet(h('h3', {}, 'Make a 3D object'),
-    hint(label ? `From ${label}` : 'From a picture'),
-    section('One photo', null,
-      button('From this photo only', () => makeFromPhoto(picks.Front, label || picks.Front), { cls: 'primary',
-        title: 'Pixal3D makes a model from the front view alone (quickest)' }),
-      help('Pixal3D turns the picture into a textured GLB and adds it to the scene, standing on the floor at the middle.')),
-    section('Its other views', null,
-      ...['Back', 'Left', 'Right'].map((role) => h('div', { class: 'row' },
-        h('span', { class: 'grow' }, role, h('span', { class: 'hint' }, picks[role] ? ` · ${picks[role]}` : '')),
-        button('Pick…', () => pick(role), { cls: 'small' }))),
-      h('div', { class: 'row wrap' },
-        button('Make its views first', () => makeFromViews(picks.Front, label || picks.Front),
-          { title: 'An orbit sheet of the object (front, side, back, other side), then a model from those four views' }),
-        button(`Make it from ${n} view${n === 1 ? '' : 's'}`, () => makeFromPicked(picks, label || picks.Front),
-          { disabled: n < 2, cls: n < 2 ? '' : 'primary' })),
-      help('Four views 90° apart, the object the same size in each, on a plain background, work best. The sheet makes them from one photo; or pick photos of your own.')),
-    section('A character sheet', null,
-      h('div', { class: 'row wrap' }, h('span', { class: 'grow' }, Object.keys(viewBoxes).length ? `Marked: ${Object.keys(viewBoxes).join(', ')}` : 'Several views in one picture'),
-        button('Mark the views…', () => {
-          closeSheet();
-          import('./view-boxes.js').then((m) => m.openViewBoxes({ image: picks.Front, boxes: viewBoxes, onDone: (b) => { viewBoxes = b; viewBoxesOf = name; again(); } }));
-        }, { cls: 'small' })),
-      button('Make it from the marked views', () => makeFromBoxes(picks.Front, label || picks.Front, viewBoxes),
-        { disabled: Object.keys(viewBoxes).length < 2, cls: Object.keys(viewBoxes).length < 2 ? '' : 'primary' }),
-      help('For one picture that holds the views, however they are laid out: draw a box round each (Front, Left, Back, Right), or start from equal columns. Each box is cut out as its own view. Left is the character\'s left.')),
+    hint(label ? `From ${label}` : 'Pick the views you have'),
+    section('Its views', null,
+      h('div', { class: 'obj-views' }, VIEW_ROLES.map(slot)),
+      h('div', { class: 'row wrap' }, button('Split one picture…', split, { cls: 'small', title: 'Draw a box round each view in one picture' }),
+        n === 1 ? button('Make a splat (Idol)', () => makeIdolSplat(only, label || only),
+          { cls: 'small', title: 'Idol: a Gaussian splat of the object from this one photo, with the sides the photo doesn\'t show. Quick, and shown in the 3D tab as a splat' }) : null,
+        n === 1 ? button('Make its other views first', () => makeFromViews(only, label || only),
+          { cls: 'small', title: 'An orbit sheet of the object (front, side, back, other side), then a model from those four views' }) : null),
+      n >= 2 ? button(`Make it from ${n} views`, () => makeFromPicked(picks, label || picks[filled[0]]), { cls: 'primary' })
+        : button(n ? 'Make it from this photo' : 'Pick a photo first', () => makeFromPhoto(only, label || only), { cls: 'primary', disabled: !n,
+          title: `${OBJ.model === 'trellis' && hasTrellis() ? 'TRELLIS.2' : 'Pixal3D'} makes a model from the one photo (quickest)` }),
+      help('Tap a slot to pick a photo for that side (the picker can crop it first). One photo makes a model by itself; two or more are used together, for a rounder one. Four views 90° apart, the object the same size in each, on a plain background, work best. Split one picture cuts a character sheet into the slots. Left is the character\'s left.')),
     section('Settings', null,
+      hasTrellis() ? field('Model (one photo)', seg([['pixal', 'Pixal3D'], ['trellis', 'TRELLIS.2']], OBJ.model, (v) => { OBJ.model = v; again(); }),
+        help('Which model makes it from one photo. Two or more views always use Pixal3D.')) : null,
       field('Detail (steps)', num('steps', 4, 60)),
       field('Seed', num('seed', 0, 2 ** 31 - 1)),
       field('Texture resolution', seg([[1024, '1K'], [2048, '2K'], [4096, '4K']], OBJ.res, (v) => { OBJ.res = v; })),
       toggle('Texture', OBJ.tex, (v) => { OBJ.tex = v; }, { help: 'Off makes the shape alone, much quicker' }),
+      toggle('The picture is a photograph (splat)', OBJ.photo, (v) => { OBJ.photo = v; }, { help: 'For Make a splat (Idol): on for a camera photo, off for a render or a generated picture. The object should be one thing, whole in the frame.' }),
       toggle('Cut out the object (one photo)', OBJ.cut, (v) => { OBJ.cut = v; }, { help: 'Removes the background before making the model from one photo. Turn off when the photo is already cut out.' })),
     actions(button('Cancel', closeSheet)));
 }
@@ -541,13 +556,55 @@ function sourcesSection() {
     help('Models: glb, gltf, fbx, obj (pick its .mtl and textures too). Splats: ply, splat, ksplat, spz. Files are kept in this project\'s folder.'));
 }
 
+// ---- clean up a model in Blender (POST /api/scene/cleanup): fewer or better-arranged faces, or smoother, as a new layer ----
+const CLEAN_MODES = {
+  quads: { label: 'Clean quads', min: 500, max: 200000, step: 500, value: 20000, unit: 'faces', send: (v) => v,
+    help: 'Blender rebuilds the surface as tidy quads (about this many faces), then bakes the old colours onto it. Best before rigging or posing.' },
+  voxel: { label: 'Even skin', min: 0.2, max: 5, step: 0.1, value: 1, unit: '% of its height', send: (v) => v / 100,
+    help: 'Blender remeshes in an even grid of this size (smaller = finer), then bakes the old colours. Closes holes and loose bits.' },
+  decimate: { label: 'Fewer faces', min: 2, max: 95, step: 1, value: 30, unit: '% kept', send: (v) => v / 100,
+    help: 'Blender removes faces and keeps the shape and its UVs, so the texture stays as it is. Quick.' },
+  subdivide: { label: 'Smoother', min: 1, max: 3, step: 1, value: 1, unit: 'levels', send: (v) => v,
+    help: 'Blender splits every face into four, per level, and rounds the shape. Four times the faces each level.' },
+};
+const CLEAN = { mode: 'quads', amount: {}, tex: 2048 };
+
+function openCleanup(o) {
+  const again = () => { closeSheet(); openCleanup(o); };
+  const m = CLEAN_MODES[CLEAN.mode], amount = CLEAN.amount[CLEAN.mode] ?? m.value;
+  const rebuild = CLEAN.mode === 'quads' || CLEAN.mode === 'voxel';
+  openSheet(h('h3', {}, 'Clean up in Blender'),
+    hint(o.name),
+    field('What to do', seg(Object.entries(CLEAN_MODES).map(([k, v]) => [k, v.label]), CLEAN.mode, (v) => { CLEAN.mode = v; again(); })),
+    help(m.help),
+    field(`Amount (${m.unit})`, h('input', { type: 'number', min: m.min, max: m.max, step: m.step, value: amount,
+      onchange: (e) => { CLEAN.amount[CLEAN.mode] = Math.max(m.min, Math.min(m.max, +e.target.value || m.value)); e.target.value = CLEAN.amount[CLEAN.mode]; } })),
+    rebuild ? field('Texture size', seg([[1024, '1K'], [2048, '2K'], [4096, '4K']], CLEAN.tex, (v) => { CLEAN.tex = v; })) : null,
+    hint('The original stays as it is: the clean one is added as a new layer.'),
+    actions(button('Cancel', closeSheet), button('Clean it up', () => { closeSheet(); runCleanup(o); }, { cls: 'primary' })));
+}
+
+async function runCleanup(o) {
+  const m = CLEAN_MODES[CLEAN.mode], bar = (await import('./ui.js')).busy('Blender is working on the model…');
+  try {
+    const { waitJob } = await import('./clipimport.js');
+    const r = await waitJob(await api('/api/scene/cleanup', { method: 'POST', busy: false,
+      body: { url: o.url, mode: CLEAN.mode, amount: m.send(CLEAN.amount[CLEAN.mode] ?? m.value), tex: CLEAN.tex } }));
+    const made = await addModel(r.url, `${o.name} (${m.label.toLowerCase()})`.slice(0, 60));
+    toast(`${made.name}: ${r.faces ? `${r.faces.toLocaleString()} faces` : 'done'}`);
+  } catch (e) { toast(e.message, true); } finally { bar.done(); }
+}
+
 function itemSection(o) {
   const set = (k, v) => { o[k] = v; changed(); };
   return section(o.type === 'splat' ? 'Imported splat' : 'Imported model', null,
     hint(`${o.file || o.name}${o.fit && o.fit !== 1 ? ` · fitted ×${o.fit}` : ''}`),
     o.type === 'model' ? toggle('Plain clay look (ignore its colours and textures)', o.clay, (on) => { o.clay = on; applyClay(R.meshes.get(o.id), o.clay); save(); draw(); }) : null,
+    o.type === 'model' && /^(glb|gltf)$/.test(o.ext || extOf(o.url || '')) && /^\/files\/projects\//.test(o.url || '')
+      ? button('Clean up in Blender…', () => openCleanup(o), { cls: 'small',
+        title: 'Blender remeshes it into tidy quads, takes faces off, or smooths it, and adds the result as a new layer' }) : null,
     o.type === 'model' ? h('div', { class: 'row wrap' },
-      button('🦴 Rig it as a person', () => rigModel(o), { cls: 'small',
+      button('Rig it as a person', () => rigModel(o), { cls: 'small',
         title: 'Make It Animatable gives it the figure\'s skeleton, so poses, moves and mocap drive it' }),
       button('Use its own skeleton', () => useOwnRig(o), { cls: 'small',
         title: 'An import that already has bones (Mixamo, UniRig) needs no rigging run: the figure drives those bones' }),
@@ -720,7 +777,7 @@ export function makeSplat(name, ctx, redo = null) {
   const ch = { ...makeChoices(coarse()), preview: previewLevel(coarse()), match: !redo };
   const keep = toggle('Keep the full set for renders', ch.keepFull, (on) => { ch.keepFull = on; },
     { help: 'On: renders (colour video, the Video tab\'s export) use every Gaussian SHARP made, about 1.2M. Off: only the previews are kept, and renders use the densest of them (smaller files).' });
-  openSheet(h('h3', {}, redo ? 'Make this splat again' : 'Photo as a splat'),
+  openSheet(h('h3', {}, redo ? 'Make this splat again' : 'Photo as a splat (SHARP)'),
     help('SHARP turns the picture into about 1.2 million Gaussians. The 3D view shows a lighter preview of them; you can change it later in the splat\'s panel. Any picture size or shape works (SHARP looks at it at 1536 px square whatever it is); sharp, well-lit photos about 1000 px or more on the short side do best, and a very small one gives a soft splat.'),
     field('Preview density', seg(LEVELS.map(([k, label, n]) => [k, label, Number.isFinite(n) ? `${label}: about ${countLabel(n)} Gaussians` : `${label}: every Gaussian`]),
       ch.preview, (k) => { ch.preview = k; })),

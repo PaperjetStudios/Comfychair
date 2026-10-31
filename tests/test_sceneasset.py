@@ -11,6 +11,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app import config, db, main, sceneasset  # noqa: E402
 
+assert not str(config.DATA_DIR).startswith(str(config.BASE_DIR / "data")), config.DATA_DIR   # never the live data/
+
 
 class SceneAsset(unittest.TestCase):
     @classmethod
@@ -30,6 +32,16 @@ class SceneAsset(unittest.TestCase):
         self.assertEqual(disk.read_bytes(), b"glTFdata")
         self.assertTrue(j["url"].startswith("/files/projects/") and "/.deck/assets/" in j["url"])
         self.assertEqual(self.c.get(j["url"]).content, b"glTFdata")
+
+    def test_cleanup_refuses_what_it_cannot_clean(self):
+        j = self.up("m.glb", b"glTFdata").json()
+        ok = {"url": j["url"], "mode": "decimate", "amount": 0.3}
+        self.assertEqual(self.c.post("/api/scene/cleanup", json={**ok, "mode": "nope"}).status_code, 400)
+        self.assertEqual(self.c.post("/api/scene/cleanup", json={**ok, "url": "/files/projects/../x.glb"}).status_code, 404)
+        self.assertEqual(self.c.post("/api/scene/cleanup", json={**ok, "url": "/files/projects/nowhere/a.glb"}).status_code, 404)
+        self.assertEqual(self.c.post("/api/scene/cleanup", json={**ok, "amount": "lots"}).status_code, 400)
+        fbx = self.up("m.fbx").json()
+        self.assertEqual(self.c.post("/api/scene/cleanup", json={**ok, "url": fbx["url"]}).status_code, 404)
 
     def test_group_keeps_related_files_together(self):
         a = self.up("box.obj").json()

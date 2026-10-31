@@ -221,12 +221,14 @@ def inject(wf: dict, values: dict, template_fields: list[dict], dims: tuple[int,
                 out = g.add("ImageCompositeMasked", "result into the picture", destination=dest, source=piece,
                             x=region["x"], y=region["y"], resize_source=False, mask=mask)
             else:        # the picture at the output's size, the result over it where the mask is
+                # (the size's shape is the picture's only roughly: stretch the picture to it rather than crop, or the
+                # result covers less than the frame and lands offset; editsize.inject stretches the model's copy too)
                 w, h = [size[0], 0], [size[0], 1]
                 orig = g.add("ImageScale", "picture to the output's size", image=[src, 0], upscale_method="lanczos",
-                             width=w, height=h, crop="center")
+                             width=w, height=h, crop="disabled")
                 dest = g.add("RepeatImageBatch", "one per result", image=orig, amount=n)
                 mimg = g.add("ImageScale", "mask to the output's size", image=mask_load, upscale_method="bilinear",
-                             width=w, height=h, crop="center")
+                             width=w, height=h, crop="disabled")
                 mask = _soften(g, mimg, w, h, grow, feather)
                 out = g.add("ImageCompositeMasked", "result over the picture", destination=dest, source=list(gen),
                             x=0, y=0, resize_source=False, mask=mask)

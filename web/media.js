@@ -3,7 +3,8 @@ import {
 } from './ui.js';
 import { fmtTime } from './playback.js';
 import { cardPicture, kindTile } from './kinds.js';
-import { S, CURRENT_EDIT as CURRENT, PICKER_SOURCES as SOURCES, previewUrl, switchTab, thumbUrl } from './core.js';
+import { S, CURRENT_EDIT as CURRENT, PICKER_SOURCES as SOURCES, inputUrl, previewUrl, switchTab, thumbUrl } from './core.js';
+import { heightGrip, maximizable, zoomPan } from './layout.js';
 import { fmtDur, runTime } from './run-state.js';
 import { fetchHistory as loadHistory } from './generation-data.js';
 
@@ -101,8 +102,39 @@ async function takePhoto({ onFile, back }) {
 export const uploadMedia = (file) => { const form = new FormData(); form.append('file', file); return api('/api/media', { method: 'POST', form }); };
 
 // this project's video outputs, newest first, plus the Video tab's uploaded clips
+// ---- recently used: a strip of the last pictures or clips picked, at the top of each picker, to hop between them ----
+// kept per device; an entry whose file is gone drops out when its thumbnail fails to load.
+// entry: {k (what makes it the same one), label, kind ('img' | 'video'), src (the thumbnail), val (what the picker hands back)}
+const RECENT_MAX = 14;
+const recentList = (what) => { const l = store.get(`deck.recent.${what}`, []); return Array.isArray(l) ? l : []; };
+function rememberRecent(what, e) {
+  store.set(`deck.recent.${what}`, [e, ...recentList(what).filter((x) => x.k !== e.k)].slice(0, RECENT_MAX));
+}
+// the strip for the picker open now: it goes after the picker's bar. pick(val) is what a tap does.
+function recentStrip(what, pick) {
+  const strip = h('div', { class: 'recent-strip', role: 'group', 'aria-label': 'Recently used' });
+  const draw = () => {
+    const l = recentList(what);
+    strip.classList.toggle('hidden', !l.length);
+    strip.replaceChildren(h('span', { class: 'recent-lbl' }, 'Recent'), ...l.map((e) => {
+      const pic = e.kind === 'video' ? h('video', { src: `${e.src}#t=0.1`, muted: true, preload: 'metadata', playsInline: true })
+        : h('img', { src: e.src, alt: '', loading: 'lazy' });
+      pic.addEventListener('error', () => { store.set(`deck.recent.${what}`, recentList(what).filter((x) => x.k !== e.k)); draw(); });
+      return h('button', { type: 'button', class: 'recent-item', title: e.label, 'aria-label': e.label, onclick: () => pick(e.val) }, pic);
+    }));
+  };
+  draw();
+  $('#sheet .picker-bar').after(strip);
+  return strip;
+}
+
 export function openVideoPicker({ title, onPick }) {
-  const picked = (val) => { closeSheet(); onPick(val); };
+  const picked = (val) => {
+    const g = val.generation != null ? S.history.get(val.generation) : null, o = g?.outputs[val.index || 0];
+    if (o?.url?.startsWith('/files/')) rememberRecent('video', { k: `g${val.generation}.${val.index || 0}`, label: genLabel(g), kind: 'img', src: previewUrl(o.url, 160), val: bareSource(val) });
+    else if (val.media) rememberRecent('video', { k: `m${val.media}`, label: clipLabel(val), kind: 'video', src: `/files/media/${encodeURIComponent(val.media)}`, val: { media: val.media } });
+    closeSheet(); onPick(val);
+  };
   pickerSheet(title, [
     fileButton('Upload…', async ([fl]) => {
       try { const m = await uploadMedia(fl); picked({ media: m.name }); }
@@ -117,6 +149,7 @@ export function openVideoPicker({ title, onPick }) {
     items.sort((x, y) => y.t - x.t);
     return items.length ? items.slice(0, 300).map((x) => x.el()) : placeholder('No videos in this project yet. Generate one or upload a clip.');
   });
+  recentStrip('video', picked);
 }
 
 // Sounds: the media library's sound files and this project's sound outputs, then clips (their sound is
@@ -294,10 +327,12 @@ export function openImagePicker(opts) {
   if (tab !== 'project' && tab !== 'all' && !SOURCES.has(tab)) tab = 'project';
   let q = '';
   let inputs = null;
-  let deleting = false;   // Delete… on: a tap on a picture deletes it (every copy, after a confirm)
   const search = h('input', { type: 'text', placeholder: 'Filter by name…' });
+  let max = null;   // the big view's full-screen toggle
 
   const picked = (name, info, card) => {
+    max?.exit();
+    rememberRecent('image', { k: name, label: name.split('/').pop(), kind: 'img', src: thumbUrl(name), val: name });
     if (!multi) { closeSheet(); onPick(name, info); return; }
     onPick(name, info);
     if (card) card.classList.add('picked');
@@ -310,8 +345,6 @@ export function openImagePicker(opts) {
       inputs = null; toast('Deleted'); draw();
     } catch (e) { toast(e.message, true); }
   };
-  const inputCard = (n, badge) => mediaCard(h('img', { src: thumbUrl(n), alt: n, loading: 'lazy' }), n.split('/').pop(),
-    (c) => (deleting ? removeInput(n) : picked(n, { name: n }, c)), { badge: deleting ? '🗑' : badge });
   const fromHistory = async (g, i, c) => {
     try {
       const r = await api(`/api/generations/${g.id}/to-input`, { method: 'POST',
@@ -320,27 +353,24 @@ export function openImagePicker(opts) {
     } catch (e) { toast(e.message, true); }
   };
 
+  // Each tab lists items for the big view: { key, title, thumb, full (what the big view shows), video?, cropSrc (a picture to crop), badge?, use(thumb), del? }
   // This project: its uploads, editor saves and drawings plus everything it generated, newest first
   const SOURCE = { upload: 'upload', editor: 'edit', drawing: 'drawing', crop: 'crop', snapshot: 'frame', scene: '3d', 'edit-tab': 'edit tab', 'video-tab': 'video edit', story: 'story', link: 'link', camera: 'camera' };
-  const projectCards = async () => {
+  const inputItem = (n, badge = null) => ({ key: n, title: n.split('/').pop(), thumb: thumbUrl(n), full: inputUrl(n), cropSrc: inputUrl(n), badge,
+    use: (c) => picked(n, { name: n }, c), del: () => removeInput(n) });
+  const projectItems = async () => {
     const items = inputs.project.filter((r) => r.source !== 'generation')
-      .map((r) => ({ t: r.created, el: () => inputCard(r.name, SOURCE[r.source] || null) }));
+      .map((r) => ({ t: r.created, it: inputItem(r.name, SOURCE[r.source] || null) }));
     for (const { g, o, i, t } of await projectOutputs(['image', 'video'])) {
-      items.push({ t, el: () => mediaCard(mediaEl(o, { thumb: true }), genLabel(g),
-        (c) => (deleting ? toast('That one is in History: delete it there') : fromHistory(g, i, c)),
-        { badge: o.kind === 'video' ? 'last frame' : null }) });
+      items.push({ t, it: { key: `g${g.id}.${i}`, title: genLabel(g), thumb: previewUrl(o.url, 320), full: o.url, video: o.kind === 'video', cropSrc: o.kind === 'image' ? o.url : null,
+        badge: o.kind === 'video' ? 'last frame' : null, use: (c) => fromHistory(g, i, c), delNote: 'That one is in History: delete it there' } });
     }
-    items.sort((x, y) => y.t - x.t);
-    return items.length ? items.slice(0, 300).map((x) => x.el()) : placeholder('Nothing in this project yet. Upload, draw, or pick from All inputs.');
+    return items.sort((x, y) => y.t - x.t).slice(0, 300).map((x) => x.it);
   };
-  const allCards = () => {
-    const list = inputs.all.filter((n) => !q || n.toLowerCase().includes(q)).slice(0, 400);
-    return list.length ? list.map((n) => inputCard(n)) : placeholder('No input images match.');
-  };
+  const allItems = () => inputs.all.filter((n) => !q || n.toLowerCase().includes(q)).slice(0, 400).map((n) => inputItem(n));
 
-  // a registered source (registerPickerSource): its items for this project; a tap picks the still, a frame, or asks
-  const sourceCards = async (src) => {
-    const items = await src.list(S.project);
+  // a registered source (registerPickerSource): its items for this project; Use picks the still, a frame, or asks
+  const sourceItems = async (src) => {
     const take = async (it, frame, c, nested = false) => {
       try { const r = await src.pick(it, { mp: mp(), frame }); picked(r.name, r, c); } catch (e) { toast(e.message, true); }
       if (nested && multi) openImagePicker(opts);   // (the choice / frame sheet replaced the picker)
@@ -349,7 +379,7 @@ export function openImagePicker(opts) {
       const f = await pickFrame({ url: it.video, title: it.title, back: () => openImagePicker(opts) });
       if (f) take(it, f, c, true);
     };
-    const tap = (it, c) => {
+    const use = (it, c) => {
       if (it.video && it.still) {
         openSheet(h('h3', {}, it.title), h('div', { class: 'media-big' }, h('img', { src: it.thumb, alt: '' })),
           actions(button('Use the saved still', () => { closeSheet(); take(it, null, c, true); }, { cls: 'primary' }),
@@ -357,12 +387,13 @@ export function openImagePicker(opts) {
       } else if (it.video) frameOf(it, c);
       else take(it, null, c);
     };
-    return items.length ? items.map((it) => mediaCard(it.thumb ? h('img', { src: it.thumb, alt: '', loading: 'lazy' }) : placeholder('…'), it.title,
-      (c) => tap(it, c), { badge: it.badge || null })) : placeholder(`Nothing in ${src.label.toLowerCase()} for this project yet.`);
+    return (await src.list(S.project)).map((it) => ({ key: String(it.id), title: it.title, thumb: it.thumb, full: it.thumb || it.video,
+      video: !it.thumb, cropSrc: it.thumb && !it.video ? it.thumb : null, badge: it.badge || null, use: (c) => use(it, c) }));
   };
+  const EMPTY = { project: 'Nothing in this project yet. Upload, draw, or pick from All inputs.', all: 'No input images match.' };
 
   const projName = (S.projects.find((p) => p.id === S.project) || {}).name || 'This project';
-  const tabs = seg([['project', projName], ['all', 'All inputs'], ...[...SOURCES.values()].map((x) => [x.key, x.label])], tab, (t) => { tab = t; store.set('deck.pickerTab2', t); draw(); });
+  const tabs = seg([['project', projName], ['all', 'All inputs'], ...[...SOURCES.values()].map((x) => [x.key, x.label])], tab, (t) => { tab = t; store.set('deck.pickerTab2', t); curKey = null; draw(); });
   const onFiles = async (files, source = 'upload') => {
     toast(`Uploading ${files.length}…`);
     for (const fl of files) {
@@ -390,31 +421,115 @@ export function openImagePicker(opts) {
   const webcam = button('📷 Camera', () => takePhoto({ back: reopen, onFile: async (f) => { await onFiles([f], 'camera'); if (multi) reopen(); } }),
     { cls: 'small hidden', title: 'Take a picture with the webcam' });
   if (desktop()) hasWebcam().then((y) => webcam.classList.toggle('hidden', !y));
-  const draw = pickerSheet(title, [tabs, h('span', { class: 'picker-break' }),
-    currentEditReady() ? button('Current edit', useCurrentEdit, { cls: 'small primary', title: 'Export the picture open in the Editor right now and use it' }) : null,
+
+  // the big view with ‹ › (swipe, ← →), what the picture can do, and the rows of what there is
+  let items = [], cur = 0, curKey = null;
+  const main = h('div', { class: 'gal-main' });
+  const prev = h('button', { type: 'button', class: 'gal-nav prev', 'aria-label': 'Previous', onclick: () => go(-1) }, '‹');
+  const next = h('button', { type: 'button', class: 'gal-nav next', 'aria-label': 'Next', onclick: () => go(1) }, '›');
+  const stage = h('div', { class: 'gal-stage pk-stage' }, main, prev, next);
+  const zoom = zoomPan(main, () => main.firstElementChild, { swipe: (d) => go(d) });
+  const name = h('span', { class: 'pk-name' });
+  const useBtn = button(multi ? 'Add this picture' : 'Use this picture', () => items[cur]?.use(rows.children[cur]), { cls: 'primary' });
+  const delBtn = button('Delete…', () => { const it = items[cur]; if (it.del) it.del(); else toast(it.delNote, true); },
+    { cls: 'small danger', title: 'Delete this picture for good (uploads and saved pictures, not History)' });
+  // Crop…: cut the picture on show first (a new copy is the one picked); Cancel comes back here
+  const cropBtn = button('Crop…', async () => {
+    const it = items[cur];
+    max?.exit();
+    const img = new Image();
+    img.src = it.cropSrc;
+    const { openCrop } = await import('./editor.js');   // (it imports this file)
+    openCrop({ img, onCancel: reopen, onApply: async (c) => {
+      try {
+        const W = img.naturalWidth, H = img.naturalHeight, cv = document.createElement('canvas');
+        cv.width = Math.max(1, Math.round(c.w * W)); cv.height = Math.max(1, Math.round(c.h * H));
+        cv.getContext('2d').drawImage(img, c.x * W, c.y * H, c.w * W, c.h * H, 0, 0, cv.width, cv.height);
+        const blob = await pngBlob(cv);
+        if (!blob) throw new Error('Couldn\'t cut that picture');
+        const r = await uploadImage(blob, { mp: mp(), source: 'crop' });
+        inputs = null;
+        picked(r.name, r, null);
+        if (multi) reopen();
+      } catch (e) { toast(e.message, true); reopen(); }
+    } });
+  }, { cls: 'small', title: 'Cut the picture first: the cropped copy is the one picked (the original stays)' });
+  const bar = h('div', { class: 'gal-actions pk-actions' }, name, useBtn, cropBtn, delBtn, multi ? button('Done', closeSheet) : null);
+  // pull this grip down to give the big picture the room (all the way shuts the rows), up for more of them
+  const grip = h('div', { class: 'pk-grip', role: 'separator', 'aria-orientation': 'horizontal', 'aria-label': 'Drag to resize the rows of pictures', title: 'Drag down for a bigger picture, up for more pictures (double-tap resets)' }, h('span'));
+  const rows = h('div', { class: 'pk-rows', role: 'listbox', 'aria-label': 'Pictures' });
+  const ROWS = 'deck.picker.rows';
+  const setRows = (px) => {
+    store.set(ROWS, px);
+    rows.style.maxHeight = px == null ? '' : `${px}px`;
+    rows.classList.toggle('shut', px === 0);
+  };
+  heightGrip(grip, { size: () => rows.offsetHeight, set: setRows });
+  setRows(store.get(ROWS, null));
+  const go = (d) => { if (items.length) select(Math.max(0, Math.min(items.length - 1, cur + d))); };
+  const select = (n) => {
+    cur = n; const it = items[n]; curKey = it?.key ?? null;
+    zoom.reset();
+    main.replaceChildren(...(!it ? [] : [it.video && it.full ? h('video', { src: it.full, controls: true, muted: true, loop: true, playsInline: true, autoplay: true })
+      : h('img', { src: it.full || it.thumb, alt: it.title, draggable: false })]));
+    prev.disabled = n <= 0; next.disabled = n >= items.length - 1;
+    name.textContent = it ? `${it.title}${it.badge ? ` · ${it.badge}` : ''}  (${n + 1} / ${items.length})` : '';
+    useBtn.disabled = !it; delBtn.classList.toggle('hidden', !it); cropBtn.classList.toggle('hidden', !it?.cropSrc);
+    [...rows.children].forEach((c, k) => { c.classList.toggle('sel', k === n); c.setAttribute('aria-selected', k === n); });
+    rows.children[n]?.scrollIntoView({ block: 'nearest' });
+  };
+  const draw = async () => {
+    search.classList.toggle('hidden', tab !== 'all');
+    rows.replaceChildren(placeholder('Loading…'));
+    try {
+      if (SOURCES.has(tab)) items = await sourceItems(SOURCES.get(tab));
+      else {
+        inputs ||= await api(`/api/inputs${S.project != null ? `?project_id=${S.project}` : ''}`);
+        items = tab === 'project' ? await projectItems() : allItems();
+      }
+    } catch (e) { items = []; rows.replaceChildren(note(e.message, 'err')); select(0); return; }
+    if (!items.length) { rows.replaceChildren(placeholder(EMPTY[tab] || `Nothing in ${SOURCES.get(tab).label.toLowerCase()} for this project yet.`)); select(0); return; }
+    rows.replaceChildren(...items.map((it, n) => {
+      const t = h('button', { type: 'button', class: 'pk-thumb', role: 'option', title: it.title, 'aria-label': it.title, onclick: () => select(n), ondblclick: () => it.use(t) },
+        it.thumb ? h('img', { src: it.thumb, alt: '', loading: 'lazy' }) : placeholder('…'), it.badge ? h('span', { class: 'play' }, it.badge) : null);
+      return t;
+    }));
+    select(Math.max(0, items.findIndex((x) => x.key === curKey)));
+  };
+  const seq = openSheet(h('h3', {}, title), h('div', { class: 'picker-bar' }, [tabs, h('span', { class: 'picker-break' }),
+    currentEditReady() ? button('Current edit', useCurrentEdit, { cls: 'small primary', title: 'Export the picture open in the Image tab right now and use it' }) : null,
     fileButton('Upload…', onFiles, { accept: 'image/*', multiple: multi, cls: 'small primary' }),
     desktop() ? webcam : fileButton('📷 Camera', (fs) => onFiles(fs, 'camera'), { accept: 'image/*', capture: 'environment' }),
     button('From a video link…', () => import('./clipimport.js').then((m) => m.openLinkStill({ back: reopen,
       onFrame: async (blob) => { await onFiles([new File([blob], 'link.png', { type: 'image/png' })], 'link'); if (multi) reopen(); } })),
-    { cls: 'small', title: 'A frame from a YouTube (or other) video' }),
-    button('Delete…', (e) => { deleting = !deleting; e.currentTarget.classList.toggle('on', deleting); draw(); },
-      { cls: 'small danger', title: 'Tap pictures to delete them for good (uploads and saved pictures, not History)' }),
-    multi ? button('Done', closeSheet) : null], async () => {
-    search.classList.toggle('hidden', tab !== 'all');
-    if (SOURCES.has(tab)) return sourceCards(SOURCES.get(tab));
-    inputs ||= await api(`/api/inputs${S.project != null ? `?project_id=${S.project}` : ''}`);
-    return tab === 'project' ? projectCards() : allCards();
-  });
-  search.addEventListener('input', () => { q = search.value.toLowerCase(); draw(); });
-  dropPictures(draw.seq, onFiles);
-  $('#sheet .picker-bar').after(search);
+    { cls: 'small', title: 'A frame from a YouTube (or other) video' })]), stage, bar, grip, rows);
+  $('#sheet').classList.add('picker-full');   // the whole screen, like the board's gallery
+  max = maximizable($('#sheet'), stage, { title: 'Full screen the picture' });   // just the picture
+  draw.seq = seq;
+  PK = { seq, go, use: () => items[cur]?.use(rows.children[cur]) };
+  draw();
+  search.addEventListener('input', () => { q = search.value.toLowerCase(); curKey = null; draw(); });
+  dropPictures(seq, onFiles);
+  const strip = recentStrip('image', (name) => picked(name, { name }, null));
+  strip.after(search);
   search.classList.toggle('hidden', tab !== 'all');
 }
 
+// ← → move through the open image picker's pictures, Enter uses the one on show
+let PK = null;
+document.addEventListener('keydown', (e) => {
+  if (!PK || !sheetStillOpen(PK.seq) || e.target.closest('input, textarea, select, button, a') || e.ctrlKey || e.metaKey) return;
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); PK.go(e.key === 'ArrowLeft' ? -1 : 1); }
+  else if (e.key === 'Enter') { e.preventDefault(); PK.use(); }
+});
+
+// a canvas as a PNG Blob (null when the canvas is empty)
+export const pngBlob = (cv) => new Promise((res) => cv.toBlob(res, 'image/png'));
+
 // Upload a File/Blob to ComfyUI's input folder, tagged with the open project.
-export function uploadImage(blob, { mp = 0, source = 'upload', filename = 'image.png' } = {}) {
+export function uploadImage(blob, { mp = 0, source = 'upload', filename = 'image.png', multiple = 16 } = {}) {
   const fd = new FormData();
-  fd.append('file', blob, blob.name || filename); fd.append('mp', mp); fd.append('multiple', 16);
+  fd.append('file', blob, blob.name || filename); fd.append('mp', mp); fd.append('multiple', multiple);
   fd.append('source', source);
   if (S.project != null) fd.append('project_id', S.project);
   return api('/api/upload', { method: 'POST', form: fd });

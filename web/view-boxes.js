@@ -1,11 +1,11 @@
 // Mark the views on one picture (a character sheet): a box per view, drawn, moved or resized on the picture.
-// The boxes are fractions of the picture, { Front: {x, y, w, h}, … }; onDone gets them.
+// The boxes are fractions of the picture, { Front: {x, y, w, h}, … }; onDone gets them. onCancel: closed without Done.
 import { button, clamp01, field, h, help, openOverlay, seg } from './ui.js';
 import { inputUrl } from './core.js';
 
 export const VIEWS = ['Front', 'Left', 'Back', 'Right'];
 
-export function openViewBoxes({ image, boxes = {}, onDone }) {
+export function openViewBoxes({ image, boxes = {}, onDone, onCancel = null }) {
   const bs = Object.fromEntries(Object.entries(boxes).map(([k, b]) => [k, { ...b }]));
   let cur = VIEWS.find((v) => !bs[v]) || 'Front';
   let aspect = 1;
@@ -75,13 +75,14 @@ export function openViewBoxes({ image, boxes = {}, onDone }) {
   canvas.addEventListener('pointerup', end); canvas.addEventListener('pointercancel', end);
 
   const start = JSON.stringify(boxes);
+  let done = false;
   const overlay = h('div', { class: 'sketch boxes-editor' },
     h('div', { class: 'sketch-bar' }, h('b', {}, 'Mark the views'), h('div', { class: 'spacer' }),
       button('Cancel', () => close(), { cls: 'small ghost' }),
-      button('Done', () => { onDone(Object.fromEntries(Object.entries(bs).map(([k, b]) => [k, { x: b.x, y: b.y, w: b.w, h: b.h }]))); close(false, true); }, { cls: 'small primary' })),
+      button('Done', () => { done = true; onDone(Object.fromEntries(Object.entries(bs).map(([k, b]) => [k, { x: b.x, y: b.y, w: b.w, h: b.h }]))); close(false, true); }, { cls: 'small primary' })),
     h('div', { class: 'box-body' }, stage, list));
   const ro = new ResizeObserver(fit);
   ro.observe(stage);
-  const close = openOverlay(overlay, { dirty: () => JSON.stringify(bs) !== start, ask: 'Throw away your changes to the views?', onClose: () => ro.disconnect() });
+  const close = openOverlay(overlay, { dirty: () => JSON.stringify(bs) !== start, ask: 'Throw away your changes to the views?', onClose: () => { ro.disconnect(); if (!done && onCancel) setTimeout(onCancel); } });   // (after the overlay is gone)
   draw();
 }

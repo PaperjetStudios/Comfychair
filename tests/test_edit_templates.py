@@ -101,3 +101,13 @@ class FollowOn(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ControlTemplates(unittest.TestCase):
+    def test_control_picture_slot_and_reference_drop(self):
+        for m in ("klein3", "klein9b", "qwen21"):
+            wf = load(f"deck-{m}-control")
+            self.assertTrue(wf["20"]["_meta"]["title"].startswith("@2 Control picture"), m)
+            out = tpl.apply(wf, {"20.image": "map.png", "21.image": "", "22.image": "", "23.image": ""})
+            self.assertIn("20", out)
+            self.assertNotIn("21", out)

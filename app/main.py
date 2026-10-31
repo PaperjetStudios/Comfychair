@@ -389,6 +389,7 @@ async def lifespan(app: FastAPI):
     await asyncio.to_thread(prune_thumbs)
     await asyncio.to_thread(prune_crops)
     await asyncio.to_thread(videoprep.prune)
+    await asyncio.to_thread(storage.prune_canvas)
     await asyncio.to_thread(audioedit.prune)
     for g in db.pending_generations():  # Video-tab renders run inside a request: a restart ends them
         if g["prompt_id"].startswith("edit-"):
@@ -888,7 +889,7 @@ async def crop_input(body: dict = Body(...)):
     try:
         data = await input_bytes(name)
         key = hashlib.sha1(data + json.dumps([crop, mp, multiple], sort_keys=True).encode()).hexdigest()[:16]
-        png, w, h = await asyncio.to_thread(imageprep.prep, data, mp, multiple, crop)
+        png, w, h = await video.crop_png(data, crop, mp, multiple)
     except Exception as e:
         raise HTTPException(400, f"Couldn't crop that image: {e}")
     origin = db.input_origin(body.get("name") or "")
@@ -1006,9 +1007,9 @@ async def _timeline_path(src: dict, tmp: Path) -> tuple[Path, str]:
             raise HTTPException(400, "A 3D scene clip wasn't rendered: export again")
         return path, "video"
     if src.get("canvas"):   # a clip put on a bigger canvas for Extend frame (POST /api/video/canvas), and its mask
-        name = str(src["canvas"])
-        path = config.VIDEOPREP_DIR / f"canvas_{name}.mp4"
-        if not re.fullmatch(r"[0-9a-f]{20}_[vm]", name) or not path.is_file():
+        name = str(src["canvas"])   # <tag>-canvas_<key>_v (or <key>_v, made before the files carried the clip's tag)
+        path = config.VIDEOPREP_DIR / (f"{name}.mp4" if re.fullmatch(r"[0-9a-f]{12}-canvas_[0-9a-f]{20}_[vm]", name) else f"canvas_{name}.mp4")
+        if not re.fullmatch(r"([0-9a-f]{12}-canvas_)?[0-9a-f]{20}_[vm]", name) or not path.is_file():
             raise HTTPException(400, "The extended frame is gone: set it up again")
         return path, "video"
     if src.get("media"):

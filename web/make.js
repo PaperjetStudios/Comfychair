@@ -43,6 +43,7 @@ export const ROLES = {
   seed: (f) => f.kind === 'seed',
   loras: (f) => f.kind === 'loras',
   depthModel: (f) => f.kind === 'choice' && f.input === 'model',
+  edgeAmount: (f) => (f.kind === 'float' || f.kind === 'int') && (f.input === 'threshold' || /edge amount/i.test(f.label)),
   depthSize: (f) => f.kind === 'int' && f.input === 'input_size',
 };
 

@@ -111,6 +111,31 @@ class Storage(unittest.TestCase):
             self.assertFalse(p.exists(), p)
         main.comfy.forget.assert_awaited()
 
+    def test_deleting_a_run_takes_its_extend_frame_canvas(self):
+        gid, ours, theirs, twins = self.gen()
+        t = storage.tag(ours.resolve())
+        canvas = [touch(config.VIDEOPREP_DIR / f"{t}-canvas_{'a' * 20}_{k}.mp4") for k in "vm"]
+        other = touch(config.VIDEOPREP_DIR / f"{storage.tag('another clip')}-canvas_{'b' * 20}_v.mp4")
+        with TestClient(main.app) as c:
+            self.assertEqual(c.delete(f"/api/generations/{gid}").status_code, 200)
+        self.assertFalse(any(p.exists() for p in canvas))
+        self.assertTrue(other.exists(), "another clip's canvas stays")
+        storage.prune_canvas()   # a month unused: gone too
+        self.assertTrue(other.exists(), "an hour old stays")
+        t0 = time.time() - 40 * 86400
+        os.utime(other, (t0, t0))
+        storage.prune_canvas()
+        self.assertFalse(other.exists())
+
+    def test_3d_assets_go_with_their_project(self):
+        d = storage.asset_dir(self.folder, "0123abcd")
+        self.assertTrue(d.is_relative_to(config.PROJECTS_DIR / self.folder))
+        files = [touch(d / "bunny_quads.glb"), touch(storage.asset_dir(self.folder, "4567ef01") / "photo_splat_full.ply")]
+        name = db.get_project(self.pid)["name"]
+        with TestClient(main.app) as c:
+            self.assertEqual(c.delete(f"/api/projects/{self.pid}", params={"confirm": name}).status_code, 200)
+        self.assertFalse(any(p.exists() for p in files))
+
     def test_deleting_a_picture(self):
         name = f"{config.COMFY_INPUT_SUBFOLDER}/pic{time.time_ns()}.png"
         files = [touch(config.INPUT_DIR / Path(name).name), touch(self.inp / name),

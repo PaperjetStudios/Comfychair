@@ -193,7 +193,9 @@ async function depthFromPicture(part = null) {
     const n = part ? part.f1 - part.f0 + 1 : renderSpan().count;
     const values = { [src.key]: { generation: color.id, index: 0 }, ...(secs && { [secs.key]: Math.max(0.1, n / FPS) }) };
     setStatus('Estimating depth from the picture…'); toast('Estimating the depth from the picture…');
-    const [g] = await queueRun({ template: 'deck-depth-video', values });
+    // (marked as the 3D tab's, with the scene's size and length, so Use as offers it as an H3 control video: useas.js)
+    const face = { kind: '3d', scene: { width: SC.width, height: SC.height, seconds: n / FPS } };
+    const [g] = await queueRun({ template: 'deck-depth-video', values, face });
     let done = await waitGen(g.id);
     if (combo) {
       setStatus('Drawing the 3D objects’ depth…');
@@ -364,6 +366,40 @@ export async function clayBlob() {
   R.depth = wasDepth;
   return blob;
 }
+// One depth or pose picture of the frame at the playhead, kept as an input picture (like Save frame): to use as a
+// reference picture in Generate and the Editor. Depth is from the 3D shapes (a splat is only a box).
+export async function saveStill(kind) {
+  if (busy || !canRender()) return false;
+  const figs = SC.objects.filter((o) => (o.type === 'figure' || o.type === 'rigged') && !o.hidden);
+  if (kind === 'pose' && !figs.length) { toast('No posable person in the scene', true); return false; }
+  busy = true; stopAsked = false; R.real = true; stopPlay(); TEMP.clear(); renderPanel();
+  const keep = R.f, bg = scene.background, W = SC.width, H = SC.height;
+  clip = { first: keep, count: 1 };
+  try {
+    let blob;
+    camera.aspect = W / H; camera.updateProjectionMatrix();
+    if (kind === 'pose') {
+      const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+      pose(keep); camera.updateMatrixWorld();
+      const opts = { hands: SC.poseHands !== false, face: SC.poseFace !== false };
+      FIGURE.drawPose(cv.getContext('2d'), figs.map((o) => FIGURE.projectPose(R.meshes.get(o.id).userData.rig, o.hide, camera, W, H, opts)), W, H);
+      blob = await new Promise((res) => cv.toBlob(res, 'image/png'));
+    } else {
+      const ranges = measureRanges();
+      const rt = new THREE.WebGLRenderTarget(W, H, { colorSpace: THREE.NoColorSpace });
+      draw('depth');
+      pose(keep); setRange(ranges[0]);
+      renderer.setRenderTarget(rt); renderDepth(renderer, scene, camera, SPLAT_PASS.spark); renderer.setRenderTarget(null);
+      blob = await targetToBlob(rt, W, H, true);
+      rt.dispose();
+    }
+    const r = await C.uploadImage(blob, { source: 'scene', filename: `scene-${kind}.png` });
+    toast(`Saved the ${kind} picture as ${r.name.split('/').pop()}`);
+    return true;
+  } catch (e) { toast(e.message, true); return false; }
+  finally { clip = null; scene.background = bg; busy = false; R.real = false; R.f = keep; fit(); refresh(); renderPanel(); }
+}
+
 export async function saveFrame() {
   if (!canRender()) return;
   const blob = await clayBlob();

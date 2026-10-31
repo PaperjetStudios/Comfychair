@@ -130,6 +130,7 @@ input[type=color] { width: 64px; height: var(--tap); border: 1px solid var(--lin
 }
 .btn { min-height: var(--tap); padding: 0 18px; font-weight: 600; white-space: nowrap; }
 .btn.small { min-height: var(--tap-sm); padding: 0 12px; font-weight: 500; font-size: 14px; }
+.btn.big-btn { width: 100%; padding: 14px 16px; font-size: 1.05rem; }
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
 .btn.ghost { background: transparent; }
 .btn.danger { color: var(--bad); }
@@ -371,6 +372,27 @@ details.group:not([open]) > summary::after { transform: rotate(-90deg); }
   .picker-bar .seg { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; }
   .picker-bar .seg button { flex: 0 0 auto; min-height: 30px; padding: 0 12px; font-size: .85rem; white-space: nowrap; }
 }
+/* the image picker: the whole screen, one big picture with the rows of pictures beneath (as the board's gallery) */
+#sheet.picker-full { top: 0; left: 0; bottom: 0; transform: none; width: 100%; max-height: none; height: 100dvh; border: 0; border-radius: 0;
+  padding: calc(12px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left)); overflow: hidden; }
+#sheet.picker-full > .pk-stage { flex: 1 1 0; min-height: 160px; background: #000; border-radius: var(--r-lg); }
+#sheet.picker-full > .pk-rows { flex: 0 1 auto; max-height: 30dvh; }
+.pk-actions { padding: 0; }
+.pk-grip { flex: none; display: grid; place-items: center; height: 18px; margin: -4px 0; cursor: ns-resize; touch-action: none; }
+.pk-grip span { width: 56px; height: 5px; border-radius: 3px; background: var(--line-2); }
+.pk-grip:hover span, .pk-grip.dragging span, .pk-grip:focus-visible span { background: var(--accent); }
+.pk-rows.shut { display: none; }
+#sheet.picker-full.maxed { padding: 0; }
+#sheet.picker-full.maxed > :not(.pk-stage) { display: none; }
+#sheet.picker-full.maxed > .pk-stage { border-radius: 0; }
+.pk-name { margin-right: auto; align-self: center; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pk-rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; overflow-y: auto; scrollbar-width: thin; align-content: start; }
+.pk-rows > .placeholder, .pk-rows > .note { grid-column: 1 / -1; }
+.pk-thumb { position: relative; aspect-ratio: 1; padding: 0; border: 2px solid transparent; border-radius: var(--r-sm); overflow: hidden; background: var(--surface-2); cursor: pointer; }
+.pk-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+.pk-thumb.sel { border-color: var(--accent); }
+.pk-thumb.picked { outline: 3px solid var(--accent); outline-offset: -3px; }
+.pk-thumb .play { position: absolute; bottom: 3px; right: 3px; font-size: var(--fs-xs); background: #000a; padding: 1px 5px; border-radius: var(--r-sm); }
 #sheet.dropping { outline: 2px dashed var(--accent); outline-offset: -6px; }
 details.desc summary { cursor: pointer; color: var(--muted); }
 details.desc[open] summary { margin-bottom: 6px; }
@@ -445,6 +467,7 @@ details.desc[open] summary { margin-bottom: 6px; }
 
 /* ---- layer lists (Editor, 3D) ---- */
 .layers { display: grid; gap: 4px; }
+.layer-pick { margin-bottom: 6px; align-items: center; }
 .layer-row { display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: center; padding: 6px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg); cursor: pointer; transition: border-color .15s, background .15s; }
 @media (hover: hover) { .layer-row:hover:not(.sel) { border-color: var(--line-2); } }
 .layer-row .thumb { width: 44px; height: 44px; }
@@ -1233,6 +1256,31 @@ button.sheet-caret { width: 22px; }
 .gal-view.maxed .gal-top, .gal-view.maxed .gal-actions, .gal-view.maxed .gal-strip { display: none; }
 .gal-view .max-btn { z-index: 6; }
 
+/* ---- basics pane: size, length, seed over the viewer, opened by the button beside ⛶ ---- */
+.max-btn.basics-btn { right: 54px; }
+.max-btn.basics-btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+@media (pointer: coarse) { .max-btn.basics-btn { right: 58px; } }
+.basics-pane {
+  position: absolute; top: 54px; right: 8px; z-index: 6; width: min(340px, calc(100% - 16px)); max-height: calc(100% - 62px); overflow: auto;
+  padding: 10px; border: 1px solid var(--line-2); border-radius: var(--r); box-shadow: var(--shadow);
+  background: color-mix(in srgb, var(--surface) 92%, transparent); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+.basics-body { display: flex; flex-direction: column; gap: 10px; }
+.tab.panel-out .stage.maxed .max-btn.basics-btn { right: calc(var(--ov-w) + 54px); }
+.tab.panel-out .stage.maxed .basics-pane { right: calc(var(--ov-w) + 8px); }
+@media (max-width: 600px) {
+  .tab.panel-out .stage.maxed .max-btn.basics-btn { right: auto; left: 54px; top: 58px; }
+  .tab.panel-out .stage.maxed .basics-pane { right: auto; left: 8px; top: 104px; }
+}
+
+/* ---- pickers: the strip of recently used pictures and clips ---- */
+.recent-strip { display: flex; gap: 6px; align-items: center; overflow-x: auto; padding: 2px 0 4px; scrollbar-width: thin; }
+.recent-lbl { flex: none; font-size: .75rem; color: var(--muted); padding-right: 2px; }
+.recent-item { flex: none; width: 56px; height: 56px; padding: 0; overflow: hidden; border: 1px solid var(--line-2); border-radius: var(--r); background: var(--surface-2); cursor: pointer; }
+.recent-item img, .recent-item video { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+@media (hover: hover) { .recent-item:hover { border-color: var(--accent); } }
+@media (pointer: coarse) { .recent-item { width: 62px; height: 62px; } }
+
 /* ---- bottom areas: a grip above them resizes them ---- */
 .hsplit { height: 14px; margin-bottom: -2px; cursor: row-resize; touch-action: none; display: grid; place-items: center; border-bottom: 1px solid var(--line); background: var(--surface); }
 .hsplit::after { content: ''; width: 56px; height: 4px; border-radius: 2px; background: var(--muted); opacity: .5; }
@@ -1395,7 +1443,8 @@ button.sheet-caret { width: 22px; }
 
 /* VFX Extend frame: the canvas (checkered) with the clip placed on it; drag the clip to move it */
 .vfx-canvas { position: relative; flex: none; background: var(--checker); outline: 2px dashed var(--accent); outline-offset: -1px; overflow: hidden; touch-action: none; cursor: grab; }
-.vfx-canvas > video { position: absolute; object-fit: fill; box-shadow: 0 0 0 1px #000a; pointer-events: none; }
+.vfx-canvas > .vfx-clip { position: absolute; overflow: hidden; box-shadow: 0 0 0 1px #000a; pointer-events: none; }
+.vfx-clip > video { position: absolute; object-fit: fill; }
 
 /* ---- full screen, every tab: the settings panel pulls out over the view (layout.js fullScreen) ---- */
 .pull-tab { display: none; }
@@ -1449,6 +1498,7 @@ body:has(.stage.maxed) .toast { z-index: 60; }
 .anim-bar .scrub-wrap { position: relative; flex: 1; min-width: 0; display: flex; }
 .anim-bar .scrub-wrap .scrub { flex: 1; }
 .anim-bar .tl-key { bottom: -4px; }
+.anim-keys .tl-key.grab { pointer-events: auto; cursor: ew-resize; touch-action: none; }
 .tl-key { position: absolute; bottom: 3px; width: 9px; height: 9px; margin-left: -4.5px; background: var(--accent); transform: rotate(45deg);
   border: 1px solid #000a; pointer-events: none; z-index: 1; }
 
@@ -1829,3 +1879,19 @@ body > .undo-dock { position: fixed; z-index: 57; top: 8px; left: 50%; transform
 .anchor-grid { display: grid; grid-template-columns: repeat(3, 14px); gap: 3px; align-self: center; }
 .anchor-grid button { width: 14px; height: 14px; padding: 0; border: 1px solid var(--line-2, var(--line)); border-radius: 3px; background: var(--surface-2, var(--bg)); }
 .anchor-grid button.on { background: var(--accent); border-color: var(--accent); }
+
+/* ---- Compare…: the pick sheet's grid of what to set a take against (useas.js pickCompare) ---- */
+.cmp-picks { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+.cmp-pick { display: flex; flex-direction: column; gap: 4px; padding: 4px; text-align: left; background: var(--panel-2, transparent); border: 1px solid var(--line); border-radius: var(--r-sm); cursor: pointer; color: inherit; font: inherit; }
+.cmp-pick:hover, .cmp-pick:focus-visible { border-color: var(--accent); }
+.cmp-pick img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: var(--r-sm); }
+.cmp-pick span { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* the 3D object sheet: four slots for its views */
+.obj-views { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+@media (max-width: 560px) { .obj-views { grid-template-columns: repeat(2, 1fr); } }
+.obj-slot-pic { width: 100%; aspect-ratio: 1; padding: 0; border: 1px dashed var(--line-2); border-radius: var(--r); overflow: hidden; background: var(--surface-2); cursor: pointer; display: grid; place-items: center; }
+.obj-slot.filled .obj-slot-pic { border-style: solid; }
+.obj-slot-pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.obj-slot-plus { font-size: 32px; color: var(--muted); }
+.obj-slot-bar { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 4px; padding-top: 4px; font-size: var(--fs-sm); }

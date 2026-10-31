@@ -5,7 +5,8 @@
    "image": ""
   },
   "_meta": {
-   "title": "@1 Picture [image]"
+   "title": "@1 Picture [image]",
+   "deck_keep_size": true
   }
  },
  "vda": {

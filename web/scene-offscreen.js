@@ -12,7 +12,7 @@ import { LOADERS, RANGE, depthMat, floorMat, geometries, photoScene, rangeMat, s
 import { applyClay } from './scene-import.js';
 import { depthLook, renderDepth, splatDepths, splatMeshes } from './splat-depth.js';
 
-export const LOOKS = [['color', 'Color'], ['clay', 'Clay'], ['depth', 'Depth'], ['pose', 'Pose']];
+export const LOOKS = [['color', 'Colour'], ['clay', 'Clay'], ['depth', 'Depth'], ['pose', 'Pose']];
 export const ready = typeof SCENE.show;   // (keeps the import above in use: it is for its side effects)
 
 const clay = new THREE.MeshStandardMaterial({ color: 0xb4b4b4, roughness: 0.9 });

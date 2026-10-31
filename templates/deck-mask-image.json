@@ -1,0 +1,57 @@
+{
+ "img": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@1 Picture [image]",
+   "deck_keep_size": true
+  }
+ },
+ "model": {
+  "class_type": "LoadSAM3Model",
+  "inputs": {
+   "precision": "auto",
+   "compile": false
+  }
+ },
+ "find": {
+  "class_type": "SAM3Grounding",
+  "inputs": {
+   "sam3_model_config": [
+    "model",
+    0
+   ],
+   "image": [
+    "img",
+    0
+   ],
+   "confidence_threshold": 0.2,
+   "text_prompt": "person",
+   "max_detections": 8
+  },
+  "_meta": {
+   "title": "@2 Prompt [text_prompt]"
+  }
+ },
+ "grey": {
+  "class_type": "MaskToImage",
+  "inputs": {
+   "mask": [
+    "find",
+    0
+   ]
+  }
+ },
+ "save": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "grey",
+    0
+   ],
+   "filename_prefix": "deck/sam3-image-mask"
+  }
+ }
+}

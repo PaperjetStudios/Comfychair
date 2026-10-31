@@ -1,0 +1,118 @@
+{
+ "src": {
+  "class_type": "VHS_LoadVideoPath",
+  "inputs": {
+   "video": "",
+   "force_rate": 24,
+   "custom_width": 0,
+   "custom_height": 0,
+   "frame_load_cap": 0,
+   "skip_first_frames": 0,
+   "select_every_nth": 1
+  },
+  "_meta": {
+   "title": "@1 Source video [video]"
+  }
+ },
+ "secs": {
+  "class_type": "PrimitiveFloat",
+  "inputs": {
+   "value": 10.0
+  },
+  "_meta": {
+   "title": "@2 Length (seconds) [value]"
+  }
+ },
+ "nf": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "max(1, min(a, round(b*24)))",
+   "values.a": [
+    "src",
+    1
+   ],
+   "values.b": [
+    "secs",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "frames within the clip and Length"
+  }
+ },
+ "cut": {
+  "class_type": "ImageFromBatch",
+  "inputs": {
+   "image": [
+    "src",
+    0
+   ],
+   "batch_index": 0,
+   "length": [
+    "nf",
+    1
+   ]
+  }
+ },
+ "amount": {
+  "class_type": "PrimitiveFloat",
+  "inputs": {
+   "value": 0.4
+  },
+  "_meta": {
+   "title": "@7 Edge amount [value]"
+  }
+ },
+ "high": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "min(0.99, a*2)",
+   "values.a": [
+    "amount",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "the high threshold: twice the low one"
+  }
+ },
+ "edges": {
+  "class_type": "Canny",
+  "inputs": {
+   "image": [
+    "cut",
+    0
+   ],
+   "low_threshold": [
+    "amount",
+    0
+   ],
+   "high_threshold": [
+    "high",
+    0
+   ]
+  }
+ },
+ "vid": {
+  "class_type": "CreateVideo",
+  "inputs": {
+   "images": [
+    "edges",
+    0
+   ],
+   "fps": 24
+  }
+ },
+ "save": {
+  "class_type": "SaveVideo",
+  "inputs": {
+   "video": [
+    "vid",
+    0
+   ],
+   "filename_prefix": "deck/canny",
+   "format": "auto",
+   "codec": "auto"
+  }
+ }
+}

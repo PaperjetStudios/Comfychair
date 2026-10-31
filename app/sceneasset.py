@@ -16,7 +16,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 
-from . import config, db
+from . import config, db, storage
 
 MAX_ASSET = 200 << 20
 MODELS = {".glb", ".gltf", ".obj", ".fbx"}
@@ -47,7 +47,7 @@ async def upload_asset(file: UploadFile = File(...), project_id: str = Form(""),
         raise HTTPException(400, "Bad import id")
     group = group or uuid.uuid4().hex[:8]
     folder = db.project_folder(pid)
-    d = config.PROJECTS_DIR / folder / ".deck" / "assets" / group
+    d = storage.asset_dir(folder, group)
     d.mkdir(parents=True, exist_ok=True)
     path = d / name
     if path.resolve().parent != d.resolve():  # (belt and braces: _safe_name leaves no separators)
@@ -76,6 +76,9 @@ async def upload_asset(file: UploadFile = File(...), project_id: str = Form(""),
 # asked to unload its models first, and a run is refused while ComfyUI has work queued. Best for small camera moves
 # near where the photo was taken; nothing behind what the picture shows exists.
 SHARP = Path(os.environ.get("DECK_SHARP", "/mnt/data/sharp-venv/bin/sharp"))
+BLENDER = Path(os.environ.get("DECK_BLENDER", str(Path.home() / "Programs" / "blender-5.3.0" / "blender")))
+REMESH = config.BASE_DIR / "look" / "blender_remesh.py"
+REMESH_MODES = {"quads": (500, 200_000), "voxel": (0.002, 0.05), "decimate": (0.02, 0.95), "subdivide": (1, 3)}
 SHARP_CKPT = Path(os.environ.get("DECK_SHARP_CKPT", "/mnt/data/ComfyUI/models/sharp/sharp_2572gikvuh.pt"))
 
 
@@ -269,7 +272,7 @@ async def splat_levels(body: dict = Body(...)):
     folder, group, name = unquote(m[1]), m[2], unquote(m[3])
     if folder != Path(folder).name or folder.startswith(".") or name != _safe_name(name):
         raise HTTPException(404, "No such splat")
-    d = config.PROJECTS_DIR / folder / ".deck" / "assets" / group
+    d = storage.asset_dir(folder, group)
     path = d / name
     if not path.is_file() or path.resolve().parent != d.resolve():
         raise HTTPException(404, "No such splat")
@@ -362,7 +365,7 @@ async def photo_splat(body: dict = Body(...)):
 
     def work(job):
         group = uuid.uuid4().hex[:8]
-        d = config.PROJECTS_DIR / folder / ".deck" / "assets" / group
+        d = storage.asset_dir(folder, group)
         with tempfile.TemporaryDirectory() as tmp, voice._gpu:
             voice._free_gpu()
             job["label"] = "Making the splat"
@@ -380,6 +383,56 @@ async def photo_splat(body: dict = Body(...)):
         return finish_splat(full, folder, group, preview, keep_full)
 
     return clipimport._start(work, "Making the splat")
+
+
+@router.post("/cleanup")
+async def model_cleanup(body: dict = Body(...)):
+    """{url (a model in a project), mode (quads | voxel | decimate | subdivide), amount, tex (texture size, 1024-4096)} -> job;
+    its result is the new model ({url, name, group, kind: "model", size, faces}) in a new import folder of the same
+    project, made by Blender run headless (look/blender_remesh.py). The original stays as it was."""
+    from . import clipimport
+    from urllib.parse import unquote
+    body = body or {}
+    m = re.fullmatch(r"/files/projects/([^/]+)/(.+)", str(body.get("url") or "").split("?")[0])
+    if not m:
+        raise HTTPException(400, "That isn't a model in a project")
+    folder, rel = unquote(m[1]), unquote(m[2])
+    src = (config.PROJECTS_DIR / folder / rel).resolve()
+    if folder != Path(folder).name or folder.startswith(".") or not src.is_relative_to((config.PROJECTS_DIR / folder).resolve()) \
+            or not src.is_file() or src.suffix.lower() not in {".glb", ".gltf"}:
+        raise HTTPException(404, "No such model (Blender cleans .glb and .gltf)")
+    mode = str(body.get("mode") or "")
+    if mode not in REMESH_MODES:
+        raise HTTPException(400, "mode is quads, voxel, decimate or subdivide")
+    lo, hi = REMESH_MODES[mode]
+    try:
+        amount = min(hi, max(lo, float(body.get("amount"))))
+        tex = min(4096, max(1024, int(body.get("tex") or 2048)))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "amount must be a number")
+    if not BLENDER.is_file():
+        raise HTTPException(400, f"Blender isn't installed ({BLENDER})")
+    stem = re.sub(r"_(quads|voxel|decimate|subdivide)$", "", src.stem)
+
+    def work(job):
+        group = uuid.uuid4().hex[:8]
+        d = storage.asset_dir(folder, group)
+        name = _safe_name(f"{stem}_{mode}.glb")
+        job["label"] = "Blender is rebuilding the surface" if mode in ("quads", "voxel") else "Blender is working"
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out.glb"
+            r = subprocess.run([str(BLENDER), "-b", "--factory-startup", "-P", str(REMESH), "--", str(src), str(out), mode,
+                                str(amount), str(tex)], capture_output=True, text=True, timeout=1800)
+            last = next((ln for ln in reversed((r.stdout or "").splitlines()) if ln.startswith("{")), "{}")
+            info = json.loads(last)
+            if r.returncode or "error" in info or not out.is_file():
+                raise RuntimeError("Blender failed: " + str(info.get("error") or ((r.stderr or r.stdout).strip().splitlines() or ["no output"])[-1])[:300])
+            d.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(out), d / name)
+        return {"url": _asset_url(folder, group, name), "name": name, "group": group, "kind": "model",
+                "size": (d / name).stat().st_size, "faces": info.get("faces")}
+
+    return clipimport._start(work, "Blender is working")
 
 
 # ---- people in a photo: "Calibrate from a person" (a photo's mesh or splat scaled so a person in it is a real height) ----

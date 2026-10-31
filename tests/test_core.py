@@ -15,6 +15,9 @@ from pathlib import Path  # noqa: E402
 
 from app import accel, editsize, main, wildcards  # noqa: E402
 from app import templates as tpl  # noqa: E402
+from app import config  # noqa: E402
+
+assert not str(config.DATA_DIR).startswith(str(config.BASE_DIR / "data")), config.DATA_DIR   # never the live data/
 
 
 def wf_basic():
@@ -122,6 +125,12 @@ class EditSize(unittest.TestCase):
         scale = next(k for k, n in out.items() if n["class_type"] == "ImageScale")
         self.assertEqual(out["3"]["inputs"]["pixels"], [scale, 0])  # the ~1 MP rescale is skipped
         self.assertEqual((out[scale]["inputs"]["width"], out[scale]["inputs"]["height"]), (768, 512))
+
+    def test_a_map_of_the_picture_keeps_its_size(self):
+        wf = {"1": {"class_type": "LoadImage", "_meta": {"deck_keep_size": True}, "inputs": {"image": "a.png"}},
+              "2": {"class_type": "RemoveBackground", "inputs": {"image": ["1", 0]}}}
+        fields = [{"key": "1.image", "kind": "image", "node": "1", "group": "Image"}]
+        self.assertEqual(editsize.fields(wf, fields), [])
 
 
 def wf_upscale():

@@ -322,8 +322,10 @@ function handlesOn(L, list) {
   list.forEach((k, j) => {
     if (!SEL.has(k) || typeof k.v !== 'number') return;
     const sides = [];
-    if (j > 0 && CURVES.has(segOf(list[j - 1]))) sides.push(['ti', segOf(list[j - 1])]);
-    if (j < list.length - 1 && CURVES.has(segOf(k))) sides.push(['to', segOf(k)]);
+    // every segment but a hold has handles to grab: one that isn't a curve yet (Smooth, Linear, In, Out) turns Bezier when its handle moves
+    const mode = (e) => (CURVES.has(e) ? e : e === 'const' ? null : 'auto');
+    if (j > 0 && mode(segOf(list[j - 1]))) sides.push(['ti', mode(segOf(list[j - 1]))]);
+    if (j < list.length - 1 && mode(segOf(k))) sides.push(['to', mode(segOf(k))]);
     for (const [side, mode] of sides) { const [dt, dv] = handleOf(list, j, side, mode); out.push({ k, j, side, mode, dt, dv }); }
   });
   return out;
@@ -542,6 +544,8 @@ function move(e) {
     let dt = g.dt0 + dx / pxf();
     const dv = g.dv0 - dy / Math.max(40, $('.graph-plot').clientHeight - 2 * GP) * (rg.hi - rg.lo);
     if (UI.snap && !e.altKey) { const r = Math.round(dt); dt = r || Math.sign(dt); }   // (snap: whole frames; Alt frees it)
+    const owner = g.x.side === 'to' ? list[j] : list[j - 1];   // the key whose ease the segment follows
+    if (owner && !CURVES.has(owner.ease)) owner.ease = 'bezier';
     moveHandle(list, j, g.x.side, dt, dv, g.x.mode);
     info(`${g.x.side === 'ti' ? 'In' : 'Out'} ${dt.toFixed(1)} f · ${dv >= 0 ? '+' : ''}${dv.toFixed(2)}`);
     pose(R.f); draw(); renderKeys();
@@ -655,7 +659,12 @@ function openMenu(anchor) {
   if (menuEl) { closeMenu(); return; }
   const item = (label, fn, keep = false) => h('button', { type: 'button', class: 'btn small ghost', onclick: () => { fn(); if (!keep) closeMenu(); } }, label);
   menuEl = h('div', { class: 'key-menu', role: 'menu' },
-    item('Select none', selectNone), item('Invert selection', selectInvert), item('Duplicate (Ctrl+D)', duplicateKeys),
+    item('Select all (A)', selectAll), item('Select none', selectNone), item('Invert selection', selectInvert), item('Duplicate (Ctrl+D)', duplicateKeys),
+    ...(TOUCH() ? [] : [
+      item(`${UI.box ? '✓ ' : ''}Box select`, () => { setUI('box', !UI.box); syncTools(); }),
+      item(`${UI.add ? '✓ ' : ''}Add to selection`, () => { setUI('add', !UI.add); syncTools(); })]),
+    item(`${UI.tool === 'scale' ? '✓ ' : ''}Stretch in time (S)`, () => { setUI('tool', UI.tool === 'scale' ? 'move' : 'scale'); syncTools(); }),
+    item('Reduce keys…', () => setTimeout(() => openReduce(anchor), 0)),
     numIn('Shift (frames)', 0, (v) => { moveKeys(v); closeMenu(); }, 'Move the selected keys by this many frames', { min: -frames(), max: frames() }),
     numIn('Scale (%)', 100, (v) => { scaleKeys(v / 100); closeMenu(); }, 'Stretch the selected keys around the playhead, in percent', { min: 5, max: 500 }),
     item(`Ruler in ${UI.unit === 's' ? 'frames' : 'seconds'}`, () => { setUI('unit', UI.unit === 's' ? 'f' : 's'); renderKeys(); }),
@@ -667,6 +676,7 @@ function openMenu(anchor) {
   addEventListener('pointerdown', menuAway, true);
 }
 
+const TOUCH = () => matchMedia('(pointer: coarse)').matches;
 function toolRow() {
   tools.length = 0; closeMenu();
   const sep = () => h('span', { class: 'sep' });
@@ -674,10 +684,10 @@ function toolRow() {
     tool('▤', () => { setUI('mode', 'dope'); renderKeys(); }, { name: 'Dope sheet', on: () => UI.mode === 'dope', title: 'a row per layer · double-tap a row to add a key' }),
     tool('∿', () => { setUI('mode', 'graph'); gRange = null; renderKeys(); }, { name: 'Graph', on: () => UI.mode === 'graph', title: 'one value over time · drag a point, double-tap to add one' }),
     sep(),
-    tool('⬚', () => { setUI('box', !UI.box); syncTools(); }, { name: 'Box select', on: () => UI.box, title: 'on a touch screen: drag on empty space to box-select instead of panning' }),
-    tool('⊕', () => { setUI('add', !UI.add); syncTools(); }, { name: 'Add to selection', on: () => UI.add, title: 'taps and boxes add to the selection (a tap on a selected key takes it out)' }),
-    tool('▣', selectAll, { name: 'Select all', title: 'A' }),
-    sep(),
+    ...(TOUCH() ? [
+      tool('⬚', () => { setUI('box', !UI.box); syncTools(); }, { name: 'Box select', on: () => UI.box, title: 'drag on empty space to box-select instead of panning' }),
+      tool('⊕', () => { setUI('add', !UI.add); syncTools(); }, { name: 'Add to selection', on: () => UI.add, title: 'taps and boxes add to the selection (a tap on a selected key takes it out)' }),
+      sep()] : []),
     tool('⧉', copyKeys, { name: 'Copy', needs: 'sel', title: 'Ctrl+C' }),
     tool('📋', () => pasteKeys(), { name: 'Paste', needs: 'clip', title: 'at the playhead, onto the selected layer if it fits (Ctrl+V)' }),
     tool('🗑', deleteKeys, { name: 'Delete selected keys', needs: 'sel', cls: 'danger', title: 'Delete' }),
@@ -690,12 +700,9 @@ function toolRow() {
       tools.push([s, null, 'sel']);
       return s;
     })(),
-    tool(icon('reduce'), (e) => openReduce(e.currentTarget), { name: 'Reduce keys', cls: 'kt-reduce', title: 'fewer keys, the motion kept within a tolerance (the selected keys, else the layer\'s)' }),
-    tool('⇔', () => { setUI('tool', UI.tool === 'scale' ? 'move' : 'scale'); syncTools(); }, { name: 'Stretch in time', on: () => UI.tool === 'scale', needs: 'sel',
-      title: 'drag across the sheet to stretch the selected keys around the playhead (Blender\'s S)' }),
     tool('🧲', () => { setUI('snap', !UI.snap); syncTools(); }, { name: 'Snap', on: () => UI.snap, title: 'dragging snaps to the playhead and to other keys' }),
     tool('⤢', () => { V.fit = true; renderKeys(); }, { name: 'Fit', title: 'show the whole clip' }),
-    tool('⋯', (e) => openMenu(e.currentTarget), { name: 'More', cls: 'kt-more', title: 'select none, invert, duplicate, shift, scale, ruler' }),
+    tool('⋯', (e) => openMenu(e.currentTarget), { name: 'More', cls: 'kt-more', title: 'more: select all / none / invert, box select, duplicate, shift, scale, stretch in time, reduce keys, ruler' }),
     keyEdit(),
     h('span', { id: 'sceneKeyInfo', class: 'hint keyinfo' }));
 }

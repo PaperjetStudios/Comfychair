@@ -21,6 +21,10 @@ function loadImage(url) {
   return img.decode().then(() => img);
 }
 
+// a mask's settings before they are changed, wherever a mask is used (Generate, the Editor's Inpaint, Story):
+// a soft 8 px edge, not grown, the whole picture sent (Crop to mask off)
+export const MASK_DEFAULT = Object.freeze({ feather: 8, grow: 0, fit: false });
+
 // the painted area's box as fractions, or null when nothing is painted (alpha above a trace)
 export function maskBox(data, W, H) {
   let x0 = W, y0 = H, x1 = -1, y1 = -1;

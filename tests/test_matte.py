@@ -131,6 +131,22 @@ class Canvas(unittest.TestCase):
         self.assertGreater(at(m, 5, 5), 200)                                 # above the clip: to paint
         self.assertLess(at(m, plan["W"] // 2, plan["H"] // 2), 40)           # the clip itself: kept
 
+    @unittest.skipUnless(HAVE_FFMPEG, "ffmpeg not installed")
+    def test_cropped_clip_leaves_its_bars_out(self):
+        td = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, td)
+        src = td / "s.mp4"   # red with a black bar down each side, 40 px wide
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=320x180:d=1:r=24",
+                        "-vf", "drawbox=x=0:y=0:w=40:h=180:c=black:t=fill,drawbox=x=280:y=0:w=40:h=180:c=black:t=fill",
+                        "-pix_fmt", "yuv420p", str(src)], check=True)
+        from app import videoprep
+        crop = videoprep.norm_crop({"x": 0.125, "y": 0, "w": 0.75, "h": 1}, 320, 180)
+        self.assertEqual(crop, (40, 0, 240, 180))
+        plan = videoedit.canvas_plan(240, 180, 16 / 9)
+        videoedit.canvas_clip(src, td / "v.mp4", td / "m.mp4", plan, crop=crop)
+        v = frame(td / "v.mp4")
+        self.assertGreater(at(v, plan["x"] + 4, plan["H"] // 2), 50)    # the clip's left edge is red now, not the bar
+        self.assertLess(at(frame(td / "m.mp4"), plan["x"] + 4, plan["H"] // 2), 40)
+
 
 @unittest.skipUnless(HAVE_FFMPEG, "needs ffmpeg")
 class SoundTrack(unittest.TestCase):

@@ -18,6 +18,11 @@ reference pictures (a jacket to copy, say), but drifts further from the picture 
 NOT given to Qwen as a reference: with it, the edit model redraws what was there (the inside barely changes).
 Flux 3 Klein was left out: with the picture as a reference it repainted the original, without it the fills
 were incoherent.
+
+2026-10-30: both Kleins added for Extend / fill (outpainting). Same masked latent as the others (only the mask is
+sampled, so the picture cannot be repainted), with no reference of the picture (tested: as a reference Klein copies whatever is under the mask, a mirrored
+pre-fill came back as the mirror; without it the sides were drawn new). Reference slots are for things to add. Klein 9B keeps its sigma schedule (4 steps); Klein 3 uses a KSampler (16 steps) and keeps the
+layout prompt node of its edit template (<ref_image_0> in the prompt).
 """
 import json
 from pathlib import Path
@@ -43,9 +48,12 @@ class G(dict):
         return nid
 
 
-def loaders(g, unet, clip, clip_type, vae):
+def loaders(g, unet, clip, clip_type, vae, gguf=False):
     g.add("1", node("UNETLoader", "@9 Model [unet_name]", unet_name=unet, weight_dtype="default"))
-    g.add("2", node("CLIPLoader", "Load CLIP", clip_name=clip, type=clip_type, device="default"))
+    if gguf:
+        g.add("2", node("CLIPLoaderGGUF", "Load CLIP (GGUF)", clip_name=clip, type=clip_type))
+    else:
+        g.add("2", node("CLIPLoader", "Load CLIP", clip_name=clip, type=clip_type, device="default"))
     g.add("3", node("VAELoader", "Load VAE", vae_name=vae))
     g.add("4", node("LoraLoaderModelOnly", "@5 LoRAs", model=["1", 0], lora_name="none", strength_model=1.0))
     g.add("5", node("DifferentialDiffusion", "Differential Diffusion (soft mask edge)", model=["4", 0], strength=1.0))
@@ -112,7 +120,56 @@ def krea():
     return g
 
 
+def klein_refs(g, prompt_node):
+    """Up to two reference pictures (things to add) on a Klein edit: (positive, negative) with them. The picture itself is
+    NOT a reference: with it Klein copies it (a mirrored pre-fill came back as the mirror); the masked latent already
+    shows the model the picture around the mask."""
+    g.add("21", node("LoadImage", "@3 More references", image=""))
+    g.add("22", node("LoadImage", "@3 More references", image=""))
+    g.add("10", node("ReferenceMultiLatent", "References", positive=[prompt_node, 0], negative=["9", 0], vae=["3", 0],
+                     resolution="resize", **{"resolution.megapixels": 1.0},
+                     **{"images.image0": ["21", 0], "images.image1": ["22", 0]}))
+    return ["10", 0], ["10", 1]
+
+
+def klein9b():
+    """Flux 2 Klein 9B: 4 steps."""
+    g = G()
+    loaders(g, "flux-2-klein-9b-fp8.safetensors", "Qwen3-8B-Q8_0.gguf", "flux2", "flux2-vae.safetensors", gguf=True)
+    latent = picture_and_mask(g)
+    g.add("8", node("CLIPTextEncode", "@1 Prompt [text]", clip=["2", 0],
+                    text="Extend the picture: the same scene continues naturally, same light, colours and grain"))
+    g.add("9", node("ConditioningZeroOut", "Negative (zeroed)", conditioning=["8", 0]))
+    pos, neg = klein_refs(g, "8")
+    g.add("11", node("Flux2Scheduler", "@7 Steps [steps]", steps=4, width=["31", 0], height=["31", 1]))
+    sample(g, pos, neg, latent, ["11", 0], "klein9b_inpaint")
+    return g
+
+
+def klein3():
+    """Flux 3 Klein: 16 steps, a KSampler on the masked latent."""
+    g = G()
+    loaders(g, "flux3-image-klein-int8-convrot.safetensors", "qwen3vl_4b_int8_convrot.safetensors", "flux3",
+            "flux2-vae.safetensors")
+    latent = picture_and_mask(g)
+    g.add("6", node("CreateBoundingBoxes", "@4 Boxes", width=1024, height=1024,
+                    editor_state={"__value__": []}, last_incoming={"__value__": []}))
+    g.add("7", node("Flux3LayoutPrompt", "@1 Prompt [prompt]", element=["6", 2],
+                    prompt="In <ref_image_0>, extend the picture: the same scene continues naturally, same light, colours and grain"))
+    g.add("8", node("CLIPTextEncode", "Encode", clip=["2", 0], text=["7", 0]))
+    g.add("9", node("ConditioningZeroOut", "Negative (zeroed)", conditioning=["8", 0]))
+    pos, neg = klein_refs(g, "8")
+    g.add("11", node("KSampler", "@6 Sampler [seed,steps,denoise]", model=["5", 0], positive=pos, negative=neg,
+                     latent_image=latent, seed=0, steps=16, cfg=1.0, sampler_name="euler", scheduler="simple",
+                     denoise=1.0))
+    g.add("12", node("VAEDecode", "VAE Decode", samples=["11", 0], vae=["3", 0]))
+    g.add("13", node("SaveImage", "Save Image", filename_prefix="klein3_inpaint", images=["12", 0]))
+    return g
+
+
 TEMPLATES = {
+    "deck-klein9b-inpaint": klein9b,
+    "deck-klein3-inpaint": klein3,
     "deck-qwen21-inpaint": qwen,
     "deck-krea2-inpaint": krea,
 }

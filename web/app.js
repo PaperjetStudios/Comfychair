@@ -16,7 +16,7 @@ import { renderVfx, vfxPause, wireVfx } from './vfx.js';
 import { renderSound, sndPause, wireSound } from './sound.js';
 import { renderStory, wireStory } from './story.js';
 import { B, closeGallery, pauseBoard, renderBoard } from './board.js';
-import { fullScreen, sideNav, wireSplitters } from './layout.js';
+import { fullScreen, sectionTargets, sideNav, wireSplitters } from './layout.js';
 import { loadPrefs, openPrefs } from './prefs.js';
 import { EDIT_PHRASES, IMAGE_PHRASES, VIDEO_PHRASES } from './phrases.js';
 import { stamp } from './shot-words.js';
@@ -156,16 +156,8 @@ document.addEventListener('keydown', (e) => {
 // The other panels' layout lives in layout.js: splitters, icon tabs, maximize
 function wireLayout() {
   wireSplitters();
-  for (const id of ['generate', 'editor']) {
-    const tab = $(`#tab-${id}`);
-    const max = fullScreen(tab);
-    document.addEventListener('keydown', (e) => {   // f: full screen, as in the players (playback.js playKeys)
-      if (e.key !== 'f' || !tab.classList.contains('active') || e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey) return;
-      e.preventDefault(); max.toggle();
-    });
-  }
-  sideNav($('#tab-generate .panel'), 'generate', () => [...document.querySelectorAll('#fields > details.group')]
-    .map((el) => ({ el, label: el.querySelector(':scope > summary')?.textContent || '' })));
+  for (const id of ['generate', 'editor']) fullScreen($(`#tab-${id}`));   // (f toggles it: layout.js fullScreen)
+  sideNav($('#tab-generate .panel'), 'generate', sectionTargets($('#fields')));
   sideNav($('#editorPanel'), 'editor', sectionTargets($('#editorPanel')));
   sideNav($('#videoPanel'), 'video', sectionTargets($('#videoPanel')));
   sideNav($('#vfxPanel'), 'vfx', sectionTargets($('#vfxPanel')));
@@ -173,10 +165,6 @@ function wireLayout() {
   sideNav($('#storyPanel'), 'story', sectionTargets($('#storyPanel')));
   sideNav($('#scenePanel'), 'scene', sectionTargets($('#scenePanel')));
 }
-// the .section blocks that sit directly in a panel's body (not ones nested inside another)
-const sectionTargets = (panel) => () => [...panel.querySelectorAll('.section')]
-  .filter((el) => !el.parentElement.closest('.section') && el.querySelector(':scope > .section-title > span'))
-  .map((el) => ({ el, label: el.querySelector(':scope > .section-title > span').textContent }));
 
 // Common phrases for MiniMax H3 prompts, after ComfyUI's H3 prompt guide (docs.comfy.org): shots
 // start with [Shot N] and later ones cut at a timestamp; ambience and sound effects go in
@@ -191,7 +179,7 @@ const H3_PHRASES = [
     ['Dissolve to', 'the shot dissolves to §'],
     ['Fade to black', 'the shot fades to black'],
   ]],
-  ['Shots', [
+  ['Framing', [
     ['Establishing', 'a wide establishing shot of §'],
     ['Wide', 'a wide shot of §'],
     ['Full body', 'a full shot of § from head to toe'],

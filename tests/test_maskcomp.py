@@ -98,7 +98,7 @@ class Composite(unittest.TestCase):
         orig = node(wf, rep["inputs"]["image"])
         self.assertEqual(orig["class_type"], "ImageScale")
         self.assertEqual(orig["inputs"]["image"], ["20", 0])   # the same picture the template loads
-        self.assertEqual(orig["inputs"]["crop"], "center")
+        self.assertEqual(orig["inputs"]["crop"], "disabled")
         sid = rep["inputs"]["amount"][0]
         self.assertEqual((orig["inputs"]["width"], orig["inputs"]["height"]), ([sid, 0], [sid, 1]))
         # the mask: loaded, scaled to the output, grown, blurred
@@ -113,7 +113,7 @@ class Composite(unittest.TestCase):
         self.assertEqual((first["class_type"], first["inputs"]["channel"]), ("ImageToMask", "red"))
         mscale = node(wf, first["inputs"]["image"])
         self.assertEqual(mscale["class_type"], "ImageScale")
-        self.assertEqual((mscale["inputs"]["width"], mscale["inputs"]["height"], mscale["inputs"]["crop"]), ([sid, 0], [sid, 1], "center"))
+        self.assertEqual((mscale["inputs"]["width"], mscale["inputs"]["height"], mscale["inputs"]["crop"]), ([sid, 0], [sid, 1], "disabled"))
         self.assertEqual(node(wf, mscale["inputs"]["image"])["inputs"]["image"], MASK)
         # editsize still sizes the template's own input, and only core nodes were added
         self.assertTrue(by_class(wf, "ImageScale"))
@@ -171,6 +171,23 @@ class CropToMask(unittest.TestCase):
         self.assertAlmostEqual(corner["w"] / corner["h"], 16 / 9, places=2)
         self.assertIsNone(maskcomp.fit_box({"x": 0.1, "y": 0.1, "w": 0.8, "h": 0.8}, 1000, 1000, 1.0))   # most of it anyway
         self.assertIsNone(maskcomp.fit_box({}, 1000, 1000, 1.0))
+
+    def test_size_stretches_only_for_a_masked_edit(self):
+        t = load("deck-klein9b-edit")
+        size = lambda wf: [n for n in by_class(wf, "ImageScale").values() if n["_meta"]["title"] == "Size (crop to fit)"]
+        plain, _ = run(t, {"20.image": "a.png", editsize.WIDTH: 1024, editsize.HEIGHT: 768})
+        self.assertEqual([n["inputs"]["crop"] for n in size(plain)], ["center"])   # a plain edit still crops to fit
+        masked, _ = run(t, {"20.image": "a.png", "20.__mask": {"name": MASK}, editsize.WIDTH: 1024, editsize.HEIGHT: 768})
+        self.assertEqual([n["inputs"]["crop"] for n in size(masked)], ["disabled"])   # lines up with the picture under it
+        # the composite leaves a node of the template's own alone, whatever its title
+        own = {"class_type": "ImageScale", "_meta": {"title": "Size (crop to fit)"},
+               "inputs": {"image": ["20", 0], "upscale_method": "lanczos", "width": 64, "height": 64, "crop": "center"}}
+        fields = tpl.describe(t, None)["fields"]
+        v = {f["key"]: f["value"] for f in fields}
+        v.update({"20.image": "a.png", "20.__mask": {"name": MASK}})
+        wf = {**tpl.apply(t.workflow, v), "own": json.loads(json.dumps(own))}
+        wf = maskcomp.inject(wf, v, fields, None)
+        self.assertEqual(wf["own"]["inputs"]["crop"], "center")
 
     def test_runs_on_the_box_and_stitches_back(self):
         t = load("deck-klein9b-edit")

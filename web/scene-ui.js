@@ -17,7 +17,7 @@ import {
   pivotMoved, pivotToView, pose, rebuildRoom, recentre, refresh, removeLayer, removeSelected, resetPivot, select, selectJoint, setFree, setMode, setOrient, syncMeshes, viewer
 } from './scene-view.js';
 import { ORIENTS, nextOrient } from './gizmo-orient.js';
-import { busy, cancelRender, letGo, play, renderColorVideo, renderDepthVideo, renderPoseVideo, saveFrame, seek, stopPlay } from './scene-export.js';
+import { busy, cancelRender, letGo, play, renderColorVideo, renderDepthVideo, renderPoseVideo, saveFrame, saveStill, seek, stopPlay } from './scene-export.js';
 import { AREA, jumpKey, maxBar, renderKeys, renderTransport, toEnd, toStart, wireSheetKeys } from './scene-keys.js';
 import { hasMode, modeDef, modeList, modeOf, modeSections } from './scene-modes.js';
 import { syncRef, toggleRef } from './scene-ref.js';
@@ -353,7 +353,7 @@ function openStretch() {
     rangeField('New length', () => want, (v) => { want = v; }, { min: LEN[0], max: LEN[1], step: 0.5, fmt: (v) => `${fmtSecs(v)} s · ${framesFor(v)} frames` }),
     help('Every key of every layer moves in time with the new length, from the start: longer slows the whole animation down, shorter speeds it up. Keys that land on the same frame merge.'),
     actions(button('Cancel', closeSheet),
-      g != null ? button(`Match generate length · ${fmtSecs(clampLen(g))} s`, () => { closeSheet(); stretchTo(g, 'match'); }) : null,
+      g != null ? button(`Match Generate length · ${fmtSecs(clampLen(g))} s`, () => { closeSheet(); stretchTo(g, 'match'); }) : null,
       button('⇔ Stretch', () => { closeSheet(); if (Math.abs(want - SC.seconds) >= 0.005) stretchTo(want, 'custom'); }, { cls: 'small primary' })));
 }
 // Match generate: take the Generate template's length when it differs (on show, and when Generate changes)
@@ -365,7 +365,7 @@ export function syncLength() {
 }
 function lengthProps() {
   const mode = SC.lenMode === 'match' ? 'match' : 'custom', g = generateSeconds();
-  const choice = seg([['match', 'Match generate', 'The length of the video template picked in Generate'], ['custom', 'Custom']], mode, (v) => {
+  const choice = seg([['match', 'Match Generate', 'The length of the video template picked in Generate'], ['custom', 'Custom']], mode, (v) => {
     SC.lenMode = v;
     if (v === 'match' && g != null) syncLength(); else { save(); renderPanel(); }
   });
@@ -381,27 +381,49 @@ function lengthProps() {
       onChange: () => { if (Math.abs(want - SC.seconds) < 0.005) return; newLength(want, 'custom'); } }), stretch];
 }
 
-export function renderProps() {
+// which videos the Render popup makes, one after another
+const KINDS = [['depth', 'Depth video', renderDepthVideo], ['pose', 'Pose video', renderPoseVideo], ['colour', 'Colour video', renderColorVideo]];
+const kindsOn = () => { const k = store.get('deck.scene.renderkinds', ['depth']); return Array.isArray(k) && k.length ? k : ['depth']; };
+
+function openRender() {
   const figs = SC.objects.some((o) => o.type === 'figure' && !o.hidden);
-  const use = (g, what) => button(`Use ${what} #${g.id} in H3 control`, () => C.useControlVideo(g, SC));
-  return section('Render', null,
-    slider('Soften edges', () => SC.blur, (v) => { SC.blur = v; }, { min: 0, max: 12, step: 0.5, fmt: (v) => (v ? `${v} px` : 'off') }),
-    help('Blurs the depth so H3 copies the shapes less literally. Use with deck-h3-ctrl2v (strength 1, end 0.4).'),
+  const on = kindsOn().filter((k) => k !== 'pose' || figs);
+  const flip = (k, v) => { const next = KINDS.map(([x]) => x).filter((x) => (x === k ? v : on.includes(x))); store.set('deck.scene.renderkinds', next); openRender(); };
+  const go = async () => {
+    const todo = KINDS.filter(([k]) => on.includes(k));
+    if (!todo.length) return toast('Tick at least one video to render', true);
+    closeSheet();
+    for (const [, , fn] of todo) if (!await fn()) break;   // (a cancelled or failed one stops the rest)
+    renderPanel();
+  };
+  openSheet(h('h3', {}, 'Render'),
+    help('Tick what to render. They run one after another over the same shot, and a cancelled or failed one stops the rest.'),
+    field('Videos', h('div', { class: 'row wrap' }, ...KINDS.filter(([k]) => k !== 'pose' || figs).map(([k, l]) => toggle(l, on.includes(k), (v) => flip(k, v))))),
     field('Render', seg([['take', 'One take'], ['each', 'Each shot']], SC.renderShots === 'each' ? 'each' : 'take', (v) => { SC.renderShots = v; save(); }),
       help('One take is a single video, with the cuts in it. Each shot renders one video per shot. The toast can lay those on the Video timeline.')),
-    field(['Depth range', info('Follow the shot: each moment gets its own near and far (eased over about a second), so the depth keeps its contrast when the camera travels. A cut starts that range again. Whole clip: one near and far for the whole clip (steady greys, but a long camera move squeezes part of it into a few greys, and depth control lets go there).')],
-      seg([['follow', 'Follow the shot'], ['clip', 'Whole clip']], SC.depthRange === 'clip' ? 'clip' : 'follow', (v) => { SC.depthRange = v; save(); })),
-    field(['Depth from', info('The 3D shapes: depth worked out exactly from the objects (a splat is only a box). The picture: the shot is rendered in colour first (splats at their full set, everything in view) and Video Depth Anything estimates its depth, so a splat gets real depth, but it is an estimate and takes longer. Both: the picture\'s depth, with the 3D objects\' exact depth laid over it.')],
-      seg([['geometry', '3D shapes'], ['picture', 'The picture'], ['combo', 'Both']], SC.depthFrom || 'geometry', (v) => { SC.depthFrom = v; save(); renderPanel(); })),
-    busy ? h('div', { class: 'row wrap' }, button('✕ Cancel render', cancelRender, { cls: 'small danger', title: 'Stop the render: nothing is saved' }))
-      : h('div', { class: 'row wrap' },
-        button('Render depth video', () => renderDepthVideo(), { cls: 'small primary' }),
-        figs ? button('Render pose video', () => renderPoseVideo(), { title: 'The posable people as OpenPose stick figures' }) : null,
-        figs ? button('Render both', async () => { if (await renderDepthVideo()) await renderPoseVideo(); }, { title: 'A depth video and a pose video of the same shot' }) : null,
-        button('🎞 Render colour video', () => renderColorVideo(), { title: 'The shot as it looks, over the scene\'s length, at its size: splats at their full set' }),
-        button('📷 Save frame', saveFrame), AREA.onlyToggle()),   // (Range only: the key sheet's work area)
-    figs ? h('div', { class: 'row wrap' }, ...[['poseHands', 'Hands in the pose video'], ['poseFace', 'Face points in the pose video']].map(([k, l]) =>
-      toggle(l, SC[k] !== false, (on) => { SC[k] = on; save(); }))) : null,
+    h('div', { class: 'row wrap' }, AREA.onlyToggle()),   // (Range only: the key sheet's work area)
+    on.includes('depth') ? section('Depth', null,
+      field(['Depth range', info('Follow the shot: each moment gets its own near and far (eased over about a second), so the depth keeps its contrast when the camera travels. A cut starts that range again. Whole clip: one near and far for the whole clip (steady greys, but a long camera move squeezes part of it into a few greys, and depth control lets go there).')],
+        seg([['follow', 'Follow the shot'], ['clip', 'Whole clip']], SC.depthRange === 'clip' ? 'clip' : 'follow', (v) => { SC.depthRange = v; save(); })),
+      field(['Depth from', info('The 3D shapes: depth worked out exactly from the objects (a splat is only a box). The picture: the shot is rendered in colour first (splats at their full set, everything in view) and Video Depth Anything estimates its depth, so a splat gets real depth, but it is an estimate and takes longer. Both: the picture\'s depth, with the 3D objects\' exact depth laid over it.')],
+        seg([['geometry', '3D shapes'], ['picture', 'The picture'], ['combo', 'Both']], SC.depthFrom || 'geometry', (v) => { SC.depthFrom = v; save(); })),
+      slider('Soften edges', () => SC.blur, (v) => { SC.blur = v; }, { min: 0, max: 12, step: 0.5, fmt: (v) => (v ? `${v} px` : 'off') }),
+      help('Blurs the depth so H3 copies the shapes less literally. Use with deck-h3-ctrl2v (strength 1, end 0.4).')) : null,
+    on.includes('pose') ? section('Pose', null,
+      h('div', { class: 'row wrap' }, ...[['poseHands', 'Hands'], ['poseFace', 'Face points']].map(([k, l]) => toggle(l, SC[k] !== false, (v) => { SC[k] = v; save(); })))) : null,
+    actions(button('Cancel', closeSheet), button(`Render ${on.length > 1 ? on.length + ' videos' : 'video'}`, go, { cls: 'primary', disabled: !on.length })));
+}
+
+// the panel's Render area: one big button (options live in its popup), a still, and the finished videos
+export function renderProps() {
+  const use = (g, what) => button(`Use ${what} #${g.id} in H3 control`, () => C.useControlVideo(g, SC));
+  return section('Render', null,
+    busy ? button('✕ Cancel render', cancelRender, { cls: 'danger big-btn', title: 'Stop the render: nothing is saved' })
+      : button('🎬 Render…', openRender, { cls: 'primary big-btn', title: 'Pick which videos to render (depth, pose, colour) and how' }),
+    h('div', { class: 'row wrap' }, button('📷 Save frame', saveFrame),
+      button('Save depth frame', () => saveStill('depth'), { disabled: busy, title: 'The depth of this frame, kept as a picture to use as a reference' }),
+      SC.objects.some((o) => (o.type === 'figure' || o.type === 'rigged') && !o.hidden)
+        ? button('Save pose frame', () => saveStill('pose'), { disabled: busy, title: 'The posable people of this frame as OpenPose stick figures, kept as a picture' }) : null),
     R.renders.depth || R.renders.pose ? h('div', { class: 'row wrap' },
       R.renders.depth ? use(R.renders.depth, 'depth') : null, R.renders.pose ? use(R.renders.pose, 'pose') : null) : null,
     h('p', { id: 'sceneStatus', class: 'hint' }, statusText));
@@ -419,7 +441,7 @@ async function openAdd() {
       chip('🖼 Photo in 3D…', () => {
         closeSheet(); C.openImagePicker({ title: 'Picture to turn into 3D', onPick: (name) => makePhoto(name) });
       }, 'Turn a picture into a 3D mesh (MoGe in ComfyUI) for camera moves'),
-      chip('Photo as a splat…', () => {
+      chip('Photo as a splat (SHARP)…', () => {
         closeSheet(); C.openImagePicker({ title: 'Picture to turn into a splat', onPick: (name) => makeSplatHere(name) });
       }, 'Turn a picture into Gaussian splats (Apple SHARP): softer and more lifelike than the mesh, for small camera moves'),
       chip('🧊 Object from photos…', async () => {

@@ -1,0 +1,218 @@
+{
+ "img": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@1 Object picture [image]",
+   "deck_keep_size": true
+  }
+ },
+ "bgm": {
+  "class_type": "LoadBackgroundRemovalModel",
+  "inputs": {
+   "bg_removal_name": "birefnet.safetensors"
+  }
+ },
+ "pre_synth": {
+  "class_type": "IdolPreprocessImage",
+  "inputs": {
+   "image": [
+    "img",
+    0
+   ],
+   "mode": "synthetic",
+   "erode_radius": 1,
+   "size": 1024,
+   "bg_removal_model": [
+    "bgm",
+    0
+   ]
+  }
+ },
+ "pre_real": {
+  "class_type": "IdolPreprocessImage",
+  "inputs": {
+   "image": [
+    "img",
+    0
+   ],
+   "mode": "real",
+   "erode_radius": 1,
+   "size": 1024,
+   "bg_removal_model": [
+    "bgm",
+    0
+   ]
+  }
+ },
+ "real": {
+  "class_type": "PrimitiveBoolean",
+  "inputs": {
+   "value": false
+  },
+  "_meta": {
+   "title": "@2 It is a photograph [value]"
+  }
+ },
+ "pick": {
+  "class_type": "ComfySwitchNode",
+  "inputs": {
+   "switch": [
+    "real",
+    0
+   ],
+   "on_false": [
+    "pre_synth",
+    0
+   ],
+   "on_true": [
+    "pre_real",
+    0
+   ]
+  }
+ },
+ "dino": {
+  "class_type": "CLIPVisionLoader",
+  "inputs": {
+   "clip_name": "dino_v3_vit_h.safetensors"
+  }
+ },
+ "flux": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "flux2-vae.safetensors"
+  }
+ },
+ "cond": {
+  "class_type": "TripoSplatConditioning",
+  "inputs": {
+   "clip_vision": [
+    "dino",
+    0
+   ],
+   "vae": [
+    "flux",
+    0
+   ],
+   "image": [
+    "pick",
+    0
+   ]
+  }
+ },
+ "unet": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "idol_fp16.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "dec": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "idol_decoder_fp16.safetensors"
+  }
+ },
+ "seed": {
+  "class_type": "PrimitiveInt",
+  "inputs": {
+   "value": 42
+  },
+  "_meta": {
+   "title": "@4 Seed [value]"
+  }
+ },
+ "steps": {
+  "class_type": "PrimitiveInt",
+  "inputs": {
+   "value": 50
+  },
+  "_meta": {
+   "title": "@3 Detail (steps) [value]"
+  }
+ },
+ "ks": {
+  "class_type": "KSampler",
+  "inputs": {
+   "model": [
+    "unet",
+    0
+   ],
+   "positive": [
+    "cond",
+    0
+   ],
+   "negative": [
+    "cond",
+    1
+   ],
+   "latent_image": [
+    "cond",
+    2
+   ],
+   "seed": [
+    "seed",
+    0
+   ],
+   "steps": [
+    "steps",
+    0
+   ],
+   "cfg": 4.0,
+   "sampler_name": "euler",
+   "scheduler": "simple",
+   "denoise": 1.0
+  }
+ },
+ "decode": {
+  "class_type": "VAEDecodeTripoSplat",
+  "inputs": {
+   "samples": [
+    "ks",
+    0
+   ],
+   "vae": [
+    "dec",
+    0
+   ],
+   "num_gaussians": 262144,
+   "seed": 0
+  }
+ },
+ "prune": {
+  "class_type": "IdolPruneSplat",
+  "inputs": {
+   "splat": [
+    "decode",
+    0
+   ],
+   "min_opacity": 0.05,
+   "max_scale": 0.0
+  }
+ },
+ "file": {
+  "class_type": "SplatToFile3D",
+  "inputs": {
+   "splat": [
+    "prune",
+    0
+   ],
+   "format": "ply"
+  }
+ },
+ "save": {
+  "class_type": "SaveGaussianSplat",
+  "inputs": {
+   "model_3d": [
+    "file",
+    0
+   ],
+   "filename_prefix": "deck/idol",
+   "viewport_state": "",
+   "width": 1024,
+   "height": 1024
+  }
+ }
+}

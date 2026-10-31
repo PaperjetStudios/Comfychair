@@ -1,0 +1,36 @@
+{
+ "img": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@1 Picture [image]",
+   "deck_keep_size": true
+  }
+ },
+ "lines": {
+  "class_type": "Scribble_XDoG_Preprocessor",
+  "inputs": {
+   "image": [
+    "img",
+    0
+   ],
+   "threshold": 32,
+   "resolution": 2048
+  },
+  "_meta": {
+   "title": "@7 Line amount [threshold]"
+  }
+ },
+ "save": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "lines",
+    0
+   ],
+   "filename_prefix": "deck/scribble"
+  }
+ }
+}

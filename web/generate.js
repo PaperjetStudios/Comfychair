@@ -1,5 +1,5 @@
 import {
-  $, h, store, clamp, clamp01, clone, cycleIndex, api, toast, undoToast, openOverlay, openSheet, sheetStillOpen, nameSheet,
+  $, h, store, clamp, clamp01, clone, cycleIndex, api, toast, undoToast, openOverlay, openSheet, closeSheet, sheetStillOpen, nameSheet,
   button, iconBtn, mpInput, actions, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider,
   insertAtCursor, toggle, textArea, seedField as uiSeedField, imageInput, chips, chip,
 } from './ui.js';
@@ -9,12 +9,12 @@ import { RUN, fmtDur } from './run-state.js';
 import { notifyPrepare, keepAwake } from './notifications.js';
 export { keepAwake } from './notifications.js';
 import { queueRun } from './make.js';
-import { zoomPan } from './layout.js';
+import { basicsPane, zoomPan } from './layout.js';
 
 import { clipInput } from './vfield.js';
 import { PREFS } from './prefs.js';
 import { FULL, openCrop, openSketch, templateAspect } from './editor.js';
-import { openMaskPainter } from './maskpaint.js';
+import { MASK_DEFAULT, openMaskPainter } from './maskpaint.js';
 import { icon } from './icons.js';
 import { kreaTag } from './cast.js';
 import { openCivitai } from './civitai.js';
@@ -117,6 +117,39 @@ export function selectTemplate(id, overrideValues = null) {
 }
 
 let shownTpl = null;   // the template the settings were last drawn for
+// The settings used every run leave the sidebar for the pane over the viewer (layout.js basicsPane): the size
+// (a width + height pair), how long, how many, and the seed.
+const BASIC_INPUT = /^(length|frames?|num_frames|fps|frame_rate|batch_size|seconds?|duration|megapixels?)$/;
+const BASIC_LABEL = /^(length|duration|seconds?|frames?|fps|frame rate|batch size|megapixels?)\b/i;
+let basicsPane$ = null;
+
+// One order for the sidebar in every template, what gets changed most at the top: the words, then what goes in,
+// the LoRAs, how hard it follows, how it's made, the model last. First match wins; a group nothing matches keeps
+// the template's order, ahead of the model. (To be configurable in Settings.)
+export const GROUP_ORDER = [
+  /^(prompt|edit|shot|negative|subject|caption|text)\b/i,
+  /image|picture|photo|video|clip|reference|character|front|source|mask|boxes|people|cut out/i,
+  /lora/i,
+  /control|denoise|strength|upscale|colou?r|look/i,
+  /size|resolution|length|duration|layout|frames/i,
+  null,   // everything else, in the template's order
+  /model|voice|engine|checkpoint/i,
+  /^advanced$/i,
+];
+function sortedGroups(groups) {
+  const none = GROUP_ORDER.indexOf(null);
+  const rank = (g) => { const i = GROUP_ORDER.findIndex((re) => re && re.test(g.label)); return i < 0 ? none : i; };
+  return groups.map((g, i) => [g, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([g]) => g);
+}
+function isBasic(f, all) {
+  if (f.kind === 'seed') return true;
+  if (f.kind !== 'int' && f.kind !== 'float') return false;
+  if (f.input === 'width' || f.input === 'height') {
+    return f.kind === 'int' && all.some((x) => x.node === f.node && x.kind === 'int' && x.input === (f.input === 'width' ? 'height' : 'width'));
+  }
+  return BASIC_INPUT.test(f.input) || BASIC_LABEL.test(f.label || '');
+}
+
 export function renderFields() {
   const t = S.tpl;
   const notes = [];
@@ -126,13 +159,16 @@ export function renderFields() {
 
   const openState = store.get('deck.groupsOpen', {});
   const groups = [];
-  for (const g of t.groups) {
+  const order = sortedGroups(t.groups);
+  const basics = t.fields.filter((f) => isBasic(f, t.fields));
+  for (const g of order) {
     const fs = t.fields.filter((f) => f.group === g.label);
-    if (!fs.length) continue;
+    const rest = fs.filter((f) => !basics.includes(f));
+    if (!rest.length) continue;   // (all of it in the pane)
     const key = `${t.id}:${g.label}`;
     const det = h('details', { class: 'group', open: openState[key] ?? g.label !== 'Advanced' },
       h('summary', {}, g.label),
-      h('div', { class: 'group-body' }, g.label !== 'Advanced' ? groupPresetBar(g, fs) : null, groupFieldEls(fs)));
+      h('div', { class: 'group-body' }, g.label !== 'Advanced' ? groupPresetBar(g, fs) : null, groupFieldEls(rest)));
     det.addEventListener('toggle', () => { const o = store.get('deck.groupsOpen', {}); o[key] = det.open; store.set('deck.groupsOpen', o); });
     groups.push(det);
   }
@@ -141,13 +177,16 @@ export function renderFields() {
   const root = $('#fields'), panel = root.closest('.panel');
   const y = panel && !(PREFS.tplScrollTop && shownTpl && shownTpl !== t.id) ? panel.scrollTop : 0;
   shownTpl = t.id;
-  const ae = document.activeElement, fe = ae && root.contains(ae) ? ae.closest('.field[data-key]') : null;
+  const scope = $('#tab-generate'), ae = document.activeElement, fe = ae && scope.contains(ae) ? ae.closest('.field[data-key]') : null;
   const at = fe ? { key: fe.dataset.key, i: [...fe.querySelectorAll(ae.tagName)].indexOf(ae), s: ae.selectionStart, e: ae.selectionEnd } : null;
   root.replaceChildren(...groups, shotBar());   // (the panel order, app-wide: what goes in, how it's made, then the saved shots)
+  basicsPane$ ||= basicsPane($('#tab-generate .viewer'), 'generate');
+  basicsPane$.body.replaceChildren(...groupFieldEls(basics));
+  basicsPane$.sync();
   hooks.decorate?.();
   if (panel) panel.scrollTop = y;
   if (at && at.i >= 0) {
-    const el = [...root.querySelectorAll('.field[data-key]')].find((x) => x.dataset.key === at.key)?.querySelectorAll(ae.tagName)[at.i];
+    const el = [...scope.querySelectorAll('.field[data-key]')].find((x) => x.dataset.key === at.key)?.querySelectorAll(ae.tagName)[at.i];
     if (el) {
       el.focus({ preventScroll: true });
       if (at.s != null) { try { el.setSelectionRange(at.s, at.e); } catch { /* number inputs have no selection */ } }
@@ -172,9 +211,10 @@ export function installState(t, st) {
 export function setVal(key, v) { S.values[key] = v; persist(); }
 
 // ---------------------------------------------------------------------------
-// saved shots: the whole template at once (prompt and its builder parts, images and crops, every
-// setting, seed modes), for this workflow. ◀ ▶ load the previous/next shot (with an Undo),
-// 💾 saves over the loaded one, ＋ saves a new one. Stored with the snippets, so every device sees them.
+// saved setups: the whole template at once (prompt and its builder parts, images and crops, every
+// setting, seed modes), for this workflow. ◀ ▶ load the previous/next setup (with an Undo),
+// 💾 saves over the loaded one, ＋ saves a new one. Stored with the snippets, so every device sees them
+// (still under the category 'Saved shot', their old name, so saved ones keep loading).
 // ---------------------------------------------------------------------------
 const SHOT_CATEGORY = 'Saved shot';
 
@@ -212,16 +252,16 @@ function shotBar() {
   };
   const go = (d) => {
     const list = entries();
-    if (!list.length) return toast('No saved shots yet: ＋ saves this one');
+    if (!list.length) return toast('No saved setups yet: ＋ saves this one');
     const x = list[cycleIndex(list.findIndex((y) => String(y.id) === curId()), d, list.length)];
-    switchTo(String(x.id), x.p, `Loaded shot "${x.name}"`);
+    switchTo(String(x.id), x.p, `Loaded setup "${x.name}"`);
   };
-  const saveNew = () => nameSheet({ title: 'Save shot', placeholder: 'Name, e.g. "Market walk – wide"',
+  const saveNew = () => nameSheet({ title: 'Save setup', placeholder: 'Name, e.g. "Market walk – wide"',
     hint: `Saves everything in ${S.tpl.name}: the prompt (and its parts), images, LoRAs and every setting.`,
     save: async (name) => {
-      const r = await saveSnippet({ category: SHOT_CATEGORY, name: name || `Shot ${entries().length + 1}`, text: JSON.stringify(captureShot()) });
+      const r = await saveSnippet({ category: SHOT_CATEGORY, name: name || `Setup ${entries().length + 1}`, text: JSON.stringify(captureShot()) });
       store.set(curKey, String(r.id));
-      renderFields(); toast(`Saved shot "${r.name}"`);
+      renderFields(); toast(`Saved setup "${r.name}"`);
     } });
   const saveOver = async () => {
     const x = loaded();
@@ -233,16 +273,16 @@ function shotBar() {
   };
   const del = async () => {
     const x = loaded();
-    if (!x) return toast('No saved shot loaded');
+    if (!x) return toast('No saved setup loaded');
     store.set(curKey, '');
-    try { await deleteSnippet(x, `Deleted shot "${x.name}"`, renderFields); } catch (e) { toast(e.message, true); }
+    try { await deleteSnippet(x, `Deleted setup "${x.name}"`, renderFields); } catch (e) { toast(e.message, true); }
   };
   const defaults = () => switchTo('', { values: Object.fromEntries(S.tpl.fields.map((f) => [f.key, f.value])) }, 'Back to the template defaults');
-  return cycleBar({ title: 'Shots', what: 'saved shot', prev: () => go(-1), next: () => go(1), cls: 'saved-bar shot-bar',
-    buttons: [iconBtn('Save over this shot', '💾', saveOver), iconBtn('Save as a new shot', '＋', saveNew),
-      iconBtn('Open this shot in a new tab', '⧉', () => { const x = loaded(); if (!x) return toast('No saved shot loaded'); hooks.openShot?.(x.p, x.name); }),
-      iconBtn('Delete this saved shot', '🗑', del), iconBtn('Back to the template defaults', '↺', defaults)],
-    pos: h('span', { class: 'snip-pos' }, !l.length ? 'No saved shots · ＋ saves everything here'
+  return cycleBar({ title: 'Setups', what: 'saved setup', prev: () => go(-1), next: () => go(1), cls: 'saved-bar shot-bar',
+    buttons: [iconBtn('Save over this setup', '💾', saveOver), iconBtn('Save as a new setup', '＋', saveNew),
+      iconBtn('Open this setup in a new tab', '⧉', () => { const x = loaded(); if (!x) return toast('No saved setup loaded'); hooks.openShot?.(x.p, x.name); }),
+      iconBtn('Delete this saved setup', '🗑', del), iconBtn('Back to the template defaults', '↺', defaults)],
+    pos: h('span', { class: 'snip-pos' }, !l.length ? 'No saved setups · ＋ saves everything here'
       : i < 0 ? `${l.length} saved · none loaded` : `${i + 1}/${l.length} · ${l[i].name}`) });
 }
 
@@ -413,9 +453,16 @@ function sizeField(fw, fh) {
     persist(); showReadout();
   };
   const aspects = [...(imgField ? [['image', 'Match image']] : []), ...ASPECT_PRESETS.map(([k]) => [k, k]), ['custom', 'Custom']];
-  const aspectSeg = seg(aspects, m.aspect, (id) => { m.aspect = id; applyPreset(); persist(); draw(); }, { wrap: true });
+  let pick = false;   // Match image and Custom fold the proportions into one button; it unfolds them
+  const aspectSeg = seg(aspects, m.aspect, (id) => { m.aspect = id; pick = false; applyPreset(); persist(); draw(); }, { wrap: true });
+  const aspectBtn = h('button', { type: 'button', class: 'icon-btn aspect-btn', onclick: () => { pick = true; draw(); } }, '⊞');
   const draw = () => {
     aspectSeg.set(m.aspect);
+    const folded = (m.aspect === 'image' || m.aspect === 'custom') && !pick;
+    aspectSeg.classList.toggle('hidden', folded);
+    aspectBtn.classList.toggle('hidden', !folded);
+    const what = m.aspect === 'image' ? 'Match image' : 'Custom';
+    aspectBtn.title = `Proportions: ${what} (tap to pick another)`; aspectBtn.setAttribute('aria-label', aspectBtn.title);
     const isCustom = m.aspect === 'custom';
     custom.classList.toggle('hidden', !isCustom);
     mpRow.classList.toggle('hidden', isCustom);
@@ -430,7 +477,7 @@ function sizeField(fw, fh) {
   custom.addEventListener('click', () => setTimeout(showReadout));
   if (m.aspect === 'image') applyPreset();   // the image (or its crop) may have changed since
   draw();
-  const el = field(['Size', readout], aspectSeg, mpRow, custom);
+  const el = field(['Size', readout], aspectSeg, aspectBtn, mpRow, custom);
   el.classList.add('size-field');
   return el;
 }
@@ -880,7 +927,6 @@ function imageField(f) {
 // onto the picture through it (app/maskcomp.py). The value: { name, src, crop, box, feather, grow, fit }. ----
 const FEATHERS = [[0, 'Hard'], [4, '4 px'], [8, '8 px'], [16, '16 px'], [32, '32 px'], [64, '64 px']];
 const GROWS = [[0, 'None'], [4, '4 px'], [8, '8 px'], [16, '16 px'], [32, '32 px']];
-const MASK_DEFAULT = { feather: 8, grow: 0, fit: false };
 // inpainting a small area at the model's full size is the point: Crop to mask starts on there
 const maskDefault = (mf) => (mf.required && mf.fit ? { ...MASK_DEFAULT, fit: true } : MASK_DEFAULT);
 // an inpaint template's mask not painted yet (generate() stops on it)
@@ -1333,6 +1379,15 @@ export function addToPrompt(text) {
   if (!f) return toast('This template has no prompt field', true);
   const cur = String(S.values[f.key] || '').trimEnd();
   if (cur.includes(text)) return toast(`"${text}" is already in the prompt`);
+  const st = builderState();
+  if (st.on && isMainPrompt(f)) {   // Build from parts writes this field from its parts: add it to one, or the next sync drops it
+    const order = PARTS[S.tpl?.tag_style === 'h3' ? 'video' : 'image'];
+    const part = order.includes('Style') ? 'Style' : order[order.length - 1];
+    const was = (st.parts[part] || '').trimEnd();
+    st.parts[part] = was ? `${was}, ${text}` : text;
+    setVal(f.key, composePrompt(st, order)); saveBuilder();
+    renderFields(); return toast(`Added "${text}" to ${part}`);
+  }
   setVal(f.key, cur ? `${cur}, ${text}` : text);
   renderFields(); toast(`Added "${text}" to ${f.group}`);
 }

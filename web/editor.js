@@ -157,7 +157,7 @@ const ED = createEditor({
   name: () => tabs?.active?.name,
   beforeRender: () => { if (!tabs.started) tabs.start(); },
   panelParts: (ed) => h('div', { class: 'panel-body' }, tabMount, ed.topRow(),
-    ed.layerList(), ed.paintProps(), ed.inpaintProps(), ed.layerProps(), ed.animProps(), ed.canvasProps(), ed.exportProps()),   // (the panel order, app-wide)
+    ed.layerList(), ed.paintProps(), ed.inpaintProps(), ed.toolsProps(), ed.layerProps(), ed.animProps(), ed.canvasProps(), ed.exportProps()),   // (the panel order, app-wide)
 });
 export const { E } = ED;
 export const persistEditor = () => ED.changed();
@@ -182,6 +182,15 @@ tabs = new TabSet({ kind: 'edit-tabs', mount: tabMount, host: $('#tab-editor'), 
 // Resolves once a tab is open (or after ~8 s, e.g. offline), so other panels can write into the current tab
 // without the first load replacing their change.
 export const editorTabsReady = () => tabs.ready();
+// A new Image tab, as the strip's ＋ makes one: shows the Editor, opens and selects it. Resolves true once it is the
+// open tab, false when it couldn't be made (left unsaved, offline: the strip has said why).
+export async function newEditTab() {
+  switchTab('editor');   // (its panel, with the strip, is drawn there)
+  await tabs.ready();
+  const was = E.tab?.id;
+  await tabs.create();
+  return !!E.tab && E.tab.id !== was;
+}
 
 // ---- the still: a picture of the composite, kept beside the tab so pickers can show it ----
 const STILL_DELAY = 4000, STILL_MAX = 2048;
@@ -235,7 +244,7 @@ export async function addToEditor(name) {
   await editorTabsReady();
   ED.addImage(name);
   switchTab('editor');
-  toast('Added to the Editor: Save as input when done');
+  toast('Added to the Image tab: Save as input when done');
 }
 
 export async function useInGenerate(...args) { return (await import('./generate.js')).useInGenerate(...args); }

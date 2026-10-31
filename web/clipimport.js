@@ -14,11 +14,15 @@ const FIRST_LEN = 10;   // a new clip starts with its first 10 s chosen
 const fmtSize = (b) => (b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1e6))} MB`);
 const fmtDur = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 
-// Poll a server job ({job}) until it ends: resolves its result, rejects with its error. alive() false: stop quietly.
+// Poll a server job ({job}) until it ends: resolves its result, rejects with its error. alive() false: the job is
+// cancelled on the server and this rejects with "Stopped".
 export function waitJob({ job }, onProgress, alive = () => true) {
   return new Promise((resolve, reject) => {
     const poll = async () => {
-      if (!alive()) return api(`/api/clip/job/${job}/cancel`, { method: 'POST', busy: false }).catch(() => {});
+      if (!alive()) {
+        api(`/api/clip/job/${job}/cancel`, { method: 'POST', busy: false }).catch(() => {});
+        return reject(new Error('Stopped'));
+      }
       let s;
       try { s = await api(`/api/clip/job/${job}`, { busy: false }); } catch (e) { return reject(e); }
       onProgress?.(s.progress, s.label);
@@ -44,13 +48,15 @@ function loadFFmpeg() {
 
 // A stream copy of [start, start+len) from a local File, read in place (WORKERFS) so a large file isn't
 // loaded into memory. A .mov keeps an edit list, so the copy starts on the cut, not the keyframe before it.
-async function copyPiece(file, start, len, onLog) {
+// signal: Stop ends the cutter's worker (the next cut loads it again).
+async function copyPiece(file, start, len, signal) {
   const ff = await loadFFmpeg();
+  if (signal?.aborted) throw new Error('Stopped');
+  const stop = () => { ffmpegP = null; ff.terminate(); };
+  signal?.addEventListener('abort', stop);
   const dir = `/in${Date.now()}`;
   await ff.createDir(dir);
   await ff.mount('WORKERFS', { files: [file] }, dir);
-  const log = ({ message }) => onLog?.(message);
-  ff.on('log', log);
   try {
     const src = `${dir}/${file.name}`;
     const base = ['-ss', start.toFixed(3), '-i', src, '-t', len.toFixed(3), '-map', '0:v:0', '-map', '0:a:0?', '-c:v', 'copy'];
@@ -64,14 +70,19 @@ async function copyPiece(file, start, len, onLog) {
       }
     }
     throw new Error("This browser's cutter couldn't read that file");
+  } catch (e) {
+    throw signal?.aborted ? new Error('Stopped') : e;
   } finally {
-    ff.off('log', log);
-    await ff.unmount(dir).catch(() => {});
-    await ff.deleteDir(dir).catch(() => {});
+    signal?.removeEventListener('abort', stop);
+    if (!signal?.aborted) {   // (stopped: the worker is gone, and its files with it)
+      await ff.unmount(dir).catch(() => {});
+      await ff.deleteDir(dir).catch(() => {});
+    }
   }
 }
 
-// opts.onSaved(entry): the saved media entry ({name, url, kind, label}); the sheet is closed first.
+// opts.onSaved(entry, { project }): the saved media entry ({name, url, kind, label}) and, when it was added to this
+// project too, its generation (else null); the sheet is closed first.
 // opts.sound: start on "Sound only" (the cut is saved as an .m4a, no picture)
 export function openClipImport({ onSaved = null, title = 'Import a clip', sound = false } = {}) {
   let tab = store.get('deck.clipImport.tab', 'link');
@@ -79,6 +90,7 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
   let size = store.get('deck.clipImport.size', 0);
   let cut = null;   // { trim, crop } as the editor reports them
   let busy = false;
+  let stopper = null;   // the running save's AbortController: Stop aborts it
   const body = h('div', { class: 'clip-import' });
   const tabs = seg([['link', 'Link'], ['pc', 'This PC'], ['device', 'This device']], tab, (t) => {
     if (busy) { tabs.set(tab); return toast('Wait for the clip to finish', true); }
@@ -109,21 +121,35 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
     return videoEditor({ ...opts, trim: cut.trim, crop: null, marks: true, loader: () => ({ rate: 0, mapped: false }),
       onChange: (trim, crop) => { cut = { trim, crop }; } });
   };
+  // run(signal, alive): the save; Save turns into Stop while it runs, which cancels it wherever it is (the cutter in
+  // this browser, the upload, or the server's job) and leaves nothing behind
   const saveBtn = (run) => {
     const b = button('Save clip', async () => {
-      if (busy) return;
-      busy = true; b.disabled = true;
+      if (busy) {
+        if (stopper && !stopper.signal.aborted) { stopper.abort(); b.disabled = true; b.textContent = 'Stopping…'; }
+        return;
+      }
+      busy = true;
+      stopper = new AbortController();
+      const { signal } = stopper;
+      b.textContent = 'Stop'; b.classList.replace('primary', 'danger');
       try {
-        const entry = await run();
+        const entry = await run(signal, () => !signal.aborted);
+        let project = null;
         if (toProject && S.project != null) {   // on the Board and in History too
-          const g = await api('/api/media/to-project', { method: 'POST', body: { name: entry.name, project_id: S.project } });
-          S.history.set(g.id, g);
+          project = await api('/api/media/to-project', { method: 'POST', body: { name: entry.name, project_id: S.project } });
+          S.history.set(project.id, project);
         }
-        toast(`Saved ${entry.label}${entry.kind === 'audio' ? ' (sound)' : ''} to the media library${toProject ? ' and this project' : ''}`);
+        toast(`Saved ${entry.label}${entry.kind === 'audio' ? ' (sound)' : ''} to the media library${project ? ' and this project' : ''}`);
         closeSheet();
-        onSaved?.(entry);
-      } catch (e) { toast(e.message, true); bar.classList.add('hidden'); }
-      finally { busy = false; b.disabled = false; }
+        onSaved?.(entry, { project });
+      } catch (e) {
+        if (signal.aborted) toast('Stopped: nothing was saved'); else toast(e.message, true);
+        bar.classList.add('hidden');
+      } finally {
+        busy = false; stopper = null; b.disabled = false;
+        b.textContent = 'Save clip'; b.classList.replace('danger', 'primary');
+      }
     }, { cls: 'primary' });
     return b;
   };
@@ -166,10 +192,10 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
       out.replaceChildren(
         h('p', { class: 'hint' }, [L.title, L.uploader, fmtDur(L.duration || 0), top ? `up to ${top}p` : null].filter(Boolean).join(' · ')),
         withSide(ed, sizeField(), field('Name', name), bar,
-          h('div', { class: 'actions' }, saveBtn(async () => {
+          h('div', { class: 'actions' }, saveBtn(async (signal, alive) => {
             const { start, end } = span(L.duration);
             return waitJob(await api(`/api/clip/link/${L.id}/cut`, { method: 'POST', busy: false,
-              body: { start, end, height: size || null, crop: cut?.crop, name: name.value.trim() || L.title, sound: soundOnly } }), progress);
+              body: { start, end, height: size || null, crop: cut?.crop, name: name.value.trim() || L.title, sound: soundOnly } }), progress, alive);
           })), smooth,
           hint('The preview is small; the saved clip is cut from the full-quality video and only that part is downloaded.')));
       if (L.cache) {   // after the editor is on the page: the job stops once it's gone
@@ -241,10 +267,10 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
         h('p', { class: 'hint' }, `${x.name} · ${info.width}×${info.height} · ${+info.fps.toFixed(2)} fps · ${fmtDur(info.duration)} · ${fmtSize(x.size)}`),
         withSide(editor({ url, info: Promise.resolve(info), duration: info.duration, onError: () => cant.classList.remove('hidden') }),
           sizeField(), field('Name', name), bar,
-          h('div', { class: 'actions' }, saveBtn(async () => {
+          h('div', { class: 'actions' }, saveBtn(async (signal, alive) => {
             const { start, end } = span(info.duration);
             return waitJob(await api('/api/clip/file/cut', { method: 'POST', busy: false,
-              body: { path: x.path, start, end, height: size || null, crop: cut?.crop, name: name.value.trim() || x.name, sound: soundOnly } }), progress);
+              body: { path: x.path, start, end, height: size || null, crop: cut?.crop, name: name.value.trim() || x.name, sound: soundOnly } }), progress, alive);
           })), cant, proxied ? hint('Showing the preview copy; the clip is cut from the original.')
             : h('div', { class: 'row' }, proxyBtn, hint('Seeking slow or jumpy (4K, long files)? A small copy seeks instantly.'))));
     };
@@ -274,15 +300,16 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
       h('p', { class: 'hint' }, `${fl.name} · ${fmtSize(fl.size)}`),
       withSide(editor({ url: objUrl, info: meta, duration: 0, onError: () => cant.classList.remove('hidden') }),
       sizeField(), field('Name', name), bar,
-      h('div', { class: 'actions' }, saveBtn(async () => {
+      h('div', { class: 'actions' }, saveBtn(async (signal, alive) => {
         await meta;
         const { start, end } = span(dur);
         progress(0, ffmpegP ? 'Cutting' : 'Loading the cutter (31 MB, once)');
         let piece, at = start;
         try {
-          piece = await copyPiece(fl, start, end - start);
+          piece = await copyPiece(fl, start, end - start, signal);
           at = 0;   // the piece starts on the cut
         } catch (e) {
+          if (signal.aborted) throw e;
           if (fl.size > 500e6) throw new Error(`${e.message}. The file is too big to send whole: copy it to the PC and use the This PC tab.`);
           piece = fl;   // small enough: send it all and let the server cut
         }
@@ -293,7 +320,7 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
         if (cut?.crop) form.append('crop', JSON.stringify(cut.crop));
         form.append('name', name.value.trim() || fl.name);
         if (soundOnly) form.append('sound', 'true');
-        return waitJob(await api('/api/clip/upload', { method: 'POST', form, busy: false }), progress);
+        return waitJob(await api('/api/clip/upload', { method: 'POST', form, busy: false, signal }), progress, alive);
       }))), cant);
   };
 

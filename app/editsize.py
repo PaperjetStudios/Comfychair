@@ -24,6 +24,9 @@ def fields(workflow: dict, template_fields: list[dict]) -> list[dict]:
     first = next((f for f in template_fields if f["kind"] == "image"), None)
     if not first:
         return []
+    # a map or a matte of the picture comes out at the picture's own size: a Size would crop it to a square
+    if (workflow.get(str(first["node"])) or {}).get("_meta", {}).get("deck_keep_size"):
+        return []
     # Qwen Image 2.1 keeps the reference at its own size rounded to 32; the others take 16
     step = 32 if any(n.get("class_type") == "TextEncodeQwenImage21" for n in workflow.values()) else 16
     common = {"node": "__deck", "kind": "int", "min": 256, "max": 4096, "step": step,
@@ -48,8 +51,14 @@ def inject(wf: dict, values: dict, template_fields: list[dict]) -> dict:
         return wf
     src = f["image_node"]
     nid = str(max((int(k) for k in wf if k.isdigit()), default=0) + 1)
+    # a masked edit laid back over the picture (maskcomp.inject) stretches rather than crops, so the result and the
+    # picture under it line up (the size's shape is the picture's only roughly)
+    mf = next((x for x in template_fields if x["kind"] == "mask" and x.get("composite")), None)
+    mv = mf and values.get(mf["key"])
+    stretch = isinstance(mv, dict) and isinstance(mv.get("name"), str) and bool(mv["name"])
     wf[nid] = {"class_type": "ImageScale", "_meta": {"title": "Size (crop to fit)"},
-               "inputs": {"image": [src, 0], "upscale_method": "lanczos", "width": int(w), "height": int(h), "crop": "center"}}
+               "inputs": {"image": [src, 0], "upscale_method": "lanczos", "width": int(w), "height": int(h),
+                          "crop": "disabled" if stretch else "center"}}
     _relink(wf, [src, 0], [nid, 0], skip=nid)
     for k, node in list(wf.items()):
         cls, ins = node["class_type"], node["inputs"]

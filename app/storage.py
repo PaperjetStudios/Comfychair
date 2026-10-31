@@ -5,7 +5,8 @@ The rules (see also the tests in tests/test_storage.py):
   wrote beside them and never reported: a video's silent copy, its first-frame PNG, an auto-rigger's GLB/FBX
   pair and texture folder) are deleted, and the run leaves ComfyUI's history (which holds its prompt).
 - Deleting a run, a picture or a project removes every copy of its files: ComfyChair's, ComfyUI's, and the
-  thumbnails and previews cached from them.
+  thumbnails, previews and Extend frame canvases cached from them.
+- The 3D tab's files (imports, photo splats, Blender clean-ups: asset_dir) live in their project's folder and go with it.
 - sweep() finds what was left behind before these rules, in ComfyChair's own folders in ComfyUI only, and never
   a file ComfyChair has no other copy of.
 """
@@ -22,6 +23,7 @@ from . import config, db
 log = logging.getLogger("comfydeck.storage")
 
 PREVIEW_DIR = config.THUMB_DIR / "previews"
+CACHE_DIRS = (config.THUMB_DIR, PREVIEW_DIR, config.VIDEOPREP_DIR)   # (VIDEOPREP_DIR: /api/video/canvas's <tag>-canvas_*.mp4)
 RIG_COPY = re.compile(r"^\d{5}_[\w.\-]+\.(glb|gltf|fbx|obj|ply|stl)$", re.I)   # /api/scene/mesh's copies in input/3d
 FRESH = 600   # a file this new (seconds) may be a run still writing: the sweep leaves it
 
@@ -33,15 +35,32 @@ def tag(key) -> str:
 
 
 def drop_caches(*keys) -> int:
-    """Delete the thumbnails and previews made from these sources (resolved paths, or input names)."""
+    """Delete the thumbnails, previews and canvases made from these sources (resolved paths, or input names)."""
     n = 0
     for k in keys:
         t = tag(k)
-        for d in (config.THUMB_DIR, PREVIEW_DIR):
+        for d in CACHE_DIRS:
             for p in d.glob(f"{t}-*"):
                 p.unlink(missing_ok=True)
                 n += 1
     return n
+
+
+def prune_canvas(max_age_days=30):
+    """Extend frame's canvases are remade on demand: clear the ones unused for a month (main.py's lifespan)."""
+    cutoff = time.time() - max_age_days * 86400
+    for p in config.VIDEOPREP_DIR.glob("*-canvas_*.mp4"):
+        try:
+            if p.stat().st_mtime < cutoff:
+                p.unlink()
+        except OSError:
+            pass
+
+
+def asset_dir(folder: str, group: str) -> Path:
+    """Where one 3D-tab import (or splat, or Blender clean-up) keeps its files: inside its project's folder, so
+    deleting the project deletes them (projects.delete removes the folder)."""
+    return config.PROJECTS_DIR / folder / ".deck" / "assets" / group
 
 
 def _inside(p: Path, root: Path | None) -> bool:

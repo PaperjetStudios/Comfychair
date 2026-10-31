@@ -60,11 +60,29 @@ def migrate(conn):
 migrate(_conn)
 
 
+class _Rows:
+    """What _q returns: the statement's rows, already read, with the cursor's interface the callers use."""
+    def __init__(self, rows, lastrowid):
+        self._rows, self.lastrowid = rows, lastrowid
+
+    def fetchall(self):
+        return self._rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
 def _q(sql, args=()):
+    """One statement under the lock, its rows read there too. The connection is shared across threads, so a cursor
+    read after the lock is released can see another thread's statement half-way (short reads, IndexError)."""
     with _lock:
         cur = _conn.execute(sql, args)
+        rows = cur.fetchall() if cur.description else []
         _conn.commit()
-        return cur
+        return _Rows(rows, cur.lastrowid)
 
 
 def _gen(row) -> dict | None:

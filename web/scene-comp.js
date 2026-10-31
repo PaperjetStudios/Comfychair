@@ -20,7 +20,7 @@ const EXTRA = new Set();   // scenes asked for by id before the timeline lists t
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
 const url = (id = '') => `/api/store/${KIND}${id ? `/${id}` : ''}${qs()}`;
 export const sceneOf = (id) => SCENES.get(id) || null;
-export const lookName = (look) => ({ color: 'Color', clay: 'Clay', depth: 'Depth', pose: 'Pose' })[look] || look;
+export const lookName = (look) => ({ color: 'Colour', clay: 'Clay', depth: 'Depth', pose: 'Pose' })[look] || look;
 
 // the project's 3D tabs, for the add menu
 export async function listScenes() {
