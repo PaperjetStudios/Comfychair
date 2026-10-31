@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import accel, editsize, maskcomp
+from . import accel, editsize, h3upscale, maskcomp
 
 TAG_RE = re.compile(r"^@\s*(?:(?P<order>\d+)\s+)?(?P<label>[^\[\]]*?)\s*(?:\[(?P<inputs>[^\]]*)\])?\s*$")
 LORA_CLASSES = {"LoraLoader", "LoraLoaderModelOnly"}
@@ -270,6 +270,10 @@ def describe(t: Template, object_info: dict | None) -> dict:
     if t.workflow:  # edit models size their output from Image 1: offer a size for it
         fields += editsize.fields(t.workflow, fields)
         fields += maskcomp.fields(t.workflow, fields)   # a mask painted on the first picture (after the Size: Crop to mask needs it)
+    sheet = h3upscale.sheet_fields(t.workflow, object_info)
+    if sheet:  # a sheet's own upscale, queued once it's done (main.finalize -> routes/effects.sheet_follow_up)
+        fields += sheet
+        groups.append({"label": "Upscale", "node": "__deck", "class": ""})
     adv = accel.fields(t.workflow, object_info) if t.workflow else []
     if adv:  # attention backend / Veda: offered on every template, applied in accel.inject
         fields += adv

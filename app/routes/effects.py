@@ -78,58 +78,91 @@ async def h3_upscale(body: dict = Body(...)):
     """A finished MiniMax H3 clip ({generation, index, scale, strength: light|medium|strong}) sampled again bigger, with the same run's prompt,
     LoRAs, references and seed (app/h3upscale.py). A new generation in History, made from the clip."""
     g = db.get_generation(int(body.get("generation", -1)))
-    idx = int(body.get("index") or 0)
+    regen_in = body.get("regen") if isinstance(body.get("regen"), dict) else None
+    try:
+        gid = await queue_h3_upscale(g, int(body.get("index") or 0), float(body.get("scale") or 1.5),
+                                     str(body.get("strength") or "strong"), regen_in)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return db.get_generation(gid)
+
+
+async def queue_h3_upscale(g: dict | None, idx: int, scale: float = 1.5, strength_name: str = "strong",
+                           regen_in: dict | None = None, extra: dict | None = None) -> int:
+    """Queue the second pass of a finished H3 clip (POST /api/h3/upscale, and a sheet's own Upscale option): the new
+    generation's id. ValueError says why it can't. A run that cuts a sheet keeps it (h3upscale.build), so the result
+    is the bigger clip and the bigger sheet. extra: more params for the new run."""
     if not g or g["status"] != "done" or not 0 <= idx < len(g["outputs"]) or g["outputs"][idx]["kind"] != "video":
-        raise HTTPException(400, "Pick a finished H3 video")
+        raise ValueError("Pick a finished H3 video")
     wf0 = db.get_workflow(g["id"])
     if not wf0 or not h3upscale.h3_node(wf0):
-        raise HTTPException(400, "Only MiniMax H3 runs can be upscaled this way")
+        raise ValueError("Only MiniMax H3 runs can be upscaled this way")
     oi = await services.object_info_or_none()
     if oi is not None and "MinimaxH3LatentUpscaler3D" not in oi:   # installed since it was read?
         oi = await services.object_info_or_none(refresh=True)
     if oi is not None and "MinimaxH3LatentUpscaler3D" not in oi:
-        raise HTTPException(400, "ComfyUI doesn't have the MiniMax H3 latent upscaler (Comfyui_Minimax_h3_latent_Upscaler): "
-                                 "install it and restart ComfyUI")
+        raise ValueError("ComfyUI doesn't have the MiniMax H3 latent upscaler (Comfyui_Minimax_h3_latent_Upscaler): "
+                         "install it and restart ComfyUI")
     path = services.output_file(g, g["outputs"][idx])
     try:
         info = await asyncio.to_thread(videoedit.probe, path)
     except (subprocess.SubprocessError, OSError, ValueError, KeyError) as e:
-        raise HTTPException(400, f"Couldn't read the clip: {e}")
-    scale = min(2.0, max(1.1, float(body.get("scale") or 1.5)))
-    strength = h3upscale.STRENGTHS.get(str(body.get("strength") or "strong"))
+        raise ValueError(f"Couldn't read the clip: {e}")
+    scale = min(2.0, max(1.1, float(scale or 1.5)))
+    strength = h3upscale.STRENGTHS.get(strength_name)
     if strength is None:
-        raise HTTPException(400, "Strength is light, medium or strong")
-    regen_in = body.get("regen") if isinstance(body.get("regen"), dict) else None
+        raise ValueError("Strength is light, medium or strong")
     regen, size = None, None
     if regen_in:
         quality = str(regen_in.get("quality") or "standard")
         if quality not in h3upscale.REGEN_SIGMAS:
-            raise HTTPException(400, "Regenerate's quality is standard or enhanced")
+            raise ValueError("Regenerate's quality is standard or enhanced")
         lora = str(regen_in.get("lora") or "")
         hit = next((x for x in h3upscale.regen_loras(oi) if x["name"] == lora), None)
         if not hit:
-            raise HTTPException(400, "Pick an Open-H3-Regenerate LoRA: none of those in models/loras was chosen")
+            raise ValueError("Pick an Open-H3-Regenerate LoRA: none of those in models/loras was chosen")
         regen = {"lora": hit["name"], "has_turbo": hit["has_turbo"], "quality": quality}
         if str(regen_in.get("target") or "") == "1080p":
             size = h3upscale.fit_1080p(info["width"], info["height"])
     folder = db.project_folder(g["project_id"])
-    try:
-        wf, (w, h) = h3upscale.build(wf0, str(path), info["width"], info["height"], scale,
-                                     f"{config.COMFY_INPUT_SUBFOLDER}/{folder}/h3up", info.get("fps") or 24, strength,
-                                     regen=regen, size=size)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+    wf, (w, h) = h3upscale.build(wf0, str(path), info["width"], info["height"], scale,
+                                 f"{config.COMFY_INPUT_SUBFOLDER}/{folder}/h3up", info.get("fps") or 24, strength,
+                                 regen=regen, size=size)
     try:
         res = await services.comfy.queue(wf)
     except ComfyError as e:
-        raise HTTPException(400, str(e))
-    params = {"source": {"generation": g["id"], "index": idx}, "scale": scale, "strength": body.get("strength") or "strong",
+        raise ValueError(str(e))
+    sheet = h3upscale.is_sheet(wf0)
+    params = {"source": {"generation": g["id"], "index": idx}, "scale": scale, "strength": strength_name,
               "frame": f"{w}×{h}", "regen": ({"lora": regen["lora"], "quality": regen["quality"]} if regen else None),
-              "from": f"{info['width']}×{info['height']}", "template": g["template"]}
-    gid = db.create_generation(g["project_id"], "h3 upscale" if not regen else "h3 regenerate", params, wf, res["prompt_id"],
+              "from": f"{info['width']}×{info['height']}", "template": g["template"], **({"sheet": True} if sheet else {}),
+              **(extra or {})}
+    name = "h3 regenerate" if regen else "h3 sheet upscale" if sheet else "h3 upscale"
+    gid = db.create_generation(g["project_id"], name, params, wf, res["prompt_id"],
                                {"generation": g["id"], "index": idx, "frame": None})
     await services.push_gen(gid)
-    return db.get_generation(gid)
+    return gid
+
+
+async def sheet_follow_up(g: dict | None) -> int | None:
+    """A finished run that asked for its own upscale (a sheet's Upscale option, h3upscale.follow_up): queue it, made
+    from that run. An upscale's own params never ask, so it can't queue another. If it can't be queued, a failed
+    run says why in History. The new generation's id, or None."""
+    want = h3upscale.follow_up((g or {}).get("params") or {})
+    if not g or g["status"] != "done" or not want or g["template"].startswith("h3 "):
+        return None
+    clip = next((i for i, o in enumerate(g["outputs"]) if o.get("kind") == "video"), None)
+    scale, strength = want
+    try:
+        return await queue_h3_upscale(g, clip if clip is not None else -1, scale, strength, extra={"auto": True})
+    except Exception as e:  # noqa: BLE001  (the sheet itself is done: the failure goes on a run of its own)
+        params = {"source": {"generation": g["id"], "index": clip or 0}, "scale": scale, "strength": strength,
+                  "template": g["template"], "sheet": True, "auto": True}
+        gid = db.create_generation(g["project_id"], "h3 sheet upscale", params, {}, f"edit-{uuid.uuid4().hex}",
+                                   {"generation": g["id"], "index": clip or 0, "frame": None})
+        db.update_generation(gid, status="error", error=f"Upscale not queued: {e}", finished=time.time())
+        await services.push_gen(gid)
+        return gid
 
 
 async def _delogo_clip(body: dict) -> tuple[dict, Path, dict]:

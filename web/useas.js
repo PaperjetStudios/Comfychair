@@ -1,4 +1,4 @@
-import { h, api, toast, openSheet, closeSheet, button, section, linkBtn, chip, hint, setIcon } from './ui.js';
+import { h, api, toast, openSheet, closeSheet, button, section, linkBtn, chip, hint, info, setIcon } from './ui.js';
 import { S, inputUrl, previewUrl, switchTab, thumbUrl } from './core.js';
 import { genLabel } from './media.js';
 import { renderFields, selectTemplate, setVal } from './generate.js';
@@ -75,7 +75,10 @@ export function openUseAs(g, index, { before = null } = {}) {
     try { await fn(); } catch (e) { toast(e.message, true); }
   }, { cls: '', ...attrs });
   const run = () => import('./run.js');
+  const sheetClip = SHEETS.has(g.template) ? g.outputs.findIndex((x) => kindOf(x) === 'video') : -1;   // (the sheet picture too: its clip)
   const groups = [
+    ['Sheet', sheetClip >= 0 ? [go('Upscale the sheet (H3)…', async () => (await run()).openH3Upscale(g, sheetClip),
+      { title: 'H3 samples the sheet\'s clip again bigger, and the sheet picture is cut again from the bigger frames' })] : []],
     [`Generate · ${S.tpl?.name || S.tpl?.id || ''}`, generateTargets(k, src, toInput, go)],
     ['VFX', vfxTargets(k, src, label, toInput, go)],
     ['Video', ['image', 'video', 'audio'].includes(k) ? [go('Add to the timeline', async () => {
@@ -96,6 +99,7 @@ export function openUseAs(g, index, { before = null } = {}) {
     ['3D', sceneTargets(g, o, src, label, toInput, go)],
     ['Other templates that take it', otherTemplates(k, src, toInput, go)],
     ['More', [
+      ...imageUpscales(k, toInput),
       ctrl3d(g) ? go('Control video for H3', async () => (await run()).useControlVideo(g, g.params.scene || g.params.__face?.scene || {}), { title: 'Into deck-h3-ctrl2v: its control video, size and length' }) : null,
       k === 'video' ? go('Refine with H3', async () => (await run()).useRefineClip(g, index), { title: 'Into deck-h3-refine: H3 draws the clip again from part-way, sharper, with your references (a splat or 3D render)' }) : null,
       k === 'video' && /^deck-h3-/.test(g.template) ? go('Upscale (H3)…', async () => (await run()).openH3Upscale(g, index), { title: 'Sample it again bigger, with this run\'s own prompt, LoRAs and references' }) : null,
@@ -111,6 +115,29 @@ export function openUseAs(g, index, { before = null } = {}) {
 // a 3D tab render that can steer H3: a depth or pose render, or a depth from the picture (deck-depth-video, run from
 // the 3D tab: scene-export.js marks it params.__face { kind: '3d', scene })
 const ctrl3d = (g) => (g.template === '3d scene' && g.params?.kind !== 'color') || (g.template === 'deck-depth-video' && g.params?.__face?.kind === '3d');
+
+// the character and object sheets (an H3 clip with a picture cut from it): Use as offers their upscale first
+const SHEETS = new Set(['deck-h3-charsheet', 'deck-h3-charsheet-bust', 'deck-h3-charsheet-bust4', 'deck-h3-objectsheet']);
+
+// A picture into an upscale template (when it's installed), as a named button with its ⓘ
+const IMAGE_UPSCALES = [
+  ['deck-upscale-image', 'Upscale (SeedVR2)…', 'SeedVR2 draws the picture again bigger with fine detail added. Slower, and it needs more memory than the fast one.'],
+  ['deck-upscale-image-fast', 'Upscale (fast)', 'An upscale model makes the picture bigger in seconds. It sharpens what is there and does not add new detail.'],
+];
+function imageUpscales(kind, toInput) {
+  if (kind !== 'image') return [];
+  return IMAGE_UPSCALES.filter(([id]) => S.templates.some((t) => t.id === id && !t.error)).map(([id, text, tip]) =>
+    h('span', { class: 'row use-as-help' }, button(text, async () => {
+      closeSheet();
+      try {
+        selectTemplate(id);
+        const f = S.tpl.fields.find((x) => x.kind === 'image');
+        setVal(f.key, (await toInput('first', S.imageMp[f.key] ?? 0, 16)).name);
+        renderFields(); switchTab('generate');
+        toast(`${S.tpl.name || id}: set ${f.group} · ${f.label}`);
+      } catch (e) { toast(e.message, true); }
+    }, { cls: '' }), info(tip)));
+}
 
 // The templates (other than Generate's) with a field of this kind: picking one opens it with the output in that field
 function otherTemplates(kind, src, toInput, go) {

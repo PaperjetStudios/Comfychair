@@ -341,6 +341,8 @@ async def finalize(pid: str):
         finalizing.discard(pid)
         if gid:
             await push_gen(gid)
+    if gid:   # a sheet run with Upscale on: its second pass, made from it (never from an upscale: no loop)
+        await effects.sheet_follow_up(db.get_generation(gid))
 
 
 async def reconcile_loop():

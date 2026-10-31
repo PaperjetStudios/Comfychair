@@ -1,6 +1,6 @@
 import {
   $, h, store, clamp, clamp01, clone, cycleIndex, api, toast, undoToast, openOverlay, openSheet, closeSheet, sheetStillOpen, nameSheet,
-  button, iconBtn, mpInput, actions, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider,
+  button, iconBtn, mpInput, actions, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider, withHelp,
   insertAtCursor, toggle, textArea, seedField as uiSeedField, imageInput, chips, chip,
 } from './ui.js';
 import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
@@ -398,6 +398,7 @@ function groupFieldEls(fs) {
     }
     if (f.kind === 'int' && f.input === 'height' && fs.some((x) => x.node === f.node && x.input === 'width' && x.kind === 'int')) continue;
     if (f.kind === 'mask') continue;   // drawn inside its picture's field
+    if (f.when && S.values[f.when.key] === f.when.not) continue;   // only while another setting is on (a sheet's Strength)
     out.push(fieldEl(f));
   }
   return out;
@@ -552,7 +553,7 @@ function choiceField(f) {
   sel.value = cur;
   sel.addEventListener('change', () => {
     setVal(f.key, sel.value);
-    if (MODEL_INPUTS.includes(f.input)) renderFields();  // LoRA lists follow the model (folder filter)
+    if (MODEL_INPUTS.includes(f.input) || S.tpl.fields.some((x) => x.when?.key === f.key)) renderFields();  // LoRA lists follow the model (folder filter); a setting shown only while this one is on
   });
   let filter = null;
   if (opts.length > 15) {
@@ -1095,6 +1096,7 @@ function loraField(f) {
 function fieldEl(f) {
   const el = fieldBody(f);
   if (el.dataset && !el.dataset.key) el.dataset.key = f.key;   // gentabs marks overridden fields by it
+  if (f.help) withHelp(el, f.help);   // a run option's ⓘ (the server's field.help)
   return el;
 }
 function fieldBody(f) {

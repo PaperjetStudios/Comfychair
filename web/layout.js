@@ -195,6 +195,7 @@ const ICONS = [
   [/sampl|steps|seed|cfg|noise|scheduler|denois|guidance/i, ['M4 7h10M18 7h2M4 17h2M10 17h10', 'M16 5v4M8 15v4']],
   [/model|checkpoint|unet|vae|clip\b|loader|base/i, ['M12 3l8 4.5v9L12 21l-8-4.5v-9z', 'M4 7.5l8 4.5 8-4.5M12 12v9']],
   [/lora|style/i, ['M12 4l9 4.5-9 4.5-9-4.5z', 'M3 12.5l9 4.5 9-4.5M3 16.5l9 4.5 9-4.5']],
+  [/upscale|enlarge/i, ['M14 4h6v6', 'M10 20H4v-6', 'M20 4l-7 7', 'M4 20l7-7']],   // (outward arrows)
   [/size|resolution|dimension|canvas|aspect|crop|frame size/i, ['M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4', 'M9 9h6v6H9z']],
   [/camera|lens|view|shot/i, ['M4 8h3l2-3h6l2 3h3v11H4z', 'M12 16a3 3 0 1 0 0-6 3 3 0 0 0 0 6']],
   [/light|sun|bright/i, ['M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8', 'M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5']],

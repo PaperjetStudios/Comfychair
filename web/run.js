@@ -506,7 +506,7 @@ export async function openGeneration(id) {
   const cur = () => g.outputs[idx];
   const isScene = g.template === '3d scene';  // a depth video from the 3D tab, with its scene in the params
   const isPhoto = g.template === '3d photo';  // a picture as a mesh (MoGe), for the 3D tab
-  const isEdit = g.template === 'video edit' || g.template === 'h3 upscale' || g.template === 'h3 regenerate' || isScene || isPhoto;  // made in the Video or 3D tab, or upscaled: no template to replay
+  const isEdit = g.template === 'video edit' || g.template === 'h3 upscale' || g.template === 'h3 sheet upscale' || g.template === 'h3 regenerate' || isScene || isPhoto;  // made in the Video or 3D tab, or upscaled: no template to replay
   // the same buttons as every take (useas.js takeButtons: Use as…, Pin, Download, Delete), after running it again
   // when its template is there; where each kind can go (3D, the Editor, Craft, Upscale, Track motion…) is Use as…
   const primary = { cls: 'small primary' };

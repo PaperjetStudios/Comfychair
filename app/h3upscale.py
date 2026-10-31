@@ -8,6 +8,11 @@ examples do; Strength light or medium starts lower, at 0.63 or 0.80, which keeps
 and sharpens less). Its sound is the clip's own, so speech stays in sync. Reference-to-video conditioning doesn't depend
 on the frame size, so it is reused; image-to-video's carries its keyframes at the frame size, so that node is run
 again at the new size.
+
+A run that also cuts a picture from its frames (the character and object sheets: VHS_SelectImages ->
+UC_StitchImageGrid -> SaveImage) keeps that branch, fed from the upscaled frames, so the second pass makes the bigger
+clip and the bigger sheet. The sheets offer this as a run option (Upscale, Strength), queued by the server as a
+follow-up run once the sheet is done (sheet_fields, follow_up).
 """
 import copy
 import re
@@ -24,6 +29,18 @@ SAMPLER = "euler"
 SIZE_FREE = {"MiniMaxH3ReferenceToVideo"}   # conditioning that doesn't depend on the frame size
 OUTPUTS = {"VHS_VideoCombine", "SaveVideo", "SaveImage", "PreviewImage", "SaveAnimatedWEBP", "SaveWEBM", "CreateVideo",
            "VAEDecode", "VAEDecodeAudio", "VAEDecodeTiled"}
+DECODES = {"VAEDecode", "VAEDecodeTiled"}
+CLIP_SAVES = {"VHS_VideoCombine", "SaveVideo", "CreateVideo", "SaveAnimatedWEBP", "SaveWEBM"}   # replaced by up_save
+
+# The sheets' run option: after the sheet is done, the server queues this upscale of it (main.finalize -> follow_up)
+UPSCALE, UPSCALE_STRENGTH = "__deck.upscale", "__deck.upscale_strength"
+SHEET_SCALES = {"Off": None, "1.5×": 1.5, "2×": 2.0}
+STRENGTH_NAMES = {"Light": "light", "Medium": "medium", "Strong": "strong"}
+SHEET_HELP = ("When the sheet is done, H3 samples the clip again bigger with the same prompt, references and seed, "
+              "and the sheet picture is cut again from the bigger frames. It is a second run in History, made from the "
+              "sheet, and takes about as long as the sheet run itself.")
+STRENGTH_HELP = ("How far the second pass may redraw. Light keeps faces and poses closest to the sheet and sharpens least; "
+                 "Strong sharpens most but can change faces and hands.")
 
 
 def is_link(v) -> bool:
@@ -136,6 +153,43 @@ def drop_turbo_under_regen(wf: dict) -> dict:
     return wf
 
 
+def is_sheet(wf: dict) -> bool:
+    """An H3 run that also cuts a picture grid from its frames (the character and object sheets)."""
+    return bool(h3_node(wf)) and any(n.get("class_type") == "UC_StitchImageGrid" for n in wf.values())
+
+
+def sheet_fields(wf: dict, object_info: dict | None) -> list[dict]:
+    """The Upscale run option a sheet template offers (with the latent upscaler installed)."""
+    if not wf or not is_sheet(wf) or (object_info is not None and "MinimaxH3LatentUpscaler3D" not in object_info):
+        return []
+    common = {"node": "__deck", "kind": "choice", "group": "Upscale"}
+    return [{**common, "key": UPSCALE, "input": "upscale", "label": "Upscale", "options": list(SHEET_SCALES),
+             "value": "Off", "help": SHEET_HELP},
+            {**common, "key": UPSCALE_STRENGTH, "input": "upscale_strength", "label": "Strength",
+             "options": list(STRENGTH_NAMES), "value": "Medium", "help": STRENGTH_HELP,
+             "when": {"key": UPSCALE, "not": "Off"}}]
+
+
+def follow_up(params: dict) -> tuple[float, str] | None:
+    """(scale, strength name) when a finished run asked for its upscale, else None."""
+    scale = SHEET_SCALES.get(str((params or {}).get(UPSCALE) or "Off"))
+    if not scale:
+        return None
+    return scale, STRENGTH_NAMES.get(str(params.get(UPSCALE_STRENGTH) or "Medium"), "medium")
+
+
+def _downstream(wf: dict, start: set[str]) -> set[str]:
+    """The nodes fed, directly or not, by any of start."""
+    out, todo = set(), list(start)
+    while todo:
+        cur = todo.pop()
+        for nid, n in wf.items():
+            if nid not in out and any(is_link(v) and v[0] == cur for v in n.get("inputs", {}).values()):
+                out.add(nid)
+                todo.append(nid)
+    return out
+
+
 def build(workflow: dict, video: str, width: int, height: int, scale: float = 1.5, prefix: str = "comfydeck/h3up",
           fps: float = 24, strength: float = STRENGTHS["strong"], regen: dict | None = None,
           size: tuple[int, int] | None = None) -> tuple[dict, tuple[int, int]]:
@@ -159,8 +213,19 @@ def build(workflow: dict, video: str, width: int, height: int, scale: float = 1.
         drop_turbo(wf, model)
         model = guider["inputs"]["model"]
 
-    for nid in [k for k, n in wf.items() if n.get("class_type") in OUTPUTS]:   # the first pass's outputs
+    # the first pass's frames, and what a sheet cuts from them (kept, fed from the upscaled frames instead)
+    decs = {k for k, n in wf.items() if n.get("class_type") in DECODES and is_link(n["inputs"].get("samples"))
+            and wf.get(n["inputs"]["samples"][0], {}).get("class_type") == "SamplerCustomAdvanced"}
+    keep = {k for k in _downstream(wf, decs) if wf[k].get("class_type") not in CLIP_SAVES | DECODES}
+    for nid in [k for k, n in wf.items() if n.get("class_type") in OUTPUTS and k not in keep]:   # the first pass's outputs
         del wf[nid]
+    for nid in keep:
+        node = wf[nid]
+        for k, v in node["inputs"].items():
+            if is_link(v) and v[0] in decs:
+                node["inputs"][k] = ["up_dec", v[1]]
+        if isinstance(node["inputs"].get("filename_prefix"), str):   # the bigger sheet, beside the bigger clip
+            node["inputs"]["filename_prefix"] = f"{prefix}-sheet"
     cond_src = h3
     if wf[h3]["class_type"] not in SIZE_FREE:   # its keyframes are encoded at the frame size: again, at the new one
         cond_src = "up_cond"

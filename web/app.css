@@ -839,6 +839,8 @@ body:has(.text-pop:not(.hidden)) .toast { z-index: 63; }
 .gal-play { flex: none; width: 64px; height: 64px; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-ink); font-size: 24px; cursor: pointer; }
 .gal-time { flex: none; min-width: 9ch; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
 .use-as .btn { flex: 0 1 auto; }
+.use-as > .use-as-help { flex: 0 1 auto; gap: 2px; }
+.use-as-help > .info-i { flex: none; }
 .gal-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 48px; height: 72px; border: 0; border-radius: var(--r); background: #0007; color: #fff; font-size: 36px; cursor: pointer; }
 .gal-nav.prev { left: 8px; } .gal-nav.next { right: 8px; }
 .gal-nav:disabled { opacity: 0; pointer-events: none; }

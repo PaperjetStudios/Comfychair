@@ -110,6 +110,42 @@ class Build(unittest.TestCase):
         self.assertNotIn("other.safetensors", got)
         self.assertEqual(up.regen_loras(None), [])
 
+    def test_a_sheet_keeps_its_picture_cut_from_the_upscaled_frames(self):
+        from app import templates as tpl
+        src = tpl.apply(self.wf("deck-h3-charsheet"), {"7.prompt": "a knight, turnaround", "20.image": "comfydeck/a.png",
+                                                       "8.noise_seed": 42})
+        self.assertTrue(up.is_sheet(src))
+        wf, size = up.build(src, "/out/sheet.mp4", 448, 768, 1.5, prefix="comfydeck/p/h3up")
+        self.assertEqual(size, (672, 1152))
+        self.assertEqual(wf["40"]["class_type"], "VHS_SelectImages")
+        self.assertEqual(wf["40"]["inputs"]["image"], ["up_dec", 0])            # the bigger frames
+        self.assertEqual(wf["40"]["inputs"]["indexes"], src["40"]["inputs"]["indexes"])
+        self.assertEqual(wf["41"]["inputs"]["images"], ["40", 0])
+        self.assertEqual(wf["42"]["class_type"], "SaveImage")
+        self.assertEqual(wf["42"]["inputs"]["images"], ["41", 0])
+        self.assertEqual(wf["42"]["inputs"]["filename_prefix"], "comfydeck/p/h3up-sheet")
+        self.assertNotIn("13", wf)                                               # the first pass's decode and saves go
+        self.assertNotIn("15", wf)
+        self.assertEqual([k for k, n in wf.items() if n["class_type"] == "VHS_VideoCombine"], ["up_save"])
+        for node in wf.values():   # nothing points at a dropped node
+            for k, v in node.get("inputs", {}).items():
+                if up.is_link(v):
+                    self.assertIn(v[0], wf, f"{k} points at a dropped node {v[0]}")
+        self.assertFalse(up.is_sheet(self.wf("deck-h3-ref2v")))
+
+    def test_sheet_option_fields_and_follow_up(self):
+        for name in ("deck-h3-charsheet", "deck-h3-charsheet-bust", "deck-h3-charsheet-bust4", "deck-h3-objectsheet"):
+            fs = up.sheet_fields(self.wf(name), None)
+            self.assertEqual([f["key"] for f in fs], [up.UPSCALE, up.UPSCALE_STRENGTH], name)
+            self.assertEqual((fs[0]["value"], fs[1]["value"]), ("Off", "Medium"))
+            self.assertTrue(all(f.get("help") for f in fs))
+        self.assertEqual(up.sheet_fields(self.wf("deck-h3-ref2v"), None), [])
+        self.assertEqual(up.sheet_fields(self.wf("deck-h3-charsheet"), {"KSampler": {}}), [])   # no upscaler installed
+        self.assertIsNone(up.follow_up({up.UPSCALE: "Off", up.UPSCALE_STRENGTH: "Strong"}))
+        self.assertIsNone(up.follow_up({}))
+        self.assertEqual(up.follow_up({up.UPSCALE: "2×", up.UPSCALE_STRENGTH: "Light"}), (2.0, "light"))
+        self.assertEqual(up.follow_up({up.UPSCALE: "1.5×"}), (1.5, "medium"))
+
     def test_not_h3(self):
         with self.assertRaises(ValueError):
             up.build(self.wf("deck-ltx-t2v"), "/x.mp4", 768, 448)
