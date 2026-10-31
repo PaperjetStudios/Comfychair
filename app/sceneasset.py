@@ -349,10 +349,15 @@ async def photo_splat(body: dict = Body(...)):
     (SHARP itself has no options worth giving: only --render, a turntable video, and the device.)"""
     from . import clipimport, voice   # (voice: the GPU lock and ComfyUI's unload)
     body = body or {}
-    image = Path(str(body.get("image") or "")).name
-    src = config.INPUT_DIR / image
-    if not image or not src.is_file():
+    from . import main   # (input_bytes: ComfyChair's own copy, a painted layer's, or ComfyUI's input folder)
+    name = str(body.get("image") or "")
+    image = Path(name).name
+    if not image:
         raise HTTPException(400, "Pick a picture")
+    try:
+        data = await main.input_bytes(name)
+    except Exception:
+        raise HTTPException(400, f"Can't find the picture {name} any more: pick it again")
     preview = str(body.get("preview") or "light")
     if preview not in LEVEL_NAMES:
         raise HTTPException(400, "preview is light, medium, dense or full")
@@ -370,7 +375,7 @@ async def photo_splat(body: dict = Body(...)):
             voice._free_gpu()
             job["label"] = "Making the splat"
             inp = Path(tmp) / "in"; inp.mkdir()
-            shutil.copy(src, inp / (Path(image).stem + Path(image).suffix.lower()))
+            (inp / (Path(image).stem + (Path(image).suffix.lower() or ".png"))).write_bytes(data)
             r = subprocess.run([str(SHARP), "predict", "-i", str(inp), "-o", str(Path(tmp) / "out"), "-c", str(SHARP_CKPT), "--device", "cuda"],
                                capture_output=True, text=True, timeout=900)
             plys = sorted((Path(tmp) / "out").glob("*.ply"))

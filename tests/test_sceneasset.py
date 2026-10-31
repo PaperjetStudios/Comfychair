@@ -33,6 +33,25 @@ class SceneAsset(unittest.TestCase):
         self.assertTrue(j["url"].startswith("/files/projects/") and "/.deck/assets/" in j["url"])
         self.assertEqual(self.c.get(j["url"]).content, b"glTFdata")
 
+    def test_splat_finds_a_picture_wherever_it_lives(self):
+        """A painted layer sits in a subfolder of the local copies: the picture check must not use the bare file name."""
+        paint = config.INPUT_DIR / main.PAINT_SUB
+        paint.mkdir(exist_ok=True)
+        (paint / "layer1.png").write_bytes(b"png")
+        sub = config.COMFY_INPUT_SUBFOLDER
+        old = (sceneasset.SHARP, sceneasset.SHARP_CKPT)
+        sceneasset.SHARP = sceneasset.SHARP_CKPT = Path("/nonexistent/sharp")   # (past the picture check, then stops: no GPU in a test)
+        try:
+            self.assertEqual(self.c.post("/api/scene/splat", json={"image": ""}).json()["detail"], "Pick a picture")
+            gone = self.c.post("/api/scene/splat", json={"image": f"{sub}/nothing-here.png"})
+            self.assertEqual(gone.status_code, 400)
+            self.assertIn("pick it again", gone.json()["detail"])
+            found = self.c.post("/api/scene/splat", json={"image": f"{sub}/{main.PAINT_SUB}/layer1.png"})
+            self.assertIn("SHARP isn't installed", found.json()["detail"])
+        finally:
+            sceneasset.SHARP, sceneasset.SHARP_CKPT = old
+            (paint / "layer1.png").unlink()
+
     def test_cleanup_refuses_what_it_cannot_clean(self):
         j = self.up("m.glb", b"glTFdata").json()
         ok = {"url": j["url"], "mode": "decimate", "amount": 0.3}
