@@ -1108,6 +1108,9 @@ def cloud(np, P, img, most=MAX_CLOUD):
     h, w = img.shape[:2]
     r, c = np.mgrid[0:rows, 0:cols]
     ok = np.isfinite(P).all(axis=2)
+    left, right, top, bottom = bars(np, img)   # (a clip's baked-in black bars hold no scene)
+    cx, cy = (c + 0.5) * w / cols, (r + 0.5) * h / rows
+    ok &= (cx >= left) & (cx < w - right) & (cy >= top) & (cy < h - bottom)
     r, c = r[ok], c[ok]
     if len(r) > most:
         pick = np.linspace(0, len(r) - 1, most).round().astype(int)
@@ -1116,6 +1119,27 @@ def cloud(np, P, img, most=MAX_CLOUD):
     py = np.clip(np.round((r + 0.5) * h / rows - 0.5).astype(int), 0, h - 1)
     rgb = img[py, px]
     return [[round(float(a), 3) for a in P[i, j]] + [int(x) for x in col] for i, j, col in zip(r, c, rgb)]
+
+
+BAR_LUMA = 20      # a row or column this dark all the way across is a letterbox / pillarbox bar
+BAR_MAX = 0.25     # bars never take more than this of the picture's width or height
+
+
+def bars(np, img):
+    """The black bars baked into a picture, as (left, right, top, bottom) pixel widths: rows and columns that
+    stay darker than BAR_LUMA all the way across, counted in from each edge, at most BAR_MAX of the size."""
+    h, w = img.shape[:2]
+    luma = img.max(axis=2) if img.ndim == 3 else img
+    dark_col = (luma < BAR_LUMA).all(axis=0)
+    dark_row = (luma < BAR_LUMA).all(axis=1)
+
+    def run(dark, limit):
+        n = 0
+        while n < limit and dark[n]:
+            n += 1
+        return n if n < limit else 0   # (dark that far in is the picture, not a bar)
+    lw, lh = int(w * BAR_MAX), int(h * BAR_MAX)
+    return run(dark_col, lw), run(dark_col[::-1], lw), run(dark_row, lh), run(dark_row[::-1], lh)
 
 
 def drift(cams, floor, X):

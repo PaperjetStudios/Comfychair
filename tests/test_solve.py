@@ -299,6 +299,18 @@ class Anchors(unittest.TestCase):
         self.assertTrue(all(len(p) == 6 and p[3] in (0, 255) for p in pc))
         self.assertLess(len(json.dumps(pc)), 150_000)
 
+    def test_cloud_skips_baked_in_bars(self):
+        P = np.random.default_rng(1).uniform(1, 5, (90, 160, 3))
+        img = np.zeros((360, 640, 3), np.uint8)
+        img[:, 80:560] = [0, 200, 0]            # pillarbox bars 80 px wide each side
+        img[:20, 80:560] = [30, 30, 30]          # a dim top band that is not a bar (not dark enough)
+        self.assertEqual(solve.bars(np, img), (80, 80, 0, 0))
+        pc = solve.cloud(np, P, img)
+        self.assertTrue(pc and all(p[4] == 200 or p[3:] == [30, 30, 30] for p in pc))
+        # a dark left half is not a bar (bars are thin)
+        half = np.zeros((360, 640, 3), np.uint8); half[:, 320:] = 255
+        self.assertEqual(solve.bars(np, half), (0, 0, 0, 0))
+
 
 @unittest.skipUnless(cv2, "needs numpy and opencv")
 class Floor(unittest.TestCase):
