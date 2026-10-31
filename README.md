@@ -111,6 +111,10 @@ Tailscale address does not.
 **Uploaded .mov files** that the browser can't play (HEVC, ProRes, PCM sound) get a playable H.264 copy in
 `tmp/playable/` beside the original; processing always uses the original, and the copy goes with the file.
 
+**Drag and drop (desktop)**: drag pictures, videos or sound from a file window onto the Video tab. On a timeline lane the
+clip lands where you drop it (a line shows where; it snaps to the frame, the playhead and clip edges); anywhere else on the
+tab it goes after the last clip. Several files go one after another. Files are uploaded to the media library like **+ Sound / files**.
+
 Free, on your own network, all from the text console: the box makes its own certificate and the tablet
 trusts it once you install one small file on it. One command does it all, and it stays on across reboots
 (the services start on HTTPS and renew the certificate themselves, also when the box's IP changes):

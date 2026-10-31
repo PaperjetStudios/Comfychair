@@ -832,12 +832,15 @@ function targetTrack(kind) {
 }
 
 // New clips go after the last clip on the selected clip's track (or V1 / A1)
-export async function addToTimeline(media) {
+// place: { track, at } puts it there (a drop on a lane); a track of the wrong kind (sound on a picture lane) is ignored
+export async function addToTimeline(media, place = null) {
   await ensureTabs();   // the tab must be open, or its clips would replace this one
   if (media.kind !== 'image' && !media.dur) media.dur = await durationOf(media.url, media.kind === 'audio' ? 'audio' : 'video');
-  const it = newItem(media, targetTrack(media.kind));
+  const want = media.kind === 'audio' ? 'audio' : 'video';
+  const lane = place?.track && V.tracks.find((t) => t.id === place.track && t.kind === want);
+  const it = newItem(media, lane ? lane.id : targetTrack(media.kind));
   if (media.kind === 'image' && media.len > 0) it.out = Math.max(MIN_LEN, media.len);   // (a storyboard shot's length)
-  it.at = TL.trackEnd(it.track);
+  it.at = lane && place.at != null ? Math.max(0, place.at) : TL.trackEnd(it.track);
   V.items.push(it); V.sel = it.id;
   timelineChanged();
   return it;
@@ -1307,12 +1310,71 @@ const editAdapter = {
   },
 };
 
+// ---- drag and drop (desktop): pictures, videos and sound dragged from a file window onto the Video tab ----
+// Over a lane the clip goes where it is dropped (snapped to the frame and to the clips' and the playhead's edges);
+// anywhere else on the tab it goes after the last clip, as + Clips does.
+const dropKind = (f) => f.type.startsWith('video/') ? 'video' : f.type.startsWith('audio/') ? 'audio' : f.type.startsWith('image/') ? 'image'
+  : /\.(mov|mp4|m4v|mkv|webm|avi)$/i.test(f.name) ? 'video' : /\.(wav|mp3|m4a|flac|ogg|oga|aac|opus)$/i.test(f.name) ? 'audio'
+  : /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name) ? 'image' : null;
+const dropOnFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+function dropSpot(e, kind) {
+  const lane = e.target.closest?.('#timeline .tl-lane');
+  const tr = lane && V.tracks.find((t) => t.id === lane.dataset.track);
+  if (!tr || tr.kind !== (kind === 'audio' ? 'audio' : 'video')) return null;
+  const raw = Math.max(0, (e.clientX - lane.getBoundingClientRect().left) / V.pps);
+  const edges = [0, V.t, ...V.items.flatMap((it) => [it.at, it.at + itLen(it)])];
+  const near = edges.find((x) => Math.abs(x - raw) * V.pps < 8);
+  return { lane, track: tr.id, at: near ?? Math.round(raw * fpsNow()) / fpsNow() };
+}
+function wireDrop() {
+  const tab = $('#tab-video');
+  let mark = null, depth = 0;
+  const clear = () => { depth = 0; tab.classList.remove('file-drop'); mark?.remove(); mark = null; };
+  const kindOf = (e) => {   // what is being dragged (the browser only says Files until the drop: a lane takes any kind here)
+    const it = [...(e.dataTransfer?.items || [])].find((i) => i.kind === 'file');
+    return it?.type.startsWith('audio/') ? 'audio' : 'video';
+  };
+  tab.addEventListener('dragenter', (e) => { if (dropOnFiles(e)) { depth++; tab.classList.add('file-drop'); } });
+  tab.addEventListener('dragleave', (e) => { if (dropOnFiles(e) && --depth <= 0) clear(); });
+  tab.addEventListener('dragover', (e) => {
+    if (!dropOnFiles(e)) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+    const spot = dropSpot(e, kindOf(e));
+    if (!spot) { mark?.remove(); mark = null; return; }
+    mark ||= h('div', { class: 'tl-dropmark' });
+    if (mark.parentElement !== spot.lane) spot.lane.append(mark);
+    mark.style.left = `${spot.at * V.pps}px`;
+  });
+  tab.addEventListener('drop', async (e) => {
+    if (!dropOnFiles(e)) return;
+    e.preventDefault();
+    const files = [...e.dataTransfer.files].map((f) => [f, dropKind(f)]);
+    const bad = files.filter(([, k]) => !k).map(([f]) => f.name);
+    const spot0 = files.find(([, k]) => k) && dropSpot(e, files.find(([, k]) => k)[1]);
+    clear();
+    if (bad.length) toast(`Not a picture, video or sound: ${bad.join(', ')}`, true);
+    let at = spot0?.at;
+    for (const [f, kind] of files) {
+      if (!kind) continue;
+      toast(`Uploading ${f.name}…`);
+      try {
+        const m = await uploadMedia(f);
+        const it = await addToTimeline({ kind: m.kind, src: { media: m.name }, url: m.url, label: m.label, thumb: m.kind === 'image' ? m.url : null },
+          spot0 && { track: spot0.track, at });
+        if (at != null && it.track === spot0.track) at = it.at + itLen(it);   // (several files go one after another)
+      } catch (err) { return toast(`Upload failed: ${err.message}`, true); }
+    }
+    if (files.some(([, k]) => k)) toast(files.length > 1 ? `Added ${files.length} files` : 'Added');
+  });
+}
+
 export function wireVideoTransport() {
   const mount = h('div', { class: 'vid-tabs' });
   $('#videoPanel').replaceChildren(mount, h('div', { id: 'vidBody' }));
   tabs = new TabSet({ kind: 'video-tabs', mount, scope: 'project', newName: (n) => `Edit ${n}`, adapter: editAdapter, seed: legacyTimeline,
     onSwitch: () => store.set('deck.video.seeded', true) });
   wireGizmo();
+  wireDrop();
   COMP.wire({ ids: () => V.items.filter((i) => i.kind === 'scene').map((i) => i.src.scene), onChange: sceneChanged,
     visible: () => $('#tab-video').classList.contains('active') });
   vtp = transport({ playing: () => V.playing, play: vidPlay, pause: vidPause, seek: vidSeek, t: () => V.t, len: seqEnd },

@@ -394,6 +394,10 @@ details.group:not([open]) > summary::after { transform: rotate(-90deg); }
 .pk-thumb.picked { outline: 3px solid var(--accent); outline-offset: -3px; }
 .pk-thumb .play { position: absolute; bottom: 3px; right: 3px; font-size: var(--fs-xs); background: #000a; padding: 1px 5px; border-radius: var(--r-sm); }
 #sheet.dropping { outline: 2px dashed var(--accent); outline-offset: -6px; }
+/* a file dragged over the Video tab, and where it would land on a lane */
+#tab-video.file-drop { outline: 2px dashed var(--accent); outline-offset: -6px; }
+#tab-video.file-drop .tl-lane { background-image: linear-gradient(color-mix(in srgb, var(--accent) 10%, transparent), color-mix(in srgb, var(--accent) 10%, transparent)); }
+.tl-dropmark { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); pointer-events: none; z-index: 5; }
 details.desc summary { cursor: pointer; color: var(--muted); }
 details.desc[open] summary { margin-bottom: 6px; }
 
