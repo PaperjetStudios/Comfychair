@@ -8,7 +8,7 @@ import {
 import { fmtTime } from './playback.js';
 import { S, fmtT, switchTab } from './core.js';
 import { sceneModule } from './run.js';
-import { sceneFromSolve, sceneFromTrack, smooth } from './track-math.js';
+import { sceneFromSolve, sceneFromTrack, smooth, worldFromSolve } from './track-math.js';
 
 const KIND = 'tracks';
 const LENSES = [[24, '24'], [28, '28'], [35, '35'], [50, '50'], [85, '85']];
@@ -123,7 +123,8 @@ export async function openTrack(opts) {
   const readout = () => {
     const el = $('#trkRead');
     if (!el || !T.result) return;
-    const f = T.result.frames[idx()], sm = (k) => smooth(T.result.frames.map((x) => x[k]), T.set.sigma)[idx()];
+    // (smoothed from where the camera starts, as cameraRows makes it)
+    const f = T.result.frames[idx()], sm = (k) => { const a = smooth(T.result.frames.map((x) => x[k]), T.set.sigma); return a[idx()] - a[0]; };
     el.textContent = `Frame ${idx() + 1} / ${T.result.n}: shift ${f.tx.toFixed(0)}, ${f.ty.toFixed(0)} px · turn ${f.rot.toFixed(1)}° · zoom ${f.scale.toFixed(2)}× (smoothed ${sm('tx').toFixed(0)}, ${sm('ty').toFixed(0)} px)`;
   };
 
@@ -179,7 +180,8 @@ export async function openTrack(opts) {
 
   // what a solve came to, and a warning when it is shaky
   const solveInfo = (sv) => {
-    const q = sv.quality || {}, h = sv.floor && sv.metric ? sv.floor.d / (Math.hypot(...sv.floor.n) || 1) * (T.set.scale || 1) : null;
+    // camera 0's height over the floor in the scene's metres: what worldFromSolve scales it to (a DA3 solve has no units of its own)
+    const q = sv.quality || {}, h = sv.floor ? sv.floor.d / (Math.hypot(...sv.floor.n) || 1) * worldFromSolve(sv, { scale: T.set.scale }).s : null;
     const line = [`Solved ${sv.n} frames`, `used ${q.used ?? '?'} points`, `median error ${(q.err ?? 0).toFixed(1)} px`,
       sv.floor ? 'floor found' : 'no floor', h != null ? `camera height ${h.toFixed(2)} m` : null,
       q.drift != null ? `moves ${(q.drift * 100).toFixed(1)} %/frame` : null, q.anchors != null ? `${q.anchors} anchors` : null,
@@ -194,7 +196,8 @@ export async function openTrack(opts) {
     const r = T.result;
     if (!r?.atlas) return toast('Track the clip again: this one has no footage picture', true);
     const sv = T.set.solve !== 'none' ? T.solves[T.set.solve] : null;
-    const sc = sv ? sceneFromSolve(sv, r, T.set) : sceneFromTrack(r, T.set);
+    const tag = `_${Date.now().toString(36)}`;   // (layer ids of their own: see track-math.js sceneOf)
+    const sc = sv ? sceneFromSolve(sv, r, { ...T.set, tag }) : sceneFromTrack(r, { ...T.set, tag });
     closeSheet(); switchTab('scene');
     (await sceneModule()).open(sc, null, `Track${sv ? ` (${SOLVE_NAME[T.set.solve]})` : ''}: ${opts.label || 'clip'}`);
   }
@@ -238,7 +241,7 @@ export async function openTrack(opts) {
           field('Model', seg([['small', 'Small'], ['base', 'Base']], T.set.da3, (v) => set('da3', v), { disabled: busy }),
             help('Small is quicker and lighter on GPU memory. Base is more accurate on hard shots.'))) : null,
         T.set.solve !== 'none' ? rangeField('Scale', () => T.set.scale, (v) => set('scale', v), { min: 0.25, max: 4, step: 0.05, fmt: (v) => `${v.toFixed(2)}×`, onChange: render,
-          help: 'Multiplies the size of the solved scene. PnP + MoGe is measured in metres, so 1 is life size. Depth Anything 3 has no units: 1 puts the camera 1.5 m above the floor it found.' }) : null,
+          help: `Multiplies the size of the solved scene. PnP + MoGe is measured in metres, so 1 is life size. Depth Anything 3 has no units: 1 puts the camera 1.5 m above the floor it found, or, with no floor, the tracked points ${T.set.dist} m away on average.` }) : null,
         T.set.solve !== 'none' ? actions(
           solving ? button('Stop', stop, { cls: 'danger' }) : button(sv ? 'Solve again' : 'Solve', solve, { cls: 'primary', disabled: busy || !T.dur || len < 0.2 })) : null,
         solving ? prog : null,

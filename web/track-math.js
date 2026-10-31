@@ -102,17 +102,19 @@ const BD = ['x', 'y', 'z', 'rx', 'ry', 'rz', 'sx', 'sy', 'sz'];
 // placed in the scene (type 'trackpts') that stay put as the camera moves. Everything in the scene is
 // a pure function of the camera, so keys are thinned together and the card and camera stay in step.
 export function sceneFromTrack(track, opts = {}) {
-  const { points = true, dist = 6, atlas = track.atlas, name = 'Footage' } = opts;
+  const { points = true, dist = 6, atlas = track.atlas, name = 'Footage', tag = '' } = opts;
   const [W, H] = track.size, fps = track.fps || 24;
   const rows = cameraRows(track, opts);
   const pts = points && track.tracks?.length ? trackPoints(track, rows, W / H, dist) : [];
-  return sceneOf(rows, { W, H, fps, atlas, name, pts });
+  return sceneOf(rows, { W, H, fps, atlas, name, pts, tag });
 }
 
 // The scene around a list of camera rows (one per clip frame at `fps`): resampled to 24 fps, thinned, the footage
 // card (when there is an atlas: clipFps its frame rate, at the scene frame the atlas's first tile belongs to) and
 // the points. room: the 3D tab's room, hidden unless a floor is known.
-function sceneOf(rows, { W, H, fps, atlas, name = 'Footage', pts = [], cloud = [], clipFps = fps, at = 0, floor = false }) {
+// tag: added to the layers' ids. The 3D tab keeps a layer's mesh by its id across tabs, so two scenes made from tracks
+// need different ids, or the second shows the first one's footage and points.
+function sceneOf(rows, { W, H, fps, atlas, name = 'Footage', pts = [], cloud = [], clipFps = fps, at = 0, floor = false, tag = '' }) {
   const aspect = W / H;
   // the scene runs at 24 fps: resample the clip's frames onto it
   const n = Math.max(2, Math.round((rows.length - 1) * SCENE_FPS / fps) + 1);
@@ -135,11 +137,11 @@ function sceneOf(rows, { W, H, fps, atlas, name = 'Footage', pts = [], cloud = [
   const seconds = Math.max(0.25, n / SCENE_FPS);
   const objects = [];
   const first = both[0], zero = { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 1, sy: 1, sz: 1 };
-  if (atlas) objects.push({ id: 'bd0track', type: 'backdrop', name, ease: 'linear', hidden: false, mute: false,
+  if (atlas) objects.push({ id: `bd0track${tag}`, type: 'backdrop', name, ease: 'linear', hidden: false, mute: false,
     keys: bdKeys, base: { ...zero, ...Object.fromEntries(BD.map((k) => [k, first['b' + k]])) },
     url: atlas.url, cols: atlas.cols, rows: atlas.rows, count: atlas.count, step: atlas.step, clipFps, ...(at ? { at } : {}) });
-  if (pts.length) objects.push({ id: 'pt0track', type: 'trackpts', name: 'Tracked points', ease: 'smooth', hidden: false, mute: false, keys: [], base: zero, pts });
-  if (cloud.length) objects.push({ id: 'cl0track', type: 'cloudpts', name: 'Scene points', ease: 'smooth', hidden: false, mute: false, keys: [], base: zero, pts: cloud });
+  if (pts.length) objects.push({ id: `pt0track${tag}`, type: 'trackpts', name: 'Tracked points', ease: 'smooth', hidden: false, mute: false, keys: [], base: zero, pts });
+  if (cloud.length) objects.push({ id: `cl0track${tag}`, type: 'cloudpts', name: 'Scene points', ease: 'smooth', hidden: false, mute: false, keys: [], base: zero, pts: cloud });
   return {
     v: 1, width, height, seconds, blur: 2, room: { w: 8, d: 8, h: 2.8, walls: false, ceiling: false, hidden: !floor },
     camera: { base: { ...camKeys[0] }, keys: camKeys, ease: 'linear' }, objects,
@@ -202,7 +204,7 @@ export function solveRows(solve, opts = {}) {
 // A new 3D scene's data from a solve, the same shape as sceneFromTrack's. track (optional): the motion track of
 // the same clip, for its footage picture (atlas); the card is shifted if the two start at different times.
 export function sceneFromSolve(solve, track = null, opts = {}) {
-  const { points = true, cloud: withCloud = true, name = 'Footage' } = opts;
+  const { points = true, cloud: withCloud = true, name = 'Footage', tag = '' } = opts;
   const atlas = opts.atlas ?? track?.atlas;
   const world = worldFromSolve(solve, opts);
   const rows = solveRows(solve, { ...opts, world });
@@ -211,7 +213,7 @@ export function sceneFromSolve(solve, track = null, opts = {}) {
   // the coloured scene points (cloud: [x, y, z, r, g, b], colours 0-255) go through the same change of axes
   const cloud = withCloud ? (solve.cloud || []).map((p) => [...toThree(p, world).map((x) => Math.round(x * 1000) / 1000), p[3], p[4], p[5]]) : [];
   const at = atlas && track ? Math.round(((track.start || 0) - (solve.start || 0)) * SCENE_FPS) : 0;
-  return sceneOf(rows, { W, H, fps, atlas, name, pts, cloud, clipFps: track?.fps || fps, at, floor: !!solve.floor });
+  return sceneOf(rows, { W, H, fps, atlas, name, pts, cloud, clipFps: track?.fps || fps, at, floor: !!solve.floor, tag });
 }
 
 // each shown track's first point, put on the ray it was seen along at its first frame, `dist` from that camera: a point

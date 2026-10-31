@@ -47,13 +47,26 @@ makers.trackpts = (o) => {
   return m;
 };
 
+// A dot about 0.6 of the gap between the cloud's points as the shot camera sees them, so the footage still shows between
+// them: the points cover a surface, so the gap is about √(area / count), the area from the two widest spreads (5th to
+// 95th percentile, so strays don't count). three sizes an attenuated point as size × (view height / 2) / depth pixels,
+// which ignores the lens: × 2 makes it 0.6 of the gap through a ~35 mm lens (tan(fov / 2) ≈ 0.3).
+// (A fixed 0.035 buried the footage of a close-up under a mosaic.)
+export function cloudDotSize(pts) {
+  if (pts.length < 8) return 0.035;
+  const spread = [0, 1, 2].map((k) => { const v = pts.map((p) => p[k]).sort((a, b) => a - b); return v[Math.floor(v.length * 0.95)] - v[Math.floor(v.length * 0.05)]; })
+    .sort((a, b) => b - a);
+  const gap = Math.sqrt(Math.max(1e-8, spread[0] * spread[1]) / pts.length);
+  return Math.max(0.004, Math.min(0.4, gap * 2));
+}
+
 // the solved scene as coloured points (sized in the world, so near ones look bigger). { type: 'cloudpts', pts: [[x, y, z, r, g, b]] }
 makers.cloudpts = (o) => {
   const pts = o.pts || [], pos = new Float32Array(pts.length * 3), colr = new Float32Array(pts.length * 3);
   const c = new THREE.Color();   // (the colours are sRGB; three works in linear)
   pts.forEach((p, i) => { pos.set([p[0], p[1], p[2]], i * 3); c.setRGB((p[3] ?? 255) / 255, (p[4] ?? 255) / 255, (p[5] ?? 255) / 255, THREE.SRGBColorSpace); colr.set([c.r, c.g, c.b], i * 3); });
   const g = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(pos, 3)).setAttribute('color', new THREE.BufferAttribute(colr, 3));
-  const mat = new THREE.PointsMaterial({ size: 0.035, sizeAttenuation: true, vertexColors: true, toneMapped: false });
+  const mat = new THREE.PointsMaterial({ size: cloudDotSize(pts), sizeAttenuation: true, vertexColors: true, toneMapped: false });
   const m = new THREE.Points(g, mat);
   m.frustumCulled = false;
   Object.assign(m.userData, { colorOnly: true, photo: true, paint: () => {} });
