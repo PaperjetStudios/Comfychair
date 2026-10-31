@@ -2,7 +2,7 @@ import {
   $, h, store, uid, api, toast, undoToast, clamp, openSheet, closeSheet, button, iconBtn, linkBtn, actions, fileButton, seg,
   field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, toggle, textArea, pctFmt, colorField, sizeSelect, canvasFont, icon,
 } from './ui.js';
-import { S, fmtT, inputUrl, thumbUrl } from './core.js';
+import { S, fmtT, inputUrl, onServer, thumbUrl } from './core.js';
 import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, soundToSoundTab, uploadImage, uploadMedia, withMediaDelete } from './media.js';
 import { openGeneration } from './run.js';
 import { TabSet } from './tabs.js';
@@ -775,11 +775,12 @@ function clipEl(it) {
   const fi = Math.max(it.fadeIn || 0, xin);
   const bg = it.kind === 'video' ? posterFor(it) : it.kind === 'image' ? it.thumb || it.url : null;
   const gone = it.kind === 'scene' && COMP.sceneOf(it.src.scene)?.state === 'missing';
-  return h('div', { class: `tl-clip ${it.kind}` + (V.sel === it.id ? ' sel' : '') + (gone ? ' gone' : ''), 'data-id': it.id,
+  return h('div', { class: `tl-clip ${it.kind}` + (V.sel === it.id ? ' sel' : '') + (gone ? ' gone' : '') + (it.fx?.busy ? ' fx-busy-clip' : ''), 'data-id': it.id,
     title: gone ? 'This 3D scene was deleted from the 3D tab' : null,
     style: `left:${it.at * V.pps}px;width:${Math.max(6, itLen(it) * V.pps)}px` + (bg ? `;background-image:url("${bg}")` : '') },
     it.kind === 'audio' ? h('canvas', { class: 'wave' }) : null,
     h('span', { class: 'tl-label' }, gone ? icon('warn') : null, it.label),
+    it.fx?.busy ? h('span', { class: 'tl-fxtag' }, h('span', { class: 'spinner' }), h('span', { class: 'fx-text' }, fxStatus(it))) : null,
     fi ? h('span', { class: 'tl-fade in', style: `width:${fi * V.pps}px` }) : null,
     it.fadeOut ? h('span', { class: 'tl-fade out', style: `width:${it.fadeOut * V.pps}px` }) : null,
     K.diamonds(it, V.pps, tc),   // its keys, After Effects style
@@ -1075,13 +1076,15 @@ function fxFields(it) {
   } }, h('option', { value: '' }, '+ Add effect…'), CLIP_FX.map(([k, l, tip]) => h('option', { value: k, title: tip }, l)));
   const len = fx.orig ? fx.orig.out - fx.orig.in : itLen(it);
   return section('Effects', null,
-    help('LTX effects run on the GPU, one after another, over this clip\'s range (up to 10 s), and the result takes the clip\'s place. Change them and render again any time: it always starts from the original. Remove puts the original back.'),
+    help('LTX effects run on the GPU, one after another, over this clip\'s range (up to 10 s), and the result takes the clip\'s place. While one runs, the clip on the timeline and this panel show a spinner, the step and the time so far; you can keep editing, and the clip swaps when it is done. Change them and render again any time: it always starts from the original. Remove puts the original back.'),
     fx.steps.map((st, i) => fxStepFields(it, st, i)),
     add,
     fx.error ? note(fx.error, 'err') : null,
-    fx.busy ? hint(`Rendering: ${fx.busy}…`) : fx.orig ? hint('Showing the rendered result.') : null,
+    fx.busy ? h('div', { class: 'fx-busy', role: 'status' }, h('span', { class: 'spinner' }),
+      h('div', { class: 'grow' }, h('b', {}, `Rendering ${fx.busy}`), h('div', { class: 'hint fx-text' }, fxStatus(it, true))),
+      h('div', { class: 'fx-bar' })) : fx.orig ? hint('Showing the rendered result.') : null,
     h('div', { class: 'row wrap' },
-      button(fx.orig ? 'Render again' : 'Render effects', () => bakeFx(it.id), { cls: 'primary', disabled: !fx.steps.length || !!fx.busy }),
+      button(fx.busy ? 'Rendering…' : fx.orig ? 'Render again' : 'Render effects', () => bakeFx(it.id), { cls: 'primary' + (fx.busy ? ' working' : ''), disabled: !fx.steps.length || !!fx.busy }),
       fx.orig ? button('Remove effects', () => unbakeFx(it)) : null,
       len > 10 ? hint('Only the first 10 s get the effects.') : null));
 }
@@ -1097,26 +1100,51 @@ function unbakeFx(it) {
   undoToast('Back to the original clip', () => { Object.assign(it, was); it.fx.orig = o; timelineChanged(); });
 }
 
+// What an effect render shows while it runs: the step, the time so far and ComfyUI's step count (all clips share one: a run is one at a time)
+const FXRUN = { t0: 0, prog: '', timer: null, n: 0 };
+const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+function fxStatus(it, long = false) {
+  const t = FXRUN.t0 ? mmss((Date.now() - FXRUN.t0) / 1000) : '';
+  return [t && `${t} so far`, FXRUN.prog && `sampling ${FXRUN.prog}`, long && 'on the GPU in ComfyUI'].filter(Boolean).join(' · ') || 'queued…';
+}
+function fxTick() {
+  for (const it of V.items) {
+    if (!it.fx?.busy) continue;
+    document.querySelectorAll(`#timeline .tl-clip[data-id="${it.id}"] .fx-text`).forEach((n) => { n.textContent = fxStatus(it); });
+  }
+  document.querySelectorAll('#videoPanel .fx-busy .fx-text').forEach((n) => { n.textContent = fxStatus(null, true); });
+}
+function fxStart() {
+  if (!FXRUN.n++) { FXRUN.t0 = Date.now(); FXRUN.prog = ''; FXRUN.timer = setInterval(fxTick, 1000); }
+}
+function fxStop() {
+  if (!--FXRUN.n) { clearInterval(FXRUN.timer); FXRUN.timer = null; FXRUN.t0 = 0; FXRUN.prog = ''; }
+}
+onServer('deck_progress', ({ data }) => { if (FXRUN.n) { FXRUN.prog = `${data.value}/${data.max}`; fxTick(); } });
+
 async function bakeFx(id) {
   let it = V.items.find((x) => x.id === id);
   const tab = tabs?.active?.id;
   const base = clipBase(it), steps = it.fx.steps.map((st) => ({ ...st }));
   let source = { ...base.src, trim: { start: base.in, len: base.out - base.in } }, secs = base.out - base.in, r = null;
   it.fx.error = null;
+  fxStart();
+  toast(`Rendering ${steps.map((st) => FX_LABEL[st.op]).join(' + ')}: the clip shows a spinner until it is done`);
   try {
     for (const [i, st] of steps.entries()) {
-      it.fx.busy = `${i + 1}/${steps.length} ${FX_LABEL[st.op]}`; renderVideoPanel();
+      it.fx.busy = `${i + 1}/${steps.length} ${FX_LABEL[st.op]}`; FXRUN.prog = ''; renderVideoPanel(); renderTimeline();
       r = await runClipStep(st, source, secs);
       source = { generation: r.generation, index: r.index };
       secs = r.dur || secs;
       it = V.items.find((x) => x.id === id) || it;
     }
   } catch (e) {
-    it.fx.busy = null; it.fx.error = `${it.fx.busy || ''} ${e.message}`.trim();
-    renderVideoPanel();
+    const at = it.fx.busy;
+    fxStop(); it.fx.busy = null; it.fx.error = `${at || ''} ${e.message}`.trim();
+    renderVideoPanel(); renderTimeline();
     return toast(`Effects stopped: ${e.message}`, true);
   }
-  it.fx.busy = null;
+  fxStop(); it.fx.busy = null;
   if (tabs?.active?.id !== tab || !V.items.includes(it)) return toast(`Effects done as #${r.generation} (the clip's edit was closed: find it in History)`);
   it.fx.orig = base;
   Object.assign(it, { src: { generation: r.generation, index: r.index }, url: r.url, label: `${base.label} ✨`, in: 0,
@@ -1272,6 +1300,7 @@ const editAdapter = {
   dump: () => ({ tracks: V.tracks, items: V.items, size: V.size, fps: V.fps, ...(V.range && { range: V.range }) }),
   load(p) {
     vidPause();
+    for (const it of p.items || []) if (it.fx?.busy && !FXRUN.n) it.fx.busy = null;   // (a render the page was closed on)
     Object.assign(V, { tracks: p.tracks, items: p.items, size: p.size, fps: p.fps, range: p.range || null, sel: null, t: 0, master: null, holdSince: 0 });
     WA.only = true; WA.sync();
     renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw(); COMP.refresh();

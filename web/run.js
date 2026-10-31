@@ -399,6 +399,7 @@ function onMessage(m) {
         break;
       }
       RUN.step = [d.value, d.max];
+      emitServer({ type: 'deck_progress', data: { value: d.value, max: d.max } });   // (the Video tab's effects show it)
       if (RUN.pid) runText(); else setProgress(d.value, d.max, `${nodeName(d.node || S.executingNode)} · ${d.value}/${d.max}`);
       break;
     case 'VHS_latentpreview': // VideoHelperSuite animated sampler preview metadata
