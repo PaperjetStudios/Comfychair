@@ -33,7 +33,8 @@ TAP_GRID = 20        # grid points per side, before region / exclude drop some
 
 TRACK_W = 640        # frames are analysed at this width (or the clip's own, if smaller)
 MAX_FRAMES = 1800    # 75 s at 24 fps
-MIN_POINTS = 80      # below this many live points, seed more
+MIN_POINTS = 80      # below this many live points, seed more (and when over half went in one step: a whip)
+LOW_QUALITY = 0.005  # still under MIN_POINTS after seeding (blank sand, blur): once more at this corner quality
 MAX_POINTS = 300
 FB_TOL = 1.0         # forward-backward error allowed, in analysis pixels
 RANSAC_TOL = 2.0
@@ -138,6 +139,7 @@ def analyse(path, start=0.0, end=None, region=None, exclude=None, progress=None,
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         if count % step == 0:
             thumbs.append(bgr.copy())
+        had = len(pts)
         if prev is not None:
             A = None
             if len(pts) >= 6:
@@ -168,11 +170,15 @@ def analyse(path, start=0.0, end=None, region=None, exclude=None, progress=None,
                         "rot": math.degrees(math.atan2(M[1, 0], M[0, 0])), "scale": float(math.hypot(M[0, 0], M[1, 0]))})
             for i, (px, py) in zip(ids, pts[:, 0, :]):
                 paths[int(i)].append([float(px), float(py)])
-        if len(pts) < MIN_POINTS:
+        for quality in (0.01, LOW_QUALITY):
+            if quality == 0.01 and not (len(pts) < MIN_POINTS or len(pts) < had / 2):
+                continue
+            if quality == LOW_QUALITY and (len(pts) >= MIN_POINTS or len(pts) >= MAX_POINTS):
+                continue
             mask = base.copy()
             for px, py in pts[:, 0, :]:
                 cv2.circle(mask, (int(px), int(py)), 12, 0, -1)
-            new = cv2.goodFeaturesToTrack(gray, MAX_POINTS - len(pts), 0.01, 12, mask=mask, blockSize=7)
+            new = cv2.goodFeaturesToTrack(gray, MAX_POINTS - len(pts), quality, 12, mask=mask, blockSize=7)
             if new is not None:
                 new = new.astype(np.float32)
                 fresh = np.arange(nxt_id, nxt_id + len(new))

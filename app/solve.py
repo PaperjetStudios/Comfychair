@@ -54,6 +54,13 @@ ANCHOR_GAP = 0.25    # ...but not closer than this many seconds
 MAX_ANCHORS = 4      # (each is a MoGe pass of a few seconds)
 ALIGN_MIN = 12       # shared points a later anchor needs to be fitted by a similarity (else by its frame's pose)...
 ALIGN_SHARE = 0.5    # ...and over this share of them must agree with the fit, or the anchor is left out
+GAP_MIN = 8          # a frame with fewer points with 3D than this is in a gap (the tracks ended: a whip, blur)...
+GAP_LOOK = 12        # ...and, for the anchor picker, one where fewer than GAP_MIN of the tracks seen this many frames
+GAP_SEE = 30         # earlier still are; it ends where this many tracks are seen again (a MoGe anchor there)
+BRIDGE_STEPS = 12    # across a gap the camera turns as the 2D track says and moves on at the median of this many
+BRIDGE_FADE = 24     # last steps, slowing to a stop over this many frames
+WHIP = 0.04          # a frame whose picture slides by over this share of its width is bridged too (a whip: blur and
+                     # the rolling shutter bend it, and PnP reads that as the camera moving metres)
 _geom = None
 
 
@@ -138,11 +145,15 @@ def _c2w(cv2, np, rvec, tvec):
     return np.concatenate([R.T, (-R.T @ t)[:, None]], axis=1)
 
 
-def _pnp_pass(cv2, np, T, V, Xw, have, skip, Km, kx, ky, thr, prior, grow, anchor=None, anchors=(), motion_w=0.0):
+def _pnp_pass(cv2, np, T, V, Xw, have, skip, Km, kx, ky, thr, prior, grow, anchor=None, anchors=(), motion_w=0.0,
+              mats=None):
     """One run through the frames (see solve_pnp). Xw (Q, 3) / have (Q,) are updated with the points the later
     anchors, triangulation, the anchor's depth and the neighbours give. motion_w: each frame's pose is pulled
     towards where the last two put it (bundle_adjust's motion prior, only backwards), so far-off points that
-    hardly pin the position don't make it jump (and the points lifted from it go wrong)."""
+    hardly pin the position don't make it jump (and the points lifted from it go wrong). A frame in a gap (under
+    GAP_MIN points with 3D) is bridged (bridge(); mats: the 2D similarity track, _sim_mats, made when first
+    needed) unless prior gives its camera; a later anchor there is placed by the bridged pose.
+    Returns (cams, good, lost, bridged (N,) mask)."""
     Q, N = T.shape[:2]
     UV = to_clip(np, T, kx, ky)   # (Q, N, 2) clip px
     Kinv = np.linalg.inv(Km)
@@ -158,6 +169,28 @@ def _pnp_pass(cv2, np, T, V, Xw, have, skip, Km, kx, ky, thr, prior, grow, ancho
     fresh, lost = True, 0
     later = {int(a["f"]): a for a in anchors if a["f"] > 0}
     solved = [0]   # the solved frames, in order
+    bridged = np.zeros(N, bool)
+    simm = [mats]   # (the 2D similarity track, made when first needed)
+
+    whip = np.zeros(N, bool)
+    if prior is None and mats is not None:
+        p = np.array([(Km[0, 2] + 0.5) / kx - 0.5, (Km[1, 2] + 0.5) / ky - 0.5, 1.0])
+        for f in range(1, N):
+            q = mats[f] @ np.linalg.solve(mats[f - 1], p)
+            whip[f] = np.hypot(*(q[:2] - p[:2])) > WHIP * 2 * (p[0] + 0.5)
+
+    def in_gap(f):
+        return prior is None and (whip[f] or (V[:, f] & have & ~skip).sum() < GAP_MIN)
+
+    def bridged_pose(f):
+        if simm[0] is None:
+            simm[0] = _sim_mats(cv2, np, T, V)
+        a = solved[-1]   # (the depth the last solved frame saw, for the slide its move gives)
+        m = V[:, a] & have & ~skip
+        z = (Xw[m] - cams[a][:, 3]) @ cams[a][:, 2] if m.any() else np.zeros(0)
+        seen = all((V[:, g - 1] & V[:, g]).sum() >= 6 for g in range(a + 1, f + 1))   # (else the 2D track held still)
+        zm = float(np.median(z[z > 0])) if (z > 0).any() and seen else None
+        return bridge(np, cams, solved, f, simm[0], Km, kx, ky, zm)
 
     def try_pnp(f, fresh, rvec, tvec):
         use = V[:, f] & have & ~skip
@@ -213,10 +246,10 @@ def _pnp_pass(cv2, np, T, V, Xw, have, skip, Km, kx, ky, thr, prior, grow, ancho
         return R.T, -R.T @ C
 
     for f in range(1, N):
-        got = try_pnp(f, fresh, rvec, tvec)
+        got = None if whip[f] else try_pnp(f, fresh, rvec, tvec)
         if f in later:   # a later MoGe anchor: its points into the solve's frame, placed by this frame's camera (solved,
             # or foreseen from the last ones) unless enough are shared for a similarity; and its depth for the ray march
-            pose = (cv2.Rodrigues(got[0])[0], got[1].reshape(3)) if got else predicted(f)
+            pose = (cv2.Rodrigues(got[0])[0], got[1].reshape(3)) if got else bridged_pose(f) if in_gap(f) else predicted(f)
             sim = _place_anchor(np, later[f], Xw, have, skip, pose)
             if sim is not None and later[f].get("grid") is not None:
                 anchor = {**later[f]["grid"], "sim": sim}
@@ -232,7 +265,12 @@ def _pnp_pass(cv2, np, T, V, Xw, have, skip, Km, kx, ky, thr, prior, grow, ancho
         else:
             lost += 1
             fresh = True
-            cams[f] = cams[f - 1] if prior is None else prior[f]   # (DA3's own camera stands in)
+            if in_gap(f):   # (the tracks have ended: turn as the picture does, and keep moving)
+                R, t = bridged_pose(f)
+                cams[f] = np.concatenate([R.T, (-R.T @ t)[:, None]], axis=1)
+                bridged[f] = True
+            else:
+                cams[f] = cams[f - 1] if prior is None else prior[f]   # (DA3's own camera stands in)
             continue
         newly = V[:, f] & (first < 0)
         first[newly] = f
@@ -282,14 +320,61 @@ def _pnp_pass(cv2, np, T, V, Xw, have, skip, Km, kx, ky, thr, prior, grow, ancho
                 Xc = (np.c_[UV[rest[ok], f], np.ones(ok.sum())] @ Kinv.T) * z[:, None]
                 Xw[rest[ok]] = (Xc - tf) @ Rf
                 have[rest[ok]] = True
-    return cams, good, lost
+    return cams, good, lost, bridged
+
+
+def _sim_mats(cv2, np, T, V):
+    """The 2D similarity track (tracking._fit) as 3x3 matrices (N, 3, 3) taking frame 0's analysis pixels to
+    each frame's."""
+    frames, _ = tracking._fit(cv2, np, np.asarray(T, np.float32), V, 1.0, 0, 0)   # (centre 0: tx, ty the shift itself)
+    out = np.zeros((len(frames), 3, 3))
+    for i, fr in enumerate(frames):
+        a, s = math.radians(fr["rot"]), fr["scale"]
+        out[i] = [[s * math.cos(a), -s * math.sin(a), fr["tx"]], [s * math.sin(a), s * math.cos(a), fr["ty"]], [0, 0, 1]]
+    return out
+
+
+def bridge(np, cams, solved, f, mats, Km, kx, ky, zmed=None):
+    """World-to-camera (R, t) for frame f in a gap, from the last solved frame a = solved[-1]: moved on at the
+    median of the last BRIDGE_STEPS solved steps, slowing linearly to a stop over BRIDGE_FADE frames, and turned
+    by the 2D similarity between a and f (mats, _sim_mats): the principal point's shift through the focal length
+    is yaw and pitch (less the shift that move gives points zmed away), the picture's turn is roll; zoom is left
+    out."""
+    a = solved[-1]
+    last = solved[-(BRIDGE_STEPS + 1):]
+    v = np.zeros(3)
+    if len(last) > 1:
+        v = np.median([(cams[b][:, 3] - cams[c][:, 3]) / (b - c) for c, b in zip(last[:-1], last[1:])], axis=0)
+        # (no faster than twice the solve's usual pace: the frames before a gap are often already going wrong)
+        S = np.asarray(solved)
+        pace = np.median(np.linalg.norm(np.diff(cams[S][:, :, 3], axis=0), axis=1) / np.diff(S)[:, None].ravel())
+        if np.linalg.norm(v) > 2 * pace:
+            v *= 2 * pace / np.linalg.norm(v)
+    k = np.arange(1, f - a + 1)
+    C = cams[a][:, 3] + v * np.clip(1 - k / BRIDGE_FADE, 0, None).sum()
+    Mr = mats[f] @ np.linalg.inv(mats[a])
+    p = np.array([(Km[0, 2] + 0.5) / kx - 0.5, (Km[1, 2] + 0.5) / ky - 0.5, 1.0])   # principal point, analysis px
+    q = Mr @ p
+    dx, dy = (q[0] - p[0]) * kx, (q[1] - p[1]) * ky
+    if zmed:   # (a sideways move slides the picture too: that part isn't a turn)
+        d = (C - cams[a][:, 3]) @ cams[a][:, :3]
+        dx, dy = dx + Km[0, 0] * d[0] / zmed, dy + Km[1, 1] * d[1] / zmed
+    yaw, pitch, roll = math.atan(dx / Km[0, 0]), -math.atan(dy / Km[1, 1]), math.atan2(Mr[1, 0], Mr[0, 0])
+    cy_, sy_, cp, sp, cr, sr = math.cos(yaw), math.sin(yaw), math.cos(pitch), math.sin(pitch), math.cos(roll), math.sin(roll)
+    Ry = np.array([[cy_, 0, sy_], [0, 1, 0], [-sy_, 0, cy_]])
+    Rx = np.array([[1, 0, 0], [0, cp, -sp], [0, sp, cp]])
+    Rz = np.array([[cr, -sr, 0], [sr, cr, 0], [0, 0, 1]])
+    R = Rx @ Ry @ Rz @ cams[a][:, :3].T
+    return R, -R @ C
 
 
 def choose_anchors(V, fps, cover=ANCHOR_COVER, every=ANCHOR_EVERY, gap=ANCHOR_GAP, most=MAX_ANCHORS):
     """The frames MoGe should give depth for, from the tracks' visibility alone (V (Q, N)): frame 0, then a frame
     wherever under `cover` of the tracks seen there were seen on an anchor already, or `every` seconds after
     the last one; never closer than `gap` seconds. With more than `most`, the ones nearest to `most` even
-    steps through the clip (so a clip whose tracks churn early still has anchors at its end)."""
+    steps through the clip (so a clip whose tracks churn early still has anchors at its end). Then, outside that
+    count, the end of every visibility gap (gap_ends) without an anchor within GAP_LOOK frames: nothing is
+    shared across a gap, so the solve starts again there from MoGe's depth."""
     import numpy as np
     V = np.asarray(V, bool)
     N = V.shape[1]
@@ -303,14 +388,37 @@ def choose_anchors(V, fps, cover=ANCHOR_COVER, every=ANCHOR_EVERY, gap=ANCHOR_GA
         if n and ((seen & covered).sum() < cover * n or f - out[-1] >= every * fps):
             out.append(f)
             covered |= seen
-    if len(out) <= most:
-        return out
-    a = np.array(out)
-    pick = [0]
-    for target in np.linspace(0, N - 1, most)[1:]:
-        cand = [x for x in a if x not in pick]
-        pick.append(int(min(cand, key=lambda x: abs(x - target))))
-    return sorted(pick)
+    if len(out) > most:
+        a = np.array(out)
+        pick = [0]
+        for target in np.linspace(0, N - 1, most)[1:]:
+            cand = [x for x in a if x not in pick]
+            pick.append(int(min(cand, key=lambda x: abs(x - target))))
+        out = pick
+    for e in gap_ends(V):
+        if all(abs(e - x) > GAP_LOOK for x in out):
+            out.append(e)
+    return sorted(out)
+
+
+def gap_ends(V, look=GAP_LOOK, few=GAP_MIN, see=GAP_SEE):
+    """Where each visibility gap ends: a gap starts at a frame where fewer than `few` of the tracks seen `look`
+    frames earlier are still seen (they all ended at once), and ends at the first frame from there on with `see`
+    tracks seen. [frame...]."""
+    import numpy as np
+    V = np.asarray(V, bool)
+    N = V.shape[1]
+    out, f = [], look
+    while f < N:
+        if V[:, f - look].sum() >= few and (V[:, f] & V[:, f - look]).sum() < few:
+            e = next((g for g in range(f, N) if V[:, g].sum() >= see), None)
+            if e is None:
+                break
+            out.append(e)
+            f = max(e, f) + look   # (one anchor per gap)
+            continue
+        f += 1
+    return out
 
 
 def similarity(A, B, iters=200, tol=None, seed=0):
@@ -433,8 +541,10 @@ def solve_pnp(T, V, X, ids, K, k_scale, prior=None, grow=True, thr=None, anchor=
     """Camera-to-world 3x4 for every frame from tracks T (Q, N, 2, analysis px) seen where V (Q, N), of which
     tracks ids have world positions X (M, 3). K [fx, fy, cx, cy] in clip pixels; k_scale: analysis to clip
     pixels (a number or (kx, ky)). Frame 0 is the identity. A frame with under 6 points seen, or no solve,
-    keeps the previous pose (or prior's, cameras to start each frame from) and counts as lost (with ba, the
-    bundle adjustment then places it from what it sees and the motion prior).
+    keeps the previous pose (or prior's, cameras to start each frame from) and counts as lost; in a gap (under
+    GAP_MIN points with 3D, no prior) it is bridged instead (bridge: the 2D track's turn, the last steady move),
+    and the bundle adjustment leaves it there. Other lost frames the bundle adjustment places from what they see
+    and the motion prior.
     Tracks that appear later are triangulated from two solved frames (grow), and tracks the cameras don't
     agree with (a wave, a person walking: over 2x the threshold on the median frame) are dropped and the
     frames solved again (kept only if that loses no more frames). With anchor (frame 0's depth grid, see
@@ -457,20 +567,21 @@ def solve_pnp(T, V, X, ids, K, k_scale, prior=None, grow=True, thr=None, anchor=
     T, V = np.asarray(T, np.float64), np.asarray(V, bool)
     skip = np.zeros(Q, bool)
     best = None
+    mats = _sim_mats(cv2, np, T, V) if prior is None else None   # (the 2D track: bridges and whips)
     for rnd in range(3):
         Xw, have = np.full((Q, 3), np.nan), np.zeros(Q, bool)
         Xw[ids], have[ids] = np.asarray(X, np.float64), True
-        cams, good, lost = _pnp_pass(cv2, np, T, V, Xw, have, skip.copy(), Km, kx, ky, thr, prior, grow, anchor, anchors,
-                                     motion_w=PNP_MOTION_W if ba else 0.0)
+        cams, good, lost, bridged = _pnp_pass(cv2, np, T, V, Xw, have, skip.copy(), Km, kx, ky, thr, prior, grow, anchor, anchors,
+                                     motion_w=PNP_MOTION_W if ba else 0.0, mats=mats)
         if best is not None and lost > best[3]:   # (the dropped tracks were holding frames up: keep the last round)
             break
-        best = (cams, Xw, have & ~skip, lost, good)
+        best = (cams, Xw, have & ~skip, lost, good, bridged)
         err = track_err(cams, Xw, T, V & good[None, :], K, (kx, ky))
         bad = have & ~skip & (err > 2 * thr)
         if rnd == 2 or not bad.any():
             break
         skip |= bad
-    cams, Xw, use, lost, good = best
+    cams, Xw, use, lost, good, bridged = best
     ba_err = None
     if ba and use.sum() >= MIN_VIS:
         ids = np.asarray(ids, np.int64)
@@ -481,7 +592,7 @@ def solve_pnp(T, V, X, ids, K, k_scale, prior=None, grow=True, thr=None, anchor=
         deps += list(priors or ())
         Xb = np.where(use[:, None], Xw, np.nan)
         for rnd in range(2):
-            cams, Xb, info = bundle_adjust(cams, Xb, T, V, K, (kx, ky), anchors=deps, huber=thr)
+            cams, Xb, info = bundle_adjust(cams, Xb, T, V, K, (kx, ky), anchors=deps, huber=thr, hold=bridged)
             bad = use & (track_err(cams, Xb, T, V, K, (kx, ky)) > 2 * thr)   # (what still doesn't fit: once more without it)
             if rnd or not bad.any() or (use & ~bad).sum() < MIN_VIS:
                 break
@@ -565,20 +676,24 @@ def _rodrigues(np, r):
     return c * np.eye(3) + s * Kx + (1 - c) * k[:, :, None] * k[:, None, :]
 
 
-def ba_sparsity(ncams, npts, oc, op, pc=(), pp=(), smooth=True):
+def ba_sparsity(ncams, npts, oc, op, pc=(), pp=(), smooth=True, free=None):
     """The Jacobian's pattern for bundle_adjust (scipy.sparse lil): 2 rows per observation (camera oc, point op), 1
-    per depth prior (camera pc, point pp), then 3 per inner frame of the motion prior; columns 6 per camera
-    1..ncams-1 (its Rodrigues turn, then its centre; camera 0 is held: it has none) and 3 per point. The motion
-    prior depends on the centres only (fewer column groups for the finite differences)."""
+    per depth prior (camera pc, point pp), then 3 per inner frame of the motion prior; columns 6 per free camera
+    (its Rodrigues turn, then its centre; free: a mask, default every camera but 0, which is held and has none) and
+    3 per point. The motion prior depends on the centres only (fewer column groups for the finite differences)."""
     import numpy as np
     from scipy.sparse import coo_matrix
     oc, op, pc, pp = (np.asarray(a, np.int64).ravel() for a in (oc, op, pc, pp))
-    nco = 6 * (ncams - 1)
+    if free is None:
+        free = np.arange(ncams) > 0
+    free = np.asarray(free, bool)
+    slot = np.cumsum(free) - 1   # (a free camera's place among the free ones)
+    nco = 6 * int(free.sum())
     rows, cols = [], []
 
     def cam(r, c, which=range(6)):   # (rows r depend on camera c's numbers `which`, if it has them)
-        m, w = c > 0, np.asarray(list(which))
-        rows.append(np.repeat(r[m], len(w))); cols.append((6 * (c[m] - 1))[:, None].repeat(len(w), 1).ravel() + np.tile(w, m.sum()))
+        m, w = free[c], np.asarray(list(which))
+        rows.append(np.repeat(r[m], len(w))); cols.append((6 * slot[c[m]])[:, None].repeat(len(w), 1).ravel() + np.tile(w, m.sum()))
 
     def pt(r, p):
         rows.append(np.repeat(r, 3)); cols.append(nco + (3 * p)[:, None].repeat(3, 1).ravel() + np.tile(np.arange(3), len(p)))
@@ -601,7 +716,7 @@ def ba_sparsity(ncams, npts, oc, op, pc=(), pp=(), smooth=True):
 
 
 def bundle_adjust(cams, X, T, V, K, k_scale, anchors=None, prior_w=BA_PRIOR_W, huber=3.0, smooth_w=BA_SMOOTH_W,
-                  max_nfev=BA_NFEV):
+                  max_nfev=BA_NFEV, hold=None):
     """All camera poses (camera-to-world (N, 3, 4); camera 0 held) and 3D points (X (Q, 3), NaN rows: tracks not
     in the solve) refined together to fit the tracks T (Q, N, 2, analysis px) where V (Q, N): reprojection errors
     in clip px under a Huber loss (huber: its knee, px), sparse Jacobian (scipy least_squares, trf). The scale,
@@ -609,6 +724,7 @@ def bundle_adjust(cams, X, T, V, K, k_scale, anchors=None, prior_w=BA_PRIOR_W, h
     depth each has in that frame's camera}] (MoGe's metres, or DA3's units) pull each point's depth in that
     camera towards it (prior_w px per unit of relative error). A weak motion prior (the camera centres' second
     difference over the median scene depth, smooth_w px per unit) keeps frames with few points from jumping.
+    hold: a mask of cameras kept as they are, besides camera 0 (bridged across a gap: nothing there to refine them).
     Returns (cams, X, info {"err": median reprojection px, "nfev", "time"})."""
     cv2, np = tracking._libs()
     from scipy.optimize import least_squares
@@ -617,6 +733,10 @@ def bundle_adjust(cams, X, T, V, K, k_scale, anchors=None, prior_w=BA_PRIOR_W, h
     cams, X = np.asarray(cams, np.float64), np.asarray(X, np.float64)
     T, V = np.asarray(T, np.float64), np.asarray(V, bool)
     N = len(cams)
+    free = np.arange(N) > 0
+    if hold is not None:
+        free &= ~np.asarray(hold, bool)
+    nf = int(free.sum())
     pts = np.where(np.isfinite(X).all(axis=1))[0]
     M = len(pts)
     slot = np.full(len(X), -1)
@@ -645,10 +765,10 @@ def bundle_adjust(cams, X, T, V, K, k_scale, anchors=None, prior_w=BA_PRIOR_W, h
     sw = smooth_w / zref
 
     def unpack(x):
-        c = x[:6 * (N - 1)].reshape(N - 1, 6)
-        r = np.vstack([r0[:1], c[:, :3]])
-        t = np.vstack([c0[:1], c[:, 3:]])
-        return r, t, x[6 * (N - 1):].reshape(M, 3)
+        c = x[:6 * nf].reshape(nf, 6)
+        r, t = r0.copy(), c0.copy()
+        r[free], t[free] = c[:, :3], c[:, 3:]
+        return r, t, x[6 * nf:].reshape(M, 3)
 
     def raw(x):
         """(reprojection errors (n_obs, 2), depth prior residuals, motion residuals), unweighted by the loss."""
@@ -668,8 +788,8 @@ def bundle_adjust(cams, X, T, V, K, k_scale, anchors=None, prior_w=BA_PRIOR_W, h
 
     # the Huber loss by reweighting (IRLS): weights from the current errors (an observation's 2D error as one), then
     # plain least squares; scipy's own robust loss crawls when most errors start beyond the knee
-    A = ba_sparsity(N, M, oc, op, pc, pp, smooth=nsm > 0)
-    x = np.concatenate([np.hstack([r0[1:], c0[1:]]).ravel(), X[pts].ravel()])
+    A = ba_sparsity(N, M, oc, op, pc, pp, smooth=nsm > 0, free=free)
+    x = np.concatenate([np.hstack([r0[free], c0[free]]).ravel(), X[pts].ravel()])
     nfev = 0
     for rnd in range(2):
         e, d, _ = raw(x)
@@ -687,7 +807,7 @@ def bundle_adjust(cams, X, T, V, K, k_scale, anchors=None, prior_w=BA_PRIOR_W, h
         x, nfev = res.x, nfev + res.nfev
     r, t, P = unpack(x)
     out = cams.copy()
-    for f in range(1, N):
+    for f in np.where(free)[0]:
         out[f] = np.concatenate([cv2.Rodrigues(r[f])[0].T, t[f][:, None]], axis=1)
     Xo = X.copy()
     Xo[pts] = P

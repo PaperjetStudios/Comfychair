@@ -140,12 +140,13 @@ class Pnp(unittest.TestCase):
         got, q = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0)
         self.assertEqual(q["lost"], 3)
         self.assertLess(np.linalg.norm(got[30][:, 3] - cams[30][:, 3]), 0.02)   # and picks up again
-        got, q = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0, ba=False)
-        self.assertEqual(q["lost"], 3)
-        np.testing.assert_allclose(got[22], got[19])
-        got, q = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0)   # the bundle adjustment places them from the five
-        for f in (20, 21, 22):                                        # and the motion prior
-            self.assertLess(np.linalg.norm(got[f][:, 3] - cams[f][:, 3]), 0.01, f)
+        for ba in (False, True):   # (a gap: bridged, moving on at the last speed; five points are too few for the
+            got, q = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0, ba=ba)   # 2D track, so the turn holds)
+            self.assertEqual(q["lost"], 3)
+            for f in (20, 21, 22):
+                self.assertLess(np.linalg.norm(got[f][:, 3] - cams[f][:, 3]), 0.01, f)
+                self.assertLess(angle(got[f][:, :3], cams[f][:, :3]), 0.45 * (f - 19), f)
+                self.assertLess(angle(got[f][:, :3], got[19][:, :3]), 0.05, f)
 
     def test_analysis_scale(self):
         X, cams, T, V = scene(noise=0)
@@ -490,6 +491,73 @@ class BundleAdjust(unittest.TestCase):
         a, _ = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0)
         b, _ = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0)
         np.testing.assert_array_equal(a, b)
+
+
+def gap_scene(seed=4, noise=0.3):
+    """90 frames walking 4 mm a frame along a straight line while slowly turning (0.2° a frame) and rolling a little;
+    200 points seen up to frame 39, then only 20 others (2D only: too few to solve from) for frames 40..59, then
+    200 new ones from frame 60. Returns (X, cams, T, V, the frame-60 points' ids)."""
+    rng = np.random.default_rng(seed)
+    n = 90
+    cams = np.array([np.concatenate([rot(0.05 * i, 0.2 * i, 0.03 * i), np.array([[0.003], [0.0005], [0.0026]]) * i], axis=1)
+                     for i in range(n)])
+    A, B, C = in_view(200, rng), in_view(20, rng, cam=cams[50]), in_view(200, rng, cam=cams[60])
+    X = np.concatenate([A, B, C])
+    T, V = project(X, cams, rng, noise)
+    V[:200, 40:] = False
+    V[200:220, :40] = V[200:220, 60:] = False
+    V[220:, :60] = False
+    return X, cams, T, V, np.arange(220, 420)
+
+
+@unittest.skipUnless(cv2, "needs numpy and opencv")
+class Gap(unittest.TestCase):
+    def test_bridge_and_reanchor(self):
+        X, cams, T, V, late = gap_scene()
+        self.assertTrue((V[:, 40:60].sum(0) == V[200:220, 40:60].sum(0)).all())
+        q = late[V[late, 60]]
+        an = [{"f": 60, "q": q, "Xc": (X[q] - cams[60][:, 3]) @ cams[60][:, :3], "grid": None}]
+        for ba in (False, True):
+            got, info = solve.solve_pnp(T, V, X[:200], np.arange(200), K, 1.0, anchors=an, ba=ba)
+            self.assertEqual(info["lost"], 20)
+            # across the gap: the 2D track's turn, the last steady move fading out
+            self.assertLess(np.linalg.norm(got[59][:, 3] - cams[59][:, 3]), 0.10)
+            self.assertLess(angle(got[59][:, :3], cams[59][:, :3]), 1.0)
+            # after it: placed by the bridged pose at frame 60, so only as good as that
+            for f in range(60, 90):
+                self.assertLess(np.linalg.norm(got[f][:, 3] - cams[f][:, 3]), 0.05, (ba, f))
+                self.assertLess(angle(got[f][:, :3], cams[f][:, :3]), 1.0, (ba, f))
+        # without the anchor the rest stays bridged (and lost)
+        _, info = solve.solve_pnp(T, V, X[:200], np.arange(200), K, 1.0, ba=False)
+        self.assertEqual(info["lost"], 50)
+
+    def test_a_whip_is_bridged(self):
+        # frames 20..23 swing 4° a frame (the picture slides 35 px of 640): bridged by the 2D track's turn, not solved
+        yaw = np.cumsum([0] + [4.0 if 20 <= i < 24 else 0.1 for i in range(1, N)])
+        cams = np.array([np.concatenate([rot(0, yaw[i], 0), np.array([[0.004], [0], [0.002]]) * i], axis=1) for i in range(N)])
+        rng = np.random.default_rng(2)
+        X = np.concatenate([in_view(300, rng), in_view(300, rng, cam=cams[22])])
+        T, V = project(X, cams, rng, 0.2)
+        got, q = solve.solve_pnp(T, V, X, np.arange(len(X)), K, 1.0, ba=False)
+        self.assertEqual(q["lost"], 4)
+        for f in range(20, 24):
+            self.assertLess(angle(got[f][:, :3], cams[f][:, :3]), 1.0, f)
+            self.assertLess(np.linalg.norm(got[f][:, 3] - cams[f][:, 3]), 0.03, f)
+
+    def test_the_anchor_picker_adds_one_where_the_gap_ends(self):
+        X, cams, T, V, _ = gap_scene()
+        self.assertEqual(solve.gap_ends(V), [60])
+        got = solve.choose_anchors(V, 24.0, most=1)
+        self.assertIn(60, got)
+        self.assertEqual(solve.gap_ends(scene()[3]), [])
+        V2 = V.copy()   # (an anchor already near it: none added)
+        self.assertEqual(solve.choose_anchors(V2, 24.0, every=100, cover=0.0, most=4).count(60), 1)
+
+    def test_sim_mats_follow_the_picture(self):
+        X, cams, T, V = scene(noise=0)
+        M = solve._sim_mats(cv2, np, T, V)
+        self.assertEqual(M.shape, (N, 3, 3))
+        np.testing.assert_allclose(M[0], np.eye(3), atol=1e-9)
 
 
 @unittest.skipUnless(cv2 and subprocess.run(["which", "ffmpeg"], capture_output=True).returncode == 0, "needs opencv and ffmpeg")
