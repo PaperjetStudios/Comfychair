@@ -3,7 +3,8 @@
 Deck MoGe Export takes the geometry of one picture from ComfyUI's MoGe nodes and points picked on it
 (JSON pixels), and writes their 3D positions, the camera's intrinsics and a sparse grid of the scene
 as a JSON file in the output folder. Deck DA3 Export does the same for a multi-view Depth Anything 3
-run: each view's camera (camera-to-world) and intrinsics, and the first view's depth as a grid.
+run: each view's camera (camera-to-world) and intrinsics, the first view's depth as a grid and (version 2)
+every view's depth as a coarser one.
 ComfyChair's motion tracking (app/solve.py) reads the file, then deletes it.
 
 Neither node holds anything on the GPU: the tensors are copied to the CPU and the work is numpy (geom.py).

@@ -109,28 +109,56 @@ def normalise(conf: np.ndarray) -> np.ndarray:
     return (conf - lo) / (hi - lo) if hi > lo else np.ones_like(conf)
 
 
+def grid_values(img: np.ndarray, ok: np.ndarray, cols: int):
+    """grid_sample for one channel, all at once: plain bilinear at the cell centres, None where any of the four
+    pixels around one isn't ok (no nearest-pixel rule at edges: for the per-view depth grids)."""
+    H, W = img.shape
+    cols, rows = grid_size(cols, W, H)
+    gx = (np.arange(cols) + 0.5) * W / cols - 0.5
+    gy = (np.arange(rows) + 0.5) * H / rows - 0.5
+    x0 = np.clip(np.floor(gx).astype(int), 0, max(W - 2, 0))
+    y0 = np.clip(np.floor(gy).astype(int), 0, max(H - 2, 0))
+    x1, y1 = np.minimum(x0 + 1, W - 1), np.minimum(y0 + 1, H - 1)
+    fx, fy = np.clip(gx - x0, 0, 1)[None, :], np.clip(gy - y0, 0, 1)[:, None]
+    Y0, Y1, X0, X1 = y0[:, None], y1[:, None], x0[None, :], x1[None, :]
+    v = img[Y0, X0] * (1 - fx) * (1 - fy) + img[Y0, X1] * fx * (1 - fy) + img[Y1, X0] * (1 - fx) * fy + img[Y1, X1] * fx * fy
+    good = ok[Y0, X0] & ok[Y0, X1] & ok[Y1, X0] & ok[Y1, X1] & np.isfinite(v)
+    return cols, rows, [None if not g else float(x) for x, g in zip(v.ravel(), good.ravel())]
+
+
+def _da3_ok(depth, sky, conf, drop):
+    """Where one view's depth is worth having: finite, positive, not sky, not in the least confident share."""
+    ok = np.isfinite(depth) & (depth > 0)
+    if sky is not None:
+        ok &= sky < 0.5
+    if conf is not None:   # (DA3's raw confidence is long-tailed: a share of its min-max range would drop most)
+        c = conf[ok]
+        if c.size:
+            ok &= conf >= np.quantile(c, drop)
+    return ok
+
+
 def da3_export(depth: np.ndarray, extr: np.ndarray, intr: np.ndarray, grid: int, resolution: int,
-               sky: np.ndarray | None = None, conf: np.ndarray | None = None, drop: float = 0.2) -> dict:
+               sky: np.ndarray | None = None, conf: np.ndarray | None = None, drop: float = 0.2,
+               view_grid: int = 64) -> dict:
     """Multi-view DA3 geometry for ComfyChair's camera solve. depth (S, H, W) z-depth; extr (S, 3|4, 4)
     world-to-camera; intr (S, 3, 3) in the pixels the model ran at. Writes camera-to-world 3x4 per view,
-    [fx, fy, cx, cy] per view in this picture's pixels and view 0's depth as a grid (None for sky and for
-    the least confident `drop` share of the rest)."""
+    [fx, fy, cx, cy] per view in this picture's pixels, view 0's depth as a grid (None for sky and for
+    the least confident `drop` share of the rest) and (version 2) every view's depth as a coarser grid
+    ("depths", view_grid columns), so tracks that start later get a position too."""
     S, H, W = depth.shape
     if not np.isfinite(extr).all():
         raise ValueError("Depth Anything 3 couldn't place the cameras (non-finite poses): try more or fewer views")
     if np.all(np.abs(intr[:, 0, 0] - 1) < 1e-6):   # (DA3Inference's identity stand-ins: the model gave no cameras)
         raise ValueError("Depth Anything 3 gave no cameras: use a Small or Base model in multiview mode")
-    ok = np.isfinite(depth[0]) & (depth[0] > 0)
-    if sky is not None:
-        ok &= sky[0] < 0.5
-    cn = None
-    if conf is not None:   # (the least confident fifth goes: DA3's raw confidence is long-tailed, so a share of
-        cn = normalise(conf[0].astype(np.float64))   # its min-max range would drop most of the picture)
-        c = conf[0][ok]
-        if c.size:
-            ok &= conf[0] >= np.quantile(c, drop)
-    cols, rows, g = grid_sample(depth[0], ok, grid)
-    out = {"version": VERSION, "views": S, "width": W, "height": H, "resolution": resolution,
+    oks = [_da3_ok(depth[i], None if sky is None else sky[i], None if conf is None else conf[i], drop) for i in range(S)]
+    cn = None if conf is None else normalise(conf[0].astype(np.float64))
+    cols, rows, g = grid_sample(depth[0], oks[0], grid)
+    depths = []
+    for i in range(S):
+        vc, vr, vals = grid_values(depth[i].astype(np.float64), oks[i], view_grid)
+        depths.append({"cols": vc, "rows": vr, "values": [None if v is None else round(v, 4) for v in vals]})
+    out = {"version": 2, "views": S, "width": W, "height": H, "resolution": resolution, "depths": depths,
            "K": [[round(v, 4) for v in da3_K(intr[i], H, W, resolution)] for i in range(S)],
            "cams": [_r(invert34(extr[i]), 6) for i in range(S)],
            "depth": {"cols": cols, "rows": rows, "values": [None if v is None else round(float(v), 5) for v in g]}}

@@ -216,6 +216,77 @@ class Pnp(unittest.TestCase):
 
 
 @unittest.skipUnless(cv2, "needs numpy and opencv")
+class Anchors(unittest.TestCase):
+    def test_chosen_where_coverage_drops(self):
+        V = np.zeros((300, 200), bool)
+        V[:100, :60] = True       # frame 0's tracks, gone at 60
+        V[100:200, 40:140] = True   # others from 40: under 40 % covered once frame 0's go
+        V[200:, 120:] = True
+        self.assertEqual(solve.choose_anchors(V, 24.0), [0, 60, 132])   # (132: three seconds after 60)
+        self.assertEqual(solve.choose_anchors(V, 24.0, every=1.0, most=99)[:3], [0, 24, 48])   # (or every second at most)
+        a = solve.choose_anchors(V, 24.0, every=0.5)   # (too many: spread over the clip, not the first few)
+        self.assertEqual((len(a), a[0]), (solve.MAX_ANCHORS, 0))
+        self.assertGreater(a[-1], 180)
+        self.assertEqual(solve.choose_anchors(V, 24.0, gap=5.0), [0, 120])   # (never closer than gap)
+
+    def test_similarity_recovers_scale_turn_and_shift(self):
+        rng = np.random.default_rng(2)
+        A = rng.uniform(-3, 3, (60, 3)) + [0, 0, 6]
+        R, t, sc = rot(10, -35, 20), np.array([0.4, -1.2, 2.0]), 1.7
+        B = sc * A @ R.T + t + rng.normal(0, 0.005, A.shape)
+        B[:10] += rng.uniform(-3, 3, (10, 3))   # a sixth wrong
+        s2, R2, t2, inl = solve.similarity(A, B)
+        self.assertAlmostEqual(s2, sc, delta=0.01)
+        self.assertLess(angle(R2, R), 0.2)
+        np.testing.assert_allclose(t2, t, atol=0.05)
+        self.assertFalse(inl[:10].any())
+        self.assertTrue(inl[10:].all())
+
+    def test_a_later_anchor_by_similarity_or_by_pose(self):
+        X, cams, T, V = scene()
+        c = cams[20]
+        w2c = (c[:, :3].T, -c[:, :3].T @ c[:, 3])
+        Xc = (X - c[:, 3]) @ c[:, :3] * 0.5   # (MoGe at this frame puts things at half the distance)
+        a = {"q": np.arange(200), "Xc": Xc}
+        for shared in (60, 0):
+            Xw, have = np.full((200, 3), np.nan), np.zeros(200, bool)
+            Xw[:shared], have[:shared] = X[:shared], True
+            if not shared:   # (none shared: its frame's camera, MoGe's own scale)
+                sim = solve._place_anchor(np, a, Xw, have, np.zeros(200, bool), w2c)
+                np.testing.assert_allclose(Xw[100:], 0.5 * (X[100:] - c[:, 3]) + c[:, 3], atol=1e-9)
+                continue
+            sim = solve._place_anchor(np, a, Xw, have, np.zeros(200, bool), w2c)
+            self.assertAlmostEqual(sim[0], 2.0, delta=1e-6)
+            np.testing.assert_allclose(Xw[shared:], X[shared:], atol=1e-6)
+            self.assertTrue(have.all())
+
+    def test_da3_lift_from_a_later_view(self):
+        # a track first seen on view 2 takes its depth from view 2's grid and lands in view 0's frame
+        X, cams, T, V = scene(noise=0)
+        idx = [0, 10, 20]
+        rows, cols = 54, 96
+        u, v = np.meshgrid((np.arange(cols) + 0.5) * W / cols - 0.5, (np.arange(rows) + 0.5) * H / rows - 0.5)
+        flat = np.full((rows, cols), 5.0)   # (each view sees a wall 5 m ahead)
+        X2 = np.stack([(T[:, 20, 0] - K[2]) / K[0] * 5, (T[:, 20, 1] - K[3]) / K[1] * 5, np.full(200, 5.0)], 1) @ cams[20][:, :3].T + cams[20][:, 3]
+        V[:, :20] = False
+        ids, got = solve.da3_lift(T, V, 1.0, 1.0, K, W, H, idx, cams[idx], [flat, flat, flat])
+        self.assertGreater(len(ids), 100)
+        np.testing.assert_allclose(got, X2[ids], atol=1e-6)
+        ids, _ = solve.da3_lift(T, V, 1.0, 1.0, K, W, H, idx, cams[idx], [flat])   # (an old export: view 0 only)
+        self.assertEqual(len(ids), 0)
+
+    def test_cloud(self):
+        P = np.random.default_rng(0).uniform(1, 5, (90, 160, 3))
+        P[:10] = np.nan
+        img = np.zeros((360, 640, 3), np.uint8)
+        img[:, 320:] = [255, 0, 0]
+        pc = solve.cloud(np, P, img)
+        self.assertEqual(len(pc), solve.MAX_CLOUD)
+        self.assertTrue(all(len(p) == 6 and p[3] in (0, 255) for p in pc))
+        self.assertLess(len(json.dumps(pc)), 150_000)
+
+
+@unittest.skipUnless(cv2, "needs numpy and opencv")
 class Floor(unittest.TestCase):
     def test_floor_under_the_camera(self):
         fl = solve.floor_from_grid(floor_grid())
@@ -307,6 +378,9 @@ class Geom(unittest.TestCase):
         np.testing.assert_allclose(np.array(ex["cams"][2]).reshape(3, 4)[:, 3], [2, 0, 0], atol=1e-5)
         self.assertIsNone(ex["depth"]["values"][0])   # sky
         self.assertEqual(len(ex["K"]), S)
+        self.assertEqual((ex["version"], len(ex["depths"])), (2, S))   # (every view's depth, coarser)
+        self.assertIsNone(ex["depths"][1]["values"][0])   # (sky in every view)
+        self.assertAlmostEqual(ex["depths"][1]["values"][-1], 2.0)
         json.dumps(ex)
         # DA3's confidence is long-tailed: the least confident fifth goes, not everything under a tenth of the range
         conf = np.broadcast_to(np.exp(8 * np.linspace(0, 1, 50)), (S, 28, 50))   # (smooth, as DA3's is)
@@ -320,14 +394,20 @@ class EndToEnd(unittest.TestCase):
     """solve(method="pnp") against a fake ComfyUI whose MoGe answers from the synthetic scene."""
 
     def test_pnp(self):
+        # frame 0's points are all gone after frame 19 and new ones come from frame 6: the later MoGe anchors
+        # carry the solve on (the fake MoGe answers from the true scene, in each anchor camera's frame)
         td = Path(tempfile.mkdtemp(prefix="deck-solve-"))
         src = td / "c.mp4"
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"testsrc=s={W}x{H}:r=24:d=2",
                         "-pix_fmt", "yuv420p", str(src)], check=True)
         out_dir, in_dir = td / "comfy" / "output", td / "comfy" / "input"
-        X, cams, T, V = scene()
-        V[150:, 0] = False   # (some points start later: they have no 3D)
-        seen = {}
+        X, cams, T, V = churn(plane=True, later_from_0=True)   # (on a sloping ground: frame 0's depth grid below)
+        XA = np.concatenate([X, churn.later])
+        frames = solve.choose_anchors(V, 24.0)
+        rows = 54
+        ground = {"cols": 96, "rows": rows, "points": [list(np.array([((c + 0.5) * W / 96 - 0.5 - K[2]) / K[0], ((r + 0.5) * H / rows - 0.5 - K[3]) / K[1], 1])
+                                                            * plane_z((r + 0.5) * H / rows - 0.5)) for r in range(rows) for c in range(96)]}
+        seen = {"inputs": [], "outs": []}
 
         class Fake:
             async def object_info(self):
@@ -339,7 +419,7 @@ class EndToEnd(unittest.TestCase):
                 p = in_dir / subfolder / filename
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_bytes(data)
-                seen["input"] = p
+                seen["inputs"].append(p)
                 return f"{subfolder}/{filename}"
 
             async def queue(self, wf, preview=None):
@@ -347,23 +427,28 @@ class EndToEnd(unittest.TestCase):
                 return {"prompt_id": "p1"}
 
             async def history(self, pid):
-                q = json.loads(seen["wf"]["4"]["inputs"]["points"])
-                pts = []
-                for x, y in q:   # the scene point that sits there in frame 0
-                    d = np.hypot(T[:, 0, 0] - x, T[:, 0, 1] - y)
-                    pts.append(list(X[int(d.argmin())]) if d.min() < 0.05 else None)
-                pts[0] = None   # (one with no depth)
-                self.payload = json.dumps({"version": 1, "width": W, "height": H, "K": K, "points": pts, "grid": floor_grid()}).encode()
-                sub = seen["wf"]["4"]["inputs"]["filename_prefix"].rpartition("/")[0] + "/run-abc"
-                f = out_dir / sub / "moge_00001_.json"
-                f.parent.mkdir(parents=True, exist_ok=True)
-                f.write_bytes(self.payload)
-                seen["out"] = f
-                return {pid: {"status": {"status_str": "success"},
-                              "outputs": {"4": {"files": [{"filename": f.name, "subfolder": sub, "type": "output"}]}}}}
+                wf, outs, self.payload = seen["wf"], {}, {}
+                for i, f in enumerate(frames):
+                    c = cams[f]
+                    pts = []
+                    for x, y in json.loads(wf[f"x{i}"]["inputs"]["points"]):   # the scene point that sits there
+                        d = np.where(V[:, f], np.hypot(T[:, f, 0] - x, T[:, f, 1] - y), np.inf)
+                        pts.append(list((XA[int(d.argmin())] - c[:, 3]) @ c[:, :3]) if d.min() < 0.05 else None)
+                    if i == 0:
+                        pts[0] = None   # (one with no depth)
+                    name = f"moge_{i:05d}_.json"
+                    grid = ground if i == 0 else {"cols": 96, "rows": rows, "points": [None] * (96 * rows)}   # (later: no depth grid)
+                    self.payload[name] = json.dumps({"version": 1, "width": W, "height": H, "K": K, "points": pts, "grid": grid}).encode()
+                    sub = wf[f"x{i}"]["inputs"]["filename_prefix"].rpartition("/")[0] + "/run-abc"
+                    p = out_dir / sub / name
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_bytes(self.payload[name])
+                    seen["outs"].append(p)
+                    outs[f"x{i}"] = {"files": [{"filename": name, "subfolder": sub, "type": "output"}]}
+                return {pid: {"status": {"status_str": "success"}, "outputs": outs}}
 
             async def view(self, filename, subfolder="", type_="output"):
-                return self.payload, "application/json"
+                return self.payload[filename], "application/json"
 
             async def forget(self, pid):
                 seen["forgot"] = pid
@@ -374,30 +459,36 @@ class EndToEnd(unittest.TestCase):
                     "_full": {"T": T.astype(np.float32), "V": V, "tw": W, "th": H}}
 
         with mock.patch.object(tracking, "comfy", Fake()), mock.patch.object(tracking, "analyse", side_effect=fake_analyse), \
-                mock.patch.object(config, "COMFY_OUTPUT_DIR", out_dir), mock.patch.object(config, "COMFY_INPUT_DIR", in_dir):
+                mock.patch.object(config, "COMFY_OUTPUT_DIR", out_dir), mock.patch.object(config, "COMFY_INPUT_DIR", in_dir), \
+                mock.patch.object(config, "DATA_DIR", td):
             out_dir.mkdir(parents=True)
             r = asyncio.run(solve.solve(src, method="pnp", tracker="klt"))
-        self.assertEqual(seen["wf"]["2"]["inputs"]["model_name"], "moge_3_vitl_fp16.safetensors")
+        self.assertGreater(len(frames), 1)
+        self.assertEqual(seen["wf"]["m"]["inputs"]["model_name"], "moge_3_vitl_fp16.safetensors")
         self.assertEqual(seen["png"], b"\x89PNG\r\n\x1a\n")
-        self.assertEqual(len(json.loads(seen["wf"]["4"]["inputs"]["points"])), 150)
-        # ComfyUI keeps nothing: the frame, the answer, its run folder and the history entry
-        self.assertFalse(seen["input"].exists())
-        self.assertFalse(seen["out"].exists() or seen["out"].parent.exists())
+        self.assertEqual(len(json.loads(seen["wf"]["x0"]["inputs"]["points"])), int(V[:, 0].sum()))
+        # ComfyUI keeps nothing: the frames, the answers, their run folder and the history entry
+        self.assertEqual(len(seen["inputs"]), len(frames))
+        self.assertFalse(any(p.exists() for p in seen["inputs"] + seen["outs"]) or seen["outs"][0].parent.exists())
         self.assertEqual(seen.get("forgot"), "p1")
+        self.assertFalse(list((td / "tmp" / "track").iterdir()))
 
         json.dumps(r)
         self.assertEqual((r["v"], r["method"], r["n"], r["size"], r["metric"]), (1, "pnp", N, [W, H], True))
         self.assertEqual(len(r["cams"]), N)
         self.assertEqual(r["cams"][0], [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0])
-        last = np.array(r["cams"][-1]).reshape(3, 4)
-        self.assertLess(np.linalg.norm(last[:, 3] - cams[-1][:, 3]), 0.02)
+        for f in (25, N - 1):
+            got = np.array(r["cams"][f]).reshape(3, 4)
+            self.assertLess(np.linalg.norm(got[:, 3] - cams[f][:, 3]), 0.03, f)
         self.assertTrue(0 < len(r["pts"]) <= 400)
-        self.assertGreaterEqual(r["quality"]["used"], 149)   # (and the late ones, triangulated)
-        self.assertLess(r["quality"]["err"], 1)
-        np.testing.assert_allclose(r["floor"]["n"], [0, -1, 0], atol=0.02)
-        self.assertEqual(len(r["K"]), 4)
+        q = r["quality"]
+        self.assertEqual((q["lost"], q["anchors"]), (0, len(frames)))
+        self.assertLess(q["err"], 1)
+        self.assertIsNotNone(r["floor"])
+        self.assertAlmostEqual(q["drift"], np.median(np.linalg.norm(np.diff(cams[:, :, 3], axis=0), axis=1)) / r["floor"]["d"], delta=0.002)
+        self.assertTrue(0 < len(r["cloud"]) <= 4000 and all(len(p) == 6 for p in r["cloud"]))
+        self.assertLess(len(json.dumps(r["cloud"])), 150_000)
         self.assertGreaterEqual(r["cost"], 0)
-
 
     def test_da3(self):
         td = Path(tempfile.mkdtemp(prefix="deck-solve-"))

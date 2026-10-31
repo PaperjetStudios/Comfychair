@@ -4,12 +4,15 @@ TAPNext++); the depth comes from ComfyUI's core geometry nodes, read back throug
 
 method "pnp": MoGe gives the first frame's 3D points (metres) and lens; every later frame's camera is the
 pose that puts those points where the tracks saw them (OpenCV PnP with RANSAC, then Levenberg-Marquardt).
-Tracks rarely last a clip, so tracks that start later get 3D too: triangulated from two solved frames once
-the camera has moved enough, else put on frame 0's depth, else given their 3D neighbours' depth. Tracks the
+Tracks rarely last a clip, so tracks that start later get 3D too: from a few later MoGe anchor frames (picked
+where the tracks with 3D thin out, all run at once, fitted to the solve by a similarity on shared points or
+placed by their frame's camera), triangulated from two solved frames once the camera has moved enough, put
+on the latest anchor's depth, or, last, given their 3D neighbours' depth. Tracks the
 cameras don't agree with (water, a person) are dropped and the frames solved again; the positions are lightly
 smoothed. method "da3": Depth Anything 3 places the cameras of a few dozen evenly spaced frames together
-(multi-view) and gives the first view's depth (no real scale); every frame is then solved as above against
-that depth, DA3's interpolated camera standing in where a frame can't be solved.
+(multi-view) and gives each view's depth (no real scale); each track takes its position from the first view
+it's seen on, and every frame is then solved as above, DA3's interpolated camera standing in where a frame
+can't be solved. Both also give "cloud": the first frame's depth as coloured points.
 
 Coordinates: camera 0's frame, OpenCV axes (x right, y down, z forward). cams are camera-to-world 3x4 and
 cams[0] is the identity. Files: the first frame goes into ComfyUI's input folder and the cut clip into
@@ -35,6 +38,7 @@ DA3_GRID = 96        # columns of the depth grid the scene points and floor come
 MOGE_GRID = 96       # (also the depth later tracks are put on: _onto_anchor)
 SMOOTH_S = 0.04      # the Gaussian over the solved positions, in seconds
 MAX_PTS = 400
+MAX_CLOUD = 3600     # (about 130 KB of JSON)
 MIN_VIS = 6
 THR_K = 2.5          # RANSAC tolerance in analysis pixels (TRACK_W wide), at least 3 clip pixels
 TRI_GAP = 6          # a later track is triangulated once seen this many frames on...
@@ -42,6 +46,12 @@ TRI_ANGLE = 2.0      # ...and once its two rays part by this many degrees
 NEAR_N = 4           # a track nothing else places takes the depth of this many 3D neighbours...
 NEAR_R = 0.15        # ...within this share of the picture's longer side, if they agree within 30 %
 FLOOR_MIN = 50
+ANCHOR_COVER = 0.4   # a new MoGe anchor where under this share of the tracks seen have one...
+ANCHOR_EVERY = 3.0   # ...or this many seconds after the last, at the most
+ANCHOR_GAP = 0.25    # ...but not closer than this many seconds
+MAX_ANCHORS = 4      # (each is a MoGe pass of a few seconds)
+ALIGN_MIN = 12       # shared points a later anchor needs to be fitted by a similarity (else by its frame's pose)...
+ALIGN_SHARE = 0.5    # ...and over this share of them must agree with the fit, or the anchor is left out
 _geom = None
 
 
@@ -126,8 +136,9 @@ def _c2w(cv2, np, rvec, tvec):
     return np.concatenate([R.T, (-R.T @ t)[:, None]], axis=1)
 
 
-def _pnp_pass(cv2, np, T, V, Xw, have, skip, Km, kx, ky, thr, prior, grow, anchor=None):
-    """One run through the frames (see solve_pnp). Xw (Q, 3) / have (Q,) are updated with triangulated points."""
+def _pnp_pass(cv2, np, T, V, Xw, have, skip, Km, kx, ky, thr, prior, grow, anchor=None, anchors=()):
+    """One run through the frames (see solve_pnp). Xw (Q, 3) / have (Q,) are updated with the points the later
+    anchors, triangulation, the anchor's depth and the neighbours give."""
     Q, N = T.shape[:2]
     UV = to_clip(np, T, kx, ky)   # (Q, N, 2) clip px
     Kinv = np.linalg.inv(Km)
@@ -141,32 +152,56 @@ def _pnp_pass(cv2, np, T, V, Xw, have, skip, Km, kx, ky, thr, prior, grow, ancho
     first[V[:, 0]] = 0
     rvec, tvec = np.zeros((3, 1)), np.zeros((3, 1))
     fresh, lost = True, 0
-    for f in range(1, N):
+    later = {int(a["f"]): a for a in anchors if a["f"] > 0}
+    solved = [0]   # the solved frames, in order
+
+    def try_pnp(f, fresh, rvec, tvec):
         use = V[:, f] & have & ~skip
-        ok = False
-        if use.sum() >= MIN_VIS:
-            obj = np.ascontiguousarray(Xw[use])
-            img = np.ascontiguousarray(UV[use, f])
-            try:
-                if fresh:
-                    ok, r, t, inl = cv2.solvePnPRansac(obj, img, Km, None, flags=cv2.SOLVEPNP_SQPNP,
-                                                       reprojectionError=thr, iterationsCount=300, confidence=0.999)
-                else:
-                    ok, r, t, inl = cv2.solvePnPRansac(obj, img, Km, None, rvec=rvec.copy(), tvec=tvec.copy(), useExtrinsicGuess=True,
-                                                       flags=cv2.SOLVEPNP_ITERATIVE, reprojectionError=thr, iterationsCount=300, confidence=0.999)
-            except cv2.error:
-                ok = False
-            if ok and inl is not None and len(inl) >= MIN_VIS:
-                inl = inl.ravel()
-                r, t = cv2.solvePnPRefineLM(obj[inl], img[inl], Km, None, r, t)
-                ok = bool(np.isfinite(r).all() and np.isfinite(t).all())
+        if use.sum() < MIN_VIS:
+            return None
+        obj = np.ascontiguousarray(Xw[use])
+        img = np.ascontiguousarray(UV[use, f])
+        try:
+            if fresh:
+                ok, r, t, inl = cv2.solvePnPRansac(obj, img, Km, None, flags=cv2.SOLVEPNP_SQPNP,
+                                                   reprojectionError=thr, iterationsCount=300, confidence=0.999)
             else:
-                ok = False
-        if ok:
-            rvec, tvec, fresh = r, t, False
+                ok, r, t, inl = cv2.solvePnPRansac(obj, img, Km, None, rvec=rvec.copy(), tvec=tvec.copy(), useExtrinsicGuess=True,
+                                                   flags=cv2.SOLVEPNP_ITERATIVE, reprojectionError=thr, iterationsCount=300, confidence=0.999)
+        except cv2.error:
+            return None
+        if not ok or inl is None or len(inl) < MIN_VIS:
+            return None
+        inl = inl.ravel()
+        r, t = cv2.solvePnPRefineLM(obj[inl], img[inl], Km, None, r, t)
+        return (r, t) if np.isfinite(r).all() and np.isfinite(t).all() else None
+
+    def predicted(f):
+        """World-to-camera for frame f from the last solved frames, moving on at their speed."""
+        a = solved[-1]
+        R, C = cams[a][:, :3], cams[a][:, 3]
+        if len(solved) > 1:
+            b = solved[-2]
+            C = C + (cams[a][:, 3] - cams[b][:, 3]) * (f - a) / (a - b)
+        return R.T, -R.T @ C
+
+    for f in range(1, N):
+        got = try_pnp(f, fresh, rvec, tvec)
+        if f in later:   # a later MoGe anchor: its points into the solve's frame, placed by this frame's camera (solved,
+            # or foreseen from the last ones) unless enough are shared for a similarity; and its depth for the ray march
+            pose = (cv2.Rodrigues(got[0])[0], got[1].reshape(3)) if got else predicted(f)
+            sim = _place_anchor(np, later[f], Xw, have, skip, pose)
+            if sim is not None and later[f].get("grid") is not None:
+                anchor = {**later[f]["grid"], "sim": sim}
+            if sim is not None:
+                got = try_pnp(f, fresh, rvec, tvec) or got
+        if got is not None:
+            rvec, tvec = got
+            fresh = False
             cams[f] = _c2w(cv2, np, rvec, tvec)
             good[f] = True
             w2c[f] = (cv2.Rodrigues(rvec)[0], tvec.reshape(3))
+            solved.append(f)
         else:
             lost += 1
             fresh = True
@@ -197,7 +232,7 @@ def _pnp_pass(cv2, np, T, V, Xw, have, skip, Km, kx, ky, thr, prior, grow, ancho
             keep = (ca[:, 2] > 0) & (cf[:, 2] > 0) & (cosang < math.cos(math.radians(TRI_ANGLE))) & (ea < thr) & (ef < thr)
             Xw[qs[keep]] = Xt[keep]
             have[qs[keep]] = True
-        # the ones that still don't part (a camera on a tripod, or turning on the spot): onto frame 0's depth
+        # the ones that still don't part (a camera on a tripod, or turning on the spot): onto the latest anchor's depth
         if anchor is not None:
             rest = cand[~have[cand]]
             if len(rest):
@@ -223,6 +258,106 @@ def _pnp_pass(cv2, np, T, V, Xw, have, skip, Km, kx, ky, thr, prior, grow, ancho
     return cams, good, lost
 
 
+def choose_anchors(V, fps, cover=ANCHOR_COVER, every=ANCHOR_EVERY, gap=ANCHOR_GAP, most=MAX_ANCHORS):
+    """The frames MoGe should give depth for, from the tracks' visibility alone (V (Q, N)): frame 0, then a frame
+    wherever under `cover` of the tracks seen there were seen on an anchor already, or `every` seconds after
+    the last one; never closer than `gap` seconds. With more than `most`, the ones nearest to `most` even
+    steps through the clip (so a clip whose tracks churn early still has anchors at its end)."""
+    import numpy as np
+    V = np.asarray(V, bool)
+    N = V.shape[1]
+    covered = V[:, 0].copy()
+    out = [0]
+    for f in range(1, N):
+        if f - out[-1] < gap * fps:
+            continue
+        seen = V[:, f]
+        n = int(seen.sum())
+        if n and ((seen & covered).sum() < cover * n or f - out[-1] >= every * fps):
+            out.append(f)
+            covered |= seen
+    if len(out) <= most:
+        return out
+    a = np.array(out)
+    pick = [0]
+    for target in np.linspace(0, N - 1, most)[1:]:
+        cand = [x for x in a if x not in pick]
+        pick.append(int(min(cand, key=lambda x: abs(x - target))))
+    return sorted(pick)
+
+
+def similarity(A, B, iters=200, tol=None, seed=0):
+    """The similarity B ≈ s·R·A + t (A, B (n, 3)) by RANSAC over Umeyama fits: (s, R, t, inliers) or None.
+    tol: inlier distance, default 5 % of B's median distance from its centre."""
+    import numpy as np
+    A, B = np.asarray(A, np.float64), np.asarray(B, np.float64)
+    n = len(A)
+    if n < 3:
+        return None
+
+    def fit(a, b):
+        ma, mb = a.mean(0), b.mean(0)
+        a0, b0 = a - ma, b - mb
+        U, S, Vt = np.linalg.svd(b0.T @ a0 / len(a))
+        D = np.diag([1, 1, np.sign(np.linalg.det(U @ Vt)) or 1])
+        R = U @ D @ Vt
+        va = (a0 ** 2).sum() / len(a)
+        if va <= 0:
+            return None
+        sc = float(np.trace(np.diag(S) @ D) / va)
+        return sc, R, mb - sc * R @ ma
+
+    if tol is None:
+        tol = 0.05 * float(np.median(np.linalg.norm(B - B.mean(0), axis=1))) or 1e-6
+    rng = np.random.default_rng(seed)
+    best = None
+    for _ in range(iters):
+        pick = rng.choice(n, 3, replace=False)
+        m = fit(A[pick], B[pick])
+        if m is None or m[0] <= 0:
+            continue
+        inl = np.linalg.norm(m[0] * A @ m[1].T + m[2] - B, axis=1) < tol
+        if best is None or inl.sum() > best.sum():
+            best = inl
+    if best is None or best.sum() < 3:
+        return None
+    m = fit(A[best], B[best])
+    if m is None:
+        return None
+    inl = np.linalg.norm(m[0] * A @ m[1].T + m[2] - B, axis=1) < tol
+    return (*fit(A[inl], B[inl]), inl) if inl.sum() >= 3 else (*m, best)
+
+
+def _place_anchor(np, a, Xw, have, skip, pose):
+    """Put a later anchor's points ({"q" tracks, "Xc" (n, 3) in its camera's frame, NaN for none}) into the
+    world: fitted by a similarity on the tracks that already have a position (over ALIGN_SHARE of them must
+    agree, else the anchor is left out), or with almost none of those, by its frame's camera (pose:
+    world-to-camera (R, t)) at MoGe's scale.
+    Tracks with no position yet take theirs. Returns (s, R, t), anchor camera to world, or None."""
+    q, Xc = np.asarray(a["q"]), np.asarray(a["Xc"], np.float64)
+    ok = np.isfinite(Xc).all(axis=1) & (Xc[:, 2] > 0) & ~skip[q]
+    if ok.sum() < MIN_VIS:
+        return None
+    shared = ok & have[q]
+    sim = None
+    if shared.sum() >= ALIGN_MIN:
+        m = similarity(Xc[shared], Xw[q[shared]])
+        if m is not None and m[3].sum() >= max(ALIGN_MIN, ALIGN_SHARE * shared.sum()):
+            sim = m[:3]
+    if sim is None and shared.sum() < MIN_VIS:
+        # (nothing to fit it to: the solve has lost its points here, so the anchor restarts it from this frame's
+        # camera, at MoGe's scale)
+        R, t = pose
+        sim = (1.0, R.T, -R.T @ t)
+    if sim is None:   # (shared points it disagrees with: the anchor's depth doesn't match the solve's; left out)
+        return None
+    sc, R, t = sim
+    new = ok & ~have[q]   # (tracks that have a position keep it: replacing it would contradict the frames so far)
+    Xw[q[new]] = sc * Xc[new] @ R.T + t
+    have[q[new]] = True
+    return sim
+
+
 def _grid_z(np, Z, gx, gy):
     """Bilinear samples of a depth grid Z (rows, cols) at grid positions; NaN outside or next to a hole."""
     rows, cols = Z.shape
@@ -235,22 +370,25 @@ def _grid_z(np, Z, gx, gy):
 
 
 def _onto_anchor(np, anchor, Rf, tf, uv, Kinv, steps=96):
-    """3D points for pixels uv seen by a camera (world-to-camera Rf, tf): where each ray first goes behind
-    frame 0's depth (anchor: {"Z" (rows, cols) z-depth grid, "K" [fx, fy, cx, cy] and "size" (w, h) of the
-    picture it covers}). NaN rows where the ray never meets it inside frame 0's picture."""
+    """3D points for pixels uv seen by a camera (world-to-camera Rf, tf): where each ray first goes behind an
+    anchor frame's depth (anchor: {"Z" (rows, cols) z-depth grid, "K" [fx, fy, cx, cy] and "size" (w, h) of the
+    picture it covers, "sim" (s, R, t): its camera's frame to the world, X = s·R·x + t; none for frame 0}).
+    NaN rows where the ray never meets it inside that picture."""
     Z, (fx, fy, cx, cy), (w, h) = anchor["Z"], anchor["K"], anchor["size"]
+    sa, Ra, ta = anchor.get("sim") or (1.0, np.eye(3), np.zeros(3))   # the anchor camera's frame to the world's
     rows, cols = Z.shape
-    C = -Rf.T @ tf                                            # the camera's centre, in world (camera 0) axes
+    C = -Rf.T @ tf                                            # the camera's centre, in world axes
     d = (np.c_[uv, np.ones(len(uv))] @ Kinv.T) @ Rf          # rays in world axes (Rᵀ·ray, row by row)
-    zmed = float(np.nanmedian(Z))
+    zmed = float(np.nanmedian(Z)) * sa
     s = np.geomspace(0.05 * zmed, 20 * zmed, steps)           # distances along the ray (z-units of the camera)
-    P = C[None, None, :] + s[None, :, None] * d[:, None, :]  # (n, steps, 3) points in camera 0's frame
+    P = C[None, None, :] + s[None, :, None] * d[:, None, :]  # (n, steps, 3) points in the world
+    Pa = ((P - ta) @ Ra) / sa                                 # ...and in the anchor camera's frame
     with np.errstate(invalid="ignore", divide="ignore"):
-        u = fx * P[..., 0] / P[..., 2] + cx
-        v = fy * P[..., 1] / P[..., 2] + cy
+        u = fx * Pa[..., 0] / Pa[..., 2] + cx
+        v = fy * Pa[..., 1] / Pa[..., 2] + cy
         zs = _grid_z(np, Z, (u + 0.5) * cols / w - 0.5, (v + 0.5) * rows / h - 0.5)
-        diff = P[..., 2] - zs                                 # < 0: in front of the surface; > 0: behind it
-    valid = np.isfinite(diff) & (P[..., 2] > 0)
+        diff = Pa[..., 2] - zs                                # < 0: in front of the surface; > 0: behind it
+    valid = np.isfinite(diff) & (Pa[..., 2] > 0)
     out = np.full((len(uv), 3), np.nan)
     for i in range(len(uv)):
         dd, ok = diff[i], valid[i]
@@ -263,7 +401,7 @@ def _onto_anchor(np, anchor, Rf, tf, uv, Kinv, steps=96):
     return out
 
 
-def solve_pnp(T, V, X, ids, K, k_scale, prior=None, grow=True, thr=None, anchor=None, smooth=0.0):
+def solve_pnp(T, V, X, ids, K, k_scale, prior=None, grow=True, thr=None, anchor=None, smooth=0.0, anchors=()):
     """Camera-to-world 3x4 for every frame from tracks T (Q, N, 2, analysis px) seen where V (Q, N), of which
     tracks ids have world positions X (M, 3). K [fx, fy, cx, cy] in clip pixels; k_scale: analysis to clip
     pixels (a number or (kx, ky)). Frame 0 is the identity. A frame with under 6 points seen, or no solve,
@@ -271,7 +409,8 @@ def solve_pnp(T, V, X, ids, K, k_scale, prior=None, grow=True, thr=None, anchor=
     Tracks that appear later are triangulated from two solved frames (grow), and tracks the cameras don't
     agree with (a wave, a person walking: over 2x the threshold on the median frame) are dropped and the
     frames solved again (kept only if that loses no more frames). With anchor (frame 0's depth grid, see
-    _onto_anchor), tracks that never part enough to triangulate are put on frame 0's depth instead. smooth: a
+    _onto_anchor), tracks that never part enough to triangulate are put on frame 0's depth instead; anchors:
+    later frames' MoGe points ({"f", "q", "Xc", "grid"}, see _place_anchor) join where they're reached. smooth: a
     Gaussian over the positions (frames, sigma), for the jitter a few far points leave.
     Returns (cams (N, 3, 4), {"used", "lost", "ids", "X"}): ids/X the points used."""
     cv2, np = tracking._libs()
@@ -286,7 +425,7 @@ def solve_pnp(T, V, X, ids, K, k_scale, prior=None, grow=True, thr=None, anchor=
     for rnd in range(3):
         Xw, have = np.full((Q, 3), np.nan), np.zeros(Q, bool)
         Xw[ids], have[ids] = np.asarray(X, np.float64), True
-        cams, good, lost = _pnp_pass(cv2, np, T, V, Xw, have, skip.copy(), Km, kx, ky, thr, prior, grow, anchor)
+        cams, good, lost = _pnp_pass(cv2, np, T, V, Xw, have, skip.copy(), Km, kx, ky, thr, prior, grow, anchor, anchors)
         if best is not None and lost > best[3]:   # (the dropped tracks were holding frames up: keep the last round)
             break
         best = (cams, Xw, have & ~skip, lost, good)
@@ -473,7 +612,8 @@ def _models(oi, node):
 
 
 async def _run(wf, node_id, what, progress, cancel):
-    """Queue a workflow, wait for it, read the JSON node_id saved, and leave nothing in ComfyUI."""
+    """Queue a workflow, wait for it, read the JSON node_id saved (a list of ids: {id: JSON} for each), and leave
+    nothing in ComfyUI."""
     comfy = tracking.comfy
     pid = (await comfy.queue(wf, preview="off"))["prompt_id"]
     t0 = time.time()
@@ -496,14 +636,17 @@ async def _run(wf, node_id, what, progress, cancel):
             msg = next((m[1].get("exception_message") for m in st.get("messages", [])
                         if isinstance(m, list) and len(m) == 2 and m[0] == "execution_error"), None)
             raise ValueError(f"{what} failed: {(msg or 'see ComfyUI').strip()}")
-        files = entry.get("outputs", {}).get(node_id, {}).get("files") or []
-        if not files:
-            raise ValueError(f"{what} gave nothing back")
+        out = {}
         try:
-            data, _ = await comfy.view(files[0]["filename"], files[0].get("subfolder", ""), files[0].get("type", "output"))
-        finally:
-            storage.drop_comfy_read(files)   # (ComfyUI keeps nothing: storage.py)
-        return json.loads(data)
+            for nid in ([node_id] if isinstance(node_id, str) else node_id):
+                files = entry.get("outputs", {}).get(nid, {}).get("files") or []
+                if not files:
+                    raise ValueError(f"{what} gave nothing back")
+                data, _ = await comfy.view(files[0]["filename"], files[0].get("subfolder", ""), files[0].get("type", "output"))
+                out[nid] = json.loads(data)
+        finally:   # (ComfyUI keeps nothing: storage.py)
+            storage.drop_comfy_read([f for o in entry.get("outputs", {}).values() for f in (o.get("files") or [])])
+        return out[node_id] if isinstance(node_id, str) else out
     finally:
         try:
             await comfy.forget(pid)
@@ -531,23 +674,38 @@ async def _pnp(path, start, W, H, T, V, kx, ky, oi, progress, cancel, smooth=0.0
     q0 = np.where(V[:, 0])[0]
     if len(q0) < MIN_VIS:
         raise ValueError("Too few points were tracked in the first frame to solve the camera")
-    p0 = to_clip(np, T[q0, 0], kx, ky)
-    png = await _ffmpeg(["ffmpeg", "-v", "error", "-ss", f"{start:.3f}", "-i", str(path), "-an", "-frames:v", "1",
-                         "-vf", f"scale={W}:{H}", "-f", "image2pipe", "-vcodec", "png", "-"], "read the first frame")
-    name = await tracking.comfy.upload_image(png, f"solve_{uuid.uuid4().hex[:12]}.png", config.COMFY_INPUT_SUBFOLDER)
+    fps = smooth / SMOOTH_S if smooth else 24.0
+    frames = choose_anchors(V, fps)
+    qs = [np.where(V[:, f])[0] for f in frames]
+    UV = to_clip(np, T, kx, ky)
+    # the anchor frames as PNGs into ComfyUI's input folder (gone again once read: CLAUDE.md), one MoGe chain
+    # each in one run (the model loads once; Deck MoGe Export as it is reads the first picture of a batch)
+    tmp = config.DATA_DIR / "tmp" / "track" / f"solve_{uuid.uuid4().hex[:12]}"
+    tmp.mkdir(parents=True, exist_ok=True)
+    names = []
     try:
-        wf = {
-            "1": {"class_type": "LoadImage", "inputs": {"image": name}},
-            "2": {"class_type": "LoadMoGeModel", "inputs": {"model_name": model}},
-            "3": {"class_type": "MoGeInference", "inputs": {"moge_model": ["2", 0], "image": ["1", 0], "resolution_level": 9,
-                  "fov_x_degrees": 0.0, "batch_size": 1, "force_projection": True, "apply_mask": True, "refine_steps": 3}},
-            "4": {"class_type": MOGE_NODE, "inputs": {"moge_geometry": ["3", 0], "points": json.dumps([[round(float(x), 2), round(float(y), 2)] for x, y in p0]),
-                  "grid": MOGE_GRID, "filename_prefix": _prefix("moge")}},
-        }
-        ex = await _run(wf, "4", "MoGe", progress, cancel)
+        sel = "+".join(f"eq(n,{f})" for f in frames)
+        await _ffmpeg(["ffmpeg", "-v", "error", "-y", "-ss", f"{start:.3f}", "-i", str(path), "-an", "-frames:v", str(len(frames)),
+                       "-vf", f"select='{sel}',scale={W}:{H}", "-fps_mode", "passthrough", str(tmp / "%03d.png")], "read the anchor frames")
+        pngs = sorted(tmp.glob("*.png"))
+        if len(pngs) != len(frames):
+            raise ValueError(f"Read {len(pngs)} of the {len(frames)} anchor frames")
+        img0 = cv2.imread(str(pngs[0]), cv2.IMREAD_COLOR)   # (the cloud's colours)
+        for p in pngs:
+            names.append(await tracking.comfy.upload_image(p.read_bytes(), f"solve_{uuid.uuid4().hex[:12]}.png", config.COMFY_INPUT_SUBFOLDER))
+        wf = {"m": {"class_type": "LoadMoGeModel", "inputs": {"model_name": model}}}
+        for i, (name, q) in enumerate(zip(names, qs)):
+            wf[f"i{i}"] = {"class_type": "LoadImage", "inputs": {"image": name}}
+            wf[f"g{i}"] = {"class_type": "MoGeInference", "inputs": {"moge_model": ["m", 0], "image": [f"i{i}", 0], "resolution_level": 9,
+                           "fov_x_degrees": 0.0, "batch_size": 1, "force_projection": True, "apply_mask": True, "refine_steps": 3}}
+            wf[f"x{i}"] = {"class_type": MOGE_NODE, "inputs": {"moge_geometry": [f"g{i}", 0], "grid": MOGE_GRID, "filename_prefix": _prefix("moge"),
+                           "points": json.dumps([[round(float(x), 2), round(float(y), 2)] for x, y in UV[q, frames[i]]])}}
+        exs = await _run(wf, [f"x{i}" for i in range(len(frames))], "MoGe", progress, cancel)
     finally:
-        storage.remove([p] if (p := storage.comfy_input(name)) else [])   # (the frame goes once it's been read: CLAUDE.md)
-    ids, X = lift(p0, ex)
+        storage.remove([p for n in names if (p := storage.comfy_input(n))])   # (the frames go once read: CLAUDE.md)
+        storage.remove([tmp])
+    ex = exs["x0"]
+    ids, X = lift(UV[q0, 0], ex)
     if len(ids) < MIN_VIS:
         raise ValueError("MoGe found depth for too few of the tracked points")
     ids = q0[ids]
@@ -556,11 +714,80 @@ async def _pnp(path, start, W, H, T, V, kx, ky, oi, progress, cancel, smooth=0.0
     if ex.get("width") and ex["width"] != W:
         s = W / ex["width"]
         K = [K[0] * s, K[1] * H / ex["height"], (K[2] + 0.5) * s - 0.5, (K[3] + 0.5) * H / ex["height"] - 0.5]
+
+    def grid(e):
+        gr = e["grid"]
+        Z = np.array([np.nan if p is None else p[2] for p in gr["points"]], np.float64).reshape(gr["rows"], gr["cols"])
+        if not np.isfinite(Z).any():
+            return None
+        return {"Z": Z, "K": [float(v) for v in e["K"]], "size": (e.get("width") or W, e.get("height") or H)}
+
+    later = []
+    for i in range(1, len(frames)):
+        e = exs[f"x{i}"]
+        Xc = np.array([[np.nan] * 3 if p is None else p for p in e["points"]], np.float64).reshape(-1, 3)
+        later.append({"f": frames[i], "q": qs[i], "Xc": Xc, "grid": grid(e)})
+    cams, q = await asyncio.to_thread(lambda: solve_pnp(T, V, X, ids, K, (kx, ky), anchor=grid(ex), smooth=smooth, anchors=later))
     gr = ex["grid"]
-    Z = np.array([np.nan if p is None else p[2] for p in gr["points"]], np.float64).reshape(gr["rows"], gr["cols"])
-    anchor = {"Z": Z, "K": [float(v) for v in ex["K"]], "size": (ex.get("width") or W, ex.get("height") or H)}
-    cams, q = await asyncio.to_thread(lambda: solve_pnp(T, V, X, ids, K, (kx, ky), anchor=anchor, smooth=smooth))
-    return {"K": K, "cams": cams, "X": q["X"], "ids": q["ids"], "floor": floor_from_grid(ex["grid"]), "metric": True, "lost": q["lost"]}
+    P = np.array([[np.nan] * 3 if p is None else p for p in gr["points"]], np.float64).reshape(gr["rows"], gr["cols"], 3)
+    pc = cloud(np, P, img0[..., ::-1]) if img0 is not None else []
+    return {"K": K, "cams": cams, "X": q["X"], "ids": q["ids"], "floor": floor_from_grid(ex["grid"]), "metric": True,
+            "lost": q["lost"], "anchors": len(frames), "cloud": pc}
+
+
+def da3_lift(T, V, kx, ky, K, W, H, idx, views, grids):
+    """3D positions (view 0's frame) for the tracks, from DA3's depth: each track from the first sampled view it's
+    seen on with depth there (grids[j]: view j's z-depth grid over the picture; fewer grids than views: only
+    those), unprojected with K (clip pixels) and moved by that view's camera (views (S, 3, 4) camera-to-world,
+    relative to view 0). Returns (ids, X (M, 3))."""
+    _, np = tracking._libs()
+    UV = to_clip(np, T, kx, ky)
+    have = np.zeros(T.shape[0], bool)
+    ids, X = [], []
+    for j, G in enumerate(grids):
+        f = int(idx[j])
+        q = np.where(V[:, f] & ~have)[0]
+        if not len(q):
+            continue
+        rows, cols = G.shape
+        u, v = UV[q, f, 0], UV[q, f, 1]
+        z = _grid_z(np, G, (u + 0.5) * cols / W - 0.5, (v + 0.5) * rows / H - 0.5)
+        ok = np.isfinite(z) & (z > 0)
+        Xc = np.stack([(u - K[2]) / K[0] * z, (v - K[3]) / K[1] * z, z], axis=1)[ok]
+        R, t = views[j][:, :3], views[j][:, 3]
+        ids.extend(q[ok].tolist())
+        X.extend((Xc @ R.T + t).tolist())
+        have[q[ok]] = True
+    return np.array(ids, np.int64), np.array(X, np.float64).reshape(-1, 3)
+
+
+def cloud(np, P, img, most=MAX_CLOUD):
+    """The scene as coloured points: P (rows, cols, 3) positions (NaN: none) on a regular grid over a picture
+    img (h, w, 3 RGB uint8), coloured from it at the cells' centres; thinned evenly to at most `most`.
+    [[x, y, z, r, g, b]...], 3 dp."""
+    rows, cols = P.shape[:2]
+    h, w = img.shape[:2]
+    r, c = np.mgrid[0:rows, 0:cols]
+    ok = np.isfinite(P).all(axis=2)
+    r, c = r[ok], c[ok]
+    if len(r) > most:
+        pick = np.linspace(0, len(r) - 1, most).round().astype(int)
+        r, c = r[pick], c[pick]
+    px = np.clip(np.round((c + 0.5) * w / cols - 0.5).astype(int), 0, w - 1)
+    py = np.clip(np.round((r + 0.5) * h / rows - 0.5).astype(int), 0, h - 1)
+    rgb = img[py, px]
+    return [[round(float(a), 3) for a in P[i, j]] + [int(x) for x in col] for i, j, col in zip(r, c, rgb)]
+
+
+def drift(cams, floor, X):
+    """The camera's median step per frame over the floor height (the median point depth with no floor), so a
+    number that reads alike for metric and unscaled solves: 0.02 is 2 % of its height a frame."""
+    _, np = tracking._libs()
+    if len(cams) < 2:
+        return 0.0
+    step = float(np.median(np.linalg.norm(np.diff(np.asarray(cams)[:, :, 3], axis=0), axis=1)))
+    ref = floor["d"] if floor else (float(np.median(np.asarray(X)[:, 2])) if len(X) else 0.0)
+    return round(step / ref, 5) if ref > 0 else None
 
 
 def _da3_size(W, H):
@@ -593,12 +820,15 @@ async def _da3(path, start, W, H, T, V, kx, ky, views, model, oi, progress, canc
                   "filename_prefix": _prefix("da3")}},
         }
         ex = await _run(wf, "4", "Depth Anything 3", progress, cancel)
+        png = await _ffmpeg(["ffmpeg", "-v", "error", "-i", str(clip), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"],
+                            "read the first view")   # (the cloud's colours: what DA3 saw)
     finally:
         clip.unlink(missing_ok=True)
     S = int(ex["views"])
     if S != len(idx):
         raise ValueError(f"Depth Anything 3 saw {S} views, not the {len(idx)} it was given")
-    cams = interp_cams(idx, relative_to_first(np.array(ex["cams"], np.float64).reshape(S, 3, 4)), N)
+    views = relative_to_first(np.array(ex["cams"], np.float64).reshape(S, 3, 4))
+    cams = interp_cams(idx, views, N)
     # one lens for the clip (no zoom): the views' median, from the views' pixels to the clip's
     wi, hi = ex["width"], ex["height"]
     # DA3 guesses the two fields of view apart and on a portrait clip they disagree (fx 3401, fy 4036 on a 4K
@@ -611,16 +841,9 @@ async def _da3(path, start, W, H, T, V, kx, ky, views, model, oi, progress, canc
     dg = {**ex["depth"], "width": wi, "height": hi}
     cols, rows = dg["cols"], dg["rows"]
     D = np.array([np.nan if v is None else v for v in dg["values"]], np.float64).reshape(rows, cols)
-    ok = np.isfinite(D)
-    q0 = np.where(V[:, 0])[0]
-    uv = to_clip(np, T[q0, 0], kx, ky)
-    ids, X = [], []
-    for q, (u, v) in zip(q0, uv):
-        z = g.bilinear(D, ok, (u + 0.5) * cols / W - 0.5, (v + 0.5) * rows / H - 0.5)
-        if z is None or not z > 0:
-            continue
-        z = float(z)
-        ids.append(q); X.append([(u - K[2]) / K[0] * z, (v - K[3]) / K[1] * z, z])
+    grids = [D] + [np.array([np.nan if v is None else v for v in d["values"]], np.float64).reshape(d["rows"], d["cols"])
+                   for d in (ex.get("depths") or [])[1:]]   # (version 2: every view's depth; else view 0 only)
+    ids, X = da3_lift(T, V, kx, ky, K, W, H, idx, views, grids)
     if len(ids) < MIN_VIS:
         raise ValueError("Depth Anything 3 found depth for too few of the tracked points")
     floor = floor_from_grid(grid_xyz(dg, [float(v) for v in Ki]))
@@ -630,7 +853,12 @@ async def _da3(path, start, W, H, T, V, kx, ky, views, model, oi, progress, canc
     anchor = {"Z": D, "K": [float(v) for v in Ki], "size": (wi, hi)}
     cams, q = await asyncio.to_thread(lambda: solve_pnp(T, V, np.array(X), np.array(ids, np.int64), K, (kx, ky), prior=cams,
                                                         anchor=anchor, smooth=smooth))
-    return {"K": K, "cams": cams, "X": q["X"], "ids": q["ids"], "floor": floor, "metric": False, "lost": q["lost"]}
+    gp = grid_xyz(dg, [float(v) for v in Ki])
+    P = np.array([[np.nan] * 3 if p is None else p for p in gp["points"]], np.float64).reshape(gp["rows"], gp["cols"], 3)
+    img = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
+    pc = cloud(np, P, img[..., ::-1]) if img is not None else []
+    return {"K": K, "cams": cams, "X": q["X"], "ids": q["ids"], "floor": floor, "metric": False, "lost": q["lost"],
+            "anchors": len(grids), "cloud": pc}
 
 
 async def solve(path, start=0.0, end=None, region=None, exclude=None, method="pnp", tracker="klt", views=32,
@@ -691,7 +919,9 @@ async def solve(path, start=0.0, end=None, region=None, exclude=None, method="pn
            "pts": [[round(float(v), 4) for v in X[i]] for i in pick],
            "floor": {"n": [round(v, 5) for v in fl["n"]], "d": round(fl["d"], 5)} if fl else None,
            "metric": s["metric"],
-           "quality": {"used": int(len(s["ids"])), "err": None if err is None else round(err, 3), "lost": int(s["lost"])},
+           "quality": {"used": int(len(s["ids"])), "err": None if err is None else round(err, 3), "lost": int(s["lost"]),
+                       "drift": drift(s["cams"], fl, X), "anchors": int(s.get("anchors", 1))},
+           "cloud": s.get("cloud") or [],
            "cost": round(time.time() - t_start, 2)}
     if progress:
         progress(1.0)
