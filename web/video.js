@@ -3,7 +3,7 @@ import {
   field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, toggle, textArea, pctFmt, colorField, sizeSelect, canvasFont, icon,
 } from './ui.js';
 import { S, fmtT, inputUrl, thumbUrl } from './core.js';
-import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, soundToSoundTab, uploadImage, uploadMedia } from './media.js';
+import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, soundToSoundTab, uploadImage, uploadMedia, withMediaDelete } from './media.js';
 import { openGeneration } from './run.js';
 import { TabSet } from './tabs.js';
 import { clipKeyTimes, clipKeys, clipSoundFields, durationOf, keyJumps, timeline, wavePeaks } from './timeline.js';
@@ -910,7 +910,7 @@ function addMediaFiles() {
     help('Music, voice-overs, or videos and images from elsewhere.', 'grow'),
     button('Done', closeSheet)], async () => {
     const list = await api('/api/media');
-    return list.length ? list.map((m) => addCard(m, m.label, media(m))) : placeholder('No files yet. Upload music, a voice-over or a video.');
+    return list.length ? list.map((m) => withMediaDelete(addCard(m, m.label, media(m)), m)) : placeholder('No files yet. Upload music, a voice-over or a video.');
   });
 }
 

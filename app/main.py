@@ -1018,6 +1018,8 @@ async def delete_media(name: str):
     path = config.MEDIA_DIR / Path(name).name
     if not path.is_file():
         raise HTTPException(404, "That file is gone")
+    if (user := storage.media_used(path.name)):
+        raise HTTPException(409, f"Project “{user}” uses this file: remove it there first")
     path.unlink()
     storage.drop_caches(path.name, path.resolve())
     return {"ok": True}

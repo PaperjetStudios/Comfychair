@@ -198,6 +198,33 @@ class Storage(unittest.TestCase):
         self.assertFalse(any(p.exists() for p in listed))
         self.assertTrue(sole.exists() and fresh.exists() and sample.exists() and ours.exists())
 
+    def test_sweep_takes_playable_copies_of_gone_media_only(self):
+        keep_media = touch(config.MEDIA_DIR / "aaaa1111_keep.mov")
+        keep = touch(config.PLAYABLE_DIR / f"{storage.tag(keep_media.name)}-play.mp4")
+        orphan = touch(config.PLAYABLE_DIR / f"{storage.tag('bbbb2222_gone.mov')}-play.mp4")
+        listed = {Path(i["path"]) for i in storage.sweep()["items"]}
+        self.assertIn(orphan, listed)
+        self.assertNotIn(keep, listed)
+        storage.sweep(do=True)
+        self.assertFalse(orphan.exists())
+        self.assertTrue(keep.exists() and keep_media.exists())
+
+    def test_media_in_use_is_refused(self):
+        f = touch(config.MEDIA_DIR / "cccc3333_clip.mp4")
+        with TestClient(main.app) as c:
+            self.assertIsNone(storage.media_used(f.name))
+            tabs = config.PROJECTS_DIR / "Proj" / ".deck" / "video-tabs"
+            tabs.mkdir(parents=True)
+            (tabs / "1.json").write_text('{"items":[{"src":{"media":"%s"}}]}' % f.name)
+            self.assertEqual(storage.media_used(f.name), "Proj")
+            r = c.delete("/api/media", params={"name": f.name})
+            self.assertEqual(r.status_code, 409)
+            self.assertIn("Proj", r.json()["detail"])
+            self.assertTrue(f.exists())
+            (tabs / "1.json").unlink()
+            self.assertEqual(c.delete("/api/media", params={"name": f.name}).status_code, 200)
+            self.assertFalse(f.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

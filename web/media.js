@@ -99,6 +99,20 @@ async function takePhoto({ onFile, back }) {
     actions(button('Take picture', take, { cls: 'primary' }), button('Cancel', () => { stop(); back(); }, { cls: 'ghost' })));
 }
 
+// A media-library card with a 🗑 on it: asks, deletes the file for good (the server refuses one a project uses), drops the card
+export function withMediaDelete(card, m) {
+  const del = iconBtn('Delete this file', '🗑', async (e) => {
+    e.stopPropagation();
+    if (!confirm(`Delete ${m.label || m.name} for good? Its copies and thumbnails go too.`)) return;
+    try {
+      await api(`/api/media?name=${encodeURIComponent(m.name)}`, { method: 'DELETE' });
+      card.remove(); toast('Deleted');
+    } catch (err) { toast(err.message, true); }
+  });
+  del.classList.add('card-del');
+  card.querySelector('.media')?.append(del);
+  return card;
+}
 export const uploadMedia = (file) => { const form = new FormData(); form.append('file', file); return api('/api/media', { method: 'POST', form }); };
 
 // this project's video outputs, newest first, plus the Video tab's uploaded clips
@@ -145,7 +159,7 @@ export function openVideoPicker({ title, onPick }) {
     try { media = (await api('/api/media')).filter((m) => m.kind === 'video'); } catch { /* the outputs still show */ }
     const items = (await projectOutputs(['video'])).map(({ g, o, i, t }) =>
       ({ t, el: () => mediaCard(cardMedia(o), genLabel(g), () => picked({ generation: g.id, index: i }), { badge: '▶' }) }));
-    for (const m of media) items.push({ t: m.created, el: () => mediaCard(cardMedia(m), m.label, () => picked({ media: m.name }), { badge: '▶' }) });
+    for (const m of media) items.push({ t: m.created, el: () => withMediaDelete(mediaCard(cardMedia(m), m.label, () => picked({ media: m.name }), { badge: '▶' }), m) });
     items.sort((x, y) => y.t - x.t);
     return items.length ? items.slice(0, 300).map((x) => x.el()) : placeholder('No videos in this project yet. Generate one or upload a clip.');
   });
@@ -166,7 +180,7 @@ export function openSoundPicker({ title = 'Pick a sound', onPick, clips = true }
       m.openClipImport({ title: 'Import a sound', sound: true, onSaved: (e) => onPick({ media: e.name }) })))], async () => {
     let media = [];
     try { media = await api('/api/media'); } catch { /* the outputs still show */ }
-    const card = (o, label, src) => ({ t: o.t, el: () => mediaCard(cardMedia(o), label, () => picked(src)) });
+    const card = (o, label, src) => ({ t: o.t, el: () => (src.media ? withMediaDelete : (c) => c)(mediaCard(cardMedia(o), label, () => picked(src)), o) });
     const sounds = (await projectOutputs(['audio'])).map(({ g, o, i, t }) => card({ ...o, t }, genLabel(g), { generation: g.id, index: i }));
     const vids = clips ? (await projectOutputs(['video'])).map(({ g, o, i, t }) => card({ ...o, t }, genLabel(g), { generation: g.id, index: i })) : [];
     for (const m of media) {

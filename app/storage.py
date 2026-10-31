@@ -188,6 +188,21 @@ def input_used(name: str) -> bool:
     return False
 
 
+def media_used(name: str) -> str | None:
+    """The project that uses this media-library file in a tab (video, sound, VFX) or a run's params (None: nobody). An "import"
+    run holds its own copy, so it doesn't count."""
+    for g in db.all_generations():
+        if g["template"] != "import" and name in json.dumps(g["params"]):
+            return (db.get_project(g["project_id"]) or {}).get("name") or "Unsorted"
+    for f in config.PROJECTS_DIR.glob("*/.deck/*-tabs/*.json"):
+        try:
+            if name in f.read_text(errors="ignore"):
+                return f.relative_to(config.PROJECTS_DIR).parts[0]
+        except OSError:
+            continue
+    return None
+
+
 def delete_input(name: str) -> int:
     """A picture, for good: its files, ComfyUI's copy, its thumbnails and its rows."""
     files = input_files(name)
@@ -247,6 +262,10 @@ def sweep(do: bool = False) -> dict:
         for p in sorted((config.COMFY_INPUT_DIR / config.COMFY_INPUT_SUBFOLDER).iterdir()):
             if p.is_file() and SOLVE_FRAME.match(p.name):
                 add(p, "a frame copied in for a camera solve")
+    live = {tag(m.name) for m in config.MEDIA_DIR.iterdir()}
+    for p in sorted(config.PLAYABLE_DIR.glob("*-play.mp4")):   # a cache of a media file; the original is the content
+        if p.is_file() and p.name[:-len("-play.mp4")] not in live:
+            add(p, "a playable copy of a media file that's gone")
     for d in (config.THUMB_DIR, PREVIEW_DIR):
         for p in sorted(d.glob("*")):
             if p.is_file() and not re.match(r"^[0-9a-f]{12}-", p.name):
