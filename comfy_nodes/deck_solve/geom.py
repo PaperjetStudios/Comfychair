@@ -110,11 +110,11 @@ def normalise(conf: np.ndarray) -> np.ndarray:
 
 
 def da3_export(depth: np.ndarray, extr: np.ndarray, intr: np.ndarray, grid: int, resolution: int,
-               sky: np.ndarray | None = None, conf: np.ndarray | None = None, min_conf: float = 0.1) -> dict:
+               sky: np.ndarray | None = None, conf: np.ndarray | None = None, drop: float = 0.2) -> dict:
     """Multi-view DA3 geometry for ComfyChair's camera solve. depth (S, H, W) z-depth; extr (S, 3|4, 4)
     world-to-camera; intr (S, 3, 3) in the pixels the model ran at. Writes camera-to-world 3x4 per view,
     [fx, fy, cx, cy] per view in this picture's pixels and view 0's depth as a grid (None for sky and for
-    the least confident pixels)."""
+    the least confident `drop` share of the rest)."""
     S, H, W = depth.shape
     if not np.isfinite(extr).all():
         raise ValueError("Depth Anything 3 couldn't place the cameras (non-finite poses): try more or fewer views")
@@ -124,9 +124,11 @@ def da3_export(depth: np.ndarray, extr: np.ndarray, intr: np.ndarray, grid: int,
     if sky is not None:
         ok &= sky[0] < 0.5
     cn = None
-    if conf is not None:
-        cn = normalise(conf[0].astype(np.float64))
-        ok &= cn >= min_conf
+    if conf is not None:   # (the least confident fifth goes: DA3's raw confidence is long-tailed, so a share of
+        cn = normalise(conf[0].astype(np.float64))   # its min-max range would drop most of the picture)
+        c = conf[0][ok]
+        if c.size:
+            ok &= conf[0] >= np.quantile(c, drop)
     cols, rows, g = grid_sample(depth[0], ok, grid)
     out = {"version": VERSION, "views": S, "width": W, "height": H, "resolution": resolution,
            "K": [[round(v, 4) for v in da3_K(intr[i], H, W, resolution)] for i in range(S)],

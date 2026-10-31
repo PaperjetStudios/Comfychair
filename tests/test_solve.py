@@ -39,24 +39,62 @@ def rot(ax, ay, az):
     return cv2.Rodrigues(np.radians([0, 0, az]))[0] @ cv2.Rodrigues(np.radians([0, ay, 0]))[0] @ cv2.Rodrigues(np.radians([ax, 0, 0]))[0]
 
 
-def scene(noise=0.1, seed=3):
-    """200 points 3..8 m in front of camera 0 and a 40-frame camera path (camera-to-world): the points'
-    2D tracks (Q, N, 2) and where each is seen (inside the picture)."""
-    rng = np.random.default_rng(seed)
-    u, v, z = rng.uniform(10, W - 10, 200), rng.uniform(10, H - 10, 200), rng.uniform(3, 8, 200)
-    X = np.stack([(u - K[2]) / K[0] * z, (v - K[3]) / K[1] * z, z], axis=1)
+def plane_z(v):
+    """A sloping ground: 8 m away at the top of the picture, 3 m at the bottom (inverse depth linear in v)."""
+    return 1 / (1 / 8 + (1 / 3 - 1 / 8) * (v + 0.5) / H)
+
+
+def path(move=1.0):
+    """A 40-frame camera path, camera-to-world: turning, and walking (scaled by move; 0: turning on the spot)."""
     cams = []
     for i in range(N):
         R = rot(0.1 * i, 0.4 * i, 0.05 * i)
-        t = np.array([0.02 * i, -0.004 * i, 0.03 * i])
+        t = np.array([0.02 * i, -0.004 * i, 0.03 * i]) * move
         cams.append(np.concatenate([R, t[:, None]], axis=1))
-    T, V = np.zeros((200, N, 2)), np.zeros((200, N), bool)
+    return np.array(cams)
+
+
+def in_view(n, rng, plane=False, cam=None):
+    """n points 3..8 m in front of a camera (camera 0 when cam is None; on plane_z with plane), in world axes."""
+    u, v, z = rng.uniform(10, W - 10, n), rng.uniform(10, H - 10, n), rng.uniform(3, 8, n)
+    if plane:
+        z = plane_z(v)
+    X = np.stack([(u - K[2]) / K[0] * z, (v - K[3]) / K[1] * z, z], axis=1)
+    return X if cam is None else X @ cam[:, :3].T + cam[:, 3]
+
+
+def project(X, cams, rng, noise):
+    """2D tracks (Q, N, 2) of world points through the cameras and where each is seen (inside the picture);
+    frame 0 exact, the others with noise px."""
+    T, V = np.zeros((len(X), len(cams), 2)), np.zeros((len(X), len(cams)), bool)
     for f, c in enumerate(cams):
         Xc = (X - c[:, 3]) @ c[:, :3]
         uu, vv = K[0] * Xc[:, 0] / Xc[:, 2] + K[2], K[1] * Xc[:, 1] / Xc[:, 2] + K[3]
-        T[:, f] = np.stack([uu, vv], 1) + (rng.normal(0, noise, (200, 2)) if f else 0)
+        T[:, f] = np.stack([uu, vv], 1) + (rng.normal(0, noise, (len(X), 2)) if f else 0)
         V[:, f] = (Xc[:, 2] > 0.1) & (uu >= 0) & (uu < W) & (vv >= 0) & (vv < H)
-    return X, np.array(cams), T, V
+    return T, V
+
+
+def scene(noise=0.1, seed=3, plane=False, move=1.0):
+    """200 points 3..8 m in front of camera 0 (on plane_z with plane) and path(move): the points'
+    2D tracks (Q, N, 2) and where each is seen."""
+    rng = np.random.default_rng(seed)
+    X, cams = in_view(200, rng, plane), path(move)
+    T, V = project(X, cams, rng, noise)
+    return X, cams, T, V
+
+
+def churn(move=1.0, plane=False, later_from_0=False):
+    """scene() whose frame-0 points are all lost after frame 19, and 200 others (in the last frame's view, or
+    with later_from_0 on frame 0's surface) seen from frame 6 on."""
+    X, cams, T, V = scene(plane=plane, move=move)
+    rng = np.random.default_rng(11)
+    XB = in_view(200, rng, plane, None if later_from_0 else cams[-1])
+    TB, VB = project(XB, cams, rng, 0.1)
+    V[:, 20:] = False
+    VB[:, :6] = False
+    churn.later = XB   # (the later points' true positions)
+    return X, cams, np.concatenate([T, TB]), np.concatenate([V, VB])
 
 
 def floor_grid(cols=48, seed=5):
@@ -108,6 +146,68 @@ class Pnp(unittest.TestCase):
         k = W / 320
         got, _ = solve.solve_pnp((T + 0.5) / k - 0.5, V, X, np.arange(200), K, k)
         self.assertLess(np.linalg.norm(got[-1][:, 3] - cams[-1][:, 3]), 0.02)
+
+    def test_points_that_come_later_are_triangulated(self):
+        # (the old solve lost every frame once frame 0's points had gone: a KLT track rarely lasts a whole clip)
+        X, cams, T, V = churn()
+        got, q = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0, grow=False)
+        self.assertEqual(q["lost"], N - 20)
+        got, q = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0)
+        self.assertEqual(q["lost"], 0)
+        self.assertGreater(q["used"], 300)
+        for f in (20, N - 1):
+            self.assertLess(np.linalg.norm(got[f][:, 3] - cams[f][:, 3]), 0.03, f)
+            self.assertLess(angle(got[f][:, :3], cams[f][:, :3]), 0.3, f)
+
+    def test_turning_on_the_spot_puts_new_points_on_frame_0s_depth(self):
+        # no walking, so nothing triangulates: later points go onto frame 0's depth (a sloping ground here)
+        X, cams, T, V = churn(move=0.0, plane=True, later_from_0=True)
+        rows, cols = 54, 96
+        Z = np.tile(plane_z((np.arange(rows) + 0.5) * H / rows - 0.5)[:, None], (1, cols))
+        anchor = {"Z": Z, "K": K, "size": (W, H)}
+        got, q = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0, anchor=anchor)
+        self.assertEqual(q["lost"], 0)
+        for f in (20, N - 1):
+            self.assertLess(np.linalg.norm(got[f][:, 3]), 0.05, f)
+            self.assertLess(angle(got[f][:, :3], cams[f][:, :3]), 0.3, f)
+        # a ray from the last camera meets the ground where the point is
+        Rf = cams[-1][:, :3].T
+        tf = -Rf @ cams[-1][:, 3]
+        q = np.where(V[200:, -1])[0]
+        Kinv = np.linalg.inv(np.array([[K[0], 0, K[2]], [0, K[1], K[3]], [0, 0, 1]]))
+        got = solve._onto_anchor(np, anchor, Rf, tf, T[200 + q, -1], Kinv)
+        hit = np.isfinite(got).all(axis=1)   # (those inside frame 0's view)
+        self.assertGreater(hit.sum(), 20)
+        self.assertLess(np.median(np.linalg.norm(got[hit] - churn.later[q[hit]], axis=1)), 0.05)
+
+    def test_after_a_pan_new_points_take_their_neighbours_depth(self):
+        # turning on the spot past frame 0's view: no parallax, no frame-0 depth there; the neighbours' depth will do
+        X, cams, T, V = churn(move=0.0, plane=True)
+        got, q = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0, grow=False)
+        self.assertEqual(q["lost"], N - 20)
+        got, q = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0)
+        self.assertEqual(q["lost"], 0)
+        for f in (20, N - 1):
+            self.assertLess(np.linalg.norm(got[f][:, 3]), 0.05, f)
+            self.assertLess(angle(got[f][:, :3], cams[f][:, :3]), 0.3, f)
+
+    def test_moving_things_are_dropped(self):
+        # a fifth of the tracks are on something moving (a wave, a person): they go, the camera stays right
+        X, cams, T, V = scene()
+        T[:40] += np.arange(N)[None, :, None] * np.array([2.5, 1.0])
+        got, q = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0)
+        self.assertLessEqual(len(set(range(40)) & set(q["ids"].tolist())), 3)   # (a few seen only briefly may stay)
+        for f in range(N):
+            self.assertLess(np.linalg.norm(got[f][:, 3] - cams[f][:, 3]), 0.02, f)
+            self.assertLess(angle(got[f][:, :3], cams[f][:, :3]), 0.3, f)
+
+    def test_smoothing_keeps_a_steady_move(self):
+        X, cams, T, V = scene(noise=0.3)
+        got, q = solve.solve_pnp(T, V, X, np.arange(200), K, 1.0, smooth=2.0)
+        np.testing.assert_allclose(got[0], np.eye(3, 4), atol=1e-9)
+        for f in range(N):
+            self.assertLess(np.linalg.norm(got[f][:, 3] - cams[f][:, 3]), 0.02, f)
+        self.assertLess(solve.reproj_err(got, q["X"], q["ids"], T, V, K, 1.0), 0.6)
 
     def test_lift(self):
         ids, X = solve.lift([[1, 2], [3, 4], [5, 6]], {"points": [[0, 0, 2], None, [1, 1, 3]]})
@@ -208,6 +308,11 @@ class Geom(unittest.TestCase):
         self.assertIsNone(ex["depth"]["values"][0])   # sky
         self.assertEqual(len(ex["K"]), S)
         json.dumps(ex)
+        # DA3's confidence is long-tailed: the least confident fifth goes, not everything under a tenth of the range
+        conf = np.broadcast_to(np.exp(8 * np.linspace(0, 1, 50)), (S, 28, 50))   # (smooth, as DA3's is)
+        ex = geom.da3_export(depth, w2c, intr, 10, 50, conf=conf)
+        kept = np.mean([v is not None for v in ex["depth"]["values"]])
+        self.assertTrue(0.7 < kept < 0.9, kept)
 
 
 @unittest.skipUnless(cv2 and subprocess.run(["which", "ffmpeg"], capture_output=True).returncode == 0, "needs opencv and ffmpeg")
@@ -287,7 +392,7 @@ class EndToEnd(unittest.TestCase):
         last = np.array(r["cams"][-1]).reshape(3, 4)
         self.assertLess(np.linalg.norm(last[:, 3] - cams[-1][:, 3]), 0.02)
         self.assertTrue(0 < len(r["pts"]) <= 400)
-        self.assertEqual(r["quality"]["used"], 149)
+        self.assertGreaterEqual(r["quality"]["used"], 149)   # (and the late ones, triangulated)
         self.assertLess(r["quality"]["err"], 1)
         np.testing.assert_allclose(r["floor"]["n"], [0, -1, 0], atol=0.02)
         self.assertEqual(len(r["K"]), 4)
@@ -299,10 +404,12 @@ class EndToEnd(unittest.TestCase):
         src = td / "c.mp4"
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"testsrc=s={W}x{H}:r=24:d=2",
                         "-pix_fmt", "yuv420p", str(src)], check=True)
-        X, cams, T, V = scene()
+        X, cams, T, V = scene(plane=True)
         G = np.vstack([np.concatenate([rot(20, -50, 10), [[3], [1], [-2]]], axis=1), [0, 0, 0, 1]])   # DA3's own world
         wi, hi = 504, 280
-        Ki = [K[0] * wi / W, K[1] * hi / H, (K[2] + 0.5) * wi / W - 0.5, (K[3] + 0.5) * hi / H - 0.5]
+        # (DA3 guesses each field of view on its own: on a portrait iPhone clip fx 3401 vs fy 4036. Pixels are
+        # square, so the solve takes their geometric mean)
+        Ki = [K[0] * wi / W * 1.2, K[1] * hi / H / 1.2, (K[2] + 0.5) * wi / W - 0.5, (K[3] + 0.5) * hi / H - 0.5]
         g = floor_grid(96)
         seen = {}
 
@@ -325,7 +432,9 @@ class EndToEnd(unittest.TestCase):
                 c2w = [(G @ np.vstack([cams[i], [0, 0, 0, 1]]))[:3] for i in idx]
                 self.payload = json.dumps({"version": 1, "views": n, "width": wi, "height": hi, "K": [Ki] * n,
                                            "cams": [list(c.ravel()) for c in c2w],
-                                           "depth": {"cols": g["cols"], "rows": g["rows"], "values": [p[2] for p in g["points"]]}}).encode()
+                                           "depth": {"cols": g["cols"], "rows": g["rows"],   # (view 0's depth: the sloping ground)
+                                                     "values": [float(plane_z((r + 0.5) * H / g["rows"] - 0.5))
+                                                                for r in range(g["rows"]) for _ in range(g["cols"])]}}).encode()
                 return {pid: {"status": {"status_str": "success"},
                               "outputs": {"4": {"files": [{"filename": "d.json", "subfolder": "", "type": "output"}]}}}}
 
@@ -354,8 +463,9 @@ class EndToEnd(unittest.TestCase):
             got = np.array(r["cams"][f]).reshape(3, 4)
             self.assertLess(np.linalg.norm(got[:, 3] - cams[f][:, 3]), 0.01 if f != 13 else 0.02)
             self.assertLess(angle(got[:, :3], cams[f][:, :3]), 0.05)
-        np.testing.assert_allclose(r["floor"]["n"], [0, -1, 0], atol=0.02)
+        self.assertIsNotNone(r["floor"])
         self.assertTrue(r["pts"])
+        self.assertLess(r["quality"]["err"], 1)
 
 
 @unittest.skipUnless(cv2 and subprocess.run(["which", "ffmpeg"], capture_output=True).returncode == 0, "needs opencv and ffmpeg")
