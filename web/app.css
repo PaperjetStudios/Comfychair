@@ -859,8 +859,9 @@ body:has(.text-pop:not(.hidden)) .toast { z-index: 63; }
 .gal-nav:disabled { opacity: 0; pointer-events: none; }
 .gal-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; padding: 8px 12px; }
 .gal-strip { display: flex; gap: 6px; overflow-x: auto; padding: 6px 12px 10px; scroll-snap-type: x proximity; scrollbar-width: thin; }
-.gal-thumb { position: relative; flex: 0 0 auto; height: 84px; padding: 0; border: 2px solid transparent; border-radius: var(--r-sm); overflow: hidden; background: var(--surface); cursor: pointer; scroll-snap-align: center; }
-.gal-thumb img, .gal-thumb video { height: 100%; width: auto; min-width: 48px; max-width: 160px; object-fit: cover; display: block; pointer-events: none; }
+.gal-thumb { position: relative; flex: 0 0 auto; height: 96px; padding: 0; border: 2px solid transparent; border-radius: var(--r-sm); overflow: hidden; background: #111; cursor: pointer; scroll-snap-align: center; }
+/* the whole picture, never a cropped sliver: a tall one is as wide as it needs to be to read, a very wide one is capped */
+.gal-thumb img, .gal-thumb video { height: 100%; width: auto; min-width: 72px; max-width: 200px; object-fit: contain; display: block; pointer-events: none; }
 .gal-thumb.sel { border-color: var(--accent); }
 .gal-thumb.marked img, .gal-thumb.marked video { opacity: .4; }
 .gal-badges { position: absolute; right: 3px; bottom: 2px; font-size: var(--fs-xs); color: var(--accent); text-shadow: 0 0 3px #000; pointer-events: none; }
