@@ -1,15 +1,17 @@
-// The two layer types a motion track makes (track-math.js sceneFromTrack):
+// The layer types a motion track makes (track-math.js sceneFromTrack, sceneFromSolve):
 //   backdrop: the footage, a plane keyed to follow the camera so it always fills the picture. It shows the
 //     clip's frame for the moment: the frames sit in one picture (a grid of small frames, from the server).
 //     { type: 'backdrop', url, cols, rows, count, step, clipFps, at? (the scene frame the clip starts on) }
 //   trackpts: the tracked points as small dots placed in the scene. { type: 'trackpts', pts: [[x, y, z]] }
-// Both draw in colour only (not in depth), and are never picked by a tap.
+//   cloudpts: a solved scene's coloured points. { type: 'cloudpts', pts: [[x, y, z, r, g, b]] } (r, g, b 0-255, sRGB)
+// All draw in colour only (not in depth), and are never picked by a tap.
 import * as THREE from './vendor/three.module.min.js';
 import { R, SC, TYPES, FPS, makers } from './scene-data.js';
 import { draw, passHooks } from './scene-view.js';
 
 TYPES.backdrop = { label: 'Footage', icon: '🎞', size: [1, 1, 1], hide: true };
 TYPES.trackpts = { label: 'Tracked points', icon: '✚', size: [1, 1, 1], hide: true };
+TYPES.cloudpts = { label: 'Scene points', icon: '⁘', size: [1, 1, 1], hide: true };
 
 const loader = new THREE.TextureLoader();
 makers.backdrop = (o, x) => {
@@ -42,6 +44,20 @@ makers.trackpts = (o) => {
   m.frustumCulled = false;
   Object.assign(m.userData, { colorOnly: true, photo: true, paint: () => {} });
   m.userData.dispose = () => { g.dispose(); m.material.dispose(); };
+  return m;
+};
+
+// the solved scene as coloured points (sized in the world, so near ones look bigger). { type: 'cloudpts', pts: [[x, y, z, r, g, b]] }
+makers.cloudpts = (o) => {
+  const pts = o.pts || [], pos = new Float32Array(pts.length * 3), colr = new Float32Array(pts.length * 3);
+  const c = new THREE.Color();   // (the colours are sRGB; three works in linear)
+  pts.forEach((p, i) => { pos.set([p[0], p[1], p[2]], i * 3); c.setRGB((p[3] ?? 255) / 255, (p[4] ?? 255) / 255, (p[5] ?? 255) / 255, THREE.SRGBColorSpace); colr.set([c.r, c.g, c.b], i * 3); });
+  const g = new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(pos, 3)).setAttribute('color', new THREE.BufferAttribute(colr, 3));
+  const mat = new THREE.PointsMaterial({ size: 0.035, sizeAttenuation: true, vertexColors: true, toneMapped: false });
+  const m = new THREE.Points(g, mat);
+  m.frustumCulled = false;
+  Object.assign(m.userData, { colorOnly: true, photo: true, paint: () => {} });
+  m.userData.dispose = () => { g.dispose(); mat.dispose(); };
   return m;
 };
 

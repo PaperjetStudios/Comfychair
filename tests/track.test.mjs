@@ -182,4 +182,18 @@ for (const i of [0, 7, 15, 29]) {
   const s3 = T.sceneFromSolve(solve, null, { points: false });
   assert.equal(s3.objects.length, 0);
 }
+// the coloured cloud goes through the same axes, keeps its colours; a floor point lands on y = 0
+{
+  const cloud = [[0.5, 1.5, 4, 10, 20, 30], [-1, 1.5, 7, 200, 100, 0], [0.2, -0.3, 5, 255, 255, 255]];
+  const sc4 = T.sceneFromSolve({ ...solve, cloud }, null, {});
+  assert.equal(sc4.objects.map((o) => o.type).join(), 'trackpts,cloudpts');
+  const cl = sc4.objects[1];
+  assert.equal(cl.id, 'cl0track');
+  assert.equal(cl.pts.length, 3);
+  assert.deepEqual(cl.pts[0].slice(3), [10, 20, 30]);
+  assert.ok(Math.abs(cl.pts[0][1]) < 1e-9 && Math.abs(cl.pts[1][1]) < 1e-9, 'floor points on y = 0');
+  const w = T.worldFromSolve(solve), want = T.toThree(cloud[2], w);
+  assert.ok(Math.hypot(...want.map((v, i) => v - cl.pts[2][i])) < 2e-3);
+  assert.equal(T.sceneFromSolve({ ...solve, cloud }, null, { cloud: false }).objects.length, 1);
+}
 console.log('solve math ok');

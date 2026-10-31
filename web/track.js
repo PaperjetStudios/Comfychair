@@ -34,7 +34,7 @@ export async function openTrack(opts) {
     result: saved.result || null, solves: saved.solves || {}, jobKind: null, stabbing: false, dur: 0, ar: 16 / 9, mode: 'region', t: 0, playing: false, job: null, timer: 0,
     region: saved.result?.region || null, exclude: saved.result?.exclude || null,
     from: opts.from ?? saved.result?.start ?? 0, to: opts.to ?? null,
-    set: { sigma: 2, stabSigma: 6, lens: 35, zoomAs: 'fov', dist: 6, points: true, method: 'klt',
+    set: { sigma: 2, stabSigma: 6, lens: 35, zoomAs: 'fov', dist: 6, points: true, cloud: true, method: 'klt',
       stab: 'smooth', stabRoll: true, stabZoom: 'auto', solve: 'none', views: 32, da3: 'small', scale: 1, ...saved.set },
   };
   const video = h('video', { src: opts.url, muted: true, playsinline: true, preload: 'auto', class: 'trk-video' });
@@ -181,7 +181,9 @@ export async function openTrack(opts) {
   const solveInfo = (sv) => {
     const q = sv.quality || {}, h = sv.floor && sv.metric ? sv.floor.d / (Math.hypot(...sv.floor.n) || 1) * (T.set.scale || 1) : null;
     const line = [`Solved ${sv.n} frames`, `used ${q.used ?? '?'} points`, `median error ${(q.err ?? 0).toFixed(1)} px`,
-      sv.floor ? 'floor found' : 'no floor', h != null ? `camera height ${h.toFixed(2)} m` : null].filter(Boolean).join(' · ');
+      sv.floor ? 'floor found' : 'no floor', h != null ? `camera height ${h.toFixed(2)} m` : null,
+      q.drift != null ? `moves ${(q.drift * 100).toFixed(1)} %/frame` : null, q.anchors != null ? `${q.anchors} anchors` : null,
+      sv.cloud?.length ? `${String(sv.cloud.length).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} scene points` : null].filter(Boolean).join(' · ');
     const warn = [];
     if (q.err > 4) warn.push(`The points miss by ${q.err.toFixed(1)} px on average: objects may slide against the footage. Track inside a box of steady background, or try the other method.`);
     if (q.lost > sv.n * 0.1) warn.push(`The camera was lost in ${q.lost} of ${sv.n} frames and held still there.`);
@@ -251,6 +253,7 @@ export async function openTrack(opts) {
             seg([['fov', 'Lens zoom'], ['dolly', 'Move forward']], T.set.zoomAs, (v) => { set('zoomAs', v); render(); })),
           T.set.zoomAs === 'dolly' ? rangeField('Subject distance', () => T.set.dist, (v) => set('dist', v), { min: 1, max: 30, step: 0.5, fmt: (v) => `${v} m` }) : null]),
         toggle('Add the tracked points as dots in the scene', T.set.points, (on) => set('points', on)),
+        sv?.cloud?.length ? toggle('Add the scene\'s points as a cloud', T.set.cloud, (on) => set('cloud', on)) : null,
         actions(button(sv ? `Create 3D scene (${SOLVE_NAME[T.set.solve]})` : 'Create 3D scene', make, { cls: 'primary' })),
       ] : [hint('Optionally draw a box round the steady background to track inside, and a box round anything moving that should be ignored. Then Track.')]),
     ].filter((x) => x != null));   // (replaceChildren would show a null as the text "null")
