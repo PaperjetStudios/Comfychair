@@ -4,6 +4,8 @@ import { pngBlob, uploadImage, openImagePicker } from './media.js';
 import { queueRun, valuesByRole, waitGen } from './make.js';
 import { icon } from './icons.js';
 import { MASK_DEFAULT } from './maskpaint.js';
+import { alphaAsGrey } from './matte-edge.js';
+import * as G from './layer-geom.js';
 
 // ---------------------------------------------------------------------------
 // Inpaint and Extend, in the Editor panel. The area to redraw is an inpaint mask layer (red, painted with a brush or
@@ -24,7 +26,7 @@ const inpaintTemplates = () => S.templates.filter((t) => !t.error && t.fields.so
   .sort((a, b) => (PREFER.indexOf(a.id) + 1 || 99) - (PREFER.indexOf(b.id) + 1 || 99));
 const stepsField = (t) => t?.fields.find((f) => f.kind === 'int' && f.input === 'steps') || null;   // (turbo sigma lists have none)
 
-async function uploadMask(cv) {
+export async function uploadMask(cv) {
   const r = await fetch('/api/inputs/mask', { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: await pngBlob(cv) });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
   return (await r.json()).name;
@@ -148,6 +150,42 @@ async function fill(eng, { denoise = ST.denoise } = {}) {
   } catch (e) { toast(e.message, true); } finally { b.done(); }
 }
 
+// the solid part of each selected layer (what its see-through and its own mask leave showing) joins the inpaint mask
+function addLayerShape(eng) {
+  const list = (eng.picked?.() || []).filter((l) => !l.mask && !l.maskOf && !l.draft && eng.ready(l));
+  if (!list.length) return toast('Select a picture layer first', true);
+  let added = 0;
+  for (const l of list) {
+    const W = l.img.naturalWidth || l.img.width, H = l.img.naturalHeight || l.img.height, k = l.crop, cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(k.w * W)); cv.height = Math.max(1, Math.round(k.h * H));
+    const c = cv.getContext('2d', { willReadFrequently: true });
+    c.drawImage(l.img, k.x * W, k.y * H, k.w * W, k.h * H, 0, 0, cv.width, cv.height);
+    const m = l.maskOff ? null : eng.E.layers.find((x) => x.maskOf === l.key && eng.ready(x));
+    if (m) {
+      const mw = m.img.naturalWidth || m.img.width, mh = m.img.naturalHeight || m.img.height;
+      c.globalCompositeOperation = 'destination-in';
+      c.drawImage(m.img, k.x * mw, k.y * mh, k.w * mw, k.h * mh, 0, 0, cv.width, cv.height);
+      c.globalCompositeOperation = 'source-over';
+    }
+    const d = c.getImageData(0, 0, cv.width, cv.height);
+    if (!d.data.some((v, i) => i % 4 === 3 && v > 127)) continue;   // (nothing solid in it)
+    alphaAsGrey(d.data);
+    c.putImageData(d, 0, 0);
+    if (eng.paint.maskFromMatte(cv, eng.layerRect(l), G.turn(l))) added++;
+  }
+  toast(added ? `Added ${added > 1 ? `${added} layers' shapes` : 'the layer\'s shape'} to the mask` : 'That layer has nothing solid to add', !added);
+}
+
+// the selected layers cut out by the inpaint mask
+function cutOutLayers(eng) {
+  const list = (eng.picked?.() || []).filter((l) => !l.mask && !l.maskOf && !l.draft && eng.ready(l));
+  if (!list.length) return toast('Select a picture layer first', true);
+  const m = eng.composeMask();
+  if (!m) return toast('Mark the area to keep first', true);
+  const n = eng.paint.cutByMask(list, { canvas: m.canvas, f: eng.frame() });
+  toast(n ? `Cut out: a new layer over ${n > 1 ? `each of ${n} layers` : 'the layer'}, which is hidden now` : 'The mask doesn\'t cover that layer', !n);
+}
+
 // the canvas outside the selected layer, marked as the mask: a picture placed on a bigger canvas, then Fill to draw the rest
 function maskOutside(eng) {
   const l = eng.E.sel;
@@ -235,6 +273,8 @@ export function inpaintSection(eng) {
     h('div', { class: 'row wrap' },
       button([icon('brush'), mask ? 'Paint mask' : 'Mark an area'], () => eng.paint.paintMask(), { cls: 'small primary', title: 'A red brush on its own layer: what it covers gets redrawn' }),
       button('Add selection', () => eng.paint.selAction('tomask'), { disabled: !eng.paint.hasSel(), title: 'The rectangle / lasso selection joins the mask' }),
+      button('Add layer shape', () => addLayerShape(eng), { disabled: !eng.E.sel || eng.E.sel.mask || eng.E.sel.draft, title: 'The solid part of the selected layer joins the mask: what its see-through leaves showing' }),
+      button('Cut out layer', () => cutOutLayers(eng), { disabled: !mask || !eng.E.sel || eng.E.sel.mask || eng.E.sel.draft, title: 'A new layer of what the mask covers on the selected layer. The layer stays, hidden; the mask is used up' }),
       button('Invert', () => eng.paint.maskOp('invert'), { disabled: !mask }),
       button('Clear', () => eng.paint.maskOp('clear'), { disabled: !mask }),
       button('Mask outside', () => maskOutside(eng), { disabled: !eng.E.sel || eng.E.sel.mask || eng.E.sel.draft, title: 'Mark everything of the canvas outside the selected layer as the mask, with a little of its edge to blend' }),

@@ -1,10 +1,12 @@
-import { h, api, store, toast, busy, button, section, field, seg, hint, help, toggle, textArea } from './ui.js';
+import { h, api, store, toast, busy, button, chip, section, field, seg, hint, help, toggle, textArea } from './ui.js';
 import { S, inputUrl } from './core.js';
 import { pngBlob, uploadImage } from './media.js';
 import { queueRun, template, valuesByRole, waitGen } from './make.js';
 import { MAPS } from './maps.js';
 import { editSizeFor } from './edit-size.js';
 import * as G from './layer-geom.js';
+import { uploadMask } from './inpaint.js';
+import { boundsOf, boxesFor, foundIn, refineEdge, separateAreas, stairOf, termsOf, worthLooking } from './matte-edge.js';
 
 // ---------------------------------------------------------------------------
 // Image tools, in the Editor panel the way the VFX tab has its effects: pick one, set it, Run. Run on chooses what it works
@@ -12,7 +14,14 @@ import * as G from './layer-geom.js';
 // a map (depth, edges, scribble, pose), an upscaled copy, a cut-out of the subject, or the inpaint mask (auto masking).
 // ---------------------------------------------------------------------------
 const KEY = 'deck.imagetools';
-const GROUPS = ['Maps', 'Cut out and mask', 'Upscale', 'Detail'];
+const GROUPS = ['Maps', 'Cut out and mask', 'Clean up', 'Upscale', 'Detail'];
+// The restoration models of Clean up: each works at the picture's own size, and changes nothing else
+const CLEAN = {
+  noise: { label: 'Noise', model: '1x_ISO_denoise_v1.pth', help: 'Takes out the grain of a photo shot in low light.' },
+  jpeg: { label: 'JPEG blocks', model: 'DeJpeg_Fatality_PlusULTRA_200000_G.pth', help: 'Takes out the blocks and halos of heavy JPEG compression.' },
+  blur: { label: 'Blur', model: '1x_DeBLR.pth', help: 'Sharpens a slightly soft picture. It can\'t bring back a badly blurred one: the Detail pass redraws those.' },
+};
+const LOOK_FOR = [['watermark', 'Watermark'], ['letters', 'Letters'], ['logo', 'Logo']];
 // The detail pass: the picture drawn again with finer detail, the layout kept. Each model is a template that already exists;
 // 'strength' is the sampler's denoise (low keeps the picture, high changes it), SeedVR2 has none and no prompt.
 const DETAIL = {
@@ -35,6 +44,7 @@ const DELIGHT = {
   klein9b: { label: 'Klein 9B', tpl: 'deck-klein9b-edit', help: 'A good all-rounder; quick.' },
   qwen21: { label: 'Qwen 2.1', tpl: 'deck-qwen21-edit', help: 'Good with objects, graphics and clean surfaces.' },
 };
+const UNMARK_PROMPT = 'Remove every watermark, stamp, logo and overlaid text from this picture, including faint see-through ones repeated across it. Fill in what is underneath them. Keep everything else exactly as it is: the same people, objects, colours, light, sharpness and framing.';
 const DELIGHT_PROMPT = 'Remove all the lighting and shadows from this picture: light it evenly and softly from every side, like an overcast day or a light tent, so dark areas are brightened and nothing is in shadow. Show the true colours and surface of the materials. Keep the shape, pose, details, background and framing exactly the same.';
 
 const OPS = [
@@ -52,6 +62,12 @@ const OPS = [
     help: 'SAM3 finds what you name ("the red car", "people", "the sky") and joins everything it finds. The result is a cut-out layer or the inpaint mask.' },
   { id: 'sheet', group: 'Cut out and mask', label: 'Split a sheet: enlarge and cut out each (for 3D)', tpl: 'deck-sheet-cell', kind: 'sheet', prompt: true,
     help: 'For a character or object sheet with rows and columns of views: cuts it into equal cells, makes each one bigger, and SAM3 cuts out what you name in it (the best match). Each view lands as its own layer where its cell was, ready for the 3D object slots (Save as input). Needs one run per cell.' },
+  { id: 'remove', group: 'Clean up', label: 'Remove: a watermark, text or what you name', tpl: 'deck-remove-lama', kind: 'remove',
+    help: 'Find by name: SAM3 marks what you name in red, for you to check and put right, since it can miss a watermark or mark other things. The red mask: you paint it (Inpaint panel), or check what was found, and Remove takes it out: LaMa fills it in from what is round it, with no prompt. Only that area changes: the rest stays pixel for pixel, at full size. Best on small things on a plain or even background; a very big area comes back softer. Separate words with commas for several things. A big area on a busy background is better redrawn in Inpaint.' },
+  { id: 'unmark', group: 'Clean up', label: 'Remove a watermark all over the picture', kind: 'delight', promptKey: 'uprompt', fallback: UNMARK_PROMPT, done: 'Watermark removed',
+    help: 'For a faint watermark repeated across the whole picture, which can\'t be marked as an area: an edit model draws the picture again without it. It runs at about 2 MP, and can change small details, so compare the result with the original.' },
+  { id: 'clean', group: 'Clean up', label: 'Clean: noise, JPEG blocks or blur', tpl: 'deck-clean-image', kind: 'clean',
+    help: 'A restoration model at the picture\'s own size: quick, and it adds nothing that isn\'t there.' },
   { id: 'delight', group: 'Detail', label: 'De-light (even out dark or shadowed pictures)', kind: 'delight',
     help: 'An edit model takes the lighting out: dark pictures are brightened and hard shadows softened, with the shape and colours kept. Run it on a view before it goes to image or 3D generation. The result is a new layer; the prompt can be changed.' },
   { id: 'up', group: 'Upscale', label: 'Upscale (quality)', tpl: 'deck-upscale-image', kind: 'up',
@@ -61,7 +77,7 @@ const OPS = [
   { id: 'upfast', group: 'Upscale', label: 'Upscale (fast)', tpl: 'deck-upscale-image-fast', kind: 'up',
     help: '4x-UltraSharp: a quick, clean enlargement without the invented detail. Export size is set to match, so Download and Save as input come out bigger.' },
 ];
-const ST = { op: 'cutout', scope: 'whole', result: 'cutout', hide: true, prompt: 'person', rows: 1, cols: 4, sheetFast: false, scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, ...store.get(KEY, {}) };
+const ST = { op: 'cutout', scope: 'whole', result: 'cutout', hide: true, fine: true, rfrom: 'words', rprompt: 'watermark', cmodel: 'noise', uprompt: UNMARK_PROMPT, prompt: 'person', rows: 1, cols: 4, sheetFast: false, scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, ...store.get(KEY, {}) };
 const save = () => store.set(KEY, ST);
 const FLIGHT = new Set();   // runs on their way back
 const op = () => OPS.find((o) => o.id === ST.op) || OPS[0];
@@ -85,7 +101,7 @@ async function keptPart(l) {
 }
 
 // The tools whose result has its layer's framing, so the layer's mask fits it
-const KEEPS_FRAMING = new Set(['up', 'detail', 'delight']);
+const KEEPS_FRAMING = new Set(['up', 'detail', 'delight', 'remove', 'clean']);
 // a layer's mask as it is now, its kept part at its own pixels (painting on it during the run doesn't change it); null if it has none
 function maskAsSent(eng, l) {
   const m = eng.E.layers.find((x) => x.maskOf === l.key && eng.ready(x));
@@ -132,6 +148,83 @@ async function matteOf(done) {
   c.globalCompositeOperation = 'lighten';
   for (const i of imgs) c.drawImage(i, 0, 0, cv.width, cv.height);
   return cv;
+}
+
+const once = async (run) => waitGen((await queueRun(run))[0].id);
+// SAM3's worker now and then fails a run ("Inference tensors do not track version counter") that works when sent again
+const sent = (run) => once(run).catch(() => once(run));
+
+// a picture's or canvas's red channel at w×h, row by row
+function redOf(pic, w, h) {
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const c = cv.getContext('2d', { willReadFrequently: true });
+  c.drawImage(pic, 0, 0, w, h);
+  const d = c.getImageData(0, 0, w, h).data, out = new Uint8Array(w * h);
+  for (let i = 0; i < out.length; i++) out[i] = d[i * 4];
+  return out;
+}
+const cropOf = (src, W, b) => {   // (a box of a row-by-row array W wide)
+  const out = new src.constructor(b.w * b.h);
+  for (let y = 0; y < b.h; y++) out.set(src.subarray((b.y + y) * W + b.x, (b.y + y) * W + b.x + b.w), y * b.w);
+  return out;
+};
+
+// The matte of a finished run with fine edges, at the picture's own size. The model saw the whole picture at about 1000 px: each thing
+// it found gets a second look, on a crop close to it (one run for each, kept out of History), and its edge is then moved onto the picture's.
+async function finerMatte(t, name, done, prompt, b) {
+  const outs = (done.outputs || []).filter((o) => o.kind === 'image');
+  if (!outs.length) throw new Error('Nothing was found');
+  const img = await loadImg(inputUrl(name)), W = img.naturalWidth, H = img.naturalHeight;
+  const masks = (await Promise.all(outs.map((o) => loadImg(o.url)))).map((i) => redOf(i, W, H));
+  const bounds = masks.map((m) => boundsOf(m, W, H)).filter(Boolean);
+  if (!bounds.length) throw new Error('Nothing was found');
+  const first = new Uint8Array(W * H);
+  for (const m of masks) for (let i = 0; i < first.length; i++) if (m[i] > first[i]) first[i] = m[i];
+  // the picture's colours: what the edge follows
+  const pic = document.createElement('canvas');
+  pic.width = W; pic.height = H;
+  const pc = pic.getContext('2d', { willReadFrequently: true });
+  pc.drawImage(img, 0, 0);
+  const px = pc.getImageData(0, 0, W, H).data, rgb = [0, 1, 2].map((c) => {
+    const v = new Float32Array(W * H);
+    for (let i = 0; i < v.length; i++) v[i] = px[i * 4 + c] / 255;
+    return v;
+  });
+  const out = new Uint8Array(W * H), boxes = boxesFor(bounds, W, H), imageField = t.fields.find((f) => f.kind === 'image');
+  for (const [k, box] of boxes.entries()) {
+    let mask = cropOf(first, W, box), seen = [W, H];
+    if (worthLooking(box, W, H)) {
+      b?.set(`Looking closer (${k + 1} of ${boxes.length})…`);
+      try {
+        const cv = document.createElement('canvas');
+        cv.width = box.w; cv.height = box.h;
+        cv.getContext('2d').drawImage(img, box.x, box.y, box.w, box.h, 0, 0, box.w, box.h);
+        const up = await uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: 'closer.png', multiple: 1 });
+        let run = null;
+        try {
+          run = await sent({ template: t.id, values: { [imageField.key]: up.name, ...valuesByRole(t, { seed: -1, prompt }) }, batch: 1 });
+          const found = await Promise.all(run.outputs.filter((o) => o.kind === 'image').map((o) => loadImg(o.url)));
+          const near = foundIn(mask, found.map((i) => redOf(i, box.w, box.h)));
+          if (near) { mask = near; seen = [box.w, box.h]; }
+        } finally {   // (the crop and its run were only a means: the matte lands on the run that was asked for)
+          if (run) await api(`/api/generations/${run.id}`, { method: 'DELETE', busy: false }).catch(() => {});
+          await api(`/api/inputs?name=${encodeURIComponent(up.name)}`, { method: 'DELETE', busy: false }).catch(() => {});
+        }
+      } catch (e) { toast(`A closer look failed, so that edge is the first look's: ${e.message}`, true); }
+    }
+    b?.set('Cleaning the edges…');
+    await new Promise((r) => setTimeout(r));   // (the bar shows before the sums)
+    const edge = refineEdge(mask, rgb.map((c) => cropOf(c, W, box)), box.w, box.h, stairOf(...seen));
+    for (let y = 0; y < box.h; y++) {
+      const to = (box.y + y) * W + box.x;
+      for (let x = 0; x < box.w; x++) if (edge[y * box.w + x] > out[to + x]) out[to + x] = edge[y * box.w + x];
+    }
+  }
+  const data = pc.createImageData(W, H);
+  for (let i = 0; i < out.length; i++) { const j = i * 4; data.data[j] = data.data[j + 1] = data.data[j + 2] = out[i]; data.data[j + 3] = 255; }
+  pc.putImageData(data, 0, 0);
+  return pic;
 }
 
 // the source with the matte as its see-through channel, at the source's own size
@@ -183,7 +276,8 @@ function placed(src, x, y, w, pic) {
 async function land(eng, o, src, done, cell) {
   const { rect, layer } = src;
   if (o.kind === 'matte') {
-    const matte = await matteOf(done);
+    const b = ST.fine ? busy('Cleaning the edges…') : null;
+    const matte = await (ST.fine ? finerMatte(template(o.tpl), src.name, done, o.prompt ? ST.prompt.trim() : undefined, b) : matteOf(done)).finally(() => b?.done());
     if (ST.result === 'mask') {
       eng.paint.maskFromMatte(matte, rect, src.was && G.turn(src.was));
       return toast(`${o.label}: added to the inpaint mask (Inpaint panel)`);
@@ -200,8 +294,8 @@ async function land(eng, o, src, done, cell) {
     return eng.changed(), eng.render();
   } else {
     const r = await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } });
-    const made = eng.addImage(r.name, { label: o.kind === 'up' ? `Upscaled ${r.width}×${r.height}` : o.kind === 'delight' ? 'De-lit' : o.kind === 'detail' ? `Detail (${dm().label})` : o.label, ...placed(src, rect.x, rect.y, rect.w, r), ...(await maskForResult(src, r)) });
-    if (layer && (o.kind === 'up' || o.kind === 'detail' || o.kind === 'delight') && ST.hide) layer.hidden = true;
+    const made = eng.addImage(r.name, { label: o.kind === 'up' ? `Upscaled ${r.width}×${r.height}` : o.kind === 'delight' ? (o.done || 'De-lit') : o.kind === 'detail' ? `Detail (${dm().label})` : o.kind === 'clean' ? `Cleaned (${(CLEAN[ST.cmodel] || CLEAN.noise).label})` : o.label, ...placed(src, rect.x, rect.y, rect.w, r), ...(await maskForResult(src, r)) });
+    if (layer && KEEPS_FRAMING.has(o.kind) && ST.hide) layer.hidden = true;
     if (layer && o.kind === 'up' && ST.hide) {   // the selection moves from the hidden original to its upscale (a layer picked since the run began stays picked)
       const E = eng.E;
       if (E.sel === layer) { E.sel = made; E.cropping = false; }
@@ -219,9 +313,12 @@ async function run(eng) {
   if (eng.loading()) return toast('The images are still loading', true);
   if (o.prompt && !ST.prompt.trim()) return toast('Say what to find first', true);
   if (!eng.E.layers.some((l) => !l.mask && !l.draft)) return toast('Add a picture first', true);
+  if (o.kind === 'remove' && ST.rfrom === 'words' && !termsOf(ST.rprompt).length) return toast('Say what to remove first', true);
+  if (o.kind === 'remove' && !template('deck-mask-image')) return toast('deck-mask-image isn\'t installed', true);
   const tab = eng.E.tab?.id, b = busy('Sending the picture…');
   try {
     await eng.paint.savePaint();
+    if (o.kind === 'remove' && ST.rfrom === 'painted') return await removePainted(eng, o, t, tab);
     const list = ST.scope === 'selected' ? targets(eng) : [null];
     if (!list.length) return toast('Select a layer first', true);
     for (const l of list) await runOne(eng, o, t, tab, await sourceOf(eng, l, o));   // (each selected layer is its own run, queued one after another)
@@ -251,6 +348,88 @@ async function runSheet(eng, o, t, tab, src) {
   for (const cell of cells) await start(cell, true);
 }
 
+// Remove: the picture and its mask (white = what goes) to LaMa. LaMa's memory grows with the picture (a 4K one doesn't fit 12 GB) and it only needs
+// what is round the mask, so it runs on a crop round each marked area, made smaller if it is big; each fill goes back on a copy of the picture.
+const LAMA_MOST = 2e6;   // pixels
+async function fillIn(eng, o, t, tab, src, maskCv) {
+  const W = maskCv.width, H = maskCv.height, red = redOf(maskCv, W, H);
+  const areas = boundsOf(red, W, H);
+  if (!areas) throw new Error('Nothing to remove there: paint it instead');
+  const mf = t.fields.find((x) => x.kind === 'mask'), main = t.fields.find((x) => x.key === mf.image_key);
+  const img = await loadImg(inputUrl(src.name));
+  const result = document.createElement('canvas');
+  result.width = W; result.height = H;
+  const rc = result.getContext('2d');
+  rc.drawImage(img, 0, 0, W, H);
+  const crop = (pic, box, k) => {
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(8, Math.round(box.w * k)); cv.height = Math.max(8, Math.round(box.h * k));
+    const c = cv.getContext('2d');
+    c.imageSmoothingQuality = 'high';
+    c.drawImage(pic, box.x, box.y, box.w, box.h, 0, 0, cv.width, cv.height);
+    return cv;
+  };
+  const b = busy(`${o.label}…`);
+  FLIGHT.add(fillIn); eng.render();
+  try {
+    const boxes = boxesFor(separateAreas(red, W, H), W, H, 0.5);
+    for (const [n, box] of boxes.entries()) {
+      b.set(`Filling in (${n + 1} of ${boxes.length})…`);
+      const k = Math.min(1, Math.sqrt(LAMA_MOST / (box.w * box.h)));
+      const up = await uploadImage(await pngBlob(crop(result, box, k)), { mp: 0, source: 'editor', filename: 'remove-area.png', multiple: 1 });
+      const name = await uploadMask(crop(maskCv, box, k));
+      let run = null;
+      try {
+        const values = { [main.key]: up.name, [mf.key]: { feather: 8, grow: 24, fit: false, name, src: up.name, crop: null, box: { x: 0, y: 0, w: 1, h: 1 } } };
+        run = await once({ template: t.id, values, batch: 1 });
+        const fill = await loadImg(run.outputs.find((x) => x.kind === 'image').url);
+        rc.drawImage(fill, box.x, box.y, box.w, box.h);
+      } finally {   // (a means to the layer: the crop, its mask and its run go)
+        if (run) await api(`/api/generations/${run.id}`, { method: 'DELETE', busy: false }).catch(() => {});
+        await api(`/api/inputs?name=${encodeURIComponent(up.name)}`, { method: 'DELETE', busy: false }).catch(() => {});
+        await api(`/api/inputs?name=${encodeURIComponent(name)}`, { method: 'DELETE', busy: false }).catch(() => {});
+      }
+    }
+    if (eng.E.tab?.id !== tab) return toast(`${o.label} finished on another edit`);
+    const r = await uploadImage(await pngBlob(result), { mp: 0, source: 'editor', filename: 'removed.png', multiple: 1 });
+    eng.addImage(r.name, { label: 'Removed', ...placed(src, src.rect.x, src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) });
+    if (src.layer && ST.hide) src.layer.hidden = true;
+    eng.changed(); eng.render();
+    toast(`${o.label}: done, a new layer on top`);
+  } finally { FLIGHT.delete(fillIn); b.done(); eng.render(); }
+}
+
+// ...what's named in the Find box, one search each, all of it joined. It only marks: SAM3 often misses a watermark or takes other things for it
+// ("text" found nothing on large white letters, "watermark" other things too), so what goes is seen in red and can be put right before Run removes it.
+async function markFound(eng, o, src) {
+  const find = template('deck-mask-image'), image = find.fields.find((f) => f.kind === 'image'), [W, H] = src.px;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const c = cv.getContext('2d');
+  c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
+  c.globalCompositeOperation = 'lighten';
+  for (const term of termsOf(ST.rprompt)) {
+    const done = await sent({ template: find.id, values: { [image.key]: src.name, ...valuesByRole(find, { seed: -1, prompt: term }) }, batch: 1 });
+    const outs = (done.outputs || []).filter((x) => x.kind === 'image');
+    for (const x of outs) c.drawImage(await loadImg(x.url), 0, 0, W, H);
+  }
+  if (!boundsOf(redOf(cv, W, H), W, H)) return toast('SAM3 found nothing there: try other words, or paint it (Inpaint panel)', true);
+  eng.paint.maskFromMatte(cv, src.rect, src.was && G.turn(src.was));
+  ST.rfrom = 'painted'; save(); eng.render();
+  toast('Marked in red: check it (paint more or erase in the Inpaint panel), then Remove');
+}
+
+// ...the inpaint mask as painted: on the whole picture, as a painted mask is
+async function removePainted(eng, o, t, tab) {
+  const f = eng.frame(), m = eng.composeMask();
+  if (!f || !m) return toast('Paint what to remove first (Inpaint panel)', true);
+  const pic = document.createElement('canvas');
+  if (!eng.compose(pic)) return toast('Add a picture first', true);
+  if (pic.width !== m.canvas.width || pic.height !== m.canvas.height) return toast(`The picture (${pic.width}×${pic.height}) and mask (${m.canvas.width}×${m.canvas.height}) differ in size: try again`, true);
+  const up = await uploadImage(await pngBlob(pic), { mp: 0, source: 'editor', filename: 'remove.png', multiple: 1 });
+  return fillIn(eng, o, t, tab, { name: up.name, rect: { x: f.x, y: f.y, w: f.w, h: f.h }, layer: null, px: [pic.width, pic.height] }, m.canvas);
+}
+
 // an edit template's Size for all of a picture of [w, h] (left alone, it crops to a 1024 square)
 function wholePicture(t, [w, h]) {
   const fw = t.fields.find((f) => f.key === '__deck.width'), fh = t.fields.find((f) => f.key === '__deck.height');
@@ -261,14 +440,19 @@ function wholePicture(t, [w, h]) {
 
 async function runOne(eng, o, t, tab, src) {
   if (o.kind === 'sheet') return runSheet(eng, o, t, tab, src);
+  if (o.kind === 'remove') return markFound(eng, o, src);
   const imageField = t.fields.find((f) => f.kind === 'image');
   const values = { [imageField.key]: src.name, ...valuesByRole(t, { seed: -1, ...(o.prompt && { prompt: ST.prompt.trim() }) }) };
   if (o.kind === 'delight') {   // the edit template's own picture and edit boxes (not its reference pictures)
     const pic = t.fields.find((f) => f.kind === 'image' && /image to edit/i.test(f.group)), box = t.fields.find((f) => f.kind === 'text' && /^edit$/i.test(f.group) && !/negative/i.test(f.input));
     if (pic) delete values[imageField.key];
     if (pic) values[pic.key] = src.name;
-    if (box) values[box.key] = (ST.lprompt || '').trim() || DELIGHT_PROMPT;
+    if (box) values[box.key] = (ST[o.promptKey || 'lprompt'] || '').trim() || o.fallback || DELIGHT_PROMPT;
     Object.assign(values, wholePicture(t, src.px));
+  }
+  if (o.kind === 'clean') {
+    const f = t.fields.find((x) => x.input === 'model_name');
+    if (f) values[f.key] = (CLEAN[ST.cmodel] || CLEAN.noise).model;
   }
   if (o.kind === 'up') {
     const f = t.fields.find((x) => x.input === 'scale_by');
@@ -299,6 +483,8 @@ async function runOne(eng, o, t, tab, src) {
   }).catch((e) => toast(`${o.label} failed: ${e.message}`, true)).finally(() => { FLIGHT.delete(g.id); eng.render(); });
 }
 
+let edgeTurn = Promise.resolve();
+
 // The Image tab's upscale, de-light and cut-out as one step on one picture, with this tab's chosen model and scale, for work
 // outside the tab (markviews.js). The result's input name comes back.
 export async function applyStep(step, name, { what = 'person' } = {}) {
@@ -318,7 +504,10 @@ export async function applyStep(step, name, { what = 'person' } = {}) {
   // SAM3's worker now and then fails a run ("Inference tensors do not track version counter") that works when sent again
   const done = step === 'cut' ? await once().catch(once) : await once();
   if (step === 'cut') {
-    const cut = await cutOut(name, await matteOf(done));
+    // (several can be going at once: fine edges hold a whole picture in memory, so one at a time)
+    const fine = ST.fine ? edgeTurn.then(() => finerMatte(t, name, done, what.trim() || 'person')) : null;
+    if (fine) edgeTurn = fine.catch(() => {});
+    const cut = await cutOut(name, await (fine || matteOf(done)));
     return (await uploadImage(await pngBlob(cut), { mp: 0, source: 'editor', filename: 'cutout.png', multiple: 1 })).name;
   }
   return (await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } })).name;
@@ -356,10 +545,18 @@ export function imageToolsSection(eng) {
     o.kind === 'sheet' ? field(['Enlarge', h('span', {}, `${ST.scale}×`)], seg([[1, '1×'], [2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); eng.render(); })) : null,
     o.kind === 'matte' ? field('Result', seg([['cutout', 'Cut-out layer'], ['black', 'On black'], ['mask', 'Inpaint mask']], ST.result, (v) => { ST.result = v; save(); eng.render(); }),
       help('On black puts the cut-out on solid black: the picture a one-photo 3D model (Idol, a splat) wants.')) : null,
+    o.kind === 'matte' ? toggle('Fine edges', ST.fine, (v) => { ST.fine = v; save(); eng.render(); },
+      { help: 'These models see any picture at about 1000 px, so a big picture\'s edge comes back as a staircase. On: each thing found gets a second look on a crop close to it (a run for each, on a big picture), then the pixels along its edge are decided by their colour: is it more common on the thing, or beside it. Off: quicker, and the edge is as the model gave it.' }) : null,
+    o.kind === 'remove' ? field('What goes', seg([['words', 'Find by name'], ['painted', 'The red mask']], ST.rfrom, (v) => { ST.rfrom = v; save(); eng.render(); })) : null,
+    o.kind === 'remove' && ST.rfrom === 'words' ? h('div', { class: 'chips' }, ...LOOK_FOR.map(([v, label]) => chip(label, () => { ST.rprompt = v; save(); eng.render(); }, { on: ST.rprompt.trim().toLowerCase() === v }))) : null,
+    o.kind === 'remove' && ST.rfrom === 'words' ? field('Find', textArea(() => ST.rprompt, (v) => { ST.rprompt = v; save(); }, { rows: 2, label: 'What to remove', placeholder: 'Watermark, text, the red sign' })) : null,
+    o.kind === 'remove' && ST.rfrom === 'painted' && !eng.paint.maskLayer(false) ? hint('Paint what to remove first (Inpaint panel), or find it by name') : null,
+    o.kind === 'clean' ? field('Take out', seg(Object.entries(CLEAN).map(([k, v]) => [k, v.label]), ST.cmodel, (v) => { ST.cmodel = v; save(); eng.render(); }, { wrap: true }),
+      help((CLEAN[ST.cmodel] || CLEAN.noise).help)) : null,
     o.kind === 'sheet' ? field('Result', seg([['cutout', 'Cut out'], ['black', 'On black']], ST.result === 'black' ? 'black' : 'cutout', (v) => { ST.result = v; save(); eng.render(); })) : null,
     o.kind === 'delight' ? field('Model', seg(Object.entries(DELIGHT).map(([k, v]) => [k, v.label]), ST.lmodel, (v) => { ST.lmodel = v; save(); eng.render(); }, { wrap: true }),
       help((DELIGHT[ST.lmodel] || DELIGHT.krea2).help)) : null,
-    o.kind === 'delight' ? field('Prompt', textArea(() => ST.lprompt, (v) => { ST.lprompt = v; save(); }, { rows: 4, label: 'How to light it' })) : null,
+    o.kind === 'delight' ? field('Prompt', textArea(() => ST[o.promptKey || 'lprompt'], (v) => { ST[o.promptKey || 'lprompt'] = v; save(); }, { rows: 4, label: o.promptKey ? 'What to remove' : 'How to light it' })) : null,
     o.kind === 'detail' ? field('Model', seg(Object.entries(DETAIL).map(([k, v]) => [k, v.label]), ST.dmodel, (v) => { ST.dmodel = v; save(); eng.render(); }, { wrap: true })) : null,
     o.kind === 'detail' ? help(dm().help) : null,
     o.kind === 'detail' && !dm().plain ? field('Strength', h('input', { type: 'range', min: 0.1, max: 0.7, step: 0.05, 'aria-label': 'Strength',
@@ -367,7 +564,7 @@ export function imageToolsSection(eng) {
       h('span', {}, String(ST.dstrength[ST.dmodel] ?? dm().strength))) : null,
     o.kind === 'detail' && !dm().plain ? field('Prompt', textArea(() => ST.dprompt[ST.dmodel] ?? dm().prompt, (v) => { ST.dprompt[ST.dmodel] = v; save(); }, { rows: 2, label: 'What to add' })) : null,
     o.kind === 'up' ? field(['Enlarge', out ? h('span', {}, out) : null], seg([[2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); eng.render(); })) : null,
-    (o.kind === 'up' || o.kind === 'detail' || o.kind === 'delight' || o.kind === 'sheet' || (o.kind === 'matte' && ST.result !== 'mask')) && onLayers
+    (KEEPS_FRAMING.has(o.kind) || o.kind === 'sheet' || (o.kind === 'matte' && ST.result !== 'mask')) && onLayers && !(o.kind === 'remove' && ST.rfrom === 'painted')
       ? toggle('Hide the original', ST.hide, (v) => { ST.hide = v; save(); }) : null,
-    h('div', { class: 'row wrap' }, button(FLIGHT.size ? 'Run again' : 'Run', () => run(eng), { cls: 'primary', disabled: !t })));
+    h('div', { class: 'row wrap' }, button(o.kind === 'remove' ? (ST.rfrom === 'words' ? 'Find and mark' : 'Remove') : FLIGHT.size ? 'Run again' : 'Run', () => run(eng), { cls: 'primary', disabled: !t })));
 }

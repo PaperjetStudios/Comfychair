@@ -653,7 +653,7 @@ hiding, blend and groups. The chips over the list add a grid, turn steps and siz
 selected layer alone, one run each). The result lands as a layer on top. On a selected layer the result sits over that
 layer: a cropped layer sends only its kept part, and a turned or mirrored layer is sent unturned and its result takes
 the same turn.
-A masked layer is sent whole, without its mask. An **Upscale**, **Detail pass** or **De-light** result gets a copy of the
+A masked layer is sent whole, without its mask. An **Upscale**, **Detail pass**, **De-light**, **Remove** or **Clean** result gets a copy of the
 mask as it was when sent, at the result's size; other tools' results get none.
 - **Maps:** **Depth map**, **Canny edges**, **Scribble** and **Pose**. Depth has **Detail** (Fine: the Large model,
   sharpest; Fast: the Small one, about five times quicker). Canny and Scribble have **Amount** (More lines, Normal,
@@ -661,12 +661,22 @@ mask as it was when sent, at the result's size; other tools' results get none.
   templates are the VFX tab's Quick effects too: `web/maps.js` names them once for both.
 - **Cut out and mask:** **Auto mask: the subject** (BiRefNet) and **Auto mask: by words** (SAM3; name what to find),
   as a cut-out layer or straight into the inpaint mask.
+  **Fine edges** (on by default): these models see any picture at about 1000 px, so a big picture's edge comes back as a
+  staircase. Each thing found gets a second look on a crop close to it (a run for each, not kept in History; not for a thing
+  about as big as the picture), then the pixels along its edge are decided by their colour: is it more common on the thing or
+  beside it (`web/matte-edge.js`). It works in a band as wide as the staircase, so a mask far off the thing is only partly put right.
+- **Clean up:** **Remove** marks what you name in red with SAM3 for you to check (it can miss a watermark or mark other
+  things), or uses the mask you painted; then LaMa fills it in from what is round it, with no prompt. It runs on a crop round each
+  marked area (at 4K the whole picture doesn't fit 12 GB), so only those areas change. **Remove a watermark all over the
+  picture** is for a faint repeated one: an edit model draws the picture again, at about 2 MP. **Clean** is a 1x restoration
+  model at the picture's own size: noise, JPEG blocks or blur.
 - **Upscale:** quality (SeedVR2) or fast (4x-UltraSharp), at 2×, 3× or 4×, hiding the original if you like.
 - **Detail pass:** draws the picture again with more fine detail and the same layout, with Klein 9B, Klein 3, Krea 2
   or Qwen 2.1 (their i2i templates, with a **Strength** and a prompt of their own) or SeedVR2. The models differ a
   lot by subject: try two on the same picture.
 
-Templates: `deck-cutout-image` and `deck-mask-image` (made by `dev/make_image_tool_templates.py`), and the depth,
+Templates: `deck-cutout-image`, `deck-mask-image`, `deck-remove-lama` (needs `models/lama/big-lama.safetensors`) and
+`deck-clean-image` (made by `dev/make_image_tool_templates.py`), and the depth,
 Canny, scribble, pose and upscale picture templates. Run on the GPU only once so far: the mask and upscale results
 were not checked there.
 
@@ -778,7 +788,10 @@ desktop ComfyUI. It's the exact graph that ran, with LoRAs expanded.
 ### Masked edits
 
 The Image tab's **Inpaint and extend** panel does the same on the canvas. Mark the area to redraw with **Paint mask**
-(a red brush on its own layer), **Add selection** (a rectangle or lasso selection joins the mask), **Invert**, **Clear**
+(a red brush on its own layer), **Add selection** (a rectangle or lasso selection joins the mask), **Add layer shape**
+(the solid part of each selected layer joins it: what its see-through and its own mask leave showing), **Cut out layer**
+(a new layer of what the mask covers on each selected layer, in the same place and at full size; the layer stays, hidden, and
+the mask is used up; **Invert** first to keep what is outside it), **Invert**, **Clear**
 or **Mask outside** (everything of the canvas outside the selected layer). **Add item** draws a box for something new:
 describe it, and optionally give a picture to match (Flux 3 Klein places each box). **Extend…** grows the canvas and
 marks the new part. Then describe what should be there, pick the Model (default `deck-klein3-inpaint`, then

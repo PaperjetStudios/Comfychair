@@ -371,6 +371,7 @@ export function createEditor(cfg) {
     if (!clear) { ctx2.fillStyle = E.bg; ctx2.fillRect(0, 0, f.w, f.h); }
     ctx2.translate(-f.x, -f.y);
     drawStack(ctx2, vis);
+    ctx2.setTransform(1, 0, 0, 1, 0, 0);   // (the caller gets a plain canvas: Inpaint's smear draws on it, and the frame's shift would paste the picture again, offset)
     return true;
   }
 

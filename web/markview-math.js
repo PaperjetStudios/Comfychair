@@ -42,3 +42,15 @@ export function slotPicks(results) {
   for (const r of results) if (['Front', 'Left', 'Back', 'Right'].includes(r.label)) out[r.label] = r.name;
   return out;
 }
+
+// Everything at once, not one after another, so all of them show in the queue. start(item) is the quick part, done in order so they queue in
+// order; finish(item, started) is the long part, begun at once. out(item, result, error) as each one lands.
+export async function makeAll(items, start, finish, out) {
+  const going = [];
+  for (const it of items) {
+    let p;
+    try { p = await start(it); } catch (e) { out(it, null, e); continue; }
+    going.push(finish(it, p).then((r) => out(it, r, null), (e) => out(it, null, e)));
+  }
+  await Promise.all(going);
+}

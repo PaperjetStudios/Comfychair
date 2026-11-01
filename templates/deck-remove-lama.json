@@ -1,0 +1,48 @@
+{
+ "img": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@1 Picture [image]",
+   "deck_keep_size": true
+  }
+ },
+ "mask": {
+  "class_type": "LoadImageMask",
+  "inputs": {
+   "image": "",
+   "channel": "red"
+  },
+  "_meta": {
+   "title": "Inpaint mask (the painted mask)"
+  }
+ },
+ "fill": {
+  "class_type": "LamaRemover",
+  "inputs": {
+   "images": [
+    "img",
+    0
+   ],
+   "masks": [
+    "mask",
+    0
+   ],
+   "mask_threshold": 250,
+   "gaussblur_radius": 8,
+   "invert_mask": false
+  }
+ },
+ "save": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "fill",
+    0
+   ],
+   "filename_prefix": "deck/removed"
+  }
+ }
+}

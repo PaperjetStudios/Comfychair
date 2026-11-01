@@ -6,6 +6,10 @@ deck-cutout-image  BiRefNet: a black-and-white matte of the main subject (white 
                    cut-out layer or the inpaint mask from it in the browser.
 deck-mask-image    SAM3 finds what the prompt names ("the red car", "people"): one matte picture per thing found;
                    the panel joins them.
+deck-remove-lama   Big LaMa fills the masked area from what is round it, with no prompt: a watermark, text or a small thing
+                   gone. The mask comes from SAM3 (deck-mask-image) or is painted. The panel runs it on a crop round each marked
+                   area (LaMa at 4K doesn't fit 12 GB) and maskcomp puts only the masked part back on the crop.
+deck-clean-image   A 1x restoration model at the picture's own size: noise, JPEG blocks or blur.
 """
 import json
 from pathlib import Path
@@ -39,6 +43,22 @@ write("deck-mask-image", {
                  confidence_threshold=0.2, text_prompt="person", max_detections=8),
     "grey": node("MaskToImage", mask=["find", 0]),
     "save": node("SaveImage", images=["grey", 0], filename_prefix="deck/sam3-image-mask"),
+})
+
+
+write("deck-remove-lama", {
+    "img": {**node("LoadImage", image=""), "_meta": {"title": "@1 Picture [image]", "deck_keep_size": True}},
+    "mask": node("LoadImageMask", "Inpaint mask (the painted mask)", image="", channel="red"),
+    # (the blur and threshold grow the mask about twice the radius: LaMa needs a watermark's soft edge inside it)
+    "fill": node("LamaRemover", images=["img", 0], masks=["mask", 0], mask_threshold=250, gaussblur_radius=8, invert_mask=False),
+    "save": node("SaveImage", images=["fill", 0], filename_prefix="deck/removed"),
+})
+
+write("deck-clean-image", {
+    "img": {**node("LoadImage", image=""), "_meta": {"title": "@1 Picture [image]", "deck_keep_size": True}},
+    "um": node("UpscaleModelLoader", "@2 Model [model_name]", model_name="1x_ISO_denoise_v1.pth"),
+    "up": node("ImageUpscaleWithModel", upscale_model=["um", 0], image=["img", 0]),
+    "save": node("SaveImage", images=["up", 0], filename_prefix="deck/cleaned"),
 })
 
 

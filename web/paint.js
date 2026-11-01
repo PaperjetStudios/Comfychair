@@ -267,6 +267,40 @@ export function createPaint(ctx) {
     return true;
   }
 
+  // Each layer in list, cut out by the inpaint mask: what the mask covers (and the layer's own mask leaves) as a new layer over it, in the same
+  // place, at the file's own pixels. The layer stays, hidden, and the mask is used up. matte: { canvas (white = covered, the frame's size), f (the frame) }. How many were cut.
+  function cutByMask(list, { canvas, f }) {
+    const a = makeCanvas(canvas.width, canvas.height), ac = a.getContext('2d'), d = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+    for (let i = 0; i < d.data.length; i += 4) d.data[i + 3] = d.data[i];   // (white = solid: what destination-in keeps)
+    ac.putImageData(d, 0, 0);
+    let cut = 0, last = null;
+    for (const l of list) {
+      const W = l.img.width, H = l.img.height, cv = makeCanvas(W, H), c = cv.getContext('2d');
+      c.drawImage(l.img, 0, 0);
+      c.globalCompositeOperation = 'destination-in';
+      c.save();
+      c.transform(...invert(layerMatrix(l)));   // (canvas place to the file's pixels)
+      c.drawImage(a, f.x, f.y);
+      c.restore();
+      const own = !l.maskOff && E().layers.find((m) => m.maskOf === l.key && m.img && l.key);
+      if (own) c.drawImage(own.img, 0, 0, W, H);
+      c.globalCompositeOperation = 'source-over';
+      const px = c.getImageData(0, 0, W, H).data;
+      let any = false;
+      for (let i = 3; i < px.length && !any; i += 4) any = px[i] > 8;
+      if (!any) continue;
+      const n = { name: null, label: `${l.label || l.name?.split('/').pop() || 'Layer'} cut out`, crop: { ...l.crop }, x: l.x, y: l.y, scale: l.scale, rotation: l.rotation || 0,
+        flipX: !!l.flipX, flipY: !!l.flipY, opacity: l.opacity ?? 1, hidden: false, blend: l.blend || 'normal', img: cv, ...(l.group ? { group: l.group } : {}) };
+      const e = E();
+      e.layers.splice(e.layers.indexOf(l) + 1, 0, n);
+      l.hidden = true;
+      dirty(n, 200);
+      last = n; cut++;
+    }
+    if (last) { E().sel = last; E().multi = []; maskOp('clear'); X.changed(); X.render(); }
+    return cut;
+  }
+
   // the mask becomes everything of the canvas frame outside layer l, with `over` px of l's edge inside it, so the redraw blends in
   function maskOutside(l, over = 0) {
     const f = X.frame();
@@ -1390,7 +1424,7 @@ export function createPaint(ctx) {
   }
   return {
     P, els: buildStrip(), painting, paintProps, paintOverlay, sync: syncStrip, savePaint, unsavedPaint, setTool, setColor,
-    blankSheet, addBlank, dropSel, undo, redo, pushStack, selectionMask, maskLayer, paintMask, hasSel: () => !!P.sel, selAction, selectLayer, resizeCanvasLayer, maskOp, growMask, maskOutside, maskFromMatte,
+    blankSheet, addBlank, dropSel, undo, redo, pushStack, selectionMask, maskLayer, paintMask, hasSel: () => !!P.sel, selAction, selectLayer, resizeCanvasLayer, cutByMask, maskOp, growMask, maskOutside, maskFromMatte,
     reset() { cancelStroke(); dropSel(); P.last = null; U.undo = []; U.redo = []; U.bytes = 0; syncStrip(); },   // another document: its undo goes
   };
 }

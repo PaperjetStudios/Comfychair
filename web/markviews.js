@@ -6,20 +6,18 @@ import { h, api, store, toast, openSheet, closeSheet, button, iconBtn, section, 
 import { inputUrl, thumbUrl } from './core.js';
 import { uploadImage } from './media.js';
 import { maximizable } from './layout.js';
-import { ANGLES, STEPS, frameAt, madeOf, packFrom, setMark, slotPicks, stepsOn, toMake, viewFile } from './markview-math.js';
+import { ANGLES, STEPS, frameAt, madeOf, makeAll, packFrom, setMark, slotPicks, stepsOn, toMake, viewFile } from './markview-math.js';
 
 const KEY = 'deck.markviews';   // (per device: which boxes are ticked)
 const load = () => ({ steps: { up: true, delight: false, cut: true }, ...store.get(KEY, {}) });
 const SESS = new Map();         // run id -> { marks, rev, running, draw, status }, so reopening finds a run still making pictures
 const THUMBS = new Map();       // `${run}:${frame}` -> a small picture of the frame, this session only
 
-async function makeView(g, index, mark, steps, what, say) {
+const frameOf = async (g, index, mark) => (await api(`/api/generations/${g.id}/to-input`, { method: 'POST', body: { index, frame: mark.frame, mp: 0, multiple: 1 }, busy: false })).name;
+async function makeView(g, index, mark, first, steps, what) {
   const { applyStep } = await import('./imagetools.js');
-  let { name } = await api(`/api/generations/${g.id}/to-input`, { method: 'POST', body: { index, frame: mark.frame, mp: 0, multiple: 1 }, busy: false });
-  for (const s of steps) {
-    say(`${mark.label}: ${STEPS.find(([k]) => k === s)[1].toLowerCase()}…`);
-    name = await applyStep(s, name, { what });
-  }
+  let name = first;
+  for (const s of steps) name = await applyStep(s, name, { what });
   const blob = await (await fetch(inputUrl(name))).blob();   // named for its angle, so the picker's filter finds it
   return (await uploadImage(blob, { mp: 0, source: 'editor', filename: viewFile(mark.label), multiple: 1, origin: { generation: g.id, index, frame: mark.frame } })).name;
 }
@@ -160,15 +158,17 @@ export async function openMarkViews(g, index) {
     const steps = stepsOn(st.steps);
     s.running = true; s.draw();
     const say = (t) => { s.status = t; s.draw(); };
-    let ok = 0;
-    for (const m of todo) {
-      try {
-        const name = await makeView(g, index, m, steps, s.what, say);
+    let ok = 0, landed = 0;
+    say(`Queueing ${todo.length}…`);
+    await makeAll(todo, (m) => frameOf(g, index, m), (m, first) => makeView(g, index, m, first, steps, s.what), (m, name, e) => {
+      landed++;
+      if (e) toast(`${m.label}: ${e.message}`, true);
+      else {
         if (s.marks.includes(m)) { m.name = name; saveMarks(g, s); }   // (moved while it ran: the new frame still needs making)
         ok++;
-        s.draw();
-      } catch (e) { toast(`${m.label}: ${e.message}`, true); }
-    }
+      }
+      say(`${ok} of ${todo.length} made${landed < todo.length ? ': the rest are in the queue' : ''}`);
+    });
     s.running = false;
     say(`${ok} of ${todo.length} made. They are in the picture picker under view-…`);
     toast(`Mark views: ${ok} of ${todo.length} pictures made`, ok < todo.length);

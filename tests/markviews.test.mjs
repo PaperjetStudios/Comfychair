@@ -1,7 +1,7 @@
 // node --test tests/markviews.test.mjs: marking a clip's frames as angles
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { frameAt, isSheetRun, madeOf, markClipOf, packFrom, setMark, toMake, slotPicks, stepsOn, viewFile } from '../web/markview-math.js';
+import { makeAll, frameAt, isSheetRun, madeOf, markClipOf, packFrom, setMark, toMake, slotPicks, stepsOn, viewFile } from '../web/markview-math.js';
 
 test('a time is the frame on show', () => {
   assert.equal(frameAt(0, 24), 0);
@@ -58,4 +58,18 @@ test('the Board\'s Sheets section: sheets and what was made from them', () => {
   assert.ok(!isSheetRun({ template: 'h3 upscale', params: {} }));
   assert.ok(!isSheetRun({ template: 'deck-sheet-cell', params: {} }));
   assert.ok(!isSheetRun({ template: 'deck-h3-i2v' }));
+});
+
+test('all the views are queued before any is waited on, in order, and one failing stops none of the others', async () => {
+  const log = [], gate = [];
+  const out = [];
+  const going = makeAll(['a', 'b', 'c'],
+    async (it) => { log.push(`start ${it}`); if (it === 'b') throw new Error('no frame'); return `${it}0`; },
+    (it, first) => { log.push(`queue ${first}`); return new Promise((res, rej) => gate.push({ it, res, rej })); },
+    (it, r, e) => out.push([it, r, e?.message ?? null]));
+  await new Promise((r) => setTimeout(r));
+  assert.deepEqual(log, ['start a', 'queue a0', 'start b', 'start c', 'queue c0']);   // (nothing has finished yet)
+  gate[1].res('C'); gate[0].rej(new Error('run failed'));
+  await going;
+  assert.deepEqual(out, [['b', null, 'no frame'], ['c', 'C', null], ['a', null, 'run failed']]);
 });
