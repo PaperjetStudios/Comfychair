@@ -153,8 +153,6 @@ async function attach(o, group) {
   group.userData.skin = {
     order, map: o.map, restQ, hipBone,
     hipRest: hipBone ? hipBone.position.clone() : null,
-    // the hips at rest, in the scene's space (the rig's root, its scale and the layer's transform)
-    figHipRest: new THREE.Vector3(0, rig.at.hips[1], 0).applyMatrix4(rig.root.matrixWorld),
   };
   group.userData.skinned = skinned;
   const view = await import('./scene-view.js');
@@ -162,6 +160,14 @@ async function attach(o, group) {
   view.draw();
   (await import('./scene-ui.js')).renderPanel();   // the panel's mapped/missing counts
   return { mapped: restQ.size, missing: Object.keys(o.map).length - restQ.size };
+}
+
+// how far the figure's hips are from their rest place on this layer, as a move in the scene. Only the pose counts: the
+// rest place is worked out with the layer where it is now, as the whole layer moving already carries the model with it
+// (a rest place kept from when the file loaded moved the model a second time, away from its rig).
+export function hipShift(rig, out = new THREE.Vector3()) {
+  rig.bones.hips.getWorldPosition(out);   // (this brings the root's world matrix up to date too)
+  return out.sub(V3.set(0, rig.at.hips[1], 0).applyMatrix4(rig.root.matrixWorld));
 }
 
 // every mapped bone takes its figure joint's world turn; the hips follow the figure's rise and fall
@@ -183,7 +189,7 @@ function sync(o, group) {
     b.updateWorldMatrix(false, false);
   }
   if (s.hipBone && s.hipRest) {
-    V2.copy(rig.bones.hips.getWorldPosition(V1)).sub(s.figHipRest);
+    hipShift(rig, V2);
     const p = s.hipBone.parent;
     if (p) {
       p.updateWorldMatrix(true, false);

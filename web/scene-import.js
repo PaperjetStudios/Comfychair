@@ -12,10 +12,10 @@ import { inputUrl, thumbUrl } from './core.js';
 import { C, OBJ as OBJ_CH, R, SC, current, matchSceneTo, newObject, namesFor, save, selItem, write } from './scene-data.js';
 import { heightOf as figureHeight } from './figure.js';
 import { addModeSection } from './scene-modes.js';
-import { LOADERS, SPLAT_PASS, activeCamera, controls, changed, draw, fit, lookThrough, passHooks, recentre, renderer, scene, select } from './scene-view.js';
+import { LOADERS, SPLAT_PASS, activeCamera, controls, changed, draw, fit, lookThrough, passHooks, pose, recentre, renderer, scene, select } from './scene-view.js';
 import { LIBRARY } from './scene-library.js';
 import { askHeight } from './scene-scale.js';
-import { fitForHeight, fmtLen, importFit, unitToMetres } from './scale-math.js';
+import { baseOf, fitForHeight, fmtLen, importFit, unitToMetres } from './scale-math.js';
 import {
   LEVELS, countLabel, fileOf, levelFor, levelName, makeChoices, placeAtCamera, previewLevel, previewUrl, renderUrl, setMakeChoices, setPlaceAtCamera,
   setPreviewLevel, setSharp, sharpOn
@@ -426,15 +426,27 @@ async function useOwnRig(o) {
 // Rig a run's mesh: the mesh goes into ComfyUI's input folder, an auto-rig template (Make It Animatable
 // for people, UniRig for anything else) returns a skinned model, and that becomes a rigged layer that
 // takes the figure's poses.
-// The rig comes back in the rigger's own size (a rigged layer is fitted to a person's height, a skinned one is raw): put it
-// where the model it was made from stands, as tall, and turned the same. like: { height (m), x, z, ry } of that model.
-function placeLike(o, like, figure) {
+// The rig comes back in the rigger's own size (a rigged layer is fitted to a person's height, a skinned one is the file's):
+// put it where the model it was made from stands, as tall, and turned the same. A rigged or skinned layer stands centred
+// with its feet at its (0, 0, 0). like: likeOf() of that model. A skinned layer takes its scale when its file has loaded
+// and its height is known (asTall, scene-skin.js).
+export function placeLike(o, like, figure) {
   if (!like || !o) return o;
-  const k = figure ? like.height / figureHeight('man') : 1;
-  o.base.x = like.x; o.base.z = like.z; o.base.ry = like.ry;
-  if (figure) o.base.sx = o.base.sy = o.base.sz = +k.toPrecision(4);
+  o.base.x = like.x; o.base.y = like.y; o.base.z = like.z; o.base.ry = like.ry;
+  if (figure) o.base.sx = o.base.sy = o.base.sz = fitForHeight(figureHeight('man'), like.height);
+  else o.asTall = like.height;
   save();
+  pose(R.f); draw();
   return o;
+}
+// where a model layer stands and how tall it is, from what is drawn: { height (m), x, y, z (its base), ry }
+export function likeOf(o) {
+  const m = R.meshes.get(o.id);
+  if (!m) return null;
+  const box = new THREE.Box3().setFromObject(m), height = box.max.y - box.min.y;
+  if (!Number.isFinite(height) || height <= 0) return null;
+  const [x, y, z] = baseOf(box.min.toArray(), box.max.toArray());   // (where it stands, whatever its origin)
+  return { height, x, y, z, ry: current(o, OBJ_CH).ry };
 }
 
 export async function rigRun(generation, index, name, template = 'deck-autorig-human', { skinned = false, url = null, like = null } = {}) {
@@ -462,13 +474,7 @@ export async function rigModel(o, template, opts = {}) {
   // a model from a run is sent by its run; any other (imported, cleaned up) by its file in the project
   if (o.gen == null && !/^\/files\/projects\//.test(o.url || '')) return toast('Rig a model that is a file in this project (one made, imported or cleaned up)', true);
   // as tall, and standing where this model does
-  const m = R.meshes.get(o.id);
-  let like = null;
-  if (m) {
-    const box = new THREE.Box3().setFromObject(m), cur = current(o, OBJ_CH);
-    if (Number.isFinite(box.max.y - box.min.y) && box.max.y > box.min.y) like = { height: box.max.y - box.min.y, x: m.position.x, z: m.position.z, ry: cur.ry };   // (where it stands, not its origin)
-  }
-  try { await rigRun(o.gen, o.genIndex || 0, o.name, template, { ...opts, url: o.url, like }); }
+  try { await rigRun(o.gen, o.genIndex || 0, o.name, template, { ...opts, url: o.url, like: likeOf(o) }); }
   catch (e) { toast(e.message, true); }
 }
 

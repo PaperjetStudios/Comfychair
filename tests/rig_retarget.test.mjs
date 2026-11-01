@@ -32,7 +32,7 @@ globalThis.getComputedStyle = () => ({ getPropertyValue: () => '' });
 await register(new URL('./shot-hooks.mjs', import.meta.url).href, { parentURL: import.meta.url });
 const THREE = await import('../web/vendor/three.module.min.js');
 const FIGURE = await import('../web/figure.js');
-const { restOffsets } = await import('../web/scene-rig.js');
+const { hipShift, restOffsets } = await import('../web/scene-rig.js');
 const mat = new THREE.MeshBasicMaterial();
 
 // A rigged model bound in a T- or A-pose: after retargeting, each limb points where the figure's does, in every
@@ -65,5 +65,18 @@ for (const bindPose of ['tpose', { lsho: q(45), rsho: q(-45) }]) {
       assert.ok(deg < 1, `${JSON.stringify(bindPose)} bind, ${pose}: ${a} is ${deg.toFixed(1)}° off the figure`);
     }
   }
+}
+// The hips' shift is the pose's alone: a layer moved, turned or scaled (as a rig is, placed where its model stood) doesn't
+// add to it, or the model parts from its rig by that much, once more at each move.
+{
+  const near = (v, want, what) => assert.ok(v.distanceTo(new THREE.Vector3(...want)) < 1e-6, `${what}: ${v.toArray()}`);
+  const group = new THREE.Group(), fig = FIGURE.buildFigure(mat, mat, 'man');
+  group.add(fig.root);
+  group.updateMatrixWorld(true);
+  near(hipShift(fig), [0, 0, 0], 'at rest');
+  group.position.set(2, 0.5, 1); group.scale.setScalar(0.74); group.rotation.y = Math.PI / 2;
+  near(hipShift(fig), [0, 0, 0], 'the layer moved, without its matrix drawn yet');
+  fig.bones.hips.position.y += 0.1;
+  near(hipShift(fig), [0, 0.074, 0], 'hips raised 10 cm on a layer at 0.74');
 }
 console.log('rig retarget ok');

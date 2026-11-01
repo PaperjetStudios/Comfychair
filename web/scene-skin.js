@@ -9,7 +9,7 @@
 import * as THREE from './vendor/three.module.min.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { BONE, R, SC, TYPES, addKey, makers, newObject, sample, save, write } from './scene-data.js';
-import { importFit } from './scale-math.js';
+import { fitForHeight, importFit } from './scale-math.js';
 import { button, field, h, help, hint, numSlider, section, toast } from './ui.js';
 import { chainTo, reach } from './ik.js';
 import { mirrorChans } from './rig-map.js';
@@ -93,6 +93,8 @@ async function attach(o, group) {
   const box = new THREE.Box3().setFromObject(obj);
   const size = box.getSize(new THREE.Vector3());
   const fit = fitFor(o, size, obj.userData?.unitScaleFactor ?? null);
+  // (a rig of a model: as tall as that model, once, whatever size the rigger gave it)
+  if (o.asTall) { o.base.sx = o.base.sy = o.base.sz = fitForHeight(size.y * fit, o.asTall); delete o.asTall; save(); }
   const wrap = new THREE.Group();
   wrap.add(obj);
   obj.position.set(-(box.min.x + box.max.x) / 2, -box.min.y, -(box.min.z + box.max.z) / 2);
