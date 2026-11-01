@@ -467,7 +467,7 @@ export async function rigModel(o, template, opts = {}) {
   let like = null;
   if (m) {
     const box = new THREE.Box3().setFromObject(m), cur = current(o, OBJ_CH);
-    if (Number.isFinite(box.max.y - box.min.y) && box.max.y > box.min.y) like = { height: box.max.y - box.min.y, x: cur.x, z: cur.z, ry: cur.ry };
+    if (Number.isFinite(box.max.y - box.min.y) && box.max.y > box.min.y) like = { height: box.max.y - box.min.y, x: m.position.x, z: m.position.z, ry: cur.ry };   // (where it stands, not its origin)
   }
   try { await rigRun(o.gen, o.genIndex || 0, o.name, template, { ...opts, url: o.url, like }); }
   catch (e) { toast(e.message, true); }

@@ -854,6 +854,11 @@ menu with each snap and its step) fade in only while something can be moved. Dep
 scale person are one **Overlays** menu beside the director view. The bars are see-through. **H** (or the eye under the
 full-screen button) hides every tool over the view; **N** pulls the settings panel in and out in full screen.
 
+Every 3D layer has an **Origin** (under Pivot in its panel): the point it really turns and scales around, in the view,
+in renders and between keys; Position is where that point is. **Edit origin** moves it without moving the layer: drag
+the gizmo (with snapping), tap the layer, or aim with Pivot at the view centre. There are also named places (Base,
+Centre, a figure's Feet, Hips, Head...), metres for X, Y and Z, and Reset.
+
 The panel's **Position**, **Rotation** and **Size** (and the camera's **Position** and **Aims at**) are rows of three
 boxes with their axis inside, X red, Y (up) green, Z blue: type a value, or hold and pull sideways at a steady rate
 (1 cm, half a degree, 5 mm a pixel; Shift on a mouse is ten times finer); a double-tap puts one back. The chain on
@@ -1148,6 +1153,7 @@ web/workarea.js      the work area every timeline shares (web/workarea-math.js: 
 web/playback.js      the transport bar and keys every player shares
 web/keys.js          the keyframe engine; web/keyed.js animatable properties for clips and layers
 web/gizmo.js         transform gizmos with grid and snapping; web/gizmo-orient.js axes and pivot maths
+web/origin-math.js   a 3D layer's origin: where it draws, and moving it without moving the layer
 web/crop-geometry.js crop geometry shared by image and video inputs
 web/undo-dock.js     Undo / Redo for the open tab
 web/sound.js         the Sound tab

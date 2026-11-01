@@ -8,7 +8,7 @@ import { $, api, busy as busyBar, canvasFont, clone, closeSheet, h, store, toast
 import { gzChip, smoothGizmo, snap3, snapMenu3 } from './gizmo.js';
 import { ORIENTS, centrePoint, follow, frameQuat, orientOf, relQuat, spaceOf } from './gizmo-orient.js';
 import {
-  C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, WP, current, frames, holdStart, hooks, liveCam, pathSig, makers, namesFor, newObject, newRoom, pivotOf, sample,
+  C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, WP, current, frames, holdStart, hooks, liveCam, pathSig, makers, namesFor, newObject, newRoom, originShift, pivotOf, sample, setOrigin,
   sameTab, save, selItem, setActiveCam, setSC, write
 } from './scene-data.js';
 import { letGo } from './scene-export.js';
@@ -67,6 +67,9 @@ let camAt = [0, 0, 0], camRel = [0, 0, 0, 1];
 // "Pivot at the view centre": a stand-in pivot for one thing (an object, or the active camera) until reset or the
 // selection changes; at is in the thing's own space. Not saved: the thing's data keeps its own origin and pivot.
 let tmpPivot = null;
+// what the view shows the selected layer's origin with (never in a render): draw() places it
+const originDot = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffb020, depthTest: false, transparent: true, opacity: 0.95 }));
+originDot.renderOrder = 12; originDot.visible = false; originDot.raycast = () => {};
 // (the skinning chunks pose an imported character's bones; plain meshes pass through them)
 const VERT = `#include <skinning_pars_vertex>
 varying float vz;
@@ -109,7 +112,7 @@ export function setup() {
   scene.add(grid);
   camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.05, 500);
   camera.layers.enable(1);  // layer 1: a figure's joint dots (picked on their own, never rendered out)
-  scene.add(ikTarget, pivot, camProxy);
+  scene.add(ikTarget, pivot, camProxy, originDot);
   R.orient = orientOf(store.get('deck.scene.orient', 'world'));   // the gizmo's axes (this device's choice)
   R.viewCut = store.get('deck.scene.viewcut', true) !== false;   // the picture follows the cuts, unless you are editing a camera
   R.shotFmt = store.get('deck.scene.shotfmt', 'h3') === 'ltx' ? 'ltx' : 'h3';
@@ -157,7 +160,7 @@ export function setup() {
   smooth = smoothGizmo(gizmo, {
     canvas, fix: fixTarget, redraw: () => draw(),
     apply: (o) => { if (gizmo.object === o) { applyChange(); draw(); } },
-    settle: () => { save(); renderKeys(); renderPanel(); },
+    settle: () => { if (originEditing()) dropOrigin(); save(); renderKeys(); renderPanel(); },
     end: () => { letGo('gizmo'); placeHandle(); },
     start: () => holdStart('gizmo'),
   });
@@ -188,7 +191,7 @@ export function setup() {
     holdEnd('bonedrag');
   }
   canvas.addEventListener('pointerdown', (e) => {
-    const bone = !HAND.on && (e.button === 0 || e.pointerType !== 'mouse') && !gizmo.dragging && gizmo.axis == null ? boneDotAt(e) : null;
+    const bone = !HAND.on && !originEditing() && (e.button === 0 || e.pointerType !== 'mouse') && !gizmo.dragging && gizmo.axis == null ? boneDotAt(e) : null;
     const dot = bone && (R.meshes.get(R.sel)?.userData.dots || []).find((x) => x.userData.joint === bone);
     if (dot) {
       const w = dot.getWorldPosition(new THREE.Vector3());
@@ -216,6 +219,7 @@ export function setup() {
     if (HAND.on) { down = null; return; }   // (Hand mode keeps the figure: a tap doesn't change what's selected)
     if (!down || down.onGizmo || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down = null; return; }
     down = null;
+    if (originEditing()) return originAtTap(e);   // (editing the origin: a tap puts it on the layer, and keeps the layer selected)
     const joint = jointAt(e);
     if (joint) return selectJoint(joint);
     const bone = boneDotAt(e);
@@ -265,14 +269,16 @@ function applyChange() {
   const o = selItem(), m = o && R.meshes.get(o.id);
   if (!o || !m) return;
   if (R.joint) return jointChanged(o);
+  if (originEditing()) return;   // (only the handle moves: the layer stays, and the origin lands when the drag settles)
   const p = pivot;
   // the object follows the pivot: turned (relative to it) and scaled around it
   const t = follow(p.position.toArray(), p.quaternion.toArray(), pivotRel, pivotAt.toArray(), p.scale.toArray());
   m.quaternion.fromArray(t.q); m.scale.copy(p.scale); m.position.fromArray(t.p);
   const d = THREE.MathUtils.radToDeg;
-  write(o, namesFor(o), { x: m.position.x, y: m.position.y, z: m.position.z,
-    rx: d(m.rotation.x), ry: d(m.rotation.y), rz: d(m.rotation.z),
-    sx: Math.max(1e-4, m.scale.x), sy: Math.max(1e-4, m.scale.y), sz: Math.max(1e-4, m.scale.z) });
+  const v = { rx: d(m.rotation.x), ry: d(m.rotation.y), rz: d(m.rotation.z),
+    sx: Math.max(1e-4, m.scale.x), sy: Math.max(1e-4, m.scale.y), sz: Math.max(1e-4, m.scale.z) };
+  const at = originShift(o, v);   // (x, y, z are where its origin is)
+  write(o, namesFor(o), { x: m.position.x + at[0], y: m.position.y + at[1], z: m.position.z + at[2], ...v });
 }
 
 // the shot camera put where the proxy is, looking along it at what it looked at (same distance)
@@ -419,6 +425,7 @@ export function photoShift(src) {
 export async function recentre(o) {
   const pos = o.type === 'photo' ? photoShift(await photoScene(o.url)) : standShift(o.box || [0, 0, 0, 0, 0, 0], o.flip);
   o.view = { pos };
+  delete o.origin;   // (it stands by its own origin again)
   write(o, OBJ.filter((k) => ['x', 'y', 'z', 'rx', 'ry', 'rz'].includes(k)), { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0 });
   R.meshes.get(o.id)?.userData.splat?.fit();
   const g = R.meshes.get(o.id);
@@ -439,7 +446,8 @@ export function photoLens(src) {
 // the shot camera where the photo was taken (and with its lens): the object's origin, or o.view.pos in its space
 export function lookThrough(o) {
   const v = current(o, OBJ), r = THREE.MathUtils.degToRad, rot = new THREE.Euler(r(v.rx), r(v.ry), r(v.rz));
-  const at = new THREE.Vector3(...(o.view?.pos || [0, 0, 0])).multiplyScalar(v.sy).applyEuler(rot).add(new THREE.Vector3(v.x, v.y, v.z));
+  const sh = originShift(o, v);
+  const at = new THREE.Vector3(...(o.view?.pos || [0, 0, 0])).multiplyScalar(v.sy).applyEuler(rot).add(new THREE.Vector3(v.x - sh[0], v.y - sh[1], v.z - sh[2]));
   const fwd = new THREE.Vector3(0, 0, -1).applyEuler(rot);
   const t = fwd.multiplyScalar((o.dist || 3) * v.sy).add(at);
   write(SC.camera, CAM, { px: at.x, py: at.y, pz: at.z, tx: t.x, ty: t.y, tz: t.z, fov: o.fov || 50, roll: 0 });
@@ -508,14 +516,16 @@ function placeIkTarget() {
   ikTarget.updateMatrixWorld();
 }
 // the selected object's pivot, in its own space (the figure's pose and the photo's mesh move it)
-function pivotPoint(o, m) {
-  const k = pivotOf(o), rig = m.userData.rig;
+function pivotPoint(o, m, k = pivotOf(o)) {
+  const rig = m.userData.rig;
   m.updateMatrixWorld(true);
+  if (k === 'set') return new THREE.Vector3().fromArray(o.origin || [0, 0, 0]);
   if (rig) {
     if (k === 'feet') return new THREE.Vector3();
     return m.worldToLocal(k === 'com' ? FIGURE.centerOfMass(rig) : rig.bones[k].getWorldPosition(new THREE.Vector3()));
   }
   if (o.type === 'photo' || LOADERS[o.type]) {  // (the mesh itself sits on the floor at its origin)
+    if (k === 'origin' && o.view) return new THREE.Vector3(...o.view.pos);   // (a photo's lens, when it stands centred)
     const box = new THREE.Box3().setFromObject(m);
     return k === 'center' && !box.isEmpty() ? m.worldToLocal(box.getCenter(new THREE.Vector3())) : new THREE.Vector3();
   }
@@ -524,12 +534,47 @@ function pivotPoint(o, m) {
 function placePivot() {
   const o = selItem(), m = o && R.meshes.get(o.id);
   if (!m) return;
-  if (tmpPivot?.item === o) { m.updateMatrixWorld(true); pivotAt.fromArray(tmpPivot.at); } else pivotAt.copy(pivotPoint(o, m));
+  const editing = originEditing();
+  if (editing) { m.updateMatrixWorld(true); pivotAt.fromArray(o.origin || [0, 0, 0]); }
+  else if (tmpPivot?.item === o) { m.updateMatrixWorld(true); pivotAt.fromArray(tmpPivot.at); } else pivotAt.copy(pivotPoint(o, m));
   pivot.position.copy(m.localToWorld(pivotAt.clone()));
-  pivot.quaternion.fromArray(frameQuat(R.orient, R.mode, m.quaternion.toArray(), activeCamera().quaternion.toArray()));
+  pivot.quaternion.fromArray(frameQuat(R.orient, editing ? 'translate' : R.mode, m.quaternion.toArray(), activeCamera().quaternion.toArray()));
   pivotRel = relQuat(pivot.quaternion.toArray(), m.quaternion.toArray());
   pivot.scale.copy(m.scale);
   pivot.updateMatrixWorld();
+}
+// ---- the layer's origin (o.origin: origin-math.js): Edit origin moves the gizmo and the origin with it, not the layer
+export const originEditing = () => !!R.originEdit && R.originEdit === R.sel && !R.joint;
+export function setOriginEdit(on) {
+  R.originEdit = on ? R.sel : null;
+  tmpPivot = null;
+  if (on) R.joint = null;
+  refresh(); renderToolbar(); renderPanel();
+}
+// the origin to a point in the layer's own space; the gizmo goes with it
+export function putOrigin(o, at) { setOrigin(o, at); o.pivot = 'set'; }
+// ...to a named place on the layer (one of pivotsFor)
+export function originTo(o, k) {
+  const m = R.meshes.get(o.id);
+  if (m) { putOrigin(o, pivotPoint(o, m, k).toArray()); changed(); }
+}
+// ...to a point in the world (the layer stays)
+function originAtWorld(p) {
+  const o = selItem(), m = o && R.meshes.get(o.id);
+  if (!m) return;
+  m.updateMatrixWorld(true);
+  putOrigin(o, m.worldToLocal(p.clone()).toArray());
+}
+function dropOrigin() { originAtWorld(pivot.position); }
+const pickable = (xs) => xs.find((x) => x.object.visible || x.object.userData.pickProxy);
+function originAtTap(e) {
+  const m = R.meshes.get(R.sel);
+  if (!m) return;
+  const r = canvas.getBoundingClientRect();
+  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), activeCamera());
+  m.updateMatrixWorld(true);
+  const hit = pickable(ray.intersectObject(m, true));
+  if (hit) { originAtWorld(hit.point); changed(); }
 }
 // View axes follow the view: put the gizmo's stand-in back each time the view moves (not while a handle is held)
 function followView() { if (R.orient === 'view') placeHandle(); }
@@ -559,7 +604,7 @@ export function pivotToView() {
   const cam = activeCamera();
   cam.updateMatrixWorld();
   ray.setFromCamera(new THREE.Vector2(0, 0), cam);
-  const r = ray.ray, cut = (xs) => xs.find((x) => x.object.visible || x.object.userData.pickProxy);
+  const r = ray.ray, cut = pickable;
   if (it === SC.camera) {   // (the shot camera: around what the free view looks at)
     const hit = cut(ray.intersectObjects(visibleMeshes(), true));
     const pt = centrePoint(r.origin.toArray(), r.direction.toArray(), hit?.point.toArray() ?? null, controls.target.toArray());
@@ -571,6 +616,7 @@ export function pivotToView() {
     m.updateMatrixWorld(true);
     const hit = cut(ray.intersectObject(m, true));
     const pt = centrePoint(r.origin.toArray(), r.direction.toArray(), hit?.point.toArray() ?? null, pivot.position.toArray());
+    if (originEditing()) { originAtWorld(new THREE.Vector3(...pt)); changed(); return; }
     tmpPivot = { item: it, at: m.worldToLocal(new THREE.Vector3(...pt)).toArray() };
   }
   refresh(); renderToolbar();
@@ -616,7 +662,7 @@ export function syncMeshes() {
   const target = HAND.on ? null : !m ? (R.free && wantFrustum() ? camProxy : null) : !R.joint ? pivot : jointMode() === 'translate' ? ikTarget : m.userData.rig.bones[R.joint];
   if (target) {
     const was = gizmo.object;
-    gizmo.setMode(R.joint ? jointMode() : target === camProxy && R.mode === 'scale' ? 'translate' : R.mode);
+    gizmo.setMode(R.joint ? jointMode() : (target === camProxy && R.mode === 'scale') || originEditing() ? 'translate' : R.mode);
     // (a joint turns on its own axes; everything else as picked: World, Local or View)
     gizmo.setSpace(R.joint && jointMode() === 'rotate' ? 'local' : spaceOf(R.orient));
     if (was !== target) { gizmo.attach(target); if (target === camProxy) placeCamProxy(); }
@@ -649,7 +695,8 @@ export function pose(f) {
     const m = R.meshes.get(o.id);
     if (!m) continue;
     const v = current(o, namesFor(o), f);
-    m.position.set(v.x, v.y, v.z);
+    const at = originShift(o, v);
+    m.position.set(v.x - at[0], v.y - at[1], v.z - at[2]);
     m.rotation.set(r(v.rx), r(v.ry), r(v.rz));
     if (EVEN.has(o.type)) m.scale.setScalar(Math.max(1e-4, v.sy));
     else m.scale.set(Math.max(0.01, v.sx), Math.max(0.01, v.sy), Math.max(0.01, v.sz));
@@ -708,6 +755,7 @@ export function draw(forRender = false) {
   gizmo.getHelper().visible = !forRender && (live || WP.gizmo) && !!gizmo.object;
   if (!forRender && !gizmo.dragging) gizmo.enabled = live || WP.gizmo;   // hidden while playing: can't be grabbed either (the drag orbits)
   const dots = !forRender && !depth && (live || WP.dots);
+  placeOriginDot(dots);
   for (const [id, m] of R.meshes) {
     for (const d of m.userData.rig?.dots || []) { d.visible = dots && id === R.sel && !HAND.on; d.material = d.userData.joint === R.joint ? dotSel : dotMat; }
     for (const d of m.userData.tips || []) { d.visible = dots && HAND.on && id === R.sel && d.userData.side === HAND.side; d.material = d.userData.finger === HAND.drag?.finger ? dotSel : dotMat; }
@@ -717,6 +765,16 @@ export function draw(forRender = false) {
     if (depth) { setRange(roughRange()); renderDepth(renderer, scene, R.free ? viewCam : camera, SPLAT_PASS.spark); }
     else renderer.render(scene, R.free ? viewCam : camera);
   }
+}
+
+// the selected layer's origin, the same size on screen wherever it is: while it is edited, or once it has been set
+function placeOriginDot(show) {
+  const o = show ? selItem() : null, m = o && R.meshes.get(o.id), editing = originEditing();
+  originDot.visible = !!m?.visible && !R.joint && !HAND.on && (editing || !!o.origin);
+  if (!originDot.visible) return;
+  if (editing && gizmo.object === pivot) originDot.position.copy(pivot.position);
+  else originDot.position.fromArray(o.origin || [0, 0, 0]).multiply(m.scale).applyQuaternion(m.quaternion).add(m.position);
+  originDot.scale.setScalar(activeCamera().position.distanceTo(originDot.position) * 0.009);
 }
 
 // the camera that's on show (the shot camera, or the free view's)
@@ -798,7 +856,7 @@ function boneDotAt(e) {
 // ---- selection, layers ------------------------------------------------------------
 export function select(id) {
   if (HAND.on && id !== R.sel) handMode(null);
-  if (id !== R.sel) tmpPivot = null;
+  if (id !== R.sel) { tmpPivot = null; R.originEdit = null; }
   const allow = modeOf().select || id === 'cuts' || id == null;   // the Shots row can be picked in Camera mode too
   R.sel = allow ? id : null; R.joint = null; refresh(); renderToolbar(); renderKeys(); renderPanel();
 }

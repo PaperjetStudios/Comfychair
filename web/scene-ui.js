@@ -14,9 +14,10 @@ import { rigProps } from './scene-rig.js';
 import { boneProps } from './scene-skin.js';
 import {
   HAND, addObject, camGizmo, cameraFromView, canPivot, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, makeSplatHere, newCameraPose, orientLabel,
-  pivotMoved, pivotToView, pose, rebuildRoom, recentre, refresh, removeLayer, removeSelected, resetPivot, select, selectJoint, setFree, setMode, setOrient, syncMeshes, viewer
+  originEditing, originTo, pivotMoved, pivotToView, pose, putOrigin, rebuildRoom, recentre, refresh, removeLayer, removeSelected, resetPivot, select, selectJoint, setFree, setMode, setOrient, setOriginEdit, syncMeshes, viewer
 } from './scene-view.js';
 import { ORIENTS, nextOrient } from './gizmo-orient.js';
+import { drawnScale } from './origin-math.js';
 import { busy, cancelRender, letGo, play, renderColorVideo, renderDepthVideo, renderPoseVideo, saveFrame, saveStill, seek, stopPlay } from './scene-export.js';
 import { AREA, jumpKey, maxBar, renderKeys, renderTransport, toEnd, toStart, wireSheetKeys } from './scene-keys.js';
 import { hasMode, modeDef, modeList, modeOf, modeSections } from './scene-modes.js';
@@ -35,8 +36,8 @@ export function renderToolbar() {
   if (!tb) return;
   const cam = camGizmo(), can = !!selItem() || cam;   // (the director view's camera has Move and Rotate)
   // a joint turns (Rotate); a hand or foot can also be dragged (Move, with IK)
-  const ok = (m) => can && !(cam && m === 'scale') && (!R.joint || m === 'rotate' || (m === 'translate' && !!FIGURE.IK[R.joint]));
-  const mode = R.joint ? jointMode() : R.mode;
+  const ok = (m) => can && !(cam && m === 'scale') && !(originEditing() && m !== 'translate') && (!R.joint || m === 'rotate' || (m === 'translate' && !!FIGURE.IK[R.joint]));
+  const mode = R.joint ? jointMode() : originEditing() ? 'translate' : R.mode;
   tb.querySelectorAll('[data-mode]').forEach((b) => { b.classList.toggle('on', ok(b.dataset.mode) && b.dataset.mode === mode); b.disabled = !ok(b.dataset.mode); });
   // the gizmo's axes: the button shows the ones in use and a tap goes on to the next
   const ob = tb.querySelector('[data-orient]'), [, , oi] = ORIENTS.find(([k]) => k === R.orient) || ORIENTS[0];
@@ -142,6 +143,7 @@ function placeProps(o, cur) {
     scaleProps(o),
     field('Pivot (where the gizmo turns it)', seg(pivotsFor(o), pivotsFor(o).some(([k]) => k === pivotOf(o)) ? pivotOf(o) : null,
       (v) => { o.pivot = v; resetPivot(); changed(); }, { wrap: true })),
+    originProps(o, cur),
     o.type === 'figure' ? shapeProps(o) : null,
     o.type === 'figure' ? [
       toggle('Planted on the floor (Up lifts it off)', o.ground, (on) => { o.ground = on; changed(); }),
@@ -163,6 +165,23 @@ function placeProps(o, cur) {
       }),
       clearKeys(o, names)),
     help('Drag the gizmo to move it; tap the object again (or W / E / R) for Rotate and Scale. With keys, a change sets a key at the playhead; with Auto key off it is held until ◆ Key (or until the playhead moves).')];
+}
+
+// the layer's origin: what x, y, z mean, and what it turns and scales around in the view, in renders and between keys
+function originProps(o, cur) {
+  const editing = originEditing(), at = o.origin || [0, 0, 0], size = drawnScale(cur(), EVEN.has(o.type));
+  const axis = (label, i) => numField(label, at[i] * size[i], (v) => {
+    if (!Number.isFinite(v)) return;
+    const next = [...(o.origin || [0, 0, 0])];
+    next[i] = v / size[i];
+    putOrigin(o, next);
+  }, changed, { live: () => { pose(R.f); draw(); }, digits: 2, step: 0.01, min: -50, max: 50 });
+  return field(['Origin', info('The point this layer really turns and scales around: in the view, in renders and between keys. Position is where this point is. Edit origin: drag the gizmo, tap the layer, or aim with Pivot at the view centre; the layer stays where it is. X, Y and Z are metres from the layer\'s own base, along its own axes. On an animated layer, position keys are adjusted and added so it stays put on its keys; between keys its path can shift a little. On a figure, moves, pairs and captured motion treat this point as the figure\'s feet.')],
+    h('div', { class: 'row wrap' },
+      toggle('Edit origin', editing, (on) => setOriginEdit(on)),
+      ...pivotsFor(o).filter(([k]) => k !== 'set').map(([k, label]) => button(label, () => originTo(o, k), { cls: 'small', title: `Put the origin at: ${label}` })),
+      o.origin ? button('Reset', () => { putOrigin(o, [0, 0, 0]); delete o.pivot; changed(); }, { cls: 'small', title: 'Back to the layer\'s own origin (it stays where it is)' }) : null),
+    h('div', { class: 'row' }, axis('X', 0), axis('Y', 1), axis('Z', 2)));
 }
 
 // a figure's body shape (o.shape: percent per proportion, not keyed) and the plain anatomy shapes (o.anatomy)

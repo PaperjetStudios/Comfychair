@@ -2,6 +2,7 @@ import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import { toast, uid } from './ui.js';
 import { isPoseCh, putKey, recordInto, sampleKeys } from './keys.js';
+import { moveOrigin, originShift as shiftBy } from './origin-math.js';
 export { isPoseCh };
 
 export let C;  // app state and actions handed over by app.js (see sceneModule there)
@@ -57,13 +58,18 @@ const PIVOTS = {
   splat: [['base', 'Base'], ['center', 'Centre']],
   other: [['base', 'Base'], ['center', 'Centre'], ['top', 'Top']],
 };
-export const pivotsFor = (o) => PIVOTS[o.type] || PIVOTS.other;
+// (a layer whose origin was set can also turn around that: scene-view.js pivotPoint)
+export const pivotsFor = (o) => [...(PIVOTS[o.type] || PIVOTS.other), ...(o.origin ? [['set', 'Origin']] : [])];
 export const pivotOf = (o) => (pivotsFor(o).some(([k]) => k === o.pivot) || (isPosable(o) && FIGURE.JOINTS[o.pivot]) ? o.pivot
   : isPosable(o) ? 'hips' : o.type === 'photo' ? 'center' : 'base');
+// A layer's origin (o.origin, in its own space: origin-math.js): x, y, z are where it is. originShift: from the layer's
+// (0, 0, 0) to the origin, at values v, so the layer's three.js object goes at x, y, z minus this.
+const NO_SHIFT = [0, 0, 0];
+export const originShift = (o, v) => (o.origin ? shiftBy(v, o.origin, EVEN.has(o.type)) : NO_SHIFT);
 
 // ---- scene data ------------------------------------------------------------
 export let SC;   // the scene (persisted per project)
-export const R = { offEdit: null, modeKey: null, free: false, f: 0, sel: null, joint: null, figTab: 'pose', poseCat: 'stand', mask: 'all', sym: false, speed: 1, inPlace: false, renders: {}, promptOff: new Set(), promptNames: false, shotOff: new Set(), shotFmt: 'h3', viewCut: true, mode: 'translate', playing: false, real: false, depth: false, autoKey: true, record: false, meshes: new Map(), room: [], applying: false, lastRender: null };
+export const R = { originEdit: null, offEdit: null, modeKey: null, free: false, f: 0, sel: null, joint: null, figTab: 'pose', poseCat: 'stand', mask: 'all', sym: false, speed: 1, inPlace: false, renders: {}, promptOff: new Set(), promptNames: false, shotOff: new Set(), shotFmt: 'h3', viewCut: true, mode: 'translate', playing: false, real: false, depth: false, autoKey: true, record: false, meshes: new Map(), room: [], applying: false, lastRender: null };
 
 export const newRoom = () => ({ w: 8, d: 8, h: 2.8, walls: true, ceiling: true, hidden: false });
 // a new scene starts empty, as Clear all leaves it (no layers, no room; the camera stays)
@@ -506,6 +512,17 @@ export function addKey(item, names, vals = null, only = null) {
   TEMP.delete(item);
   if (!hasKeys(item)) Object.assign(item.base, vals);
   for (const ch of keyChans(item, names, vals)) if ((!only || only.has(ch)) && valOf(vals, ch) !== undefined) setKey(item, ch, R.f, valOf(vals, ch));
+}
+
+// The origin to `at` (in the layer's own space), the layer staying where it is, held changes included
+export function setOrigin(o, at) {
+  const from = o.origin || NO_SHIFT, d = at.map((a, i) => a - from[i]), even = EVEN.has(o.type);
+  for (const v of [MUTED.get(o), TEMP.get(o)?.v]) {
+    if (v?.x === undefined) continue;
+    const s = shiftBy(v, d, even);
+    v.x += s[0]; v.y += s[1]; v.z += s[2];
+  }
+  moveOrigin(o, at, { even, setKey, sample: (f) => sample(o, OBJ, f) });
 }
 
 export const selItem = () => SC.objects.find((o) => o.id === R.sel) || null;
