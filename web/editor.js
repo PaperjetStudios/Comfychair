@@ -156,6 +156,7 @@ const ED = createEditor({
   onChange: () => { tabs.changed(); stillSoon(); },   // the tab saves itself shortly and its still follows
   name: () => tabs?.active?.name,
   beforeRender: () => { if (!tabs.started) tabs.start(); },
+  newEdit: (payload) => tabs.createFrom(payload, 'layers'),
   panelParts: (ed) => h('div', { class: 'panel-body' }, tabMount, ed.topRow(),
     ed.layerList(), ed.paintProps(), ed.inpaintProps(), ed.toolsProps(), ed.layerProps(), ed.animProps(), ed.canvasProps(), ed.exportProps()),   // (the panel order, app-wide)
 });

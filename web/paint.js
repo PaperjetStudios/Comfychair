@@ -244,14 +244,18 @@ export function createPaint(ctx) {
   }
 
   // the inpaint mask takes in what a matte (a canvas, white = keep) covers, drawn into rect r (canvas px): auto masking
-  function maskFromMatte(matte, r) {
+  // (turn: a matrix for a matte from a turned layer, in canvas px)
+  function maskFromMatte(matte, r, turn = null) {
     const f = X.frame();
     if (!f) return false;
     const cv = makeCanvas(f.w, f.h), c = cv.getContext('2d');
     let l = maskLayerOf();
     if (l) c.drawImage(l.img, l.x - f.x, l.y - f.y);
     const tmp = makeCanvas(f.w, f.h), t = tmp.getContext('2d');
-    t.drawImage(matte, r.x - f.x, r.y - f.y, r.w, r.h);
+    t.translate(-f.x, -f.y);
+    if (turn) t.transform(...turn);
+    t.drawImage(matte, r.x, r.y, r.w, r.h);
+    t.setTransform(1, 0, 0, 1, 0, 0);
     const d = t.getImageData(0, 0, f.w, f.h), p = d.data;
     for (let i = 0; i < p.length; i += 4) { const on = p[i] > 127; p[i] = 255; p[i + 1] = 45; p[i + 2] = 45; p[i + 3] = on ? 255 : 0; }   // (MASK_RED)
     t.putImageData(d, 0, 0);

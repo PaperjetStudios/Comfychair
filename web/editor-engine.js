@@ -68,8 +68,8 @@ export function createEditor(cfg) {
   // What a tab stores: the editor's settings and its layers (input image names + crop/position), all small.
   // (Layers only ever name input images, so nothing here is a data URL or a blob. A new blank canvas has no file
   // until its first save, a moment later: it's left out until then.)
-  const dumpEditor = () => ({ v: 2, size: E.size, cols: E.cols, gap: E.gap, bg: E.bg, clear: !!E.clear, out: E.out || 1, mp: E.mp, snap: E.snap, arrange: E.arrange, anim: E.anim, items: E.items, groups: E.groups,
-    layers: E.layers.filter((l) => l.name).map((l) => ({ ...(l.key ? { key: l.key } : {}), ...(l.group ? { group: l.group } : {}), ...(l.maskOf ? { maskOf: l.maskOf } : {}), ...(l.maskOff ? { maskOff: true } : {}), name: l.name, crop: l.crop, x: l.x, y: l.y, scale: l.scale, opacity: l.opacity, hidden: l.hidden,
+  const dumpEditor = (list = E.layers) => ({ v: 2, size: E.size, cols: E.cols, gap: E.gap, bg: E.bg, clear: !!E.clear, out: E.out || 1, mp: E.mp, snap: E.snap, arrange: E.arrange, anim: E.anim, items: E.items, groups: E.groups,
+    layers: list.filter((l) => l.name).map((l) => ({ ...(l.key ? { key: l.key } : {}), ...(l.group ? { group: l.group } : {}), ...(l.maskOf ? { maskOf: l.maskOf } : {}), ...(l.maskOff ? { maskOff: true } : {}), name: l.name, crop: l.crop, x: l.x, y: l.y, scale: l.scale, opacity: l.opacity, hidden: l.hidden,
       blend: l.blend || 'normal', locked: !!l.locked, label: l.label || null, chans: l.chans || null, ...(l.mask ? { mask: true } : {}), ...(l.draft ? { draft: true } : {}), ...(l.canvas ? { canvas: true } : {}), ...(l.clip ? { clip: true } : {}),
       ...(l.rotation ? { rotation: l.rotation } : {}), ...(l.flipX ? { flipX: true } : {}), ...(l.flipY ? { flipY: true } : {}) })) });
   // every edit ends up here: an animated layer keys what moved, then the host saves (the Editor tab's tab and still)
@@ -1113,7 +1113,7 @@ export function createEditor(cfg) {
             E.layers = before; persistEditor(); renderEditor();
           });
         }, { cls: 'small danger' })),
-      help('Drag any selected layer on the canvas to move them all. Opacity, Blend and the buttons change every selected layer; the Image tools panel runs on each one in turn. Select one layer to edit it alone.'));
+      help('Drag any selected layer on the canvas to move them all. Opacity, Blend and the buttons change every selected layer; the Image tools panel, set to Selected layers, runs on each one in turn. Select one layer to edit it alone.'));
   }
 
   function layerProps(l) {
@@ -1311,8 +1311,64 @@ export function createEditor(cfg) {
         button(E.anim ? 'Save this frame as input' : 'Save as input', saveEditor, { cls: E.anim ? 'small' : 'small primary' }),
         button('Download', downloadEditor),
         button('Open in PhotoCraft', (ev) => craftEditor(ev.currentTarget), { title: 'Every layer as its own layer, to keep editing on the computer' }),
-        button('Craft documents…', () => openCraftSheet())));
+        button('Craft documents…', () => openCraftSheet())),
+      selectedExport());
   }
+
+  // ---- the selected layers on their own: inputs in this project, one input, or a new edit ----
+  const selectedPictures = () => { const on = picked(); return E.layers.filter((l) => on.includes(l) && ready(l) && !l.mask && !l.draft && !l.maskOf); };
+  function selectedExport() {
+    const n = selectedPictures().length;
+    if (!n) return null;
+    return h('div', {},
+      field(`${n} selected ${n > 1 ? 'layers' : 'layer'}`, h('div', { class: 'row wrap' },
+        button(n > 1 ? 'Save each as input' : 'Save layer as input', saveEach, { cls: 'small' }),
+        n > 1 ? button('Save as one input', saveTogether, { cls: 'small' }) : null,
+        cfg.newEdit ? button('Open in a new edit', openSelected, { cls: 'small' }) : null),
+      help('Save each as input makes every layer its own input in this project, at its file\'s full pixels, with its crop, turn and opacity and a see-through background. Save as one input makes them one input the size of their shared box, on the Background colour, at Export size and Max MP. Open in a new edit puts them in a new tab, where they stay in place and can be changed without touching this edit. A hidden layer that is selected is included.')));
+  }
+  const pngOf = (cv) => new Promise((res, rej) => cv.toBlob((b) => (b ? res(b) : rej(new Error('The picture is too big to save'))), 'image/png'));
+  // a layer alone at its file's own pixels, as it shows (crop, turn, opacity), with nothing behind it
+  function layerPicture(l) {
+    const b = bounds(l), k = 1 / l.scale, cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(b.w * k)); cv.height = Math.max(1, Math.round(b.h * k));
+    const c = cv.getContext('2d');
+    c.imageSmoothingQuality = 'high'; c.scale(k, k); c.translate(-b.x, -b.y);
+    drawMasked(c, { ...l, blend: 'normal', live: null });   // (through its mask, if it has one)
+    return cv;
+  }
+  // the work on the selected layers: unsaved paint first, so they are as they show
+  async function onSelected(say, work) {
+    const b = busy(say);
+    try {
+      if (paint.unsavedPaint()) await paint.savePaint();
+      const list = selectedPictures();
+      if (!list.length) return toast('Select a layer first', true);
+      await work(list);
+    } catch (e) { toast('Save failed: ' + e.message, true); } finally { b.done(); }
+  }
+  // an input in this project, as Save as input makes one, without leaving the Image tab
+  const saveEach = () => onSelected('Saving the layers…', async (list) => {
+    for (const l of list) await uploadImage(await pngOf(layerPicture(l)), { mp: 0, source: 'editor', filename: 'layer.png', multiple: 1 });
+    toast(list.length > 1 ? `${list.length} layers saved as inputs` : 'Layer saved as an input');
+  });
+  const saveTogether = () => onSelected('Putting the layers together…', async (list) => {
+    const b = unionRect(list.map(bounds)), x = Math.floor(b.x), y = Math.floor(b.y), w = Math.max(1, Math.ceil(b.x + b.w) - x), hh = Math.max(1, Math.ceil(b.y + b.h) - y);
+    const k = E.out || 1, cv = document.createElement('canvas');
+    cv.width = Math.round(w * k); cv.height = Math.round(hh * k);
+    const c = cv.getContext('2d');
+    c.imageSmoothingQuality = 'high'; c.scale(k, k);
+    c.fillStyle = E.bg; c.fillRect(0, 0, w, hh);
+    c.translate(-x, -y);
+    drawStack(c, list);
+    const r = await uploadImage(await pngOf(cv), { mp: E.mp, source: 'editor', filename: 'layers.png' });
+    toast(`Saved as an input, ${r.width}×${r.height}`);
+  });
+  const openSelected = () => onSelected('Opening a new edit…', async (list) => {
+    const keys = E.anim && list.some((l) => anyKeys(l));   // (an animation keeps its fixed canvas; otherwise the new edit fits its layers)
+    const d = dumpEditor(E.layers.filter((l) => list.includes(l) || list.some((o) => o.key && o.key === l.maskOf)));   // (each with its mask; its group comes with it, and an unused group drops on load)
+    await cfg.newEdit({ ...d, size: keys ? E.size : null, anim: keys ? E.anim : null, arrange: null, items: [], layers: d.layers.map((l) => ({ ...l, hidden: false })) });
+  });
 
   // The edit as a layered PhotoCraft document: each layer cropped as here and placed where it sits on the canvas
   async function craftEditor(btn) {

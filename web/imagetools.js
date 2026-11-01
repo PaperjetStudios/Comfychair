@@ -4,10 +4,11 @@ import { pngBlob, uploadImage } from './media.js';
 import { queueRun, template, valuesByRole, waitGen } from './make.js';
 import { MAPS } from './maps.js';
 import { editSizeFor } from './edit-size.js';
+import * as G from './layer-geom.js';
 
 // ---------------------------------------------------------------------------
-// Image tools, in the Editor panel the way the VFX tab has its effects: pick one, set it, Run. It works on the selected
-// picture layer, or on the whole picture (every layer together) when none is selected, and the result lands as a layer:
+// Image tools, in the Editor panel the way the VFX tab has its effects: pick one, set it, Run. Run on chooses what it works
+// on: the whole picture (every layer together) or each selected layer in turn. The result lands as a layer:
 // a map (depth, edges, scribble, pose), an upscaled copy, a cut-out of the subject, or the inpaint mask (auto masking).
 // ---------------------------------------------------------------------------
 const KEY = 'deck.imagetools';
@@ -60,7 +61,7 @@ const OPS = [
   { id: 'upfast', group: 'Upscale', label: 'Upscale (fast)', tpl: 'deck-upscale-image-fast', kind: 'up',
     help: '4x-UltraSharp: a quick, clean enlargement without the invented detail. Export size is set to match, so Download and Save as input come out bigger.' },
 ];
-const ST = { op: 'cutout', result: 'cutout', hide: true, prompt: 'person', rows: 1, cols: 4, sheetFast: false, scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, ...store.get(KEY, {}) };
+const ST = { op: 'cutout', scope: 'whole', result: 'cutout', hide: true, prompt: 'person', rows: 1, cols: 4, sheetFast: false, scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, ...store.get(KEY, {}) };
 const save = () => store.set(KEY, ST);
 const FLIGHT = new Set();   // runs on their way back
 const op = () => OPS.find((o) => o.id === ST.op) || OPS[0];
@@ -69,16 +70,27 @@ const tplId = (o) => (o.kind === 'delight' ? (DELIGHT[ST.lmodel] || DELIGHT.krea
 
 const loadImg = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Could not load a picture')); i.src = src; });
 const plainCrop = (c) => !c || (c.x < 0.001 && c.y < 0.001 && c.w > 0.999 && c.h > 0.999);
-const turned = (l) => !!((l.rotation || 0) % 360) || !!l.flipX || !!l.flipY;
 
-// what the tool works on: the selected picture layer as it is (its own file, no cropping or turning), else every layer
-// together. { name (an input), rect (where it sits on the canvas), layer (or null) }
-const usable = (l) => l && !l.mask && !l.draft && l.name && !turned(l) && plainCrop(l.crop);
-// the layers an Image tool runs on: every selected layer it can use (one run each, in turn), else the one layer or the whole picture
+// the selected layers an Image tool can run on, one run each: picture layers, not an inpaint mask or draft
+const usable = (l) => l && !l.mask && !l.draft && !l.maskOf && !l.broken && l.name;
 const targets = (eng) => (eng.picked?.() || []).filter(usable);
 
-async function sourceOf(eng, l = eng.E.sel) {
-  if (usable(l)) return { name: l.name, rect: eng.layerRect(l), layer: l, px: [l.img.naturalWidth, l.img.naturalHeight] };
+// a cropped layer's kept part, at the file's own pixels, as a new input
+async function keptPart(l) {
+  const W = l.img.naturalWidth, H = l.img.naturalHeight, c = l.crop, cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.round(c.w * W)); cv.height = Math.max(1, Math.round(c.h * H));
+  cv.getContext('2d').drawImage(l.img, c.x * W, c.y * H, c.w * W, c.h * H, 0, 0, cv.width, cv.height);
+  const up = await uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: 'layer.png', multiple: 1 });
+  return { name: up.name, px: [cv.width, cv.height] };
+}
+
+// what the tool works on: a layer (null: every layer together). { name (an input), rect (where it sits on the canvas before
+// any turn), layer (or null), was (the layer's place when sent: its turn goes on the result), px }. A model sees a layer unturned.
+async function sourceOf(eng, l) {
+  if (l) {
+    const part = plainCrop(l.crop) ? { name: l.name, px: [l.img.naturalWidth, l.img.naturalHeight] } : await keptPart(l);
+    return { ...part, rect: eng.layerRect(l), layer: l, was: { ...l } };
+  }
   const f = eng.frame(), pic = document.createElement('canvas');
   if (!f || !eng.compose(pic)) throw new Error('Add a picture first');
   const up = await uploadImage(await pngBlob(pic), { mp: 0, source: 'editor', filename: 'tool.png', multiple: 1 });
@@ -139,29 +151,39 @@ async function cutCells(src) {
   return out;
 }
 
+// a result pic's place at x, y and w wide: over its layer, with that layer's turn
+function placed(src, x, y, w, pic) {
+  const scale = w / pic.width;
+  return { ...(src.was ? G.placeOn(src.was, { x, y, w, h: pic.height * scale }) : { x, y }), scale };
+}
+
 async function land(eng, o, src, done, cell) {
   const { rect, layer } = src;
-  const place = { x: rect.x, y: rect.y };
   if (o.kind === 'matte') {
     const matte = await matteOf(done);
     if (ST.result === 'mask') {
-      eng.paint.maskFromMatte(matte, rect);
+      eng.paint.maskFromMatte(matte, rect, src.was && G.turn(src.was));
       return toast(`${o.label}: added to the inpaint mask (Inpaint panel)`);
     }
     const cut = await cutOut(src.name, matte);
     const up = ST.result === 'black' ? await onBlack(cut) : await uploadImage(await pngBlob(cut), { mp: 0, source: 'editor', filename: 'cutout.png', multiple: 1 });
-    eng.addImage(up.name, { label: ST.result === 'black' ? 'Cut out on black' : 'Cut out', ...place, scale: rect.w / up.width });
+    eng.addImage(up.name, { label: ST.result === 'black' ? 'Cut out on black' : 'Cut out', ...placed(src, rect.x, rect.y, rect.w, up) });
     if (layer && ST.hide) layer.hidden = true;
   } else if (o.kind === 'sheet') {
     let r = await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } });
     if (ST.result === 'black') r = await onBlack(await loadImg(inputUrl(r.name)));
     const cw = rect.w / ST.cols, ch = rect.h / ST.rows;
-    eng.addImage(r.name, { label: `${ST.result === 'black' ? 'View on black' : 'View'} ${cell.r + 1}-${cell.c + 1}`, x: rect.x + cell.c * cw, y: rect.y + cell.r * ch, scale: cw / r.width });
+    eng.addImage(r.name, { label: `${ST.result === 'black' ? 'View on black' : 'View'} ${cell.r + 1}-${cell.c + 1}`, ...placed(src, rect.x + cell.c * cw, rect.y + cell.r * ch, cw, r) });
     return eng.changed(), eng.render();
   } else {
     const r = await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } });
-    eng.addImage(r.name, { label: o.kind === 'up' ? `Upscaled ${r.width}×${r.height}` : o.kind === 'delight' ? 'De-lit' : o.kind === 'detail' ? `Detail (${dm().label})` : o.label, ...place, scale: rect.w / r.width });
+    const made = eng.addImage(r.name, { label: o.kind === 'up' ? `Upscaled ${r.width}×${r.height}` : o.kind === 'delight' ? 'De-lit' : o.kind === 'detail' ? `Detail (${dm().label})` : o.label, ...placed(src, rect.x, rect.y, rect.w, r) });
     if (layer && (o.kind === 'up' || o.kind === 'detail' || o.kind === 'delight') && ST.hide) layer.hidden = true;
+    if (layer && o.kind === 'up' && ST.hide) {   // the selection moves from the hidden original to its upscale (a layer picked since the run began stays picked)
+      const E = eng.E;
+      if (E.sel === layer) { E.sel = made; E.cropping = false; }
+      E.multi = E.multi.map((m) => (m === layer ? made : m));
+    }
     if (o.kind === 'up') eng.E.out = Math.max(eng.E.out || 1, ST.scale);   // (the layer keeps its size on the canvas; exporting at this size shows the new detail)
   }
   eng.changed(); eng.render();
@@ -177,12 +199,9 @@ async function run(eng) {
   const tab = eng.E.tab?.id, b = busy('Sending the picture…');
   try {
     await eng.paint.savePaint();
-    const many = targets(eng);
-    if (many.length > 1) {   // each selected layer is its own run, queued one after another
-      for (const l of many) await runOne(eng, o, t, tab, await sourceOf(eng, l));
-      return;
-    }
-    await runOne(eng, o, t, tab, await sourceOf(eng, many[0]));
+    const list = ST.scope === 'selected' ? targets(eng) : [null];
+    if (!list.length) return toast('Select a layer first', true);
+    for (const l of list) await runOne(eng, o, t, tab, await sourceOf(eng, l));   // (each selected layer is its own run, queued one after another)
   } catch (e) { toast(e.message, true); } finally { b.done(); }
 }
 
@@ -285,17 +304,20 @@ export async function applyStep(step, name, { what = 'person' } = {}) {
 export function imageToolsSection(eng) {
   const E = eng.E;
   if (!E.layers.some((l) => !l.mask && !l.draft)) return null;
-  const o = op(), t = template(tplId(o)), l = E.sel, many = targets(eng).length;
-  const onLayer = usable(l);
-  const f = eng.frame(), size = onLayer ? eng.layerRect(l) : f;
+  const o = op(), t = template(tplId(o)), picked = ST.scope === 'selected' ? targets(eng) : [], many = picked.length;
+  const onLayers = ST.scope === 'selected' && many > 0;
+  const size = many === 1 ? eng.layerRect(picked[0]) : ST.scope === 'whole' ? eng.frame() : null;
   const select = h('select', { 'aria-label': 'Image tool', onchange: (ev) => { ST.op = ev.target.value; save(); eng.render(); } },
     ...GROUPS.map((g) => h('optgroup', { label: g }, ...OPS.filter((x) => x.group === g).map((x) => h('option', { value: x.id, selected: x.id === o.id }, x.label)))));
   const out = size && o.kind === 'up' ? `${Math.round(size.w * ST.scale)}×${Math.round(size.h * ST.scale)}` : null;
   const on = many > 1 ? `Runs on each of the ${many} selected layers, one after the other.`
-    : onLayer ? `Runs on the layer ${l.label || l.name.split('/').pop()}.` : 'Runs on the whole picture: select a layer to use just that one.';
+    : many ? `Runs on the layer ${picked[0].label || picked[0].name.split('/').pop()}.` : ST.scope === 'whole' ? 'Runs on the whole picture.' : '';
   return section('Image tools', null,
-    select, help(`${o.help} ${on}`),
+    select, help(`${o.help} ${on}`.trim()),
     !t ? hint(`${tplId(o)} isn't installed yet`) : null,
+    field('Run on', seg([['whole', 'Whole picture'], ['selected', 'Selected layers']], ST.scope, (v) => { ST.scope = v; save(); eng.render(); }),
+      help('Whole picture sends every visible layer together. Selected layers runs on each selected layer alone, one run each, with the result over that layer. A cropped layer sends its kept part. A turned or mirrored layer is sent unturned, and its result takes the same turn.')),
+    ST.scope === 'selected' && !many ? hint('Select a layer first') : null,
     o.prompt ? field('Find', textArea(() => ST.prompt, (v) => { ST.prompt = v; save(); }, { rows: 2, label: 'What to find', placeholder: 'The red car, people, the sky' })) : null,
     o.depth ? field('Detail', seg([['large', 'Fine'], ['small', 'Fast']], ST.depthModel, (v) => { ST.depthModel = v; save(); eng.render(); }),
       help('Fine uses the Large model: the sharpest edges, steadiest depth. Fast uses Small: about five times quicker, softer.')) : null,
@@ -322,7 +344,7 @@ export function imageToolsSection(eng) {
       h('span', {}, String(ST.dstrength[ST.dmodel] ?? dm().strength))) : null,
     o.kind === 'detail' && !dm().plain ? field('Prompt', textArea(() => ST.dprompt[ST.dmodel] ?? dm().prompt, (v) => { ST.dprompt[ST.dmodel] = v; save(); }, { rows: 2, label: 'What to add' })) : null,
     o.kind === 'up' ? field(['Enlarge', out ? h('span', {}, out) : null], seg([[2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); eng.render(); })) : null,
-    (o.kind === 'up' || o.kind === 'detail' || o.kind === 'delight' || o.kind === 'sheet' || (o.kind === 'matte' && ST.result !== 'mask')) && (onLayer || many > 1)
+    (o.kind === 'up' || o.kind === 'detail' || o.kind === 'delight' || o.kind === 'sheet' || (o.kind === 'matte' && ST.result !== 'mask')) && onLayers
       ? toggle('Hide the original', ST.hide, (v) => { ST.hide = v; save(); }) : null,
     h('div', { class: 'row wrap' }, button(FLIGHT.size ? 'Run again' : 'Run', () => run(eng), { cls: 'primary', disabled: !t })));
 }

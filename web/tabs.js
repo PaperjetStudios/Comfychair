@@ -349,6 +349,12 @@ export class TabSet {
     if (!(await this.leave())) return;
     try { this.open(await this.create1({ name: this.freeName(this.newName), payload: this.adapter.empty() })); } catch (e) { toast(e.message, true); }
   }
+  // a new tab from a payload, named after the one on show
+  async createFrom(payload, suffix) {
+    const a = this.active;
+    if (!(await this.leave())) return;
+    try { this.open(await this.create1({ name: `${a?.name || 'Tab'} ${suffix}`.slice(0, 120), payload, ...(a ? { order: a.order + 0.5 } : {}) })); } catch (e) { toast(e.message, true); }
+  }
   async duplicate() {
     if (!(await this.leave())) return;
     const a = this.active;
