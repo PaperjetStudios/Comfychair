@@ -7,6 +7,8 @@ import { S, CURRENT_EDIT as CURRENT, PICKER_SOURCES as SOURCES, inputUrl, previe
 import { heightGrip, maximizable, zoomPan } from './layout.js';
 import { fmtDur, runTime } from './run-state.js';
 import { fetchHistory as loadHistory } from './generation-data.js';
+import { tick, tickRange } from './pick-slots.js';
+import { draggingPicture, dropKind, droppedFiles } from './drop-files.js';
 
 // This project's finished outputs of the given kinds, newest first: [{ g, o, i, t }]
 export async function projectOutputs(kinds) {
@@ -57,15 +59,18 @@ function dropPictures(seq, give) {
   const el = $('#sheet');
   if (el.dataset.drop) return;
   el.dataset.drop = '1';
-  const live = (e) => DROP && sheetStillOpen(DROP.seq) && [...(e.dataTransfer?.types || [])].includes('Files');
+  const live = (e) => DROP && sheetStillOpen(DROP.seq) && draggingPicture(e.dataTransfer);
   el.addEventListener('dragover', (e) => { if (!live(e)) return; e.preventDefault(); el.classList.add('dropping'); });
   el.addEventListener('dragleave', (e) => { if (!el.contains(e.relatedTarget)) el.classList.remove('dropping'); });
-  el.addEventListener('drop', (e) => {
+  el.addEventListener('drop', async (e) => {
     el.classList.remove('dropping');
     if (!live(e)) return;
     e.preventDefault();
-    const fs = [...e.dataTransfer.files].filter((f) => f.type.startsWith('image/'));
-    if (fs.length) DROP.give(fs); else toast('Drop a picture (PNG, JPG, WebP…)', true);
+    const { give } = DROP;
+    try {
+      const fs = (await droppedFiles(e.dataTransfer)).filter((f) => dropKind(f) === 'image');
+      if (fs.length) give(fs); else toast('Drop a picture (PNG, JPG, WebP…)', true);
+    } catch (err) { toast(err.message, true); }
   });
 }
 
@@ -333,10 +338,13 @@ export function pickFrame({ url, title = 'Pick a frame', fps = 24, back = null, 
 // ---------------------------------------------------------------------------
 // image picker: a gallery of ComfyUI's input images and of history outputs, plus upload.
 // Whatever is picked ends up as an image in ComfyUI's input folder, so onPick gets its name.
-// multi: keep the sheet open and call onPick for every tap (the editor adds several at once).
+// multi: tap pictures to tick them (shift-click a run of them; limit: how many fit), then Add calls onPick for each, in the
+// order ticked. Uploads, crops and the rest get ticked too. The ticks live on opts, so they survive the sheets that replace the picker.
 // ---------------------------------------------------------------------------
 export function openImagePicker(opts) {
-  const { title, mp = () => 0, onPick, multi = false } = opts;
+  const { title, mp = () => 0, onPick, limit = Infinity } = opts;
+  const multi = !!opts.multi && limit > 1;
+  const sel = multi ? (opts.sel ||= new Map()) : null;   // key -> item, in the order ticked
   let tab = store.get('deck.pickerTab2', 'project');
   if (tab !== 'project' && tab !== 'all' && !SOURCES.has(tab)) tab = 'project';
   let q = '';
@@ -344,13 +352,33 @@ export function openImagePicker(opts) {
   const search = h('input', { type: 'text', placeholder: 'Filter by name…' });
   let max = null;   // the big view's full-screen toggle
 
-  const picked = (name, info, card) => {
+  const remember = (name) => rememberRecent('image', { k: name, label: name.split('/').pop(), kind: 'img', src: thumbUrl(name), val: name });
+  const full = () => toast(`There's room for ${limit} here: untick one first`, true);
+  const picked = (name, info) => {
+    if (multi) {
+      if (tick(sel, { ...inputItem(name), get: async () => ({ name, info }) }, true, limit)) paintTicks(); else full();
+      return;
+    }
     max?.exit();
-    rememberRecent('image', { k: name, label: name.split('/').pop(), kind: 'img', src: thumbUrl(name), val: name });
-    if (!multi) { closeSheet(); onPick(name, info); return; }
-    onPick(name, info);
-    if (card) card.classList.add('picked');
-    toast('Added');
+    remember(name);
+    closeSheet(); onPick(name, info);
+  };
+  // Add: every ticked picture, in order. Each one's copy is made now (a History output becomes an input only if it is used).
+  const addTicked = async () => {
+    const list = [...sel.values()];
+    sel.clear();
+    max?.exit();
+    closeSheet();
+    let n = 0;
+    for (const it of list) {
+      try {
+        const r = await it.get();
+        remember(r.name);
+        await onPick(r.name, r.info);
+        n++;
+      } catch (e) { toast(e.message, true); }
+    }
+    if (n) toast(n === 1 ? 'Added' : `Added ${n} pictures`);
   };
   const removeInput = async (n) => {
     if (!confirm(`Delete ${n.split('/').pop()} for good? Every copy goes (here and in ComfyUI), and its thumbnails.`)) return;
@@ -359,25 +387,26 @@ export function openImagePicker(opts) {
       inputs = null; toast('Deleted'); draw();
     } catch (e) { toast(e.message, true); }
   };
-  const fromHistory = async (g, i, c) => {
-    try {
-      const r = await api(`/api/generations/${g.id}/to-input`, { method: 'POST',
-        body: { index: i, frame: 'last', mp: mp(), multiple: 16 } });
-      picked(r.name, r, c);
-    } catch (e) { toast(e.message, true); }
+  const historyGet = async (g, i) => {
+    const r = await api(`/api/generations/${g.id}/to-input`, { method: 'POST',
+      body: { index: i, frame: 'last', mp: mp(), multiple: 16 } });
+    return { name: r.name, info: r };
+  };
+  const fromHistory = async (g, i) => {
+    try { const r = await historyGet(g, i); picked(r.name, r.info); } catch (e) { toast(e.message, true); }
   };
 
-  // Each tab lists items for the big view: { key, title, thumb, full (what the big view shows), video?, cropSrc (a picture to crop), badge?, use(thumb), del? }
+  // Each tab lists items for the big view: { key, title, thumb, full (what the big view shows), video?, cropSrc (a picture to crop), badge?, use(), get? (makes the picture: { name, info }; none: it needs a choice first, so it can't be ticked), del? }
   // This project: its uploads, editor saves and drawings plus everything it generated, newest first
   const SOURCE = { upload: 'upload', editor: 'edit', drawing: 'drawing', crop: 'crop', snapshot: 'frame', scene: '3d', 'edit-tab': 'edit tab', 'video-tab': 'video edit', story: 'story', link: 'link', camera: 'camera' };
   const inputItem = (n, badge = null) => ({ key: n, title: n.split('/').pop(), thumb: thumbUrl(n), full: inputUrl(n), cropSrc: inputUrl(n), badge,
-    use: (c) => picked(n, { name: n }, c), del: () => removeInput(n) });
+    use: () => picked(n, { name: n }), get: async () => ({ name: n, info: { name: n } }), del: () => removeInput(n) });
   const projectItems = async () => {
     const items = inputs.project.filter((r) => r.source !== 'generation')
       .map((r) => ({ t: r.created, it: inputItem(r.name, SOURCE[r.source] || null) }));
     for (const { g, o, i, t } of await projectOutputs(['image', 'video'])) {
       items.push({ t, it: { key: `g${g.id}.${i}`, title: genLabel(g), thumb: previewUrl(o.url, 320), full: o.url, video: o.kind === 'video', cropSrc: o.kind === 'image' ? o.url : null,
-        badge: o.kind === 'video' ? 'last frame' : null, use: (c) => fromHistory(g, i, c), delNote: 'That one is in History: delete it there' } });
+        badge: o.kind === 'video' ? 'last frame' : null, use: () => fromHistory(g, i), get: () => historyGet(g, i), delNote: 'That one is in History: delete it there' } });
     }
     return items.sort((x, y) => y.t - x.t).slice(0, 300).map((x) => x.it);
   };
@@ -385,24 +414,25 @@ export function openImagePicker(opts) {
 
   // a registered source (registerPickerSource): its items for this project; Use picks the still, a frame, or asks
   const sourceItems = async (src) => {
-    const take = async (it, frame, c, nested = false) => {
-      try { const r = await src.pick(it, { mp: mp(), frame }); picked(r.name, r, c); } catch (e) { toast(e.message, true); }
+    const take = async (it, frame, nested = false) => {
+      try { const r = await src.pick(it, { mp: mp(), frame }); picked(r.name, r); } catch (e) { toast(e.message, true); }
       if (nested && multi) openImagePicker(opts);   // (the choice / frame sheet replaced the picker)
     };
-    const frameOf = async (it, c) => {
+    const frameOf = async (it) => {
       const f = await pickFrame({ url: it.video, title: it.title, back: () => openImagePicker(opts) });
-      if (f) take(it, f, c, true);
+      if (f) take(it, f, true);
     };
-    const use = (it, c) => {
+    const use = (it) => {
       if (it.video && it.still) {
         openSheet(h('h3', {}, it.title), h('div', { class: 'media-big' }, h('img', { src: it.thumb, alt: '' })),
-          actions(button('Use the saved still', () => { closeSheet(); take(it, null, c, true); }, { cls: 'primary' }),
-            button('Pick a frame…', () => frameOf(it, c)), button('Back', () => openImagePicker(opts), { cls: 'ghost' })));
-      } else if (it.video) frameOf(it, c);
-      else take(it, null, c);
+          actions(button('Use the saved still', () => { closeSheet(); take(it, null, true); }, { cls: 'primary' }),
+            button('Pick a frame…', () => frameOf(it)), button('Back', () => openImagePicker(opts), { cls: 'ghost' })));
+      } else if (it.video) frameOf(it);
+      else take(it, null);
     };
     return (await src.list(S.project)).map((it) => ({ key: String(it.id), title: it.title, thumb: it.thumb, full: it.thumb || it.video,
-      video: !it.thumb, cropSrc: it.thumb && !it.video ? it.thumb : null, badge: it.badge || null, use: (c) => use(it, c) }));
+      video: !it.thumb, cropSrc: it.thumb && !it.video ? it.thumb : null, badge: it.badge || null, use: () => use(it),
+      get: it.video ? null : async () => { const r = await src.pick(it, { mp: mp(), frame: null }); return { name: r.name, info: r }; } }));
   };
   const EMPTY = { project: 'Nothing in this project yet. Upload, draw, or pick from All inputs.', all: 'No input images match.' };
 
@@ -411,10 +441,11 @@ export function openImagePicker(opts) {
   const onFiles = async (files, source = 'upload') => {
     toast(`Uploading ${files.length}…`);
     for (const fl of files) {
+      if (multi && sel.size >= limit) { full(); break; }
       try {
         const r = await uploadImage(fl, { mp: mp(), source });
         inputs = null;
-        picked(r.name, r, null);
+        picked(r.name, r);
         if (!multi) return;
       } catch (e) { toast('Upload failed: ' + e.message, true); return; }
     }
@@ -428,7 +459,7 @@ export function openImagePicker(opts) {
       if (!blob) return toast('The edit has no pictures yet', true);
       const r = await uploadImage(blob, { mp: mp(), source: 'editor', filename: 'editor.png' });
       inputs = null;
-      picked(r.name, r, null);
+      picked(r.name, r);
     } catch (e) { toast(`Couldn't export the edit: ${e.message}`, true); }
   };
   const reopen = () => openImagePicker(opts);
@@ -444,7 +475,16 @@ export function openImagePicker(opts) {
   const stage = h('div', { class: 'gal-stage pk-stage' }, main, prev, next);
   const zoom = zoomPan(main, () => main.firstElementChild, { swipe: (d) => go(d) });
   const name = h('span', { class: 'pk-name' });
-  const useBtn = button(multi ? 'Add this picture' : 'Use this picture', () => items[cur]?.use(rows.children[cur]), { cls: 'primary' });
+  // multi: adds what is ticked, or the picture on show when nothing is. One that needs a choice (a clip's frame) asks first, and is ticked after.
+  const useCurrent = () => {
+    const it = items[cur];
+    if (!multi) return it?.use();
+    if (it && !it.get) return it.use();
+    if (it && !sel.size) tick(sel, it, true, limit);
+    if (sel.size) addTicked();
+  };
+  const useBtn = button('Use this picture', useCurrent, { cls: 'primary' });
+  const clearBtn = multi ? button('Clear', () => { sel.clear(); paintTicks(); }, { cls: 'small ghost', title: 'Untick every picture' }) : null;
   const delBtn = button('Delete…', () => { const it = items[cur]; if (it.del) it.del(); else toast(it.delNote, true); },
     { cls: 'small danger', title: 'Delete this picture for good (uploads and saved pictures, not History)' });
   // Crop…: cut the picture on show first (a new copy is the one picked); Cancel comes back here
@@ -463,15 +503,41 @@ export function openImagePicker(opts) {
         if (!blob) throw new Error('Couldn\'t cut that picture');
         const r = await uploadImage(blob, { mp: mp(), source: 'crop' });
         inputs = null;
-        picked(r.name, r, null);
+        picked(r.name, r);
         if (multi) reopen();
       } catch (e) { toast(e.message, true); reopen(); }
     } });
   }, { cls: 'small', title: 'Cut the picture first: the cropped copy is the one picked (the original stays)' });
-  const bar = h('div', { class: 'gal-actions pk-actions' }, name, useBtn, cropBtn, delBtn, multi ? button('Done', closeSheet) : null);
+  const bar = h('div', { class: 'gal-actions pk-actions' }, name, useBtn, clearBtn, cropBtn, delBtn);
   // pull this grip down to give the big picture the room (all the way shuts the rows), up for more of them
   const grip = h('div', { class: 'pk-grip', role: 'separator', 'aria-orientation': 'horizontal', 'aria-label': 'Drag to resize the rows of pictures', title: 'Drag down for a bigger picture, up for more pictures (double-tap resets)' }, h('span'));
-  const rows = h('div', { class: 'pk-rows', role: 'listbox', 'aria-label': 'Pictures' });
+  const rows = h('div', { class: 'pk-rows', role: 'listbox', 'aria-label': 'Pictures', 'aria-multiselectable': multi ? 'true' : null });
+  // the ticks on the rows (with their order) and on the button
+  function paintTicks() {
+    if (!multi) return;
+    const order = [...sel.keys()], n = order.length, it = items[cur];
+    useBtn.firstChild.textContent = it && !it.get ? 'Choose…' : n > 1 ? `Add ${n} pictures` : n ? 'Add 1 picture' : 'Add this picture';
+    useBtn.disabled = !it && !n;
+    clearBtn.classList.toggle('hidden', !n);
+    if (rows.children.length !== items.length) return;
+    [...rows.children].forEach((c, k) => {
+      const at = order.indexOf(items[k].key);
+      c.classList.toggle('picked', at >= 0);
+      c.setAttribute('aria-selected', at >= 0);
+      c.querySelector('.pk-n')?.remove();
+      if (at >= 0) c.append(h('span', { class: 'pk-n' }, `${at + 1}`));
+    });
+  }
+  // a tap ticks or unticks; shift ticks the run from the last one tapped
+  let anchor = null;
+  const tapTick = (n, e) => {
+    const it = items[n];
+    if (!it.get) return;
+    if (e.shiftKey && anchor != null) { if (!tickRange(sel, items, anchor, n, limit)) full(); }
+    else if (!tick(sel, it, !sel.has(it.key), limit)) full();
+    anchor = n;
+    paintTicks();
+  };
   const ROWS = 'deck.picker.rows';
   const setRows = (px) => {
     store.set(ROWS, px);
@@ -491,6 +557,7 @@ export function openImagePicker(opts) {
     useBtn.disabled = !it; delBtn.classList.toggle('hidden', !it); cropBtn.classList.toggle('hidden', !it?.cropSrc);
     [...rows.children].forEach((c, k) => { c.classList.toggle('sel', k === n); c.setAttribute('aria-selected', k === n); });
     rows.children[n]?.scrollIntoView({ block: 'nearest' });
+    paintTicks();
   };
   const draw = async () => {
     search.classList.toggle('hidden', tab !== 'all');
@@ -504,7 +571,8 @@ export function openImagePicker(opts) {
     } catch (e) { items = []; rows.replaceChildren(note(e.message, 'err')); select(0); return; }
     if (!items.length) { rows.replaceChildren(placeholder(EMPTY[tab] || `Nothing in ${SOURCES.get(tab).label.toLowerCase()} for this project yet.`)); select(0); return; }
     rows.replaceChildren(...items.map((it, n) => {
-      const t = h('button', { type: 'button', class: 'pk-thumb', role: 'option', title: it.title, 'aria-label': it.title, onclick: () => select(n), ondblclick: () => it.use(t) },
+      const t = h('button', { type: 'button', class: 'pk-thumb', role: 'option', title: it.title, 'aria-label': it.title, onclick: (e) => { select(n); if (multi) tapTick(n, e); },
+        ondblclick: () => { if (!multi) return it.use(); if (!it.get) return it.use(); if (tick(sel, it, true, limit)) addTicked(); else full(); } },
         it.thumb ? h('img', { src: it.thumb, alt: '', loading: 'lazy' }) : placeholder('…'), it.badge ? h('span', { class: 'play' }, it.badge) : null);
       return t;
     }));
@@ -520,21 +588,22 @@ export function openImagePicker(opts) {
   $('#sheet').classList.add('picker-full');   // the whole screen, like the board's gallery
   max = maximizable($('#sheet'), stage, { title: 'Full screen the picture' });   // just the picture
   draw.seq = seq;
-  PK = { seq, go, use: () => items[cur]?.use(rows.children[cur]) };
+  PK = { seq, go, use: useCurrent, tick: () => { if (multi && items[cur]) tapTick(cur, {}); } };
   draw();
   search.addEventListener('input', () => { q = search.value.toLowerCase(); curKey = null; draw(); });
   dropPictures(seq, onFiles);
-  const strip = recentStrip('image', (name) => picked(name, { name }, null));
+  const strip = recentStrip('image', (name) => picked(name, { name }));
   strip.after(search);
   search.classList.toggle('hidden', tab !== 'all');
 }
 
-// ← → move through the open image picker's pictures, Enter uses the one on show
+// ← → move through the open image picker's pictures, Enter uses the one on show (or adds the ticked ones), Space ticks it
 let PK = null;
 document.addEventListener('keydown', (e) => {
   if (!PK || !sheetStillOpen(PK.seq) || e.target.closest('input, textarea, select, button, a') || e.ctrlKey || e.metaKey) return;
   if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); PK.go(e.key === 'ArrowLeft' ? -1 : 1); }
   else if (e.key === 'Enter') { e.preventDefault(); PK.use(); }
+  else if (e.key === ' ') { e.preventDefault(); PK.tick(); }
 });
 
 // a canvas as a PNG Blob (null when the canvas is empty)

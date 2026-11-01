@@ -393,8 +393,12 @@ details.group:not([open]) > summary::after { transform: rotate(-90deg); }
 .pk-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
 .pk-thumb.sel { border-color: var(--accent); }
 .pk-thumb.picked { outline: 3px solid var(--accent); outline-offset: -3px; }
+.pk-n { position: absolute; top: 4px; left: 4px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; background: var(--accent); color: var(--accent-ink, #fff); font-size: var(--fs-xs); font-weight: 700; line-height: 20px; text-align: center; }
 .pk-thumb .play { position: absolute; bottom: 3px; right: 3px; font-size: var(--fs-xs); background: #000a; padding: 1px 5px; border-radius: var(--r-sm); }
 #sheet.dropping { outline: 2px dashed var(--accent); outline-offset: -6px; }
+/* a picture dragged over the app, and the slot it would fill */
+body.picture-drag::after { content: ''; position: fixed; inset: 4px; border: 2px dashed var(--accent); border-radius: var(--r-lg); pointer-events: none; z-index: 10000; }
+.picture-slot.drop-here { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
 /* a file dragged over the Video tab, and where it would land on a lane */
 #tab-video.file-drop { outline: 2px dashed var(--accent); outline-offset: -6px; }
 #tab-video.file-drop .tl-lane { background-image: linear-gradient(color-mix(in srgb, var(--accent) 10%, transparent), color-mix(in srgb, var(--accent) 10%, transparent)); }

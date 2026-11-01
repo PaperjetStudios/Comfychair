@@ -5,6 +5,8 @@ import {
 } from './ui.js';
 import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
 import { clipLabel, clipUrl, openImagePicker, openVideoPicker, soundInput } from './media.js';
+import { pictureSlot } from './picture-drop.js';
+import { slotsFrom } from './pick-slots.js';
 import { RUN, fmtDur } from './run-state.js';
 import { notifyPrepare, keepAwake } from './notifications.js';
 export { keepAwake } from './notifications.js';
@@ -880,14 +882,21 @@ function cropPreview(src, c) {
 function imageField(f) {
   const v = S.values[f.key];
   if (S.imageMp[f.key] == null) S.imageMp[f.key] = f.mp ?? 1;
-  const pick = () => openImagePicker({
-    title: `${f.group} · ${f.label}`, mp: () => S.imageMp[f.key],
-    onPick: (name, info) => {
-      setVal(f.key, name);
-      renderFields();
-      if (info && info.width) toast(`Set ${f.label} (${info.width}×${info.height})`);
-    },
-  });
+  // several slots of one group (H3's References): pick several, and they fill this slot and the group's empty ones
+  const pick = () => {
+    const slots = slotsFrom(S.tpl?.fields, f.key, S.values);
+    let at = 0;
+    openImagePicker({
+      title: `${f.group} · ${f.label}`, mp: () => S.imageMp[f.key], multi: slots.length > 1, limit: slots.length,
+      onPick: (name, info) => {
+        const key = slots[at++];
+        if (!key) return;
+        setVal(key, name);
+        renderFields();
+        if (slots.length === 1 && info && info.width) toast(`Set ${f.label} (${info.width}×${info.height})`);
+      },
+    });
+  };
   // A crop is only a setting: the field keeps the original image, the thumb shows it with the
   // cut-off parts greyed out, and generate() sends a cropped copy (see cropForRun).
   const old = S.imageCrop[f.key];
@@ -921,7 +930,7 @@ function imageField(f) {
     below: [mpInput(() => S.imageMp[f.key], (n) => { S.imageMp[f.key] = n; persist(); }),
       v && mf && S.values[mf.key]?.name ? maskSettings(f, mf, v, cropped?.crop || null) : null] });
   el.dataset.key = f.key;
-  return el;
+  return pictureSlot(el, { give: set, mp: () => S.imageMp[f.key], empty: !v });
 }
 
 // ---- masks: paint where the edit may change the picture (web/maskpaint.js); the server puts every result back

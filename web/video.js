@@ -4,6 +4,7 @@ import {
 } from './ui.js';
 import { S, fmtT, inputUrl, onServer, thumbUrl } from './core.js';
 import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, soundToSoundTab, uploadImage, uploadMedia, withMediaDelete } from './media.js';
+import { draggingPicture, dropKind, droppedFiles } from './drop-files.js';
 import { openGeneration } from './run.js';
 import { TabSet } from './tabs.js';
 import { clipKeyTimes, clipKeys, clipSoundFields, durationOf, keyJumps, timeline, wavePeaks } from './timeline.js';
@@ -1313,10 +1314,7 @@ const editAdapter = {
 // ---- drag and drop (desktop): pictures, videos and sound dragged from a file window onto the Video tab ----
 // Over a lane the clip goes where it is dropped (snapped to the frame and to the clips' and the playhead's edges);
 // anywhere else on the tab it goes after the last clip, as + Clips does.
-const dropKind = (f) => f.type.startsWith('video/') ? 'video' : f.type.startsWith('audio/') ? 'audio' : f.type.startsWith('image/') ? 'image'
-  : /\.(mov|mp4|m4v|mkv|webm|avi)$/i.test(f.name) ? 'video' : /\.(wav|mp3|m4a|flac|ogg|oga|aac|opus)$/i.test(f.name) ? 'audio'
-  : /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(f.name) ? 'image' : null;
-const dropOnFiles = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+const dropOnFiles = (e) => draggingPicture(e.dataTransfer);
 function dropSpot(e, kind) {
   const lane = e.target.closest?.('#timeline .tl-lane');
   const tr = lane && V.tracks.find((t) => t.id === lane.dataset.track);
@@ -1348,7 +1346,10 @@ function wireDrop() {
   tab.addEventListener('drop', async (e) => {
     if (!dropOnFiles(e)) return;
     e.preventDefault();
-    const files = [...e.dataTransfer.files].map((f) => [f, dropKind(f)]);
+    const got = droppedFiles(e.dataTransfer);
+    let dropped;
+    try { dropped = await got; } catch (err) { clear(); return toast(err.message, true); }
+    const files = dropped.map((f) => [f, dropKind(f)]);
     const bad = files.filter(([, k]) => !k).map(([f]) => f.name);
     const spot0 = files.find(([, k]) => k) && dropSpot(e, files.find(([, k]) => k)[1]);
     clear();

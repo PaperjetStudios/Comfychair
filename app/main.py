@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from . import accel, audioedit, civitai, clipimport, craft, delogo, h3upscale, posefind, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import projects, storage, store, network
 from . import playable
-from . import keyexpr, looks, maskcomp, promptaid, sceneasset
+from . import fetchpicture, keyexpr, looks, maskcomp, promptaid, sceneasset
 from . import templates as tpl
 from .comfy import Comfy, ComfyError
 from .routes import audio, effects, library, scene, video, web
@@ -472,6 +472,7 @@ app.include_router(craft.router)
 app.include_router(previews.router)
 app.include_router(promptaid.router)
 app.include_router(looks.router)
+app.include_router(fetchpicture.router)
 
 
 class TokenGate:

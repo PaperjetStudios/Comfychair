@@ -366,7 +366,7 @@ ComfyUI (see *Voice tools*).
 | `@Sampler [seed,steps,cfg]` | only the listed inputs |
 | `@1 Prompt` | a leading number orders the group among groups of the same kind (see below) |
 | `@LoRAs` on a **LoraLoader** or **LoraLoaderModelOnly** | a LoRA stack: add/remove/disable, strength sliders. At run time the node is chained N times, or bypassed if the stack is empty |
-| `@Start frame` on a **LoadImage** | image picker: a gallery of input images and generated outputs, plus upload (with megapixel cap). Left empty, the node is removed and whatever it fed is unplugged, so it works for optional inputs (reference images, first/last frames) |
+| `@Start frame` on a **LoadImage** | image picker: a gallery of input images and generated outputs, plus upload (with megapixel cap). Left empty, the node is removed and whatever it fed is unplugged, so it works for optional inputs (reference images, first/last frames). Where several slots share a title (H3's References) the picker takes several: they fill this slot, then the empty ones |
 | the same `@References` title on several nodes | one group; the fields are numbered (Image 1, Image 2…) |
 
 A **Primitive** node (`PrimitiveInt`, `PrimitiveFloat`…) shows as one number labelled with its title, e.g.
@@ -494,6 +494,8 @@ one from each close-up (`162,198,234,270`), 4 per row.
 Pick the sheet as a reference in `deck-h3-ref2v` for the next video. With a fixed seed the same
 character gives the same sheet; if the orbit runs fast or slow, change **Sheet frames** (frame = seconds × 24).
 The length is fixed, so changing the shot timestamps in the prompt also means changing the frames.
+For detail on the body, `deck-h3-charsheet-body` (13 s, 8 pictures, 4 per row): the same orbit of the full figure, then close shots of the chest, back, legs and feet.
+
 Shorter sheets for a model of the upper body, same inputs and settings: `deck-h3-charsheet-bust` (8 s, 6 pictures, 3 per row: front, side, back, other side, then close-ups of the face front and three-quarter) and `deck-h3-charsheet-bust4` (5.5 s, 4 pictures: front, side, back, face front). The camera frames head to mid-waist the whole way. They come from `dev/make_bust_sheet_templates.py`; frames are untested on a GPU, so change **Sheet frames** if the orbit lands off.
 `deck-h3-objectsheet` is the same for props and other objects: the close-ups are front, three-quarter,
 the top (high angle) and a small detail.

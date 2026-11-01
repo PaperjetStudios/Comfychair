@@ -1,6 +1,7 @@
 import { h, api, toast, undoToast, uid, button, iconBtn, field, section, help, textArea, chip, icon, hint } from './ui.js';
 import { S, thumbUrl, onServer, onProject, isMine, previewUrl } from './core.js';
 import { openImagePicker } from './media.js';
+import { pictureSlot } from './picture-drop.js';
 import { suggest, typing, VIEWS, VIEW_KEYS, VIEW_PROMPTS, viewPrompt, packViews } from './cast.js';
 import { queueRun, template as installed, roleField, valuesByRole, ROLES } from './make.js';
 
@@ -230,7 +231,8 @@ function packField(c) {
   const ok = viewsReady(), src = mainPicture(c);
   const slot = (k, label) => {
     const v = c.views[k], wait = pendingView(c, k);
-    return h('div', { class: `ch-view${v ? ' on' : ''}` },
+    const box = (el) => wait ? el : pictureSlot(el, { give: (n) => setView(c, k, n) });
+    return box(h('div', { class: `ch-view${v ? ' on' : ''}` },
       v ? h('button', { type: 'button', class: 'ch-pic-img', 'aria-label': `${label} view: replace with a picture`,
         onclick: () => openImagePicker({ title: `${c.name}: ${label.toLowerCase()} view`, mp: () => 0, onPick: (n) => setView(c, k, n) }) },
       h('img', { src: thumbUrl(v, 240), alt: '', loading: 'lazy' }))
@@ -239,7 +241,7 @@ function packField(c) {
             onclick: () => openImagePicker({ title: `${c.name}: ${label.toLowerCase()} view`, mp: () => 0, onPick: (n) => setView(c, k, n) }) }, icon('plus')),
       h('span', { class: 'ch-view-lbl' }, label),
       v ? iconBtn(`Clear the ${label.toLowerCase()} view`, icon('close'), () => setView(c, k, null), { class: 'icon-btn st-frame-x' }) : null,
-      !v && !wait && ok && src ? iconBtn(`Make the ${label.toLowerCase()} view`, icon('sparkle'), () => makeViews(c, [k]), { class: 'icon-btn ch-view-make' }) : null);
+      !v && !wait && ok && src ? iconBtn(`Make the ${label.toLowerCase()} view`, icon('sparkle'), () => makeViews(c, [k]), { class: 'icon-btn ch-view-make' }) : null));
   };
   const review = c.cands.length ? h('div', { class: 'ch-cands' }, c.cands.map((x) => h('div', { class: 'ch-cand' },
     h('div', { class: 'ch-cand-img' }, h('img', { src: previewUrl(x.url, 320), alt: '', loading: 'lazy' }), h('span', { class: 'ch-view-lbl' }, VIEWS.find(([v]) => v === x.view)?.[1])),
@@ -317,7 +319,7 @@ export function characterSection(c, { done, extra = [] } = {}) {
       help('Reference pictures. The main one (ticked; tap another to change it) goes to templates that take extra pictures, so the model can match the face and clothes.'),
       pics,
       h('div', { class: 'row wrap' },
-        button([icon('image'), 'Add a picture'], () => openImagePicker({ title: `A picture of ${c.name || 'them'}`, mp: () => 0, onPick: (n) => addPicture(c, n) })),
+        button([icon('image'), 'Add pictures'], () => openImagePicker({ title: `Pictures of ${c.name || 'them'}`, multi: true, mp: () => 0, onPick: (n) => addPicture(c, n) })),
         ...extra)),
     packField(c),
     field('Voice', vs.length ? voice : hint('No voices saved yet: make one in the Sound tab (Voice tools).'),
