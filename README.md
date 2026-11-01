@@ -628,8 +628,10 @@ A single clip from another model (an LTX take, a scene render) goes through **Us
 loaded into `deck-h3-refine` with Regenerate already on; several such clips are refused.
 
 **Image tools** (Image tab, panel **Image tools**; the same idea as the VFX tab's effects). Pick a tool, then **Run**.
-It works on the selected picture layer, or on the whole picture when none is selected, and the result lands as a layer
-on top.
+**Run on** chooses what it works on: **Whole picture** (every visible layer together) or **Selected layers** (each
+selected layer alone, one run each). The result lands as a layer on top. On a selected layer the result sits over that
+layer: a cropped layer sends only its kept part, and a turned or mirrored layer is sent unturned and its result takes
+the same turn.
 - **Maps:** **Depth map**, **Canny edges**, **Scribble** and **Pose**. Depth has **Detail** (Fine: the Large model,
   sharpest; Fast: the Small one, about five times quicker). Canny and Scribble have **Amount** (More lines, Normal,
   Fewer). Pose can read with DWPose (CPU) or SDPose (GPU, holds up better on hard poses, up to 2 people). These
@@ -644,6 +646,12 @@ on top.
 Templates: `deck-cutout-image` and `deck-mask-image` (made by `dev/make_image_tool_templates.py`), and the depth,
 Canny, scribble, pose and upscale picture templates. Run on the GPU only once so far: the mask and upscale results
 were not checked there.
+
+**Selected layers** (Image tab, **Export** panel, with layers selected): **Save each as input** makes every layer its
+own input in the current project, at its file's full pixels, with its crop, turn and opacity and a see-through
+background. **Save as one input** makes them one input the size of their shared box, on the **Background** colour, at
+**Export size** and **Max MP**. **Open in a new edit** puts them in a new edit tab, in place. A hidden layer that is
+selected is included.
 
 **Upscaling:** `deck-upscale-image` / `deck-upscale-video` use SeedVR2 7B (sharp, int8) in one step,
 `deck-upscale-video-fast` the 3B, `deck-upscale-image-fast` a 4× GAN model (4x-UltraSharp) then a

@@ -58,6 +58,13 @@ export function bounds(l) {
 }
 export const insideLayer = (l, p) => { const q = toLocal(l, p), r = layerRect(l); return q.x >= r.x && q.x <= r.x + r.w && q.y >= r.y && q.y <= r.y + r.h; };
 
+// A layer's place when it covers rect in l's unturned frame and turns with l (an Image tool's result over l): x, y, and l's turn if it has one
+export function placeOn(l, rect) {
+  if (!turned(l)) return { x: rect.x, y: rect.y };
+  const c = apply(turn(l), { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 });
+  return { x: c.x - rect.w / 2, y: c.y - rect.h / 2, rotation: l.rotation || 0, flipX: !!l.flipX, flipY: !!l.flipY };
+}
+
 // A new crop that leaves the image where it is on the canvas: with a turn, the kept part's centre (the pivot) moves
 // with the crop, so its position makes up for that
 export function cropKeepingPlace(l, c) {

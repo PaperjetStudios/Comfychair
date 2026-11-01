@@ -27,6 +27,17 @@ const lf = layer({ flipX: true });
 nearP(G.imageToCanvas(lf, { x: 0, y: 0 }), { x: 410, y: 20 }, 'flip');
 assert.deepEqual(G.bounds(lf), G.layerRect(lf));
 
+// an Image tool's result: over its layer with the layer's turn, and a part of the layer stays on the same pixels
+assert.deepEqual(G.placeOn(l0, { x: 10, y: 20, w: 400, h: 200 }), { x: 10, y: 20 });
+const lt = layer({ rotation: 30, flipX: true });
+const pl = G.placeOn(lt, G.layerRect(lt));
+assert.deepEqual([pl.rotation, pl.flipX, pl.flipY], [30, true, false]);
+near(pl.x, 10, 'same box x'); near(pl.y, 20, 'same box y');
+const cell = { x: 210, y: 20, w: 200, h: 100 }, cl = G.placeOn(lt, cell);   // the top-right quarter
+const res = { img: { naturalWidth: 400, naturalHeight: 200 }, crop: { x: 0, y: 0, w: 1, h: 1 }, scale: 0.5, ...cl };
+nearP(G.imageToCanvas(res, { x: 0, y: 0 }), G.imageToCanvas(lt, { x: 100, y: 0 }), 'cell top-left');
+nearP(G.imageToCanvas(res, { x: 400, y: 200 }), G.imageToCanvas(lt, { x: 200, y: 50 }), 'cell bottom-right');
+
 // a new crop leaves the image where it was, turned or not
 for (const o of [{}, { rotation: 37 }, { rotation: -120, flipY: true }]) {
   const l = layer(o), p = { x: 150, y: 60 }, at = G.imageToCanvas(l, p);
