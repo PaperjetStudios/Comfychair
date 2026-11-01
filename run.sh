@@ -7,6 +7,19 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Started by hand while it's already running: open the running one instead of failing on the busy port. Only in a
+# terminal: a service or a background start keeps uvicorn's error, so its failure still shows.
+if [ -t 1 ]; then
+  for scheme in https http; do
+    running="$scheme://localhost:${DECK_PORT:-8190}"
+    if curl -fsk -m 2 "$running/api/status" 2>/dev/null | grep -q '"ui_version"'; then
+      echo "ComfyChair is already running: $running"
+      if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then xdg-open "$running" >/dev/null 2>&1 || true; fi
+      exit 0
+    fi
+  done
+fi
+
 if [ ! -x .venv/bin/uvicorn ]; then
   echo "Setting up virtualenv…"
   python3 -m venv .venv || { echo "Install venv support first: sudo apt install python3-venv"; exit 1; }
