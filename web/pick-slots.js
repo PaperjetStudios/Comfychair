@@ -42,3 +42,8 @@ export function tickRange(sel, items, from, to, limit = Infinity) {
   }
   return true;
 }
+
+// The image picker's filter. A picture's tag is the one on its thumbnail; a picture from a run has none on show, and filters as generated.
+const tagOf = (it) => it.badge || (it.run ? 'generated' : null);
+export const tagsIn = (items) => [...new Set(items.map(tagOf).filter(Boolean))].sort();
+export const byTag = (items, tag) => (tag ? items.filter((it) => tagOf(it) === tag) : items);

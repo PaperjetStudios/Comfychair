@@ -16,7 +16,7 @@ import { modeOf } from './scene-modes.js';
 import { renderKeys, renderPanel, renderToolbar, setSceneMode } from './scene-ui.js';
 import { placeAtCamera, sharpOn } from './splat-levels.js';
 import { standShift } from './splat-shape.js';
-import { renderDepth, setSplatRange, splatDepths, splatMeshes } from './splat-depth.js';
+import { renderDepth, setSplatRange, splatBlurOf, splatDepths, splatMeshes } from './splat-depth.js';
 // the SparkRenderer once scene-import.js has made one (a depth picture draws the splats in a pass of their own)
 export const SPLAT_PASS = { spark: null };
 
@@ -762,7 +762,7 @@ export function draw(forRender = false) {
     for (const d of m.userData.dots || []) { d.visible = dots && id === R.sel; d.material = d.userData.joint === m.userData.pickedBone ? dotSel : dotMat; }
   }
   if (!forRender) {
-    if (depth) { setRange(roughRange()); renderDepth(renderer, scene, R.free ? viewCam : camera, SPLAT_PASS.spark); }
+    if (depth) { setRange(roughRange()); renderDepth(renderer, scene, R.free ? viewCam : camera, SPLAT_PASS.spark, splatBlurOf(SC)); }
     else renderer.render(scene, R.free ? viewCam : camera);
   }
 }
@@ -993,7 +993,6 @@ export function setFree(on) {
 }
 // aim the free view at a point from where
 export function aimFree(at, target) { viewCam.position.set(...at); viewControls.target.set(...target); viewControls.update(); draw(); }
-// the shot camera set to what the free view sees (its lens stays)
 // where a new camera starts: the view you're looking through in the director view; else a step back and up from
 // the active camera (on top of it, it was easy to lose, and it inherited wherever that camera had been sent)
 export function newCameraPose() {
@@ -1007,9 +1006,10 @@ export function newCameraPose() {
   return { ...c, px: c.px + back.x, py: c.py + back.y + 0.3, pz: c.pz + back.z, roll: 0 };
 }
 
+// the shot camera set to what the free view sees, its lens too, so the framing is the same
 export function cameraFromView() {
   const p = viewCam.position, t = viewControls.target;
-  write(SC.camera, CAM, { px: p.x, py: p.y, pz: p.z, tx: t.x, ty: t.y, tz: t.z, roll: 0 });
+  write(SC.camera, CAM, { px: p.x, py: p.y, pz: p.z, tx: t.x, ty: t.y, tz: t.z, fov: viewCam.fov, roll: 0 });
 }
 function syncFrustum() {
   if (!wantFrustum()) return;

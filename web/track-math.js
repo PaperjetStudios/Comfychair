@@ -72,6 +72,14 @@ export function backdropAt(c, aspect, D = BACKDROP_DIST) {
   return { x: eye[0] - b.z[0] * D, y: eye[1] - b.z[1] * D, z: eye[2] - b.z[2] * D, rx, ry, rz, sx: hh * aspect, sy: hh, sz: 1 };
 }
 
+// a background picture's values for a camera: where the card goes, one even scale so that a plane aspect wide and 1 tall
+// covers the frame (frameAspect) with nothing left bare; the part of the photo a frame of another shape can't show is off it
+export function pictureAt(c, aspect, frameAspect, D = BACKDROP_DIST) {
+  const { x, y, z, rx, ry, rz, sy } = backdropAt(c, frameAspect, D);
+  const s = sy * Math.max(1, frameAspect / aspect);
+  return { x, y, z, rx, ry, rz, sx: s, sy: s, sz: s };
+}
+
 // Keep only the frames that matter: a frame stays if dropping it would leave any channel further from the
 // straight line between its neighbours than tol allows (Ramer-Douglas-Peucker, all channels at once).
 // rows: [{ f, ...values }], tol: { name: allowed error }.

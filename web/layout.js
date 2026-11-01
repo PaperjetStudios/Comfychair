@@ -3,6 +3,7 @@
 // are remembered per device (localStorage), per panel.
 
 import { $, h, store, clamp, overlayOpened, overlayClosed, setIcon } from './ui.js';
+import { keyboardFocus } from './key-focus.js';
 
 const svg = (paths) => {
   const ns = 'http://www.w3.org/2000/svg', s = document.createElementNS(ns, 'svg');
@@ -64,7 +65,7 @@ export function wireSplitters() {
     sp.tabIndex = 0;
     sp.addEventListener('keydown', (e) => {
       const d = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[e.key];
-      if (!d) return;
+      if (!d || !keyboardFocus()) return;   // (one only dragged leaves the arrows to the tab's player)
       e.preventDefault();
       const r = tab.getBoundingClientRect(), a = $(`#${tab.id} .stage`).getBoundingClientRect(), p = $(`#${tab.id} > .panel`).getBoundingClientRect();
       if (portrait()) save(tab, { h: Math.round(clamp(a.height + d * 24, 140, r.height - 160)) });
@@ -99,7 +100,7 @@ export function heightGrip(grip, { size, set, max = () => innerHeight * 0.6 }) {
   });
   grip.addEventListener('keydown', (e) => {
     const d = { ArrowUp: 1, ArrowDown: -1 }[e.key];
-    if (!d) return;
+    if (!d || !keyboardFocus()) return;
     e.preventDefault(); to(size() + d * 48);
   });
 }

@@ -9,7 +9,7 @@ import * as THREE from './vendor/three.module.min.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip, field, seg, info, rangeField, mediaCard, placeholder, iconBtn } from './ui.js';
 import { inputUrl, thumbUrl } from './core.js';
-import { C, OBJ as OBJ_CH, R, SC, current, newObject, namesFor, save, selItem, write } from './scene-data.js';
+import { C, OBJ as OBJ_CH, R, SC, current, matchSceneTo, newObject, namesFor, save, selItem, write } from './scene-data.js';
 import { heightOf as figureHeight } from './figure.js';
 import { addModeSection } from './scene-modes.js';
 import { LOADERS, SPLAT_PASS, activeCamera, controls, changed, draw, fit, lookThrough, passHooks, recentre, renderer, scene, select } from './scene-view.js';
@@ -20,7 +20,6 @@ import {
   LEVELS, countLabel, fileOf, levelFor, levelName, makeChoices, placeAtCamera, previewLevel, previewUrl, renderUrl, setMakeChoices, setPlaceAtCamera,
   setPreviewLevel, setSharp, sharpOn
 } from './splat-levels.js';
-import { depthLook } from './splat-depth.js';
 import {
   GROWS, fillFactor, keptShare, medianOf, pickAlong, reachOf, samplePoints, sameTrim, shapeMesh, standShift, trimBody, trimSphere
 } from './splat-shape.js';
@@ -80,11 +79,11 @@ LOADERS.model = (o, group, x = {}) => {
 };
 
 // ---- splats: Spark (vendor/spark.module.js) draws them through one SparkRenderer in the scene ----
-let sparkLib = null, spark = null, sparkMod = null;
+let sparkLib = null, spark = null;
 export const sparkNow = () => spark;   // (the depth pass draws it on its own: splat-depth.js renderDepth)
 async function sparkOf() {
   sparkLib ||= import('./vendor/spark.module.js');
-  const lib = sparkMod = await sparkLib;
+  const lib = await sparkLib;
   if (!spark) { spark = SPLAT_PASS.spark = new lib.SparkRenderer({ renderer }); scene.add(spark); }
   return lib;
 }
@@ -120,7 +119,7 @@ LOADERS.splat = (o, group, x = {}) => {
     if (!alive(o, group)) return;
     const holder = new THREE.Group();   // turned over if the file is y-down
     holder.add(mesh);
-    // the depth render can't use splats: a box of the same size stands in (see passHooks below)
+    // a box of the same size stands in for the clay look and for picking
     const proxy = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), clayMat);
     proxy.visible = false; proxy.userData.pickProxy = true;   // (the view-centre pivot aims at it: scene-view.js pivotToView)
     const box = o.box || splatBox(mesh);
@@ -186,19 +185,14 @@ function kick() {
   kickTimer = setTimeout(go, 80);
 }
 passHooks.push((pass, forRender) => {
-  // depth: each splat coloured by its depth, drawn by renderDepth (splat-depth.js) over the meshes; measuring
-  // the range (rangeMat) its box stands in
-  const range = forRender === 'range';
-  let turned = false;
+  // depth: the splats are drawn as dots by renderDepth (splat-depth.js) over the meshes, not by Spark
   for (const m of R.meshes.values()) {
     const sp = m.userData.splat;
     if (!sp) continue;
     sp.proxy.visible = false;   // (near and far count the splat's own points: splat-depth.js splatDepths)
     if (sp.sphere && pass === 'depth') sp.sphere.visible = false;
-    if (sparkMod && sp.mesh && depthLook(sparkMod, sp.mesh, pass === 'depth' && !range)) turned = true;
   }
   if (spark) spark.visible = pass !== 'depth';
-  if (turned && !forRender && !kicking) kick();   // (the splats come back in their new colours a moment later)
   if (pass !== 'color' || kicking || !spark) return;
   const has = hasSplat();
   if (has || hadSplat) kick();
@@ -826,14 +820,6 @@ async function remakeLevels(o, trim) {
 // ---- a picture as a splat (SHARP, POST /api/scene/splat): where the shot camera is, seen through the photo's lens ----
 // First a small sheet: the preview density (this device's, as the layer panel's Splat preview) and whether the
 // full set is kept for renders. These are remembered per device.
-// Make the scene's picture the photo's shape (long side kept, sides in steps of 16): SHARP keeps the photo's own
-// lens and shape, and a scene of another shape shows the splat as a strip, or cut off
-function matchSceneTo(w, h) {
-  if (!w || !h) return;
-  const long = Math.max(SC.width, SC.height), r = w / h;
-  const [W, H] = r >= 1 ? [long, long / r] : [long * r, long];
-  SC.width = Math.max(64, Math.round(W / 16) * 16); SC.height = Math.max(64, Math.round(H / 16) * 16);
-}
 export function makeSplat(name, ctx, redo = null) {
   const ch = { ...makeChoices(coarse()), preview: previewLevel(coarse()), match: !redo };
   const keep = toggle('Keep the full set for renders', ch.keepFull, (on) => { ch.keepFull = on; },

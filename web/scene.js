@@ -25,6 +25,7 @@ import { setBoneDrag, setBonePick } from './scene-view.js';
 import { onBoneDrag, onBoneDragEnd, onBonePick } from './scene-skin.js';
 import { registerRef } from './scene-ref.js';
 import './scene-track.js';   // the footage and track-point layers a motion track makes
+import './scene-picture.js';   // a picture as the scene's background
 export { addModeSection, registerMode } from './scene-modes.js';
 export { addPhoto, makePhoto } from './scene-view.js';
 export { addModel, openObjectSheet } from './scene-import.js';

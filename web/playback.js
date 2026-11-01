@@ -1,12 +1,15 @@
-import { button, h, iconBtn, numSlider, seg, setIcon } from './ui.js';
+import { button, h, iconBtn, info, numSlider, seg, setIcon } from './ui.js';
+import { ownsKey } from './key-focus.js';
 
 // ---------------------------------------------------------------------------
 // playback: the transport bar and keys every player shares (Video, Sound, VFX, the Editor), laid out like Blender's
 // timeline header: ⇤ to the start, ⧏ the previous key, back a step, Play / Pause, forward a step, ⧐ the next key, ⇥ to
 // the end, Loop, a speed, the time and, for a player without a timeline, a scrub bar. Tap the time to type one (a frame
 // number with an fps, else seconds; 1.5s and m:ss work in both); with length, the length is typed beside it.
-// Keys while its tab is open: Space plays, ← / → step (Shift: a second), ↑ / ↓ the next / previous key, Home / End;
-// with a work area I / O, Alt+X.
+// Keys while its tab is open: Space plays, K stops, P plays from the start of the range (or of the clip), ← / → or , / .
+// step (Shift+← / →: a second), ↑ / ↓ the next / previous key, Home / End; with a work area I / O set its ends,
+// Shift+I / Shift+O go to them, Alt+X clears it. They keep working after a button or the scrub bar is clicked
+// (key-focus.js). The ⓘ at the end of the bar lists them.
 //
 //   const tp = transport(player, { step, loop, rates, scrub, fps, frames, extra, timeId });
 //   player: { playing(), play(), pause(), seek(t), t(), len() }
@@ -48,6 +51,8 @@ export function transport(p, { step, loop = null, rates = null, rate = null, scr
   const tp = {
     small, keyStep: () => val(step.key ?? step.by), area, hasKeys: !!keys,
     toggle: () => { if (p.playing()) p.pause(); else p.play(); tp.update(); },
+    stop: () => { p.pause(); tp.update(); },
+    playRange: () => { p.pause(); p.seek(area?.stored()?.a ?? 0); p.play(); tp.update(); },
     nudge: (d) => { if (step.pause !== false) p.pause(); p.seek(inside(Math.min(Math.max(0, p.t() + d), p.len() || Infinity))); tp.update(); },
     toStart: () => { p.pause(); p.seek(area?.bound()?.a ?? 0); tp.update(); },
     toEnd: () => { p.pause(); p.seek(area?.bound()?.b ?? p.len()); tp.update(); },
@@ -114,9 +119,19 @@ export function transport(p, { step, loop = null, rates = null, rate = null, scr
     rates && rate ? seg(rates, rate.get(), (v) => rate.set(Number(v))) : null,
     ...extra,
     bar ? null : time,
-    lenIn ? h('label', { class: 'keynum tp-len', title: 'The length, in seconds' }, 'Length', lenIn) : null);
+    lenIn ? h('label', { class: 'keynum tp-len', title: 'The length, in seconds' }, 'Length', lenIn) : null,
+    info(keysHelp({ step: step.key ? `${step.key} s` : step.label, area, keys: !!keys }), 'Keyboard shortcuts'));
   showLoop(); tp.update();
   return tp;
+}
+
+// The text behind a player's ⓘ. step: what one step is ('one frame'); area: its work area, if any; keys: it has keys to jump to
+export function keysHelp({ step, area = null, keys = false }) {
+  const [i, o, x] = area?.alt ? ['Alt+I', 'Alt+O', 'Alt+Shift+'] : ['I', 'O', 'Shift+'];
+  return ['Keys:', 'Space play / pause', 'K stop', `P play from the start${area ? ' of the range' : ''}`,
+    `← → or , . ${step}`, 'Shift+← → a second', keys ? '↑ ↓ next / previous key' : null, 'Home / End the start / end',
+    area ? `${i} / ${o} set the range's in / out` : null, area ? `${x}I / ${x}O go to them` : null, area ? 'Alt+X clear the range' : null]
+    .filter(Boolean).join(' · ');
 }
 
 // The player's keys while active() (its tab is open and nothing is being typed in). more(e): the tab's own keys.
@@ -124,13 +139,14 @@ export function playKeys(active, tpOf, more = () => ({})) {
   document.addEventListener('keydown', (e) => {
     const tp = tpOf();
     if (e.defaultPrevented || !tp || !active() || document.querySelector('.tab.active[aria-busy=true]') ||
-      e.target.closest('input, textarea, select, button, [role=tab], [role=dialog]') || e.ctrlKey || e.metaKey) return;
-    const range = tp.area?.keyFn(e);   // the work area: I / O, Alt+X
-    if (range) { e.preventDefault(); range(); return; }
+      ownsKey(e) || e.ctrlKey || e.metaKey) return;
+    const range = tp.area?.keyFn(e);   // the work area: I / O, Shift+I / Shift+O, Alt+X
+    if (range) { e.preventDefault(); if (e.shiftKey) tp.stop(); range(); tp.update(); return; }
     const fn = {
-      ' ': tp.toggle,
+      ' ': tp.toggle, k: tp.stop, p: tp.playRange,
       ArrowLeft: () => tp.nudge(e.shiftKey ? -1 : -tp.keyStep()),
       ArrowRight: () => tp.nudge(e.shiftKey ? 1 : tp.keyStep()),
+      ',': () => tp.nudge(-tp.keyStep()), '.': () => tp.nudge(tp.keyStep()),
       ArrowUp: tp.hasKeys ? () => tp.toKey(1) : null, ArrowDown: tp.hasKeys ? () => tp.toKey(-1) : null,
       Home: tp.toStart, End: tp.toEnd,
       ...more(e),

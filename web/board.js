@@ -3,6 +3,7 @@ import {
   numSlider, field, section, hint, openSheet, closeSheet, icon, iconize, setIcon,
 } from './ui.js';
 import { fmtTime } from './playback.js';
+import { runBar } from './run-bar.js';
 import { bareSource, extractSound, genLabel, soundInput, soundToSoundTab } from './media.js';
 import { S, switchTab, onServer } from './core.js';
 import { finishWithH3, openGeneration } from './run.js';
@@ -640,12 +641,13 @@ function openGallery(key) {
   pauseBoard();
   const main = h('div', { class: 'gal-main' });
   const el = h('div', { class: 'gal-view', role: 'dialog', 'aria-modal': 'true' },
-    h('div', { class: 'gal-top' }, h('span', { class: 'gal-title' }), h('span', { class: 'gal-count hint' }),
+    h('div', { class: 'gal-top' }, h('span', { class: 'gal-title' }), h('span', { class: 'gal-count hint' }), h('span', { class: 'gal-size hint', title: 'Size in pixels' }),
       button('Thumbnails', () => galleryStrip(), { cls: 'small gal-strip-btn', title: 'Show or hide the thumbnails (T)' }),
       iconBtn('Close', '✕', () => closeGallery())),
     h('div', { class: 'gal-stage' }, main,
       h('button', { type: 'button', class: 'gal-nav prev', 'aria-label': 'Previous', onclick: () => galleryGo(-1) }, '‹'),
       h('button', { type: 'button', class: 'gal-nav next', 'aria-label': 'Next', onclick: () => galleryGo(1) }, '›')),
+    h('div', { class: 'strip gal-run' }),
     h('div', { class: 'gal-actions' }),
     h('div', { class: 'gal-strip' }));
   GAL.el = el;
@@ -700,6 +702,19 @@ function modelSlot(o) {
   return slot;
 }
 
+// the size in pixels of the picture or video on show, read from the file once it has loaded (blank for anything else)
+function gallerySize(label, m) {
+  label.textContent = '';
+  if (!m) return;
+  const show = () => {
+    if (!m.isConnected) return;   // (already moved on to another)
+    const w = m.naturalWidth || m.videoWidth, hh = m.naturalHeight || m.videoHeight;
+    label.textContent = w ? `${w} × ${hh}` : '';
+  };
+  m.addEventListener(m.tagName === 'VIDEO' ? 'loadedmetadata' : 'load', show);
+  show();
+}
+
 function galleryRender(newMedia = false) {
   const el = GAL.el, cur = GAL.items[GAL.idx];
   if (!el || !cur) return;
@@ -715,6 +730,7 @@ function galleryRender(newMedia = false) {
     main.querySelectorAll('video, audio').forEach((v) => v.pause());
     galleryZoom();
     main.replaceChildren(o.kind === 'video' ? galleryVideo(o) : o.kind === 'audio' ? galleryAudio(o) : o.kind === 'image' ? h('img', { src: o.url, alt: o.filename, draggable: false }) : ['mesh', 'splat'].includes(kindOf(o)) ? modelSlot(o) : kindTile(o, cur.g));
+    gallerySize(el.querySelector('.gal-size'), o.kind === 'image' || o.kind === 'video' ? main.querySelector('img, video') : null);
     for (const d of [-1, 1]) {   // warm the cache for the neighbours
       const nb = GAL.items[GAL.idx + d];
       if (nb && nb.o.kind === 'image') new Image().src = nb.o.url;
@@ -722,6 +738,11 @@ function galleryRender(newMedia = false) {
   }
   GAL.key = cur.key;
 
+  runBar(el.querySelector('.gal-run'), g, i, { before: closeGallery, onPick: (n) => {   // (one the Board's filter leaves out comes in beside this one)
+    let at = GAL.items.findIndex((x) => x.g.id === g.id && x.i === n);
+    if (at < 0) { at = GAL.idx + 1; GAL.items.splice(at, 0, { g, o: g.outputs[n], i: n, key: `${g.id}:${n}` }); }
+    GAL.idx = at; galleryRender(true);
+  } });
   const owners = B.attached.get(g.id);
   el.querySelector('.gal-actions').replaceChildren(...[
     owners ? button([icon('link'), `In use: ${usedText(owners)}`], () => keptSheet([{ id: g.id, used_by: owners }], 0), { cls: 'small' }) : null,

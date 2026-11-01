@@ -9,10 +9,11 @@ import {
   CURVES, EASES, allKeys, bounds, copy, handleOf, isScalar, kindOf, moveBy, moveHandle, paste, prune, quatDeg, reduceKeys, remove, restore, scaleAround, setBroken, setChan, setEase, snapshot, track
 } from './keys.js';
 import { changed, draw, pose, select } from './scene-view.js';
-import { busy, play, seek } from './scene-export.js';
+import { busy, play, seek, stopPlay } from './scene-export.js';
 import { newLength, setAutoKey } from './scene-ui.js';
 import { modeOf } from './scene-modes.js';
 import { workArea } from './workarea.js';
+import { keysText } from './scene-shortcuts.js';
 
 // ---- the key sheet: a Blender-style dope sheet and a simple graph editor over the layers' keys -----
 // A row per layer (the camera, then the objects) that opens (▸) into a row per channel, a figure's pose
@@ -905,6 +906,18 @@ function lengthIn() {
   return h('label', { class: 'keynum', title: `The scene's length in seconds (${frames()} frames); keys past a shorter end ask first` }, 'Length', i, 's');
 }
 
+// ◆ Key and ✕ Key (the buttons, J and Shift+J)
+export function keyHere() {
+  if (R.sel === 'cuts') { cutTo(SC.camera); changed(); return; }
+  const [item, names] = keyTarget(); if (!item) return;
+  addKey(item, names); changed();
+}
+export function unkeyHere() {
+  if (R.sel === 'cuts') { dropCuts((c) => c.f === R.f); changed(); return; }
+  const [item] = keyTarget(); if (!item) return;
+  dropKeys(item, (f) => f === R.f); changed();
+}
+
 export function renderTransport() {
   const lanes = h('div', { id: 'sceneLanes', class: 'sheet-lanes' });
   lanes.addEventListener('pointerdown', down);
@@ -926,6 +939,7 @@ export function renderTransport() {
         iconBtn('Go to the end', '⇥', toEnd, { title: 'Go to the end, of the range while it is on (End)' })),
       frameIn(), lengthIn(),
       AREA.toggleBtn(),
+      infoBtn(keysText(), 'Keyboard shortcuts'),
       button('👁', (e) => openWP(e.currentTarget), { id: 'sceneWP', cls: 'small kt', title: 'While playing: what shows, and jumping back after an edit', 'aria-label': 'While playing' }),
       h('span', { id: 'sceneTime', class: 'timecode' }),
       h('span', { class: 'grow' }),
@@ -934,16 +948,8 @@ export function renderTransport() {
       button('REC', () => setRecord(!R.record), { id: 'sceneRec', cls: 'small rec' + (R.record ? ' on' : ''), 'aria-pressed': R.record,
         title: 'Record: while it plays, what you hold (gizmo, slider, orbit) is keyed every few frames over the time you hold it' }),
       h('span', { class: 'hint' }, 'Key: ', h('b', { id: 'sceneKeyFor' })),
-      button('◆ Key', () => {
-        if (R.sel === 'cuts') { cutTo(SC.camera); changed(); return; }
-        const [item, names] = keyTarget(); if (!item) return;
-        addKey(item, names); changed();
-      }, { id: 'sceneAddKey', title: 'Keyframe at the playhead. On the Shots row, cut to the camera you edit.' }),
-      button('✕ Key', () => {
-        if (R.sel === 'cuts') { dropCuts((c) => c.f === R.f); changed(); return; }
-        const [item] = keyTarget(); if (!item) return;
-        dropKeys(item, (f) => f === R.f); changed();
-      }, { id: 'sceneDelKey', title: 'Remove the key at the playhead' })),
+      button('◆ Key', keyHere, { id: 'sceneAddKey', title: 'Keyframe at the playhead (J). On the Shots row, cut to the camera you edit.' }),
+      button('✕ Key', unkeyHere, { id: 'sceneDelKey', title: 'Remove the key at the playhead (Shift+J)' })),
     toolRow()),
     grip(),
     h('div', { id: 'sceneSheet', class: 'scene-sheet' }, h('div', { id: 'sceneNames', class: 'sheet-names' }), lanes));
@@ -964,13 +970,14 @@ export function wireSheetKeys() {
   document.addEventListener('keydown', (e) => {
     if (!$('#tab-scene').classList.contains('active') || sheetOpen() || e.target.closest('input, textarea, select')) return;
     const k = e.key.toLowerCase(), eat = () => { e.preventDefault(); e.stopImmediatePropagation(); };
-    const range = AREA.keyFn(e);   // the work area, wherever the 3D tab has the keys: I / O at the playhead, Alt+X clears
-    if (range) { eat(); range(); return; }
+    const range = AREA.keyFn(e);   // the work area, wherever the 3D tab has the keys: I / O at the playhead, Shift+I / Shift+O go to them, Alt+X clears
+    if (range) { eat(); if (e.shiftKey) stopPlay(); range(); return; }
     if (!focus) return;
     if (e.ctrlKey || e.metaKey) {
       if (k === 'c') { eat(); copyKeys(); } else if (k === 'v') { eat(); pasteKeys(); } else if (k === 'd') { eat(); duplicateKeys(); } else if (k === 'a') { eat(); selectAll(); }
     } else if ((k === 'delete' || k === 'backspace' || k === 'x') && SEL.size) { eat(); deleteKeys(); }
-    else if (k === 'a') { eat(); if (e.altKey) selectNone(); else selectAll(); }
+    else if (k === 'a' && !e.shiftKey) { eat(); if (e.altKey) selectNone(); else selectAll(); }   // (Shift+A is Add)
+    else if (k === 's' && !e.shiftKey) { eat(); setUI('tool', UI.tool === 'scale' ? 'move' : 'scale'); syncTools(); toast(UI.tool === 'scale' ? 'Stretch in time: drag on the sheet' : 'Stretch in time off'); }
     else if (k === 'escape' && SEL.size) { eat(); selectNone(); }
   }, true);
 }

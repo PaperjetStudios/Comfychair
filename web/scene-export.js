@@ -4,7 +4,7 @@ import { C, FPS, R, SC, TEMP, commitHolds, frames, holdEnd, recordFrame, settleT
 import {
   RANGE, SPLAT_PASS, camera, draw, fit, floorMat, paint, pose, rangeMat, refresh, renderer, scene, setRange, wallMat
 } from './scene-view.js';
-import { renderDepth, splatDepths, splatMeshes } from './splat-depth.js';
+import { renderDepth, splatBlurOf, splatDepths, splatMeshes } from './splat-depth.js';
 import { api, busy as busyBar, toast } from './ui.js';
 import { modeOf } from './scene-modes.js';
 import { renderKeys, renderPanel, renderTime, renderTransport, setStatus } from './scene-ui.js';
@@ -157,7 +157,7 @@ export async function renderDepthVideo(part = null, { objectsOnly = false } = {}
     for (let k = 0; k < count; k++) {
       pose(first + k);
       setRange(ranges[k]);
-      renderer.setRenderTarget(rt); renderDepth(renderer, scene, camera, objectsOnly ? null : SPLAT_PASS.spark); renderer.setRenderTarget(null);
+      renderer.setRenderTarget(rt); renderDepth(renderer, scene, camera, objectsOnly ? null : SPLAT_PASS.spark, splatBlurOf(SC)); renderer.setRenderTarget(null);
       form.append('frames', await targetToBlob(rt, W, H, true, objectsOnly ? DEPTH_FLOOR : 0), `f${String(k).padStart(5, '0')}.png`);
       if (k % 12 === 0) setStatus(`Rendering ${k + 1}/${count}…`);
       bar.set(null, (k + 1) / count);
@@ -367,7 +367,7 @@ export async function clayBlob() {
   return blob;
 }
 // One depth or pose picture of the frame at the playhead, kept as an input picture (like Save frame): to use as a
-// reference picture in Generate and the Editor. Depth is from the 3D shapes (a splat is only a box).
+// reference picture in Generate and the Editor. Depth is from the 3D shapes and the splats' dots (splat-depth.js).
 export async function saveStill(kind) {
   if (busy || !canRender()) return false;
   const figs = SC.objects.filter((o) => (o.type === 'figure' || o.type === 'rigged') && !o.hidden);
@@ -389,7 +389,7 @@ export async function saveStill(kind) {
       const rt = new THREE.WebGLRenderTarget(W, H, { colorSpace: THREE.NoColorSpace });
       draw('depth');
       pose(keep); setRange(ranges[0]);
-      renderer.setRenderTarget(rt); renderDepth(renderer, scene, camera, SPLAT_PASS.spark); renderer.setRenderTarget(null);
+      renderer.setRenderTarget(rt); renderDepth(renderer, scene, camera, SPLAT_PASS.spark, splatBlurOf(SC)); renderer.setRenderTarget(null);
       blob = await targetToBlob(rt, W, H, true);
       rt.dispose();
     }

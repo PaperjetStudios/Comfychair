@@ -12,6 +12,8 @@
 //   tabs.active           // { id, name, rev, order } of the tab on show, or null
 import { h, api, store, toast, undoToast, openSheet, closeSheet, nameSheet, button, actions, uid, clone } from './ui.js';
 import { S, onServer, onProject } from './core.js';
+import { keyboardFocus } from './key-focus.js';
+import { dropIndex, slideOf } from './tab-order.js';
 
 const SAVE_DELAY = 1000, DRAG_PX = 6, HOLD_MS = 350, EDGE_PX = 40;
 const TIMEOUT = 30000;
@@ -30,7 +32,7 @@ export class TabSet {
     this.row.setAttribute('aria-label', 'Documents');
     this.row.addEventListener('keydown', (e) => {
       const buttons = [...this.row.querySelectorAll('.tab-switch')], at = buttons.indexOf(e.target);
-      if (at < 0) return;
+      if (at < 0 || !keyboardFocus()) return;   // (a tab only clicked leaves the arrows to the player)
       const to = { ArrowLeft: (at - 1 + buttons.length) % buttons.length, ArrowRight: (at + 1) % buttons.length, Home: 0, End: buttons.length - 1 }[e.key];
       if (to == null) return;
       e.preventDefault(); buttons[to].focus(); buttons[to].click();
@@ -423,9 +425,9 @@ export class TabSet {
     // ancestor, which threw the settings panel back to the top after each save
     const on = this.row.querySelector('.tabchip.on');
     if (on) {
-      const r = this.row, left = on.offsetLeft;
-      if (left < r.scrollLeft) r.scrollLeft = left;
-      else if (left + on.offsetWidth > r.scrollLeft + r.clientWidth) r.scrollLeft = left + on.offsetWidth - r.clientWidth;
+      const r = this.row, top = on.offsetTop;
+      if (top < r.scrollTop) r.scrollTop = top;
+      else if (top + on.offsetHeight > r.scrollTop + r.clientHeight) r.scrollTop = top + on.offsetHeight - r.clientHeight;
     }
     this.showState();
     if (focused) this.row.querySelector('.tabchip.on .tab-switch')?.focus({ preventScroll: true });
@@ -437,14 +439,14 @@ export class TabSet {
   dragStart(e, id) {
     if (e.button > 0 || e.target.closest('.tab-more') || this.drag) return;
     const chip = e.currentTarget, touch = e.pointerType !== 'mouse';
-    const d = this.drag = { id, chip, x0: e.clientX, pid: e.pointerId, touch, started: false, lastX: e.clientX, from: -1, to: -1 };
+    const d = this.drag = { id, chip, x0: e.clientX, y0: e.clientY, pid: e.pointerId, touch, started: false, lastX: e.clientX, lastY: e.clientY, from: -1, to: -1 };
     const move = (ev) => {
       if (ev.pointerId !== d.pid) return;
-      d.lastX = ev.clientX;
+      d.lastX = ev.clientX; d.lastY = ev.clientY;
       if (!d.started) {
-        const dx = Math.abs(ev.clientX - d.x0);
-        if (touch) { if (dx > 10) cancel(); }   // a swipe before the hold: let the strip scroll
-        else if (dx > DRAG_PX) lift();
+        const dist = Math.hypot(ev.clientX - d.x0, ev.clientY - d.y0);
+        if (touch) { if (dist > 10) cancel(); }   // a swipe before the hold: let the strip scroll
+        else if (dist > DRAG_PX) lift();
         return;
       }
       ev.preventDefault();
@@ -454,10 +456,8 @@ export class TabSet {
       const chips = [...this.row.children];
       d.chips = chips;
       d.from = chips.indexOf(chip); d.to = d.from;
-      d.rects = chips.map((c) => ({ left: c.offsetLeft, w: c.offsetWidth }));
-      const gap = d.rects.length > 1 ? Math.max(0, d.rects[1].left - d.rects[0].left - d.rects[0].w) : 0;
-      d.shift = d.rects[d.from].w + gap;
-      d.scroll0 = this.row.scrollLeft;
+      d.rects = chips.map((c) => ({ left: c.offsetLeft, top: c.offsetTop, w: c.offsetWidth, h: c.offsetHeight }));
+      d.scroll0 = this.row.scrollTop;
       d.started = true;
       try { chip.setPointerCapture(d.pid); } catch { /* pointer gone */ }
       chips.forEach((c) => c.classList.add('shifting'));
@@ -469,17 +469,15 @@ export class TabSet {
     const tick = () => {
       if (!d.started) return;
       const r = this.row.getBoundingClientRect();
-      if (d.lastX < r.left + EDGE_PX) this.row.scrollLeft -= Math.ceil((EDGE_PX - (d.lastX - r.left)) / 4);
-      else if (d.lastX > r.right - EDGE_PX) this.row.scrollLeft += Math.ceil((EDGE_PX - (r.right - d.lastX)) / 4);
-      const dx = d.lastX - d.x0 + (this.row.scrollLeft - d.scroll0);
-      const me = d.rects[d.from], centre = me.left + me.w / 2 + dx;
-      let to = 0;
-      d.rects.forEach((q, i) => { if (i !== d.from && q.left + q.w / 2 < centre) to++; });
+      if (d.lastY < r.top + EDGE_PX) this.row.scrollTop -= Math.ceil((EDGE_PX - (d.lastY - r.top)) / 4);
+      else if (d.lastY > r.bottom - EDGE_PX) this.row.scrollTop += Math.ceil((EDGE_PX - (r.bottom - d.lastY)) / 4);
+      const dx = d.lastX - d.x0, dy = d.lastY - d.y0 + (this.row.scrollTop - d.scroll0);
+      const me = d.rects[d.from], to = dropIndex(d.rects, d.from, me.left + me.w / 2 + dx, me.top + me.h / 2 + dy);
       d.to = to;
       d.chips.forEach((c, i) => {
-        if (i === d.from) c.style.transform = `translateX(${dx}px)`;
-        else c.style.transform = d.from < to && i > d.from && i <= to ? `translateX(${-d.shift}px)`
-          : d.from > to && i >= to && i < d.from ? `translateX(${d.shift}px)` : '';
+        if (i === d.from) { c.style.transform = `translate(${dx}px, ${dy}px)`; return; }
+        const by = slideOf(d.rects, d.from, to, i);
+        c.style.transform = by ? `translate(${by[0]}px, ${by[1]}px)` : '';
       });
       d.raf = requestAnimationFrame(tick);
     };

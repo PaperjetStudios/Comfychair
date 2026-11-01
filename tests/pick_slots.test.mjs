@@ -1,7 +1,7 @@
 // node --test tests/pick_slots.test.mjs: ticking several pictures in the image picker and the slots they fill
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { addFrame, frameIndex, slotsFrom, tick, tickRange } from '../web/pick-slots.js';
+import { addFrame, frameIndex, slotsFrom, tick, tickRange, byTag, tagsIn } from '../web/pick-slots.js';
 
 const refs = ['a', 'b', 'c', 'd'].map((key) => ({ key, kind: 'image', group: 'References' }));
 const fields = [{ key: 'first', kind: 'image', group: 'First frame' }, { key: 'p', kind: 'text', group: 'References' }, ...refs];
@@ -57,4 +57,12 @@ test('a time is a frame index, not past the last', () => {
   assert.equal(frameIndex(0.02, 24), 0);
   assert.equal(frameIndex(10, 24, 100), 99);
   assert.equal(frameIndex(1, 0), 24, 'no rate known: 24');
+});
+
+test('the picker filters by tag: what is on the thumbnail, or generated for a run\'s picture', () => {
+  const items = [{ key: 'a', badge: 'upload' }, { key: 'b', run: {} }, { key: 'c', badge: 'frames', run: {} }, { key: 'd', badge: 'edit' }, { key: 'e', badge: 'upload' }, { key: 'f' }];
+  assert.deepEqual(tagsIn(items), ['edit', 'frames', 'generated', 'upload']);
+  assert.deepEqual(byTag(items, 'upload').map((x) => x.key), ['a', 'e']);
+  assert.deepEqual(byTag(items, 'generated').map((x) => x.key), ['b']);
+  assert.equal(byTag(items, null), items);
 });

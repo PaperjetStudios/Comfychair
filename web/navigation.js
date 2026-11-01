@@ -1,3 +1,4 @@
+import { keyboardFocus } from './key-focus.js';
 import { initHistory } from './history.js';
 
 // Screen state and visits live here; app.js renders screens and world.js renders the space controls.
@@ -27,7 +28,7 @@ export function wireTabKeys(list) {
   list.addEventListener('keydown', (e) => {
     const tabs = [...list.querySelectorAll('[role=tab]')].filter((b) => b.getClientRects().length);
     const at = tabs.indexOf(e.target);
-    if (at < 0) return;
+    if (at < 0 || !keyboardFocus()) return;   // (a tab only clicked leaves the arrows to the tab's player)
     const to = { ArrowLeft: (at - 1 + tabs.length) % tabs.length, ArrowRight: (at + 1) % tabs.length, Home: 0, End: tabs.length - 1 }[e.key];
     if (to == null) return;
     e.preventDefault(); tabs[to].focus(); tabs[to].click();

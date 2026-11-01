@@ -56,6 +56,7 @@ const PIVOTS = {
   photo: [['origin', 'Lens'], ['center', 'Centre']],
   model: [['base', 'Base'], ['center', 'Centre']],
   splat: [['base', 'Base'], ['center', 'Centre']],
+  picture: [['center', 'Centre']],
   other: [['base', 'Base'], ['center', 'Centre'], ['top', 'Top']],
 };
 // (a layer whose origin was set can also turn around that: scene-view.js pivotPoint)
@@ -89,6 +90,15 @@ export function newObject(type, at = {}, others = SC.objects) {
     base: { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: t.size[0], sy: t.size[1], sz: t.size[2], ...at } };
   if (isPosable(o)) { o.base.j = { ...FIGURE.preset('stand').j, ...FIGURE.handPose('relaxed', 'l'), ...FIGURE.handPose('relaxed', 'r') }; o.ground = true; }
   return o;
+}
+
+// Make the scene's picture the photo's shape (long side kept, sides in steps of 16): SHARP keeps the photo's own
+// lens and shape, and a scene of another shape shows the splat as a strip, or cut off
+export function matchSceneTo(w, h) {
+  if (!w || !h) return;
+  const long = Math.max(SC.width, SC.height), r = w / h;
+  const [W, H] = r >= 1 ? [long, long / r] : [long * r, long];
+  SC.width = Math.max(64, Math.round(W / 16) * 16); SC.height = Math.max(64, Math.round(H / 16) * 16);
 }
 
 // scenes saved before rotation on all axes, hiding and a deletable room, and before keys were per channel

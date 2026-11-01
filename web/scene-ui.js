@@ -2,7 +2,7 @@ import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import {
   $, actions, button, clamp, clone, closeSheet, field, h, hint, iconBtn, layerRowsEl, numField, openSheet, panelTop, rangeField,
-  section, seg, sheetOpen, store, uid, undoToast, help, toggle, sizeSelect, chip, info, toast, icon, iconize, numSlider, popover, closePopover,
+  section, seg, sheetOpen, store, uid, undoToast, help, withHelp, toggle, sizeSelect, chip, info, toast, icon, iconize, numSlider, popover, closePopover,
 } from './ui.js';
 import {
   C, CAM, EVEN, FPS, HIST, camsOf, cutTo, dropCuts, newCamera, setActiveCam, shots, stretchCuts, trimCuts, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropHolds, dropKeys, holdStart, frames, framesFor, hasKeys, hooks, keyCount, addKey, bakeBase, sampleChan,
@@ -19,9 +19,13 @@ import {
 import { ORIENTS, nextOrient } from './gizmo-orient.js';
 import { drawnScale } from './origin-math.js';
 import { busy, cancelRender, letGo, play, renderColorVideo, renderDepthVideo, renderPoseVideo, saveFrame, saveStill, seek, stopPlay } from './scene-export.js';
-import { AREA, jumpKey, maxBar, renderKeys, renderTransport, toEnd, toStart, wireSheetKeys } from './scene-keys.js';
+import { AREA, jumpKey, keyHere, maxBar, renderKeys, renderTransport, toEnd, toStart, unkeyHere, wireSheetKeys } from './scene-keys.js';
+import { commandFor, keysList } from './scene-shortcuts.js';
+import { SPLAT_BLUR } from './splat-depth.js';
+import { toggleGrid3 } from './gizmo.js';
 import { hasMode, modeDef, modeList, modeOf, modeSections } from './scene-modes.js';
 import { syncRef, toggleRef } from './scene-ref.js';
+import { addPicture, fitPicture, sceneToPicture } from './scene-picture.js';
 import { keysPast, stretchAll } from './keys.js';
 import { offsetField } from './scene-offset.js';
 import { refOn as scaleRefOn, scaleProps, setRef as setScaleRef } from './scene-scale.js';
@@ -58,13 +62,14 @@ export function renderToolbar() {
   fb.classList.toggle('hidden', fixed);
   fb.classList.toggle('on', R.free); fb.setAttribute('aria-pressed', R.free);
   fb.title = R.free ? 'Director view: back to looking through the camera (V)' : 'Director view: look around the scene freely, the camera drawn in it (V)';
+  tb.querySelector('[data-camview]').classList.toggle('hidden', !canCamToView());
   const vb = tb.querySelector('[data-viewcut]');
   if (vb) {
     vb.classList.toggle('on', !!R.viewCut); vb.setAttribute('aria-pressed', !!R.viewCut);
     vb.textContent = R.viewCut ? 'Cut' : 'Cam';
     vb.title = R.viewCut
-      ? 'View: Cut. Playback follows the shot list. With the camera selected, or in Camera mode, you still see the camera you edit. A drag does nothing while another camera is on show: switch to Cam to move it. Renders always follow the cuts.'
-      : 'View: the camera you edit. Renders still follow the cuts.';
+      ? 'View: Cut (Shift+V). Playback follows the shot list. With the camera selected, or in Camera mode, you still see the camera you edit. A drag does nothing while another camera is on show: switch to Cam to move it. Renders always follow the cuts.'
+      : 'View: the camera you edit (Shift+V). Renders still follow the cuts.';
   }
   syncUndo();
 }
@@ -131,6 +136,11 @@ function objectProps(o) {
     o.type === 'rigged' ? rigProps(o) : null);
 }
 
+function duplicateObject(o) {
+  const c = { ...clone(o), id: uid(), name: `${o.name} copy` };
+  c.base.x += 0.6; (c.chans.x || []).forEach((k) => { k.v += 0.6; }); if (c.off) c.off.pv[0] += 0.6;
+  SC.objects.push(c); save(); select(c.id);
+}
 // where it is, how big, its pivot; duplicate and delete
 function placeProps(o, cur) {
   const names = namesFor(o);
@@ -145,10 +155,10 @@ function placeProps(o, cur) {
     vecRow('Position (m)', o, names, [['x', 'X', 'x'], ['y', 'Y', 'y', 'Y (up)'], ['z', 'Z', 'z']], { min: -50, max: 50 }),
     vecRow('Rotation (°)', o, names, [['rx', 'X', 'x'], ['ry', 'Y', 'y'], ['rz', 'Z', 'z']], { min: -720, max: 720, step: 0.5, digits: 1, perPx: 0.5 }),
     o.type === 'figure' ? sizeKeys(num('Height (m)', () => cur().sy * FIGURE.heightOf(o.body, o.shape), (v) => even(Math.max(0.3, v) / FIGURE.heightOf(o.body, o.shape)), { min: 0.3, max: 2.5, step: 0.01 }), 'Height')
-      : EVEN.has(o.type) ? sizeKeys(num('Scale', () => cur().sy, (v) => even(Math.max(0.0001, v)), { min: 0.0001, max: 20, step: 0.001, digits: 4 }), 'Scale')
+      : EVEN.has(o.type) ? sizeKeys(num('Scale', () => cur().sy, (v) => even(Math.max(0.0001, v)), { min: 0.0001, max: o.type === 'picture' ? 500 : 20, step: 0.001, digits: 4 }), 'Scale')
       : vecRow('Size (m)', o, names, [['sx', 'W', 'x', 'Width'], ['sy', 'H', 'y', 'Height'], ['sz', 'D', 'z', 'Depth']],
         { min: 0.01, max: 50, step: 0.01, perPx: 0.005, reset: { sx: TYPES[o.type].size[0], sy: TYPES[o.type].size[1], sz: TYPES[o.type].size[2] }, lock }),
-    scaleProps(o),
+    o.type === 'picture' ? null : scaleProps(o),   // (a real size means nothing for a backdrop)
     field('Pivot (where the gizmo turns it)', seg(pivotsFor(o), pivotsFor(o).some(([k]) => k === pivotOf(o)) ? pivotOf(o) : null,
       (v) => { o.pivot = v; resetPivot(); changed(); }, { wrap: true })),
     originProps(o, cur),
@@ -159,6 +169,10 @@ function placeProps(o, cur) {
         const v = cur(), c = current(SC.camera, CAM);
         write(o, names, { ry: Math.round(THREE.MathUtils.radToDeg(Math.atan2(c.px - v.x, c.pz - v.z))) }); changed();
       })] : null,
+    o.type === 'picture' ? [
+      button('🎥 Fit to the camera', () => fitPicture(o), { title: 'Fill the shot camera\'s frame, at the playhead' }),
+      button('Make the scene the picture\'s shape', () => sceneToPicture(o), { title: `Make the scene's picture this shape (${o.pw} × ${o.ph}), so none of it is cut off` }),
+      help('The picture on a flat plane, in its own shape, behind everything. It stays put when the camera moves. It is in colour renders but not depth ones. A tap on the view goes through it: pick it in the layer list.')] : null,
     o.type === 'photo' ? [
       button('🎥 Camera to the photo\'s view', () => { lookThrough(o); changed(); }),
       o.view ? null : button('Re-centre', () => recentre(o), { title: 'Stand it centred at the middle of the scene, on the floor and upright; the camera moves to the photo\'s view' }),
@@ -166,11 +180,7 @@ function placeProps(o, cur) {
     easeSeg(o),
     hasKeys(o) || o.off ? offsetField(o) : null,
     h('div', { class: 'row wrap' },
-      button('Duplicate', () => {
-        const c = { ...clone(o), id: uid(), name: `${o.name} copy` };
-        c.base.x += 0.6; (c.chans.x || []).forEach((k) => { k.v += 0.6; }); if (c.off) c.off.pv[0] += 0.6;
-        SC.objects.push(c); save(); select(c.id);
-      }),
+      button('Duplicate', () => duplicateObject(o), { title: 'Duplicate (Shift+D)' }),
       clearKeys(o, names)),
     help('Drag the gizmo to move it; tap the object again (or W / E / R) for Rotate and Scale. With keys, a change sets a key at the playhead; with Auto key off it is held until ◆ Key (or until the playhead moves).')];
 }
@@ -256,15 +266,16 @@ function camerasField() {
     active ? name : h('span', { class: 'grow' }, c.name),
     h('span', { class: 'hint grow' }, shotLine(c) || (keyCount(c) ? `${keyCount(c)} keys` : '')),
     active ? h('span', { class: 'chip on' }, 'Active') : button('Make active', () => { setActiveCam(c); changed(); }, { title: `Look through ${c.name}` }),
-    button('Cut here', () => { cutTo(c); changed(); toast(`Cut to ${c.name}`); }, { title: 'Cut to this camera at the playhead' }),
+    button('Cut here', () => { cutTo(c); changed(); toast(`Cut to ${c.name}`); }, { title: active ? 'Cut to this camera at the playhead (B)' : 'Cut to this camera at the playhead' }),
     active ? null : button('Delete', () => { SC.cams = SC.cams.filter((x) => x !== c); dropCuts((x) => x.cam === c.id); changed(); }, { cls: 'small danger', 'aria-label': `Delete ${c.name}` }));
   return field(['Cameras', info('The camera you edit is the active one: its moves, its gizmo, ◆ Key. The picture while the clip plays, and every render, follow the Shots row. Cut here writes a cut at the playhead. The first cut\'s camera is the shot from the start. New camera starts at the view you see in the director view, or a step behind the active camera.')],
     row(SC.camera, true),
     ...(SC.cams || []).map((c) => row(c, false)),
     here ? h('p', { class: 'hint' }, `Shot under the playhead: ${here.i} · ${here.cam.name}`) : null,
-    button('New camera', () => { const c = newCamera(); c.base = { ...c.base, ...newCameraPose() }; SC.cams.push(SC.camera); SC.camera = c; changed(); toast(`${c.name} is active`); },
-      { title: 'A new camera, made active: at the view you see in the director view, else a step behind the active camera' }));
+    button('New camera', addCamera,
+      { title: 'A new camera, made active (Shift+C): at the view you see in the director view, else a step behind the active camera' }));
 }
+function addCamera() { const c = newCamera(); c.base = { ...c.base, ...newCameraPose() }; SC.cams.push(SC.camera); SC.camera = c; changed(); toast(`${c.name} is active`); }
 
 // ---- Transform: a row per vector (Blender's N panel). Three boxes with their axis letter inside, coloured X red,
 // Y (up) green, Z blue; typed, or held and pulled sideways at a steady rate (perPx: a metre per 100 px, a degree a px…;
@@ -432,8 +443,10 @@ function openRender() {
     on.includes('depth') ? section('Depth', null,
       field(['Depth range', info('Follow the shot: each moment gets its own near and far (eased over about a second), so the depth keeps its contrast when the camera travels. A cut starts that range again. Whole clip: one near and far for the whole clip (steady greys, but a long camera move squeezes part of it into a few greys, and depth control lets go there).')],
         seg([['follow', 'Follow the shot'], ['clip', 'Whole clip']], SC.depthRange === 'clip' ? 'clip' : 'follow', (v) => { SC.depthRange = v; save(); })),
-      field(['Depth from', info('The 3D shapes: depth worked out exactly from the objects (a splat is only a box). The picture: the shot is rendered in colour first (splats at their full set, everything in view) and Video Depth Anything estimates its depth, so a splat gets real depth, but it is an estimate and takes longer. Both: the picture\'s depth, with the 3D objects\' exact depth laid over it.')],
+      field(['Depth from', info('The 3D shapes: depth worked out exactly from the objects and from each splat\'s points (Splat blur closes the gaps between them). The picture: the shot is rendered in colour first (splats at their full set, everything in view) and Video Depth Anything estimates its depth, which is smoother on a splat, but it is an estimate and takes longer. Both: the picture\'s depth, with the 3D objects\' exact depth laid over it.')],
         seg([['geometry', '3D shapes'], ['picture', 'The picture'], ['combo', 'Both']], SC.depthFrom || 'geometry', (v) => { SC.depthFrom = v; save(); })),
+      SC.objects.some((o) => o.type === 'splat') && (SC.depthFrom || 'geometry') !== 'picture' ? withHelp(slider('Splat blur', () => SC.splatBlur ?? SPLAT_BLUR, (v) => { SC.splatBlur = v; }, { min: 0, max: 16, step: 0.5, fmt: (v) => (v ? `${v} px` : 'off') }),
+        'Blurs only the splats, before they join the rest of the depth, and closes the gaps between their points. More makes a patchy splat smooth, and blends what is in front of it into what is behind.') : null,
       slider('Soften edges', () => SC.blur, (v) => { SC.blur = v; }, { min: 0, max: 12, step: 0.5, fmt: (v) => (v ? `${v} px` : 'off') }),
       help('Blurs the depth so H3 copies the shapes less literally. Use with deck-h3-ctrl2v (strength 1, end 0.4).')) : null,
     on.includes('pose') ? section('Pose', null,
@@ -447,7 +460,7 @@ export function renderProps() {
   return section('Render', null,
     busy ? button('✕ Cancel render', cancelRender, { cls: 'danger big-btn', title: 'Stop the render: nothing is saved' })
       : button('🎬 Render…', openRender, { cls: 'primary big-btn', title: 'Pick which videos to render (depth, pose, colour) and how' }),
-    h('div', { class: 'row wrap' }, button('📷 Save frame', saveFrame),
+    h('div', { class: 'row wrap' }, button('📷 Save frame', saveFrame, { title: 'Save this frame (Shift+S)' }),
       button('Save depth frame', () => saveStill('depth'), { disabled: busy, title: 'The depth of this frame, kept as a picture to use as a reference' }),
       SC.objects.some((o) => (o.type === 'figure' || o.type === 'rigged') && !o.hidden)
         ? button('Save pose frame', () => saveStill('pose'), { disabled: busy, title: 'The posable people of this frame as OpenPose stick figures, kept as a picture' }) : null),
@@ -465,6 +478,9 @@ async function openAdd() {
       ? FIGURE.BODIES.map(([b, l]) => chip(`${d.icon} ${d.label} (${l.toLowerCase()})`, () => addObject(t, { body: b })))
       : [chip(`${d.icon} ${d.label}`, () => addObject(t))])),
       SC.room ? null : chip('⌂ Room', () => addObject(ROOM)),
+      chip('🖼 Picture as background…', () => {
+        closeSheet(); C.openImagePicker({ title: 'Background picture', onPick: (name) => addPicture(name) });
+      }, 'A flat plane with the picture\'s own shape, behind everything, filling the shot camera\'s frame'),
       chip('🖼 Photo in 3D…', () => {
         closeSheet(); C.openImagePicker({ title: 'Picture to turn into 3D', onPick: (name) => makePhoto(name) });
       }, 'Turn a picture into a 3D mesh (MoGe in ComfyUI) for camera moves'),
@@ -513,7 +529,7 @@ function renderModes() {
   const el = $('#sceneModeBar');
   if (!el) return;
   const cur = modeOf().key;
-  el.replaceChildren(...modeList().map((m) => h('button', { type: 'button', class: m.key === cur ? 'on' : '', title: m.hint || m.label,
+  el.replaceChildren(...modeList().map((m, i) => h('button', { type: 'button', class: m.key === cur ? 'on' : '', title: `${m.hint || m.label} (${i + 1})`,
     'aria-label': m.label, 'aria-pressed': m.key === cur, 'data-scene-mode': m.key, onclick: () => setSceneMode(m.key) }, iconize(m.icon))));
 }
 
@@ -527,7 +543,7 @@ export function renderPanel() {
 
 export function editPanel() {
   return [
-    panelTop(button('+ Add', openAdd, { cls: 'primary' }), SC.objects.length || SC.room ? () => {
+    panelTop(button('+ Add', openAdd, { cls: 'primary', title: 'Add to the scene (Shift+A)' }), SC.objects.length || SC.room ? () => {
       const before = clone(SC), ok = sameTab();
       SC.objects = []; SC.room = null; R.sel = null; rebuildRoom(); changed(); renderToolbar();
       undoToast('Scene cleared (the camera stays)', () => { if (ok()) { setSC(before); rebuildRoom(); changed(); } });
@@ -544,7 +560,7 @@ export function cameraPanel() {
     section('View', null,
       seg([['shot', '🎥 Through the camera'], ['free', '🧭 Director view']], R.free ? 'free' : 'shot', (v) => { setFree(v === 'free'); renderPanel(); }),
       R.free ? [help('Look around freely: the camera is drawn as a frustum and orbiting here leaves it alone. Set the camera from what you see when it is framed.'),
-        button('🎥 Camera to this view', () => { cameraFromView(); changed(); })]
+        button('🎥 Camera to this view', camToView, { title: 'Move the active camera to exactly this view, lens included (C)' })]
         : help('You see what the camera sees: drag empty space to orbit it, two fingers to pan and zoom.')),
     cameraProps()];
 }
@@ -554,6 +570,13 @@ export function cameraPanel() {
 function toggleFree() {
   if (modeOf().view === 'free') return;
   setFree(!R.free); renderPanel();
+}
+// the active camera to exactly what the director view shows (the view's button, the panel's, C)
+const canCamToView = () => R.free && !!modeOf().frustum;
+function camToView() {
+  if (!canCamToView()) { toast('Go to the director view first (V)', true); return; }
+  cameraFromView(); changed();
+  toast(TEMP.has(SC.camera) ? `${SC.camera.name || 'Camera'} moved here: press ◆ Key (J) to keep it, Auto key is off` : `${SC.camera.name || 'Camera'} moved to this view`);
 }
 
 // ---- the view's tool bar: the transform tools fade in when something can be moved (contextual), the view's
@@ -571,6 +594,7 @@ export function buildToolbar() {
       title: 'Reset pivot: back to its own (Pivot in the panel)' }, icon('pivot-reset')),
     h('span', { class: 'sep' })),
     h('button', { type: 'button', class: 'ico', 'data-free': '', 'aria-label': 'Director view', onclick: toggleFree }, icon('compass')),
+    h('button', { type: 'button', class: 'ico hidden', 'data-camview': '', 'aria-label': 'Camera to this view', title: 'Camera to this view: move the active camera to exactly what you see, lens included (C)', onclick: camToView }, icon('camera')),
     h('button', { type: 'button', class: 'ico', 'data-viewcut': '', 'aria-label': 'View cuts',
       onclick: () => { R.viewCut = !R.viewCut; store.set('deck.scene.viewcut', R.viewCut); pose(R.f); draw(); renderToolbar(); } }, 'Cut'),
     h('button', { type: 'button', class: 'ico', 'data-overlays': '', 'aria-label': 'Overlays', title: 'Overlays: depth, reference picture, scale person',
@@ -590,6 +614,28 @@ function overlayMenu(anchor) {
     toggle('Scale person (1.8 m, only in the view)', scaleRefOn(), (on) => { setScaleRef(on); renderToolbar(); }),
     h('span', { class: 'hint' }, 'H hides every tool over the view; N pulls the panel out in full screen.'));
 }
+
+// the one-key commands (scene-shortcuts.js). Those for the key sheet do nothing where it is hidden (Create object).
+const hasSheet = () => modeOf().lanes !== 'none';
+const COMMAND = {
+  camToView,
+  newCamera: () => { if (hasSheet()) addCamera(); },
+  viewCut: () => $('#sceneToolbar [data-viewcut]')?.click(),
+  cutHere: () => { if (!hasSheet()) return; cutTo(SC.camera); changed(); toast(`Cut to ${SC.camera.name || 'Camera'}`); },
+  addKey: () => { if (hasSheet()) keyHere(); },
+  delKey: () => { if (hasSheet()) unkeyHere(); },
+  add: () => { setSceneMode('edit'); openAdd(); },
+  duplicate: () => { const o = selItem(); if (o) duplicateObject(o); },
+  gridSnap: () => toast(`Grid snapping ${toggleGrid3() ? 'on' : 'off'}`),
+  fullScreen: () => maxBar().click(),
+  saveFrame,
+  mode1: () => setSceneMode(modeList()[0]?.key),
+  mode2: () => setSceneMode(modeList()[1]?.key),
+  mode3: () => setSceneMode(modeList()[2]?.key),
+  keysHelp: () => popover($('#sceneToolbar'), h('b', {}, 'Keyboard shortcuts'),
+    h('div', { style: 'display:grid;gap:8px;max-height:calc(100vh - 150px);overflow:auto' },
+      ...keysList().map(([group, keys]) => h('div', {}, h('b', {}, group), ...keys.map((k) => h('div', { class: 'hint' }, k)))))),
+};
 
 // the HUD: every tool over the view, hidden or shown (kept per device)
 const HUD = 'deck.scene.hudOff';
@@ -620,6 +666,8 @@ export function wireKeys() {
       if (k === 'z' || k === 'y') { e.preventDefault(); undo(k === 'z' && !e.shiftKey); }
       return;
     }
+    const command = commandFor(e);
+    if (command) { e.preventDefault(); COMMAND[command](); return; }
     const m = MODES.find(([, , k]) => k === e.key.toLowerCase());
     if (m) { e.preventDefault(); setMode(m[0]); }
     else if (e.key.toLowerCase() === 'k') { e.preventDefault(); setAutoKey(!R.autoKey); }
@@ -630,6 +678,8 @@ export function wireKeys() {
     else if (e.key === 'Escape') { if (HAND.on) handMode(null); else if (R.joint) selectJoint(null); else select(null); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && R.sel) { e.preventDefault(); removeSelected(); }
     else if (e.key === ' ') { e.preventDefault(); play(); }
+    else if (e.key.toLowerCase() === 'p') { e.preventDefault(); stopPlay(); seek(AREA.stored()?.a ?? 0); play(); }   // from the start of the range
+    else if (e.key === ',' || e.key === '.') { e.preventDefault(); stopPlay(); seek(R.f + (e.key === '.' ? 1 : -1)); }
     else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {  // a frame; with Shift, to the start / end (Blender)
       e.preventDefault(); stopPlay();
       const fwd = e.key === 'ArrowRight';

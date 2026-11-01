@@ -1,8 +1,9 @@
 // The player + trim + crop widget of a template's video field (generate.js videoField builds the rest).
 // It never redraws the field: edits report through onChange(trim|null, crop|null) when a drag or a
 // typed number ends. trim = {start, len} in seconds; crop = {x, y, w, h} fractions of the frame.
-import { api, button, clamp, clamp01, field, h, iconBtn, pickButtons, seg, setIcon, store } from './ui.js';
+import { api, button, clamp, clamp01, field, h, iconBtn, info as infoBtn, pickButtons, seg, setIcon, store } from './ui.js';
 import { fmtTime } from './playback.js';
+import { ownsKey } from './key-focus.js';
 import { ASPECTS, aspectCrop, cropSpan } from './crop-geometry.js';
 
 const FULL = { x: 0, y: 0, w: 1, h: 1 };
@@ -361,9 +362,10 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
   const lenBar = h('div', { class: 'vf-bar vf-lens' }, h('span', { class: 'hint' }, 'Length'),
     ...[3, 5, 8, 10].map((L) => button(`${L} s`, () => lenTap(L), { cls: 'small', title: `Keep ${L} seconds from the start; drag the lit part to move it` })));
 
-  const el = h('div', { class: 'vf', ...(marks && { tabindex: 0 }) },
+  const keysInfo = infoBtn(`Keys, after a click on the clip: Space play / pause · K stop · P play from in to out · ← → ${marks ? 'a step of the chosen size (Shift: a frame)' : 'a frame (Shift: a second)'} · , . a frame · Home / End the start / end of the clip · I / O set in / out · Shift+I / Shift+O go to them · Alt+X clear them`, 'Keyboard shortcuts');
+  const el = h('div', { class: 'vf', tabindex: 0 },
     h('div', { class: 'crop-stage vf-stage' }, wrap),
-    h('div', { class: 'vf-bar' }, play, time, mute, loopBtn, cropBtn), markBar, snd,
+    h('div', { class: 'vf-bar' }, play, time, mute, loopBtn, cropBtn, keysInfo), markBar, snd,
     cropBar, marks ? h('div', { class: 'vf-stripbox' }, strip) : null, track, lenBar, marks ? fineBox : null,
     h('div', { class: 'vf-nums' }, fields.map((x) => x.el), fitBtn),
     infoEl);
@@ -377,20 +379,27 @@ export function videoEditor({ url, source, info: infoP = null, audio = null, tri
     v.addEventListener('loadedmetadata', () => { v.currentTime = t; v.playbackRate = Number(speed?.querySelector('.on')?.dataset.v || 1); if (playing) v.play().catch(() => {}); }, { once: true });
     if (cells.some((c) => !c.done)) { stripFor = ''; makeStrip(u); }   // (the local copy fills the strip faster)
   };
-  if (marks) {   // keys while the editor has focus: ← → a step of the chosen size (Shift: a frame), I / O set in / out, P plays the selection, Space plays
-    el.addEventListener('keydown', (e) => {
-      if (e.target.closest('input, textarea, select')) return;
-      const k = e.key.toLowerCase();
-      if (k === 'arrowleft' || k === 'arrowright') step((k === 'arrowleft' ? -1 : 1) * (e.shiftKey ? f() : stepSize()));
-      else if (k === 'i') setIn();
-      else if (k === 'o') setOut();
-      else if (k === 'p') playSel();
-      else if (k === ' ') play.click();
-      else return;
-      e.preventDefault();
-    });
-    el.addEventListener('pointerdown', (e) => { if (!e.target.closest('input, button, textarea, select')) el.focus({ preventScroll: true }); });
-  }
+  // keys while the editor has focus: ← → a step of the chosen size with marks (Shift: a frame), else a frame (Shift: a
+  // second), , . a frame, Home / End, I / O set in / out (Shift: go to them), Alt+X clears them, P plays the selection, Space plays, K stops
+  const goHead = (t) => { v.pause(); focus = 'head'; seek(t); };
+  const clearMarks = () => { t0 = 0; t1 = Infinity; nums(); drawTrack(); info(); commit(); };
+  el.addEventListener('keydown', (e) => {
+    if (ownsKey(e, { dialog: false }) || e.ctrlKey || e.metaKey) return;
+    const k = e.key.toLowerCase();
+    if (e.altKey) { if (e.code !== 'KeyX') return; clearMarks(); }
+    else if (k === 'arrowleft' || k === 'arrowright') step((k === 'arrowleft' ? -1 : 1) * (marks ? (e.shiftKey ? f() : stepSize()) : (e.shiftKey ? 1 : f())));
+    else if (k === ',' || k === '.') step((k === ',' ? -1 : 1) * f());
+    else if (k === 'home') goHead(0);
+    else if (k === 'end') goHead(dur);
+    else if (k === 'i') { if (e.shiftKey) goHead(t0); else setIn(); }
+    else if (k === 'o') { if (e.shiftKey) goHead(end()); else setOut(); }
+    else if (k === 'p') playSel();
+    else if (k === 'k') v.pause();
+    else if (k === ' ') play.click();
+    else return;
+    e.preventDefault(); e.stopPropagation();   // (not the tab's own player too)
+  });
+  el.addEventListener('pointerdown', (e) => { if (!e.target.closest('input, button, textarea, select')) el.focus({ preventScroll: true }); });
   return el;
 }
 

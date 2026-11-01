@@ -89,6 +89,7 @@ export function shapeMesh(lib, mesh, o, render = false) {
   });
   mesh.updateGenerator();
   const shape = {
+    now: () => ({ grow: u.grow.value, c: u.c.value.toArray(), r: u.r.value, near: u.near.value }),   // (a depth picture's dots: splat-depth.js)
     set(x = o) {
       u.grow.value = growOf(x, render);
       const t = trimOn(x, render);

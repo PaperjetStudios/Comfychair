@@ -196,5 +196,16 @@ export function alphaAsGrey(px) {
   return px;
 }
 
+// the box round what is solid in RGBA pixels w wide, or null when nothing is. least: how solid counts (a faint haze doesn't hold a trim open)
+export function solidBounds(px, w, h, least = 8) {
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0, i = 3; y < h; y++) {
+    for (let x = 0; x < w; x++, i += 4) {
+      if (px[i] > least) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    }
+  }
+  return x1 < 0 ? null : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
+
 // the words of a "Find" box, each its own search: SAM3 takes one thing per run
 export const termsOf = (text, most = 4) => [...new Set(String(text || '').split(/[,;\n]/).map((x) => x.trim()).filter(Boolean))].slice(0, most);

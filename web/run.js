@@ -10,6 +10,7 @@ import {
 import { S, fmtT, isMine, loadProjects, switchTab, emitServer, onServer } from './core.js';
 import { genLabel, mediaEl, openImagePicker, outputCard, uploadImage } from './media.js';
 import { factsOf, isMedia, kindDef, kindTile, kindOf, madeBy } from './kinds.js';
+import { runBar } from './run-bar.js';
 import { addToPrompt, builderState, loadTemplates, renderFields, saveBuilder, selectTemplate, setVal, stop } from './generate.js';
 import { queueRun } from './make.js';
 
@@ -105,13 +106,7 @@ function showOutput(g, index = 0) {
   const el = mediaEl(o);
   if (o.kind === 'image') el.addEventListener('click', () => openGeneration(g.id));
   box.replaceChildren(el);
-  outputThumbs($('#outStrip'), g, index, (i) => showOutput(g, i));
-}
-
-// A run's outputs as thumbnails to switch between (none when there's only one)
-function outputThumbs(strip, g, sel, onPick) {
-  strip.replaceChildren(...(g.outputs.length > 1 ? g.outputs.map((o, i) =>
-    h('button', { type: 'button', class: 'thumb' + (i === sel ? ' sel' : ''), onclick: () => onPick(i) }, mediaEl(o, { thumb: true }))) : []));
+  runBar($('#outStrip'), g, index, { onPick: (i) => showOutput(g, i) });
 }
 
 function setProgress(value, max, text) {
@@ -493,7 +488,7 @@ export async function openGeneration(id) {
     const o = g.outputs[idx];
     big.replaceChildren(!o ? placeholder(g.error || g.status) : isMedia(o) ? mediaEl(o) : kindOf(o) === 'mesh' ? views.modelViewer(o) : kindOf(o) === 'splat' ? views.splatViewer(o) : kindTile(o, g));
     facts.textContent = o ? [kindDef(o).name, !isMedia(o) && madeBy(g) ? `made with ${madeBy(g)}` : null, factsOf(o)].filter(Boolean).join(' · ') : '';
-    outputThumbs(strip, g, idx, (i) => { idx = i; draw(); });
+    runBar(strip, g, idx, { onPick: (i) => { idx = i; draw(); }, before: closeSheet });
     bar.replaceChildren(actions(buttons()));
   };
   const t = S.templates.find((x) => x.id === g.template);
@@ -560,6 +555,19 @@ export async function useControlVideo(g, sc) {
   if (sc.seconds && int(/length/i)) setVal(int(/length/i).key, Math.round(sc.seconds));   // (a whole number of seconds there; the scene may have a half)
   renderFields();
   toast(`Control video #${g.id} set: add references and a prompt`);
+}
+
+// A clip into a template's video field, in the Generate tab (a run bar's Upscale)
+export function useClipIn(id, g, index = 0) {
+  if (!S.templates.find((t) => t.id === id)) return toast(`Template ${id} is missing`, true);
+  S.history.set(g.id, S.history.get(g.id) || g);
+  switchTab('generate');
+  if (S.tpl?.id !== id) selectTemplate(id);
+  const f = S.tpl.fields.find((x) => x.kind === 'video');
+  if (!f) return toast(`${S.tpl.name || id} has no video field`, true);
+  setVal(f.key, { generation: g.id, index });
+  renderFields();
+  toast(`${S.tpl.name || id}: clip #${g.id} set. Generate when ready`);
 }
 
 // A clip (a 3D colour render, a splat camera move) into deck-h3-refine: H3 draws it again from part-way, with references.

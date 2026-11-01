@@ -19,6 +19,7 @@ import { framesToClip } from './scene-comp.js';
 import { BLENDS, blendOp, createPaint, isCanvas } from './paint.js';
 import { icon } from './icons.js';
 import * as G from './layer-geom.js';
+import { solidBounds } from './matte-edge.js';
 import { inpaintSection } from './inpaint.js';
 import { imageToolsSection } from './imagetools.js';
 
@@ -481,6 +482,23 @@ export function createEditor(cfg) {
 
   // Set a layer's crop without moving the image under it (turned, too)
   function setLayerCrop(l, c) { Object.assign(l, G.cropKeepingPlace(l, c)); }
+  // the crop trimmed to what is solid inside it (what the layer's see-through and its own mask leave), in place
+  function trimCrop(l) {
+    const W = l.img.naturalWidth || l.img.width, H = l.img.naturalHeight || l.img.height, c = l.crop;
+    const x = Math.round(c.x * W), y = Math.round(c.y * H), w = Math.max(1, Math.round(c.w * W)), hh = Math.max(1, Math.round(c.h * H));
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = hh;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(l.img, -x, -y);
+    const m = l.key && !l.maskOff ? E.layers.find((o) => o.maskOf === l.key && ready(o)) : null;
+    if (m) { ctx.globalCompositeOperation = 'destination-in'; ctx.drawImage(m.img, -x, -y, W, H); }
+    const b = solidBounds(ctx.getImageData(0, 0, w, hh).data, w, hh);
+    if (!b) return toast('Nothing solid in the crop to trim to', true);
+    if (b.w === w && b.h === hh) return toast('The crop is already tight: nothing see-through round the edge');
+    E.aspect = null;
+    setLayerCrop(l, { x: (x + b.x) / W, y: (y + b.y) / H, w: b.w / W, h: b.h / H });
+    editorChanged();
+  }
 
   // view: canvas px → screen px in the viewer (s = zoom, ox/oy = offset). It's refitted on every
   // redraw, except while dragging, so the canvas doesn't jump around under the finger. While painting,
@@ -666,7 +684,7 @@ export function createEditor(cfg) {
     };
     // where the pointer is on the selected layer's image, as fractions of it
     const frac = (l, p) => { const q = G.canvasToImage(l, p); return { x: q.x / l.img.naturalWidth, y: q.y / l.img.naturalHeight }; };
-    let drag = null, lastTap = { t: 0, l: null }, held = [];
+    let drag = null, lastTap = { t: 0, l: null }, lastCorner = { t: 0, k: null }, held = [];
     // a second finger turns the press into a pinch (paint.js): what the first finger moved goes back
     const cancelDrag = () => {
       if (!drag) return;
@@ -720,6 +738,9 @@ export function createEditor(cfg) {
       if (sel && E.cropping) {   // (in the image's own fractions, so a turned layer crops the same)
         const c = sel.crop, k = corner(p, sel, true), raw = frac(sel, p);
         const q = { x: clamp01(raw.x), y: clamp01(raw.y) };
+        // a corner tapped twice trims the crop to the solid part
+        if (k && k === lastCorner.k && performance.now() - lastCorner.t < 350) { lastCorner = { t: 0, k: null }; EVheld = false; trimCrop(sel); return; }
+        lastCorner = { t: performance.now(), k };
         if (k) drag = { crop: true, fx: k.includes('w') ? c.x + c.w : c.x, fy: k.includes('n') ? c.y + c.h : c.y };
         else if (G.insideLayer(sel, p)) drag = { crop: true, move: true, q0: q, c0: { ...c } };
         else if (raw.x >= 0 && raw.x <= 1 && raw.y >= 0 && raw.y <= 1) drag = { crop: true, fx: q.x, fy: q.y };
@@ -856,7 +877,7 @@ export function createEditor(cfg) {
         if (it.w < 8 || it.h < 8) { E.items.splice(E.items.indexOf(it), 1); E.itemSel = -1; } else E.itemDraw = false;
       }
       drag = null; EVheld = false; E.guides = [];
-      if (moved) { lastTap = { t: 0, l: null }; persistEditor(); }
+      if (moved) { lastTap = { t: 0, l: null }; lastCorner = { t: 0, k: null }; persistEditor(); }
       renderEditor();
     };
     cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
@@ -895,9 +916,9 @@ export function createEditor(cfg) {
       if (!keys[e.key]) return;
       e.preventDefault(); keys[e.key](); renderEditor();
     });
-    // an animation's keys (Space, and ← → Home End when no layer is selected: those nudge a selected one)
+    // an animation's keys (← → only when no layer is selected: they nudge a selected one, so , . step then)
     playKeys(() => !!E.anim && cfg.active() && !sheetOpen(), () => EA.tp,
-      () => (E.sel ? { ArrowLeft: null, ArrowRight: null, Home: null, End: null } : {}));
+      () => (E.sel ? { ArrowLeft: null, ArrowRight: null } : {}));
   }
 
   function removeLayer(l) {
@@ -1124,7 +1145,7 @@ export function createEditor(cfg) {
     const W = l.img.naturalWidth, H = l.img.naturalHeight, c = l.crop;
     if (E.cropping) {
       return section('Crop', done,
-        help('Drag the box or its corners on the canvas. Switch back to Transform, or tap outside the image, when you\'re done.'),
+        help('Drag the box or its corners on the canvas. Double-tap a corner to trim the crop to the solid part of a picture with see-through in it. Switch back to Transform, or tap outside the image, when you\'re done.'),
         field('Aspect', seg(ASPECTS.map(([label, a]) => [a, label]), E.aspect, (a) => {
           E.aspect = a;
           if (a) setLayerCrop(l, aspectCrop(W, H, a));

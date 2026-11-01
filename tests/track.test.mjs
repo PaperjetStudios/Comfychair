@@ -197,3 +197,17 @@ for (const i of [0, 7, 15, 29]) {
   assert.equal(T.sceneFromSolve({ ...solve, cloud }, null, { cloud: false }).objects.length, 1);
 }
 console.log('solve math ok');
+
+// a background picture: on the card's spot, one even scale, and it always covers the frame
+{
+  const c = { px: 0, py: 1.6, pz: 5, tx: 0, ty: 1, tz: 0, fov: 45, roll: 0 };
+  const card = T.backdropAt(c, 16 / 9);
+  for (const [pic, frame] of [[16 / 9, 16 / 9], [3 / 2, 16 / 9], [9 / 16, 16 / 9], [2.4, 16 / 9], [4 / 5, 1]]) {
+    const p = T.pictureAt(c, pic, frame);
+    assert.equal(p.sx, p.sy); assert.equal(p.sy, p.sz);
+    assert.deepEqual([p.x, p.y, p.z, p.rx, p.ry, p.rz], [card.x, card.y, card.z, card.rx, card.ry, card.rz]);
+    const fh = card.sy, fw = fh * frame;
+    assert.ok(p.sy >= fh - 1e-9 && p.sy * pic >= fw - 1e-9, `covers the frame: ${pic} in ${frame}`);
+    assert.ok(Math.abs(p.sy - fh) < 1e-9 || Math.abs(p.sy * pic - fw) < 1e-9, `no bigger than it has to be: ${pic} in ${frame}`);
+  }
+}

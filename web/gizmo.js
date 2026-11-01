@@ -218,6 +218,13 @@ export const snapBar3 = (onChange) => chipBar(S3, ['grid', 'rot', 'scale'], onCh
 const SNAP3 = [['grid', 'Move on a floor grid', 'gridM', [0.05, 0.1, 0.25, 0.5, 1], (v) => `${v} m`],
   ['rot', 'Turn in steps', 'rotStep', [5, 15, 30, 45, 90], (v) => `${v}°`],
   ['scale', 'Size in steps (m, or × for a figure or photo)', 'scaleStep', [0.01, 0.05, 0.1, 0.25, 0.5], (v) => `${v}`]];
+let setSnap3 = null;   // the menu's own setter: it saves, updates the chip and tells the view
+// the G key: move snapping on or off. Returns whether it is on now.
+export function toggleGrid3() {
+  const on = !snap3.grid;
+  if (setSnap3) setSnap3(() => { snap3.grid = on; }); else { snap3.grid = on; saveSnap3(); }
+  return on;
+}
 export function snapMenu3(onChange) {
   const show = () => {
     const on = SNAP3.filter(([p]) => snap3[p]);
@@ -225,12 +232,13 @@ export function snapMenu3(onChange) {
     chip.classList.toggle('on', on.length > 0); chip.setAttribute('aria-pressed', String(on.length > 0));
   };
   const set = (fn) => { fn(); saveSnap3(); show(); onChange?.(); };
+  setSnap3 = set;
   const open = () => popover(chip, h('b', {}, 'Snapping'),
     ...SNAP3.map(([p, label, k, opts, f]) => h('div', { class: 'snap-row' },
       toggle(label, snap3[p], (on) => set(() => { snap3[p] = on; })),
       seg(opts.map((v) => [v, f(v)]), snap3[k], (v) => set(() => { snap3[k] = Number(v); snap3[p] = true; })))),
     h('span', { class: 'hint' }, 'On a desktop, hold Alt while dragging to drag freely.'));
-  const chip = gzChip('', open, { title: 'Snapping: grid, turn and size steps' });
+  const chip = gzChip('', open, { title: 'Snapping: grid, turn and size steps (G: grid on / off)' });
   show();
   return h('div', { class: 'gz-bar' }, chip);
 }

@@ -10,7 +10,7 @@ import * as FIGURE from './figure.js';
 import { CAM, EVEN, applyOffset, applyRoll, FPS, OBJ, TYPES, framesFor, liveCam, makers, namesFor, originShift, pathSig, sample, shots, upgrade } from './scene-data.js';
 import { LOADERS, RANGE, depthMat, floorMat, geometries, photoScene, rangeMat, setRange, wallMat } from './scene-view.js';
 import { applyClay } from './scene-import.js';
-import { depthLook, renderDepth, splatDepths, splatMeshes } from './splat-depth.js';
+import { renderDepth, splatBlurOf, splatDepths, splatMeshes } from './splat-depth.js';
 
 export const LOOKS = [['color', 'Colour'], ['clay', 'Clay'], ['depth', 'Depth'], ['pose', 'Pose']];
 export const ready = typeof SCENE.show;   // (keeps the import above in use: it is for its side effects)
@@ -78,7 +78,7 @@ export class Stage {
       }).catch(() => {}).finally(() => this.loaded(o.id));
     } else if (makers[o.type]) {
       m = makers[o.type](o, x);
-      if (o.ref || o.type === 'backdrop') this.waiting.add(o.id);   // (an object layer fills itself in once its library entry arrives)
+      if (o.ref || o.type === 'backdrop' || o.type === 'picture') this.waiting.add(o.id);   // (an object layer fills itself in once its library entry arrives)
     } else if (LOADERS[o.type]) {
       m = new THREE.Group(); this.waiting.add(o.id); LOADERS[o.type](o, m, x);
     } else m = new THREE.Mesh(geometries()[TYPES[o.type].geo || o.type], clay);
@@ -113,7 +113,7 @@ export class Stage {
   setLook(look) {
     if (this.look === look) return;
     this.look = look;
-    const proxy = look === 'clay';   // a splat can't be clayed: its box stands in (depth colours it: splat-depth.js)
+    const proxy = look === 'clay';   // a splat can't be clayed: its box stands in (depth draws it as dots: splat-depth.js)
     this.scene.overrideMaterial = look === 'depth' ? depthMat : null;
     this.scene.background = new THREE.Color(look === 'depth' ? 0x000000 : BG);
     for (const o of this.sc.objects) {
@@ -124,7 +124,6 @@ export class Stage {
       if (m.userData.own) m.material = look === 'clay' ? clay : m.userData.own;   // an object layer keeps its colour except in clay
       const sp = m.userData.splat;
       if (sp) for (const c of m.children) c.visible = c === sp.proxy ? proxy : !proxy;
-      if (sp?.mesh && this.lib) depthLook(this.lib, sp.mesh, look === 'depth');
     }
     if (this.spark) this.spark.visible = !proxy && look !== 'depth';   // (depth draws it in a pass of its own)
   }
@@ -183,7 +182,7 @@ export class Stage {
     const gl = glr();
     if (gl.domElement.width !== W || gl.domElement.height !== H) gl.setSize(W, H, false);
     if (range) setRange(range);
-    if (look === 'depth') renderDepth(gl, this.scene, this.camera, this.hasSplat ? this.spark : null); else gl.render(this.scene, this.camera);
+    if (look === 'depth') renderDepth(gl, this.scene, this.camera, this.hasSplat ? this.spark : null, splatBlurOf(this.sc)); else gl.render(this.scene, this.camera);
     cv.getContext('2d').drawImage(gl.domElement, 0, 0);
     if (look === 'color' && this.hasSplat) this.kick(`${f}|${W}`);
   }

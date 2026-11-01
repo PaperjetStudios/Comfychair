@@ -14,7 +14,8 @@ import * as M from './workarea-math.js';
 // and End typed, In / Out at the playhead, the whole timeline, Clear.
 // While it is on, play loops inside it (or stops at its out point with Loop off), stepping and scrubbing stay
 // inside, and ⇤ / ⇥ go to its ends.
-// Keys: I / O set the in / out point at the playhead (Alt+I / Alt+O where I and O are taken), Alt+X clears.
+// Keys: I / O set the in / out point at the playhead (Alt+I / Alt+O where I and O are taken), with Shift they go to
+// that point, Alt+X clears.
 // It is saved with the tab's document ({ a, b, on } in the timeline's units). Exports offer "Range only".
 //
 //   const W = workArea({ get, set, len, at, pos, t, seek, step, points?, minLen?, alt?, changed? });
@@ -44,6 +45,7 @@ export function workArea(o) {
 
   const W = {
     only: true,   // exports: only the range (while there is one)
+    alt: !!o.alt,
     stored,
     bound: () => M.bound(o.get(), len(), 0),
     clamp: (t) => M.clampT(t, W.bound()),
@@ -67,6 +69,11 @@ export function workArea(o) {
     if (!before) return;
     commit(null);
     undoToast('Work area cleared', () => commit(before));
+  };
+  const goTo = (end) => () => {
+    const r = stored();
+    if (!r) return toast(`No range yet: Range, or ${keysLabel} at the playhead`, true);
+    o.seek(r[end]);
   };
   W.toggle = () => {
     const r = stored();
@@ -183,12 +190,14 @@ export function workArea(o) {
   }
   W.sync = sync;
 
-  // ---- keys: I / O (Alt+I / Alt+O with alt) set in / out at the playhead, Alt+X clears ----
+  // ---- keys: I / O (Alt+I / Alt+O with alt) set in / out at the playhead, with Shift go to them, Alt+X clears ----
   W.keyFn = (e) => {
     if (e.ctrlKey || e.metaKey) return null;
     if (e.altKey && e.code === 'KeyX') return W.clear;
     if (e.altKey !== !!o.alt) return null;
-    return e.code === 'KeyI' ? W.setIn : e.code === 'KeyO' ? W.setOut : null;
+    if (e.code === 'KeyI') return e.shiftKey ? goTo('a') : W.setIn;
+    if (e.code === 'KeyO') return e.shiftKey ? goTo('b') : W.setOut;
+    return null;
   };
 
   // ---- exports: "Range only" (on by default while there is a range) ----

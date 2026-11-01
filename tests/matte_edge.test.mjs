@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SEES, alphaAsGrey, boundsOf, boxesFor, foundIn, guidedFilter, refineEdge, separateAreas, stairOf, termsOf, worthLooking } from '../web/matte-edge.js';
+import { SEES, alphaAsGrey, boundsOf, solidBounds, boxesFor, foundIn, guidedFilter, refineEdge, separateAreas, stairOf, termsOf, worthLooking } from '../web/matte-edge.js';
 
 // a picture of w×h with an edge at x = at, and the same edge in a mask as a staircase `step` wide (a diagonal in the picture)
 function scene(w, h, step) {
@@ -140,4 +140,12 @@ test('separate marked areas: a line of letters is one, two far apart are two, no
 test('a layer\'s see-through as a matte: solid is white, see-through black, whatever its colour', () => {
   const px = Uint8ClampedArray.from([9, 80, 200, 255, 200, 0, 0, 0, 1, 2, 3, 128]);
   assert.deepEqual([...alphaAsGrey(px)], [255, 255, 255, 255, 0, 0, 0, 255, 128, 128, 128, 255]);
+});
+
+test('what is solid in a picture: a blob in the middle, a faint haze ignored, nothing is null', () => {
+  const w = 10, h = 8, px = new Uint8ClampedArray(w * h * 4);
+  assert.equal(solidBounds(px, w, h), null);
+  for (let y = 3; y < 6; y++) for (let x = 4; x < 7; x++) px[(y * w + x) * 4 + 3] = 255;
+  px[3] = 5;   // (haze in the corner)
+  assert.deepEqual(solidBounds(px, w, h), { x: 4, y: 3, w: 3, h: 3 });
 });
