@@ -135,6 +135,17 @@ class Storage(unittest.TestCase):
             self.assertFalse(p.exists(), p)
         main.comfy.forget.assert_awaited()
 
+    def test_deleting_a_run_takes_its_view_marks(self):
+        gid, ours, theirs, twins = self.gen()
+        folder = main.db.project_folder(main.db.get_generation(gid)["project_id"])
+        marks = touch(config.PROJECTS_DIR / folder / ".deck" / "view-marks" / f"g{gid}.json")
+        other = touch(config.PROJECTS_DIR / folder / ".deck" / "view-marks" / f"g{gid + 1}.json")
+        with TestClient(main.app) as c:
+            self.assertEqual(c.delete(f"/api/generations/{gid}").status_code, 200)
+        self.assertFalse(marks.exists())
+        self.assertTrue(other.exists())
+        other.unlink()
+
     def test_deleting_a_run_takes_its_extend_frame_canvas(self):
         gid, ours, theirs, twins = self.gen()
         t = storage.tag(ours.resolve())

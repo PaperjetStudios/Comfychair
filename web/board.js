@@ -7,6 +7,7 @@ import { bareSource, extractSound, genLabel, soundInput, soundToSoundTab } from 
 import { S, switchTab, onServer } from './core.js';
 import { finishWithH3, openGeneration } from './run.js';
 import { openUseAs } from './useas.js';
+import { isSheetRun } from './markview-math.js';
 import { E, FULL, editorTabsReady, newEditTab, openCrop, persistEditor, renderEditor } from './editor.js';
 import { addToTimeline } from './video.js';
 import { maximizable, zoomPan } from './layout.js';
@@ -43,7 +44,7 @@ export async function renderBoard() {
   if (!B.boxWired) { B.boxWired = true; wireBoxSelect(); }
   const bar = $('#boardBar');
   if (B.filter === 'marked' && !B.marked.size) B.filter = 'all';
-  const filters = [['all', 'All'], ['image', 'Images'], ['video', 'Videos'], ['audio', 'Sounds'], ['motion', 'Motion'], ['3d', '3D'],
+  const filters = [['all', 'All'], ['image', 'Images'], ['video', 'Videos'], ['audio', 'Sounds'], ['motion', 'Motion'], ['3d', '3D'], ['sheets', 'Sheets'],
     ['pinned', '★ Pinned'], ...(B.marked.size ? [['marked', '🗑 Marked']] : [])];
   const filterSeg = seg(filters, B.filter, (k) => { B.filter = k; store.set('deck.board.filter', k); renderBoard(); });
   const size = numSlider({ min: 120, max: 520, step: 10, value: B.size, label: 'Tile size' });
@@ -68,6 +69,7 @@ export async function renderBoard() {
     B.from != null || B.to != null ? 'Nothing in that date range.'
       : B.filter === 'pinned' ? 'Nothing pinned yet. Tap ☆ on any tile.'
         : B.filter === 'marked' ? 'Nothing marked. Mark things for deletion in the gallery (tap a tile).'
+          : B.filter === 'sheets' ? 'No character or object sheets in this project yet.'
           : 'Nothing generated in this project yet.')]));
   $('#board').querySelectorAll('video').forEach((v) => boardVideos.observe(v));
   count.textContent = `${tiles.length} item${tiles.length === 1 ? '' : 's'}`;
@@ -84,6 +86,7 @@ function boardItems() {
   for (const g of gens) {
     if (B.filter === 'pinned' && !g.pinned) continue;
     if (B.filter === 'marked' && !B.marked.has(g.id)) continue;
+    if (B.filter === 'sheets' && !isSheetRun(g)) continue;
     const t = genTime(g);
     if ((B.from != null && t < B.from) || (B.to != null && t > B.to)) continue;
     g.outputs.forEach((o, i) => {

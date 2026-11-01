@@ -133,6 +133,35 @@ class Build(unittest.TestCase):
                     self.assertIn(v[0], wf, f"{k} points at a dropped node {v[0]}")
         self.assertFalse(up.is_sheet(self.wf("deck-h3-ref2v")))
 
+    def test_sheet_marks(self):
+        m = up.sheet_marks(self.wf("deck-h3-charsheet"))
+        self.assertEqual(m[:2], [{"label": "Front", "frame": 4}, {"label": "Left", "frame": 54}])
+        self.assertEqual([x["label"] for x in m][-1], "Detail")
+        self.assertEqual([x["label"] for x in up.sheet_marks(self.wf("deck-h3-charsheet-bust4"))], ["Front", "Left", "Back", "Face front"])
+        self.assertEqual([x["frame"] for x in up.sheet_marks(self.wf("deck-h3-charsheet-bust"))], [3, 45, 80, 100, 138, 174])
+        self.assertEqual(up.sheet_marks(self.wf("deck-h3-objectsheet"))[6]["label"], "Top")
+        self.assertEqual(up.sheet_marks(self.wf("deck-h3-ref2v")), [])
+        self.assertEqual(up.sheet_marks({}), [])
+
+    def test_sheet_pose(self):
+        for name in ("deck-h3-charsheet", "deck-h3-charsheet-bust", "deck-h3-charsheet-bust4"):
+            self.assertEqual([f["key"] for f in up.pose_fields(self.wf(name))], [up.POSE], name)
+            for pose, word in (("A-pose", "A-pose"), ("T-pose", "T-pose")):
+                wf = up.apply_pose(self.wf(name), {up.POSE: pose})
+                text = wf[up.h3_node(wf)]["inputs"]["prompt"]
+                self.assertIn(word, text)
+                self.assertNotIn("relaxed neutral", text)
+            same = self.wf(name)
+            self.assertEqual(up.apply_pose(self.wf(name), {up.POSE: "Relaxed"}), same)
+            self.assertEqual(up.apply_pose(self.wf(name), {}), same)
+        self.assertEqual(up.pose_fields(self.wf("deck-h3-objectsheet")), [])
+        self.assertEqual(up.pose_fields(self.wf("deck-h3-ref2v")), [])
+        # words the user rewrote: the pose still gets in
+        wf = self.wf("deck-h3-charsheet")
+        wf[up.h3_node(wf)]["inputs"]["prompt"] = "[Shot 1] A knight stands guard."
+        text = up.apply_pose(wf, {up.POSE: "T-pose"})[up.h3_node(wf)]["inputs"]["prompt"]
+        self.assertTrue(text.startswith("[Shot 1] <Subject 1> stands in a T-pose"))
+
     def test_sheet_option_fields_and_follow_up(self):
         for name in ("deck-h3-charsheet", "deck-h3-charsheet-bust", "deck-h3-charsheet-bust4", "deck-h3-objectsheet"):
             fs = up.sheet_fields(self.wf(name), None)

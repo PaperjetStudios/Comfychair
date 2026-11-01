@@ -270,6 +270,10 @@ def describe(t: Template, object_info: dict | None) -> dict:
     if t.workflow:  # edit models size their output from Image 1: offer a size for it
         fields += editsize.fields(t.workflow, fields)
         fields += maskcomp.fields(t.workflow, fields)   # a mask painted on the first picture (after the Size: Crop to mask needs it)
+    pose = h3upscale.pose_fields(t.workflow)
+    if pose:  # how a character sheet's character stands (main: h3upscale.apply_pose)
+        fields += pose
+        groups.append({"label": "Pose", "node": "__deck", "class": ""})
     sheet = h3upscale.sheet_fields(t.workflow, object_info)
     if sheet:  # a sheet's own upscale, queued once it's done (main.finalize -> routes/effects.sheet_follow_up)
         fields += sheet

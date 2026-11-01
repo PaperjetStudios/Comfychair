@@ -170,6 +170,62 @@ def sheet_fields(wf: dict, object_info: dict | None) -> list[dict]:
              "when": {"key": UPSCALE, "not": "Off"}}]
 
 
+# A sheet's pose: the words in Shot 1 say how the character stands. T and A keep the arms clear of the body for rigging and 3D.
+POSE = "__deck.pose"
+POSES = {"Relaxed": None,
+         "A-pose": "in an A-pose: standing straight, legs slightly apart, both arms straight and held out to the sides about "
+                   "45 degrees below the shoulders, palms facing down, fingers apart",
+         "T-pose": "in a T-pose: standing straight, legs slightly apart, both arms straight out to the sides at shoulder "
+                   "height, level with the floor, palms facing down, fingers apart"}
+POSE_WORDS = re.compile(r"(?:standing still )?in a relaxed neutral pose(?:, arms slightly away from the body)?")
+POSE_HELP = ("How the character stands through the orbit. A-pose or T-pose keep the arms clear of the body, which helps rigging and "
+             "3D models. A bust sheet frames to the mid-waist, so a T-pose's arms can leave the frame.")
+
+
+def pose_fields(wf: dict) -> list[dict]:
+    """The Pose option of a character sheet (its prompt says how the character stands; an object sheet's doesn't)."""
+    nid = h3_node(wf) if wf and is_sheet(wf) else None
+    if not nid or not POSE_WORDS.search(str(wf[nid]["inputs"].get("prompt") or "")):
+        return []
+    return [{"key": POSE, "node": "__deck", "input": "pose", "kind": "choice", "group": "Pose", "label": "Pose",
+             "options": list(POSES), "value": "Relaxed", "help": POSE_HELP}]
+
+
+def apply_pose(wf: dict, values: dict) -> dict:
+    """The chosen pose written into the sheet's prompt. Prompt words that were rewritten get it as a sentence at the top of Shot 1."""
+    words, nid = POSES.get(str((values or {}).get(POSE) or "")), h3_node(wf)
+    if not words or not nid:
+        return wf
+    text = str(wf[nid]["inputs"].get("prompt") or "")
+    if POSE_WORDS.search(text):
+        text = POSE_WORDS.sub(lambda _: f"standing still {words}", text, count=1)
+    elif "[Shot 1] " in text:
+        text = text.replace("[Shot 1] ", f"[Shot 1] <Subject 1> stands {words}. ", 1)
+    else:
+        text = f"<Subject 1> stands {words}. {text}"
+    wf[nid]["inputs"]["prompt"] = text
+    return wf
+
+
+# What a sheet's picture frames show, in order (the orbit turns to the character's left first; dev/make_bust_sheet_templates.py)
+SHEET_ANGLES = {4: ("Front", "Left", "Back", "Face front"),
+                6: ("Front", "Left", "Back", "Right", "Face front", "Face 3/4"),
+                8: ("Front", "Left", "Back", "Right", "Face front", "Face 3/4", "Face side", "Detail")}
+OBJECT_ANGLES = ("Front", "Left", "Back", "Right", "Detail", "Detail", "Top", "Detail")
+
+
+def sheet_marks(wf: dict) -> list[dict]:
+    """The frames a sheet run cut its picture from, labelled by angle. Frames it can't name are Detail."""
+    nid = h3_node(wf) if wf and is_sheet(wf) else None
+    picks = next((n for n in wf.values() if n.get("class_type") == "VHS_SelectImages"), None) if nid else None
+    if not picks:
+        return []
+    frames = [int(x) for x in re.findall(r"\d+", str(picks["inputs"].get("indexes") or ""))]
+    is_object = "is the object shown" in str(wf[nid]["inputs"].get("prompt") or "")
+    names = OBJECT_ANGLES if is_object and len(frames) == 8 else SHEET_ANGLES.get(len(frames), ())
+    return [{"label": names[i] if i < len(names) else "Detail", "frame": f} for i, f in enumerate(frames)]
+
+
 def follow_up(params: dict) -> tuple[float, str] | None:
     """(scale, strength name) when a finished run asked for its upscale, else None."""
     scale = SHEET_SCALES.get(str((params or {}).get(UPSCALE) or "Off"))

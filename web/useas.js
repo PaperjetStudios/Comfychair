@@ -3,6 +3,7 @@ import { S, inputUrl, previewUrl, switchTab, thumbUrl } from './core.js';
 import { genLabel } from './media.js';
 import { renderFields, selectTemplate, setVal } from './generate.js';
 import { factsOf, kindDef, kindOf } from './kinds.js';
+import { SHEET_TEMPLATES, markClipOf } from './markview-math.js';
 
 // ---------------------------------------------------------------------------
 // "Use as…" (Board gallery, History details): every place a finished output can go, grouped by tab, only the
@@ -76,9 +77,12 @@ export function openUseAs(g, index, { before = null } = {}) {
   }, { cls: '', ...attrs });
   const run = () => import('./run.js');
   const sheetClip = SHEETS.has(g.template) ? g.outputs.findIndex((x) => kindOf(x) === 'video') : -1;   // (the sheet picture too: its clip)
+  const markClip = markClipOf(g, index);
   const groups = [
-    ['Sheet', sheetClip >= 0 ? [go('Upscale the sheet (H3)…', async () => (await run()).openH3Upscale(g, sheetClip),
-      { title: 'H3 samples the sheet\'s clip again bigger, and the sheet picture is cut again from the bigger frames' })] : []],
+    ['Sheet', [...(markClip >= 0 ? [go('Mark views…', async () => (await import('./markviews.js')).openMarkViews(g, markClip),
+      { title: 'Scrub the clip and mark frames as angles; each becomes its own picture, with Upscale, De-light and Cut out as you choose' })] : []),
+    ...(sheetClip >= 0 ? [go('Upscale the sheet (H3)…', async () => (await run()).openH3Upscale(g, sheetClip),
+      { title: 'H3 samples the sheet\'s clip again bigger, and the sheet picture is cut again from the bigger frames' })] : [])]],
     [`Generate · ${S.tpl?.name || S.tpl?.id || ''}`, generateTargets(k, src, toInput, go)],
     ['VFX', vfxTargets(k, src, label, toInput, go)],
     ['Video', ['image', 'video', 'audio'].includes(k) ? [go('Add to the timeline', async () => {
@@ -116,8 +120,8 @@ export function openUseAs(g, index, { before = null } = {}) {
 // the 3D tab: scene-export.js marks it params.__face { kind: '3d', scene })
 const ctrl3d = (g) => (g.template === '3d scene' && g.params?.kind !== 'color') || (g.template === 'deck-depth-video' && g.params?.__face?.kind === '3d');
 
-// the character and object sheets (an H3 clip with a picture cut from it): Use as offers their upscale first
-const SHEETS = new Set(['deck-h3-charsheet', 'deck-h3-charsheet-bust', 'deck-h3-charsheet-bust4', 'deck-h3-objectsheet']);
+// the character and object sheets: Use as offers their upscale first
+const SHEETS = SHEET_TEMPLATES;
 
 // A picture into an upscale template (when it's installed), as a named button with its ⓘ
 const IMAGE_UPSCALES = [

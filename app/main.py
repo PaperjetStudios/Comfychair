@@ -663,7 +663,7 @@ async def generate(body: dict = Body(...)):
         run = maskcomp.prefill(run, flist, t.workflow)   # a mask input of the template's own takes the painted mask
         wf = editsize.inject(accel.inject(tpl.apply(t.workflow, run), run), run, flist)
         wf = maskcomp.inject(wf, run, flist, await _mask_dims(run, flist))
-        wf = h3upscale.drop_turbo_under_regen(wf)
+        wf = h3upscale.apply_pose(h3upscale.drop_turbo_under_regen(wf), run)
         folder = db.project_folder(project_id)
         for node in wf.values():  # ComfyUI's own copy goes to output/comfydeck/<project>/ too
             fp = node["inputs"].get("filename_prefix")
@@ -755,7 +755,9 @@ async def delete_generation(gid: int):
     g = db.get_generation(gid)
     if not g:
         raise HTTPException(404)
+    folder = db.project_folder(g["project_id"])
     db.delete_generation(gid)
+    storage.drop_view_marks(folder, gid)
     for o in g["outputs"]:   # every copy (storage.py): ours, ComfyUI's (older runs still have one) and what it wrote
         ours = output_file(g, o)   # beside it, a mesh copied in for rigging, and the thumbnails and previews of it
         gone = [ours]
@@ -978,6 +980,12 @@ async def generation_to_input(gid: int, body: dict = Body(default={})):
     source = {"generation": gid, "index": idx, "frame": which if out["kind"] == "video" else None}
     db.set_input_origin(name, source)
     return {"name": name, "width": w, "height": h, "source": source}
+
+
+@app.get("/api/generations/{gid}/sheet-marks")
+async def generation_sheet_marks(gid: int):
+    """The frames a sheet run cut its picture from, as angles: where Mark views starts on that clip."""
+    return h3upscale.sheet_marks(db.get_workflow(gid) or {})
 
 
 # what the media library takes: pictures, clips and sounds (imageprep.KINDS)

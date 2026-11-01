@@ -247,6 +247,29 @@ async function runOne(eng, o, t, tab, src) {
   }).catch((e) => toast(`${o.label} failed: ${e.message}`, true)).finally(() => { FLIGHT.delete(g.id); eng.render(); });
 }
 
+// The Image tab's upscale, de-light and cut-out as one step on one picture, with this tab's chosen model and scale, for work
+// outside the tab (markviews.js). The result's input name comes back.
+export async function applyStep(step, name, { what = 'person' } = {}) {
+  const id = step === 'up' ? 'deck-upscale-image' : step === 'cut' ? 'deck-mask-image' : (DELIGHT[ST.lmodel] || DELIGHT.krea2).tpl;
+  const t = template(id);
+  if (!t) throw new Error(`${id} isn't installed`);
+  const set = (f, v) => { if (f) values[f.key] = v; };
+  const values = valuesByRole(t, { seed: -1, ...(step === 'cut' && { prompt: what.trim() || 'person' }) });
+  if (step === 'delight') {
+    set(t.fields.find((f) => f.kind === 'image' && /image to edit/i.test(f.group)) || t.fields.find((f) => f.kind === 'image'), name);
+    set(t.fields.find((f) => f.kind === 'text' && /^edit$/i.test(f.group) && !/negative/i.test(f.input)), (ST.lprompt || '').trim() || DELIGHT_PROMPT);
+  } else set(t.fields.find((f) => f.kind === 'image'), name);
+  if (step === 'up') set(t.fields.find((f) => f.input === 'scale_by'), ST.scale);
+  const once = async () => waitGen((await queueRun({ template: id, values, batch: 1 }))[0].id);
+  // SAM3's worker now and then fails a run ("Inference tensors do not track version counter") that works when sent again
+  const done = step === 'cut' ? await once().catch(once) : await once();
+  if (step === 'cut') {
+    const cut = await cutOut(name, await matteOf(done));
+    return (await uploadImage(await pngBlob(cut), { mp: 0, source: 'editor', filename: 'cutout.png', multiple: 1 })).name;
+  }
+  return (await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } })).name;
+}
+
 export function imageToolsSection(eng) {
   const E = eng.E;
   if (!E.layers.some((l) => !l.mask && !l.draft)) return null;

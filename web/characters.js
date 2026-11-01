@@ -204,6 +204,16 @@ async function keepView(c, x) {
 function dropCand(c, x) { c.cands = c.cands.filter((y) => y !== x); changed(c); tell(); }
 function redoView(c, x) { dropCand(c, x); makeViews(c, [x.view]); }
 function setView(c, k, name) { if (name) c.views[k] = name; else delete c.views[k]; changed(c); tell(); }
+// several look pack views at once ({ view: name, or null to clear }); what they replace comes back, in the same form, for an undo
+export function setViews(c, views) {
+  const was = {};
+  for (const [k, name] of Object.entries(views)) {
+    was[k] = c.views[k] || null;
+    if (name) c.views[k] = name; else delete c.views[k];
+  }
+  changed(c); tell();
+  return was;
+}
 
 async function makeSheet(c) {
   const pics = packViews(c).map((k) => c.views[k]);

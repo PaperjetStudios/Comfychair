@@ -111,6 +111,11 @@ def comfy_path(item: dict) -> Path | None:
     return p if _inside(p, root) else None
 
 
+def drop_view_marks(project_folder: str, gid: int) -> None:
+    """The frames marked on a run's clip (Mark views) go with the run."""
+    (config.PROJECTS_DIR / project_folder / ".deck" / "view-marks" / f"g{gid}.json").unlink(missing_ok=True)
+
+
 def drop_comfy_outputs(items: list[dict], saved: list[Path]) -> int:
     """After a run: ComfyUI's copies of what it reported, and their family, once every one of ComfyChair's copies
     is on disk (if one is missing or empty nothing is deleted: ComfyUI's may be the only copy)."""
