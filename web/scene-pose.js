@@ -47,6 +47,16 @@ function takePose(o, j, { m = undefined, name = null, mask = R.mask } = {}) {
   changed();
 }
 
+// back to the neutral standing pose: every joint, finger, adjust slider, face and the pose name cleared, at the playhead (one undo step)
+export function resetPose(o) {
+  const v = current(o, FIG), j = { ...FIGURE.preset('stand').j };
+  for (const n of Object.keys(FIGURE.HAND)) delete j[n];
+  write(o, FIG, { j, m: {}, pn: 'stand', ...liftTo(o, v, j, {}) });
+  R.joint = null;
+  changed();
+  toast(`${o.name}: pose reset`);
+}
+
 // two people: this figure and the nearest other one (a new one when there's none), placed together
 function takePair(o, key) {
   const p = FIGURE.pair(key), v = current(o, FIG), s = v.sy, r = THREE.MathUtils.degToRad(v.ry);
@@ -110,7 +120,7 @@ export function posesTab(o, cur) {
       }, { title: 'Swap left and right' }),
       button('Copy pose', () => { const v = cur(); clip = { j: v.j, m: v.m, pn: v.pn }; toast('Pose copied: paste it on any figure'); renderPanel(); }),
       clip ? button('Paste pose', () => takePose(o, clip.j, { m: clip.m, name: clip.pn })) : null,
-      button('Reset', () => takePose(o, FIGURE.preset('stand').j, { m: {}, name: 'stand', mask: 'all' }))),
+      button('Reset pose', () => resetPose(o), { title: 'Every joint, finger and slider back to the neutral stand' })),
   ];
 }
 
@@ -278,6 +288,7 @@ export function jointsTab(o, cur) {
     h('div', { class: 'row joint-head' }, iconBtn('Previous joint', '◀', () => step(-1)), h('b', { class: 'grow' }, label), iconBtn('Next joint', '▶', () => step(1))),
     withKeys(field('Turn', turn('Bend', 0), turn('Twist', 1), turn('Side', 2)), label, o, FIG, [`j.${n}`]),
     toggle('Mirror edits to the other side', R.sym, (on) => { R.sym = on; }),
+    h('div', { class: 'row wrap' }, button('Reset whole pose', () => resetPose(o), { title: 'Every joint, finger and slider back to the neutral stand' })),
     h('div', { class: 'row wrap' },
       button('Reset joint', () => { const j = { ...cur().j }; delete j[n]; if (R.sym && opp) delete j[opp]; write(o, FIG, { j }); changed(); }),
       opp ? button('Copy to other side', () => { const j = { ...cur().j }; if (j[n]) j[opp] = FIGURE.mirrorQ(j[n]); else delete j[opp]; write(o, FIG, { j }); changed(); }) : null,

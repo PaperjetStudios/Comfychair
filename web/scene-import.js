@@ -9,7 +9,8 @@ import * as THREE from './vendor/three.module.min.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip, field, seg, info, rangeField, mediaCard, placeholder, iconBtn } from './ui.js';
 import { thumbUrl } from './core.js';
-import { C, R, SC, newObject, namesFor, save, selItem, write } from './scene-data.js';
+import { C, OBJ as OBJ_CH, R, SC, current, newObject, namesFor, save, selItem, write } from './scene-data.js';
+import { heightOf as figureHeight } from './figure.js';
 import { addModeSection } from './scene-modes.js';
 import { LOADERS, SPLAT_PASS, activeCamera, controls, changed, draw, fit, lookThrough, passHooks, recentre, renderer, scene, select } from './scene-view.js';
 import { LIBRARY } from './scene-library.js';
@@ -347,7 +348,7 @@ const glbOf = (g) => (g?.outputs || []).find((o) => /\.glb$/i.test(o.filename));
 async function land(g, label) {
   const out = glbOf(g);
   if (!out) throw new Error('That run made no 3D model (a GLB)');
-  await addModel(out.url, label);
+  await addModel(out.url, label, { gen: g.id, index: g.outputs.indexOf(out) });
 }
 
 // one picture of an object as a splat (Idol): the splat file lands as a splat layer
@@ -426,12 +427,23 @@ async function useOwnRig(o) {
 // Rig a run's mesh: the mesh goes into ComfyUI's input folder, an auto-rig template (Make It Animatable
 // for people, UniRig for anything else) returns a skinned model, and that becomes a rigged layer that
 // takes the figure's poses.
-export async function rigRun(generation, index, name, template = 'deck-autorig-human', { skinned = false } = {}) {
+// The rig comes back in the rigger's own size (a rigged layer is fitted to a person's height, a skinned one is raw): put it
+// where the model it was made from stands, as tall, and turned the same. like: { height (m), x, z, ry } of that model.
+function placeLike(o, like, figure) {
+  if (!like || !o) return o;
+  const k = figure ? like.height / figureHeight('man') : 1;
+  o.base.x = like.x; o.base.z = like.z; o.base.ry = like.ry;
+  if (figure) o.base.sx = o.base.sy = o.base.sz = +k.toPrecision(4);
+  save();
+  return o;
+}
+
+export async function rigRun(generation, index, name, template = 'deck-autorig-human', { skinned = false, url = null, like = null } = {}) {
   const { template: tpl2, queueRun, waitGen } = await import('./make.js');
   const t = tpl2(template);
   if (!t) return toast(`Rigging needs the UniRig nodes (ComfyUI-UniRig) and the ${template} template`, true);
   const up = await api('/api/scene/mesh', { method: 'POST', busy: 'Sending the model to ComfyUI…',
-    body: { generation, index } });
+    body: generation == null ? { url } : { generation, index } });
   const f = t.fields.find((x) => x.group === 'Model');   // the mesh's path (a text field: no list to be on)
   const [g] = await queueRun({ template, values: f ? { [f.key]: up.file_path } : {} });
   toast(`${name || 'The model'}: rigging queued as #${g.id}. It takes a while.`);
@@ -440,16 +452,24 @@ export async function rigRun(generation, index, name, template = 'deck-autorig-h
   if (!file) throw new Error('The rig made no model file');
   if (skinned) {
     const { addSkinned } = await import('./scene-skin.js');
-    return addSkinned(file.url, name || 'Skinned', { gen: done.id });
+    return placeLike(await addSkinned(file.url, name || 'Skinned', { gen: done.id }), like, false);
   }
   const { addRigged } = await import('./scene-rig.js');
-  return addRigged(file.url, name || 'Rigged', { gen: done.id });
+  return placeLike(await addRigged(file.url, name || 'Rigged', { gen: done.id }), like, true);
 }
 
 export async function rigModel(o, template, opts = {}) {
   if (!o || o.type !== 'model') return toast('Pick a model layer first', true);
-  if (o.gen == null) return toast('Rig a model that came from a run (or made from a photo)', true);
-  try { await rigRun(o.gen, o.genIndex || 0, o.name, template, opts); }
+  // a model from a run is sent by its run; any other (imported, cleaned up) by its file in the project
+  if (o.gen == null && !/^\/files\/projects\//.test(o.url || '')) return toast('Rig a model that is a file in this project (one made, imported or cleaned up)', true);
+  // as tall, and standing where this model does
+  const m = R.meshes.get(o.id);
+  let like = null;
+  if (m) {
+    const box = new THREE.Box3().setFromObject(m), cur = current(o, OBJ_CH);
+    if (Number.isFinite(box.max.y - box.min.y) && box.max.y > box.min.y) like = { height: box.max.y - box.min.y, x: cur.x, z: cur.z, ry: cur.ry };
+  }
+  try { await rigRun(o.gen, o.genIndex || 0, o.name, template, { ...opts, url: o.url, like }); }
   catch (e) { toast(e.message, true); }
 }
 

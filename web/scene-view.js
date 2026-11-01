@@ -1,3 +1,4 @@
+import { wireWalk } from './scene-walk.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { OrbitControls } from './vendor/OrbitControls.js';
 import * as THREE from './vendor/three.module.min.js';
@@ -140,6 +141,7 @@ export function setup() {
   viewControls.enableDamping = false; viewControls.enabled = false;
   viewControls.target.set(0, 1, 0); viewControls.update();
   viewControls.addEventListener('change', () => { followView(); draw(); });
+  wireWalk({ canvas, cam: () => (R.free ? viewCam : camera), ctl: () => (R.free ? viewControls : controls) });   // right mouse + W A S D (scene-walk.js)
   shotCam = new THREE.PerspectiveCamera(45, 16 / 9, 0.3, 3);  // (only drawn: short, so the frustum stays small)
   frustum = new THREE.CameraHelper(shotCam); frustum.visible = false; scene.add(frustum);
   stage = new THREE.Mesh(new THREE.CircleGeometry(2, 64).rotateX(-Math.PI / 2), floorMat);  // Create object's floor

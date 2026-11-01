@@ -89,7 +89,7 @@ document.addEventListener('pointerdown', (e) => {
     clearTimeout(hold);
     inp.removeEventListener('pointermove', move); inp.removeEventListener('pointerup', end); inp.removeEventListener('pointercancel', end);
     setTimeout(() => inp.removeEventListener('contextmenu', noMenu), 300);
-    if (!armed) return;
+    if (!armed || (mouse && !on)) return;   // (a mouse click that never became a drag is just a click: the box keeps focus to type in)
     armed = false;
     inp.classList.remove('scrubbing');
     // the tap that ends a hold or a drag shouldn't open the keyboard

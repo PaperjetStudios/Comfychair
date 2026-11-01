@@ -173,7 +173,8 @@ export async function onBoneDrag(id, bone, target) {
   const bag = {};
   for (const b of r.bones) bag[b.name] = b.q;
   if (!Object.keys(bag).length) return;
-  write(o, BONE, { b: bag });
+  // (the bones turned join the ones already posed: writing only these would drop every other bone's turn)
+  write(o, BONE, { b: { ...(sample(o, BONE, R.f).b || {}), ...bag } });
   SK.bone = bone;
   const g = R.meshes.get(id);
   if (g) g.userData.pickedBone = bone;
@@ -235,6 +236,36 @@ export async function addSkinned(url, name = 'Skinned', { gen = null, index = 0 
   return o;
 }
 
+// Pose it like a figure: the same model as a rigged layer, so the pose library, Adjust, Hands, Face, Moves and Joints
+// all drive it (its bones are matched to the figure's joints by name and place). Keys on its own bones are left behind;
+// where it stands, its turn, size and name carry over. One undo step (and a toast to take it back).
+async function poseLikeFigure(o) {
+  const { addRigged } = await import('./scene-rig.js');
+  const before = JSON.stringify(SC.objects), sel = o.id;
+  const n = await addRigged(o.url, o.name, { gen: o.gen, index: o.genIndex || 0 });
+  for (const k of ['x', 'y', 'z', 'rx', 'ry', 'rz', 'sx', 'sy', 'sz']) if (o.base[k] !== undefined) n.base[k] = o.base[k];
+  SC.objects = SC.objects.filter((x) => x.id !== o.id);
+  save();
+  (await import('./scene-view.js')).select(n.id);
+  const { undoToast } = await import('./ui.js');
+  undoToast(`${n.name}: now posed like a figure (pose library, Adjust, Hands, Face)`, async () => {
+    SC.objects = JSON.parse(before);
+    const v = await import('./scene-view.js');
+    v.syncMeshes(); save(); v.select(sel);
+  });
+}
+
+// every bone back to its bind pose, at the playhead (one undo step)
+function resetBones(o) {
+  const s = R.meshes.get(o.id)?.userData.skin;
+  if (!s) return toast('Its skeleton is still loading', true);
+  const b = {};
+  for (const [name, q] of s.rest) b[name] = q.toArray();
+  write(o, BONE, { b });
+  changed();
+  toast(`${o.name}: pose reset`);
+}
+
 // the panel: pick a bone, turn it, key it, put it back
 export function boneProps(o) {
   const skin = R.meshes.get(o.id)?.userData.skin;
@@ -247,6 +278,10 @@ export function boneProps(o) {
     return i;
   };
   return section('Bones', null,
+    button('Reset pose', () => resetBones(o), { title: 'Every bone back to the model\'s bind pose' }),
+    button('🧍 Pose it like a figure', () => poseLikeFigure(o).catch((e) => toast(e.message, true)),
+      { title: 'Use the pose library, Adjust, Hands, Face and Moves on this model: its bones follow the figure\'s joints' }),
+    help('Matches this model\'s bones to the figure\'s joints, so the same poses and sliders as a mannequin work on it. Its own bone keys are not carried over. Undo is in the message that appears.'),
     hint(skin ? `${names.length} bones · keyed here at the playhead` : 'Loading its skeleton…'),
     names.length ? field('Bone', h('select', { 'aria-label': 'Bone',
       onchange: (e) => { SK.bone = e.target.value; SK.x = SK.y = SK.z = 0;

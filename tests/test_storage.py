@@ -106,6 +106,16 @@ class Storage(unittest.TestCase):
         comfy.once(wf)
         self.assertEqual(wf["1"]["inputs"]["filename_prefix"], a, "once only")
 
+    def test_rig_copy_of_a_model_file_has_a_name_the_sweep_knows(self):
+        src = touch(config.PROJECTS_DIR / self.folder / "imports" / "abc" / "thing one.glb")
+        r = TestClient(main.app).post("/api/scene/mesh", json={"url": f"/files/projects/{self.folder}/imports/abc/thing%20one.glb"})
+        self.assertEqual(r.status_code, 200, r.text)
+        name = r.json()["name"]
+        self.assertTrue(storage.RIG_COPY.match(name), name)
+        self.assertTrue((self.inp / "3d" / name).is_file())
+        bad = TestClient(main.app).post("/api/scene/mesh", json={"url": f"/files/projects/{self.folder}/../../etc/passwd"})
+        self.assertGreaterEqual(bad.status_code, 400)
+
     def test_the_rig_mesh_copy(self):
         wf = {"meshpath": {"class_type": "PrimitiveString", "inputs": {"value": "3d/00672_object3d_00009.glb"}},
               "meshany": {"class_type": "LazySwitchKJ", "inputs": {"switch": True, "on_true": ["meshpath", 0], "on_false": ["meshpath", 0]}},

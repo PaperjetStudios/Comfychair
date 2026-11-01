@@ -1,5 +1,6 @@
 """Scene endpoints."""
 import asyncio
+import hashlib
 import json
 import re
 import shutil
@@ -227,22 +228,38 @@ async def scene_clip(frames: list[UploadFile] = File(...), token: str = Form(...
 async def scene_mesh(body: dict = Body(...)):
     """Copy a run's mesh into ComfyUI's input folder, where the auto-rig templates load it from
     (UniRigLoadMesh reads ComfyUI's input; the 3D tab's Rig it buttons call this first)."""
-    g = db.get_generation(int((body or {}).get("generation", -1)))
-    if not g:
-        raise HTTPException(404, "No such generation")
-    idx = int(body.get("index", 0))
-    if not 0 <= idx < len(g["outputs"]):
-        raise HTTPException(400, "Bad output index")
+    body = body or {}
     if not config.COMFY_INPUT_DIR:
         raise HTTPException(503, "ComfyUI's folder isn't here: set DECK_COMFY_DIR to it")
-    src = services.output_file(g, g["outputs"][idx])
-    if not src.is_file():
-        raise HTTPException(404, "That file is gone")
+    if body.get("url"):   # a model with no run behind it (one imported, or made by Clean up): a file in a project
+        from urllib.parse import unquote
+        m = re.fullmatch(r"/files/projects/([^/]+)/(.+)", str(body["url"]).split("?")[0])
+        if not m:
+            raise HTTPException(400, "That isn't a model in a project")
+        folder = unquote(m[1])
+        src = (config.PROJECTS_DIR / folder / unquote(m[2])).resolve()
+        if folder != Path(folder).name or folder.startswith(".") or not src.is_relative_to((config.PROJECTS_DIR / folder).resolve()) \
+                or not src.is_file() or src.suffix.lower() not in {".glb", ".gltf", ".fbx", ".obj"}:
+            raise HTTPException(404, "No such model")
+        # (a name storage.RIG_COPY knows, so the copy goes with the rig run that reads it)
+        tag = int(hashlib.sha1(str(src).encode()).hexdigest()[:8], 16) % 100000
+        src_name = f"{tag:05d}_{src.name}"
+    else:
+        g = db.get_generation(int(body.get("generation", -1)))
+        if not g:
+            raise HTTPException(404, "No such generation")
+        idx = int(body.get("index", 0))
+        if not 0 <= idx < len(g["outputs"]):
+            raise HTTPException(400, "Bad output index")
+        src = services.output_file(g, g["outputs"][idx])
+        if not src.is_file():
+            raise HTTPException(404, "That file is gone")
+        src_name = src.name
     # UniRig's mesh loader lists ComfyUI's input/3d folder (and the input root), and only those: a run's
     # mesh goes there under its own name
     folder = config.COMFY_INPUT_DIR / "3d"
     folder.mkdir(parents=True, exist_ok=True)
-    name = re.sub(r"[^\w.\-]+", "_", src.name)[:80] or "model.glb"
+    name = re.sub(r"[^\w.\-]+", "_", src_name)[:80] or "model.glb"
     dest = folder / name
     if not dest.exists() or dest.stat().st_size != src.stat().st_size:
         await asyncio.to_thread(shutil.copyfile, src, dest)
