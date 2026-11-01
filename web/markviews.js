@@ -21,7 +21,7 @@ async function makeView(g, index, mark, steps, what, say) {
     name = await applyStep(s, name, { what });
   }
   const blob = await (await fetch(inputUrl(name))).blob();   // named for its angle, so the picker's filter finds it
-  return (await uploadImage(blob, { mp: 0, source: 'editor', filename: viewFile(mark.label), multiple: 1 })).name;
+  return (await uploadImage(blob, { mp: 0, source: 'editor', filename: viewFile(mark.label), multiple: 1, origin: { generation: g.id, index, frame: mark.frame } })).name;
 }
 
 const docUrl = (g) => `/api/store/view-marks/g${g.id}${g.project_id != null ? `?project_id=${g.project_id}` : ''}`;
@@ -113,6 +113,7 @@ export async function openMarkViews(g, index) {
     done.replaceChildren(...made.map((r) => h('div', { class: 'mv-mark' },
       h('span', { class: 'mv-thumb' }, h('img', { src: thumbUrl(r.name, 240), alt: '', loading: 'lazy' })), h('span', { class: 'ch-view-lbl' }, r.label))));
     use.replaceChildren(...(Object.keys(picks).length ? [button('Make a 3D object from these…', async () => {
+      await (await import('./run.js')).sceneModule();   // (the 3D tab may not have been opened yet)
       (await import('./scene-import.js')).openObjectSheet(Object.values(picks)[0], '', picks);
     }, { cls: 'small', title: 'Front, Left, Back and Right go into the 3D object\'s slots' })] : []),
     ...(made.length ? [button('Send to the look pack', sendToPack, { cls: 'small', title: 'Into the character picked above' })] : []));

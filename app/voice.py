@@ -22,7 +22,7 @@ import httpx
 from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import FileResponse
 
-from . import audioedit, clipimport, config
+from . import audioedit, clipimport, config, storage
 
 router = APIRouter(prefix="/api/voice")
 resolve_src = None   # main.py sets it: (src dict, tmp) -> (path, kind), as the Video tab finds clips
@@ -265,6 +265,8 @@ async def voice_edit(vid: str, body: dict = Body(...)):
 @router.delete("/voices/{vid}")
 async def voice_delete(vid: str):
     _voice(vid)
+    if (users := storage.characters_using(lambda p: p.get("voice") == vid)):
+        raise HTTPException(409, f"In use by {', '.join(users)}: give them another voice first")
     (VOICES / f"{vid}.json").unlink(missing_ok=True)
     (VOICES / f"{vid}.wav").unlink(missing_ok=True)
     return {"ok": True}

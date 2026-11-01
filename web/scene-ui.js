@@ -111,13 +111,21 @@ const num = (label, get, set, opts = {}) => numField(label, get(), set,
 const easeSeg = (item) => field('Between keys', seg([['smooth', 'Ease'], ['linear', 'Linear']], item.ease, (v) => { item.ease = v; changed(); }));
 const clearKeys = (item, names) => (hasKeys(item) ? button('Clear keys', () => { Object.assign(item.base, current(item, names)); item.chans = {}; changed(); }) : null);
 
+// a layer placed from a character: when the character's current model or rig has changed, offer the new one (never by itself: finished shots stay as they are)
+function charLink(o) {
+  if (!o.char) return null;
+  const row = hint('');
+  import('./charstage.js').then(({ layerChar }) => { const el = layerChar(o); if (el) row.replaceWith(el); }).catch(() => {});
+  return row;
+}
+
 function objectProps(o) {
   const names = namesFor(o);
   const cur = () => current(o, names);
-  if (!isPosable(o)) return section(TYPES[o.type].label, () => select(null), placeProps(o, cur), isBoneKeyed(o) ? boneProps(o) : null);
+  if (!isPosable(o)) return section(TYPES[o.type].label, () => select(null), charLink(o), placeProps(o, cur), isBoneKeyed(o) ? boneProps(o) : null);
   // a figure: its pose tools in tabs, big enough for fingers
   const tab = FIG_TABS.some(([k]) => k === R.figTab) ? R.figTab : 'pose';
-  return section(o.name, () => select(null),
+  return section(o.name, () => select(null), charLink(o),
     seg(FIG_TABS, tab, (v) => { R.figTab = v; store.set('deck.scene.figtab', v); renderPanel(); }, { wrap: true }),
     { pose: posesTab, adjust: adjustTab, hands: handsTab, face: faceTab, move: movesTab, joint: jointsTab, parts: partsTab, place: placeProps }[tab](o, cur),
     o.type === 'rigged' ? rigProps(o) : null);

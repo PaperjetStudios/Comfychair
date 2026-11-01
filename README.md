@@ -627,6 +627,25 @@ finished take becomes that shot's clip (**Shots to video** takes it over the dra
 A single clip from another model (an LTX take, a scene render) goes through **Use as → Finish with H3** instead,
 loaded into `deck-h3-refine` with Regenerate already on; several such clips are refused.
 
+**Characters** (Story tab, view **Characters**). A character holds its writing (role, height, a line, their story, notes), a
+voice, and one or more **looks**: each look has its own words for prompts, main picture, views, sheet, expressions, current
+3D model and current rig. A shot chooses which look it uses. **Media** is their own ordered list (drag to reorder), with
+photos marked Face, Body, Reference or Edit. **Edit in Generate**, the sheets, **Make the views**, **Make the expressions**,
+**Make a 3D object** and **Rig** all come back to **To review**, to keep, make again or throw away, and this survives a
+reload. **Use as… → Give it to a character** sends anything else in. **Model and rig** are per-look settings: choose an older
+version, or use **Make again** / **Rig again**, which start from how the current one was made. A layer placed in a 3D scene
+doesn't change by itself; the 3D panel offers **Update to current rig**, which adds a new layer where the old one stands and
+hides the old one with its poses. **Bring in from a project** copies a character and its files, so the two share only the voice.
+
+**In use on the Board.** A run that any saved document uses (a character, a shot, a scene, a timeline, an open tab) shows a
+link badge and can't be deleted until it's taken out of what holds it. **Delete all** removes what the Board is showing
+except what's in use or pinned, and says how many of each stay first.
+
+**Layers on a canvas.** Story's canvas has the layers in a dock under the picture (drag its grip to resize, pull it down to
+shut). On Story and the Image tab, **Group** joins selected layers, with one opacity and blend for the whole group. The mask
+button gives a layer a mask: the eraser hides, the brush shows, and it moves with its layer. Undo also covers moves, order,
+hiding, blend and groups. The chips over the list add a grid, turn steps and size steps.
+
 **Image tools** (Image tab, panel **Image tools**; the same idea as the VFX tab's effects). Pick a tool, then **Run**.
 It works on the selected picture layer, or on the whole picture when none is selected, and the result lands as a layer
 on top.

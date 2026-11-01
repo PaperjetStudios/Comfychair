@@ -1,13 +1,13 @@
 import {
   $, h, store, uid, clone, api, toast, undoToast, button, iconBtn, seg, field, section, help, info, note, placeholder,
-  fileButton, textArea, chip, icon, openSheet, closeSheet, actions, openOverlay,
+  fileButton, textArea, chip, icon, openSheet, closeSheet, actions, openOverlay, hint,
 } from './ui.js';
 import { S, inputUrl, isMine, onServer, previewUrl, switchTab, thumbUrl } from './core.js';
 import { ROLES, queueRun, roleField, template, valuesByRole } from './make.js';
 import { clipUrl, openImagePicker, openVideoPicker, pickFrame, uploadImage } from './media.js';
 import { renderFields, setVal } from './generate.js';
 import { TabSet } from './tabs.js';
-import { fullScreen } from './layout.js';
+import { fullScreen, heightGrip } from './layout.js';
 import { BLANK as COMP_BLANK, createEditor } from './editor-engine.js';
 import { openCompare } from './compare.js';
 import { addPicture as addCharPicture, castSection, characterById, characterSection, characters, mainPicture, mentionBox, onCharacters } from './characters.js';
@@ -15,6 +15,7 @@ import { TALK_TPL, talkPrompt, talkSeconds } from './talk.js';
 import { MASK_DEFAULT } from './maskpaint.js';
 import { isH3Run } from './board.js';
 import { finishWithH3 } from './run.js';
+import { charPanel, renderCast } from './charstage.js';
 import { castLines, dialogueLines, findCharacter, mentioned, packPictures, pictureTag, plain, refPicture, speakerOf, viewLabel, VIEWS as LOOK_VIEWS, wantedView } from './cast.js';
 import { registerUndo } from './undo-dock.js';
 import { ANGLES, MOVES, SIZES } from './shot-words.js';
@@ -59,7 +60,7 @@ const newScene = (o = {}) => ({ id: uid(), slug: '', summary: '', collapsed: fal
 const BLANK = () => ({ title: '', notes: '', style: '', aspect: '16:9', tpl: null, batch: 1, scenes: [newScene()],
   refine: { tpl: null, change: 0.55, batch: 2 }, video: { tpl: null, engine: 'qwen' } });
 let P = BLANK();
-const VIEWS = [['canvas', 'canvas', 'Canvas'], ['board', 'board', 'Storyboard'], ['outline', 'list', 'Outline'], ['script', 'text', 'Script']];
+const VIEWS = [['canvas', 'canvas', 'Canvas'], ['board', 'board', 'Storyboard'], ['outline', 'list', 'Outline'], ['script', 'text', 'Script'], ['cast', 'person', 'Characters']];
 const U = { sel: null, doc: null, char: null, speaking: null, view: store.get('deck.story.view', 'canvas') };
 if (!VIEWS.some(([v]) => v === U.view)) U.view = 'canvas';
 
@@ -223,7 +224,7 @@ function frameSize(t) {
 const promptOf = (s) => [[[SIZES.find(([k]) => k === s.size)?.[2], ANGLES.find(([k]) => k === s.angle)?.[2]].filter(Boolean).join(', '),
   plain(s.what.trim(), characters()), P.style.trim()].filter(Boolean).join(', '), ...castLines(castOf(s))].join('\n');
 // the characters a shot brings in: named in what we see or the action, or speaking
-const castOf = (s) => mentioned(`${s.what}\n${s.action}`, characters());
+const castOf = (s) => mentioned(`${s.what}\n${s.action}`, characters()).map((c) => c.withLook?.(s.looks?.[c.id]) ?? c);
 
 async function makeFrame(s) {
   const t = storyTemplate();
@@ -856,10 +857,12 @@ function refsField(s, t) {
     ...cast.map((c) => {
       const cur = s.refs?.[c.id] || 'auto', got = refPicture(c, s);
       const opts = [['auto', `Auto (${viewLabel(refPicture(c, s, 'auto').view)})`], ...LOOK_VIEWS.filter(([k]) => c.views?.[k]),
+        ...Object.keys(c.expressions || {}).map((k) => [`expr:${k}`, viewLabel(`expr:${k}`)]),
         ...(c.sheet ? [['sheet', 'Sheet']] : []), ...(mainPicture(c) ? [['main', 'Main picture']] : [])];
       return h('div', { class: 'st-ref' },
         h('span', { class: 'ch-chip-face' }, h('img', { src: thumbUrl(got.name, 64), alt: '' })),
         h('b', {}, c.name),
+        c.looks?.length > 1 ? h('div', { class: 'chips' }, c.looks.map((l) => chip(l.name, () => { s.looks = { ...(s.looks || {}), [c.id]: l.id }; changed(); }, { on: c.lookNow.id === l.id }))) : null,
         h('div', { class: 'chips' }, opts.map(([k, l]) => chip(l, () => { s.refs = { ...(s.refs || {}) }; if (k === 'auto') delete s.refs[c.id]; else s.refs[c.id] = k; changed(); }, { on: cur === k }))));
     }));
 }
@@ -1106,7 +1109,8 @@ function canvasStage(st) {
     sc.shots.map(tile),
     h('button', { type: 'button', class: 'st-film-add', onclick: () => addShot(sc, sc.shots[sc.shots.length - 1]), 'aria-label': 'A shot at the end of the scene' }, icon('plus')));
   drawEmpty();
-  st.replaceChildren(head, CV.viewer, film);
+  st.replaceChildren(head, CV.viewer, ...layersDock(), film);
+  if (!DOCK.el.childElementCount) renderPanel();   // (the first time: the panel's draw fills it)
   requestAnimationFrame(() => film.querySelector('.sel')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
 }
 // only the pictures changed (a canvas was saved): the strip and cards follow, the panel too unless something in it is
@@ -1158,6 +1162,12 @@ export function renderStage() {
   st.classList.toggle('board', board);
   st.classList.toggle('canvas', U.view === 'canvas');
   st.classList.toggle('script', U.view === 'script');
+  st.classList.toggle('cast', U.view === 'cast');
+  if (U.view === 'cast') {
+    renderCast(st, { open: U.char, onOpen: openCharacterView, onBack: () => openCharacterView(null) });
+    renderBar();
+    return;
+  }
   if (U.view === 'canvas') { canvasStage(st); renderBar(); return; }
   if (U.view === 'script') { scriptStage(st); renderBar(); return; }
   const head = board ? h('div', { class: 'st-head' }, h('b', { class: 'st-board-title', 'data-show': 'story.title', 'data-empty': tabs?.active?.name || 'Story' }, P.title || tabs?.active?.name || 'Story'))
@@ -1274,21 +1284,67 @@ function castChips(s) {
     () => openCharacter(c.id), { title: c.look || c.desc || c.name, on: U.char === c.id }))));
 }
 
+// the Characters view's panel: the character open on the stage, or the list
+function castPanel(body) {
+  const c = U.char && characterById(U.char);
+  const parts = c ? charPanel(c, { done: () => openCharacterView(null), goShot }) : [castSection({ open: null, onOpen: openCharacterView })];
+  const a = document.activeElement, key = a && body.contains(a) ? a.dataset?.bind : null;
+  const range = key && 'selectionStart' in a ? [a.selectionStart, a.selectionEnd] : null;
+  body.replaceChildren(...parts);
+  if (key) {
+    const n = body.querySelector(`[data-bind="${key}"]`);
+    if (n) { n.focus({ preventScroll: true }); if (range) try { n.setSelectionRange(...range); } catch { /* not a text box */ } }
+  }
+}
+// a shot a character is in: its story, on the outline with the shot selected
+async function goShot(f) {
+  if (tabs?.active?.id !== f.story) { try { await tabs.switchTo(f.story); } catch { /* it stays on this story */ } }
+  U.view = 'board'; store.set('deck.story.view', 'board');
+  if (locate(f.shot)) U.sel = f.shot;
+  renderStage(); renderPanel();
+}
+// the Characters view, with this character open (or the cast)
+export function openCharacterView(id = null) {
+  U.char = id; U.view = 'cast'; store.set('deck.story.view', 'cast');
+  renderStage(); renderPanel();
+}
+
+// the layers dock under the canvas: always there on the canvas view, on a grip that sets its height (pulled right down, it shuts)
+const DOCK = { el: null, grip: null };
+function layersDock() {
+  if (DOCK.el) return [DOCK.grip, DOCK.el];
+  DOCK.el = h('div', { class: 'st-layers', 'aria-label': 'Layers' });
+  DOCK.grip = h('div', { class: 'st-layers-grip', role: 'separator', 'aria-label': 'Drag to resize the layers', title: 'Drag to resize · pull down to shut · double-tap to reset' });
+  const apply = (px) => { DOCK.el.style.height = px == null ? '' : `${px}px`; DOCK.el.classList.toggle('shut', px === 0); };
+  apply(store.get('deck.story.layersH', null));
+  heightGrip(DOCK.grip, { size: () => DOCK.el.offsetHeight, set: (px) => { apply(px); store.set('deck.story.layersH', px); }, max: () => Math.max(160, $('#storyStage').clientHeight * 0.6) });
+  return [DOCK.grip, DOCK.el];
+}
+function drawDock(ed) {
+  if (!DOCK.el) return;
+  if (!ed) return DOCK.el.replaceChildren(hint('Tap a shot to see its layers'));
+  DOCK.el.replaceChildren(
+    h('div', { class: 'st-layers-list' }, ed.topRow([iconBtn('Frame from a clip', icon('film'), frameFromVideo, { class: 'icon-btn ico-btn' })]), ed.layerList()),
+    h('div', { class: 'st-layers-props' }, ed.layerProps()));
+}
+
 // The panel: the shot, then (on the canvas view) the canvas's tools, then the characters, then the story's frame settings. The brush's
 // settings come first while painting. A redraw keeps the cursor in the box being typed in.
 function fillPanel() {
   const body = $('#storyBody');
   if (!body) return;
+  if (U.view === 'cast') return castPanel(body);
   const at = U.sel && locate(U.sel);
   if (!at) U.sel = null;
   const ed = U.view === 'canvas' && at && CV.shot === at.s.id ? CV.eng : null;
+  drawDock(ed);
   const parts = [ed?.paintProps(), at ? shotSection(at) : section('Shot', null, placeholder('Tap a shot to edit it here')),
-    ...(ed ? [section('Layers', null, ed.topRow([iconBtn('Frame from a clip', icon('film'), frameFromVideo, { class: 'icon-btn ico-btn' })]), ed.layerList()),
-      ed.layerProps(), ed.canvasProps()] : []),
+    ...(ed ? [ed.canvasProps(), ed.inpaintProps(), ed.toolsProps(), ed.exportProps()] : []),
     at ? refineSection(at) : null, at ? videoSection(at) : null,
     castSection({ open: U.char, onOpen: openCharacter }),
     U.char && characterById(U.char) ? characterSection(characterById(U.char), { done: () => openCharacter(null),
-      extra: at && chosen(at.s) ? [button([icon('canvas'), 'The shot\'s frame'], () => frameToCharacter(characterById(U.char), at.s), { title: 'Add this shot\'s frame as one of their pictures' })] : [] }) : null,
+      extra: [button([icon('person'), 'Open in Characters'], () => openCharacterView(U.char)),
+        ...(at && chosen(at.s) ? [button([icon('canvas'), 'The shot\'s frame'], () => frameToCharacter(characterById(U.char), at.s), { title: 'Add this shot\'s frame as one of their pictures' })] : [])] }) : null,
     framesSection()].filter(Boolean);
   const a = document.activeElement, key = a && body.contains(a) ? a.dataset?.bind : null;
   const range = key && 'selectionStart' in a ? [a.selectionStart, a.selectionEnd] : null;
@@ -1327,13 +1383,14 @@ const adapter = {
   },
 };
 
+export const storyEngine = () => CV.eng;   // (for a browser check of the canvas)
 export function wireStory() {
   const mount = h('div', { class: 'vid-tabs' });
   $('#storyPanel').replaceChildren(mount, h('div', { id: 'storyBody', class: 'panel-body' }));
   tabs = new TabSet({ kind: 'story-tabs', mount, scope: 'project', newName: (n) => `Story ${n}`, adapter });
   fullScreen($('#tab-story'));
   makeCanvas();
-  onCharacters(() => { if (!shown()) return; if (U.view === 'script') renderStage(); renderPanel(); });
+  onCharacters(() => { if (!shown()) return; if (U.view === 'script' || U.view === 'cast') renderStage(); renderPanel(); });
   // a frame run for a shot here ends: this device queued it, so this device files the pictures (another device
   // showing the same story gets them with the save); anything else just redraws its waiting tiles
   onServer('deck_generation', ({ data: g }) => {

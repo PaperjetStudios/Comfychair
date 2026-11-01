@@ -22,6 +22,7 @@ export const B = { filter: store.get('deck.board.filter', 'all'), size: store.ge
   selecting: false, sel: new Set(), longPressed: false, boxDrag: store.get('deck.board.boxDrag', false),   // sel: "<generation id>:<output index>"
   marked: new Set(store.get('deck.board.marked', [])),
   from: null, to: null,   // a date and time range (seconds), either end open
+  attached: new Map(),   // run id -> what uses it (GET /api/generations/attached, storage.attachments): the delete buttons leave these
   folded: new Set(store.get('deck.board.folded', [])) };   // days folded shut  // generation ids marked for deletion
 const boardVideos = new IntersectionObserver((entries) => {
   for (const e of entries) {
@@ -39,13 +40,43 @@ async function loadAllProjectGenerations() {
   }
   B.loadedFor = S.project;
 }
+async function loadAttached() {
+  try { B.attached = new Map(Object.entries(await api('/api/generations/attached', { busy: false })).map(([k, v]) => [Number(k), v])); }
+  catch { /* offline: the server still refuses, and says why */ }
+}
+const usedText = (owners) => owners.map((o) => `${o.label} ${o.name}`.trim()).join(', ');
+// where to go to let a run go: the tab its owner is in (a story and a character are both in Story)
+const OWNER_TAB = { characters: 'story', 'story-tabs': 'story', 'scene-tabs': 'scene', scenes: 'scene', objects: 'scene', 'video-tabs': 'video',
+  'sound-tabs': 'sound', 'vfx-tabs': 'vfx', 'edit-tabs': 'editor', 'gen-tabs': 'generate' };
+function openOwner(o) {
+  closeSheet();
+  closeGallery();
+  switchTab(OWNER_TAB[o.kind] || 'board');
+  if (o.kind === 'characters') import('./story.js').then((m) => m.openCharacterView?.(o.id));
+}
+const usedBadge = (g) => {
+  const owners = B.attached.get(g.id);
+  return owners ? h('span', { class: 'tile-used', title: `In use: ${usedText(owners)}`, 'aria-label': `In use: ${usedText(owners)}` }, icon('link')) : null;
+};
+// the runs a delete left, and what holds each
+function keptSheet(kept, done) {
+  const row = ({ id, used_by: owners }) => {
+    const g = S.history.get(id);
+    return h('div', { class: 'kept-row' }, h('b', {}, g ? genLabel(g) : `#${id}`),
+      h('span', { class: 'row wrap' }, owners.map((o) => button(`${o.label} ${o.name}`.trim(), () => openOwner(o), { cls: 'small' }))));
+  };
+  openSheet(h('h3', {}, `Deleted ${done}, kept ${kept.length} in use`),
+    hint('Take one out of what uses it, and then it can be deleted.'),
+    h('div', { class: 'kept-list' }, kept.map(row)),
+    h('div', { class: 'row wrap' }, button('OK', closeSheet)));
+}
 
 export async function renderBoard() {
   if (!B.boxWired) { B.boxWired = true; wireBoxSelect(); }
   const bar = $('#boardBar');
   if (B.filter === 'marked' && !B.marked.size) B.filter = 'all';
   const filters = [['all', 'All'], ['image', 'Images'], ['video', 'Videos'], ['audio', 'Sounds'], ['motion', 'Motion'], ['3d', '3D'], ['sheets', 'Sheets'],
-    ['pinned', '★ Pinned'], ...(B.marked.size ? [['marked', '🗑 Marked']] : [])];
+    ['pinned', '★ Pinned'], ['attached', 'In use'], ['free', 'Not in use'], ...(B.marked.size ? [['marked', '🗑 Marked']] : [])];
   const filterSeg = seg(filters, B.filter, (k) => { B.filter = k; store.set('deck.board.filter', k); renderBoard(); });
   const size = numSlider({ min: 120, max: 520, step: 10, value: B.size, label: 'Tile size' });
   const setSize = () => { B.size = Number(size.value); store.set('deck.board.size', B.size); $('#board').style.setProperty('--tile', `${B.size}px`); };
@@ -53,21 +84,25 @@ export async function renderBoard() {
   const count = h('span', { class: 'hint' });
   const selBtn = button(B.selecting ? 'Done' : '☑ Select', () => setBoardSelecting(!B.selecting), { cls: 'small' + (B.selecting ? ' on' : '') });
   const delMarked = h('span', { class: 'hidden' });   // filled in once the project's generations are loaded
+  const delAll = h('span', { class: 'hidden' });
   const importBtn = button('⤓ Import clip', () => import('./clipimport.js').then((m) => m.openClipImport({ onSaved: clipImported })),
     { title: 'Cut a piece out of a YouTube/Reddit link, or a big video file, into the media library' });
-  bar.replaceChildren(filterSeg, h('label', { class: 'board-size' }, 'Size', size), selBtn, importBtn, delMarked, count, rangeBar(), boardSelBar());
+  bar.replaceChildren(filterSeg, h('label', { class: 'board-size' }, 'Size', size), selBtn, importBtn, delMarked, delAll, count, rangeBar(), boardSelBar());
   $('#board').style.setProperty('--tile', `${B.size}px`);
 
   if (B.loadedFor !== S.project) {
     $('#board').replaceChildren(placeholder('Loading…'));
     try { await loadAllProjectGenerations(); } catch (e) { toast(e.message, true); }
   }
+  await loadAttached();
   const items = boardItems();
   const tiles = items.map(({ g, o, i }) => boardTile(g, o, i));
   pauseBoard();
   $('#board').replaceChildren(...(tiles.length ? dayGroups(items, tiles) : [placeholder(
     B.from != null || B.to != null ? 'Nothing in that date range.'
       : B.filter === 'pinned' ? 'Nothing pinned yet. Tap ☆ on any tile.'
+        : B.filter === 'attached' ? 'Nothing here is in use yet.'
+        : B.filter === 'free' ? 'Everything here is in use.'
         : B.filter === 'marked' ? 'Nothing marked. Mark things for deletion in the gallery (tap a tile).'
           : B.filter === 'sheets' ? 'No character or object sheets in this project yet.'
           : 'Nothing generated in this project yet.')]));
@@ -75,6 +110,7 @@ export async function renderBoard() {
   count.textContent = `${tiles.length} item${tiles.length === 1 ? '' : 's'}`;
   const nMarked = markedGens().length;
   if (nMarked) delMarked.replaceWith(button(`Delete ${nMarked} marked`, deleteMarked, { cls: 'small danger' }));
+  if (items.length) delAll.replaceWith(button('Delete all', deleteAll, { cls: 'small danger', title: 'Everything showing, except what is in use or pinned' }));
 }
 
 // what the board shows with the current filter, newest first: [{g, o, i, key}]
@@ -86,6 +122,8 @@ function boardItems() {
   for (const g of gens) {
     if (B.filter === 'pinned' && !g.pinned) continue;
     if (B.filter === 'marked' && !B.marked.has(g.id)) continue;
+    if (B.filter === 'attached' && !B.attached.has(g.id)) continue;
+    if (B.filter === 'free' && B.attached.has(g.id)) continue;
     if (B.filter === 'sheets' && !isSheetRun(g)) continue;
     const t = genTime(g);
     if ((B.from != null && t < B.from) || (B.to != null && t > B.to)) continue;
@@ -184,6 +222,7 @@ function boardTile(g, o, i) {
     } }, media, pin, h('span', { class: 'tick', 'aria-hidden': 'true' }, icon('check')),
     h('span', { class: 'mark', 'aria-hidden': 'true' }, icon('trash')),
     o.duration ? h('span', { class: 'tile-len' }, clipLen(o.duration)) : null,
+    usedBadge(g),
     h('div', { class: 'tile-meta' }, genLabel(g), kindMark(o)));
   // long press: start selecting with this tile
   let timer = 0, start = null;
@@ -493,18 +532,39 @@ async function deleteMarked() {
 // Asks first; returns false if nothing was deleted
 async function deleteGenerations(gens, note = '') {
   if (!gens.length) return false;
-  const pinned = gens.filter((g) => g.pinned).length;
-  if (!confirm(`Delete ${gens.length} generation${gens.length > 1 ? 's' : ''} and their files? This can't be undone.` + note
+  await loadAttached();
+  const held = gens.filter((g) => B.attached.has(g.id)).length, going = gens.length - held;
+  if (!going) { keptSheet(gens.map((g) => ({ id: g.id, used_by: B.attached.get(g.id) })), 0); return false; }
+  const pinned = gens.filter((g) => g.pinned && !B.attached.has(g.id)).length;
+  if (!confirm(`Delete ${going} generation${going > 1 ? 's' : ''} and their files? This can't be undone.` + note
+    + (held ? `\n\n${held} in use stay.` : '')
     + (pinned ? `\n\n${pinned} of them ${pinned > 1 ? 'are' : 'is'} pinned.` : ''))) return false;
-  let done = 0;
-  for (const g of gens) {
-    try { await api(`/api/generations/${g.id}`, { method: 'DELETE' }); S.history.delete(g.id); B.marked.delete(g.id); done++; }
-    catch (e) { toast(`#${g.id}: ${e.message}`, true); }
-  }
+  return sendDelete(gens);
+}
+// the server keeps what's in use, whatever this device believes: it answers with both
+async function sendDelete(gens) {
+  let r;
+  try { r = await api('/api/generations/delete', { method: 'POST', body: { ids: gens.map((g) => g.id) }, busy: 'Deleting…' }); }
+  catch (e) { toast(e.message, true); return false; }
+  for (const id of r.deleted) { S.history.delete(id); B.marked.delete(id); }
   saveMarked();
   if (GAL.el) galleryRefresh();
-  toast(`Deleted ${done} generation${done === 1 ? '' : 's'}`);
-  return done > 0;
+  if (r.failed.length) toast(`${r.failed.length} couldn't be deleted`, true);
+  if (r.kept.length) keptSheet(r.kept, r.deleted.length);
+  else toast(`Deleted ${r.deleted.length} generation${r.deleted.length === 1 ? '' : 's'}`);
+  return r.deleted.length > 0;
+}
+
+// Everything the board is showing goes, except what's in use or pinned
+async function deleteAll() {
+  await loadAttached();
+  const gens = [...new Map(boardItems().map((x) => [x.g.id, x.g])).values()];
+  const going = gens.filter((g) => !g.pinned && !B.attached.has(g.id));
+  const inUse = gens.filter((g) => B.attached.has(g.id)).length, pinned = gens.filter((g) => g.pinned && !B.attached.has(g.id)).length;
+  if (!going.length) return toast(`Nothing to delete: ${inUse} in use, ${pinned} pinned`);
+  if (!confirm(`Delete ${going.length} generation${going.length > 1 ? 's' : ''} and their files? This can't be undone.\n\n`
+    + `Staying: ${inUse} in use, ${pinned} pinned.`)) return;
+  if (await sendDelete(going)) renderBoard();
 }
 
 export function boardChanged(g) {
@@ -662,7 +722,9 @@ function galleryRender(newMedia = false) {
   }
   GAL.key = cur.key;
 
+  const owners = B.attached.get(g.id);
   el.querySelector('.gal-actions').replaceChildren(...[
+    owners ? button([icon('link'), `In use: ${usedText(owners)}`], () => keptSheet([{ id: g.id, used_by: owners }], 0), { cls: 'small' }) : null,
     button(g.pinned ? '★ Pinned' : '☆ Pin', () => togglePin(g), { cls: 'small' + (g.pinned ? ' on' : ''), title: 'P' }),
     button(marked ? '🗑 Marked' : '🗑 Mark', () => { toggleMarked(g.id); boardChanged(g); }, { cls: 'small' + (marked ? ' danger on' : ''), title: 'D' }),
     o.kind === 'image' ? button('✎ Edit here', () => { closeGallery(); itemsToEditor([cur]); }, { title: 'E: replaces the open Image tab\'s layers (Undo brings them back)' }) : null,
@@ -686,7 +748,7 @@ function galleryRender(newMedia = false) {
     const x = GAL.items[n], xg = S.history.get(x.g.id) || x.g;
     t.classList.toggle('sel', n === GAL.idx);
     t.classList.toggle('marked', B.marked.has(xg.id));
-    t.querySelector('.gal-badges').replaceChildren(...[xg.pinned && iconize('★'), B.marked.has(xg.id) && icon('trash'), kindMark(x.o)].filter(Boolean));
+    t.querySelector('.gal-badges').replaceChildren(...[xg.pinned && iconize('★'), B.marked.has(xg.id) && icon('trash'), B.attached.has(xg.id) && icon('link'), kindMark(x.o)].filter(Boolean));
   });
   strip.querySelector('.gal-thumb.sel')?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: newMedia ? 'smooth' : 'auto' });
 }
@@ -731,4 +793,10 @@ onServer('generation_updated', ({ data: g }) => {
 onServer('deck_generation_deleted', ({ data }) => {
   document.querySelectorAll(`#board .tile[data-gen="${data.id}"]`).forEach((t) => { B.sel.delete(t.dataset.key); t.remove(); });
   if (GAL.el) galleryRefresh();
+});
+// a saved document changed: what's in use may have too (a moment later, once for a burst of saves)
+let usedTimer = 0;
+onServer('store', () => {
+  clearTimeout(usedTimer);
+  usedTimer = setTimeout(async () => { if ($('#tab-board').classList.contains('active')) renderBoard(); }, 1500);
 });

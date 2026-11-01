@@ -179,12 +179,19 @@ def input_files(name: str) -> list[Path]:
     return out
 
 
+def _doc_files():
+    """Every saved document of every project, and the shared library's: tabs, characters, scenes, tracks and the rest
+    (a trashed one is in .trash, one folder further down, so it isn't here)."""
+    yield from config.PROJECTS_DIR.glob("*/.deck/*/*.json")
+    yield from config.LIBRARY_DIR.glob("*/*.json")
+
+
 def input_used(name: str) -> bool:
-    """Whether any run or any project's tab uses this picture (a deleted project's are gone by then)."""
+    """Whether any run or any saved document uses this picture (a deleted project's are gone by then)."""
     for g in db.all_generations():
         if name in json.dumps(g["params"]):
             return True
-    for f in config.PROJECTS_DIR.glob("*/.deck/*-tabs/*.json"):
+    for f in _doc_files():
         try:
             if name in f.read_text(errors="ignore"):
                 return True
@@ -199,13 +206,101 @@ def media_used(name: str) -> str | None:
     for g in db.all_generations():
         if g["template"] != "import" and name in json.dumps(g["params"]):
             return (db.get_project(g["project_id"]) or {}).get("name") or "Unsorted"
-    for f in config.PROJECTS_DIR.glob("*/.deck/*-tabs/*.json"):
+    for f in _doc_files():
         try:
             if name in f.read_text(errors="ignore"):
-                return f.relative_to(config.PROJECTS_DIR).parts[0]
+                return f.relative_to(config.PROJECTS_DIR).parts[0] if f.is_relative_to(config.PROJECTS_DIR) else "the library"
         except OSError:
             continue
     return None
+
+
+# ---- what's attached: a run nothing may delete while something uses it ----
+_NOT_USE_KEYS = {"parent", "pending", "vpending"}   # where a run came from, and runs still on their way, aren't uses
+_NOT_USE_KINDS = {"view-marks", "prefs", "gen-presets"}
+_KIND_LABEL = {"characters": "Character", "story-tabs": "Story", "scene-tabs": "3D", "scenes": "3D scene", "video-tabs": "Video",
+               "sound-tabs": "Sound", "vfx-tabs": "VFX", "edit-tabs": "Image", "gen-tabs": "Generate", "objects": "3D object", "tracks": "Tracks"}
+
+
+def _run_refs(v, origins: dict, out: set):
+    """The runs one document's value points at: {generation: id} and {gen: id}, and a picture made from a run's output."""
+    if isinstance(v, dict):
+        for k, x in v.items():
+            if k in _NOT_USE_KEYS:
+                continue
+            if k in ("generation", "gen") and isinstance(x, int) and not isinstance(x, bool):
+                out.add(x)
+            else:
+                _run_refs(x, origins, out)
+    elif isinstance(v, list):
+        for x in v:
+            _run_refs(x, origins, out)
+    elif isinstance(v, str) and v in origins:
+        out.add(origins[v])
+
+
+def attachments() -> dict[int, list[dict]]:
+    """{run id: [{kind, label, project, id, name}]}: every run a saved document uses, in any project (a trashed document
+    doesn't count). The Board shows these and the delete routes refuse them, until the owner lets go."""
+    origins = db.input_origin_runs()
+    found: dict[int, list[dict]] = {}
+    for f in config.PROJECTS_DIR.glob("*/.deck/*/*.json"):
+        kind = f.parent.name
+        if kind in _NOT_USE_KINDS:
+            continue
+        try:
+            doc = json.loads(f.read_text(errors="ignore"))
+        except (OSError, ValueError):
+            continue
+        refs: set[int] = set()
+        _run_refs(doc.get("payload"), origins, refs)
+        for gid in refs:
+            found.setdefault(gid, []).append({"kind": kind, "label": _KIND_LABEL.get(kind, kind), "project": f.relative_to(config.PROJECTS_DIR).parts[0],
+                                              "id": doc.get("id") or f.stem, "name": doc.get("name") or ""})
+    return found
+
+
+def used_by_text(owners: list[dict]) -> str:
+    """A run's owners for a sentence: Character Mara, Video Cut 2."""
+    return ", ".join(f"{o['label']} {o['name']}".strip() for o in owners)
+
+
+def characters_using(test) -> list[str]:
+    """The characters, in any project, whose saved payload passes test(payload): their names."""
+    names = []
+    for f in config.PROJECTS_DIR.glob("*/.deck/characters/*.json"):
+        try:
+            doc = json.loads(f.read_text(errors="ignore"))
+            if test(doc.get("payload") or {}):
+                names.append(doc.get("name") or "Someone")
+        except (OSError, ValueError):
+            continue
+    return names
+
+
+def character_pictures(payload: dict) -> set[str]:
+    """Every input name a character's payload holds (any field, any look)."""
+    out: set[str] = set()
+    def walk(v):
+        if isinstance(v, dict):
+            for x in v.values():
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+        elif isinstance(v, str) and v.startswith(config.COMFY_INPUT_SUBFOLDER + "/"):
+            out.add(v)
+    walk(payload)
+    return out
+
+
+def drop_character_pictures(payload: dict) -> int:
+    """A character has left the trash for good: its pictures go, unless something else uses them."""
+    freed = 0
+    for name in character_pictures(payload):
+        if not input_used(name):
+            freed += delete_input(name)
+    return freed
 
 
 def delete_input(name: str) -> int:

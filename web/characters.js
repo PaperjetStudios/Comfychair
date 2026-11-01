@@ -2,7 +2,9 @@ import { h, api, toast, undoToast, uid, button, iconBtn, field, section, help, t
 import { S, thumbUrl, onServer, onProject, isMine, previewUrl } from './core.js';
 import { openImagePicker } from './media.js';
 import { pictureSlot } from './picture-drop.js';
-import { suggest, typing, VIEWS, VIEW_KEYS, VIEW_PROMPTS, viewPrompt, packViews } from './cast.js';
+import { suggest, typing, VIEWS, VIEW_KEYS, VIEW_PROMPTS, viewPrompt, packViews, EXPRESSIONS, exprPrompt } from './cast.js';
+import { Character, fromDoc, payloadOf, addImage, keepCandidate, settleRun, slotKind, slotKey, removeItem } from './char-model.js';
+import { kindOf } from './kinds.js';
 import { queueRun, template as installed, roleField, valuesByRole, ROLES } from './make.js';
 
 // ---------------------------------------------------------------------------
@@ -15,7 +17,8 @@ import { queueRun, template as installed, roleField, valuesByRole, ROLES } from 
 // A look pack: named views (front, three-quarter, side, back, face: web/cast.js VIEWS) made from the main picture
 // with deck-krea2-identity (Make the views), each result kept, made again or thrown away; and a sheet, the kept
 // views composed into one picture (POST /api/looks/sheet). Runs for views wait on the character (vpending) and land
-// as candidates (cands) to review.
+// as candidates (cands) to review. web/char-model.js says what a character is (its looks, media and slots);
+// web/charstage.js is the Characters view on the Story tab.
 // ---------------------------------------------------------------------------
 const KIND = 'characters';
 const C = { list: [], pid: undefined, ready: null, voices: null, timers: new Map(), saving: new Set(), subs: new Set() };
@@ -27,18 +30,6 @@ export const characterById = (id) => C.list.find((c) => c.id === id) || null;
 export const mainPicture = (c) => (c?.main && c.pics.includes(c.main) ? c.main : c?.pics[0] || null);
 export function onCharacters(fn) { C.subs.add(fn); return () => C.subs.delete(fn); }
 const tell = () => C.subs.forEach((f) => { try { f(); } catch (e) { console.warn(e); } });
-
-const fromDoc = (d) => {
-  const p = d.payload || {};
-  return { id: d.id, rev: d.rev, name: d.name || '', desc: p.desc || '', look: p.look || '', notes: p.notes || '',
-    pics: Array.isArray(p.pics) ? p.pics.filter((x) => typeof x === 'string') : [], main: p.main || null, voice: p.voice || null,
-    views: Object.fromEntries(VIEW_KEYS.filter((k) => typeof p.views?.[k] === 'string').map((k) => [k, p.views[k]])),
-    sheet: typeof p.sheet === 'string' ? p.sheet : null,
-    vpending: Array.isArray(p.vpending) ? p.vpending.filter((x) => x && x.gen && VIEW_KEYS.includes(x.view)) : [],
-    cands: Array.isArray(p.cands) ? p.cands.filter((x) => x && x.id && VIEW_KEYS.includes(x.view)) : [] };
-};
-const payloadOf = (c) => ({ desc: c.desc, look: c.look, notes: c.notes, pics: c.pics, main: c.main, voice: c.voice,
-  views: c.views, sheet: c.sheet, vpending: c.vpending, cands: c.cands });
 
 // every character of the open project (again after a project switch, or another device's change)
 export function loadCharacters() {
@@ -74,7 +65,7 @@ onServer('store', async (m) => {
 });
 
 // ---- saving: a change is written a moment after the last one; another device's newer copy wins (said so) ----
-function changed(c, now = false) {
+export function changed(c, now = false) {
   clearTimeout(C.timers.get(c.id));
   C.timers.set(c.id, setTimeout(() => save(c), now ? 0 : 700));
 }
@@ -101,14 +92,13 @@ export async function newCharacter(o = {}) {
   await loadCharacters();
   let n = C.list.length + 1;
   while (C.list.some((x) => x.name === `Character ${n}`)) n++;
-  const c = { id: uid(), rev: 0, name: `Character ${n}`, desc: '', look: '', notes: '', pics: [], main: null, voice: null,
-    views: {}, sheet: null, vpending: [], cands: [], ...o };
+  const c = new Character({ id: uid(), rev: 0, name: `Character ${n}`, ...o });
   C.list.push(c);
   changed(c, true);
   tell();
   return c;
 }
-async function deleteCharacter(c) {
+export async function deleteCharacter(c) {
   clearTimeout(C.timers.get(c.id));
   C.list = C.list.filter((x) => x !== c);
   tell();
@@ -118,12 +108,11 @@ async function deleteCharacter(c) {
     tell();
   });
 }
-export function addPicture(c, name) {
-  if (!name || c.pics.includes(name)) return;
-  c.pics.push(name);
-  c.main ||= name;
+export function addPicture(c, name, opts = {}) {
+  if (!addImage(c, name, { id: uid(), ...opts })) return;
   changed(c); tell();
 }
+export const tellCharacters = tell;
 
 async function loadVoices() {
   if (C.voices) return C.voices;
@@ -139,40 +128,61 @@ export const VIEW_TEMPLATE = 'deck-krea2-identity';
 const VIEW_BOOST = 4;   // Reference strength: the template's 2 lets the outfit drift on a new pose; 4 keeps it
 const VROLE = { ...ROLES, person: (f) => f.kind === 'image', width: (f) => f.kind === 'int' && f.input === 'width',
   height: (f) => f.kind === 'int' && f.input === 'height', boost: (f) => f.kind === 'float' && f.input === 'ref_boost' };
-const pendingView = (c, k) => c.vpending.some((x) => x.view === k);
+const pendingSlot = (c, slot) => c.vpending.some((x) => x.slot === slot && x.look === c.lookNow.id);
+const pendingView = (c, k) => pendingSlot(c, `view:${k}`);
+const candFor = (c, slot) => c.cands.some((x) => x.slot === slot && x.look === c.lookNow.id);
 export const viewsReady = () => !!installed(VIEW_TEMPLATE);
 
 // queue deck-krea2-identity for these views of c (default: the ones it lacks, not already on their way or to review)
-export async function makeViews(c, keys = VIEW_KEYS.filter((k) => !c.views[k] && !pendingView(c, k) && !c.cands.some((x) => x.view === k))) {
-  const t = installed(VIEW_TEMPLATE), src = mainPicture(c);
+export async function makeViews(c, keys = VIEW_KEYS.filter((k) => !c.views[k] && !pendingView(c, k) && !candFor(c, `view:${k}`))) {
+  if (!keys.length) return toast('Every view is there already (or on its way)');
+  return runIdentity(c, keys.map((k) => ({ slot: `view:${k}`, prompt: viewPrompt(k), w: VIEW_PROMPTS[k][1], hh: VIEW_PROMPTS[k][2] })));
+}
+// the same for expressions: close-ups from the main picture, one run each
+export async function makeExpressions(c, keys = EXPRESSIONS.map(([k]) => k).filter((k) => !c.expressions[k] && !pendingSlot(c, `expr:${k}`) && !candFor(c, `expr:${k}`))) {
+  if (!keys.length) return toast('Every expression is there already (or on its way)');
+  return runIdentity(c, keys.map((k) => ({ slot: `expr:${k}`, prompt: exprPrompt(k), w: 1024, hh: 1024 })));
+}
+async function runIdentity(c, jobs) {
+  const t = installed(VIEW_TEMPLATE), src = mainPicture(c), look = c.lookNow.id;
   if (!t) return toast(`${VIEW_TEMPLATE} isn't installed (README: Krea 2 identity edit)`, true);
   if (!src) return toast('Add a picture of them first: the views are made from the main one', true);
-  if (!keys.length) return toast('Every view is there already (or on its way)');
   let n = 0;
-  for (const k of keys) {
-    const [, w, hh] = VIEW_PROMPTS[k];
-    const values = valuesByRole(t, { person: src, prompt: viewPrompt(k), width: w, height: hh, boost: VIEW_BOOST, seed: -1 }, VROLE);
+  for (const { slot, prompt, w, hh } of jobs) {
+    const values = valuesByRole(t, { person: src, prompt, width: w, height: hh, boost: VIEW_BOOST, seed: -1 }, VROLE);
     try {
       const [g] = await queueRun({ template: t.id, values });
-      c.vpending.push({ gen: g.id, view: k });
+      c.vpending.push({ gen: g.id, look, slot });
       n++;
     } catch (e) { toast(e.message, true); break; }
   }
-  if (n) { changed(c); tell(); toast(n > 1 ? `Making ${n} views of ${c.name}: they come back here to keep or redo` : `Making the ${k2label(keys[0])} view`); }
+  if (n) { changed(c); tell(); toast(n > 1 ? `Making ${n} for ${c.name}: they come back here to keep or redo` : `Making the ${slotLabel(jobs[0].slot).toLowerCase()}`); }
 }
-const k2label = (k) => (VIEWS.find(([v]) => v === k)?.[1] || k).toLowerCase();
+export const slotLabel = (slot) => {
+  const k = slotKind(slot), key = slotKey(slot);
+  if (k === 'view') return `${VIEWS.find(([v]) => v === key)?.[1] || key} view`;
+  if (k === 'expr') return `${EXPRESSIONS.find(([v]) => v === key)?.[1] || key} expression`;
+  return { edit: 'Edit', sheet: 'Sheet', model: '3D model', splat: 'Splat', rig: 'Rig', clip: 'Clip' }[k] || slot;
+};
+// runs queued for c: they come back to To review ({ made }: how they were made, to make them again)
+export function runsFor(c, gens, slot, { look = c.lookNow.id, made = null } = {}) {
+  for (const g of gens) c.vpending.push({ gen: g.id, look, slot, ...(made ? { made } : {}) });
+  changed(c); tell();
+}
 
-// a run for a view ended: its picture waits to be kept (once)
+// a run for a character ended: what it made waits to be kept (once)
 function settleView(c, g) {
-  const p = c.vpending.find((x) => x.gen === g.id);
-  if (!p) return false;
-  c.vpending = c.vpending.filter((x) => x !== p);
-  if (g.status === 'done') {
-    (g.outputs || []).forEach((o, index) => {
-      if (o.kind === 'image' && !c.cands.some((x) => x.gen === g.id && x.index === index)) c.cands.push({ id: uid(), view: p.view, gen: g.id, index, url: o.url });
-    });
-  } else if (g.status !== 'gone') toast(`The ${k2label(p.view)} view of ${c.name} failed${g.error ? `: ${g.error}` : ''}`, true);
+  const r = settleRun(c, g, { kindOf, uid });
+  if (!r) return false;
+  if (r.failed) toast(`${slotLabel(r.pending.slot)} for ${c.name} failed${g.error ? `: ${g.error}` : ''}`, true);
+  else if (g.status === 'done' && !r.added) toast(`${slotLabel(r.pending.slot)} for ${c.name}: that run made nothing that fits`, true);
   return true;
+}
+// Generate's Make: while this is set, what it queues comes back to this character (a tag on the Generate tab says so)
+export function setWorkingFor(c, slot = 'edit', made = null) {
+  const look = c.lookNow.id;
+  S.workingFor = { label: `${c.name || 'Someone'} · ${slotLabel(slot)}`, clear: () => { S.workingFor = null; },
+    ran: (gens) => { const x = characterById(c.id); if (x) { runsFor(x, gens, slot, { look, made }); toast(`Comes back to ${x.name}'s To review`); } } };
 }
 onServer('deck_generation', ({ data: g }) => {
   if (!g || !['done', 'error', 'interrupted'].includes(g.status) || !isMine(g.prompt_id)) return;
@@ -194,16 +204,39 @@ async function viewsCatchUp() {
   }
 }
 
-async function keepView(c, x) {
+// a picture becomes a picture of theirs (its own copy, made from the run); a clip, a model or a rig stays the run's output
+export async function keepCand(c, x) {
   try {
-    const r = await api(`/api/generations/${x.gen}/to-input`, { method: 'POST', body: { index: x.index, frame: 'first', mp: 0, multiple: 16 }, busy: 'Keeping the view…' });
-    c.views[x.view] = r.name;
-    c.cands = c.cands.filter((y) => y !== x);
+    let name = null;
+    if ((x.kind || 'image') === 'image') {
+      name = (await api(`/api/generations/${x.gen}/to-input`, { method: 'POST', body: { index: x.index, frame: 'first', mp: 0, multiple: 16 }, busy: 'Keeping it…' })).name;
+    }
+    keepCandidate(c, x, { name, id: uid() });
     changed(c); tell();
   } catch (e) { toast(e.message, true); }
 }
-function dropCand(c, x) { c.cands = c.cands.filter((y) => y !== x); changed(c); tell(); }
-function redoView(c, x) { dropCand(c, x); makeViews(c, [x.view]); }
+export function dropCand(c, x) { c.cands = c.cands.filter((y) => y !== x); changed(c); tell(); }
+const canRedo = (x) => ['view', 'expr'].includes(slotKind(x.slot));
+function redoCand(c, x) {
+  dropCand(c, x);
+  const on = c.withLook(x.look), key = slotKey(x.slot);
+  if (slotKind(x.slot) === 'view') makeViews(on, [key]); else makeExpressions(on, [key]);
+}
+// the runs that came back, to keep, make again or throw away
+export function reviewRow(c, extra = () => null) {
+  if (!c.cands.length) return null;
+  const lookName = (id) => (c.looks.length > 1 ? `${c.looks.find((l) => l.id === id)?.name || ''} · ` : '');
+  return h('div', { class: 'ch-cands' }, c.cands.map((x) => h('div', { class: 'ch-cand' },
+    h('div', { class: 'ch-cand-img' }, (x.kind || 'image') === 'image' ? h('img', { src: previewUrl(x.url, 320), alt: '', loading: 'lazy' })
+      : x.kind === 'video' ? h('video', { src: x.url, muted: true, preload: 'metadata', controls: true, playsInline: true })
+        : h('span', { class: 'ch-noface' }, icon('cube')),
+    h('span', { class: 'ch-view-lbl' }, `${lookName(x.look)}${slotLabel(x.slot)}`)),
+    extra(x),
+    h('div', { class: 'ch-cand-btns' },
+      iconBtn('Keep it', icon('check'), () => keepCand(c, x), { class: 'icon-btn' }),
+      canRedo(x) ? iconBtn('Make it again', icon('refresh'), () => redoCand(c, x), { class: 'icon-btn' }) : null,
+      iconBtn('Throw it away', icon('trash'), () => dropCand(c, x), { class: 'icon-btn' })))));
+}
 function setView(c, k, name) { if (name) c.views[k] = name; else delete c.views[k]; changed(c); tell(); }
 // several look pack views at once ({ view: name, or null to clear }); what they replace comes back, in the same form, for an undo
 export function setViews(c, views) {
@@ -227,7 +260,7 @@ async function makeSheet(c) {
   } catch (e) { toast(e.message, true); }
 }
 
-function packField(c) {
+export function packField(c) {
   const ok = viewsReady(), src = mainPicture(c);
   const slot = (k, label) => {
     const v = c.views[k], wait = pendingView(c, k);
@@ -243,12 +276,7 @@ function packField(c) {
       v ? iconBtn(`Clear the ${label.toLowerCase()} view`, icon('close'), () => setView(c, k, null), { class: 'icon-btn st-frame-x' }) : null,
       !v && !wait && ok && src ? iconBtn(`Make the ${label.toLowerCase()} view`, icon('sparkle'), () => makeViews(c, [k]), { class: 'icon-btn ch-view-make' }) : null));
   };
-  const review = c.cands.length ? h('div', { class: 'ch-cands' }, c.cands.map((x) => h('div', { class: 'ch-cand' },
-    h('div', { class: 'ch-cand-img' }, h('img', { src: previewUrl(x.url, 320), alt: '', loading: 'lazy' }), h('span', { class: 'ch-view-lbl' }, VIEWS.find(([v]) => v === x.view)?.[1])),
-    h('div', { class: 'ch-cand-btns' },
-      iconBtn('Keep it', icon('check'), () => keepView(c, x), { class: 'icon-btn' }),
-      iconBtn('Make it again', icon('refresh'), () => redoView(c, x), { class: 'icon-btn' }),
-      iconBtn('Throw it away', icon('trash'), () => dropCand(c, x), { class: 'icon-btn' }))))) : null;
+  const review = reviewRow(c);
   const n = packViews(c).length;
   return field(['Look pack', h('span', {}, `${n}/${VIEWS.length}`)],
     help(`Views of them for shots to use: a close-up gets the face, a profile the side, from behind the back, otherwise the front or three-quarter. Make the views draws the missing ones from the main picture (${VIEW_TEMPLATE}); keep, redo or throw away each. A plus picks one from your pictures instead. The sheet puts the kept views side by side as one reference picture.`),
@@ -282,7 +310,7 @@ export function castSection({ open = null, onOpen, extra = [] } = {}) {
 }
 
 // a text box bound to one of c's fields (it keeps the cursor through a redraw: data-bind)
-function charBox(c, key, opts) {
+export function charBox(c, key, opts) {
   const ta = textArea(() => c[key], (v) => { c[key] = v; changed(c); }, { rows: 2, max: 400, ...opts });
   ta.dataset.bind = `char.${c.id}.${key}`;
   return ta;
@@ -301,8 +329,8 @@ export function characterSection(c, { done, extra = [] } = {}) {
       onclick: () => { c.main = p; changed(c); tell(); } }, h('img', { src: thumbUrl(p, 240), alt: '', loading: 'lazy' })),
     p === main ? h('span', { class: 'st-frame-on' }, icon('check')) : null,
     iconBtn('Remove this picture', icon('close'), () => {
-      c.pics = c.pics.filter((x) => x !== p);
-      if (c.main === p) c.main = c.pics[0] || null;
+      const it = c.media.find((m) => m.src?.input === p);
+      if (it) removeItem(c, it.id);
       changed(c); tell();
     }, { class: 'icon-btn st-frame-x' }))));
   const vs = C.voices || [];
@@ -310,6 +338,7 @@ export function characterSection(c, { done, extra = [] } = {}) {
   const voice = h('div', { class: 'chips' },
     chip('None', () => { c.voice = null; changed(c); tell(); }, { on: !c.voice }),
     vs.map((x) => chip(x.name, () => { c.voice = x.id; changed(c); tell(); }, { on: c.voice === x.id })));
+  // (the words on the character itself are its active look's)
   return section(`Character · ${c.name || 'Someone'}`, done,
     field('Name', name),
     field('Who they are', charBox(c, 'desc', { placeholder: 'e.g. the lighthouse keeper, tired and kind', label: 'Who they are' })),

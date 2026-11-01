@@ -42,6 +42,14 @@ class PhotoCommands(unittest.TestCase):
         props = [p for c, p in cmds if c == "layer.setProps"]
         self.assertEqual([p["visible"] for p in props], [True, False])
 
+    def test_a_layers_opacity_and_blend_go_along(self):
+        layers = [{"path": "a.png", "size": (10, 10), "rect": {"x": 0, "y": 0, "w": 10, "h": 10}, "name": "A", "opacity": 0.5, "blend": "multiply"},
+                  {"path": "b.png", "size": (10, 10), "rect": {"x": 0, "y": 0, "w": 10, "h": 10}, "name": "B", "opacity": 1, "blend": "normal"}]
+        props = [p for c, p in craft.photo_commands({"w": 10, "h": 10, "bg": None}, layers)[1] if c == "layer.setProps"]
+        self.assertEqual((props[0]["opacity"], props[0]["blend"]), (0.5, "Multiply"))
+        self.assertNotIn("opacity", props[1])
+        self.assertNotIn("blend", props[1])
+
     def test_no_colour_is_transparent(self):
         self.assertEqual(craft.photo_commands({"w": 10, "h": 10, "bg": None}, [])[0]["background"], "transparent")
 

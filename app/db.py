@@ -209,6 +209,20 @@ def copy_generations(src_project: int, dst_project: int, fix) -> dict[int, int]:
     return ids
 
 
+def copy_generation(gid: int, dst_project: int, fix) -> int:
+    """One run's copy in another project (as copy_generations does for a whole project): the new id."""
+    with _lock:
+        r = dict(_conn.execute("SELECT * FROM generations WHERE id=?", (gid,)).fetchone())
+        r.pop("id")
+        r.update(project_id=dst_project, prompt_id=f"copy-{gid}-{time.time_ns()}")
+        cur = _conn.execute(f"INSERT INTO generations({', '.join(r)}) VALUES ({', '.join('?' * len(r))})", tuple(r.values()))
+        new = r["id"] = cur.lastrowid
+        if ch := fix(r, {gid: new}):
+            _conn.execute(f"UPDATE generations SET {', '.join(f'{k}=?' for k in ch)} WHERE id=?", (*ch.values(), new))
+        _conn.commit()
+    return new
+
+
 # ---- generations ------------------------------------------------------------
 def create_generation(project_id, template, params, workflow, prompt_id, parent=None) -> int:
     cur = _q(
@@ -276,6 +290,19 @@ def delete_input(name: str):
 def set_input_origin(name: str, origin: dict | None):
     if origin and origin.get("generation") is not None:
         _q("INSERT OR REPLACE INTO input_origins(name, origin) VALUES (?,?)", (name, json.dumps(origin)))
+
+
+def input_origin_runs() -> dict[str, int]:
+    """{input name: the run it was made from}, for every picture made from an output."""
+    out = {}
+    for r in _q("SELECT name, origin FROM input_origins").fetchall():
+        try:
+            gid = json.loads(r["origin"]).get("generation")
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(gid, int):
+            out[r["name"]] = gid
+    return out
 
 
 def input_origin(name: str) -> dict | None:

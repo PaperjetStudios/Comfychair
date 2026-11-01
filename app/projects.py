@@ -24,7 +24,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Body, HTTPException
 
-from . import config, db, storage
+from . import config, db, storage, store
 
 log = logging.getLogger("comfydeck.projects")
 router = APIRouter(prefix="/api/projects")
@@ -104,8 +104,8 @@ def sweep():
 # ---- rewriting a copy's links ---------------------------------------------
 def _relinker(old: str, new: str, ids: dict[int, int]):
     """A function that rewrites JSON values copied from folder `old` into folder `new`: file links
-    (/files/projects/<old>/...) point into the new folder, and {"generation": <old id>} references to
-    copied generations use the new ids."""
+    (/files/projects/<old>/...) point into the new folder, and {"generation": <old id>} and {"gen": <old id>}
+    references to copied generations use the new ids."""
     pairs = [(f"/files/projects/{quote(old)}/", f"/files/projects/{quote(new)}/"),
              (f"/files/projects/{old}/", f"/files/projects/{new}/")]
 
@@ -120,7 +120,7 @@ def _relinker(old: str, new: str, ids: dict[int, int]):
         if isinstance(v, dict):
             out = {}
             for k, x in v.items():
-                if k == "generation" and isinstance(x, int) and not isinstance(x, bool) and x in ids:
+                if k in ("generation", "gen") and isinstance(x, int) and not isinstance(x, bool) and x in ids:
                     out[k] = ids[x]
                 else:
                     out[k] = fix(x)
@@ -250,6 +250,98 @@ async def duplicate(pid: int, name: str | None = None) -> dict:
     job["task"] = asyncio.create_task(_run_job(job))
     await _tell(reason="copying", id=dst["id"], src=pid)
     return {"job": _job_view(job), "project": dst}
+
+
+# ---- a character brought in from another project ----------------------------
+def _copy_input(name: str, dst: int) -> str:
+    """A picture's own copy for another project: a new name, both of its files, its own row."""
+    sub = config.COMFY_INPUT_SUBFOLDER
+    new = f"{sub}/{uuid.uuid4().hex}{Path(name).suffix or '.png'}"
+    ours = config.INPUT_DIR / Path(name).name
+    if not ours.is_file():
+        raise FileNotFoundError(name)
+    shutil.copy2(ours, config.INPUT_DIR / Path(new).name)
+    if config.COMFY_INPUT_DIR:
+        target = config.COMFY_INPUT_DIR / new
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ours, target)
+    db.add_input(new, dst, "character")
+    return new
+
+
+def _copy_run(gid: int, dst: int) -> int | None:
+    """One finished run and its files for another project (as a project's duplicate does): the new id, None if it's gone."""
+    g = db.get_generation(gid)
+    if not g or g["status"] != "done":
+        return None
+    old_folder, new_folder = db.project_folder(g["project_id"]), db.project_folder(dst)
+    new = db.copy_generation(gid, dst, _row_fixer(old_folder, new_folder))
+    for o in g["outputs"] or []:
+        src = config.PROJECTS_DIR / o["path"] if o.get("path") else config.GEN_DIR / str(gid) / o["filename"]
+        if not src.is_file():
+            continue
+        target = (config.PROJECTS_DIR / (new_folder + o["path"][len(old_folder):]) if o.get("path", "").startswith(f"{old_folder}/")
+                  else config.GEN_DIR / str(new) / o["filename"])
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, target)
+    return new
+
+
+def copy_character(doc: dict, src: int, dst: int) -> dict:
+    """The character for project dst, sharing nothing with the original but the voice library: new pictures, new runs, a new id.
+    Runs still on their way and results still to review stay with the original. A picture or a run that's gone is left out."""
+    payload = {**(doc.get("payload") or {}), "vpending": [], "cands": []}
+    names = {n: _copy_input(n, dst) for n in storage.character_pictures(payload) if (config.INPUT_DIR / Path(n).name).is_file()}
+    runs: dict[int, int] = {}
+
+    def fix(v):
+        if isinstance(v, str):
+            return names.get(v, v)
+        if isinstance(v, list):
+            return [fix(x) for x in v]
+        if isinstance(v, dict):
+            out = {}
+            for k, x in v.items():
+                if k in ("generation", "gen") and isinstance(x, int) and not isinstance(x, bool):
+                    if x not in runs and (new := _copy_run(x, dst)) is not None:
+                        runs[x] = new
+                    out[k] = runs.get(x, x)
+                else:
+                    out[k] = fix(x)
+            return out
+        return v
+    fixed = fix(payload)
+    # a run's address moved with it: a media item's link is drawn again from the new run
+    for m in fixed.get("media") or []:
+        gid = (m.get("src") or {}).get("generation")
+        if gid in runs.values():
+            g = db.get_generation(gid)
+            outs = g["outputs"] if g else []
+            i = (m.get("src") or {}).get("index", 0)
+            m["url"] = f"/files/projects/{quote(outs[i]['path'])}" if i < len(outs) and outs[i].get("path") else m.get("url", "")
+    return {"id": uuid.uuid4().hex[:16], "name": doc.get("name") or "Someone", "payload": fixed}
+
+
+@router.post("/{pid}/characters/copy")
+async def character_copy(pid: int, body: dict = Body(...)):
+    """{from_project, id}: a copy of that project's character in this one -> the new document."""
+    src = body.get("from_project")
+    if not db.get_project(pid) or (src is not None and not db.get_project(src)):
+        raise HTTPException(404, "No such project")
+    if src == pid:
+        raise HTTPException(400, "That character is in this project already")
+    did = str(body.get("id") or "")
+    store._check_id(did)
+    doc = store._read(store._dir("characters", src, None) / f"{did}.json")
+    if not doc:
+        raise HTTPException(404, "No such character")
+    fresh = await asyncio.to_thread(copy_character, doc, src, pid)
+    target = store._dir("characters", pid, None)
+    now = time.time()
+    new = {"id": fresh["id"], "kind": "characters", "name": fresh["name"], "order": 0, "rev": 1, "updated": now, "payload": fresh["payload"]}
+    store._write(target / f"{fresh['id']}.json", new)
+    await store._tell("characters", fresh["id"], 1, pid, None)
+    return new
 
 
 # ---- routes ------------------------------------------------------------------

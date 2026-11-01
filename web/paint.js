@@ -347,9 +347,25 @@ export function createPaint(ctx) {
     while (U.undo.length > 1 && U.bytes > UNDO_BYTES) { const e = U.undo.shift(); U.bytes -= e.before.data.length + e.after.data.length; }
     syncStrip();
   }
+  // a change to the stack itself (engine: noteStack), between the strokes. merge: it goes with the step before (a slider's run)
+  const NO_PIXELS = { data: { length: 0 } };
+  function pushStack(was, now, doc, merge) {
+    const last = U.undo[U.undo.length - 1];
+    if (merge && last?.stack && last.doc === doc) { last.afterStack = now; U.redo = []; syncStrip(); return; }
+    U.undo.push({ stack: true, doc, beforeStack: was, afterStack: now, before: NO_PIXELS, after: NO_PIXELS });
+    for (const e of U.redo) U.bytes -= e.before.data.length + e.after.data.length;
+    U.redo = [];
+    syncStrip();
+  }
   function step(from, to, which) {
     while (from.length) {
       const e = from.pop();
+      if (e.stack) {
+        if (e.doc !== X.docId?.()) continue;   // (another tab's or shot's)
+        to.push(e);
+        X.restoreStack?.(which === 'before' ? e.beforeStack : e.afterStack);
+        break;
+      }
       if (!E().layers.includes(e.l) || !isCanvas(e.l)) { U.bytes -= e.before.data.length + e.after.data.length; continue; }   // its layer is gone
       e.l.img.getContext('2d').putImageData(e[which], e.x, e.y);
       to.push(e);
@@ -1370,7 +1386,7 @@ export function createPaint(ctx) {
   }
   return {
     P, els: buildStrip(), painting, paintProps, paintOverlay, sync: syncStrip, savePaint, unsavedPaint, setTool, setColor,
-    blankSheet, addBlank, dropSel, undo, redo, selectionMask, maskLayer, paintMask, hasSel: () => !!P.sel, selAction, selectLayer, resizeCanvasLayer, maskOp, growMask, maskOutside, maskFromMatte,
+    blankSheet, addBlank, dropSel, undo, redo, pushStack, selectionMask, maskLayer, paintMask, hasSel: () => !!P.sel, selAction, selectLayer, resizeCanvasLayer, maskOp, growMask, maskOutside, maskFromMatte,
     reset() { cancelStroke(); dropSel(); P.last = null; U.undo = []; U.redo = []; U.bytes = 0; syncStrip(); },   // another document: its undo goes
   };
 }

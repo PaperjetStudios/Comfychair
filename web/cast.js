@@ -107,7 +107,7 @@ export function dialogueLines(text, list) {
 // name one instead (s.refs[character id]: 'auto' | 'main' | 'sheet' | a view).
 export const VIEWS = [['front', 'Front'], ['three', 'Three-quarter'], ['side', 'Side'], ['back', 'Back'], ['face', 'Face']];
 export const VIEW_KEYS = VIEWS.map(([k]) => k);
-export const viewLabel = (k) => VIEWS.find(([v]) => v === k)?.[1] || (k === 'sheet' ? 'Sheet' : k === 'main' ? 'Main picture' : k);
+export const viewLabel = (k) => VIEWS.find(([v]) => v === k)?.[1] || (k === 'sheet' ? 'Sheet' : k === 'main' ? 'Main picture' : String(k).startsWith('expr:') ? (EXPRESSIONS.find(([v]) => v === k.slice(5))?.[1] || k) : k);
 // what Make the views asks deck-krea2-identity for, and at what size (portrait for the body, square for the face).
 // Tested on the robot character 2026-10-28: at 832×1216 the three-quarter and side views often came back as two
 // figures side by side; 704×1280 with "alone in the centre" gave one every time. A back view keeps the jacket's back
@@ -122,6 +122,9 @@ export const VIEW_PROMPTS = {
   face: ['Close-up portrait of the character\'s face, head and shoulders, looking straight at the camera.', 1024, 1024],
 };
 export const viewPrompt = (k) => `${VIEW_PROMPTS[k][0]} ${STUDIO}`;
+// the expression set: close-ups of the same face, from the main picture
+export const EXPRESSIONS = [['neutral', 'Neutral'], ['happy', 'Happy'], ['sad', 'Sad'], ['angry', 'Angry'], ['surprised', 'Surprised'], ['afraid', 'Afraid']];
+export const exprPrompt = (k) => `Close-up portrait of the character's face, head and shoulders, looking straight at the camera, with a ${EXPRESSIONS.find(([v]) => v === k)?.[1].toLowerCase() || k} expression. ${STUDIO}`;
 
 // the view a shot's camera wants: from its size, its angle, then its words
 export function wantedView(s = {}) {
@@ -144,6 +147,7 @@ export const mainOf = (c) => (c?.main && c.pics?.includes(c.main) ? c.main : c?.
 export function refPicture(c, s = {}, choice = s?.refs?.[c?.id] || 'auto') {
   if (!c) return null;
   const v = c.views || {};
+  if (String(choice).startsWith('expr:') && c.expressions?.[choice.slice(5)]) return { name: c.expressions[choice.slice(5)], view: choice };
   if (choice === 'sheet' && c.sheet) return { name: c.sheet, view: 'sheet' };
   if (choice === 'main' && mainOf(c)) return { name: mainOf(c), view: 'main' };
   if (VIEW_KEYS.includes(choice) && v[choice]) return { name: v[choice], view: choice };

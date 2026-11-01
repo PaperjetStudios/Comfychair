@@ -2,11 +2,12 @@ import { ASPECTS, FULL, aspectCrop, cropSpan } from './crop-geometry.js';
 export { ASPECTS, FULL, aspectCrop, cropSpan } from './crop-geometry.js';
 import {
   h, api, clamp01, busy, toast, undoToast, sheetOpen, openSheet, closeSheet, loadingSheet, sheetStillOpen, button, iconBtn, actions,
-  seg, field, section, hint, toggle, propNum, layerRowsEl, panelTop, help, colorField, rangeField, pctFmt, clamp, mpInput,
+  seg, field, section, hint, toggle, propNum, layerRowsEl, panelTop, help, colorField, rangeField, pctFmt, clamp, mpInput, uid,
 } from './ui.js';
 import { ASPECT_PRESETS, S, inputUrl, switchTab, thumbUrl } from './core.js';
 import { openImagePicker, uploadImage } from './media.js';
-import { snapNearest } from './gizmo.js';
+import { snap as gridSnap, snapBar, snapNearest, snapOn, snapStep } from './gizmo.js';
+import * as ST from './layer-stack.js';
 import { openCraftSheet, sendToCraft } from './craft.js';
 import { animated, anyKeys, keyTimes, keyedRange, refreshKeyed, value } from './keyed.js';
 import { putKey } from './keys.js';
@@ -28,7 +29,7 @@ import { imageToolsSection } from './imagetools.js';
 // The engine is made once per host with createEditor(): the Editor tab (editor.js, its edit tabs) and the Story
 // tab's shot canvas (story.js, one composition per shot) each have their own state, view, painter and undo.
 // ---------------------------------------------------------------------------
-export const BLANK = () => ({ v: 2, size: null, cols: 2, gap: 0, bg: '#000000', clear: false, out: 1, mp: 0, snap: true, arrange: null, anim: null, items: [], layers: [] });
+export const BLANK = () => ({ v: 2, size: null, cols: 2, gap: 0, bg: '#000000', clear: false, out: 1, mp: 0, snap: true, arrange: null, anim: null, items: [], layers: [], groups: [] });
 // a saved payload (an edit tab, or the old `deck.editor`) as editor state
 export function fromSaved(saved) {
   const e = { ...BLANK(), ...saved, arrange: saved.arrange || null };
@@ -40,7 +41,9 @@ export function fromSaved(saved) {
     x: l.x, y: l.y, scale: l.x == null ? 1 : l.scale, opacity: l.opacity ?? 1, hidden: !!l.hidden,
     blend: l.blend || 'normal', locked: !!l.locked, ...(l.label ? { label: l.label } : {}), ...(l.mask ? { mask: true } : {}), ...(l.draft ? { draft: true } : {}), ...(l.canvas ? { canvas: true } : {}), ...(l.clip ? { clip: true } : {}),
     ...(l.rotation ? { rotation: +l.rotation } : {}), ...(l.flipX ? { flipX: true } : {}), ...(l.flipY ? { flipY: true } : {}),
-    ...(l.chans ? { chans: structuredClone(l.chans) } : {}) }));
+    ...(l.chans ? { chans: structuredClone(l.chans) } : {}),
+    ...(l.key ? { key: l.key } : {}), ...(l.group ? { group: l.group } : {}), ...(l.maskOf ? { maskOf: l.maskOf } : {}), ...(l.maskOff ? { maskOff: true } : {}) }));
+  e.groups = (saved.groups || []).map((g) => ({ id: g.id, name: g.name || 'Group', opacity: g.opacity ?? 1, blend: g.blend || 'normal', collapsed: !!g.collapsed }));
   // The old auto-layout editor kept no positions: lay its images out once they load, in the same
   // order (its first image was leftmost, so it goes to the top of the list).
   if (saved.v !== 2 && e.layers.length) { e.arrange = saved.layout || 'row'; e.layers.reverse(); }
@@ -65,12 +68,30 @@ export function createEditor(cfg) {
   // What a tab stores: the editor's settings and its layers (input image names + crop/position), all small.
   // (Layers only ever name input images, so nothing here is a data URL or a blob. A new blank canvas has no file
   // until its first save, a moment later: it's left out until then.)
-  const dumpEditor = () => ({ v: 2, size: E.size, cols: E.cols, gap: E.gap, bg: E.bg, clear: !!E.clear, out: E.out || 1, mp: E.mp, snap: E.snap, arrange: E.arrange, anim: E.anim, items: E.items,
-    layers: E.layers.filter((l) => l.name).map((l) => ({ name: l.name, crop: l.crop, x: l.x, y: l.y, scale: l.scale, opacity: l.opacity, hidden: l.hidden,
+  const dumpEditor = () => ({ v: 2, size: E.size, cols: E.cols, gap: E.gap, bg: E.bg, clear: !!E.clear, out: E.out || 1, mp: E.mp, snap: E.snap, arrange: E.arrange, anim: E.anim, items: E.items, groups: E.groups,
+    layers: E.layers.filter((l) => l.name).map((l) => ({ ...(l.key ? { key: l.key } : {}), ...(l.group ? { group: l.group } : {}), ...(l.maskOf ? { maskOf: l.maskOf } : {}), ...(l.maskOff ? { maskOff: true } : {}), name: l.name, crop: l.crop, x: l.x, y: l.y, scale: l.scale, opacity: l.opacity, hidden: l.hidden,
       blend: l.blend || 'normal', locked: !!l.locked, label: l.label || null, chans: l.chans || null, ...(l.mask ? { mask: true } : {}), ...(l.draft ? { draft: true } : {}), ...(l.canvas ? { canvas: true } : {}), ...(l.clip ? { clip: true } : {}),
       ...(l.rotation ? { rotation: l.rotation } : {}), ...(l.flipX ? { flipX: true } : {}), ...(l.flipY ? { flipY: true } : {}) })) });
   // every edit ends up here: an animated layer keys what moved, then the host saves (the Editor tab's tab and still)
-  function persistEditor() { keyPose(); cfg.onChange?.(); }
+  function persistEditor() { noteStack(); keyPose(); cfg.onChange?.(); }
+
+  // ---- undo for the stack itself: what a change did (moved, reordered, hid, grouped...) goes on the painter's history, next to its strokes ----
+  let stackWas = null, stackAt = 0;
+  function noteStack() {
+    const now = ST.stackState(E.layers, E.groups);
+    if (!stackWas || !paint) { stackWas = now; return; }
+    if (ST.sameState(stackWas, now)) return;
+    const t = Date.now();
+    paint.pushStack(stackWas, now, cfg.docId?.() ?? E.tab?.id, t - stackAt < 500);   // (a slider's run of changes is one step)
+    stackAt = t; stackWas = now;
+  }
+  function restoreStack(st) {
+    ST.applyState(E, st);
+    stackWas = ST.stackState(E.layers, E.groups);
+    if (E.sel && !E.layers.includes(E.sel)) E.sel = null;
+    cfg.onChange?.();
+    renderEditor();
+  }
 
   // ---- animation: layers keyed over time like After Effects, on keys.js (the engine the Video tab's clips and the 3D tab use) ----
   // E.anim: null (a still) or { len, fps, range? } (seconds, frames a second; range: the work area, workarea.js). A layer's keys are l.chans[ch] = [{ f: seconds, v }], and
@@ -242,7 +263,7 @@ export function createEditor(cfg) {
   // (an inpaint mask layer, l.mask, is a red tint over the canvas for the Inpaint panel: never part of the picture)
   // a painted canvas (or the inpaint mask) is resized, never turned or cropped; layers and other objects keep those
   const plain = (l) => !!(l && (l.canvas || l.mask || (l.label && /^Canvas \d+$/.test(l.label) && isCanvas(l))));   // (a canvas made before the flag has its numbered name)
-  const visibleLayers = () => E.layers.filter((l) => ready(l) && !l.hidden && !l.mask);
+  const visibleLayers = () => E.layers.filter((l) => ready(l) && !l.hidden && !l.mask && !l.maskOf);
 
   // The output area: the fixed size, or just big enough for every visible layer
   function editorFrame() {
@@ -259,7 +280,7 @@ export function createEditor(cfg) {
     const W = l.img.naturalWidth, H = l.img.naturalHeight, c = l.crop, r = layerRect(l), t = G.turned(l);
     if (t) { ctx.save(); ctx.transform(...G.turn(l)); }
     ctx.globalAlpha = clamp(l.opacity ?? 1, 0, 1);
-    ctx.globalCompositeOperation = blendOp(l);
+    ctx.globalCompositeOperation = l.op || blendOp(l);
     ctx.drawImage(l.live || l.img, c.x * W, c.y * H, Math.max(1, c.w * W), Math.max(1, c.h * H), r.x, r.y, r.w, r.h);
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
     if (t) ctx.restore();
@@ -276,14 +297,52 @@ export function createEditor(cfg) {
     }
     return null;
   }
-  function drawStack(ctx, list) {
-    list.forEach((l, i) => {
+  // scratch canvases as big as what's being drawn on, with its transform (depth: a masked layer inside a group)
+  const POOL = [];
+  function scratchFor(ctx, depth) {
+    const cv = (POOL[depth] ||= document.createElement('canvas'));
+    if (cv.width !== ctx.canvas.width || cv.height !== ctx.canvas.height) { cv.width = ctx.canvas.width; cv.height = ctx.canvas.height; }
+    const c = cv.getContext('2d');
+    c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, cv.width, cv.height);
+    c.setTransform(ctx.getTransform());
+    c.imageSmoothingQuality = 'high';
+    return c;
+  }
+  function pasteDown(ctx, cv, opacity, op) {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = clamp(opacity ?? 1, 0, 1); ctx.globalCompositeOperation = op;
+    ctx.drawImage(cv, 0, 0);
+    ctx.restore();
+  }
+  const maskOfLayer = (l) => (l.key && !l.maskOff ? E.layers.find((m) => m.maskOf === l.key && ready(m)) || null : null);
+  // a layer, seen through its mask if it has one
+  function drawMasked(ctx, l, depth = 0) {
+    const m = maskOfLayer(l);
+    if (!m) return drawLayer(ctx, l);
+    const c = scratchFor(ctx, depth);
+    drawLayer(c, { ...l, opacity: 1, op: 'source-over' });
+    ST.syncMask(m, l);
+    drawLayer(c, { ...m, opacity: 1, op: 'destination-in' });
+    pasteDown(ctx, c.canvas, l.opacity, blendOp(l));
+  }
+  const groupOf = (l) => (l.group ? E.groups.find((g) => g.id === l.group) || null : null);
+  function drawStack(ctx, all) {
+    const list = all.filter((l) => !l.maskOf);
+    const one = (c, l, i, depth) => {
       const r = clipOf(list, i);
-      if (!r) return drawLayer(ctx, l);
-      ctx.save(); ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
-      drawLayer(ctx, l);
-      ctx.restore();
-    });
+      if (!r) return drawMasked(c, l, depth);
+      c.save(); c.beginPath(); c.rect(r.x, r.y, r.w, r.h); c.clip();
+      drawMasked(c, l, depth);
+      c.restore();
+    };
+    for (let i = 0; i < list.length;) {
+      const g = groupOf(list[i]);
+      if (ST.plainGroup(g)) { one(ctx, list[i], i, 0); i++; continue; }
+      const c = scratchFor(ctx, 0);   // a group with its own opacity or blend: its members together, then that on the whole
+      for (; i < list.length && list[i].group === g.id; i++) one(c, list[i], i, 1);
+      pasteDown(ctx, c.canvas, g.opacity, blendOp(g));
+    }
   }
   // move a layer so the box round it starts at x, y
   function placeBounds(l, x, y) {
@@ -537,6 +596,13 @@ export function createEditor(cfg) {
       ctx.restore();
       ctx.save(); ctx.translate(ox, oy); ctx.scale(s, s); drawLayer(ctx, sel); ctx.restore();
     }
+    if (f && gridSnap.grid && !E.cropping) {   // the grid moves snap to
+      const step = ST.gridStep(f.w, gridSnap.gridPct) * s, fr = scr(f);
+      ctx.strokeStyle = '#ffffff38'; ctx.lineWidth = 1; ctx.beginPath();
+      for (let x = fr.x; x <= fr.x + fr.w + 0.5; x += step) { ctx.moveTo(Math.round(x) + 0.5, fr.y); ctx.lineTo(Math.round(x) + 0.5, fr.y + fr.h); }
+      for (let y = fr.y; y <= fr.y + fr.h + 0.5; y += step) { ctx.moveTo(fr.x, Math.round(y) + 0.5); ctx.lineTo(fr.x + fr.w, Math.round(y) + 0.5); }
+      ctx.stroke();
+    }
     drawBox(ctx, sel, accent, { rotate: !E.cropping && !sel.locked && !plain(sel), crop: E.cropping });
     ctx.strokeStyle = '#ff3df2'; ctx.lineWidth = 1;
     for (const g of E.guides) {
@@ -588,6 +654,7 @@ export function createEditor(cfg) {
     };
     const onRotate = (p, l) => { const q = scrOf(p), { rot } = boxPoints(l); return Math.hypot(rot.x - q.x, rot.y - q.y) < HANDLE; };
     // a point on the canvas pulled to the frame's and the layers' edges and middles (Snap on; Alt skips it)
+    const stepScale = (v, e) => (snapOn('scale', e) ? Math.max(0.01, snapStep(v * 100, gridSnap.scaleStep) / 100) : v);
     const snapPoint = (p, e) => {
       E.guides = [];
       if (!E.snap || e.altKey) return { x: Math.round(p.x), y: Math.round(p.y) };
@@ -731,21 +798,21 @@ export function createEditor(cfg) {
       } else if (drag.rotate) {
         // snapping pulls to 15° steps nearby; Shift always steps by 15°; Alt is free
         const l = drag.l, deg = drag.r0 + ((Math.atan2(p.y - drag.c.y, p.x - drag.c.x) - drag.a0) * 180) / Math.PI;
-        l.rotation = G.snapAngle(deg, e.altKey ? {} : e.shiftKey ? { step: 15 } : E.snap ? { pull: 4 } : {});
+        l.rotation = snapOn('rot', e) ? snapStep(deg, gridSnap.rotStep) : G.snapAngle(deg, e.altKey ? {} : e.shiftKey ? { step: 15 } : E.snap ? { pull: 4 } : {});
         const c = G.centre(l);   // (the centre stays put: rounding)
         l.x += drag.c.x - c.x; l.y += drag.c.y - c.y;
         E.guides = [];
       } else if (drag.tresize) {
         const l = drag.l, cos = Math.cos(drag.a), sin = Math.sin(drag.a);
         const dx = p.x - drag.anchor.x, dy = p.y - drag.anchor.y, lx = dx * cos + dy * sin, ly = -dx * sin + dy * cos;   // in the layer's own axes
-        l.scale = Math.max(0.01, Math.max((lx * drag.sx) / drag.cw, (ly * drag.sy) / drag.ch));
+        l.scale = stepScale(Math.max(0.01, Math.max((lx * drag.sx) / drag.cw, (ly * drag.sy) / drag.ch)), e);
         const hx = (drag.sx * drag.cw * l.scale) / 2, hy = (drag.sy * drag.ch * l.scale) / 2;
         const cx = drag.anchor.x + hx * cos - hy * sin, cy = drag.anchor.y + hx * sin + hy * cos;
         l.x = cx - (drag.cw * l.scale) / 2; l.y = cy - (drag.ch * l.scale) / 2;
         E.guides = [];
       } else if (drag.resize) {
         const l = drag.l, left = p.x < drag.ax, up = p.y < drag.ay;
-        l.scale = Math.max(0.01, Math.abs(p.x - drag.ax) / drag.cw, Math.abs(p.y - drag.ay) / drag.ch);
+        l.scale = stepScale(Math.max(0.01, Math.abs(p.x - drag.ax) / drag.cw, Math.abs(p.y - drag.ay) / drag.ch), e);
         E.guides = [];
         if (E.snap && !e.altKey) {   // the dragged corner snaps on whichever axis is closer
           const t = snapTargets(l), thr = SNAP / EV.s;
@@ -770,6 +837,11 @@ export function createEditor(cfg) {
           const sy = snapNearest([r.y, r.y + r.h / 2, r.y + r.h], t.ys, thr);
           if (sx) { l.x = Math.round(l.x + sx.d); E.guides.push({ x: sx.at }); }
           if (sy) { l.y = Math.round(l.y + sy.d); E.guides.push({ y: sy.at }); }
+        }
+        if (snapOn('grid', e) && editorFrame()) {   // the grid wins over the edges
+          const f = editorFrame(), step = ST.gridStep(f.w, gridSnap.gridPct), r = bounds(l);
+          l.x = Math.round(l.x + ST.onGrid(r.x, f.x, step) - r.x); l.y = Math.round(l.y + ST.onGrid(r.y, f.y, step) - r.y);
+          E.guides = [];
         }
         for (const [m, mx, my] of drag.group || []) { m.x = mx + (l.x - drag.x0); m.y = my + (l.y - drag.y0); }
       }
@@ -797,7 +869,7 @@ export function createEditor(cfg) {
     // painting (paint.js): its pointer handlers come first while a paint tool is picked; its tool strip sits on the left
     paint = createPaint({
       E, canvas: () => cv, viewer: () => cv.parentElement, view: () => EV, zoom: viewZoom, frame: editorFrame,
-      toCanvas: (e) => point(e), cancelDrag, redraw: drawEditorCanvas, render: renderEditor, changed: persistEditor,
+      toCanvas: (e) => point(e), cancelDrag, redraw: drawEditorCanvas, render: renderEditor, changed: persistEditor, restoreStack, docId: () => cfg.docId?.() ?? E.tab?.id,
       hit: (p) => [...visibleLayers()].reverse().find((l) => G.insideLayer(l, p)) || null,
       snapOn: () => E.snap,
       snaps: () => { const rs = visibleLayers().map(bounds), f = editorFrame(); if (f) rs.push(f); return { xs: rs.flatMap((r) => [r.x, r.x + r.w / 2, r.x + r.w]), ys: rs.flatMap((r) => [r.y, r.y + r.h / 2, r.y + r.h]) }; },
@@ -829,8 +901,9 @@ export function createEditor(cfg) {
 
   function removeLayer(l) {
     const before = E.layers;
-    E.layers = E.layers.filter((o) => o !== l);
+    E.layers = ST.normalize(E.layers.filter((o) => o !== l), E.groups);
     if (E.sel === l) { E.sel = null; E.cropping = false; }
+    if (E.sel?.maskOf === l.key) { E.sel = null; E.cropping = false; }
     persistEditor();
     const tid = docId();
     undoToast('Layer removed', () => {
@@ -841,7 +914,9 @@ export function createEditor(cfg) {
 
   function renderEditor() {
     cfg.beforeRender?.();
+    for (const l of E.layers) l.key ||= uid();   // (what a mask and a group know a layer by)
     E.layers.forEach(loadLayerImage);
+    for (const m of E.layers) if (m.maskOf) { const o = E.layers.find((x) => x.key === m.maskOf); if (o) ST.syncMask(m, o); }
     if (E.sel && !E.layers.includes(E.sel)) { E.sel = E.multi.find((l) => E.layers.includes(l)) || null; E.multi = E.multi.filter((l) => l !== E.sel); }
     E.multi = E.multi.filter((l) => E.layers.includes(l) && l !== E.sel);
     if (!E.sel) { E.multi = []; E.pickMode = false; }
@@ -893,23 +968,46 @@ export function createEditor(cfg) {
   function layerList() {
     if (!E.layers.length) return hint('Add images from your inputs, generations or device, then tap one on the canvas to move, resize or crop it.');
     // (the list shows the top layer first: a place in it is the same place counted from the other end)
-    const reorder = (from, to) => {
-      const n = E.layers.length, [l] = E.layers.splice(n - 1 - from, 1);
-      E.layers.splice(n - 1 - to, 0, l);
-      editorChanged();
-    };
+    const reorder = (from, to) => { E.layers = ST.moveRow(E.layers, E.groups, from, to); editorChanged(); };
     const several = picked();
     const bar = h('div', { class: 'row wrap layer-pick' },
       h('button', { type: 'button', class: `btn small${E.pickMode ? ' on' : ''}`, 'aria-pressed': String(!!E.pickMode),
         title: 'Taps on the list and the canvas add or drop layers from the selection (or hold Shift)',
         onclick: () => { E.pickMode = !E.pickMode; renderEditor(); } }, 'Select several'),
-      button('All', () => { const vis = E.layers.filter((l) => !l.mask && !l.draft); E.sel = vis[vis.length - 1] || null; E.multi = vis.slice(0, -1); renderEditor(); }, { cls: 'small' }),
+      button('All', () => { const vis = E.layers.filter((l) => !l.mask && !l.draft && !l.maskOf); E.sel = vis[vis.length - 1] || null; E.multi = vis.slice(0, -1); renderEditor(); }, { cls: 'small' }),
       several.length ? button('None', () => { E.sel = null; E.multi = []; E.pickMode = false; renderEditor(); }, { cls: 'small' }) : null,
-      several.length > 1 ? hint(`${several.length} selected`) : null);
-    const list = layerRowsEl([...E.layers].reverse().map((l) => {
+      several.length > 1 ? button([icon('copy'), 'Group'], () => { E.layers = ST.makeGroup(E.layers, E.groups, several, uid()); E.multi = []; editorChanged(); }, { cls: 'small', title: 'These layers as one group: its own opacity and blend, and they move together in the list' }) : null,
+      several.length > 1 ? hint(`${several.length} selected`) : null,
+      snapBar(['grid', 'rot', 'scale'], () => drawEditorCanvas()));
+    const groupRow = (g) => {
+      const members = E.layers.filter((l) => l.group === g.id && !l.maskOf), allOff = members.every((l) => l.hidden), allLocked = members.every((l) => l.locked);
+      const pct = h('input', { type: 'number', min: 0, max: 100, step: 5, value: Math.round((g.opacity ?? 1) * 100), 'aria-label': `${g.name} opacity (%)`, title: 'Opacity of the group as one', class: 'layer-group-pct',
+        onclick: (e) => e.stopPropagation(), onchange: (e) => { g.opacity = clamp(Number(e.target.value) / 100 || 0, 0, 1); editorChanged(); } });
+      const blendSel = h('select', { 'aria-label': `${g.name} blend`, title: 'Blend of the group as one', onclick: (e) => e.stopPropagation(), onchange: (e) => { g.blend = e.target.value; editorChanged(); } },
+        BLENDS.map(([v, l]) => h('option', { value: v, selected: v === (g.blend || 'normal') }, l)));
+      return {
+        sel: members.length && members.every((l) => several.includes(l)), off: allOff,
+        onclick: () => { E.sel = members[members.length - 1]; E.multi = members.slice(0, -1); E.cropping = false; renderEditor(); },
+        thumb: h('span', { class: 'layer-group-mark' }, icon('copy')), name: g.name, hint: `${members.length} layers`,
+        buttons: [pct, blendSel,
+          iconBtn(g.collapsed ? 'Open the group' : 'Fold the group', icon(g.collapsed ? 'right' : 'chevdown'), () => { g.collapsed = !g.collapsed; editorChanged(); }),
+          iconBtn(allLocked ? 'Unlock the group' : 'Lock the group', icon(allLocked ? 'lock' : 'unlock'), () => { members.forEach((l) => { l.locked = !allLocked; }); editorChanged(); }),
+          iconBtn(allOff ? 'Show the group' : 'Hide the group', allOff ? '◌' : '◉', () => { members.forEach((l) => { l.hidden = !allOff; }); editorChanged(); }),
+          iconBtn('Ungroup', icon('close'), () => { E.layers = ST.ungroup(E.layers, E.groups, g.id); editorChanged(); })],
+      };
+    };
+    const maskBtns = (l) => {
+      const m = E.layers.find((x) => x.maskOf === l.key);
+      if (!m) return [iconBtn('Add a mask: erase on it to hide parts of this layer', icon('contrast'), () => addLayerMask(l))];
+      return [h('button', { type: 'button', class: `icon-btn ico-btn${E.sel === m ? ' on' : ''}`, 'aria-label': 'Paint its mask', title: 'Paint its mask: erase hides, brush shows',
+        onclick: (e) => { e.stopPropagation(); pickOnly(m); renderEditor(); } }, icon('contrast'))];
+    };
+    const list = layerRowsEl(ST.rowsOf(E.layers, E.groups).map(({ group: g, layer: l, in: inGroup }) => {
+      if (g) return groupRow(g);
       const r = ready(l) ? layerRect(l) : null, cropped = l.crop.w < 0.999 || l.crop.h < 0.999;
       const blend = l.blend && l.blend !== 'normal' ? ` · ${BLENDS.find(([v]) => v === l.blend)?.[1].toLowerCase()}` : '';
       return {
+        cls: inGroup ? 'in-group' : '',
         sel: several.includes(l), off: l.hidden || l.broken,
         // (painting the selected layer: tapping it again keeps it, so the brush always has a layer)
         onclick: (ev) => {
@@ -925,11 +1023,34 @@ export function createEditor(cfg) {
         buttons: [
           l.locked ? h('button', { type: 'button', class: 'icon-btn ico-btn on', 'aria-label': 'Unlock', title: 'Locked: tap to unlock',
             onclick: (e) => { e.stopPropagation(); l.locked = false; editorChanged(); } }, icon('lock')) : null,
+          ...maskBtns(l),
           iconBtn(l.hidden ? 'Show' : 'Hide', l.hidden ? '◌' : '◉', () => { l.hidden = !l.hidden; editorChanged(); }),
           iconBtn('Delete layer', icon('trash'), () => { removeLayer(l); renderEditor(); })],
       };
     }), { onReorder: reorder });
     return h('div', {}, bar, list);
+  }
+
+  // A mask for this layer: a painted layer of its own, all showing to start with, as big as the picture (the brush shows, the eraser hides)
+  function addLayerMask(l) {
+    if (!ready(l)) return;
+    const W = l.img.naturalWidth || l.img.width, H = l.img.naturalHeight || l.img.height;
+    const m = paint.addBlank({ w: W, h: H, fill: '#ffffff' });
+    l.key ||= uid();
+    Object.assign(m, { maskOf: l.key, label: `${layerName(l)} mask` });
+    ST.syncMask(m, l);
+    E.layers = ST.normalize(E.layers, E.groups);
+    E.sel = m; E.multi = [];
+    editorChanged();
+  }
+  function maskProps(m) {
+    const o = E.layers.find((x) => x.key === m.maskOf);
+    if (!o) return null;
+    return section(`Mask of ${layerName(o)}`, () => { pickOnly(o); renderEditor(); },
+      help('Paint on the mask with the paint tools: the eraser hides that part of the layer, the brush shows it again. It moves and scales with its layer.'),
+      h('div', { class: 'row wrap' },
+        h('button', { type: 'button', class: `btn small${o.maskOff ? ' on' : ''}`, onclick: () => { o.maskOff = !o.maskOff; editorChanged(); } }, o.maskOff ? 'Switched off' : 'Switch off'),
+        button('Delete the mask', () => { E.layers = E.layers.filter((x) => x !== m); pickOnly(o); editorChanged(); }, { cls: 'small danger' })));
   }
 
   // The panel for two or more selected layers: each change goes to every one of them
@@ -1196,7 +1317,7 @@ export function createEditor(cfg) {
   // The edit as a layered PhotoCraft document: each layer cropped as here and placed where it sits on the canvas
   async function craftEditor(btn) {
     if (paint.unsavedPaint()) await paint.savePaint();   // PhotoCraft reads each layer's file
-    const f = editorFrame(), layers = E.layers.filter((l) => ready(l) && l.name);
+    const f = editorFrame(), layers = E.layers.filter((l) => ready(l) && l.name && !l.maskOf);
     if (!f || !layers.length) return toast('Add some images first', true);
     // PhotoCraft documents take no turns: a turned or mirrored layer goes as a picture of itself, turned, in its box
     const baked = async (l) => {
@@ -1204,7 +1325,7 @@ export function createEditor(cfg) {
       cv.width = Math.max(1, Math.round(b.w)); cv.height = Math.max(1, Math.round(b.h));
       const c = cv.getContext('2d');
       c.imageSmoothingQuality = 'high'; c.translate(-b.x, -b.y);
-      drawLayer(c, { ...l, opacity: 1, blend: 'normal', live: null });
+      drawMasked(c, { ...l, opacity: 1, blend: 'normal', live: null });
       const r = await fetch('/api/paint', { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: await new Promise((res) => cv.toBlob(res, 'image/png')) });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return { name: (await r.json()).name, b };
@@ -1212,8 +1333,8 @@ export function createEditor(cfg) {
     let list;
     try {
       list = await Promise.all(layers.map(async (l) => {
-        const base = { name: layerName(l).replace(/\.[a-z]+$/i, ''), hidden: !!l.hidden };
-        if (G.turned(l)) { const { name, b } = await baked(l); return { ...base, src: { input: name }, crop: { ...FULL }, rect: { x: b.x - f.x, y: b.y - f.y, w: b.w, h: b.h } }; }
+        const base = { name: layerName(l).replace(/\.[a-z]+$/i, ''), hidden: !!l.hidden, opacity: l.opacity ?? 1, blend: l.blend || 'normal' };
+        if (G.turned(l) || maskOfLayer(l)) { const { name, b } = await baked(l); return { ...base, src: { input: name }, crop: { ...FULL }, rect: { x: b.x - f.x, y: b.y - f.y, w: b.w, h: b.h } }; }
         const r = layerRect(l);
         return { ...base, src: { input: l.name }, crop: l.crop, rect: { x: r.x - f.x, y: r.y - f.y, w: r.w, h: r.h } };
       }));
@@ -1288,6 +1409,8 @@ export function createEditor(cfg) {
   function load(payload) {
     editorPause();
     Object.assign(E, fromSaved(payload || {}), { sel: null, multi: [], pickMode: false, cropping: false, aspect: null, guides: [], t: 0 });
+    E.layers = ST.normalize(E.layers, E.groups);
+    stackWas = null;   // (a fresh start for this document's undo)
     poseAt(0);
   }
   const eng = {
@@ -1295,7 +1418,7 @@ export function createEditor(cfg) {
     blob: editorBlob, frame: editorFrame, composeMask, drawLayer, bounds, layerRect, ready, loading: () => E.layers.some((l) => !l.broken && !ready(l)), addImage, pause: editorPause,
     zoom: viewZoom, get paint() { return paint; },
     // the panel's parts, for the host to lay out
-    topRow, layerList, layerProps: () => (picked().length > 1 ? groupProps(picked()) : E.sel ? layerProps(E.sel) : null), picked, animProps, canvasProps, exportProps,
+    topRow, layerList, layerProps: () => (picked().length > 1 ? groupProps(picked()) : E.sel?.maskOf ? maskProps(E.sel) : E.sel ? layerProps(E.sel) : null), picked, animProps, canvasProps, exportProps,
     paintProps: () => paint.paintProps(),
     inpaintProps: () => inpaintSection(eng),
     toolsProps: () => imageToolsSection(eng),

@@ -97,6 +97,7 @@ export function openUseAs(g, index, { before = null } = {}) {
       toast(`${label} is on the Sound tab`);
     })] : k === 'video' ? [go('Its sound onto the timeline', async () =>
       (await import('./media.js')).soundToSoundTab(src, { name: `${g.id}-${g.template}-sound` }), { title: 'Take the clip\'s sound out and put it on the Sound tab\'s timeline' })] : []],
+    ['Character', ['image', 'video', 'mesh', 'splat'].includes(k) ? [go('Give it to a character…', async () => (await import('./charsend.js')).sendToCharacter(g, index, o, toInput))] : []],
     ['Image', k === 'image' ? [go('Open in the Image tab', async () => (await import('./editor.js')).addToEditor((await toInput()).name))]
       : k === 'video' ? [go('First frame in the Image tab', async () => (await import('./editor.js')).addToEditor((await toInput('first')).name)),
         go('Last frame in the Image tab', async () => (await import('./editor.js')).addToEditor((await toInput('last')).name))] : []],

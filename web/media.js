@@ -610,10 +610,11 @@ document.addEventListener('keydown', (e) => {
 export const pngBlob = (cv) => new Promise((res) => cv.toBlob(res, 'image/png'));
 
 // Upload a File/Blob to ComfyUI's input folder, tagged with the open project.
-export function uploadImage(blob, { mp = 0, source = 'upload', filename = 'image.png', multiple = 16 } = {}) {
+export function uploadImage(blob, { mp = 0, source = 'upload', filename = 'image.png', multiple = 16, origin = null } = {}) {
   const fd = new FormData();
   fd.append('file', blob, blob.name || filename); fd.append('mp', mp); fd.append('multiple', multiple);
   fd.append('source', source);
+  if (origin) fd.append('origin', JSON.stringify(origin));
   if (S.project != null) fd.append('project_id', S.project);
   return api('/api/upload', { method: 'POST', form: fd });
 }

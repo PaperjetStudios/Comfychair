@@ -2,6 +2,7 @@
 copy, deleting a run, a picture or a project removes every copy and cache, and the sweep finds old leftovers but
 never a sole copy. Run: .venv/bin/python -m unittest discover tests"""
 import asyncio
+import json
 import os
 import tempfile
 import time
@@ -203,6 +204,151 @@ class Storage(unittest.TestCase):
             self.assertEqual(c.delete(f"/api/projects/{self.pid}", params={"confirm": name}).status_code, 200)
         self.assertFalse((config.INPUT_DIR / Path(mine).name).exists() or (self.inp / mine).exists())
         self.assertTrue((config.INPUT_DIR / Path(shared).name).exists() and (self.inp / shared).exists(), "another project uses it")
+
+    # ---- what's attached: the Board's protection ----
+    def doc(self, kind, payload, name="Mara", did="c1", folder=None):
+        f = config.PROJECTS_DIR / (folder or self.folder) / ".deck" / kind / f"{did}.json"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps({"id": did, "kind": kind, "name": name, "order": 0, "rev": 1, "updated": 0, "payload": payload}))
+        return f
+
+    def test_attachments_see_each_kind_of_reference(self):
+        a, _, _, _ = self.gen(run="r1")
+        b, _, _, _ = self.gen(run="r2")
+        c, _, _, _ = self.gen(run="r3")
+        d, _, _, _ = self.gen(run="r4")
+        pic = f"{config.COMFY_INPUT_SUBFOLDER}/made{time.time_ns()}.png"
+        db.set_input_origin(pic, {"generation": c, "index": 0, "frame": None})
+        self.doc("characters", {"media": [{"src": {"generation": a, "index": 0}}], "cands": [{"id": "x", "gen": b, "index": 0}], "pics": [pic],
+                                "vpending": [{"gen": d, "view": "front"}]})
+        got = storage.attachments()
+        for gid in (a, b, c):
+            self.assertEqual(got[gid][0]["name"], "Mara")
+            self.assertEqual(got[gid][0]["label"], "Character")
+        self.assertNotIn(d, got, "a run still on its way isn't a use")
+
+    def test_a_parent_or_a_trashed_owner_is_no_attachment(self):
+        a, _, _, _ = self.gen(run="r1")
+        self.doc("gen-tabs", {"parent": {"generation": a, "index": 0}}, did="t1")
+        f = self.doc("characters", {"media": [{"src": {"generation": a}}]}, did="c2")
+        trash = f.parent / ".trash"
+        trash.mkdir()
+        f.rename(trash / "c2.123.json")
+        self.assertNotIn(a, storage.attachments())
+
+    def test_an_attached_run_is_refused_until_it_is_detached(self):
+        gid, ours, _, _ = self.gen()
+        f = self.doc("characters", {"media": [{"src": {"generation": gid, "index": 0}}]})
+        with TestClient(main.app) as c:
+            r = c.delete(f"/api/generations/{gid}")
+            self.assertEqual(r.status_code, 409)
+            self.assertIn("Mara", r.json()["detail"]["message"])
+            self.assertEqual(r.json()["detail"]["used_by"][0]["kind"], "characters")
+            self.assertTrue(ours.exists() and db.get_generation(gid))
+            f.unlink()
+            self.assertEqual(c.delete(f"/api/generations/{gid}").status_code, 200)
+        self.assertFalse(ours.exists() or db.get_generation(gid))
+
+    def test_delete_all_takes_only_what_nothing_uses(self):
+        kept, kept_file, _, _ = self.gen(run="r1")
+        free, free_file, _, _ = self.gen(run="r2")
+        self.doc("video-tabs", {"items": [{"src": {"generation": kept, "index": 0}}]}, name="Cut", did="v1")
+        with TestClient(main.app) as c:
+            attached = c.get("/api/generations/attached").json()
+            self.assertEqual(attached[str(kept)][0]["label"], "Video")
+            r = c.post("/api/generations/delete", json={"ids": [kept, free, 99999999]}).json()
+        self.assertEqual(r["deleted"], [free])
+        self.assertEqual([x["id"] for x in r["kept"]], [kept])
+        self.assertTrue(kept_file.exists())
+        self.assertFalse(free_file.exists())
+
+    def test_a_character_holds_its_pictures(self):
+        name = f"{config.COMFY_INPUT_SUBFOLDER}/face{time.time_ns()}.png"
+        touch(config.INPUT_DIR / Path(name).name)
+        db.add_input(name, self.pid)
+        other = db.create_project(f"Other {time.time_ns()}")
+        f = self.doc("characters", {"looks": [{"views": {"front": name}}]}, folder=other["folder"] if "folder" in other else db.project_folder(other["id"]))
+        self.assertTrue(storage.input_used(name), "a character in another project uses it")
+        with TestClient(main.app) as c:
+            r = c.delete("/api/inputs", params={"name": name})
+            self.assertEqual(r.status_code, 409)
+            self.assertIn("Mara", r.json()["detail"])
+            self.assertTrue((config.INPUT_DIR / Path(name).name).exists())
+            pname = db.get_project(self.pid)["name"]
+            self.assertEqual(c.delete(f"/api/projects/{self.pid}", params={"confirm": pname}).status_code, 200)
+            self.assertTrue((config.INPUT_DIR / Path(name).name).exists(), "deleting the project that owned it spares it")
+            f.unlink()
+            self.assertEqual(c.delete("/api/inputs", params={"name": name}).status_code, 200)
+        self.assertFalse((config.INPUT_DIR / Path(name).name).exists())
+
+    def test_a_character_leaving_the_trash_takes_only_its_own_pictures(self):
+        mine, shared = (f"{config.COMFY_INPUT_SUBFOLDER}/{n}{time.time_ns()}.png" for n in ("mine", "shared"))
+        for n in (mine, shared):
+            touch(config.INPUT_DIR / Path(n).name)
+            db.add_input(n, self.pid)
+        self.doc("story-tabs", {"frames": [{"input": shared}]}, did="s1")
+        f = self.doc("characters", {"pics": [mine, shared]}, did="c9")
+        with TestClient(main.app) as c:
+            q = {"project_id": self.pid}
+            self.assertEqual(c.delete("/api/store/characters/c9", params=q).status_code, 200)
+            self.assertTrue((config.INPUT_DIR / Path(mine).name).exists(), "still in the trash: Undo can bring it back")
+            old = next((f.parent / ".trash").glob("c9.*.json"))
+            old.rename(old.with_name(f"c9.{time.time_ns() - 40 * 86400 * 10**9}.json"))
+            self.doc("characters", {}, did="c10")
+            self.assertEqual(c.delete("/api/store/characters/c10", params=q).status_code, 200)   # the next delete clears old trash
+        self.assertFalse((config.INPUT_DIR / Path(mine).name).exists())
+        self.assertTrue((config.INPUT_DIR / Path(shared).name).exists())
+
+    def test_a_voice_a_character_uses_is_refused(self):
+        from app import voice
+        vid = "abc123def456"
+        voice.VOICES.mkdir(parents=True, exist_ok=True)
+        (voice.VOICES / f"{vid}.json").write_text(json.dumps({"id": vid, "name": "V"}))
+        (voice.VOICES / f"{vid}.wav").write_bytes(b"x")
+        f = self.doc("characters", {"voice": vid})
+        with TestClient(main.app) as c:
+            r = c.delete(f"/api/voice/voices/{vid}")
+            self.assertEqual(r.status_code, 409)
+            self.assertIn("Mara", r.json()["detail"])
+            f.unlink()
+            self.assertEqual(c.delete(f"/api/voice/voices/{vid}").status_code, 200)
+        self.assertFalse((voice.VOICES / f"{vid}.wav").exists())
+
+    def test_a_character_brought_in_shares_nothing_with_the_original(self):
+        gid, ours, _, _ = self.gen()
+        name = f"{config.COMFY_INPUT_SUBFOLDER}/face{time.time_ns()}.png"
+        pic = touch(config.INPUT_DIR / Path(name).name)
+        db.add_input(name, self.pid)
+        self.doc("characters", {"looks": [{"id": "main", "name": "Main", "views": {"front": name}, "model": "m1"}], "voice": "v",
+                                "media": [{"id": "m1", "kind": "mesh", "src": {"generation": gid, "index": 0}, "role": "model"}],
+                                "cands": [{"id": "x", "gen": gid, "index": 0}], "vpending": [{"gen": 5}]}, did="c1")
+        other = db.create_project(f"Other {time.time_ns()}")["id"]
+        with TestClient(main.app) as c:
+            d = c.post(f"/api/projects/{other}/characters/copy", json={"from_project": self.pid, "id": "c1"})
+            self.assertEqual(d.status_code, 200, d.text)
+            d = d.json()
+            p = d["payload"]
+            new_pic = p["looks"][0]["views"]["front"]
+            new_gen = p["media"][0]["src"]["generation"]
+            self.assertNotEqual(new_pic, name)
+            self.assertNotEqual(new_gen, gid)
+            self.assertEqual(p["cands"], [])
+            self.assertEqual(p["vpending"], [])
+            self.assertEqual(p["voice"], "v")
+            copied_output = config.PROJECTS_DIR / db.get_generation(new_gen)["outputs"][0]["path"]
+            self.assertTrue(copied_output.exists())
+            self.assertEqual(db.get_generation(new_gen)["project_id"], other)
+            pname = db.get_project(self.pid)["name"]
+            self.assertEqual(c.delete(f"/api/projects/{self.pid}", params={"confirm": pname}).status_code, 200)
+            self.assertFalse(ours.exists() or pic.exists(), "the original's files went with its project")
+            self.assertTrue(copied_output.exists() and (config.INPUT_DIR / Path(new_pic).name).exists(), "the copy is whole")
+            self.assertEqual(c.delete(f"/api/generations/{new_gen}").status_code, 409)
+
+    def test_a_duplicate_project_remaps_gen_references(self):
+        from app import projects
+        fix = projects._relinker("A", "B", {7: 70})
+        self.assertEqual(fix({"cands": [{"gen": 7, "index": 0}], "src": {"generation": 7}, "gen": 8}),
+                         {"cands": [{"gen": 70, "index": 0}], "src": {"generation": 70}, "gen": 8})
 
     def test_sweep_never_takes_a_sole_copy(self):
         gid, ours, theirs, twins = self.gen()

@@ -18,7 +18,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from . import config, db
+from . import config, db, storage
 
 # The one place that says which kinds exist. Add a name here to start storing a new one.
 KINDS = ("gen-tabs", "gen-presets", "edit-tabs", "video-tabs", "sound-tabs", "scene-tabs", "vfx-tabs", "story-tabs", "characters", "objects", "scenes", "tracks", "prefs", "view-marks")
@@ -179,6 +179,8 @@ async def delete_doc(kind: str, did: str, project_id: int | None = None, scope: 
     for old in (d / ".trash").glob("*.json"):
         ts = old.name[:-5].rpartition(".")[2]
         if ts.isdigit() and int(ts) < cutoff:
+            if kind == "characters":   # gone for good: its pictures go too (storage.py), unless something else uses them
+                storage.drop_character_pictures((_read(old) or {}).get("payload") or {})
             old.unlink(missing_ok=True)
             old.with_suffix(".png").unlink(missing_ok=True)
     ts = time.time_ns()

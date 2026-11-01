@@ -157,6 +157,8 @@ export function renderFields() {
   const notes = [];
   if (t.error) notes.push(note(t.error, 'err'));
   for (const w of t.warnings) notes.push(note(w, 'warn'));
+  if (S.workingFor) notes.unshift(h('div', { class: 'working-for' }, icon('person'), h('span', {}, `Working for ${S.workingFor.label}`),
+    iconBtn('Stop working for them', icon('close'), () => { S.workingFor.clear(); renderFields(); }, { class: 'icon-btn' })));
   $('#tplNotes').replaceChildren(...notes);
 
   const openState = store.get('deck.groupsOpen', {});
@@ -1154,6 +1156,7 @@ export async function generate() {
     const pf = S.tpl.fields.find(isMainPrompt);
     const builder = pf && builderState().on ? { parts: S.pb.parts, subjects: S.pb.subjects } : null;
     const gens = await queueRun({ template: S.tpl.id, values, batch: S.batch, builder, timeout: 120000 });   // (what it's made from: the server reads it off the inputs)
+    S.workingFor?.ran(gens);   // made for a character (web/characters.js setWorkingFor): it comes back to them
     const lastGen = gens[gens.length - 1];
     for (const f of S.tpl.fields) {
       if (f.kind !== 'seed') continue;

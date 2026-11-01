@@ -653,7 +653,7 @@ export function layerRowsEl(rows, { onReorder = null } = {}) {
     return g;
   };
   list.append(...rows.map((r, i) =>
-    h('div', { class: 'layer-row' + (onReorder ? ' reorder' : '') + (r.sel ? ' sel' : '') + (r.off ? ' off' : ''), onclick: r.onclick },
+    h('div', { class: 'layer-row' + (onReorder ? ' reorder' : '') + (r.sel ? ' sel' : '') + (r.off ? ' off' : '') + (r.cls ? ` ${r.cls}` : ''), onclick: r.onclick },
       onReorder ? grip(i) : null,
       h('span', { class: 'thumb' }, r.thumb),
       h('div', { class: 'layer-name' }, h('span', {}, r.name), h('span', { class: 'hint' }, r.hint || '')),

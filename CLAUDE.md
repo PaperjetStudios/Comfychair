@@ -16,8 +16,11 @@
     or with its owner.
   - A custom node that receives a file path from another node moves the file rather than copying it, and
     removes that node's other files, as `comfy_nodes/deck_rigsave` does.
-- Deleting a picture (`DELETE /api/inputs`) removes every copy. Deleting a project removes its pictures unless
-  another project's runs or tabs use them.
+- Deleting a picture (`DELETE /api/inputs`) removes every copy, unless a character uses it: that's refused until it's
+  taken out of them. Deleting a project removes its pictures unless another project's runs or saved documents use them.
+- **A run in use can't be deleted.** `storage.attachments` lists what every saved document uses; `DELETE
+  /api/generations/{id}` refuses those with a 409 and `POST /api/generations/delete` keeps them. A new document kind that
+  points at a run with `generation` or `gen`, or at a picture made from one, is covered by this without more code.
 - Settings → Projects → **Clean up leftovers** (`storage.sweep`) handles anything left over:
   - It lists before deleting.
   - It covers only ComfyChair's own folders in ComfyUI.
@@ -29,6 +32,7 @@
 - Every new panel or area uses `layout.js`: `wireSplitters()` for resizable areas, `maximizable()` for a full-screen
   toggle and `sideNav()` for a side panel's icon tabs.
 - Every transform gets a grid and snapping (`gizmo.js` `snap`/`snapBar`, `snap3`/`snapBar3`).
+- A layer stack's rules (groups, masks, undo states) live in `web/layer-stack.js`; a character's in `web/char-model.js`.
 
 ## Working on it
 

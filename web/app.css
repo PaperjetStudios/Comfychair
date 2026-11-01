@@ -773,6 +773,9 @@ body:has(.text-pop:not(.hidden)) .toast { z-index: 63; }
 .tile .pin.on { color: var(--accent); }
 .tile-len { position: absolute; top: 8px; left: 8px; padding: 2px 7px; border-radius: var(--r); background: #000b; color: #fff; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; pointer-events: none; }
 .board.selecting .tile .tile-len, .tile.marked .tile-len { display: none; }
+.tile-used { position: absolute; bottom: 34px; right: 8px; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: #000b; color: #fff; pointer-events: none; }
+.kept-list { display: flex; flex-direction: column; gap: 8px; max-height: 50vh; overflow: auto; }
+.kept-row { display: flex; flex-direction: column; gap: 4px; }
 .tile-meta { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 8px 6px; font-size: var(--fs-xs); color: #ddd; background: linear-gradient(transparent, #000c); pointer-events: none; }
 .tile .tick { position: absolute; top: 6px; left: 6px; width: 34px; height: 34px; border-radius: 50%; display: none; place-items: center; font-weight: 700; border: 2px solid #fff; background: #000a; color: transparent; }
 .board.selecting .tile .tick { display: grid; }
@@ -1743,6 +1746,54 @@ button.ch-view-empty:hover { color: var(--text); }
 .ch-sheet { position: relative; margin: 8px 0; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: #000; }
 .ch-sheet img { width: 100%; display: block; }
 .ch-audio { width: 100%; height: 36px; margin-top: 6px; }
+.ch-cand-img video { width: 100%; height: 100%; object-fit: contain; display: block; }
+.ch-cand-img .ch-noface { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); }
+.working-for { display: flex; align-items: center; gap: 8px; padding: 6px 8px; margin-bottom: 8px; border: 1px solid var(--accent); border-radius: var(--r); }
+.working-for span { flex: 1; min-width: 0; }
+/* the layers dock under the Story canvas */
+.st-layers-grip { flex: none; height: 14px; margin: -4px 0; cursor: row-resize; touch-action: none; display: grid; place-items: center; }
+.st-layers-grip::after { content: ''; width: 56px; height: 4px; border-radius: 2px; background: var(--muted); opacity: .5; }
+.st-layers-grip:hover::after, .st-layers-grip.dragging::after { background: var(--accent); opacity: 1; }
+@media (pointer: coarse) { .st-layers-grip { height: 24px; margin: -8px 0; } }
+.st-layers { flex: none; height: 210px; display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 8px; overflow: hidden; }
+.st-layers.shut { display: none; }
+.st-layers-list, .st-layers-props { overflow: auto; min-height: 0; overscroll-behavior: contain; touch-action: pan-y; }
+@media (max-width: 700px) { .st-layers { grid-template-columns: minmax(0, 1fr); overflow: auto; } .st-layers-list, .st-layers-props { overflow: visible; } }
+.layer-row.in-group { margin-left: 16px; }
+.layer-pick .gz-bar { position: static; max-width: none; flex-basis: 100%; }
+.layer-group-mark { width: 44px; height: 44px; display: grid; place-items: center; color: var(--muted); }
+.layer-group-pct { width: 56px; }
+/* the Characters view on the Story tab */
+#storyStage.cast { display: block; overflow: auto; padding: 12px; }
+.cs-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; padding-right: 44px; }
+.cs-head h2 { margin: 0; font-size: 20px; flex: 1; min-width: 120px; }
+.cs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.cs-card { display: grid; grid-template-rows: auto auto; padding: 0; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: var(--bg); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.cs-card:hover { border-color: var(--accent); }
+.cs-card-pic { aspect-ratio: 3 / 4; display: grid; place-items: center; background: var(--surface-2); color: var(--muted); }
+.cs-card-pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cs-card-text { display: grid; gap: 2px; padding: 8px; min-width: 0; }
+.cs-card-text span { color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cs-block { margin-bottom: 16px; }
+.cs-block > h3 { margin: 0 0 8px; font-size: var(--fs-sm, 13px); color: var(--muted); font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.cs-looks { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; }
+.cs-media .layer-thumb, .cs-thumb { width: 72px; height: 72px; flex: none; border-radius: var(--r); overflow: hidden; display: grid; place-items: center; background: var(--surface-2); color: var(--muted); }
+.cs-thumb img, .cs-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cs-part { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: var(--r); margin-bottom: 8px; }
+.cs-part.stale { border-color: var(--warn, #c90); }
+.cs-stale { color: var(--warn, #c90); font-size: var(--fs-xs); }
+.cs-line-scroll { overflow-x: auto; }
+.cs-line { display: flex; align-items: flex-end; gap: 20px; width: max-content; min-width: 100%; padding: 8px 8px 0; background-image: repeating-linear-gradient(to top, var(--line-2) 0 1px, transparent 1px var(--cm10, 40px)); background-repeat: no-repeat; background-size: 100% 100%; background-position: 0 -84px; }
+.cs-fig { position: relative; flex: none; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; }
+.cs-fig img { display: block; }
+.cs-fig-box { display: grid; place-items: center; background: var(--surface-2); color: var(--muted); border-radius: var(--r) var(--r) 0 0; min-width: 60px; }
+.cs-fig-lbl { font-size: var(--fs-xs); text-align: center; padding: 2px 4px; }
+.cs-fig-foot { height: 84px; flex: none; }
+.cs-fig-move { display: flex; justify-content: center; }
+.cs-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.cs-appear { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.cs-score { padding: 1px 6px; border-radius: var(--r); font-size: var(--fs-xs); background: var(--surface-3); }
+.cs-score.bad { background: var(--bad); color: #fff; }
 .ch-mention { display: grid; gap: 4px; min-width: 0; }
 .ch-suggest { gap: 4px; }
 .ch-chip-face { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; overflow: hidden; margin-right: 6px; vertical-align: middle; background: var(--surface-3); }

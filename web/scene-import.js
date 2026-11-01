@@ -339,15 +339,20 @@ async function objectRun(templateId, values, what) {
   const { queueRun, waitGen } = await import('./make.js');
   const [g] = await queueRun({ template: templateId, values });
   toast(`${what}: queued as #${g.id}. It takes a while on the GPU.`);
+  if (forCharacter && what === 'The 3D object') forCharacter.queued(g, 'model', templateId, { ...OBJ });   // (recorded now: the run is found again after a reload)
+  if (forCharacter && what === 'The splat') forCharacter.queued(g, 'splat', templateId, { ...OBJ });
   const done = await waitGen(g.id);
   return done?.outputs ? done : api(`/api/generations/${g.id}`, { busy: false });
 }
 
 const glbOf = (g) => (g?.outputs || []).find((o) => /\.glb$/i.test(o.filename));
 
+// a model being made for a character goes back to them (their To review), not into the open scene
+let forCharacter = null;
 async function land(g, label) {
   const out = glbOf(g);
   if (!out) throw new Error('That run made no 3D model (a GLB)');
+  if (forCharacter) return;
   await addModel(out.url, label, { gen: g.id, index: g.outputs.indexOf(out) });
 }
 
@@ -361,7 +366,7 @@ async function makeIdolSplat(name, label) {
     const g = await objectRun(SPLAT_TPL, values, 'The splat');
     const i = (g.outputs || []).findIndex((o) => o.kind === 'splat' || /\.(ply|spz|ksplat|splat)$/i.test(o.filename));
     if (i < 0) throw new Error('That run made no splat file');
-    await addSplat(g.outputs[i].url, label, { gen: g.id, index: i });
+    if (!forCharacter) await addSplat(g.outputs[i].url, label, { gen: g.id, index: i });
     closeSheet();
   } catch (e) { toast(e.message, true); }
 }
@@ -509,8 +514,11 @@ async function checkViews(picks, go, back) {
 // the sheet: a board of the four views (Front, Left, Back, Right). A slot takes any photo (the picker crops too), one
 // picture can be split across the slots, and what is filled decides the run: one photo alone, or the views together.
 const VIEW_ROLES = ['Front', 'Left', 'Back', 'Right'];
-export function openObjectSheet(name, label = '', picks = { Front: name }) {
-  const again = () => openObjectSheet(name, label, picks);   // (the views picked so far stay)
+// { character }: { queued(run, slot, template, settings) } gets the final run and the model goes to them; { settings }: start from these
+export function openObjectSheet(name, label = '', picks = { Front: name }, opts = {}) {
+  forCharacter = opts.character || null;
+  if (opts.settings) Object.assign(OBJ, opts.settings);
+  const again = () => openObjectSheet(name, label, picks, { character: opts.character });   // (the views picked so far stay)
   const num = (key, min, max) => h('input', { type: 'number', min, max, value: OBJ[key], placeholder: key === 'seed' ? 'random' : null,
     onchange: (e) => { OBJ[key] = e.target.value === '' && key === 'seed' ? '' : Math.max(min, Math.min(max, Math.round(+e.target.value || min))); } });
   const pick = (role) => {

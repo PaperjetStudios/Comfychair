@@ -60,6 +60,9 @@ def _safe(s: str, n: int = 50) -> str:
 
 # ---- PhotoCraft ----
 
+PHOTO_BLENDS = {"multiply": "Multiply", "screen": "Screen", "overlay": "Overlay"}
+
+
 def photo_commands(canvas: dict, layers: list[dict]) -> tuple[dict, list[tuple[str, dict]]]:
     """(file.new params, [(command, params)]) for photocraft-cli run. layers (bottom first) carry "path" (already
     cropped to what shows), "rect" {x, y, w, h} in canvas px, "name" and "hidden"."""
@@ -73,7 +76,12 @@ def photo_commands(canvas: dict, layers: list[dict]) -> tuple[dict, list[tuple[s
         cmds.append(("file.placeEmbedded", {"path": str(l["path"]), "scale": round(100 * r["w"] / max(1, iw), 4),
                                             "fit": False, "smartObject": True,
                                             "center": [round(r["x"] + r["w"] / 2, 2), round(r["y"] + r["h"] / 2, 2)]}))
-        cmds.append(("layer.setProps", {"name": str(l.get("name") or "Layer")[:120], "visible": not l.get("hidden")}))
+        props = {"name": str(l.get("name") or "Layer")[:120], "visible": not l.get("hidden")}
+        if isinstance(l.get("opacity"), (int, float)) and l["opacity"] < 1:
+            props["opacity"] = max(0.0, float(l["opacity"]))
+        if l.get("blend") in PHOTO_BLENDS:   # (the Image tab's Add has no name PhotoCraft is known to take: it goes as Normal)
+            props["blend"] = PHOTO_BLENDS[l["blend"]]
+        cmds.append(("layer.setProps", props))
     return new, cmds
 
 

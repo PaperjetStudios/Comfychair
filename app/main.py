@@ -733,6 +733,12 @@ async def generations(project_id: int | None = None, limit: int = 60, before: in
     return db.list_generations(project_id, min(limit, 200), before, edit_tab, status)
 
 
+@app.get("/api/generations/attached")
+async def generations_attached():
+    """{run id: [what uses it]} for the Board's badges and filters. The whole index: a run's owner can be in another project."""
+    return {str(k): v for k, v in (await asyncio.to_thread(storage.attachments)).items()}
+
+
 @app.get("/api/generations/{gid}")
 async def generation(gid: int):
     g = db.get_generation(gid)
@@ -753,9 +759,43 @@ async def generation_workflow(gid: int):
 
 @app.delete("/api/generations/{gid}")
 async def delete_generation(gid: int):
+    """A run nothing uses, for good. One a saved document uses is refused: 409 with what uses it (storage.attachments)."""
     g = db.get_generation(gid)
     if not g:
         raise HTTPException(404)
+    owners = (await asyncio.to_thread(storage.attachments)).get(gid)
+    if owners:
+        raise HTTPException(409, {"message": f"In use: {storage.used_by_text(owners)}", "used_by": owners})
+    await remove_generation(g)
+    return {"ok": True}
+
+
+@app.post("/api/generations/delete")
+async def delete_generations(body: dict = Body(...)):
+    """{ids}: delete these runs in one go, keeping any that something uses -> {deleted: [id], kept: [{id, used_by}], failed: [id]}."""
+    index = await asyncio.to_thread(storage.attachments)
+    deleted, kept, failed = [], [], []
+    for gid in body.get("ids") or []:
+        if not isinstance(gid, int) or isinstance(gid, bool):
+            raise HTTPException(400, "Bad id")
+        if gid in index:
+            kept.append({"id": gid, "used_by": index[gid]})
+            continue
+        g = db.get_generation(gid)
+        if not g:
+            continue
+        try:
+            await remove_generation(g)
+            deleted.append(gid)
+        except Exception as e:
+            log.warning("Couldn't delete run %s: %s", gid, e)
+            failed.append(gid)
+    return {"deleted": deleted, "kept": kept, "failed": failed}
+
+
+async def remove_generation(g: dict):
+    """A run, for good: its row, every copy of its files and its ComfyUI history entry."""
+    gid = g["id"]
     folder = db.project_folder(g["project_id"])
     db.delete_generation(gid)
     storage.drop_view_marks(folder, gid)
@@ -774,7 +814,6 @@ async def delete_generation(gid: int):
     if g.get("prompt_id") and not g["prompt_id"].startswith("edit-"):
         await comfy.forget(g["prompt_id"])
     await broadcast({"type": "deck_generation_deleted", "data": {"id": gid}})
-    return {"ok": True}
 
 
 # ---- images -----------------------------------------------------------------
@@ -792,7 +831,7 @@ def _project(v):
 
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...), mp: float = Form(0), multiple: int = Form(8), crop: str = Form(""),
-                 project_id: str = Form(""), source: str = Form("upload")):
+                 project_id: str = Form(""), source: str = Form("upload"), origin: str = Form("")):
     data = await file.read(MAX_IMAGE_UPLOAD + 1)
     if len(data) > MAX_IMAGE_UPLOAD:
         raise HTTPException(413, f"That image is over {MAX_IMAGE_UPLOAD >> 20} MB")
@@ -802,6 +841,13 @@ async def upload(file: UploadFile = File(...), mp: float = Form(0), multiple: in
     except Exception as e:
         raise HTTPException(400, f"Couldn't read that image: {e}")
     name = await upload_prepared(png, _project(project_id), source[:20])
+    if origin:   # (a picture finished in the browser from a run's output: Mark views. It counts as made from that run)
+        try:
+            o = json.loads(origin)
+        except ValueError:
+            o = None
+        if isinstance(o, dict) and isinstance(o.get("generation"), int) and db.get_generation(o["generation"]):
+            db.set_input_origin(name, {"generation": o["generation"], "index": o.get("index", 0), "frame": o.get("frame")})
     return {"name": name, "width": w, "height": h}
 
 
@@ -1204,6 +1250,9 @@ async def delete_input(name: str):
     that used it keep their record; running them again needs another picture."""
     if not name.startswith(config.COMFY_INPUT_SUBFOLDER + "/") or ".." in name.split("/"):
         raise HTTPException(400, "That isn't one of ComfyChair's pictures")
+    users = await asyncio.to_thread(storage.characters_using, lambda p: name in storage.character_pictures(p))
+    if users:
+        raise HTTPException(409, f"In use by {', '.join(users)}: remove it from them first")
     freed = await asyncio.to_thread(storage.delete_input, name)
     await broadcast({"type": "deck_input_deleted", "data": {"name": name}})
     return {"ok": True, "freed": freed}
