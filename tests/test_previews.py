@@ -70,3 +70,36 @@ class Rotation(unittest.TestCase):
         self.assertNotEqual(out, rot)                         # a copy with the turn baked in
         baked = videoedit.probe(Path(out))
         self.assertEqual((baked["width"], baked["height"], baked["rotation"]), (360, 640, 0))
+
+class ModelShots(unittest.TestCase):
+    JPEG = b"\xff\xd8\xff\xe0 a picture"
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        from app import main, storage
+        self.c, self.storage = TestClient(main.app), storage
+        self.model = config.MEDIA_DIR / "aaaa0001_t.glb"
+        self.model.write_bytes(b"glTF model")
+        self.u = f"/files/media/{self.model.name}"
+        self.addCleanup(self.model.unlink, missing_ok=True)
+
+    def test_kept_once_drawn_and_gone_with_the_model(self):
+        self.assertEqual(self.c.get("/api/preview/shot", params={"u": self.u}).status_code, 204)
+        self.assertEqual(self.c.post("/api/preview/shot", params={"u": self.u}, content=self.JPEG).status_code, 200)
+        r = self.c.get("/api/preview/shot", params={"u": self.u})
+        self.assertEqual((r.status_code, r.content), (200, self.JPEG))
+        made = list(previews.DIR.glob(f"{self.storage.tag(self.model.resolve())}-*"))
+        self.assertEqual(len(made), 1)
+        self.storage.drop_caches(self.model.resolve())
+        self.assertFalse(made[0].exists())
+        self.assertEqual(self.c.get("/api/preview/shot", params={"u": self.u}).status_code, 204)
+
+    def test_refuses_what_is_not_a_model_shot(self):
+        self.assertEqual(self.c.post("/api/preview/shot", params={"u": self.u}, content=b"not a jpeg").status_code, 400)
+        self.assertEqual(self.c.post("/api/preview/shot", params={"u": self.u}, content=b"\xff\xd8\xff" + bytes(previews.MAX_SHOT)).status_code, 413)
+        self.assertEqual(self.c.get("/api/preview/shot", params={"u": "/files/media/nope.glb"}).status_code, 404)
+        pic = config.MEDIA_DIR / "aaaa0002_t.png"
+        pic.write_bytes(b"x")
+        self.addCleanup(pic.unlink, missing_ok=True)
+        self.assertEqual(self.c.get("/api/preview/shot", params={"u": f"/files/media/{pic.name}"}).status_code, 400)
+

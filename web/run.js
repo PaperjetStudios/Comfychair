@@ -9,7 +9,7 @@ import {
 } from './ui.js';
 import { S, fmtT, isMine, loadProjects, switchTab, emitServer, onServer } from './core.js';
 import { genLabel, mediaEl, openImagePicker, outputCard, uploadImage } from './media.js';
-import { factsOf, isMedia, kindDef, kindTile } from './kinds.js';
+import { factsOf, isMedia, kindDef, kindTile, kindOf, madeBy } from './kinds.js';
 import { addToPrompt, builderState, loadTemplates, renderFields, saveBuilder, selectTemplate, setVal, stop } from './generate.js';
 import { queueRun } from './make.js';
 
@@ -488,10 +488,11 @@ export async function openGeneration(id) {
   const facts = h('p', { class: 'hint gen-facts' });   // what it is and what's worth knowing (kinds.js)
   const bar = h('div');   // the buttons, for the output on show
   const { takeButtons } = await import('./useas.js');
+  const views = g.outputs.some((x) => ['mesh', 'splat'].includes(kindOf(x))) ? await import('./modelview.js') : null;
   const draw = () => {
     const o = g.outputs[idx];
-    big.replaceChildren(!o ? placeholder(g.error || g.status) : isMedia(o) ? mediaEl(o) : kindTile(o, g));
-    facts.textContent = o ? [kindDef(o).name, factsOf(o)].filter(Boolean).join(' · ') : '';
+    big.replaceChildren(!o ? placeholder(g.error || g.status) : isMedia(o) ? mediaEl(o) : kindOf(o) === 'mesh' ? views.modelViewer(o) : kindOf(o) === 'splat' ? views.splatViewer(o) : kindTile(o, g));
+    facts.textContent = o ? [kindDef(o).name, !isMedia(o) && madeBy(g) ? `made with ${madeBy(g)}` : null, factsOf(o)].filter(Boolean).join(' · ') : '';
     outputThumbs(strip, g, idx, (i) => { idx = i; draw(); });
     bar.replaceChildren(actions(buttons()));
   };

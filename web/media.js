@@ -2,7 +2,7 @@ import {
   $, h, store, api, toast, openSheet, closeSheet, sheetStillOpen, button, iconBtn, actions, fileButton, seg, placeholder, note, mediaCard, field, pickButtons,
 } from './ui.js';
 import { fmtTime } from './playback.js';
-import { cardPicture, kindTile } from './kinds.js';
+import { cardPicture, kindTile, madeBy } from './kinds.js';
 import { S, CURRENT_EDIT as CURRENT, PICKER_SOURCES as SOURCES, inputUrl, previewUrl, switchTab, thumbUrl } from './core.js';
 import { heightGrip, maximizable, zoomPan } from './layout.js';
 import { fmtDur, runTime } from './run-state.js';
@@ -19,7 +19,7 @@ export async function projectOutputs(kinds) {
   return items.sort((x, y) => y.t - x.t);
 }
 // a run by its template, an imported file by its name
-export const genLabel = (g) => `#${g.id} ${g.template === 'import' && g.params?.label ? g.params.label : g.template}`;
+export const genLabel = (g) => `#${g.id} ${g.template === 'import' && g.params?.label ? g.params.label : madeBy(g) || g.template}`;
 // a card's picture: a thumbnail, or a note for sound
 export const cardMedia = (o, g = null) => cardPicture(o, g);   // (kinds.js: a still, a waveform, or what the kind is)
 

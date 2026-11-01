@@ -4,6 +4,8 @@
   clip   a video at most w px wide, 8 fps, no sound, quick to load: the Board plays these while a tile is on screen
   wave   a sound's waveform: a PNG w px wide and a third as tall, in the accent colour on a see-through background
 
+A 3D model's screenshot is drawn in the browser (web/modelview.js) and kept here: GET and POST /api/preview/shot?u=<file url>.
+
 Made on first ask and cached in data/thumbs/previews (named after the file, its size and time, and w), so a
 changed file gets a new preview. Two are made at a time, so a full Board can't swamp the machine.
 """
@@ -14,7 +16,7 @@ import subprocess
 from pathlib import Path
 from urllib.parse import unquote
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 
 from . import config, imageprep, storage, videoedit
@@ -25,6 +27,8 @@ DIR.mkdir(parents=True, exist_ok=True)
 ROOTS = {"/files/projects/": config.PROJECTS_DIR, "/files/media/": config.MEDIA_DIR, "/files/generations/": config.GEN_DIR,
          "/files/library/": config.LIBRARY_DIR}
 VIDEO = {".mp4", ".webm", ".mov", ".mkv", ".m4v", ".gif"}
+MODELS = {".glb", ".gltf", ".obj", ".fbx"}
+MAX_SHOT = 3 * 1024 * 1024
 AUDIO = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".opus"}
 WAVE_COLOUR = "0xe9b44c"   # web/app.css --accent
 FPS = 8
@@ -46,7 +50,7 @@ def _key(p: Path, w: int, kind: str) -> Path:
     st = p.stat()
     h = hashlib.sha1(f"{p}:{st.st_size}:{st.st_mtime_ns}:{w}:{kind}".encode()).hexdigest()[:12]
     # (it starts with the source's tag, so deleting the source deletes its previews: storage.drop_caches)
-    return DIR / f"{storage.tag(p)}-{h}.{ {'still': 'jpg', 'clip': 'mp4', 'wave': 'png'}[kind] }"
+    return DIR / f"{storage.tag(p)}-{h}.{ {'still': 'jpg', 'clip': 'mp4', 'wave': 'png', 'shot': 'jpg'}[kind] }"
 
 
 def make_still(p: Path, out: Path, w: int):
@@ -113,6 +117,37 @@ async def preview(u: str, w: int = 320, kind: str = "still"):
                     raise HTTPException(415, f"Couldn't preview that: {e}")
     return FileResponse(out, media_type=TYPES[kind],
                         headers={"Cache-Control": "max-age=604800"})
+
+
+def _model(u: str) -> Path:
+    p = source(u)
+    if p.suffix.lower() not in MODELS:
+        raise HTTPException(400, "Only 3D models have a screenshot")
+    return p
+
+
+@router.get("/api/preview/shot")
+async def model_shot(u: str):
+    """A model's saved screenshot; 204 until a browser has drawn one."""
+    out = _key(_model(u), 0, "shot")
+    if not out.is_file():
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})
+    return FileResponse(out, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+
+
+@router.post("/api/preview/shot")
+async def save_model_shot(u: str, request: Request):
+    """Keep the screenshot a browser drew (a JPEG). It starts with the model's tag, so it goes with the model."""
+    out = _key(_model(u), 0, "shot")
+    raw = await request.body()
+    if len(raw) > MAX_SHOT:
+        raise HTTPException(413, "That screenshot is too big")
+    if raw[:3] != b"\xff\xd8\xff":
+        raise HTTPException(400, "A screenshot is a JPEG")
+    tmp = out.with_suffix(".part")
+    tmp.write_bytes(raw)
+    tmp.rename(out)
+    return {"ok": True}
 
 
 async def warm(urls: list[str]):

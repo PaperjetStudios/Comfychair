@@ -633,6 +633,13 @@ function galleryGo(d) {
   GAL.idx = n; galleryRender(true);
 }
 
+// a 3D model or splat in the gallery: the viewer, loaded the first time one is shown (three.js is big)
+function modelSlot(o) {
+  const slot = h('div', { class: 'model-view' }, h('span', { class: 'hint' }, 'Loading…'));
+  import('./modelview.js').then((m) => { if (slot.isConnected) slot.replaceWith((kindOf(o) === 'splat' ? m.splatViewer : m.modelViewer)(o, { maxBtn: false })); }).catch((e) => toast(e.message, true));
+  return slot;
+}
+
 function galleryRender(newMedia = false) {
   const el = GAL.el, cur = GAL.items[GAL.idx];
   if (!el || !cur) return;
@@ -647,7 +654,7 @@ function galleryRender(newMedia = false) {
   if (newMedia || GAL.key !== cur.key) {
     main.querySelectorAll('video, audio').forEach((v) => v.pause());
     galleryZoom();
-    main.replaceChildren(o.kind === 'video' ? galleryVideo(o) : o.kind === 'audio' ? galleryAudio(o) : o.kind === 'image' ? h('img', { src: o.url, alt: o.filename, draggable: false }) : kindTile(o, cur.g));
+    main.replaceChildren(o.kind === 'video' ? galleryVideo(o) : o.kind === 'audio' ? galleryAudio(o) : o.kind === 'image' ? h('img', { src: o.url, alt: o.filename, draggable: false }) : ['mesh', 'splat'].includes(kindOf(o)) ? modelSlot(o) : kindTile(o, cur.g));
     for (const d of [-1, 1]) {   // warm the cache for the neighbours
       const nb = GAL.items[GAL.idx + d];
       if (nb && nb.o.kind === 'image') new Image().src = nb.o.url;
@@ -691,9 +698,9 @@ function galleryZoom() { GZ?.reset(); }
 function wireGallerySwipe(main) {
   const media = () => main.firstElementChild;
   GZ = zoomPan(main, media, {
-    canZoom: () => !media()?.classList.contains('gal-audio'),
+    canZoom: () => !media()?.classList.contains('gal-audio') && !media()?.classList.contains('model-view'),
     // a sound's play button and scrub bar keep their touches, and so does the bottom of an unzoomed video (its controls)
-    skip: (e) => !!e.target.closest('.gal-audio-ui') || (GZ.s() === 1 && media()?.tagName === 'VIDEO' && e.clientY > media().getBoundingClientRect().bottom - 50),
+    skip: (e) => !!e.target.closest('.gal-audio-ui, .model-view') || (GZ.s() === 1 && media()?.tagName === 'VIDEO' && e.clientY > media().getBoundingClientRect().bottom - 50),
     swipe: (dir) => galleryGo(dir),
     onChange: (s) => GAL.el?.classList.toggle('zoomed', s !== 1) });
 }

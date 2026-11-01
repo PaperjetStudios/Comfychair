@@ -8,7 +8,7 @@
 import * as THREE from './vendor/three.module.min.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip, field, seg, info, rangeField, mediaCard, placeholder, iconBtn } from './ui.js';
-import { thumbUrl } from './core.js';
+import { inputUrl, thumbUrl } from './core.js';
 import { C, OBJ as OBJ_CH, R, SC, current, newObject, namesFor, save, selItem, write } from './scene-data.js';
 import { heightOf as figureHeight } from './figure.js';
 import { addModeSection } from './scene-modes.js';
@@ -473,6 +473,39 @@ export async function rigModel(o, template, opts = {}) {
   catch (e) { toast(e.message, true); }
 }
 
+// A view the picture's edge cuts off makes a model with that part missing, and it costs a GPU run to find out: look before
+// making, say which, and let it through if it's meant. A picture that can't be read is no reason to stop.
+async function cutViews(picks) {
+  const { cutEdges } = await import('./edge-check.js');
+  const out = [];
+  for (const [view, name] of Object.entries(picks)) {
+    if (!name) continue;
+    try {
+      const img = new Image();
+      img.src = inputUrl(name);
+      await img.decode();
+      const k = Math.min(1, 512 / Math.max(img.naturalWidth, img.naturalHeight)), w = Math.max(4, Math.round(img.naturalWidth * k)), hh = Math.max(4, Math.round(img.naturalHeight * k));
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = hh;
+      const c = cv.getContext('2d', { willReadFrequently: true });
+      c.drawImage(img, 0, 0, w, hh);
+      const edges = cutEdges(c.getImageData(0, 0, w, hh).data, w, hh);
+      if (edges.length) out.push({ view, name, edges });
+    } catch { /* (the run will say if it's really unreadable) */ }
+  }
+  return out;
+}
+async function checkViews(picks, go, back) {
+  const cuts = await cutViews(picks), { edgeWords } = await import('./edge-check.js');
+  if (!cuts.length) return go();
+  openSheet(h('h3', {}, cuts.length > 1 ? 'These views look cut off' : 'This view looks cut off'),
+    help('The subject reaches the edge of the picture, so what is past the edge won\'t be in the model. Go back and use a picture with space all round it. If it is meant (a bust, or a false alarm), make it anyway.'),
+    h('div', { class: 'obj-views' }, cuts.map((c) => h('div', { class: 'obj-slot filled' },
+      h('div', { class: 'obj-slot-pic' }, h('img', { src: thumbUrl(c.name, 320), alt: '' })),
+      h('div', { class: 'obj-slot-bar' }, h('span', {}, `${c.view}: ${edgeWords(c.edges)}`))))),
+    actions(button('Make it anyway', () => { closeSheet(); go(); }, { cls: 'primary' }), button('Back', back)));
+}
+
 // the sheet: a board of the four views (Front, Left, Back, Right). A slot takes any photo (the picker crops too), one
 // picture can be split across the slots, and what is filled decides the run: one photo alone, or the views together.
 const VIEW_ROLES = ['Front', 'Left', 'Back', 'Right'];
@@ -507,12 +540,12 @@ export function openObjectSheet(name, label = '', picks = { Front: name }) {
     section('Its views', null,
       h('div', { class: 'obj-views' }, VIEW_ROLES.map(slot)),
       h('div', { class: 'row wrap' }, button('Split one picture…', split, { cls: 'small', title: 'Draw a box round each view in one picture' }),
-        n === 1 ? button('Make a splat (Idol)', () => makeIdolSplat(only, label || only),
+        n === 1 ? button('Make a splat (Idol)', () => checkViews(picks, () => makeIdolSplat(only, label || only), again),
           { cls: 'small', title: 'Idol: a Gaussian splat of the object from this one photo, with the sides the photo doesn\'t show. Quick, and shown in the 3D tab as a splat' }) : null,
-        n === 1 ? button('Make its other views first', () => makeFromViews(only, label || only),
+        n === 1 ? button('Make its other views first', () => checkViews(picks, () => makeFromViews(only, label || only), again),
           { cls: 'small', title: 'An orbit sheet of the object (front, side, back, other side), then a model from those four views' }) : null),
-      n >= 2 ? button(`Make it from ${n} views`, () => makeFromPicked(picks, label || picks[filled[0]]), { cls: 'primary' })
-        : button(n ? 'Make it from this photo' : 'Pick a photo first', () => makeFromPhoto(only, label || only), { cls: 'primary', disabled: !n,
+      n >= 2 ? button(`Make it from ${n} views`, () => checkViews(picks, () => makeFromPicked(picks, label || picks[filled[0]]), again), { cls: 'primary' })
+        : button(n ? 'Make it from this photo' : 'Pick a photo first', () => checkViews(picks, () => makeFromPhoto(only, label || only), again), { cls: 'primary', disabled: !n,
           title: `${OBJ.model === 'trellis' && hasTrellis() ? 'TRELLIS.2' : 'Pixal3D'} makes a model from the one photo (quickest)` }),
       help('Tap a slot to pick a photo for that side (the picker can crop it first). One photo makes a model by itself; two or more are used together, for a rounder one. Four views 90° apart, the object the same size in each, on a plain background, work best. Split one picture cuts a character sheet into the slots. Left is the character\'s left.')),
     section('Settings', null,

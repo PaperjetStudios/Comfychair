@@ -1,6 +1,7 @@
 import { h, icon } from './ui.js';
 import { previewUrl, thumbUrl } from './core.js';
 import { fmtTime } from './playback.js';
+export { madeBy } from './made-by.js';
 
 // ---------------------------------------------------------------------------
 // kinds: what each kind of thing the app makes or holds is called, how it's drawn and what's worth knowing
@@ -50,6 +51,25 @@ export function kindTile(o, g = null) {
     h('span', { class: 'kind-name' }, d.name), h('span', { class: 'kind-facts' }, factsOf(o)));
 }
 
+// A 3D model's card: its tile until its screenshot is there. Once on screen it asks for the saved one, and if there is none the
+// browser draws it (modelview.js, one at a time) and keeps it. A model that can't be drawn keeps its tile.
+export const shotUrl = (url) => `/api/preview/shot?u=${encodeURIComponent(url)}`;
+function modelCard(o, g) {
+  const tile = kindTile(o, g);
+  if (!o.url?.startsWith('/files/') || typeof IntersectionObserver === 'undefined') return tile;
+  const show = (onFail) => {
+    const img = h('img', { src: shotUrl(o.url), alt: o.filename || '', draggable: false,
+      onload: () => tile.replaceWith(img), onerror: onFail });
+  };
+  const seen = new IntersectionObserver((entries) => {
+    if (!entries.some((e) => e.isIntersecting)) return;
+    seen.disconnect();
+    show(() => import('./modelview.js').then((m) => m.ensureShot(o.url)).then((ok) => { if (ok) show(() => {}); }).catch(() => {}));
+  }, { rootMargin: '200px' });
+  seen.observe(tile);
+  return tile;
+}
+
 // a card's picture (History, takes, pickers, the Board): the light preview still, a sound's waveform, or the kind's tile
 export function cardPicture(o, g = null, w = 320, { live = false } = {}) {
   const k = kindOf(o);
@@ -62,5 +82,6 @@ export function cardPicture(o, g = null, w = 320, { live = false } = {}) {
   if (k === 'image') return h('img', { src: o.url, alt: o.filename || '', loading: 'lazy' });
   if (k === 'video') return h('video', { src: `${o.url}#t=0.1`, muted: true, playsInline: true, preload: 'metadata' });
   if (k === 'audio') return waveArt(o, w, 'card-wave');
+  if (k === 'mesh') return modelCard(o, g);
   return kindTile(o, g);
 }
