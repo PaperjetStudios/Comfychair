@@ -3,6 +3,7 @@
 // (by distance to the bone's own point, 1/d^4 falloff, four at most), enough to keep a crudely edited
 // skeleton moving the mesh sensibly. Pure three.js, no DOM — tests/reskin.test.mjs runs it.
 import * as THREE from './vendor/three.module.min.js';
+import { toCreasedNormals } from './vendor/BufferGeometryUtils.js';
 
 const V = new THREE.Vector3();
 
@@ -81,6 +82,40 @@ export function disposeTree(root) {
     }
     if (c.isSkinnedMesh) once(c.skeleton);
   });
+}
+
+// Is this geometry faceted? Auto-riggers write a normal per face (UniRig builds its mesh with no smoothing at all), so a smooth
+// model comes back in facets. True when there are no normals, or (nearly) every corner's normal is its face's own.
+export function isFaceted(geo) {
+  const pos = geo.attributes.position, nor = geo.attributes.normal, idx = geo.index;
+  if (!pos) return false;
+  if (!nor) return true;
+  const n = (idx ? idx.count : pos.count) - ((idx ? idx.count : pos.count) % 3);
+  const at = (i) => (idx ? idx.getX(i) : i), a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), f = new THREE.Vector3(), v = new THREE.Vector3();
+  let same = 0, all = 0;
+  for (let i = 0; i < n; i += 3) {
+    a.fromBufferAttribute(pos, at(i)); b.fromBufferAttribute(pos, at(i + 1)); c.fromBufferAttribute(pos, at(i + 2));
+    f.subVectors(c, b).cross(v.subVectors(a, b));
+    if (f.lengthSq() < 1e-24) continue;
+    f.normalize();
+    for (let k = 0; k < 3; k++) { all++; if (v.fromBufferAttribute(nor, at(i + k)).normalize().dot(f) > 0.999) same++; }
+  }
+  return all > 0 && same / all > 0.98;
+}
+
+// A loaded model's faceted meshes given smooth normals, kept sharp where faces meet at more than creaseAngle (a real edge).
+// Normals a file authored stay as they are. Skin weights and UVs are kept. Returns how many meshes changed.
+export function smoothFaceted(root, creaseAngle = Math.PI / 3) {
+  let n = 0;
+  root?.traverse((c) => {
+    if (!c.isMesh || !isFaceted(c.geometry)) return;
+    const was = c.geometry, made = toCreasedNormals(was, creaseAngle);
+    if (made !== was) was.dispose();
+    c.geometry = made;
+    for (const m of [].concat(c.material || [])) if (m.flatShading) { m.flatShading = false; m.needsUpdate = true; }
+    n++;
+  });
+  return n;
 }
 
 // the bones in parents-before-children order, from the ones that have no bone parent

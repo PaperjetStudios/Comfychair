@@ -599,7 +599,7 @@ export function syncMeshes() {
   for (const [id, m] of R.meshes) if (!ids.has(id)) { scene.remove(m); R.meshes.delete(id); m.userData.dispose?.(); }
   for (const o of SC.objects) {  // a figure that changed body is built again
     const m = R.meshes.get(o.id);
-    if (m?.userData.rig && m.userData.body !== FIGURE.bodyOf(o.body)) { scene.remove(m); R.meshes.delete(o.id); }
+    if (m?.userData.rig && m.userData.body !== FIGURE.bodyOf(o.body)) { scene.remove(m); R.meshes.delete(o.id); m.userData.dispose?.(); }
   }
   for (const o of SC.objects) {
     const m = R.meshes.get(o.id) || makeObject(o);

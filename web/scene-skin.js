@@ -13,7 +13,7 @@ import { importFit } from './scale-math.js';
 import { button, field, h, help, hint, numSlider, section, toast } from './ui.js';
 import { chainTo, reach } from './ik.js';
 import { mirrorChans } from './rig-map.js';
-import { boneOrder, disposeTree, reskinAll } from './reskin.js';
+import { boneOrder, disposeTree, reskinAll, smoothFaceted } from './reskin.js';
 
 const gltf = new GLTFLoader();
 const extOf = (url) => (String(url).split(/[?#]/)[0].match(/\.(\w+)$/) || [])[1]?.toLowerCase() || '';
@@ -27,8 +27,9 @@ const turned = () => Math.abs(SK.x) + Math.abs(SK.y) + Math.abs(SK.z) > 0;
 
 async function loadFile(o) {
   const ext = (o.ext || extOf(o.url)).toLowerCase();
-  if (ext === 'fbx') return new (await import('./vendor/FBXLoader.js')).FBXLoader().loadAsync(o.url);
-  return (await gltf.loadAsync(o.url)).scene;
+  const obj = ext === 'fbx' ? await new (await import('./vendor/FBXLoader.js')).FBXLoader().loadAsync(o.url) : (await gltf.loadAsync(o.url)).scene;
+  smoothFaceted(obj);
+  return obj;
 }
 
 // the even scale that makes it a usable size in metres (glTF is metres; an FBX says its unit)

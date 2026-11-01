@@ -11,7 +11,7 @@ import { GLTFLoader } from './vendor/GLTFLoader.js';
 import * as FIGURE from './figure.js';
 import { R, SC, TYPES, makers, newObject, save } from './scene-data.js';
 import { mapBones, restPositions } from './rig-map.js';
-import { disposeTree } from './reskin.js';
+import { disposeTree, smoothFaceted } from './reskin.js';
 import { button, h, help, hint, section, store, toast, toggle } from './ui.js';
 
 const hideMat = new THREE.MeshBasicMaterial({ visible: false });   // the hidden rig's own volumes
@@ -97,8 +97,9 @@ export function restOffsets(map, byName, group) {
 // a skinned model file as three.js objects, in its bind pose
 async function loadFile(o) {
   const ext = (o.ext || extOf(o.url)).toLowerCase();
-  if (ext === 'fbx') return new (await import('./vendor/FBXLoader.js')).FBXLoader().loadAsync(o.url);
-  return (await gltf.loadAsync(o.url)).scene;
+  const obj = ext === 'fbx' ? await new (await import('./vendor/FBXLoader.js')).FBXLoader().loadAsync(o.url) : (await gltf.loadAsync(o.url)).scene;
+  smoothFaceted(obj);
+  return obj;
 }
 
 // where each bone sits in the layer's own metres (the wrapper's fit to the figure's height and its turn kept, so
@@ -198,6 +199,7 @@ export function makeRigged(o) {
   for (const m of rig.meshes) m.visible = false;     // the model draws itself; the rig only poses it
   group.add(rig.root);
   group.userData.rig = rig;
+  group.userData.body = FIGURE.bodyOf(o.body);   // (syncMeshes builds a rig again when this differs: unset, every click reloaded the file)
   group.userData.atFrame = () => sync(o, group);
   // (selecting it paints nothing: the view's figure clay on the hidden rig showed it once the skin had loaded)
   group.userData.paint = () => {};

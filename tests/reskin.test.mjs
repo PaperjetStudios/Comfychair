@@ -66,3 +66,28 @@ assert.equal(R.reskinAll([], [root]), 0);
   assert.deepEqual(hits.sort(), ['geo', 'mat', 'skel', 'tex']);
 }
 console.log('reskin ok');
+
+// a faceted skinned model comes out smooth, weights kept; authored normals are left alone
+{
+  const positions = [0, 0, 0, 1, 0, 0, 0, 1, 0.2,  1, 0, 0, 1, 1, 0, 0, 1, 0.2];
+  const geo2 = new THREE.BufferGeometry();
+  geo2.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo2.computeVertexNormals();   // (no index: each corner gets its face's normal)
+  geo2.setAttribute('skinWeight', new THREE.Float32BufferAttribute(new Array(24).fill(0.25), 4));
+  assert.ok(R.isFaceted(geo2), 'face normals read as faceted');
+  const mesh2 = new THREE.Mesh(geo2, new THREE.MeshStandardMaterial({ flatShading: true }));
+  assert.equal(R.smoothFaceted(mesh2), 1);
+  assert.equal(mesh2.material.flatShading, false);
+  assert.ok(!R.isFaceted(mesh2.geometry), 'smooth after');
+  assert.equal(mesh2.geometry.attributes.skinWeight.count, 6, 'weights kept');
+  assert.equal(R.smoothFaceted(mesh2), 0, 'already smooth: left alone');
+  // two faces meeting at 90 degrees: a real edge stays sharp
+  const sharp = new THREE.BufferGeometry();
+  sharp.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0,  1, 0, 0, 1, 0, -1, 0, 0, -1], 3));
+  sharp.computeVertexNormals();
+  const box = new THREE.Mesh(sharp, new THREE.MeshStandardMaterial());
+  R.smoothFaceted(box);
+  const nz = box.geometry.attributes.normal;
+  assert.ok(Math.abs(nz.getZ(1)) > 0.99 && Math.abs(nz.getZ(3)) < 0.01, 'the corner on the edge keeps each face\'s own normal');
+  assert.equal(R.isFaceted(new THREE.BufferGeometry()), false, 'no positions: nothing to do');
+}
