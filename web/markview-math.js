@@ -1,6 +1,6 @@
 // Mark views' sums, with no DOM (markviews.js is the sheet; tests/markviews.test.mjs checks these).
 export const ANGLES = ['Front', 'Front 3/4 left', 'Left', 'Back 3/4 left', 'Back', 'Back 3/4 right', 'Right', 'Front 3/4 right',
-  'Top', 'Bottom', 'Face front', 'Face 3/4', 'Face side', 'Detail'];
+  'Top', 'Bottom', 'Face front', 'Face 3/4', 'Face side', 'Chest', 'Back detail', 'Legs', 'Feet', 'Detail'];
 // the steps a mark goes through, in this order
 export const STEPS = [['up', 'Upscale'], ['delight', 'De-light'], ['cut', 'Cut out']];
 export const stepsOn = (on) => STEPS.map(([k]) => k).filter((k) => on[k]);
@@ -23,7 +23,7 @@ export function packFrom(results) {
   return out;
 }
 // the character and object sheets (an H3 clip with a picture cut from it)
-export const SHEET_TEMPLATES = new Set(['deck-h3-charsheet', 'deck-h3-charsheet-bust', 'deck-h3-charsheet-bust4', 'deck-h3-objectsheet']);
+export const SHEET_TEMPLATES = new Set(['deck-h3-charsheet', 'deck-h3-charsheet-body', 'deck-h3-charsheet-bust', 'deck-h3-charsheet-bust4', 'deck-h3-objectsheet']);
 // a sheet's run, or its upscale or regenerate (a new run that says it was made from a sheet)
 export const isSheetRun = (g) => SHEET_TEMPLATES.has(g.template) || !!g.params?.sheet;
 // which output Mark views works on, or -1: an H3 run's clip (an upscale's "h3 ..." runs too), from the clip or from the sheet picture beside it

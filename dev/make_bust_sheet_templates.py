@@ -47,3 +47,21 @@ make('deck-h3-charsheet-bust', 8, [3, 45, 80, 100, 138, 174], [
 make('deck-h3-charsheet-bust4', 5.5, [3, 36, 64, 114], [
     (4.0, f"{FACE} from the front, neutral expression, looking into the lens."),
 ], 4, 'h3bust4')
+
+# The body sheet, for detail where a model needs it: the full sheet's whole orbit of the full figure, then the body instead of the
+# face. 8 images, 13 s: orbit 6 s + chest, back, legs and feet, 1.75 s each, a frame from the middle of each
+WHOLE = BASE['7']['inputs']['prompt'].split('\n[Shot 2]')[0]   # (its first lines: who it is, and the orbit)
+d = json.loads(json.dumps(BASE))
+d['7']['inputs']['prompt'] = (
+    f"{WHOLE}"
+    "\n[Shot 2] At 00:06.000, the camera cuts to a close-up of <Subject 1>'s chest from the front, from the collarbones to the waist, showing every detail of the outfit."
+    "\n[Shot 3] At 00:07.750, the camera cuts to a close-up of <Subject 1>'s back from directly behind, from the shoulders to the waist, showing every detail of the outfit."
+    "\n[Shot 4] At 00:09.500, the camera cuts to a shot of <Subject 1>'s legs from the front, from the hips to the ankles, both legs fully in frame."
+    "\n[Shot 5] At 00:11.250, the camera cuts to a low close-up of <Subject 1>'s feet and footwear from the front, both feet fully in frame, on the floor."
+    f"{TAIL}")
+d['7']['inputs']['length'] = 13 * 24 + 6
+d['40']['inputs']['indexes'] = '4,54,96,120,165,207,249,291'
+d['41']['inputs']['max_images_per_row'] = 4
+for k in ('15', '42'):
+    d[k]['inputs']['filename_prefix'] = 'comfydeck/h3body'
+(ROOT / 'deck-h3-charsheet-body.json').write_text(json.dumps(d, indent=1) + '\n')

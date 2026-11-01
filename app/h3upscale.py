@@ -212,6 +212,7 @@ SHEET_ANGLES = {4: ("Front", "Left", "Back", "Face front"),
                 6: ("Front", "Left", "Back", "Right", "Face front", "Face 3/4"),
                 8: ("Front", "Left", "Back", "Right", "Face front", "Face 3/4", "Face side", "Detail")}
 OBJECT_ANGLES = ("Front", "Left", "Back", "Right", "Detail", "Detail", "Top", "Detail")
+BODY_ANGLES = ("Front", "Left", "Back", "Right", "Chest", "Back detail", "Legs", "Feet")   # (deck-h3-charsheet-body)
 
 
 def sheet_marks(wf: dict) -> list[dict]:
@@ -222,7 +223,8 @@ def sheet_marks(wf: dict) -> list[dict]:
         return []
     frames = [int(x) for x in re.findall(r"\d+", str(picks["inputs"].get("indexes") or ""))]
     is_object = "is the object shown" in str(wf[nid]["inputs"].get("prompt") or "")
-    names = OBJECT_ANGLES if is_object and len(frames) == 8 else SHEET_ANGLES.get(len(frames), ())
+    is_body = "<Subject 1>'s feet" in str(wf[nid]["inputs"].get("prompt") or "")
+    names = (BODY_ANGLES if is_body else OBJECT_ANGLES) if (is_object or is_body) and len(frames) == 8 else SHEET_ANGLES.get(len(frames), ())
     return [{"label": names[i] if i < len(names) else "Detail", "frame": f} for i, f in enumerate(frames)]
 
 

@@ -52,7 +52,7 @@ test('repairing: a moved mark needs making again, the others keep their pictures
   assert.deepEqual(madeOf(moved), [{ label: 'Front', frame: 4, name: 'a' }]);
 });
 test('the Board\'s Sheets section: sheets and what was made from them', () => {
-  for (const template of ['deck-h3-charsheet', 'deck-h3-charsheet-bust', 'deck-h3-charsheet-bust4', 'deck-h3-objectsheet']) assert.ok(isSheetRun({ template, params: {} }), template);
+  for (const template of ['deck-h3-charsheet', 'deck-h3-charsheet-body', 'deck-h3-charsheet-bust', 'deck-h3-charsheet-bust4', 'deck-h3-objectsheet']) assert.ok(isSheetRun({ template, params: {} }), template);
   assert.ok(isSheetRun({ template: 'h3 sheet upscale', params: { sheet: true } }));
   assert.ok(isSheetRun({ template: 'h3 regenerate', params: { sheet: true } }));
   assert.ok(!isSheetRun({ template: 'h3 upscale', params: {} }));
