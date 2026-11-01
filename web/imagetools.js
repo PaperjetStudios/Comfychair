@@ -84,12 +84,35 @@ async function keptPart(l) {
   return { name: up.name, px: [cv.width, cv.height] };
 }
 
+// The tools whose result has its layer's framing, so the layer's mask fits it
+const KEEPS_FRAMING = new Set(['up', 'detail', 'delight']);
+// a layer's mask as it is now, its kept part at its own pixels (painting on it during the run doesn't change it); null if it has none
+function maskAsSent(eng, l) {
+  const m = eng.E.layers.find((x) => x.maskOf === l.key && eng.ready(x));
+  if (!m) return null;
+  const W = m.img.naturalWidth || m.img.width, H = m.img.naturalHeight || m.img.height, c = l.crop, cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.round(c.w * W)); cv.height = Math.max(1, Math.round(c.h * H));
+  cv.getContext('2d').drawImage(m.img, c.x * W, c.y * H, c.w * W, c.h * H, 0, 0, cv.width, cv.height);
+  return cv;
+}
+// that mask at a result's pixels, as a new input: what a mask shares with its layer is scale and crop, so it must be the result's size
+async function maskForResult(src, r) {
+  if (!src.mask) return {};
+  const cv = document.createElement('canvas');
+  cv.width = r.width; cv.height = r.height;
+  const c = cv.getContext('2d');
+  c.imageSmoothingQuality = 'high';
+  c.drawImage(src.mask, 0, 0, cv.width, cv.height);
+  const up = await uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: 'mask.png', multiple: 1 });
+  return { mask: up.name, ...(src.was.maskOff && { maskOff: true }) };
+}
+
 // what the tool works on: a layer (null: every layer together). { name (an input), rect (where it sits on the canvas before
-// any turn), layer (or null), was (the layer's place when sent: its turn goes on the result), px }. A model sees a layer unturned.
-async function sourceOf(eng, l) {
+// any turn), layer (or null), was (the layer's place when sent: its turn goes on the result), mask (its mask when sent, for a tool in KEEPS_FRAMING), px }. A model sees a layer unturned.
+async function sourceOf(eng, l, o) {
   if (l) {
     const part = plainCrop(l.crop) ? { name: l.name, px: [l.img.naturalWidth, l.img.naturalHeight] } : await keptPart(l);
-    return { ...part, rect: eng.layerRect(l), layer: l, was: { ...l } };
+    return { ...part, rect: eng.layerRect(l), layer: l, was: { ...l }, mask: KEEPS_FRAMING.has(o.kind) ? maskAsSent(eng, l) : null };
   }
   const f = eng.frame(), pic = document.createElement('canvas');
   if (!f || !eng.compose(pic)) throw new Error('Add a picture first');
@@ -177,7 +200,7 @@ async function land(eng, o, src, done, cell) {
     return eng.changed(), eng.render();
   } else {
     const r = await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } });
-    const made = eng.addImage(r.name, { label: o.kind === 'up' ? `Upscaled ${r.width}×${r.height}` : o.kind === 'delight' ? 'De-lit' : o.kind === 'detail' ? `Detail (${dm().label})` : o.label, ...placed(src, rect.x, rect.y, rect.w, r) });
+    const made = eng.addImage(r.name, { label: o.kind === 'up' ? `Upscaled ${r.width}×${r.height}` : o.kind === 'delight' ? 'De-lit' : o.kind === 'detail' ? `Detail (${dm().label})` : o.label, ...placed(src, rect.x, rect.y, rect.w, r), ...(await maskForResult(src, r)) });
     if (layer && (o.kind === 'up' || o.kind === 'detail' || o.kind === 'delight') && ST.hide) layer.hidden = true;
     if (layer && o.kind === 'up' && ST.hide) {   // the selection moves from the hidden original to its upscale (a layer picked since the run began stays picked)
       const E = eng.E;
@@ -201,7 +224,7 @@ async function run(eng) {
     await eng.paint.savePaint();
     const list = ST.scope === 'selected' ? targets(eng) : [null];
     if (!list.length) return toast('Select a layer first', true);
-    for (const l of list) await runOne(eng, o, t, tab, await sourceOf(eng, l));   // (each selected layer is its own run, queued one after another)
+    for (const l of list) await runOne(eng, o, t, tab, await sourceOf(eng, l, o));   // (each selected layer is its own run, queued one after another)
   } catch (e) { toast(e.message, true); } finally { b.done(); }
 }
 
@@ -316,7 +339,7 @@ export function imageToolsSection(eng) {
     select, help(`${o.help} ${on}`.trim()),
     !t ? hint(`${tplId(o)} isn't installed yet`) : null,
     field('Run on', seg([['whole', 'Whole picture'], ['selected', 'Selected layers']], ST.scope, (v) => { ST.scope = v; save(); eng.render(); }),
-      help('Whole picture sends every visible layer together. Selected layers runs on each selected layer alone, one run each, with the result over that layer. A cropped layer sends its kept part. A turned or mirrored layer is sent unturned, and its result takes the same turn.')),
+      help('Whole picture sends every visible layer together. Selected layers runs on each selected layer alone, one run each, with the result over that layer. A cropped layer sends its kept part. A turned or mirrored layer is sent unturned, and its result takes the same turn. A masked layer is sent whole: an Upscale, Detail or De-light result gets a copy of its mask, and other tools\' results get none.')),
     ST.scope === 'selected' && !many ? hint('Select a layer first') : null,
     o.prompt ? field('Find', textArea(() => ST.prompt, (v) => { ST.prompt = v; save(); }, { rows: 2, label: 'What to find', placeholder: 'The red car, people, the sky' })) : null,
     o.depth ? field('Detail', seg([['large', 'Fine'], ['small', 'Fast']], ST.depthModel, (v) => { ST.depthModel = v; save(); eng.render(); }),

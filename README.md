@@ -653,6 +653,8 @@ hiding, blend and groups. The chips over the list add a grid, turn steps and siz
 selected layer alone, one run each). The result lands as a layer on top. On a selected layer the result sits over that
 layer: a cropped layer sends only its kept part, and a turned or mirrored layer is sent unturned and its result takes
 the same turn.
+A masked layer is sent whole, without its mask. An **Upscale**, **Detail pass** or **De-light** result gets a copy of the
+mask as it was when sent, at the result's size; other tools' results get none.
 - **Maps:** **Depth map**, **Canny edges**, **Scribble** and **Pose**. Depth has **Detail** (Fine: the Large model,
   sharpest; Fast: the Small one, about five times quicker). Canny and Scribble have **Amount** (More lines, Normal,
   Fewer). Pose can read with DWPose (CPU) or SDPose (GPU, holds up better on hard poses, up to 2 people). These

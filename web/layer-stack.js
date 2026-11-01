@@ -90,6 +90,14 @@ export function syncMask(m, o) {
   m.rotation = o.rotation; m.flipX = o.flipX; m.flipY = o.flipY;
 }
 
+// A mask on an owner that has none yet: the owner gets a key if it lacks one, the mask takes its geometry. Returns the new list.
+export function attachMask(layers, groups, owner, mask, key) {
+  owner.key ??= key;
+  mask.maskOf = owner.key;
+  syncMask(mask, owner);
+  return normalize(layers.includes(mask) ? layers : [...layers, mask], groups);
+}
+
 // the grid: every pct% of the frame's width, from its corner
 export const gridStep = (frameW, pct) => Math.max(1, frameW * pct / 100);
 export const onGrid = (v, from, step) => from + Math.round((v - from) / step) * step;

@@ -1399,9 +1399,12 @@ export function createEditor(cfg) {
   }
 
   // a picture as a new layer on top (o: label, fit 'cover' or 'contain' to fill the canvas whatever its size, locked...)
-  function addImage(name, o = {}) {
+  // (o.mask: a picture of the new layer's own size, added with it as its mask, one undo step)
+  function addImage(name, { mask, ...o } = {}) {
     const l = { name, crop: { ...FULL }, scale: 1, opacity: 1, hidden: false, ...o };
-    E.layers.push(l); editorChanged();
+    E.layers.push(l);
+    if (mask) E.layers = ST.attachMask(E.layers, E.groups, l, { name: mask, label: `${layerName(l)} mask`, opacity: 1, hidden: false, blend: 'normal' }, uid());
+    editorChanged();
     return l;
   }
 

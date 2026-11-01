@@ -52,6 +52,17 @@ test('a mask stays right above its owner and goes with it', () => {
   o.x = 5; o.rotation = 30; S.syncMask(m, o);
   assert.equal(m.x, 5); assert.equal(m.rotation, 30);
 });
+test('a mask attached to a new layer sits right above it, with its geometry', () => {
+  const t = L('t'), o = L(undefined, { x: 7, y: 8, scale: 0.5, rotation: 30, flipX: true, crop: { x: 0, y: 0, w: 1, h: 1 } }), m = { name: 'mask.png' };
+  const out = S.attachMask([o, t], [], o, m, 'new-key');
+  assert.equal(o.key, 'new-key');
+  assert.equal(m.maskOf, 'new-key');
+  assert.deepEqual(out, [o, m, t]);
+  assert.deepEqual([m.x, m.y, m.scale, m.rotation, m.flipX, m.crop], [7, 8, 0.5, 30, true, o.crop]);
+  const keyed = L('k'), m2 = { name: 'm2.png' };
+  S.attachMask([keyed], [], keyed, m2, 'unused');
+  assert.equal(keyed.key, 'k', 'a key it has stays');
+});
 test('undo puts the stack back on the same layer objects, with their pixels', () => {
   const a = L('a'), b = L('b'), E = { layers: [a, b], groups: [] };
   const was = S.stackState(E.layers, E.groups);
