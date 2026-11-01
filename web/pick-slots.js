@@ -12,6 +12,19 @@ export function slotsFrom(fields, key, values) {
 }
 
 // sel: a Map of key -> item, in the order they were ticked. False when there is no room for it.
+// the frames chosen from one clip: a frame goes on once, in the order chosen, while there's room. False: no room.
+export function addFrame(list, frame, room = Infinity) {
+  if (list.some((x) => x.frame === frame.frame)) return true;
+  if (list.length >= room) return false;
+  list.push(frame);
+  return true;
+}
+// where a video is at time t, as a frame index (ffmpeg counts from 0), not past its last one
+export const frameIndex = (t, fps, frames = 0) => {
+  const n = Math.max(0, Math.round(t * (fps || 24)));
+  return frames > 0 ? Math.min(frames - 1, n) : n;
+};
+
 export function tick(sel, item, on, limit = Infinity) {
   if (!on) { sel.delete(item.key); return true; }
   if (sel.has(item.key)) return true;

@@ -1,7 +1,7 @@
 // node --test tests/pick_slots.test.mjs: ticking several pictures in the image picker and the slots they fill
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { slotsFrom, tick, tickRange } from '../web/pick-slots.js';
+import { addFrame, frameIndex, slotsFrom, tick, tickRange } from '../web/pick-slots.js';
 
 const refs = ['a', 'b', 'c', 'd'].map((key) => ({ key, kind: 'image', group: 'References' }));
 const fields = [{ key: 'first', kind: 'image', group: 'First frame' }, { key: 'p', kind: 'text', group: 'References' }, ...refs];
@@ -42,4 +42,19 @@ test('a range ticks in the direction clicked and passes over what needs a choice
   sel = new Map();
   assert.equal(tickRange(sel, items, 0, 3, 2), false);
   assert.deepEqual([...sel.keys()], ['a', 'c']);
+});
+
+test('frames from a clip: once each, in order, while there is room', () => {
+  const l = [];
+  assert.equal(addFrame(l, { frame: 5 }, 2), true);
+  assert.equal(addFrame(l, { frame: 5 }, 2), true, 'the same frame again changes nothing');
+  assert.equal(addFrame(l, { frame: 1 }, 2), true);
+  assert.equal(addFrame(l, { frame: 9 }, 2), false);
+  assert.deepEqual(l.map((x) => x.frame), [5, 1]);
+});
+test('a time is a frame index, not past the last', () => {
+  assert.equal(frameIndex(1, 24), 24);
+  assert.equal(frameIndex(0.02, 24), 0);
+  assert.equal(frameIndex(10, 24, 100), 99);
+  assert.equal(frameIndex(1, 0), 24, 'no rate known: 24');
 });

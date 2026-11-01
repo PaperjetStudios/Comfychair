@@ -7,7 +7,7 @@ import { S, CURRENT_EDIT as CURRENT, PICKER_SOURCES as SOURCES, inputUrl, previe
 import { heightGrip, maximizable, zoomPan } from './layout.js';
 import { fmtDur, runTime } from './run-state.js';
 import { fetchHistory as loadHistory } from './generation-data.js';
-import { tick, tickRange } from './pick-slots.js';
+import { tick, tickRange, addFrame, frameIndex } from './pick-slots.js';
 import { draggingPicture, dropKind, droppedFiles } from './drop-files.js';
 
 // This project's finished outputs of the given kinds, newest first: [{ g, o, i, t }]
@@ -335,6 +335,77 @@ export function pickFrame({ url, title = 'Pick a frame', fps = 24, back = null, 
   });
 }
 
+// Frames out of a clip for a picture input. room: how many fit (1: Use this frame; more: Add this frame, as many as fit, then Done).
+// Resolves with [{ frame (index), t, blob (the frame as shown, only asked for by wantBlob), thumb }], or null for Back. Last frame: the clip's end, as a pick by itself.
+export function pickFrames({ url, title = 'Pick a frame', fps = 24, frames = 0, room = 1, wantBlob = false }) {
+  const many = room > 1;
+  return new Promise((resolve) => {
+    const v = h('video', { src: `${url}#t=0.001`, muted: true, playsInline: true, preload: 'auto', class: 'frame-video' });
+    const slider = h('input', { type: 'range', min: 0, max: 0, step: 'any', value: 0, 'aria-label': 'Time' });
+    const lbl = h('span', { class: 'timecode' }, fmtTime(0));
+    const list = [];
+    const strip = h('div', { class: 'frame-strip' });
+    const doneBtn = button('Done', () => finish(list.length ? list : null), { cls: 'primary' });
+    const seek = (t) => { v.currentTime = Math.max(0, Math.min(v.duration || 0, t)); };
+    const step = (n) => { v.pause(); seek((frameIndex(v.currentTime, fps, frames) + n + 0.5) / fps); };
+    const finish = (out) => { closeSheet(); resolve(out); };
+    const draw = () => {
+      strip.replaceChildren(...list.map((x) => h('span', { class: 'frame-chip' },
+        h('button', { type: 'button', class: 'frame-chip-img', 'aria-label': `Go to frame ${x.frame}`, title: `Frame ${x.frame}`, onclick: () => seek(x.t) }, h('img', { src: x.thumb, alt: '' })),
+        h('span', { class: 'frame-chip-n' }, `${x.frame}`),
+        iconBtn(`Take out frame ${x.frame}`, '✕', () => { list.splice(list.indexOf(x), 1); draw(); }, { class: 'icon-btn st-frame-x' }))));
+      doneBtn.firstChild.textContent = list.length ? `Done (${list.length})` : 'Done';
+      doneBtn.disabled = !list.length;
+    };
+    v.addEventListener('loadedmetadata', () => { slider.max = v.duration; });
+    v.addEventListener('timeupdate', () => { slider.value = v.currentTime; lbl.textContent = `${fmtTime(v.currentTime, fps)} / ${fmtTime(v.duration, fps)} · frame ${frameIndex(v.currentTime, fps, frames)}`; });
+    v.addEventListener('error', () => toast("Couldn't load that video", true));
+    slider.addEventListener('input', () => { v.pause(); seek(Number(slider.value)); });
+    // the frame on show: its index and a small picture (and the whole frame, for a clip the server can't cut by index)
+    const grabNow = async () => {
+      if (!v.videoWidth) { toast('The video is still loading', true); return null; }
+      v.pause();
+      if (v.seeking) await new Promise((r) => v.addEventListener('seeked', r, { once: true }));
+      const k = Math.min(1, 200 / Math.max(v.videoWidth, v.videoHeight)), small = document.createElement('canvas');
+      small.width = Math.max(1, Math.round(v.videoWidth * k)); small.height = Math.max(1, Math.round(v.videoHeight * k));
+      small.getContext('2d').drawImage(v, 0, 0, small.width, small.height);
+      const out = { frame: frameIndex(v.currentTime, fps, frames), t: v.currentTime, thumb: small.toDataURL('image/jpeg', 0.8) };
+      if (wantBlob) {
+        const cv = document.createElement('canvas');
+        cv.width = v.videoWidth; cv.height = v.videoHeight;
+        cv.getContext('2d').drawImage(v, 0, 0);
+        out.blob = await new Promise((r) => cv.toBlob(r, 'image/png'));
+      }
+      return out;
+    };
+    const lastFrame = async () => {
+      if (!many) return finish([{ frame: 'last', t: 0, thumb: null }]);
+      if (!v.duration) return toast('The video is still loading', true);
+      seek(v.duration);
+      await new Promise((r) => { if (v.seeking) v.addEventListener('seeked', r, { once: true }); else r(); });
+      const f = await grabNow();
+      if (!f) return;
+      if (!addFrame(list, { ...f, frame: 'last' }, room)) return toast(`There's room for ${room} here: take one out first`, true);
+      draw();
+    };
+    const add = async () => {
+      const f = await grabNow();
+      if (!f) return;
+      if (!many) return finish([f]);
+      if (!addFrame(list, f, room)) return toast(`There's room for ${room} here: take one out first`, true);
+      draw();
+    };
+    openSheet(h('h3', {}, title), h('div', { class: 'media-big' }, v), slider,
+      h('div', { class: 'row frame-bar' }, iconBtn('Back one frame', '⏮', () => step(-1)), lbl, iconBtn('Forward one frame', '⏭', () => step(1))),
+      many ? strip : null,
+      actions(button(many ? 'Add this frame' : 'Use this frame', add, { cls: many ? '' : 'primary' }),
+        many ? doneBtn : null,
+        !wantBlob ? button('Last frame', lastFrame, { cls: 'small' }) : null,
+        button('Back', () => finish(null), { cls: 'ghost' })));
+    draw();
+  });
+}
+
 // ---------------------------------------------------------------------------
 // image picker: a gallery of ComfyUI's input images and of history outputs, plus upload.
 // Whatever is picked ends up as an image in ComfyUI's input folder, so onPick gets its name.
@@ -387,13 +458,29 @@ export function openImagePicker(opts) {
       inputs = null; toast('Deleted'); draw();
     } catch (e) { toast(e.message, true); }
   };
-  const historyGet = async (g, i) => {
+  const historyGet = async (g, i, frame = 'last') => {
     const r = await api(`/api/generations/${g.id}/to-input`, { method: 'POST',
-      body: { index: i, frame: 'last', mp: mp(), multiple: 16 } });
+      body: { index: i, frame, mp: mp(), multiple: 16 } });
     return { name: r.name, info: r };
   };
   const fromHistory = async (g, i) => {
     try { const r = await historyGet(g, i); picked(r.name, r.info); } catch (e) { toast(e.message, true); }
+  };
+  const roomLeft = () => (multi ? limit - sel.size : 1);
+  // a clip's frames, by the room this input has: one is used straight away; several are ticked, each made only if it's added
+  const framesFrom = async (g, i, o) => {
+    const room = roomLeft();
+    if (room < 1) return full();
+    const list = await pickFrames({ url: o.url, title: genLabel(g), fps: o.fps || 24, frames: o.frames || 0, room });
+    if (list && !multi) {
+      try { const r = await historyGet(g, i, list[0].frame); picked(r.name, r.info); } catch (e) { toast(e.message, true); openImagePicker(opts); }
+      return;
+    }
+    if (list) for (const f of list) {
+      tick(sel, { key: `g${g.id}.${i}@${f.frame}`, title: `${genLabel(g)} · ${f.frame === 'last' ? 'last frame' : `frame ${f.frame}`}`, thumb: f.thumb || previewUrl(o.url, 320),
+        get: () => historyGet(g, i, f.frame) }, true, limit);
+    }
+    openImagePicker(opts);
   };
 
   // Each tab lists items for the big view: { key, title, thumb, full (what the big view shows), video?, cropSrc (a picture to crop), badge?, use(), get? (makes the picture: { name, info }; none: it needs a choice first, so it can't be ticked), del? }
@@ -406,7 +493,7 @@ export function openImagePicker(opts) {
       .map((r) => ({ t: r.created, it: inputItem(r.name, SOURCE[r.source] || null) }));
     for (const { g, o, i, t } of await projectOutputs(['image', 'video'])) {
       items.push({ t, it: { key: `g${g.id}.${i}`, title: genLabel(g), thumb: previewUrl(o.url, 320), full: o.url, video: o.kind === 'video', cropSrc: o.kind === 'image' ? o.url : null,
-        badge: o.kind === 'video' ? 'last frame' : null, use: () => fromHistory(g, i), get: () => historyGet(g, i), delNote: 'That one is in History: delete it there' } });
+        badge: o.kind === 'video' ? 'frames' : null, use: () => (o.kind === 'video' ? framesFrom(g, i, o) : fromHistory(g, i)), get: o.kind === 'video' ? null : () => historyGet(g, i), delNote: 'That one is in History: delete it there' } });
     }
     return items.sort((x, y) => y.t - x.t).slice(0, 300).map((x) => x.it);
   };
@@ -419,8 +506,16 @@ export function openImagePicker(opts) {
       if (nested && multi) openImagePicker(opts);   // (the choice / frame sheet replaced the picker)
     };
     const frameOf = async (it) => {
-      const f = await pickFrame({ url: it.video, title: it.title, back: () => openImagePicker(opts) });
-      if (f) take(it, f, true);
+      const room = roomLeft();
+      if (room < 1) return full();
+      const list = await pickFrames({ url: it.video, title: it.title, room, wantBlob: true });
+      if (!list) return openImagePicker(opts);
+      if (!multi) return take(it, list[0].blob, true);
+      for (const f of list) {
+        tick(sel, { key: `${src.key}.${it.id}@${f.frame}`, title: `${it.title} · frame ${f.frame}`, thumb: f.thumb,
+          get: async () => { const r = await src.pick(it, { mp: mp(), frame: f.blob }); return { name: r.name, info: r }; } }, true, limit);
+      }
+      openImagePicker(opts);
     };
     const use = (it) => {
       if (it.video && it.still) {
@@ -479,11 +574,13 @@ export function openImagePicker(opts) {
   const useCurrent = () => {
     const it = items[cur];
     if (!multi) return it?.use();
+    if (sel.size) return addTicked();
     if (it && !it.get) return it.use();
-    if (it && !sel.size) tick(sel, it, true, limit);
-    if (sel.size) addTicked();
+    if (it) { tick(sel, it, true, limit); addTicked(); }
   };
   const useBtn = button('Use this picture', useCurrent, { cls: 'primary' });
+  // (what's ticked waits on Add; a clip on show can still give more frames)
+  const moreBtn = multi ? button('Choose frames…', () => items[cur]?.use(), { cls: 'small' }) : null;
   const clearBtn = multi ? button('Clear', () => { sel.clear(); paintTicks(); }, { cls: 'small ghost', title: 'Untick every picture' }) : null;
   const delBtn = button('Delete…', () => { const it = items[cur]; if (it.del) it.del(); else toast(it.delNote, true); },
     { cls: 'small danger', title: 'Delete this picture for good (uploads and saved pictures, not History)' });
@@ -508,7 +605,7 @@ export function openImagePicker(opts) {
       } catch (e) { toast(e.message, true); reopen(); }
     } });
   }, { cls: 'small', title: 'Cut the picture first: the cropped copy is the one picked (the original stays)' });
-  const bar = h('div', { class: 'gal-actions pk-actions' }, name, useBtn, clearBtn, cropBtn, delBtn);
+  const bar = h('div', { class: 'gal-actions pk-actions' }, name, useBtn, moreBtn, clearBtn, cropBtn, delBtn);
   // pull this grip down to give the big picture the room (all the way shuts the rows), up for more of them
   const grip = h('div', { class: 'pk-grip', role: 'separator', 'aria-orientation': 'horizontal', 'aria-label': 'Drag to resize the rows of pictures', title: 'Drag down for a bigger picture, up for more pictures (double-tap resets)' }, h('span'));
   const rows = h('div', { class: 'pk-rows', role: 'listbox', 'aria-label': 'Pictures', 'aria-multiselectable': multi ? 'true' : null });
@@ -516,7 +613,9 @@ export function openImagePicker(opts) {
   function paintTicks() {
     if (!multi) return;
     const order = [...sel.keys()], n = order.length, it = items[cur];
-    useBtn.firstChild.textContent = it && !it.get ? 'Choose…' : n > 1 ? `Add ${n} pictures` : n ? 'Add 1 picture' : 'Add this picture';
+    useBtn.firstChild.textContent = n > 1 ? `Add ${n} pictures` : n ? 'Add 1 picture' : it && !it.get ? (it.video ? 'Choose frames…' : 'Choose…') : 'Add this picture';
+    moreBtn.firstChild.textContent = it?.video ? 'Choose frames…' : 'Choose…';
+    moreBtn.classList.toggle('hidden', !(n && it && !it.get));
     useBtn.disabled = !it && !n;
     clearBtn.classList.toggle('hidden', !n);
     if (rows.children.length !== items.length) return;
@@ -554,6 +653,7 @@ export function openImagePicker(opts) {
       : h('img', { src: it.full || it.thumb, alt: it.title, draggable: false })]));
     prev.disabled = n <= 0; next.disabled = n >= items.length - 1;
     name.textContent = it ? `${it.title}${it.badge ? ` · ${it.badge}` : ''}  (${n + 1} / ${items.length})` : '';
+    if (!multi) useBtn.firstChild.textContent = it?.video ? 'Choose a frame…' : 'Use this picture';
     useBtn.disabled = !it; delBtn.classList.toggle('hidden', !it); cropBtn.classList.toggle('hidden', !it?.cropSrc);
     [...rows.children].forEach((c, k) => { c.classList.toggle('sel', k === n); c.setAttribute('aria-selected', k === n); });
     rows.children[n]?.scrollIntoView({ block: 'nearest' });

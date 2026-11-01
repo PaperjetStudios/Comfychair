@@ -627,6 +627,8 @@ finished take becomes that shot's clip (**Shots to video** takes it over the dra
 A single clip from another model (an LTX take, a scene render) goes through **Use as → Finish with H3** instead,
 loaded into `deck-h3-refine` with Regenerate already on; several such clips are refused.
 
+**A clip in the image picker.** Choosing a video opens its frames. Scrub or step to one: an input that takes one picture gets **Use this frame**; one that takes several gets **Add this frame**, up to the room it has, then **Done**. **Last frame** is there too. Each is cut from the file at that exact frame.
+
 **Characters** (Story tab, view **Characters**). A character holds its writing (role, height, a line, their story, notes), a
 voice, and one or more **looks**: each look has its own words for prompts, main picture, views, sheet, expressions, current
 3D model and current rig. A shot chooses which look it uses. **Media** is their own ordered list (drag to reorder), with
