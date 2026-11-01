@@ -3,6 +3,7 @@ import { S, inputUrl } from './core.js';
 import { pngBlob, uploadImage } from './media.js';
 import { queueRun, template, valuesByRole, waitGen } from './make.js';
 import { MAPS } from './maps.js';
+import { editSizeFor } from './edit-size.js';
 
 // ---------------------------------------------------------------------------
 // Image tools, in the Editor panel the way the VFX tab has its effects: pick one, set it, Run. It works on the selected
@@ -208,6 +209,14 @@ async function runSheet(eng, o, t, tab, src) {
   for (const cell of cells) await start(cell, true);
 }
 
+// an edit template's Size for all of a picture of [w, h] (left alone, it crops to a 1024 square)
+function wholePicture(t, [w, h]) {
+  const fw = t.fields.find((f) => f.key === '__deck.width'), fh = t.fields.find((f) => f.key === '__deck.height');
+  if (!fw || !fh) return {};
+  const [sw, sh] = editSizeFor(w, h, fw.step || 16);
+  return { [fw.key]: sw, [fh.key]: sh };
+}
+
 async function runOne(eng, o, t, tab, src) {
   if (o.kind === 'sheet') return runSheet(eng, o, t, tab, src);
   const imageField = t.fields.find((f) => f.kind === 'image');
@@ -217,6 +226,7 @@ async function runOne(eng, o, t, tab, src) {
     if (pic) delete values[imageField.key];
     if (pic) values[pic.key] = src.name;
     if (box) values[box.key] = (ST.lprompt || '').trim() || DELIGHT_PROMPT;
+    Object.assign(values, wholePicture(t, src.px));
   }
   if (o.kind === 'up') {
     const f = t.fields.find((x) => x.input === 'scale_by');
@@ -258,6 +268,8 @@ export async function applyStep(step, name, { what = 'person' } = {}) {
   if (step === 'delight') {
     set(t.fields.find((f) => f.kind === 'image' && /image to edit/i.test(f.group)) || t.fields.find((f) => f.kind === 'image'), name);
     set(t.fields.find((f) => f.kind === 'text' && /^edit$/i.test(f.group) && !/negative/i.test(f.input)), (ST.lprompt || '').trim() || DELIGHT_PROMPT);
+    const img = await loadImg(inputUrl(name));
+    Object.assign(values, wholePicture(t, [img.naturalWidth, img.naturalHeight]));
   } else set(t.fields.find((f) => f.kind === 'image'), name);
   if (step === 'up') set(t.fields.find((f) => f.input === 'scale_by'), ST.scale);
   const once = async () => waitGen((await queueRun({ template: id, values, batch: 1 }))[0].id);
