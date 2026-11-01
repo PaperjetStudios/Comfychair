@@ -1,0 +1,244 @@
+{
+ "img": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@1 Picture [image]",
+   "deck_keep_size": true
+  }
+ },
+ "pre0": {
+  "class_type": "ImageScaleBy",
+  "inputs": {
+   "image": [
+    "img",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "scale_by": 2.0
+  },
+  "_meta": {
+   "title": "@3 Enlarge [scale_by]"
+  }
+ },
+ "pad": {
+  "class_type": "SeedVR2Preprocess",
+  "inputs": {
+   "resized_images": [
+    "pre0",
+    0
+   ]
+  }
+ },
+ "vae": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "seedvr2_ema_vae_fp16.safetensors"
+  }
+ },
+ "unet": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "seedvr2_7b_sharp_int8_convrot.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "enc": {
+  "class_type": "VAEEncodeTiled",
+  "inputs": {
+   "pixels": [
+    "pad",
+    0
+   ],
+   "vae": [
+    "vae",
+    0
+   ],
+   "tile_size": 512,
+   "overlap": 128,
+   "temporal_size": 64,
+   "temporal_overlap": 8
+  }
+ },
+ "cond": {
+  "class_type": "SeedVR2Conditioning",
+  "inputs": {
+   "model": [
+    "unet",
+    0
+   ],
+   "vae_conditioning": [
+    "enc",
+    0
+   ]
+  }
+ },
+ "ks": {
+  "class_type": "KSampler",
+  "inputs": {
+   "model": [
+    "unet",
+    0
+   ],
+   "positive": [
+    "cond",
+    0
+   ],
+   "negative": [
+    "cond",
+    1
+   ],
+   "latent_image": [
+    "enc",
+    0
+   ],
+   "seed": 42,
+   "steps": 1,
+   "cfg": 1.0,
+   "sampler_name": "euler",
+   "scheduler": "simple",
+   "denoise": 1.0
+  },
+  "_meta": {
+   "title": "@4 Seed [seed]"
+  }
+ },
+ "dec": {
+  "class_type": "VAEDecodeTiled",
+  "inputs": {
+   "samples": [
+    "ks",
+    0
+   ],
+   "vae": [
+    "vae",
+    0
+   ],
+   "tile_size": 512,
+   "overlap": 128,
+   "temporal_size": 64,
+   "temporal_overlap": 8
+  }
+ },
+ "up": {
+  "class_type": "SeedVR2PostProcessing",
+  "inputs": {
+   "images": [
+    "dec",
+    0
+   ],
+   "original_resized_images": [
+    "pre0",
+    0
+   ],
+   "color_correction_method": "lab"
+  }
+ },
+ "model": {
+  "class_type": "LoadSAM3Model",
+  "inputs": {
+   "precision": "auto",
+   "compile": false
+  }
+ },
+ "find": {
+  "class_type": "SAM3Grounding",
+  "inputs": {
+   "sam3_model_config": [
+    "model",
+    0
+   ],
+   "image": [
+    "up",
+    0
+   ],
+   "confidence_threshold": 0.2,
+   "text_prompt": "person",
+   "max_detections": 1
+  },
+  "_meta": {
+   "title": "@2 Cut out what [text_prompt]"
+  }
+ },
+ "mimg": {
+  "class_type": "MaskToImage",
+  "inputs": {
+   "mask": [
+    "find",
+    0
+   ]
+  }
+ },
+ "size": {
+  "class_type": "GetImageSize",
+  "inputs": {
+   "image": [
+    "up",
+    0
+   ]
+  }
+ },
+ "msize": {
+  "class_type": "ImageScale",
+  "inputs": {
+   "image": [
+    "mimg",
+    0
+   ],
+   "upscale_method": "bilinear",
+   "width": [
+    "size",
+    0
+   ],
+   "height": [
+    "size",
+    1
+   ],
+   "crop": "disabled"
+  }
+ },
+ "mask": {
+  "class_type": "ImageToMask",
+  "inputs": {
+   "image": [
+    "msize",
+    0
+   ],
+   "channel": "red"
+  }
+ },
+ "flip": {
+  "class_type": "InvertMask",
+  "inputs": {
+   "mask": [
+    "mask",
+    0
+   ]
+  }
+ },
+ "join": {
+  "class_type": "JoinImageWithAlpha",
+  "inputs": {
+   "image": [
+    "up",
+    0
+   ],
+   "alpha": [
+    "flip",
+    0
+   ]
+  }
+ },
+ "save": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "join",
+    0
+   ],
+   "filename_prefix": "deck/sheet-cell"
+  }
+ }
+}

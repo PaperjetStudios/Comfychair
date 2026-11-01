@@ -26,6 +26,15 @@ const DETAIL = {
     help: 'Qwen Image 2.1 turbo: good at clean lines, text and illustrations or graphics, less so for pores and skin.' },
 };
 
+// De-lighting: an edit model told to take the lighting out, so a picture that came out dark or with hard shadows is even and
+// flat before it goes to image or 3D generation. Each is an edit template that already exists.
+const DELIGHT = {
+  krea2: { label: 'Krea 2', tpl: 'deck-krea2-edit', help: 'Keeps people and likenesses best.' },
+  klein9b: { label: 'Klein 9B', tpl: 'deck-klein9b-edit', help: 'A good all-rounder; quick.' },
+  qwen21: { label: 'Qwen 2.1', tpl: 'deck-qwen21-edit', help: 'Good with objects, graphics and clean surfaces.' },
+};
+const DELIGHT_PROMPT = 'Remove all the lighting and shadows from this picture: light it evenly and softly from every side, like an overcast day or a light tent, so dark areas are brightened and nothing is in shadow. Show the true colours and surface of the materials. Keep the shape, pose, details, background and framing exactly the same.';
+
 const OPS = [
   { id: 'depth', group: 'Maps', label: 'Depth map', tpl: MAPS.depth.still, kind: 'layer', depth: true,
     help: 'A grey depth map (near is white) of the picture: Video Depth Anything. A layer on top; use it as a reference picture or control.' },
@@ -39,6 +48,10 @@ const OPS = [
     help: 'BiRefNet finds the main subject. The result is a cut-out layer (the background see-through) or the inpaint mask, to redraw it or everything else.' },
   { id: 'words', group: 'Cut out and mask', label: 'Auto mask: by words (SAM3)', tpl: 'deck-mask-image', kind: 'matte', prompt: true,
     help: 'SAM3 finds what you name ("the red car", "people", "the sky") and joins everything it finds. The result is a cut-out layer or the inpaint mask.' },
+  { id: 'sheet', group: 'Cut out and mask', label: 'Split a sheet: enlarge and cut out each (for 3D)', tpl: 'deck-sheet-cell', kind: 'sheet', prompt: true,
+    help: 'For a character or object sheet with rows and columns of views: cuts it into equal cells, makes each one bigger, and SAM3 cuts out what you name in it (the best match). Each view lands as its own layer where its cell was, ready for the 3D object slots (Save as input). Needs one run per cell.' },
+  { id: 'delight', group: 'Detail', label: 'De-light (even out dark or shadowed pictures)', kind: 'delight',
+    help: 'An edit model takes the lighting out: dark pictures are brightened and hard shadows softened, with the shape and colours kept. Run it on a view before it goes to image or 3D generation. The result is a new layer; the prompt can be changed.' },
   { id: 'up', group: 'Upscale', label: 'Upscale (quality)', tpl: 'deck-upscale-image', kind: 'up',
     help: 'SeedVR2 makes the picture bigger and sharper, adding detail. Slow, and the memory it needs grows with the size: 2× of a 1 MP picture is fine, 4× of a big one may not fit. The new layer sits the same size on the canvas; Export size (Export panel) is set to match, so Download and Save as input come out that much bigger.' },
   { id: 'detail', group: 'Detail', label: 'Detail pass', kind: 'detail',
@@ -46,12 +59,12 @@ const OPS = [
   { id: 'upfast', group: 'Upscale', label: 'Upscale (fast)', tpl: 'deck-upscale-image-fast', kind: 'up',
     help: '4x-UltraSharp: a quick, clean enlargement without the invented detail. Export size is set to match, so Download and Save as input come out bigger.' },
 ];
-const ST = { op: 'cutout', result: 'cutout', hide: true, prompt: 'person', scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', dmodel: 'klein9b', dprompt: {}, dstrength: {}, ...store.get(KEY, {}) };
+const ST = { op: 'cutout', result: 'cutout', hide: true, prompt: 'person', rows: 1, cols: 4, sheetFast: false, scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, ...store.get(KEY, {}) };
 const save = () => store.set(KEY, ST);
 const FLIGHT = new Set();   // runs on their way back
 const op = () => OPS.find((o) => o.id === ST.op) || OPS[0];
 const dm = () => DETAIL[ST.dmodel] || DETAIL.klein9b;
-const tplId = (o) => (o.kind === 'detail' ? dm().tpl : o.sd && ST.poser === 'sdpose' ? o.sd : o.tpl);
+const tplId = (o) => (o.kind === 'delight' ? (DELIGHT[ST.lmodel] || DELIGHT.krea2).tpl : o.kind === 'sheet' ? (ST.sheetFast ? 'deck-sheet-cell-fast' : 'deck-sheet-cell') : o.kind === 'detail' ? dm().tpl : o.sd && ST.poser === 'sdpose' ? o.sd : o.tpl);
 
 const loadImg = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Could not load a picture')); i.src = src; });
 const plainCrop = (c) => !c || (c.x < 0.001 && c.y < 0.001 && c.w > 0.999 && c.h > 0.999);
@@ -101,7 +114,31 @@ async function cutOut(name, matte) {
   return cv;
 }
 
-async function land(eng, o, src, done) {
+// a picture with see-through parts put on solid black (what Idol and other one-photo models want), uploaded as a new input
+async function onBlack(img) {
+  const cv = document.createElement('canvas');
+  cv.width = img.naturalWidth || img.width; cv.height = img.naturalHeight || img.height;
+  const c = cv.getContext('2d');
+  c.fillStyle = '#000'; c.fillRect(0, 0, cv.width, cv.height);
+  c.drawImage(img, 0, 0);
+  return uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: 'on-black.png', multiple: 1 });
+}
+
+// the sheet's cells, cut in the browser and uploaded: [{ name, r, c }]
+async function cutCells(src) {
+  const img = await loadImg(inputUrl(src.name)), W = img.naturalWidth, H = img.naturalHeight, out = [];
+  for (let r = 0; r < ST.rows; r++) for (let c = 0; c < ST.cols; c++) {
+    const x0 = Math.round((c * W) / ST.cols), x1 = Math.round(((c + 1) * W) / ST.cols), y0 = Math.round((r * H) / ST.rows), y1 = Math.round(((r + 1) * H) / ST.rows);
+    const cv = document.createElement('canvas');
+    cv.width = x1 - x0; cv.height = y1 - y0;
+    cv.getContext('2d').drawImage(img, x0, y0, cv.width, cv.height, 0, 0, cv.width, cv.height);
+    const up = await uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: `cell-${r + 1}-${c + 1}.png`, multiple: 1 });
+    out.push({ name: up.name, r, c });
+  }
+  return out;
+}
+
+async function land(eng, o, src, done, cell) {
   const { rect, layer } = src;
   const place = { x: rect.x, y: rect.y };
   if (o.kind === 'matte') {
@@ -111,13 +148,19 @@ async function land(eng, o, src, done) {
       return toast(`${o.label}: added to the inpaint mask (Inpaint panel)`);
     }
     const cut = await cutOut(src.name, matte);
-    const up = await uploadImage(await pngBlob(cut), { mp: 0, source: 'editor', filename: 'cutout.png', multiple: 1 });
-    eng.addImage(up.name, { label: 'Cut out', ...place, scale: rect.w / up.width });
+    const up = ST.result === 'black' ? await onBlack(cut) : await uploadImage(await pngBlob(cut), { mp: 0, source: 'editor', filename: 'cutout.png', multiple: 1 });
+    eng.addImage(up.name, { label: ST.result === 'black' ? 'Cut out on black' : 'Cut out', ...place, scale: rect.w / up.width });
     if (layer && ST.hide) layer.hidden = true;
+  } else if (o.kind === 'sheet') {
+    let r = await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } });
+    if (ST.result === 'black') r = await onBlack(await loadImg(inputUrl(r.name)));
+    const cw = rect.w / ST.cols, ch = rect.h / ST.rows;
+    eng.addImage(r.name, { label: `${ST.result === 'black' ? 'View on black' : 'View'} ${cell.r + 1}-${cell.c + 1}`, x: rect.x + cell.c * cw, y: rect.y + cell.r * ch, scale: cw / r.width });
+    return eng.changed(), eng.render();
   } else {
     const r = await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } });
-    eng.addImage(r.name, { label: o.kind === 'up' ? `Upscaled ${r.width}×${r.height}` : o.kind === 'detail' ? `Detail (${dm().label})` : o.label, ...place, scale: rect.w / r.width });
-    if (layer && (o.kind === 'up' || o.kind === 'detail') && ST.hide) layer.hidden = true;
+    eng.addImage(r.name, { label: o.kind === 'up' ? `Upscaled ${r.width}×${r.height}` : o.kind === 'delight' ? 'De-lit' : o.kind === 'detail' ? `Detail (${dm().label})` : o.label, ...place, scale: rect.w / r.width });
+    if (layer && (o.kind === 'up' || o.kind === 'detail' || o.kind === 'delight') && ST.hide) layer.hidden = true;
     if (o.kind === 'up') eng.E.out = Math.max(eng.E.out || 1, ST.scale);   // (the layer keeps its size on the canvas; exporting at this size shows the new detail)
   }
   eng.changed(); eng.render();
@@ -142,9 +185,39 @@ async function run(eng) {
   } catch (e) { toast(e.message, true); } finally { b.done(); }
 }
 
+async function runSheet(eng, o, t, tab, src) {
+  const cells = await cutCells(src), set = (input, v) => { const f = t.fields.find((x) => x.input === input); return f ? [f.key, v] : null; };
+  const imageField = t.fields.find((f) => f.kind === 'image');
+  toast(`${o.label}: ${cells.length} cells queued; each lands as a layer`);
+  let left = cells.length;
+  const start = async (cell, again) => {
+    const sc = set('scale_by', ST.sheetFast ? ST.scale / 4 : ST.scale);
+    const values = { [imageField.key]: cell.name, ...valuesByRole(t, { seed: -1, prompt: ST.prompt.trim() }), ...(sc && { [sc[0]]: sc[1] }) };
+    const [g] = await queueRun({ template: t.id, values, batch: 1 });
+    FLIGHT.add(g.id); eng.render();
+    waitGen(g.id).then(async (done) => {
+      if (eng.E.tab?.id !== tab) return toast(`${o.label} #${done.id} finished on another edit: it is in History`);
+      await land(eng, o, src, done, cell);
+      if (--left === 0) { if (src.layer && ST.hide) src.layer.hidden = true; eng.changed(); eng.render(); toast(`${o.label}: all ${cells.length} views are layers`); }
+    }).catch((e) => {
+      // SAM3's worker now and then fails a run ("Inference tensors do not track version counter") that works when sent again
+      if (again) return start(cell, false).catch((e2) => toast(`${o.label} cell ${cell.r + 1}-${cell.c + 1} failed: ${e2.message}`, true));
+      toast(`${o.label} cell ${cell.r + 1}-${cell.c + 1} failed: ${e.message}`, true);
+    }).finally(() => { FLIGHT.delete(g.id); eng.render(); });
+  };
+  for (const cell of cells) await start(cell, true);
+}
+
 async function runOne(eng, o, t, tab, src) {
+  if (o.kind === 'sheet') return runSheet(eng, o, t, tab, src);
   const imageField = t.fields.find((f) => f.kind === 'image');
   const values = { [imageField.key]: src.name, ...valuesByRole(t, { seed: -1, ...(o.prompt && { prompt: ST.prompt.trim() }) }) };
+  if (o.kind === 'delight') {   // the edit template's own picture and edit boxes (not its reference pictures)
+    const pic = t.fields.find((f) => f.kind === 'image' && /image to edit/i.test(f.group)), box = t.fields.find((f) => f.kind === 'text' && /^edit$/i.test(f.group) && !/negative/i.test(f.input));
+    if (pic) delete values[imageField.key];
+    if (pic) values[pic.key] = src.name;
+    if (box) values[box.key] = (ST.lprompt || '').trim() || DELIGHT_PROMPT;
+  }
   if (o.kind === 'up') {
     const f = t.fields.find((x) => x.input === 'scale_by');
     if (f) values[f.key] = o.id === 'upfast' ? ST.scale / 4 : ST.scale;
@@ -194,7 +267,19 @@ export function imageToolsSection(eng) {
     o.edges ? field('Amount', seg([['more', 'More lines'], ['normal', 'Normal'], ['less', 'Fewer']], ST.edgeAmount, (v) => { ST.edgeAmount = v; save(); eng.render(); }),
       help('How much detail the lines pick up. More lines also take in faint edges and texture; fewer keeps the main outlines.')) : null,
     o.sd ? field('Pose from', seg([['dwpose', 'DWPose'], ['sdpose', 'SDPose']], ST.poser, (v) => { ST.poser = v; save(); eng.render(); })) : null,
-    o.kind === 'matte' ? field('Result', seg([['cutout', 'Cut-out layer'], ['mask', 'Inpaint mask']], ST.result, (v) => { ST.result = v; save(); eng.render(); })) : null,
+    o.kind === 'sheet' ? field('Rows × columns', h('span', { class: 'row' },
+      ...['rows', 'cols'].map((k) => h('input', { type: 'number', min: 1, max: 8, value: ST[k], 'aria-label': k === 'rows' ? 'Rows' : 'Columns',
+        onchange: (e) => { ST[k] = Math.max(1, Math.min(8, Math.round(+e.target.value || 1))); e.target.value = ST[k]; save(); } }))),
+      help('How the sheet is laid out: equal cells, left to right, top to bottom. Spacing between cells is fine: the cut-out ignores it.')) : null,
+    o.kind === 'sheet' ? field('Enlarge with', seg([[false, 'SeedVR2'], [true, 'Fast']], ST.sheetFast, (v) => { ST.sheetFast = v; save(); eng.render(); }),
+      help('SeedVR2 adds detail (slow, once per cell). Fast is 4x-UltraSharp: quick and clean.')) : null,
+    o.kind === 'sheet' ? field(['Enlarge', h('span', {}, `${ST.scale}×`)], seg([[1, '1×'], [2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); eng.render(); })) : null,
+    o.kind === 'matte' ? field('Result', seg([['cutout', 'Cut-out layer'], ['black', 'On black'], ['mask', 'Inpaint mask']], ST.result, (v) => { ST.result = v; save(); eng.render(); }),
+      help('On black puts the cut-out on solid black: the picture a one-photo 3D model (Idol, a splat) wants.')) : null,
+    o.kind === 'sheet' ? field('Result', seg([['cutout', 'Cut out'], ['black', 'On black']], ST.result === 'black' ? 'black' : 'cutout', (v) => { ST.result = v; save(); eng.render(); })) : null,
+    o.kind === 'delight' ? field('Model', seg(Object.entries(DELIGHT).map(([k, v]) => [k, v.label]), ST.lmodel, (v) => { ST.lmodel = v; save(); eng.render(); }, { wrap: true }),
+      help((DELIGHT[ST.lmodel] || DELIGHT.krea2).help)) : null,
+    o.kind === 'delight' ? field('Prompt', textArea(() => ST.lprompt, (v) => { ST.lprompt = v; save(); }, { rows: 4, label: 'How to light it' })) : null,
     o.kind === 'detail' ? field('Model', seg(Object.entries(DETAIL).map(([k, v]) => [k, v.label]), ST.dmodel, (v) => { ST.dmodel = v; save(); eng.render(); }, { wrap: true })) : null,
     o.kind === 'detail' ? help(dm().help) : null,
     o.kind === 'detail' && !dm().plain ? field('Strength', h('input', { type: 'range', min: 0.1, max: 0.7, step: 0.05, 'aria-label': 'Strength',
@@ -202,7 +287,7 @@ export function imageToolsSection(eng) {
       h('span', {}, String(ST.dstrength[ST.dmodel] ?? dm().strength))) : null,
     o.kind === 'detail' && !dm().plain ? field('Prompt', textArea(() => ST.dprompt[ST.dmodel] ?? dm().prompt, (v) => { ST.dprompt[ST.dmodel] = v; save(); }, { rows: 2, label: 'What to add' })) : null,
     o.kind === 'up' ? field(['Enlarge', out ? h('span', {}, out) : null], seg([[2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); eng.render(); })) : null,
-    (o.kind === 'up' || o.kind === 'detail' || (o.kind === 'matte' && ST.result === 'cutout')) && (onLayer || many > 1)
+    (o.kind === 'up' || o.kind === 'detail' || o.kind === 'delight' || o.kind === 'sheet' || (o.kind === 'matte' && ST.result !== 'mask')) && (onLayer || many > 1)
       ? toggle('Hide the original', ST.hide, (v) => { ST.hide = v; save(); }) : null,
     h('div', { class: 'row wrap' }, button(FLIGHT.size ? 'Run again' : 'Run', () => run(eng), { cls: 'primary', disabled: !t })));
 }
