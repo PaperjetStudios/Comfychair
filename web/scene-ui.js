@@ -5,7 +5,7 @@ import {
   section, seg, sheetOpen, store, uid, undoToast, help, withHelp, toggle, sizeSelect, chip, info, toast, icon, iconize, numSlider, popover, closePopover,
 } from './ui.js';
 import {
-  C, CAM, EVEN, FPS, HIST, camsOf, cutTo, dropCuts, newCamera, setActiveCam, shots, stretchCuts, trimCuts, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropHolds, dropKeys, holdStart, frames, framesFor, hasKeys, hooks, keyCount, addKey, bakeBase, sampleChan,
+  applyToLayer, canBake, C, CAM, EVEN, FPS, HIST, camsOf, cutTo, dropCuts, newCamera, setActiveCam, shots, stretchCuts, trimCuts, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropHolds, dropKeys, holdStart, frames, framesFor, hasKeys, hooks, keyCount, addKey, bakeBase, sampleChan,
   namesFor, pivotOf, pivotsFor, sameTab, save, selItem, setSC, write, isPosable, isBoneKeyed
 } from './scene-data.js';
 import { FIG_TABS, adjustTab, faceTab, handsTab, jointsTab, movesTab, partsTab, posesTab, promptProps } from './scene-pose.js';
@@ -21,6 +21,8 @@ import { drawnScale } from './origin-math.js';
 import { busy, cancelRender, letGo, play, renderColorVideo, renderDepthVideo, renderPoseVideo, saveFrame, saveStill, seek, stopPlay } from './scene-export.js';
 import { AREA, jumpKey, keyHere, maxBar, renderKeys, renderTransport, toEnd, toStart, unkeyHere, wireSheetKeys } from './scene-keys.js';
 import { commandFor, keysList } from './scene-shortcuts.js';
+import { PIP, togglePip, wirePip } from './scene-pip.js';
+import { scaleOf as bakeScale } from './bake-math.js';
 import { SPLAT_BLUR } from './splat-depth.js';
 import { toggleGrid3 } from './gizmo.js';
 import { hasMode, modeDef, modeList, modeOf, modeSections } from './scene-modes.js';
@@ -63,6 +65,8 @@ export function renderToolbar() {
   fb.classList.toggle('on', R.free); fb.setAttribute('aria-pressed', R.free);
   fb.title = R.free ? 'Director view: back to looking through the camera (V)' : 'Director view: look around the scene freely, the camera drawn in it (V)';
   tb.querySelector('[data-camview]').classList.toggle('hidden', !canCamToView());
+  const pipBtn = tb.querySelector('[data-pip]');
+  pipBtn.classList.toggle('hidden', !R.free); pipBtn.classList.toggle('on', PIP.on);
   const vb = tb.querySelector('[data-viewcut]');
   if (vb) {
     vb.classList.toggle('on', !!R.viewCut); vb.setAttribute('aria-pressed', !!R.viewCut);
@@ -162,6 +166,7 @@ function placeProps(o, cur) {
     field('Pivot (where the gizmo turns it)', seg(pivotsFor(o), pivotsFor(o).some(([k]) => k === pivotOf(o)) ? pivotOf(o) : null,
       (v) => { o.pivot = v; resetPivot(); changed(); }, { wrap: true })),
     originProps(o, cur),
+    applyProps(o),
     o.type === 'figure' ? shapeProps(o) : null,
     o.type === 'figure' ? [
       toggle('Planted on the floor (Up lifts it off)', o.ground, (on) => { o.ground = on; changed(); }),
@@ -185,9 +190,25 @@ function placeProps(o, cur) {
     help('Drag the gizmo to move it; tap the object again (or W / E / R) for Rotate and Scale. With keys, a change sets a key at the playhead; with Auto key off it is held until ◆ Key (or until the playhead moves).')];
 }
 
+// Apply: the layer looks the same, and its scale, rotation or everything reads as nothing (bake-math.js)
+function applyProps(o) {
+  if (!canBake(o)) return null;
+  const apply = (kind) => {
+    const r = applyToLayer(o, kind);
+    if (!r.ok) return toast(r.why, true);
+    changed(); refresh();
+    if (r.note) toast(r.note);
+  };
+  return field(['Apply', info('The layer stays exactly where it is and looks the same, but what you apply reads as nothing: Apply scale makes its scale 1, Apply rotation makes its rotation 0, and Apply transform does both and puts its position at 0, with its origin there. The gizmo and later changes then start clean. Files are not changed. A stretched layer loses its scale with its rotation. Anything with keys on what would go can\'t be applied.', 'About Apply')],
+    h('div', { class: 'row wrap' },
+      button('Apply scale', () => apply('scale'), { cls: 'small' }),
+      button('Apply rotation', () => apply('rotation'), { cls: 'small' }),
+      button('Apply transform', () => apply('all'), { cls: 'small' })));
+}
+
 // the layer's origin: what x, y, z mean, and what it turns and scales around in the view, in renders and between keys
 function originProps(o, cur) {
-  const editing = originEditing(), at = o.origin || [0, 0, 0], size = drawnScale(cur(), EVEN.has(o.type));
+  const editing = originEditing(), at = o.origin || [0, 0, 0], own = o.bake ? bakeScale(o.bake) : [1, 1, 1], size = drawnScale(cur(), EVEN.has(o.type)).map((v, i) => v * own[i]);
   const axis = (label, i) => numField(label, at[i] * size[i], (v) => {
     if (!Number.isFinite(v)) return;
     const next = [...(o.origin || [0, 0, 0])];
@@ -595,10 +616,13 @@ export function buildToolbar() {
     h('span', { class: 'sep' })),
     h('button', { type: 'button', class: 'ico', 'data-free': '', 'aria-label': 'Director view', onclick: toggleFree }, icon('compass')),
     h('button', { type: 'button', class: 'ico hidden', 'data-camview': '', 'aria-label': 'Camera to this view', title: 'Camera to this view: move the active camera to exactly what you see, lens included (C)', onclick: camToView }, icon('camera')),
+    h('button', { type: 'button', class: 'ico hidden', 'data-pip': '', 'aria-label': 'Mini camera view', title: 'Mini camera view (M): what the camera sees, in a box you can drag and resize',
+      onclick: () => { togglePip(); renderToolbar(); } }, icon('image')),
     h('button', { type: 'button', class: 'ico', 'data-viewcut': '', 'aria-label': 'View cuts',
       onclick: () => { R.viewCut = !R.viewCut; store.set('deck.scene.viewcut', R.viewCut); pose(R.f); draw(); renderToolbar(); } }, 'Cut'),
     h('button', { type: 'button', class: 'ico', 'data-overlays': '', 'aria-label': 'Overlays', title: 'Overlays: depth, reference picture, scale person',
       onclick: (e) => overlayMenu(e.currentTarget) }, icon('contrast'))));
+  wirePip({ viewer, canvas: $('#sceneCanvas'), draw, aspect: () => SC.width / SC.height });
   viewer.append(h('button', { type: 'button', class: 'max-btn hud-btn', id: 'sceneHud', onclick: () => setHud(!hudOff()) }));
   setHud(hudOff());
   // Undo / Redo: the app's dock (undo-dock.js), in the top bar and over the full-screen view
@@ -619,6 +643,7 @@ function overlayMenu(anchor) {
 const hasSheet = () => modeOf().lanes !== 'none';
 const COMMAND = {
   camToView,
+  pip: () => { if (R.free) { togglePip(); renderToolbar(); } },
   newCamera: () => { if (hasSheet()) addCamera(); },
   viewCut: () => $('#sceneToolbar [data-viewcut]')?.click(),
   cutHere: () => { if (!hasSheet()) return; cutTo(SC.camera); changed(); toast(`Cut to ${SC.camera.name || 'Camera'}`); },

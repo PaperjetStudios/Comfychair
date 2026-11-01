@@ -1,4 +1,6 @@
 import { wireWalk } from './scene-walk.js';
+import { pipRect, syncPip } from './scene-pip.js';
+import { linear as bakeLinear, point as bakePoint, scaleOf as bakeScale } from './bake-math.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { OrbitControls } from './vendor/OrbitControls.js';
 import * as THREE from './vendor/three.module.min.js';
@@ -8,7 +10,7 @@ import { $, api, busy as busyBar, canvasFont, clone, closeSheet, h, store, toast
 import { gzChip, smoothGizmo, snap3, snapMenu3 } from './gizmo.js';
 import { ORIENTS, centrePoint, follow, frameQuat, orientOf, relQuat, spaceOf } from './gizmo-orient.js';
 import {
-  C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, WP, current, frames, holdStart, hooks, liveCam, pathSig, makers, namesFor, newObject, newRoom, originShift, pivotOf, sample, setOrigin,
+  C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, WP, current, frames, holdStart, hooks, liveCam, pathSig, makers, namesFor, newObject, newRoom, originShift, bakeOn, pivotOf, sample, setOrigin,
   sameTab, save, selItem, setActiveCam, setSC, write
 } from './scene-data.js';
 import { letGo } from './scene-export.js';
@@ -272,7 +274,7 @@ function applyChange() {
   if (originEditing()) return;   // (only the handle moves: the layer stays, and the origin lands when the drag settles)
   const p = pivot;
   // the object follows the pivot: turned (relative to it) and scaled around it
-  const t = follow(p.position.toArray(), p.quaternion.toArray(), pivotRel, pivotAt.toArray(), p.scale.toArray());
+  const t = follow(p.position.toArray(), p.quaternion.toArray(), pivotRel, o.bake ? bakePoint(o.bake, pivotAt.toArray()) : pivotAt.toArray(), p.scale.toArray());
   m.quaternion.fromArray(t.q); m.scale.copy(p.scale); m.position.fromArray(t.p);
   const d = THREE.MathUtils.radToDeg;
   const v = { rx: d(m.rotation.x), ry: d(m.rotation.y), rz: d(m.rotation.z),
@@ -447,9 +449,10 @@ export function photoLens(src) {
 export function lookThrough(o) {
   const v = current(o, OBJ), r = THREE.MathUtils.degToRad, rot = new THREE.Euler(r(v.rx), r(v.ry), r(v.rz));
   const sh = originShift(o, v);
-  const at = new THREE.Vector3(...(o.view?.pos || [0, 0, 0])).multiplyScalar(v.sy).applyEuler(rot).add(new THREE.Vector3(v.x - sh[0], v.y - sh[1], v.z - sh[2]));
-  const fwd = new THREE.Vector3(0, 0, -1).applyEuler(rot);
-  const t = fwd.multiplyScalar((o.dist || 3) * v.sy).add(at);
+  const lens = o.view?.pos || [0, 0, 0], B = o.bake;   // (what was applied to it carries the photo's camera too)
+  const at = new THREE.Vector3(...(B ? bakePoint(B, lens) : lens)).multiplyScalar(v.sy).applyEuler(rot).add(new THREE.Vector3(v.x - sh[0], v.y - sh[1], v.z - sh[2]));
+  const fwd = new THREE.Vector3(...(B ? bakeLinear(B, [0, 0, -1]) : [0, 0, -1])).normalize().applyEuler(rot);
+  const t = fwd.multiplyScalar((o.dist || 3) * v.sy * (B ? bakeScale(B)[2] : 1)).add(at);
   write(SC.camera, CAM, { px: at.x, py: at.y, pz: at.z, tx: t.x, ty: t.y, tz: t.z, fov: o.fov || 50, roll: 0 });
 }
 
@@ -696,6 +699,7 @@ export function pose(f) {
     if (!m) continue;
     const v = current(o, namesFor(o), f);
     const at = originShift(o, v);
+    bakeOn(m, o.bake);
     m.position.set(v.x - at[0], v.y - at[1], v.z - at[2]);
     m.rotation.set(r(v.rx), r(v.ry), r(v.rz));
     if (EVEN.has(o.type)) m.scale.setScalar(Math.max(1e-4, v.sy));
@@ -764,7 +768,23 @@ export function draw(forRender = false) {
   if (!forRender) {
     if (depth) { setRange(roughRange()); renderDepth(renderer, scene, R.free ? viewCam : camera, SPLAT_PASS.spark, splatBlurOf(SC)); }
     else renderer.render(scene, R.free ? viewCam : camera);
+    syncPip(R.free && !depth);
+    drawPip();
   }
+}
+
+// the mini camera view (scene-pip.js): the camera you edit, into its box on the canvas, with none of the view's tools in it
+function drawPip() {
+  const size = renderer.getSize(new THREE.Vector2()), b = pipRect(size.x, size.y);
+  if (!b) return;
+  const tools = [grid, snapGrid, stage, frustum, originDot, gizmo.getHelper(), ...[...OTHERS.values()].map((x) => x.group)];
+  for (const m of R.meshes.values()) tools.push(...(m.userData.rig?.dots || []), ...(m.userData.tips || []), ...(m.userData.dots || []));
+  const on = tools.filter((x) => x.visible);
+  for (const x of on) x.visible = false;
+  renderer.setViewport(b.x, b.y, b.w, b.h); renderer.setScissor(b.x, b.y, b.w, b.h); renderer.setScissorTest(true);
+  renderer.render(scene, camera);
+  renderer.setScissorTest(false); renderer.setViewport(0, 0, size.x, size.y);
+  for (const x of on) x.visible = true;
 }
 
 // the selected layer's origin, the same size on screen wherever it is: while it is edited, or once it has been set
@@ -773,7 +793,7 @@ function placeOriginDot(show) {
   originDot.visible = !!m?.visible && !R.joint && !HAND.on && (editing || !!o.origin);
   if (!originDot.visible) return;
   if (editing && gizmo.object === pivot) originDot.position.copy(pivot.position);
-  else originDot.position.fromArray(o.origin || [0, 0, 0]).multiply(m.scale).applyQuaternion(m.quaternion).add(m.position);
+  else { m.updateMatrixWorld(true); m.localToWorld(originDot.position.fromArray(o.origin || [0, 0, 0])); }
   originDot.scale.setScalar(activeCamera().position.distanceTo(originDot.position) * 0.009);
 }
 

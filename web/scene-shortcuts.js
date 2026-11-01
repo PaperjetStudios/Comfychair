@@ -4,6 +4,7 @@
 // [what it runs, key, needs Shift, what the list says]
 export const COMMANDS = [
   ['camToView', 'c', false, 'camera to this view (director view)'],
+  ['pip', 'm', false, 'mini camera view (director view)'],
   ['newCamera', 'c', true, 'new camera'],
   ['viewCut', 'v', true, 'view: the camera you edit / the cuts'],
   ['cutHere', 'b', false, 'cut to the active camera at the playhead'],

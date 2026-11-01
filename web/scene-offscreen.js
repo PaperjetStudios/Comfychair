@@ -7,7 +7,7 @@ import * as THREE from './vendor/three.module.min.js';
 import { frameRanges } from './depth-range.js';
 import * as SCENE from './scene.js';   // (its layer types register when it loads; it is not initialised here, so no panel appears)
 import * as FIGURE from './figure.js';
-import { CAM, EVEN, applyOffset, applyRoll, FPS, OBJ, TYPES, framesFor, liveCam, makers, namesFor, originShift, pathSig, sample, shots, upgrade } from './scene-data.js';
+import { CAM, EVEN, applyOffset, bakeOn, applyRoll, FPS, OBJ, TYPES, framesFor, liveCam, makers, namesFor, originShift, pathSig, sample, shots, upgrade } from './scene-data.js';
 import { LOADERS, RANGE, depthMat, floorMat, geometries, photoScene, rangeMat, setRange, wallMat } from './scene-view.js';
 import { applyClay } from './scene-import.js';
 import { renderDepth, splatBlurOf, splatDepths, splatMeshes } from './splat-depth.js';
@@ -138,6 +138,7 @@ export class Stage {
       if (!m) continue;
       const v = applyOffset(o, sample(o, namesFor(o), f), f);   // (its offset layer on top)
       const at = originShift(o, v);
+      bakeOn(m, o.bake);
       m.position.set(v.x - at[0], v.y - at[1], v.z - at[2]);
       m.rotation.set(r(v.rx), r(v.ry), r(v.rz));
       if (EVEN.has(o.type)) m.scale.setScalar(Math.max(1e-4, v.sy));

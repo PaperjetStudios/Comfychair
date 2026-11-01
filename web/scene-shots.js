@@ -1,6 +1,7 @@
 // Prompt from the shots: one line per cut, in the same words the Story tab uses.
 import * as FIGURE from './figure.js';
 import { C, CAM, FPS, R, SC, originShift, sample, save, shots } from './scene-data.js';
+import { point as bakePoint, scaleOf as bakeScale } from './bake-math.js';
 import { promptItems, promptText } from './scene-pose.js';
 import {
   framingOf, guessMove, shotSentence, shotWarnings, smpte,
@@ -14,6 +15,10 @@ const off = (s) => R.shotOff.has(sid(s));
 function boxAt(o, f) {
   const v = sample(o, ['x', 'y', 'z', 'rx', 'ry', 'rz', 'sx', 'sy', 'sz'], f), at = originShift(o, v);
   v.x -= at[0]; v.y -= at[1]; v.z -= at[2];   // (from where the layer stands, not its origin)
+  if (o.bake) {   // (what was applied to it: its size and where it stands now)
+    const k = bakeScale(o.bake), t = bakePoint(o.bake, [0, 0, 0]);
+    v.sx *= k[0]; v.sy *= k[1]; v.sz *= k[2]; v.x += t[0]; v.y += t[1]; v.z += t[2];
+  }
   if (o.type === 'figure' || o.type === 'rigged') {
     const ht = FIGURE.heightOf(o.body, o.shape) * Math.abs(v.sy || 1), w = 0.45 * Math.abs(v.sy || 1);
     return { name: o.name, min: [v.x - w / 2, v.y, v.z - w / 2], max: [v.x + w / 2, v.y + ht, v.z + w / 2] };

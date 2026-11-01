@@ -3,6 +3,7 @@ import * as FIGURE from './figure.js';
 import { toast, uid } from './ui.js';
 import { isPoseCh, putKey, recordInto, sampleKeys } from './keys.js';
 import { moveOrigin, originShift as shiftBy } from './origin-math.js';
+import { applyBake, linear as bakeLinear, point as bakePoint } from './bake-math.js';
 export { isPoseCh };
 
 export let C;  // app state and actions handed over by app.js (see sceneModule there)
@@ -66,7 +67,20 @@ export const pivotOf = (o) => (pivotsFor(o).some(([k]) => k === o.pivot) || (isP
 // A layer's origin (o.origin, in its own space: origin-math.js): x, y, z are where it is. originShift: from the layer's
 // (0, 0, 0) to the origin, at values v, so the layer's three.js object goes at x, y, z minus this.
 const NO_SHIFT = [0, 0, 0];
-export const originShift = (o, v) => (o.origin ? shiftBy(v, o.origin, EVEN.has(o.type)) : NO_SHIFT);
+export const originShift = (o, v) => (o.bake ? shiftBy(v, bakePoint(o.bake, o.origin || NO_SHIFT), EVEN.has(o.type)) : o.origin ? shiftBy(v, o.origin, EVEN.has(o.type)) : NO_SHIFT);
+// What a layer has had applied (o.bake: bake-math.js) goes on its three.js object inside its x, y, z, turn and size, whatever kind it is:
+// its own updateMatrix adds it, so picking, boxes and the gizmo all see it. Rigs have bones and heights of their own; a picture and a backdrop are placed by the camera.
+const NO_BAKE = new Set(['figure', 'rigged', 'skinned', 'picture', 'backdrop']);
+export const canBake = (o) => !NO_BAKE.has(o.type);
+const plainMatrix = THREE.Object3D.prototype.updateMatrix;
+export function bakeOn(m, bake) {
+  if ((m.userData.baked || null) === (bake || null)) return;
+  m.userData.baked = bake || null;
+  if (!bake) { delete m.updateMatrix; return; }
+  const B = new THREE.Matrix4().fromArray(bake);
+  m.updateMatrix = function bakedMatrix() { plainMatrix.call(this); this.matrix.multiply(B); };
+}
+export const applyToLayer = (o, kind) => applyBake(o, kind, { even: EVEN.has(o.type) });
 
 // ---- scene data ------------------------------------------------------------
 export let SC;   // the scene (persisted per project)
@@ -526,13 +540,14 @@ export function addKey(item, names, vals = null, only = null) {
 
 // The origin to `at` (in the layer's own space), the layer staying where it is, held changes included
 export function setOrigin(o, at) {
-  const from = o.origin || NO_SHIFT, d = at.map((a, i) => a - from[i]), even = EVEN.has(o.type);
+  const map = (x) => (o.bake ? bakeLinear(o.bake, x) : x);
+  const from = o.origin || NO_SHIFT, d = map(at.map((a, i) => a - from[i])), even = EVEN.has(o.type);
   for (const v of [MUTED.get(o), TEMP.get(o)?.v]) {
     if (v?.x === undefined) continue;
     const s = shiftBy(v, d, even);
     v.x += s[0]; v.y += s[1]; v.z += s[2];
   }
-  moveOrigin(o, at, { even, setKey, sample: (f) => sample(o, OBJ, f) });
+  moveOrigin(o, at, { even, setKey, map, sample: (f) => sample(o, OBJ, f) });
 }
 
 export const selItem = () => SC.objects.find((o) => o.id === R.sel) || null;

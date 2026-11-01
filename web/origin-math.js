@@ -24,8 +24,9 @@ const PLACE = ['x', 'y', 'z'], TURN = ['rx', 'ry', 'rz', 'sx', 'sy', 'sz'];
 // The origin moves to `at` and the layer stays where it is: x, y, z change by the shift, in the base and on keys. With a
 // turn or a size animated the shift differs per frame, so place gets keys on every frame that has a place, turn or size
 // key (between those keys it can part slightly from the old path). sample(f): the values before the change.
-export function moveOrigin(item, at, { even, sample, setKey }) {
-  const from = item.origin || [0, 0, 0], d = at.map((a, i) => a - from[i]);
+// map: what a layer's applied transform (bake-math.js) does to a distance in its own space.
+export function moveOrigin(item, at, { even, sample, setKey, map = (x) => x }) {
+  const from = item.origin || [0, 0, 0], d = map(at.map((a, i) => a - from[i]));
   const keyed = (ch) => !!item.chans?.[ch]?.length;
   const base = originShift(item.base, d, even);
   if (TURN.some(keyed)) {

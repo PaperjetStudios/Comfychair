@@ -900,6 +900,13 @@ menu with each snap and its step) fade in only while something can be moved. Dep
 scale person are one **Overlays** menu beside the director view. The bars are see-through. **H** (or the eye under the
 full-screen button) hides every tool over the view; **N** pulls the settings panel in and out in full screen.
 
+The director view has a **mini camera view** (its toolbar button, or M): what the camera you edit sees, in a box you can drag and resize from its corner, with none of the view's tools in it. It isn't in renders, and it hides while the Depth overlay is on.
+
+**Apply scale**, **Apply rotation** and **Apply transform** (a layer's panel, under Origin) work as in Blender: the layer stays exactly
+where it is and looks the same, but its scale reads 1, its rotation 0, or both and its position 0 with its origin there
+(`web/bake-math.js`; the layer's `bake`). Files aren't changed. A stretched layer loses its scale with its rotation, keys on what would
+go refuse it, and posable people, rigged models, pictures and backdrops don't have it.
+
 Every 3D layer has an **Origin** (under Pivot in its panel): the point it really turns and scales around, in the view,
 in renders and between keys; Position is where that point is. **Edit origin** moves it without moving the layer: drag
 the gizmo (with snapping), tap the layer, or aim with Pivot at the view centre. There are also named places (Base,
