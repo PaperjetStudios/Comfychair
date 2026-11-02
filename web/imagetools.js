@@ -104,7 +104,7 @@ const targets = (eng) => (eng.picked?.() || []).filter(usable);
 
 // a cropped layer's kept part, at the file's own pixels, as a new input
 async function keptPart(eng, l) {
-  const W = l.img.naturalWidth, H = l.img.naturalHeight, c = l.crop, cv = document.createElement('canvas');
+  const W = l.img.naturalWidth || l.img.width, H = l.img.naturalHeight || l.img.height, c = l.crop, cv = document.createElement('canvas');   // (a painted layer is a canvas)
   [cv.width, cv.height] = G.sentPixels(l);
   const pic = eng.layerPicture(l), k = (pic.naturalWidth || pic.width) / W;   // (with its Colour adjustments: what's sent is what you see)
   cv.getContext('2d').drawImage(pic, c.x * W * k, c.y * H * k, c.w * W * k, c.h * H * k, 0, 0, cv.width, cv.height);

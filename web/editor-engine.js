@@ -1507,7 +1507,7 @@ export function createEditor(cfg) {
   }
   const pngOf = (cv) => new Promise((res, rej) => cv.toBlob((b) => (b ? res(b) : rej(new Error('The picture is too big to save'))), 'image/png'));
   // a layer alone at its file's own pixels, as it shows (crop, turn, opacity), with nothing behind it
-  function layerPicture(l) {
+  function layerAlone(l) {
     const b = bounds(l), k = 1 / l.scale, cv = document.createElement('canvas');
     cv.width = Math.max(1, Math.round(b.w * k)); cv.height = Math.max(1, Math.round(b.h * k));
     const c = cv.getContext('2d');
@@ -1527,7 +1527,7 @@ export function createEditor(cfg) {
   }
   // an input in this project, as Save as input makes one, without leaving the Image tab
   const saveEach = () => onSelected('Saving the layers…', async (list) => {
-    for (const l of list) await uploadImage(await pngOf(layerPicture(l)), { mp: 0, source: 'editor', filename: 'layer.png', multiple: 1, board: l.label || 'Saved layer' });
+    for (const l of list) await uploadImage(await pngOf(layerAlone(l)), { mp: 0, source: 'editor', filename: 'layer.png', multiple: 1, board: l.label || 'Saved layer' });
     toast(list.length > 1 ? `${list.length} layers saved as inputs` : 'Layer saved as an input');
   });
   const saveTogether = () => onSelected('Putting the layers together…', async (list) => {
