@@ -4,6 +4,7 @@
 //   each other. Hide and lock on a group set them on its members, so everything else reads the layers as ever.
 //   Masks: a mask is a layer of its own (mask.maskOf = its owner's key) with its owner's geometry, drawn only as its owner's
 //   see-through: alpha shows, erased hides. It sits right above its owner and is never a row of its own.
+//   Merge: the layers drawn as one new picture, at the place of the topmost, in their group if they share one. Undo brings them back.
 //   Undo: stackState() is what a change to the stack changes (no pixels); applyState() puts it back on the same layer objects.
 // ---------------------------------------------------------------------------
 const FIELDS = ['crop', 'x', 'y', 'scale', 'opacity', 'hidden', 'blend', 'locked', 'label', 'rotation', 'flipX', 'flipY', 'group', 'maskOf', 'maskOff', 'clip'];
@@ -53,6 +54,38 @@ export function makeGroup(layers, groups, picked, id, name = `Group ${groups.len
 export function ungroup(layers, groups, id) {
   for (const l of layers) if (l.group === id) delete l.group;
   return normalize(layers, groups);
+}
+// what a merge can take: a picture that shows
+const mergeable = (l) => !!l && !l.mask && !l.draft && !l.maskOf && !l.hidden;
+// the layer l merges down into: the nearest showing one below it, in the same group; null if there is none
+export function mergeBelow(layers, l) {
+  if (!mergeable(l)) return null;
+  for (let i = layers.indexOf(l) - 1; i >= 0; i--) {
+    const o = layers[i];
+    if (o.maskOf || o.mask || o.draft || o.hidden) continue;
+    return (o.group || null) === (l.group || null) ? o : null;
+  }
+  return null;
+}
+// of these, what can merge, bottom first (a hidden one stays as it is)
+export const mergeSet = (layers, picked) => layers.filter((l) => picked.includes(l) && mergeable(l));
+// the group a merge stays in: the one they all share, if any
+export const mergeGroup = (list) => (list[0]?.group && list.every((l) => l.group === list[0].group) ? list[0].group : null);
+// the merged picture's pixels per canvas unit: as sharp as its sharpest layer, within what a canvas holds
+export function mergeScale(list, w, h, maxPixels = 64e6, maxSide = 8192) {
+  const k = Math.max(...list.map((l) => 1 / (l.scale || 1)));
+  return Math.min(k, Math.sqrt(maxPixels / Math.max(1, w * h)), maxSide / Math.max(1, w, h));
+}
+// the stack with the list (and its masks) gone and the merged layer at the place of the topmost
+export function mergedStack(layers, groups, list, merged) {
+  const top = Math.max(...list.map((l) => layers.indexOf(l)));
+  const keysGone = new Set(list.map((l) => l.key).filter((k) => k != null));
+  const out = [];
+  layers.forEach((l, i) => {
+    if (i === top) out.push(merged);
+    if (!list.includes(l) && !(l.maskOf && keysGone.has(l.maskOf))) out.push(l);
+  });
+  return normalize(out, groups);
 }
 // The list top first: a row is { group } (a group's heading) or { layer }. A collapsed group shows its heading only; masks aren't rows.
 export function rowsOf(layers, groups = []) {

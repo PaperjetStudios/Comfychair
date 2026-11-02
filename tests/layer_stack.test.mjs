@@ -80,3 +80,47 @@ test('the grid counts from the frame', () => {
   assert.ok(S.plainGroup({ opacity: 1, blend: 'normal' }));
   assert.ok(!S.plainGroup({ opacity: 0.5 }));
 });
+
+test('merge down goes to the nearest showing layer below, in the same group', () => {
+  const a = L('a'), off = L('off', { hidden: true }), m = L('m', { maskOf: 'b' }), b = L('b');
+  assert.equal(S.mergeBelow([a, off, b, m], b), a);
+  assert.equal(S.mergeBelow([a, b], a), null);
+  const g1 = L('g1', { group: 'g' }), g2 = L('g2', { group: 'g' }), out = L('out');
+  assert.equal(S.mergeBelow([out, g1, g2], g2), g1);
+  assert.equal(S.mergeBelow([out, g1, g2], g1), null, 'the bottom of a group stays in it');
+  assert.equal(S.mergeBelow([g1, g2, out], out), null, 'nor does a layer merge into a group');
+  assert.equal(S.mergeBelow([a, L('ink', { mask: true }), b], b), a, 'the inpaint mask is no picture');
+  assert.equal(S.mergeBelow([a, b], L('x', { hidden: true })), null);
+});
+test('merging takes what shows, bottom first', () => {
+  const a = L('a'), b = L('b', { hidden: true }), c = L('c'), m = L('m', { maskOf: 'c' }), ink = L('ink', { mask: true });
+  assert.deepEqual(keys(S.mergeSet([a, b, c, m, ink], [c, ink, b, a, m])), ['a', 'c']);
+});
+test('the merged layer sits at the topmost, its masks gone, others in their places', () => {
+  const a = L('a'), b = L('b'), bm = L('bm', { maskOf: 'b' }), c = L('c'), d = L('d'), x = L('x');
+  assert.deepEqual(keys(S.mergedStack([a, b, bm, c, d], [], [a, b, ], x)), ['x', 'c', 'd']);
+  assert.deepEqual(keys(S.mergedStack([a, b, bm, c, d], [], [a, c], x)), ['b', 'bm', 'x', 'd'], 'one between them stays under');
+});
+test('a merge stays in a group they all share, and an emptied group goes', () => {
+  const a = L('a', { group: 'g' }), b = L('b', { group: 'g' }), c = L('c'), groups = [{ id: 'g', name: 'G' }];
+  assert.equal(S.mergeGroup([a, b]), 'g');
+  assert.equal(S.mergeGroup([a, c]), null);
+  const x = L('x', { group: 'g' });
+  assert.deepEqual(keys(S.mergedStack([a, b, c], groups, [a, b], x)), ['x', 'c']);
+  assert.equal(groups.length, 1);
+  const y = L('y');
+  S.mergedStack([a, b, c], groups, [a, b], y);
+  assert.equal(groups.length, 0);
+});
+test('a merge is as sharp as its sharpest layer, within what a canvas holds', () => {
+  assert.equal(S.mergeScale([L('a', { scale: 0.5 }), L('b', { scale: 1 })], 100, 100), 2);
+  assert.equal(S.mergeScale([L('a', { scale: 0.01 })], 4000, 2000), 8192 / 4000);
+  assert.ok(Math.abs(S.mergeScale([L('a', { scale: 0.1 })], 3000, 3000) - Math.sqrt(64e6 / 9e6)) < 1e-9);
+});
+test('undo of a merge puts the same layers back', () => {
+  const a = L('a', { opacity: 0.5 }), b = L('b'), E = { layers: [a, b], groups: [] }, was = S.stackState(E.layers, E.groups);
+  E.layers = S.mergedStack(E.layers, E.groups, [a, b], L('x'));
+  S.applyState(E, was);
+  assert.deepEqual(keys(E.layers), ['a', 'b']);
+  assert.equal(E.layers[0], a);
+});

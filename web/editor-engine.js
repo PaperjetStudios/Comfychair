@@ -902,6 +902,10 @@ export function createEditor(cfg) {
 
     // V / C switch tool, Esc finishes a crop / deselects, Delete removes the selected layer, arrows nudge it
     document.addEventListener('keydown', (e) => {
+      if (cfg.active() && !sheetOpen() && E.sel && (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'e' && !e.target.closest('input, textarea, select')) {
+        e.preventDefault();
+        return picked().length > 1 ? mergeSelected() : mergeDown(E.sel);
+      }
       if (!cfg.active() || sheetOpen()
         || e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey || !E.sel) return;
       const l = E.sel, n = e.shiftKey ? 10 : 1;
@@ -999,6 +1003,9 @@ export function createEditor(cfg) {
       button('All', () => { const vis = E.layers.filter((l) => !l.mask && !l.draft && !l.maskOf); E.sel = vis[vis.length - 1] || null; E.multi = vis.slice(0, -1); renderEditor(); }, { cls: 'small' }),
       several.length ? button('None', () => { E.sel = null; E.multi = []; E.pickMode = false; renderEditor(); }, { cls: 'small' }) : null,
       several.length > 1 ? button([icon('copy'), 'Group'], () => { E.layers = ST.makeGroup(E.layers, E.groups, several, uid()); E.multi = []; editorChanged(); }, { cls: 'small', title: 'These layers as one group: its own opacity and blend, and they move together in the list' }) : null,
+      several.length === 1 ? button('Merge down', () => mergeDown(several[0]), { cls: 'small', disabled: !ST.mergeBelow(E.layers, several[0]), title: 'Into the layer below, as they look (Ctrl+E)' }) : null,
+      several.length > 1 ? button('Merge selected', mergeSelected, { cls: 'small', disabled: ST.mergeSet(E.layers, several).length < 2, title: 'These layers as one picture, at the place of the topmost (Ctrl+E)' }) : null,
+      several.length ? help('Merge draws the layers into one new picture: crops, turns, opacity and masks are drawn in. It keeps the lowest layer\'s blend, for the whole picture, so layers with a blend other than Normal can look different. A hidden layer isn\'t merged. Locked or animated layers can\'t be merged. Undo brings them back.') : null,
       several.length > 1 ? hint(`${several.length} selected`) : null,
       snapBar(['grid', 'rot', 'scale'], () => drawEditorCanvas()));
     const groupRow = (g) => {
@@ -1386,6 +1393,36 @@ export function createEditor(cfg) {
     const r = await uploadImage(await pngOf(cv), { mp: E.mp, source: 'editor', filename: 'layers.png', board: 'Saved layers' });
     toast(`Saved as an input, ${r.width}×${r.height}`);
   });
+  // These layers as one new picture, as they look: crops, turns, opacity, masks and blends are drawn in. Its input is an upload like any
+  // other layer's; the old layers stay on the undo history.
+  async function mergeLayers(list, say) {
+    if (list.length < 2) return toast('Pick at least two layers that show', true);
+    if (list.some((l) => l.locked)) return toast('Unlock the layers first', true);
+    if (list.some(anyKeys)) return toast('An animated layer can\'t be merged', true);
+    if (!list.every(ready)) return toast('The images are still loading', true);
+    const tid = docId(), b = busy(say);
+    try {
+      if (paint.unsavedPaint()) await paint.savePaint();
+      const box = unionRect(list.map(bounds)), x = Math.floor(box.x), y = Math.floor(box.y), w = Math.max(1, Math.ceil(box.x + box.w) - x), hh = Math.max(1, Math.ceil(box.y + box.h) - y);
+      const group = ST.mergeGroup(list), k = ST.mergeScale(list, w, hh), cv = document.createElement('canvas');
+      cv.width = Math.max(1, Math.round(w * k)); cv.height = Math.max(1, Math.round(hh * k));
+      const c = cv.getContext('2d');
+      c.imageSmoothingQuality = 'high'; c.scale(cv.width / w, cv.height / hh); c.translate(-x, -y);
+      // (a group they share still applies to the merged layer, so it isn't drawn in as well)
+      drawStack(c, group ? list.map(({ group: _, ...l }) => l) : list);
+      const up = await uploadImage(await pngOf(cv), { mp: 0, source: 'editor', filename: 'merged.png', multiple: 1 });
+      await new Promise((res) => { const i = new Image(); i.onload = i.onerror = res; i.src = inputUrl(up.name); });   // (no gap on the canvas when it swaps)
+      if (docId() !== tid) return toast(cfg.elsewhere || 'Those layers were in another edit tab', true);
+      const low = list[0], merged = { key: uid(), name: up.name, label: `${layerName(list[list.length - 1])} (merged)`, crop: { ...FULL }, x, y, scale: w / cv.width, opacity: 1, hidden: false,
+        blend: low.blend || 'normal', ...(group ? { group } : {}) };
+      E.layers = ST.mergedStack(E.layers, E.groups, list, merged);
+      E.sel = merged; E.multi = []; E.cropping = false;
+      editorChanged();
+      toast(list.some((l) => (l.blend || 'normal') !== 'normal') ? `Merged ${list.length} layers: a blend now applies to the whole picture, so it can look different (Undo brings them back)` : `Merged ${list.length} layers`);
+    } catch (e) { toast('Merge failed: ' + e.message, true); } finally { b.done(); }
+  }
+  const mergeDown = (l) => { const o = ST.mergeBelow(E.layers, l); return o ? mergeLayers([o, l], 'Merging down…') : toast('Nothing showing below it to merge into', true); };
+  const mergeSelected = () => mergeLayers(ST.mergeSet(E.layers, picked()), 'Merging the layers…');
   const openSelected = () => onSelected('Opening a new edit…', async (list) => {
     const keys = E.anim && list.some((l) => anyKeys(l));   // (an animation keeps its fixed canvas; otherwise the new edit fits its layers)
     const d = dumpEditor(E.layers.filter((l) => list.includes(l) || list.some((o) => o.key && o.key === l.maskOf)));   // (each with its mask; its group comes with it, and an unused group drops on load)
