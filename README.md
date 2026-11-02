@@ -660,7 +660,7 @@ mask as it was when sent, at the result's size; other tools' results get none.
   Fewer). Pose can read with DWPose (CPU) or SDPose (GPU, holds up better on hard poses, up to 2 people). These
   templates are the VFX tab's Quick effects too: `web/maps.js` names them once for both.
 - **Cut out and mask:** **Auto mask: the subject** (BiRefNet) and **Auto mask: by words** (SAM3; name what to find),
-  as a cut-out layer or straight into the inpaint mask.
+  as a cut-out layer or straight into the mask.
   **Fine edges** (on by default): these models see any picture at about 1000 px, so a big picture's edge comes back as a
   staircase. Each thing found gets a second look on a crop close to it (a run for each, not kept in History; not for a thing
   about as big as the picture), then the pixels along its edge are decided by their colour: is it more common on the thing or
@@ -787,20 +787,20 @@ desktop ComfyUI. It's the exact graph that ran, with LoRAs expanded.
 
 ### Masked edits
 
-The Image tab's **Inpaint and extend** panel does the same on the canvas. Mark the area to redraw with **Paint mask**
+The Image tab does the same on the canvas. In the **Masks** panel, mark the area to redraw with **Paint mask**
 (a red brush on its own layer), **Add selection** (a rectangle or lasso selection joins the mask), **Add layer shape**
 (the solid part of each selected layer joins it: what its see-through and its own mask leave showing), **Cut out layer**
 (a new layer of what the mask covers on each selected layer, in the same place and at full size; the layer stays, hidden, and
 the mask is used up; **Invert** first to keep what is outside it), **Invert**, **Clear**
-or **Mask outside** (everything of the canvas outside the selected layer). **Add item** draws a box for something new:
+or **Mask outside** (everything of the canvas outside the selected layer). **Dilate / erode** grows or shrinks the mask, and the
+canvas follows the slider. In the **Inpaint and extend** panel, **Add item** draws a box for something new:
 describe it, and optionally give a picture to match (Flux 3 Klein places each box). **Extend…** grows the canvas and
 marks the new part. Then describe what should be there, pick the Model (default `deck-klein3-inpaint`, then
-`deck-klein9b-inpaint`, `deck-krea2-inpaint`, `deck-qwen21-inpaint`), set Denoise, Crop to mask, Edge softness and
-Grow, and tap **Fill**. The rest of the picture comes back untouched.
+`deck-klein9b-inpaint`, `deck-krea2-inpaint`, `deck-qwen21-inpaint`), set Denoise, Crop to mask and Edge softness, and tap **Fill**. The rest of the picture comes back untouched.
 
 On an image template (the `-edit` and `-i2i` ones), the first picture has **Mask…**: a full-screen painter
 over the picture as cropped. Paint what the edit may change; it shows as a red tint. The pen paints (press
-harder for a wider line), **Erase** takes paint off, **Size** is on screen (zoom in for fine work, or `[` `]`),
+harder for a wider line), **Erase** takes paint off, **Size** is on screen (zoom in for fine work, or `[` `]`), **Dilate / erode** grows or shrinks what is painted,
 and **Invert**, **Fill all** and **Clear** work on the whole mask. Two fingers pan and zoom; once the pen has
 touched the screen, fingers only pan (**Pen only**). A two-finger tap undoes, three redo (or Ctrl+Z).
 **Use mask** saves it, and the picture's field shows its thumbnail (tap to edit it, the bin removes it)

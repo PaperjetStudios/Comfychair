@@ -978,14 +978,14 @@ function maskSettings(f, mf, v, crop) {
     ? 'Only the painted part can change: every result is put back onto this picture through the mask, so the rest stays exactly as it was. If the result\'s shape differs from the picture, the picture is cropped from the middle to fit it first.'
     : 'The template takes the mask as its own mask input.';
   return h('div', { class: 'mask-set' },
-    field('Mask', help(`${what} Tap the mask to paint more or less. Edge softness blends the border; Grow widens the painted part first.${mf.fit ? ' Crop to mask runs the edit on a box around the mask at the chosen size, then puts it back: more detail for a small area (the rest of the picture is not seen by the model).' : ''}`),
+    field('Mask', help(`${what} Tap the mask to paint more or less. Edge softness blends the border. To grow or shrink it, use Dilate / erode in the painter.${mf.fit ? ' Crop to mask runs the edit on a box around the mask at the chosen size, then puts it back: more detail for a small area (the rest of the picture is not seen by the model).' : ''}`),
       h('div', { class: 'row' },
         h('button', { type: 'button', class: 'mask-thumb', title: 'Edit the mask', 'aria-label': 'Edit the mask', onclick: () => paintMask(f, mf, v, crop) },
           h('img', { src: thumbUrl(m.name, 128), alt: '' })),
         button('Edit…', () => paintMask(f, mf, v, crop)),
         iconBtn('Remove the mask', icon('trash'), remove))),
     mf.composite ? field('Edge softness', chips(FEATHERS, m.feather, (x) => put({ feather: num(x) }))) : null,
-    mf.composite ? field('Grow', chips(GROWS, m.grow, (x) => put({ grow: num(x) }))) : null,
+    mf.composite && m.grow ? field('Grow', chips(GROWS, m.grow, (x) => put({ grow: num(x) }))) : null,   // (a mask saved with one: it can be set back to None; the painter's Dilate / erode does it now)
     mf.fit ? toggle('Crop to mask', m.fit, (on) => put({ fit: on })) : null);
 }
 

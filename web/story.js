@@ -1339,7 +1339,7 @@ function fillPanel() {
   const ed = U.view === 'canvas' && at && CV.shot === at.s.id ? CV.eng : null;
   drawDock(ed);
   const parts = [ed?.paintProps(), at ? shotSection(at) : section('Shot', null, placeholder('Tap a shot to edit it here')),
-    ...(ed ? [ed.canvasProps(), ed.inpaintProps(), ed.toolsProps(), ed.exportProps()] : []),
+    ...(ed ? [ed.canvasProps(), ed.masksProps(), ed.inpaintProps(), ed.toolsProps(), ed.exportProps()] : []),
     at ? refineSection(at) : null, at ? videoSection(at) : null,
     castSection({ open: U.char, onOpen: openCharacter }),
     U.char && characterById(U.char) ? characterSection(characterById(U.char), { done: () => openCharacter(null),

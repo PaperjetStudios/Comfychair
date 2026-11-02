@@ -261,10 +261,11 @@ class Endpoint(unittest.TestCase):
         fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
         ckpt = tmp / "ck.pt"; ckpt.write_bytes(b"x")
         (Path(config.INPUT_DIR) / "splat-src.png").write_bytes(b"png")
+        picked = f"{config.COMFY_INPUT_SUBFOLDER}/splat-src.png"   # (what the picker hands over for ComfyChair's own copy)
         olds = (sa.SHARP, sa.SHARP_CKPT, voice._free_gpu)
         sa.SHARP, sa.SHARP_CKPT, voice._free_gpu = fake, ckpt, lambda: None
         try:
-            r = self.c.post("/api/scene/splat", json={"image": "splat-src.png", "project_id": self.pid, "preview": "medium", "keep_full": True})
+            r = self.c.post("/api/scene/splat", json={"image": picked, "project_id": self.pid, "preview": "medium", "keep_full": True})
             self.assertEqual(r.status_code, 200, r.text)
             jid = r.json()["job"]
             for _ in range(200):
@@ -278,7 +279,7 @@ class Endpoint(unittest.TestCase):
             self.assertEqual([v["k"] for v in res["levels"]], ["light", "medium", "full"])
             self.assertEqual(res["lens"]["height"], 750)
             self.assertEqual(self.c.get(res["levels"][-1]["url"]).status_code, 200)
-            self.assertEqual(self.c.post("/api/scene/splat", json={"image": "splat-src.png", "preview": "huge"}).status_code, 400)
+            self.assertEqual(self.c.post("/api/scene/splat", json={"image": picked, "preview": "huge"}).status_code, 400)
         finally:
             sa.SHARP, sa.SHARP_CKPT, voice._free_gpu = olds
             shutil.rmtree(tmp, ignore_errors=True)

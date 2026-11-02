@@ -1,5 +1,6 @@
 import { h, store, toast, clamp, openOverlay, button, iconBtn, seg, numSlider, help, loadingSheet, sheetStillOpen, closeSheet } from './ui.js';
 import { icon } from './icons.js';
+import { SPREAD_MAX, distanceField, spreadInto } from './mask-spread.js';
 import { inputUrl } from './core.js';
 
 // ---------------------------------------------------------------------------
@@ -96,7 +97,18 @@ export async function openMaskPainter({ picture, crop = null, mask = null, onDon
     for (let i = 0; i < a.length; i++) { const j = i * 4; p[j] = 255; p[j + 1] = 45; p[j + 2] = 45; p[j + 3] = a[i]; }
     ctx.putImageData(d, 0, 0);
   };
+  // Dilate / erode, live: each move works from the mask as it was when the slider first moved; painting or undoing starts again from what is there
+  let SP = null;   // { base, field, held }
+  const spreadOff = () => { SP = null; spreadIn.set(0); };
+  const spreadTo = (r) => {
+    SP ||= (() => { const base = alpha(); return { base, field: distanceField(base, W, H), held: false }; })();
+    if (!SP.field) return;
+    if (!SP.held) { const keep = SP; snapshot(); SP = keep; spreadIn.set(r); SP.held = true; }
+    if (!r) { putAlpha(SP.base); return; }
+    putAlpha(spreadInto(SP.field, r, new Uint8Array(W * H), W));
+  };
   const snapshot = () => {
+    spreadOff();
     st.undo.push(alpha());
     if (st.undo.length > UNDO_MAX) st.undo.shift();
     st.redo = []; st.dirty = true;
@@ -104,6 +116,7 @@ export async function openMaskPainter({ picture, crop = null, mask = null, onDon
   };
   const step = (from, to) => {
     if (!from.length) return;
+    spreadOff();
     to.push(alpha());
     putAlpha(from.pop());
     st.dirty = true;
@@ -196,6 +209,9 @@ export async function openMaskPainter({ picture, crop = null, mask = null, onDon
 
   // ---- the bar ----
   const sizeIn = numSlider({ min: 2, max: 300, step: 1, value: st.size, label: 'Brush size' });
+  const spreadIn = numSlider({ min: -SPREAD_MAX, max: SPREAD_MAX, step: 1, value: 0, label: 'Dilate or erode (px)' });
+  spreadIn.addEventListener('input', () => { if (spreadIn.dataset.scrubbing) spreadTo(Number(spreadIn.value)); });
+  spreadIn.addEventListener('change', () => { spreadTo(Number(spreadIn.value)); if (SP) SP.held = false; });
   const setSize = () => { st.size = Number(sizeIn.value); store.set('deck.mask.size', st.size); };
   sizeIn.addEventListener('input', setSize); sizeIn.addEventListener('change', setSize);
   const toolSeg = seg([['paint', [icon('brush'), 'Paint']], ['erase', [icon('eraser'), 'Erase']]], st.tool, (t) => { st.tool = t; });
@@ -222,12 +238,13 @@ export async function openMaskPainter({ picture, crop = null, mask = null, onDon
     h('div', { class: 'sketch-bar' },
       toolSeg,
       h('label', { class: 'sketch-size' }, 'Size', sizeIn),
+      h('label', { class: 'sketch-size', title: 'Right grows the mask, left shrinks it, and the view follows. Back to 0 brings it back, until you paint' }, 'Dilate / erode', spreadIn),
       penBtn, undoBtn, redoBtn,
       button('Invert', () => whole(() => { ctx.globalCompositeOperation = 'xor'; ctx.fillStyle = TINT; ctx.fillRect(0, 0, W, H); })),
       button('Fill all', () => whole(() => { ctx.fillStyle = TINT; ctx.fillRect(0, 0, W, H); })),
       button('Clear', () => whole(() => ctx.clearRect(0, 0, W, H))),
       iconBtn('Fit the picture in view', icon('fit'), fit),
-      help('Paint over what the edit may change: it shows red. Everything else is kept exactly as it was (the result is put back onto your picture through the mask). Press harder with the pen for a wider line; the size is on screen, so zoom in for fine work. Once the pen has touched the screen, fingers stop painting (Pen only): two fingers pan and zoom, a two-finger tap undoes, three redoes. Invert swaps painted and kept. [ and ] change the size, B and E switch between paint and erase, Ctrl+Z undoes.'),
+      help('Paint over what the edit may change: it shows red. Everything else is kept exactly as it was (the result is put back onto your picture through the mask). Press harder with the pen for a wider line; the size is on screen, so zoom in for fine work. Once the pen has touched the screen, fingers stop painting (Pen only): two fingers pan and zoom, a two-finger tap undoes, three redoes. Invert swaps painted and kept. Dilate / erode grows or shrinks the mask, in pixels of the picture. [ and ] change the size, B and E switch between paint and erase, Ctrl+Z undoes.'),
       h('div', { class: 'spacer' }),
       button('Cancel', () => close(), { cls: 'small ghost' }),
       button('Use mask', save, { cls: 'small primary' })),

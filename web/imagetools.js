@@ -13,7 +13,7 @@ import { SWAP_MODELS, SWAP_PARTS, biggestArea, changedAround, joined, onlyWithin
 // ---------------------------------------------------------------------------
 // Image tools, in the Editor panel the way the VFX tab has its effects: pick one, set it, Run. Run on chooses what it works
 // on: the whole picture (every layer together) or each selected layer in turn. The result lands as a layer:
-// a map (depth, edges, scribble, pose), an upscaled copy, a cut-out of the subject, or the inpaint mask (auto masking).
+// a map (depth, edges, scribble, pose), an upscaled copy, a cut-out of the subject, or the mask (auto masking).
 // ---------------------------------------------------------------------------
 const KEY = 'deck.imagetools';
 const GROUPS = ['Maps', 'Cut out and mask', 'Swap', 'Clean up', 'Upscale', 'Detail'];
@@ -61,15 +61,15 @@ const OPS = [
   { id: 'pose', group: 'Maps', label: 'Pose', tpl: MAPS.pose.still, sd: MAPS.pose.stillSd, kind: 'layer',
     help: 'The body, hands and face landmarks as an OpenPose-style picture. DWPose runs on the CPU; SDPose uses the GPU and holds up better on hard poses (up to 2 people).' },
   { id: 'cutout', group: 'Cut out and mask', label: 'Auto mask: the subject', tpl: 'deck-cutout-image', kind: 'matte',
-    help: 'BiRefNet finds the main subject. The result is a cut-out layer (the background see-through) or the inpaint mask, to redraw it or everything else.' },
+    help: 'BiRefNet finds the main subject. The result is a cut-out layer (the background see-through) or the mask, to redraw it or everything else.' },
   { id: 'words', group: 'Cut out and mask', label: 'Auto mask: by words (SAM3)', tpl: 'deck-mask-image', kind: 'matte', prompt: true,
-    help: 'SAM3 finds what you name ("the red car", "people", "the sky") and joins everything it finds. The result is a cut-out layer or the inpaint mask.' },
+    help: 'SAM3 finds what you name ("the red car", "people", "the sky") and joins everything it finds. The result is a cut-out layer or the mask.' },
   { id: 'sheet', group: 'Cut out and mask', label: 'Split a sheet: enlarge and cut out each (for 3D)', tpl: 'deck-sheet-cell', kind: 'sheet', prompt: true,
     help: 'For a character or object sheet with rows and columns of views: cuts it into equal cells, makes each one bigger, and SAM3 cuts out what you name in it (the best match). Each view lands as its own layer where its cell was, ready for the 3D object slots (Save as input). Needs one run per cell.' },
   { id: 'swap', group: 'Swap', label: 'Swap a face or body from another picture', kind: 'swap',
     help: 'Pick the part, the picture to take it from and one or more models, then Swap. The area is found for you (the biggest one if there are several), or use the red mask to choose it. The model sees a close-up, and its result goes back through a soft edge: outside the area the picture stays pixel for pixel. Each ticked model lands as its own layer, to compare.' },
   { id: 'remove', group: 'Clean up', label: 'Remove: a watermark, text or what you name', tpl: 'deck-remove-lama', kind: 'remove',
-    help: 'Find by name: SAM3 marks what you name in red, for you to check and put right, since it can miss a watermark or mark other things. The red mask: you paint it (Inpaint panel), or check what was found, and Remove takes it out: LaMa fills it in from what is round it, with no prompt. Only that area changes: the rest stays pixel for pixel, at full size. Best on small things on a plain or even background; a very big area comes back softer. Separate words with commas for several things. A big area on a busy background is better redrawn in Inpaint.' },
+    help: 'Find by name: SAM3 marks what you name in red, for you to check and put right, since it can miss a watermark or mark other things. The red mask: you paint it (Masks panel), or check what was found, and Remove takes it out: LaMa fills it in from what is round it, with no prompt. Only that area changes: the rest stays pixel for pixel, at full size. Best on small things on a plain or even background; a very big area comes back softer. Separate words with commas for several things. A big area on a busy background is better redrawn in Inpaint.' },
   { id: 'unmark', group: 'Clean up', label: 'Remove a watermark all over the picture', kind: 'delight', promptKey: 'uprompt', fallback: UNMARK_PROMPT, done: 'Watermark removed',
     help: 'For a faint watermark repeated across the whole picture, which can\'t be marked as an area: an edit model draws the picture again without it. It runs at about 2 MP, and can change small details, so compare the result with the original.' },
   { id: 'clean', group: 'Clean up', label: 'Clean: noise, JPEG blocks or blur', tpl: 'deck-clean-image', kind: 'clean',
@@ -98,7 +98,7 @@ const tplId = (o) => (o.kind === 'swap' ? (SWAP_MODELS[swapModels()[0]] || SWAP_
 // (a run's file is asked for afresh: runs deleted along the way free their ids, so the next run's file can have the same name, and the browser would show the old one)
 const loadImg = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Could not load a picture')); i.src = src.startsWith('/files/') ? `${src}${src.includes('?') ? '&' : '?'}at=${Date.now()}${Math.random()}` : src; });
 
-// the selected layers an Image tool can run on, one run each: picture layers, not an inpaint mask or draft
+// the selected layers an Image tool can run on, one run each: picture layers, not a mask or draft
 const usable = (l) => l && !l.mask && !l.draft && !l.maskOf && !l.broken && l.name;
 const targets = (eng) => (eng.picked?.() || []).filter(usable);
 
@@ -292,7 +292,7 @@ async function land(eng, o, src, done, cell) {
     const matte = await (ST.fine ? finerMatte(template(o.tpl), src.name, done, o.prompt ? ST.prompt.trim() : undefined, b) : matteOf(done)).finally(() => b?.done());
     if (ST.result === 'mask') {
       eng.paint.maskFromMatte(matte, rect, src.was && G.turn(src.was));
-      return toast(`${o.label}: added to the inpaint mask (Inpaint panel)`);
+      return toast(`${o.label}: added to the mask (Masks panel)`);
     }
     const cut = await cutOut(src.name, matte);
     const up = ST.result === 'black' ? await onBlack(cut) : await uploadImage(await pngBlob(cut), { mp: 0, source: 'editor', filename: 'cutout.png', multiple: 1, board: 'Cut out' });
@@ -445,16 +445,16 @@ const dropInput = (name) => api(`/api/inputs?name=${encodeURIComponent(name)}`, 
 // ("text" found nothing on large white letters, "watermark" other things too), so what goes is seen in red and can be put right before Run removes it.
 async function markFound(eng, o, src) {
   const [W, H] = src.px, cv = await searchFor(src.name, W, H, termsOf(ST.rprompt));
-  if (!boundsOf(redOf(cv, W, H), W, H)) return toast('SAM3 found nothing there: try other words, or paint it (Inpaint panel)', true);
+  if (!boundsOf(redOf(cv, W, H), W, H)) return toast('SAM3 found nothing there: try other words, or paint it (Masks panel)', true);
   eng.paint.maskFromMatte(cv, src.rect, src.was && G.turn(src.was));
   ST.rfrom = 'painted'; save(); eng.render();
-  toast('Marked in red: check it (paint more or erase in the Inpaint panel), then Remove');
+  toast('Marked in red: check it (paint more or erase in the Masks panel), then Remove');
 }
 
-// ...the inpaint mask as painted: on the whole picture, as a painted mask is
+// ...the mask as painted: on the whole picture, as a painted mask is
 async function removePainted(eng, o, t, tab) {
   const f = eng.frame(), m = eng.composeMask();
-  if (!f || !m) return toast('Paint what to remove first (Inpaint panel)', true);
+  if (!f || !m) return toast('Paint what to remove first (Masks panel)', true);
   const pic = document.createElement('canvas');
   if (!eng.compose(pic)) return toast('Add a picture first', true);
   if (pic.width !== m.canvas.width || pic.height !== m.canvas.height) return toast(`The picture (${pic.width}×${pic.height}) and mask (${m.canvas.width}×${m.canvas.height}) differ in size: try again`, true);
@@ -592,7 +592,7 @@ async function swapOnSource(eng, o, tab, src) {
 // ...on the red mask as painted: on the whole picture, as a painted mask is
 async function swapPainted(eng, o, tab) {
   const f = eng.frame(), m = eng.composeMask();
-  if (!f || !m) return toast('Paint the area first (Inpaint panel), or have it found', true);
+  if (!f || !m) return toast('Paint the area first (Masks panel), or have it found', true);
   const pic = document.createElement('canvas');
   if (!eng.compose(pic)) return toast('Add a picture first', true);
   if (pic.width !== m.canvas.width || pic.height !== m.canvas.height) return toast(`The picture (${pic.width}×${pic.height}) and mask (${m.canvas.width}×${m.canvas.height}) differ in size: try again`, true);
@@ -617,7 +617,7 @@ async function swapSend(eng) {
     let src, red;
     if (ST.swapWhere === 'painted') {
       const m = eng.composeMask(), pic = document.createElement('canvas');
-      if (!m) return toast('Paint the area first (Inpaint panel), or have it found', true);
+      if (!m) return toast('Paint the area first (Masks panel), or have it found', true);
       if (!eng.compose(pic)) return toast('Add a picture first', true);
       const up = await uploadImage(await pngBlob(pic), { mp: 0, source: 'editor', filename: 'swap.png', multiple: 1 });
       spare = up.name;
@@ -666,10 +666,10 @@ async function swapMark(eng) {
     if (!list.length) return toast('Select a layer first', true);
     for (const l of list) {
       const src = await sourceOf(eng, l, o), [W, H] = src.px, found = await findPart(src.name, W, H, ST.swapPart);
-      if (!found) { toast(`SAM3 found no ${SWAP_PARTS[ST.swapPart].label.toLowerCase()} there: paint it (Inpaint panel)`, true); continue; }
+      if (!found) { toast(`SAM3 found no ${SWAP_PARTS[ST.swapPart].label.toLowerCase()} there: paint it (Masks panel)`, true); continue; }
       eng.paint.maskFromMatte(maskCanvas(found.mask, W, H), src.rect, src.was && G.turn(src.was));
       ST.swapWhere = 'painted'; save(); eng.render();
-      toast('Marked in red: check it (paint more or erase in the Inpaint panel), then Swap');
+      toast('Marked in red: check it (paint more or erase in the Masks panel), then Swap');
     }
   } catch (e) { toast(e.message, true); } finally { b.done(); }
 }
@@ -790,7 +790,7 @@ export function imageToolsSection(eng) {
     o.kind === 'sheet' ? field('Enlarge with', seg([[false, 'SeedVR2'], [true, 'Fast']], ST.sheetFast, (v) => { ST.sheetFast = v; save(); eng.render(); }),
       help('SeedVR2 adds detail (slow, once per cell). Fast is 4x-UltraSharp: quick and clean.')) : null,
     o.kind === 'sheet' ? field(['Enlarge', h('span', {}, `${ST.scale}×`)], seg([[1, '1×'], [2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); eng.render(); })) : null,
-    o.kind === 'matte' ? field('Result', seg([['cutout', 'Cut-out layer'], ['black', 'On black'], ['mask', 'Inpaint mask']], ST.result, (v) => { ST.result = v; save(); eng.render(); }),
+    o.kind === 'matte' ? field('Result', seg([['cutout', 'Cut-out layer'], ['black', 'On black'], ['mask', 'Mask']], ST.result, (v) => { ST.result = v; save(); eng.render(); }),
       help('On black puts the cut-out on solid black: the picture a one-photo 3D model (Idol, a splat) wants.')) : null,
     ...(o.id === 'words' || (o.kind === 'remove' && ST.rfrom === 'words') || (o.kind === 'swap' && ST.swapWhere === 'find') ? samFields(eng) : []),
     ...(o.kind === 'sheet' ? samFields(eng, false) : []),
@@ -799,7 +799,7 @@ export function imageToolsSection(eng) {
     o.kind === 'remove' ? field('What goes', seg([['words', 'Find by name'], ['painted', 'The red mask']], ST.rfrom, (v) => { ST.rfrom = v; save(); eng.render(); })) : null,
     o.kind === 'remove' && ST.rfrom === 'words' ? h('div', { class: 'chips' }, ...LOOK_FOR.map(([v, label]) => chip(label, () => { ST.rprompt = v; save(); eng.render(); }, { on: ST.rprompt.trim().toLowerCase() === v }))) : null,
     o.kind === 'remove' && ST.rfrom === 'words' ? field('Find', textArea(() => ST.rprompt, (v) => { ST.rprompt = v; save(); }, { rows: 2, label: 'What to remove', placeholder: 'Watermark, text, the red sign' })) : null,
-    o.kind === 'remove' && ST.rfrom === 'painted' && !eng.paint.maskLayer(false) ? hint('Paint what to remove first (Inpaint panel), or find it by name') : null,
+    o.kind === 'remove' && ST.rfrom === 'painted' && !eng.paint.maskLayer(false) ? hint('Paint what to remove first (Masks panel), or find it by name') : null,
     o.kind === 'swap' ? field('Swap', seg(Object.entries(SWAP_PARTS).map(([k, v]) => [k, v.label]), ST.swapPart, (v) => { ST.swapPart = v; save(); eng.render(); }, { wrap: true }),
       help(SWAP_PARTS[ST.swapPart].help)) : null,
     o.kind === 'swap' ? imageInput({ label: 'Take it from', name: ST.swapFrom ? ST.swapFrom.split('/').pop() : '', thumb: ST.swapFrom ? h('img', { src: thumbUrl(ST.swapFrom, 256), alt: '' }) : null,
@@ -809,8 +809,8 @@ export function imageToolsSection(eng) {
       chip(v.label, () => { ST.swapModels = ST.swapModels.includes(k) ? ST.swapModels.filter((x) => x !== k) : [...ST.swapModels, k]; save(); eng.render(); }, { on: ST.swapModels.includes(k) }))),
       help(Object.values(SWAP_MODELS).map((v) => `${v.label}: ${v.help}`).join(' '))) : null,
     o.kind === 'swap' ? field('Where', seg([['find', 'Find it'], ['painted', 'The red mask']], ST.swapWhere, (v) => { ST.swapWhere = v; save(); eng.render(); }),
-      help('Find it uses SAM3 and takes the biggest one it finds. With several people, Mark it first, erase what shouldn\'t change in the Inpaint panel, and Swap from the red mask.')) : null,
-    o.kind === 'swap' && ST.swapWhere === 'painted' && !eng.paint.maskLayer(false) ? hint('Paint the area first (Inpaint panel), or Mark it') : null,
+      help('Find it uses SAM3 and takes the biggest one it finds. With several people, Mark it first, erase what shouldn\'t change in the Masks panel, and Swap from the red mask.')) : null,
+    o.kind === 'swap' && ST.swapWhere === 'painted' && !eng.paint.maskLayer(false) ? hint('Paint the area first (Masks panel), or Mark it') : null,
     o.kind === 'swap' ? field('Also say', textArea(() => ST.swapExtra, (v) => { ST.swapExtra = v; save(); }, { rows: 2, label: 'Words added to the prompt', placeholder: 'Keep the glasses' })) : null,
     o.kind === 'clean' ? field('Take out', seg(Object.entries(CLEAN).map(([k, v]) => [k, v.label]), ST.cmodel, (v) => { ST.cmodel = v; save(); eng.render(); }, { wrap: true }),
       help((CLEAN[ST.cmodel] || CLEAN.noise).help)) : null,

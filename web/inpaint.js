@@ -4,11 +4,12 @@ import { pngBlob, uploadImage, openImagePicker } from './media.js';
 import { queueRun, valuesByRole, waitGen } from './make.js';
 import { icon } from './icons.js';
 import { MASK_DEFAULT } from './maskpaint.js';
+import { SPREAD_MAX, spreadLabel } from './mask-spread.js';
 import { alphaAsGrey } from './matte-edge.js';
 import * as G from './layer-geom.js';
 
 // ---------------------------------------------------------------------------
-// Inpaint and Extend, in the Editor panel. The area to redraw is an inpaint mask layer (red, painted with a brush or
+// Inpaint and Extend, in the Editor panel. The area to redraw is the mask layer (red, painted with a brush or
 // added from a rectangle / lasso selection, see paint.js maskLayer) kept out of the picture. Fill sends the picture
 // (every layer but the mask) and the mask to an inpaint template (the masked-edit path of app/maskcomp.py, so the
 // rest of the picture comes back pixel for pixel) and the result lands as a new layer on top, the frame's size.
@@ -112,7 +113,7 @@ async function fill(eng, { denoise = ST.denoise } = {}) {
   const t = items.length ? S.templates.find((x) => x.id === 'deck-klein3-inpaint' && !x.error)
     : S.templates.find((x) => x.id === ST.tpl && !x.error) || inpaintTemplates()[0];
   if (!t) return toast(items.length ? 'Add item needs the Flux 3 Klein inpaint template' : 'No inpaint template is installed', true);
-  if (!items.length && !eng.composeMask()) return toast('Mark the area to redraw first: paint the mask, or select and Add to inpaint mask', true);
+  if (!items.length && !eng.composeMask()) return toast('Mark the area to redraw first: paint the mask, or select and Add to mask', true);
   if (eng.loading()) return toast('The images are still loading', true);
   const tab = eng.E.tab?.id, b = busy('Sending the picture…');
   try {
@@ -136,7 +137,7 @@ async function fill(eng, { denoise = ST.denoise } = {}) {
     if (dn) values[dn.key] = denoise;
     const sf = stepsField(t);
     if (sf && ST.steps) values[sf.key] = ST.steps;
-    values[mf.key] = { feather: ST.feather, grow: ST.grow, fit: fitOn, name: maskName, box: m.box, src: up.name, crop: null };
+    values[mf.key] = { feather: ST.feather, grow: 0, fit: fitOn, name: maskName, box: m.box, src: up.name, crop: null };
     const [g] = await queueRun({ template: t.id, values, batch: 1 });
     toast(`Redrawing (#${g.id}): it lands as a new layer`);
     FLIGHT.add(g.id); eng.render();
@@ -150,7 +151,7 @@ async function fill(eng, { denoise = ST.denoise } = {}) {
   } catch (e) { toast(e.message, true); } finally { b.done(); }
 }
 
-// the solid part of each selected layer (what its see-through and its own mask leave showing) joins the inpaint mask
+// the solid part of each selected layer (what its see-through and its own mask leave showing) joins the mask
 function addLayerShape(eng) {
   const list = (eng.picked?.() || []).filter((l) => !l.mask && !l.maskOf && !l.draft && eng.ready(l));
   if (!list.length) return toast('Select a picture layer first', true);
@@ -176,7 +177,7 @@ function addLayerShape(eng) {
   toast(added ? `Added ${added > 1 ? `${added} layers' shapes` : 'the layer\'s shape'} to the mask` : 'That layer has nothing solid to add', !added);
 }
 
-// the selected layers cut out by the inpaint mask
+// the selected layers cut out by the mask
 function cutOutLayers(eng) {
   const list = (eng.picked?.() || []).filter((l) => !l.mask && !l.maskOf && !l.draft && eng.ready(l));
   if (!list.length) return toast('Select a picture layer first', true);
@@ -222,7 +223,7 @@ function extendSheet(eng) {
   const w0 = () => Math.max(f0.w, f0.h);
   draw();
   openSheet(h('h3', {}, 'Extend the canvas'),
-    help('Grows the canvas and marks the new part, with a little of the old edge so it blends, as the inpaint mask. Then describe the whole scene in the Inpaint panel and press Fill. Extending cannot be undone with Undo: Canvas, Fit layers brings the old frame back.'),
+    help('Grows the canvas and marks the new part, with a little of the old edge so it blends, as the mask. Then describe the whole scene in the Inpaint panel and press Fill. Extending cannot be undone with Undo: Canvas, Fit layers brings the old frame back.'),
     field(['Grow by', out], nums),
     field('Both sides', seg([[0.125, '+12%'], [0.25, '+25%'], [0.5, '+50%']], null, grow, { action: true })),
     field('To a shape', seg(ASPECT_PRESETS.map(([k, a]) => [a, k]), null, toShape, { action: true, wrap: true })),
@@ -262,14 +263,13 @@ function itemRow(eng, it, i) {
     desc);
 }
 
-export function inpaintSection(eng) {
-  const E = eng.E, ts = inpaintTemplates();
+// the mask: what marks it, and Dilate / erode following the slider on the canvas (what Fill, Remove, Swap and Cut out get is what shows)
+export function masksSection(eng) {
+  const E = eng.E;
   if (!E.layers.length) return null;
-  const mask = eng.paint.maskLayer(false);
-  const t = ts.find((x) => x.id === ST.tpl) || ts[0];
-  const drafts = E.layers.filter((l) => l.draft);
-  const cover = mask ? eng.composeMask() : null;
-  return section('Inpaint and extend', null,
+  const mask = eng.paint.maskLayer(false), cover = mask ? eng.composeMask() : null;
+  let spread = eng.paint.spreadValue();
+  return section('Masks', null,
     h('div', { class: 'row wrap' },
       button([icon('brush'), mask ? 'Paint mask' : 'Mark an area'], () => eng.paint.paintMask(), { cls: 'small primary', title: 'A red brush on its own layer: what it covers gets redrawn' }),
       button('Add selection', () => eng.paint.selAction('tomask'), { disabled: !eng.paint.hasSel(), title: 'The rectangle / lasso selection joins the mask' }),
@@ -277,24 +277,37 @@ export function inpaintSection(eng) {
       button('Cut out layer', () => cutOutLayers(eng), { disabled: !mask || !eng.E.sel || eng.E.sel.mask || eng.E.sel.draft, title: 'A new layer of what the mask covers on the selected layer. The layer stays, hidden; the mask is used up' }),
       button('Invert', () => eng.paint.maskOp('invert'), { disabled: !mask }),
       button('Clear', () => eng.paint.maskOp('clear'), { disabled: !mask }),
-      button('Mask outside', () => maskOutside(eng), { disabled: !eng.E.sel || eng.E.sel.mask || eng.E.sel.draft, title: 'Mark everything of the canvas outside the selected layer as the mask, with a little of its edge to blend' }),
+      button('Mask outside', () => maskOutside(eng), { disabled: !eng.E.sel || eng.E.sel.mask || eng.E.sel.draft, title: 'Mark everything of the canvas outside the selected layer as the mask, with a little of its edge to blend' })),
+    hint(cover ? `Mask covers ${Math.max(1, Math.round(cover.cover * 100))}% of the picture` : 'Nothing marked yet'),
+    mask ? rangeField('Dilate / erode', () => spread, (v) => { spread = Math.round(v); }, { min: -SPREAD_MAX, max: SPREAD_MAX, step: 1, fmt: spreadLabel,
+      onInput: () => { eng.paint.spreadLive(spread); eng.draw(); }, onChange: () => { eng.paint.spreadDone(); eng.changed(); eng.render(); },   // (the canvas alone while dragging: a render rebuilds this slider)
+      help: 'Right dilates the mask (it grows), left erodes it (it shrinks), and the canvas follows. Back to the middle brings it back, until you paint on it. Whatever uses the mask gets it as it shows.' }) : null,
+    mask ? rangeField('Mask visibility', () => mask.opacity, (v) => { mask.opacity = v; }, { min: 0.1, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%`,
+      onInput: () => eng.draw(), onChange: () => { eng.changed(); eng.render(); },   // (the canvas alone while dragging: a render rebuilds this slider)
+      help: 'Only how strongly the red shows while you edit. The area sent to redraw is always the full mask, whatever the brush opacity or this.' }) : null,
+    help('Paint the area (red), or mark it with the Select tools (M, A) and Add selection. The Inpaint panel, Remove and Swap use it.'));
+}
+
+export function inpaintSection(eng) {
+  const E = eng.E, ts = inpaintTemplates();
+  if (!E.layers.length) return null;
+  const t = ts.find((x) => x.id === ST.tpl) || ts[0];
+  const drafts = E.layers.filter((l) => l.draft);
+  const cover = eng.paint.maskLayer(false) ? eng.composeMask() : null;
+  return section('Inpaint and extend', null,
+    h('div', { class: 'row wrap' },
       button(E.itemDraw ? 'Drag on the canvas…' : 'Add item', () => { E.itemDraw = !E.itemDraw; if (E.itemDraw) toast('Drag a box where the item goes'); eng.render(); }, { cls: E.itemDraw ? 'small primary' : '', title: 'Draw a box for something new: describe it, and optionally give a picture to match (Flux 3 Klein)' }),
       button('Extend…', () => extendSheet(eng), { title: 'Grow the canvas and mark the new part' })),
     ...E.items.map((it, i) => itemRow(eng, it, i)),
-    hint(cover ? `Mask covers ${Math.max(1, Math.round(cover.cover * 100))}% of the picture` : 'Nothing marked yet'),
     ts.length ? field('Prompt', textArea(() => ST.prompt, (v) => { ST.prompt = v; save(); }, { rows: 2, placeholder: 'What should be there: "a red leather jacket", not "make it red"' })) : null,
     ts.length > 1 ? field('Model', seg(ts.map((x) => [x.id, x.name || x.id]), t.id, (v) => { ST.tpl = v; save(); }, { wrap: true })) : null,
     ts.length ? rangeField('Denoise', () => ST.denoise, (v) => { ST.denoise = v; save(); }, { min: 0.3, max: 1, step: 0.05, fmt: (v) => v.toFixed(2),
       help: '1.0 redraws the area from scratch (use it to extend or remove things). 0.6 to 0.8 keeps shapes and colours.' }) : null,
-    mask ? rangeField('Mask visibility', () => mask.opacity, (v) => { mask.opacity = v; }, { min: 0.1, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%`,
-      onInput: () => eng.draw(), onChange: () => { eng.changed(); eng.render(); },   // (the canvas alone while dragging: a render rebuilds this slider)
-      help: 'Only how strongly the red shows while you edit. The area sent to redraw is always the full mask, whatever the brush opacity or this.' }) : null,
     stepsField(t) ? rangeField('Steps', () => ST.steps || stepsField(t).value, (v) => { ST.steps = Math.round(v); save(); }, { min: 2, max: 40, step: 1, fmt: (v) => String(Math.round(v)),
       help: 'Sampling steps. Turbo models are made for about 8; more can add detail, or change nothing.' }) : null,
     ts.length ? h('div', { class: 'row wrap' },
       toggle('Crop to mask', ST.fit, (on) => { ST.fit = on; save(); }, { help: 'The model sees only a box round the mask, at its full resolution: better detail for a small area.' }),
-      propNum('Edge softness (px)', ST.feather, (v) => { ST.feather = v; save(); }, () => {}, { min: 0, max: 64, step: 2 }),
-      propNum('Grow (px)', ST.grow, (v) => { ST.grow = v; save(); }, () => {}, { min: 0, max: 32, step: 2 })) : null,
+      propNum('Edge softness (px)', ST.feather, (v) => { ST.feather = v; save(); }, () => {}, { min: 0, max: 64, step: 2 })) : null,
     ...drafts.map((l) => h('div', { class: 'row wrap' }, hint(`${l.label}: a draft`),
       button('Keep as layer', () => { delete l.draft; eng.changed(); eng.render(); }, { cls: 'small primary', title: 'It joins the picture, and is sent with the next Fill' }),
       button('Discard', () => { E.layers.splice(E.layers.indexOf(l), 1); if (E.sel === l) E.sel = null; eng.changed(); eng.render(); }, { cls: 'small ghost' }))),
@@ -302,5 +315,5 @@ export function inpaintSection(eng) {
       button(FLIGHT.size ? 'Fill again' : 'Fill', () => fill(eng), { cls: 'small primary', disabled: !ts.length || (!cover && !usableItems(eng).length) }),
       FLIGHT.size ? hint(`${FLIGHT.size} on its way…`) : null),
     ts.length ? null : hint('No inpaint template is installed (deck-krea2-inpaint).'),
-    help('Add item draws a box for something new: describe it, optionally give a picture to match, and Fill (Flux 3 Klein places each box). Paint the area to redraw (red), or mark it with the Select tools (M, A) and Add selection; describe what should be there, and Fill: the rest of the picture comes back untouched and the result is a draft on top. Fill as often as you like: drafts are not sent. Keep the one you want as a layer. Extend grows the canvas and marks the new part for you.'));
+    help('Add item draws a box for something new: describe it, optionally give a picture to match, and Fill (Flux 3 Klein places each box). Mark the area to redraw in the Masks panel; describe what should be there, and Fill: the rest of the picture comes back untouched and the result is a draft on top. Fill as often as you like: drafts are not sent. Keep the one you want as a layer. Extend grows the canvas and marks the new part for you.'));
 }

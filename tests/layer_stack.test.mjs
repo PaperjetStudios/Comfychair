@@ -135,3 +135,25 @@ test('undo brings back a layer\'s adjust and what its mask works on', () => {
   assert.deepEqual(l.adjust, { exposure: 1 });
   assert.equal(l.maskFor, undefined);
 });
+
+test('Duplicate: copies over the topmost, masks with them, nothing shared', () => {
+  let n = 0;
+  const o = { newKey: () => `k${++n}`, name: (l) => l.label };
+  const a = L('a', { key: 'a', label: 'A', crop: { x: 0 }, adjust: { on: 1 } }), m = L('am', { maskOf: 'a', key: 'am', label: 'A mask', crop: { x: 0 } }), b = L('b', { key: 'b', label: 'B', crop: { x: 0 } }), red = L('red', { mask: true, crop: { x: 0 } });
+  const r = S.duplicate([a, m, b, red], [], [a], o);
+  assert.equal(r.copies.length, 1);
+  const c = r.copies[0];
+  assert.equal(c.label, 'A copy');
+  assert.notEqual(c.key, 'a');
+  assert.deepEqual(r.layers.map((l) => l.label), ['A', 'A mask', 'A copy', 'A copy mask', 'B', undefined].map((x, i) => (i === 5 ? r.layers[5].label : x)));
+  assert.equal(r.layers[3].maskOf, c.key, 'its own mask');
+  assert.notEqual(c.crop, a.crop); assert.notEqual(c.adjust, a.adjust);
+  assert.equal(S.duplicate([a, m, b, red], [], [m], o).copies[0].label, 'A copy', 'its mask picked means the layer');
+  assert.equal(S.duplicate([a, red], [], [red], o).copies.length, 0, 'the red mask is no picture');
+  const two = S.duplicate([a, m, b], [], [b, a], o);
+  assert.deepEqual(two.copies.map((l) => l.label), ['A copy', 'B copy'], 'the stack\'s order');
+  assert.equal(two.layers.indexOf(two.copies[0]), 3, 'over the topmost');
+  const g = L('g', { key: 'g', label: 'G', group: 'x', crop: { x: 0 } }), h = L('h', { key: 'h', label: 'H', group: 'x', crop: { x: 0 } });
+  const inG = S.duplicate([g, h], [{ id: 'x' }], [g], o);
+  assert.equal(inG.copies[0].group, 'x', 'it stays in its group');
+});

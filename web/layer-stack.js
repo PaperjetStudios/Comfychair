@@ -135,3 +135,28 @@ export function attachMask(layers, groups, owner, mask, key) {
 // the grid: every pct% of the frame's width, from its corner
 export const gridStep = (frameW, pct) => Math.max(1, frameW * pct / 100);
 export const onGrid = (v, from, step) => from + Math.round((v - from) / step) * step;
+
+// Duplicate: a copy of each of list (a mask in it stands for its owner; the red Masks layer and drafts are left out) over the topmost of
+// them, in the same order and place, with its own mask copied too. A copy keeps its group. { newKey(), img(layer), name(layer) } come from
+// the caller: img says what a copy draws (a painted layer's canvas can't be shared). Returns { layers, copies }.
+export function duplicate(layers, groups, list, { newKey, img = (l) => l.img, name = (l) => l.label || l.name }) {
+  const own = new Set();
+  for (const l of list) own.add(l.maskOf ? layers.find((o) => o.key === l.maskOf && !o.maskOf) : l);
+  const from = layers.filter((l) => own.has(l) && !l.mask && !l.draft);
+  if (!from.length) return { layers, copies: [] };
+  const twin = (l, extra) => {
+    const c = { ...l, crop: { ...l.crop }, img: img(l), ...extra };
+    for (const k of ['chans', 'adjust']) if (l[k]) c[k] = structuredClone(l[k]);
+    for (const k of ['live', 'thumbEl', 'thumbRev']) delete c[k];
+    return c;
+  };
+  const copies = [], made = [];
+  for (const l of from) {
+    const c = twin(l, { key: newKey(), label: `${name(l)} copy` }), m = l.key != null && layers.find((o) => o.maskOf === l.key);
+    copies.push(c); made.push(c);
+    if (m) made.push(twin(m, { key: newKey(), maskOf: c.key, label: `${name(c)} mask` }));
+  }
+  const top = from[from.length - 1], topMask = top.key != null ? layers.find((o) => o.maskOf === top.key) : null;
+  const at = layers.indexOf(topMask || top) + 1;
+  return { layers: normalize([...layers.slice(0, at), ...made, ...layers.slice(at)], groups), copies };
+}

@@ -23,7 +23,7 @@ import { adjustPanel } from './adjust-panel.js';
 import { icon } from './icons.js';
 import * as G from './layer-geom.js';
 import { solidBounds } from './matte-edge.js';
-import { inpaintSection } from './inpaint.js';
+import { inpaintSection, masksSection } from './inpaint.js';
 import { imageToolsSection } from './imagetools.js';
 
 // ---------------------------------------------------------------------------
@@ -43,7 +43,7 @@ export function fromSaved(saved) {
   // the last one is drawn on top. size: a fixed {w,h} canvas, or null to fit around the layers. anim: see below.
   e.layers = (saved.layers || []).map((l) => ({ name: l.name, crop: { ...(l.crop || FULL) },
     x: l.x, y: l.y, scale: l.x == null ? 1 : l.scale, opacity: l.opacity ?? 1, hidden: !!l.hidden,
-    blend: l.blend || 'normal', locked: !!l.locked, ...(l.label ? { label: l.label } : {}), ...(l.mask ? { mask: true } : {}), ...(l.draft ? { draft: true } : {}), ...(l.canvas ? { canvas: true } : {}), ...(l.clip ? { clip: true } : {}),
+    blend: l.blend || 'normal', locked: !!l.locked, ...(l.label ? { label: l.label === 'Inpaint mask' ? 'Mask' : l.label } : {}), ...(l.mask ? { mask: true } : {}), ...(l.draft ? { draft: true } : {}), ...(l.canvas ? { canvas: true } : {}), ...(l.clip ? { clip: true } : {}),
     ...(l.rotation ? { rotation: +l.rotation } : {}), ...(l.flipX ? { flipX: true } : {}), ...(l.flipY ? { flipY: true } : {}),
     ...(l.chans ? { chans: structuredClone(l.chans) } : {}),
     ...(l.key ? { key: l.key } : {}), ...(l.group ? { group: l.group } : {}), ...(l.maskOf ? { maskOf: l.maskOf } : {}), ...(l.maskOff ? { maskOff: true } : {}), ...(l.maskFor ? { maskFor: l.maskFor } : {}), ...(l.adjust ? { adjust: structuredClone(l.adjust) } : {}) }));
@@ -264,7 +264,7 @@ export function createEditor(cfg) {
     return { x, y, w: Math.max(...rs.map((r) => r.x + r.w)) - x, h: Math.max(...rs.map((r) => r.y + r.h)) - y };
   }
   // (an inpaint draft, l.draft, shows but is left out of what is sent and saved until the Inpaint panel keeps it)
-  // (an inpaint mask layer, l.mask, is a red tint over the canvas for the Inpaint panel: never part of the picture)
+  // (a mask layer, l.mask, is a red tint over the canvas for the Masks panel: never part of the picture)
   // a painted canvas (or the inpaint mask) is resized, never turned or cropped; layers and other objects keep those
   const plain = (l) => !!(l && (l.canvas || l.mask || (l.label && /^Canvas \d+$/.test(l.label) && isCanvas(l))));   // (a canvas made before the flag has its numbered name)
   const visibleLayers = () => E.layers.filter((l) => ready(l) && !l.hidden && !l.mask && !l.maskOf);
@@ -972,6 +972,10 @@ export function createEditor(cfg) {
         e.preventDefault();
         return picked().length > 1 ? mergeSelected() : mergeDown(E.sel);
       }
+      if (cfg.active() && !sheetOpen() && E.sel && (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'j' && !e.target.closest('input, textarea, select')) {
+        e.preventDefault();
+        return duplicateSelected();
+      }
       if (!cfg.active() || sheetOpen()
         || e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey || !E.sel) return;
       const l = E.sel, n = e.shiftKey ? 10 : 1;
@@ -1072,6 +1076,20 @@ export function createEditor(cfg) {
   const pickOnly = (l) => { E.sel = l; E.multi = []; E.cropping = false; };
 
   // Top of the list is drawn on top; tap a row to select that layer
+  // a copy of each selected layer over them, in the same place, picked (undo takes it away: a change to the stack). A painted layer gets a canvas of its own.
+  function duplicateSelected() {
+    const copyCanvas = (l) => {
+      if (!(l.img instanceof HTMLCanvasElement)) return l.img;
+      const cv = document.createElement('canvas');
+      cv.width = l.img.width; cv.height = l.img.height;
+      cv.getContext('2d').drawImage(l.img, 0, 0);
+      return cv;
+    };
+    const r = ST.duplicate(E.layers, E.groups, picked().filter(ready), { newKey: uid, img: copyCanvas, name: layerName });
+    if (!r.copies.length) return toast('Select a picture layer first', true);
+    E.layers = r.layers; E.sel = r.copies[r.copies.length - 1]; E.multi = r.copies.slice(0, -1);
+    editorChanged();
+  }
   function layerList() {
     if (!E.layers.length) return hint('Add images from your inputs, generations or device, then tap one on the canvas to move, resize or crop it.');
     // (the list shows the top layer first: a place in it is the same place counted from the other end)
@@ -1084,6 +1102,7 @@ export function createEditor(cfg) {
       button('All', () => { const vis = E.layers.filter((l) => !l.mask && !l.draft && !l.maskOf); E.sel = vis[vis.length - 1] || null; E.multi = vis.slice(0, -1); renderEditor(); }, { cls: 'small' }),
       several.length ? button('None', () => { E.sel = null; E.multi = []; E.pickMode = false; renderEditor(); }, { cls: 'small' }) : null,
       several.length > 1 ? button([icon('copy'), 'Group'], () => { E.layers = ST.makeGroup(E.layers, E.groups, several, uid()); E.multi = []; editorChanged(); }, { cls: 'small', title: 'These layers as one group: its own opacity and blend, and they move together in the list' }) : null,
+      several.length ? button([icon('copy'), 'Duplicate'], duplicateSelected, { cls: 'small', title: 'A copy of each selected layer, its own mask too, on top of them in the same place (Ctrl+J)' }) : null,
       several.length === 1 ? button('Merge down', () => mergeDown(several[0]), { cls: 'small', disabled: !ST.mergeBelow(E.layers, several[0]), title: 'Into the layer below, as they look (Ctrl+E)' }) : null,
       several.length > 1 ? button('Merge selected', mergeSelected, { cls: 'small', disabled: ST.mergeSet(E.layers, several).length < 2, title: 'These layers as one picture, at the place of the topmost (Ctrl+E)' }) : null,
       several.length ? help('Merge draws the layers into one new picture: crops, turns, opacity and masks are drawn in. It keeps the lowest layer\'s blend, for the whole picture, so layers with a blend other than Normal can look different. A hidden layer isn\'t merged. Locked or animated layers can\'t be merged. Undo brings them back.') : null,
@@ -1668,6 +1687,7 @@ export function createEditor(cfg) {
     // the panel's parts, for the host to lay out
     topRow, layerList, layerProps: () => (picked().length > 1 ? groupProps(picked()) : E.sel?.maskOf ? maskProps(E.sel) : E.sel ? [layerProps(E.sel), E.cropping ? null : adjustProps(E.sel)] : null), picked, animProps, canvasProps, exportProps,
     paintProps: () => paint.paintProps(),
+    masksProps: () => masksSection(eng),
     inpaintProps: () => inpaintSection(eng),
     toolsProps: () => imageToolsSection(eng),
   };

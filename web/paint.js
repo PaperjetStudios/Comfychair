@@ -1,3 +1,4 @@
+import { distanceField, spreadInto } from './mask-spread.js';
 import { h, store, toast, clamp, seg, field, section, help, rangeField, button, hint, pctFmt, colorField, openSheet, closeSheet, actions, propNum } from './ui.js';
 import { icon } from './icons.js';
 import { ASPECT_PRESETS } from './core.js';
@@ -193,7 +194,7 @@ export function createPaint(ctx) {
     const f = X.frame();
     if (!f) { toast('Add a picture first', true); return null; }
     const cv = makeCanvas(f.w, f.h);
-    l = { name: null, label: 'Inpaint mask', mask: true, crop: { x: 0, y: 0, w: 1, h: 1 }, x: f.x, y: f.y, scale: 1, opacity: 0.55, hidden: false, blend: 'normal', img: cv };
+    l = { name: null, label: 'Mask', mask: true, crop: { x: 0, y: 0, w: 1, h: 1 }, x: f.x, y: f.y, scale: 1, opacity: 0.55, hidden: false, blend: 'normal', img: cv };
     E().layers.push(l);   // (on top; the selection stays where it is)
     dirty(l, 200);
     X.changed();
@@ -213,6 +214,42 @@ export function createPaint(ctx) {
     X.render();
   }
   const MASK_RED = '#ff2d2d';
+  // ---- Dilate / erode, live: each move of the slider works from the mask as it was when the slider first moved, so going back to
+  // 0 brings it back. Once it is painted, undone or replaced, that is the mask to work from, and the slider is at 0 again.
+  let SP = null;   // { l, img, rev, start (ImageData), field, work (ImageData), r, before (ImageData, while the slider is held) }
+  const spreadSame = (m) => !!m && !!SP && SP.l === m && SP.img === m.img && SP.rev === (m.paintRev || 0);
+  const spreadValue = () => (spreadSame(maskLayerOf()) ? SP.r : 0);
+  function spreadLive(r) {
+    const m = maskLayerOf();
+    if (!m) return;
+    const cv = layerCanvas(m), c = cv.getContext('2d', { willReadFrequently: true }), w = cv.width, hh = cv.height;
+    if (!spreadSame(m)) {
+      const start = c.getImageData(0, 0, w, hh), a = new Uint8Array(w * hh), work = c.createImageData(w, hh);
+      for (let i = 0; i < a.length; i++) { a[i] = start.data[i * 4 + 3]; work.data[i * 4] = 255; work.data[i * 4 + 1] = 45; work.data[i * 4 + 2] = 45; }   // (MASK_RED)
+      SP = { l: m, img: cv, rev: m.paintRev || 0, start, field: distanceField(a, w, hh), work, r: 0, before: null };
+    }
+    if (!SP.field) return;
+    if (!SP.before) {
+      SP.before = c.getImageData(0, 0, w, hh);
+      // (let go, wherever the pointer is)
+      const up = () => { removeEventListener('pointerup', up, true); removeEventListener('pointercancel', up, true); setTimeout(() => { if (spreadDone()) { X.changed(); X.render(); } }); };
+      addEventListener('pointerup', up, true); addEventListener('pointercancel', up, true);
+    }
+    SP.r = r;
+    if (r) spreadInto(SP.field, r, SP.work.data, w, { stride: 4, offset: 3 });
+    c.putImageData(r ? SP.work : SP.start, 0, 0);
+  }
+  // the slider let go: one undo step, and the mask's file saved
+  function spreadDone() {
+    const m = maskLayerOf();
+    if (!spreadSame(m) || !SP.before) return false;
+    const cv = m.img, c = cv.getContext('2d'), now = c.getImageData(0, 0, cv.width, cv.height), before = SP.before;
+    SP.before = null;
+    c.putImageData(before, 0, 0);
+    change(m, { x: 0, y: 0, w: cv.width, h: cv.height }, (x) => x.putImageData(now, 0, 0));
+    SP.rev = m.paintRev;
+    return true;
+  }
   // 'clear' empties the mask, 'invert' swaps painted and not
   function maskOp(kind) {
     const m = maskLayer(false);
@@ -234,7 +271,7 @@ export function createPaint(ctx) {
     const cv = makeCanvas(f.w, f.h), c = cv.getContext('2d');
     if (l) c.drawImage(l.img, l.x - f.x, l.y - f.y);
     else {
-      l = { name: null, label: 'Inpaint mask', mask: true, crop: { x: 0, y: 0, w: 1, h: 1 }, x: f.x, y: f.y, scale: 1, opacity: 0.55, hidden: false, blend: 'normal' };
+      l = { name: null, label: 'Mask', mask: true, crop: { x: 0, y: 0, w: 1, h: 1 }, x: f.x, y: f.y, scale: 1, opacity: 0.55, hidden: false, blend: 'normal' };
       E().layers.push(l);
     }
     c.fillStyle = MASK_RED;
@@ -260,7 +297,7 @@ export function createPaint(ctx) {
     for (let i = 0; i < p.length; i += 4) { const on = p[i] > 127; p[i] = 255; p[i + 1] = 45; p[i + 2] = 45; p[i + 3] = on ? 255 : 0; }   // (MASK_RED)
     t.putImageData(d, 0, 0);
     c.drawImage(tmp, 0, 0);
-    if (!l) { l = { name: null, label: 'Inpaint mask', mask: true, crop: { x: 0, y: 0, w: 1, h: 1 }, x: f.x, y: f.y, scale: 1, opacity: 0.55, hidden: false, blend: 'normal' }; E().layers.push(l); }
+    if (!l) { l = { name: null, label: 'Mask', mask: true, crop: { x: 0, y: 0, w: 1, h: 1 }, x: f.x, y: f.y, scale: 1, opacity: 0.55, hidden: false, blend: 'normal' }; E().layers.push(l); }
     Object.assign(l, { img: cv, x: f.x, y: f.y, scale: 1, hidden: false, crop: { x: 0, y: 0, w: 1, h: 1 } });
     dirty(l, 200);
     X.changed(); X.render();
@@ -313,7 +350,7 @@ export function createPaint(ctx) {
     c.globalCompositeOperation = 'source-over';
     if (over > 0) { c.save(); path(); c.clip(); c.strokeStyle = MASK_RED; c.lineWidth = over * 2; path(); c.stroke(); c.restore(); }
     let m = maskLayerOf();
-    if (!m) { m = { name: null, label: 'Inpaint mask', mask: true, crop: { x: 0, y: 0, w: 1, h: 1 }, x: f.x, y: f.y, scale: 1, opacity: 0.55, hidden: false, blend: 'normal' }; E().layers.push(m); }
+    if (!m) { m = { name: null, label: 'Mask', mask: true, crop: { x: 0, y: 0, w: 1, h: 1 }, x: f.x, y: f.y, scale: 1, opacity: 0.55, hidden: false, blend: 'normal' }; E().layers.push(m); }
     Object.assign(m, { img: cv, x: f.x, y: f.y, scale: 1, hidden: false, crop: { x: 0, y: 0, w: 1, h: 1 } });
     dirty(m, 200);
     X.changed(); X.render();
@@ -368,7 +405,7 @@ export function createPaint(ctx) {
           }
         }
       }
-      if (saved && !S) X.render();   // (the layer thumbnails)
+      if (saved && !S && !SP?.before) X.render();   // (the layer thumbnails; not under a Dilate / erode slider that is held: it would lose it)
     })();
     try { await saving; } finally { saving = null; }
   }
@@ -413,8 +450,10 @@ export function createPaint(ctx) {
     }
     syncStrip();
   }
-  const undo = () => { if (P.sel?.float) cancelFloat(); else step(U.undo, U.redo, 'before'); };   // (a lifted selection just drops back)
-  const redo = () => { commitFloat(); step(U.redo, U.undo, 'after'); };
+  // (the Dilate / erode slider goes back to 0: what is there now is the mask it works from)
+  const spreadReset = () => { if (SP) { SP = null; X.render(); } };
+  const undo = () => { if (P.sel?.float) cancelFloat(); else { step(U.undo, U.redo, 'before'); spreadReset(); } };   // (a lifted selection just drops back)
+  const redo = () => { commitFloat(); step(U.redo, U.undo, 'after'); spreadReset(); };
   // Run fn(ctx) on the layer's pixels inside the box, as one undo step
   function change(l, box, fn) {
     const cv = layerCanvas(l), c = cv.getContext('2d');
@@ -998,7 +1037,7 @@ export function createPaint(ctx) {
         c.globalCompositeOperation = kind === 'tomask' ? 'source-over' : 'destination-out';
         c.setTransform(...invert(layerMatrix(m))); c.drawImage(red, s.ox, s.oy);   // (through the mask layer's own place and scale)
       });
-      if (kind === 'tomask') toast('Added to the inpaint mask (Inpaint panel)');
+      if (kind === 'tomask') toast('Added to the mask (Masks panel)');
     } else if (kind === 'invert') {
       s.m = invertCanvas(s.m); settleSel(s);
     } else if (kind === 'grow' || kind === 'shrink' || kind === 'feather') {
@@ -1089,7 +1128,7 @@ export function createPaint(ctx) {
         b('Expand', 'Grow it by the panel\'s amount', () => selAction('grow')), b('Contract', 'Shrink it', () => selAction('shrink')),
         b('Feather', 'Soften its edge', () => selAction('feather')),
         b('Layer mask', 'Show only this on the layer: a mask you can go on painting', () => X.maskFromSelection?.()),
-        b('+ Mask', 'Mark it for inpainting', () => selAction('tomask')), b('− Mask', 'Take it off the inpaint mask', () => selAction('unmask')),
+        b('+ Mask', 'Mark it for inpainting', () => selAction('tomask')), b('− Mask', 'Take it off the mask', () => selAction('unmask')),
         b('Delete', 'Clear it from the layer', () => selAction('clear')),
         b('Deselect', 'Ctrl+D', () => { dropSel(); X.render(); }));
       selBar.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -1370,7 +1409,7 @@ export function createPaint(ctx) {
           act('Delete', 'clear', 'Clear what\'s selected (Delete)'), act('Fill', 'fill', 'Fill it with the colour'),
           act('Copy to layer', 'copy', 'A new layer with what\'s selected'), act('Cut to layer', 'cut', 'Move what\'s selected to a new layer')),
         h('div', { class: 'row wrap' },
-          act('Add to inpaint mask', 'tomask', 'Mark it for inpainting'), act('Remove from mask', 'unmask', 'Take it off the inpaint mask')),
+          act('Add to mask', 'tomask', 'Mark it for inpainting'), act('Remove from mask', 'unmask', 'Take it off the mask')),
         colour,
         toggle(t === 'lasso' ? 'Keep shape when scaling' : 'Square / keep shape', P.constrain, () => { P.constrain = !P.constrain; }, 'Also: hold Shift once the drag has started, or rest a finger on the screen'),
         help(`${t === 'lasso' ? 'Draw round what you want.' : 'Drag a box; it snaps to the canvas and the other layers (the Snap button).'} Brushes, shapes and fill then stay inside it. Hold a layer on the canvas to select its pixels. Drag inside the selection to move it, a corner to scale it. ${gestures}`));
@@ -1446,7 +1485,7 @@ export function createPaint(ctx) {
   }
   return {
     P, els: buildStrip(), painting, paintProps, paintOverlay, sync: syncStrip, savePaint, unsavedPaint, setTool, setColor,
-    blankSheet, addBlank, dropSel, undo, redo, pushStack, selectionMask, maskLayer, paintMask, layerMaskOp, hasSel: () => !!P.sel, selAction, selectLayer, resizeCanvasLayer, cutByMask, maskOp, growMask, maskOutside, maskFromMatte,
+    blankSheet, addBlank, dropSel, undo, redo, pushStack, selectionMask, maskLayer, paintMask, spreadValue, spreadLive, spreadDone, layerMaskOp, hasSel: () => !!P.sel, selAction, selectLayer, resizeCanvasLayer, cutByMask, maskOp, growMask, maskOutside, maskFromMatte,
     reset() { cancelStroke(); dropSel(); P.last = null; U.undo = []; U.redo = []; U.bytes = 0; syncStrip(); },   // another document: its undo goes
   };
 }
