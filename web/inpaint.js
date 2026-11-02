@@ -1,7 +1,7 @@
 import { h, api, store, toast, busy, button, section, field, seg, hint, help, toggle, textArea, rangeField, propNum, openSheet, closeSheet, actions } from './ui.js';
 import { ASPECT_PRESETS, S } from './core.js';
 import { pngBlob, uploadImage, openImagePicker } from './media.js';
-import { queueRun, valuesByRole, waitGen } from './make.js';
+import { queueRun, roleField, valuesByRole, waitGen } from './make.js';
 import { icon } from './icons.js';
 import { MASK_DEFAULT } from './maskpaint.js';
 import { SPREAD_MAX, spreadLabel } from './mask-spread.js';
@@ -23,7 +23,8 @@ const FLIGHT = new Set();   // runs on their way back
 const OVERLAP = 0.04;       // Extend: how much of the old edge joins the mask, a share of the canvas's longer side
 
 const PREFER = ['deck-klein3-inpaint', 'deck-klein9b-inpaint', 'deck-krea2-inpaint', 'deck-qwen21-inpaint'];   // (the first one installed is the default; Klein draws the best extensions)
-const inpaintTemplates = () => S.templates.filter((t) => !t.error && t.fields.some((f) => f.kind === 'mask' && f.required))
+// (one that takes a prompt: LaMa only fills from what is round the mask, whatever is asked for, so it isn't a model to pick here. Image tools, Remove, is its place)
+const inpaintTemplates = () => S.templates.filter((t) => !t.error && t.fields.some((f) => f.kind === 'mask' && f.required) && !!roleField(t, 'prompt'))
   .sort((a, b) => (PREFER.indexOf(a.id) + 1 || 99) - (PREFER.indexOf(b.id) + 1 || 99));
 const stepsField = (t) => t?.fields.find((f) => f.kind === 'int' && f.input === 'steps') || null;   // (turbo sigma lists have none)
 
