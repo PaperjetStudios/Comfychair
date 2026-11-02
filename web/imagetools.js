@@ -1,12 +1,13 @@
-import { h, api, store, toast, busy, button, chip, section, field, seg, hint, help, toggle, textArea } from './ui.js';
-import { S, inputUrl } from './core.js';
-import { pngBlob, uploadImage } from './media.js';
+import { h, api, store, toast, busy, button, chip, section, field, seg, hint, help, imageInput, toggle, textArea } from './ui.js';
+import { S, inputUrl, thumbUrl } from './core.js';
+import { openImagePicker, pngBlob, uploadImage } from './media.js';
 import { queueRun, template, valuesByRole, waitGen } from './make.js';
 import { MAPS } from './maps.js';
 import { editSizeFor } from './edit-size.js';
 import * as G from './layer-geom.js';
 import { uploadMask } from './inpaint.js';
 import { boundsOf, boxesFor, foundIn, refineEdge, separateAreas, stairOf, termsOf, worthLooking } from './matte-edge.js';
+import { SWAP_MODELS, SWAP_PARTS, biggestArea, changedAround, joined, onlyWithin, scaleFor, softEdge, swapBox, swapLora, swapPrompt, swapRefPixels, without } from './swap-part.js';
 
 // ---------------------------------------------------------------------------
 // Image tools, in the Editor panel the way the VFX tab has its effects: pick one, set it, Run. Run on chooses what it works
@@ -14,7 +15,7 @@ import { boundsOf, boxesFor, foundIn, refineEdge, separateAreas, stairOf, termsO
 // a map (depth, edges, scribble, pose), an upscaled copy, a cut-out of the subject, or the inpaint mask (auto masking).
 // ---------------------------------------------------------------------------
 const KEY = 'deck.imagetools';
-const GROUPS = ['Maps', 'Cut out and mask', 'Clean up', 'Upscale', 'Detail'];
+const GROUPS = ['Maps', 'Cut out and mask', 'Swap', 'Clean up', 'Upscale', 'Detail'];
 // The restoration models of Clean up: each works at the picture's own size, and changes nothing else
 const CLEAN = {
   noise: { label: 'Noise', model: '1x_ISO_denoise_v1.pth', help: 'Takes out the grain of a photo shot in low light.' },
@@ -64,6 +65,8 @@ const OPS = [
     help: 'SAM3 finds what you name ("the red car", "people", "the sky") and joins everything it finds. The result is a cut-out layer or the inpaint mask.' },
   { id: 'sheet', group: 'Cut out and mask', label: 'Split a sheet: enlarge and cut out each (for 3D)', tpl: 'deck-sheet-cell', kind: 'sheet', prompt: true,
     help: 'For a character or object sheet with rows and columns of views: cuts it into equal cells, makes each one bigger, and SAM3 cuts out what you name in it (the best match). Each view lands as its own layer where its cell was, ready for the 3D object slots (Save as input). Needs one run per cell.' },
+  { id: 'swap', group: 'Swap', label: 'Swap a face or body from another picture', kind: 'swap',
+    help: 'Pick the part, the picture to take it from and one or more models, then Swap. The area is found for you (the biggest one if there are several), or use the red mask to choose it. The model sees a close-up, and its result goes back through a soft edge: outside the area the picture stays pixel for pixel. Each ticked model lands as its own layer, to compare.' },
   { id: 'remove', group: 'Clean up', label: 'Remove: a watermark, text or what you name', tpl: 'deck-remove-lama', kind: 'remove',
     help: 'Find by name: SAM3 marks what you name in red, for you to check and put right, since it can miss a watermark or mark other things. The red mask: you paint it (Inpaint panel), or check what was found, and Remove takes it out: LaMa fills it in from what is round it, with no prompt. Only that area changes: the rest stays pixel for pixel, at full size. Best on small things on a plain or even background; a very big area comes back softer. Separate words with commas for several things. A big area on a busy background is better redrawn in Inpaint.' },
   { id: 'unmark', group: 'Clean up', label: 'Remove a watermark all over the picture', kind: 'delight', promptKey: 'uprompt', fallback: UNMARK_PROMPT, done: 'Watermark removed',
@@ -79,15 +82,20 @@ const OPS = [
   { id: 'upfast', group: 'Upscale', label: 'Upscale (fast)', tpl: 'deck-upscale-image-fast', kind: 'up',
     help: '4x-UltraSharp: a quick, clean enlargement without the invented detail. Export size is set to match, so Download and Save as input come out bigger.' },
 ];
-const ST = { op: 'cutout', scope: 'whole', result: 'cutout', hide: true, fine: true, rfrom: 'words', rprompt: 'watermark', cmodel: 'noise', uprompt: UNMARK_PROMPT, prompt: 'person', rows: 1, cols: 4, sheetFast: false, scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, ...store.get(KEY, {}) };
+const ST = { op: 'cutout', scope: 'whole', result: 'cutout', hide: true, fine: true, rfrom: 'words', rprompt: 'watermark', cmodel: 'noise', uprompt: UNMARK_PROMPT, prompt: 'person', rows: 1, cols: 4, sheetFast: false, swapPart: 'face', swapFrom: '', swapModels: ['klein9b'], swapWhere: 'find', swapExtra: '', scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, ...store.get(KEY, {}) };
 if (ST.lprompt === OLD_DELIGHT_PROMPT) ST.lprompt = DELIGHT_PROMPT;   // (the old default, saved in this browser; a prompt someone wrote stays)
 const save = () => store.set(KEY, ST);
 const FLIGHT = new Set();   // runs on their way back
 const op = () => OPS.find((o) => o.id === ST.op) || OPS[0];
 const dm = () => DETAIL[ST.dmodel] || DETAIL.klein9b;
-const tplId = (o) => (o.kind === 'delight' ? (DELIGHT[ST.lmodel] || DELIGHT.krea2).tpl : o.kind === 'sheet' ? (ST.sheetFast ? 'deck-sheet-cell-fast' : 'deck-sheet-cell') : o.kind === 'detail' ? dm().tpl : o.sd && ST.poser === 'sdpose' ? o.sd : o.tpl);
+// the models that can do the chosen part here: the template is installed, and its LoRA if it needs one
+const loraField = (t) => t?.fields.find((f) => f.kind === 'loras');
+const canSwap = (k) => { const t = template(SWAP_MODELS[k]?.tpl); return !!t && swapLora(k, ST.swapPart, loraField(t)?.options || []) !== false; };
+const swapModels = () => ST.swapModels.filter(canSwap);
+const tplId = (o) => (o.kind === 'swap' ? (SWAP_MODELS[swapModels()[0]] || SWAP_MODELS.klein9b).tpl : o.kind === 'delight' ? (DELIGHT[ST.lmodel] || DELIGHT.krea2).tpl : o.kind === 'sheet' ? (ST.sheetFast ? 'deck-sheet-cell-fast' : 'deck-sheet-cell') : o.kind === 'detail' ? dm().tpl : o.sd && ST.poser === 'sdpose' ? o.sd : o.tpl);
 
-const loadImg = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Could not load a picture')); i.src = src; });
+// (a run's file is asked for afresh: runs deleted along the way free their ids, so the next run's file can have the same name, and the browser would show the old one)
+const loadImg = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Could not load a picture')); i.src = src.startsWith('/files/') ? `${src}${src.includes('?') ? '&' : '?'}at=${Date.now()}${Math.random()}` : src; });
 const plainCrop = (c) => !c || (c.x < 0.001 && c.y < 0.001 && c.w > 0.999 && c.h > 0.999);
 
 // the selected layers an Image tool can run on, one run each: picture layers, not an inpaint mask or draft
@@ -104,7 +112,7 @@ async function keptPart(l) {
 }
 
 // The tools whose result has its layer's framing, so the layer's mask fits it
-const KEEPS_FRAMING = new Set(['up', 'detail', 'delight', 'remove', 'clean']);
+const KEEPS_FRAMING = new Set(['up', 'detail', 'delight', 'remove', 'clean', 'swap']);
 // a layer's mask as it is now, its kept part at its own pixels (painting on it during the run doesn't change it); null if it has none
 function maskAsSent(eng, l) {
   const m = eng.E.layers.find((x) => x.maskOf === l.key && eng.ready(x));
@@ -312,6 +320,9 @@ async function land(eng, o, src, done, cell) {
 
 async function run(eng) {
   const o = op(), t = template(tplId(o));
+  if (o.kind === 'swap' && !ST.swapFrom) return toast('Pick the picture to take it from first', true);
+  if (o.kind === 'swap' && !swapModels().length) return toast('Tick an installed model first', true);
+  if (o.kind === 'swap' && !template('deck-mask-image')) return toast('deck-mask-image isn\'t installed', true);
   if (!t) return toast(`${tplId(o)} isn't installed`, true);
   if (eng.loading()) return toast('The images are still loading', true);
   if (o.prompt && !ST.prompt.trim()) return toast('Say what to find first', true);
@@ -322,6 +333,7 @@ async function run(eng) {
   try {
     await eng.paint.savePaint();
     if (o.kind === 'remove' && ST.rfrom === 'painted') return await removePainted(eng, o, t, tab);
+    if (o.kind === 'swap' && ST.swapWhere === 'painted') return await swapPainted(eng, o, tab);
     const list = ST.scope === 'selected' ? targets(eng) : [null];
     if (!list.length) return toast('Select a layer first', true);
     for (const l of list) await runOne(eng, o, t, tab, await sourceOf(eng, l, o));   // (each selected layer is its own run, queued one after another)
@@ -402,20 +414,28 @@ async function fillIn(eng, o, t, tab, src, maskCv) {
   } finally { FLIGHT.delete(fillIn); b.done(); eng.render(); }
 }
 
-// ...what's named in the Find box, one search each, all of it joined. It only marks: SAM3 often misses a watermark or takes other things for it
-// ("text" found nothing on large white letters, "watermark" other things too), so what goes is seen in red and can be put right before Run removes it.
-async function markFound(eng, o, src) {
-  const find = template('deck-mask-image'), image = find.fields.find((f) => f.kind === 'image'), [W, H] = src.px;
+// what SAM3 finds for these words in a picture, one search each, joined on a W×H canvas (white = found). Its runs are only a means, so they go.
+async function searchFor(name, W, H, terms) {
+  const find = template('deck-mask-image'), image = find.fields.find((f) => f.kind === 'image');
   const cv = document.createElement('canvas');
   cv.width = W; cv.height = H;
   const c = cv.getContext('2d');
   c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
   c.globalCompositeOperation = 'lighten';
-  for (const term of termsOf(ST.rprompt)) {
-    const done = await sent({ template: find.id, values: { [image.key]: src.name, ...valuesByRole(find, { seed: -1, prompt: term }) }, batch: 1 });
-    const outs = (done.outputs || []).filter((x) => x.kind === 'image');
-    for (const x of outs) c.drawImage(await loadImg(x.url), 0, 0, W, H);
+  for (const term of terms) {
+    const done = await sent({ template: find.id, values: { [image.key]: name, ...valuesByRole(find, { seed: -1, prompt: term }) }, batch: 1 });
+    for (const x of (done.outputs || []).filter((y) => y.kind === 'image')) c.drawImage(await loadImg(x.url), 0, 0, W, H);
+    await dropRun(done.id);
   }
+  return cv;
+}
+const dropRun = (id) => api(`/api/generations/${id}`, { method: 'DELETE', busy: false }).catch(() => {});
+const dropInput = (name) => api(`/api/inputs?name=${encodeURIComponent(name)}`, { method: 'DELETE', busy: false }).catch(() => {});
+
+// ...what's named in the Find box, one search each, all of it joined. It only marks: SAM3 often misses a watermark or takes other things for it
+// ("text" found nothing on large white letters, "watermark" other things too), so what goes is seen in red and can be put right before Run removes it.
+async function markFound(eng, o, src) {
+  const [W, H] = src.px, cv = await searchFor(src.name, W, H, termsOf(ST.rprompt));
   if (!boundsOf(redOf(cv, W, H), W, H)) return toast('SAM3 found nothing there: try other words, or paint it (Inpaint panel)', true);
   eng.paint.maskFromMatte(cv, src.rect, src.was && G.turn(src.was));
   ST.rfrom = 'painted'; save(); eng.render();
@@ -433,17 +453,171 @@ async function removePainted(eng, o, t, tab) {
   return fillIn(eng, o, t, tab, { name: up.name, rect: { x: f.x, y: f.y, w: f.w, h: f.h }, layer: null, px: [pic.width, pic.height] }, m.canvas);
 }
 
+// ---- Swap: a character's face, head or body from another picture ----
+// the part in a W×H picture, as a row-by-row mask of its biggest area; null if it isn't found
+async function findPart(name, W, H, part) {
+  const p = SWAP_PARTS[part], red = redOf(await searchFor(name, W, H, p.find), W, H);
+  if (!boundsOf(red, W, H)) return null;
+  const whole = onlyWithin(red, W, biggestArea(separateAreas(red, W, H)));
+  if (!p.keep) return { mask: whole, keep: null };
+  const keep = redOf(await searchFor(name, W, H, p.keep), W, H), left = without(whole, keep);
+  return boundsOf(left, W, H) ? { mask: left, keep } : { mask: whole, keep: null };
+}
+const canvasOf = (W, H) => { const cv = document.createElement('canvas'); cv.width = W; cv.height = H; return cv; };
+const maskCanvas = (red, W, H) => {
+  const cv = canvasOf(W, H), c = cv.getContext('2d'), d = c.createImageData(W, H);
+  for (let i = 0; i < red.length; i++) { const j = i * 4; d.data[j] = d.data[j + 1] = d.data[j + 2] = red[i]; d.data[j + 3] = 255; }
+  c.putImageData(d, 0, 0);
+  return cv;
+};
+
+// the picture to take the part from: for a face or head a close-up of it, so the model has its likeness at full size. Whole if it isn't found.
+async function swapReference(part) {
+  const p = SWAP_PARTS[part];
+  if (!p.closeUp) return { name: ST.swapFrom, made: false };
+  const img = await loadImg(inputUrl(ST.swapFrom)).catch(() => { throw new Error('The picture to take it from is gone: pick it again'); });
+  const W = img.naturalWidth, H = img.naturalHeight, found = await findPart(ST.swapFrom, W, H, part);
+  if (!found) return { name: ST.swapFrom, made: false };
+  const box = swapBox(boundsOf(found.mask, W, H), W, H, 0.35), cv = canvasOf(box.w, box.h);
+  cv.getContext('2d').drawImage(img, box.x, box.y, box.w, box.h, 0, 0, box.w, box.h);
+  const up = await uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: 'swap-from.png', multiple: 1 });
+  return { name: up.name, made: true };
+}
+
+// a copy of a reference at about this many pixels, as a new input; null if it is already no bigger, or none is wanted
+async function smallerRef(name, pixels) {
+  if (!pixels) return null;
+  const img = await loadImg(inputUrl(name)), k = Math.sqrt(pixels / (img.naturalWidth * img.naturalHeight));
+  if (k >= 1) return null;
+  const cv = canvasOf(Math.round(img.naturalWidth * k), Math.round(img.naturalHeight * k)), c = cv.getContext('2d');
+  c.imageSmoothingQuality = 'high';
+  c.drawImage(img, 0, 0, cv.width, cv.height);
+  return (await uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: 'swap-from-small.png', multiple: 1 })).name;
+}
+
+// The swap on a picture whose area is known: one close-up and one soft edge, then a run per ticked model. Each result goes back on a
+// copy of the picture through that edge and lands as a layer. The close-up, the reference and the runs were only a means, so they go.
+async function swapArea(eng, o, tab, src, { mask: red, keep }, b) {
+  const part = ST.swapPart, p = SWAP_PARTS[part], [W, H] = src.px, area = boundsOf(red, W, H);
+  if (!area) throw new Error('There is nothing in the area to swap');
+  const box = swapBox(area, W, H, p.room), side = Math.max(area.w, area.h), k = scaleFor(box, p.pixels);
+  const cw = Math.max(64, Math.round(box.w * k)), ch = Math.max(64, Math.round(box.h * k));
+  const pic = await loadImg(inputUrl(src.name)), close = canvasOf(cw, ch), cc = close.getContext('2d');
+  cc.imageSmoothingQuality = 'high';
+  cc.drawImage(pic, box.x, box.y, box.w, box.h, 0, 0, cw, ch);
+  const area0 = cropOf(red, W, box), keep0 = keep && cropOf(keep, W, box);
+  const was = canvasOf(box.w, box.h), wc = was.getContext('2d', { willReadFrequently: true });
+  wc.drawImage(pic, box.x, box.y, box.w, box.h, 0, 0, box.w, box.h);
+  const before = wc.getImageData(0, 0, box.w, box.h).data;
+  b.set('Finding the part to take…');
+  const ref = await swapReference(part), closeUp = await uploadImage(await pngBlob(close), { mp: 0, source: 'editor', filename: 'swap-close.png', multiple: 1 });
+  const wanted = swapModels();
+  FLIGHT.add(swapArea); eng.render();
+  try {
+    for (const [n, key] of wanted.entries()) {
+      const m = SWAP_MODELS[key], t = template(m.tpl);
+      b.set(`${m.label} (${n + 1} of ${wanted.length})…`);
+      let run = null, smaller = null;
+      try {
+        const main = t.fields.find((f) => f.kind === 'image' && /image to edit/i.test(f.group));
+        const refField = t.fields.find((f) => f.kind === 'image' && /reference/i.test(f.group));
+        const prompt = t.fields.find((f) => f.kind === 'text' && /^edit$/i.test(f.group) && !/negative/i.test(f.input));
+        if (!main || !refField || !prompt) throw new Error('it has no reference picture');
+        const lora = swapLora(key, part, loraField(t)?.options || []);
+        smaller = await smallerRef(ref.name, swapRefPixels(key, part));
+        const values = { ...valuesByRole(t, { seed: -1 }), [main.key]: closeUp.name, [refField.key]: smaller || ref.name, [prompt.key]: swapPrompt(part, key, ST.swapExtra), ...wholePicture(t, [cw, ch], m.maxPixels),
+          ...(lora && { [loraField(t).key]: [lora] }) };
+        run = await once({ template: t.id, values, batch: 1 });
+        const made = await loadImg(run.outputs.find((x) => x.kind === 'image').url);
+        if (eng.E.tab?.id !== tab) { toast(`${o.label} finished on another edit`); continue; }
+        const r = await uploadImage(await pngBlob(pasted(pic, W, H, made, box, before, area0, keep0, side, p)), { mp: 0, source: 'editor', filename: 'swapped.png', multiple: 1 });
+        eng.addImage(r.name, { label: `${p.label} swap (${m.label})`, ...placed(src, src.rect.x, src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) });
+        if (src.layer && ST.hide) src.layer.hidden = true;
+        eng.changed(); eng.render();
+      } catch (e) { toast(`${m.label}: ${e.message}`, true); } finally { if (run) await dropRun(run.id); if (smaller) await dropInput(smaller); }
+    }
+  } finally {
+    FLIGHT.delete(swapArea);
+    await dropInput(closeUp.name);
+    if (ref.made) await dropInput(ref.name);
+    eng.render();
+  }
+  toast(`${o.label}: done`);
+}
+
+// a copy of the picture with what the model made back in its box, through the edge
+function pasted(pic, W, H, made, box, before, area, keep, side, p) {
+  const piece = canvasOf(box.w, box.h), c = piece.getContext('2d', { willReadFrequently: true });
+  c.imageSmoothingQuality = 'high';
+  c.drawImage(made, 0, 0, box.w, box.h);
+  const px = c.getImageData(0, 0, box.w, box.h);
+  // the area, and what the model changed right next to it (a new beard, a bigger build), but never what is to be kept
+  const near = changedAround(before, px.data, area, box.w, box.h);
+  let use = near ? joined(area, near) : area;
+  if (keep) use = without(use, keep);
+  const e = softEdge(use, box.w, box.h, side * p.grow, side * p.soft);
+  // (the kept part wins over the grown edge: a head is small beside a full-length figure, and the growth alone would cover it)
+  const held = keep && softEdge(keep, box.w, box.h, 0, Math.max(4, side * 0.008));
+  for (let i = 0; i < e.length; i++) px.data[i * 4 + 3] = held ? Math.min(e[i], 255 - held[i]) : e[i];
+  c.putImageData(px, 0, 0);
+  const out = canvasOf(W, H), oc = out.getContext('2d');
+  oc.drawImage(pic, 0, 0, W, H);
+  oc.drawImage(piece, box.x, box.y);
+  return out;
+}
+
+async function swapOnSource(eng, o, tab, src) {
+  const b = busy('Finding the area…');
+  try {
+    const [W, H] = src.px, found = await findPart(src.name, W, H, ST.swapPart);
+    if (!found) return toast(`SAM3 found no ${SWAP_PARTS[ST.swapPart].label.toLowerCase()} there: paint the red mask instead`, true);
+    await swapArea(eng, o, tab, src, found, b);
+  } finally { b.done(); }
+}
+
+// ...on the red mask as painted: on the whole picture, as a painted mask is
+async function swapPainted(eng, o, tab) {
+  const f = eng.frame(), m = eng.composeMask();
+  if (!f || !m) return toast('Paint the area first (Inpaint panel), or have it found', true);
+  const pic = document.createElement('canvas');
+  if (!eng.compose(pic)) return toast('Add a picture first', true);
+  if (pic.width !== m.canvas.width || pic.height !== m.canvas.height) return toast(`The picture (${pic.width}×${pic.height}) and mask (${m.canvas.width}×${m.canvas.height}) differ in size: try again`, true);
+  const up = await uploadImage(await pngBlob(pic), { mp: 0, source: 'editor', filename: 'swap.png', multiple: 1 }), b = busy('Swapping…');
+  try {
+    await swapArea(eng, o, tab, { name: up.name, rect: { x: f.x, y: f.y, w: f.w, h: f.h }, layer: null, px: [pic.width, pic.height] }, { mask: redOf(m.canvas, pic.width, pic.height), keep: null }, b);
+  } finally { b.done(); }
+}
+
+// Mark only: the area goes in the red mask to check and put right, for the next Swap
+async function swapMark(eng) {
+  const o = op(), b = busy('Finding the area…');
+  if (!template('deck-mask-image')) { b.done(); return toast('deck-mask-image isn\'t installed', true); }
+  try {
+    await eng.paint.savePaint();
+    const list = ST.scope === 'selected' ? targets(eng) : [null];
+    if (!list.length) return toast('Select a layer first', true);
+    for (const l of list) {
+      const src = await sourceOf(eng, l, o), [W, H] = src.px, found = await findPart(src.name, W, H, ST.swapPart);
+      if (!found) { toast(`SAM3 found no ${SWAP_PARTS[ST.swapPart].label.toLowerCase()} there: paint it (Inpaint panel)`, true); continue; }
+      eng.paint.maskFromMatte(maskCanvas(found.mask, W, H), src.rect, src.was && G.turn(src.was));
+      ST.swapWhere = 'painted'; save(); eng.render();
+      toast('Marked in red: check it (paint more or erase in the Inpaint panel), then Swap');
+    }
+  } catch (e) { toast(e.message, true); } finally { b.done(); }
+}
+
 // an edit template's Size for all of a picture of [w, h] (left alone, it crops to a 1024 square)
-function wholePicture(t, [w, h]) {
+function wholePicture(t, [w, h], maxPixels) {
   const fw = t.fields.find((f) => f.key === '__deck.width'), fh = t.fields.find((f) => f.key === '__deck.height');
   if (!fw || !fh) return {};
-  const [sw, sh] = editSizeFor(w, h, fw.step || 16);
+  const [sw, sh] = editSizeFor(w, h, fw.step || 16, maxPixels);
   return { [fw.key]: sw, [fh.key]: sh };
 }
 
 async function runOne(eng, o, t, tab, src) {
   if (o.kind === 'sheet') return runSheet(eng, o, t, tab, src);
   if (o.kind === 'remove') return markFound(eng, o, src);
+  if (o.kind === 'swap') return swapOnSource(eng, o, tab, src);
   const imageField = t.fields.find((f) => f.kind === 'image');
   const values = { [imageField.key]: src.name, ...valuesByRole(t, { seed: -1, ...(o.prompt && { prompt: ST.prompt.trim() }) }) };
   if (o.kind === 'delight') {   // the edit template's own picture and edit boxes (not its reference pictures)
@@ -554,6 +728,18 @@ export function imageToolsSection(eng) {
     o.kind === 'remove' && ST.rfrom === 'words' ? h('div', { class: 'chips' }, ...LOOK_FOR.map(([v, label]) => chip(label, () => { ST.rprompt = v; save(); eng.render(); }, { on: ST.rprompt.trim().toLowerCase() === v }))) : null,
     o.kind === 'remove' && ST.rfrom === 'words' ? field('Find', textArea(() => ST.rprompt, (v) => { ST.rprompt = v; save(); }, { rows: 2, label: 'What to remove', placeholder: 'Watermark, text, the red sign' })) : null,
     o.kind === 'remove' && ST.rfrom === 'painted' && !eng.paint.maskLayer(false) ? hint('Paint what to remove first (Inpaint panel), or find it by name') : null,
+    o.kind === 'swap' ? field('Swap', seg(Object.entries(SWAP_PARTS).map(([k, v]) => [k, v.label]), ST.swapPart, (v) => { ST.swapPart = v; save(); eng.render(); }, { wrap: true }),
+      help(SWAP_PARTS[ST.swapPart].help)) : null,
+    o.kind === 'swap' ? imageInput({ label: 'Take it from', name: ST.swapFrom ? ST.swapFrom.split('/').pop() : '', thumb: ST.swapFrom ? h('img', { src: thumbUrl(ST.swapFrom, 256), alt: '' }) : null,
+      pick: () => openImagePicker({ title: 'The picture to take it from', onPick: (name) => { ST.swapFrom = name; save(); eng.render(); } }),
+      onClear: () => { ST.swapFrom = ''; save(); eng.render(); } }) : null,
+    o.kind === 'swap' ? field(['Models', h('span', {}, `${swapModels().length} ticked`)], h('div', { class: 'chips' }, ...Object.entries(SWAP_MODELS).filter(([k]) => canSwap(k)).map(([k, v]) =>
+      chip(v.label, () => { ST.swapModels = ST.swapModels.includes(k) ? ST.swapModels.filter((x) => x !== k) : [...ST.swapModels, k]; save(); eng.render(); }, { on: ST.swapModels.includes(k) }))),
+      help(Object.values(SWAP_MODELS).map((v) => `${v.label}: ${v.help}`).join(' '))) : null,
+    o.kind === 'swap' ? field('Where', seg([['find', 'Find it'], ['painted', 'The red mask']], ST.swapWhere, (v) => { ST.swapWhere = v; save(); eng.render(); }),
+      help('Find it uses SAM3 and takes the biggest one it finds. With several people, Mark it first, erase what shouldn\'t change in the Inpaint panel, and Swap from the red mask.')) : null,
+    o.kind === 'swap' && ST.swapWhere === 'painted' && !eng.paint.maskLayer(false) ? hint('Paint the area first (Inpaint panel), or Mark it') : null,
+    o.kind === 'swap' ? field('Also say', textArea(() => ST.swapExtra, (v) => { ST.swapExtra = v; save(); }, { rows: 2, label: 'Words added to the prompt', placeholder: 'Keep the glasses' })) : null,
     o.kind === 'clean' ? field('Take out', seg(Object.entries(CLEAN).map(([k, v]) => [k, v.label]), ST.cmodel, (v) => { ST.cmodel = v; save(); eng.render(); }, { wrap: true }),
       help((CLEAN[ST.cmodel] || CLEAN.noise).help)) : null,
     o.kind === 'sheet' ? field('Result', seg([['cutout', 'Cut out'], ['black', 'On black']], ST.result === 'black' ? 'black' : 'cutout', (v) => { ST.result = v; save(); eng.render(); })) : null,
@@ -569,5 +755,5 @@ export function imageToolsSection(eng) {
     o.kind === 'up' ? field(['Enlarge', out ? h('span', {}, out) : null], seg([[2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); eng.render(); })) : null,
     (KEEPS_FRAMING.has(o.kind) || o.kind === 'sheet' || (o.kind === 'matte' && ST.result !== 'mask')) && onLayers && !(o.kind === 'remove' && ST.rfrom === 'painted')
       ? toggle('Hide the original', ST.hide, (v) => { ST.hide = v; save(); }) : null,
-    h('div', { class: 'row wrap' }, button(o.kind === 'remove' ? (ST.rfrom === 'words' ? 'Find and mark' : 'Remove') : FLIGHT.size ? 'Run again' : 'Run', () => run(eng), { cls: 'primary', disabled: !t })));
+    h('div', { class: 'row wrap' }, o.kind === 'swap' ? button('Mark it', () => swapMark(eng), { disabled: !t }) : null, button(o.kind === 'swap' ? 'Swap' : o.kind === 'remove' ? (ST.rfrom === 'words' ? 'Find and mark' : 'Remove') : FLIGHT.size ? 'Run again' : 'Run', () => run(eng), { cls: 'primary', disabled: !t })));
 }
