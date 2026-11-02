@@ -41,6 +41,16 @@ export const ROLES = {
   strength: (f) => f.kind === 'float' && f.input === 'strength_model',
   outsize: (f) => f.kind === 'choice' && f.input === 'output_size',
   seed: (f) => f.kind === 'seed',
+  score: (f) => f.input === 'score_threshold',   // (SAM3 on a clip: how sure it must be)
+  confidence: (f) => f.input === 'confidence_threshold',   // (SAM3 on a picture)
+  maxFound: (f) => f.input === 'max_detections',
+  direction: (f) => f.input === 'direction',
+  which: (f) => f.input === 'obj_id',
+  margin: (f) => f.input === 'margin',
+  follow: (f) => f.input === 'follow',
+  steady: (f) => f.input === 'smooth',
+  onlyMask: (f) => f.input === 'only_mask',
+  hold: (f) => f.input === 'strength',
   loras: (f) => f.kind === 'loras',
   depthModel: (f) => f.kind === 'choice' && f.input === 'model',
   edgeAmount: (f) => (f.kind === 'float' || f.kind === 'int') && (f.input === 'threshold' || /edge amount/i.test(f.label)),

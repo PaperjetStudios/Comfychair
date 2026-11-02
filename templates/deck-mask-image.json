@@ -32,7 +32,7 @@
    "max_detections": 8
   },
   "_meta": {
-   "title": "@2 Prompt [text_prompt]"
+   "title": "@2 Prompt [text_prompt,confidence_threshold,max_detections]"
   }
  },
  "grey": {

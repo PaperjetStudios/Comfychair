@@ -45,15 +45,15 @@ const EFFECTS = [
     help: 'Change the first frame (in Generate with an edit template, or in the Image tab), and the change carries through the whole clip.' },
   { id: 'lora', group: 'Restyle', label: 'LoRA restyle', tpl: 'deck-ltx-v2v-lora', needs: ['source', 'loras', 'prompt', 'len', 'res', 'seed'],
     help: 'Runs the clip through an IC-LoRA: deblur, colourise, restore, day to night, head swap and so on. Pick the LoRA and its strength, and describe the result in the prompt (for colourise, name the colours): with an empty prompt the change is faint.' },
-  { id: 'alpha', group: 'Matte', label: 'Cut out (Alpha Gen)', tpl: 'deck-ltx-alpha', masked: 'deck-ltx-alpha-crop', needs: ['source', 'matte?', 'len', 'res'],
+  { id: 'alpha', group: 'Matte', label: 'Cut out (Alpha Gen)', tpl: 'deck-ltx-alpha', masked: 'deck-ltx-alpha-crop', needs: ['source', 'matte?', 'alpha', 'len', 'res', 'seed'],
     help: 'Makes a black-and-white matte of the main subject (white = keep). Then use it with "Apply matte", or as a mask. Give it a mask of one thing (Mask (SAM3), from the same clip) and it works on a crop round that thing: a sharper matte in the same time, of just that thing.' },
   { id: 'colorkey', group: 'Matte', label: 'Colour key', job: 'key', needs: ['source', 'keycolor'],
     help: 'Cuts out a green or blue screen. Quick: runs on the server with ffmpeg, no GPU.' },
-  { id: 'mattekey', group: 'Matte', label: 'Apply matte', job: 'key', needs: ['source', 'matte'],
+  { id: 'mattekey', group: 'Matte', label: 'Apply matte', job: 'key', needs: ['source', 'matte', 'invert'],
     help: 'Uses a matte clip (white = keep) as the clip\'s see-through channel, so lower tracks show through.' },
   { id: 'refine', group: 'Matte', label: 'Clean up matte', job: 'matte', needs: ['source?', 'matte', 'matte2', 'refine'],
     help: 'Cleans up a matte or mask (white = keep), or combines two: SAM3\'s and Alpha Gen\'s, say. Grow or shrink it, fill holes, steady it, harden or soften the edge. Quick: ffmpeg on the server, no GPU. Then Use as matte / mask.' },
-  { id: 'mask', group: 'Remove', label: 'Mask (SAM3)', tpl: 'deck-sam3-video-mask', needs: ['source', 'points', 'prompt', 'len'],
+  { id: 'mask', group: 'Remove', label: 'Mask (SAM3)', tpl: 'deck-sam3-video-mask', needs: ['source', 'points', 'prompt', 'sam', 'len'],
     help: 'Tap the thing to cut out on the frame (Exclude marks what to leave out), or describe it. SAM3 follows it through the clip and makes a mask clip.' },
   { id: 'inpaint', group: 'Remove', label: 'Replace', tpl: 'deck-ltx-inpaint', mult: 64, needs: ['source', 'matte', 'prompt', 'len', 'res', 'seed'],
     help: 'Paints something new where a mask clip is white (make one with Mask (SAM3) or Alpha Gen) and keeps the rest of the picture. Describe the whole shot with the new thing in it.' },
@@ -451,6 +451,9 @@ function render() {
     needs.has('boxes') ? field('Quality', seg([['quality', 'Quality'], ['fast', 'Fast']], T.delogo || 'quality', (v) => { T.delogo = v; changed(false); }),
       help('Quality runs ProPainter on the GPU: about a minute for 10 s with small boxes. Fast is ffmpeg\'s delogo: seconds, but the box goes soft.')) : null,
     ...(needs.has('refine') ? refineFields() : []),
+    ...(needs.has('sam') ? samFields() : []),
+    ...(needs.has('alpha') ? alphaFields() : []),
+    needs.has('invert') ? toggle('Invert (keep what\'s black)', T.key.invert, (on) => { T.key.invert = on; changed(false); }) : null,
     ...(needs.has('canvas') ? canvasFields() : []),
     needs.has('loras') ? lorasField(t) : null,
     needs.has('len') ? rangeField('Length', () => T.len, (v) => { T.len = v; }, { min: 1, max: e.maxLen || 10, step: 1 / 3,
@@ -675,6 +678,31 @@ function pickResult(onPick) {
   openVideoPicker({ title: 'Pick a matte or mask', onPick });
 }
 
+// SAM3 on a clip: as the template has them (dev/make_ltx_templates.py)
+const SAM = { score: 0.3, direction: 'both', which: -1 };
+function samFields() {
+  const s = (T.sam ||= { ...SAM });
+  return [rangeField('How sure', () => s.score, (v) => { s.score = v; }, { min: 0.05, max: 0.95, step: 0.05, onChange: () => changed(false),
+    help: 'What SAM3 needs to be sure of before it takes something it was asked for by name. Lower finds more, and may take the wrong things; higher finds less. Tapped points don\'t use this much.' }),
+  field('Follow it', seg([['both', 'Both ways'], ['forward', 'Forward']], s.direction === 'forward' ? 'forward' : 'both', (v) => { s.direction = v; changed(false); }),
+    help('From the frame you tapped on (the first frame when you name it). Forward leaves the frames before it empty.')),
+  rangeField('Object number', () => s.which, (v) => { s.which = v; }, { min: -1, max: 9, step: 1, fmt: (v) => (v < 0 ? 'All' : String(v)), onChange: () => changed(false),
+    help: 'All puts everything SAM3 found in one mask. A number takes one of them, by SAM3\'s own numbering: it doesn\'t go by position, and some numbers are empty, so try a few. A number past the last one gives all of them.' })];
+}
+// Alpha Gen: as the templates have them. The crop's only count with a mask clip (deck-ltx-alpha-crop).
+const ALPHA = { strength: 1, hold: 1, margin: 0.2, follow: 'auto', steady: 0.85, onlyMask: true, grow: 0.06 };
+function alphaFields() {
+  const a = (T.alpha ||= { ...ALPHA }), num = (k, label, o) => rangeField(label, () => a[k], (v) => { a[k] = v; }, { onChange: () => changed(false), ...o });
+  return [num('strength', 'Matte strength', { min: 0, max: 1.5, step: 0.05, help: 'How strongly the matte model is applied. It was trained at 1.' }),
+    num('hold', 'Hold to the clip', { min: 0, max: 1, step: 0.05, help: 'How closely the matte keeps to the clip\'s picture. Lower lets the model drift.' }),
+    ...(T.matte ? [num('margin', 'Crop room', { min: 0, max: 2, step: 0.05, help: 'Room round the thing on each side, as a share of its size. Less gives it more pixels; too little cuts off hair and motion.' }),
+      field('Crop', seg([['auto', 'Auto'], ['still', 'Still'], ['follow', 'Follow']], a.follow, (v) => { a.follow = v; changed(); }),
+        help('Still: one crop over everywhere the thing goes. Follow: a smaller crop that moves with it. Auto: still, unless that crop would be much bigger.')),
+      a.follow === 'still' ? null : num('steady', 'Crop steadiness', { min: 0, max: 0.99, step: 0.01, help: 'How steady a following crop is. Higher is steadier and slower to follow.' }),
+      toggle('Only the masked thing', a.onlyMask, (on) => { a.onlyMask = on; changed(); }),
+      a.onlyMask ? num('grow', 'Past the mask', { min: 0, max: 0.5, step: 0.01, help: 'How far past the mask the matte is kept, as a share of the crop\'s short side: room for hair and motion blur the mask missed.' }) : null] : [])];
+}
+
 function faceFields() {
   const f = (T.face ||= { ...FACE }), face = (T.blend || 'face') === 'face';
   const num = (k, label, opts) => rangeField(label, () => f[k] ?? FACE[k], (v) => { f[k] = v; },
@@ -736,6 +764,12 @@ async function buildRun(e, loose = false) {
     put('edgeAmount', e.id === 'canny' ? [0.2, 0.4, 0.6][k] : [16, 28, 40][k]);   // Canny's low threshold; XDoG's threshold
   }
   if (e.needs.includes('outsize')) put('outsize', T.outsize || 'FullHD');
+  if (e.needs.includes('sam')) { const s = T.sam || SAM; put('score', s.score); put('direction', s.direction === 'forward' ? 'forward' : 'both'); put('which', s.which); }
+  if (e.needs.includes('alpha')) {
+    const a = T.alpha || ALPHA;
+    put('strength', a.strength); put('hold', a.hold);
+    if (T.matte) { put('margin', a.margin); put('follow', a.follow); put('steady', a.steady); put('onlyMask', a.onlyMask); put('grow', a.grow); }
+  }
   if (e.needs.includes('line')) {   // the spoken line, the prompt made from it, the clip as long as it, at about 0.9 MP
     put('sound', T.sound);
     put('prompt', T.prompt.trim() ? T.prompt : talkPromptOf());

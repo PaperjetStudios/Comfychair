@@ -262,6 +262,10 @@ class Storage(unittest.TestCase):
             self.assertIsNone(db.input_origin(name))
             db.delete_generation(other)
 
+    def test_a_run_that_found_nothing_says_so(self):
+        self.assertIn("found nothing", main.run_error({"node_type": "SAM3Propagate", "exception_message": "cannot mmap an empty file"}))
+        self.assertEqual(main.run_error({"node_type": "KSampler", "exception_message": "out of memory"}), "KSampler: out of memory")
+
     def test_a_project_takes_its_saved_pictures(self):
         with TestClient(main.app) as c:
             _, _, run_file, input_file = self._saved(c)

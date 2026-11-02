@@ -39,7 +39,7 @@ write("deck-cutout-image", {
 write("deck-mask-image", {
     "img": {**node("LoadImage", image=""), "_meta": {"title": "@1 Picture [image]", "deck_keep_size": True}},
     "model": node("LoadSAM3Model", precision="auto", compile=False),
-    "find": node("SAM3Grounding", "@2 Prompt [text_prompt]", sam3_model_config=["model", 0], image=["img", 0],
+    "find": node("SAM3Grounding", "@2 Prompt [text_prompt,confidence_threshold,max_detections]", sam3_model_config=["model", 0], image=["img", 0],
                  confidence_threshold=0.2, text_prompt="person", max_detections=8),
     "grey": node("MaskToImage", mask=["find", 0]),
     "save": node("SaveImage", images=["grey", 0], filename_prefix="deck/sam3-image-mask"),
@@ -87,7 +87,7 @@ def sheet_cell(fast):
         })
     wf.update({
         "model": node("LoadSAM3Model", precision="auto", compile=False),
-        "find": node("SAM3Grounding", "@2 Cut out what [text_prompt]", sam3_model_config=["model", 0], image=["up", 0],
+        "find": node("SAM3Grounding", "@2 Cut out what [text_prompt,confidence_threshold]", sam3_model_config=["model", 0], image=["up", 0],
                      confidence_threshold=0.2, text_prompt="person", max_detections=1),
         # the matte at the picture's own size whatever SAM3 returns (nothing found = a small empty one)
         "mimg": node("MaskToImage", mask=["find", 0]),

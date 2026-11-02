@@ -1,4 +1,4 @@
-import { h, api, store, toast, busy, button, chip, section, field, seg, hint, help, imageInput, toggle, textArea } from './ui.js';
+import { h, api, store, toast, busy, button, chip, section, field, rangeField, seg, hint, help, imageInput, toggle, textArea } from './ui.js';
 import { S, inputUrl, switchTab, thumbUrl } from './core.js';
 import { openImagePicker, pngBlob, uploadImage } from './media.js';
 import { queueRun, template, valuesByRole, waitGen } from './make.js';
@@ -82,7 +82,7 @@ const OPS = [
   { id: 'upfast', group: 'Upscale', label: 'Upscale (fast)', tpl: 'deck-upscale-image-fast', kind: 'up',
     help: '4x-UltraSharp: a quick, clean enlargement without the invented detail. Export size is set to match, so Download and Save as input come out bigger.' },
 ];
-const ST = { op: 'cutout', scope: 'whole', result: 'cutout', hide: true, fine: true, rfrom: 'words', rprompt: 'watermark', cmodel: 'noise', uprompt: UNMARK_PROMPT, prompt: 'person', rows: 1, cols: 4, sheetFast: false, swapPart: 'face', swapFrom: '', swapModels: ['klein9b'], swapWhere: 'find', swapExtra: '', scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, ...store.get(KEY, {}) };
+const ST = { samSure: 0.2, samMost: 8, op: 'cutout', scope: 'whole', result: 'cutout', hide: true, fine: true, rfrom: 'words', rprompt: 'watermark', cmodel: 'noise', uprompt: UNMARK_PROMPT, prompt: 'person', rows: 1, cols: 4, sheetFast: false, swapPart: 'face', swapFrom: '', swapModels: ['klein9b'], swapWhere: 'find', swapExtra: '', scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, ...store.get(KEY, {}) };
 if (ST.lprompt === OLD_DELIGHT_PROMPT) ST.lprompt = DELIGHT_PROMPT;   // (the old default, saved in this browser; a prompt someone wrote stays)
 const save = () => store.set(KEY, ST);
 const FLIGHT = new Set();   // runs on their way back
@@ -214,7 +214,7 @@ async function finerMatte(t, name, done, prompt, b) {
         const up = await uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: 'closer.png', multiple: 1 });
         let run = null;
         try {
-          run = await sent({ template: t.id, values: { [imageField.key]: up.name, ...valuesByRole(t, { seed: -1, prompt }) }, batch: 1 });
+          run = await sent({ template: t.id, values: { [imageField.key]: up.name, ...valuesByRole(t, { seed: -1, prompt }), ...samKnobs(t) }, batch: 1 });
           const found = await Promise.all(run.outputs.filter((o) => o.kind === 'image').map((o) => loadImg(o.url)));
           const near = foundIn(mask, found.map((i) => redOf(i, box.w, box.h)));
           if (near) { mask = near; seen = [box.w, box.h]; }
@@ -347,7 +347,7 @@ async function runSheet(eng, o, t, tab, src) {
   let left = cells.length;
   const start = async (cell, again) => {
     const sc = set('scale_by', ST.sheetFast ? ST.scale / 4 : ST.scale);
-    const values = { [imageField.key]: cell.name, ...valuesByRole(t, { seed: -1, prompt: ST.prompt.trim() }), ...(sc && { [sc[0]]: sc[1] }) };
+    const values = { [imageField.key]: cell.name, ...valuesByRole(t, { seed: -1, prompt: ST.prompt.trim(), confidence: ST.samSure }), ...(sc && { [sc[0]]: sc[1] }) };
     const [g] = await queueRun({ template: t.id, values, batch: 1 });
     FLIGHT.add(g.id); eng.render();
     waitGen(g.id).then(async (done) => {
@@ -414,6 +414,14 @@ async function fillIn(eng, o, t, tab, src, maskCv) {
   } finally { FLIGHT.delete(fillIn); b.done(); eng.render(); }
 }
 
+// SAM3 on a picture: how sure it must be and how many it takes, as set in the panel (the template's own fields)
+const samKnobs = (t) => valuesByRole(t, { confidence: ST.samSure, maxFound: ST.samMost });
+const samFields = (eng, most = true) => [
+  rangeField('How sure', () => ST.samSure, (v) => { ST.samSure = v; save(); }, { min: 0.05, max: 0.95, step: 0.05,
+    help: 'What SAM3 needs to be sure of before it takes something. Lower finds more, and may take the wrong things; higher finds less.' }),
+  most ? rangeField('At most', () => ST.samMost, (v) => { ST.samMost = v; save(); }, { min: 1, max: 32, step: 1, fmt: (v) => String(v),
+    help: 'How many things it takes for each word. They are joined into one matte.' }) : null];
+
 // what SAM3 finds for these words in a picture, one search each, joined on a W×H canvas (white = found). Its runs are only a means, so they go.
 async function searchFor(name, W, H, terms) {
   const find = template('deck-mask-image'), image = find.fields.find((f) => f.kind === 'image');
@@ -423,7 +431,7 @@ async function searchFor(name, W, H, terms) {
   c.fillStyle = '#000'; c.fillRect(0, 0, W, H);
   c.globalCompositeOperation = 'lighten';
   for (const term of terms) {
-    const done = await sent({ template: find.id, values: { [image.key]: name, ...valuesByRole(find, { seed: -1, prompt: term }) }, batch: 1 });
+    const done = await sent({ template: find.id, values: { [image.key]: name, ...valuesByRole(find, { seed: -1, prompt: term }), ...samKnobs(find) }, batch: 1 });
     for (const x of (done.outputs || []).filter((y) => y.kind === 'image')) c.drawImage(await loadImg(x.url), 0, 0, W, H);
     await dropRun(done.id);
   }
@@ -678,7 +686,7 @@ async function runOne(eng, o, t, tab, src) {
   if (o.kind === 'remove') return markFound(eng, o, src);
   if (o.kind === 'swap') return swapOnSource(eng, o, tab, src);
   const imageField = t.fields.find((f) => f.kind === 'image');
-  const values = { [imageField.key]: src.name, ...valuesByRole(t, { seed: -1, ...(o.prompt && { prompt: ST.prompt.trim() }) }) };
+  const values = { [imageField.key]: src.name, ...valuesByRole(t, { seed: -1, ...(o.prompt && { prompt: ST.prompt.trim() }) }), ...samKnobs(t) };
   if (o.kind === 'delight') {   // the edit template's own picture and edit boxes (not its reference pictures)
     const pic = t.fields.find((f) => f.kind === 'image' && /image to edit/i.test(f.group)), box = t.fields.find((f) => f.kind === 'text' && /^edit$/i.test(f.group) && !/negative/i.test(f.input));
     if (pic) delete values[imageField.key];
@@ -736,6 +744,7 @@ export async function applyStep(step, name, { what = 'person' } = {}) {
     Object.assign(values, wholePicture(t, [img.naturalWidth, img.naturalHeight]));
   } else set(t.fields.find((f) => f.kind === 'image'), name);
   if (step === 'up') set(t.fields.find((f) => f.input === 'scale_by'), ST.scale);
+  if (step === 'cut') Object.assign(values, valuesByRole(t, { confidence: ST.samSure }));
   const once = async () => waitGen((await queueRun({ template: id, values, batch: 1 }))[0].id);
   // SAM3's worker now and then fails a run ("Inference tensors do not track version counter") that works when sent again
   const done = step === 'cut' ? await once().catch(once) : await once();
@@ -781,6 +790,8 @@ export function imageToolsSection(eng) {
     o.kind === 'sheet' ? field(['Enlarge', h('span', {}, `${ST.scale}×`)], seg([[1, '1×'], [2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); eng.render(); })) : null,
     o.kind === 'matte' ? field('Result', seg([['cutout', 'Cut-out layer'], ['black', 'On black'], ['mask', 'Inpaint mask']], ST.result, (v) => { ST.result = v; save(); eng.render(); }),
       help('On black puts the cut-out on solid black: the picture a one-photo 3D model (Idol, a splat) wants.')) : null,
+    ...(o.id === 'words' || (o.kind === 'remove' && ST.rfrom === 'words') || (o.kind === 'swap' && ST.swapWhere === 'find') ? samFields(eng) : []),
+    ...(o.kind === 'sheet' ? samFields(eng, false) : []),
     o.kind === 'matte' ? toggle('Fine edges', ST.fine, (v) => { ST.fine = v; save(); eng.render(); },
       { help: 'These models see any picture at about 1000 px, so a big picture\'s edge comes back as a staircase. On: each thing found gets a second look on a crop close to it (a run for each, on a big picture), then the pixels along its edge are decided by their colour: is it more common on the thing, or beside it. Off: quicker, and the edge is as the model gave it.' }) : null,
     o.kind === 'remove' ? field('What goes', seg([['words', 'Find by name'], ['painted', 'The red mask']], ST.rfrom, (v) => { ST.rfrom = v; save(); eng.render(); })) : null,

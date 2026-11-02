@@ -123,7 +123,7 @@
    "score_threshold": 0.3
   },
   "_meta": {
-   "title": "@2 Prompt [prompt_mode,text_prompt]"
+   "title": "@2 Prompt [prompt_mode,text_prompt,score_threshold]"
   }
  },
  "prop": {
@@ -137,9 +137,15 @@
     "seg",
     0
    ],
-   "start_frame": 0,
+   "start_frame": [
+    "pf",
+    0
+   ],
    "end_frame": -1,
    "direction": "both"
+  },
+  "_meta": {
+   "title": "@7 Follow [direction]"
   }
  },
  "out": {
@@ -159,6 +165,9 @@
    ],
    "obj_id": -1,
    "plot_all_masks": true
+  },
+  "_meta": {
+   "title": "@8 Which one [obj_id]"
   }
  },
  "img": {

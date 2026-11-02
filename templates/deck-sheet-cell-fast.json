@@ -65,7 +65,7 @@
    "max_detections": 1
   },
   "_meta": {
-   "title": "@2 Cut out what [text_prompt]"
+   "title": "@2 Cut out what [text_prompt,confidence_threshold]"
   }
  },
  "mimg": {

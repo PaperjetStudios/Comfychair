@@ -480,13 +480,23 @@ def sam3_mask():
     g.add("pts", node("SAM3PointCollector", "@5 Points [coordinates,neg_coordinates]", image=["pframe", 0], points_store="{}",
                       coordinates="[]", neg_coordinates="[]"))
     g.add("model", node("LoadSAM3Model", precision="auto", compile=False))
-    g.add("seg", node("SAM3VideoSegmentation", "@2 Prompt [prompt_mode,text_prompt]", video_frames=["cut", 0], prompt_mode="text",
+    g.add("seg", node("SAM3VideoSegmentation", "@2 Prompt [prompt_mode,text_prompt,score_threshold]", video_frames=["cut", 0], prompt_mode="text",
                       text_prompt="person", positive_points=["pts", 0], negative_points=["pts", 1], frame_idx=["pf", 0], score_threshold=0.3))
-    g.add("prop", node("SAM3Propagate", sam3_model_config=["model", 0], video_state=["seg", 0], start_frame=0, end_frame=-1, direction="both"))
-    g.add("out", node("SAM3VideoOutput", masks=["prop", 0], video_state=["prop", 2], scores=["prop", 1], obj_id=-1, plot_all_masks=True))
+    g.add("prop", node("SAM3Propagate", "@7 Follow [direction]", sam3_model_config=["model", 0], video_state=["seg", 0], start_frame=["pf", 0], end_frame=-1, direction="both"))
+    g.add("out", node("SAM3VideoOutput", "@8 Which one [obj_id]", masks=["prop", 0], video_state=["prop", 2], scores=["prop", 1], obj_id=-1, plot_all_masks=True))
     g.add("img", node("MaskToImage", mask=["out", 0]))
     g.add("vid", node("CreateVideo", images=["img", 0], fps=FPS))
     g.add("save", node("SaveVideo", video=["vid", 0], filename_prefix="deck/sam3-mask", format="auto", codec="auto"))
+    return g
+
+
+ALPHA_LORA_TITLE, ALPHA_GUIDE_TITLE = "@9 Matte strength [strength_model]", "@10 Hold to the clip [strength]"
+
+
+def alpha():
+    """Alpha Gen on the whole clip, with its two strengths on show."""
+    g = v2v("ltx-alpha", "ltx-2.5-22b-ic-lora-alpha-gen-0.9.safetensors", lora_title=ALPHA_LORA_TITLE, prompt_title=None, max_frames=145)
+    g["guide"]["_meta"] = {"title": ALPHA_GUIDE_TITLE}
     return g
 
 
@@ -508,12 +518,12 @@ def alpha_crop():
     g.add("cut", node("ImageFromBatch", image=["src", 0], batch_index=0, length=["nf", 1]))
     g.add("mcut", node("ImageFromBatch", image=["msk", 0], batch_index=0, length=["nf", 1]))
     g.add("mask", node("ImageToMask", image=["mcut", 0], channel="red"))
-    g.add("sub", node("DeckSubjectCrop", "@7 Crop [margin,follow]", images=["cut", 0], mask=["mask", 0], margin=0.2,
+    g.add("sub", node("DeckSubjectCrop", "@7 Crop [margin,follow,smooth]", images=["cut", 0], mask=["mask", 0], margin=0.2,
                       short=["short", 0], follow="auto", smooth=0.85))
-    g.add("lora", node("LTXICLoRALoaderModelOnly", model=["unet", 0], lora_name=LORA + "ltx-2.5-22b-ic-lora-alpha-gen-0.9.safetensors",
+    g.add("lora", node("LTXICLoRALoaderModelOnly", ALPHA_LORA_TITLE, model=["unet", 0], lora_name=LORA + "ltx-2.5-22b-ic-lora-alpha-gen-0.9.safetensors",
                        strength_model=1.0))
     g.add("vlat", node("EmptyLTXVLatentVideo", width=["sub", 2], height=["sub", 3], length=["nf", 1], batch_size=1))
-    g.add("guide", node("LTXAddVideoICLoRAGuide", positive=["cond", 0], negative=["cond", 1], vae=["vvae", 0], latent=["vlat", 0],
+    g.add("guide", node("LTXAddVideoICLoRAGuide", ALPHA_GUIDE_TITLE, positive=["cond", 0], negative=["cond", 1], vae=["vvae", 0], latent=["vlat", 0],
                         image=["sub", 0], frame_idx=0, strength=1.0, latent_downscale_factor=["lora", 1], crop="disabled",
                         use_tiled_encode=False, tile_size=256, tile_overlap=64, use_streaming=False, tile_frames=97))
     audio_latent(g, ["nf", 1])
@@ -602,7 +612,7 @@ TEMPLATES = {
     "deck-ltx-inpaint": inpaint,
     "deck-ltx-v2v-lora": lambda: v2v("ltx-v2v-lora", "ltx-2.5-22b-ic-lora-colorization-0.9.safetensors",
                                       lora_title="@5 IC-LoRA [lora_name,strength_model]"),
-    "deck-ltx-alpha": lambda: v2v("ltx-alpha", "ltx-2.5-22b-ic-lora-alpha-gen-0.9.safetensors", prompt_title=None, max_frames=145),
+    "deck-ltx-alpha": alpha,
     "deck-ltx-alpha-crop": alpha_crop,
     "deck-ltx-cleanplate": lambda: v2v(
         "ltx-cleanplate", "ltx-2.5-22b-ic-lora-clean-plate-1.0.safetensors",

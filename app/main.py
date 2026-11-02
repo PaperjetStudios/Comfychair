@@ -218,7 +218,7 @@ async def on_comfy(kind, payload):
     elif t == "execution_error":
         g = db.get_by_prompt(pid)
         if g:
-            msg = f"{data.get('node_type', '')}: {data.get('exception_message', 'error')}".strip(": ")
+            msg = run_error(data)
             db.update_generation(g["id"], status="error", error=msg, finished=time.time())
             await push_gen(g["id"])
     elif t == "execution_interrupted":
@@ -226,6 +226,14 @@ async def on_comfy(kind, payload):
         if g:
             db.update_generation(g["id"], status="interrupted", finished=time.time())
             await push_gen(g["id"])
+
+
+def run_error(data: dict) -> str:
+    """What a failed run says. SAM3 following nothing fails on an empty file: say what that means."""
+    kind, text = data.get("node_type", ""), str(data.get("exception_message", "error"))
+    if kind == "SAM3Propagate" and "empty file" in text:
+        return "SAM3 found nothing to follow: lower How sure, use other words, or tap the thing on the frame"
+    return f"{kind}: {text}".strip(": ")
 
 
 def output_file(g: dict, o: dict) -> Path:

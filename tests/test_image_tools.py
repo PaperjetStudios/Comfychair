@@ -29,7 +29,12 @@ class ImageToolTemplates(unittest.TestCase):
 
     def test_words_template_takes_a_prompt(self):
         wf = load("deck-mask-image")
-        self.assertIn("[text_prompt]", wf["find"]["_meta"]["title"])
+        self.assertIn("[text_prompt,confidence_threshold,max_detections]", wf["find"]["_meta"]["title"])
+
+    def test_sam3_clip_follows_from_the_frame_it_was_told(self):
+        wf = load("deck-sam3-video-mask")
+        self.assertEqual(wf["prop"]["inputs"]["start_frame"], wf["seg"]["inputs"]["frame_idx"])
+        self.assertIn("score_threshold", wf["seg"]["_meta"]["title"])
 
     def test_sheet_cell_templates(self):
         for name in ("deck-sheet-cell", "deck-sheet-cell-fast"):
@@ -41,7 +46,7 @@ class ImageToolTemplates(unittest.TestCase):
             self.assertEqual(len([n for n in wf.values() if n["class_type"] == "LoadImage"]), 1)
             self.assertEqual(len([n for n in wf.values() if n["class_type"] == "SaveImage"]), 1)
             titles = " ".join(n.get("_meta", {}).get("title", "") for n in wf.values())
-            for key in ("[text_prompt]", "[scale_by]"):
+            for key in ("[text_prompt,confidence_threshold]", "[scale_by]"):
                 self.assertIn(key, titles)
 
 
