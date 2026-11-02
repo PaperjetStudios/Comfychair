@@ -13,6 +13,7 @@ import { R, SC, TYPES, makers, newObject, save } from './scene-data.js';
 import { mapBones, restPositions } from './rig-map.js';
 import { disposeTree, smoothFaceted } from './reskin.js';
 import { button, h, help, hint, section, store, toast, toggle } from './ui.js';
+import { blenderButton } from './blender.js';
 
 const hideMat = new THREE.MeshBasicMaterial({ visible: false });   // the hidden rig's own volumes
 const dotMat = new THREE.MeshBasicMaterial({ color: 0x4cc3ff, depthTest: false, transparent: true, opacity: 0.85 });
@@ -251,6 +252,7 @@ export function rigProps(o) {
     toast(`${RM.joint} now follows ${RM.bone}`);
   };
   return section('Rigged model', null,
+    blenderButton(o.url, o.name),
     hint(skin ? `${skin.restQ.size} bones follow the figure` : 'Loading its skeleton…'),
     missing.length ? hint(`No bone for: ${missing.join(', ')}`) : null,
     missing.length && bones.length ? h('div', { class: 'row wrap' },

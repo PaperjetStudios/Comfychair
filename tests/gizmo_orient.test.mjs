@@ -74,3 +74,12 @@ nearV(G.centrePoint([0, 1, 5], [0, 0, -1], null, [3, 3, 0]), [0, 1, 0], 'centre:
 nearV(G.centrePoint([0, 1, 5], [0, 0, -1], null, [0, 0, 9]), [0, 1, 4.9], 'centre: behind the camera');
 
 console.log('gizmo_orient ok');
+
+// faceQuat points +Z at the target, Y up
+for (const to of [[3, 1, 2], [-4, 0, -1], [0, 5, 0.01], [0, 0, -3]]) {
+  const q = G.faceQuat([0, 0, 0], to), n = Math.hypot(...to);
+  nearV(G.qRot(q, [0, 0, 1]), to.map((v) => v / n), `faces ${to}`);
+  near(G.qRot(q, [1, 0, 0])[1], 0, 'no roll');
+}
+near(G.qRot(G.faceQuat([0, 0, 0], [3, 4, 0], { upright: true }), [0, 1, 0])[1], 1, 'upright stays upright');
+assert.equal(G.faceQuat([1, 1, 1], [1, 1, 1]), null);

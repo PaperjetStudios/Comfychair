@@ -1008,6 +1008,34 @@ async def paint_pruner():
         await asyncio.sleep(86400)
 
 
+@app.post("/api/inputs/resize")
+async def resize_input(body: dict = Body(...)):
+    """A picture at most {mp} megapixels, resampled, for {name}: a new input of the project, so it goes with the project or
+    with DELETE /api/inputs, and is listed in the picker. The same picture and size reuse one file. A picture that already
+    fits comes back under its own name."""
+    name = str(body.get("name") or "")
+    try:
+        mp = float(body.get("mp") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "mp is a number of megapixels")
+    if mp <= 0:
+        raise HTTPException(400, "mp is a number of megapixels")
+    try:
+        data = await input_bytes(name)
+        w, h = await asyncio.to_thread(imageprep.size_of, data)
+        if w * h <= mp * 1_000_000:
+            return {"name": name, "width": w, "height": h}
+        png, w, h = await asyncio.to_thread(imageprep.prep, data, mp, 1, None)
+    except Exception as e:
+        raise HTTPException(400, f"Couldn't resample that picture: {e}")
+    fname = hashlib.sha1(data + repr(mp).encode()).hexdigest()[:12] + ".png"
+    (config.INPUT_DIR / fname).write_bytes(png)
+    made = await comfy.upload_image(png, fname, config.COMFY_INPUT_SUBFOLDER)
+    db.add_input(made, _project(body.get("project_id")), "smaller")
+    db.set_input_origin(made, db.input_origin(name))   # (still made from the same output, if it was)
+    return {"name": made, "width": w, "height": h}
+
+
 @app.post("/api/inputs/crop")
 async def crop_input(body: dict = Body(...)):
     """Crop an input image ({name, crop: {x,y,w,h} fractions, mp, multiple}) for one run. The copy is

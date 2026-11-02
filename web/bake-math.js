@@ -3,7 +3,7 @@
 // A layer is drawn at T R S B: its x, y, z, turn and size, then item.bake, what was applied to it (16 numbers, column by column, as
 // three.js's Matrix4). Applying moves part of T R S into B: the layer looks exactly the same, and those values read 0 or 1. Its files
 // are not touched. item.origin stays in the file's own space, so what x, y, z and the turn work round is B × origin.
-import { qRot } from './gizmo-orient.js';
+import { qInv, qMul, qRot } from './gizmo-orient.js';
 import { drawnScale, eulerQ } from './origin-math.js';
 
 export const IDENT = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
@@ -68,4 +68,45 @@ export function applyBake(item, kind, { even = false } = {}) {
   }
   item.bake = next;
   return { ok: true, note: stretched ? 'It was stretched, so its scale was applied too' : null };
+}
+
+// ---- the layer's axes (the rotation offset): its own X, Y and Z turn, and it stays exactly where it is ----
+// a turn as degrees in three.js's Euler order (XYZ), the numbers nearest ref, so a key at 170° doesn't come back as 180 / 10 / 180
+export function eulerNear([x, y, z, w], ref = {}) {
+  const m13 = 2 * (x * z + y * w), m11 = 1 - 2 * (y * y + z * z), m12 = 2 * (x * y - z * w), m22 = 1 - 2 * (x * x + z * z), m23 = 2 * (y * z - x * w), m32 = 2 * (y * z + x * w), m33 = 1 - 2 * (x * x + y * y);
+  const D = 180 / Math.PI, ry = Math.asin(Math.max(-1, Math.min(1, m13))) * D;
+  const flat = Math.abs(m13) < 0.9999999, rx = (flat ? Math.atan2(-m23, m33) : Math.atan2(m32, m22)) * D, rz = flat ? Math.atan2(-m12, m11) * D : 0;
+  const near = (a, r = 0) => a + 360 * Math.round((r - a) / 360);
+  const opts = [[rx, ry, rz], [rx + 180, 180 - ry, rz + 180]].map(([a, b, c]) => [near(a, ref.rx), near(b, ref.ry), near(c, ref.rz)]);
+  const dist = (a) => Math.abs(a[0] - (ref.rx || 0)) + Math.abs(a[1] - (ref.ry || 0)) + Math.abs(a[2] - (ref.rz || 0));
+  const [a, b, c] = dist(opts[0]) <= dist(opts[1]) ? opts[0] : opts[1];
+  return { rx: a, ry: b, rz: c };
+}
+
+// The layer's axes to the turn q, at the playhead whose shown turn is `now`. With d the change in its own frame, each turn R becomes
+// R d⁻¹ and the bake B becomes d B, so what is drawn (T R S B) and where its origin is don't change. A turn with keys gets keys on
+// every frame that has one (between keys its path can part slightly from the old one). `undo` turns any other value the same way.
+// sample(f): the turn's values before the change. A stretched layer can't: its size goes into the bake first, as Apply rotation does.
+export function turnAxes(item, q, now, { even = false, sample = null, setKey = null } = {}) {
+  if (item.off) return { ok: false, why: 'It has an offset layer: bake or remove that first' };
+  if (item.mute) return { ok: false, why: 'It has muted keys: turn them back on first' };
+  if (TURN.some((ch) => item.mods?.[ch]?.length)) return { ok: false, why: 'Its rotation has modifiers: take them off first' };
+  const keyed = (chs) => chs.some((ch) => item.chans?.[ch]?.length), b = item.base;
+  if (!even && keyed(SIZE)) return { ok: false, why: 'It has keys on its size, so its axes can\'t be turned' };
+  const stretched = !even && !same(drawnScale(b, even));
+  if (stretched) applyBake(item, 'scale', { even });
+  const d = qMul(qInv(q), eulerQ(now.rx, now.ry, now.rz)), undo = qInv(d);
+  item.bake = mul(matrix(d, [1, 1, 1], [0, 0, 0]), item.bake || IDENT);
+  const turned = (v, ref) => eulerNear(qMul(eulerQ(v.rx, v.ry, v.rz), undo), ref);
+  if (keyed(TURN)) {
+    const fs = [...new Set(TURN.flatMap((ch) => (item.chans[ch] || []).map((k) => k.f)))].sort((x, y) => x - y);
+    let ref = b;
+    const vals = fs.map((f) => { ref = turned(sample(f), ref); return { f, ...ref }; });
+    Object.assign(b, turned(b, b));
+    for (const ch of TURN) {   // (a turn that wasn't animated and needs no keys now stays that way: no extra rows in the sheet)
+      if (!item.chans[ch]?.length && vals.every((x) => Math.abs(x[ch] - vals[0][ch]) < 1e-9)) b[ch] = vals[0][ch];
+      else for (const x of vals) setKey(item, ch, x.f, x[ch]);
+    }
+  } else Object.assign(b, turned(b, b));
+  return { ok: true, undo, note: stretched ? 'It was stretched, so its scale was applied too' : null };
 }

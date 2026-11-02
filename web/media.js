@@ -1,7 +1,8 @@
 import {
-  $, h, store, api, toast, openSheet, closeSheet, sheetStillOpen, button, chip, iconBtn, actions, fileButton, seg, placeholder, note, mediaCard, field, pickButtons,
+  $, h, store, api, toast, openSheet, closeSheet, sheetStillOpen, button, chip, iconBtn, actions, fileButton, seg, placeholder, note, mediaCard, field, pickButtons, info,
 } from './ui.js';
 import { fmtTime } from './playback.js';
+import { MP_STEPS, capLabel } from './mp-cap.js';
 import { runBar } from './run-bar.js';
 import { cardPicture, kindTile, madeBy } from './kinds.js';
 import { S, CURRENT_EDIT as CURRENT, PICKER_SOURCES as SOURCES, inputUrl, previewUrl, switchTab, thumbUrl } from './core.js';
@@ -413,8 +414,44 @@ export function pickFrames({ url, title = 'Pick a frame', fps = 24, frames = 0, 
 // multi: tap pictures to tick them (shift-click a run of them; limit: how many fit), then Add calls onPick for each, in the
 // order ticked. Uploads, crops and the rest get ticked too. The ticks live on opts, so they survive the sheets that replace the picker.
 // ---------------------------------------------------------------------------
+const MP_INFO = 'The most megapixels the picture may have when it is used. A bigger one is resampled into a new, smaller copy, and the original stays. A smaller one is never made bigger. Full keeps it as it is. Lower sizes use less memory and load quicker, but give less detail: SHARP looks at a picture at 1536 px square, so below about 2.4 MP a splat starts to go softer.';
+const mpKeyOf = (key) => `deck.picker.mp.${key}`;
+// a picture's resampled copy, at most mp megapixels: the same name back when it already fits (main.resize_input)
+export const resizeInput = (name, mp) => api('/api/inputs/resize', { method: 'POST', body: { name, mp, project_id: S.project } });
+// the row of sizes: for a picture named here, or (with no name) for the one set() is told about; remembered per kind of work when key is given
+export function maxMpRow(name, onPick, key = null, init = null) {
+  const saved = key ? store.get(mpKeyOf(key), null) : null;
+  let wh = null, cur = saved ?? 0;
+  init?.(cur);
+  const label = h('span', { class: 'hint' });
+  const show = () => { label.textContent = wh ? capLabel(wh[0], wh[1], cur) : ''; };
+  const row = seg(MP_STEPS, cur, (v) => { cur = v; if (key) store.set(mpKeyOf(key), v); show(); onPick(v); }, { wrap: true });
+  if (name) { const im = new Image(); im.onload = () => { wh = [im.naturalWidth, im.naturalHeight]; show(); }; im.src = inputUrl(name); }
+  return h('span', { class: 'pk-mp' }, h('span', { class: 'hint' }, 'Max MP'), row, label, info(MP_INFO, 'About the largest size'));
+}
+// before a 3D job that comes with a picture already chosen: the size to use it at. done(name) gets the copy, or the same name.
+export function askMaxMp(name, done, key = '3d') {
+  let mp = 0;
+  const go = async () => {
+    closeSheet();
+    try { done(mp ? (await resizeInput(name, mp)).name : name); } catch (e) { toast(e.message, true); }
+  };
+  openSheet(h('h3', {}, 'Largest size for this picture'), h('div', { class: 'media-big' }, h('img', { src: inputUrl(name), alt: '' })),
+    maxMpRow(name, (v) => { mp = v; }, key, (v) => { mp = v; }),
+    actions(button('Cancel', closeSheet), button('Continue', go, { cls: 'primary' })));
+}
+
 export function openImagePicker(opts) {
-  const { title, mp = () => 0, onPick, limit = Infinity } = opts;
+  const { title, mp: callerMp = () => 0, onPick, limit = Infinity } = opts;
+  // the largest size: chosen here (opts.maxMp, kept on opts so it survives the sheets that replace the picker; remembered per kind of
+  // work with opts.mpKey), else what the caller asks for. A picture already in the inputs is only made smaller when it was chosen here.
+  if (opts.maxMp === undefined) opts.maxMp = opts.mpKey ? store.get(mpKeyOf(opts.mpKey), null) : null;
+  const mp = () => opts.maxMp ?? callerMp();
+  const capped = async (name, info2) => {
+    if (!opts.maxMp) return { name, info: info2 };
+    const r = await resizeInput(name, opts.maxMp);
+    return r.name === name ? { name, info: info2 } : { name: r.name, info: r };
+  };
   const multi = !!opts.multi && limit > 1;
   const sel = multi ? (opts.sel ||= new Map()) : null;   // key -> item, in the order ticked
   let tab = store.get('deck.pickerTab2', 'project');
@@ -433,7 +470,8 @@ export function openImagePicker(opts) {
     }
     max?.exit();
     remember(name);
-    closeSheet(); onPick(name, info);
+    closeSheet();
+    capped(name, info).then((r) => onPick(r.name, r.info)).catch((e) => toast(e.message, true));
   };
   // Add: every ticked picture, in order. Each one's copy is made now (a History output becomes an input only if it is used).
   const addTicked = async () => {
@@ -446,7 +484,8 @@ export function openImagePicker(opts) {
       try {
         const r = await it.get();
         remember(r.name);
-        await onPick(r.name, r.info);
+        const c = await capped(r.name, r.info);
+        await onPick(c.name, c.info);
         n++;
       } catch (e) { toast(e.message, true); }
     }
@@ -486,7 +525,7 @@ export function openImagePicker(opts) {
 
   // Each tab lists items for the big view: { key, title, thumb, full (what the big view shows), video?, cropSrc (a picture to crop), badge?, use(), get? (makes the picture: { name, info }; none: it needs a choice first, so it can't be ticked), del? }
   // This project: its uploads, editor saves and drawings plus everything it generated, newest first
-  const SOURCE = { upload: 'upload', editor: 'edit', drawing: 'drawing', crop: 'crop', snapshot: 'frame', scene: '3d', 'edit-tab': 'edit tab', 'video-tab': 'video edit', story: 'story', link: 'link', camera: 'camera', vfx: 'vfx', sheet: 'sheet' };
+  const SOURCE = { upload: 'upload', editor: 'edit', drawing: 'drawing', crop: 'crop', snapshot: 'frame', scene: '3d', smaller: 'smaller', 'edit-tab': 'edit tab', 'video-tab': 'video edit', story: 'story', link: 'link', camera: 'camera', vfx: 'vfx', sheet: 'sheet' };
   const inputItem = (n, badge = null) => ({ key: n, title: n.split('/').pop(), thumb: thumbUrl(n), full: inputUrl(n), cropSrc: inputUrl(n), badge,
     use: () => picked(n, { name: n }), get: async () => ({ name: n, info: { name: n } }), del: () => removeInput(n) });
   const projectItems = async () => {
@@ -613,7 +652,15 @@ export function openImagePicker(opts) {
       } catch (e) { toast(e.message, true); reopen(); }
     } });
   }, { cls: 'small', title: 'Cut the picture first: the cropped copy is the one picked (the original stays)' });
-  const bar = h('div', { class: 'gal-actions pk-actions' }, name, useBtn, moreBtn, clearBtn, cropBtn, delBtn);
+  // what the picture on show is, and what it will be used at
+  const mpLabel = h('span', { class: 'hint' });
+  let shownWH = null;
+  // (a picture already in the inputs only comes down when it was chosen here; a run's or an upload's follows the caller too)
+  const capNow = () => (items[cur]?.del ? opts.maxMp || 0 : mp() || 0);
+  const showMp = () => { mpSeg.set(capNow()); mpLabel.textContent = shownWH ? capLabel(shownWH[0], shownWH[1], capNow()) : ''; };
+  const mpSeg = seg(MP_STEPS, opts.maxMp ?? 0, (v) => { opts.maxMp = v; if (opts.mpKey) store.set(mpKeyOf(opts.mpKey), v); showMp(); }, { wrap: true });
+  const mpRow = h('span', { class: 'pk-mp' }, h('span', { class: 'hint' }, 'Max MP'), mpSeg, mpLabel, info(MP_INFO, 'About the largest size'));
+  const bar = h('div', { class: 'gal-actions pk-actions' }, name, mpRow, useBtn, moreBtn, clearBtn, cropBtn, delBtn);
   const runRow = h('div', { class: 'strip gal-run' });   // the files its run made, and what to do with its clip (run-bar.js)
   const showRun = (it) => {
     if (!it?.run) return runRow.replaceChildren();
@@ -665,7 +712,8 @@ export function openImagePicker(opts) {
     cur = n; const it = items[n]; curKey = it?.key ?? null;
     zoom.reset();
     main.replaceChildren(...(!it ? [] : [it.video && it.full ? h('video', { src: it.full, controls: true, muted: true, loop: true, playsInline: true, autoplay: true })
-      : h('img', { src: it.full || it.thumb, alt: it.title, draggable: false })]));
+      : h('img', { src: it.full || it.thumb, alt: it.title, draggable: false, onload: (e) => { if (items[cur] === it && it.cropSrc === it.full && !SOURCES.has(tab)) { shownWH = [e.target.naturalWidth, e.target.naturalHeight]; showMp(); } } })]));
+    shownWH = null; showMp();
     prev.disabled = n <= 0; next.disabled = n >= items.length - 1;
     name.textContent = it ? `${it.title}${it.badge ? ` · ${it.badge}` : ''}  (${n + 1} / ${items.length})` : '';
     if (!multi) useBtn.firstChild.textContent = it?.video ? 'Choose a frame…' : 'Use this picture';

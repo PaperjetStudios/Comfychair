@@ -1,6 +1,7 @@
 import { h, api, toast, openSheet, closeSheet, button, section, linkBtn, chip, hint, info, setIcon } from './ui.js';
 import { S, inputUrl, previewUrl, switchTab, thumbUrl } from './core.js';
-import { genLabel } from './media.js';
+import { askMaxMp, genLabel } from './media.js';
+import { blenderFile, onlyWhereBlender, openInBlender } from './blender.js';
 import { renderFields, selectTemplate, setVal } from './generate.js';
 import { factsOf, kindDef, kindOf } from './kinds.js';
 import { SHEET_TEMPLATES, markClipOf } from './markview-math.js';
@@ -208,12 +209,14 @@ function sceneTargets(g, o, src, label, toInput, go) {
       (await scene()).useAsRef({ kind: 'image', name, url: inputUrl(name), label });
     }), go('Photo in 3D', async () => {
       const { name } = await toInput();
-      (await scene()).makePhoto(name);
+      askMaxMp(name, async (n) => (await scene()).makePhoto(n));
     }, { title: 'Turns the picture into a mesh in the scene (MoGe, runs in ComfyUI)' }),
     go('Make a 3D object', async () => {
       const { name } = await toInput();
-      await scene();
-      (await import('./scene-import.js')).openObjectSheet(name, label);
+      askMaxMp(name, async (n) => {
+        await scene();
+        (await import('./scene-import.js')).openObjectSheet(n, label);
+      });
     }, { title: 'Pixal3D: a textured model from this photo (or its other views), in the 3D scene' })];
   }
   if (k === 'video') {
@@ -240,7 +243,8 @@ function sceneTargets(g, o, src, label, toInput, go) {
     go('Rig anything', async () => {
       await scene();
       await (await import('./scene-import.js')).rigRun(g.id, index, label, 'deck-autorig-any', { skinned: true });
-    }, { title: 'UniRig: a skeleton for an animal or a prop, keyed bone by bone in the Bones panel' })];
+    }, { title: 'UniRig: a skeleton for an animal or a prop, keyed bone by bone in the Bones panel' }),
+    blenderFile(o.url) ? onlyWhereBlender(go('Open in Blender', () => openInBlender(o.url, label), { title: 'Opens this model in Blender on this PC. Its file here isn\'t changed' })) : null].filter(Boolean);
   }
   return [];
 }

@@ -11,6 +11,7 @@ import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { BONE, R, SC, TYPES, addKey, makers, newObject, sample, save, write } from './scene-data.js';
 import { fitForHeight, importFit } from './scale-math.js';
 import { button, field, h, help, hint, numSlider, section, toast } from './ui.js';
+import { blenderButton } from './blender.js';
 import { chainTo, reach } from './ik.js';
 import { mirrorChans } from './rig-map.js';
 import { boneOrder, disposeTree, reskinAll, smoothFaceted } from './reskin.js';
@@ -281,6 +282,7 @@ export function boneProps(o) {
     return i;
   };
   return section('Bones', null,
+    blenderButton(o.url, o.name),
     button('Reset pose', () => resetBones(o), { title: 'Every bone back to the model\'s bind pose' }),
     button('🧍 Pose it like a figure', () => poseLikeFigure(o).catch((e) => toast(e.message, true)),
       { title: 'Use the pose library, Adjust, Hands, Face and Moves on this model: its bones follow the figure\'s joints' }),

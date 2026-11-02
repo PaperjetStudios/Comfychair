@@ -1,8 +1,11 @@
 """Tests for the 3D tab's file import (app/sceneasset.py)."""
 import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault("DECK_DATA", tempfile.mkdtemp(prefix="deck-test-"))
 os.environ.setdefault("DECK_COMFY_DIR", "")
@@ -105,6 +108,59 @@ class SceneAsset(unittest.TestCase):
         r = self.c.post("/api/scene/asset", files={"file": ("a.glb", b"x")})
         self.assertEqual(r.status_code, 200)
         self.assertIn("/files/projects/Unsorted/", r.json()["url"])
+
+
+class OpenInBlender(unittest.TestCase):
+    def setUp(self):
+        self.dir = config.PROJECTS_DIR / "blender-test" / ".deck" / "assets" / "a1"
+        self.dir.mkdir(parents=True, exist_ok=True)
+        (self.dir / "m.glb").write_bytes(b"glTF")
+        (self.dir / "m.txt").write_text("no")
+        self.url = "/files/projects/blender-test/.deck/assets/a1/m.glb"
+        self.addCleanup(shutil.rmtree, config.PROJECTS_DIR / "blender-test", True)
+        for p in (mock.patch.object(sceneasset, "BLENDER", self.dir / "m.glb"),
+                  mock.patch.object(sceneasset, "_desktop_env", lambda: {"DISPLAY": ":0"})):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _client(self, client):   # (no startup: that's the whole app's, and it would run once per client)
+        return TestClient(main.app, client=(client, 5000))
+
+    def _post(self, client, url):
+        proc = mock.Mock()
+        proc.wait.side_effect = subprocess.TimeoutExpired("blender", 2)
+        with mock.patch.object(sceneasset.subprocess, "Popen", return_value=proc) as popen:
+            return self._client(client).post("/api/scene/blender", json={"url": url}), popen, None
+
+    def test_opens_on_this_pc(self):
+        r, popen, _ = self._post("127.0.0.1", self.url)
+        self.assertEqual(r.status_code, 200)
+        cmd, env = popen.call_args.args[0], popen.call_args.kwargs["env"]
+        self.assertEqual(cmd[-1], str(self.dir / "m.glb"))
+        self.assertIn("rm -rf", " ".join(cmd))   # (its temporary folder goes when it closes)
+        self.assertTrue(env["TMPDIR"].startswith(tempfile.gettempdir()))
+        shutil.rmtree(env["TMPDIR"], ignore_errors=True)
+
+    def test_another_device_cant_open_a_window_here(self):
+        r, popen, _ = self._post("192.168.3.50", self.url)
+        self.assertEqual(r.status_code, 403)
+        popen.assert_not_called()
+        self.assertFalse(self._client("192.168.3.50").get("/api/scene/blender").json()["can"])
+        self.assertTrue(self._client("127.0.0.1").get("/api/scene/blender").json()["can"])
+
+    def test_only_a_model_in_a_project(self):
+        for url in ("/files/projects/blender-test/.deck/assets/a1/m.txt", "/files/projects/blender-test/../../secret.glb", "/etc/passwd"):
+            r, popen, _ = self._post("127.0.0.1", url)
+            self.assertIn(r.status_code, (400, 404), url)
+            popen.assert_not_called()
+
+    def test_gone_straight_away_says_so_and_leaves_nothing(self):
+        proc = mock.Mock()
+        proc.wait.return_value = 1
+        with mock.patch.object(sceneasset.subprocess, "Popen", return_value=proc) as popen:
+            r = self._client("127.0.0.1").post("/api/scene/blender", json={"url": self.url})
+        self.assertEqual(r.status_code, 400)
+        self.assertFalse(Path(popen.call_args.kwargs["env"]["TMPDIR"]).exists())
 
 
 if __name__ == "__main__":

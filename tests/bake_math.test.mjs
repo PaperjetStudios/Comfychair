@@ -1,7 +1,7 @@
 // Apply scale, rotation, transform (web/bake-math.js), checked against three.js: the layer doesn't move, at any frame.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { applyBake, IDENT, linear, point } from '../web/bake-math.js';
+import { applyBake, IDENT, linear, point, turnAxes } from '../web/bake-math.js';
 import { drawnScale, eulerQ, moveOrigin, originShift } from '../web/origin-math.js';
 import { follow } from '../web/gizmo-orient.js';
 import * as THREE from '../web/vendor/three.module.min.js';
@@ -71,4 +71,42 @@ test('moving an origin after applying leaves the layer where it is', () => {
   const before = drawn(o, o.base, true);
   moveOrigin(o, [0.5, 0.2, 0.1], { even: true, sample: () => o.base, setKey() {}, map: (d) => linear(o.bake, d) });
   close(drawn(o, o.base, true), before, 'origin');
+});
+
+// ---- the axes (bake-math.js turnAxes): the layer stays where it is, its turn reads as asked
+const YAW90 = [0, Math.SQRT1_2, 0, Math.SQRT1_2];
+for (const [name, item, even] of [
+  ['an even model', layer({ sx: 2, sy: 2, sz: 2 }), true],
+  ['with an origin and something applied', { ...layer({ sx: 2, sy: 2, sz: 2 }), origin: [0.1, 0.2, 0.3], bake: new THREE.Matrix4().makeRotationY(1).setPosition(1, 2, 3).toArray() }, true],
+  ['a stretched box', { ...layer(), origin: [0.3, 0.5, -0.1] }, false],
+]) {
+  test(`Axes, ${name}: it stays where it is`, () => {
+    const before = drawn(item, item.base, even);
+    const r = turnAxes(item, YAW90, { ...item.base }, { even });
+    assert.ok(r.ok);
+    close(drawn(item, item.base, even), before, 'axes');
+    assert.ok(Math.abs(item.base.ry - 90) < 1e-6 && Math.abs(item.base.rx) < 1e-6);
+    assert.equal(r.note !== null, !even);
+  });
+}
+test('Axes on a keyed turn: it stays put on every key, and nothing extra gets keys', () => {
+  const k = (f, v) => ({ f, v });
+  const item = { ...layer({ sx: 2, sy: 2, sz: 2 }), chans: { ry: [k(0, 10), k(24, 200)], rx: [k(12, 30)] } };
+  const at = (f) => {
+    const look = (ch) => { const l = item.chans[ch] || []; const e = l.find((x) => x.f === f); return e ? e.v : item.base[ch]; };
+    return { ...item.base, rx: look('rx'), ry: look('ry'), rz: look('rz') };
+  };
+  const set = (it, ch, f, v) => { const l = (it.chans[ch] ||= []); const e = l.find((x) => x.f === f); if (e) e.v = v; else l.push(k(f, v)); };
+  const before = [0, 12, 24].map((f) => drawn(item, { ...at(f), rx: at(f).rx, ry: f === 12 ? 10 : at(f).ry }, true));
+  // (frame 12's turn between keys: held at 10 here, as sample says)
+  const sample = (f) => ({ ...at(f), ry: f === 12 ? 10 : at(f).ry });
+  assert.ok(turnAxes(item, YAW90, sample(0), { even: true, sample, setKey: set }).ok);
+  [0, 12, 24].forEach((f, i) => close(drawn(item, at(f), true), before[i], `frame ${f}`));
+  assert.deepEqual([...new Set(item.chans.rx.map((x) => x.f))].sort((a, b) => a - b), [0, 12, 24]);
+});
+test('Axes are refused where they can\'t hold', () => {
+  assert.equal(turnAxes({ ...layer(), off: {} }, YAW90, layer().base).ok, false);
+  assert.equal(turnAxes({ ...layer(), mute: true }, YAW90, layer().base).ok, false);
+  assert.equal(turnAxes({ ...layer(), mods: { ry: [{}] } }, YAW90, layer().base).ok, false);
+  assert.equal(turnAxes({ ...layer(), chans: { sx: [{ f: 0, v: 1 }] } }, YAW90, layer().base).ok, false);
 });

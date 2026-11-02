@@ -213,6 +213,25 @@ class Storage(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
+    def test_a_resampled_picture_is_an_input_that_goes_with_its_project(self):
+        self._uploads()
+        with TestClient(main.app) as c:
+            big = c.post("/api/upload", data={"project_id": self.pid, "multiple": 1}, files={"file": ("a.png", png_bytes(), "image/png")}).json()
+            w, h = big["width"], big["height"]
+            mp = (w * h) / 4 / 1_000_000
+            r = c.post("/api/inputs/resize", json={"name": big["name"], "mp": mp, "project_id": self.pid}).json()
+            self.assertNotEqual(r["name"], big["name"])
+            self.assertLessEqual(r["width"] * r["height"], w * h / 4)
+            self.assertIn(r["name"], [x["name"] for x in db.project_inputs(self.pid)])
+            again = c.post("/api/inputs/resize", json={"name": big["name"], "mp": mp, "project_id": self.pid}).json()
+            self.assertEqual(again["name"], r["name"])   # (one file, however often it is picked)
+            fits = c.post("/api/inputs/resize", json={"name": big["name"], "mp": 100, "project_id": self.pid}).json()
+            self.assertEqual(fits["name"], big["name"])
+            copy = config.INPUT_DIR / Path(r["name"]).name
+            self.assertTrue(copy.is_file())
+            self.assertEqual(c.delete("/api/inputs", params={"name": r["name"]}).status_code, 200)
+        self.assertFalse(copy.exists())
+
     def test_an_input_without_board_makes_no_run(self):
         self._uploads()
         with TestClient(main.app) as c:

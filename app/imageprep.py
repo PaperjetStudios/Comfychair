@@ -74,6 +74,11 @@ def prep(data: bytes, max_mp: float = 0, multiple: int = 8, crop: dict | None = 
     return out.getvalue(), im.size[0], im.size[1]
 
 
+def size_of(data: bytes) -> tuple[int, int]:
+    """(width, height) as prep sees it: turned by its EXIF."""
+    return ImageOps.exif_transpose(Image.open(io.BytesIO(data))).size
+
+
 def thumbnail(data: bytes, width: int) -> bytes:
     """Small JPEG for gallery grids."""
     im = ImageOps.exif_transpose(Image.open(io.BytesIO(data)))

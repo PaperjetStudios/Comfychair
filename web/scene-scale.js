@@ -157,6 +157,36 @@ export function initScale() {
   // (its toggle is in the view bar's Overlays menu: scene-ui.js)
 }
 
+// ---- stand it on what's under the next tap: the nearest layer there (a background splat's Gaussians, a model), else the floor ----
+export function startStand(o) {
+  const cv = renderer.domElement;
+  toast(`Tap where ${o.name} should stand (Esc: never mind)`);
+  const stop = () => { removeEventListener('pointerdown', grab, true); removeEventListener('keydown', esc, true); };
+  const esc = (e) => { if (e.key === 'Escape') { e.stopImmediatePropagation(); stop(); } };
+  const grab = (e) => {
+    if (e.target !== cv) return;
+    e.stopImmediatePropagation(); e.preventDefault();
+    stop();
+    addEventListener('pointerup', (u) => { u.stopImmediatePropagation(); }, { capture: true, once: true });
+    const ray = rayAt(e), from = ray.ray.origin;
+    let at = null;
+    for (const x of SC.objects) {
+      if (x === o || x.hidden) continue;
+      const p = hitOn(x, ray);
+      if (p && (!at || from.distanceTo(p) < from.distanceTo(at))) at = p;
+    }
+    at ||= ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), new THREE.Vector3());
+    if (!at) return toast('Nothing there to stand on: tap lower', true);
+    const b = worldBox(o);
+    if (b.isEmpty()) return toast(`${o.name} isn't loaded yet`, true);
+    const v = current(o, OBJ), mid = (i) => (b.min.getComponent(i) + b.max.getComponent(i)) / 2;
+    write(o, namesFor(o), { x: v.x + at.x - mid(0), y: v.y + at.y - b.min.y, z: v.z + at.z - mid(2) });
+    changed();
+  };
+  addEventListener('pointerdown', grab, true);
+  addEventListener('keydown', esc, true);
+}
+
 // ---- measure: two taps on the selected object, then what that distance really is ----
 const rayAt = (e) => {
   const r = renderer.domElement.getBoundingClientRect(), ray = new THREE.Raycaster();

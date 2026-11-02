@@ -389,6 +389,8 @@ details.group:not([open]) > summary::after { transform: rotate(-90deg); }
 #sheet.picker-full.maxed { padding: 0; }
 #sheet.picker-full.maxed > :not(.pk-stage) { display: none; }
 #sheet.picker-full.maxed > .pk-stage { border-radius: 0; }
+.pk-mp { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.pk-mp .seg button { white-space: nowrap; }
 .pk-name { margin-right: auto; align-self: center; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 /* (max-content rows: with the rows box short, auto rows shrank below the square thumbnails, which then drew over each other) */
 .pk-rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); grid-auto-rows: max-content; gap: 6px; overflow-y: auto; scrollbar-width: thin; align-content: start; }

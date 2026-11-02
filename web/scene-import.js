@@ -7,6 +7,8 @@
 // Both scale evenly (base.sx = sy = sz = fit, then whatever the user did). The file is in the project
 // folder (POST /api/scene/asset); the layer only holds its URL.
 import * as THREE from './vendor/three.module.min.js';
+import { maxMpRow, resizeInput } from './media.js';
+import { blenderButton } from './blender.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip, field, seg, info, rangeField, mediaCard, placeholder, iconBtn } from './ui.js';
 import { inputUrl, thumbUrl } from './core.js';
@@ -564,12 +566,12 @@ export function openObjectSheet(name, label = '', picks = { Front: name }, opts 
     onchange: (e) => { OBJ[key] = e.target.value === '' && key === 'seed' ? '' : Math.max(min, Math.min(max, Math.round(+e.target.value || min))); } });
   const pick = (role) => {
     closeSheet();
-    C.openImagePicker({ title: `The ${role.toLowerCase()} view`, onPick: (n) => { picks[role] = n; again(); } });
+    C.openImagePicker({ title: `The ${role.toLowerCase()} view`, mpKey: '3d', onPick: (n) => { picks[role] = n; again(); } });
   };
   // one picture holding several views (a character sheet): a box round each, cut out into its slot
   const split = () => {
     closeSheet();
-    C.openImagePicker({ title: 'A picture with several views', onPick: (src) => import('./view-boxes.js').then((m) => m.openViewBoxes({ image: src, boxes: {},
+    C.openImagePicker({ title: 'A picture with several views', mpKey: '3d', onPick: (src) => import('./view-boxes.js').then((m) => m.openViewBoxes({ image: src, boxes: {},
       onDone: async (boxes) => {
         try {
           for (const [view, box] of Object.entries(boxes)) picks[view] = (await api('/api/inputs/crop', { method: 'POST', body: { name: src, multiple: 1, crop: box } })).name;
@@ -705,6 +707,7 @@ function itemSection(o) {
     o.type === 'model' && /^(glb|gltf)$/.test(o.ext || extOf(o.url || '')) && /^\/files\/projects\//.test(o.url || '')
       ? button('Clean up in Blender…', () => openCleanup(o), { cls: 'small',
         title: 'Blender remeshes it into tidy quads, takes faces off, or smooths it, and adds the result as a new layer' }) : null,
+    o.type === 'model' ? blenderButton(o.url, o.name) : null,
     o.type === 'model' ? h('div', { class: 'row wrap' },
       button('Rig it as a person', () => rigModel(o), { cls: 'small',
         title: 'Make It Animatable gives it the figure\'s skeleton, so poses, moves and mocap drive it' }),
@@ -796,7 +799,7 @@ async function pickMadeFrame(o) {
 }
 function framesFields(o) {
   const n = frameCount(o), now = R.meshes.get(o.id)?.userData.splat?.meshes;
-  const addPics = (how, title) => C.openImagePicker({ title, multi: true, onPick: (name) => queueFrame(o, how, name) });
+  const addPics = (how, title) => C.openImagePicker({ title, multi: true, mpKey: '3d', onPick: (name) => queueFrame(o, how, name) });
   const sheet = (i) => { const k = o.chans?.sf?.find((x) => x.f === R.f && Math.round(x.v) === i); return !!k; };
   const makers = madeByIdol(o) ? [['idol', 'Add pictures (Idol)…']] : o.image ? [['sharp', 'Add pictures (SHARP)…']]
     : [['sharp', 'Add pictures (SHARP)…'], ['idol', 'Add pictures (Idol)…']];
@@ -1015,6 +1018,7 @@ export function makeSplat(name, ctx, redo = null) {
     { help: 'On: renders (colour video, the Video tab\'s export) use every Gaussian SHARP made, about 1.2M. Off: only the previews are kept, and renders use the densest of them (smaller files).' });
   openSheet(h('h3', {}, redo ? 'Make this splat again' : 'Photo as a splat (SHARP)'),
     help('SHARP turns the picture into about 1.2 million Gaussians. The 3D view shows a lighter preview of them; you can change it later in the splat\'s panel. Any picture size or shape works (SHARP looks at it at 1536 px square whatever it is); sharp, well-lit photos about 1000 px or more on the short side do best, and a very small one gives a soft splat.'),
+    redo ? field('Largest size', maxMpRow(name, (v) => { ch.mp = v; }, '3d', (v) => { ch.mp = v; })) : null,
     field('Preview density', seg(LEVELS.map(([k, label, n]) => [k, label, Number.isFinite(n) ? `${label}: about ${countLabel(n)} Gaussians` : `${label}: every Gaussian`]),
       ch.preview, (k) => { ch.preview = k; })),
     keep,
@@ -1031,6 +1035,7 @@ async function runSplat(name, ch, { lookThrough, camera, busyBar }, redo = null)
   const bar = busyBar(redo ? 'Making the splat again…' : 'Making a splat from the picture…');
   try {
     const { waitJob } = await import('./clipimport.js');
+    if (ch.mp) name = (await resizeInput(name, ch.mp)).name;
     const r = await waitJob(await api('/api/scene/splat', { method: 'POST', body: { image: name, project_id: C.S.project, preview: ch.preview, keep_full: ch.keepFull }, busy: false }));
     if (ch.match) matchSceneTo(r.lens?.width, r.lens?.height);
     if (redo) {   // the same layer (where it stands, its keys and trim), with the new splat in it

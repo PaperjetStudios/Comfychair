@@ -13,7 +13,7 @@ import { shotProps } from './scene-shots.js';
 import { rigProps } from './scene-rig.js';
 import { boneProps } from './scene-skin.js';
 import {
-  HAND, addObject, camGizmo, cameraFromView, canPivot, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, makeSplatHere, newCameraPose, orientLabel,
+  HAND, addObject, aimCameraAt, axesToView, camGizmo, cameraFromView, canPivot, canTurnAxes, faceCamera, lookAtLayer, originMode, turnAxesBy, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, makeSplatHere, newCameraPose, orientLabel,
   originEditing, originTo, pivotMoved, pivotToView, pose, putOrigin, rebuildRoom, recentre, refresh, removeLayer, removeSelected, resetPivot, select, selectJoint, setFree, setMode, setOrient, setOriginEdit, syncMeshes, viewer
 } from './scene-view.js';
 import { ORIENTS, nextOrient } from './gizmo-orient.js';
@@ -30,7 +30,7 @@ import { syncRef, toggleRef } from './scene-ref.js';
 import { addPicture, fitPicture, sceneToPicture } from './scene-picture.js';
 import { keysPast, stretchAll } from './keys.js';
 import { offsetField } from './scene-offset.js';
-import { refOn as scaleRefOn, scaleProps, setRef as setScaleRef } from './scene-scale.js';
+import { refOn as scaleRefOn, scaleProps, setRef as setScaleRef, startStand } from './scene-scale.js';
 import { registerUndo, syncUndo } from './undo-dock.js';
 
 // ---- UI ----------------------------------------------------------------------
@@ -42,8 +42,8 @@ export function renderToolbar() {
   if (!tb) return;
   const cam = camGizmo(), can = !!selItem() || cam;   // (the director view's camera has Move and Rotate)
   // a joint turns (Rotate); a hand or foot can also be dragged (Move, with IK)
-  const ok = (m) => can && !(cam && m === 'scale') && !(originEditing() && m !== 'translate') && (!R.joint || m === 'rotate' || (m === 'translate' && !!FIGURE.IK[R.joint]));
-  const mode = R.joint ? jointMode() : originEditing() ? 'translate' : R.mode;
+  const ok = (m) => can && !(cam && m === 'scale') && !(originEditing() && (m === 'scale' || (m === 'rotate' && !canTurnAxes(selItem())))) && (!R.joint || m === 'rotate' || (m === 'translate' && !!FIGURE.IK[R.joint]));
+  const mode = R.joint ? jointMode() : originEditing() ? originMode() : R.mode;
   tb.querySelectorAll('[data-mode]').forEach((b) => { b.classList.toggle('on', ok(b.dataset.mode) && b.dataset.mode === mode); b.disabled = !ok(b.dataset.mode); });
   // the gizmo's axes: the button shows the ones in use and a tap goes on to the next
   const ob = tb.querySelector('[data-orient]'), [, , oi] = ORIENTS.find(([k]) => k === R.orient) || ORIENTS[0];
@@ -51,6 +51,10 @@ export function renderToolbar() {
   const nx = ORIENTS.find(([k]) => k === nextOrient(R.orient))[1];
   ob.title = `Gizmo axes: ${orientLabel()}${R.orient === 'view' ? ' (screen right, up, toward you)' : R.orient === 'local' ? ' (the object\'s own)' : ''}. Tap for ${nx} (Q)`;
   ob.setAttribute('aria-label', `Gizmo axes: ${orientLabel()}`);
+  const ob2 = tb.querySelector('[data-origin]'), edit = originEditing(), one = !!selItem() && !R.joint;
+  ob2.disabled = !one; ob2.classList.toggle('on', edit); ob2.setAttribute('aria-pressed', edit);
+  tb.querySelector('[data-face]').disabled = !one;
+  tb.querySelector('[data-selcam]').classList.toggle('hidden', R.sel == null || !modeOf().select);
   const pb = tb.querySelector('[data-pivot]'), moved = pivotMoved();
   pb.disabled = !canPivot(); pb.classList.toggle('on', moved); pb.setAttribute('aria-pressed', moved);
   tb.querySelector('[data-pivot-reset]').classList.toggle('hidden', !moved);
@@ -168,12 +172,8 @@ function placeProps(o, cur) {
     originProps(o, cur),
     applyProps(o),
     o.type === 'figure' ? shapeProps(o) : null,
-    o.type === 'figure' ? [
-      toggle('Planted on the floor (Up lifts it off)', o.ground, (on) => { o.ground = on; changed(); }),
-      button('🎥 Face the camera', () => {
-        const v = cur(), c = current(SC.camera, CAM);
-        write(o, names, { ry: Math.round(THREE.MathUtils.radToDeg(Math.atan2(c.px - v.x, c.pz - v.z))) }); changed();
-      })] : null,
+    o.type === 'figure' ? toggle('Planted on the floor (Up lifts it off)', o.ground, (on) => { o.ground = on; changed(); }) : null,
+    fitProps(o),
     o.type === 'picture' ? [
       button('🎥 Fit to the camera', () => fitPicture(o), { title: 'Fill the shot camera\'s frame, at the playhead' }),
       button('Make the scene the picture\'s shape', () => sceneToPicture(o), { title: `Make the scene's picture this shape (${o.pw} × ${o.ph}), so none of it is cut off` }),
@@ -188,6 +188,18 @@ function placeProps(o, cur) {
       button('Duplicate', () => duplicateObject(o), { title: 'Duplicate (Shift+D)' }),
       clearKeys(o, names)),
     help('Drag the gizmo to move it; tap the object again (or W / E / R) for Rotate and Scale. With keys, a change sets a key at the playhead; with Auto key off it is held until ◆ Key (or until the playhead moves).')];
+}
+
+// fitting it into the scene: toward the camera, the camera at it, standing on what's under a tap, and locked when it's the background
+function fitProps(o) {
+  return field(['Fit into the scene', info('Face the camera turns its front (its own +Z, the blue axis) at the camera, around its pivot. Upright only turns it about the up axis, so it keeps standing. If the wrong side comes round, set its front with Edit origin and axes. Aim the camera keeps the camera where it stands and points it at this layer\'s pivot. Look at it brings the director view to this layer, so it orbits around it. Stand it on: the next tap puts its base there, on a splat or a model under the tap, else on the floor. Locked: a tap on the view goes through it, for a background splat. It stays in the layer list, and picking it there still moves it.', 'About fitting into the scene')],
+    h('div', { class: 'row wrap' },
+      button('🎥 Face the camera', () => faceCamera(o), { cls: 'small', title: 'T' }),
+      isPosable(o) ? null : button('Upright only', () => faceCamera(o, true), { cls: 'small' }),
+      button('Aim the camera at it', () => aimCameraAt(o), { cls: 'small' }),
+      R.free ? button('Look at it', () => lookAtLayer(o), { cls: 'small' }) : null,
+      o.type === 'picture' ? null : button('Stand it on…', () => startStand(o), { cls: 'small' })),
+    toggle('Locked: taps on the view go through it', !!o.locked, (on) => { if (on) o.locked = true; else delete o.locked; changed(); }));
 }
 
 // Apply: the layer looks the same, and its scale, rotation or everything reads as nothing (bake-math.js)
@@ -215,12 +227,16 @@ function originProps(o, cur) {
     next[i] = v / size[i];
     putOrigin(o, next);
   }, changed, { live: () => { pose(R.f); draw(); }, digits: 2, step: 0.01, min: -50, max: 50 });
-  return field(['Origin', info('The point this layer really turns and scales around: in the view, in renders and between keys. Position is where this point is. Edit origin: drag the gizmo, tap the layer, or aim with Pivot at the view centre; the layer stays where it is. X, Y and Z are metres from the layer\'s own base, along its own axes. On an animated layer, position keys are adjusted and added so it stays put on its keys; between keys its path can shift a little. On a figure, moves, pairs and captured motion treat this point as the figure\'s feet.')],
+  const axes = editing && canTurnAxes(o);
+  return field(['Origin and axes', info('The origin is the point this layer really turns and scales around: in the view, in renders and between keys. Position is where this point is. Edit origin and axes (Y): Move drags the origin, Rotate turns the layer\'s own axes (its rotation offset), and the layer stays where it is. A tap on the layer, or Pivot at the view centre, puts the origin there. Red is X, green Y, blue Z, and the cone on Z is its front, which Face the camera points at the camera. Axes to this view: look at its front, then tap it. Grid and turn snapping work here too. A stretched layer has its scale applied when its axes turn; a figure, a rig or a picture keeps its axes. Rotation keys are adjusted and added the same way as position keys. X, Y and Z are metres from the layer\'s own base, along its own axes. On an animated layer, position keys are adjusted and added so it stays put on its keys; between keys its path can shift a little. On a figure, moves, pairs and captured motion treat this point as the figure\'s feet.')],
     h('div', { class: 'row wrap' },
-      toggle('Edit origin', editing, (on) => setOriginEdit(on)),
+      toggle('Edit origin and axes', editing, (on) => setOriginEdit(on)),
       ...pivotsFor(o).filter(([k]) => k !== 'set').map(([k, label]) => button(label, () => originTo(o, k), { cls: 'small', title: `Put the origin at: ${label}` })),
       o.origin ? button('Reset', () => { putOrigin(o, [0, 0, 0]); delete o.pivot; changed(); }, { cls: 'small', title: 'Back to the layer\'s own origin (it stays where it is)' }) : null),
-    h('div', { class: 'row' }, axis('X', 0), axis('Y', 1), axis('Z', 2)));
+    h('div', { class: 'row' }, axis('X', 0), axis('Y', 1), axis('Z', 2)),
+    axes ? h('div', { class: 'row wrap' },
+      button('Axes to this view', () => axesToView(o), { cls: 'small', title: 'Its front (the blue axis) comes toward you, the layer stays' }),
+      ...['X', 'Y', 'Z'].map((a, i) => button(`${a} +90°`, () => turnAxesBy(o, i), { cls: 'small', title: `Turn its axes a quarter turn about its own ${a}, the layer stays` }))) : null);
 }
 
 // a figure's body shape (o.shape: percent per proportion, not keyed) and the plain anatomy shapes (o.anatomy)
@@ -247,6 +263,7 @@ function layerList() {
   const keys = (it) => { const n = keyCount(it); return n ? `${n} key${n > 1 ? 's' : ''}` : ''; };
   const hideBtn = (it, after) => iconBtn(it.hidden ? 'Show' : 'Hide', it.hidden ? '◌' : '◉', () => { it.hidden = !it.hidden; after(); });
   const delBtn = (id, name) => iconBtn(`Delete ${name}`, '🗑', () => removeLayer(id));
+  const lockBtn = (it) => iconBtn(it.locked ? `Unlock ${it.name}` : `Lock ${it.name}: taps on the view go through it`, icon(it.locked ? 'lock' : 'unlock'), () => { if (it.locked) delete it.locked; else it.locked = true; changed(); });
   const rows = [{ sel: !R.sel, thumb: h('span', { class: 'scene-icon' }, icon('video')), name: SC.cams?.length ? `${SC.camera.name} (active of ${SC.cams.length + 1})` : 'Camera',
     hint: [`${SC.width}×${SC.height} · ${fmtSecs(SC.seconds)} s`, keys(SC.camera)].filter(Boolean).join(' · '), onclick: () => select(null) }];
   if (SC.room) {
@@ -257,7 +274,7 @@ function layerList() {
   for (const o of [...SC.objects].reverse()) {
     rows.push({ sel: o.id === R.sel, off: o.hidden, thumb: h('span', { class: 'scene-icon' }, iconize(TYPES[o.type].icon)), name: o.name,
       hint: [TYPES[o.type].label, keys(o), o.hidden ? 'hidden' : ''].filter(Boolean).join(' · '),
-      onclick: () => select(o.id === R.sel ? null : o.id), buttons: [hideBtn(o, changed), delBtn(o.id, o.name)] });
+      onclick: () => select(o.id === R.sel ? null : o.id), buttons: [lockBtn(o), hideBtn(o, changed), delBtn(o.id, o.name)] });
   }
   return layerRowsEl(rows);
 }
@@ -503,10 +520,10 @@ async function openAdd() {
         closeSheet(); C.openImagePicker({ title: 'Background picture', onPick: (name) => addPicture(name) });
       }, 'A flat plane with the picture\'s own shape, behind everything, filling the shot camera\'s frame'),
       chip('🖼 Photo in 3D…', () => {
-        closeSheet(); C.openImagePicker({ title: 'Picture to turn into 3D', onPick: (name) => makePhoto(name) });
+        closeSheet(); C.openImagePicker({ title: 'Picture to turn into 3D', mpKey: '3d', onPick: (name) => makePhoto(name) });
       }, 'Turn a picture into a 3D mesh (MoGe in ComfyUI) for camera moves'),
       chip('Photo as a splat (SHARP)…', () => {
-        closeSheet(); C.openImagePicker({ title: 'Picture to turn into a splat', onPick: (name) => makeSplatHere(name) });
+        closeSheet(); C.openImagePicker({ title: 'Picture to turn into a splat', mpKey: '3d', onPick: (name) => makeSplatHere(name) });
       }, 'Turn a picture into Gaussian splats (Apple SHARP): softer and more lifelike than the mesh, for small camera moves'),
       chip('🧊 Object from photos…', async () => {
         closeSheet();
@@ -609,11 +626,16 @@ export function buildToolbar() {
     ...MODES.map(([m, icon, key, name]) => h('button', { type: 'button', class: 'ico', 'data-mode': m, title: `${name} (${key.toUpperCase()})`,
       'aria-label': name, onclick: () => setMode(m) }, iconize(icon))),
     h('button', { type: 'button', class: 'ico', 'data-orient': '', onclick: () => setOrient(nextOrient(R.orient)) }),
+    h('button', { type: 'button', class: 'ico', 'data-origin': '', 'aria-label': 'Edit origin and axes', onclick: () => setOriginEdit(!originEditing()),
+      title: 'Edit origin and axes (Y): Move drags its origin, Rotate turns its axes, and the layer stays where it is' }, icon('target')),
+    h('button', { type: 'button', class: 'ico', 'data-face': '', 'aria-label': 'Face the camera', onclick: () => { const o = selItem(); if (o) faceCamera(o); },
+      title: 'Face the camera (T): its front (+Z) turns to the camera' }, icon('person')),
     h('button', { type: 'button', class: 'ico', 'data-pivot': '', 'aria-label': 'Pivot at the view centre', onclick: pivotToView,
       title: 'Pivot at the view centre: turn and scale around where the middle of the view meets it (until Reset or another pick)' }, icon('pivot-view')),
     h('button', { type: 'button', class: 'ico hidden', 'data-pivot-reset': '', 'aria-label': 'Reset pivot', onclick: resetPivot,
       title: 'Reset pivot: back to its own (Pivot in the panel)' }, icon('pivot-reset')),
     h('span', { class: 'sep' })),
+    h('button', { type: 'button', class: 'ico hidden', 'data-selcam': '', 'aria-label': 'Select the camera', title: 'Select the camera (Esc): in the director view its gizmo comes on; tapping its outline does the same', onclick: () => select(null) }, icon('video')),
     h('button', { type: 'button', class: 'ico', 'data-free': '', 'aria-label': 'Director view', onclick: toggleFree }, icon('compass')),
     h('button', { type: 'button', class: 'ico hidden', 'data-camview': '', 'aria-label': 'Camera to this view', title: 'Camera to this view: move the active camera to exactly what you see, lens included (C)', onclick: camToView }, icon('camera')),
     h('button', { type: 'button', class: 'ico hidden', 'data-pip': '', 'aria-label': 'Mini camera view', title: 'Mini camera view (M): what the camera sees, in a box you can drag and resize',
@@ -642,6 +664,8 @@ function overlayMenu(anchor) {
 // the one-key commands (scene-shortcuts.js). Those for the key sheet do nothing where it is hidden (Create object).
 const hasSheet = () => modeOf().lanes !== 'none';
 const COMMAND = {
+  faceCam: () => { const o = selItem(); if (o) faceCamera(o); },
+  originEdit: () => { if (selItem() && !R.joint) setOriginEdit(!originEditing()); },
   camToView,
   pip: () => { if (R.free) { togglePip(); renderToolbar(); } },
   newCamera: () => { if (hasSheet()) addCamera(); },
@@ -700,7 +724,7 @@ export function wireKeys() {
     else if (e.key.toLowerCase() === 'h') { e.preventDefault(); setHud(!hudOff()); }
     else if (e.key.toLowerCase() === 'n') { const p = $('#tab-scene .stage.maxed .pull-tab'); if (p) { e.preventDefault(); p.dispatchEvent(new MouseEvent('click', { bubbles: true })); } }
     else if (e.key.toLowerCase() === 'q') { e.preventDefault(); setOrient(nextOrient(R.orient)); toast(`Gizmo axes: ${orientLabel()}`); }
-    else if (e.key === 'Escape') { if (HAND.on) handMode(null); else if (R.joint) selectJoint(null); else select(null); }
+    else if (e.key === 'Escape') { if (HAND.on) handMode(null); else if (originEditing()) setOriginEdit(false); else if (R.joint) selectJoint(null); else select(null); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && R.sel) { e.preventDefault(); removeSelected(); }
     else if (e.key === ' ') { e.preventDefault(); play(); }
     else if (e.key.toLowerCase() === 'p') { e.preventDefault(); stopPlay(); seek(AREA.stored()?.a ?? 0); play(); }   // from the start of the range

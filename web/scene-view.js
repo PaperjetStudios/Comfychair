@@ -1,6 +1,7 @@
 import { wireWalk } from './scene-walk.js';
 import { pipRect, syncPip } from './scene-pip.js';
-import { linear as bakeLinear, point as bakePoint, scaleOf as bakeScale } from './bake-math.js';
+import { eulerNear, linear as bakeLinear, point as bakePoint, scaleOf as bakeScale } from './bake-math.js';
+import { eulerQ } from './origin-math.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { OrbitControls } from './vendor/OrbitControls.js';
 import * as THREE from './vendor/three.module.min.js';
@@ -8,16 +9,16 @@ import { TransformControls } from './vendor/TransformControls.js';
 import * as FIGURE from './figure.js';
 import { $, api, busy as busyBar, canvasFont, clone, closeSheet, h, store, toast, undoToast } from './ui.js';
 import { gzChip, smoothGizmo, snap3, snapMenu3 } from './gizmo.js';
-import { ORIENTS, centrePoint, follow, frameQuat, orientOf, relQuat, spaceOf } from './gizmo-orient.js';
+import { ORIENTS, centrePoint, faceQuat, follow, frameQuat, orientOf, qMul, relQuat, spaceOf } from './gizmo-orient.js';
 import {
   C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, WP, current, frames, holdStart, hooks, liveCam, pathSig, makers, namesFor, newObject, newRoom, originShift, bakeOn, pivotOf, sample, setOrigin,
-  sameTab, save, selItem, setActiveCam, setSC, write
+  canBake, isPosable, sameTab, save, selItem, setActiveCam, setAxes, setSC, write
 } from './scene-data.js';
 import { letGo } from './scene-export.js';
 import { modeOf } from './scene-modes.js';
 import { renderKeys, renderPanel, renderToolbar, setSceneMode } from './scene-ui.js';
 import { placeAtCamera, sharpOn } from './splat-levels.js';
-import { standShift } from './splat-shape.js';
+import { pickAlong, samplePoints, standShift } from './splat-shape.js';
 import { renderDepth, setSplatRange, splatBlurOf, splatDepths, splatMeshes } from './splat-depth.js';
 // the SparkRenderer once scene-import.js has made one (a depth picture draws the splats in a pass of their own)
 export const SPLAT_PASS = { spark: null };
@@ -72,6 +73,12 @@ let tmpPivot = null;
 // what the view shows the selected layer's origin with (never in a render): draw() places it
 const originDot = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffb020, depthTest: false, transparent: true, opacity: 0.95 }));
 originDot.renderOrder = 12; originDot.visible = false; originDot.raycast = () => {};
+// ...and its axes while they are edited: red X, green Y, blue Z, the cone on +Z being its front
+const axesMark = new THREE.AxesHelper(1);
+axesMark.material.depthTest = false; axesMark.material.transparent = true;
+axesMark.add(new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.22, 12).rotateX(Math.PI / 2).translate(0, 0, 1.05), new THREE.MeshBasicMaterial({ color: 0x4d8dff, depthTest: false, transparent: true })));
+axesMark.renderOrder = 12; axesMark.children[0].renderOrder = 12; axesMark.visible = false;
+axesMark.raycast = () => {}; axesMark.children[0].raycast = () => {};
 // (the skinning chunks pose an imported character's bones; plain meshes pass through them)
 const VERT = `#include <skinning_pars_vertex>
 varying float vz;
@@ -97,6 +104,9 @@ export const rangeMat = new THREE.ShaderMaterial({
     + ' gl_FragColor = vec4(e, 1.0); }',
 });
 
+// a camera's outline stays on show inside a splat or behind a wall
+function seeThrough(helper) { helper.material.depthTest = false; helper.material.transparent = true; helper.renderOrder = 11; }
+
 let built = false;   // setup has made everything draw() uses
 export function setup() {
   viewer = $('#sceneViewer');
@@ -114,7 +124,7 @@ export function setup() {
   scene.add(grid);
   camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.05, 500);
   camera.layers.enable(1);  // layer 1: a figure's joint dots (picked on their own, never rendered out)
-  scene.add(ikTarget, pivot, camProxy, originDot);
+  scene.add(ikTarget, pivot, camProxy, originDot, axesMark);
   R.orient = orientOf(store.get('deck.scene.orient', 'world'));   // the gizmo's axes (this device's choice)
   R.viewCut = store.get('deck.scene.viewcut', true) !== false;   // the picture follows the cuts, unless you are editing a camera
   R.shotFmt = store.get('deck.scene.shotfmt', 'h3') === 'ltx' ? 'ltx' : 'h3';
@@ -148,7 +158,7 @@ export function setup() {
   viewControls.addEventListener('change', () => { followView(); draw(); });
   wireWalk({ canvas, cam: () => (R.free ? viewCam : camera), ctl: () => (R.free ? viewControls : controls) });   // right mouse + W A S D (scene-walk.js)
   shotCam = new THREE.PerspectiveCamera(45, 16 / 9, 0.3, 3);  // (only drawn: short, so the frustum stays small)
-  frustum = new THREE.CameraHelper(shotCam); frustum.visible = false; scene.add(frustum);
+  frustum = new THREE.CameraHelper(shotCam); frustum.visible = false; seeThrough(frustum); scene.add(frustum);
   stage = new THREE.Mesh(new THREE.CircleGeometry(2, 64).rotateX(-Math.PI / 2), floorMat);  // Create object's floor
   stage.visible = false; scene.add(stage);
 
@@ -162,7 +172,7 @@ export function setup() {
   smooth = smoothGizmo(gizmo, {
     canvas, fix: fixTarget, redraw: () => draw(),
     apply: (o) => { if (gizmo.object === o) { applyChange(); draw(); } },
-    settle: () => { if (originEditing()) dropOrigin(); save(); renderKeys(); renderPanel(); },
+    settle: () => { if (originEditing()) dropEdit(); save(); renderKeys(); renderPanel(); },
     end: () => { letGo('gizmo'); placeHandle(); },
     start: () => holdStart('gizmo'),
   });
@@ -226,6 +236,7 @@ export function setup() {
     if (joint) return selectJoint(joint);
     const bone = boneDotAt(e);
     if (bone) { bonePick?.(R.sel, bone); return; }
+    if (R.sel != null && frustumAt(e)) return select(null);   // (a tap on the camera's outline picks it, whatever is behind it)
     const other = otherCamAt(e);
     if (other) { setActiveCam(other); R.sel = null; changed(); toast(`${other.name} is active`); return; }
     const id = hitAt(e);
@@ -271,7 +282,7 @@ function applyChange() {
   const o = selItem(), m = o && R.meshes.get(o.id);
   if (!o || !m) return;
   if (R.joint) return jointChanged(o);
-  if (originEditing()) return;   // (only the handle moves: the layer stays, and the origin lands when the drag settles)
+  if (originEditing()) return;   // (only the handle moves: the layer stays, and the origin or axes land when the drag settles)
   const p = pivot;
   // the object follows the pivot: turned (relative to it) and scaled around it
   const t = follow(p.position.toArray(), p.quaternion.toArray(), pivotRel, o.bake ? bakePoint(o.bake, pivotAt.toArray()) : pivotAt.toArray(), p.scale.toArray());
@@ -541,13 +552,16 @@ function placePivot() {
   if (editing) { m.updateMatrixWorld(true); pivotAt.fromArray(o.origin || [0, 0, 0]); }
   else if (tmpPivot?.item === o) { m.updateMatrixWorld(true); pivotAt.fromArray(tmpPivot.at); } else pivotAt.copy(pivotPoint(o, m));
   pivot.position.copy(m.localToWorld(pivotAt.clone()));
-  pivot.quaternion.fromArray(frameQuat(R.orient, editing ? 'translate' : R.mode, m.quaternion.toArray(), activeCamera().quaternion.toArray()));
+  pivot.quaternion.fromArray(frameQuat(R.orient, editing ? originMode() : R.mode, m.quaternion.toArray(), activeCamera().quaternion.toArray()));
   pivotRel = relQuat(pivot.quaternion.toArray(), m.quaternion.toArray());
   pivot.scale.copy(m.scale);
   pivot.updateMatrixWorld();
 }
 // ---- the layer's origin (o.origin: origin-math.js): Edit origin moves the gizmo and the origin with it, not the layer
 export const originEditing = () => !!R.originEdit && R.originEdit === R.sel && !R.joint;
+// what the gizmo edits there: Move the origin, Rotate the axes (a rig or a backdrop has no axes to turn: bake-math.js can't hold them)
+export const canTurnAxes = (o) => !!o && canBake(o);
+export const originMode = () => (R.mode === 'rotate' && canTurnAxes(selItem()) ? 'rotate' : 'translate');
 export function setOriginEdit(on) {
   R.originEdit = on ? R.sel : null;
   tmpPivot = null;
@@ -569,6 +583,62 @@ function originAtWorld(p) {
   putOrigin(o, m.worldToLocal(p.clone()).toArray());
 }
 function dropOrigin() { originAtWorld(pivot.position); }
+function dropEdit() {
+  if (originMode() !== 'rotate') return dropOrigin();
+  putAxes(selItem(), qMul(pivot.quaternion.toArray(), pivotRel));
+}
+function putAxes(o, q) {
+  const r = setAxes(o, q);
+  if (!r.ok) toast(r.why, true); else if (r.note) toast(r.note);
+  pose(R.f);
+  return r.ok;
+}
+// the axes so that its front (+Z) comes toward what you are looking through
+export function axesToView(o) {
+  const q = faceQuat(pivot.position.toArray(), activeCamera().position.toArray());
+  if (q && putAxes(o, q)) changed();
+}
+// a quarter turn about one of its own axes (0 X, 1 Y, 2 Z)
+export function turnAxesBy(o, i) {
+  const v = current(o, OBJ), by = eulerQ(...[0, 1, 2].map((k) => (k === i ? 90 : 0)));
+  if (putAxes(o, qMul(eulerQ(v.rx, v.ry, v.rz), by))) changed();
+}
+
+// ---- fitting a layer into the scene: the camera is what's on show (the shot camera, or the one drawn in the director view) ----
+const pivotWorld = (o, m) => {
+  m.updateMatrixWorld(true);
+  const at = tmpPivot?.item === o ? new THREE.Vector3(...tmpPivot.at) : pivotPoint(o, m);
+  return { at, p: m.localToWorld(at.clone()) };
+};
+// its front (+Z) at the camera, turned around its pivot so it doesn't swing away. upright: about the up axis only (a figure always is)
+export function faceCamera(o, upright = false) {
+  const m = R.meshes.get(o.id);
+  if (!m) return;
+  const { at, p } = pivotWorld(o, m), q = faceQuat(p.toArray(), camera.position.toArray(), { upright: upright || isPosable(o) });
+  if (!q) return;
+  const s = m.scale.toArray(), t = follow(p.toArray(), q, [0, 0, 0, 1], o.bake ? bakePoint(o.bake, at.toArray()) : at.toArray(), s);
+  const turn = eulerNear(t.q, current(o, OBJ));
+  const sh = originShift(o, { ...turn, sx: s[0], sy: s[1], sz: s[2] });
+  write(o, namesFor(o), { x: t.p[0] + sh[0], y: t.p[1] + sh[1], z: t.p[2] + sh[2], ...turn });
+  changed();
+}
+// the shot camera aims at the layer's pivot and stays where it stands
+export function aimCameraAt(o) {
+  const m = R.meshes.get(o.id);
+  if (!m) return;
+  const { p } = pivotWorld(o, m);
+  write(SC.camera, CAM, { tx: p.x, ty: p.y, tz: p.z });
+  changed();
+}
+// the director view turns to the layer, close enough to see it whole, so it orbits around it
+export function lookAtLayer(o) {
+  const m = R.meshes.get(o.id);
+  if (!m) return;
+  const box = new THREE.Box3().setFromObject(m), mid = box.isEmpty() ? m.position.clone() : box.getCenter(new THREE.Vector3());
+  const r = box.isEmpty() ? 1 : Math.max(0.5, box.getSize(new THREE.Vector3()).length() * 0.9);
+  const back = viewCam.position.clone().sub(viewControls.target).setLength(r);
+  aimFree(mid.clone().add(back).toArray(), mid.toArray());
+}
 const pickable = (xs) => xs.find((x) => x.object.visible || x.object.userData.pickProxy);
 function originAtTap(e) {
   const m = R.meshes.get(R.sel);
@@ -665,7 +735,7 @@ export function syncMeshes() {
   const target = HAND.on ? null : !m ? (R.free && wantFrustum() ? camProxy : null) : !R.joint ? pivot : jointMode() === 'translate' ? ikTarget : m.userData.rig.bones[R.joint];
   if (target) {
     const was = gizmo.object;
-    gizmo.setMode(R.joint ? jointMode() : (target === camProxy && R.mode === 'scale') || originEditing() ? 'translate' : R.mode);
+    gizmo.setMode(R.joint ? jointMode() : originEditing() ? originMode() : target === camProxy && R.mode === 'scale' ? 'translate' : R.mode);
     // (a joint turns on its own axes; everything else as picked: World, Local or View)
     gizmo.setSpace(R.joint && jointMode() === 'rotate' ? 'local' : spaceOf(R.orient));
     if (was !== target) { gizmo.attach(target); if (target === camProxy) placeCamProxy(); }
@@ -777,7 +847,7 @@ export function draw(forRender = false) {
 function drawPip() {
   const size = renderer.getSize(new THREE.Vector2()), b = pipRect(size.x, size.y);
   if (!b) return;
-  const tools = [grid, snapGrid, stage, frustum, originDot, gizmo.getHelper(), ...[...OTHERS.values()].map((x) => x.group)];
+  const tools = [grid, snapGrid, stage, frustum, originDot, axesMark, gizmo.getHelper(), ...[...OTHERS.values()].map((x) => x.group)];
   for (const m of R.meshes.values()) tools.push(...(m.userData.rig?.dots || []), ...(m.userData.tips || []), ...(m.userData.dots || []));
   const on = tools.filter((x) => x.visible);
   for (const x of on) x.visible = false;
@@ -791,10 +861,16 @@ function drawPip() {
 function placeOriginDot(show) {
   const o = show ? selItem() : null, m = o && R.meshes.get(o.id), editing = originEditing();
   originDot.visible = !!m?.visible && !R.joint && !HAND.on && (editing || !!o.origin);
+  axesMark.visible = originDot.visible && editing;
   if (!originDot.visible) return;
   if (editing && gizmo.object === pivot) originDot.position.copy(pivot.position);
   else { m.updateMatrixWorld(true); m.localToWorld(originDot.position.fromArray(o.origin || [0, 0, 0])); }
-  originDot.scale.setScalar(activeCamera().position.distanceTo(originDot.position) * 0.009);
+  const far = activeCamera().position.distanceTo(originDot.position);
+  originDot.scale.setScalar(far * 0.009);
+  if (axesMark.visible) {
+    axesMark.position.copy(originDot.position); axesMark.scale.setScalar(far * 0.12);
+    if (gizmo.object === pivot) axesMark.quaternion.fromArray(qMul(pivot.quaternion.toArray(), pivotRel)); else axesMark.quaternion.copy(m.quaternion);
+  }
 }
 
 // the camera that's on show (the shot camera, or the free view's)
@@ -824,9 +900,29 @@ function hitAt(e) {
   if (!modeOf().select) return null;
   const r = canvas.getBoundingClientRect();
   ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), activeCamera());
-  // the room and photos only block: tapping them deselects (pick them in the layer list)
-  const hit = ray.intersectObjects(visibleMeshes(), true).find((x) => x.object.visible);  // raycasts ignore .visible: hidden figure parts can't be picked
-  return hit && hit.object.userData.id !== ROOM && !hit.object.userData.photo ? hit.object.userData.id : null;
+  // the room and photos only block: tapping them deselects (pick them in the layer list). A locked layer lets the tap through. A model
+  // standing in a splat wins over the splat, whose stray Gaussians are often nearer along the ray.
+  const itemOf = (x) => SC.objects.find((o) => o.id === x.object.userData.id);
+  const hit = ray.intersectObjects(visibleMeshes(), true).find((x) => x.object.visible && !itemOf(x)?.locked);  // raycasts ignore .visible: hidden figure parts can't be picked
+  const blocks = hit && (hit.object.userData.id === ROOM || hit.object.userData.photo);
+  if (hit && !blocks) return hit.object.userData.id;
+  // a splat: a tap on its Gaussians (not its box: that takes the taps on the air around a background, and the camera can stand inside it)
+  let best = null;
+  for (const o of SC.objects) {
+    const m = R.meshes.get(o.id), d = o.locked || !m?.visible ? null : splatFrom(m);
+    if (d != null && d < (best?.d ?? hit?.distance ?? Infinity)) best = { id: o.id, d };
+  }
+  return best?.id ?? null;
+}
+// how far along the ray a splat layer's nearest Gaussian is, or null
+function splatFrom(m) {
+  const mesh = m.userData.splat?.mesh;
+  if (!mesh) return null;
+  m.updateMatrixWorld(true);
+  const inv = mesh.matrixWorld.clone().invert(), org = ray.ray.origin.clone().applyMatrix4(inv), dir = ray.ray.direction.clone().transformDirection(inv);
+  const b = new THREE.Box3().setFromObject(m.userData.splat.proxy).getSize(new THREE.Vector3()).length() / Math.max(1e-4, m.scale.y);
+  const p = pickAlong(samplePoints(mesh), org.toArray(), dir.toArray(), b * 0.01);
+  return p ? ray.ray.origin.distanceTo(mesh.localToWorld(new THREE.Vector3(...p))) : null;
 }
 // the selected figure's joint dot under the pointer (within a finger's reach). Where dots overlap,
 // the one nearest the camera wins; anything else in front of it takes the tap instead. Turn the view
@@ -1062,7 +1158,7 @@ function syncOthers() {
     let x = OTHERS.get(c);
     if (!x) {
       const cam = new THREE.PerspectiveCamera(45, 16 / 9, 0.3, 3), helper = new THREE.CameraHelper(cam), group = new THREE.Group();
-      const grey = new THREE.Color(0x8a8f99); helper.setColors(grey, grey, grey, grey, grey);
+      const grey = new THREE.Color(0x8a8f99); helper.setColors(grey, grey, grey, grey, grey); seeThrough(helper);
       group.add(cam, helper); scene.add(group);
       OTHERS.set(c, x = { group, cam, helper, label: null, name: null });
     }
@@ -1074,19 +1170,30 @@ function syncOthers() {
   }
 }
 // the other camera whose outline (or name) is under the pointer, within a finger's reach; the nearest wins
-function otherCamAt(e) {
-  if (!wantFrustum() || !OTHERS.size) return null;
-  const r = canvas.getBoundingClientRect(), reach = e.pointerType === 'touch' ? 28 : 18, px = e.clientX - r.left, py = e.clientY - r.top;
+const reachOf = (e) => (e.pointerType === 'touch' ? 28 : 18);
+// how far the pointer is from a camera's outline, on screen (and scr, for anything else near it)
+function outlineFrom(e) {
+  const r = canvas.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
   const scr = (w) => { const p = w.clone().project(viewCam); return p.z > 1 ? null : [(p.x + 1) / 2 * r.width, (1 - p.y) / 2 * r.height]; };
   const seg = (a, b) => {
     if (!a || !b) return Infinity;
     const dx = b[0] - a[0], dy = b[1] - a[1], t = Math.max(0, Math.min(1, ((px - a[0]) * dx + (py - a[1]) * dy) / (dx * dx + dy * dy || 1)));
     return Math.hypot(a[0] + dx * t - px, a[1] + dy * t - py);
   };
+  const dist = (cam) => {
+    const apex = scr(cam.position), far = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => scr(new THREE.Vector3(u, v, 1).unproject(cam)));
+    return Math.min(...far.map((p) => seg(apex, p)), ...far.map((p, i) => seg(p, far[(i + 1) % 4])));
+  };
+  return { px, py, scr, dist };
+}
+// the active camera's outline under the pointer, within a finger's reach
+const frustumAt = (e) => wantFrustum() && outlineFrom(e).dist(shotCam) < reachOf(e);
+function otherCamAt(e) {
+  if (!wantFrustum() || !OTHERS.size) return null;
+  const reach = reachOf(e), { px, py, scr, dist } = outlineFrom(e);
   let best = null;
   for (const [c, x] of OTHERS) {
-    const apex = scr(x.cam.position), far = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([u, v]) => scr(new THREE.Vector3(u, v, 1).unproject(x.cam)));
-    let d = Math.min(...far.map((p) => seg(apex, p)), ...far.map((p, i) => seg(p, far[(i + 1) % 4])));
+    let d = dist(x.cam);
     const lb = scr(x.label.position);   // (the name's box, up and to the right of its corner)
     if (lb && px >= lb[0] - 4 && py <= lb[1] + 4 && py >= lb[1] - 30 && px <= lb[0] + 160) d = Math.min(d, 0);
     if (d < reach && (!best || d < best.d)) best = { c, d };

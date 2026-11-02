@@ -2,6 +2,7 @@
 project's own folder: projects/<folder>/.deck/assets/<import id>/<file name>. One import can be several
 files (an OBJ with its MTL and textures, a glTF with its .bin) that share an import id, so their
 relative names keep working. They are served under /files/projects/ like every other project file."""
+import asyncio
 import json
 import math
 import os
@@ -14,7 +15,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, File, Form, HTTPException, Request, UploadFile
 
 from . import config, db, storage
 
@@ -264,7 +265,6 @@ async def splat_levels(body: dict = Body(...)):
     from its full set. That is <name>_full.ply when there is one (a photo's splat), else the file itself (an imported
     .ply), so older splats and imports get levels too. With a trim the levels hold only what it keeps (the full set
     stays whole: renders trim it as they draw)."""
-    import asyncio
     from urllib.parse import unquote
     m = re.fullmatch(r"/files/projects/([^/]+)/\.deck/assets/([0-9a-f]{8})/([^/]+)", str((body or {}).get("url") or "").split("?")[0])
     if not m:
@@ -390,22 +390,107 @@ async def photo_splat(body: dict = Body(...)):
     return clipimport._start(work, "Making the splat")
 
 
+# ---- Open in Blender: its window, on this PC's own screen ----
+OPENER = config.BASE_DIR / "look" / "blender_open.py"
+OPENS = {".glb", ".gltf", ".fbx", ".obj"}
+
+
+def _same_pc(request: Request) -> bool:
+    """The browser is on the PC ComfyChair runs on: a tablet or another PC must not put a window on this one's screen.
+    (Opened by the PC's own network address, the connection comes from that same address.)"""
+    who = request.client.host if request.client else ""
+    here = request.scope.get("server") or ("",)
+    return who in ("127.0.0.1", "::1", "localhost") or (bool(who) and who == here[0])
+
+
+def _desktop_env() -> dict | None:
+    """What a window needs to reach the screen, or None with no desktop running. A system service starts without any of
+    it, so it comes from the logged-in user's session. Blender's temporary files (its autosave and quit.blend hold the
+    model) go to TMPDIR, set by blender_open."""
+    env = dict(os.environ)
+    run = Path(f"/run/user/{os.getuid()}")
+    if run.is_dir():
+        env.setdefault("XDG_RUNTIME_DIR", str(run))
+        if (run / "bus").exists():
+            env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path={run / 'bus'}")
+    if not env.get("DISPLAY") and not env.get("WAYLAND_DISPLAY"):
+        wayland = sorted(p.name for p in run.glob("wayland-*") if not p.name.endswith(".lock")) if run.is_dir() else []
+        x11 = sorted(p.name for p in Path("/tmp/.X11-unix").glob("X*")) if Path("/tmp/.X11-unix").is_dir() else []
+        if wayland:
+            env["WAYLAND_DISPLAY"] = wayland[0]
+        elif x11:
+            env["DISPLAY"] = f":{x11[0][1:]}"
+        else:
+            return None
+    if env.get("DISPLAY") and not env.get("XAUTHORITY"):
+        for auth in [Path.home() / ".Xauthority", run / "gdm" / "Xauthority", *sorted(run.glob(".mutter-Xwaylandauth.*"))]:
+            if auth.is_file():
+                env["XAUTHORITY"] = str(auth)
+                break
+    return env
+
+
+@router.get("/blender")
+async def blender_status(request: Request):
+    """{can}: whether Open in Blender can work from this browser (the button only shows when it can)."""
+    return {"can": _same_pc(request) and BLENDER.is_file() and _desktop_env() is not None}
+
+
+@router.post("/blender")
+async def blender_open(request: Request, body: dict = Body(...)):
+    """{url (a model in a project)} -> {ok}: the model opened in Blender's window, for a look or for work by hand. The
+    file isn't changed. Blender runs on after this returns, and after ComfyChair restarts (a scope of its own, when the
+    user's session has one), and its temporary folder goes when it closes."""
+    if not _same_pc(request):
+        raise HTTPException(403, "Blender opens on the PC ComfyChair runs on: use a browser on that PC")
+    src = _project_model(body.get("url"), OPENS, "No such model")
+    if not BLENDER.is_file():
+        raise HTTPException(400, f"Blender isn't installed ({BLENDER})")
+    env = _desktop_env()
+    if env is None:
+        raise HTTPException(400, "No desktop is running on this PC")
+    tmp = tempfile.mkdtemp(prefix="deck-blender-")
+    env.update(TMPDIR=tmp, TEMP=tmp, TMP=tmp)
+    cmd = ["sh", "-c", '"$@"; rm -rf "$TMPDIR"', "blender", str(BLENDER), "--python", str(OPENER), "--", str(src)]
+    if shutil.which("systemd-run") and env.get("DBUS_SESSION_BUS_ADDRESS"):
+        cmd = ["systemd-run", "--user", "--scope", "--collect", "--quiet", *cmd]
+
+    def start():
+        p = subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        try:   # (gone this soon, it never opened)
+            return p.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            return None
+
+    if await asyncio.to_thread(start) is not None:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise HTTPException(400, "Blender closed straight away: is the desktop logged in?")
+    return {"ok": True, "name": src.name}
+
+
+def _project_model(url, exts: set, missing: str) -> Path:
+    """The file of a model in a project, from its /files/projects/... url."""
+    from urllib.parse import unquote
+    m = re.fullmatch(r"/files/projects/([^/]+)/(.+)", str(url or "").split("?")[0])
+    if not m:
+        raise HTTPException(400, "That isn't a model in a project")
+    folder, rel = unquote(m[1]), unquote(m[2])
+    src = (config.PROJECTS_DIR / folder / rel).resolve()
+    if folder != Path(folder).name or folder.startswith(".") or not src.is_relative_to((config.PROJECTS_DIR / folder).resolve()) \
+            or not src.is_file() or src.suffix.lower() not in exts:
+        raise HTTPException(404, missing)
+    return src
+
+
 @router.post("/cleanup")
 async def model_cleanup(body: dict = Body(...)):
     """{url (a model in a project), mode (quads | voxel | decimate | subdivide), amount, tex (texture size, 1024-4096)} -> job;
     its result is the new model ({url, name, group, kind: "model", size, faces}) in a new import folder of the same
     project, made by Blender run headless (look/blender_remesh.py). The original stays as it was."""
     from . import clipimport
-    from urllib.parse import unquote
     body = body or {}
-    m = re.fullmatch(r"/files/projects/([^/]+)/(.+)", str(body.get("url") or "").split("?")[0])
-    if not m:
-        raise HTTPException(400, "That isn't a model in a project")
-    folder, rel = unquote(m[1]), unquote(m[2])
-    src = (config.PROJECTS_DIR / folder / rel).resolve()
-    if folder != Path(folder).name or folder.startswith(".") or not src.is_relative_to((config.PROJECTS_DIR / folder).resolve()) \
-            or not src.is_file() or src.suffix.lower() not in {".glb", ".gltf"}:
-        raise HTTPException(404, "No such model (Blender cleans .glb and .gltf)")
+    src = _project_model(body.get("url"), {".glb", ".gltf"}, "No such model (Blender cleans .glb and .gltf)")
+    folder = src.relative_to(config.PROJECTS_DIR.resolve()).parts[0]
     mode = str(body.get("mode") or "")
     if mode not in REMESH_MODES:
         raise HTTPException(400, "mode is quads, voxel, decimate or subdivide")
@@ -472,7 +557,6 @@ def find_people(path: Path, py: Path, det: Path) -> dict:
 async def photo_person(body: dict = Body(...)):
     """{image: an input name} -> {w, h, people: [[x0, y0, x1, y1, score], ...]}: the people in a photo (fractions of the
     picture, the tallest first), found with DWPose's YOLOX on the CPU; refused (409) while ComfyUI's queue is busy."""
-    import asyncio
     from . import looks
     image = str((body or {}).get("image") or "")
     if not image:

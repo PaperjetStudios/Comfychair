@@ -4,7 +4,9 @@ import { toast, uid } from './ui.js';
 import { isPoseCh, putKey, recordInto, sampleKeys } from './keys.js';
 import { shiftByMods } from './curve-mods.js';
 import { moveOrigin, originShift as shiftBy } from './origin-math.js';
-import { applyBake, linear as bakeLinear, point as bakePoint } from './bake-math.js';
+import { applyBake, eulerNear, linear as bakeLinear, point as bakePoint, turnAxes } from './bake-math.js';
+import { eulerQ } from './origin-math.js';
+import { qMul } from './gizmo-orient.js';
 export { isPoseCh };
 
 export let C;  // app state and actions handed over by app.js (see sceneModule there)
@@ -556,6 +558,14 @@ export function setOrigin(o, at) {
     v.x += s[0]; v.y += s[1]; v.z += s[2];
   }
   moveOrigin(o, at, { even, setKey, map, sample: (f) => sampleK(o, OBJ, f) });
+}
+
+// The layer's axes to the turn q (its rotation offset: bake-math.js turnAxes), the layer staying where it is, a held change included.
+export function setAxes(o, q) {
+  const r = turnAxes(o, q, current(o, OBJ), { even: EVEN.has(o.type), setKey, sample: (f) => sampleK(o, OBJ, f) });
+  const held = r.ok && TEMP.get(o)?.v;
+  if (held?.rx !== undefined) Object.assign(held, eulerNear(qMul(eulerQ(held.rx, held.ry, held.rz), r.undo), held));
+  return r;
 }
 
 export const selItem = () => SC.objects.find((o) => o.id === R.sel) || null;

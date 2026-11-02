@@ -3,6 +3,8 @@
 
 // [what it runs, key, needs Shift, what the list says]
 export const COMMANDS = [
+  ['faceCam', 't', false, 'the selected object faces the camera'],
+  ['originEdit', 'y', false, 'edit the selected object\'s origin (Move) and axes (Rotate)'],
   ['camToView', 'c', false, 'camera to this view (director view)'],
   ['pip', 'm', false, 'mini camera view (director view)'],
   ['newCamera', 'c', true, 'new camera'],
@@ -32,7 +34,7 @@ const keyName = (key, shift) => (key === '?' ? '?' : `${shift ? 'Shift+' : ''}${
 // the keys the tab had before this list, by what they're for
 const OTHERS = [
   ['View', ['V director view / through the camera', 'H hide the tools', 'N the panel, in full screen', 'Right mouse + W A S D Q E walk the camera']],
-  ['Objects', ['W / E / R move, rotate, scale', 'Q gizmo axes', 'Delete remove the selected object', 'Esc deselect', 'Ctrl+Z undo', 'Ctrl+Y redo']],
+  ['Objects', ['W / E / R move, rotate, scale', 'Q gizmo axes', 'Delete remove the selected object', 'Esc leave Edit origin, else deselect (the camera)', 'Ctrl+Z undo', 'Ctrl+Y redo']],
   ['Time', ['Space play / pause', 'P play from the start of the range', '← → or , . a frame', 'Shift+← → the start / end', '↑ ↓ next / previous key', 'Home / End the start / end', 'I / O set the range\'s in / out', 'Shift+I / Shift+O go to them', 'Alt+X clear the range', 'K auto key']],
   ['Key sheet, after a click on it', ['A select all', 'Alt+A select none', 'S stretch in time', 'X or Delete delete keys', 'Ctrl+C / Ctrl+V / Ctrl+D copy, paste, duplicate']],
 ];

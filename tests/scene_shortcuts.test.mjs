@@ -48,3 +48,8 @@ test('the list names every command', () => {
   for (const [, , , what] of COMMANDS) assert.ok(text.includes(what), what);
   assert.ok(text.includes('Shift+C new camera'));
 });
+
+test('the fit keys', () => {
+  assert.equal(press('t'), 'faceCam');
+  assert.equal(press('y'), 'originEdit');
+});

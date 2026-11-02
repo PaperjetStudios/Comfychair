@@ -57,3 +57,20 @@ export function centrePoint(o, d, hit, ref) {
   const t = Math.max(0.1, (ref[0] - o[0]) * d[0] + (ref[1] - o[1]) * d[1] + (ref[2] - o[2]) * d[2]);
   return [o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t];
 }
+
+// A layer's front is its own +Z. The turn that points it from `from` at `to`, Y as near up as it goes (no roll). upright: a turn about
+// the up axis only, so it stays standing. null when they are in the same place.
+export function faceQuat(from, to, { upright = false } = {}) {
+  const cross = ([a, b, c], [d, e, f]) => [b * f - c * e, c * d - a * f, a * e - b * d];
+  const unit = (v) => { const n = Math.hypot(...v); return n > 1e-9 ? v.map((x) => x / n) : null; };
+  const z = unit([to[0] - from[0], upright ? 0 : to[1] - from[1], to[2] - from[2]]);
+  if (!z) return null;
+  const x = unit(cross([0, 1, 0], z)) || [1, 0, 0], y = cross(z, x);
+  // (the turn with those three as its columns)
+  const t = x[0] + y[1] + z[2];
+  if (t > 0) { const s = 2 * Math.sqrt(t + 1); return [(y[2] - z[1]) / s, (z[0] - x[2]) / s, (x[1] - y[0]) / s, s / 4]; }
+  if (x[0] > y[1] && x[0] > z[2]) { const s = 2 * Math.sqrt(1 + x[0] - y[1] - z[2]); return [s / 4, (y[0] + x[1]) / s, (z[0] + x[2]) / s, (y[2] - z[1]) / s]; }
+  if (y[1] > z[2]) { const s = 2 * Math.sqrt(1 + y[1] - x[0] - z[2]); return [(y[0] + x[1]) / s, s / 4, (z[1] + y[2]) / s, (z[0] - x[2]) / s]; }
+  const s = 2 * Math.sqrt(1 + z[2] - x[0] - y[1]);
+  return [(z[0] + x[2]) / s, (z[1] + y[2]) / s, s / 4, (x[1] - y[0]) / s];
+}
