@@ -282,7 +282,7 @@ export function createPaint(ctx) {
       c.transform(...invert(layerMatrix(l)));   // (canvas place to the file's pixels)
       c.drawImage(a, f.x, f.y);
       c.restore();
-      const own = !l.maskOff && E().layers.find((m) => m.maskOf === l.key && m.img && l.key);
+      const own = !l.maskOff && l.maskFor !== 'adjust' && E().layers.find((m) => m.maskOf === l.key && m.img && l.key);
       if (own) c.drawImage(own.img, 0, 0, W, H);
       c.globalCompositeOperation = 'source-over';
       const px = c.getImageData(0, 0, W, H).data;
@@ -290,7 +290,7 @@ export function createPaint(ctx) {
       for (let i = 3; i < px.length && !any; i += 4) any = px[i] > 8;
       if (!any) continue;
       const n = { name: null, label: `${l.label || l.name?.split('/').pop() || 'Layer'} cut out`, crop: { ...l.crop }, x: l.x, y: l.y, scale: l.scale, rotation: l.rotation || 0,
-        flipX: !!l.flipX, flipY: !!l.flipY, opacity: l.opacity ?? 1, hidden: false, blend: l.blend || 'normal', img: cv, ...(l.group ? { group: l.group } : {}) };
+        flipX: !!l.flipX, flipY: !!l.flipY, opacity: l.opacity ?? 1, hidden: false, blend: l.blend || 'normal', img: cv, ...(l.group ? { group: l.group } : {}), ...(l.adjust ? { adjust: l.adjust } : {}) };
       const e = E();
       e.layers.splice(e.layers.indexOf(l) + 1, 0, n);
       l.hidden = true;
@@ -430,6 +430,27 @@ export function createPaint(ctx) {
   // ---- strokes: dabs go into a buffer at full strength, and the buffer goes onto the layer at the brush's
   // opacity (so a stroke never darkens where it crosses itself), or cuts it away for the eraser ----
   let S = null;   // the stroke being drawn
+  // A layer's mask (paint.js holds its undo) changed as a whole. kind: invert, all (shows everything), none (hides everything), soften (r: px of the picture), selection (shows only that)
+  function layerMaskOp(m, kind, r = 8) {
+    const cv = layerCanvas(m), W = cv.width, H = cv.height, full = { x: 0, y: 0, w: W, h: H };
+    if (kind === 'invert') change(m, full, (c) => { c.globalCompositeOperation = 'xor'; c.fillStyle = '#fff'; c.fillRect(0, 0, W, H); });
+    else if (kind === 'all') change(m, full, (c) => { c.globalCompositeOperation = 'source-over'; c.fillStyle = '#fff'; c.fillRect(0, 0, W, H); });
+    else if (kind === 'none') change(m, full, (c) => { c.clearRect(0, 0, W, H); });
+    else if (kind === 'selection') {
+      const ls = P.sel && !P.sel.float ? layerSel(m) : null;
+      if (!ls) return toast('Select something first', true);
+      change(m, full, (c) => { c.globalCompositeOperation = 'copy'; c.drawImage(ls.mask, 0, 0); });
+      dropSel();
+    } else if (kind === 'soften') {
+      const px = Math.max(1, r / Math.max(1e-3, m.scale || 1)), p = Math.ceil(px * 3), wide = makeCanvas(W + 2 * p, H + 2 * p), wc = wide.getContext('2d');
+      if (!('filter' in wc)) return toast('Softening needs a newer browser', true);
+      wc.drawImage(cv, 0, 0, wide.width, wide.height);   // (past the edge it goes on as it was, or the edge would fade)
+      wc.clearRect(p, p, W, H); wc.drawImage(cv, p, p);
+      const soft = makeCanvas(wide.width, wide.height), sc = soft.getContext('2d');
+      sc.filter = `blur(${px}px)`; sc.drawImage(wide, 0, 0);
+      change(m, full, (c) => { c.globalCompositeOperation = 'copy'; c.drawImage(soft, -p, -p); });
+    }
+  }
   function target() {
     const l = E().sel;
     if (!l || !l.img || !l.img.naturalWidth || l.x == null) return null;
@@ -961,7 +982,7 @@ export function createPaint(ctx) {
       c.drawImage(l.img, 0, 0);
       c.globalCompositeOperation = 'destination-in'; c.drawImage(ls.mask, 0, 0);
       const n = { name: null, label: `${l.label || l.name?.split('/').pop() || 'Layer'} ${kind === 'cut' ? 'cut' : 'copy'}`, crop: { ...l.crop }, x: l.x, y: l.y,
-        scale: l.scale, rotation: l.rotation || 0, flipX: !!l.flipX, flipY: !!l.flipY, opacity: 1, hidden: false, blend: 'normal', img: cv };
+        scale: l.scale, rotation: l.rotation || 0, flipX: !!l.flipX, flipY: !!l.flipY, opacity: 1, hidden: false, blend: 'normal', img: cv, ...(l.adjust ? { adjust: l.adjust } : {}) };
       if (kind === 'cut') change(l, bb, (cc) => { cc.globalCompositeOperation = 'destination-out'; cc.drawImage(ls.mask, bb.x, bb.y, bb.w, bb.h, bb.x, bb.y, bb.w, bb.h); });
       const e = E();
       e.layers.splice(e.layers.indexOf(l) + 1, 0, n);
@@ -1067,6 +1088,7 @@ export function createPaint(ctx) {
         b('Invert', 'Swap what is selected (Ctrl+Shift+I)', () => selAction('invert')),
         b('Expand', 'Grow it by the panel\'s amount', () => selAction('grow')), b('Contract', 'Shrink it', () => selAction('shrink')),
         b('Feather', 'Soften its edge', () => selAction('feather')),
+        b('Layer mask', 'Show only this on the layer: a mask you can go on painting', () => X.maskFromSelection?.()),
         b('+ Mask', 'Mark it for inpainting', () => selAction('tomask')), b('− Mask', 'Take it off the inpaint mask', () => selAction('unmask')),
         b('Delete', 'Clear it from the layer', () => selAction('clear')),
         b('Deselect', 'Ctrl+D', () => { dropSel(); X.render(); }));
@@ -1424,7 +1446,7 @@ export function createPaint(ctx) {
   }
   return {
     P, els: buildStrip(), painting, paintProps, paintOverlay, sync: syncStrip, savePaint, unsavedPaint, setTool, setColor,
-    blankSheet, addBlank, dropSel, undo, redo, pushStack, selectionMask, maskLayer, paintMask, hasSel: () => !!P.sel, selAction, selectLayer, resizeCanvasLayer, cutByMask, maskOp, growMask, maskOutside, maskFromMatte,
+    blankSheet, addBlank, dropSel, undo, redo, pushStack, selectionMask, maskLayer, paintMask, layerMaskOp, hasSel: () => !!P.sel, selAction, selectLayer, resizeCanvasLayer, cutByMask, maskOp, growMask, maskOutside, maskFromMatte,
     reset() { cancelStroke(); dropSel(); P.last = null; U.undo = []; U.redo = []; U.bytes = 0; syncStrip(); },   // another document: its undo goes
   };
 }

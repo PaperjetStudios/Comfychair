@@ -160,7 +160,7 @@ function addLayerShape(eng) {
     cv.width = Math.max(1, Math.round(k.w * W)); cv.height = Math.max(1, Math.round(k.h * H));
     const c = cv.getContext('2d', { willReadFrequently: true });
     c.drawImage(l.img, k.x * W, k.y * H, k.w * W, k.h * H, 0, 0, cv.width, cv.height);
-    const m = l.maskOff ? null : eng.E.layers.find((x) => x.maskOf === l.key && eng.ready(x));
+    const m = l.maskOff || l.maskFor === 'adjust' ? null : eng.E.layers.find((x) => x.maskOf === l.key && eng.ready(x));
     if (m) {
       const mw = m.img.naturalWidth || m.img.width, mh = m.img.naturalHeight || m.img.height;
       c.globalCompositeOperation = 'destination-in';

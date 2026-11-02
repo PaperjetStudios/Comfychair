@@ -17,6 +17,9 @@ import { workArea } from './workarea.js';
 import { frameSpan, playFrom, tickT } from './workarea-math.js';
 import { framesToClip } from './scene-comp.js';
 import { BLENDS, blendOp, createPaint, isCanvas } from './paint.js';
+import * as A from './adjust.js';
+import { gradedPicture, histOfPicture } from './adjust-draw.js';
+import { adjustPanel } from './adjust-panel.js';
 import { icon } from './icons.js';
 import * as G from './layer-geom.js';
 import { solidBounds } from './matte-edge.js';
@@ -43,7 +46,7 @@ export function fromSaved(saved) {
     blend: l.blend || 'normal', locked: !!l.locked, ...(l.label ? { label: l.label } : {}), ...(l.mask ? { mask: true } : {}), ...(l.draft ? { draft: true } : {}), ...(l.canvas ? { canvas: true } : {}), ...(l.clip ? { clip: true } : {}),
     ...(l.rotation ? { rotation: +l.rotation } : {}), ...(l.flipX ? { flipX: true } : {}), ...(l.flipY ? { flipY: true } : {}),
     ...(l.chans ? { chans: structuredClone(l.chans) } : {}),
-    ...(l.key ? { key: l.key } : {}), ...(l.group ? { group: l.group } : {}), ...(l.maskOf ? { maskOf: l.maskOf } : {}), ...(l.maskOff ? { maskOff: true } : {}) }));
+    ...(l.key ? { key: l.key } : {}), ...(l.group ? { group: l.group } : {}), ...(l.maskOf ? { maskOf: l.maskOf } : {}), ...(l.maskOff ? { maskOff: true } : {}), ...(l.maskFor ? { maskFor: l.maskFor } : {}), ...(l.adjust ? { adjust: structuredClone(l.adjust) } : {}) }));
   e.groups = (saved.groups || []).map((g) => ({ id: g.id, name: g.name || 'Group', opacity: g.opacity ?? 1, blend: g.blend || 'normal', collapsed: !!g.collapsed }));
   // The old auto-layout editor kept no positions: lay its images out once they load, in the same
   // order (its first image was leftmost, so it goes to the top of the list).
@@ -70,7 +73,7 @@ export function createEditor(cfg) {
   // (Layers only ever name input images, so nothing here is a data URL or a blob. A new blank canvas has no file
   // until its first save, a moment later: it's left out until then.)
   const dumpEditor = (list = E.layers) => ({ v: 2, size: E.size, cols: E.cols, gap: E.gap, bg: E.bg, clear: !!E.clear, out: E.out || 1, mp: E.mp, snap: E.snap, arrange: E.arrange, anim: E.anim, items: E.items, groups: E.groups,
-    layers: list.filter((l) => l.name).map((l) => ({ ...(l.key ? { key: l.key } : {}), ...(l.group ? { group: l.group } : {}), ...(l.maskOf ? { maskOf: l.maskOf } : {}), ...(l.maskOff ? { maskOff: true } : {}), name: l.name, crop: l.crop, x: l.x, y: l.y, scale: l.scale, opacity: l.opacity, hidden: l.hidden,
+    layers: list.filter((l) => l.name).map((l) => ({ ...(l.key ? { key: l.key } : {}), ...(l.group ? { group: l.group } : {}), ...(l.maskOf ? { maskOf: l.maskOf } : {}), ...(l.maskOff ? { maskOff: true } : {}), ...(l.maskFor ? { maskFor: l.maskFor } : {}), ...(l.adjust ? { adjust: l.adjust } : {}), name: l.name, crop: l.crop, x: l.x, y: l.y, scale: l.scale, opacity: l.opacity, hidden: l.hidden,
       blend: l.blend || 'normal', locked: !!l.locked, label: l.label || null, chans: l.chans || null, ...(l.mask ? { mask: true } : {}), ...(l.draft ? { draft: true } : {}), ...(l.canvas ? { canvas: true } : {}), ...(l.clip ? { clip: true } : {}),
       ...(l.rotation ? { rotation: l.rotation } : {}), ...(l.flipX ? { flipX: true } : {}), ...(l.flipY ? { flipY: true } : {}) })) });
   // every edit ends up here: an animated layer keys what moved, then the host saves (the Editor tab's tab and still)
@@ -275,14 +278,21 @@ export function createEditor(cfg) {
     return { x, y, w: Math.max(1, Math.ceil(b.x + b.w) - x), h: Math.max(1, Math.ceil(b.y + b.h) - y) };
   }
 
+  // what a layer is drawn from: its pixels (with the stroke being painted, l.live), through its Colour adjustments
+  let adjusting = false;   // (a slider or curve is moving: big pictures are graded small until it stops)
+  function pixelsOf(l) {
+    const src = l.live || l.img;
+    if (!A.isOn(l.adjust)) return src;
+    return gradedPicture(src, l.adjust, { owner: l.img, rev: l.paintRev || 0, quick: adjusting, live: !!l.live });
+  }
   // (l.live: the layer with the stroke being painted on it, paint.js)
   // (a turned or mirrored layer is drawn through its turn about the kept part's centre)
   function drawLayer(ctx, l) {
-    const W = l.img.naturalWidth, H = l.img.naturalHeight, c = l.crop, r = layerRect(l), t = G.turned(l);
+    const W = l.img.naturalWidth, H = l.img.naturalHeight, c = l.crop, r = layerRect(l), t = G.turned(l), src = pixelsOf(l), kx = src.width / W || 1, ky = src.height / H || 1;
     if (t) { ctx.save(); ctx.transform(...G.turn(l)); }
     ctx.globalAlpha = clamp(l.opacity ?? 1, 0, 1);
     ctx.globalCompositeOperation = l.op || blendOp(l);
-    ctx.drawImage(l.live || l.img, c.x * W, c.y * H, Math.max(1, c.w * W), Math.max(1, c.h * H), r.x, r.y, r.w, r.h);
+    ctx.drawImage(src, c.x * W * kx, c.y * H * ky, Math.max(1, c.w * W * kx), Math.max(1, c.h * H * ky), r.x, r.y, r.w, r.h);
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
     if (t) ctx.restore();
   }
@@ -321,11 +331,59 @@ export function createEditor(cfg) {
   function drawMasked(ctx, l, depth = 0) {
     const m = maskOfLayer(l);
     if (!m) return drawLayer(ctx, l);
+    if (l.maskFor === 'adjust') {   // the mask says where its adjustments go: the plain layer, the adjusted one over it through the mask
+      if (!A.isOn(l.adjust)) return drawLayer(ctx, l);
+      const c = scratchFor(ctx, depth), over = scratchFor(ctx, depth + 1);
+      drawLayer(c, { ...l, opacity: 1, op: 'source-over', adjust: null });
+      drawLayer(over, { ...l, opacity: 1, op: 'source-over' });
+      ST.syncMask(m, l);
+      drawLayer(over, { ...m, opacity: 1, op: 'destination-in' });
+      pasteDown(c, over.canvas, 1, 'source-over');
+      return pasteDown(ctx, c.canvas, l.opacity, blendOp(l));
+    }
     const c = scratchFor(ctx, depth);
     drawLayer(c, { ...l, opacity: 1, op: 'source-over' });
     ST.syncMask(m, l);
     drawLayer(c, { ...m, opacity: 1, op: 'destination-in' });
     pasteDown(ctx, c.canvas, l.opacity, blendOp(l));
+  }
+  // A layer's picture at its file's size, with its adjustments in (what an Image tool is sent)
+  function layerPicture(l) {
+    const m = l.maskFor === 'adjust' ? maskOfLayer(l) : null, graded = A.isOn(l.adjust) ? gradedPicture(l.img, l.adjust, { owner: l.img, rev: l.paintRev || 0 }) : l.img;
+    if (!m || graded === l.img) return graded;
+    const W = l.img.naturalWidth || l.img.width, H = l.img.naturalHeight || l.img.height;
+    const make = () => { const cv = document.createElement('canvas'); cv.width = W; cv.height = H; return cv; };
+    const over = make(), oc = over.getContext('2d'), out = make(), c = out.getContext('2d');
+    oc.drawImage(graded, 0, 0, W, H); oc.globalCompositeOperation = 'destination-in'; oc.drawImage(m.img, 0, 0, W, H);
+    c.drawImage(l.img, 0, 0, W, H); c.drawImage(over, 0, 0);
+    return out;
+  }
+  // Over the picture on screen while a mask is being worked on: what it hides in red, or the mask itself in black and white
+  let maskView = 'red';
+  function boxOf(c, l, style) {
+    c.save();
+    if (G.turned(l)) c.transform(...G.turn(l));
+    const r = layerRect(l);
+    c.fillStyle = style; c.fillRect(r.x, r.y, r.w, r.h);
+    c.restore();
+  }
+  function drawMaskView(ctx) {
+    const m = E.sel?.maskOf ? E.sel : null, o = m && E.layers.find((x) => x.key === m.maskOf);
+    if (!o || maskView === 'picture' || !ready(o) || !ready(m)) return;
+    ST.syncMask(m, o);
+    const c = scratchFor(ctx, 3);
+    if (maskView === 'red') {
+      drawLayer(c, { ...o, opacity: 1, op: 'source-over', adjust: null });
+      boxOf(c, o, 'rgba(255, 40, 60, .55)');
+      drawLayer(c, { ...m, opacity: 1, op: 'destination-out' });
+    } else {
+      const w = scratchFor(ctx, 4);
+      drawLayer(w, { ...m, opacity: 1, op: 'source-over' });
+      w.save(); w.setTransform(1, 0, 0, 1, 0, 0); w.globalCompositeOperation = 'source-in'; w.fillStyle = '#fff'; w.fillRect(0, 0, w.canvas.width, w.canvas.height); w.restore();
+      boxOf(c, o, '#000');
+      pasteDown(c, w.canvas, 1, 'source-over');
+    }
+    pasteDown(ctx, c.canvas, 1, 'source-over');
   }
   const groupOf = (l) => (l.group ? E.groups.find((g) => g.id === l.group) || null : null);
   function drawStack(ctx, all) {
@@ -490,7 +548,7 @@ export function createEditor(cfg) {
     cv.width = w; cv.height = hh;
     const ctx = cv.getContext('2d', { willReadFrequently: true });
     ctx.drawImage(l.img, -x, -y);
-    const m = l.key && !l.maskOff ? E.layers.find((o) => o.maskOf === l.key && ready(o)) : null;
+    const m = l.maskFor === 'adjust' ? null : maskOfLayer(l);
     if (m) { ctx.globalCompositeOperation = 'destination-in'; ctx.drawImage(m.img, -x, -y, W, H); }
     const b = solidBounds(ctx.getImageData(0, 0, w, hh).data, w, hh);
     if (!b) return toast('Nothing solid in the crop to trim to', true);
@@ -574,7 +632,10 @@ export function createEditor(cfg) {
     ctx.save(); ctx.translate(ox, oy); ctx.scale(s, s);
     if (f) { ctx.fillStyle = E.bg; ctx.fillRect(f.x, f.y, f.w, f.h); if (E.clear) chequer(ctx, f, s); }
     drawStack(ctx, E.layers.filter((l) => ready(l) && !l.hidden));
+    drawMaskView(ctx);
     ctx.restore();
+    const shown = E.sel?.maskOf ? E.sel : null;   // (its thumbnail in the list follows the painting)
+    if (shown?.thumbEl?.isConnected && !shown.live && shown.thumbRev !== (shown.paintRev || 0)) fillMaskThumb(shown, shown.thumbEl);
     if (E.size && f) {   // shade whatever hangs off a fixed-size canvas
       const fr = scr(f);
       ctx.fillStyle = '#000a'; ctx.beginPath(); ctx.rect(0, 0, w, hh); ctx.rect(fr.x, fr.y, fr.w, fr.h); ctx.fill('evenodd');
@@ -893,6 +954,11 @@ export function createEditor(cfg) {
       E, canvas: () => cv, viewer: () => cv.parentElement, view: () => EV, zoom: viewZoom, frame: editorFrame,
       toCanvas: (e) => point(e), cancelDrag, redraw: drawEditorCanvas, render: renderEditor, changed: persistEditor, restoreStack, docId: () => cfg.docId?.() ?? E.tab?.id,
       hit: (p) => [...visibleLayers()].reverse().find((l) => G.insideLayer(l, p)) || null,
+      maskFromSelection: () => {
+        const l = E.sel?.maskOf ? E.layers.find((o) => o.key === E.sel.maskOf) : E.sel, m = l && E.layers.find((o) => l.key && o.maskOf === l.key);
+        if (!l || !adjustable(l)) return toast('Pick a picture layer first', true);
+        if (m) { pickOnly(m); paint.layerMaskOp(m, 'selection'); editorChanged(); } else addLayerMask(l);
+      },
       snapOn: () => E.snap,
       snaps: () => { const rs = visibleLayers().map(bounds), f = editorFrame(); if (f) rs.push(f); return { xs: rs.flatMap((r) => [r.x, r.x + r.w / 2, r.x + r.w]), ys: rs.flatMap((r) => [r.y, r.y + r.h / 2, r.y + r.h]) }; },
       composite: (c) => { const f = editorFrame(); if (f) { c.fillStyle = E.bg; c.fillRect(f.x, f.y, f.w, f.h); } drawStack(c, visibleLayers()); },
@@ -972,6 +1038,21 @@ export function createEditor(cfg) {
 
   const layerName = (l) => l.label || l.name?.split('/').pop() || 'Canvas';
   // a painted layer's thumbnail, drawn from its pixels (the server's thumbnails are JPEGs: no see-through)
+  // a mask as it works: white shows, black hides
+  function maskThumb(m) {
+    const cv = h('canvas', { class: 'paint-thumb' });
+    if (ready(m)) fillMaskThumb(m, cv);
+    return cv;
+  }
+  function fillMaskThumb(m, cv) {
+    m.thumbEl = cv; m.thumbRev = m.paintRev || 0;
+    const W = m.img.naturalWidth || m.img.width, H = m.img.naturalHeight || m.img.height, k = Math.min(1, 88 / Math.max(W, H));
+    cv.width = Math.max(1, Math.round(W * k)); cv.height = Math.max(1, Math.round(H * k));
+    const c = cv.getContext('2d');
+    c.drawImage(m.img, 0, 0, cv.width, cv.height);
+    c.globalCompositeOperation = 'source-in'; c.fillStyle = '#fff'; c.fillRect(0, 0, cv.width, cv.height);
+    c.globalCompositeOperation = 'destination-over'; c.fillStyle = '#000'; c.fillRect(0, 0, cv.width, cv.height);
+  }
   function canvasThumb(src) {
     const k = Math.min(1, 88 / Math.max(src.width, src.height)), cv = h('canvas', { class: 'paint-thumb' });
     cv.width = Math.max(1, Math.round(src.width * k)); cv.height = Math.max(1, Math.round(src.height * k));
@@ -1027,9 +1108,9 @@ export function createEditor(cfg) {
     };
     const maskBtns = (l) => {
       const m = E.layers.find((x) => x.maskOf === l.key);
-      if (!m) return [iconBtn('Add a mask: erase on it to hide parts of this layer', icon('contrast'), () => addLayerMask(l))];
-      return [h('button', { type: 'button', class: `icon-btn ico-btn${E.sel === m ? ' on' : ''}`, 'aria-label': 'Paint its mask', title: 'Paint its mask: erase hides, brush shows',
-        onclick: (e) => { e.stopPropagation(); pickOnly(m); renderEditor(); } }, icon('contrast'))];
+      if (!m) return [iconBtn(paint.hasSel() ? 'Add a mask from the selection' : 'Add a mask: paint on it to hide parts of this layer', icon('contrast'), () => addLayerMask(l))];
+      return [h('button', { type: 'button', class: `mask-thumb${E.sel === m ? ' on' : ''}${l.maskOff ? ' off' : ''}`, 'aria-label': `Paint the mask of ${layerName(l)}`, title: 'Its mask: white shows, black hides. Tap to paint on it; tap again to go back to the layer',
+        onclick: (e) => { e.stopPropagation(); if (E.sel === m) pickOnly(l); else { pickOnly(m); if (!paint.painting()) paint.setTool('eraser'); } renderEditor(); } }, maskThumb(m))];
     };
     const list = layerRowsEl(ST.rowsOf(E.layers, E.groups).map(({ group: g, layer: l, in: inGroup }) => {
       if (g) return groupRow(g);
@@ -1060,9 +1141,10 @@ export function createEditor(cfg) {
     return h('div', {}, bar, list);
   }
 
-  // A mask for this layer: a painted layer of its own, all showing to start with, as big as the picture (the brush shows, the eraser hides)
+  // A mask for this layer: a painted layer of its own, as big as the picture (the brush shows, the eraser hides); all showing to start with, or just the selection if there is one
   function addLayerMask(l) {
     if (!ready(l)) return;
+    const fromSel = paint.hasSel();
     const W = l.img.naturalWidth || l.img.width, H = l.img.naturalHeight || l.img.height;
     const m = paint.addBlank({ w: W, h: H, fill: '#ffffff' });
     l.key ||= uid();
@@ -1070,16 +1152,64 @@ export function createEditor(cfg) {
     ST.syncMask(m, l);
     E.layers = ST.normalize(E.layers, E.groups);
     E.sel = m; E.multi = [];
+    if (fromSel) paint.layerMaskOp(m, 'selection');
+    if (!paint.painting()) paint.setTool('eraser');
     editorChanged();
   }
   function maskProps(m) {
     const o = E.layers.find((x) => x.key === m.maskOf);
     if (!o) return null;
     return section(`Mask of ${layerName(o)}`, () => { pickOnly(o); renderEditor(); },
-      help('Paint on the mask with the paint tools: the eraser hides that part of the layer, the brush shows it again. It moves and scales with its layer.'),
+      help('Hide paints black on the mask and hides that part of the layer; Show paints it back. A soft or see-through brush hides part way. It moves and scales with its layer, and the red is only on screen: it never goes in the picture.'),
+      field('Paint', seg([['eraser', 'Hide'], ['brush', 'Show']], ['eraser', 'brush'].includes(paint.P.tool) ? paint.P.tool : null, (t) => { paint.setTool(t); renderEditor(); })),
+      field('See', seg([['red', 'Red on hidden'], ['grey', 'Black and white'], ['picture', 'Result']], maskView, (v) => { maskView = v; drawEditorCanvas(); })),
+      field('It works on', help('Layer: what it hides is gone from the picture. Colour only: the whole layer shows, and the Colour section\'s curves and sliders apply only where the mask is white.'),
+        seg([['layer', 'Layer'], ['adjust', 'Colour only']], o.maskFor === 'adjust' ? 'adjust' : 'layer', (v) => { if (v === 'adjust') o.maskFor = 'adjust'; else delete o.maskFor; editorChanged(); })),
+      h('div', { class: 'row wrap' },
+        button('Invert', () => { paint.layerMaskOp(m, 'invert'); editorChanged(); }, { cls: 'small', title: 'Swap what shows and what hides' }),
+        button('Show all', () => { paint.layerMaskOp(m, 'all'); editorChanged(); }, { cls: 'small' }),
+        button('Hide all', () => { paint.layerMaskOp(m, 'none'); editorChanged(); }, { cls: 'small' }),
+        button('From selection', () => { paint.layerMaskOp(m, 'selection'); editorChanged(); }, { cls: 'small', disabled: !paint.hasSel(), title: 'Show only what is selected' })),
+      field('Soften its edge', h('div', { class: 'row wrap' }, ...[4, 16, 48].map((r) => button(`${r} px`, () => { paint.layerMaskOp(m, 'soften', r); editorChanged(); }, { cls: 'small', title: `Blur the mask by ${r} px of the picture` })))),
       h('div', { class: 'row wrap' },
         h('button', { type: 'button', class: `btn small${o.maskOff ? ' on' : ''}`, onclick: () => { o.maskOff = !o.maskOff; editorChanged(); } }, o.maskOff ? 'Switched off' : 'Switch off'),
-        button('Delete the mask', () => { E.layers = E.layers.filter((x) => x !== m); pickOnly(o); editorChanged(); }, { cls: 'small danger' })));
+        button('Delete the mask', () => { E.layers = E.layers.filter((x) => x !== m); delete o.maskFor; pickOnly(o); editorChanged(); }, { cls: 'small danger' })));
+  }
+
+  // The selected layer's Colour section; kept while it stays selected, so a curve isn't rebuilt under the pointer
+  let colourOf = null;
+  const adjustable = (l) => ready(l) && !l.mask && !l.draft && !l.maskOf;
+  function layerLook(l) { return A.histThrough(histOfPicture(l.img, l.crop), l.adjust); }
+  // what's under a layer as one small picture, to match it to its surroundings
+  function belowLook(l) {
+    const f = editorFrame(), list = visibleLayers().filter((o) => !o.draft), at = list.indexOf(l);
+    if (!f || at < 1) throw new Error('Nothing showing below it');
+    const k = Math.min(1, 640 / Math.max(f.w, f.h)), cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(f.w * k)); cv.height = Math.max(1, Math.round(f.h * k));
+    const c = cv.getContext('2d');
+    c.scale(k, k); c.translate(-f.x, -f.y);
+    drawStack(c, list.slice(0, at));
+    return histOfPicture(cv);
+  }
+  function adjustProps(l) {
+    if (!adjustable(l)) return null;
+    if (colourOf?.layer === l) { colourOf.sync(); return colourOf.el; }
+    const others = () => [
+      ...(visibleLayers().indexOf(l) > 0 ? [['below', 'Everything below it']] : []),
+      ...E.layers.map((o, i) => [i, o]).filter(([, o]) => o !== l && adjustable(o)).reverse().map(([i, o]) => [o.key || `at${i}`, layerName(o)]),
+    ];
+    const otherHist = async (id) => {
+      if (id === 'below') return belowLook(l);
+      const o = E.layers.find((x, i) => adjustable(x) && (x.key || `at${i}`) === id);
+      if (!o) throw new Error('That layer has gone');
+      return layerLook(o);
+    };
+    colourOf = { layer: l, ...adjustPanel({
+      get: () => l.adjust || null, set: (a) => { if (a) l.adjust = a; else delete l.adjust; },
+      onInput: () => { adjusting = true; drawEditorCanvas(); },
+      onChange: () => { adjusting = false; persistEditor(); drawEditorCanvas(); },   // (no rebuild of the panel: the graph stays under the pointer)
+      hist: async () => histOfPicture(l.img, l.crop), others, otherHist }) };
+    return colourOf.el;
   }
 
   // The panel for two or more selected layers: each change goes to every one of them
@@ -1449,7 +1579,7 @@ export function createEditor(cfg) {
     try {
       list = await Promise.all(layers.map(async (l) => {
         const base = { name: layerName(l).replace(/\.[a-z]+$/i, ''), hidden: !!l.hidden, opacity: l.opacity ?? 1, blend: l.blend || 'normal' };
-        if (G.turned(l) || maskOfLayer(l)) { const { name, b } = await baked(l); return { ...base, src: { input: name }, crop: { ...FULL }, rect: { x: b.x - f.x, y: b.y - f.y, w: b.w, h: b.h } }; }
+        if (G.turned(l) || maskOfLayer(l) || A.isOn(l.adjust)) { const { name, b } = await baked(l); return { ...base, src: { input: name }, crop: { ...FULL }, rect: { x: b.x - f.x, y: b.y - f.y, w: b.w, h: b.h } }; }
         const r = layerRect(l);
         return { ...base, src: { input: l.name }, crop: l.crop, rect: { x: r.x - f.x, y: r.y - f.y, w: r.w, h: r.h } };
       }));
@@ -1533,10 +1663,10 @@ export function createEditor(cfg) {
   }
   const eng = {
     E, render: renderEditor, draw: drawEditorCanvas, changed: persistEditor, load, dump: dumpEditor, compose: composeEditor,
-    blob: editorBlob, frame: editorFrame, composeMask, drawLayer, bounds, layerRect, ready, loading: () => E.layers.some((l) => !l.broken && !ready(l)), addImage, pause: editorPause,
+    blob: editorBlob, frame: editorFrame, composeMask, drawLayer, layerPicture, bounds, layerRect, ready, loading: () => E.layers.some((l) => !l.broken && !ready(l)), addImage, pause: editorPause,
     zoom: viewZoom, get paint() { return paint; },
     // the panel's parts, for the host to lay out
-    topRow, layerList, layerProps: () => (picked().length > 1 ? groupProps(picked()) : E.sel?.maskOf ? maskProps(E.sel) : E.sel ? layerProps(E.sel) : null), picked, animProps, canvasProps, exportProps,
+    topRow, layerList, layerProps: () => (picked().length > 1 ? groupProps(picked()) : E.sel?.maskOf ? maskProps(E.sel) : E.sel ? [layerProps(E.sel), E.cropping ? null : adjustProps(E.sel)] : null), picked, animProps, canvasProps, exportProps,
     paintProps: () => paint.paintProps(),
     inpaintProps: () => inpaintSection(eng),
     toolsProps: () => imageToolsSection(eng),

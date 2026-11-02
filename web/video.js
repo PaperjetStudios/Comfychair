@@ -1,5 +1,5 @@
 import {
-  $, h, store, uid, api, toast, undoToast, clamp, openSheet, closeSheet, button, iconBtn, linkBtn, actions, fileButton, seg,
+  $, h, store, uid, api, busy, toast, undoToast, clamp, openSheet, closeSheet, button, iconBtn, linkBtn, actions, fileButton, seg,
   field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, toggle, textArea, pctFmt, colorField, sizeSelect, canvasFont, icon,
 } from './ui.js';
 import { S, fmtT, inputUrl, onServer, thumbUrl } from './core.js';
@@ -14,6 +14,9 @@ import { cutItems, playFrom, playSeek, tickT } from './workarea-math.js';
 import { refreshKeyed } from './keyed.js';
 import * as COMP from './scene-comp.js';
 import { fullScreen } from './layout.js';
+import * as A from './adjust.js';
+import { gradedFrame, histOfPicture } from './adjust-draw.js';
+import { adjustPanel } from './adjust-panel.js';
 import { canTrack, openTrack } from './track.js';
 import { CLIP_FX, KEY_DEFAULT, keyRangeFields, loraChoice, restyleLoras, runClipStep } from './clip-effects.js';
 import { snap, snapOn, snapStep, snapNearest, normDeg, Weight, WEIGHT, DEAD_PX, deadzone, snapBar, gzChip } from './gizmo.js';
@@ -304,7 +307,7 @@ function drawFrame() {
       ctx.globalAlpha = clamp(prop(it, 'opacity'), 0, 1) * fadeGain(it, V.t, false);
       // the anchor sits at the frame centre + (x, y); the clip turns and scales around it (videoedit._place does the same)
       ctx.save(); ctx.translate(g.px, g.py); ctx.rotate(g.rot);
-      ctx.drawImage(el, -g.ax * g.dw, -g.ay * g.dh, g.dw, g.dh);
+      ctx.drawImage(A.isOn(it.adjust) ? gradedFrame(el, it.adjust, V.playing ? 960 : 1600) : el, -g.ax * g.dw, -g.ay * g.dh, g.dw, g.dh);
       ctx.restore();
     }
   }
@@ -955,6 +958,41 @@ const clipKeyed = (it, label, ch, opts) => K.field(it, label, ch, opts);
 const SIZES = [['Match first clip', null], ['1280×720', [1280, 720]], ['1920×1080', [1920, 1080]], ['720×1280', [720, 1280]],
   ['1080×1920', [1080, 1920]], ['1024×1024', [1024, 1024]], ['832×480', [832, 480]], ['480×832', [480, 832]]];
 
+// ---- a clip's Colour section: the same curves and sliders as an Image layer; Match works from its frames, sampled by the server ----
+const CLIP_HIST = new Map();   // (a clip's part, sampled once)
+async function clipHist(it) {
+  if (it.kind === 'scene') return histOfPicture(mediaFor(it));   // (live from the 3D tab: there's no file; what shows now)
+  const body = { source: it.src, start: it.kind === 'video' ? it.in || 0 : 0, len: it.kind === 'video' ? itLen(it) : 0 }, key = JSON.stringify(body);
+  if (!CLIP_HIST.has(key)) CLIP_HIST.set(key, api('/api/video/histogram', { method: 'POST', body }).catch((e) => { CLIP_HIST.delete(key); throw e; }));
+  return CLIP_HIST.get(key);
+}
+const clipLook = async (it) => A.histThrough(await clipHist(it), it.adjust);
+const matchable = (it) => it.kind === 'video' || it.kind === 'image';
+let colourOf = null;
+function colourSection(it) {
+  if (colourOf?.id === it.id) { colourOf.sync(); return colourOf.el; }
+  const rest = () => V.items.filter((o) => o !== it && matchable(o));
+  const matchAll = (strength) => async () => {
+    const list = rest().filter((o) => o.src), b = busy('Matching the clips…');
+    try {
+      const want = await clipLook(it);
+      for (const o of list) {
+        const curves = A.matchCurves(A.histThrough(await clipHist(o), { ...o.adjust, curves: null }), want, { strength: strength() });
+        if (curves) o.adjust = A.clean({ ...o.adjust, curves });
+      }
+      timelineChanged();
+      toast(`${list.length} ${list.length === 1 ? 'clip' : 'clips'} matched to ${it.label}`);
+    } catch (e) { toast(`Match failed: ${e.message}`, true); } finally { b.done(); }
+  };
+  colourOf = { id: it.id, ...adjustPanel({
+    get: () => it.adjust || null, set: (a) => { if (a) it.adjust = a; else delete it.adjust; },
+    onInput: requestDraw, onChange: () => { requestDraw(); persistTimeline(); }, hist: () => clipHist(it),
+    others: () => rest().map((o) => [o.id, `${o.label} (${fmtT(o.at)})`]),
+    otherHist: (id) => clipLook(V.items.find((o) => o.id === id)),
+    extra: (strength) => (it.kind !== 'scene' && rest().length > 1 ? button('Match every clip to this one', matchAll(strength), { cls: 'small', title: 'This clip stays as it is; each other video and picture gets curves to look like it' }) : null) }) };
+  return colourOf.el;
+}
+
 // a scene clip: which look it is drawn in, and where it comes from
 function sceneFields(it) {
   const d = COMP.sceneOf(it.src.scene);
@@ -1011,6 +1049,7 @@ function renderVideoPanel() {
         isVisual(it) ? button('Reset framing', () => { Object.assign(it, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); delete it.rotation; delete it.anchor; for (const ch of ['x', 'y', 'scale', 'rotation', 'opacity']) delete it.chans?.[ch]; timelineChanged(); }) : null,
         button('Delete clip', TL.deleteSelected, { cls: 'small danger', title: 'Delete' })));
   })() : null;
+  const colour = it && isVisual(it) ? colourSection(it) : null;
 
   const sizeSel = sizeSelect(SIZES, V.size, (s) => { V.size = s; timelineChanged(); });
   const fpsSel = h('select', {}, [[0, 'Match first clip'], [16, '16'], [24, '24'], [25, '25'], [30, '30'], [60, '60']].map(([v, label]) =>
@@ -1030,7 +1069,7 @@ function renderVideoPanel() {
       button('+ Sound / files', addMediaFiles),
       button('+ 3D scene…', addScene, { title: 'A 3D tab as a live clip' }),
       V.items.length ? button('Clear all', clearAll, { cls: 'small ghost' }) : null),
-    clip || (V.items.length
+    clip, colour, !clip && (V.items.length
       ? help('Tap a clip to edit it. Drag clips to move them (also onto other tracks), drag their ends to trim, and overlap two clips on a track to cross-fade. Higher video tracks draw on top.')
       : hint('Add generated clips, images or sound. They line up on V1 / A1; drag them onto V2 to layer them over V1.')),
     section('Sequence', null,
@@ -1235,7 +1274,7 @@ async function timelineBody(btn) {
       ? { src: { clip: made.get(it).clip }, scene: made.get(it).scene, in: 0, out: itLen(it) } : { src: it.src, in: it.in, out: it.out ?? it.dur }),
       x: it.x, y: it.y, scale: it.scale, fit: it.fit, rotation: it.rotation || 0, anchor_x: it.anchor?.x, anchor_y: it.anchor?.y,
       opacity: it.opacity, volume: it.volume, chans: it.chans || null,
-      fade_in: it.fadeIn, fade_out: it.fadeOut })) };
+      grade: A.exportGrade(it.adjust), fade_in: it.fadeIn, fade_out: it.fadeOut })) };
 }
 
 async function exportVideo(btn) {

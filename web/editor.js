@@ -158,7 +158,8 @@ const ED = createEditor({
   beforeRender: () => { if (!tabs.started) tabs.start(); },
   newEdit: (payload) => tabs.createFrom(payload, 'layers'),
   panelParts: (ed) => h('div', { class: 'panel-body' }, tabMount, ed.topRow(),
-    ed.layerList(), ed.paintProps(), ed.inpaintProps(), ed.toolsProps(), ed.layerProps(), ed.animProps(), ed.canvasProps(), ed.exportProps()),   // (the panel order, app-wide)
+    // (a mask being painted: its section first, with what to see and do; otherwise the panel order, app-wide)
+    ed.layerList(), ed.E.sel?.maskOf ? ed.layerProps() : null, ed.paintProps(), ed.inpaintProps(), ed.toolsProps(), ed.E.sel?.maskOf ? null : ed.layerProps(), ed.animProps(), ed.canvasProps(), ed.exportProps()),
 });
 export const { E } = ED;
 export const persistEditor = () => ED.changed();

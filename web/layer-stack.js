@@ -4,10 +4,11 @@
 //   each other. Hide and lock on a group set them on its members, so everything else reads the layers as ever.
 //   Masks: a mask is a layer of its own (mask.maskOf = its owner's key) with its owner's geometry, drawn only as its owner's
 //   see-through: alpha shows, erased hides. It sits right above its owner and is never a row of its own.
+//   A mask with maskFor 'adjust' hides nothing: it says where the layer's Colour adjustments (web/adjust.js) apply.
 //   Merge: the layers drawn as one new picture, at the place of the topmost, in their group if they share one. Undo brings them back.
 //   Undo: stackState() is what a change to the stack changes (no pixels); applyState() puts it back on the same layer objects.
 // ---------------------------------------------------------------------------
-const FIELDS = ['crop', 'x', 'y', 'scale', 'opacity', 'hidden', 'blend', 'locked', 'label', 'rotation', 'flipX', 'flipY', 'group', 'maskOf', 'maskOff', 'clip'];
+const FIELDS = ['crop', 'x', 'y', 'scale', 'opacity', 'hidden', 'blend', 'locked', 'label', 'rotation', 'flipX', 'flipY', 'group', 'maskOf', 'maskOff', 'clip', 'adjust', 'maskFor'];
 const copy = (v) => (v && typeof v === 'object' ? { ...v } : v);
 
 export function stackState(layers, groups = []) {

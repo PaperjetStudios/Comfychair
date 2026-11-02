@@ -6,6 +6,7 @@ import { MAPS } from './maps.js';
 import { editSizeFor } from './edit-size.js';
 import * as G from './layer-geom.js';
 import { uploadMask } from './inpaint.js';
+import { isOn } from './adjust.js';
 import { boundsOf, boxesFor, foundIn, refineEdge, separateAreas, stairOf, termsOf, worthLooking } from './matte-edge.js';
 import { SWAP_MODELS, SWAP_PARTS, biggestArea, changedAround, joined, onlyWithin, scaleFor, softEdge, swapBox, swapLora, swapPrompt, swapRefPixels, without } from './swap-part.js';
 
@@ -102,10 +103,11 @@ const usable = (l) => l && !l.mask && !l.draft && !l.maskOf && !l.broken && l.na
 const targets = (eng) => (eng.picked?.() || []).filter(usable);
 
 // a cropped layer's kept part, at the file's own pixels, as a new input
-async function keptPart(l) {
+async function keptPart(eng, l) {
   const W = l.img.naturalWidth, H = l.img.naturalHeight, c = l.crop, cv = document.createElement('canvas');
   [cv.width, cv.height] = G.sentPixels(l);
-  cv.getContext('2d').drawImage(l.img, c.x * W, c.y * H, c.w * W, c.h * H, 0, 0, cv.width, cv.height);
+  const pic = eng.layerPicture(l), k = (pic.naturalWidth || pic.width) / W;   // (with its Colour adjustments: what's sent is what you see)
+  cv.getContext('2d').drawImage(pic, c.x * W * k, c.y * H * k, c.w * W * k, c.h * H * k, 0, 0, cv.width, cv.height);
   const up = await uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: 'layer.png', multiple: 1 });
   return { name: up.name, px: [cv.width, cv.height] };
 }
@@ -114,7 +116,7 @@ async function keptPart(l) {
 const KEEPS_FRAMING = new Set(['up', 'detail', 'delight', 'remove', 'clean', 'swap']);
 // a layer's mask as it is now, its kept part at its own pixels (painting on it during the run doesn't change it); null if it has none
 function maskAsSent(eng, l) {
-  const m = eng.E.layers.find((x) => x.maskOf === l.key && eng.ready(x));
+  const m = l.maskFor === 'adjust' ? null : eng.E.layers.find((x) => x.maskOf === l.key && eng.ready(x));   // (a mask for its colour is in the picture sent)
   if (!m) return null;
   const W = m.img.naturalWidth || m.img.width, H = m.img.naturalHeight || m.img.height, c = l.crop, cv = document.createElement('canvas');
   cv.width = Math.max(1, Math.round(c.w * W)); cv.height = Math.max(1, Math.round(c.h * H));
@@ -137,7 +139,7 @@ async function maskForResult(src, r) {
 // any turn), layer (or null), was (the layer's place when sent: its turn goes on the result), mask (its mask when sent, for a tool in KEEPS_FRAMING), px }. A model sees a layer unturned.
 async function sourceOf(eng, l, o) {
   if (l) {
-    const part = G.plainCrop(l.crop) ? { name: l.name, px: G.sentPixels(l) } : await keptPart(l);
+    const part = G.plainCrop(l.crop) && !isOn(l.adjust) ? { name: l.name, px: G.sentPixels(l) } : await keptPart(eng, l);
     return { ...part, rect: eng.layerRect(l), layer: l, was: { ...l }, mask: KEEPS_FRAMING.has(o.kind) ? maskAsSent(eng, l) : null };
   }
   const f = eng.frame(), pic = document.createElement('canvas');

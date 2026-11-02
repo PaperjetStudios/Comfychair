@@ -82,6 +82,20 @@ async def video_prep(body: dict = Body(...)):
     return {**r, "path": str(r["path"])}
 
 
+@router.post("/api/video/histogram")
+async def video_histogram(body: dict = Body(...)):
+    """What's in a clip's part ({source, start, len} seconds; a picture needs no times), for matching colours between
+    clips: {r, g, b} of 256 counts each, over frames spread across it. Writes nothing."""
+    with tempfile.TemporaryDirectory() as td:
+        path, kind = await services.timeline_path(body.get("source") or {}, Path(td))
+        if kind not in ("video", "image"):
+            raise HTTPException(400, "Only a video or a picture has colours to match")
+        try:
+            return await asyncio.to_thread(videoedit.histogram, path, kind, float(body.get("start") or 0), float(body.get("len") or 0))
+        except (subprocess.SubprocessError, OSError, ValueError, KeyError) as e:
+            raise HTTPException(400, f"Couldn't read its colours: {e}")
+
+
 @router.post("/api/video/render")
 async def video_render(body: dict = Body(...)):
     """Render the Video tab's timeline ({tracks, items, width, height, fps}) into a new video in History."""
@@ -100,7 +114,7 @@ async def video_render(body: dict = Body(...)):
                 raise HTTPException(400, f"{path.name} isn't a video, image or sound")
             items.append({**{k: it.get(k) for k in ("at", "in", "out", "x", "y", "scale", "fit", "opacity",
                                                     "volume", "fade_in", "fade_out", "rotation",
-                                                    "anchor_x", "anchor_y", "chans")},   # chans: its keys (keyexpr.py)
+                                                    "anchor_x", "anchor_y", "chans", "grade")},   # chans: its keys (keyexpr.py); grade: web/adjust.js exportGrade
                           "path": str(path), "kind": kind, "track": tr["id"], "z": z_of.get(tr["id"], 0),
                           "hidden": bool(tr.get("hidden")), "muted": bool(tr.get("muted"))})
             if (it.get("src") or {}).get("clip") and it.get("scene"):   # (an Editor animation's clip names no scene)

@@ -124,3 +124,14 @@ test('undo of a merge puts the same layers back', () => {
   assert.deepEqual(keys(E.layers), ['a', 'b']);
   assert.equal(E.layers[0], a);
 });
+
+test('undo brings back a layer\'s adjust and what its mask works on', () => {
+  const l = L('a', { adjust: { exposure: 1 } }), m = L('m', { maskOf: 'a' });
+  const was = S.stackState([l, m]);
+  l.adjust = { exposure: 2 }; l.maskFor = 'adjust';
+  assert.equal(S.sameState(was, S.stackState([l, m])), false);
+  const E = { layers: [], groups: [] };
+  S.applyState(E, was);
+  assert.deepEqual(l.adjust, { exposure: 1 });
+  assert.equal(l.maskFor, undefined);
+});

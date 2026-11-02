@@ -5,6 +5,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import numpy as np
+
 from . import keyexpr
 
 _NVENC = None
@@ -221,11 +223,56 @@ def mix_filters(items: list[dict], inputs: dict, total: float) -> list[str]:
     return mix
 
 
+def grade_filters(grade: dict | None) -> list[str]:
+    """A clip's Colour section for ffmpeg: web/adjust.js exportGrade works out its {r, g, b, m}, so preview and export
+    share one set of colour math. r, g, b: what each channel becomes, at even steps from 0 to 1; m: a 3x3 colour matrix after them."""
+    if not grade:
+        return []
+    def knots(ch: str) -> str:
+        vals = [min(1.0, max(0.0, float(v))) for v in grade[ch]]
+        if len(vals) < 2:
+            raise ValueError("Bad colour curve")
+        return " ".join(f"{i / (len(vals) - 1):.5f}/{v:.5f}" for i, v in enumerate(vals))
+    chain = [f"curves=r='{knots('r')}':g='{knots('g')}':b='{knots('b')}'"]
+    if grade.get("m"):
+        m = [float(v) for v in grade["m"]]
+        if len(m) != 9:
+            raise ValueError("Bad colour matrix")
+        chain.append("colorchannelmixer=" + ":".join(f"{v:.5f}" for v in (*m[0:3], 0, *m[3:6], 0, *m[6:9], 0)))
+    return chain
+
+
+HIST_FRAMES, HIST_WIDTH = 24, 320
+
+
+def histogram(path: Path, kind: str, start: float = 0, length: float = 0) -> dict:
+    """{r, g, b} of 256 counts over frames spread across a clip's part (a picture is one frame); what doesn't show
+    (alpha under half) isn't counted."""
+    info = probe(path) if kind == "video" else {}
+    seek, vf = [], f"scale={HIST_WIDTH}:-2:flags=area,format=rgba"
+    if kind == "video":
+        dur = float(info.get("duration") or 0)
+        span = length if length > 0 else max(0.04, dur - start)
+        dec = ["-c:v", "libvpx-vp9"] if info.get("alpha") else []
+        seek = [*dec, "-ss", f"{start:.3f}", "-t", f"{span:.3f}"]
+        vf = f"fps={HIST_FRAMES / span:.5f}," + vf
+    r = subprocess.run(["ffmpeg", "-v", "error", *seek, "-i", str(path), "-vf", vf, "-frames:v", str(HIST_FRAMES if seek else 1),
+                        "-f", "rawvideo", "-"], capture_output=True, timeout=180)
+    if r.returncode:
+        raise ValueError(r.stderr.decode(errors="replace")[-300:] or "ffmpeg failed")
+    px = np.frombuffer(r.stdout, np.uint8)
+    px = px[: len(px) - len(px) % 4].reshape(-1, 4)
+    px = px[px[:, 3] >= 128]
+    if not len(px):
+        raise ValueError("nothing shows in it")
+    return {ch: np.bincount(px[:, i], minlength=256).tolist() for i, ch in enumerate("rgb")}
+
+
 def render(items: list[dict], out: Path, width: int | None = None, height: int | None = None,
            fps: float | None = None):
     """items: [{"path", "kind": video|image|audio, "track", "z" (video tracks: 0 = bottom),
     "hidden", "muted", "at", "in", "out", "x", "y", "scale", "fit", "rotation" (degrees, clockwise), "anchor_x", "anchor_y" (0..1 of the
-    clip, default 0.5), "opacity", "volume", "fade_in", "fade_out"}] with times in seconds. Frame size and rate default to the first visual
+    clip, default 0.5), "opacity", "volume", "fade_in", "fade_out", "grade" (grade_filters)}] with times in seconds. Frame size and rate default to the first visual
     clip's; gaps are black, clip audio and audio-track clips are mixed."""
     items = timeline_items(items, 0.04)
     if not items:
@@ -263,9 +310,9 @@ def render(items: list[dict], out: Path, width: int | None = None, height: int |
         mode = "increase" if it.get("fit") == "fill" else "decrease"
         anim = _animated(it)
         if anim:   # keyed scale (or a fixed one, for the placement below): its size per frame from the keys
-            chain = [f"fps={fps:g}", "setpts=PTS-STARTPTS", *_keyed_scale(it, W, H), "setsar=1", "format=yuva420p"]
+            chain = [f"fps={fps:g}", "setpts=PTS-STARTPTS", *grade_filters(it.get("grade")), *_keyed_scale(it, W, H), "setsar=1", "format=yuva420p"]
         else:
-            chain = [f"fps={fps:g}", "setpts=PTS-STARTPTS",
+            chain = [f"fps={fps:g}", "setpts=PTS-STARTPTS", *grade_filters(it.get("grade")),
                      f"scale=w={round(W * scale)}:h={round(H * scale)}:force_original_aspect_ratio={mode}:force_divisible_by=2",
                      "setsar=1", "format=yuva420p"]
         fi = max(float(it.get("fade_in") or 0), it["xin"])

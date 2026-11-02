@@ -2011,3 +2011,16 @@ body > .undo-dock { position: fixed; z-index: 57; top: 8px; left: 50%; transform
 .scene-pip { position: absolute; z-index: 3; box-sizing: border-box; border: 2px solid var(--accent); border-radius: var(--r-sm); box-shadow: var(--shadow-sm); cursor: move; touch-action: none; }
 .scene-pip .pip-close { position: absolute; top: 2px; right: 2px; background: #000a; color: #fff; }
 .scene-pip .pip-grip { position: absolute; right: 0; bottom: 0; width: 22px; height: 22px; cursor: nwse-resize; touch-action: none; background: linear-gradient(135deg, transparent 55%, var(--accent) 55%); }
+
+/* the Colour section: curves (adjust-panel.js), and a layer's mask in the list */
+.curve-box { position: relative; display: grid; gap: 6px; }
+.curve-canvas { width: 100%; height: 210px; touch-action: none; border-radius: var(--r-sm); cursor: crosshair; }
+.curve-box > .max-btn { position: absolute; top: 0; right: 0; }
+.curve-box.maxed { position: fixed; inset: 0; z-index: 60; padding: 16px; background: var(--bg); grid-template-rows: auto 1fr; }
+.curve-box.maxed .curve-canvas { height: 100%; min-height: 0; }
+.curve-box.maxed > .max-btn { top: 16px; right: 16px; }
+.mask-thumb { padding: 0; width: 36px; height: 36px; display: grid; place-items: center; border: 2px solid var(--line-2); border-radius: var(--r-sm); background: #000; cursor: pointer; overflow: hidden; }
+.mask-thumb.on { border-color: var(--accent); }
+.mask-thumb.off { opacity: .4; }
+.mask-thumb .paint-thumb { width: 100%; height: 100%; background: #000; border-radius: 0; }
+.curve-box > .seg { margin-right: 44px; }
