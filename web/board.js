@@ -7,7 +7,7 @@ import { runBar } from './run-bar.js';
 import { bareSource, extractSound, genLabel, soundInput, soundToSoundTab } from './media.js';
 import { S, switchTab, onServer } from './core.js';
 import { finishWithH3, openGeneration } from './run.js';
-import { openUseAs } from './useas.js';
+import { openUseAs, pickCompare } from './useas.js';
 import { isSheetRun } from './markview-math.js';
 import { E, FULL, editorTabsReady, newEditTab, openCrop, persistEditor, renderEditor } from './editor.js';
 import { addToTimeline } from './video.js';
@@ -215,12 +215,14 @@ function boardTile(g, o, i) {
   const media = cardPicture(o, g, B.size, { live: true });   // (kinds.js: the same pictures as everywhere)
   const pin = h('button', { type: 'button', class: 'pin' + (g.pinned ? ' on' : ''), 'aria-label': g.pinned ? 'Unpin' : 'Pin',
     onclick: (e) => { e.stopPropagation(); togglePin(S.history.get(g.id) || g); } }, iconize(g.pinned ? '★' : '☆'));
+  const cmp = ['image', 'video'].includes(kindOf(o)) ? h('button', { type: 'button', class: 'tile-cmp', 'aria-label': 'Compare', title: 'Compare with another',
+    onclick: (e) => { e.stopPropagation(); pickCompare(S.history.get(g.id) || g, i); } }, icon('swap')) : null;
   const key = `${g.id}:${i}`;
   const tile = h('div', { class: 'tile' + (B.sel.has(key) ? ' sel' : '') + (B.marked.has(g.id) ? ' marked' : ''), 'data-gen': g.id, 'data-key': key,
     onclick: () => {
       if (B.longPressed) { B.longPressed = false; return; }   // the long press already selected it
       if (B.selecting) toggleBoardSel(key, tile); else openGallery(key);
-    } }, media, pin, h('span', { class: 'tick', 'aria-hidden': 'true' }, icon('check')),
+    } }, media, pin, cmp, h('span', { class: 'tick', 'aria-hidden': 'true' }, icon('check')),
     h('span', { class: 'mark', 'aria-hidden': 'true' }, icon('trash')),
     o.duration ? h('span', { class: 'tile-len' }, clipLen(o.duration)) : null,
     usedBadge(g),
@@ -229,7 +231,7 @@ function boardTile(g, o, i) {
   let timer = 0, start = null;
   tile.addEventListener('pointerdown', (e) => {
     B.longPressed = false;
-    if (e.target.closest('.pin')) return;
+    if (e.target.closest('.pin, .tile-cmp')) return;
     start = { x: e.clientX, y: e.clientY };
     timer = setTimeout(() => {
       B.longPressed = true;
@@ -750,6 +752,7 @@ function galleryRender(newMedia = false) {
     button(marked ? '🗑 Marked' : '🗑 Mark', () => { toggleMarked(g.id); boardChanged(g); }, { cls: 'small' + (marked ? ' danger on' : ''), title: 'D' }),
     o.kind === 'image' ? button('✎ Edit here', () => { closeGallery(); itemsToEditor([cur]); }, { title: 'E: replaces the open Image tab\'s layers (Undo brings them back)' }) : null,
     button('Use as…', () => openUseAs(g, i, { before: () => closeGallery() }), { cls: 'small primary', title: 'U: send it to Generate, VFX, Video, Sound, the Image tab or 3D' }),
+    ['image', 'video'].includes(kindOf(o)) ? button([icon('swap'), 'Compare'], () => pickCompare(g, i), { title: 'C: wipe or side by side with another' }) : null,
     o.kind === 'image' || o.kind === 'video' ? button('✂ Crop', () => openCropCopy(g, i), { title: 'Make a cropped copy' }) : null,
     o.kind === 'video' ? button('♪ Sound', () => openSoundSheet(g, i), { title: 'Take the sound out, or put a sound on this clip' }) : null,
     button('Details', () => openGeneration(g.id)),
@@ -800,6 +803,7 @@ document.addEventListener('keydown', (e) => {
     d: () => { toggleMarked(cur.g.id); boardChanged(cur.g); },
     e: () => { if (cur.o.kind === 'image') { closeGallery(); itemsToEditor([cur]); } },
     u: () => openUseAs(S.history.get(cur.g.id) || cur.g, cur.i, { before: () => closeGallery() }),
+    c: () => { if (['image', 'video'].includes(kindOf(cur.o))) pickCompare(S.history.get(cur.g.id) || cur.g, cur.i); },
     ' ': () => { const m = GAL.el.querySelector('.gal-main video, .gal-main audio'); if (m) { if (m.paused) m.play().catch(() => {}); else m.pause(); } },
   };
   if (e.key === ' ' && e.target.closest('button, a')) return;   // (Space on a focused button presses it)

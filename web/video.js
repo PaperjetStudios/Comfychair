@@ -1289,7 +1289,7 @@ async function snapshotFrame() {
     actions(
       button('Save as input', async () => {
         try {
-          const r = await uploadImage(blob, { mp: 0, source: 'snapshot', filename: name });
+          const r = await uploadImage(blob, { mp: 0, source: 'snapshot', filename: name, board: 'Saved frame' });
           (await import('./generate.js')).useInGenerate(r.name, `Saved ${r.width}×${r.height}`);
         } catch (e) { toast('Save failed: ' + e.message, true); }
       }, { cls: 'small primary' }),

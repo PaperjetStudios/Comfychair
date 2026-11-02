@@ -797,6 +797,11 @@ async def remove_generation(g: dict):
     """A run, for good: its row, every copy of its files and its ComfyUI history entry."""
     gid = g["id"]
     folder = db.project_folder(g["project_id"])
+    for name in db.saved_inputs(gid):   # (saved_run: the same picture, unless a run or document still needs it)
+        if await asyncio.to_thread(storage.input_used, name):
+            db.clear_input_origin(name)
+        else:
+            await asyncio.to_thread(storage.delete_input, name)
     db.delete_generation(gid)
     storage.drop_view_marks(folder, gid)
     for o in g["outputs"]:   # every copy (storage.py): ours, ComfyUI's (older runs still have one) and what it wrote
@@ -831,7 +836,8 @@ def _project(v):
 
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...), mp: float = Form(0), multiple: int = Form(8), crop: str = Form(""),
-                 project_id: str = Form(""), source: str = Form("upload"), origin: str = Form("")):
+                 project_id: str = Form(""), source: str = Form("upload"), origin: str = Form(""),
+                 board: str = Form("")):
     data = await file.read(MAX_IMAGE_UPLOAD + 1)
     if len(data) > MAX_IMAGE_UPLOAD:
         raise HTTPException(413, f"That image is over {MAX_IMAGE_UPLOAD >> 20} MB")
@@ -848,7 +854,22 @@ async def upload(file: UploadFile = File(...), mp: float = Form(0), multiple: in
             o = None
         if isinstance(o, dict) and isinstance(o.get("generation"), int) and db.get_generation(o["generation"]):
             db.set_input_origin(name, {"generation": o["generation"], "index": o.get("index", 0), "frame": o.get("frame")})
+    if board:   # (something the user made here and keeps: it shows on the Board with the runs)
+        await saved_run(name, png, _project(project_id), board[:80])
     return {"name": name, "width": w, "height": h}
+
+
+async def saved_run(name: str, png: bytes, project_id, label: str) -> int:
+    """A picture made in the browser (a saved layer, a tool's result), as a run on the Board and in History. The run and
+    the input are one picture: deleting either takes the other (remove_generation, DELETE /api/inputs), and a document
+    using the input holds the run, through its origin (storage.attachments)."""
+    gid = db.create_generation(project_id, "saved", {"label": label}, {}, f"edit-saved-{uuid.uuid4().hex}")
+    out, rel = new_output(db.get_generation(gid), "picture.png")
+    out.write_bytes(png)
+    db.update_generation(gid, status="done", finished=time.time(), outputs=[{"filename": out.name, "path": rel, "kind": "image", "node": "saved"}])
+    db.set_input_origin(name, {"generation": gid, "index": 0, "frame": None, "saved": True})
+    await push_gen(gid)
+    return gid
 
 
 PAINT_SUB = "paint"   # the Editor's painted layers: kept here only, out of ComfyUI and the input galleries
@@ -1253,7 +1274,10 @@ async def delete_input(name: str):
     users = await asyncio.to_thread(storage.characters_using, lambda p: name in storage.character_pictures(p))
     if users:
         raise HTTPException(409, f"In use by {', '.join(users)}: remove it from them first")
+    origin = db.input_origin(name)
     freed = await asyncio.to_thread(storage.delete_input, name)
+    if origin and origin.get("saved") and (g := db.get_generation(origin["generation"])):
+        await remove_generation(g)   # (saved_run: its copy on the Board is the same picture)
     await broadcast({"type": "deck_input_deleted", "data": {"name": name}})
     return {"ok": True, "freed": freed}
 

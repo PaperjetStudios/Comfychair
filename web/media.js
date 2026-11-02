@@ -22,7 +22,7 @@ export async function projectOutputs(kinds) {
   return items.sort((x, y) => y.t - x.t);
 }
 // a run by its template, an imported file by its name
-export const genLabel = (g) => `#${g.id} ${g.template === 'import' && g.params?.label ? g.params.label : madeBy(g) || g.template}`;
+export const genLabel = (g) => `#${g.id} ${(g.template === 'import' || g.template === 'saved') && g.params?.label ? g.params.label : madeBy(g) || g.template}`;
 // a card's picture: a thumbnail, or a note for sound
 export const cardMedia = (o, g = null) => cardPicture(o, g);   // (kinds.js: a still, a waveform, or what the kind is)
 
@@ -727,11 +727,12 @@ document.addEventListener('keydown', (e) => {
 export const pngBlob = (cv) => new Promise((res) => cv.toBlob(res, 'image/png'));
 
 // Upload a File/Blob to ComfyUI's input folder, tagged with the open project.
-export function uploadImage(blob, { mp = 0, source = 'upload', filename = 'image.png', multiple = 16, origin = null } = {}) {
+export function uploadImage(blob, { mp = 0, source = 'upload', filename = 'image.png', multiple = 16, origin = null, board = '' } = {}) {
   const fd = new FormData();
   fd.append('file', blob, blob.name || filename); fd.append('mp', mp); fd.append('multiple', multiple);
   fd.append('source', source);
   if (origin) fd.append('origin', JSON.stringify(origin));
+  if (board) fd.append('board', board);   // a name: it also shows on the Board (main.saved_run)
   if (S.project != null) fd.append('project_id', S.project);
   return api('/api/upload', { method: 'POST', form: fd });
 }

@@ -310,6 +310,23 @@ def input_origin(name: str) -> dict | None:
     return json.loads(r["origin"]) if r else None
 
 
+def saved_inputs(gid: int) -> list[str]:
+    """The input a saved picture's run is the Board's copy of (main.saved_run), not ones later made from its output."""
+    out = []
+    for r in _q("SELECT name, origin FROM input_origins").fetchall():
+        try:
+            o = json.loads(r["origin"])
+        except ValueError:
+            continue
+        if isinstance(o, dict) and o.get("saved") and o.get("generation") == gid:
+            out.append(r["name"])
+    return out
+
+
+def clear_input_origin(name: str):
+    _q("DELETE FROM input_origins WHERE name=?", (name,))
+
+
 def project_inputs(project_id) -> list[dict]:
     rows = _q("SELECT * FROM inputs WHERE project_id IS ? ORDER BY created DESC", (project_id,)).fetchall()
     return [dict(r) for r in rows]

@@ -23,6 +23,14 @@ def setUpModule():   # imported late: other test modules set DECK_DATA/DECK_COMF
     assert not str(config.DATA_DIR).startswith(str(config.BASE_DIR / "data")), config.DATA_DIR
 
 
+def png_bytes() -> bytes:
+    from io import BytesIO
+    from PIL import Image
+    b = BytesIO()
+    Image.new("RGB", (4, 4), (10, 20, 30)).save(b, "PNG")
+    return b.getvalue()
+
+
 def touch(p: Path, n=100, old=True) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(b"x" * n)
@@ -190,6 +198,76 @@ class Storage(unittest.TestCase):
             self.assertEqual(c.delete("/api/inputs", params={"name": name}).status_code, 200)
         self.assertFalse(any(p.exists() for p in files))
         self.assertNotIn(name, [r["name"] for r in db.project_inputs(self.pid)])
+
+    def _saved(self, c):
+        self._uploads()
+        r = c.post("/api/upload", data={"project_id": self.pid, "source": "editor", "board": "A layer", "multiple": 1},
+                   files={"file": ("a.png", png_bytes(), "image/png")}).json()
+        gid = db.input_origin(r["name"])["generation"]
+        g = db.get_generation(gid)
+        self.assertEqual((g["template"], g["params"]["label"], g["status"]), ("saved", "A layer", "done"))
+        return r["name"], gid, config.PROJECTS_DIR / g["outputs"][0]["path"], config.INPUT_DIR / Path(r["name"]).name
+
+    def _uploads(self):   # (ComfyUI's copy: named as main.upload_prepared would have it)
+        p = mock.patch.object(main.comfy, "upload_image", mock.AsyncMock(side_effect=lambda png, fname, sub: f"{sub}/{fname}"))
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_an_input_without_board_makes_no_run(self):
+        self._uploads()
+        with TestClient(main.app) as c:
+            r = c.post("/api/upload", data={"project_id": self.pid, "multiple": 1}, files={"file": ("a.png", png_bytes(), "image/png")}).json()
+        self.assertIsNone(db.input_origin(r["name"]))
+
+    def test_deleting_a_saved_pictures_run_takes_the_input(self):
+        with TestClient(main.app) as c:
+            name, gid, run_file, input_file = self._saved(c)
+            self.assertTrue(run_file.is_file() and input_file.is_file())
+            self.assertEqual(c.delete(f"/api/generations/{gid}").status_code, 200)
+        self.assertFalse(run_file.exists() or input_file.exists())
+        self.assertNotIn(name, [r["name"] for r in db.project_inputs(self.pid)])
+
+    def test_deleting_a_saved_picture_takes_its_run(self):
+        with TestClient(main.app) as c:
+            name, gid, run_file, input_file = self._saved(c)
+            self.assertEqual(c.delete("/api/inputs", params={"name": name}).status_code, 200)
+        self.assertFalse(run_file.exists() or input_file.exists())
+        self.assertIsNone(db.get_generation(gid))
+
+    def test_a_copy_made_from_a_saved_pictures_run_leaves_the_run(self):
+        with TestClient(main.app) as c:
+            _, gid, run_file, _ = self._saved(c)
+            copy = c.post(f"/api/generations/{gid}/to-input", json={"index": 0, "mp": 0, "multiple": 1}).json()["name"]
+            self.assertEqual(c.delete("/api/inputs", params={"name": copy}).status_code, 200)
+        self.assertTrue(run_file.is_file())
+        self.assertIsNotNone(db.get_generation(gid))
+
+    def test_a_saved_picture_in_a_document_cant_go(self):
+        with TestClient(main.app) as c:
+            name, gid, run_file, input_file = self._saved(c)
+            doc = config.PROJECTS_DIR / self.folder / ".deck" / "edit-tabs" / "t.json"
+            doc.parent.mkdir(parents=True, exist_ok=True)
+            doc.write_text(json.dumps({"id": "t", "name": "Edit", "payload": {"layers": [{"name": name}]}}))
+            self.assertEqual(c.delete(f"/api/generations/{gid}").status_code, 409)
+            doc.unlink()
+        self.assertTrue(run_file.is_file() and input_file.is_file())
+
+    def test_a_saved_picture_another_run_used_stays_as_an_input(self):
+        with TestClient(main.app) as c:
+            name, gid, run_file, input_file = self._saved(c)
+            other = db.create_generation(self.pid, "x", {"pic": name}, {}, "edit-x")
+            self.assertEqual(c.delete(f"/api/generations/{gid}").status_code, 200)
+            self.assertFalse(run_file.exists())
+            self.assertTrue(input_file.is_file())
+            self.assertIsNone(db.input_origin(name))
+            db.delete_generation(other)
+
+    def test_a_project_takes_its_saved_pictures(self):
+        with TestClient(main.app) as c:
+            _, _, run_file, input_file = self._saved(c)
+            name = db.get_project(self.pid)["name"]
+            self.assertEqual(c.delete(f"/api/projects/{self.pid}", params={"confirm": name}).status_code, 200)
+        self.assertFalse(run_file.exists() or input_file.exists())
 
     def test_a_project_takes_its_unused_pictures(self):
         sub = config.COMFY_INPUT_SUBFOLDER

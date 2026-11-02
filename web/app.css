@@ -775,6 +775,8 @@ body:has(.text-pop:not(.hidden)) .toast { z-index: 63; }
 .tile img, .tile video { pointer-events: none; -webkit-user-drag: none; user-drag: none; }
 .tile .pin { position: absolute; top: 6px; right: 6px; width: 40px; height: 40px; border-radius: 50%; border: 0; background: #000a; color: #fff; font-size: 20px; cursor: pointer; }
 .tile .pin.on { color: var(--accent); }
+.tile .tile-cmp { position: absolute; top: 52px; right: 6px; width: 40px; height: 40px; border-radius: 50%; border: 0; background: #000a; color: #fff; display: grid; place-items: center; cursor: pointer; }
+.board.selecting .tile .tile-cmp { display: none; }
 .tile-len { position: absolute; top: 8px; left: 8px; padding: 2px 7px; border-radius: var(--r); background: #000b; color: #fff; font-size: var(--fs-xs); font-variant-numeric: tabular-nums; pointer-events: none; }
 .board.selecting .tile .tile-len, .tile.marked .tile-len { display: none; }
 .tile-used { position: absolute; bottom: 34px; right: 8px; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: #000b; color: #fff; pointer-events: none; }

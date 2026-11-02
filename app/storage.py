@@ -6,6 +6,7 @@ The rules (see also the tests in tests/test_storage.py):
   pair and texture folder) are deleted, and the run leaves ComfyUI's history (which holds its prompt).
 - Deleting a run, a picture or a project removes every copy of its files: ComfyChair's, ComfyUI's, and the
   thumbnails, previews and Extend frame canvases cached from them.
+- A saved picture (main.saved_run) is an input and a run on the Board with one copy each: deleting either takes both.
 - The 3D tab's files (imports, photo splats, Blender clean-ups: asset_dir) live in their project's folder and go with it.
 - sweep() finds what was left behind before these rules, in ComfyChair's own folders in ComfyUI only, and never
   a file ComfyChair has no other copy of.

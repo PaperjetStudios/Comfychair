@@ -1,5 +1,5 @@
 import { h, api, store, toast, busy, button, chip, section, field, seg, hint, help, imageInput, toggle, textArea } from './ui.js';
-import { S, inputUrl, thumbUrl } from './core.js';
+import { S, inputUrl, switchTab, thumbUrl } from './core.js';
 import { openImagePicker, pngBlob, uploadImage } from './media.js';
 import { queueRun, template, valuesByRole, waitGen } from './make.js';
 import { MAPS } from './maps.js';
@@ -261,7 +261,7 @@ async function onBlack(img) {
   const c = cv.getContext('2d');
   c.fillStyle = '#000'; c.fillRect(0, 0, cv.width, cv.height);
   c.drawImage(img, 0, 0);
-  return uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: 'on-black.png', multiple: 1 });
+  return uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: 'on-black.png', multiple: 1, board: 'Cut out on black' });
 }
 
 // the sheet's cells, cut in the browser and uploaded: [{ name, r, c }]
@@ -294,7 +294,7 @@ async function land(eng, o, src, done, cell) {
       return toast(`${o.label}: added to the inpaint mask (Inpaint panel)`);
     }
     const cut = await cutOut(src.name, matte);
-    const up = ST.result === 'black' ? await onBlack(cut) : await uploadImage(await pngBlob(cut), { mp: 0, source: 'editor', filename: 'cutout.png', multiple: 1 });
+    const up = ST.result === 'black' ? await onBlack(cut) : await uploadImage(await pngBlob(cut), { mp: 0, source: 'editor', filename: 'cutout.png', multiple: 1, board: 'Cut out' });
     eng.addImage(up.name, { label: ST.result === 'black' ? 'Cut out on black' : 'Cut out', ...placed(src, rect.x, rect.y, rect.w, up) });
     if (layer && ST.hide) layer.hidden = true;
   } else if (o.kind === 'sheet') {
@@ -406,7 +406,7 @@ async function fillIn(eng, o, t, tab, src, maskCv) {
       }
     }
     if (eng.E.tab?.id !== tab) return toast(`${o.label} finished on another edit`);
-    const r = await uploadImage(await pngBlob(result), { mp: 0, source: 'editor', filename: 'removed.png', multiple: 1 });
+    const r = await uploadImage(await pngBlob(result), { mp: 0, source: 'editor', filename: 'removed.png', multiple: 1, board: 'Removed' });
     eng.addImage(r.name, { label: 'Removed', ...placed(src, src.rect.x, src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) });
     if (src.layer && ST.hide) src.layer.hidden = true;
     eng.changed(); eng.render();
@@ -495,6 +495,17 @@ async function smallerRef(name, pixels) {
   return (await uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: 'swap-from-small.png', multiple: 1 })).name;
 }
 
+// what one model is told for a swap: the close-up, the reference, its prompt and size, and its LoRA
+function swapValues(t, key, part, close, ref, size) {
+  const main = t.fields.find((f) => f.kind === 'image' && /image to edit/i.test(f.group));
+  const refField = t.fields.find((f) => f.kind === 'image' && /reference/i.test(f.group));
+  const prompt = t.fields.find((f) => f.kind === 'text' && /^edit$/i.test(f.group) && !/negative/i.test(f.input));
+  if (!main || !refField || !prompt) throw new Error('it has no reference picture');
+  const lora = swapLora(key, part, loraField(t)?.options || []);
+  return { [main.key]: close, [refField.key]: ref, [prompt.key]: swapPrompt(part, key, ST.swapExtra), ...wholePicture(t, size, SWAP_MODELS[key].maxPixels),
+    ...(lora && { [loraField(t).key]: [lora] }) };
+}
+
 // The swap on a picture whose area is known: one close-up and one soft edge, then a run per ticked model. Each result goes back on a
 // copy of the picture through that edge and lands as a layer. The close-up, the reference and the runs were only a means, so they go.
 async function swapArea(eng, o, tab, src, { mask: red, keep }, b) {
@@ -519,18 +530,12 @@ async function swapArea(eng, o, tab, src, { mask: red, keep }, b) {
       b.set(`${m.label} (${n + 1} of ${wanted.length})…`);
       let run = null, smaller = null;
       try {
-        const main = t.fields.find((f) => f.kind === 'image' && /image to edit/i.test(f.group));
-        const refField = t.fields.find((f) => f.kind === 'image' && /reference/i.test(f.group));
-        const prompt = t.fields.find((f) => f.kind === 'text' && /^edit$/i.test(f.group) && !/negative/i.test(f.input));
-        if (!main || !refField || !prompt) throw new Error('it has no reference picture');
-        const lora = swapLora(key, part, loraField(t)?.options || []);
         smaller = await smallerRef(ref.name, swapRefPixels(key, part));
-        const values = { ...valuesByRole(t, { seed: -1 }), [main.key]: closeUp.name, [refField.key]: smaller || ref.name, [prompt.key]: swapPrompt(part, key, ST.swapExtra), ...wholePicture(t, [cw, ch], m.maxPixels),
-          ...(lora && { [loraField(t).key]: [lora] }) };
+        const values = { ...valuesByRole(t, { seed: -1 }), ...swapValues(t, key, part, closeUp.name, smaller || ref.name, [cw, ch]) };
         run = await once({ template: t.id, values, batch: 1 });
         const made = await loadImg(run.outputs.find((x) => x.kind === 'image').url);
         if (eng.E.tab?.id !== tab) { toast(`${o.label} finished on another edit`); continue; }
-        const r = await uploadImage(await pngBlob(pasted(pic, W, H, made, box, before, area0, keep0, side, p)), { mp: 0, source: 'editor', filename: 'swapped.png', multiple: 1 });
+        const r = await uploadImage(await pngBlob(pasted(pic, W, H, made, box, before, area0, keep0, side, p)), { mp: 0, source: 'editor', filename: 'swapped.png', multiple: 1, board: `${p.label} swap (${m.label})` });
         eng.addImage(r.name, { label: `${p.label} swap (${m.label})`, ...placed(src, src.rect.x, src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) });
         if (src.layer && ST.hide) src.layer.hidden = true;
         eng.changed(); eng.render();
@@ -586,6 +591,60 @@ async function swapPainted(eng, o, tab) {
   try {
     await swapArea(eng, o, tab, { name: up.name, rect: { x: f.x, y: f.y, w: f.w, h: f.h }, layer: null, px: [pic.width, pic.height] }, { mask: redOf(m.canvas, pic.width, pic.height), keep: null }, b);
   } finally { b.done(); }
+}
+
+// Send to Generate: a tab per ticked model, set up as Swap would run it, to change its settings and run it there. The close-up and
+// reference stay (the tabs use them); what the model makes stays as made, not put back on the picture.
+async function swapSend(eng) {
+  if (!ST.swapFrom) return toast('Pick the picture to take it from first', true);
+  const wanted = swapModels(), part = ST.swapPart, o = op();
+  if (!wanted.length) return toast('Tick an installed model first', true);
+  const { hooks } = await import('./generate.js');
+  if (!hooks.openShot) return toast('The Generate tab isn\'t ready yet', true);
+  const b = busy('Finding the area…');
+  let spare = null;
+  try {
+    await eng.paint.savePaint();
+    let src, red;
+    if (ST.swapWhere === 'painted') {
+      const m = eng.composeMask(), pic = document.createElement('canvas');
+      if (!m) return toast('Paint the area first (Inpaint panel), or have it found', true);
+      if (!eng.compose(pic)) return toast('Add a picture first', true);
+      const up = await uploadImage(await pngBlob(pic), { mp: 0, source: 'editor', filename: 'swap.png', multiple: 1 });
+      spare = up.name;
+      src = { name: up.name, px: [pic.width, pic.height] };
+      red = redOf(m.canvas, pic.width, pic.height);
+    } else {
+      if (!template('deck-mask-image')) return toast('deck-mask-image isn\'t installed', true);
+      const l = ST.scope === 'selected' ? targets(eng)[0] : null;
+      if (ST.scope === 'selected' && !l) return toast('Select a layer first', true);
+      src = await sourceOf(eng, l, o);
+      if (src.name !== l?.name) spare = src.name;
+      const found = await findPart(src.name, src.px[0], src.px[1], part);
+      if (!found) return toast(`SAM3 found no ${SWAP_PARTS[part].label.toLowerCase()} there: paint the red mask instead`, true);
+      red = found.mask;
+    }
+    const p = SWAP_PARTS[part], [W, H] = src.px, area = boundsOf(red, W, H);
+    if (!area) return toast('There is nothing in the area to swap', true);
+    const box = swapBox(area, W, H, p.room), k = scaleFor(box, p.pixels);
+    const cw = Math.max(64, Math.round(box.w * k)), ch = Math.max(64, Math.round(box.h * k));
+    const pic = await loadImg(inputUrl(src.name)), close = canvasOf(cw, ch), cc = close.getContext('2d');
+    cc.imageSmoothingQuality = 'high';
+    cc.drawImage(pic, box.x, box.y, box.w, box.h, 0, 0, cw, ch);
+    b.set('Setting it up in Generate…');
+    const ref = await swapReference(part), closeUp = await uploadImage(await pngBlob(close), { mp: 0, source: 'editor', filename: 'swap-close.png', multiple: 1 });
+    let sent = 0;
+    switchTab('generate');   // (its tabs start on a first visit)
+    for (const key of wanted) {
+      const m = SWAP_MODELS[key], t = template(m.tpl);
+      try {
+        const small = await smallerRef(ref.name, swapRefPixels(key, part));
+        await hooks.openShot({ workflow: t.id, values: swapValues(t, key, part, closeUp.name, small || ref.name, [cw, ch]) }, `${p.label} swap · ${m.label}`);
+        sent++;
+      } catch (e) { toast(`${m.label}: ${e.message}`, true); }
+    }
+    if (sent) toast(sent > 1 ? `${sent} tabs in Generate, one per model` : 'Set up in Generate');
+  } catch (e) { toast(e.message, true); } finally { if (spare) await dropInput(spare); b.done(); }
 }
 
 // Mark only: the area goes in the red mask to check and put right, for the next Swap
@@ -685,7 +744,7 @@ export async function applyStep(step, name, { what = 'person' } = {}) {
     const fine = ST.fine ? edgeTurn.then(() => finerMatte(t, name, done, what.trim() || 'person')) : null;
     if (fine) edgeTurn = fine.catch(() => {});
     const cut = await cutOut(name, await (fine || matteOf(done)));
-    return (await uploadImage(await pngBlob(cut), { mp: 0, source: 'editor', filename: 'cutout.png', multiple: 1 })).name;
+    return (await uploadImage(await pngBlob(cut), { mp: 0, source: 'editor', filename: 'cutout.png', multiple: 1, board: 'Sheet view' })).name;
   }
   return (await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } })).name;
 }
@@ -755,5 +814,8 @@ export function imageToolsSection(eng) {
     o.kind === 'up' ? field(['Enlarge', out ? h('span', {}, out) : null], seg([[2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); eng.render(); })) : null,
     (KEEPS_FRAMING.has(o.kind) || o.kind === 'sheet' || (o.kind === 'matte' && ST.result !== 'mask')) && onLayers && !(o.kind === 'remove' && ST.rfrom === 'painted')
       ? toggle('Hide the original', ST.hide, (v) => { ST.hide = v; save(); }) : null,
-    h('div', { class: 'row wrap' }, o.kind === 'swap' ? button('Mark it', () => swapMark(eng), { disabled: !t }) : null, button(o.kind === 'swap' ? 'Swap' : o.kind === 'remove' ? (ST.rfrom === 'words' ? 'Find and mark' : 'Remove') : FLIGHT.size ? 'Run again' : 'Run', () => run(eng), { cls: 'primary', disabled: !t })));
+    h('div', { class: 'row wrap' }, o.kind === 'swap' ? button('Mark it', () => swapMark(eng), { disabled: !t }) : null,
+      o.kind === 'swap' ? button('Send to Generate', () => swapSend(eng), { disabled: !t }) : null,
+      o.kind === 'swap' ? help('Send to Generate opens a tab per ticked model with the close-up, the reference, the prompt, the size and the LoRA set, to change and run there. What it makes there stays as made: it isn\'t put back on the whole picture.') : null,
+      button(o.kind === 'swap' ? 'Swap' : o.kind === 'remove' ? (ST.rfrom === 'words' ? 'Find and mark' : 'Remove') : FLIGHT.size ? 'Run again' : 'Run', () => run(eng), { cls: 'primary', disabled: !t })));
 }

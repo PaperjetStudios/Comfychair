@@ -1371,7 +1371,7 @@ export function createEditor(cfg) {
   }
   // an input in this project, as Save as input makes one, without leaving the Image tab
   const saveEach = () => onSelected('Saving the layers…', async (list) => {
-    for (const l of list) await uploadImage(await pngOf(layerPicture(l)), { mp: 0, source: 'editor', filename: 'layer.png', multiple: 1 });
+    for (const l of list) await uploadImage(await pngOf(layerPicture(l)), { mp: 0, source: 'editor', filename: 'layer.png', multiple: 1, board: l.label || 'Saved layer' });
     toast(list.length > 1 ? `${list.length} layers saved as inputs` : 'Layer saved as an input');
   });
   const saveTogether = () => onSelected('Putting the layers together…', async (list) => {
@@ -1383,7 +1383,7 @@ export function createEditor(cfg) {
     c.fillStyle = E.bg; c.fillRect(0, 0, w, hh);
     c.translate(-x, -y);
     drawStack(c, list);
-    const r = await uploadImage(await pngOf(cv), { mp: E.mp, source: 'editor', filename: 'layers.png' });
+    const r = await uploadImage(await pngOf(cv), { mp: E.mp, source: 'editor', filename: 'layers.png', board: 'Saved layers' });
     toast(`Saved as an input, ${r.width}×${r.height}`);
   });
   const openSelected = () => onSelected('Opening a new edit…', async (list) => {
@@ -1447,7 +1447,7 @@ export function createEditor(cfg) {
     try {
       const blob = await editorBlob(false, E.out || 1);
       if (!blob) return toast('Add some images first', true);
-      const r = await uploadImage(blob, { mp: E.mp, source: 'editor', filename: 'editor.png' });
+      const r = await uploadImage(blob, { mp: E.mp, source: 'editor', filename: 'editor.png', board: 'Saved picture' });
       (await import('./generate.js')).useInGenerate(r.name, `Saved ${r.width}×${r.height}`);
     } catch (e) { toast('Save failed: ' + e.message, true); }
     finally { b.done(); }

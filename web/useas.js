@@ -42,7 +42,7 @@ export function takeButtons(g, i, { details = false, onDeleted = null } = {}) {
 
 // Compare… : what this take can be set against (the pictures it was made from, then other takes of its kind, newest
 // first), as a grid of thumbs; a pick opens compare.js (wipe or side by side) with this take on the left.
-function pickCompare(g, i) {
+export function pickCompare(g, i) {
   const o = g.outputs[i], k = kindOf(o), mine = { o, label: genLabel(g) };
   const t = S.templates.find((x) => x.id === g.template);
   const made = (t?.fields || []).filter((f) => f.kind === 'image' && typeof g.params[f.key] === 'string' && g.params[f.key])
