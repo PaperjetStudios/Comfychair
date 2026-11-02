@@ -144,7 +144,7 @@ export class Stage {
       if (EVEN.has(o.type)) m.scale.setScalar(Math.max(1e-4, v.sy));
       else m.scale.set(Math.max(0.01, v.sx), Math.max(0.01, v.sy), Math.max(0.01, v.sz));
       if (m.userData.rig) { FIGURE.setShape(m.userData.rig, o.shape, o.anatomy); FIGURE.applyPose(m.userData.rig, v.j, this.stepped(o, v.m, f), o.ground); FIGURE.setHidden(m.userData.rig, o.hide); }
-      m.userData.atFrame?.(f);
+      m.userData.atFrame?.(f, v);
     }
     const c = sample(liveCam(f, this.sc), CAM, f);   // the cut at this frame, or the active camera when there are none
     this.camera.position.set(c.px, c.py, c.pz);
@@ -213,6 +213,13 @@ export class Stage {
     const sp = this.spark, v = sp?.defaultView, t0 = performance.now();
     const busy = () => (sp?.pendingUpdate && sp.pendingUpdate.timeoutId !== -1) || v?.sorting || v?.pending;
     while (busy() && performance.now() - t0 < 3000) await sleep(20);
+    // an animated splat's new frame has to reach the picture: a wrong frame is worse than a slow one. Up to 60 s, drawing
+    // now and then (Spark only picks up a change on a draw)
+    const anim = [...this.meshes.values()].map((m) => m.userData.splat).filter((s) => s?.meshes?.length > 1);
+    const shown = () => anim.every((s) => v?.display?.accumulator?.mapping?.some((r) => r.node === s.mesh));
+    for (let last = t0; !shown() && performance.now() - t0 < 60000; await sleep(30)) {
+      if (performance.now() - last > 1000) { last = performance.now(); glr().render(this.scene, this.camera); }
+    }
   }
 
   // near and far for each frame, measured once (depth-range.js: following the shot, or one range for the clip as

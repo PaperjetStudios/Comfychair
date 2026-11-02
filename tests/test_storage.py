@@ -212,6 +212,15 @@ class Storage(unittest.TestCase):
         f.write_text(json.dumps({"id": did, "kind": kind, "name": name, "order": 0, "rev": 1, "updated": 0, "payload": payload}))
         return f
 
+    def test_attachments_see_a_run_used_as_a_splat_frame(self):
+        """An animated splat's later frames sit in objects[].frames[]: their runs can't be deleted either."""
+        a, _, _, _ = self.gen(run="r1")
+        b, _, _, _ = self.gen(run="r2")
+        self.doc("scene-tabs", {"objects": [{"type": "splat", "gen": a, "frames": [{"url": "/x.ply", "gen": b, "genIndex": 0}]}]})
+        got = storage.attachments()
+        self.assertIn(a, got)
+        self.assertIn(b, got)
+
     def test_attachments_see_each_kind_of_reference(self):
         a, _, _, _ = self.gen(run="r1")
         b, _, _, _ = self.gen(run="r2")

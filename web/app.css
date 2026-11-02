@@ -1143,6 +1143,14 @@ button.sheet-caret { width: 22px; }
 .sheet-lane .cut-block.sel { outline: 2px solid #fff; outline-offset: -2px; z-index: 1; }
 .sheet-lane.muted .key, .sheet-lane.muted .span { opacity: .3; }
 .sheet-lane.muted { background: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--bad) 8%, transparent) 6px 12px); }
+.splat-frame { display: flex; align-items: center; gap: 2px; }
+.splat-frame > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.splat-frame .icon-btn { flex: none; width: 32px; min-width: 32px; height: 32px; padding: 0; }
+.curve-mods-head { display: flex; align-items: center; gap: 6px; }
+.curve-mods { display: grid; gap: 6px; margin-bottom: 6px; }
+.curve-mods select { height: 32px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface-2); color: var(--text); font: inherit; font-size: 13px; padding: 0 4px; }
+.curve-mod { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 6px 10px; align-items: end; padding: 6px; border: 1px solid var(--line); border-radius: var(--r); }
+.curve-mod.off { opacity: .55; }
 .graph-plot { position: absolute; left: 0; right: 0; top: 26px; bottom: 0; }
 .graph-plot.muted { opacity: .4; }
 .graph-cv { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }

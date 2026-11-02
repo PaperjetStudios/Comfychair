@@ -2,14 +2,15 @@
 // (ply, splat, ksplat, spz) and starter scenes. Plugs into the Edit scene panel and the layer loaders
 // (scene-view.js LOADERS / passHooks); needs nothing in the core but those hooks and the layer types.
 //   model layer: { type: 'model', name, url, file, ext, mtl?, fit, clay? }
-//   splat layer: { type: 'splat', name, url, file, ext, fit, flip, box: [x0,y0,z0,x1,y1,z1] (the splat's own units) }
+//   splat layer: { type: 'splat', name, url, file, ext, fit, flip, box: [x0,y0,z0,x1,y1,z1] (the splat's own units),
+//     frames?, frameRate?, frameLoop? (an animated splat: splat-frames.js) }
 // Both scale evenly (base.sx = sy = sz = fit, then whatever the user did). The file is in the project
 // folder (POST /api/scene/asset); the layer only holds its URL.
 import * as THREE from './vendor/three.module.min.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip, field, seg, info, rangeField, mediaCard, placeholder, iconBtn } from './ui.js';
 import { inputUrl, thumbUrl } from './core.js';
-import { C, OBJ as OBJ_CH, R, SC, current, matchSceneTo, newObject, namesFor, save, selItem, write } from './scene-data.js';
+import { C, OBJ as OBJ_CH, R, SC, current, frames, matchSceneTo, newObject, namesFor, sampleChan, save, selItem, setKey, write } from './scene-data.js';
 import { heightOf as figureHeight } from './figure.js';
 import { addModeSection } from './scene-modes.js';
 import { LOADERS, SPLAT_PASS, activeCamera, controls, changed, draw, fit, lookThrough, passHooks, pose, recentre, renderer, scene, select } from './scene-view.js';
@@ -23,6 +24,7 @@ import {
 import {
   GROWS, fillFactor, keptShare, medianOf, pickAlong, reachOf, samplePoints, sameTrim, shapeMesh, standShift, trimBody, trimSphere
 } from './splat-shape.js';
+import { LOOPS, RATES, DEFAULT_RATE, addFrame, frameCount, frameIndex, frameList, frameTrimOf, framesOnWhole, hasFrameKeys, removeFrame, sceneFrameShowing, shapeFor, swapFrames } from './splat-frames.js';
 
 const MODELS = new Set(['glb', 'gltf', 'obj', 'fbx']);
 const SPLATS = new Set(['ply', 'splat', 'ksplat', 'spz']);
@@ -113,6 +115,8 @@ const flipFor = (ext) => ext !== 'spz';
 
 LOADERS.splat = (o, group, x = {}) => {
   const alive = x.mine || mine, redraw = x.draw || draw;
+  let index = 0;   // (the frame showing; pose can ask before anything has loaded)
+  group.userData.atFrame = (f, v) => { index = frameIndex(o, f, v?.sf); group.userData.splat?.show(index); };
   const ready = x.mine ? null : loaded.get(o.id);
   if (!x.mine) loaded.delete(o.id);
   (ready ? Promise.resolve(ready) : loadSplat(o, x)).then((mesh) => {
@@ -137,31 +141,68 @@ LOADERS.splat = (o, group, x = {}) => {
     };
     fit();
     group.add(holder, proxy);
-    const sp = group.userData.splat = { fit, proxy, holder, mesh, url: mesh.userData.url };
+    // meshes: one per frame, in order (null until it has loaded); only the frame showing is visible, and it is sp.mesh
+    const sp = group.userData.splat = { fit, proxy, holder, mesh, meshes: [mesh], all: new Set([mesh]), show(i) {
+      const list = sp.meshes;
+      let at = Math.min(i, list.length - 1);
+      while (at > 0 && !list[at]) at--;   // (a frame still on its way: the one before it holds)
+      const m = list[at] || list.find(Boolean);
+      if (!m) return;
+      for (const c of sp.all) c.visible = c === m;
+      sp.mesh = m;
+    }, index: () => index };
     if (!x.mine) { sp.sphere = trimSphere(); holder.add(sp.sphere); }   // (the trim's sphere, while it is adjusted)
-    group.userData.dispose = () => { holder.remove(sp.mesh); sp.mesh.dispose(); sp.mesh = null; };  // (the layer is gone: free its buffers)
-    tagPicks(o, group); redraw();
-  }).catch((e) => toast(`${o.name}: ${e.message}`, true));
+    group.userData.dispose = () => {   // (the layer is gone: free its buffers)
+      sp.job = null;
+      for (const m of sp.all) { holder.remove(m); m.dispose(); }
+      sp.all.clear(); sp.meshes = []; sp.mesh = null;
+    };
+    tagPicks(o, group);
+    applyShapes(o, sp);
+    sp.show(index);
+    if (!x.mine) redraw();
+    return frameCount(o) > 1 ? syncFrames(o, group, x, alive) : null;
+  }).then(() => { if (alive(o, group)) redraw(); })
+    .catch((e) => { toast(`${o.name}: ${e.message}`, true); if (x.mine) redraw(); });
 };
+
+// A layer's meshes follow its frames and this device's preview level: what is missing loads, one at a time, and what
+// is no longer wanted goes once the rest are in (a frame getting a new level keeps showing the old one until then).
+// A render (x.full) loads each frame's full set. A later call takes over from an earlier one.
+const applyShapes = (o, sp) => sp.meshes.forEach((m, i) => m?.userData.shape?.set(shapeFor(o, i)));   // (each frame's own trim, else the layer's)
+async function syncFrames(o, group, x = {}, alive = mine) {
+  const sp = group.userData.splat, want = frameList(o).map((fr) => splatUrl(fr, x)), job = sp.job = { urls: want.join() };
+  const have = new Map([...sp.all].map((m) => [m.userData.url, m]));
+  sp.meshes = want.map((url, i) => have.get(url) || sp.meshes[i] || null);
+  for (let i = 0; i < want.length; i++) {
+    if (have.has(want[i])) continue;
+    let m;
+    try { m = await loadSplat(o, x, want[i]); } catch (e) { toast(`${o.name}, frame ${i + 1}: ${e.message}`, true); continue; }
+    if (sp.job !== job || !alive(o, group)) { m.dispose(); return; }
+    m.visible = false;
+    sp.holder.add(m); sp.all.add(m); have.set(want[i], m);
+    want.forEach((url, j) => { if (url === want[i]) sp.meshes[j] = m; });   // (the same file twice: one mesh)
+    applyShapes(o, sp);
+    sp.show(sp.index());
+    if (!x.mine) draw();
+  }
+  if (sp.job !== job) return;
+  sp.meshes = want.map((url) => have.get(url) || null);
+  applyShapes(o, sp);
+  sp.show(sp.index());
+  for (const m of [...sp.all]) if (!sp.meshes.includes(m)) { sp.all.delete(m); sp.holder.remove(m); m.dispose(); }
+}
 
 // The preview level changed (or the layer got levels): each splat layer whose file differs loads the new one, and
 // the old mesh is let go once the new one is in. The box stays the layer's own (o.box), so nothing moves.
-const swapping = new Map();   // layer id: the url on its way in
 export function applySplatLevels() {
   for (const o of SC.objects) {
     if (o.type !== 'splat') continue;
     const group = R.meshes.get(o.id), sp = group?.userData.splat;
-    const url = splatUrl(o);
-    if (!sp || (swapping.get(o.id) ?? sp.url) === url) continue;
-    swapping.set(o.id, url);
-    loadSplat(o, {}, url).then((mesh) => {
-      if (swapping.get(o.id) !== url || !mine(o, group) || !sp.mesh) { mesh.dispose(); return; }
-      const old = sp.mesh;
-      sp.holder.remove(old); old.dispose();
-      sp.holder.add(mesh); sp.mesh = mesh; sp.url = url;
-      draw();
-    }).catch((e) => toast(`${o.name}: ${e.message}`, true))
-      .finally(() => { if (swapping.get(o.id) === url) swapping.delete(o.id); });
+    if (!sp) continue;
+    const urls = frameList(o).map((fr) => splatUrl(fr));
+    if (sp.job?.urls === urls.join() || (urls.length === sp.meshes.length && urls.every((u, i) => sp.meshes[i]?.userData.url === u))) continue;
+    syncFrames(o, group).then(draw).catch((e) => toast(`${o.name}: ${e.message}`, true));
   }
 }
 
@@ -682,10 +723,106 @@ function itemSection(o) {
     o.type === 'splat' && o.cam ? h('div', { class: 'row wrap' },
       button('🎥 Camera to the photo\'s view', () => { lookThrough(o); changed(); }),
       o.view ? null : button('Re-centre', () => recentre(o), { title: 'Stand it centred at the middle of the scene, on the floor and upright; the camera moves to the photo\'s view' })) : null,
+    o.type === 'splat' ? framesFields(o) : null,
     o.type === 'splat' ? previewFields(o) : null,
     o.type === 'splat' ? shapeFields(o) : null,
     button('Back to fitted size', () => { const f = o.fit || 1; write(o, namesFor(o), { sx: f, sy: f, sz: f }); changed(); }),
     o.type === 'splat' ? help('Splats can\'t be drawn as depth: renders (and the ◐ Depth view) use a box the size of the splat in its place.') : null);
+}
+
+// ---- an animated splat (splat-frames.js): more files on one layer, played by a frame rate or by keys on the timeline ----
+const frameName = (fr, i) => fr.label || (fr.image ? fr.image.split('/').pop() : '') || fr.file || `Frame ${i + 1}`;
+const framesChanged = (o) => {   // (the 'sf' channel comes and goes with the frames: the layer's rows follow)
+  const group = R.meshes.get(o.id);
+  if (group?.userData.splat) syncFrames(o, group).then(() => { pose(R.f); draw(); }).catch((e) => toast(e.message, true));
+  changed();
+};
+// which maker a new frame should use: the one that made this layer
+const madeByIdol = (o) => !o.image && o.gen != null;
+// Pictures queue up here, one layer's at a time: each becomes a frame as its run finishes.
+const FRAME_QUEUE = new Map();   // layer: { names, how, bar, seed }
+async function runFrameQueue(o, how) {
+  const q = FRAME_QUEUE.get(o);
+  const { busy } = await import('./ui.js');
+  const bar = busy('Making frames…');
+  const keepFull = levelFor(o, 'full')?.k === 'full' || !o.levels?.length;
+  try {
+    while (q.names.length) {
+      const name = q.names.shift();
+      bar.set(`Frame ${frameCount(o) + 1}: ${name.split('/').pop()}${q.names.length ? ` (${q.names.length} more after it)` : ''}`);
+      let fr;
+      if (how === 'idol') fr = await idolFrame(name, q);
+      else {
+        const { waitJob } = await import('./clipimport.js');
+        const r = await waitJob(await api('/api/scene/splat', { method: 'POST', body: { image: name, project_id: C.S.project, preview: previewLevel(coarse()), keep_full: keepFull }, busy: false }));
+        fr = { url: r.url, file: r.name, ext: 'ply', levels: r.levels || undefined, image: name };
+      }
+      if (!SC.objects.includes(o)) throw new Error('That splat is no longer in the open scene: the other pictures were not made');
+      addFrame(o, fr);
+      framesChanged(o);
+    }
+    toast(`${o.name}: ${frameCount(o)} frames`);
+  } catch (e) { toast(e.message, true); } finally { FRAME_QUEUE.delete(o); bar.done(); }
+}
+function queueFrame(o, how, name) {
+  const q = FRAME_QUEUE.get(o);
+  if (q) { q.names.push(name); return; }
+  FRAME_QUEUE.set(o, { names: [name], seed: OBJ.seed === '' ? Math.floor(Math.random() * 2 ** 31) : Number(OBJ.seed) });
+  runFrameQueue(o, how);
+}
+// one Idol run: every frame of a batch has the same seed, so they differ as little as they can
+async function idolFrame(name, q) {
+  const { t, values } = await objectValues(SPLAT_TPL, { 'Object picture': name });
+  const set = (group, v) => { const f = t.fields.find((x) => x.group === group && x.kind !== 'image'); if (f) values[f.key] = v; };
+  set('It is a photograph', OBJ.photo);
+  set('Seed', q.seed);
+  const g = await objectRun(SPLAT_TPL, values, 'The frame');
+  const i = (g.outputs || []).findIndex((x) => x.kind === 'splat' || /\.(ply|spz|ksplat|splat)$/i.test(x.filename));
+  if (i < 0) throw new Error('That run made no splat file');
+  return { url: g.outputs[i].url, ext: extOf(g.outputs[i].url), gen: g.id, genIndex: i, image: name };
+}
+// a splat this project already made, as the next frame
+async function pickMadeFrame(o) {
+  const { projectOutputs, genLabel } = await import('./media.js');
+  const { cardPicture } = await import('./kinds.js');
+  const grid = h('div', { class: 'grid gallery' }, placeholder('Loading…'));
+  openSheet(h('h3', {}, 'A splat as the next frame'), grid, actions(button('Done', closeSheet)));
+  const items = (await projectOutputs(['splat'])).filter(({ o: x }) => SPLATS.has(extOf(x.filename)));
+  grid.replaceChildren(...(items.length ? items.slice(0, 300).map(({ g, o: x, i }) => mediaCard(cardPicture(x, g), genLabel(g), () => {
+    addFrame(o, { url: x.url, ext: extOf(x.url), gen: g.id, genIndex: i, label: genLabel(g) });
+    framesChanged(o);
+    toast(`Frame ${frameCount(o)} added`);
+  })) : [placeholder('No splats made in this project yet.')]));
+}
+function framesFields(o) {
+  const n = frameCount(o), now = R.meshes.get(o.id)?.userData.splat?.meshes;
+  const addPics = (how, title) => C.openImagePicker({ title, multi: true, onPick: (name) => queueFrame(o, how, name) });
+  const sheet = (i) => { const k = o.chans?.sf?.find((x) => x.f === R.f && Math.round(x.v) === i); return !!k; };
+  const makers = madeByIdol(o) ? [['idol', 'Add pictures (Idol)…']] : o.image ? [['sharp', 'Add pictures (SHARP)…']]
+    : [['sharp', 'Add pictures (SHARP)…'], ['idol', 'Add pictures (Idol)…']];
+  const out = [
+    field(['Frames', info('Each frame is its own splat on this layer, shown one at a time. Every picture runs through the model, so a frame takes as long as a new splat, and takes that much disk. Frames from the same camera line up; the model works on each picture alone, so expect some flicker. To take pictures from a clip, use Pick a frame in the picker.')],
+      h('div', { class: 'row wrap' },
+        ...makers.map(([how, label]) => button(label, () => addPics(how, `Pictures for the frames of ${o.name}`), { cls: 'small' })),
+        button('Add a splat this project made…', () => pickMadeFrame(o), { cls: 'small' }))),
+  ];
+  if (n < 2) return out;
+  out.push(h('div', { class: 'stack' }, ...frameList(o).map((fr, i) => h('div', { class: 'splat-frame' },
+    h('span', { title: fr.url }, `${i + 1}. ${frameName(fr, i)}${now && !now[i] ? ' (loading)' : ''}`),
+    iconBtn(`Key: frame ${i + 1} from the playhead on`, '◆', () => { setKey(o, 'sf', R.f, i); framesChanged(o); }, { class: `icon-btn${sheet(i) ? ' on' : ''}` }),
+    iconBtn('Earlier', '▲', () => { TRIM_EDIT.delete(o); if (swapFrames(o, i, i - 1)) framesChanged(o); }, { disabled: i === 0 }),
+    iconBtn('Later', '▼', () => { TRIM_EDIT.delete(o); if (swapFrames(o, i, i + 1)) framesChanged(o); }, { disabled: i === n - 1 }),
+    iconBtn('Take this frame out of the layer', '✕', () => { TRIM_EDIT.delete(o); removeFrame(o, i); framesChanged(o); })))));
+  if (hasFrameKeys(o)) {
+    out.push(hint(`Frame set by ${o.chans.sf.length} key${o.chans.sf.length === 1 ? '' : 's'} on the timeline`),
+      button('Clear the keys: use the frame rate', () => { delete o.chans.sf; framesChanged(o); }, { cls: 'small' }));
+  } else {
+    out.push(
+      field(['Frame rate', info('Frames a second, however fast the scene plays. For a frame on an exact moment, use the ◆ beside it: it keys that frame at the playhead, and keys take over from the rate.')],
+        seg(RATES.map((r) => [r, String(r), `${r} frames a second`]), +o.frameRate || DEFAULT_RATE, (r) => { o.frameRate = r; pose(R.f); draw(); save(); })),
+      field('Then', seg(LOOPS, o.frameLoop || 'loop', (k) => { o.frameLoop = k; pose(R.f); draw(); save(); })));
+  }
+  return out;
 }
 
 // ---- splat preview: which level the view shows (this device's choice, for every splat), and lighter levels on demand ----
@@ -712,6 +849,9 @@ function previewFields(o) {
         const r = await api('/api/scene/splat/levels', { method: 'POST', body: { url: o.url }, busy: 'Making lighter previews…' });
         if (!r.levels.some((v) => v.k !== 'full')) return toast(`It has only ${countLabel(r.n)} Gaussians: already light`);
         o.levels = r.levels; o.box ||= r.box;
+        for (const fr of o.frames || []) {
+          if (/\.ply$/i.test(fileOf(fr.url))) fr.levels = (await api('/api/scene/splat/levels', { method: 'POST', body: { url: fr.url }, busy: 'Making lighter previews…' })).levels;
+        }
         changed(); applySplatLevels();
         toast(`Previews made: ${r.levels.map((v) => `${levelName(v.k)} ${countLabel(v.n)}`).join(', ')}`);
       } catch (e) { toast(e.message, true); }
@@ -724,12 +864,25 @@ function previewFields(o) {
 // also cut the preview levels on the server, so the view really draws fewer ----
 const meshOf = (o) => R.meshes.get(o.id)?.userData.splat?.mesh || null;
 const worldScale = (o) => Math.abs(R.meshes.get(o.id)?.scale.x || 1);
-function reshape(o) { meshOf(o)?.userData.shape?.set(o); draw(); }
+function reshape(o) {
+  const sp = R.meshes.get(o.id)?.userData.splat;
+  if (sp) applyShapes(o, sp);
+  draw();
+}
+// which trim the panel edits: null the whole layer's, a number that frame's own
+const TRIM_EDIT = new WeakMap();
+const trimFrame = (o) => { const i = TRIM_EDIT.get(o) ?? null; return i !== null && i < frameCount(o) ? i : null; };
+const meshAt = (o, i) => (i === null ? meshOf(o) : R.meshes.get(o.id)?.userData.splat?.meshes?.[i] || meshOf(o));
+// show the frame being trimmed: the playhead goes to the nearest moment it shows
+async function goToFrame(o, i) {
+  const f = sceneFrameShowing(o, i, frames(), R.f, (x) => (o.chans?.sf?.length ? sampleChan(o, 'sf', x) : undefined));
+  if (f === null) return toast(`Frame ${i + 1} never shows on the timeline: the view can't show it while you trim it`, true);
+  (await import('./scene-export.js')).seek(f);
+}
 let sphereTimer = 0;
-function showSphere(o) {
+function showSphere(o, t = o.trim) {
   const sp = R.meshes.get(o.id)?.userData.splat, s = sp?.sphere;
   if (!s) return;
-  const t = o.trim;
   s.visible = !!(t?.on && t.c);
   if (s.visible) { s.position.set(...t.c); s.scale.setScalar(t.r); }
   clearTimeout(sphereTimer);
@@ -737,7 +890,7 @@ function showSphere(o) {
   draw();
 }
 // pick the trim's centre: the next tap on the view lands on the nearest splat under it (else on its box)
-function pickCentre(o, done) {
+function pickCentre(o, done, at = null) {
   toast('Tap the splat where the middle of what to keep is');
   const grab = (e) => {
     const cv = renderer.domElement;
@@ -745,7 +898,7 @@ function pickCentre(o, done) {
     e.stopImmediatePropagation(); e.preventDefault();
     removeEventListener('pointerdown', grab, true);
     addEventListener('pointerup', (u) => { u.stopImmediatePropagation(); }, { capture: true, once: true });
-    const mesh = meshOf(o);
+    const mesh = meshAt(o, at);
     if (!mesh) return;
     const r = cv.getBoundingClientRect(), ray = new THREE.Raycaster();
     ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), activeCamera());
@@ -763,10 +916,14 @@ function pickCentre(o, done) {
   addEventListener('pointerdown', grab, true);
 }
 function shapeFields(o) {
-  const n = levelFor(o, 'full')?.n || meshOf(o)?.packedSplats?.numSplats || 0;
+  const at = trimFrame(o), holder = at === null ? o : frameList(o)[at], key = at === null ? 'trim' : 'frameTrim';
+  const own = at !== null && !!holder.frameTrim;   // (a frame with no trim of its own shows the layer's, read-only until changed)
+  const tNow = () => (at === null ? o.trim : holder.frameTrim || o.trim);
+  const mesh0 = () => meshAt(o, at);
+  const n = levelFor(holder, 'full')?.n || mesh0()?.packedSplats?.numSplats || 0;
   const facts = hint('');
   const showFacts = () => {
-    const g = +o.grow || 1, t = o.trim, mesh = meshOf(o);
+    const g = +o.grow || 1, t = tNow(), mesh = mesh0();
     const cut = t?.on && t.c && sameTrim(trimBody(t), t.made) && t.kept;   // (cut: the server counted it; else the shown level's points say)
     const share = cut && n ? t.kept / n : t?.on && t.c && mesh ? keptShare(samplePoints(mesh), t) : 1;
     const parts = [];
@@ -782,44 +939,70 @@ function shapeFields(o) {
       seg(GROWS.map((g) => [g, `×${g}`, g < 1 ? `Erode: fill ≈ ×${fillFactor(g)}` : g > 1 ? `Dilate: fill ≈ ×${fillFactor(g)}` : 'As made']), +o.grow || 1,
         (g) => { o.grow = g === 1 ? undefined : g; after(); })),
     toggle('Size in renders too', !!o.growRenders, (on) => { o.growRenders = on || undefined; save(); }),
-    toggle('Radial trim', !!o.trim?.on, (on) => {
-      const mesh = meshOf(o);
-      if (on && !o.trim?.c && mesh) {
-        const pts = samplePoints(mesh), c = medianOf(pts);
-        o.trim = { on: true, c, r: reachOf(pts, c), near: 0, renders: true };
-      } else o.trim = { ...(o.trim || { near: 0, renders: true }), on };
-      reshape(o); showSphere(o); changed();
-    }, { help: 'Keep only the Gaussians within a distance of a centre (the splat\'s middle, or a point you tap). Shown live; "Cut the previews" makes the preview files hold only what is kept, so the view draws fewer. Renders trim the full set the same way.' }),
   ];
-  const t = o.trim;
+  if (frameCount(o) > 1) {
+    out.push(field(['Trim', info('Whole layer: one trim for every frame. A frame: a trim of its own, in place of the whole layer\'s, and only on that frame. The view goes to where that frame shows.')],
+      h('select', { 'aria-label': 'What the trim applies to', onchange: (e) => {
+        const v = e.target.value === '' ? null : +e.target.value;
+        if (v === null) TRIM_EDIT.delete(o); else { TRIM_EDIT.set(o, v); goToFrame(o, v); }
+        changed();
+      } }, h('option', { value: '', selected: at === null }, 'Whole layer'),
+      ...frameList(o).map((fr, i) => h('option', { value: i, selected: at === i }, `Frame ${i + 1}${fr.frameTrim ? ' (own trim)' : ''}`)))));
+  }
+  // the trim to change: a frame takes a copy of the layer's the first time it is changed
+  const mine = () => {
+    if (at !== null && !holder.frameTrim) { holder.frameTrim = o.trim ? structuredClone(o.trim) : { near: 0, renders: true }; delete holder.frameTrim.made; delete holder.frameTrim.kept; }
+    return holder[key];
+  };
+  out.push(toggle('Radial trim', !!tNow()?.on, (on) => {
+    const mesh = mesh0(), t = at === null ? o.trim : mine();
+    if (on && !t?.c && mesh) {
+      const pts = samplePoints(mesh), c = medianOf(pts);
+      holder[key] = { on: true, c, r: reachOf(pts, c), near: 0, renders: true };
+    } else holder[key] = { ...(t || { near: 0, renders: true }), on };
+    reshape(o); showSphere(o, holder[key]); changed();
+  }, { help: 'Keep only the Gaussians within a distance of a centre (the splat\'s middle, or a point you tap). Shown live; "Cut the previews" makes the preview files hold only what is kept, so the view draws fewer. Renders trim the full set the same way.' }));
+  if (own) out.push(button('Use the whole layer\'s trim', () => { delete holder.frameTrim; reshape(o); changed(); }, { cls: 'small', title: 'This frame gives up its own trim. Its preview files stay as they were until the previews are cut again' }));
+  const t = tNow();
   if (t?.on && t.c) {
     const s = worldScale(o), b = o.box || [0, 0, 0, 1, 1, 1];
     const big = Math.max(0.5, Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) * s);
-    const live = () => { reshape(o); showSphere(o); showFacts(); };
+    const live = () => { reshape(o); showSphere(o, tNow()); showFacts(); };
+    // (a frame's first change gives it a trim of its own: the panel then offers what goes with one)
+    const settled = () => { live(); if (at !== null && !own) changed(); else save(); };
     out.push(
-      rangeField('Keep within (m)', () => t.r * s, (v) => { t.r = Math.max(0.01, v / s); }, { min: 0.05, max: +big.toFixed(2), step: 0.01, fmt: (v) => v.toFixed(2), onInput: live, onChange: () => { save(); live(); } }),
-      o.cam ? rangeField('Drop near the camera (m)', () => (t.near || 0) * s, (v) => { t.near = Math.max(0, v / s); }, { min: 0, max: +Math.min(big, 5).toFixed(2), step: 0.01, fmt: (v) => (v ? v.toFixed(2) : 'off'), onInput: live, onChange: () => { save(); live(); } }) : null,
+      rangeField('Keep within (m)', () => tNow().r * s, (v) => { mine(); tNow().r = Math.max(0.01, v / s); }, { min: 0.05, max: +big.toFixed(2), step: 0.01, fmt: (v) => v.toFixed(2), onInput: live, onChange: settled }),
+      o.cam ? rangeField('Drop near the camera (m)', () => (tNow().near || 0) * s, (v) => { mine(); tNow().near = Math.max(0, v / s); }, { min: 0, max: +Math.min(big, 5).toFixed(2), step: 0.01, fmt: (v) => (v ? v.toFixed(2) : 'off'), onInput: live, onChange: settled }) : null,
       h('div', { class: 'row wrap' },
-        button('Centre: its middle', () => { const m = meshOf(o); if (!m) return; t.c = medianOf(samplePoints(m)); save(); live(); }),
-        button('Pick the centre…', () => pickCentre(o, (c) => { t.c = c; live(); changed(); })),
-        button('Show', () => showSphere(o), { title: 'Show the trim\'s sphere for a moment' })),
-      toggle('Trim renders too', t.renders !== false, (on) => { t.renders = on; save(); }));
-    if (/\.ply$/i.test(fileOf(o.url)) && !sameTrim(trimBody(t), t.made)) {
-      out.push(button('Cut the previews', () => remakeLevels(o, trimBody(t)), { cls: 'small primary', title: 'Make the preview levels hold only what the trim keeps (the full set stays whole for renders)' }));
+        button('Centre: its middle', () => { const m = mesh0(); if (!m) return; mine(); tNow().c = medianOf(samplePoints(m)); settled(); }),
+        button('Pick the centre…', () => pickCentre(o, (c) => { mine(); tNow().c = c; live(); changed(); }, at)),
+        button('Show', () => showSphere(o, tNow()), { title: 'Show the trim\'s sphere for a moment' })),
+      toggle('Trim renders too', t.renders !== false, (on) => { mine(); tNow().renders = on; settled(); }));
+    if (/\.ply$/i.test(fileOf(holder.url)) && !sameTrim(trimBody(t), t.made) && (at === null || own)) {
+      out.push(button('Cut the previews', () => remakeLevels(o, trimBody(t), at), { cls: 'small primary', title: 'Make the preview levels hold only what the trim keeps (the full set stays whole for renders)' }));
     }
-  } else if (o.trim?.made && /\.ply$/i.test(fileOf(o.url))) {
-    out.push(button('Whole previews again', () => remakeLevels(o, null), { title: 'The trim is off: make the preview levels from the whole splat again' }));
+  } else if (t?.made && /\.ply$/i.test(fileOf(holder.url)) && (at === null || own)) {
+    out.push(button('Whole previews again', () => remakeLevels(o, null, at), { title: 'The trim is off: make the preview levels from the whole splat again' }));
   }
   out.push(facts);
   return out;
 }
-async function remakeLevels(o, trim) {
+// at: one frame, with its own trim; null: the whole layer's trim, on the frames that follow it
+async function remakeLevels(o, trim, at = null) {
+  const busy = trim ? 'Cutting the previews…' : 'Making whole previews…', list = frameList(o);
   try {
-    const r = await api('/api/scene/splat/levels', { method: 'POST', body: { url: o.url, trim }, busy: trim ? 'Cutting the previews…' : 'Making whole previews…' });
-    o.levels = r.levels; o.box ||= r.box;
-    if (o.trim) { o.trim.made = r.trim || undefined; o.trim.kept = r.trim ? r.kept : undefined; }
+    let r = null, kept = 0, total = 0;
+    for (const i of at === null ? framesOnWhole(o) : [at]) {
+      if (!/\.ply$/i.test(fileOf(list[i].url))) continue;
+      r = await api('/api/scene/splat/levels', { method: 'POST', body: { url: list[i].url, trim }, busy });
+      list[i].levels = r.levels; kept += r.kept; total += r.n;
+      if (i === 0) o.box ||= r.box;
+    }
+    if (!r) return toast('None of those frames can be cut: only .ply splats have previews', true);
+    const t = at === null ? o.trim : list[at].frameTrim;
+    if (t) { t.made = r.trim || undefined; t.kept = r.trim ? r.kept : undefined; }
     changed(); applySplatLevels();
-    toast(trim ? `Previews cut: ${countLabel(r.kept)} of ${countLabel(r.n)} kept` : 'Previews made from the whole splat');
+    toast(trim ? `Previews cut: ${countLabel(kept)} of ${countLabel(total)} kept` : 'Previews made from the whole splat');
   } catch (e) { toast(e.message, true); }
 }
 

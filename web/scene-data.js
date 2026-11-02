@@ -2,6 +2,7 @@ import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import { toast, uid } from './ui.js';
 import { isPoseCh, putKey, recordInto, sampleKeys } from './keys.js';
+import { shiftByMods } from './curve-mods.js';
 import { moveOrigin, originShift as shiftBy } from './origin-math.js';
 import { applyBake, linear as bakeLinear, point as bakePoint } from './bake-math.js';
 export { isPoseCh };
@@ -44,7 +45,9 @@ export const isPosable = (o) => o?.type === 'figure' || o?.type === 'rigged';
 // a generic skinned model (scene-skin.js) keys its own bones: b.<bone>, the same quaternions j.<joint> are
 export const BONE = [...OBJ, 'b'];
 export const isBoneKeyed = (o) => o?.type === 'skinned';
-export const namesFor = (o) => (isPosable(o) ? FIG : isBoneKeyed(o) ? BONE : OBJ);
+// an animated splat (splat-frames.js) also keys which of its frames shows: sf
+const SPLAT_ANIM = [...OBJ, 'sf'];
+export const namesFor = (o) => (isPosable(o) ? FIG : isBoneKeyed(o) ? BONE : o?.frames?.length ? SPLAT_ANIM : OBJ);
 // a joint's turn (j.) and a bone's (b.) are quaternions: both slerp and both live in a bag by name
 export const isQuatCh = (ch) => ch.startsWith('j.') || ch.startsWith('b.');
 // the gizmo's modes: [mode, icon, shortcut, name]
@@ -315,14 +318,17 @@ export function keyChans(item, names, vals, from = null) {
 // one channel at frame f
 // (keys.js sampleKeys: a joint's turn slerps, the pose's name steps half way, the rest blend as numbers)
 const stepAt = (a, b, e) => (e < 0.5 ? a : b);
+const holdAt = (a) => a;   // (a splat's frame stays until the next key)
 export function sampleChan(item, ch, f) {
   const list = item.chans?.[ch];
   if (!list || !list.length) return baseOf(item, ch);
-  return sampleKeys(list, f, { ease: item.ease, lerp: isQuatCh(ch) ? FIGURE.slerpQ : ch === 'pn' ? stepAt : undefined });
+  return sampleKeys(list, f, { ease: item.ease, lerp: isQuatCh(ch) ? FIGURE.slerpQ : ch === 'pn' ? stepAt : ch === 'sf' ? holdAt : undefined });
 }
 
-// an item's values at frame f: each channel eased between its own keys
-export function sample(item, names, f) {
+// an item's values at frame f, its modifiers on top (curve-mods.js): what shows. Edits work in what the keys hold, sampleK.
+export const sample = (item, names, f) => shiftByMods(item, sampleK(item, names, f), f / FPS);
+// the same as the keys and base hold it: each channel eased between its own keys
+export function sampleK(item, names, f) {
   const out = {};
   for (const n of names) {
     if (n === 'j' || n === 'b') {
@@ -419,9 +425,9 @@ export function rawCurrent(item, names, f = R.f) {
   if (item.mute && !R.real) return pick(heldOf(item), names);
   const t = hasKeys(item) ? TEMP.get(item) : null;
   // (a change held while it plays keeps only its own channels on top: the rest plays on)
-  const out = t?.play ? overlay(sample(item, names, f), t.hv, names) : t && t.f === f ? pick(t.v, names) : sample(item, names, f);
+  const out = t?.play ? overlay(sampleK(item, names, f), t.hv, names) : t && t.f === f ? pick(t.v, names) : sampleK(item, names, f);
   const hd = !R.real && HOLD.items.get(item);
-  return hd ? overlay(out, hd.ch, names) : out;
+  return shiftByMods(item, hd ? overlay(out, hd.ch, names) : out, f / FPS);
 }
 
 // ---- edits while it plays ----------------------------------------------------------------------------
@@ -449,7 +455,7 @@ const holding = (item) => R.playing && HOLD.src.size > 0 && (hasKeys(item) || R.
 function holdWrite(item, names, vals) {
   let hd = HOLD.items.get(item);
   if (!hd) HOLD.items.set(item, hd = { ch: new Map(), rec: [] });
-  const from = sample(item, names, R.f);
+  const from = sampleK(item, names, R.f);
   for (const [ch, v] of changedChans(item, names, { ...from, ...vals }, from)) hd.ch.set(ch, cloneV(v));
 }
 // a gesture that edits begins (gizmo, orbit, hand, panel); while it plays, its writes are held
@@ -495,10 +501,10 @@ export function commitHolds() {
 function holdTemp(item, f, hv) {
   const t = TEMP.get(item);
   if (t?.play) for (const [c, v] of t.hv) if (!hv.has(c)) hv.set(c, v);
-  TEMP.set(item, { f, play: R.playing, hv, ch: new Set(hv.keys()), v: overlay(sample(item, allNames(item), f), hv, allNames(item)) });
+  TEMP.set(item, { f, play: R.playing, hv, ch: new Set(hv.keys()), v: overlay(sampleK(item, allNames(item), f), hv, allNames(item)) });
 }
 export function settleTemp() {
-  for (const [item, t] of TEMP) if (t.play) { t.play = false; t.f = R.f; t.v = overlay(sample(item, allNames(item), R.f), t.hv, allNames(item)); }
+  for (const [item, t] of TEMP) if (t.play) { t.play = false; t.f = R.f; t.v = overlay(sampleK(item, allNames(item), R.f), t.hv, allNames(item)); }
 }
 // a new scene (undo, a tab): nothing held carries over
 export function dropHolds() { HOLD.items.clear(); HOLD.src.clear(); HOLD.f0 = null; }
@@ -516,11 +522,12 @@ export function write(item, names, vals) {
     if (R.offEdit === item.id) { writeOffset(item, names, vals); return; }
     vals = removeOffset(item, vals);
   }
+  vals = shiftByMods(item, vals, R.f / FPS, -1);   // (what was written is what shows: the keys hold it without the modifiers)
   if (holding(item)) { holdWrite(item, names, vals); return; }
   if (!hasKeys(item)) { Object.assign(item.base, vals); return; }
-  const from = sample(item, names, R.f);
+  const from = sampleK(item, names, R.f);
   if (!R.autoKey) {
-    const v = { ...rawCurrent(item, names), ...vals };
+    const v = { ...shiftByMods(item, rawCurrent(item, names), R.f / FPS, -1), ...vals };
     if (R.playing) return holdTemp(item, R.f, new Map(changedChans(item, names, v, from).map(([ch, x]) => [ch, cloneV(x)])));
     TEMP.set(item, { f: R.f, v, ch: new Set(changedChans(item, names, v, from).map(([ch]) => ch)) });
     return;
@@ -533,6 +540,7 @@ export function write(item, names, vals) {
 export function addKey(item, names, vals = null, only = null) {
   const held = TEMP.get(item);
   if (!vals) { vals = rawCurrent(item, names); if (!only && held && (held.f === R.f || held.play) && held.ch.size) only = held.ch; }
+  vals = shiftByMods(item, vals, R.f / FPS, -1);   // (what shows, less the modifiers)
   TEMP.delete(item);
   if (!hasKeys(item)) Object.assign(item.base, vals);
   for (const ch of keyChans(item, names, vals)) if ((!only || only.has(ch)) && valOf(vals, ch) !== undefined) setKey(item, ch, R.f, valOf(vals, ch));
@@ -547,7 +555,7 @@ export function setOrigin(o, at) {
     const s = shiftBy(v, d, even);
     v.x += s[0]; v.y += s[1]; v.z += s[2];
   }
-  moveOrigin(o, at, { even, setKey, map, sample: (f) => sample(o, OBJ, f) });
+  moveOrigin(o, at, { even, setKey, map, sample: (f) => sampleK(o, OBJ, f) });
 }
 
 export const selItem = () => SC.objects.find((o) => o.id === R.sel) || null;

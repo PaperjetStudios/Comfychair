@@ -1,7 +1,8 @@
 import * as FIGURE from './figure.js';
 import { fullScreen } from './layout.js';
-import { $, button, h, iconBtn, info as infoBtn, numSlider, seg, sheetOpen, store, toast, toggle, canvasFont, iconize } from './ui.js';
+import { $, button, h, iconBtn, info as infoBtn, numSlider, rangeField, seg, sheetOpen, store, toast, toggle, canvasFont, iconize } from './ui.js';
 import { icon } from './icons.js';
+import { MOD_TYPES, canModify, isRandom, modsAt, newMod } from './curve-mods.js';
 import {
   CAM, FPS, HOLD, OBJ, OFF, R, ROOM, SC, TEMP, TYPES, WP, addKey, bakeBase, camById, camsOf, cutTo, cutTrack, dropCuts, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setActiveCam, setKey, setMute
 } from './scene-data.js';
@@ -103,9 +104,10 @@ function gLayer() {
 // the numbers the graph can plot: a figure's parameters once keyed (a joint's turn is not one number)
 const channels = (L) => chanIds(L).filter((ch) => isScalar(ch) && !(ch.startsWith('m.') && !L.item.chans?.[ch]));
 const LABELS = { x: 'X', y: 'Up', z: 'Z', rx: 'Rot X', ry: 'Rot Y', rz: 'Rot Z', sx: 'Width', sy: 'Height', sz: 'Depth',
-  px: 'Cam X', py: 'Cam height', pz: 'Cam Z', tx: 'Aim X', ty: 'Aim Y', tz: 'Aim Z', fov: 'Lens', roll: 'Roll', pn: 'Pose name', s: 'Scale' };
+  px: 'Cam X', py: 'Cam height', pz: 'Cam Z', tx: 'Aim X', ty: 'Aim Y', tz: 'Aim Z', fov: 'Lens', roll: 'Roll', pn: 'Pose name', s: 'Scale', sf: 'Splat frame' };
 const chLabel = (ch) => (ch.startsWith('m.') ? (FIGURE.PARAMS[ch.slice(2)]?.label || ch.slice(2)) : ch.startsWith('j.') ? (FIGURE.RIG_JOINTS[ch.slice(2)]?.[2] || ch.slice(2)) : LABELS[ch] || ch);
-const sampleCh = (L, ch, f) => sampleChan(L.item, ch, f);
+// what the channel shows, its modifiers on (the keys sit on what they alone hold: sampleChan)
+const sampleCh = (L, ch, f) => { const v = sampleChan(L.item, ch, f), m = L.item.mods?.[ch]; return m?.length && typeof v === 'number' ? v + modsAt(m, f / FPS) : v; };
 function graphRange(L, ch) {
   let lo = Infinity, hi = -Infinity;
   for (let f = 0; f <= span(); f++) { const v = sampleCh(L, ch, f); lo = Math.min(lo, v); hi = Math.max(hi, v); }
@@ -215,10 +217,12 @@ export function renderKeys() {
     body = [plot];
     $('#sceneNames').replaceChildren(
       h('div', { class: 'sheet-head' }, layerSel(sh, L), muteBtn(L)),
-      ...chs.map((ch) => h('button', { type: 'button', class: 'sheet-name' + (ch === G.ch ? ' sel' : ''), onclick: () => { G.ch = ch; gRange = null; renderKeys(); } }, chLabel(ch))));
+      ...chs.map((ch) => h('button', { type: 'button', class: 'sheet-name' + (ch === G.ch ? ' sel' : ''), onclick: () => { G.ch = ch; gRange = null; renderKeys(); } }, `${chLabel(ch)}${L.item.mods?.[ch]?.length ? ' ƒ' : ''}`)));
     lanes.replaceChildren(ruler(), ...body, h('div', { id: 'scenePlayhead', class: 'playhead', style: `left:${lanePos(R.f)}` }));
+    renderMods(L, sheet);   // (first: the strip's height comes out of the graph's)
     drawGraph(plot, L, rg, n);
   } else {
+    renderMods(null, sheet);
     ROWS = rowsNow();
     const nameRow = (r) => {
       const L = r.L, pad = `padding-left:${r.depth * 12}px`, off = L.item.hidden || L.item.mute ? ' off' : '', mine = L.id === R.sel;
@@ -282,6 +286,46 @@ const keyEl = (d, ri, j, style) => h('span', { class: `key e-${easeOf(d) || 'def
   'data-key': j, 'data-l': ri, style: `left:${lanePos(d.f)};${style}`,
   title: `Key at ${(d.f / FPS).toFixed(2)} s · frame ${d.f + 1}${d.keys.length > 1 ? ` · ${d.keys.length} channels` : easeOf(d) ? ` · ${easeOf(d)}` : ''}` });
 
+// ---- the graph channel's modifiers (curve-mods.js): a strip above the graph; its sliders redraw the graph as they move ----
+const ampMax = (ch) => (ch === 'fov' ? 20 : ANG.has(ch) ? 45 : 2);
+function renderMods(L, sheet) {
+  let el = $('#sceneMods');
+  if (!L || !canModify(G.ch)) { el?.remove(); return; }
+  if (!el) { el = h('div', { id: 'sceneMods', class: 'curve-mods' }); sheet.parentElement.insertBefore(el, sheet); }
+  const list = L.item.mods?.[G.ch] || [], sig = `${L.id}|${G.ch}|${list.map((m) => `${m.type}${m.on !== false}`).join()}`;
+  if (el.dataset.sig === sig) return;   // (not rebuilt while a slider is held)
+  el.dataset.sig = sig;
+  const live = () => { pose(R.f); draw(); gRange = null; renderKeys(); };
+  const done = () => { changed(); };
+  const edit = () => { el.dataset.sig = ''; done(); };
+  const drop = (m) => {
+    const left = list.filter((x) => x !== m);
+    if (left.length) L.item.mods[G.ch] = left; else { delete L.item.mods[G.ch]; if (!Object.keys(L.item.mods).length) delete L.item.mods; }
+    edit();
+  };
+  const add = h('select', { 'aria-label': `Add a modifier to ${chLabel(G.ch)}`, onchange: (e) => {
+    const type = e.target.value; e.target.value = '';
+    if (!type) return;
+    const seed = 1 + Math.floor(Math.random() * 99999);
+    ((L.item.mods ||= {})[G.ch] ||= []).push(newMod(type, +(ampMax(G.ch) / 20).toFixed(3), seed));
+    gRange = null; edit();
+  } }, h('option', { value: '' }, `+ Modifier on ${chLabel(G.ch)}…`), ...MOD_TYPES.map(([v, label]) => h('option', { value: v }, label)));
+  const slider = (m, key, label, opts) => rangeField(label, () => +m[key] || 0, (v) => { m[key] = v; }, { ...opts, onInput: live, onChange: done });
+  el.replaceChildren(h('div', { class: 'curve-mods-head' }, add,
+    infoBtn('Adds a wave or noise on top of this value, whatever its keys do, and in renders too. The thin line is what the keys alone hold. Moving the object or camera still works: the keys take what you did, less the modifier. Amount is in the value\'s own unit; Speed is in cycles a second.', 'Modifiers')),
+  ...list.map((m) => h('div', { class: 'curve-mod' + (m.on === false ? ' off' : '') },
+    h('select', { 'aria-label': 'Kind of modifier', onchange: (e) => {
+      const n = newMod(e.target.value, m.amp, m.seed || 1 + Math.floor(Math.random() * 99999));
+      Object.assign(m, n, { freq: m.freq, phase: m.phase, on: m.on }); edit();
+    } }, ...MOD_TYPES.map(([v, label]) => h('option', { value: v, selected: v === m.type }, label))),
+    slider(m, 'amp', 'Amount', { min: 0, max: ampMax(G.ch), step: ampMax(G.ch) / 400, fmt: (v) => v.toFixed(3) }),
+    slider(m, 'freq', 'Speed', { min: 0.05, max: 8, step: 0.05, fmt: (v) => `${v.toFixed(2)}/s` }),
+    isRandom(m.type) ? null : slider(m, 'phase', 'Phase', { min: 0, max: 360, step: 5, fmt: (v) => `${Math.round(v)}°` }),
+    m.type === 'noise' ? slider(m, 'detail', 'Detail', { min: 1, max: 4, step: 1, fmt: (v) => String(Math.round(v)) }) : null,
+    isRandom(m.type) ? button('New shape', () => { m.seed = 1 + Math.floor(Math.random() * 99999); gRange = null; edit(); }, { cls: 'small', title: 'Another random shape: the same one comes back in every render until then' }) : null,
+    toggle('On', m.on !== false, (on) => { m.on = on; gRange = null; edit(); }),
+    iconBtn('Remove this modifier', '✕', () => { gRange = null; drop(m); }))));
+}
 function drawGraph(plot, L, rg, n) {
   const cv = plot.firstChild, dpr = Math.min(window.devicePixelRatio || 1, 2), w = plot.clientWidth, hh = plot.clientHeight;
   if (!w || !hh) return;
@@ -297,8 +341,13 @@ function drawGraph(plot, L, rg, n) {
     c.strokeStyle = col('--line', '#333'); c.lineWidth = 1; c.beginPath(); c.moveTo(0, Y(v)); c.lineTo(w, Y(v)); c.stroke();
     c.fillStyle = col('--muted', '#888'); c.fillText(+v.toFixed(3), 3, Y(v) - 1);
   }
-  c.strokeStyle = col('--accent', '#e9b44c'); c.lineWidth = 2; c.beginPath();
   const f0 = Math.max(0, Math.floor(V.a)), f1 = Math.min(n, Math.ceil(V.b));
+  if (L.item.mods?.[G.ch]?.length) {   // what the keys alone hold, thin under the result: the keys sit on it
+    c.strokeStyle = col('--muted', '#888'); c.lineWidth = 1; c.beginPath();
+    for (let f = f0; f <= f1; f++) { const v = sampleChan(L.item, G.ch, f); if (f === f0) c.moveTo(X(f), Y(v)); else c.lineTo(X(f), Y(v)); }
+    c.stroke();
+  }
+  c.strokeStyle = col('--accent', '#e9b44c'); c.lineWidth = 2; c.beginPath();
   // a few px a step, so a bezier between keys a frame or two apart still shows its shape
   const step = Math.min(1, Math.max(1 / 16, 3 / pxf()));
   for (let f = f0; f <= f1 + 1e-9; f += step) { const v = sampleCh(L, G.ch, f); if (f === f0) c.moveTo(X(f), Y(v)); else c.lineTo(X(f), Y(v)); }
@@ -718,6 +767,7 @@ function reduceOpts(T, o) {
   const ease = T.item.ease || 'smooth', as = o.as === 'keep' ? '' : o.as;
   if (T.ch.startsWith('j.')) return { tol: o.deg, ease, lerp: FIGURE.slerpQ, dist: quatDeg, as: as && 'linear' };
   if (T.ch === 'pn') return { tol: 0, ease, lerp: stepAt, dist: (a, b) => (a === b ? 0 : 1), as: '' };
+  if (T.ch === 'sf') return { tol: 0, ease, lerp: (a) => a, dist: (a, b) => (a === b ? 0 : 1), as: '' };
   if (ANG.has(T.ch)) return { tol: o.deg, ease, as };
   if (T.ch.startsWith('m.')) { const vs = T.keys.map((k) => k.v); return { tol: (o.cm / 100) * Math.max(1e-6, Math.max(...vs) - Math.min(...vs)), ease, as }; }
   return { tol: o.cm / 100, ease, as };
