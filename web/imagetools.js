@@ -96,7 +96,6 @@ const tplId = (o) => (o.kind === 'swap' ? (SWAP_MODELS[swapModels()[0]] || SWAP_
 
 // (a run's file is asked for afresh: runs deleted along the way free their ids, so the next run's file can have the same name, and the browser would show the old one)
 const loadImg = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Could not load a picture')); i.src = src.startsWith('/files/') ? `${src}${src.includes('?') ? '&' : '?'}at=${Date.now()}${Math.random()}` : src; });
-const plainCrop = (c) => !c || (c.x < 0.001 && c.y < 0.001 && c.w > 0.999 && c.h > 0.999);
 
 // the selected layers an Image tool can run on, one run each: picture layers, not an inpaint mask or draft
 const usable = (l) => l && !l.mask && !l.draft && !l.maskOf && !l.broken && l.name;
@@ -105,7 +104,7 @@ const targets = (eng) => (eng.picked?.() || []).filter(usable);
 // a cropped layer's kept part, at the file's own pixels, as a new input
 async function keptPart(l) {
   const W = l.img.naturalWidth, H = l.img.naturalHeight, c = l.crop, cv = document.createElement('canvas');
-  cv.width = Math.max(1, Math.round(c.w * W)); cv.height = Math.max(1, Math.round(c.h * H));
+  [cv.width, cv.height] = G.sentPixels(l);
   cv.getContext('2d').drawImage(l.img, c.x * W, c.y * H, c.w * W, c.h * H, 0, 0, cv.width, cv.height);
   const up = await uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: 'layer.png', multiple: 1 });
   return { name: up.name, px: [cv.width, cv.height] };
@@ -138,7 +137,7 @@ async function maskForResult(src, r) {
 // any turn), layer (or null), was (the layer's place when sent: its turn goes on the result), mask (its mask when sent, for a tool in KEEPS_FRAMING), px }. A model sees a layer unturned.
 async function sourceOf(eng, l, o) {
   if (l) {
-    const part = plainCrop(l.crop) ? { name: l.name, px: [l.img.naturalWidth, l.img.naturalHeight] } : await keptPart(l);
+    const part = G.plainCrop(l.crop) ? { name: l.name, px: G.sentPixels(l) } : await keptPart(l);
     return { ...part, rect: eng.layerRect(l), layer: l, was: { ...l }, mask: KEEPS_FRAMING.has(o.kind) ? maskAsSent(eng, l) : null };
   }
   const f = eng.frame(), pic = document.createElement('canvas');
@@ -763,10 +762,11 @@ export function imageToolsSection(eng) {
   if (!E.layers.some((l) => !l.mask && !l.draft)) return null;
   const o = op(), t = template(tplId(o)), picked = ST.scope === 'selected' ? targets(eng) : [], many = picked.length;
   const onLayers = ST.scope === 'selected' && many > 0;
-  const size = many === 1 ? eng.layerRect(picked[0]) : ST.scope === 'whole' ? eng.frame() : null;
+  const frame = ST.scope === 'whole' ? eng.frame() : null;
+  const size = many === 1 ? (eng.ready(picked[0]) ? G.sentPixels(picked[0]) : null) : frame ? [frame.w, frame.h] : null;   // (what's sent: a layer's own pixels, whatever its scale; the whole picture's canvas size)
   const select = h('select', { 'aria-label': 'Image tool', onchange: (ev) => { ST.op = ev.target.value; save(); eng.render(); } },
     ...GROUPS.map((g) => h('optgroup', { label: g }, ...OPS.filter((x) => x.group === g).map((x) => h('option', { value: x.id, selected: x.id === o.id }, x.label)))));
-  const out = size && o.kind === 'up' ? `${Math.round(size.w * ST.scale)}×${Math.round(size.h * ST.scale)}` : null;
+  const out = size && o.kind === 'up' ? `${Math.round(size[0] * ST.scale)}×${Math.round(size[1] * ST.scale)}` : null;
   const on = many > 1 ? `Runs on each of the ${many} selected layers, one after the other.`
     : many ? `Runs on the layer ${picked[0].label || picked[0].name.split('/').pop()}.` : ST.scope === 'whole' ? 'Runs on the whole picture.' : '';
   return section('Image tools', null,

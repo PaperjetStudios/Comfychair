@@ -6,6 +6,11 @@ const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-6, `${msg}: ${a} != $
 const nearP = (p, q, msg) => { near(p.x, q.x, `${msg} x`); near(p.y, q.y, `${msg} y`); };
 const layer = (o = {}) => ({ img: { naturalWidth: 200, naturalHeight: 100 }, crop: { x: 0, y: 0, w: 1, h: 1 }, x: 10, y: 20, scale: 2, ...o });
 
+// what an Image tool is sent: the file's pixels, whatever the layer's scale; a crop keeps its part of them
+assert.deepEqual(G.sentPixels(layer({ scale: 0.5 })), [200, 100]);
+assert.deepEqual(G.sentPixels(layer({ scale: 0.5, crop: { x: 0.25, y: 0, w: 0.5, h: 0.5 } })), [100, 50]);
+assert.deepEqual(G.sentPixels(layer({ crop: { x: 0, y: 0, w: 0.9995, h: 1 } })), [200, 100]);
+
 // no turn: exactly as before
 const l0 = layer();
 assert.deepEqual(G.layerRect(l0), { x: 10, y: 20, w: 400, h: 200 });

@@ -23,6 +23,13 @@ export function layerRect(l) {
   const [W, H] = size(l), c = l.crop;
   return { x: l.x, y: l.y, w: c.w * W * l.scale, h: c.h * H * l.scale };
 }
+// whether a crop keeps the whole image
+export const plainCrop = (c) => !c || (c.x < 0.001 && c.y < 0.001 && c.w > 0.999 && c.h > 0.999);
+// the pixels an Image tool is sent for this layer: its kept part at the file's own size, whatever its scale on the canvas
+export function sentPixels(l) {
+  const [W, H] = size(l), c = l.crop;
+  return plainCrop(c) ? [W, H] : [Math.max(1, Math.round(c.w * W)), Math.max(1, Math.round(c.h * H))];
+}
 export const centre = (l) => { const r = layerRect(l); return { x: r.x + r.w / 2, y: r.y + r.h / 2 }; };
 // the turn and mirror alone (a 2x2 as a matrix without moving)
 export function linear(l) {
