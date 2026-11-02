@@ -14,7 +14,7 @@ import { rigProps } from './scene-rig.js';
 import { boneProps } from './scene-skin.js';
 import {
   HAND, addObject, aimCameraAt, axesToView, camGizmo, cameraFromView, canPivot, canTurnAxes, faceCamera, lookAtLayer, originMode, turnAxesBy, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, makeSplatHere, newCameraPose, orientLabel,
-  originEditing, originTo, pivotMoved, pivotToView, pose, putOrigin, rebuildRoom, recentre, refresh, removeLayer, removeSelected, resetPivot, select, selectJoint, setFree, setMode, setOrient, setOriginEdit, syncMeshes, viewer
+  originEditing, originTo, boxHost, setBoxEdit, pivotMoved, pivotToView, pose, putOrigin, rebuildRoom, recentre, refresh, removeLayer, removeSelected, resetPivot, select, selectJoint, setFree, setMode, setOrient, setOriginEdit, syncMeshes, viewer
 } from './scene-view.js';
 import { ORIENTS, nextOrient } from './gizmo-orient.js';
 import { drawnScale } from './origin-math.js';
@@ -542,6 +542,7 @@ function undo(back = true) {
   setSC(JSON.parse(HIST.cur)); SC.mode = mode; TEMP.clear(); R.joint = null;
   if (R.sel === ROOM ? !SC.room : R.sel && !selItem()) R.sel = null;
   R.f = Math.min(R.f, frames() - 1);
+  for (const o of SC.objects) if (o.type === 'splat') boxHost.changed(o);   // (its trim as it was: the mesh keeps what it was last told)
   save(); rebuildRoom(); refresh(); renderToolbar(); renderTransport(); renderPanel(); fit();
 }
 
@@ -724,7 +725,7 @@ export function wireKeys() {
     else if (e.key.toLowerCase() === 'h') { e.preventDefault(); setHud(!hudOff()); }
     else if (e.key.toLowerCase() === 'n') { const p = $('#tab-scene .stage.maxed .pull-tab'); if (p) { e.preventDefault(); p.dispatchEvent(new MouseEvent('click', { bubbles: true })); } }
     else if (e.key.toLowerCase() === 'q') { e.preventDefault(); setOrient(nextOrient(R.orient)); toast(`Gizmo axes: ${orientLabel()}`); }
-    else if (e.key === 'Escape') { if (HAND.on) handMode(null); else if (originEditing()) setOriginEdit(false); else if (R.joint) selectJoint(null); else select(null); }
+    else if (e.key === 'Escape') { if (HAND.on) handMode(null); else if (R.boxEdit && R.boxEdit === R.sel) setBoxEdit(false); else if (originEditing()) setOriginEdit(false); else if (R.joint) selectJoint(null); else select(null); }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && R.sel) { e.preventDefault(); removeSelected(); }
     else if (e.key === ' ') { e.preventDefault(); play(); }
     else if (e.key.toLowerCase() === 'p') { e.preventDefault(); stopPlay(); seek(AREA.stored()?.a ?? 0); play(); }   // from the start of the range

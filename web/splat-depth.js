@@ -38,14 +38,15 @@ export function cloudArrays(splats) {
   return { pos: pos.subarray(0, k * 3), size: size.subarray(0, k) };
 }
 
-const DOT_VERT = `attribute float aSize; uniform float h, grow, r, cut; uniform vec3 c; varying float vz;
+const DOT_VERT = `attribute float aSize; uniform float h, grow, r, cut; uniform vec3 c, bc, bx, by, bz, bh; varying float vz;
 void main() {
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   vz = -mv.z;
   gl_Position = projectionMatrix * mv;
   float across = 2.0 * ${REACH.toFixed(1)} * aSize * grow * length(modelViewMatrix[0].xyz);
   gl_PointSize = clamp(across * projectionMatrix[1][1] * h * 0.5 / max(vz, 1e-3), h / 180.0, h / 8.0);
-  if (distance(position, c) > r || length(position) < cut) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);   // (trimmed: splat-shape.js)
+  vec3 bd = position - bc;
+  if (distance(position, c) > r || length(position) < cut || abs(dot(bd, bx)) > bh.x || abs(dot(bd, by)) > bh.y || abs(dot(bd, bz)) > bh.z) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);   // (trimmed: splat-shape.js)
 }`;
 const DOT_FRAG = `uniform float near; uniform float far; varying float vz;
 void main() {
@@ -61,7 +62,8 @@ function cloudOf(mesh) {
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
   const m = new THREE.ShaderMaterial({ vertexShader: DOT_VERT, fragmentShader: DOT_FRAG, blending: THREE.NoBlending,
-    uniforms: { ...U, grow: { value: 1 }, c: { value: new THREE.Vector3() }, r: { value: 1e9 }, cut: { value: 0 } } });
+    uniforms: { ...U, grow: { value: 1 }, c: { value: new THREE.Vector3() }, r: { value: 1e9 }, cut: { value: 0 },
+      bc: { value: new THREE.Vector3() }, bx: { value: new THREE.Vector3(1, 0, 0) }, by: { value: new THREE.Vector3(0, 1, 0) }, bz: { value: new THREE.Vector3(0, 0, 1) }, bh: { value: new THREE.Vector3(1e9, 1e9, 1e9) } } });
   const cloud = new THREE.Points(g, m);
   cloud.frustumCulled = false; cloud.raycast = () => {}; cloud.layers.set(SPLAT_LAYER);
   mesh.add(cloud);
@@ -73,7 +75,12 @@ function readyClouds(scene) {
   scene.traverseVisible((o) => {
     if (!o.packedSplats?.numSplats) return;
     const u = cloudOf(o).material.uniforms, s = o.userData.shape?.now?.();
-    if (s) { u.grow.value = s.grow; u.c.value.set(...s.c); u.r.value = s.r; u.cut.value = s.near; }
+    if (s) {
+      u.grow.value = s.grow; u.c.value.set(...s.c); u.r.value = s.r; u.cut.value = s.near;
+      u.bc.value.set(...(s.box?.c || [0, 0, 0]));
+      if (s.box) { u.bx.value.set(...s.box.a[0]); u.by.value.set(...s.box.a[1]); u.bz.value.set(...s.box.a[2]); }
+      u.bh.value.set(...(s.box?.h || [1e9, 1e9, 1e9]));
+    }
   });
 }
 

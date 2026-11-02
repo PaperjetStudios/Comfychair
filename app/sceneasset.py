@@ -188,32 +188,57 @@ def splat_box(props, data) -> list:
 
 
 def clean_trim(trim) -> dict | None:
-    """A radial trim as the layer keeps it: {c: [x, y, z] (the centre, in the file's units), r (keep within this
-    of c), near (drop within this of the photo's camera, the file's origin; 0 = off)} -> rounded, or None (no trim)."""
+    """A trim as the layer keeps it, either part or both. Radial: {c: [x, y, z] (the centre, in the file's units), r (keep
+    within this of c), near (drop within this of the photo's camera, the file's origin; 0 = off)}. Box: {box: {c, h: [half
+    sizes], q: [x, y, z, w] (its turn)}}: keep what is inside it. -> rounded, or None (no trim)."""
     if not trim:
         return None
-    try:
-        c = [round(float(v), 4) for v in trim["c"]]
-        r, near = round(float(trim["r"]), 4), round(float(trim.get("near") or 0), 4)
-    except (KeyError, TypeError, ValueError):
-        raise ValueError("A trim is {c: [x, y, z], r, near}")
-    if len(c) != 3 or not all(map(math.isfinite, [*c, r, near])) or r <= 0 or near < 0:
-        raise ValueError("A trim needs a centre and a radius above 0")
-    return {"c": c, "r": r, "near": near}
+    out = {}
+    if "c" in trim or "r" in trim:
+        try:
+            c = [round(float(v), 4) for v in trim["c"]]
+            r, near = round(float(trim["r"]), 4), round(float(trim.get("near") or 0), 4)
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("A trim is {c: [x, y, z], r, near}")
+        if len(c) != 3 or not all(map(math.isfinite, [*c, r, near])) or r <= 0 or near < 0:
+            raise ValueError("A trim needs a centre and a radius above 0")
+        out.update(c=c, r=r, near=near)
+    if trim.get("box"):
+        try:
+            b = {k: [round(float(v), 4) for v in trim["box"][k]] for k in ("c", "h", "q")}
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("A box trim is {c: [x, y, z], h: [x, y, z], q: [x, y, z, w]}")
+        if len(b["c"]) != 3 or len(b["h"]) != 3 or len(b["q"]) != 4 or not all(map(math.isfinite, [*b["c"], *b["h"], *b["q"]])) \
+                or min(b["h"]) <= 0 or not any(b["q"]):
+            raise ValueError("A box trim needs a size above 0 and a turn")
+        out["box"] = b
+    if not out:
+        raise ValueError("A trim is {c: [x, y, z], r, near} or {box}")
+    return out
 
 
 def trim_tag(trim: dict) -> str:
     import hashlib
-    return hashlib.sha1(repr((trim["c"], trim["r"], trim["near"])).encode()).hexdigest()[:8]
+    radial = (trim.get("c"), trim.get("r"), trim.get("near"))
+    return hashlib.sha1(repr((*radial, trim["box"]) if trim.get("box") else radial).encode()).hexdigest()[:8]
 
 
 def trim_mask(props, data, trim: dict):
-    """Which Gaussians a trim keeps: centre within r of c, and farther than `near` from the origin."""
+    """Which Gaussians a trim keeps: centre within r of c, farther than `near` from the origin, and inside its box."""
     import numpy as np
     xyz = data[:, [props.index("x"), props.index("y"), props.index("z")]].astype("f8")
-    keep = ((xyz - np.array(trim["c"])) ** 2).sum(1) <= trim["r"] ** 2
-    if trim["near"] > 0:
-        keep &= (xyz ** 2).sum(1) > trim["near"] ** 2
+    keep = np.ones(len(xyz), dtype=bool)
+    if "c" in trim:
+        keep &= ((xyz - np.array(trim["c"])) ** 2).sum(1) <= trim["r"] ** 2
+        if trim["near"] > 0:
+            keep &= (xyz ** 2).sum(1) > trim["near"] ** 2
+    if trim.get("box"):
+        b = trim["box"]
+        x, y, z, w = np.array(b["q"], dtype="f8") / np.linalg.norm(b["q"])
+        axes = np.array([[1 - 2 * (y * y + z * z), 2 * (x * y + z * w), 2 * (x * z - y * w)],   # (the box's own X, Y, Z in the file)
+                         [2 * (x * y - z * w), 1 - 2 * (x * x + z * z), 2 * (y * z + x * w)],
+                         [2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y)]])
+        keep &= (np.abs((xyz - np.array(b["c"])) @ axes.T) <= np.array(b["h"])).all(1)
     return keep
 
 
@@ -228,7 +253,7 @@ def make_levels(full: Path, base: str, grow: bool = True, trim: dict | None = No
     if trim:
         data = data[trim_mask(props, data, trim)]
         if not len(data):
-            raise ValueError("That trim leaves nothing: make the radius bigger")
+            raise ValueError("That trim leaves nothing: make it bigger")
     kept = len(data)
     order = _visible_order(props, data, _is_photo(full)) if kept > LEVELS[0][1] else None
     prefix = f"{base}_t{trim_tag(trim)}" if trim else base

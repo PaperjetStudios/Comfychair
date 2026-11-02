@@ -1,5 +1,6 @@
 """Splat preview levels (app/sceneasset.py): lighter copies of a splat beside its full set, made after SHARP and
 on demand for older splats and imported .ply files. Uses small synthetic .ply files; SHARP never runs."""
+import math
 import os
 import shutil
 import stat
@@ -110,6 +111,32 @@ class Levels(unittest.TestCase):
         p.write_bytes(b"not a ply")
         with self.assertRaises(ValueError):
             sa._read_ply(p)
+
+    def test_box_trim(self):
+        import numpy as np
+        d = Path(tempfile.mkdtemp(prefix="box-trim-"))
+        self.addCleanup(shutil.rmtree, d, True)
+        src = d / "b.ply"
+        write_ply(src, 400)
+        turn = [0, 0, round(math.sin(math.pi / 8), 4), round(math.cos(math.pi / 8), 4)]   # 45 degrees about Z
+        trim = sa.clean_trim({"box": {"c": [1, 0.5, 1.5], "h": [0.5, 0.5, 5], "q": turn}})
+        self.assertEqual(set(trim), {"box"})
+        props, data = sa._read_ply(src)
+        keep = sa.trim_mask(props, data, trim)
+        xyz = data[:, [props.index("x"), props.index("y"), props.index("z")]].astype("f8") - [1, 0.5, 1.5]
+        k = math.sqrt(0.5)
+        want = (np.abs(xyz[:, 0] * k + xyz[:, 1] * k) <= 0.5) & (np.abs(-xyz[:, 0] * k + xyz[:, 1] * k) <= 0.5) & (np.abs(xyz[:, 2]) <= 5)
+        self.assertTrue(0 < want.sum() < len(xyz))
+        self.assertEqual(keep.tolist(), want.tolist())
+        # both together keep less than either; the file name differs from the same radial trim alone
+        radial = {"c": [1, 0.5, 1.5], "r": 0.4, "near": 0}
+        both = sa.clean_trim({**radial, "box": trim["box"]})
+        self.assertLessEqual(sa.trim_mask(props, data, both).sum(), keep.sum())
+        self.assertNotEqual(sa.trim_tag(both), sa.trim_tag(sa.clean_trim(radial)))
+        self.assertEqual(sa.make_levels(src, "b", trim=trim)["kept"], int(want.sum()))
+        for bad in ({"box": {"c": [0, 0, 0], "h": [0, 1, 1], "q": [0, 0, 0, 1]}}, {"box": {"c": [0, 0, 0], "h": [1, 1, 1], "q": [0, 0, 0, 0]}}, {"box": {"c": [0, 0], "h": [1, 1, 1], "q": [0, 0, 0, 1]}}, {"near": 1}):
+            with self.assertRaises(ValueError):
+                sa.clean_trim(bad)
 
     def test_trimmed_levels(self):
         src = self.d / "t_full.ply"

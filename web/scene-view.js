@@ -12,13 +12,13 @@ import { gzChip, smoothGizmo, snap3, snapMenu3 } from './gizmo.js';
 import { ORIENTS, centrePoint, faceQuat, follow, frameQuat, orientOf, qMul, relQuat, spaceOf } from './gizmo-orient.js';
 import {
   C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, WP, current, frames, holdStart, hooks, liveCam, pathSig, makers, namesFor, newObject, newRoom, originShift, bakeOn, pivotOf, sample, setOrigin,
-  canBake, isPosable, sameTab, save, selItem, setActiveCam, setAxes, setSC, write
+  canBake, hasKeys, isPosable, sameTab, save, selItem, setActiveCam, setAxes, setSC, write
 } from './scene-data.js';
 import { letGo } from './scene-export.js';
 import { modeOf } from './scene-modes.js';
 import { renderKeys, renderPanel, renderToolbar, setSceneMode } from './scene-ui.js';
 import { placeAtCamera, sharpOn } from './splat-levels.js';
-import { pickAlong, samplePoints, standShift } from './splat-shape.js';
+import { keptPoints, pickAlong, standShift } from './splat-shape.js';
 import { renderDepth, setSplatRange, splatBlurOf, splatDepths, splatMeshes } from './splat-depth.js';
 // the SparkRenderer once scene-import.js has made one (a depth picture draws the splats in a pass of their own)
 export const SPLAT_PASS = { spark: null };
@@ -74,6 +74,11 @@ let tmpPivot = null;
 const originDot = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffb020, depthTest: false, transparent: true, opacity: 0.95 }));
 originDot.renderOrder = 12; originDot.visible = false; originDot.raycast = () => {};
 // ...and its axes while they are edited: red X, green Y, blue Z, the cone on +Z being its front
+// a splat's box trim while it is edited: the gizmo holds this, its scale the box's sides; the bottom face, the floor, is filled
+const boxMark = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)), new THREE.LineBasicMaterial({ color: 0xffc94d, depthTest: false, transparent: true }));
+boxMark.add(new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2).translate(0, -0.5, 0), new THREE.MeshBasicMaterial({ color: 0xffc94d, opacity: 0.22, depthTest: false, depthWrite: false, transparent: true, side: THREE.DoubleSide })));
+boxMark.renderOrder = 12; boxMark.children[0].renderOrder = 11; boxMark.visible = false;
+boxMark.raycast = () => {}; boxMark.children[0].raycast = () => {};
 const axesMark = new THREE.AxesHelper(1);
 axesMark.material.depthTest = false; axesMark.material.transparent = true;
 axesMark.add(new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.22, 12).rotateX(Math.PI / 2).translate(0, 0, 1.05), new THREE.MeshBasicMaterial({ color: 0x4d8dff, depthTest: false, transparent: true })));
@@ -124,7 +129,7 @@ export function setup() {
   scene.add(grid);
   camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.05, 500);
   camera.layers.enable(1);  // layer 1: a figure's joint dots (picked on their own, never rendered out)
-  scene.add(ikTarget, pivot, camProxy, originDot, axesMark);
+  scene.add(ikTarget, pivot, camProxy, originDot, axesMark, boxMark);
   R.orient = orientOf(store.get('deck.scene.orient', 'world'));   // the gizmo's axes (this device's choice)
   R.viewCut = store.get('deck.scene.viewcut', true) !== false;   // the picture follows the cuts, unless you are editing a camera
   R.shotFmt = store.get('deck.scene.shotfmt', 'h3') === 'ltx' ? 'ltx' : 'h3';
@@ -231,6 +236,7 @@ export function setup() {
     if (HAND.on) { down = null; return; }   // (Hand mode keeps the figure: a tap doesn't change what's selected)
     if (!down || down.onGizmo || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down = null; return; }
     down = null;
+    if (boxEditing()) return;   // (editing the box: a tap leaves the selection alone)
     if (originEditing()) return originAtTap(e);   // (editing the origin: a tap puts it on the layer, and keeps the layer selected)
     const joint = jointAt(e);
     if (joint) return selectJoint(joint);
@@ -279,6 +285,7 @@ function fixTarget(o, start) {
 // the scene follows it and the change is written (a key, or the base)
 function applyChange() {
   if (gizmo.object === camProxy) return camChanged();
+  if (gizmo.object === boxMark) return boxChanged();
   const o = selItem(), m = o && R.meshes.get(o.id);
   if (!o || !m) return;
   if (R.joint) return jointChanged(o);
@@ -306,14 +313,18 @@ function placeCamProxy() {
   camProxy.userData.d = Math.max(0.5, camera.position.distanceTo(controls.target));
   camProxy.updateMatrixWorld();
 }
-function camChanged() {
-  const at = follow(camProxy.position.toArray(), camProxy.quaternion.toArray(), camRel, camAt);
-  const p = new THREE.Vector3(...at.p), q = new THREE.Quaternion(...at.q);
-  const t = new THREE.Vector3(0, 0, -1).applyQuaternion(q).multiplyScalar(camProxy.userData.d).add(p);
+// a camera's values for standing at p, turned q, looking d ahead
+function camValues(p, q, d) {
+  const t = new THREE.Vector3(0, 0, -1).applyQuaternion(q).multiplyScalar(d).add(p);
   // the roll is what is left of the camera's turn once it is aimed level (applyRoll's sign)
   const lvl = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(p, t, camera.up)), dq = lvl.invert().multiply(q);
   const c = { px: p.x, py: p.y, pz: p.z, tx: t.x, ty: t.y, tz: t.z, fov: camera.fov, roll: -THREE.MathUtils.radToDeg(2 * Math.atan2(dq.z, dq.w)) };
   if (c.roll < -180) c.roll += 360; else if (c.roll > 180) c.roll -= 360;
+  return c;
+}
+function camChanged() {
+  const at = follow(camProxy.position.toArray(), camProxy.quaternion.toArray(), camRel, camAt);
+  const c = camValues(new THREE.Vector3(...at.p), new THREE.Quaternion(...at.q), camProxy.userData.d);
   write(SC.camera, CAM, { px: c.px, py: c.py, pz: c.pz, tx: c.tx, ty: c.ty, tz: c.tz, roll: c.roll });
   putCamera(c);
 }
@@ -564,6 +575,7 @@ export const canTurnAxes = (o) => !!o && canBake(o);
 export const originMode = () => (R.mode === 'rotate' && canTurnAxes(selItem()) ? 'rotate' : 'translate');
 export function setOriginEdit(on) {
   R.originEdit = on ? R.sel : null;
+  if (on) R.boxEdit = null;
   tmpPivot = null;
   if (on) R.joint = null;
   refresh(); renderToolbar(); renderPanel();
@@ -602,6 +614,71 @@ export function axesToView(o) {
 export function turnAxesBy(o, i) {
   const v = current(o, OBJ), by = eulerQ(...[0, 1, 2].map((k) => (k === i ? 90 : 0)));
   if (putAxes(o, qMul(eulerQ(v.rx, v.ry, v.rz), by))) changed();
+}
+
+// ---- a splat's box trim (splat-shape.js): the gizmo holds boxMark, placed from the box in the file's units through the splat's holder.
+// scene-import.js says which trim the panel is editing (a frame's own, or the layer's): get(o), edit(o) (a frame takes its own copy),
+// and changed(o) when it moved.
+export const boxHost = { get: () => null, edit: () => null, changed: () => {} };
+const holderOf = (o) => R.meshes.get(o?.id)?.userData.splat?.holder || null;
+export const boxEditing = () => !!R.boxEdit && R.boxEdit === R.sel && !R.joint && !!boxHost.get(selItem())?.on && !!holderOf(selItem());
+export function setBoxEdit(on) {
+  R.boxEdit = on ? R.sel : null;
+  if (on) { R.originEdit = null; tmpPivot = null; R.joint = null; }
+  refresh(); renderToolbar(); renderPanel();
+}
+const holderParts = (o) => {
+  const hd = holderOf(o), p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+  hd.updateWorldMatrix(true, false);
+  hd.matrixWorld.decompose(p, q, s);
+  return { m: hd.matrixWorld, q, s: Math.abs(s.y) || 1 };
+};
+function placeBox() {
+  const o = selItem(), b = boxHost.get(o);
+  if (!b) return;
+  const { m, q, s } = holderParts(o);
+  boxMark.position.fromArray(b.c).applyMatrix4(m);
+  boxMark.quaternion.copy(q).multiply(new THREE.Quaternion(...b.q));
+  boxMark.scale.set(b.h[0] * 2 * s, b.h[1] * 2 * s, b.h[2] * 2 * s);
+  boxMark.updateMatrixWorld();
+}
+function boxChanged() {
+  const o = selItem(), b = boxHost.edit(o);
+  if (!b) return;
+  const { m, q, s } = holderParts(o), r = (a) => a.map((v) => +v.toFixed(4)) ;
+  b.c = r(boxMark.position.clone().applyMatrix4(m.clone().invert()).toArray());
+  b.q = q.clone().invert().multiply(boxMark.quaternion).normalize().toArray().map((v) => +v.toFixed(5));
+  b.h = r(boxMark.scale.toArray().map((v) => Math.max(0.005, Math.abs(v) / (2 * s))));
+  boxHost.changed(o);
+}
+// the turn that takes the box's up to the world's, the shortest way (so it doesn't spin about the up axis)
+const upTurn = () => new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0).applyQuaternion(boxMark.quaternion).normalize(), new THREE.Vector3(0, 1, 0));
+// the box level, the layer staying where it is (after turning the layer by hand)
+export function levelBox(o) {
+  placeBox();
+  boxMark.quaternion.premultiply(upTurn());
+  boxChanged();
+  changed();
+}
+// Set floor: the layer turns and moves so the box's bottom face is level and at the world's floor, and the camera, when asked and it has no
+// keys, goes with it so the framing stays. Models then stand on it at y = 0.
+export function setFloor(o, withCamera = true) {
+  const m = R.meshes.get(o.id);
+  if (!m || !boxHost.get(o)) return false;
+  placeBox();
+  m.updateMatrixWorld(true);
+  const turn = upTurn(), from = boxMark.localToWorld(new THREE.Vector3(0, -0.5, 0)), to = from.clone().setY(0);
+  const carry = (p) => p.clone().sub(from).applyQuaternion(turn).add(to);
+  const at = carry(m.localToWorld(new THREE.Vector3(...(o.origin || [0, 0, 0]))));
+  const r = eulerNear(turn.clone().multiply(m.quaternion).toArray(), current(o, OBJ));
+  write(o, namesFor(o), { x: at.x, y: at.y, z: at.z, ...r });
+  const follows = withCamera && !hasKeys(SC.camera);
+  if (follows) {
+    const c = camValues(carry(camera.position), turn.clone().multiply(camera.quaternion), Math.max(0.5, camera.position.distanceTo(controls.target)));
+    write(SC.camera, CAM, { px: c.px, py: c.py, pz: c.pz, tx: c.tx, ty: c.ty, tz: c.tz, roll: c.roll });
+  }
+  changed();
+  return { camera: follows };
 }
 
 // ---- fitting a layer into the scene: the camera is what's on show (the shot camera, or the one drawn in the director view) ----
@@ -657,6 +734,7 @@ function placeHandle() {
   if (gizmo.object === pivot) placePivot();
   else if (gizmo.object === ikTarget) placeIkTarget();
   else if (gizmo.object === camProxy) placeCamProxy();
+  else if (gizmo.object === boxMark) placeBox();
 }
 
 // ---- the gizmo's axes (World / Local / View, remembered on this device) and its stand-in pivot
@@ -732,13 +810,14 @@ export function syncMeshes() {
   const o = selItem();
   const m = o && !o.hidden && onStage() ? R.meshes.get(o.id) : null;
   if (R.joint && !m?.userData.rig) R.joint = null;
-  const target = HAND.on ? null : !m ? (R.free && wantFrustum() ? camProxy : null) : !R.joint ? pivot : jointMode() === 'translate' ? ikTarget : m.userData.rig.bones[R.joint];
+  const box = !!m && !HAND.on && boxEditing();
+  const target = box ? boxMark : HAND.on ? null : !m ? (R.free && wantFrustum() ? camProxy : null) : !R.joint ? pivot : jointMode() === 'translate' ? ikTarget : m.userData.rig.bones[R.joint];
   if (target) {
     const was = gizmo.object;
-    gizmo.setMode(R.joint ? jointMode() : originEditing() ? originMode() : target === camProxy && R.mode === 'scale' ? 'translate' : R.mode);
+    gizmo.setMode(R.joint ? jointMode() : !box && originEditing() ? originMode() : target === camProxy && R.mode === 'scale' ? 'translate' : R.mode);
     // (a joint turns on its own axes; everything else as picked: World, Local or View)
     gizmo.setSpace(R.joint && jointMode() === 'rotate' ? 'local' : spaceOf(R.orient));
-    if (was !== target) { gizmo.attach(target); if (target === camProxy) placeCamProxy(); }
+    if (was !== target) { gizmo.attach(target); if (target === camProxy) placeCamProxy(); if (target === boxMark) placeBox(); }
   } else gizmo.detach();
 }
 
@@ -785,6 +864,7 @@ export function pose(f) {
   if (gizmo.object === ikTarget) placeIkTarget();
   if (gizmo.object === pivot) placePivot();
   if (gizmo.object === camProxy) placeCamProxy();
+  if (gizmo.object === boxMark) placeBox();
 }
 // editing a camera: Camera mode, or the camera layer selected (not while it plays, and not the Shots row)
 function editingCamera() {
@@ -823,6 +903,7 @@ export function draw(forRender = false) {
   grid.visible = !forRender && !depth && !snap3.grid && (live || WP.grid);
   snapGrid.visible = !forRender && !depth && snap3.grid && (live || WP.grid);
   for (const f of passHooks) f(depth || forRender === 'range' ? 'depth' : 'color', forRender);
+  boxMark.visible = !forRender && !depth && gizmo.object === boxMark;
   frustum.visible = wantFrustum() && !forRender && !depth && (live || WP.frustum);
   for (const x of OTHERS.values()) x.group.visible = frustum.visible;
   stage.visible = !onStage() && !forRender;
@@ -847,7 +928,7 @@ export function draw(forRender = false) {
 function drawPip() {
   const size = renderer.getSize(new THREE.Vector2()), b = pipRect(size.x, size.y);
   if (!b) return;
-  const tools = [grid, snapGrid, stage, frustum, originDot, axesMark, gizmo.getHelper(), ...[...OTHERS.values()].map((x) => x.group)];
+  const tools = [grid, snapGrid, stage, frustum, originDot, axesMark, boxMark, gizmo.getHelper(), ...[...OTHERS.values()].map((x) => x.group)];
   for (const m of R.meshes.values()) tools.push(...(m.userData.rig?.dots || []), ...(m.userData.tips || []), ...(m.userData.dots || []));
   const on = tools.filter((x) => x.visible);
   for (const x of on) x.visible = false;
@@ -921,7 +1002,7 @@ function splatFrom(m) {
   m.updateMatrixWorld(true);
   const inv = mesh.matrixWorld.clone().invert(), org = ray.ray.origin.clone().applyMatrix4(inv), dir = ray.ray.direction.clone().transformDirection(inv);
   const b = new THREE.Box3().setFromObject(m.userData.splat.proxy).getSize(new THREE.Vector3()).length() / Math.max(1e-4, m.scale.y);
-  const p = pickAlong(samplePoints(mesh), org.toArray(), dir.toArray(), b * 0.01);
+  const p = pickAlong(keptPoints(mesh), org.toArray(), dir.toArray(), b * 0.01);
   return p ? ray.ray.origin.distanceTo(mesh.localToWorld(new THREE.Vector3(...p))) : null;
 }
 // the selected figure's joint dot under the pointer (within a finger's reach). Where dots overlap,
@@ -972,7 +1053,7 @@ function boneDotAt(e) {
 // ---- selection, layers ------------------------------------------------------------
 export function select(id) {
   if (HAND.on && id !== R.sel) handMode(null);
-  if (id !== R.sel) { tmpPivot = null; R.originEdit = null; }
+  if (id !== R.sel) { tmpPivot = null; R.originEdit = null; R.boxEdit = null; }
   const allow = modeOf().select || id === 'cuts' || id == null;   // the Shots row can be picked in Camera mode too
   R.sel = allow ? id : null; R.joint = null; refresh(); renderToolbar(); renderKeys(); renderPanel();
 }

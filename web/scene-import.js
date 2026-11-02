@@ -10,12 +10,12 @@ import * as THREE from './vendor/three.module.min.js';
 import { maxMpRow, resizeInput } from './media.js';
 import { blenderButton } from './blender.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
-import { actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip, field, seg, info, rangeField, mediaCard, placeholder, iconBtn } from './ui.js';
+import { store, actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip, field, seg, info, rangeField, mediaCard, placeholder, iconBtn } from './ui.js';
 import { inputUrl, thumbUrl } from './core.js';
 import { C, OBJ as OBJ_CH, R, SC, current, frames, matchSceneTo, newObject, namesFor, sampleChan, save, selItem, setKey, write } from './scene-data.js';
 import { heightOf as figureHeight } from './figure.js';
 import { addModeSection } from './scene-modes.js';
-import { LOADERS, SPLAT_PASS, activeCamera, controls, changed, draw, fit, lookThrough, passHooks, pose, recentre, renderer, scene, select } from './scene-view.js';
+import { LOADERS, SPLAT_PASS, activeCamera, boxEditing, boxHost, levelBox, refresh, setBoxEdit, setFloor, controls, changed, draw, fit, lookThrough, passHooks, pose, recentre, renderer, scene, select } from './scene-view.js';
 import { LIBRARY } from './scene-library.js';
 import { askHeight } from './scene-scale.js';
 import { baseOf, fitForHeight, fmtLen, importFit, unitToMetres } from './scale-math.js';
@@ -24,7 +24,7 @@ import {
   setPreviewLevel, setSharp, sharpOn
 } from './splat-levels.js';
 import {
-  GROWS, fillFactor, keptShare, medianOf, pickAlong, reachOf, samplePoints, sameTrim, shapeMesh, standShift, trimBody, trimSphere
+  GROWS, boxAround, boxBottomTo, fillFactor, keptShare, medianOf, pickAlong, reachOf, samplePoints, sameTrim, shapeMesh, standShift, trimBody, trimSphere
 } from './splat-shape.js';
 import { LOOPS, RATES, DEFAULT_RATE, addFrame, frameCount, frameIndex, frameList, frameTrimOf, framesOnWhole, hasFrameKeys, removeFrame, sceneFrameShowing, shapeFor, swapFrames } from './splat-frames.js';
 
@@ -876,6 +876,15 @@ function reshape(o) {
 const TRIM_EDIT = new WeakMap();
 const trimFrame = (o) => { const i = TRIM_EDIT.get(o) ?? null; return i !== null && i < frameCount(o) ? i : null; };
 const meshAt = (o, i) => (i === null ? meshOf(o) : R.meshes.get(o.id)?.userData.splat?.meshes?.[i] || meshOf(o));
+// the box trim the gizmo edits (scene-view.js): what the panel is on; a frame takes a copy of the layer's the first time it changes
+const trimShown = (o) => { const at = trimFrame(o); return at === null ? o.trim : frameList(o)[at].frameTrim || o.trim; };
+boxHost.get = (o) => (o?.type === 'splat' ? trimShown(o)?.box || null : null);
+boxHost.edit = (o) => {
+  const at = trimFrame(o), fr = at === null ? null : frameList(o)[at];
+  if (fr && !fr.frameTrim) { fr.frameTrim = structuredClone(o.trim); delete fr.frameTrim.made; delete fr.frameTrim.kept; }
+  return (fr ? fr.frameTrim : o.trim)?.box || null;
+};
+boxHost.changed = (o) => reshape(o);
 // show the frame being trimmed: the playhead goes to the nearest moment it shows
 async function goToFrame(o, i) {
   const f = sceneFrameShowing(o, i, frames(), R.f, (x) => (o.chans?.sf?.length ? sampleChan(o, 'sf', x) : undefined));
@@ -893,8 +902,8 @@ function showSphere(o, t = o.trim) {
   draw();
 }
 // pick the trim's centre: the next tap on the view lands on the nearest splat under it (else on its box)
-function pickCentre(o, done, at = null) {
-  toast('Tap the splat where the middle of what to keep is');
+function pickCentre(o, done, at = null, ask = 'Tap the splat where the middle of what to keep is', reach = 0.01) {
+  toast(ask);
   const grab = (e) => {
     const cv = renderer.domElement;
     if (e.target !== cv) return;
@@ -908,7 +917,7 @@ function pickCentre(o, done, at = null) {
     const inv = mesh.matrixWorld.clone().invert();
     const org = ray.ray.origin.clone().applyMatrix4(inv), dir = ray.ray.direction.clone().transformDirection(inv);
     const b = o.box || [-1, -1, -1, 1, 1, 1], diag = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]);
-    let hit = pickAlong(samplePoints(mesh), org.toArray(), dir.toArray(), diag * 0.01);
+    let hit = pickAlong(samplePoints(mesh), org.toArray(), dir.toArray(), diag * reach);
     if (!hit) {
       const box = new THREE.Box3(new THREE.Vector3(b[0], b[1], b[2]), new THREE.Vector3(b[3], b[4], b[5]));
       hit = new THREE.Ray(org, dir).intersectBox(box, new THREE.Vector3())?.toArray() || null;
@@ -917,6 +926,34 @@ function pickCentre(o, done, at = null) {
     done(hit.map((v) => +v.toFixed(4)));
   };
   addEventListener('pointerdown', grab, true);
+}
+// the box trim: keep what is inside a box the gizmo moves, turns and sizes; its bottom face can be made the floor
+const FLOOR_CAM = 'deck.scene.floorcam';
+function boxFields(o, at, mine, tNow, mesh0, s, big, showFacts) {
+  const box = tNow()?.box;
+  const out = [toggle('Box trim', !!box?.on, (on) => {
+    const m = mesh0();
+    if (at === null) o.trim ||= { on: false, near: 0, renders: true };
+    const t = mine();
+    if (on && !t.box && m) t.box = boxAround(samplePoints(m), !!o.flip);
+    else if (t.box) t.box.on = on;
+    reshape(o);
+    if (on) setBoxEdit(true); else { if (R.boxEdit === o.id) setBoxEdit(false); changed(); }
+  }, { help: 'Keep only what is inside a box. Edit the box puts the gizmo on it: Move, Rotate and Scale, with snapping, and the splat stays where it is. To level a tilted splat, turn the box until its filled bottom face lies on the ground in the splat, then Set floor. If you turned the splat by hand instead, Level the box first.' })];
+  if (!box?.on) return out;
+  const live = () => { reshape(o); showFacts(); };
+  const side = (label, i) => rangeField(label, () => box.h[i] * 2 * s, (v) => { const b = boxHost.edit(o); b.h[i] = Math.max(0.005, v / (2 * s)); },
+    { min: 0.02, max: +(big * 2).toFixed(2), step: 0.01, fmt: (v) => v.toFixed(2), onInput: () => { live(); refresh(); }, onChange: () => { live(); refresh(); save(); } });
+  out.push(
+    toggle('Edit the box', boxEditing(), (on) => setBoxEdit(on), { help: 'The gizmo moves, turns and sizes the box (W, E, R). Esc leaves it.' }),
+    side('Width (m)', 0), side('Height (m)', 1), side('Depth (m)', 2),
+    h('div', { class: 'row wrap' },
+      button('Fit to the splat', () => { const m = mesh0(), b = boxHost.edit(o); if (!m || !b) return; Object.assign(b, boxAround(samplePoints(m), !!o.flip)); reshape(o); changed(); }, { cls: 'small', title: 'The box back round the splat, on the splat\'s axes' }),
+      button('Level the box', () => levelBox(o), { cls: 'small', title: 'Turn the box so its bottom is level in the scene. The splat stays' }),
+      button('Pick the floor…', () => pickCentre(o, (p) => { const b = boxHost.edit(o); Object.assign(b, boxBottomTo(b, p)); reshape(o); changed(); }, at, 'Tap the ground in the splat: the box\'s bottom goes there', 0.02), { cls: 'small', title: 'The next tap puts the box\'s bottom on the ground under it, along the box\'s own up' }),
+      button('Set floor', () => { const r = setFloor(o, store.get(FLOOR_CAM, true) !== false); if (r) toast(r.camera ? 'Floor set: the splat and the camera turned with it' : store.get(FLOOR_CAM, true) !== false ? 'Floor set. The camera has keys, so it stayed' : 'Floor set'); }, { cls: 'small primary', title: 'Turn and move the splat so the box\'s bottom is level, on the scene\'s floor' })),
+    toggle('Set floor moves the camera too', store.get(FLOOR_CAM, true) !== false, (on) => store.set(FLOOR_CAM, on), { help: 'On: the camera turns and moves with the splat, so what it sees stays the same. A camera with keys stays where it is.' }));
+  return out;
 }
 function shapeFields(o) {
   const at = trimFrame(o), holder = at === null ? o : frameList(o)[at], key = at === null ? 'trim' : 'frameTrim';
@@ -927,11 +964,11 @@ function shapeFields(o) {
   const facts = hint('');
   const showFacts = () => {
     const g = +o.grow || 1, t = tNow(), mesh = mesh0();
-    const cut = t?.on && t.c && sameTrim(trimBody(t), t.made) && t.kept;   // (cut: the server counted it; else the shown level's points say)
-    const share = cut && n ? t.kept / n : t?.on && t.c && mesh ? keptShare(samplePoints(mesh), t) : 1;
+    const body = trimBody(t), cut = body && sameTrim(body, t.made) && t.kept;   // (cut: the server counted it; else the shown level's points say)
+    const share = cut && n ? t.kept / n : body && mesh ? keptShare(samplePoints(mesh), t) : 1;
     const parts = [];
     if (g !== 1) parts.push(`each Gaussian ×${g} wide · fill ≈ ×${fillFactor(g)}`);
-    if (t?.on && t.c) parts.push(`trim keeps ≈ ${Math.round(share * 100)}%${n ? ` (${countLabel(Math.round(share * n))} of ${countLabel(n)})` : ''}`
+    if (body) parts.push(`trim keeps ≈ ${Math.round(share * 100)}%${n ? ` (${countLabel(Math.round(share * n))} of ${countLabel(n)})` : ''}`
       + (sameTrim(trimBody(t), t.made) ? ' · previews cut' : ' · previews not cut yet'));
     facts.textContent = parts.join(' · ') || 'As made';
   };
@@ -961,28 +998,32 @@ function shapeFields(o) {
     const mesh = mesh0(), t = at === null ? o.trim : mine();
     if (on && !t?.c && mesh) {
       const pts = samplePoints(mesh), c = medianOf(pts);
-      holder[key] = { on: true, c, r: reachOf(pts, c), near: 0, renders: true };
+      holder[key] = { near: 0, renders: true, ...t, on: true, c, r: reachOf(pts, c) };
     } else holder[key] = { ...(t || { near: 0, renders: true }), on };
     reshape(o); showSphere(o, holder[key]); changed();
   }, { help: 'Keep only the Gaussians within a distance of a centre (the splat\'s middle, or a point you tap). Shown live; "Cut the previews" makes the preview files hold only what is kept, so the view draws fewer. Renders trim the full set the same way.' }));
   if (own) out.push(button('Use the whole layer\'s trim', () => { delete holder.frameTrim; reshape(o); changed(); }, { cls: 'small', title: 'This frame gives up its own trim. Its preview files stay as they were until the previews are cut again' }));
-  const t = tNow();
+  const t = tNow(), body = trimBody(t);
+  const s = worldScale(o), bb = o.box || [0, 0, 0, 1, 1, 1];
+  const big = Math.max(0.5, Math.hypot(bb[3] - bb[0], bb[4] - bb[1], bb[5] - bb[2]) * s);
+  // (a frame's first change gives it a trim of its own: the panel then offers what goes with one)
+  const settledOf = (live) => () => { live(); if (at !== null && !own) changed(); else save(); };
   if (t?.on && t.c) {
-    const s = worldScale(o), b = o.box || [0, 0, 0, 1, 1, 1];
-    const big = Math.max(0.5, Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]) * s);
     const live = () => { reshape(o); showSphere(o, tNow()); showFacts(); };
-    // (a frame's first change gives it a trim of its own: the panel then offers what goes with one)
-    const settled = () => { live(); if (at !== null && !own) changed(); else save(); };
+    const settled = settledOf(live);
     out.push(
       rangeField('Keep within (m)', () => tNow().r * s, (v) => { mine(); tNow().r = Math.max(0.01, v / s); }, { min: 0.05, max: +big.toFixed(2), step: 0.01, fmt: (v) => v.toFixed(2), onInput: live, onChange: settled }),
       o.cam ? rangeField('Drop near the camera (m)', () => (tNow().near || 0) * s, (v) => { mine(); tNow().near = Math.max(0, v / s); }, { min: 0, max: +Math.min(big, 5).toFixed(2), step: 0.01, fmt: (v) => (v ? v.toFixed(2) : 'off'), onInput: live, onChange: settled }) : null,
       h('div', { class: 'row wrap' },
         button('Centre: its middle', () => { const m = mesh0(); if (!m) return; mine(); tNow().c = medianOf(samplePoints(m)); settled(); }),
         button('Pick the centre…', () => pickCentre(o, (c) => { mine(); tNow().c = c; live(); changed(); }, at)),
-        button('Show', () => showSphere(o, tNow()), { title: 'Show the trim\'s sphere for a moment' })),
-      toggle('Trim renders too', t.renders !== false, (on) => { mine(); tNow().renders = on; settled(); }));
-    if (/\.ply$/i.test(fileOf(holder.url)) && !sameTrim(trimBody(t), t.made) && (at === null || own)) {
-      out.push(button('Cut the previews', () => remakeLevels(o, trimBody(t), at), { cls: 'small primary', title: 'Make the preview levels hold only what the trim keeps (the full set stays whole for renders)' }));
+        button('Show', () => showSphere(o, tNow()), { title: 'Show the trim\'s sphere for a moment' })));
+  }
+  out.push(...boxFields(o, at, mine, tNow, mesh0, s, big, showFacts));
+  if (body) {
+    out.push(toggle('Trim renders too', t.renders !== false, (on) => { mine(); tNow().renders = on; settledOf(() => { reshape(o); showFacts(); })(); }));
+    if (/\.ply$/i.test(fileOf(holder.url)) && !sameTrim(body, t.made) && (at === null || own)) {
+      out.push(button('Cut the previews', () => remakeLevels(o, body, at), { cls: 'small primary', title: 'Make the preview levels hold only what the trim keeps (the full set stays whole for renders)' }));
     }
   } else if (t?.made && /\.ply$/i.test(fileOf(holder.url)) && (at === null || own)) {
     out.push(button('Whole previews again', () => remakeLevels(o, null, at), { title: 'The trim is off: make the preview levels from the whole splat again' }));

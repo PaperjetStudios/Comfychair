@@ -7,7 +7,7 @@ import * as THREE from './vendor/three.module.min.js';
 import { actions, api, button, canvasFont, closeSheet, field, h, hint, icon, openSheet, seg, sheetStillOpen, store, toast } from './ui.js';
 import { OBJ, R, SC, WP, current, namesFor, write } from './scene-data.js';
 import { PERSON_PROFILE, activeCamera, canvas, changed, controls, draw, passHooks, photoScene, renderer, scene } from './scene-view.js';
-import { samplePoints, pickAlong } from './splat-shape.js';
+import { keptPoints, pickAlong, samplePoints } from './splat-shape.js';
 import { modeOf } from './scene-modes.js';
 import {
   HEIGHTS, LENGTHS, baseOf, boxSize, dist, factorFor, fitForHeight, fmtHWD, fmtLen, glToCam, headFeet, personDepth, personFactor, scaledVals, tanXY
@@ -204,7 +204,7 @@ export function hitOn(o, ray) {
       const inv = sp.mesh.matrixWorld.clone().invert();
       const org = ray.ray.origin.clone().applyMatrix4(inv), dir = ray.ray.direction.clone().transformDirection(inv);
       const b = o.box || [-1, -1, -1, 1, 1, 1], diag = Math.hypot(b[3] - b[0], b[4] - b[1], b[5] - b[2]);
-      const p = pickAlong(samplePoints(sp.mesh), org.toArray(), dir.toArray(), diag * 0.006);
+      const p = pickAlong(keptPoints(sp.mesh), org.toArray(), dir.toArray(), diag * 0.006);
       if (p) return sp.mesh.localToWorld(new THREE.Vector3(...p));
     }
     return ray.intersectObject(sp.proxy, false)[0]?.point || null;
