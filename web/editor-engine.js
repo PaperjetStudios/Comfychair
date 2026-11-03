@@ -975,8 +975,13 @@ export function createEditor(cfg) {
       e.clipboardData?.setData('text/plain', 'ComfyChair layers');   // (so an older picture on the clipboard doesn't win the paste)
       copySelected().catch((err) => toast(err.message, true));
     });
+    // (only from the keys: on Linux a middle click is a paste event too, of whatever text is selected)
+    let pasteKey = false;
+    addEventListener('keydown', (e) => { pasteKey = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v'; }, true);
     document.addEventListener('paste', (e) => {
-      if (!cfg.active() || sheetOpen() || editing(e) || !store.get(LAYER_CLIP, null)) return;
+      const fromKeys = pasteKey;
+      pasteKey = false;
+      if (!fromKeys || !cfg.active() || sheetOpen() || editing(e) || !store.get(LAYER_CLIP, null)) return;
       if ([...(e.clipboardData?.items || [])].some((x) => x.type.startsWith('image/'))) return;
       e.preventDefault();
       pasteLayers();
