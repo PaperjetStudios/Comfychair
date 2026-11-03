@@ -1230,6 +1230,39 @@ export function createEditor(cfg) {
     return colourOf.el;
   }
 
+  // Match colour, for the selected layers: curves on each so they look like one of them, or like all of them averaged (nothing else about them changes)
+  let matchTo = null, matchStrength = 0.8;   // (the layer, or 'all'; kept while the panel redraws)
+  function groupColour(ls) {
+    const list = ls.filter(adjustable);
+    if (list.length < 2) return null;
+    if (matchTo !== 'all' && !list.includes(matchTo)) matchTo = list[0];
+    const go = () => {
+      try {
+        const ref = matchTo === 'all' ? null : matchTo;
+        const want = ref ? layerLook(ref) : A.averageLook(list.map(layerLook));
+        if (!want) return toast('None of them has anything showing to match', true);
+        let done = 0;
+        for (const l of list) {
+          if (l === ref) continue;
+          const curves = A.matchCurves(A.histThrough(histOfPicture(l.img, l.crop), { ...l.adjust, curves: null }), want, { strength: matchStrength });
+          if (!curves) continue;
+          const a = A.clean({ ...l.adjust, curves });
+          if (a) l.adjust = a; else delete l.adjust;
+          done++;
+        }
+        editorChanged();
+        toast(`${done} ${done === 1 ? 'layer' : 'layers'} matched${ref ? ` to ${layerName(ref)}` : ' to their average'}`);
+      } catch (e) { toast(`Match failed: ${e.message}`, true); }
+    };
+    const pick = h('select', { 'aria-label': 'Match colour to', onchange: (e) => { matchTo = e.target.value === 'all' ? 'all' : list[+e.target.value]; } },
+      list.map((l, i) => h('option', { value: i, selected: l === matchTo }, layerName(l))),
+      h('option', { value: 'all', selected: matchTo === 'all' }, 'Their average'));
+    return h('div', {},
+      field('Match colour to', help('Gives each selected layer curves for the brightness and colour spread of the one picked, which stays as it is. Their average moves them all to a look in between, each layer counting the same whatever its size. A layer\'s sliders stay; its curves are replaced. Similar pictures match best: lower Strength when they show very different things. Select one layer to fine-tune its curves.'), pick),
+      rangeField('Strength', () => matchStrength, (v) => { matchStrength = v; }, { min: 0, max: 1, step: 0.05, fmt: pctFmt }),
+      button('Match colour', go, { cls: 'small primary', title: 'Curves on each selected layer' }));
+  }
+
   // The panel for two or more selected layers: each change goes to every one of them
   function groupProps(ls) {
     const done = () => { E.sel = null; E.multi = []; E.pickMode = false; renderEditor(); };
@@ -1271,6 +1304,7 @@ export function createEditor(cfg) {
       field('Size', h('div', { class: 'row wrap' }, button('Bigger ×1.1', () => scaleBy(1.1), { cls: 'small' }), button('Smaller ×0.9', () => scaleBy(0.9), { cls: 'small' }),
         button('100%', () => each((l) => { const r = layerRect(l), cx = r.x + r.w / 2, cy = r.y + r.h / 2; l.scale = 1; const n = layerRect(l); l.x = Math.round(cx - n.w / 2); l.y = Math.round(cy - n.h / 2); }), { cls: 'small' }),
         button('Match the first', () => { const w = layerRect(ls[0]).w; each((l) => { const r = layerRect(l), cx = r.x + r.w / 2, cy = r.y + r.h / 2; l.scale = Math.max(0.01, l.scale * w / r.w); const n = layerRect(l); l.x = Math.round(cx - n.w / 2); l.y = Math.round(cy - n.h / 2); }); }, { cls: 'small', title: 'Every layer the first one\'s width on the canvas' }))),
+      groupColour(ls),
       h('div', { class: 'row wrap ed-turns' },
         iconBtn('Turn a quarter left', icon('rotl'), () => turn(-90)), iconBtn('Turn a quarter right', icon('rotr'), () => turn(90)),
         iconBtn('Mirror left to right', icon('fliph'), () => each((l) => { l.flipX = !l.flipX; })), iconBtn('Mirror top to bottom', icon('flipv'), () => each((l) => { l.flipY = !l.flipY; }))),

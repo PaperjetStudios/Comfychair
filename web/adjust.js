@@ -174,6 +174,18 @@ function simplify(pts, tol = 0.004, most = 9) {
   }
   return keep.sort((a, b) => a - b).map((i) => pts[i]);
 }
+// One look from several, each counting the same whatever its size (shares, not counts). Those showing nothing don't count; null when none shows anything.
+export function averageLook(looks) {
+  const out = { r: new Array(256).fill(0), g: new Array(256).fill(0), b: new Array(256).fill(0) };
+  let used = 0;
+  for (const look of looks) {
+    const totals = ['r', 'g', 'b'].map((ch) => look[ch].reduce((a, b) => a + b, 0));
+    if (totals.some((t) => !t)) continue;
+    ['r', 'g', 'b'].forEach((ch, k) => look[ch].forEach((n, i) => { out[ch][i] += n / totals[k]; }));
+    used++;
+  }
+  return used ? out : null;
+}
 const MATCH_AT = [0.002, 0.01, 0.03, 0.07, 0.15, 0.25, 0.35, 0.5, 0.65, 0.75, 0.85, 0.93, 0.97, 0.99, 0.998];
 const MAX_SLOPE = 4;   // (steeper than this, a difference in what's in the shots would show as banding, not a match)
 // The curves that give a picture with histogram src the look of one with histogram ref: the value at each share of one

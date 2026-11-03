@@ -81,6 +81,26 @@ test('match strength 0 leaves it alone, and a picture matches itself with a stra
   for (const pts of Object.values(A.matchCurves(hist, hist))) for (const [x, y] of pts) assert.ok(Math.abs(x - y) < 0.02);
 });
 
+test('the average of several looks counts each the same, whatever its size, and skips one showing nothing', () => {
+  const dark = A.histOf(picture(4000, 3, ([r, g, b]) => [r * 0.3, g * 0.3, b * 0.3])), light = A.histOf(picture(40000, 9, ([r, g, b]) => [0.6 + r * 0.3, 0.6 + g * 0.3, 0.6 + b * 0.3]));
+  const clear = A.histOf(new Uint8ClampedArray(400));
+  const avg = A.averageLook([dark, clear, light]);
+  const share = (h, from, to) => h.g.slice(from, to).reduce((a, b) => a + b, 0) / h.g.reduce((a, b) => a + b, 0);
+  assert.ok(Math.abs(share(avg, 0, 128) - 0.5) < 0.01, 'half dark, though the light one has ten times the pixels');
+  assert.deepEqual(A.averageLook([dark]).g.map((v) => +v.toFixed(9)), dark.g.map((n) => +(n / 4000).toFixed(9)));
+  assert.equal(A.averageLook([clear]), null);
+});
+
+test('two layers matched to their average come closer to each other', () => {
+  const a = picture(30000, 11), b = picture(30000, 23, ([r, g, bl]) => [0.1 + 0.6 * r, 0.7 * g, 0.2 + 0.8 * bl]);
+  const want = A.averageLook([A.histOf(a), A.histOf(b)]);
+  const outA = graded(a, { curves: A.matchCurves(A.histOf(a), want) }), outB = graded(b, { curves: A.matchCurves(A.histOf(b), want) });
+  for (const c of [0, 1, 2]) {
+    const before = Math.abs(mean(a, c) - mean(b, c)), after = Math.abs(mean(outA, c) - mean(outB, c));
+    assert.ok(after < Math.max(4, before / 3), `channel ${c}: ${before} to ${after}`);
+  }
+});
+
 test('what does not show is not matched; a picture with nothing showing gives no curves', () => {
   const clear = new Uint8ClampedArray(400);
   assert.equal(A.matchCurves(A.histOf(clear), A.histOf(picture())), null);
