@@ -22,7 +22,7 @@ import { gradedPicture, histOfPicture } from './adjust-draw.js';
 import { adjustPanel } from './adjust-panel.js';
 import { icon } from './icons.js';
 import * as G from './layer-geom.js';
-import { gridItem, gridPlan, fitToCell } from './layer-grid.js';
+import { densePlan, gridItem, gridPlan, fitToCell } from './layer-grid.js';
 import { solidBounds } from './matte-edge.js';
 import { inpaintSection, masksSection } from './inpaint.js';
 import { imageToolsSection, runImageTool } from './imagetools.js';
@@ -1434,31 +1434,38 @@ export function createEditor(cfg) {
     });
   }
 
-  // Grid: the selected pictures in equal cells (web/layer-grid.js). gridCrops remembers what a grid cut, so another grid starts
+  // Grid: the selected pictures packed tight or in equal cells (web/layer-grid.js). gridCrops remembers what a grid cut, so another grid starts
   // from the picture's own crop, whatever the last one's cells were; a crop changed by hand since then is the new start.
-  const GRID_PREFS = 'deck.layergrid';
+  const GRID_PREFS = 'deck.layergrid', GRID_DEFAULTS = { pack: 'dense', cols: 0, gap: 0, crop: false };
   const gridCrops = new WeakMap();
+  // ...and gridSpots the order it laid them out in, so another grid keeps it unless a picture has been moved since
+  const gridSpots = new WeakMap();
   function makeGrid(ls) {
-    const o = store.get(GRID_PREFS, { cols: 0, gap: 0, crop: false });
+    const o = store.get(GRID_PREFS, GRID_DEFAULTS), dense = (o.pack || 'dense') === 'dense';
     const set = ls.filter((l) => ready(l) && !l.locked && !l.hidden && !plain(l)).sort((a, b) => E.layers.indexOf(b) - E.layers.indexOf(a));   // (top of the list first)
     if (set.length < 2) return toast('A grid needs two or more pictures that show and aren\'t locked', true);
     const bases = set.map((l) => { const m = gridCrops.get(l); return m && JSON.stringify(l.crop) === m.made ? m.base : l.crop; });
     const items = set.map((l, i) => gridItem(l, bases[i], o.crop));
-    const { cells } = gridPlan(items, { frame: E.size ? editorFrame() : null, origin: unionRect(set.map(bounds)), cols: o.cols, gap: o.gap });
+    const spots = set.map((l) => gridSpots.get(l)), same = spots.every((m, i) => m && m.made === JSON.stringify(bounds(set[i])));
+    const where = { frame: E.size ? editorFrame() : null, origin: unionRect(set.map(bounds)), cols: o.cols, gap: o.gap,
+      ...(same ? { order: set.map((_, i) => i).sort((a, b) => spots[a].rank - spots[b].rank) } : {}) };
+    const { cells, order } = dense ? densePlan(items, { ...where, fill: o.crop }) : gridPlan(items, where);
     set.forEach((l, i) => {
-      Object.assign(l, fitToCell(l, bases[i], cells[i], o.crop));
+      Object.assign(l, fitToCell(l, bases[i], cells[i], o.crop, dense));
       if (o.crop) gridCrops.set(l, { base: bases[i], made: JSON.stringify(l.crop) }); else gridCrops.delete(l);
     });
+    order.forEach((i, rank) => gridSpots.set(set[i], { rank, made: JSON.stringify(bounds(set[i])) }));
     editorChanged();
   }
   function gridControls(ls) {
-    const o = store.get(GRID_PREFS, { cols: 0, gap: 0, crop: false });
+    const o = store.get(GRID_PREFS, GRID_DEFAULTS);
     const save = (patch) => { store.set(GRID_PREFS, { ...o, ...patch }); renderEditor(); };
     const most = Math.min(8, ls.length);
-    return field('Grid', help('Puts the selected pictures in equal cells, filling the canvas if it has a fixed size. They keep their reading order on the canvas; a pile goes in list order, top first. Auto picks the columns that suit their shapes best. Crop off shows each whole picture inside its cell. Crop on fills each cell and cuts what sticks out, around the middle; it also straightens a picture turned at an angle, to the nearest quarter. A hidden or locked layer stays where it is. Undo brings the old places back.'),
+    return field('Grid', help('Puts the selected pictures in a grid, as big as the canvas allows if it has a fixed size. Dense packs them edge to edge at their own shapes, in rows of differing heights (or columns), so the only space between them is the Gap; a number sets about how many go in a row. Equal cells gives every picture a cell of the same size, so a picture of another shape has space around it; a number sets the columns. They keep their reading order on the canvas; a pile goes in list order, top first. Auto picks what suits their shapes best. Crop off shows each whole picture. Crop on cuts what sticks out, around the middle, so the pictures fill the canvas in Dense and their cells in Equal cells; it also straightens a picture turned at an angle, to the nearest quarter. A hidden or locked layer stays where it is. Undo brings the old places back.'),
+      seg([['dense', 'Dense'], ['cells', 'Equal cells']], o.pack || 'dense', (v) => save({ pack: v })),
       seg([[0, 'Auto'], ...Array.from({ length: most }, (_, i) => [i + 1, String(i + 1)])], o.cols > most ? 0 : o.cols, (v) => save({ cols: v }), { wrap: true }),
       rangeField('Gap', () => o.gap, (v) => { o.gap = v; store.set(GRID_PREFS, { ...o }); }, { min: 0, max: 100, step: 1, fmt: (v) => `${Math.round(v)} px` }),
-      h('div', { class: 'row wrap' }, toggle('Crop to fill', o.crop, (on) => save({ crop: on })), button('Make grid', () => makeGrid(ls), { cls: 'small primary', title: 'Into equal cells, with these settings' })));
+      h('div', { class: 'row wrap' }, toggle('Crop to fill', o.crop, (on) => save({ crop: on })), button('Make grid', () => makeGrid(ls), { cls: 'small primary', title: 'Lay them out with these settings' })));
   }
 
   // The panel for two or more selected layers: each change goes to every one of them

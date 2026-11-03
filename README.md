@@ -652,6 +652,8 @@ hiding, blend and groups. The chips over the list add a grid, turn steps and siz
 
 **Selecting layers:** Shift-click in the list selects from the selected layer through the one clicked; a hidden layer between them is left out. Alt-click adds or drops one. The **Select layers** arrow (Q, under Move) drags a box: it selects every showing, unlocked layer it touches. Shift adds, Alt takes away. Press V to move what's selected. When a tool hides the original, its result takes the original's place in the selection, so the next run works on the results. **Move to new edit** takes the selected layers and their masks out of this edit into a new tab. **Delete N selected** (or the Delete key) removes them all, with Undo; a locked one stays. **Shift+Enter** runs the Image tool that's open, also from its text boxes.
 
+**Grid** (two or more layers selected): **Dense** packs the pictures edge to edge at their own shapes, in rows of differing heights (or columns), and the only space between them is **Gap**. **Equal cells** gives each one a same-sized cell, so a picture of another shape has space around it. **Crop to fill** cuts what sticks out, so Dense reaches every edge of a fixed canvas. Undo brings the old places back.
+
 **Between edits:** **Copy** (Ctrl+C) takes the selected layers with their masks and **Paste** (Ctrl+V) puts them in any edit tab, in the place they had; a group comes along.
 They still use the same picture files. **Delete hidden** removes every hidden layer and its mask, with Undo; a locked layer stays. **Match colour** (two or more selected) gives them curves to look like one of them, or like their average.
 
