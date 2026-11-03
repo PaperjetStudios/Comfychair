@@ -25,7 +25,7 @@ import * as G from './layer-geom.js';
 import { gridItem, gridPlan, fitToCell } from './layer-grid.js';
 import { solidBounds } from './matte-edge.js';
 import { inpaintSection, masksSection } from './inpaint.js';
-import { imageToolsSection } from './imagetools.js';
+import { imageToolsSection, runImageTool } from './imagetools.js';
 
 // ---------------------------------------------------------------------------
 // editor: a simple Photoshop-style layer stack for cropping images and putting them together
@@ -270,6 +270,10 @@ export function createEditor(cfg) {
   // a painted canvas (or the inpaint mask) is resized, never turned or cropped; layers and other objects keep those
   const plain = (l) => !!(l && (l.canvas || l.mask || (l.label && /^Canvas \d+$/.test(l.label) && isCanvas(l))));   // (a canvas made before the flag has its numbered name)
   const visibleLayers = () => E.layers.filter((l) => ready(l) && !l.hidden && !l.mask && !l.maskOf);
+  // the Select layers tool: what its box takes (as a tap on the canvas: a locked layer is picked from the list), and the box on show
+  const boxLayers = () => visibleLayers().filter((l) => !l.locked && !l.draft);
+  const dragBox = (a, b) => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) });
+  let boxShown = null;
 
   // The output area: the fixed size, or just big enough for every visible layer
   function editorFrame() {
@@ -652,6 +656,11 @@ export function createEditor(cfg) {
       ctx.fillStyle = '#2ee6d6'; ctx.fillRect(r.x, r.y, tw, 20);
       ctx.fillStyle = '#000'; ctx.fillText(tag, r.x + 5, r.y + 15);
     });
+    if (boxShown) {   // the Select layers tool's box
+      const r = scr(boxShown);
+      ctx.fillStyle = `${accent}22`; ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = accent; ctx.lineWidth = 1; ctx.setLineDash([5, 4]); ctx.strokeRect(r.x, r.y, r.w, r.h); ctx.setLineDash([]);
+    }
     const sel = E.sel && ready(E.sel) ? E.sel : null;
     if (!sel) return;
     for (const m of E.multi) {   // the others selected with it: an outline
@@ -792,6 +801,10 @@ export function createEditor(cfg) {
       const p = point(e), sel = E.sel && ready(E.sel) ? E.sel : null;
       drag = null; EVheld = true;
       held = E.layers.map((l) => [l, l.x, l.y, l.scale, { ...l.crop }, l.rotation || 0]);
+      if (paint.boxing() && !E.cropping) {   // the Select layers tool: a box from the corner pressed
+        if (e.button === 0) drag = { box: true, a: p, b: p, op: e.altKey ? 'sub' : e.shiftKey ? 'add' : 'new', before: picked() };
+        return;
+      }
       if (E.itemDraw && e.button === 0) {   // a new item box from the corner pressed
         const q = snapPoint(p, e), it = { x: q.x, y: q.y, w: 0, h: 0, desc: '', ref: '' };
         E.items.push(it); E.itemSel = E.items.length - 1;
@@ -851,6 +864,17 @@ export function createEditor(cfg) {
     cv.addEventListener('pointermove', (e) => {
       if (!drag) return;
       const p = point(e);
+      if (drag.box) {
+        drag.b = p;
+        drag.live ||= Math.hypot(p.x - drag.a.x, p.y - drag.a.y) * EV.s > 4;
+        if (drag.live) {
+          boxShown = dragBox(drag.a, p);
+          ST.setPicked(E, ST.boxPick(boxLayers().filter((l) => G.touchesBox(l, boxShown)), drag.before, drag.op));
+          E.cropping = false;
+          drawEditorCanvas();
+        }
+        return;
+      }
       if (drag.item) {
         const q = snapPoint(p, e), it = drag.item;
         it.x = Math.round(Math.min(drag.p0.x, q.x)); it.y = Math.round(Math.min(drag.p0.y, q.y));
@@ -935,6 +959,11 @@ export function createEditor(cfg) {
     });
     const end = () => {
       const moved = drag && drag.moved;
+      boxShown = null;
+      if (drag?.box && !drag.live) {   // a click: the layer under it, as a box that small would touch it
+        const hit = boxLayers().reverse().find((l) => G.insideLayer(l, drag.a));
+        ST.setPicked(E, ST.boxPick(hit ? [hit] : [], drag.before, drag.op));
+      }
       if (drag?.item) {   // a box too small to mean anything was a click: gone
         const it = drag.item;
         if (it.w < 8 || it.h < 8) { E.items.splice(E.items.indexOf(it), 1); E.itemSel = -1; } else E.itemDraw = false;
@@ -987,6 +1016,14 @@ export function createEditor(cfg) {
       e.preventDefault();
       pasteLayers();
     });
+    // Shift+Enter runs the Image tool that's open, from its own text boxes too; another panel's box keeps its new line. (On window: before paint.js's keys.)
+    window.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || !e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || e.repeat || !cfg.active() || sheetOpen()) return;
+      const box = editing(e);
+      if (box && !box.closest('section')?.querySelector('select[aria-label="Image tool"]')) return;
+      e.preventDefault(); e.stopPropagation();
+      runImageTool(eng);
+    }, true);
     // V / C switch tool, Esc finishes a crop / deselects, Delete removes the selected layer, arrows nudge it
     document.addEventListener('keydown', (e) => {
       if (cfg.active() && !sheetOpen() && E.sel && (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'e' && !e.target.closest('input, textarea, select')) {
@@ -1005,7 +1042,7 @@ export function createEditor(cfg) {
         Escape: () => { if (E.cropping) E.cropping = false; else if (E.multi.length) E.multi = []; else E.sel = null; },
         v: () => { E.cropping = false; }, c: () => { if (!plain(l)) { E.cropping = true; E.aspect = null; } },
         Enter: () => { E.cropping = false; },
-        Delete: () => removeLayer(l), Backspace: () => removeLayer(l),
+        Delete: () => (E.multi.length ? deleteSelected() : removeLayer(l)), Backspace: () => (E.multi.length ? deleteSelected() : removeLayer(l)),
         ArrowLeft: () => nudge(-n, 0), ArrowRight: () => nudge(n, 0), ArrowUp: () => nudge(0, -n), ArrowDown: () => nudge(0, n),
       };
       if (!keys[e.key]) return;
@@ -1039,7 +1076,11 @@ export function createEditor(cfg) {
     if (!E.sel) { E.multi = []; E.pickMode = false; }
     if (!E.sel || !ready(E.sel)) E.cropping = false;
     if (cfg.renderPanel) cfg.renderPanel(eng);
-    else if (cfg.panel) cfg.panel.replaceChildren(...[].concat(cfg.panelParts(eng)).filter(Boolean));
+    else if (cfg.panel) {
+      const top = cfg.panel.scrollTop;   // (the panel built again stays where it was scrolled)
+      cfg.panel.replaceChildren(...[].concat(cfg.panelParts(eng)).filter(Boolean));
+      if (cfg.panel.scrollTop !== top) cfg.panel.scrollTop = top;
+    }
     animBar();
     drawEditorCanvas();
     paint.sync();
@@ -1118,7 +1159,7 @@ export function createEditor(cfg) {
     const several = picked(), hiddenCount = ST.hiddenOnes(E.layers).count;
     const bar = h('div', { class: 'row wrap layer-pick' },
       h('button', { type: 'button', class: `btn small${E.pickMode ? ' on' : ''}`, 'aria-pressed': String(!!E.pickMode),
-        title: 'Taps on the list and the canvas add or drop layers from the selection (or hold Shift)',
+        title: 'Taps on the list and the canvas add or drop layers from the selection. Also: Shift on the canvas, Alt in the list. Shift in the list selects a range',
         onclick: () => { E.pickMode = !E.pickMode; renderEditor(); } }, 'Select several'),
       button('All', () => { const vis = E.layers.filter((l) => !l.mask && !l.draft && !l.maskOf); E.sel = vis[vis.length - 1] || null; E.multi = vis.slice(0, -1); renderEditor(); }, { cls: 'small' }),
       several.length ? button('None', () => { E.sel = null; E.multi = []; E.pickMode = false; renderEditor(); }, { cls: 'small' }) : null,
@@ -1127,6 +1168,8 @@ export function createEditor(cfg) {
       store.get(LAYER_CLIP, null) ? button([icon('paste'), 'Paste'], pasteLayers, { cls: 'small', title: 'The layers you copied, on top, in the place they had (Ctrl+V)' }) : null,
       hiddenCount ? button([icon('trash'), `Delete ${hiddenCount} hidden`], deleteHidden, { cls: 'small danger', title: 'Every hidden layer, its mask too. A locked one stays' }) : null,
       several.length ? button([icon('copy'), 'Duplicate'], duplicateSelected, { cls: 'small', title: 'A copy of each selected layer, its own mask too, on top of them in the same place (Ctrl+J)' }) : null,
+      several.length > 1 ? button([icon('trash'), `Delete ${several.length} selected`], deleteSelected, { cls: 'small danger', title: 'Every selected layer, its mask too (Delete). A locked one stays' }) : null,
+      several.length && cfg.newEdit ? button('Move to new edit', moveToNewEdit, { cls: 'small', title: 'The selected layers, their masks too, out of this edit and into a new one' }) : null,
       several.length === 1 ? button('Merge down', () => mergeDown(several[0]), { cls: 'small', disabled: !ST.mergeBelow(E.layers, several[0]), title: 'Into the layer below, as they look (Ctrl+E)' }) : null,
       several.length > 1 ? button('Merge selected', mergeSelected, { cls: 'small', disabled: ST.mergeSet(E.layers, several).length < 2, title: 'These layers as one picture, at the place of the topmost (Ctrl+E)' }) : null,
       several.length ? help('Merge draws the layers into one new picture: crops, turns, opacity and masks are drawn in. It keeps the lowest layer\'s blend, for the whole picture, so layers with a blend other than Normal can look different. A hidden layer isn\'t merged. Locked or animated layers can\'t be merged. Undo brings them back.') : null,
@@ -1165,7 +1208,8 @@ export function createEditor(cfg) {
         // (painting the selected layer: tapping it again keeps it, so the brush always has a layer)
         onclick: (ev) => {
           if (ev?.ctrlKey || ev?.metaKey) { paint.selectLayer(l, ev.shiftKey ? 'add' : ev.altKey ? 'sub' : 'new'); return; }   // Ctrl-tap: its pixels become the selection
-          if (ev?.shiftKey || E.pickMode) { togglePick(l); renderEditor(); return; }
+          if (ev?.shiftKey && !E.pickMode && E.sel) { ST.setPicked(E, ST.rangeOf(E.layers, E.sel, l)); E.cropping = false; renderEditor(); return; }   // from the selected layer through this one
+          if (ev?.shiftKey || ev?.altKey || E.pickMode) { togglePick(l); renderEditor(); return; }
           if (l === E.sel && !E.multi.length && !paint.painting()) { E.sel = null; E.cropping = false; } else pickOnly(l);
           renderEditor();
         },
@@ -1309,6 +1353,30 @@ export function createEditor(cfg) {
     E.sel = pics[pics.length - 1] || null; E.multi = pics.slice(0, -1); E.cropping = false;
     editorChanged();
     toast(`${pics.length} ${pics.length === 1 ? 'layer' : 'layers'} pasted`);
+  }
+  // The selected layers, with their masks, out of this edit into a new one, where they had been on the canvas
+  async function moveToNewEdit() {
+    await paint.savePaint();   // (a painted layer needs its file first)
+    const list = ST.clipOf(E.layers, picked().filter(ready)), saved = dumpEditor(list), before = E.layers, tid = docId();
+    if (!saved.layers.length) return toast('Select a picture layer first', true);
+    E.layers = ST.normalize(E.layers.filter((l) => !list.includes(l)), E.groups);
+    E.sel = null; E.multi = []; E.cropping = false;
+    persistEditor();
+    await cfg.newEdit({ ...saved, size: null, anim: null, arrange: null, items: [] });
+    if (docId() === tid) { E.layers = before; persistEditor(); renderEditor(); return toast('Couldn\'t open a new edit: the layers stay here', true); }
+    const n = saved.layers.filter((l) => !l.maskOf).length;
+    toast(`${n} ${n === 1 ? 'layer' : 'layers'} moved to this new edit`);
+  }
+  function deleteSelected() {
+    const before = E.layers, was = picked(), tid = docId(), { keep, count } = ST.withoutPicked(E.layers, was);
+    if (!count) return toast('Those layers are locked', true);
+    E.layers = ST.normalize(keep, E.groups);
+    E.sel = null; E.multi = []; E.cropping = false;
+    persistEditor(); renderEditor();
+    undoToast(`${count} ${count === 1 ? 'layer' : 'layers'} removed`, () => {
+      if (docId() !== tid) return toast(cfg.elsewhere || 'Those layers were in another edit tab', true);
+      E.layers = before; ST.setPicked(E, was); persistEditor(); renderEditor();
+    });
   }
   function deleteHidden() {
     const before = E.layers, tid = docId(), { count, keep } = ST.hiddenOnes(E.layers);

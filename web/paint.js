@@ -33,6 +33,7 @@ export const blendOp = (l) => BLEND[l.blend] || 'source-over';
 // tools: [id, name, key]; 'move' is the editor's own move / resize / crop
 const TOOLS = [
   ['move', 'Move, resize and crop layers', 'v'],
+  ['arrow', 'Select layers: drag a box over them. Shift adds, Alt takes away', 'q'],
   ['brush', 'Brush', 'b'], ['eraser', 'Eraser', 'e'],
   ['line', 'Line', 'l'], ['rect', 'Rectangle', 'r'], ['ellipse', 'Ellipse', 'o'],
   ['fill', 'Fill', 'g'], ['pick', 'Colour picker', 'i'],
@@ -127,7 +128,7 @@ export function createPaint(ctx) {
     selOp: 'new', selMove: 'outline', selAmt: store.get('deck.paint.selAmt', 8), last: null, lastAt: null, guides: [],   // selections: how a shape joins, what a drag moves, Expand / Contract px
     back: 'brush',   // the tool the colour picker goes back to
   };
-  const painting = () => P.tool !== 'move';
+  const painting = () => P.tool !== 'move' && P.tool !== 'arrow';
   const brushKey = () => (P.tool === 'eraser' ? 'eraser' : P.tool === 'brush' ? P.brush : SHAPES.includes(P.tool) ? 'shape' : P.tool === 'fill' ? 'fill' : P.brush);
   const bset = (k = brushKey()) => ({ ...(BRUSHES[k] || OTHER[k]), ...(P.set[k] || {}) });
   function setBrush(k, o) { P.set[k] = { ...(P.set[k] || {}), ...o }; store.set('deck.paint.set', P.set); }
@@ -517,9 +518,12 @@ export function createPaint(ctx) {
     live.ctx.clearRect(0, 0, cv.width, cv.height); live.ctx.drawImage(cv, 0, 0);
     l.live = live.cv;
   }
+  let lastEnd = null;   // where the last stroke ended: { l, q }, in the layer's pixels
   function beginStroke(e, l) {
     openBuffers(l);
-    S = { l, id: e.pointerId, type: e.pointerType, b: bset(), erase: P.tool === 'eraser', bb: null, sm: null, last: null, carry: 0, raw: null, frame: 0, clip: clipOf(l) };
+    // (Shift: a straight line from where the last stroke on this layer ended)
+    const from = e.shiftKey && lastEnd?.l === l ? lastEnd.q : null;
+    S = { l, id: e.pointerId, type: e.pointerType, b: bset(), erase: P.tool === 'eraser', bb: null, sm: null, last: from, carry: 0, raw: null, frame: 0, clip: clipOf(l) };
     moveStroke(e);
   }
 
@@ -685,6 +689,7 @@ export function createPaint(ctx) {
     cancelAnimationFrame(S.frame);
     if (S.raw && S.sm) lineTo(S.raw);   // the stabiliser catches up with where the pen lifted
     const s = S, bb = s.bb;
+    if (s.last) lastEnd = { l: s.l, q: s.last };
     S = null; s.l.live = null;
     if (bb) change(s.l, bb, (c) => laydown(c, SCR.buf.cv, intBox(bb, s.l.img), s));
     X.redraw();
@@ -1248,6 +1253,7 @@ export function createPaint(ctx) {
     else if (P.tool === 'fill') fillAt(e, l);
   }
   function onMove(e) {
+    if (e.pointerType !== 'touch') hover = { clientX: e.clientX, clientY: e.clientY };
     if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
       touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (G) { e.stopImmediatePropagation(); moveGesture(); return; }
@@ -1290,6 +1296,15 @@ export function createPaint(ctx) {
     ring.classList.remove('hidden');
   }
   function hideRing() { ring?.classList.add('hidden'); }
+  // The size just changed by key: the ring shows it now, where the pointer is, or for a moment in the middle if the pointer is off the canvas
+  let hover = null, ringOff = 0;
+  function showSize() {
+    clearTimeout(ringOff);
+    if (hover) return showRing(hover);
+    const r = X.viewer().getBoundingClientRect();
+    showRing({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 });
+    ringOff = setTimeout(hideRing, 800);
+  }
 
   // ---- the tool strip down the left of the canvas ----
   let strip = null;
@@ -1302,17 +1317,17 @@ export function createPaint(ctx) {
     strip.querySelector('[data-act=fit]').classList.toggle('hidden', !X.zoom.zoomed());
     const sw = strip.querySelector('.paint-color');
     sw.style.setProperty('--c', P.color); sw.querySelector('input').value = P.color;
-    X.canvas().style.cursor = painting() ? 'crosshair' : '';
+    X.canvas().style.cursor = painting() || P.tool === 'arrow' ? 'crosshair' : '';
   }
   function setTool(t) {
     if (t === P.tool) return;
     cancelStroke();
-    if (t === 'pick' && P.tool !== 'move') P.back = P.tool;
+    if (t === 'pick' && painting()) P.back = P.tool;
     P.tool = t;
     const e = E();
     e.cropping = false;
     commitFloat();   // (the selection stays through any tool, as in Photoshop; the zoom stays too)
-    if (t !== 'move' && t !== 'pick' && !target()) {   // something to paint on: the top layer that can be, or a new white canvas
+    if (t !== 'move' && t !== 'arrow' && t !== 'pick' && !target()) {   // something to paint on: the top layer that can be, or a new white canvas
       const l = [...e.layers].reverse().find((o) => o.img?.naturalWidth && o.x != null && !o.hidden && !o.locked);
       if (l) e.sel = l;
       else if (!e.layers.length) addBlank({ ...(X.frame() || { w: 1024, h: 1024 }), fill: '#ffffff' });
@@ -1323,7 +1338,7 @@ export function createPaint(ctx) {
   function setColor(c, keep = true) {
     P.color = c; store.set('deck.paint.color', c);
     if (keep) { P.recent = [c, ...P.recent.filter((x) => x !== c)].slice(0, 8); store.set('deck.paint.recent', P.recent); }
-    if (P.tool === 'eraser' || P.tool === 'move') setTool('brush');
+    if (P.tool === 'eraser' || !painting()) setTool('brush');
     syncStrip();
   }
   function buildStrip() {
@@ -1345,6 +1360,7 @@ export function createPaint(ctx) {
   }
 
   // ---- the side panel's settings for the tool ----
+  let sizeField = null;   // the Size slider on show: [ and ] set it, without building the panel again (that's slow, and the side bar jumped)
   function paintProps() {
     if (!painting()) return null;
     const l = target();
@@ -1353,7 +1369,7 @@ export function createPaint(ctx) {
     const swatches = h('div', { class: 'swatches' }, [...new Set([...P.recent, ...SWATCHES])].slice(0, 16).map((c) =>
       h('button', { type: 'button', style: `background:${c}`, class: c === P.color ? 'on' : '', 'aria-label': `Colour ${c}`, onclick: () => { setColor(c); X.render(); } })));
     const toggle = (label, on, flip, title) => button(label, () => { flip(); X.render(); }, { cls: `small${on ? ' on' : ''}`, title });
-    const size = (label) => rangeField(label, () => bset(k).size, (v) => keepB({ size: Math.round(v) }), { min: 1, max: 400, step: 1, fmt: (v) => `${Math.round(v)} px` });
+    const size = (label) => (sizeField = rangeField(label, () => bset(k).size, (v) => keepB({ size: Math.round(v) }), { min: 1, max: 400, step: 1, fmt: (v) => `${Math.round(v)} px` }));
     const opacity = (label = 'Opacity') => rangeField(label, () => bset(k).opacity, (v) => keepB({ opacity: clamp(v, 0.01, 1) }), { min: 0.01, max: 1, step: 0.01, fmt: pctFmt });
     const colour = colorField('Colour', () => P.color, (c) => setColor(c, false), swatches);
     const penOnly = toggle('Pen only', P.penOnly, () => { P.penOnly = !P.penOnly; }, 'Fingers pan and zoom, and don\'t paint');
@@ -1372,7 +1388,7 @@ export function createPaint(ctx) {
         rangeField('Smoothing', () => P.smooth, (v) => { P.smooth = clamp(v, 0, 1); store.set('deck.paint.smooth', P.smooth); }, { min: 0, max: 1, step: 0.01, fmt: pctFmt }),
         t === 'brush' ? colour : null,
         h('div', { class: 'row wrap' }, penOnly, button('Blank canvas', blankSheet, { title: 'A new empty layer to paint on' })),
-        help(`The pen paints: press harder for a wider or stronger line, tilt a pencil to shade. Once the pen has touched the canvas, fingers stop painting (Pen only). ${gestures} [ and ] change the size; Alt picks a colour. Smoothing steadies the line (it trails the pen a little).`));
+        help(`The pen paints: press harder for a wider or stronger line, tilt a pencil to shade. Once the pen has touched the canvas, fingers stop painting (Pen only). ${gestures} [ and ] change the size; Alt picks a colour; Shift-click draws a straight line from where the last stroke ended. Smoothing steadies the line (it trails the pen a little).`));
     }
     if (SHAPES.includes(t)) {
       return section('Shapes', done, on,
@@ -1434,16 +1450,18 @@ export function createPaint(ctx) {
       return;
     }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (KEYS[k] && !(k === 'v' && !painting())) { e.preventDefault(); e.stopImmediatePropagation(); setTool(KEYS[k]); return; }
+    if (KEYS[k] && !(k === 'v' && P.tool === 'move')) { e.preventDefault(); e.stopImmediatePropagation(); setTool(KEYS[k]); return; }
     if (painting() && (e.key === '[' || e.key === ']')) {
       e.preventDefault();
       const kk = brushKey(), s = bset(kk).size;
-      setBrush(kk, { size: clamp(Math.round(e.key === ']' ? s * 1.2 + 1 : s / 1.2 - 1), 1, 400) });
-      X.render();
+      const size = clamp(Math.round(e.key === ']' ? s * 1.2 + 1 : s / 1.2 - 1), 1, 400);
+      setBrush(kk, { size });
+      sizeField?.show(size);
+      showSize();
       return;
     }
     // the layout keys (Delete removes the layer, arrows nudge it, Esc deselects) don't apply while painting
-    if (painting() && ['Delete', 'Backspace', 'Escape', 'Enter', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'c'].includes(e.key)) {
+    if (painting() && !(e.key === 'Enter' && e.shiftKey) && ['Delete', 'Backspace', 'Escape', 'Enter', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'c'].includes(e.key)) {
       if (e.key === 'Escape') { if (P.sel) dropSel(); else setTool('move'); X.render(); }
       else if ((e.key === 'Delete' || e.key === 'Backspace') && P.sel) selAction('clear');
       else if (e.key === 'Enter' && P.sel?.float) { commitFloat(); X.render(); }
@@ -1458,7 +1476,7 @@ export function createPaint(ctx) {
   cv.addEventListener('pointermove', onMove, true);
   cv.addEventListener('pointerup', onUp, true);
   cv.addEventListener('pointercancel', onUp, true);
-  cv.addEventListener('pointerleave', hideRing);
+  cv.addEventListener('pointerleave', () => { hover = null; hideRing(); });
   cv.addEventListener('wheel', (e) => {   // the wheel zooms about the pointer
     if (!X.active()) return;
     e.preventDefault();
@@ -1484,7 +1502,7 @@ export function createPaint(ctx) {
     return m;
   }
   return {
-    P, els: buildStrip(), painting, paintProps, paintOverlay, sync: syncStrip, savePaint, unsavedPaint, setTool, setColor,
+    P, els: buildStrip(), painting, boxing: () => P.tool === 'arrow', paintProps, paintOverlay, sync: syncStrip, savePaint, unsavedPaint, setTool, setColor,
     blankSheet, addBlank, dropSel, undo, redo, pushStack, selectionMask, maskLayer, paintMask, spreadValue, spreadLive, spreadDone, layerMaskOp, hasSel: () => !!P.sel, selAction, selectLayer, resizeCanvasLayer, cutByMask, maskOp, growMask, maskOutside, maskFromMatte,
     reset() { cancelStroke(); dropSel(); P.last = null; U.undo = []; U.redo = []; U.bytes = 0; syncStrip(); },   // another document: its undo goes
   };

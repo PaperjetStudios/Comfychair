@@ -191,3 +191,53 @@ test('delete hidden takes hidden layers and their masks, not locked ones, drafts
   assert.equal(S.hiddenOnes([b]).count, 0);
 });
 
+test('a range runs both ways, both ends always, and leaves out hidden layers between', () => {
+  const a = L('a'), b = L('b', { hidden: true }), c = L('c'), d = L('d', { hidden: true }), e = L('e');
+  assert.deepEqual(keys(S.rangeOf([a, b, c, d, e], a, c)), ['a', 'c']);
+  assert.deepEqual(keys(S.rangeOf([a, b, c, d, e], e, c)), ['c', 'e']);
+  assert.deepEqual(keys(S.rangeOf([a, b, c, d, e], b, d)), ['b', 'c', 'd']);
+});
+test('a range leaves out masks and drafts, and a layer no longer there is only the one clicked', () => {
+  const a = L('a'), m = L('m', { maskOf: 'a' }), p = L('p', { mask: true }), r = L('r', { draft: true }), c = L('c');
+  assert.deepEqual(keys(S.rangeOf([a, m, p, r, c], a, c)), ['a', 'c']);
+  assert.deepEqual(keys(S.rangeOf([c], a, c)), ['c']);
+});
+test('a box replaces, adds to or takes from the selection', () => {
+  const a = L('a'), b = L('b'), c = L('c');
+  assert.deepEqual(keys(S.boxPick([b, c], [a, b], 'new')), ['b', 'c']);
+  assert.deepEqual(keys(S.boxPick([b, c], [a, b], 'add')), ['a', 'b', 'c']);
+  assert.deepEqual(keys(S.boxPick([b, c], [a, b], 'sub')), ['a']);
+});
+test('setting the selection keeps the layer a range counts from, if it can', () => {
+  const a = L('a'), b = L('b'), E = { sel: a, multi: [] };
+  S.setPicked(E, [a, b]);
+  assert.equal(E.sel, a); assert.deepEqual(E.multi, [b]);
+  S.setPicked(E, [b]);
+  assert.equal(E.sel, b); assert.deepEqual(E.multi, []);
+  S.setPicked(E, []);
+  assert.equal(E.sel, null);
+});
+test('a result takes its hidden original\'s place in the selection, wherever it is', () => {
+  const a = L('a'), b = L('b'), ra = L('ra'), rb = L('rb'), E = { sel: a, multi: [b], cropping: true };
+  S.handOver(E, { layer: b }, rb);
+  assert.equal(E.sel, a); assert.deepEqual(E.multi, [rb]);
+  S.handOver(E, { layer: a }, ra);
+  assert.equal(E.sel, ra); assert.deepEqual(E.multi, [rb]);
+  assert.equal(E.cropping, false);
+});
+test('variations of one original all join; a selection changed since the run stays', () => {
+  const a = L('a'), r1 = L('r1'), r2 = L('r2'), E = { sel: a, multi: [] }, src = { layer: a };
+  S.handOver(E, src, r1);
+  S.handOver(E, src, r2);
+  assert.equal(E.sel, r1); assert.deepEqual(E.multi, [r2]);
+  const other = L('other'), F = { sel: other, multi: [] };
+  S.handOver(F, { layer: a }, r1);
+  assert.equal(F.sel, other); assert.deepEqual(F.multi, []);
+});
+test('deleting the selection takes their masks, and leaves locked layers and the rest', () => {
+  const a = L('a'), m = L('m', { maskOf: 'a' }), b = L('b', { locked: true }), mb = L('mb', { maskOf: 'b' }), c = L('c');
+  const r = S.withoutPicked([a, m, b, mb, c], [a, b]);
+  assert.deepEqual(keys(r.keep), ['b', 'mb', 'c']);
+  assert.equal(r.count, 1);
+  assert.equal(S.withoutPicked([b], [b]).count, 0);
+});

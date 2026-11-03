@@ -66,6 +66,17 @@ export function sentToFrame(l, f, [w, h]) {
   const r = layerRect(l);
   return mul(T(-f.x, -f.y), mul(turn(l), [r.w / w, 0, 0, r.h / h, r.x, r.y]));
 }
+// does a box on the canvas ({ x, y, w, h }) touch what the layer covers, turned or not: no line along either's sides separates them
+export function touchesBox(l, box) {
+  const a = corners(l).map(({ x, y }) => [x, y]);
+  const b = [[box.x, box.y], [box.x + box.w, box.y], [box.x + box.w, box.y + box.h], [box.x, box.y + box.h]];
+  const axes = [[1, 0], [0, 1], [a[1][0] - a[0][0], a[1][1] - a[0][1]], [a[3][0] - a[0][0], a[3][1] - a[0][1]]];
+  return axes.every(([ax, ay]) => {
+    const on = (ps) => ps.map(([x, y]) => x * ax + y * ay);
+    const pa = on(a), pb = on(b);
+    return Math.max(...pa) >= Math.min(...pb) && Math.max(...pb) >= Math.min(...pa);
+  });
+}
 // the box round what the layer covers on the canvas (layerRect itself when it isn't turned)
 export function bounds(l) {
   if (!((l.rotation || 0) % 360)) return layerRect(l);

@@ -493,7 +493,7 @@ details.desc[open] summary { margin-bottom: 6px; }
 /* ---- layer lists (Editor, 3D) ---- */
 .layers { display: grid; gap: 4px; }
 .layer-pick { margin-bottom: 6px; align-items: center; }
-.layer-row { display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: center; padding: 6px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg); cursor: pointer; transition: border-color .15s, background .15s; }
+.layer-row { user-select: none; display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: center; padding: 6px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg); cursor: pointer; transition: border-color .15s, background .15s; }
 @media (hover: hover) { .layer-row:hover:not(.sel) { border-color: var(--line-2); } }
 .layer-row .thumb { width: 44px; height: 44px; }
 .layer-row.sel { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }

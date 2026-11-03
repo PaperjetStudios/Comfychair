@@ -128,6 +128,7 @@ export async function openMaskPainter({ picture, crop = null, mask = null, onDon
   // ---- strokes (as the sketch pad: round segments, pen pressure sets the width) ----
   let stroke = null;
   const width = (e) => (st.size / V.z) * (e.pointerType === 'pen' ? 0.15 + 0.85 * (e.pressure || 0.5) : 1);
+  let lastEnd = null, hovered = null;
   const paintTo = (e) => {
     ctx.globalCompositeOperation = st.tool === 'erase' ? 'destination-out' : 'source-over';
     ctx.strokeStyle = ctx.fillStyle = TINT; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -175,7 +176,7 @@ export async function openMaskPainter({ picture, crop = null, mask = null, onDon
     }
     if (stroke) return;
     snapshot();
-    stroke = { id: e.pointerId, type: e.pointerType, last: null };
+    stroke = { id: e.pointerId, type: e.pointerType, last: e.shiftKey ? lastEnd : null };   // (Shift: a straight line from where the last stroke ended)
     paintTo(e);
   });
   stage.addEventListener('pointermove', (e) => {
@@ -184,7 +185,7 @@ export async function openMaskPainter({ picture, crop = null, mask = null, onDon
       if (G) { moveGesture(); return; }
     }
     if (stroke && e.pointerId === stroke.id) paintTo(e);
-    if (e.pointerType !== 'touch') showRing(e);
+    if (e.pointerType !== 'touch') { hovered = e; showRing(e); }
   });
   const up = (e) => {
     if (e.pointerType === 'touch' && touches.delete(e.pointerId) && G) {
@@ -195,11 +196,11 @@ export async function openMaskPainter({ picture, crop = null, mask = null, onDon
       } else G.n = 0;
       return;
     }
-    if (stroke && e.pointerId === stroke.id) stroke = null;
+    if (stroke && e.pointerId === stroke.id) { lastEnd = stroke.last; stroke = null; }
   };
   stage.addEventListener('pointerup', up);
   stage.addEventListener('pointercancel', up);
-  stage.addEventListener('pointerleave', () => ring.classList.add('hidden'));
+  stage.addEventListener('pointerleave', () => { hovered = null; ring.classList.add('hidden'); });
   stage.addEventListener('wheel', (e) => { e.preventDefault(); const p = local(e); zoomAt(V.z * Math.exp(-e.deltaY * 0.0015), p.x, p.y); }, { passive: false });
   const showRing = (e) => {
     const p = local(e), d = Math.max(4, st.size);
@@ -254,7 +255,7 @@ export async function openMaskPainter({ picture, crop = null, mask = null, onDon
     if (e.target.closest?.('input, textarea, select')) return;
     const k = e.key.toLowerCase();
     if ((e.ctrlKey || e.metaKey) && (k === 'z' || k === 'y')) { e.preventDefault(); if (k === 'y' || e.shiftKey) redo(); else undo(); }
-    else if (e.key === '[' || e.key === ']') { sizeIn.set(e.key === ']' ? st.size * 1.2 + 1 : st.size / 1.2 - 1); setSize(); }
+    else if (e.key === '[' || e.key === ']') { sizeIn.set(e.key === ']' ? st.size * 1.2 + 1 : st.size / 1.2 - 1); setSize(); if (hovered) showRing(hovered); }
     else if (k === 'b' || k === 'e') { st.tool = k === 'b' ? 'paint' : 'erase'; toolSeg.set(st.tool); }
     else return;
     e.stopImmediatePropagation();

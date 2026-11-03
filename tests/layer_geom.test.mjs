@@ -74,3 +74,14 @@ console.log('layer geom ok');
 assert.equal(G.seeThrough(new Uint8ClampedArray([9, 9, 9, 255, 9, 9, 9, 255])), false);
 assert.equal(G.seeThrough(new Uint8ClampedArray([9, 9, 9, 255, 9, 9, 9, 0])), true);
 assert.equal(G.seeThrough(new Uint8ClampedArray([9, 9, 9, 252])), false);
+
+// a box over the layers (Select layers): it touches what a layer covers, turned or not
+{
+  const flat = layer({ x: 0, y: 0, scale: 1 });   // 200x100 at the origin
+  assert.ok(G.touchesBox(flat, { x: 190, y: 90, w: 50, h: 50 }));
+  assert.ok(!G.touchesBox(flat, { x: 201, y: 0, w: 50, h: 50 }));
+  const turned = layer({ x: 0, y: 0, scale: 1, rotation: 45 });   // a box inside the square round it but off its turned sides doesn't touch it; the middle does
+  assert.ok(!G.touchesBox(turned, { x: 190, y: 0, w: 5, h: 5 }));
+  assert.ok(G.touchesBox(turned, { x: 98, y: 48, w: 4, h: 4 }));
+  assert.ok(G.touchesBox(turned, { x: -100, y: -100, w: 400, h: 300 }));
+}

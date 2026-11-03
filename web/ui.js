@@ -584,6 +584,7 @@ export function rangeField(label, get, set, { min, max, step, digits = null, fmt
   r.addEventListener('input', () => { if (r.dataset.scrubbing) { take(); onInput?.(); } });
   r.addEventListener('change', () => { take(); onInput?.(); onChange?.(); });
   const el = field([label, val], r);
+  el.show = (v) => { r.set(v); val.textContent = fmt(v); };   // (a value set from outside, without building the panel again)
   return tip ? withHelp(el, tip) : el;
 }
 

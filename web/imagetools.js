@@ -5,6 +5,7 @@ import { queueRun, template, valuesByRole, waitGen } from './make.js';
 import { MAPS } from './maps.js';
 import { editSizeFor } from './edit-size.js';
 import * as G from './layer-geom.js';
+import * as Stack from './layer-stack.js';
 import { layerMask, uploadMask } from './inpaint.js';
 import { maskAsSent, maskForResult, placed, shapeOf } from './layer-result.js';
 import { isOn } from './adjust.js';
@@ -291,6 +292,13 @@ async function cutCells(src) {
   return out;
 }
 
+// A result is in: with Hide the original on, its layer hides and the result takes its place in the selection
+function hideOriginal(eng, src, made) {
+  if (!src.layer || !ST.hide) return;
+  src.layer.hidden = true;
+  Stack.handOver(eng.E, src, made);
+}
+
 async function land(eng, o, src, done, cell) {
   const { rect, layer } = src;
   if (o.kind === 'matte') {
@@ -302,23 +310,18 @@ async function land(eng, o, src, done, cell) {
     }
     const cut = await cutOut(src.name, matte);
     const up = ST.result === 'black' ? await onBlack(cut) : await uploadImage(await pngBlob(cut), { mp: 0, source: 'editor', filename: 'cutout.png', multiple: 1, board: 'Cut out' });
-    eng.addImage(up.name, { label: ST.result === 'black' ? 'Cut out on black' : 'Cut out', ...placed(src, rect.x, rect.y, rect.w, up) });
-    if (layer && ST.hide) layer.hidden = true;
+    hideOriginal(eng, src, eng.addImage(up.name, { label: ST.result === 'black' ? 'Cut out on black' : 'Cut out', ...placed(src, rect.x, rect.y, rect.w, up) }));
   } else if (o.kind === 'sheet') {
     let r = await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } });
     if (ST.result === 'black') r = await onBlack(await loadImg(inputUrl(r.name)));
     const cw = rect.w / ST.cols, ch = rect.h / ST.rows;
-    eng.addImage(r.name, { label: `${ST.result === 'black' ? 'View on black' : 'View'} ${cell.r + 1}-${cell.c + 1}`, ...placed(src, rect.x + cell.c * cw, rect.y + cell.r * ch, cw, r) });
+    const view = eng.addImage(r.name, { label: `${ST.result === 'black' ? 'View on black' : 'View'} ${cell.r + 1}-${cell.c + 1}`, ...placed(src, rect.x + cell.c * cw, rect.y + cell.r * ch, cw, r) });
+    if (layer && ST.hide) Stack.handOver(eng.E, src, view);   // (it hides when the last view is in)
     return eng.changed(), eng.render();
   } else {
     const r = await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } });
     const made = eng.addImage(r.name, { label: o.kind === 'up' ? `Upscaled ${r.width}×${r.height}` : o.kind === 'edit' ? 'Edited' : o.kind === 'delight' ? (o.done || 'De-lit') : o.kind === 'detail' ? `Detail (${dm().label})` : o.kind === 'clean' ? `Cleaned (${(CLEAN[ST.cmodel] || CLEAN.noise).label})` : o.label, ...placed(src, rect.x, rect.y, rect.w, r), ...(await maskForResult(src, r)) });
-    if (layer && KEEPS_FRAMING.has(o.kind) && ST.hide) layer.hidden = true;
-    if (layer && o.kind === 'up' && ST.hide) {   // the selection moves from the hidden original to its upscale (a layer picked since the run began stays picked)
-      const E = eng.E;
-      if (E.sel === layer) { E.sel = made; E.cropping = false; }
-      E.multi = E.multi.map((m) => (m === layer ? made : m));
-    }
+    if (KEEPS_FRAMING.has(o.kind)) hideOriginal(eng, src, made);
     if (o.kind === 'up') eng.E.out = Math.max(eng.E.out || 1, ST.scale);   // (the layer keeps its size on the canvas; exporting at this size shows the new detail)
   }
   eng.changed(); eng.render();
@@ -420,8 +423,7 @@ async function fillIn(eng, o, t, tab, src, maskCv) {
     }
     if (eng.E.tab?.id !== tab) return toast(`${o.label} finished on another edit`);
     const r = await uploadImage(await pngBlob(result), { mp: 0, source: 'editor', filename: 'removed.png', multiple: 1, board: 'Removed' });
-    eng.addImage(r.name, { label: 'Removed', ...placed(src, src.rect.x, src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) });
-    if (src.layer && ST.hide) src.layer.hidden = true;
+    hideOriginal(eng, src, eng.addImage(r.name, { label: 'Removed', ...placed(src, src.rect.x, src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) }));
     eng.changed(); eng.render();
     toast(`${o.label}: done, a new layer on top`);
   } finally { FLIGHT.delete(fillIn); b.done(); eng.render(); }
@@ -572,8 +574,7 @@ async function swapArea(eng, o, tab, src, { mask: red, keep }, b) {
         const made = await loadImg(run.outputs.find((x) => x.kind === 'image').url);
         if (eng.E.tab?.id !== tab) { toast(`${o.label} finished on another edit`); continue; }
         const r = await uploadImage(await pngBlob(pasted(pic, W, H, made, box, before, area0, keep0, side, p)), { mp: 0, source: 'editor', filename: 'swapped.png', multiple: 1, board: `${p.label} swap (${m.label})` });
-        eng.addImage(r.name, { label: `${p.label} swap (${m.label})`, ...placed(src, src.rect.x, src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) });
-        if (src.layer && ST.hide) src.layer.hidden = true;
+        hideOriginal(eng, src, eng.addImage(r.name, { label: `${p.label} swap (${m.label})`, ...placed(src, src.rect.x, src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) }));
         eng.changed(); eng.render();
       } catch (e) { toast(`${m.label}: ${e.message}`, true); } finally { if (run) await dropRun(run.id); if (smaller) await dropInput(smaller); }
     }
@@ -740,8 +741,7 @@ async function addColour(cv, prompt) {
 async function landCanvas(eng, o, tab, src, cv, label, board) {
   if (eng.E.tab?.id !== tab) return toast(`${o.label} finished on another edit: run it again there`, true);
   const r = await uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: `${board.toLowerCase()}.png`, multiple: 1, board });
-  eng.addImage(r.name, { label, ...placed(src, src.rect.x, src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) });
-  if (src.layer && ST.hide) src.layer.hidden = true;
+  hideOriginal(eng, src, eng.addImage(r.name, { label, ...placed(src, src.rect.x, src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) }));
   eng.changed(); eng.render();
   toast(`${o.label}: done, a new layer on top`);
 }
@@ -1063,6 +1063,9 @@ export async function applyStep(step, name, { what = 'person' } = {}) {
   return (await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } })).name;
 }
 
+// Shift+Enter: the tool open in this panel, as its Run button
+export const runImageTool = (eng) => (eng.E.layers.some((l) => !l.mask && !l.draft) ? run(eng) : toast('Add a picture first', true));
+
 export function imageToolsSection(eng) {
   const E = eng.E;
   if (!E.layers.some((l) => !l.mask && !l.draft)) return null;
@@ -1081,7 +1084,7 @@ export function imageToolsSection(eng) {
       onclick: () => { if (here) return; ST.op = ids[0]; save(); eng.render(); } }, icon(ic), h('span', {}, label));
   }));
   return section('Image tools', null,
-    quick, select, help(`${o.help} ${on}`.trim()),
+    quick, select, help(`${o.help} ${on} Shift+Enter runs this tool.`.trim()),
     !t ? hint(`${tplId(o)} isn't installed yet`) : null,
     field('Run on', seg([['whole', 'Whole picture'], ['selected', 'Selected layers']], ST.scope, (v) => { ST.scope = v; save(); eng.render(); }),
       help('Whole picture sends every visible layer together. Selected layers runs on each selected layer alone, one run each, with the result over that layer. A cropped layer sends its kept part. A turned or mirrored layer is sent unturned, and its result takes the same turn. A masked layer is sent whole: an Upscale, Detail or De-light result gets a copy of its mask, and other tools\' results get none. Remove from the red mask cuts the mask to each selected layer, and leaves out a layer it doesn\'t touch.')),
@@ -1153,5 +1156,5 @@ export function imageToolsSection(eng) {
     h('div', { class: 'row wrap' }, o.kind === 'swap' ? button('Mark it', () => swapMark(eng), { disabled: !t }) : null,
       o.kind === 'swap' ? button('Send to Generate', () => swapSend(eng), { disabled: !t }) : null,
       o.kind === 'swap' ? help('Send to Generate opens a tab per ticked model with the close-up, the reference, the prompt, the size and the LoRA set, to change and run there. What it makes there stays as made: it isn\'t put back on the whole picture.') : null,
-      button(o.kind === 'swap' ? 'Swap' : o.kind === 'remove' ? (ST.rfrom === 'words' ? 'Find and mark' : 'Remove') : FLIGHT.size ? 'Run again' : 'Run', () => run(eng), { cls: 'primary', disabled: !t })));
+      button(o.kind === 'swap' ? 'Swap' : o.kind === 'remove' ? (ST.rfrom === 'words' ? 'Find and mark' : 'Remove') : FLIGHT.size ? 'Run again' : 'Run', () => run(eng), { cls: 'primary', disabled: !t, title: 'Shift+Enter' })));
 }

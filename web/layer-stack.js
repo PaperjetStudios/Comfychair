@@ -190,3 +190,43 @@ export function hiddenOnes(layers) {
   const gone = layers.filter((l) => l.hidden && !l.locked && !l.mask && !l.draft && !l.maskOf);
   return { count: gone.length, keep: layers.filter((l) => !gone.includes(l) && !(l.maskOf != null && gone.some((o) => o.key === l.maskOf))) };
 }
+
+// ---- which layers are selected ----
+const rowLayer = (l) => !l.mask && !l.maskOf && !l.draft;
+// Shift-click in the list: from one layer through another, both ends always. Between them a hidden layer is left out, or running a tool on the range
+// would run it again on the originals it hid.
+export function rangeOf(layers, from, to) {
+  const a = layers.indexOf(from), b = layers.indexOf(to);
+  if (a < 0 || b < 0) return [to];
+  return layers.slice(Math.min(a, b), Math.max(a, b) + 1).filter((l) => l === from || l === to || (rowLayer(l) && !l.hidden));
+}
+// A box drawn over the layers: what's selected after it. op: 'new' (what it touches), 'add' or 'sub' (Shift and Alt)
+export function boxPick(touched, before, op) {
+  if (op === 'sub') return before.filter((l) => !touched.includes(l));
+  return op === 'add' ? [...before, ...touched.filter((l) => !before.includes(l))] : touched;
+}
+// A list of layers as the selection: E.sel stays if it's among them (Shift-click counts from it), else the last of them
+export function setPicked(E, list) {
+  E.sel = list.includes(E.sel) ? E.sel : list[list.length - 1] || null;
+  E.multi = list.filter((l) => l !== E.sel);
+}
+// A result has hidden its original: in the selection it takes the original's place, so the next run works on the results. More results from the same
+// original (variations, a sheet's views) join it. src: what was sent, its layer the original. A selection changed since then is left alone.
+export function handOver(E, src, made) {
+  const old = src.layer, picked = E.sel ? [E.sel, ...E.multi] : [];
+  if (picked.includes(old)) {
+    if (E.sel === old) E.sel = made;
+    E.multi = E.multi.map((l) => (l === old ? made : l));
+    E.cropping = false;
+    src.heirs = [made];
+  } else if (src.heirs?.some((l) => picked.includes(l))) {
+    E.multi = [...E.multi, made];
+    src.heirs.push(made);
+  }
+}
+// Delete on the selection: what stays and how many go. A locked layer stays; a mask goes with its layer, and a picked mask alone is only that mask.
+export function withoutPicked(layers, picked) {
+  const gone = new Set(picked.filter((l) => !l.locked));
+  for (const l of layers) if (l.maskOf && [...gone].some((o) => o.key && o.key === l.maskOf)) gone.add(l);
+  return { keep: layers.filter((l) => !gone.has(l)), count: picked.filter((l) => gone.has(l)).length };
+}
