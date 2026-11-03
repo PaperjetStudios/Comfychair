@@ -475,6 +475,102 @@ class Storage(unittest.TestCase):
         self.assertFalse(any(p.exists() for p in listed))
         self.assertTrue(sole.exists() and fresh.exists() and sample.exists() and ours.exists())
 
+    # ---- Clean up this project ----
+    def free_picture(self, name=None, old=True):
+        name = name or f"{time.time_ns()}.png"
+        full = f"{config.COMFY_INPUT_SUBFOLDER}/{name}"
+        touch(config.INPUT_DIR / name, old=old)
+        db.add_input(full, self.pid)
+        return full
+
+    def unused(self):
+        return {i["id"]: i for i in storage.project_unused(self.pid)["items"]}
+
+    def put_doc(self, payload, kind="edit-tabs", trashed=False, stem=None):
+        d = config.PROJECTS_DIR / self.folder / ".deck" / kind
+        d = d / ".trash" if trashed else d
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{stem or time.time_ns()}.json").write_text(json.dumps({"id": "d", "name": "D", "payload": payload}))
+
+    def test_unused_lists_only_what_nothing_holds_and_lists_without_deleting(self):
+        free, in_doc, by_url, in_trash, fresh = self.free_picture(), self.free_picture(), self.free_picture(), self.free_picture(), self.free_picture(old=False)
+        self.put_doc({"layers": [{"name": in_doc}], "src": "/api/input?name=" + by_url.replace("/", "%2F")})
+        self.put_doc({"name": in_trash}, trashed=True)
+        got = self.unused()
+        self.assertEqual(got[f"input:{free}"]["tier"], "free")
+        for held in (in_doc, by_url, in_trash, fresh):
+            self.assertNotIn(f"input:{held}", got)
+        self.assertTrue(storage.input_files(free)[0].is_file(), "listing deletes nothing")
+
+    def test_unused_sees_another_projects_document_and_a_character(self):
+        a, b = self.free_picture(), self.free_picture()
+        other = db.project_folder(db.create_project(f"Other {time.time_ns()}")["id"])
+        d = config.PROJECTS_DIR / other / ".deck" / "scene-tabs"
+        d.mkdir(parents=True)
+        (d / "x.json").write_text(json.dumps({"payload": {"p": a}}))
+        self.put_doc({"look": b}, kind="characters")
+        got = self.unused()
+        self.assertNotIn(f"input:{a}", got)
+        self.assertNotIn(f"input:{b}", got)
+
+    def test_unused_runs_tier_and_a_run_on_its_way_holds(self):
+        old, sized, waiting = self.free_picture(), self.free_picture(), self.free_picture()
+        gid = db.create_generation(self.pid, "x", {"image": old}, {"1": {"inputs": {"image": sized}}}, f"p-{time.time_ns()}")
+        db.update_generation(gid, status="done")
+        db.create_generation(self.pid, "x", {"image": waiting}, {}, f"p-{time.time_ns()}")
+        got = self.unused()
+        self.assertEqual(got[f"input:{old}"]["tier"], "runs")
+        self.assertEqual(got[f"input:{sized}"]["tier"], "runs", "named only by the workflow")
+        self.assertNotIn(f"input:{waiting}", got)
+
+    def test_unused_keeps_a_picture_saved_to_the_board(self):
+        name = self.free_picture()
+        gid = db.create_generation(self.pid, "saved", {}, {}, f"p-{time.time_ns()}")
+        db.set_input_origin(name, {"generation": gid, "index": 0, "frame": None, "saved": True})
+        self.assertNotIn(f"input:{name}", self.unused())
+
+    def test_unused_assets_and_stray_files_go_with_their_caches(self):
+        root = config.PROJECTS_DIR / self.folder
+        free = touch(root / ".deck" / "assets" / "aaaa1111" / "m.glb")
+        kept = touch(root / ".deck" / "assets" / "bbbb2222" / "s.ply")
+        self.put_doc({"url": f"/files/projects/{self.folder}/.deck/assets/bbbb2222/s.ply"}, kind="scene-tabs")
+        gid, ours, _, _ = self.gen()
+        stray, nested = touch(root / "stray.png"), touch(root / "sheets" / "only-in-this-folder.png")
+        cache = touch(config.THUMB_DIR / f"{storage.tag(stray.resolve())}-96.jpg")
+        got = self.unused()
+        self.assertTrue({"asset:aaaa1111", "file:stray.png", "file:sheets/only-in-this-folder.png"} <= set(got))
+        self.assertNotIn("asset:bbbb2222", got)
+        self.assertFalse([k for k in got if k.endswith(ours.name)], "a run's output is no stray")
+        self.assertFalse([k for k in got if ".deck" in k])
+        r = storage.drop_unused(self.pid, ["asset:aaaa1111", "file:stray.png", "file:sheets/only-in-this-folder.png"])
+        self.assertEqual(r["count"], 3)
+        self.assertFalse(free.parent.exists() or stray.exists() or cache.exists() or nested.parent.exists())
+        self.assertTrue(kept.exists() and ours.exists())
+
+    def test_unused_leaves_imports_while_an_outside_job_has_the_card(self):
+        touch(config.PROJECTS_DIR / self.folder / ".deck" / "assets" / "cccc3333" / "m.glb")
+        with mock.patch("app.gpu.state", return_value=({"label": "splat"}, [])):
+            self.assertNotIn("asset:cccc3333", self.unused())
+
+    def test_drop_unused_takes_only_what_was_picked_and_is_still_unused(self):
+        a, b, late = self.free_picture(), self.free_picture(), self.free_picture()
+        copy = touch(self.inp / a)
+        self.put_doc({"name": late})
+        r = storage.drop_unused(self.pid, [f"input:{a}", f"input:{late}", "file:../../secret", "asset:nope"])
+        self.assertEqual((r["count"], r["pictures"]), (1, [a]))
+        self.assertFalse(copy.exists() or storage.input_files(a)[0].exists())
+        self.assertEqual(db.input_origin(a), None)
+        self.assertTrue(storage.input_files(b)[0].exists() and storage.input_files(late)[0].exists())
+
+    def test_unused_routes(self):
+        name = self.free_picture()
+        with TestClient(main.app) as c:
+            self.assertEqual(c.get("/api/storage/unused", params={"project_id": 99999999}).status_code, 404)
+            listed = c.get("/api/storage/unused", params={"project_id": self.pid}).json()
+            self.assertIn(f"input:{name}", [i["id"] for i in listed["items"]])
+            self.assertEqual(c.post("/api/storage/unused", json={"project_id": self.pid, "ids": [f"input:{name}"]}).json()["count"], 1)
+        self.assertFalse(storage.input_files(name)[0].exists())
+
     def test_sweep_takes_playable_copies_of_gone_media_only(self):
         keep_media = touch(config.MEDIA_DIR / "aaaa1111_keep.mov")
         keep = touch(config.PLAYABLE_DIR / f"{storage.tag(keep_media.name)}-play.mp4")

@@ -10,6 +10,8 @@ The rules (see also the tests in tests/test_storage.py):
 - The 3D tab's files (imports, photo splats, Blender clean-ups: asset_dir) live in their project's folder and go with it.
 - sweep() finds what was left behind before these rules, in ComfyChair's own folders in ComfyUI only, and never
   a file ComfyChair has no other copy of.
+- project_unused() lists one project's pictures, 3D imports and stray files that nothing uses; drop_unused() deletes
+  the ones picked from that list. A saved document, in the trash too, or a run still on its way always holds a file.
 """
 import hashlib
 import json
@@ -18,6 +20,7 @@ import re
 import shutil
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 from . import config, db
 
@@ -379,3 +382,97 @@ def sweep(do: bool = False) -> dict:
                 d.rmdir()
         log.info("storage sweep: %d files, %.1f MB freed", len(items), freed / 1e6)
     return {"items": items, "bytes": total, "freed": freed, "count": len(items)}
+
+
+# ---- what one project no longer uses (Settings -> Projects -> Clean up this project) ----
+def _uses() -> tuple[str, str]:
+    """(everything saved documents and unfinished runs name, everything finished runs name) as text. A trashed document
+    counts: Undo can bring it back. A run's workflow counts too: it holds the resized copies its params don't name."""
+    docs, runs = [], []
+    for f in (*_doc_files(), *config.PROJECTS_DIR.glob("*/.deck/*/.trash/*.json"), *config.LIBRARY_DIR.glob("*/.trash/*.json")):
+        try:
+            docs.append(f.read_text(errors="ignore"))
+        except OSError:
+            continue
+    for status, text in db.run_texts():
+        (runs if status in ("done", "error", "interrupted") else docs).append(text)
+    return "\n".join(docs), "\n".join(runs)
+
+
+def _named(text: str, name: str) -> bool:
+    """Whether a document's or a run's text names this file, however it's written there (in a URL, in escaped JSON)."""
+    return name in text or quote(name) in text or json.dumps(name)[1:-1] in text
+
+
+def _newest(p: Path) -> float:
+    return max((f.stat().st_mtime for f in p.rglob("*") if f.is_file()), default=p.stat().st_mtime) if p.is_dir() else p.stat().st_mtime
+
+
+def project_unused(project_id) -> dict:
+    """One project's files nothing uses, listed and not touched: its input pictures, its 3D imports (while no outside job
+    has the card: one may be writing into a new import) and files in its folder that are no run's output. tier "free": nothing
+    names it. tier "runs": only finished runs do, which keep their outputs but can't run again without it. Runs themselves
+    aren't listed, nor a picture saved to the Board (it is a run), nor anything under FRESH seconds old."""
+    from . import gpu   # (it imports nothing of this, but only this list needs it)
+    docs, runs = _uses()
+    now, items = time.time(), []
+
+    def add(kind: str, key: str, name: str, p: Path, size: int, *refs: str):
+        try:
+            if now - _newest(p) < FRESH or any(_named(docs, r) for r in refs):
+                return
+        except OSError:
+            return
+        items.append({"id": f"{kind}:{key}", "kind": kind, "name": name, "bytes": size, "tier": "runs" if any(_named(runs, r) for r in refs) else "free"})
+
+    for r in db.project_inputs(project_id):
+        name = r["name"]
+        files = [p for p in input_files(name) if p.is_file()]
+        if files and not (db.input_origin(name) or {}).get("saved"):
+            add("input", name, Path(name).name, files[0], files[0].stat().st_size, Path(name).name)
+
+    root = config.PROJECTS_DIR / db.project_folder(project_id)
+    assets = root / ".deck" / "assets"
+    if assets.is_dir() and not gpu.state()[0]:
+        for d in sorted(assets.iterdir()):
+            if d.is_dir():
+                parts = sorted((f for f in d.rglob("*") if f.is_file()), key=lambda f: -f.stat().st_size)
+                label = (parts[0].name + (f" + {len(parts) - 1} more" if len(parts) > 1 else "")) if parts else d.name
+                add("asset", d.name, label, d, sum(f.stat().st_size for f in parts), d.name)
+
+    if root.is_dir():
+        recorded = {(config.PROJECTS_DIR / o["path"]).resolve() for g in db.all_generations() for o in g["outputs"] or [] if o.get("path")}
+        for p in sorted(root.rglob("*")):
+            rel = p.relative_to(root)
+            if ".deck" not in rel.parts and p.is_file() and p.resolve() not in recorded:
+                add("file", rel.as_posix(), rel.as_posix(), p, p.stat().st_size, p.name)
+    return {"items": items, "count": len(items), "bytes": sum(i["bytes"] for i in items)}
+
+
+def drop_unused(project_id, ids) -> dict:
+    """Delete the picked items of project_unused, every copy. The list is made again first, so what something started using
+    since it was shown stays. Returns what went, with the picture names for the galleries."""
+    want = set(ids)
+    root = config.PROJECTS_DIR / db.project_folder(project_id)
+    freed, gone, pictures = 0, 0, []
+    for it in project_unused(project_id)["items"]:
+        if it["id"] not in want:
+            continue
+        key = it["id"].split(":", 1)[1]
+        if it["kind"] == "input":
+            freed += delete_input(key)
+            pictures.append(key)
+        else:
+            p = (root / ".deck" / "assets" / key) if it["kind"] == "asset" else root / key
+            if not _inside(p, root):
+                continue
+            drop_caches(*[f.resolve() for f in ([q for q in p.rglob("*") if q.is_file()] if p.is_dir() else [p])])
+            freed += remove([p])
+            if it["kind"] == "file":
+                for d in p.parents:   # folders it leaves empty
+                    if d == root or not _inside(d, root) or any(d.iterdir()):
+                        break
+                    d.rmdir()
+        gone += 1
+    log.info("project clean-up: %d items, %.1f MB freed", gone, freed / 1e6)
+    return {"count": gone, "freed": freed, "pictures": pictures}

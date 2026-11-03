@@ -2,7 +2,7 @@
 // to change the order the picker shows; rename, duplicate (a background copy, with progress) and delete
 // (asks first, naming the project and its size, and wants the name typed). The server tells every device
 // about each change (deck_projects), so the list and #projectSel stay in step everywhere.
-import { h, api, toast, openSheet, closeSheet, button, iconBtn, section, help, note, actions } from './ui.js';
+import { h, api, toast, openSheet, closeSheet, button, iconBtn, section, help, info as infoBtn, note, actions } from './ui.js';
 import { S, loadProjects, onServer, openProject } from './core.js';
 
 const P = { list: null, stats: {}, jobs: new Map(), drag: null, back: null };
@@ -22,6 +22,7 @@ export function projectsSection(back) {
   return section('Projects', null,
     help('Drag ⠿ (or use ↑ ↓) to change the order of the project picker. ✎ renames (the folder on disk keeps its name). ⧉ makes a copy with all its files, saved tabs and history; a big project takes a while and you can keep working. 🗑 deletes a project, its history and its files on disk for good, with its pictures unless another project uses them.'),
     P.list,
+    button('Clean up this project…', cleanProject, { title: 'Pictures, 3D imports and files this project no longer uses: see them, then delete them' }),
     button('Clean up leftovers…', cleanUp, { title: 'Copies ComfyUI kept of ComfyChair\'s files, and old thumbnails: see them, then delete them' }));
 }
 
@@ -46,6 +47,55 @@ async function cleanUp() {
       } catch (e) { toast(e.message, true); }
       closeSheet(); P.back?.();
     }, { cls: 'danger' }), button('Back', () => { closeSheet(); P.back?.(); }, { cls: 'ghost' })));
+}
+
+// Settings → Projects → Clean up this project: its pictures, 3D imports and stray files nothing uses (storage.project_unused),
+// each with a tick. What only old runs name starts unticked: those runs couldn't run again without it.
+const UNUSED_KIND = { input: 'Picture', asset: '3D import', file: 'File' };
+async function cleanProject() {
+  const pid = S.project, name = S.projects.find((p) => p.id === pid)?.name || 'Unsorted';
+  let r;
+  try { r = await api(`/api/storage/unused${pid != null ? `?project_id=${pid}` : ''}`, { busy: 'Looking…' }); } catch (e) { return toast(e.message, true); }
+  if (!r.count) return toast(`${name} has nothing unused`);
+  const on = new Set(r.items.filter((i) => i.tier === 'free').map((i) => i.id)), boxes = new Map();
+  const back = () => { closeSheet(); P.back?.(); };
+  const go = button('', async () => {
+    try {
+      const d = await api('/api/storage/unused', { method: 'POST', busy: 'Deleting…', body: { project_id: pid, ids: [...on] } });
+      toast(`Deleted ${d.count} item${d.count === 1 ? '' : 's'}, ${fmtBytes(d.freed)} freed`);
+    } catch (e) { toast(e.message, true); }
+    back();
+  }, { cls: 'danger' });
+  const update = () => {
+    const bytes = r.items.reduce((a, i) => a + (on.has(i.id) ? i.bytes : 0), 0);
+    go.textContent = `Delete ${on.size} item${on.size === 1 ? '' : 's'} (${fmtBytes(bytes)})`;
+    go.disabled = !on.size;
+    for (const g of groupBoxes) { const c = g.items.filter((i) => on.has(i.id)).length; g.box.checked = c === g.items.length; g.box.indeterminate = !!c && c < g.items.length; }
+  };
+  const groupBoxes = [];
+  const group = (tier, title, tip) => {
+    const items = r.items.filter((i) => i.tier === tier);
+    if (!items.length) return null;
+    const box = h('input', { type: 'checkbox', 'aria-label': `All of ${title}`, onchange: (e) => {
+      for (const i of items) { if (e.target.checked) on.add(i.id); else on.delete(i.id); boxes.get(i.id).checked = e.target.checked; }
+      update();
+    } });
+    groupBoxes.push({ box, items });
+    return h('div', { class: 'unused-group' },
+      h('label', { class: 'unused-head' }, box, h('b', {}, title), h('span', { class: 'hint' }, `${items.length}, ${fmtBytes(items.reduce((a, i) => a + i.bytes, 0))}`), infoBtn(tip)),
+      ...items.map((i) => {
+        const tick = h('input', { type: 'checkbox', checked: on.has(i.id), 'aria-label': i.name, onchange: (e) => { if (e.target.checked) on.add(i.id); else on.delete(i.id); update(); } });
+        boxes.set(i.id, tick);
+        return h('label', { class: 'unused-row' }, tick,
+          i.kind === 'input' ? h('img', { src: `/api/input?name=${encodeURIComponent(i.id.slice(6))}&thumb=96`, alt: '', loading: 'lazy' }) : h('span', { class: 'unused-kind' }, UNUSED_KIND[i.kind]),
+          h('span', { class: 'unused-name', title: i.name }, i.name), h('span', { class: 'hint' }, fmtBytes(i.bytes)));
+      }));
+  };
+  const sheet = [
+    group('free', 'Not used by anything', 'No saved document or run names these, in any project. A document in the trash counts as using a file, and so does anything under ten minutes old. Runs are not listed: delete those on the Board.'),
+    group('runs', 'Only old runs used these', 'These runs keep their results and settings, but running one again needs another picture or file.')];
+  update();
+  openSheet(h('h3', {}, `Clean up ${name}`), ...sheet.filter(Boolean), actions(go, button('Back', back, { cls: 'ghost' })));
 }
 
 async function refresh() {

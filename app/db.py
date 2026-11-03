@@ -372,5 +372,10 @@ def all_generations():
     return [_gen(r) for r in _q("SELECT * FROM generations").fetchall()]
 
 
+def run_texts() -> list[tuple[str, str]]:
+    """(status, params and workflow as saved) of every run: what names a file, for storage._uses."""
+    return [(r["status"], f'{r["params"] or ""}\n{r["workflow"] or ""}') for r in _q("SELECT status, params, workflow FROM generations").fetchall()]
+
+
 def delete_generation(gid: int):
     _q("DELETE FROM generations WHERE id=?", (gid,))
