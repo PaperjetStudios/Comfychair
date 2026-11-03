@@ -29,7 +29,7 @@ resolve_src = None   # main.py sets it: (src dict, tmp) -> (path, kind), as the 
 media_entry = None   # main.py sets it: (Path) -> the media library's JSON for a file
 
 WORKER = config.BASE_DIR / "voice" / "worker.py"
-VOICE_HOME = Path(os.environ.get("DECK_VOICE_HOME", config.BASE_DIR.parent / "comfydeck-voice"))
+VOICE_HOME = Path(os.environ.get("DECK_VOICE_HOME", "/mnt/data/comfydeck-voice"))
 PY = Path(os.environ.get("DECK_VOICE_PY", VOICE_HOME / ".venv" / "bin" / "python"))
 VOICES = config.DATA_DIR / "voices"
 # the dialogue's other engines, each in its own install on the SATA drive (README, Sound tab, Voice tools)

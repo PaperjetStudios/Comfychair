@@ -1039,17 +1039,17 @@ laying the lines on the timeline a track per voice.
 They run in their own venv so their torch never touches ComfyUI's (`voice/worker.py`, started by `app/voice.py`):
 
 ```bash
-python3.12 -m venv ~/Programs/comfydeck-voice/.venv
-~/Programs/comfydeck-voice/.venv/bin/pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu128
-~/Programs/comfydeck-voice/.venv/bin/pip install "audio-separator[gpu]" qwen-tts faster-whisper soundfile audioread "av<16"
+python3.12 -m venv /mnt/data/comfydeck-voice/.venv
+/mnt/data/comfydeck-voice/.venv/bin/pip install torch torchaudio torchvision --index-url https://download.pytorch.org/whl/cu128
+/mnt/data/comfydeck-voice/.venv/bin/pip install "audio-separator[gpu]" qwen-tts faster-whisper soundfile audioread "av<16"
 # if a dependency swapped torchvision for a CPU build ("operator torchvision::nms does not exist"):
-~/Programs/comfydeck-voice/.venv/bin/pip install --force-reinstall --no-deps "torchvision==0.26.0+cu128" --index-url https://download.pytorch.org/whl/cu128
+/mnt/data/comfydeck-voice/.venv/bin/pip install --force-reinstall --no-deps "torchvision==0.26.0+cu128" --index-url https://download.pytorch.org/whl/cu128
 ```
 
 (`av<16`: faster-whisper 1.2 breaks on PyAV 19. Whisper finds the CUDA libraries torch put in the venv; `app/voice.py`
 adds them to `LD_LIBRARY_PATH`.)
 
-Models download on first use into `~/Programs/comfydeck-voice/models` (separation ~0.2–0.9 GB each, Whisper
+Models download on first use into `/mnt/data/comfydeck-voice/models` (separation ~0.2–0.9 GB each, Whisper
 large-v3-turbo ~1.6 GB, Qwen3-TTS ~4.5 GB). `DECK_VOICE_HOME`, `DECK_VOICE_PY`, `DECK_TTS_MODEL` and
 `DECK_WHISPER_MODEL` override the defaults. A run needs the GPU: it waits for an empty ComfyUI queue (it refuses
 otherwise) and asks ComfyUI to unload its models first. Saved voices live in `data/voices/`.
