@@ -17,7 +17,7 @@ test('a failing layer is reported and the others still run', async () => {
   assert.deepEqual(ran, ['a', 'c']);
   assert.deepEqual(r.done, ['a', 'c']);
   assert.deepEqual(r.failed, [{ item: 'b', error: 'upload failed' }]);
-  assert.equal(failureText('Face skin detail', r.failed), 'Face skin detail failed on b (upload failed)');
+  assert.equal(failureText('Skin detail', r.failed), 'Skin detail failed on b (upload failed)');
 });
 
 test('one layer works, and nothing failed says nothing', async () => {

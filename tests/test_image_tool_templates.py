@@ -62,6 +62,21 @@ class FaceSkin(unittest.TestCase):
         self.assertEqual(wf["10"]["inputs"]["images"], ["34", 0])
         self.assertTrue(wf["20"]["_meta"]["deck_keep_size"])
 
+    def test_a_big_part_on_a_large_picture_is_not_cut_to_a_patch(self):
+        for name in ("deck-klein9b-face-skin", "deck-klein9b-detail", "deck-krea2-detail", "deck-qwen21-detail"):
+            self.assertEqual(load(name)["32"]["inputs"]["max_crop_resolution"], 16384)
+
+
+class SkinWhole(unittest.TestCase):
+    def test_the_model_sees_the_whole_picture_with_the_lora_the_panel_checks_for(self):
+        wf = load("deck-klein9b-skin-whole")
+        classes = {n["class_type"] for n in wf.values()}
+        self.assertFalse(classes & {"SAM3Grounding", "ImageCropByMaskAndResize", "ImageUncropByMask"})
+        lora = next(n for n in wf.values() if n["class_type"] == "LoraLoaderModelOnly")["inputs"]["lora_name"]
+        panel = (TEMPLATES.parent / "web" / "imagetools.js").read_text()
+        self.assertIn("deck-klein9b-skin-whole", panel)
+        self.assertIn(lora, panel)
+
 
 class Edit(unittest.TestCase):
     def test_the_panels_knobs_are_fields_of_the_template(self):
