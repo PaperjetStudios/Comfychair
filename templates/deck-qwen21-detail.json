@@ -279,7 +279,7 @@
     0
    ],
    "source": [
-    "12",
+    "35",
     0
    ],
    "mask": [
@@ -293,6 +293,18 @@
   },
   "_meta": {
    "title": "Put it back"
+  }
+ },
+ "35": {
+  "class_type": "SplitImageWithAlpha",
+  "inputs": {
+   "image": [
+    "12",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Drop the decoded alpha (Qwen 2.1 VAE gives RGBA)"
   }
  }
 }

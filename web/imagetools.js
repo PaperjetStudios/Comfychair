@@ -36,12 +36,15 @@ const LOOK_FOR = [['watermark', 'Watermark'], ['letters', 'Letters'], ['logo', '
 const DETAIL = {
   seedvr2: { label: 'SeedVR2 7B', tpl: 'deck-upscale-image', plain: true,
     help: 'Restores and sharpens at the picture\'s own size, with no prompt: the most faithful, nothing invented that isn\'t there. Best for soft or noisy pictures and photos.' },
+  skin: { label: 'Face skin', tpl: 'deck-klein9b-face-skin', lora: 'klein/Flux2 Klein 9B Realistic Detail LoRA.safetensors', strength: 0.3,
+    prompt: 'A candid close-up photograph of a face, natural skin with subtle texture and slight imperfections, soft daylight',
+    help: 'Finds the main face, redraws it larger with Klein 9B and a realistic detail LoRA, and blends it back: the rest of the picture stays as it is. 0.3 keeps the likeness and expression. 0.4 gives more skin but the expression can shift. At 0.5 pores are strongest, but moles or makeup may appear and the face can change. A pattern already in the skin gets stronger.' },
   klein9b: { label: 'Klein 9B', tpl: 'deck-klein9b-i2i', strength: 0.35, prompt: 'highly detailed, fine texture, sharp focus, crisp edges',
     help: 'FLUX.2 Klein 9B draws it again at low strength: adds believable fine detail (skin, fabric, foliage) from the prompt. A good all-rounder.' },
   klein3: { label: 'Klein 3', tpl: 'deck-klein3-i2i', strength: 0.35, prompt: 'highly detailed, fine texture, sharp focus, crisp edges',
     help: 'The newer Klein: a different look from Klein 9B, so try both on the same picture.' },
   krea2: { label: 'Krea 2', tpl: 'deck-krea2-i2i', strength: 0.3, prompt: 'highly realistic detailed photograph, natural light, rich texture, sharp focus',
-    help: 'Krea 2 turbo: strongest on photographic realism (skin, light, materials). Keep strength low for a face or a likeness.' },
+    help: 'Krea 2 turbo: strong on light and materials. On faces it can draw dotted pores and change the likeness, so use Face skin for those.' },
   qwen21: { label: 'Qwen 2.1', tpl: 'deck-qwen21-i2i', strength: 0.4, prompt: 'a detailed, polished version of this image with clean lines and fine texture',
     help: 'Qwen Image 2.1 turbo: good at clean lines, text and illustrations or graphics, less so for pores and skin.' },
 };
@@ -102,9 +105,11 @@ if (ST.lprompt === OLD_DELIGHT_PROMPT) ST.lprompt = DELIGHT_PROMPT;   // (the ol
 const save = () => store.set(KEY, ST);
 const FLIGHT = new Set();   // runs on their way back
 const op = () => OPS.find((o) => o.id === ST.op) || OPS[0];
-const dm = () => DETAIL[ST.dmodel] || DETAIL.klein9b;
 // the models that can do the chosen part here: the template is installed, and its LoRA if it needs one
 const loraField = (t) => t?.fields.find((f) => f.kind === 'loras');
+// a detail model that needs a LoRA shows only if it is installed
+const canDetail = (k) => { const m = DETAIL[k]; return !!m && (!m.lora || (loraField(template(m.tpl))?.options || []).includes(m.lora)); };
+const dm = () => (canDetail(ST.dmodel) ? DETAIL[ST.dmodel] : DETAIL.klein9b);
 const canSwap = (k) => { const t = template(SWAP_MODELS[k]?.tpl); return !!t && swapLora(k, ST.swapPart, loraField(t)?.options || []) !== false; };
 const swapModels = () => ST.swapModels.filter(canSwap);
 const tplId = (o) => (o.kind === 'swap' ? (SWAP_MODELS[swapModels()[0]] || SWAP_MODELS.klein9b).tpl : o.kind === 'delight' || o.kind === 'colorise' ? (DELIGHT[ST.lmodel] || DELIGHT.krea2).tpl : o.kind === 'sheet' ? (ST.sheetFast ? 'deck-sheet-cell-fast' : 'deck-sheet-cell') : o.kind === 'detail' ? dm().tpl : o.sd && ST.poser === 'sdpose' ? o.sd : o.tpl);
@@ -1010,7 +1015,7 @@ export function imageToolsSection(eng) {
     o.kind === 'delight' ? field('Model', seg(Object.entries(DELIGHT).map(([k, v]) => [k, v.label]), ST.lmodel, (v) => { ST.lmodel = v; save(); eng.render(); }, { wrap: true }),
       help((DELIGHT[ST.lmodel] || DELIGHT.krea2).help)) : null,
     o.kind === 'delight' ? field('Prompt', textArea(() => ST[o.promptKey || 'lprompt'], (v) => { ST[o.promptKey || 'lprompt'] = v; save(); }, { rows: 4, label: o.promptKey ? 'What to remove' : 'How to light it' })) : null,
-    o.kind === 'detail' ? field('Model', seg(Object.entries(DETAIL).map(([k, v]) => [k, v.label]), ST.dmodel, (v) => { ST.dmodel = v; save(); eng.render(); }, { wrap: true })) : null,
+    o.kind === 'detail' ? field('Model', seg(Object.entries(DETAIL).filter(([k]) => canDetail(k)).map(([k, v]) => [k, v.label]), ST.dmodel, (v) => { ST.dmodel = v; save(); eng.render(); }, { wrap: true })) : null,
     o.kind === 'detail' ? help(dm().help) : null,
     o.kind === 'detail' && !dm().plain ? field('Strength', h('input', { type: 'range', min: 0.1, max: 0.7, step: 0.05, 'aria-label': 'Strength',
       value: ST.dstrength[ST.dmodel] ?? dm().strength, oninput: (e) => { ST.dstrength[ST.dmodel] = +e.target.value; save(); e.target.nextSibling.textContent = e.target.value; } }),

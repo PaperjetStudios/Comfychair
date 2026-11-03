@@ -42,5 +42,34 @@ class Faces(unittest.TestCase):
         self.assertTrue(wf["img"]["_meta"]["deck_keep_size"])
 
 
+class FaceSkin(unittest.TestCase):
+    def test_the_workflow_has_the_lora_the_panel_checks_for(self):
+        wf = load("deck-klein9b-face-skin")
+        lora = wf["4"]["inputs"]["lora_name"]
+        self.assertEqual(lora, "klein/Flux2 Klein 9B Realistic Detail LoRA.safetensors")
+        self.assertEqual(wf["4"]["inputs"]["strength_model"], 1.0)
+        self.assertEqual(wf["8"]["inputs"]["denoise"], 0.3)
+        panel = (TEMPLATES.parent / "web" / "imagetools.js").read_text()
+        self.assertIn("deck-klein9b-face-skin", panel)
+        self.assertIn(lora, panel)
+
+    def test_only_the_face_changes_at_the_pictures_own_size(self):
+        wf = load("deck-klein9b-face-skin")
+        self.assertEqual(wf["31"]["inputs"]["text_prompt"], "face")
+        self.assertEqual(wf["32"]["inputs"]["image"], ["20", 0])
+        self.assertEqual(wf["34"]["inputs"]["destination"], ["20", 0])
+        self.assertEqual(wf["34"]["inputs"]["source"], ["9", 0])
+        self.assertEqual(wf["10"]["inputs"]["images"], ["34", 0])
+        self.assertTrue(wf["20"]["_meta"]["deck_keep_size"])
+
+
+class QwenDetail(unittest.TestCase):
+    def test_its_decoded_alpha_is_dropped_before_the_face_goes_back(self):
+        wf = load("deck-qwen21-detail")   # (the Qwen 2.1 VAE gives RGBA, which ImageUncropByMask refuses)
+        self.assertEqual(wf["35"]["class_type"], "SplitImageWithAlpha")
+        self.assertEqual(wf["35"]["inputs"]["image"], ["12", 0])
+        self.assertEqual(wf["34"]["inputs"]["source"], ["35", 0])
+
+
 if __name__ == "__main__":
     unittest.main()

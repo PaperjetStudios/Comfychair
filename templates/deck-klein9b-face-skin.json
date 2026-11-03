@@ -1,0 +1,248 @@
+{
+ "1": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "flux-2-klein-9b-fp8.safetensors",
+   "weight_dtype": "default"
+  },
+  "_meta": {
+   "title": "@9 Model [unet_name]"
+  }
+ },
+ "2": {
+  "class_type": "CLIPLoaderGGUF",
+  "inputs": {
+   "clip_name": "Qwen3-8B-Q8_0.gguf",
+   "type": "flux2"
+  },
+  "_meta": {
+   "title": "Load CLIP (GGUF)"
+  }
+ },
+ "3": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "flux2-vae.safetensors"
+  },
+  "_meta": {
+   "title": "Load VAE"
+  }
+ },
+ "4": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "model": [
+    "1",
+    0
+   ],
+   "lora_name": "klein/Flux2 Klein 9B Realistic Detail LoRA.safetensors",
+   "strength_model": 1.0
+  },
+  "_meta": {
+   "title": "@3 LoRAs"
+  }
+ },
+ "5": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "A candid close-up photograph of a face, natural skin with subtle texture and slight imperfections, soft daylight",
+   "clip": [
+    "2",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "@1 Prompt"
+  }
+ },
+ "6": {
+  "class_type": "ConditioningZeroOut",
+  "inputs": {
+   "conditioning": [
+    "5",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Negative (zeroed)"
+  }
+ },
+ "22": {
+  "class_type": "VAEEncode",
+  "inputs": {
+   "pixels": [
+    "32",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Encode source"
+  }
+ },
+ "8": {
+  "class_type": "KSampler",
+  "inputs": {
+   "seed": 0,
+   "steps": 4,
+   "cfg": 1.0,
+   "sampler_name": "euler",
+   "scheduler": "simple",
+   "denoise": 0.3,
+   "model": [
+    "4",
+    0
+   ],
+   "positive": [
+    "5",
+    0
+   ],
+   "negative": [
+    "6",
+    0
+   ],
+   "latent_image": [
+    "22",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "@4 Sampler [denoise,seed,steps,sampler_name,scheduler]"
+  }
+ },
+ "9": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "8",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "VAE Decode"
+  }
+ },
+ "10": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "klein9b_face_skin",
+   "images": [
+    "34",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Save Image"
+  }
+ },
+ "20": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@2 Picture [image]",
+   "deck_keep_size": true
+  }
+ },
+ "30": {
+  "class_type": "LoadSAM3Model",
+  "inputs": {
+   "precision": "auto",
+   "compile": false
+  },
+  "_meta": {
+   "title": "Load SAM3"
+  }
+ },
+ "31": {
+  "class_type": "SAM3Grounding",
+  "inputs": {
+   "sam3_model_config": [
+    "30",
+    0
+   ],
+   "image": [
+    "20",
+    0
+   ],
+   "confidence_threshold": 0.3,
+   "text_prompt": "face",
+   "max_detections": 1
+  },
+  "_meta": {
+   "title": "@2 Detail what [text_prompt,confidence_threshold]"
+  }
+ },
+ "32": {
+  "class_type": "ImageCropByMaskAndResize",
+  "inputs": {
+   "image": [
+    "20",
+    0
+   ],
+   "mask": [
+    "31",
+    0
+   ],
+   "base_resolution": 1024,
+   "padding": 48,
+   "min_crop_resolution": 128,
+   "max_crop_resolution": 1024
+  },
+  "_meta": {
+   "title": "@8 Crop [base_resolution,padding]"
+  }
+ },
+ "33": {
+  "class_type": "GrowMaskWithBlur",
+  "inputs": {
+   "mask": [
+    "32",
+    1
+   ],
+   "expand": 6,
+   "incremental_expandrate": 0.0,
+   "tapered_corners": true,
+   "flip_input": false,
+   "blur_radius": 12.0,
+   "lerp_alpha": 1.0,
+   "decay_factor": 1.0,
+   "fill_holes": false
+  },
+  "_meta": {
+   "title": "@8 Blend [expand,blur_radius]"
+  }
+ },
+ "34": {
+  "class_type": "ImageUncropByMask",
+  "inputs": {
+   "destination": [
+    "20",
+    0
+   ],
+   "source": [
+    "9",
+    0
+   ],
+   "mask": [
+    "33",
+    0
+   ],
+   "bbox": [
+    "32",
+    2
+   ]
+  },
+  "_meta": {
+   "title": "Put it back"
+  }
+ }
+}

@@ -25,6 +25,9 @@ MODELS = {
     "qwen21": ("deck-qwen21-i2i", 0.4),
 }
 PROMPT = "A sharp, highly detailed close-up, natural skin texture, fine pores, crisp eyes, realistic hair strands"
+# Face skin: the best of the skin tests on real pictures (Krea 2 drew dotted pores, Qwen 2.1 stayed smooth)
+SKIN_LORA = "klein/Flux2 Klein 9B Realistic Detail LoRA.safetensors"
+SKIN_PROMPT = "A candid close-up photograph of a face, natural skin with subtle texture and slight imperfections, soft daylight"
 
 
 def node(cls, title=None, **inputs):
@@ -38,7 +41,7 @@ def by_class(wf, cls):
     return next(k for k, n in wf.items() if n["class_type"] == cls)
 
 
-def make(key, base, denoise):
+def make(key, base, denoise, name="detail", prompt=PROMPT, lora=None):
     wf = json.loads((OUT / f"{base}.json").read_text())
     # the i2i template's picture + resize pair goes; the picture keeps its own size
     enc = by_class(wf, "VAEEncode")
@@ -59,17 +62,23 @@ def make(key, base, denoise):
                     lerp_alpha=1.0, decay_factor=1.0, fill_holes=False)
     wf["34"] = node("ImageUncropByMask", "Put it back", destination=["20", 0], source=[dec, 0], mask=["33", 0],
                     bbox=["32", 2])
+    if key == "qwen21":   # (its VAE decodes to RGBA, which ImageUncropByMask refuses)
+        wf["35"] = node("SplitImageWithAlpha", "Drop the decoded alpha (Qwen 2.1 VAE gives RGBA)", image=[dec, 0])
+        wf["34"]["inputs"]["source"] = ["35", 0]
     wf[enc]["inputs"]["pixels"] = ["32", 0]
     wf[save]["inputs"]["images"] = ["34", 0]
-    wf[save]["inputs"]["filename_prefix"] = f"{key}_detail"
+    wf[save]["inputs"]["filename_prefix"] = f"{key}_{name.replace('-', '_')}"
     # the redraw strength and the prompt
     for n in wf.values():
         if n["class_type"] in ("KSampler", "SplitSigmasDenoise"):
             n["inputs"]["denoise"] = denoise
         if n["class_type"] in ("CLIPTextEncode", "TextEncodeQwenImage21") and n.get("_meta", {}).get("title", "").startswith("@1"):
-            n["inputs"]["prompt" if n["class_type"] == "TextEncodeQwenImage21" else "text"] = PROMPT
-    (OUT / f"deck-{key}-detail.json").write_text(json.dumps(wf, indent=1) + "\n")
+            n["inputs"]["prompt" if n["class_type"] == "TextEncodeQwenImage21" else "text"] = prompt
+    if lora:
+        wf[by_class(wf, "LoraLoaderModelOnly")]["inputs"]["lora_name"] = lora
+    (OUT / f"deck-{key}-{name}.json").write_text(json.dumps(wf, indent=1) + "\n")
 
 
 for key, (base, denoise) in MODELS.items():
     make(key, base, denoise)
+make("klein9b", "deck-klein9b-i2i", 0.3, name="face-skin", prompt=SKIN_PROMPT, lora=SKIN_LORA)
