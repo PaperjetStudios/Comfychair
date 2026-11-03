@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 import unittest
+from contextlib import nullcontext
 from unittest import mock
 
 from fastapi import HTTPException
@@ -109,16 +110,12 @@ class Device(unittest.TestCase):
         def post(payload, timeout):
             posted.append(payload)
             return answer("one", "two")
-        if locked:
-            pa.voice._gpu.acquire()
-        try:
+        held = pa.gpu.card("another job") if locked else nullcontext()
+        with held:
             with mock.patch.object(pa, "ensure_server"), mock.patch.object(pa, "_comfy_busy", return_value=busy), \
                     mock.patch.object(pa, "_vram_free_mb", return_value=free_mb), \
                     mock.patch.object(pa.voice, "_free_gpu") as free, mock.patch.object(pa, "_post", side_effect=post):
                 data, used = pa.chat([{"role": "user", "content": "x"}], device)
-        finally:
-            if locked:
-                pa.voice._gpu.release()
         return data, used, posted, free
 
     def test_auto_uses_the_card_and_unloads_after(self):

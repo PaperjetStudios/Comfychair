@@ -34,6 +34,13 @@
 - Every transform gets a grid and snapping (`gizmo.js` `snap`/`snapBar`, `snap3`/`snapBar3`).
 - A layer stack's rules (groups, masks, undo states) live in `web/layer-stack.js`; a character's in `web/char-model.js`.
 
+## The card takes one thing at a time
+
+- Anything heavy outside ComfyUI (a new GPU worker, a big Blender job) runs inside `with gpu.card(label, job):`
+  (`app/gpu.py`), and is stoppable (`sceneasset._run_stoppable`). It then appears in the Queue panel by itself.
+- Everything goes to ComfyUI through `comfy.queue`, never its own `POST /prompt`: that's what holds a run back while an
+  outside job has the card.
+
 ## Working on it
 
 - Tests never touch the live `data/` folder. Run them with a scratch `DECK_DATA`:

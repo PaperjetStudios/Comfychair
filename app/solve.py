@@ -943,7 +943,7 @@ async def _run(wf, node_id, what, progress, cancel):
         while True:
             if cancel and cancel():
                 try:
-                    await comfy.delete_queued([pid]); await comfy.interrupt()
+                    await comfy.stop_run(pid)
                 except Exception:
                     pass
                 raise InterruptedError("Stopped")

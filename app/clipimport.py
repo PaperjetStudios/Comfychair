@@ -143,7 +143,7 @@ JOBS: dict[str, dict] = {}
 def _start(work, label: str) -> dict:
     """Run work(job) in a thread; it sets job["result"] and updates job["progress"] (0..1) as it goes."""
     jid = uuid.uuid4().hex[:12]
-    job = {"state": "running", "progress": 0.0, "label": label, "cancel": False, "proc": None, "t": time.time()}
+    job = {"id": jid, "state": "running", "progress": 0.0, "label": label, "cancel": False, "proc": None, "t": time.time()}
 
     def run():
         try:

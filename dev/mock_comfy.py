@@ -174,7 +174,7 @@ async def prompt(body: dict):
     if errors:
         return Response(json.dumps({"error": {"message": "Prompt outputs failed validation"}, "node_errors": errors}),
                         status_code=400, media_type="application/json")
-    pid = str(uuid.uuid4())
+    pid = body.get("prompt_id") or str(uuid.uuid4())
     counter["n"] += 1
     pending[pid] = counter["n"]
     await queue.put((pid, p, body.get("client_id")))

@@ -6,7 +6,7 @@
   POST /api/voice/speak       new lines in saved voices (Qwen3-TTS cloning) -> one media entry per line
 
 Each is a job (POST returns {job}; GET /api/clip/job/{id} reports progress, as the clip importer's do). The worker
-needs the GPU, so ComfyUI is asked to unload its models first, and a run is refused while ComfyUI has work queued."""
+needs the GPU, so it takes its turn in the card's line (app/gpu.py) and ComfyUI is asked to unload its models first."""
 import json
 import os
 import re
@@ -22,7 +22,7 @@ import httpx
 from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import FileResponse
 
-from . import audioedit, clipimport, config, storage
+from . import audioedit, clipimport, config, gpu, storage
 
 router = APIRouter(prefix="/api/voice")
 resolve_src = None   # main.py sets it: (src dict, tmp) -> (path, kind), as the Video tab finds clips
@@ -42,7 +42,6 @@ ENGINES = {   # engine: (its python, its script); qwen is worker.py's own speak
 LINE_LUFS = -16   # every spoken line evened out to this loudness (cloned voices come out as quiet as their clip)
 ID_RE = re.compile(r"^[a-f0-9]{12}$")
 LANGS = ["Auto", "English", "Chinese", "Japanese", "Korean", "German", "French", "Russian", "Portuguese", "Spanish", "Italian"]
-_gpu = threading.Lock()   # one worker at a time: they each want most of the card
 
 
 def installed() -> bool:
@@ -70,7 +69,8 @@ def _need():
 
 
 def _free_gpu():
-    """Ask ComfyUI to unload its models so the worker has the card; refuse while ComfyUI is busy."""
+    """Ask ComfyUI to unload its models so the worker has the card. Refuses if ComfyUI is busy even so: the card's line has
+    waited for it to empty, so only a run from ComfyUI's own desktop page can have got in."""
     try:
         q = httpx.get(f"{config.COMFY_URL}/queue", timeout=5).json()
         n = len(q.get("queue_running", [])) + len(q.get("queue_pending", []))
@@ -90,7 +90,7 @@ def _run(job: dict, task: dict, timeout=3600, py: Path = PY, script: Path = WORK
     env = {**os.environ, "HF_HOME": str(hf or VOICE_HOME / "models" / "hf"), "DECK_VOICE_MODELS": str(VOICE_HOME / "models"),
            "DECK_INDEX_TTS": str(INDEX_HOME), "DECK_FISH_S2": str(ENGINES_HOME),
            "PYTHONUNBUFFERED": "1", "LD_LIBRARY_PATH": os.pathsep.join(libs + [os.environ.get("LD_LIBRARY_PATH", "")]).strip(os.pathsep)}
-    with _gpu:
+    with gpu.card(job.get("label") or "Voice", job):   # they each want most of the card: one at a time, ComfyUI waiting
         _free_gpu()
         last, err = None, []
         with subprocess.Popen([str(py), "-I", str(script), json.dumps(task)], stdout=subprocess.PIPE, stderr=subprocess.PIPE,

@@ -8,16 +8,18 @@ import math
 import os
 import re
 import shutil
+import signal
 import struct
 import subprocess
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, File, Form, HTTPException, Request, UploadFile
 
-from . import config, db, storage
+from . import config, db, gpu, storage
 
 MAX_ASSET = 200 << 20
 MODELS = {".glb", ".gltf", ".obj", ".fbx"}
@@ -73,8 +75,8 @@ async def upload_asset(file: UploadFile = File(...), project_id: str = Form(""),
 
 # ---- a picture as a Gaussian splat: Apple's SHARP (apple/ml-sharp), in its own venv on /mnt/data ----
 # One photo in, about 1.2M Gaussians out (a .ply in the photo's camera space, metres, OpenCV axes: y down, z away),
-# saved as an asset like an imported splat. It runs on the GPU outside ComfyUI, as the voice tools do: ComfyUI is
-# asked to unload its models first, and a run is refused while ComfyUI has work queued. Best for small camera moves
+# saved as an asset like an imported splat. It runs on the GPU outside ComfyUI, as the voice tools do: it takes its turn
+# in the card's line (app/gpu.py), and ComfyUI is asked to unload its models first. Best for small camera moves
 # near where the photo was taken; nothing behind what the picture shows exists.
 SHARP = Path(os.environ.get("DECK_SHARP", "/mnt/data/sharp-venv/bin/sharp"))
 BLENDER = Path(os.environ.get("DECK_BLENDER", str(Path.home() / "Programs" / "blender-5.3.0" / "blender")))
@@ -366,13 +368,39 @@ def finish_splat(full: Path, folder: str, group: str, preview: str = "light", ke
             "lens": lens, "levels": levels, "level": pick["k"], "n": made["n"], "box": made["box"]}
 
 
+def _run_stoppable(job: dict, cmd: list[str], timeout: float) -> subprocess.CompletedProcess:
+    """subprocess.run that the job's Stop can end, with whatever the program started: a child left alive would keep the
+    pipes open, and this job and everything behind it in the card's line would wait on it."""
+    end = time.monotonic() + timeout
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True) as p:
+        job["proc"] = p
+        try:
+            while True:
+                try:
+                    out, err = p.communicate(timeout=0.5)
+                    break
+                except subprocess.TimeoutExpired:
+                    late = time.monotonic() > end
+                    if job["cancel"] or late:
+                        try:
+                            os.killpg(p.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    if late:
+                        p.communicate()
+                        raise subprocess.TimeoutExpired(cmd, timeout) from None
+        finally:
+            job["proc"] = None
+    return subprocess.CompletedProcess(cmd, p.returncode, out, err)
+
+
 @router.post("/splat")
 async def photo_splat(body: dict = Body(...)):
     """{image (an input name), project_id, preview (light | medium | dense | full), keep_full} -> job; its result is
     the splat asset ({url, name, group, kind, size}: the preview level asked for), its levels ([{k, url, n}]), the
     full count and box, plus the photo's lens ({fov, width, height}) so the shot camera can look through it.
     (SHARP itself has no options worth giving: only --render, a turntable video, and the device.)"""
-    from . import clipimport, voice   # (voice: the GPU lock and ComfyUI's unload)
+    from . import clipimport, voice   # (voice: ComfyUI's unload)
     body = body or {}
     from . import main   # (input_bytes: ComfyChair's own copy, a painted layer's, or ComfyUI's input folder)
     name = str(body.get("image") or "")
@@ -396,13 +424,12 @@ async def photo_splat(body: dict = Body(...)):
     def work(job):
         group = uuid.uuid4().hex[:8]
         d = storage.asset_dir(folder, group)
-        with tempfile.TemporaryDirectory() as tmp, voice._gpu:
+        with tempfile.TemporaryDirectory() as tmp, gpu.card("Making the splat", job):
             voice._free_gpu()
             job["label"] = "Making the splat"
             inp = Path(tmp) / "in"; inp.mkdir()
             (inp / (Path(image).stem + (Path(image).suffix.lower() or ".png"))).write_bytes(data)
-            r = subprocess.run([str(SHARP), "predict", "-i", str(inp), "-o", str(Path(tmp) / "out"), "-c", str(SHARP_CKPT), "--device", "cuda"],
-                               capture_output=True, text=True, timeout=900)
+            r = _run_stoppable(job, [str(SHARP), "predict", "-i", str(inp), "-o", str(Path(tmp) / "out"), "-c", str(SHARP_CKPT), "--device", "cuda"], 900)
             plys = sorted((Path(tmp) / "out").glob("*.ply"))
             if r.returncode or not plys:
                 raise RuntimeError("SHARP failed: " + ((r.stderr or r.stdout).strip().splitlines() or ["no output"])[-1][:300])
@@ -533,11 +560,11 @@ async def model_cleanup(body: dict = Body(...)):
         group = uuid.uuid4().hex[:8]
         d = storage.asset_dir(folder, group)
         name = _safe_name(f"{stem}_{mode}.glb")
-        job["label"] = "Blender is rebuilding the surface" if mode in ("quads", "voxel") else "Blender is working"
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, gpu.card("Blender is working", job):   # (the processor, but it's heavy)
+            job["label"] = "Blender is rebuilding the surface" if mode in ("quads", "voxel") else "Blender is working"
             out = Path(tmp) / "out.glb"
-            r = subprocess.run([str(BLENDER), "-b", "--factory-startup", "-P", str(REMESH), "--", str(src), str(out), mode,
-                                str(amount), str(tex)], capture_output=True, text=True, timeout=1800)
+            r = _run_stoppable(job, [str(BLENDER), "-b", "--factory-startup", "-P", str(REMESH), "--", str(src), str(out), mode,
+                                     str(amount), str(tex)], 1800)
             last = next((ln for ln in reversed((r.stdout or "").splitlines()) if ln.startswith("{")), "{}")
             info = json.loads(last)
             if r.returncode or "error" in info or not out.is_file():

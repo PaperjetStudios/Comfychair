@@ -307,10 +307,11 @@ export function syncWithServer() {
       if (!S.templates.length) await loadTemplates();
       try { const s = await api('/api/status'); setConn(s.comfy_connected); checkUiVersion(s.ui_version); } catch { /* the socket says the rest */ }
       const jobs = await api('/api/jobs');
-      const running = jobs.active.find((j) => j.status === 'running');
+      const running = jobs.active.find((j) => j.status === 'running' && j.prompt_id);
       S.activePid = running ? running.prompt_id : null;
-      S.queueRemaining = jobs.active.length;
-      $('#queueInfo').textContent = jobs.active.length ? ` · ${jobs.active.length}` : '';
+      S.lineCount = jobs.active.filter((j) => j.line).length;
+      S.comfyCount = jobs.active.length - S.lineCount;
+      showQueueCount();
       const wasRunning = RUN.pid;
       if (running && isMine(running.prompt_id)) {
         if (RUN.pid !== running.prompt_id) {
@@ -353,6 +354,13 @@ function showBusy() {
   setProgress(0, 0, 'ComfyUI is busy with a run from another device');
 }
 
+// The Queue button's number: ComfyUI's queue and the card's own line (app/gpu.py).
+function showQueueCount() {
+  const q = (S.comfyCount || 0) + (S.lineCount || 0);
+  S.queueRemaining = q;
+  $('#queueInfo').textContent = q ? ` · ${q}` : '';
+}
+
 function onMessage(m) {
   const d = m.data || {};
   S.debugCounts[m.type] = (S.debugCounts[m.type] || 0) + 1;
@@ -360,11 +368,11 @@ function onMessage(m) {
   const mine = d.prompt_id ? isMine(d.prompt_id) : isMine(S.activePid);
   switch (m.type) {
     case 'deck_comfy_status': setConn(d.connected); break;
+    case 'deck_line': S.lineCount = d.count; showQueueCount(); break;
     case 'status': {
-      const q = d.status?.exec_info?.queue_remaining ?? 0;
-      S.queueRemaining = q;
-      $('#queueInfo').textContent = q ? ` · ${q}` : '';
-      if (!q) {
+      S.comfyCount = d.status?.exec_info?.queue_remaining ?? 0;
+      showQueueCount();
+      if (!S.queueRemaining) {
         S.activePid = null;
         keepAwake(false);
         if (!RUN.pid && Date.now() - (RUN.endedAt || 0) > 6000) setProgress(0, 0, '');  // keep "Finished in …" up a while
@@ -646,11 +654,17 @@ export async function openJobs() {
     const row = (j, right, btn) => h('div', { class: `job ${j.status}`, onclick: () => j.id && openGeneration(j.id) },
       h('div', { class: 'job-main' }, h('b', {}, j.id ? `#${j.id} ` : ''), j.template,
         h('div', { class: 'hint' }, right)), btn);
+    const cancelJob = (j, word) => button(word, async (e) => {
+      e.stopPropagation();
+      try { await api(`/api/clip/job/${j.job}/cancel`, { method: 'POST' }); refresh(); } catch (err) { toast(err.message, true); }
+    });
     const active = d.active.map((j) => row(j,
       j.status === 'running'
-        ? `running ${fmtDur(j.elapsed)}${j.typical ? ` of ~${fmtDur(j.typical)}` : ''}`
-        : `waiting ${fmtDur(j.waiting)} · ${j.eta != null ? `starts in ~${fmtDur(j.eta - (j.typical || 0))}, done in ~${fmtDur(j.eta)}` : 'no timing yet for this template'}`,
-      j.status === 'running'
+        ? `running ${fmtDur(j.elapsed)}${j.typical ? ` of ~${fmtDur(j.typical)}` : ''}${j.progress ? ` · ${Math.round(j.progress * 100)}%` : ''}`
+        : `waiting ${fmtDur(j.waiting)}${j.eta != null ? ` · starts in ~${fmtDur(j.eta - (j.typical || 0))}, done in ~${fmtDur(j.eta)}` : j.prompt_id && !j.typical ? ' · no timing yet for this template' : ''}`,
+      !j.prompt_id
+        ? j.job && cancelJob(j, j.status === 'running' ? 'Stop' : 'Cancel')
+        : j.status === 'running'
         ? button('Stop', async (e) => {
             e.stopPropagation();
             const who = isMine(j.prompt_id) ? '' : ' It was started from another device.';

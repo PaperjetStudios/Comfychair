@@ -4,10 +4,10 @@
 It runs through Ollama (https://ollama.com) with a vision model (default qwen3.5:4b). When Ollama isn't running but
 its program is installed, ComfyChair starts `ollama serve` itself, as a background process of its own.
 
-The GPU is shared with ComfyUI: a run on the graphics card takes the voice tools' lock (voice._gpu), refuses while
-ComfyUI has work queued, asks ComfyUI to unload its models only when the card hasn't room, and tells Ollama to unload
-the model as soon as it has answered (keep_alive 0), so ComfyUI gets the card back. "auto" uses the processor instead
-when ComfyUI is busy or a voice job holds the card (slower: about 45 s for three variants instead of about 6 s)."""
+The GPU is shared with ComfyUI: a run on the graphics card takes its turn in the card's line (app/gpu.py), asks ComfyUI
+to unload its models only when the card hasn't room, and tells Ollama to unload the model as soon as it has answered
+(keep_alive 0), so ComfyUI gets the card back. "auto" uses the processor instead of waiting when ComfyUI is busy or
+another job has the card (slower: about 45 s for three variants instead of about 6 s)."""
 import base64
 import io
 import json
@@ -24,7 +24,7 @@ import httpx
 from fastapi import APIRouter, Body, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
-from . import config, voice
+from . import config, gpu, voice
 
 log = logging.getLogger("comfydeck.promptaid")
 router = APIRouter(prefix="/api/prompt")
@@ -296,18 +296,17 @@ def chat(messages: list[dict], device: str = "auto", temperature: float = 0.8, l
         device = "cpu" if _comfy_busy() else "gpu"
     d = None
     if device == "gpu":
-        if voice._gpu.acquire(timeout=0.5 if auto else 60):
-            try:
+        try:
+            with gpu.card("Prompt helper", timeout=0.5 if auto else 60):
                 try:
                     _room_on_card()
                     d = _post(payload, GPU_TIMEOUT)
                 except RuntimeError as e:   # ComfyUI got a job in the meantime
                     if not auto:
                         raise HTTPException(409, str(e))
-            finally:
-                voice._gpu.release()
-        elif not auto:
-            raise HTTPException(409, "The graphics card is busy with a voice or 3D job: try again, or run on the processor")
+        except gpu.Busy:
+            if not auto:
+                raise HTTPException(409, "The graphics card is busy: try again, or run on the processor")
         if d is None:
             device = "cpu"
     if d is None:

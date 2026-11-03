@@ -23,7 +23,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFil
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import accel, audioedit, civitai, clipimport, craft, delogo, h3upscale, posefind, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
+from . import accel, audioedit, civitai, clipimport, craft, delogo, gpu, h3upscale, posefind, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import projects, storage, store, network
 from . import playable
 from . import fetchpicture, keyexpr, looks, maskcomp, promptaid, sceneasset
@@ -353,6 +353,26 @@ async def finalize(pid: str):
         await effects.sheet_follow_up(db.get_generation(gid))
 
 
+async def held_run_failed(pid: str, msg: str):
+    """A run held in the card's line that ComfyUI then refused (app/gpu.py): its row says so."""
+    g = db.get_by_prompt(pid)
+    if g:
+        db.update_generation(g["id"], status="error", error=msg, finished=time.time())
+        await push_gen(g["id"])
+        await comfy.forget(pid)
+
+
+async def line_watch():
+    """Every device's Queue button counts what's waiting in the card's line too (ComfyUI's status messages don't)."""
+    last = 0
+    while True:
+        await asyncio.sleep(1)
+        n = gpu.count()
+        if n != last:
+            last = n
+            await broadcast({"type": "deck_line", "data": {"count": n}})
+
+
 async def reconcile_loop():
     """Safety net for missed websocket events (e.g. ComfyChair restarted mid-run). A run that ComfyUI
     has neither queued nor finished was lost (ComfyUI restarted mid-run), so it's marked interrupted
@@ -369,7 +389,7 @@ async def reconcile_loop():
                 lost_since.clear()
                 continue
             q = await comfy.queue_state()
-            known = {it[1] for it in q.get("queue_running", []) + q.get("queue_pending", [])}
+            known = {it[1] for it in q.get("queue_running", []) + q.get("queue_pending", [])} | set(gpu.held_ids())
             for g in pending:
                 pid = g["prompt_id"]
                 if (await comfy.history(pid)).get(pid):
@@ -451,14 +471,17 @@ async def lifespan(app: FastAPI):
         if g["prompt_id"].startswith("edit-"):
             db.update_generation(g["id"], status="error", error="ComfyChair restarted during the render", finished=time.time())
     comfy.listeners.add(on_comfy)
+    comfy.on_held_failed = held_run_failed
     await comfy.start()
     task = asyncio.create_task(reconcile_loop())
+    line = asyncio.create_task(line_watch())
     sweeper = asyncio.create_task(clipimport.sweeper())   # the clip importer's previews and leftovers
     painter = asyncio.create_task(paint_pruner())   # the Editor's paint files no tab names any more
     asyncio.create_task(asyncio.to_thread(backfill_facts))
     log.info("ComfyChair ready. ComfyUI at %s", config.COMFY_URL)
     yield
     task.cancel()
+    line.cancel()
     sweeper.cancel()
     painter.cancel()
     await comfy.stop()
@@ -708,7 +731,7 @@ async def interrupt(body: dict = Body(default={})):
     if pid in {it[1] for it in q.get("queue_running", [])}:
         await comfy.interrupt()
         return {"ok": True, "stopped": "running"}
-    if pid in {it[1] for it in q.get("queue_pending", [])}:
+    if pid in {it[1] for it in q.get("queue_pending", [])} | set(gpu.held_ids()):
         await comfy.delete_queued([pid])
         g = db.get_by_prompt(pid)
         if g and g["status"] == "queued":
@@ -720,7 +743,7 @@ async def interrupt(body: dict = Body(default={})):
 
 @app.get("/api/queue")
 async def queue_state():
-    return await comfy.queue_state()
+    return {**await comfy.queue_state(), "line": gpu.count()}   # line: the card's own, ComfyUI's queue doesn't show it
 
 
 @app.post("/api/queue/cancel")
@@ -1239,14 +1262,27 @@ async def lora_info(name: str, fetch: bool = False):
 
 @app.get("/api/jobs")
 async def jobs():
-    """What's running and waiting (in ComfyUI's order) with timings, plus recent runs."""
+    """What's running and waiting (the job on the card, ComfyUI's queue, then the card's line: app/gpu.py) with timings,
+    plus recent runs. A held run has line: true. An outside job has line: true and job (its id for /api/clip/job, if it can
+    be stopped) instead of a prompt id."""
     try:
         q = await comfy.queue_state()
     except Exception:
         q = {}
     order = [it[1] for it in q.get("queue_running", [])] + \
             [it[1] for it in sorted(q.get("queue_pending", []), key=lambda it: it[0])]
+    holder, line = gpu.state()
+    order = [{"pid": pid} for pid in order] + line
     now, avg_cache, active = time.time(), {}, []
+
+    def outside(t, running):
+        job = t.get("job") or {}
+        return {"template": job.get("label") if running and job.get("label") else t["label"], "line": True, "job": job.get("id"),
+                "status": "running" if running else "queued", "progress": job.get("progress") if running else None,
+                "elapsed": now - t["started"] if running else None, "waiting": now - t["since"], "typical": None}
+
+    if holder:
+        active.append(outside(holder, True))
 
     def avg(template):
         if template not in avg_cache:
@@ -1254,26 +1290,32 @@ async def jobs():
             avg_cache[template] = sum(ts) / len(ts) if ts else None
         return avg_cache[template]
 
-    for pos, pid in enumerate(order):
+    pos = -1
+    for item in order:
+        if item.get("kind") == "job":
+            active.append(outside(item, False))
+            continue
+        pos, pid, held = pos + 1, item["pid"], item.get("kind") == "comfy"
         g = db.get_by_prompt(pid)
         if not g:
-            active.append({"prompt_id": pid, "template": "(started outside ComfyChair)", "status": "running" if pos == 0 and q.get("queue_running") else "queued"})
+            active.append({"prompt_id": pid, "template": "(started outside ComfyChair)", "line": held, "status": "running" if pos == 0 and q.get("queue_running") else "queued"})
             continue
         running = g["status"] == "running" or (pos == 0 and bool(q.get("queue_running")))
-        active.append({**g, "status": "running" if running else "queued", "position": pos,
+        active.append({**g, "status": "running" if running else "queued", "position": pos, "line": held,
                        "elapsed": now - (g.get("started") or g["created"]) if running else None,
                        "waiting": now - g["created"], "typical": avg(g["template"]),
                        # so a tablet that reconnects mid-run can redraw its stage strip
                        "stages": stages.stages_in(_workflow_for(pid)) if running else None})
     # rough ETA: what's left of the running job plus the typical time of everything ahead
-    t = 0.0
+    t, unknown = 0.0, False
     for j in active:
         typ = j.get("typical")
         if j["status"] == "running":
             t += max(0.0, (typ or 0) - (j.get("elapsed") or 0))
         else:
             t += typ or 0
-        j["eta"] = t if typ else None
+        unknown = unknown or ("job" in j)   # (an outside job's length isn't known: nothing behind it can say when it starts)
+        j["eta"] = t if typ and not unknown else None
     recent = [{**g, "duration": (g["finished"] - (g.get("started") or g["created"])) if g.get("finished") else None}
               for g in db.recent_finished()]
     return {"active": active, "recent": recent}

@@ -7,7 +7,7 @@ import uuid
 import httpx
 import websockets
 
-from . import config
+from . import config, gpu
 
 log = logging.getLogger("comfydeck.comfy")
 
@@ -99,6 +99,8 @@ class Comfy:
         self._ws = None
         self._last_msg = 0.0  # loop time of the last websocket message
         self._checks = set()
+        self._failed = {}   # held runs ComfyUI wouldn't take: prompt id -> what it said
+        self.on_held_failed = None   # async (prompt id, message): set by main, marks the run's row
 
     # ---- lifecycle -------------------------------------------------------
     async def start(self):
@@ -191,7 +193,8 @@ class Comfy:
         return r.json()["LoadImage"]["input"]["required"]["image"][0]
 
     async def queue(self, workflow: dict, preview: str | None = None) -> dict:
-        await self._free_on_model_change(workflow)
+        """Send a run to ComfyUI, or hold it in the card's line (app/gpu.py) while an outside job is ahead of it: the prompt
+        id is chosen here, so it's good either way. A held run's refusal comes later, as a failed run instead of ComfyError."""
         once(workflow)
         # Live sampler previews: ComfyUI sends none unless asked. Images use "taesd" (the tiny
         # decoders in models/vae_approx, else latent2rgb). Video uses latent2rgb with VHS's animated
@@ -206,8 +209,26 @@ class Comfy:
                      "extra_pnginfo": {"workflow": {"extra": {"VHS_latentpreview": True}}}}
         else:
             extra = {"preview_method": config.PREVIEW_METHOD}
+        pid = str(uuid.uuid4())
+        body = {"prompt": workflow, "prompt_id": pid, "client_id": self.client_id, "extra_data": extra}
+        if gpu.hold(pid, lambda: self._send(workflow, body), self._held_failed):
+            return {"prompt_id": pid, "number": None, "node_errors": {}}
+        try:
+            return await self._send(workflow, body)
+        finally:
+            gpu.sent()
+
+    async def _held_failed(self, pid: str, error: Exception):
+        """ComfyUI refused a held run, or couldn't be reached: history() now reports it, for whoever is waiting on it."""
+        msg = str(error) or error.__class__.__name__
+        self._failed[pid] = msg
+        if self.on_held_failed:
+            await self.on_held_failed(pid, msg)
+
+    async def _send(self, workflow: dict, body: dict) -> dict:
+        await self._free_on_model_change(workflow)
         since = asyncio.get_running_loop().time()
-        r = await self.http.post("/prompt", json={"prompt": workflow, "client_id": self.client_id, "extra_data": extra})
+        r = await self.http.post("/prompt", json=body)
         if r.status_code < 400:
             task = asyncio.create_task(self._check_listening(since))
             self._checks.add(task)
@@ -240,12 +261,16 @@ class Comfy:
         self._last_models = models
 
     async def history(self, prompt_id: str) -> dict:
+        if prompt_id in self._failed:
+            return {prompt_id: {"outputs": {}, "status": {"status_str": "error", "messages": [
+                ["execution_error", {"exception_message": self._failed[prompt_id]}]]}}}
         r = await self.http.get(f"/history/{prompt_id}")
         r.raise_for_status()
         return r.json()
 
     async def forget(self, prompt_id: str):
         """Take a finished run out of ComfyUI's history (it holds the prompt and the output names until a restart)."""
+        self._failed.pop(prompt_id, None)
         try:
             await self.http.post("/history", json={"delete": [prompt_id]})
         except httpx.HTTPError:
@@ -286,5 +311,15 @@ class Comfy:
         return r.json()
 
     async def delete_queued(self, prompt_ids: list[str]):
-        r = await self.http.post("/queue", json={"delete": prompt_ids})
+        rest = [p for p in prompt_ids if p not in gpu.drop(prompt_ids)]
+        if not rest:
+            return
+        r = await self.http.post("/queue", json={"delete": rest})
         r.raise_for_status()
+
+    async def stop_run(self, prompt_id: str):
+        """Stop one run wherever it is, and only that one: another run on the card carries on."""
+        await self.delete_queued([prompt_id])
+        q = await self.queue_state()
+        if prompt_id in {it[1] for it in q.get("queue_running", [])}:
+            await self.interrupt()

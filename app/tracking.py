@@ -297,7 +297,7 @@ async def analyse_tapnext(path, start=0.0, end=None, region=None, exclude=None, 
         while True:
             if cancel and cancel():
                 try:
-                    await comfy.delete_queued([pid]); await comfy.interrupt()
+                    await comfy.stop_run(pid)
                 except Exception:
                     pass
                 raise InterruptedError("Stopped")
