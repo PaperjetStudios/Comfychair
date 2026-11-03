@@ -1,6 +1,7 @@
 import { h, api, store, toast, busy, button, chip, section, field, rangeField, seedField, seg, hint, help, imageInput, toggle, textArea } from './ui.js';
 import { S, inputUrl, switchTab, thumbUrl } from './core.js';
 import { openImagePicker, pngBlob, uploadImage } from './media.js';
+import { pictureSlot } from './picture-drop.js';
 import { queueRun, template, valuesByRole, waitGen } from './make.js';
 import { MAPS } from './maps.js';
 import { editSizeFor, editSizeTo } from './edit-size.js';
@@ -1006,9 +1007,10 @@ function editFields(eng, t, size) {
   const redo = () => { save(); eng.render(); }, lf = loraField(t), installed = lf?.options || [];
   const refsMost = t?.fields.filter((f) => f.kind === 'image' && /reference/i.test(f.group)).length || 0;
   const [sw, sh] = size ? editSizeTo(size[0], size[1], 32, ST.emp * 1e6) : [];
-  const ref = (i) => imageInput({ label: `Picture ${i + 2}`, name: ST.erefs[i] ? ST.erefs[i].split('/').pop() : '', thumb: ST.erefs[i] ? h('img', { src: thumbUrl(ST.erefs[i], 256), alt: '' }) : null,
-    pick: () => openImagePicker({ title: `Picture ${i + 2}`, onPick: (name) => { ST.erefs[i] = name; redo(); } }),
-    onClear: () => { ST.erefs.splice(i, 1); redo(); } });
+  const setRef = (i) => (name) => { ST.erefs[i] = name; redo(); };
+  const ref = (i) => pictureSlot(imageInput({ label: `Picture ${i + 2}`, name: ST.erefs[i] ? ST.erefs[i].split('/').pop() : '', thumb: ST.erefs[i] ? h('img', { src: thumbUrl(ST.erefs[i], 256), alt: '' }) : null,
+    pick: () => openImagePicker({ title: `Picture ${i + 2}`, onPick: setRef(i) }),
+    onClear: () => { ST.erefs.splice(i, 1); redo(); } }), { give: setRef(i) });
   return [
     field('Prompt', textArea(() => ST.eprompt, (v) => { ST.eprompt = v; save(); }, { rows: 4, label: 'What to change', placeholder: 'Make the jacket red leather' }),
       help('Say what to change, plainly. The picture being edited is Picture 1 and your references are Picture 2 onward, so you can write: give the person in Picture 1 the coat from Picture 2. {layer} becomes each layer\'s name, and {red|blue|green} picks one afresh for each run, so one prompt can differ across a batch.')),
@@ -1206,9 +1208,9 @@ export function imageToolsSection(eng) {
     o.kind === 'remove' && ST.rfrom === 'painted' && !eng.paint.maskLayer(false) ? hint('Paint what to remove first (Masks panel), or find it by name') : null,
     o.kind === 'swap' ? field('Swap', seg(Object.entries(SWAP_PARTS).map(([k, v]) => [k, v.label]), ST.swapPart, (v) => { ST.swapPart = v; save(); eng.render(); }, { wrap: true }),
       help(SWAP_PARTS[ST.swapPart].help)) : null,
-    o.kind === 'swap' ? imageInput({ label: 'Take it from', name: ST.swapFrom ? ST.swapFrom.split('/').pop() : '', thumb: ST.swapFrom ? h('img', { src: thumbUrl(ST.swapFrom, 256), alt: '' }) : null,
+    o.kind === 'swap' ? pictureSlot(imageInput({ label: 'Take it from', name: ST.swapFrom ? ST.swapFrom.split('/').pop() : '', thumb: ST.swapFrom ? h('img', { src: thumbUrl(ST.swapFrom, 256), alt: '' }) : null,
       pick: () => openImagePicker({ title: 'The picture to take it from', onPick: (name) => { ST.swapFrom = name; save(); eng.render(); } }),
-      onClear: () => { ST.swapFrom = ''; save(); eng.render(); } }) : null,
+      onClear: () => { ST.swapFrom = ''; save(); eng.render(); } }), { give: (name) => { ST.swapFrom = name; save(); eng.render(); } }) : null,
     o.kind === 'swap' ? field(['Models', h('span', {}, `${swapModels().length} ticked`)], h('div', { class: 'chips' }, ...Object.entries(SWAP_MODELS).filter(([k]) => canSwap(k)).map(([k, v]) =>
       chip(v.label, () => { ST.swapModels = ST.swapModels.includes(k) ? ST.swapModels.filter((x) => x !== k) : [...ST.swapModels, k]; save(); eng.render(); }, { on: ST.swapModels.includes(k) }))),
       help(Object.values(SWAP_MODELS).map((v) => `${v.label}: ${v.help}`).join(' '))) : null,

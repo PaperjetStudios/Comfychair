@@ -415,6 +415,11 @@ details.group:not([open]) > summary::after { transform: rotate(-90deg); }
 /* a picture dragged over the app, and the slot it would fill */
 body.picture-drag::after { content: ''; position: fixed; inset: 4px; border: 2px dashed var(--accent); border-radius: var(--r-lg); pointer-events: none; z-index: 10000; }
 .picture-slot.drop-here { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+/* a layer dragged out of the canvas or the list: what can take it, and the picture following the pointer */
+body.slot-drag .picture-slot:not(.drop-here) { outline: 1px dashed var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+.picture-ghost { position: fixed; top: 0; left: 0; z-index: 10000; pointer-events: none; opacity: .85; }
+.picture-ghost[hidden] { display: none; }
+.picture-ghost > * { display: block; width: 96px; height: 96px; object-fit: contain; background: var(--panel, #222); border: 1px solid var(--accent); border-radius: var(--r-sm); }
 /* a file dragged over the Video tab, and where it would land on a lane */
 #tab-video.file-drop { outline: 2px dashed var(--accent); outline-offset: -6px; }
 #tab-video.file-drop .tl-lane { background-image: linear-gradient(color-mix(in srgb, var(--accent) 10%, transparent), color-mix(in srgb, var(--accent) 10%, transparent)); }

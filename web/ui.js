@@ -627,7 +627,8 @@ export const cycleBar = ({ title, what, prev, next, buttons = [], pos, cls = '' 
 
 // rows: [{ thumb (element), name, hint, sel, off, onclick, buttons: [elements] }]. onReorder(from, to): the rows (in the order
 // given) get a grip to drag by, and a row dropped on another's place calls it with both positions.
-export function layerRowsEl(rows, { onReorder = null } = {}) {
+// dragOut(i, list): a row can also be dragged out to something else: { move(x, y) (true: over a target, so not a reorder), end(x, y) (true: it took the row; no x: called off) }, or null.
+export function layerRowsEl(rows, { onReorder = null, dragOut = null } = {}) {
   const list = h('div', { class: 'layers' });
   const grip = (i) => {
     const g = h('span', { class: 'layer-grip', title: 'Drag to reorder', 'aria-label': 'Drag to reorder', role: 'button' }, icon('grip'));
@@ -637,9 +638,15 @@ export function layerRowsEl(rows, { onReorder = null } = {}) {
       e.preventDefault(); e.stopPropagation();
       const els = [...list.children], row = els[i];
       let to = i;
+      const out = dragOut?.(i, list);
       g.setPointerCapture(e.pointerId);
       row.classList.add('dragging');
       const over = (ev) => {
+        if (out?.move(ev.clientX, ev.clientY)) {
+          to = i;
+          els.forEach((r) => r.classList.remove('drop-before', 'drop-after'));
+          return;
+        }
         to = els.findIndex((r) => ev.clientY < r.getBoundingClientRect().top + r.offsetHeight / 2);
         if (to < 0) to = els.length - 1; else if (to > i) to--;   // (dropped below its own place: the slot above that row)
         els.forEach((r, k) => r.classList.toggle('drop-before', k === to && to < i));
@@ -648,7 +655,8 @@ export function layerRowsEl(rows, { onReorder = null } = {}) {
       const end = (ev) => {
         g.removeEventListener('pointermove', over); g.removeEventListener('pointerup', end); g.removeEventListener('pointercancel', end);
         els.forEach((r) => r.classList.remove('dragging', 'drop-before', 'drop-after'));
-        if (ev.type === 'pointerup' && to !== i) onReorder(i, to);
+        const up = ev.type === 'pointerup', taken = out?.end(up ? ev.clientX : undefined, ev.clientY);
+        if (up && !taken && to !== i) onReorder(i, to);
       };
       g.addEventListener('pointermove', over); g.addEventListener('pointerup', end); g.addEventListener('pointercancel', end);
     });

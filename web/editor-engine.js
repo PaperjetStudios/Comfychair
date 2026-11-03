@@ -6,6 +6,7 @@ import { store,
 } from './ui.js';
 import { ASPECT_PRESETS, S, inputUrl, switchTab, thumbUrl } from './core.js';
 import { openImagePicker, uploadImage } from './media.js';
+import { pictureDrag } from './picture-drop.js';
 import { snap as gridSnap, snapBar, snapNearest, snapOn, snapStep } from './gizmo.js';
 import * as ST from './layer-stack.js';
 import { openCraftSheet, sendToCraft } from './craft.js';
@@ -801,6 +802,7 @@ export function createEditor(cfg) {
     const cancelDrag = () => {
       if (!drag) return;
       for (const [l, x, y, scale, crop, rotation] of held) Object.assign(l, { x, y, scale, crop, rotation });
+      drag.out?.end();
       drag = null; EVheld = false; E.guides = [];
       lastTap = { t: 0, l: null };   // (a pinch's first finger isn't half a double-tap)
       drawEditorCanvas();
@@ -908,7 +910,7 @@ export function createEditor(cfg) {
       if (e.shiftKey || E.pickMode) { EVheld = false; togglePick(hit); renderEditor(); return; }
       lastTap = { t: now, l: hit };
       const group = picked();
-      drag = { l: hit, p0: p, x0: hit.x, y0: hit.y };
+      drag = { l: hit, p0: p, x0: hit.x, y0: hit.y, was: { sel: E.sel, multi: E.multi }, out: canGive(hit) ? pictureDrag(cv, () => layerThumb(hit)) : null };
       if (group.length > 1 && group.includes(hit)) drag.group = group.filter((m) => m !== hit && !m.locked).map((m) => [m, m.x, m.y]);   // (the selection moves together)
       else if (E.sel !== hit || E.multi.length) { pickOnly(hit); renderEditor(); }
     });
@@ -1006,9 +1008,18 @@ export function createEditor(cfg) {
         for (const [m, mx, my] of drag.group || []) { m.x = mx + (l.x - drag.x0); m.y = my + (l.y - drag.y0); }
       }
       drag.moved = true;
+      drag.out?.move(e.clientX, e.clientY);
       drawEditorCanvas();
     });
     const end = (e) => {
+      const slot = drag?.out?.end(e?.type === 'pointerup' ? e.clientX : undefined, e?.clientY);
+      if (slot) {   // let go on a picture slot: it takes a copy, and the layers and the selection go back as they were
+        for (const [l, x, y, scale, crop, rotation] of held) Object.assign(l, { x, y, scale, crop, rotation });
+        Object.assign(E, drag.was);
+        drag.moved = false;
+        lastTap = { t: 0, l: null };
+        giveLayer(drag.l, slot);
+      }
       const moved = drag && drag.moved;
       if (drag?.crop && E.sel && G.pastEdge(E.sel.crop)) {   // past the edges: the layer goes back as it was, and a new picture with the grey in it goes over it
         const l = E.sel, c = l.crop, at = { x: l.x, y: l.y };
@@ -1265,7 +1276,7 @@ export function createEditor(cfg) {
           if (l === E.sel && !E.multi.length && !paint.painting()) { E.sel = null; E.cropping = false; } else pickOnly(l);
           renderEditor();
         },
-        thumb: isCanvas(l) ? canvasThumb(l.img) : h('img', { src: thumbUrl(l.name, 160), alt: '' }),
+        thumb: layerThumb(l),
         name: layerName(l),
         hint: l.broken ? 'could not load' : !r ? 'loading…'
           : `${Math.round(r.w)}×${Math.round(r.h)}${cropped ? ' · cropped' : ''}${blend}${anyKeys(l) ? ' · animated' : ''}${l.hidden ? ' · hidden' : ''}`,
@@ -1276,7 +1287,12 @@ export function createEditor(cfg) {
           iconBtn(l.hidden ? 'Show' : 'Hide', l.hidden ? '◌' : '◉', () => { l.hidden = !l.hidden; editorChanged(); }),
           iconBtn('Delete layer', icon('trash'), () => { removeLayer(l); renderEditor(); })],
       };
-    }), { onReorder: reorder });
+    }), { onReorder: reorder, dragOut: (i, from) => {
+      const l = rows[i].layer;
+      if (!l || !canGive(l)) return null;
+      const d = pictureDrag(from, () => layerThumb(l));
+      return { move: (x, y) => !!d.move(x, y), end: (x, y) => { const slot = d.end(x, y); if (slot) giveLayer(l, slot); return !!slot; } };
+    } });
     pressMenu(list, (e) => {
       const it = rows[[...list.children].indexOf(e.target.closest('.layer-row'))];
       if (it?.group) ST.setPicked(E, E.layers.filter((l) => l.group === it.group.id && !l.maskOf));
@@ -1779,6 +1795,16 @@ export function createEditor(cfg) {
     c.imageSmoothingQuality = 'high'; c.scale(k, k); c.translate(-b.x, -b.y);
     drawMasked(c, { ...l, blend: 'normal', live: null });   // (through its mask, if it has one)
     return cv;
+  }
+  const canGive = (l) => ready(l) && !l.mask && !l.draft && !l.maskOf;
+  const layerThumb = (l) => (isCanvas(l) ? canvasThumb(l.img) : h('img', { src: thumbUrl(l.name, 160), alt: '' }));
+  // a layer dragged onto a picture slot (a tool's reference, say): the slot gets an input of it as it shows; the layer stays in the stack
+  async function giveLayer(l, slot) {
+    const b = busy('Copying the layer…');
+    try {
+      if (paint.unsavedPaint()) await paint.savePaint();
+      slot.give((await uploadImage(await pngOf(layerAlone(l)), { mp: slot.mp(), source: 'editor', filename: 'layer.png', multiple: 1 })).name);
+    } catch (e) { toast('Copy failed: ' + e.message, true); } finally { b.done(); }
   }
   // the work on the selected layers: unsaved paint first, so they are as they show
   async function onSelected(say, work) {

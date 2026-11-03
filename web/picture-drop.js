@@ -1,7 +1,7 @@
 // Pictures dropped anywhere in the app, from a file window or another browser window. Places with their own drop (an
 // open picture picker, the Video tab's timeline, the 3D view) take theirs first. Otherwise a picture goes to the slot
 // under it; if it missed one, to the open tab's first empty slot; on the Image tab, in as a layer; else to this project's pictures.
-import { $, sheetOpen, toast } from './ui.js';
+import { $, h, sheetOpen, toast } from './ui.js';
 import { uploadImage } from './media.js';
 import { draggingPicture, dropKind, droppedFiles } from './drop-files.js';
 
@@ -51,6 +51,29 @@ const wanted = (e) => !e.defaultPrevented && draggingPicture(e.dataTransfer)
 let over = null;
 const mark = (el) => { if (el !== over) { over?.classList.remove('drop-here'); el?.classList.add('drop-here'); over = el; } };
 const done = () => { document.body.classList.remove('picture-drag'); mark(null); };
+
+// A picture dragged by pointer from inside the app, a layer say (from: the element it starts on; thumb(): what follows the
+// pointer once it has left that). move(x, y): the slot under it, if any. end(x, y): the slot it was let go on; no x, or no slot: null.
+export function pictureDrag(from, thumb) {
+  let ghost = null;
+  const finish = () => { ghost?.remove(); ghost = null; document.body.classList.remove('slot-drag'); mark(null); };
+  const under = (x, y) => document.elementFromPoint(x, y);
+  return {
+    move(x, y) {
+      const el = under(x, y), away = !from.contains(el);
+      document.body.classList.toggle('slot-drag', away);
+      if (away && !ghost) document.body.append(ghost = h('div', { class: 'picture-ghost' }, thumb()));
+      if (ghost) { ghost.hidden = !away; ghost.style.transform = `translate(${x + 12}px, ${y + 12}px)`; }
+      const slot = slotAt(el);
+      mark(slot?.el || null);
+      return slot;
+    },
+    end(x, y) {
+      finish();
+      return x == null ? null : slotAt(under(x, y));
+    },
+  };
+}
 
 document.addEventListener('dragover', (e) => {
   if (!wanted(e)) return;

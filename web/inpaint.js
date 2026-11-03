@@ -1,6 +1,7 @@
 import { h, api, store, toast, busy, button, section, field, seg, hint, help, toggle, textArea, rangeField, propNum, openSheet, closeSheet, actions } from './ui.js';
 import { ASPECT_PRESETS, S } from './core.js';
 import { pngBlob, uploadImage, openImagePicker } from './media.js';
+import { pictureSlot } from './picture-drop.js';
 import { queueRun, roleField, valuesByRole, waitGen } from './make.js';
 import { maskAsSent, maskForResult, placed } from './layer-result.js';
 import { eachOne, failureText } from './tool-batch.js';
@@ -309,13 +310,13 @@ function itemRow(eng, it, i) {
   const desc = textArea(() => it.desc, (v) => { it.desc = v; }, { rows: 2, placeholder: 'What goes in this box: "a brass lantern on the table"', label: `Item ${i + 1}` });
   desc.addEventListener('change', () => eng.changed());
   desc.addEventListener('focus', () => { if (E.itemSel !== i) { E.itemSel = i; eng.draw(); } });
-  return h('div', { class: 'col' },
+  return pictureSlot(h('div', { class: 'col' },
     h('div', { class: 'row wrap' }, hint(`Item ${i + 1}: ${Math.round(it.w)}×${Math.round(it.h)}${small ? ' (too small)' : ''}`),
       button(it.ref ? 'Change picture' : 'Match a picture', () => openImagePicker({ title: 'A picture to match', multi: false, mp: () => 0,
         onPick: (name) => { it.ref = name; eng.changed(); eng.render(); } }), { cls: 'small', title: 'The item is drawn to look like this picture' }),
       it.ref ? button('No picture', () => { it.ref = ''; eng.changed(); eng.render(); }, { cls: 'small ghost' }) : null,
       button('Delete', () => { E.items.splice(i, 1); E.itemSel = -1; eng.changed(); eng.render(); }, { cls: 'small ghost' })),
-    desc);
+    desc), { give: (name) => { it.ref = name; eng.changed(); eng.render(); } });
 }
 
 // the mask: what marks it, and Dilate / erode following the slider on the canvas (what Fill, Remove, Swap and Cut out get is what shows)
