@@ -57,3 +57,8 @@ assert.equal(G.snapAngle(52, { step: 15 }), 45);
 assert.equal(G.snapAngle(270), -90);
 assert.equal(G.snapAngle(-180), 180);
 console.log('layer geom ok');
+
+// a picture that is see-through anywhere
+assert.equal(G.seeThrough(new Uint8ClampedArray([9, 9, 9, 255, 9, 9, 9, 255])), false);
+assert.equal(G.seeThrough(new Uint8ClampedArray([9, 9, 9, 255, 9, 9, 9, 0])), true);
+assert.equal(G.seeThrough(new Uint8ClampedArray([9, 9, 9, 252])), false);

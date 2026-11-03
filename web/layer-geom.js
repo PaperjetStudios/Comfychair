@@ -24,6 +24,11 @@ export function layerRect(l) {
   return { x: l.x, y: l.y, w: c.w * W * l.scale, h: c.h * H * l.scale };
 }
 // whether a crop keeps the whole image
+// RGBA pixels with any part see-through (a rounding's worth of it doesn't count)
+export function seeThrough(px, solid = 250) {
+  for (let i = 3; i < px.length; i += 4) if (px[i] < solid) return true;
+  return false;
+}
 export const plainCrop = (c) => !c || (c.x < 0.001 && c.y < 0.001 && c.w > 0.999 && c.h > 0.999);
 // the pixels an Image tool is sent for this layer: its kept part at the file's own size, whatever its scale on the canvas
 export function sentPixels(l) {

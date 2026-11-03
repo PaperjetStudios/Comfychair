@@ -99,6 +99,7 @@ const tplId = (o) => (o.kind === 'swap' ? (SWAP_MODELS[swapModels()[0]] || SWAP_
 const loadImg = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Could not load a picture')); i.src = src.startsWith('/files/') ? `${src}${src.includes('?') ? '&' : '?'}at=${Date.now()}${Math.random()}` : src; });
 
 // the selected layers an Image tool can run on, one run each: picture layers, not a mask or draft
+const { seeThrough } = G;
 const usable = (l) => l && !l.mask && !l.draft && !l.maskOf && !l.broken && l.name;
 const targets = (eng) => (eng.picked?.() || []).filter(usable);
 
@@ -114,13 +115,35 @@ async function keptPart(eng, l) {
 
 // The tools whose result has its layer's framing, so the layer's mask fits it
 const KEEPS_FRAMING = new Set(['up', 'detail', 'delight', 'remove', 'clean', 'swap']);
-// a layer's mask as it is now, its kept part at its own pixels (painting on it during the run doesn't change it); null if it has none
+// The models give back a solid picture: a cut-out's see-through would be lost. A canvas that shows what a picture's see-through leaves, or null when it is solid
+function shapeOf(pic, sx, sy, sw, sh, w, h) {
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const c = cv.getContext('2d', { willReadFrequently: true });
+  c.drawImage(pic, sx, sy, sw, sh, 0, 0, w, h);
+  return seeThrough(c.getImageData(0, 0, w, h).data) ? cv : null;
+}
+// A layer's shape as it is now, its kept part at its own pixels (painting on it during the run doesn't change it): what its mask and its own
+// see-through leave showing, for a mask on the result. null if it has neither.
 function maskAsSent(eng, l) {
   const m = l.maskFor === 'adjust' ? null : eng.E.layers.find((x) => x.maskOf === l.key && eng.ready(x));   // (a mask for its colour is in the picture sent)
-  if (!m) return null;
-  const W = m.img.naturalWidth || m.img.width, H = m.img.naturalHeight || m.img.height, c = l.crop, cv = document.createElement('canvas');
-  cv.width = Math.max(1, Math.round(c.w * W)); cv.height = Math.max(1, Math.round(c.h * H));
-  cv.getContext('2d').drawImage(m.img, c.x * W, c.y * H, c.w * W, c.h * H, 0, 0, cv.width, cv.height);
+  const W = l.img.naturalWidth || l.img.width, H = l.img.naturalHeight || l.img.height, k = l.crop;
+  const w = Math.max(1, Math.round(k.w * W)), h = Math.max(1, Math.round(k.h * H));
+  const own = shapeOf(l.img, k.x * W, k.y * H, k.w * W, k.h * H, w, h);
+  // (a mask switched off stays off, on the result too; the see-through can't be, so it goes on alone)
+  const useMask = m && !(l.maskOff && own);
+  if (!useMask && !own) return null;
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const c = cv.getContext('2d');
+  c.fillStyle = '#fff'; c.fillRect(0, 0, w, h);
+  c.globalCompositeOperation = 'destination-in';
+  if (own) c.drawImage(own, 0, 0);
+  if (useMask) {
+    const mw = m.img.naturalWidth || m.img.width, mh = m.img.naturalHeight || m.img.height;
+    c.drawImage(m.img, k.x * mw, k.y * mh, k.w * mw, k.h * mh, 0, 0, w, h);
+  }
+  cv.dataset.off = useMask && l.maskOff ? '1' : '';
   return cv;
 }
 // that mask at a result's pixels, as a new input: what a mask shares with its layer is scale and crop, so it must be the result's size
@@ -132,7 +155,7 @@ async function maskForResult(src, r) {
   c.imageSmoothingQuality = 'high';
   c.drawImage(src.mask, 0, 0, cv.width, cv.height);
   const up = await uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: 'mask.png', multiple: 1 });
-  return { mask: up.name, ...(src.was.maskOff && { maskOff: true }) };
+  return { mask: up.name, ...(src.mask.dataset.off && { maskOff: true }) };
 }
 
 // what the tool works on: a layer (null: every layer together). { name (an input), rect (where it sits on the canvas before
@@ -145,7 +168,11 @@ async function sourceOf(eng, l, o) {
   const f = eng.frame(), pic = document.createElement('canvas');
   if (!f || !eng.compose(pic)) throw new Error('Add a picture first');
   const up = await uploadImage(await pngBlob(pic), { mp: 0, source: 'editor', filename: 'tool.png', multiple: 1 });
-  return { name: up.name, rect: { x: f.x, y: f.y, w: f.w, h: f.h }, layer: null, px: [pic.width, pic.height] };
+  // (every layer together: the empty part of the canvas stays empty)
+  const bare = document.createElement('canvas');   // (what is sent has the canvas's background behind it: this has not)
+  const empty = KEEPS_FRAMING.has(o.kind) && eng.compose(bare, true) ? shapeOf(bare, 0, 0, bare.width, bare.height, bare.width, bare.height) : null;
+  if (empty) { const c = empty.getContext('2d'); c.globalCompositeOperation = 'source-in'; c.fillStyle = '#fff'; c.fillRect(0, 0, empty.width, empty.height); }
+  return { name: up.name, rect: { x: f.x, y: f.y, w: f.w, h: f.h }, layer: null, px: [pic.width, pic.height], mask: empty };
 }
 
 // a matte picture (white = keep) from the run's outputs: several (one per thing SAM3 found) are joined
