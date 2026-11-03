@@ -22,6 +22,7 @@ import { gradedPicture, histOfPicture } from './adjust-draw.js';
 import { adjustPanel } from './adjust-panel.js';
 import { icon } from './icons.js';
 import * as G from './layer-geom.js';
+import { gridItem, gridPlan, fitToCell } from './layer-grid.js';
 import { solidBounds } from './matte-edge.js';
 import { inpaintSection, masksSection } from './inpaint.js';
 import { imageToolsSection } from './imagetools.js';
@@ -1322,6 +1323,33 @@ export function createEditor(cfg) {
     });
   }
 
+  // Grid: the selected pictures in equal cells (web/layer-grid.js). gridCrops remembers what a grid cut, so another grid starts
+  // from the picture's own crop, whatever the last one's cells were; a crop changed by hand since then is the new start.
+  const GRID_PREFS = 'deck.layergrid';
+  const gridCrops = new WeakMap();
+  function makeGrid(ls) {
+    const o = store.get(GRID_PREFS, { cols: 0, gap: 0, crop: false });
+    const set = ls.filter((l) => ready(l) && !l.locked && !l.hidden && !plain(l)).sort((a, b) => E.layers.indexOf(b) - E.layers.indexOf(a));   // (top of the list first)
+    if (set.length < 2) return toast('A grid needs two or more pictures that show and aren\'t locked', true);
+    const bases = set.map((l) => { const m = gridCrops.get(l); return m && JSON.stringify(l.crop) === m.made ? m.base : l.crop; });
+    const items = set.map((l, i) => gridItem(l, bases[i], o.crop));
+    const { cells } = gridPlan(items, { frame: E.size ? editorFrame() : null, origin: unionRect(set.map(bounds)), cols: o.cols, gap: o.gap });
+    set.forEach((l, i) => {
+      Object.assign(l, fitToCell(l, bases[i], cells[i], o.crop));
+      if (o.crop) gridCrops.set(l, { base: bases[i], made: JSON.stringify(l.crop) }); else gridCrops.delete(l);
+    });
+    editorChanged();
+  }
+  function gridControls(ls) {
+    const o = store.get(GRID_PREFS, { cols: 0, gap: 0, crop: false });
+    const save = (patch) => { store.set(GRID_PREFS, { ...o, ...patch }); renderEditor(); };
+    const most = Math.min(8, ls.length);
+    return field('Grid', help('Puts the selected pictures in equal cells, filling the canvas if it has a fixed size. They keep their reading order on the canvas; a pile goes in list order, top first. Auto picks the columns that suit their shapes best. Crop off shows each whole picture inside its cell. Crop on fills each cell and cuts what sticks out, around the middle; it also straightens a picture turned at an angle, to the nearest quarter. A hidden or locked layer stays where it is. Undo brings the old places back.'),
+      seg([[0, 'Auto'], ...Array.from({ length: most }, (_, i) => [i + 1, String(i + 1)])], o.cols > most ? 0 : o.cols, (v) => save({ cols: v }), { wrap: true }),
+      rangeField('Gap', () => o.gap, (v) => { o.gap = v; store.set(GRID_PREFS, { ...o }); }, { min: 0, max: 100, step: 1, fmt: (v) => `${Math.round(v)} px` }),
+      h('div', { class: 'row wrap' }, toggle('Crop to fill', o.crop, (on) => save({ crop: on })), button('Make grid', () => makeGrid(ls), { cls: 'small primary', title: 'Into equal cells, with these settings' })));
+  }
+
   // The panel for two or more selected layers: each change goes to every one of them
   function groupProps(ls) {
     const done = () => { E.sel = null; E.multi = []; E.pickMode = false; renderEditor(); };
@@ -1372,6 +1400,7 @@ export function createEditor(cfg) {
         seg([[0, '⇤ Left'], [0.5, '↔ Centre'], [1, 'Right ⇥']], null, aligner('x'), { action: true }),
         seg([[0, '⤒ Top'], [0.5, '↕ Middle'], [1, 'Bottom ⤓']], null, aligner('y'), { action: true })),
       field('Spread evenly', h('div', { class: 'row wrap' }, button('Across', () => spread('x'), { cls: 'small' }), button('Down', () => spread('y'), { cls: 'small' }))),
+      gridControls(ls),
       h('div', { class: 'row wrap' },
         button(allOn('hidden') ? 'Show all' : 'Hide all', () => { const on = !allOn('hidden'); each((l) => { l.hidden = on; }); }, { cls: 'small' }),
         button(allOn('locked') ? 'Unlock all' : 'Lock all', () => { const on = !allOn('locked'); each((l) => { l.locked = on; }); }, { cls: 'small' }),

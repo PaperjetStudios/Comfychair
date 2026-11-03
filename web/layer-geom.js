@@ -5,7 +5,7 @@
 // across that centre by l.flipX / l.flipY. Without rotation or flips everything is as it always was.
 // Matrices are [a, b, c, d, e, f]: x' = a x + c y + e, y' = b x + d y + f (canvas 2D order).
 // ---------------------------------------------------------------------------
-const size = (l) => [l.img?.naturalWidth || l.w || 1, l.img?.naturalHeight || l.h || 1];
+export const size = (l) => [l.img?.naturalWidth || l.w || 1, l.img?.naturalHeight || l.h || 1];
 export const turned = (l) => !!((l.rotation || 0) % 360) || !!l.flipX || !!l.flipY;
 
 export const mul = (m, n) => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3],
