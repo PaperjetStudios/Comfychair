@@ -312,7 +312,7 @@ details.group:not([open]) > summary::after { transform: rotate(-90deg); }
 .mp { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; font-size: var(--fs-sm); color: var(--muted); }
 .mp input { min-height: var(--tap-sm); }
 
-.lora-row { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+.lora-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
 .lora-row .top { display: flex; gap: 6px; align-items: center; }
 .lora-row .top select { flex: 1; }
 .lora-row .top .lora-pick { flex: 1; }

@@ -1,16 +1,19 @@
-import { h, api, store, toast, busy, button, chip, section, field, rangeField, seg, hint, help, imageInput, toggle, textArea } from './ui.js';
+import { h, api, store, toast, busy, button, chip, section, field, rangeField, seedField, seg, hint, help, imageInput, toggle, textArea } from './ui.js';
 import { S, inputUrl, switchTab, thumbUrl } from './core.js';
 import { openImagePicker, pngBlob, uploadImage } from './media.js';
 import { queueRun, template, valuesByRole, waitGen } from './make.js';
 import { MAPS } from './maps.js';
 import { editSizeFor } from './edit-size.js';
 import * as G from './layer-geom.js';
-import { uploadMask } from './inpaint.js';
+import { layerMask, uploadMask } from './inpaint.js';
+import { maskAsSent, maskForResult, placed, shapeOf } from './layer-result.js';
 import { isOn } from './adjust.js';
 import { boundsOf, boxesFor, foundIn, refineEdge, separateAreas, stairOf, termsOf, worthLooking } from './matte-edge.js';
 import { faceBox, keepBrightness, scratchMask, tilesOf } from './photo-restore.js';
 import { icon } from './icons.js';
 import { eachOne, failureText } from './tool-batch.js';
+import { editPrompt, layerWord, seedStep, sigmasFor, usableLoras } from './edit-image.js';
+import { loraPicker } from './lora-pick.js';
 import { SWAP_MODELS, SWAP_PARTS, biggestArea, changedAround, joined, onlyWithin, scaleFor, softEdge, swapBox, swapLora, swapPrompt, swapRefPixels, without } from './swap-part.js';
 
 // ---------------------------------------------------------------------------
@@ -19,10 +22,10 @@ import { SWAP_MODELS, SWAP_PARTS, biggestArea, changedAround, joined, onlyWithin
 // a map (depth, edges, scribble, pose), an upscaled copy, a cut-out of the subject, or the mask (auto masking).
 // ---------------------------------------------------------------------------
 const KEY = 'deck.imagetools';
-const GROUPS = ['Maps', 'Cut out and mask', 'Swap', 'Clean up', 'Colour', 'Upscale', 'Detail'];
+const GROUPS = ['Edit', 'Maps', 'Cut out and mask', 'Swap', 'Clean up', 'Colour', 'Upscale', 'Detail'];
 // The row of buttons over the list: the main things, each opening its tool (the first of its tools, unless one of them is open)
 const QUICK = [
-  ['Upscale', 'enlarge', ['up', 'upfast']], ['Clean up', 'sparkle', ['clean']], ['Restore', 'photo', ['restore']], ['Colourise', 'palette', ['colorise']],
+  ['Edit', 'edit', ['edit']], ['Upscale', 'enlarge', ['up', 'upfast']], ['Clean up', 'sparkle', ['clean']], ['Restore', 'photo', ['restore']], ['Colourise', 'palette', ['colorise']],
   ['Remove', 'eraser', ['remove', 'unmark']], ['Cut out', 'cut', ['cutout', 'words', 'sheet']], ['Swap', 'swap', ['swap']], ['Face skin', 'person', ['skin']], ['Detail', 'star', ['detail', 'delight']], ['Maps', 'grid', ['depth', 'canny', 'scribble', 'pose']],
 ];
 // The restoration models of Clean up: each works at the picture's own size, and changes nothing else
@@ -66,6 +69,8 @@ const OLD_DELIGHT_PROMPT = 'Remove all the lighting and shadows from this pictur
 const COLOUR_PROMPT = 'Colorize this black and white photograph with natural, true-to-life colors: real skin tones, clothing, plants, sky and materials. Keep every person and object, the light, the shadows, the details and the framing exactly the same. Do not add or remove anything.';
 
 const OPS = [
+  { id: 'edit', group: 'Edit', label: 'Edit from a prompt (Qwen 2.1)', tpl: 'deck-qwen21-edit', kind: 'edit',
+    help: 'Say what to change, and Qwen 2.1 draws each picture again with that change. Select many layers to run the same edit on each. Each result lands as a new layer over its original. The model works at the size set below, so a picture bigger than that comes back smaller unless you set an area: then the rest stays pixel for pixel.' },
   { id: 'depth', group: 'Maps', label: 'Depth map', tpl: MAPS.depth.still, kind: 'layer', depth: true,
     help: 'A grey depth map (near is white) of the picture: Video Depth Anything. A layer on top; use it as a reference picture or control.' },
   { id: 'canny', group: 'Maps', label: 'Canny edges', tpl: MAPS.canny.still, kind: 'layer', edges: [0.2, 0.4, 0.6],
@@ -103,7 +108,7 @@ const OPS = [
   { id: 'upfast', group: 'Upscale', label: 'Upscale (fast)', tpl: 'deck-upscale-image-fast', kind: 'up',
     help: '4x-UltraSharp: a quick, clean enlargement without the invented detail. Export size is set to match, so Download and Save as input come out bigger.' },
 ];
-const ST = { samSure: 0.2, samMost: 8, op: 'cutout', scope: 'whole', result: 'cutout', hide: true, fine: true, rfrom: 'words', rprompt: 'watermark', cmodel: 'noise', uprompt: UNMARK_PROMPT, prompt: 'person', rows: 1, cols: 4, sheetFast: false, swapPart: 'face', swapFrom: '', swapModels: ['klein9b'], swapWhere: 'find', swapExtra: '', scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', stepScratch: true, stepClean: true, stepFaces: true, stepColour: false, scratchAmount: 'normal', faceAmount: 0.8, cprompt: COLOUR_PROMPT, dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, ...store.get(KEY, {}) };
+const ST = { samSure: 0.2, samMost: 8, op: 'cutout', scope: 'whole', result: 'cutout', hide: true, fine: true, rfrom: 'words', rprompt: 'watermark', cmodel: 'noise', uprompt: UNMARK_PROMPT, prompt: 'person', rows: 1, cols: 4, sheetFast: false, swapPart: 'face', swapFrom: '', swapModels: ['klein9b'], swapWhere: 'find', swapExtra: '', scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', stepScratch: true, stepClean: true, stepFaces: true, stepColour: false, scratchAmount: 'normal', faceAmount: 0.8, cprompt: COLOUR_PROMPT, dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, eprompt: '', econtext: '', ekeep: true, erefs: [], ewhere: 'all', efind: '', eclose: true, egrow: 8, esoft: 16, emp: 2, ecount: 1, eseed: 0, eseedMode: 'random', esteps: 8, ecfg: 1, eneg: '', eloras: [], ...store.get(KEY, {}) };
 if (ST.lprompt === OLD_DELIGHT_PROMPT) ST.lprompt = DELIGHT_PROMPT;   // (the old default, saved in this browser; a prompt someone wrote stays)
 const save = () => store.set(KEY, ST);
 const FLIGHT = new Set();   // runs on their way back
@@ -123,7 +128,6 @@ const tplId = (o) => (o.kind === 'swap' ? (SWAP_MODELS[swapModels()[0]] || SWAP_
 const loadImg = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Could not load a picture')); i.src = src.startsWith('/files/') ? `${src}${src.includes('?') ? '&' : '?'}at=${Date.now()}${Math.random()}` : src; });
 
 // the selected layers an Image tool can run on, one run each: picture layers, not a mask or draft
-const { seeThrough } = G;
 const usable = (l) => l && !l.mask && !l.draft && !l.maskOf && !l.broken && l.name;
 const targets = (eng) => (eng.picked?.() || []).filter(usable);
 
@@ -138,50 +142,7 @@ async function keptPart(eng, l) {
 }
 
 // The tools whose result has its layer's framing, so the layer's mask fits it
-const KEEPS_FRAMING = new Set(['up', 'detail', 'delight', 'remove', 'clean', 'swap', 'restore', 'colorise']);
-// The models give back a solid picture: a cut-out's see-through would be lost. A canvas that shows what a picture's see-through leaves, or null when it is solid
-function shapeOf(pic, sx, sy, sw, sh, w, h) {
-  const cv = document.createElement('canvas');
-  cv.width = w; cv.height = h;
-  const c = cv.getContext('2d', { willReadFrequently: true });
-  c.drawImage(pic, sx, sy, sw, sh, 0, 0, w, h);
-  return seeThrough(c.getImageData(0, 0, w, h).data) ? cv : null;
-}
-// A layer's shape as it is now, its kept part at its own pixels (painting on it during the run doesn't change it): what its mask and its own
-// see-through leave showing, for a mask on the result. null if it has neither.
-function maskAsSent(eng, l) {
-  const m = l.maskFor === 'adjust' ? null : eng.E.layers.find((x) => x.maskOf === l.key && eng.ready(x));   // (a mask for its colour is in the picture sent)
-  const W = l.img.naturalWidth || l.img.width, H = l.img.naturalHeight || l.img.height, k = l.crop;
-  const w = Math.max(1, Math.round(k.w * W)), h = Math.max(1, Math.round(k.h * H));
-  const own = shapeOf(l.img, k.x * W, k.y * H, k.w * W, k.h * H, w, h);
-  // (a mask switched off stays off, on the result too; the see-through can't be, so it goes on alone)
-  const useMask = m && !(l.maskOff && own);
-  if (!useMask && !own) return null;
-  const cv = document.createElement('canvas');
-  cv.width = w; cv.height = h;
-  const c = cv.getContext('2d');
-  c.fillStyle = '#fff'; c.fillRect(0, 0, w, h);
-  c.globalCompositeOperation = 'destination-in';
-  if (own) c.drawImage(own, 0, 0);
-  if (useMask) {
-    const mw = m.img.naturalWidth || m.img.width, mh = m.img.naturalHeight || m.img.height;
-    c.drawImage(m.img, k.x * mw, k.y * mh, k.w * mw, k.h * mh, 0, 0, w, h);
-  }
-  cv.dataset.off = useMask && l.maskOff ? '1' : '';
-  return cv;
-}
-// that mask at a result's pixels, as a new input: what a mask shares with its layer is scale and crop, so it must be the result's size
-async function maskForResult(src, r) {
-  if (!src.mask) return {};
-  const cv = document.createElement('canvas');
-  cv.width = r.width; cv.height = r.height;
-  const c = cv.getContext('2d');
-  c.imageSmoothingQuality = 'high';
-  c.drawImage(src.mask, 0, 0, cv.width, cv.height);
-  const up = await uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: 'mask.png', multiple: 1 });
-  return { mask: up.name, ...(src.mask.dataset.off && { maskOff: true }) };
-}
-
+const KEEPS_FRAMING = new Set(['up', 'detail', 'delight', 'remove', 'clean', 'swap', 'restore', 'colorise', 'edit']);
 // what the tool works on: a layer (null: every layer together). { name (an input), rect (where it sits on the canvas before
 // any turn), layer (or null), was (the layer's place when sent: its turn goes on the result), mask (its mask when sent, for a tool in KEEPS_FRAMING), px }. A model sees a layer unturned.
 async function sourceOf(eng, l, o) {
@@ -330,12 +291,6 @@ async function cutCells(src) {
   return out;
 }
 
-// a result pic's place at x, y and w wide: over its layer, with that layer's turn
-function placed(src, x, y, w, pic) {
-  const scale = w / pic.width;
-  return { ...(src.was ? G.placeOn(src.was, { x, y, w, h: pic.height * scale }) : { x, y }), scale };
-}
-
 async function land(eng, o, src, done, cell) {
   const { rect, layer } = src;
   if (o.kind === 'matte') {
@@ -357,7 +312,7 @@ async function land(eng, o, src, done, cell) {
     return eng.changed(), eng.render();
   } else {
     const r = await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } });
-    const made = eng.addImage(r.name, { label: o.kind === 'up' ? `Upscaled ${r.width}×${r.height}` : o.kind === 'delight' ? (o.done || 'De-lit') : o.kind === 'detail' ? `Detail (${dm().label})` : o.kind === 'clean' ? `Cleaned (${(CLEAN[ST.cmodel] || CLEAN.noise).label})` : o.label, ...placed(src, rect.x, rect.y, rect.w, r), ...(await maskForResult(src, r)) });
+    const made = eng.addImage(r.name, { label: o.kind === 'up' ? `Upscaled ${r.width}×${r.height}` : o.kind === 'edit' ? 'Edited' : o.kind === 'delight' ? (o.done || 'De-lit') : o.kind === 'detail' ? `Detail (${dm().label})` : o.kind === 'clean' ? `Cleaned (${(CLEAN[ST.cmodel] || CLEAN.noise).label})` : o.label, ...placed(src, rect.x, rect.y, rect.w, r), ...(await maskForResult(src, r)) });
     if (layer && KEEPS_FRAMING.has(o.kind) && ST.hide) layer.hidden = true;
     if (layer && o.kind === 'up' && ST.hide) {   // the selection moves from the hidden original to its upscale (a layer picked since the run began stays picked)
       const E = eng.E;
@@ -381,11 +336,15 @@ async function run(eng) {
   if (!eng.E.layers.some((l) => !l.mask && !l.draft)) return toast('Add a picture first', true);
   if (o.kind === 'remove' && ST.rfrom === 'words' && !termsOf(ST.rprompt).length) return toast('Say what to remove first', true);
   if (o.kind === 'remove' && !template('deck-mask-image')) return toast('deck-mask-image isn\'t installed', true);
+  if (o.kind === 'edit' && !ST.eprompt.trim()) return toast('Say what to change first', true);
+  if (o.kind === 'edit' && ST.ewhere === 'words' && !termsOf(ST.efind).length) return toast('Say what to find first', true);
+  if (o.kind === 'edit' && ST.ewhere === 'words' && !template('deck-mask-image')) return toast('deck-mask-image isn\'t installed', true);
   const tab = eng.E.tab?.id, b = busy('Sending the picture…');
   try {
     await eng.paint.savePaint();
     if (o.kind === 'remove' && ST.rfrom === 'painted') return await removePainted(eng, o, t, tab);
     if (o.kind === 'swap' && ST.swapWhere === 'painted') return await swapPainted(eng, o, tab);
+    if (o.kind === 'edit' && ST.ewhere === 'painted') return await editPainted(eng, o, t, tab);
     const list = ST.scope === 'selected' ? targets(eng) : [null];
     if (!list.length) return toast('Select a layer first', true);
     // (each selected layer is its own run, queued one after another; one failing to send doesn't stop the rest)
@@ -508,11 +467,26 @@ async function markFound(eng, o, src) {
 async function removePainted(eng, o, t, tab) {
   const f = eng.frame(), m = eng.composeMask();
   if (!f || !m) return toast('Paint what to remove first (Masks panel)', true);
+  if (ST.scope === 'selected') return removeOnLayers(eng, o, t, tab, f, m);
   const pic = document.createElement('canvas');
   if (!eng.compose(pic)) return toast('Add a picture first', true);
   if (pic.width !== m.canvas.width || pic.height !== m.canvas.height) return toast(`The picture (${pic.width}×${pic.height}) and mask (${m.canvas.width}×${m.canvas.height}) differ in size: try again`, true);
   const up = await uploadImage(await pngBlob(pic), { mp: 0, source: 'editor', filename: 'remove.png', multiple: 1 });
   return fillIn(eng, o, t, tab, { name: up.name, rect: { x: f.x, y: f.y, w: f.w, h: f.h }, layer: null, px: [pic.width, pic.height] }, m.canvas);
+}
+
+// ...on each selected layer alone: the one painted mask is cut to each, and a layer it doesn't touch is left out
+async function removeOnLayers(eng, o, t, tab, f, m) {
+  const list = targets(eng);
+  if (!list.length) return toast('Select a layer first', true);
+  const jobs = list.map((l) => [l, layerMask(m, f, l)]).filter(([, cut]) => cut);
+  if (!jobs.length) return toast('The mask doesn\'t touch a selected layer', true);
+  if (jobs.length < list.length) toast(`The mask misses ${list.length - jobs.length} of the selected layers: they stay as they are`);
+  const { failed } = await eachOne(jobs, async ([l, cut]) => {
+    const src = await sourceOf(eng, l, o);
+    try { await fillIn(eng, o, t, tab, src, cut.canvas); } finally { if (src.name !== l.name) await dropInput(src.name); }   // (a kept part, sent only for this)
+  });
+  if (failed.length) toast(failureText(o.label, failed, ([l]) => l.label || l.name.split('/').pop()), true);
 }
 
 // ---- Swap: a character's face, head or body from another picture ----
@@ -866,7 +840,151 @@ async function restorePhoto(eng, o, tab, src) {
   } finally { FLIGHT.delete(restorePhoto); b.done(); eng.render(); }
 }
 
+// ---- Edit: a prompt, what else you can tell it, and the model's knobs, on each picture in turn ----
+// what the model is told for one picture, at w×h
+function editValues(t, name, px, src) {
+  const by = (input) => t.fields.find((f) => f.input === input), set = (input, v) => { const f = by(input); return f ? { [f.key]: v } : {}; };
+  const main = t.fields.find((f) => f.kind === 'image' && /image to edit/i.test(f.group)), refs = t.fields.filter((f) => f.kind === 'image' && /reference/i.test(f.group));
+  const { use, next } = seedStep(ST.eseedMode, ST.eseed, ST.ecount);
+  ST.eseed = next; save();
+  const lf = loraField(t), loras = lf ? usableLoras(ST.eloras, lf.options || []) : [];
+  return { [main.key]: name, ...Object.fromEntries(ST.erefs.slice(0, refs.length).map((r, i) => [refs[i].key, r])),
+    ...set('prompt', editPrompt({ prompt: ST.eprompt, context: ST.econtext, keep: ST.ekeep, layer: layerWord(src.layer) })),
+    ...valuesByRole(t, { seed: use }), ...set('sigmas', sigmasFor(ST.esteps)), ...set('cfg', ST.ecfg), ...(ST.ecfg > 1 && set('negative_prompt', ST.eneg)),
+    ...(lf && { [lf.key]: loras }), ...wholePicture(t, px, ST.emp * 1e6) };
+}
+
+// ...of an area of the picture (the mask: red, row by row): each result goes back through its soft edge at the picture's own size, so the rest stays pixel for pixel.
+// What the model sees is stretched to exactly its size, so nothing is cropped and the result lines up. What was sent and the runs were only a means, so they go.
+async function editArea(eng, o, t, tab, src, red, b) {
+  const [W, H] = src.px, area = boundsOf(red, W, H);
+  if (!area) throw new Error('There is nothing in the area to edit');
+  const box = ST.eclose ? swapBox(area, W, H, 0.35) : { x: 0, y: 0, w: W, h: H }, pic = await loadImg(inputUrl(src.name));
+  const [sw, sh] = editSizeFor(box.w, box.h, 32, ST.emp * 1e6), seen = canvasOf(sw, sh), sc = seen.getContext('2d');
+  sc.imageSmoothingQuality = 'high';
+  sc.drawImage(pic, box.x, box.y, box.w, box.h, 0, 0, sw, sh);
+  const edge = softEdge(red, W, H, ST.egrow, ST.esoft), name = await send(seen, 'edit-area.png');
+  FLIGHT.add(editArea); eng.render();
+  try {
+    b.set('Editing…');
+    const gens = await queueRun({ template: t.id, values: editValues(t, name, [sw, sh], src), batch: ST.ecount });
+    await Promise.all(gens.map(async (g) => {
+      let run = null;
+      try {
+        run = await waitGen(g.id);
+        const made = await madeBy(run), out = canvasFrom(pic, W, H), piece = canvasOf(W, H), pc = piece.getContext('2d', { willReadFrequently: true });
+        pc.imageSmoothingQuality = 'high';
+        pc.drawImage(made, box.x, box.y, box.w, box.h);
+        const px = pc.getImageData(0, 0, W, H);
+        for (let i = 0; i < edge.length; i++) px.data[i * 4 + 3] = Math.min(px.data[i * 4 + 3], edge[i]);
+        pc.putImageData(px, 0, 0);
+        out.getContext('2d').drawImage(piece, 0, 0);
+        await landCanvas(eng, o, tab, src, out, 'Edited', 'Edited');
+      } catch (e) { toast(`${o.label} failed${src.layer ? ` on ${layerWord(src.layer)}` : ''}: ${e.message}`, true); } finally { if (run) await dropRun(run.id); }
+    }));
+  } finally { FLIGHT.delete(editArea); await dropInput(name); eng.render(); }
+}
+
+// ...the area as painted: on the whole picture, as a painted mask is
+async function editPainted(eng, o, t, tab) {
+  const f = eng.frame(), m = eng.composeMask();
+  if (!f || !m) return toast('Paint the area first (Masks panel), or have it found', true);
+  if (ST.scope === 'selected') return editOnLayers(eng, o, t, tab, f, m);
+  const pic = document.createElement('canvas');
+  if (!eng.compose(pic)) return toast('Add a picture first', true);
+  if (pic.width !== m.canvas.width || pic.height !== m.canvas.height) return toast(`The picture (${pic.width}×${pic.height}) and mask (${m.canvas.width}×${m.canvas.height}) differ in size: try again`, true);
+  const up = await uploadImage(await pngBlob(pic), { mp: 0, source: 'editor', filename: 'edit.png', multiple: 1 }), b = busy('Editing…');
+  try {
+    await editArea(eng, o, t, tab, { name: up.name, rect: { x: f.x, y: f.y, w: f.w, h: f.h }, layer: null, px: [pic.width, pic.height] }, redOf(m.canvas, pic.width, pic.height), b);
+  } finally { b.done(); }
+}
+
+// ...on each selected layer alone: the one painted mask is cut to each, and a layer it doesn't touch is left out
+async function editOnLayers(eng, o, t, tab, f, m) {
+  const list = targets(eng);
+  if (!list.length) return toast('Select a layer first', true);
+  const jobs = list.map((l) => [l, layerMask(m, f, l)]).filter(([, cut]) => cut);
+  if (!jobs.length) return toast('The mask doesn\'t touch a selected layer', true);
+  if (jobs.length < list.length) toast(`The mask misses ${list.length - jobs.length} of the selected layers: they stay as they are`);
+  const b = busy('Editing…');
+  try {
+    const { failed } = await eachOne(jobs, async ([l, cut]) => {
+      const src = await sourceOf(eng, l, o);
+      try { await editArea(eng, o, t, tab, src, redOf(cut.canvas, src.px[0], src.px[1]), b); } finally { if (src.name !== l.name) await dropInput(src.name); }   // (a kept part, sent only for this)
+    });
+    if (failed.length) toast(failureText(o.label, failed, ([l]) => layerWord(l)), true);
+  } finally { b.done(); }
+}
+
+// One picture of the batch. Everything: the runs go in the queue and land as they finish. Found by name: SAM3 first, then the area's edit.
+async function editOne(eng, o, t, tab, src) {
+  if (ST.ewhere === 'words') {
+    const [W, H] = src.px, b = busy('Finding the area…');
+    try {
+      const red = redOf(await searchFor(src.name, W, H, termsOf(ST.efind)), W, H);
+      if (!boundsOf(red, W, H)) throw new Error(`SAM3 found no "${ST.efind.trim()}": try other words, or a lower How sure`);
+      return await editArea(eng, o, t, tab, src, red, b);
+    } finally { b.done(); }
+  }
+  const gens = await queueRun({ template: t.id, values: editValues(t, src.name, src.px, src), batch: ST.ecount });
+  toast(`${o.label}: ${gens.length > 1 ? `${gens.length} runs` : `#${gens[0].id}`} queued; each lands as a new layer`);
+  for (const g of gens) {
+    FLIGHT.add(g.id); eng.render();
+    waitGen(g.id).then(async (done) => {
+      if (eng.E.tab?.id !== tab) return toast(`${o.label} #${done.id} finished on another edit: it is in History`);
+      await land(eng, o, src, done);
+    }).catch((e) => toast(`${o.label} failed${src.layer ? ` on ${layerWord(src.layer)}` : ''}: ${e.message}`, true)).finally(() => { FLIGHT.delete(g.id); eng.render(); });
+  }
+}
+
+// the Edit tool's settings
+function editFields(eng, t, size) {
+  const redo = () => { save(); eng.render(); }, lf = loraField(t), installed = lf?.options || [];
+  const refsMost = t?.fields.filter((f) => f.kind === 'image' && /reference/i.test(f.group)).length || 0;
+  const [sw, sh] = size ? editSizeFor(size[0], size[1], 32, ST.emp * 1e6) : [];
+  const ref = (i) => imageInput({ label: `Picture ${i + 2}`, name: ST.erefs[i] ? ST.erefs[i].split('/').pop() : '', thumb: ST.erefs[i] ? h('img', { src: thumbUrl(ST.erefs[i], 256), alt: '' }) : null,
+    pick: () => openImagePicker({ title: `Picture ${i + 2}`, onPick: (name) => { ST.erefs[i] = name; redo(); } }),
+    onClear: () => { ST.erefs.splice(i, 1); redo(); } });
+  return [
+    field('Prompt', textArea(() => ST.eprompt, (v) => { ST.eprompt = v; save(); }, { rows: 4, label: 'What to change', placeholder: 'Make the jacket red leather' }),
+      help('Say what to change, plainly. The picture being edited is Picture 1 and your references are Picture 2 onward, so you can write: give the person in Picture 1 the coat from Picture 2. {layer} becomes each layer\'s name, and {red|blue|green} picks one afresh for each run, so one prompt can differ across a batch.')),
+    field('Also know', textArea(() => ST.econtext, (v) => { ST.econtext = v; save(); }, { rows: 2, label: 'More context for the model', placeholder: 'A film still, 1970s, shot on 35mm' }),
+      help('Anything else the model should know: what the picture is, its style, what must not change. It goes after the prompt, on every run.')),
+    toggle('Keep the rest', ST.ekeep, (v) => { ST.ekeep = v; redo(); }, { help: 'Adds a sentence telling the model to change only what you asked and to keep the framing, pose, details and background. Turn it off for a change to the whole picture, like a new style.' }),
+    ...ST.erefs.slice(0, refsMost).map((_, i) => ref(i)),
+    ST.erefs.length < refsMost ? ref(ST.erefs.length) : null,
+    field('Change', seg([['all', 'Anywhere'], ['words', 'What I name'], ['painted', 'The red mask']], ST.ewhere, (v) => { ST.ewhere = v; redo(); }),
+      help('Anywhere lands what the model made, as it made it. What I name has SAM3 find the area in each picture. The red mask uses what you painted (Masks panel), cut to each selected layer; a layer it doesn\'t touch is left out. With an area only that area changes, and the rest stays pixel for pixel at full size. SAM3 misses some words: it found no "jacket" on a man in one, but found "man" and "person".')),
+    ST.ewhere === 'words' ? field('Find', textArea(() => ST.efind, (v) => { ST.efind = v; save(); }, { rows: 2, label: 'What to find', placeholder: 'The jacket, the sky' })) : null,
+    ...(ST.ewhere === 'words' ? samFields(eng) : []),
+    ST.ewhere === 'painted' && !eng.paint.maskLayer(false) ? hint('Paint the area first (Masks panel)') : null,
+    ST.ewhere !== 'all' ? toggle('Close-up', ST.eclose, (v) => { ST.eclose = v; redo(); }, { help: 'The model sees a box round the area at its full size: more detail in a small area. Off, it sees the whole picture: better when the change must match what is far from it.' }) : null,
+    ST.ewhere !== 'all' ? rangeField('Grow the area', () => ST.egrow, (v) => { ST.egrow = v; save(); }, { min: 0, max: 64, step: 1, fmt: (v) => `${v} px` }) : null,
+    ST.ewhere !== 'all' ? rangeField('Edge softness', () => ST.esoft, (v) => { ST.esoft = v; save(); }, { min: 0, max: 64, step: 1, fmt: (v) => `${v} px` }) : null,
+    field(['Size', sw ? h('span', {}, `${sw}×${sh}`) : null], seg([[1, '1 MP'], [1.5, '1.5 MP'], [2, '2 MP'], [3, '3 MP']], ST.emp, (v) => { ST.emp = v; redo(); }),
+      help('The most the model works at. A smaller picture stays its own size. More keeps more detail, takes longer and needs more memory.')),
+    field('Variations', seg([[1, '1'], [2, '2'], [3, '3'], [4, '4']], ST.ecount, (v) => { ST.ecount = v; redo(); }),
+      help('How many results for each picture, each with its own seed and its own layer.')),
+    seedField('Seed', { get: () => ST.eseed, set: (v) => { ST.eseed = v; save(); }, mode: () => ST.eseedMode, setMode: (m) => { ST.eseedMode = m; redo(); } }),
+    rangeField('Steps', () => ST.esteps, (v) => { ST.esteps = Math.round(v); save(); }, { min: 2, max: 20, step: 1, fmt: (v) => String(Math.round(v)),
+      help: 'The turbo model is tuned for 8. 4 is quicker and still holds up; more than 8 gives little.' }),
+    rangeField('Guidance', () => ST.ecfg, (v) => { ST.ecfg = v; save(); }, { min: 1, max: 5, step: 0.1, fmt: (v) => v.toFixed(1), onChange: () => eng.render(),
+      help: 'How hard the model follows the prompt. At 1 it can stop short: asked for red leather, a denim jacket came back red denim, and at 2.5 it came back leather. Above 1 each run takes about twice as long, and the Avoid box is used.' }),
+    ST.ecfg > 1 ? field('Avoid', textArea(() => ST.eneg, (v) => { ST.eneg = v; save(); }, { rows: 2, label: 'What to avoid', placeholder: 'Blurry, extra fingers' })) : null,
+    lf ? field(['LoRAs', h('span', {}, `${usableLoras(ST.eloras, installed).length} on`)],
+      help('LoRAs change what an edit can do and how it looks. They run in the order listed, on every run. Your Qwen folder comes first, and search finds the others, which are for other models and rarely work here. Some need a trigger word: put it in the prompt. Untick one to compare the same seed without it (Seed: Fixed).'),
+      ...ST.eloras.map((l, i) => h('div', { class: `lora-row${l.enabled === false ? ' off' : ''}` },
+        h('div', { class: 'top' }, h('input', { type: 'checkbox', checked: l.enabled !== false, title: 'Enabled', 'aria-label': 'LoRA on', onchange: (e) => { l.enabled = e.target.checked; redo(); } }), loraPicker({ options: installed.filter((n) => /^qwen\//i.test(n)), others: installed.filter((n) => !/^qwen\//i.test(n)), value: l.name, empty: '— choose LoRA —', label: (n) => n.replace(/^qwen\//i, ''), aria: 'LoRA',
+          onPick: (name) => { ST.eloras[i].name = name; redo(); } }),
+        button('✕', () => { ST.eloras.splice(i, 1); redo(); }, { cls: 'small', title: 'Remove LoRA' })),
+        l.name && !installed.includes(l.name) ? hint('Not installed: left out of the run') : null,
+        rangeField('Strength', () => l.strength, (v) => { l.strength = v; save(); }, { min: -1, max: 2, step: 0.05 }))),
+      button('+ Add LoRA', () => { ST.eloras.push({ name: '', strength: 1, enabled: true }); redo(); }, { cls: 'small add-btn' })) : null,
+  ];
+}
+
 async function runOne(eng, o, t, tab, src) {
+  if (o.kind === 'edit') return editOne(eng, o, t, tab, src);
   if (o.kind === 'sheet') return runSheet(eng, o, t, tab, src);
   if (o.kind === 'remove') return markFound(eng, o, src);
   if (o.kind === 'swap') return swapOnSource(eng, o, tab, src);
@@ -966,8 +1084,9 @@ export function imageToolsSection(eng) {
     quick, select, help(`${o.help} ${on}`.trim()),
     !t ? hint(`${tplId(o)} isn't installed yet`) : null,
     field('Run on', seg([['whole', 'Whole picture'], ['selected', 'Selected layers']], ST.scope, (v) => { ST.scope = v; save(); eng.render(); }),
-      help('Whole picture sends every visible layer together. Selected layers runs on each selected layer alone, one run each, with the result over that layer. A cropped layer sends its kept part. A turned or mirrored layer is sent unturned, and its result takes the same turn. A masked layer is sent whole: an Upscale, Detail or De-light result gets a copy of its mask, and other tools\' results get none.')),
+      help('Whole picture sends every visible layer together. Selected layers runs on each selected layer alone, one run each, with the result over that layer. A cropped layer sends its kept part. A turned or mirrored layer is sent unturned, and its result takes the same turn. A masked layer is sent whole: an Upscale, Detail or De-light result gets a copy of its mask, and other tools\' results get none. Remove from the red mask cuts the mask to each selected layer, and leaves out a layer it doesn\'t touch.')),
     ST.scope === 'selected' && !many ? hint('Select a layer first') : null,
+    ...(o.kind === 'edit' && t ? editFields(eng, t, size) : []),
     o.prompt ? field('Find', textArea(() => ST.prompt, (v) => { ST.prompt = v; save(); }, { rows: 2, label: 'What to find', placeholder: 'The red car, people, the sky' })) : null,
     o.depth ? field('Detail', seg([['large', 'Fine'], ['small', 'Fast']], ST.depthModel, (v) => { ST.depthModel = v; save(); eng.render(); }),
       help('Fine uses the Large model: the sharpest edges, steadiest depth. Fast uses Small: about five times quicker, softer.')) : null,
@@ -1029,7 +1148,7 @@ export function imageToolsSection(eng) {
       h('span', {}, String(ST.dstrength[dmKey()] ?? dm().strength))) : null,
     o.kind === 'detail' && !dm().plain ? field('Prompt', textArea(() => ST.dprompt[dmKey()] ?? dm().prompt, (v) => { ST.dprompt[dmKey()] = v; save(); }, { rows: 2, label: 'What to add' })) : null,
     o.kind === 'up' ? field(['Enlarge', out ? h('span', {}, out) : null], seg([[2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); eng.render(); })) : null,
-    (KEEPS_FRAMING.has(o.kind) || o.kind === 'sheet' || (o.kind === 'matte' && ST.result !== 'mask')) && onLayers && !(o.kind === 'remove' && ST.rfrom === 'painted')
+    (KEEPS_FRAMING.has(o.kind) || o.kind === 'sheet' || (o.kind === 'matte' && ST.result !== 'mask')) && onLayers && !(o.kind === 'edit' && ST.ewhere === 'painted' && ST.scope !== 'selected')
       ? toggle('Hide the original', ST.hide, (v) => { ST.hide = v; save(); }) : null,
     h('div', { class: 'row wrap' }, o.kind === 'swap' ? button('Mark it', () => swapMark(eng), { disabled: !t }) : null,
       o.kind === 'swap' ? button('Send to Generate', () => swapSend(eng), { disabled: !t }) : null,

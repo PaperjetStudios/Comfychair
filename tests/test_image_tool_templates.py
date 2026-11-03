@@ -3,7 +3,7 @@ import json
 import unittest
 from pathlib import Path
 
-from app import maskcomp
+from app import maskcomp, templates
 
 TEMPLATES = Path(__file__).resolve().parent.parent / "templates"
 
@@ -61,6 +61,19 @@ class FaceSkin(unittest.TestCase):
         self.assertEqual(wf["34"]["inputs"]["source"], ["9", 0])
         self.assertEqual(wf["10"]["inputs"]["images"], ["34", 0])
         self.assertTrue(wf["20"]["_meta"]["deck_keep_size"])
+
+
+class Edit(unittest.TestCase):
+    def test_the_panels_knobs_are_fields_of_the_template(self):
+        t = templates.get(TEMPLATES, "deck-qwen21-edit")
+        inputs = {(f["key"]) for f in templates.describe(t, None)["fields"]}
+        for key in ("9.sigmas", "10.cfg", "5.prompt", "5.negative_prompt", "4.__loras", "7.noise_seed", "20.image", "21.image"):
+            self.assertIn(key, inputs)
+
+    def test_the_default_is_the_turbo_models_own_settings(self):
+        wf = load("deck-qwen21-edit")
+        self.assertEqual(wf["10"]["inputs"]["cfg"], 1.0)
+        self.assertEqual(len(wf["9"]["inputs"]["sigmas"].split(",")), 9)   # (8 steps)
 
 
 class QwenDetail(unittest.TestCase):

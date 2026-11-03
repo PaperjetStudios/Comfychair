@@ -656,9 +656,17 @@ They still use the same picture files. **Delete hidden** removes every hidden la
 selected layer alone, one run each). The result lands as a layer on top. On a selected layer the result sits over that
 layer: a cropped layer sends only its kept part, and a turned or mirrored layer is sent unturned and its result takes
 the same turn.
-A masked layer is sent whole, without its mask. An **Upscale**, **Detail pass**, **De-light**, **Remove** or **Clean** result gets a copy of the
+A masked layer is sent whole, without its mask. An **Edit**, **Upscale**, **Detail pass**, **De-light**, **Remove** or **Clean** result gets a copy of the
 mask as it was when sent, at the result's size; other tools' results get none.
 The row of buttons at the top of the section opens the main tools; the list below it has them all.
+- **Edit from a prompt** (Qwen 2.1): the same edit on many layers at once. **Prompt**, **Also know** (more context, on
+  every run), **Keep the rest** (a sentence that holds the rest still) and up to three reference pictures (the picture
+  being edited is Picture 1, references Picture 2 onward). `{layer}` in the prompt becomes each layer's name, and
+  `{a|b|c}` picks afresh for each run. **Change** sets where: **Anywhere**, **What I name** (SAM3 finds it in each
+  picture) or **The red mask** (cut to each selected layer); with an area only that area changes, the rest stays pixel
+  for pixel, with **Close-up**, **Grow the area** and **Edge softness**. Knobs: **Size**, **Variations**, **Seed**
+  (Fixed: alike across a batch), **Steps**, **Guidance** (above 1 it follows the prompt harder, takes about twice as
+  long, and uses **Avoid**) and **LoRAs** (each with strength and on/off). A layer that fails doesn't stop the rest.
 - **Maps:** **Depth map**, **Canny edges**, **Scribble** and **Pose**. Depth has **Detail** (Fine: the Large model,
   sharpest; Fast: the Small one, about five times quicker). Canny and Scribble have **Amount** (More lines, Normal,
   Fewer). Pose can read with DWPose (CPU) or SDPose (GPU, holds up better on hard poses, up to 2 people). These

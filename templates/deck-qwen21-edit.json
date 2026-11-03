@@ -102,7 +102,7 @@
       "sigmas": "1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568, 0"
     },
     "_meta": {
-      "title": "Turbo sigmas (8 steps)"
+      "title": "@7 Steps [sigmas]"
     }
   },
   "10": {
@@ -123,7 +123,7 @@
       "cfg": 1.0
     },
     "_meta": {
-      "title": "CFG Guider"
+      "title": "@7 Guidance [cfg]"
     }
   },
   "11": {

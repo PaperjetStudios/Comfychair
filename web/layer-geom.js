@@ -61,6 +61,11 @@ export function corners(l) {
   return [[r.x, r.y], [r.x + r.w, r.y], [r.x + r.w, r.y + r.h], [r.x, r.y + r.h]].map(([x, y]) =>
     ({ x: c.x + (x - c.x) * cos - (y - c.y) * sin, y: c.y + (x - c.x) * sin + (y - c.y) * cos }));
 }
+// A layer's sent pixels (w×h, its kept part unturned) -> a frame's pixels (a picture of the whole canvas, as a painted mask is)
+export function sentToFrame(l, f, [w, h]) {
+  const r = layerRect(l);
+  return mul(T(-f.x, -f.y), mul(turn(l), [r.w / w, 0, 0, r.h / h, r.x, r.y]));
+}
 // the box round what the layer covers on the canvas (layerRect itself when it isn't turned)
 export function bounds(l) {
   if (!((l.rotation || 0) % 360)) return layerRect(l);

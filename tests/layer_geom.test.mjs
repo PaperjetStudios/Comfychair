@@ -11,6 +11,18 @@ assert.deepEqual(G.sentPixels(layer({ scale: 0.5 })), [200, 100]);
 assert.deepEqual(G.sentPixels(layer({ scale: 0.5, crop: { x: 0.25, y: 0, w: 0.5, h: 0.5 } })), [100, 50]);
 assert.deepEqual(G.sentPixels(layer({ crop: { x: 0, y: 0, w: 0.9995, h: 1 } })), [200, 100]);
 
+// a painted mask is cut to a layer: its sent pixels -> the frame's, at the layer's scale, crop and turn
+const toFrame = (l, f, px, p) => G.apply(G.sentToFrame(l, f, px), p);
+const inFrame = { x: 10, y: 20, w: 400, h: 200 };
+nearP(toFrame(layer(), inFrame, [200, 100], { x: 0, y: 0 }), { x: 0, y: 0 }, 'mask: corner');
+nearP(toFrame(layer(), inFrame, [200, 100], { x: 200, y: 100 }), { x: 400, y: 200 }, 'mask: scaled');
+nearP(toFrame(layer({ x: 110 }), { x: 10, y: 20, w: 800, h: 200 }, [200, 100], { x: 0, y: 0 }), { x: 100, y: 0 }, 'mask: a second layer along the canvas');
+nearP(toFrame(layer({ crop: { x: 0.5, y: 0, w: 0.5, h: 1 } }), inFrame, [100, 100], { x: 100, y: 100 }), { x: 200, y: 200 }, 'mask: a crop');
+nearP(toFrame(layer({ flipX: true }), inFrame, [200, 100], { x: 0, y: 0 }), { x: 400, y: 0 }, 'mask: mirrored');
+nearP(toFrame(layer({ rotation: 90 }), { x: 0, y: 0, w: 1, h: 1 }, [200, 100], { x: 0, y: 0 }), G.imageToCanvas(layer({ rotation: 90 }), { x: 0, y: 0 }), 'mask: turned, as the layer shows');
+const m = G.sentToFrame(layer(), inFrame, [200, 100]);
+nearP(G.apply(G.invert(m), G.apply(m, { x: 37, y: 11 })), { x: 37, y: 11 }, 'mask: back again');
+
 // no turn: exactly as before
 const l0 = layer();
 assert.deepEqual(G.layerRect(l0), { x: 10, y: 20, w: 400, h: 200 });

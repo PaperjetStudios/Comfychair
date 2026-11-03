@@ -2,6 +2,8 @@ import { h, api, store, toast, busy, button, section, field, seg, hint, help, to
 import { ASPECT_PRESETS, S } from './core.js';
 import { pngBlob, uploadImage, openImagePicker } from './media.js';
 import { queueRun, roleField, valuesByRole, waitGen } from './make.js';
+import { maskAsSent, maskForResult, placed } from './layer-result.js';
+import { eachOne, failureText } from './tool-batch.js';
 import { icon } from './icons.js';
 import { MASK_DEFAULT } from './maskpaint.js';
 import { SPREAD_MAX, spreadLabel } from './mask-spread.js';
@@ -17,7 +19,7 @@ import * as G from './layer-geom.js';
 // ---------------------------------------------------------------------------
 const KEY = 'deck.inpaint';
 // (fit on: the Inpaint panel is for redrawing a small area, best at the model's full size)
-const ST = { prompt: '', tpl: null, denoise: 0.9, ...MASK_DEFAULT, fit: true, steps: 0, ...store.get(KEY, {}) };
+const ST = { prompt: '', tpl: null, denoise: 0.9, ...MASK_DEFAULT, fit: true, steps: 0, scope: 'whole', ...store.get(KEY, {}) };
 const save = () => store.set(KEY, ST);
 const FLIGHT = new Set();   // runs on their way back
 const OVERLAP = 0.04;       // Extend: how much of the old edge joins the mask, a share of the canvas's longer side
@@ -108,6 +110,76 @@ function maskWithItems(f, m, items) {
   return { canvas: cv, box: { x: 0, y: 0, w: 1, h: 1 } };
 }
 
+// The part of a painted mask (eng.composeMask, the frame's size) that falls on a layer, at the pixels the layer is sent at: its kept part, unturned.
+// { canvas, box } as composeMask gives them, or null if no ink falls on it.
+export function layerMask(m, f, l) {
+  const [w, h] = G.sentPixels(l), cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const c = cv.getContext('2d', { willReadFrequently: true });
+  c.fillStyle = '#000'; c.fillRect(0, 0, w, h);
+  c.imageSmoothingQuality = 'high';
+  c.setTransform(...G.invert(G.sentToFrame(l, f, [w, h])));
+  c.drawImage(m.canvas, 0, 0);
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  const p = c.getImageData(0, 0, w, h).data;
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (p[(y * w + x) * 4] > 16) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  return x1 < 0 ? null : { canvas: cv, box: { x: x0 / w, y: y0 / h, w: (x1 - x0 + 1) / w, h: (y1 - y0 + 1) / h } };
+}
+// what's sent of a layer: its kept part at its own pixels, with its Colour adjustments (what you see)
+function layerPic(eng, l) {
+  const W = l.img.naturalWidth || l.img.width, H = l.img.naturalHeight || l.img.height, c = l.crop, cv = document.createElement('canvas');
+  [cv.width, cv.height] = G.sentPixels(l);
+  const pic = eng.layerPicture(l), k = (pic.naturalWidth || pic.width) / W;
+  cv.getContext('2d').drawImage(pic, c.x * W * k, c.y * H * k, c.w * W * k, c.h * H * k, 0, 0, cv.width, cv.height);
+  return cv;
+}
+
+// One Fill: a picture and its mask, the same size. Its result lands as a draft where place(the result) says.
+async function queueFill(eng, t, tab, { pic, m, denoise, items, f, place }) {
+  if (denoise >= 0.95) smearUnderMask(pic, m.canvas);
+  const up = await uploadImage(await pngBlob(pic), { mp: 0, source: 'editor', filename: 'inpaint.png', multiple: 1 }   /* (kept the mask's size: a trimmed edge would shift it) */);
+  const maskName = await uploadMask(m.canvas);
+  const mf = t.fields.find((x) => x.kind === 'mask'), main = t.fields.find((x) => x.key === mf.image_key);
+  const dn = t.fields.find((x) => x.kind === 'float' && /denoise/i.test(`${x.input} ${x.label} ${x.group}`));
+  const fitOn = ST.fit && !items.length;   // (an item's place is a share of the whole picture the model sees)
+  const prompt = ST.prompt.trim() || (items.length ? `Add ${items.map((_, i) => `<obj_${i + 1}>`).join(', ')} to the picture at the boxed places, matching its light, colours and grain` : '');
+  const values = { [main.key]: up.name, ...valuesByRole(t, { prompt, seed: -1 }), ...sizeValues(t, pic.width, pic.height, fitOn ? 1 : Math.min(2, pic.width * pic.height / 1e6)) };
+  const bf = t.fields.find((x) => x.kind === 'boxes');
+  if (items.length && bf) values[bf.key] = items.map((it) => ({ x: (it.x - f.x) / f.w, y: (it.y - f.y) / f.h, w: it.w / f.w, h: it.h / f.h, type: 'obj', desc: it.desc.trim(), ...(it.ref ? { ref: it.ref } : {}) }));
+  if (dn) values[dn.key] = denoise;
+  const sf = stepsField(t);
+  if (sf && ST.steps) values[sf.key] = ST.steps;
+  values[mf.key] = { feather: ST.feather, grow: 0, fit: fitOn, name: maskName, box: m.box, src: up.name, crop: null };
+  const [g] = await queueRun({ template: t.id, values, batch: 1 });
+  toast(`Redrawing (#${g.id}): it lands as a new layer`);
+  FLIGHT.add(g.id); eng.render();
+  waitGen(g.id).then(async (done) => {
+    const r = await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } });
+    if (eng.E.tab?.id !== tab) return toast(`Inpaint #${done.id} finished on another edit: it is in History`);
+    eng.addImage(r.name, { label: `Inpaint #${done.id}`, draft: true, ...(await place(r)) });
+    eng.render();
+    toast('Inpaint done: a draft on top, not sent with the next Fill. Keep it to make it a layer');
+  }).catch((e) => toast(`Inpaint failed: ${e.message}`, true)).finally(() => { FLIGHT.delete(g.id); eng.render(); });
+}
+
+// Fill on each selected layer alone: the one painted mask is cut to each, and a layer it doesn't touch is left out
+async function fillLayers(eng, t, tab, denoise) {
+  const list = (eng.picked?.() || []).filter((l) => !l.mask && !l.maskOf && !l.draft && !l.broken && l.name && eng.ready(l));
+  if (!list.length) return toast('Select a picture layer first', true);
+  const f = eng.frame(), whole = eng.composeMask();
+  if (!f || !whole) return toast('Mark the area to redraw first', true);
+  const jobs = list.map((l) => [l, layerMask(whole, f, l)]).filter(([, m]) => m);
+  if (!jobs.length) return toast('The mask doesn\'t touch a selected layer', true);
+  if (jobs.length < list.length) toast(`The mask misses ${list.length - jobs.length} of the selected layers: they stay as they are`);
+  const { failed } = await eachOne(jobs, async ([l, m]) => {
+    const src = { rect: eng.layerRect(l), was: { ...l }, mask: maskAsSent(eng, l) };   // (as sent: a layer changed during the run doesn't move its result)
+    await queueFill(eng, t, tab, { pic: layerPic(eng, l), m, denoise, items: [], f,
+      place: async (r) => ({ ...placed(src, src.rect.x, src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) }) });
+  });
+  if (failed.length) toast(failureText('Inpaint', failed, ([l]) => l.label || l.name.split('/').pop()), true);
+}
+
 async function fill(eng, { denoise = ST.denoise } = {}) {
   const items = usableItems(eng);
   // items go to Klein 3: its layout boxes place each one, and a picture can be matched
@@ -116,39 +188,18 @@ async function fill(eng, { denoise = ST.denoise } = {}) {
   if (!t) return toast(items.length ? 'Add item needs the Flux 3 Klein inpaint template' : 'No inpaint template is installed', true);
   if (!items.length && !eng.composeMask()) return toast('Mark the area to redraw first: paint the mask, or select and Add to mask', true);
   if (eng.loading()) return toast('The images are still loading', true);
+  if (ST.scope === 'selected' && items.length) return toast('Add item works on the whole picture: set Run on to Whole picture', true);
   const tab = eng.E.tab?.id, b = busy('Sending the picture…');
   try {
     await eng.paint.savePaint();
+    if (ST.scope === 'selected') return await fillLayers(eng, t, tab, denoise);
     // (after the save: it can change the frame, and the mask and the picture must be the same size or they do not line up)
     const f = eng.frame(), m = items.length ? maskWithItems(eng.frame(), eng.composeMask(), items) : eng.composeMask();
     if (!f || !m) return toast('Mark the area to redraw first', true);
     const pic = document.createElement('canvas');
     if (!eng.compose(pic)) return toast('Add a picture first', true);
     if (pic.width !== m.canvas.width || pic.height !== m.canvas.height) return toast(`The picture (${pic.width}×${pic.height}) and mask (${m.canvas.width}×${m.canvas.height}) differ in size: try again`, true);
-    if (denoise >= 0.95) smearUnderMask(pic, m.canvas);
-    const up = await uploadImage(await pngBlob(pic), { mp: 0, source: 'editor', filename: 'inpaint.png', multiple: 1 }   /* (kept the mask's size: a trimmed edge would shift it) */);
-    const maskName = await uploadMask(m.canvas);
-    const mf = t.fields.find((x) => x.kind === 'mask'), main = t.fields.find((x) => x.key === mf.image_key);
-    const dn = t.fields.find((x) => x.kind === 'float' && /denoise/i.test(`${x.input} ${x.label} ${x.group}`));
-    const fitOn = ST.fit && !items.length;   // (an item's place is a share of the whole picture the model sees)
-    const prompt = ST.prompt.trim() || (items.length ? `Add ${items.map((_, i) => `<obj_${i + 1}>`).join(', ')} to the picture at the boxed places, matching its light, colours and grain` : '');
-    const values = { [main.key]: up.name, ...valuesByRole(t, { prompt, seed: -1 }), ...sizeValues(t, f.w, f.h, fitOn ? 1 : Math.min(2, f.w * f.h / 1e6)) };
-    const bf = t.fields.find((x) => x.kind === 'boxes');
-    if (items.length && bf) values[bf.key] = items.map((it) => ({ x: (it.x - f.x) / f.w, y: (it.y - f.y) / f.h, w: it.w / f.w, h: it.h / f.h, type: 'obj', desc: it.desc.trim(), ...(it.ref ? { ref: it.ref } : {}) }));
-    if (dn) values[dn.key] = denoise;
-    const sf = stepsField(t);
-    if (sf && ST.steps) values[sf.key] = ST.steps;
-    values[mf.key] = { feather: ST.feather, grow: 0, fit: fitOn, name: maskName, box: m.box, src: up.name, crop: null };
-    const [g] = await queueRun({ template: t.id, values, batch: 1 });
-    toast(`Redrawing (#${g.id}): it lands as a new layer`);
-    FLIGHT.add(g.id); eng.render();
-    waitGen(g.id).then(async (done) => {
-      const r = await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } });
-      if (eng.E.tab?.id !== tab) return toast(`Inpaint #${done.id} finished on another edit: it is in History`);
-      eng.addImage(r.name, { label: `Inpaint #${done.id}`, draft: true, x: f.x, y: f.y, scale: f.w / r.width });
-      eng.render();
-      toast('Inpaint done: a draft on top, not sent with the next Fill. Keep it to make it a layer');
-    }).catch((e) => toast(`Inpaint failed: ${e.message}`, true)).finally(() => { FLIGHT.delete(g.id); eng.render(); });
+    await queueFill(eng, t, tab, { pic, m, denoise, items, f, place: (r) => ({ x: f.x, y: f.y, scale: f.w / r.width }) });
   } catch (e) { toast(e.message, true); } finally { b.done(); }
 }
 
@@ -300,6 +351,8 @@ export function inpaintSection(eng) {
       button(E.itemDraw ? 'Drag on the canvas…' : 'Add item', () => { E.itemDraw = !E.itemDraw; if (E.itemDraw) toast('Drag a box where the item goes'); eng.render(); }, { cls: E.itemDraw ? 'small primary' : '', title: 'Draw a box for something new: describe it, and optionally give a picture to match (Flux 3 Klein)' }),
       button('Extend…', () => extendSheet(eng), { title: 'Grow the canvas and mark the new part' })),
     ...E.items.map((it, i) => itemRow(eng, it, i)),
+    ts.length ? field('Run on', seg([['whole', 'Whole picture'], ['selected', 'Selected layers']], ST.scope, (v) => { ST.scope = v; save(); eng.render(); }),
+      help('Whole picture sends every visible layer together and gives one result. Selected layers cuts the mask to each selected layer and runs that layer alone, one run each, with its own draft over it. A layer the mask doesn\'t touch is left out. Add item works on the whole picture only.')) : null,
     ts.length ? field('Prompt', textArea(() => ST.prompt, (v) => { ST.prompt = v; save(); }, { rows: 2, placeholder: 'What should be there: "a red leather jacket", not "make it red"' })) : null,
     ts.length > 1 ? field('Model', seg(ts.map((x) => [x.id, x.name || x.id]), t.id, (v) => { ST.tpl = v; save(); }, { wrap: true })) : null,
     ts.length ? rangeField('Denoise', () => ST.denoise, (v) => { ST.denoise = v; save(); }, { min: 0.3, max: 1, step: 0.05, fmt: (v) => v.toFixed(2),
