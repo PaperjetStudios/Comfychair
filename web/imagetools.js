@@ -3,7 +3,7 @@ import { S, inputUrl, switchTab, thumbUrl } from './core.js';
 import { openImagePicker, pngBlob, uploadImage } from './media.js';
 import { queueRun, template, valuesByRole, waitGen } from './make.js';
 import { MAPS } from './maps.js';
-import { editSizeFor } from './edit-size.js';
+import { editSizeFor, editSizeTo } from './edit-size.js';
 import * as G from './layer-geom.js';
 import * as Stack from './layer-stack.js';
 import { layerMask, uploadMask } from './inpaint.js';
@@ -72,7 +72,7 @@ const COLOUR_PROMPT = 'Colorize this black and white photograph with natural, tr
 
 const OPS = [
   { id: 'edit', group: 'Edit', label: 'Edit from a prompt (Qwen 2.1)', tpl: 'deck-qwen21-edit', kind: 'edit',
-    help: 'Say what to change, and Qwen 2.1 draws each picture again with that change. Select many layers to run the same edit on each. Each result lands as a new layer over its original. The model works at the size set below, so a picture bigger than that comes back smaller unless you set an area: then the rest stays pixel for pixel.' },
+    help: 'Say what to change, and Qwen 2.1 draws each picture again with that change. Select many layers to run the same edit on each. Each result lands as a new layer over its original. The model works at the size set below, bigger or smaller than the picture, and the result lands at the size of its original. With an area the rest stays pixel for pixel.' },
   { id: 'depth', group: 'Maps', label: 'Depth map', tpl: MAPS.depth.still, kind: 'layer', depth: true,
     help: 'A grey depth map (near is white) of the picture: Video Depth Anything. A layer on top; use it as a reference picture or control.' },
   { id: 'canny', group: 'Maps', label: 'Canny edges', tpl: MAPS.canny.still, kind: 'layer', edges: [0.2, 0.4, 0.6],
@@ -907,7 +907,7 @@ async function restorePhoto(eng, o, tab, src) {
 
 // ---- Edit: a prompt, what else you can tell it, and the model's knobs, on each picture in turn ----
 // what the model is told for one picture, at w×h
-function editValues(t, name, px, src) {
+function editValues(t, name, [w, h], src) {
   const by = (input) => t.fields.find((f) => f.input === input), set = (input, v) => { const f = by(input); return f ? { [f.key]: v } : {}; };
   const main = t.fields.find((f) => f.kind === 'image' && /image to edit/i.test(f.group)), refs = t.fields.filter((f) => f.kind === 'image' && /reference/i.test(f.group));
   const { use, next } = seedStep(ST.eseedMode, ST.eseed, ST.ecount);
@@ -916,7 +916,7 @@ function editValues(t, name, px, src) {
   return { [main.key]: name, ...Object.fromEntries(ST.erefs.slice(0, refs.length).map((r, i) => [refs[i].key, r])),
     ...set('prompt', editPrompt({ prompt: ST.eprompt, context: ST.econtext, keep: ST.ekeep, layer: layerWord(src.layer) })),
     ...valuesByRole(t, { seed: use }), ...set('sigmas', sigmasFor(ST.esteps)), ...set('cfg', ST.ecfg), ...(ST.ecfg > 1 && set('negative_prompt', ST.eneg)),
-    ...(lf && { [lf.key]: loras }), ...wholePicture(t, px, ST.emp * 1e6) };
+    ...(lf && { [lf.key]: loras }), ...set('width', w), ...set('height', h) };
 }
 
 // ...of an area of the picture (the mask: red, row by row): each result goes back through its soft edge at the picture's own size, so the rest stays pixel for pixel.
@@ -925,7 +925,7 @@ async function editArea(eng, o, t, tab, src, red, b) {
   const [W, H] = src.px, area = boundsOf(red, W, H);
   if (!area) throw new Error('There is nothing in the area to edit');
   const box = ST.eclose ? swapBox(area, W, H, 0.35) : { x: 0, y: 0, w: W, h: H }, pic = await loadImg(inputUrl(src.name));
-  const [sw, sh] = editSizeFor(box.w, box.h, 32, ST.emp * 1e6), seen = canvasOf(sw, sh), sc = seen.getContext('2d');
+  const [sw, sh] = editSizeTo(box.w, box.h, 32, ST.emp * 1e6), seen = canvasOf(sw, sh), sc = seen.getContext('2d');
   sc.imageSmoothingQuality = 'high';
   sc.drawImage(pic, box.x, box.y, box.w, box.h, 0, 0, sw, sh);
   const edge = softEdge(red, W, H, ST.egrow, ST.esoft), name = await send(seen, 'edit-area.png');
@@ -991,7 +991,7 @@ async function editOne(eng, o, t, tab, src) {
       return await editArea(eng, o, t, tab, src, red, b);
     } finally { b.done(); }
   }
-  const gens = await queueRun({ template: t.id, values: editValues(t, src.name, src.px, src), batch: ST.ecount });
+  const gens = await queueRun({ template: t.id, values: editValues(t, src.name, editSizeTo(src.px[0], src.px[1], 32, ST.emp * 1e6), src), batch: ST.ecount });
   toast(`${o.label}: ${gens.length > 1 ? `${gens.length} runs` : `#${gens[0].id}`} queued; each lands as a new layer`);
   gens.forEach((g, nth) => follow(eng, o, tab, src, g, nth));
 }
@@ -1000,7 +1000,7 @@ async function editOne(eng, o, t, tab, src) {
 function editFields(eng, t, size) {
   const redo = () => { save(); eng.render(); }, lf = loraField(t), installed = lf?.options || [];
   const refsMost = t?.fields.filter((f) => f.kind === 'image' && /reference/i.test(f.group)).length || 0;
-  const [sw, sh] = size ? editSizeFor(size[0], size[1], 32, ST.emp * 1e6) : [];
+  const [sw, sh] = size ? editSizeTo(size[0], size[1], 32, ST.emp * 1e6) : [];
   const ref = (i) => imageInput({ label: `Picture ${i + 2}`, name: ST.erefs[i] ? ST.erefs[i].split('/').pop() : '', thumb: ST.erefs[i] ? h('img', { src: thumbUrl(ST.erefs[i], 256), alt: '' }) : null,
     pick: () => openImagePicker({ title: `Picture ${i + 2}`, onPick: (name) => { ST.erefs[i] = name; redo(); } }),
     onClear: () => { ST.erefs.splice(i, 1); redo(); } });
@@ -1021,7 +1021,7 @@ function editFields(eng, t, size) {
     ST.ewhere !== 'all' ? rangeField('Grow the area', () => ST.egrow, (v) => { ST.egrow = v; save(); }, { min: 0, max: 64, step: 1, fmt: (v) => `${v} px` }) : null,
     ST.ewhere !== 'all' ? rangeField('Edge softness', () => ST.esoft, (v) => { ST.esoft = v; save(); }, { min: 0, max: 64, step: 1, fmt: (v) => `${v} px` }) : null,
     field(['Size', sw ? h('span', {}, `${sw}×${sh}`) : null], seg([[1, '1 MP'], [1.5, '1.5 MP'], [2, '2 MP'], [3, '3 MP']], ST.emp, (v) => { ST.emp = v; redo(); }),
-      help('The most the model works at. A smaller picture stays its own size. More keeps more detail, takes longer and needs more memory.')),
+      help('What the model works at, whatever the picture\'s size: a smaller picture is scaled up to it, a bigger one down. More keeps more detail, takes longer and needs more memory.')),
     field('Variations', seg([[1, '1'], [2, '2'], [3, '3'], [4, '4']], ST.ecount, (v) => { ST.ecount = v; redo(); }),
       help('How many results for each picture, each with its own seed and its own layer. They land side by side, the first in the original\'s place. On a canvas of a fixed size they land on top of each other, as the rest would be cut off.')),
     seedField('Seed', { get: () => ST.eseed, set: (v) => { ST.eseed = v; save(); }, mode: () => ST.eseedMode, setMode: (m) => { ST.eseedMode = m; redo(); } }),

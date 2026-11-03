@@ -668,9 +668,9 @@ The row of buttons at the top of the section opens the main tools; the list belo
   being edited is Picture 1, references Picture 2 onward). `{layer}` in the prompt becomes each layer's name, and
   `{a|b|c}` picks afresh for each run. **Change** sets where: **Anywhere**, **What I name** (SAM3 finds it in each
   picture) or **The red mask** (cut to each selected layer); with an area only that area changes, the rest stays pixel
-  for pixel, with **Close-up**, **Grow the area** and **Edge softness**. Knobs: **Size**, **Variations** (side by side, or on
-  top of each other on a canvas of a fixed size), **Seed**
-  (Fixed: alike across a batch), **Steps**, **Guidance** (above 1 it follows the prompt harder, takes about twice as
+  for pixel, with **Close-up**, **Grow the area** and **Edge softness**. Knobs: **Size** (what the model works at: a
+  smaller picture is scaled up to it, a bigger one down; the result lands at its original's size), **Variations** (side by side, or on top of each other on a canvas of a fixed
+  size), **Seed** (Fixed: alike across a batch), **Steps**, **Guidance** (above 1 it follows the prompt harder, takes about twice as
   long, and uses **Avoid**) and **LoRAs** (each with strength and on/off). A layer that fails doesn't stop the rest.
 - **Maps:** **Depth map**, **Canny edges**, **Scribble** and **Pose**. Depth has **Detail** (Fine: the Large model,
   sharpest; Fast: the Small one, about five times quicker). Canny and Scribble have **Amount** (More lines, Normal,
