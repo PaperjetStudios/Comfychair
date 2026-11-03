@@ -546,6 +546,38 @@ export function createEditor(cfg) {
 
   // Set a layer's crop without moving the image under it (turned, too)
   function setLayerCrop(l, c) { Object.assign(l, G.cropKeepingPlace(l, c)); }
+  const GROW_GREY = '#808080';   // what an edit model is told to fill in
+  const pastOn = (e) => e.ctrlKey || e.metaKey || !!E.cropPast;
+  // A crop past the picture's edges (c, the kept part at canvas place at): a new picture of that box, the new part neutral grey, over the layer, which hides.
+  // A new layer and not this one changed: the painter's undo holds pixels of this one's size. The picture's see-through stays; a mask shows the new part.
+  async function growLayer(l, c, at) {
+    const b = busy('Adding the grey…');
+    try {
+      await paint.savePaint();
+      const W = l.img.naturalWidth || l.img.width, H = l.img.naturalHeight || l.img.height, { w, h: hh, ix, iy } = G.grownPicture(c, W, H);
+      const onto = (pic, fill) => {
+        const cv = document.createElement('canvas');
+        cv.width = w; cv.height = hh;
+        const x = cv.getContext('2d');
+        x.fillStyle = fill; x.fillRect(0, 0, w, hh); x.clearRect(ix, iy, W, H);
+        x.imageSmoothingQuality = 'high';
+        x.drawImage(pic, ix, iy, W, H);
+        return cv;
+      };
+      const send = async (cv, filename) => (await uploadImage(await pngOf(cv), { mp: 0, source: 'editor', filename, multiple: 1 })).name;
+      const m = E.layers.find((o) => o.maskOf === l.key && ready(o));
+      const name = await send(onto(l.img, GROW_GREY), 'expanded.png'), mask = m ? await send(onto(m.img, '#fff'), 'expanded-mask.png') : null;
+      const made = addImage(name, { label: `${layerName(l)} expanded`, x: at.x, y: at.y, scale: l.scale, opacity: l.opacity, blend: l.blend,
+        ...(l.rotation && { rotation: l.rotation }), ...(l.flipX && { flipX: true }), ...(l.flipY && { flipY: true }), ...(l.group && { group: l.group }), ...(l.adjust && { adjust: { ...l.adjust } }),
+        ...(l.maskOff && { maskOff: true }), ...(l.maskFor && { maskFor: l.maskFor }), ...(mask && { mask }) });
+      E.layers = ST.placedOver(E.layers, E.groups, made, l);
+      l.hidden = true;
+      ST.handOver(E, { layer: l }, made);
+      E.cropping = false;
+      editorChanged();
+      toast('Grey added: a new layer over the original. Edit from a prompt can fill it in');
+    } catch (e) { toast(e.message, true); } finally { b.done(); }
+  }
   // the crop trimmed to what is solid inside it (what the layer's see-through and its own mask leave), in place
   function trimCrop(l) {
     const W = l.img.naturalWidth || l.img.width, H = l.img.naturalHeight || l.img.height, c = l.crop;
@@ -685,7 +717,12 @@ export function createEditor(cfg) {
       ctx.globalAlpha = 0.35; ctx.drawImage(sel.img, 0, 0); ctx.globalAlpha = 1;
       ctx.strokeStyle = '#fff6'; ctx.lineWidth = 1 / (s * sel.scale); ctx.strokeRect(0, 0, sel.img.naturalWidth, sel.img.naturalHeight);
       ctx.restore();
-      ctx.save(); ctx.translate(ox, oy); ctx.scale(s, s); drawLayer(ctx, sel); ctx.restore();
+      ctx.save(); ctx.translate(ox, oy); ctx.scale(s, s);
+      if (G.pastEdge(sel.crop)) {   // the part past the picture's edges: the grey it will be
+        const r = layerRect(sel);
+        ctx.save(); ctx.transform(...G.turn(sel)); ctx.fillStyle = GROW_GREY; ctx.fillRect(r.x, r.y, r.w, r.h); ctx.restore();
+      }
+      drawLayer(ctx, sel); ctx.restore();
     }
     if (f && gridSnap.grid && !E.cropping) {   // the grid moves snap to
       const step = ST.gridStep(f.w, gridSnap.gridPct) * s, fr = scr(f);
@@ -812,14 +849,15 @@ export function createEditor(cfg) {
         return;
       }
       if (sel && E.cropping) {   // (in the image's own fractions, so a turned layer crops the same)
-        const c = sel.crop, k = corner(p, sel, true), raw = frac(sel, p);
+        const c = sel.crop, k = corner(p, sel, true), raw = frac(sel, p), was = { crop: { ...c }, x: sel.x, y: sel.y };
         const q = { x: clamp01(raw.x), y: clamp01(raw.y) };
         // a corner tapped twice trims the crop to the solid part
         if (k && k === lastCorner.k && performance.now() - lastCorner.t < 350) { lastCorner = { t: 0, k: null }; EVheld = false; trimCrop(sel); return; }
         lastCorner = { t: performance.now(), k };
-        if (k) drag = { crop: true, fx: k.includes('w') ? c.x + c.w : c.x, fy: k.includes('n') ? c.y + c.h : c.y };
-        else if (G.insideLayer(sel, p)) drag = { crop: true, move: true, q0: q, c0: { ...c } };
-        else if (raw.x >= 0 && raw.x <= 1 && raw.y >= 0 && raw.y <= 1) drag = { crop: true, fx: q.x, fy: q.y };
+        if (k) drag = { crop: true, was, fx: k.includes('w') ? c.x + c.w : c.x, fy: k.includes('n') ? c.y + c.h : c.y };
+        else if (G.insideLayer(sel, p)) drag = { crop: true, was, move: true, q0: q, c0: { ...c } };
+        else if (raw.x >= 0 && raw.x <= 1 && raw.y >= 0 && raw.y <= 1) drag = { crop: true, was, fx: q.x, fy: q.y };
+        else if (pastOn(e)) drag = { crop: true, was, fx: raw.x, fy: raw.y };   // (from outside the picture)
         else { EVheld = false; E.cropping = false; renderEditor(); }   // tapping outside the image finishes the crop
         return;
       }
@@ -891,17 +929,17 @@ export function createEditor(cfg) {
           if (sx) E.guides.push({ x: sx.at });
           if (sy) E.guides.push({ y: sy.at });
         }
-        const raw = frac(l, pp), q = { x: clamp01(raw.x), y: clamp01(raw.y) };
+        const past = pastOn(e), keep = (v, most) => (past ? v : Math.min(most, Math.max(0, v)));   // (Ctrl: past the picture's edges)
+        const raw = frac(l, pp), q = past ? raw : { x: clamp01(raw.x), y: clamp01(raw.y) };
         const c = drag.move
-          ? { ...drag.c0, x: Math.min(1 - drag.c0.w, Math.max(0, drag.c0.x + q.x - drag.q0.x)),
-            y: Math.min(1 - drag.c0.h, Math.max(0, drag.c0.y + q.y - drag.q0.y)) }
-          : cropSpan(W, H, E.aspect, drag.fx, drag.fy, q.x, q.y);
+          ? { ...drag.c0, x: keep(drag.c0.x + q.x - drag.q0.x, 1 - drag.c0.w), y: keep(drag.c0.y + q.y - drag.q0.y, 1 - drag.c0.h) }
+          : cropSpan(W, H, E.aspect, drag.fx, drag.fy, q.x, q.y, past);
         if (snapping && drag.move && !G.turned(l)) {   // the kept part's edges and middle, on the canvas
           const ox = l.x - l.crop.x * W * l.scale, oy = l.y - l.crop.y * H * l.scale, kw = W * l.scale, kh = H * l.scale;
           const xs = [c.x, c.x + c.w / 2, c.x + c.w].map((f) => ox + f * kw), ys = [c.y, c.y + c.h / 2, c.y + c.h].map((f) => oy + f * kh);
           const sx = snapNearest(xs, t.xs, thr), sy = snapNearest(ys, t.ys, thr);
-          if (sx) { c.x = Math.min(1 - c.w, Math.max(0, c.x + sx.d / kw)); E.guides.push({ x: sx.at }); }
-          if (sy) { c.y = Math.min(1 - c.h, Math.max(0, c.y + sy.d / kh)); E.guides.push({ y: sy.at }); }
+          if (sx) { c.x = keep(c.x + sx.d / kw, 1 - c.w); E.guides.push({ x: sx.at }); }
+          if (sy) { c.y = keep(c.y + sy.d / kh, 1 - c.h); E.guides.push({ y: sy.at }); }
         }
         setLayerCrop(l, c);
       } else if (drag.rotate) {
@@ -957,8 +995,13 @@ export function createEditor(cfg) {
       drag.moved = true;
       drawEditorCanvas();
     });
-    const end = () => {
+    const end = (e) => {
       const moved = drag && drag.moved;
+      if (drag?.crop && E.sel && G.pastEdge(E.sel.crop)) {   // past the edges: the layer goes back as it was, and a new picture with the grey in it goes over it
+        const l = E.sel, c = l.crop, at = { x: l.x, y: l.y };
+        Object.assign(l, drag.was);
+        if (e?.type !== 'pointercancel') growLayer(l, c, at);
+      }
       boxShown = null;
       if (drag?.box && !drag.live) {   // a click: the layer under it, as a box that small would touch it
         const hit = boxLayers().reverse().find((l) => G.insideLayer(l, drag.a));
@@ -1491,6 +1534,7 @@ export function createEditor(cfg) {
     if (E.cropping) {
       return section('Crop', done,
         help('Drag the box or its corners on the canvas. Double-tap a corner to trim the crop to the solid part of a picture with see-through in it. Switch back to Transform, or tap outside the image, when you\'re done.'),
+        toggle('Past the edges', !!E.cropPast, (v) => { E.cropPast = v; renderEditor(); }, { help: 'Or hold Ctrl while you drag. The box can go past the picture, and the new part is neutral grey. Letting go makes a new layer over this one, which hides. Then Image tools → Edit from a prompt can fill the grey in. This worked in a test: Fill the plain grey area, continuing the picture naturally. Keep everything else exactly the same. The model draws the whole picture again, so a face can change a little: to keep the rest exact, paint the grey as the red mask and use The red mask.' }),
         field('Aspect', seg(ASPECTS.map(([label, a]) => [a, label]), E.aspect, (a) => {
           E.aspect = a;
           if (a) setLayerCrop(l, aspectCrop(W, H, a));

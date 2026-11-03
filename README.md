@@ -648,6 +648,8 @@ shut). On Story and the Image tab, **Group** joins selected layers, with one opa
 button gives a layer a mask: the eraser hides, the brush shows, and it moves with its layer. Undo also covers moves, order,
 hiding, blend and groups. The chips over the list add a grid, turn steps and size steps.
 
+**Cropping past the edges:** hold **Ctrl** while dragging a crop (or turn on **Past the edges**) and the box can go past the picture. The new part is neutral grey. Letting go makes a new layer of that box over the original, which hides; its mask, if it has one, shows the new part. **Edit from a prompt** can then fill the grey in.
+
 **Selecting layers:** Shift-click in the list selects from the selected layer through the one clicked; a hidden layer between them is left out. Alt-click adds or drops one. The **Select layers** arrow (Q, under Move) drags a box: it selects every showing, unlocked layer it touches. Shift adds, Alt takes away. Press V to move what's selected. When a tool hides the original, its result takes the original's place in the selection, so the next run works on the results. **Move to new edit** takes the selected layers and their masks out of this edit into a new tab. **Delete N selected** (or the Delete key) removes them all, with Undo; a locked one stays. **Shift+Enter** runs the Image tool that's open, also from its text boxes.
 
 **Between edits:** **Copy** (Ctrl+C) takes the selected layers with their masks and **Paste** (Ctrl+V) puts them in any edit tab, in the place they had; a group comes along.

@@ -230,3 +230,8 @@ export function withoutPicked(layers, picked) {
   for (const l of layers) if (l.maskOf && [...gone].some((o) => o.key && o.key === l.maskOf)) gone.add(l);
   return { keep: layers.filter((l) => !gone.has(l)), count: picked.filter((l) => gone.has(l)).length };
 }
+// A new layer's place right over another (a mask stays with its owner, and a group's members stay together). Returns the new list.
+export function placedOver(layers, groups, made, over) {
+  const rest = layers.filter((l) => l !== made), at = rest.indexOf(over);
+  return normalize(at < 0 ? layers : [...rest.slice(0, at + 1), made, ...rest.slice(at + 1)], groups);
+}

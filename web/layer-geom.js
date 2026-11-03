@@ -66,6 +66,11 @@ export function sentToFrame(l, f, [w, h]) {
   const r = layerRect(l);
   return mul(T(-f.x, -f.y), mul(turn(l), [r.w / w, 0, 0, r.h / h, r.x, r.y]));
 }
+// A crop that goes past the picture's edges (Ctrl while cropping), and the picture it makes: w×h, with the old W×H picture drawn at ix, iy
+export const pastEdge = (c) => c.x < -1e-4 || c.y < -1e-4 || c.x + c.w > 1 + 1e-4 || c.y + c.h > 1 + 1e-4;
+export function grownPicture(c, W, H) {
+  return { w: Math.max(1, Math.round(c.w * W)), h: Math.max(1, Math.round(c.h * H)), ix: -Math.round(c.x * W), iy: -Math.round(c.y * H) };
+}
 // does a box on the canvas ({ x, y, w, h }) touch what the layer covers, turned or not: no line along either's sides separates them
 export function touchesBox(l, box) {
   const a = corners(l).map(({ x, y }) => [x, y]);

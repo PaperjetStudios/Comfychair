@@ -241,3 +241,9 @@ test('deleting the selection takes their masks, and leaves locked layers and the
   assert.equal(r.count, 1);
   assert.equal(S.withoutPicked([b], [b]).count, 0);
 });
+test('a new layer goes right over another, past its mask, and stays in the group', () => {
+  const a = L('a'), am = L('am', { maskOf: 'a' }), b = L('b'), made = L('n');
+  assert.deepEqual(keys(S.placedOver([a, am, b, made], [], made, a)), ['a', 'am', 'n', 'b']);
+  const g = [{ id: 'g' }], c = L('c', { group: 'g' }), d = L('d', { group: 'g' }), n2 = L('n2', { group: 'g' });
+  assert.deepEqual(keys(S.placedOver([c, d, b, n2], g, n2, c)), ['c', 'n2', 'd', 'b']);
+});

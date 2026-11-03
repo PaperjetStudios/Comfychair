@@ -4,11 +4,11 @@ export const FULL = { x: 0, y: 0, w: 1, h: 1 };
 export const ASPECTS = [['Free', null], ...ASPECT_PRESETS];
 
 // Crop rectangle (fractions of a W×H image) from a fixed corner (fx,fy) to the pointer, respecting
-// the aspect lock (width/height in pixels, null = free) and the image bounds
-export function cropSpan(W, H, aspect, fx, fy, px, py) {
+// the aspect lock (width/height in pixels, null = free) and the image bounds (past: it may go past them)
+export function cropSpan(W, H, aspect, fx, fy, px, py, past = false) {
   let w = Math.abs(px - fx), hh = Math.abs(py - fy);
   if (aspect) {
-    const maxW = px < fx ? fx : 1 - fx, maxH = py < fy ? fy : 1 - fy;
+    const maxW = past ? Infinity : px < fx ? fx : 1 - fx, maxH = past ? Infinity : py < fy ? fy : 1 - fy;
     hh = (w * W) / (aspect * H);
     if (hh > maxH) { hh = maxH; w = (hh * aspect * H) / W; }
     if (w > maxW) { w = maxW; hh = (w * W) / (aspect * H); }
