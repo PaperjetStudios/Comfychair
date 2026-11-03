@@ -153,6 +153,7 @@ export async function api(path, { method = 'GET', body, form, timeout = form ? 3
   if (!r.ok) {
     const d = data && data.detail;
     const err = new Error((d && typeof d === 'object' ? d.message : d) || text || r.statusText);
+    err.status = r.status;
     if (d && typeof d === 'object') err.data = d;
     throw err;
   }

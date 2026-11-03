@@ -13,6 +13,7 @@ import { boundsOf, boxesFor, foundIn, refineEdge, separateAreas, stairOf, termsO
 import { faceBox, keepBrightness, scratchMask, tilesOf } from './photo-restore.js';
 import { icon } from './icons.js';
 import { eachOne, failureText } from './tool-batch.js';
+import { besideX, layerOf, owedFor, owedRecord, sameRun, withOwed, withoutOwed } from './owed-runs.js';
 import { editPrompt, layerWord, seedStep, sigmasFor, usableLoras } from './edit-image.js';
 import { loraPicker } from './lora-pick.js';
 import { SWAP_MODELS, SWAP_PARTS, biggestArea, changedAround, joined, onlyWithin, scaleFor, softEdge, swapBox, swapLora, swapPrompt, swapRefPixels, without } from './swap-part.js';
@@ -301,6 +302,7 @@ function hideOriginal(eng, src, made) {
 
 async function land(eng, o, src, done, cell) {
   const { rect, layer } = src;
+  const x = besideX(rect, cell?.nth, !!eng.E.size);   // (a variation goes beside the one before it)
   if (o.kind === 'matte') {
     const b = ST.fine ? busy('Cleaning the edges…') : null;
     const matte = await (ST.fine ? finerMatte(template(o.tpl), src.name, done, o.prompt ? ST.prompt.trim() : undefined, b) : matteOf(done)).finally(() => b?.done());
@@ -320,12 +322,75 @@ async function land(eng, o, src, done, cell) {
     return eng.changed(), eng.render();
   } else {
     const r = await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } });
-    const made = eng.addImage(r.name, { label: o.kind === 'up' ? `Upscaled ${r.width}×${r.height}` : o.kind === 'edit' ? 'Edited' : o.kind === 'delight' ? (o.done || 'De-lit') : o.kind === 'detail' ? `Detail (${dm().label})` : o.kind === 'clean' ? `Cleaned (${(CLEAN[ST.cmodel] || CLEAN.noise).label})` : o.label, ...placed(src, rect.x, rect.y, rect.w, r), ...(await maskForResult(src, r)) });
+    const made = eng.addImage(r.name, { label: o.kind === 'up' ? `Upscaled ${r.width}×${r.height}` : o.kind === 'edit' ? 'Edited' : o.kind === 'delight' ? (o.done || 'De-lit') : o.kind === 'detail' ? `Detail (${dm().label})` : o.kind === 'clean' ? `Cleaned (${(CLEAN[ST.cmodel] || CLEAN.noise).label})` : o.label, ...placed(src, x, rect.y, rect.w, r), ...(await maskForResult(src, r)) });
     if (KEEPS_FRAMING.has(o.kind)) hideOriginal(eng, src, made);
     if (o.kind === 'up') eng.E.out = Math.max(eng.E.out || 1, ST.scale);   // (the layer keeps its size on the canvas; exporting at this size shows the new detail)
   }
   eng.changed(); eng.render();
   toast(`${o.label}: done, a new layer on top`);
+}
+
+// ---- The runs an edit is owed: kept in this browser (web/owed-runs.js), so they land after a reload, or when you go back to their edit ----
+const OWED = 'deck.imagetools.owed';
+const owedList = () => store.get(OWED, []);
+const FOLLOWING = new Set();   // run ids this page is already waiting for
+// (a cut-out's landing needs the template and the matte's own steps, so it isn't kept. false: nothing kept, or storage is off in this browser)
+function rememberOwed(o, tab, src, g, nth) {
+  if (!tab || o.kind === 'matte') return false;
+  store.set(OWED, withOwed(owedList(), owedRecord(tab, o.id, src, g, nth)));
+  return owedList().some((r) => r.id === g.id);
+}
+const forgetOwed = (id) => store.set(OWED, withoutOwed(owedList(), id));
+// taken off the list before landing, so a second window with this edit open doesn't land it too
+function takeOwed(id) {
+  if (!owedList().some((r) => r.id === id)) return false;
+  forgetOwed(id);
+  return true;
+}
+
+// a finished run into its edit, if that's the one open
+async function settle(eng, o, tab, src, done, nth, kept) {
+  if (eng.E.tab?.id !== tab) return toast(kept ? `${o.label} #${done.id} finished on another edit: it lands when you go back to it` : `${o.label} #${done.id} finished on another edit: it is in History`);
+  if (kept && !takeOwed(done.id)) return;
+  if (src.layer && !eng.E.layers.includes(src.layer)) src.layer = layerOf(eng.E.layers, src.was);   // (the edit was opened again: its layers are new objects)
+  await land(eng, o, src, done, { nth });
+}
+
+// One queued run, from here until it lands. nth: which variation of its picture
+function follow(eng, o, tab, src, g, nth = 0) {
+  const kept = rememberOwed(o, tab, src, g, nth);
+  FOLLOWING.add(g.id); FLIGHT.add(g.id); eng.render();
+  waitGen(g.id).then((done) => settle(eng, o, tab, src, done, nth, kept))
+    .catch((e) => { forgetOwed(g.id); toast(`${o.label} failed${src.layer ? ` on ${layerWord(src.layer)}` : ''}: ${e.message}`, true); })
+    .finally(() => { FOLLOWING.delete(g.id); FLIGHT.delete(g.id); eng.render(); });
+}
+
+// a kept run, picked up again once the edit's pictures have loaded
+async function resumeOwed(eng, rec) {
+  const o = OPS.find((x) => x.id === rec.op), tab = rec.tab;
+  FOLLOWING.add(rec.id); FLIGHT.add(rec.id); eng.render();
+  try {
+    if (!o) return forgetOwed(rec.id);
+    let g;
+    try { g = await api(`/api/generations/${rec.id}`, { busy: false }); } catch (e) {
+      if (e.status === 404) forgetOwed(rec.id);   // (the run was deleted. Otherwise the server is away: it stays, for next time)
+      return;
+    }
+    if (!sameRun(rec, g)) return forgetOwed(rec.id);
+    const done = g.status === 'done' ? g : await waitGen(rec.id);
+    while (eng.E.tab?.id === tab && eng.loading()) await new Promise((go) => setTimeout(go, 200));
+    if (eng.E.tab?.id !== tab) return;   // (left again: it stays on the list for the next time this edit opens)
+    const layer = layerOf(eng.E.layers, rec.was);
+    const src = { name: rec.name, px: rec.px, rect: rec.rect, was: rec.was, layer, mask: layer && eng.ready(layer) && KEEPS_FRAMING.has(o.kind) ? maskAsSent(eng, layer) : null };
+    await settle(eng, o, tab, src, done, rec.nth, true);
+  } catch (e) { forgetOwed(rec.id); toast(`${o?.label || 'A tool'} failed: ${e.message}`, true); } finally { FOLLOWING.delete(rec.id); FLIGHT.delete(rec.id); eng.render(); }
+}
+
+// Called when an edit opens: whatever it's still owed that nothing in this page is waiting for
+export function landOwed(eng) {
+  const tab = eng.E.tab?.id;
+  if (!tab) return;
+  for (const rec of owedFor(owedList(), tab)) if (!FOLLOWING.has(rec.id)) resumeOwed(eng, rec);
 }
 
 async function run(eng) {
@@ -738,10 +803,10 @@ async function addColour(cv, prompt) {
 }
 
 // a finished canvas as the new layer
-async function landCanvas(eng, o, tab, src, cv, label, board) {
+async function landCanvas(eng, o, tab, src, cv, label, board, nth = 0) {
   if (eng.E.tab?.id !== tab) return toast(`${o.label} finished on another edit: run it again there`, true);
   const r = await uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: `${board.toLowerCase()}.png`, multiple: 1, board });
-  hideOriginal(eng, src, eng.addImage(r.name, { label, ...placed(src, src.rect.x, src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) }));
+  hideOriginal(eng, src, eng.addImage(r.name, { label, ...placed(src, besideX(src.rect, nth, !!eng.E.size), src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) }));
   eng.changed(); eng.render();
   toast(`${o.label}: done, a new layer on top`);
 }
@@ -868,7 +933,7 @@ async function editArea(eng, o, t, tab, src, red, b) {
   try {
     b.set('Editing…');
     const gens = await queueRun({ template: t.id, values: editValues(t, name, [sw, sh], src), batch: ST.ecount });
-    await Promise.all(gens.map(async (g) => {
+    await Promise.all(gens.map(async (g, nth) => {
       let run = null;
       try {
         run = await waitGen(g.id);
@@ -879,7 +944,7 @@ async function editArea(eng, o, t, tab, src, red, b) {
         for (let i = 0; i < edge.length; i++) px.data[i * 4 + 3] = Math.min(px.data[i * 4 + 3], edge[i]);
         pc.putImageData(px, 0, 0);
         out.getContext('2d').drawImage(piece, 0, 0);
-        await landCanvas(eng, o, tab, src, out, 'Edited', 'Edited');
+        await landCanvas(eng, o, tab, src, out, 'Edited', 'Edited', nth);
       } catch (e) { toast(`${o.label} failed${src.layer ? ` on ${layerWord(src.layer)}` : ''}: ${e.message}`, true); } finally { if (run) await dropRun(run.id); }
     }));
   } finally { FLIGHT.delete(editArea); await dropInput(name); eng.render(); }
@@ -928,13 +993,7 @@ async function editOne(eng, o, t, tab, src) {
   }
   const gens = await queueRun({ template: t.id, values: editValues(t, src.name, src.px, src), batch: ST.ecount });
   toast(`${o.label}: ${gens.length > 1 ? `${gens.length} runs` : `#${gens[0].id}`} queued; each lands as a new layer`);
-  for (const g of gens) {
-    FLIGHT.add(g.id); eng.render();
-    waitGen(g.id).then(async (done) => {
-      if (eng.E.tab?.id !== tab) return toast(`${o.label} #${done.id} finished on another edit: it is in History`);
-      await land(eng, o, src, done);
-    }).catch((e) => toast(`${o.label} failed${src.layer ? ` on ${layerWord(src.layer)}` : ''}: ${e.message}`, true)).finally(() => { FLIGHT.delete(g.id); eng.render(); });
-  }
+  gens.forEach((g, nth) => follow(eng, o, tab, src, g, nth));
 }
 
 // the Edit tool's settings
@@ -964,7 +1023,7 @@ function editFields(eng, t, size) {
     field(['Size', sw ? h('span', {}, `${sw}×${sh}`) : null], seg([[1, '1 MP'], [1.5, '1.5 MP'], [2, '2 MP'], [3, '3 MP']], ST.emp, (v) => { ST.emp = v; redo(); }),
       help('The most the model works at. A smaller picture stays its own size. More keeps more detail, takes longer and needs more memory.')),
     field('Variations', seg([[1, '1'], [2, '2'], [3, '3'], [4, '4']], ST.ecount, (v) => { ST.ecount = v; redo(); }),
-      help('How many results for each picture, each with its own seed and its own layer.')),
+      help('How many results for each picture, each with its own seed and its own layer. They land side by side, the first in the original\'s place. On a canvas of a fixed size they land on top of each other, as the rest would be cut off.')),
     seedField('Seed', { get: () => ST.eseed, set: (v) => { ST.eseed = v; save(); }, mode: () => ST.eseedMode, setMode: (m) => { ST.eseedMode = m; redo(); } }),
     rangeField('Steps', () => ST.esteps, (v) => { ST.esteps = Math.round(v); save(); }, { min: 2, max: 20, step: 1, fmt: (v) => String(Math.round(v)),
       help: 'The turbo model is tuned for 8. 4 is quicker and still holds up; more than 8 gives little.' }),
@@ -1025,11 +1084,7 @@ async function runOne(eng, o, t, tab, src) {
   }
   const [g] = await queueRun({ template: t.id, values, batch: 1 });
   toast(`${o.label} (#${g.id}): it lands as a new layer`);
-  FLIGHT.add(g.id); eng.render();
-  waitGen(g.id).then(async (done) => {
-    if (eng.E.tab?.id !== tab) return toast(`${o.label} #${done.id} finished on another edit: it is in History`);
-    await land(eng, o, src, done);
-  }).catch((e) => toast(`${o.label} failed${src.layer ? ` on ${src.layer.label || src.layer.name.split('/').pop()}` : ''}: ${e.message}`, true)).finally(() => { FLIGHT.delete(g.id); eng.render(); });
+  follow(eng, o, tab, src, g);
 }
 
 let edgeTurn = Promise.resolve();

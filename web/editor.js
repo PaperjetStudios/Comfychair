@@ -4,6 +4,7 @@ import { registerPickerSource, uploadImage } from './media.js';
 import { TabSet } from './tabs.js';
 import { SWATCHES } from './paint.js';
 import { BLANK, createEditor } from './editor-engine.js';
+import { landOwed } from './imagetools.js';
 import { registerUndo } from './undo-dock.js';
 
 export { ASPECTS, FULL, aspectCrop, cropSpan, openCrop } from './editor-engine.js';
@@ -178,6 +179,7 @@ tabs = new TabSet({ kind: 'edit-tabs', mount: tabMount, host: $('#tab-editor'), 
       store.set(SEEDED, true);
       if (!doc.still && E.layers.length) stillSoon();
       renderEditor();
+      landOwed(ED);   // (runs that finished, or are still going, since this edit was last open here)
     },
   } });
 
