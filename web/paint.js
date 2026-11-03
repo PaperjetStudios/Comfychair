@@ -40,7 +40,7 @@ const TOOLS = [
 ];
 const KEYS = Object.fromEntries(TOOLS.map(([t, , k]) => [k, t]));
 
-function makeCanvas(w, hh) {
+export function makeCanvas(w, hh) {
   const cv = document.createElement('canvas');
   cv.width = w; cv.height = hh;
   Object.defineProperties(cv, { naturalWidth: { get() { return this.width; } }, naturalHeight: { get() { return this.height; } } });

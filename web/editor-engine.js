@@ -16,7 +16,7 @@ import { keyJumps } from './timeline.js';
 import { workArea } from './workarea.js';
 import { frameSpan, playFrom, tickT } from './workarea-math.js';
 import { framesToClip } from './scene-comp.js';
-import { BLENDS, blendOp, createPaint, isCanvas } from './paint.js';
+import { BLENDS, blendOp, createPaint, isCanvas, makeCanvas } from './paint.js';
 import * as A from './adjust.js';
 import { gradedPicture, histOfPicture } from './adjust-draw.js';
 import { adjustPanel } from './adjust-panel.js';
@@ -1080,8 +1080,7 @@ export function createEditor(cfg) {
   function duplicateSelected() {
     const copyCanvas = (l) => {
       if (!(l.img instanceof HTMLCanvasElement)) return l.img;
-      const cv = document.createElement('canvas');
-      cv.width = l.img.width; cv.height = l.img.height;
+      const cv = makeCanvas(l.img.width, l.img.height);   // (paint.js's: it says its size as a picture does, or the copy never counts as loaded)
       cv.getContext('2d').drawImage(l.img, 0, 0);
       return cv;
     };
