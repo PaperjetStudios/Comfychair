@@ -10,6 +10,7 @@ import { isOn } from './adjust.js';
 import { boundsOf, boxesFor, foundIn, refineEdge, separateAreas, stairOf, termsOf, worthLooking } from './matte-edge.js';
 import { faceBox, keepBrightness, scratchMask, tilesOf } from './photo-restore.js';
 import { icon } from './icons.js';
+import { eachOne, failureText } from './tool-batch.js';
 import { SWAP_MODELS, SWAP_PARTS, biggestArea, changedAround, joined, onlyWithin, scaleFor, softEdge, swapBox, swapLora, swapPrompt, swapRefPixels, without } from './swap-part.js';
 
 // ---------------------------------------------------------------------------
@@ -22,7 +23,7 @@ const GROUPS = ['Maps', 'Cut out and mask', 'Swap', 'Clean up', 'Colour', 'Upsca
 // The row of buttons over the list: the main things, each opening its tool (the first of its tools, unless one of them is open)
 const QUICK = [
   ['Upscale', 'enlarge', ['up', 'upfast']], ['Clean up', 'sparkle', ['clean']], ['Restore', 'photo', ['restore']], ['Colourise', 'palette', ['colorise']],
-  ['Remove', 'eraser', ['remove', 'unmark']], ['Cut out', 'cut', ['cutout', 'words', 'sheet']], ['Swap', 'swap', ['swap']], ['Detail', 'star', ['detail', 'delight']], ['Maps', 'grid', ['depth', 'canny', 'scribble', 'pose']],
+  ['Remove', 'eraser', ['remove', 'unmark']], ['Cut out', 'cut', ['cutout', 'words', 'sheet']], ['Swap', 'swap', ['swap']], ['Face skin', 'person', ['skin']], ['Detail', 'star', ['detail', 'delight']], ['Maps', 'grid', ['depth', 'canny', 'scribble', 'pose']],
 ];
 // The restoration models of Clean up: each works at the picture's own size, and changes nothing else
 const CLEAN = {
@@ -36,7 +37,7 @@ const LOOK_FOR = [['watermark', 'Watermark'], ['letters', 'Letters'], ['logo', '
 const DETAIL = {
   seedvr2: { label: 'SeedVR2 7B', tpl: 'deck-upscale-image', plain: true,
     help: 'Restores and sharpens at the picture\'s own size, with no prompt: the most faithful, nothing invented that isn\'t there. Best for soft or noisy pictures and photos.' },
-  skin: { label: 'Face skin', tpl: 'deck-klein9b-face-skin', lora: 'klein/Flux2 Klein 9B Realistic Detail LoRA.safetensors', strength: 0.3,
+  skin: { label: 'Face skin', own: true, tpl: 'deck-klein9b-face-skin', lora: 'klein/Flux2 Klein 9B Realistic Detail LoRA.safetensors', strength: 0.3,
     prompt: 'A candid close-up photograph of a face, natural skin with subtle texture and slight imperfections, soft daylight',
     help: 'Finds the main face, redraws it larger with Klein 9B and a realistic detail LoRA, and blends it back: the rest of the picture stays as it is. 0.3 keeps the likeness and expression. 0.4 gives more skin but the expression can shift. At 0.5 pores are strongest, but moles or makeup may appear and the face can change. A pattern already in the skin gets stronger.' },
   klein9b: { label: 'Klein 9B', tpl: 'deck-klein9b-i2i', strength: 0.35, prompt: 'highly detailed, fine texture, sharp focus, crisp edges',
@@ -95,6 +96,8 @@ const OPS = [
     help: 'An edit model takes the lighting out: dark pictures are brightened and hard shadows softened, with the shape and colours kept. Run it on a view before it goes to image or 3D generation. The result is a new layer; the prompt can be changed.' },
   { id: 'up', group: 'Upscale', label: 'Upscale (quality)', tpl: 'deck-upscale-image', kind: 'up',
     help: 'SeedVR2 makes the picture bigger and sharper, adding detail. Slow, and the memory it needs grows with the size: 2× of a 1 MP picture is fine, 4× of a big one may not fit. The new layer sits the same size on the canvas; Export size (Export panel) is set to match, so Download and Save as input come out that much bigger.' },
+  { id: 'skin', group: 'Detail', label: 'Face skin detail', kind: 'detail', model: 'skin',
+    help: 'Finds the main face in each picture, redraws it larger with Klein 9B and a realistic detail LoRA, and blends it back: the rest stays as it is. One face per picture (the biggest). A picture with no face comes back unchanged. With several layers selected, each is run in turn and gets its own result over it.' },
   { id: 'detail', group: 'Detail', label: 'Detail pass', kind: 'detail',
     help: 'Draws the picture again with more fine detail and the same layout. Pick the model: they differ a lot by subject, so try two on the same picture. Low strength keeps it close to the original.' },
   { id: 'upfast', group: 'Upscale', label: 'Upscale (fast)', tpl: 'deck-upscale-image-fast', kind: 'up',
@@ -108,11 +111,13 @@ const op = () => OPS.find((o) => o.id === ST.op) || OPS[0];
 // the models that can do the chosen part here: the template is installed, and its LoRA if it needs one
 const loraField = (t) => t?.fields.find((f) => f.kind === 'loras');
 // a detail model that needs a LoRA shows only if it is installed
-const canDetail = (k) => { const m = DETAIL[k]; return !!m && (!m.lora || (loraField(template(m.tpl))?.options || []).includes(m.lora)); };
-const dm = () => (canDetail(ST.dmodel) ? DETAIL[ST.dmodel] : DETAIL.klein9b);
+const canDetail = (k) => { const m = DETAIL[k]; return !!m && (!m.own || op().model === k) && (!m.lora || (loraField(template(m.tpl))?.options || []).includes(m.lora)); };
+// (the Face skin tool is the detail pass with its own model fixed)
+const dmKey = () => (op().model && canDetail(op().model) ? op().model : canDetail(ST.dmodel) ? ST.dmodel : 'klein9b');
+const dm = () => DETAIL[dmKey()];
 const canSwap = (k) => { const t = template(SWAP_MODELS[k]?.tpl); return !!t && swapLora(k, ST.swapPart, loraField(t)?.options || []) !== false; };
 const swapModels = () => ST.swapModels.filter(canSwap);
-const tplId = (o) => (o.kind === 'swap' ? (SWAP_MODELS[swapModels()[0]] || SWAP_MODELS.klein9b).tpl : o.kind === 'delight' || o.kind === 'colorise' ? (DELIGHT[ST.lmodel] || DELIGHT.krea2).tpl : o.kind === 'sheet' ? (ST.sheetFast ? 'deck-sheet-cell-fast' : 'deck-sheet-cell') : o.kind === 'detail' ? dm().tpl : o.sd && ST.poser === 'sdpose' ? o.sd : o.tpl);
+const tplId = (o) => (o.kind === 'swap' ? (SWAP_MODELS[swapModels()[0]] || SWAP_MODELS.klein9b).tpl : o.kind === 'delight' || o.kind === 'colorise' ? (DELIGHT[ST.lmodel] || DELIGHT.krea2).tpl : o.kind === 'sheet' ? (ST.sheetFast ? 'deck-sheet-cell-fast' : 'deck-sheet-cell') : o.kind === 'detail' ? (o.model && !canDetail(o.model) ? `${DETAIL[o.model].tpl} with its LoRA` : dm().tpl) : o.sd && ST.poser === 'sdpose' ? o.sd : o.tpl);
 
 // (a run's file is asked for afresh: runs deleted along the way free their ids, so the next run's file can have the same name, and the browser would show the old one)
 const loadImg = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Could not load a picture')); i.src = src.startsWith('/files/') ? `${src}${src.includes('?') ? '&' : '?'}at=${Date.now()}${Math.random()}` : src; });
@@ -383,7 +388,9 @@ async function run(eng) {
     if (o.kind === 'swap' && ST.swapWhere === 'painted') return await swapPainted(eng, o, tab);
     const list = ST.scope === 'selected' ? targets(eng) : [null];
     if (!list.length) return toast('Select a layer first', true);
-    for (const l of list) await runOne(eng, o, t, tab, await sourceOf(eng, l, o));   // (each selected layer is its own run, queued one after another)
+    // (each selected layer is its own run, queued one after another; one failing to send doesn't stop the rest)
+    const { failed } = await eachOne(list, async (l) => runOne(eng, o, t, tab, await sourceOf(eng, l, o)));
+    if (failed.length) toast(failureText(o.label, failed, (l) => l?.label || l?.name?.split('/').pop() || 'the picture'), true);
   } catch (e) { toast(e.message, true); } finally { b.done(); }
 }
 
@@ -893,9 +900,9 @@ async function runOne(eng, o, t, tab, src) {
     else {
       let [w, hh] = src.px; const k = Math.min(1, Math.sqrt(2.1e6 / (w * hh)));
       set('width', Math.max(256, Math.round((w * k) / 16) * 16)); set('height', Math.max(256, Math.round((hh * k) / 16) * 16));
-      set('denoise', ST.dstrength[ST.dmodel] ?? m.strength);
+      set('denoise', ST.dstrength[dmKey()] ?? m.strength);
       const pf = t.fields.find((x) => x.kind === 'text' && /prompt/i.test(x.group) && !/negative/i.test(x.group));
-      if (pf) values[pf.key] = (ST.dprompt[ST.dmodel] ?? m.prompt).trim() || m.prompt;
+      if (pf) values[pf.key] = (ST.dprompt[dmKey()] ?? m.prompt).trim() || m.prompt;
     }
   }
   const [g] = await queueRun({ template: t.id, values, batch: 1 });
@@ -904,7 +911,7 @@ async function runOne(eng, o, t, tab, src) {
   waitGen(g.id).then(async (done) => {
     if (eng.E.tab?.id !== tab) return toast(`${o.label} #${done.id} finished on another edit: it is in History`);
     await land(eng, o, src, done);
-  }).catch((e) => toast(`${o.label} failed: ${e.message}`, true)).finally(() => { FLIGHT.delete(g.id); eng.render(); });
+  }).catch((e) => toast(`${o.label} failed${src.layer ? ` on ${src.layer.label || src.layer.name.split('/').pop()}` : ''}: ${e.message}`, true)).finally(() => { FLIGHT.delete(g.id); eng.render(); });
 }
 
 let edgeTurn = Promise.resolve();
@@ -1015,12 +1022,12 @@ export function imageToolsSection(eng) {
     o.kind === 'delight' ? field('Model', seg(Object.entries(DELIGHT).map(([k, v]) => [k, v.label]), ST.lmodel, (v) => { ST.lmodel = v; save(); eng.render(); }, { wrap: true }),
       help((DELIGHT[ST.lmodel] || DELIGHT.krea2).help)) : null,
     o.kind === 'delight' ? field('Prompt', textArea(() => ST[o.promptKey || 'lprompt'], (v) => { ST[o.promptKey || 'lprompt'] = v; save(); }, { rows: 4, label: o.promptKey ? 'What to remove' : 'How to light it' })) : null,
-    o.kind === 'detail' ? field('Model', seg(Object.entries(DETAIL).filter(([k]) => canDetail(k)).map(([k, v]) => [k, v.label]), ST.dmodel, (v) => { ST.dmodel = v; save(); eng.render(); }, { wrap: true })) : null,
+    o.kind === 'detail' && !o.model ? field('Model', seg(Object.entries(DETAIL).filter(([k]) => canDetail(k)).map(([k, v]) => [k, v.label]), ST.dmodel, (v) => { ST.dmodel = v; save(); eng.render(); }, { wrap: true })) : null,
     o.kind === 'detail' ? help(dm().help) : null,
     o.kind === 'detail' && !dm().plain ? field('Strength', h('input', { type: 'range', min: 0.1, max: 0.7, step: 0.05, 'aria-label': 'Strength',
-      value: ST.dstrength[ST.dmodel] ?? dm().strength, oninput: (e) => { ST.dstrength[ST.dmodel] = +e.target.value; save(); e.target.nextSibling.textContent = e.target.value; } }),
-      h('span', {}, String(ST.dstrength[ST.dmodel] ?? dm().strength))) : null,
-    o.kind === 'detail' && !dm().plain ? field('Prompt', textArea(() => ST.dprompt[ST.dmodel] ?? dm().prompt, (v) => { ST.dprompt[ST.dmodel] = v; save(); }, { rows: 2, label: 'What to add' })) : null,
+      value: ST.dstrength[dmKey()] ?? dm().strength, oninput: (e) => { ST.dstrength[dmKey()] = +e.target.value; save(); e.target.nextSibling.textContent = e.target.value; } }),
+      h('span', {}, String(ST.dstrength[dmKey()] ?? dm().strength))) : null,
+    o.kind === 'detail' && !dm().plain ? field('Prompt', textArea(() => ST.dprompt[dmKey()] ?? dm().prompt, (v) => { ST.dprompt[dmKey()] = v; save(); }, { rows: 2, label: 'What to add' })) : null,
     o.kind === 'up' ? field(['Enlarge', out ? h('span', {}, out) : null], seg([[2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); eng.render(); })) : null,
     (KEEPS_FRAMING.has(o.kind) || o.kind === 'sheet' || (o.kind === 'matte' && ST.result !== 'mask')) && onLayers && !(o.kind === 'remove' && ST.rfrom === 'painted')
       ? toggle('Hide the original', ST.hide, (v) => { ST.hide = v; save(); }) : null,
