@@ -21,6 +21,8 @@ import * as A from './adjust.js';
 import { gradedPicture, histOfPicture } from './adjust-draw.js';
 import { adjustPanel } from './adjust-panel.js';
 import { icon } from './icons.js';
+import { layerMenu, pickedFor } from './layer-menu.js';
+import { openPressMenu, pressMenu } from './press-menu.js';
 import * as G from './layer-geom.js';
 import { densePlan, gridItem, gridPlan, fitToCell } from './layer-grid.js';
 import { solidBounds } from './matte-edge.js';
@@ -814,8 +816,18 @@ export function createEditor(cfg) {
       try { cv.setPointerCapture(e.pointerId); } catch { /* the pointer is already gone */ }
       cv.style.cursor = 'grabbing';
     };
+    // Right click or a long hold on the canvas, with no tool that uses the press itself: the layers' menu, for the layer under it
+    const canvasMenuOk = () => !!EV && !EA.exporting && !paint.painting() && !paint.boxing() && !E.cropping && !E.itemDraw && !E.pickMode;
+    pressMenu(cv, (e) => {
+      cancelDrag(); EVheld = false;
+      const hit = visibleLayers().reverse().find((l) => !l.locked && G.insideLayer(l, point(e)));
+      if (hit) ST.setPicked(E, pickedFor(picked(), hit));
+      renderEditor();
+      openLayerMenu(e.clientX, e.clientY);
+    }, { ok: canvasMenuOk });
     cv.addEventListener('pointerdown', (e) => {
       if (!EV || EA.exporting || e.pointerType === 'touch') return;
+      if (e.button === 2 && canvasMenuOk()) { e.stopImmediatePropagation(); e.preventDefault(); return; }   // (it isn't a drag: the menu comes with its contextmenu event)
       if (e.button === 1 || (e.button === 0 && spaceHeld)) { e.stopImmediatePropagation(); e.preventDefault(); startPan(e); }
     }, true);
     cv.addEventListener('pointermove', (e) => {
@@ -1132,14 +1144,15 @@ export function createEditor(cfg) {
   function topRow(more = []) {
     return panelTop([button('+ Add images', addEditorImages, { cls: 'primary' }),
       h('button', { type: 'button', class: 'icon-btn ico-btn', title: 'Blank canvas: a new empty layer to paint on', 'aria-label': 'Blank canvas',
-        onclick: paint.blankSheet }, icon('canvas')), ...more], E.layers.length ? () => {
-      const before = E.layers, tid = docId();
-      E.layers = []; E.sel = null; E.arrange = null; persistEditor(); renderEditor();
-      undoToast(`Cleared ${before.length} layer${before.length > 1 ? 's' : ''}`, () => {
-        if (docId() !== tid) return toast(cfg.elsewhere || 'Those layers were in another edit tab', true);
-        E.layers = before; persistEditor(); renderEditor();
-      });
-    } : null);
+        onclick: paint.blankSheet }, icon('canvas')), ...more]);
+  }
+  function clearLayers() {
+    const before = E.layers, tid = docId();
+    E.layers = []; E.sel = null; E.multi = []; E.arrange = null; persistEditor(); renderEditor();
+    undoToast(`Cleared ${before.length} layer${before.length > 1 ? 's' : ''}`, () => {
+      if (docId() !== tid) return toast(cfg.elsewhere || 'Those layers were in another edit tab', true);
+      E.layers = before; persistEditor(); renderEditor();
+    });
   }
 
   const editorChanged = () => { persistEditor(); renderEditor(); };
@@ -1197,6 +1210,7 @@ export function createEditor(cfg) {
   function layerList() {
     if (!E.layers.length) return h('div', {}, hint('Add images from your inputs, generations or device, then tap one on the canvas to move, resize or crop it.'),
       store.get(LAYER_CLIP, null) ? button([icon('paste'), 'Paste layers'], pasteLayers, { cls: 'small', title: 'The layers you copied (Ctrl+V)' }) : null);
+    const rows = ST.rowsOf(E.layers, E.groups);
     // (the list shows the top layer first: a place in it is the same place counted from the other end)
     const reorder = (from, to) => { E.layers = ST.moveRow(E.layers, E.groups, from, to); editorChanged(); };
     const several = picked(), hiddenCount = ST.hiddenOnes(E.layers).count;
@@ -1204,18 +1218,8 @@ export function createEditor(cfg) {
       h('button', { type: 'button', class: `btn small${E.pickMode ? ' on' : ''}`, 'aria-pressed': String(!!E.pickMode),
         title: 'Taps on the list and the canvas add or drop layers from the selection. Also: Shift on the canvas, Alt in the list. Shift in the list selects a range',
         onclick: () => { E.pickMode = !E.pickMode; renderEditor(); } }, 'Select several'),
-      button('All', () => { const vis = E.layers.filter((l) => !l.mask && !l.draft && !l.maskOf); E.sel = vis[vis.length - 1] || null; E.multi = vis.slice(0, -1); renderEditor(); }, { cls: 'small' }),
-      several.length ? button('None', () => { E.sel = null; E.multi = []; E.pickMode = false; renderEditor(); }, { cls: 'small' }) : null,
-      several.length > 1 ? button([icon('copy'), 'Group'], () => { E.layers = ST.makeGroup(E.layers, E.groups, several, uid()); E.multi = []; editorChanged(); }, { cls: 'small', title: 'These layers as one group: its own opacity and blend, and they move together in the list' }) : null,
-      several.length ? button([icon('copy'), 'Copy'], copySelected, { cls: 'small', title: 'To paste in another edit, its masks too (Ctrl+C)' }) : null,
-      store.get(LAYER_CLIP, null) ? button([icon('paste'), 'Paste'], pasteLayers, { cls: 'small', title: 'The layers you copied, on top, in the place they had (Ctrl+V)' }) : null,
-      hiddenCount ? button([icon('trash'), `Delete ${hiddenCount} hidden`], deleteHidden, { cls: 'small danger', title: 'Every hidden layer, its mask too. A locked one stays' }) : null,
-      several.length ? button([icon('copy'), 'Duplicate'], duplicateSelected, { cls: 'small', title: 'A copy of each selected layer, its own mask too, on top of them in the same place (Ctrl+J)' }) : null,
-      several.length > 1 ? button([icon('trash'), `Delete ${several.length} selected`], deleteSelected, { cls: 'small danger', title: 'Every selected layer, its mask too (Delete). A locked one stays' }) : null,
-      several.length && cfg.newEdit ? button('Move to new edit', moveToNewEdit, { cls: 'small', title: 'The selected layers, their masks too, out of this edit and into a new one' }) : null,
-      several.length === 1 ? button('Merge down', () => mergeDown(several[0]), { cls: 'small', disabled: !ST.mergeBelow(E.layers, several[0]), title: 'Into the layer below, as they look (Ctrl+E)' }) : null,
-      several.length > 1 ? button('Merge selected', mergeSelected, { cls: 'small', disabled: ST.mergeSet(E.layers, several).length < 2, title: 'These layers as one picture, at the place of the topmost (Ctrl+E)' }) : null,
-      several.length ? help('Merge draws the layers into one new picture: crops, turns, opacity and masks are drawn in. It keeps the lowest layer\'s blend, for the whole picture, so layers with a blend other than Normal can look different. A hidden layer isn\'t merged. Locked or animated layers can\'t be merged. Undo brings them back.') : null,
+      iconBtn('Layer actions', icon('more'), (ev) => { const r = ev.currentTarget.getBoundingClientRect(); openLayerMenu(r.left, r.bottom + 4); }),
+      help('Right click a layer or the canvas, or hold a finger on it, for what you can do with the selected layers. Pressing a layer that isn\'t selected selects it alone first. Merge draws the layers into one new picture: crops, turns, opacity and masks are drawn in. It keeps the lowest layer\'s blend, for the whole picture, so layers with a blend other than Normal can look different. A hidden layer isn\'t merged. Locked or animated layers can\'t be merged. Undo brings them back. Save each as input makes every layer its own input in this project, at its file\'s full pixels, with its crop, turn and opacity and a see-through background. Save as one input makes them one input the size of their shared box, on the Background colour, at Export size and Max MP. Open in a new edit puts them in a new tab, where they stay in place and can be changed without touching this edit. A hidden layer that is selected is included.'),
       several.length > 1 ? hint(`${several.length} selected`) : null,
       snapBar(['grid', 'rot', 'scale'], () => drawEditorCanvas()));
     const groupRow = (g) => {
@@ -1241,7 +1245,7 @@ export function createEditor(cfg) {
       return [h('button', { type: 'button', class: `mask-thumb${E.sel === m ? ' on' : ''}${l.maskOff ? ' off' : ''}`, 'aria-label': `Paint the mask of ${layerName(l)}`, title: 'Its mask: white shows, black hides. Tap to paint on it; tap again to go back to the layer',
         onclick: (e) => { e.stopPropagation(); if (E.sel === m) pickOnly(l); else { pickOnly(m); if (!paint.painting()) paint.setTool('eraser'); } renderEditor(); } }, maskThumb(m))];
     };
-    const list = layerRowsEl(ST.rowsOf(E.layers, E.groups).map(({ group: g, layer: l, in: inGroup }) => {
+    const list = layerRowsEl(rows.map(({ group: g, layer: l, in: inGroup }) => {
       if (g) return groupRow(g);
       const r = ready(l) ? layerRect(l) : null, cropped = l.crop.w < 0.999 || l.crop.h < 0.999;
       const blend = l.blend && l.blend !== 'normal' ? ` · ${BLENDS.find(([v]) => v === l.blend)?.[1].toLowerCase()}` : '';
@@ -1268,7 +1272,34 @@ export function createEditor(cfg) {
           iconBtn('Delete layer', icon('trash'), () => { removeLayer(l); renderEditor(); })],
       };
     }), { onReorder: reorder });
+    pressMenu(list, (e) => {
+      const it = rows[[...list.children].indexOf(e.target.closest('.layer-row'))];
+      if (it?.group) ST.setPicked(E, E.layers.filter((l) => l.group === it.group.id && !l.maskOf));
+      else if (it?.layer) ST.setPicked(E, pickedFor(picked(), it.layer));
+      if (it) E.cropping = false;
+      renderEditor();
+      openLayerMenu(e.clientX, e.clientY);
+    }, { ok: (e) => !e.target.closest('button, .layer-grip') });
     return h('div', {}, bar, list);
+  }
+
+  // What can be done with the selected layers (web/layer-menu.js says what's offered, and in what order)
+  const LAYER_ACTIONS = {
+    all: () => { const vis = E.layers.filter((l) => !l.mask && !l.draft && !l.maskOf); E.sel = vis[vis.length - 1] || null; E.multi = vis.slice(0, -1); renderEditor(); },
+    none: () => { E.sel = null; E.multi = []; E.pickMode = false; renderEditor(); },
+    several: () => { E.pickMode = !E.pickMode; renderEditor(); },
+    copy: () => copySelected(), paste: () => pasteLayers(), duplicate: () => duplicateSelected(),
+    group: () => { E.layers = ST.makeGroup(E.layers, E.groups, picked(), uid()); E.multi = []; editorChanged(); },
+    mergeDown: () => mergeDown(picked()[0]), mergeSelected: () => mergeSelected(),
+    saveEach: () => saveEach(), saveTogether: () => saveTogether(), openNew: () => openSelected(), moveNew: () => moveToNewEdit(),
+    delete: () => deleteSelected(), deleteHidden: () => deleteHidden(), clear: () => clearLayers(),
+  };
+  function openLayerMenu(x, y) {
+    const on = picked();
+    const groups = layerMenu({ layers: E.layers.filter((l) => !l.mask && !l.draft && !l.maskOf).length, selected: on.length, pictures: selectedPictures().length,
+      hidden: ST.hiddenOnes(E.layers).count, clip: !!store.get(LAYER_CLIP, null), pickMode: E.pickMode, newEdit: !!cfg.newEdit,
+      mergeDown: on.length === 1 && !!ST.mergeBelow(E.layers, on[0]), mergeSet: on.length > 1 && ST.mergeSet(E.layers, on).length >= 2 });
+    openPressMenu(x, y, groups.map((g) => g.map((it) => ({ ...it, run: LAYER_ACTIONS[it.id] }))), 'Layers');
   }
 
   // A mask for this layer: a painted layer of its own, as big as the picture (the brush shows, the eraser hides); all showing to start with, or just the selection if there is one
@@ -1729,22 +1760,11 @@ export function createEditor(cfg) {
         button(E.anim ? 'Save this frame as input' : 'Save as input', saveEditor, { cls: E.anim ? 'small' : 'small primary' }),
         button('Download', downloadEditor),
         button('Open in PhotoCraft', (ev) => craftEditor(ev.currentTarget), { title: 'Every layer as its own layer, to keep editing on the computer' }),
-        button('Craft documents…', () => openCraftSheet())),
-      selectedExport());
+        button('Craft documents…', () => openCraftSheet())));
   }
 
   // ---- the selected layers on their own: inputs in this project, one input, or a new edit ----
   const selectedPictures = () => { const on = picked(); return E.layers.filter((l) => on.includes(l) && ready(l) && !l.mask && !l.draft && !l.maskOf); };
-  function selectedExport() {
-    const n = selectedPictures().length;
-    if (!n) return null;
-    return h('div', {},
-      field(`${n} selected ${n > 1 ? 'layers' : 'layer'}`, h('div', { class: 'row wrap' },
-        button(n > 1 ? 'Save each as input' : 'Save layer as input', saveEach, { cls: 'small' }),
-        n > 1 ? button('Save as one input', saveTogether, { cls: 'small' }) : null,
-        cfg.newEdit ? button('Open in a new edit', openSelected, { cls: 'small' }) : null),
-      help('Save each as input makes every layer its own input in this project, at its file\'s full pixels, with its crop, turn and opacity and a see-through background. Save as one input makes them one input the size of their shared box, on the Background colour, at Export size and Max MP. Open in a new edit puts them in a new tab, where they stay in place and can be changed without touching this edit. A hidden layer that is selected is included.')));
-  }
   const pngOf = (cv) => new Promise((res, rej) => cv.toBlob((b) => (b ? res(b) : rej(new Error('The picture is too big to save'))), 'image/png'));
   // a layer alone at its file's own pixels, as it shows (crop, turn, opacity), with nothing behind it
   function layerAlone(l) {

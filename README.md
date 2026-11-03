@@ -654,6 +654,8 @@ hiding, blend and groups. The chips over the list add a grid, turn steps and siz
 
 **Grid** (two or more layers selected): **Dense** packs the pictures edge to edge at their own shapes, in rows of differing heights (or columns), and the only space between them is **Gap**. **Equal cells** gives each one a same-sized cell, so a picture of another shape has space around it. **Crop to fill** cuts what sticks out, so Dense reaches every edge of a fixed canvas. Undo brings the old places back.
 
+**The layers' menu:** right click a layer or the canvas, or hold a finger on it, or press **⋯** over the list. It's in this order: **Select all**, **Select none**, **Select several**; **Copy**, **Paste**, **Duplicate**; **Group**, **Merge down** or **Merge selected**; **Save layer as input** (or **Save each as input** and **Save as one input**), **Open in a new edit**, **Move to new edit**; **Delete**, **Delete N hidden**, **Clear all**. Pressing a layer that isn't selected selects it alone first. On the canvas the menu is off while a paint tool, the crop or Select layers is using the press.
+
 **Between edits:** **Copy** (Ctrl+C) takes the selected layers with their masks and **Paste** (Ctrl+V) puts them in any edit tab, in the place they had; a group comes along.
 They still use the same picture files. **Delete hidden** removes every hidden layer and its mask, with Undo; a locked layer stays. **Match colour** (two or more selected) gives them curves to look like one of them, or like their average.
 
