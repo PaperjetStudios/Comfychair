@@ -170,8 +170,13 @@ def rig_input(wf: dict | None) -> Path | None:
 
 
 # ---- pictures (inputs) ----
+def crop_name(name: str, key: str) -> str:
+    """The file a crop of a picture is sent to a run as: named after the picture, so input_files finds it when the picture goes."""
+    return f"crop_{tag(name)}_{key}.png"
+
+
 def input_files(name: str) -> list[Path]:
-    """Every copy of an input picture: ComfyChair's and ComfyUI's."""
+    """Every copy of an input picture: ComfyChair's, ComfyUI's and the crops cut from it for runs."""
     from .main import local_input   # (main imports this module)
     out = []
     if (p := local_input(name)) is not None:
@@ -180,6 +185,7 @@ def input_files(name: str) -> list[Path]:
         p = config.COMFY_INPUT_DIR / name
         if _inside(p, config.COMFY_INPUT_DIR):
             out.append(p)
+        out += (config.COMFY_INPUT_DIR / config.COMFY_INPUT_SUBFOLDER).glob(crop_name(name, "*"))
     return out
 
 

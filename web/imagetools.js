@@ -1,7 +1,7 @@
-import { h, api, store, toast, busy, button, chip, section, field, rangeField, seedField, seg, hint, help, imageInput, toggle, textArea } from './ui.js';
-import { S, inputUrl, switchTab, thumbUrl } from './core.js';
-import { openImagePicker, pngBlob, uploadImage } from './media.js';
-import { pictureSlot } from './picture-drop.js';
+import { h, api, store, toast, busy, button, chip, choiceField, section, field, rangeField, seedField, seg, hint, help, toggle, textArea } from './ui.js';
+import { S, inputUrl, switchTab } from './core.js';
+import { pngBlob, uploadImage } from './media.js';
+import { pictureForRun, pictureInput } from './picture-input.js';
 import { queueRun, template, valuesByRole, waitGen } from './make.js';
 import { MAPS } from './maps.js';
 import { editSizeFor, editSizeTo } from './edit-size.js';
@@ -16,7 +16,7 @@ import { icon } from './icons.js';
 import { eachOne, failureText } from './tool-batch.js';
 import { partPrompt, partSize, partsOf } from './skin-parts.js';
 import { besideX, layerOf, owedFor, owedRecord, sameRun, withOwed, withoutOwed } from './owed-runs.js';
-import { editPrompt, layerWord, seedStep, sigmasFor, usableLoras } from './edit-image.js';
+import { asRefs, editChoices, editPrompt, layerWord, refSlots, seedStep, sigmasFor, usableLoras } from './edit-image.js';
 import { loraPicker } from './lora-pick.js';
 import { SWAP_MODELS, SWAP_PARTS, biggestArea, changedAround, joined, onlyWithin, scaleFor, softEdge, swapBox, swapLora, swapPrompt, swapRefPixels, without } from './swap-part.js';
 
@@ -115,7 +115,8 @@ const OPS = [
   { id: 'upfast', group: 'Upscale', label: 'Upscale (fast)', tpl: 'deck-upscale-image-fast', kind: 'up',
     help: '4x-UltraSharp: a quick, clean enlargement without the invented detail. Export size is set to match, so Download and Save as input come out bigger.' },
 ];
-const ST = { skinWhere: 'whole', skinParts: 'face', samSure: 0.2, samMost: 8, op: 'cutout', scope: 'whole', result: 'cutout', hide: true, fine: true, rfrom: 'words', rprompt: 'watermark', cmodel: 'noise', uprompt: UNMARK_PROMPT, prompt: 'person', rows: 1, cols: 4, sheetFast: false, swapPart: 'face', swapFrom: '', swapModels: ['klein9b'], swapWhere: 'find', swapExtra: '', scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', stepScratch: true, stepClean: true, stepFaces: true, stepColour: false, scratchAmount: 'normal', faceAmount: 0.8, cprompt: COLOUR_PROMPT, dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, eprompt: '', econtext: '', ekeep: true, erefs: [], ewhere: 'all', efind: '', eclose: true, egrow: 8, esoft: 16, emp: 2, ecount: 1, eseed: 0, eseedMode: 'random', esteps: 8, ecfg: 1, eneg: '', eloras: [], ...store.get(KEY, {}) };
+const ST = { skinWhere: 'whole', skinParts: 'face', samSure: 0.2, samMost: 8, op: 'cutout', scope: 'whole', result: 'cutout', hide: true, fine: true, rfrom: 'words', rprompt: 'watermark', cmodel: 'noise', uprompt: UNMARK_PROMPT, prompt: 'person', rows: 1, cols: 4, sheetFast: false, swapPart: 'face', swapFrom: '', swapCrop: null, swapMp: 0, swapModels: ['klein9b'], swapWhere: 'find', swapExtra: '', scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', stepScratch: true, stepClean: true, stepFaces: true, stepColour: false, scratchAmount: 'normal', faceAmount: 0.8, cprompt: COLOUR_PROMPT, dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, eprompt: '', econtext: '', ekeep: true, erefs: [], erefMp: {}, echoice: {}, ewhere: 'all', efind: '', eclose: true, egrow: 8, esoft: 16, emp: 2, ecount: 1, eseed: 0, eseedMode: 'random', esteps: 8, ecfg: 1, eneg: '', eloras: [], ...store.get(KEY, {}) };
+ST.erefs = asRefs(ST.erefs);   // (saved as bare names by an older version)
 if (ST.lprompt === OLD_DELIGHT_PROMPT) ST.lprompt = DELIGHT_PROMPT;   // (the old default, saved in this browser; a prompt someone wrote stays)
 const save = () => store.set(KEY, ST);
 const FLIGHT = new Set();   // runs on their way back
@@ -583,10 +584,11 @@ const maskCanvas = (red, W, H) => {
 // the picture to take the part from: for a face or head a close-up of it, so the model has its likeness at full size. Whole if it isn't found.
 async function swapReference(part) {
   const p = SWAP_PARTS[part];
-  if (!p.closeUp) return { name: ST.swapFrom, made: false };
-  const img = await loadImg(inputUrl(ST.swapFrom)).catch(() => { throw new Error('The picture to take it from is gone: pick it again'); });
-  const W = img.naturalWidth, H = img.naturalHeight, found = await findPart(ST.swapFrom, W, H, part);
-  if (!found) return { name: ST.swapFrom, made: false };
+  const from = await pictureForRun(ST.swapFrom, ST.swapCrop, ST.swapMp);
+  if (!p.closeUp) return { name: from, made: false };
+  const img = await loadImg(inputUrl(from)).catch(() => { throw new Error('The picture to take it from is gone: pick it again'); });
+  const W = img.naturalWidth, H = img.naturalHeight, found = await findPart(from, W, H, part);
+  if (!found) return { name: from, made: false };
   const box = swapBox(boundsOf(found.mask, W, H), W, H, 0.35), cv = canvasOf(box.w, box.h);
   cv.getContext('2d').drawImage(img, box.x, box.y, box.w, box.h, 0, 0, box.w, box.h);
   const up = await uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: 'swap-from.png', multiple: 1 });
@@ -913,13 +915,14 @@ async function restorePhoto(eng, o, tab, src) {
 
 // ---- Edit: a prompt, what else you can tell it, and the model's knobs, on each picture in turn ----
 // what the model is told for one picture, at w×h
-function editValues(t, name, [w, h], src) {
+async function editValues(t, name, [w, h], src) {
   const by = (input) => t.fields.find((f) => f.input === input), set = (input, v) => { const f = by(input); return f ? { [f.key]: v } : {}; };
   const main = t.fields.find((f) => f.kind === 'image' && /image to edit/i.test(f.group)), refs = t.fields.filter((f) => f.kind === 'image' && /reference/i.test(f.group));
   const { use, next } = seedStep(ST.eseedMode, ST.eseed, ST.ecount);
   ST.eseed = next; save();
   const lf = loraField(t), loras = lf ? usableLoras(ST.eloras, lf.options || []) : [];
-  return { [main.key]: name, ...Object.fromEntries(ST.erefs.slice(0, refs.length).map((r, i) => [refs[i].key, r])),
+  const sent = await Promise.all(ST.erefs.slice(0, refs.length).map((r, i) => pictureForRun(r.name, r.crop, ST.erefMp[i] ?? refs[i].mp ?? 1)));
+  return { [main.key]: name, ...Object.fromEntries(sent.map((r, i) => [refs[i].key, r])), ...editChoices(t.fields, ST.echoice),
     ...set('prompt', editPrompt({ prompt: ST.eprompt, context: ST.econtext, keep: ST.ekeep, layer: layerWord(src.layer) })),
     ...valuesByRole(t, { seed: use }), ...set('sigmas', sigmasFor(ST.esteps)), ...set('cfg', ST.ecfg), ...(ST.ecfg > 1 && set('negative_prompt', ST.eneg)),
     ...(lf && { [lf.key]: loras }), ...set('width', w), ...set('height', h) };
@@ -938,7 +941,7 @@ async function editArea(eng, o, t, tab, src, red, b) {
   FLIGHT.add(editArea); eng.render();
   try {
     b.set('Editing…');
-    const gens = await queueRun({ template: t.id, values: editValues(t, name, [sw, sh], src), batch: ST.ecount });
+    const gens = await queueRun({ template: t.id, values: await editValues(t, name, [sw, sh], src), batch: ST.ecount });
     await Promise.all(gens.map(async (g, nth) => {
       let run = null;
       try {
@@ -997,7 +1000,7 @@ async function editOne(eng, o, t, tab, src) {
       return await editArea(eng, o, t, tab, src, red, b);
     } finally { b.done(); }
   }
-  const gens = await queueRun({ template: t.id, values: editValues(t, src.name, editSizeTo(src.px[0], src.px[1], 32, ST.emp * 1e6), src), batch: ST.ecount });
+  const gens = await queueRun({ template: t.id, values: await editValues(t, src.name, editSizeTo(src.px[0], src.px[1], 32, ST.emp * 1e6), src), batch: ST.ecount });
   toast(`${o.label}: ${gens.length > 1 ? `${gens.length} runs` : `#${gens[0].id}`} queued; each lands as a new layer`);
   gens.forEach((g, nth) => follow(eng, o, tab, src, g, nth));
 }
@@ -1005,12 +1008,15 @@ async function editOne(eng, o, t, tab, src) {
 // the Edit tool's settings
 function editFields(eng, t, size) {
   const redo = () => { save(); eng.render(); }, lf = loraField(t), installed = lf?.options || [];
-  const refsMost = t?.fields.filter((f) => f.kind === 'image' && /reference/i.test(f.group)).length || 0;
+  const refFields = t?.fields.filter((f) => f.kind === 'image' && /reference/i.test(f.group)) || [], refsMost = refFields.length;
   const [sw, sh] = size ? editSizeTo(size[0], size[1], 32, ST.emp * 1e6) : [];
-  const setRef = (i) => (name) => { ST.erefs[i] = name; redo(); };
-  const ref = (i) => pictureSlot(imageInput({ label: `Picture ${i + 2}`, name: ST.erefs[i] ? ST.erefs[i].split('/').pop() : '', thumb: ST.erefs[i] ? h('img', { src: thumbUrl(ST.erefs[i], 256), alt: '' }) : null,
-    pick: () => openImagePicker({ title: `Picture ${i + 2}`, onPick: setRef(i) }),
-    onClear: () => { ST.erefs.splice(i, 1); redo(); } }), { give: setRef(i) });
+  const setRef = (i) => (name) => { ST.erefs[i] = { name }; redo(); };
+  // a slot's own picture, or (picking several) the ones it fills after it
+  const ref = (i) => pictureInput({ label: `Picture ${i + 2}`, name: ST.erefs[i]?.name || '', empty: false, set: setRef(i), aspect: () => (size ? size[0] / size[1] : 1),
+    onClear: () => { ST.erefs.splice(i, 1); redo(); },
+    crop: ST.erefs[i]?.crop || null, setCrop: (c) => { ST.erefs[i] = { name: ST.erefs[i].name, ...(c && { crop: c }) }; redo(); },
+    mp: () => ST.erefMp[i] ?? refFields[i]?.mp ?? 1, setMp: (n) => { ST.erefMp[i] = n; save(); },
+    slots: () => refSlots(i, ST.erefs.length, refsMost).map(setRef) });
   return [
     field('Prompt', textArea(() => ST.eprompt, (v) => { ST.eprompt = v; save(); }, { rows: 4, label: 'What to change', placeholder: 'Make the jacket red leather' }),
       help('Say what to change, plainly. The picture being edited is Picture 1 and your references are Picture 2 onward, so you can write: give the person in Picture 1 the coat from Picture 2. {layer} becomes each layer\'s name, and {red|blue|green} picks one afresh for each run, so one prompt can differ across a batch.')),
@@ -1036,6 +1042,7 @@ function editFields(eng, t, size) {
       help: 'The turbo model is tuned for 8. 4 is quicker and still holds up; more than 8 gives little.' }),
     rangeField('Guidance', () => ST.ecfg, (v) => { ST.ecfg = v; save(); }, { min: 1, max: 5, step: 0.1, fmt: (v) => v.toFixed(1), onChange: () => eng.render(),
       help: 'How hard the model follows the prompt. At 1 it can stop short: asked for red leather, a denim jacket came back red denim, and at 2.5 it came back leather. Above 1 each run takes about twice as long, and the Avoid box is used.' }),
+    ...(t?.fields || []).filter((f) => f.kind === 'choice').map((f) => choiceField(f.group, f.options, ST.echoice[f.key] ?? f.value, (v) => { ST.echoice[f.key] = v; save(); })),
     ST.ecfg > 1 ? field('Avoid', textArea(() => ST.eneg, (v) => { ST.eneg = v; save(); }, { rows: 2, label: 'What to avoid', placeholder: 'Blurry, extra fingers' })) : null,
     lf ? field(['LoRAs', h('span', {}, `${usableLoras(ST.eloras, installed).length} on`)],
       help('LoRAs change what an edit can do and how it looks. They run in the order listed, on every run. Your Qwen folder comes first, and search finds the others, which are for other models and rarely work here. Some need a trigger word: put it in the prompt. Untick one to compare the same seed without it (Seed: Fixed).'),
@@ -1208,9 +1215,9 @@ export function imageToolsSection(eng) {
     o.kind === 'remove' && ST.rfrom === 'painted' && !eng.paint.maskLayer(false) ? hint('Paint what to remove first (Masks panel), or find it by name') : null,
     o.kind === 'swap' ? field('Swap', seg(Object.entries(SWAP_PARTS).map(([k, v]) => [k, v.label]), ST.swapPart, (v) => { ST.swapPart = v; save(); eng.render(); }, { wrap: true }),
       help(SWAP_PARTS[ST.swapPart].help)) : null,
-    o.kind === 'swap' ? pictureSlot(imageInput({ label: 'Take it from', name: ST.swapFrom ? ST.swapFrom.split('/').pop() : '', thumb: ST.swapFrom ? h('img', { src: thumbUrl(ST.swapFrom, 256), alt: '' }) : null,
-      pick: () => openImagePicker({ title: 'The picture to take it from', onPick: (name) => { ST.swapFrom = name; save(); eng.render(); } }),
-      onClear: () => { ST.swapFrom = ''; save(); eng.render(); } }), { give: (name) => { ST.swapFrom = name; save(); eng.render(); } }) : null,
+    o.kind === 'swap' ? pictureInput({ label: 'Take it from', title: 'The picture to take it from', name: ST.swapFrom, empty: false,
+      set: (name) => { ST.swapFrom = name; ST.swapCrop = null; save(); eng.render(); },
+      crop: ST.swapCrop, setCrop: (c) => { ST.swapCrop = c; save(); eng.render(); }, mp: () => ST.swapMp, setMp: (n) => { ST.swapMp = n; save(); } }) : null,
     o.kind === 'swap' ? field(['Models', h('span', {}, `${swapModels().length} ticked`)], h('div', { class: 'chips' }, ...Object.entries(SWAP_MODELS).filter(([k]) => canSwap(k)).map(([k, v]) =>
       chip(v.label, () => { ST.swapModels = ST.swapModels.includes(k) ? ST.swapModels.filter((x) => x !== k) : [...ST.swapModels, k]; save(); eng.render(); }, { on: ST.swapModels.includes(k) }))),
       help(Object.values(SWAP_MODELS).map((v) => `${v.label}: ${v.help}`).join(' '))) : null,

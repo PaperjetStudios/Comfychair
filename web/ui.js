@@ -525,6 +525,23 @@ export function imageInput({ label, name, thumb, pick, onClear, buttons = [], be
       h('div', { class: 'actions' }, pickButtons(!!thumb, pick, onClear, buttons), below)));
 }
 
+// A choice from a list, with a filter box when it's long. One that's no longer there stays on show, marked. set(value) on a change.
+export function choiceField(label, options, cur, set) {
+  const opts = cur != null && !options.includes(cur) ? [cur, ...options] : [...options];
+  const sel = h('select', { 'aria-label': label }, opts.map((o) => h('option', { value: o }, options.includes(o) ? o : `${o} (missing)`)));
+  sel.value = cur;
+  sel.addEventListener('change', () => set(sel.value));
+  let filter = null;
+  if (opts.length > 15) {
+    filter = h('input', { type: 'text', placeholder: `Filter ${opts.length} options…` });
+    filter.addEventListener('input', () => {
+      const q = filter.value.toLowerCase();
+      for (const o of sel.options) o.hidden = q && !o.value.toLowerCase().includes(q);
+    });
+  }
+  return field(label, filter, sel);
+}
+
 // A labelled setting: the label on the left, an optional note on the right (label: [text, note]).
 // A help(text) among the kids becomes an ⓘ after the label.
 export function field(label, ...kids) {

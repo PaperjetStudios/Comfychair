@@ -33,3 +33,17 @@ export function sigmasFor(steps) {
 
 // the LoRAs a run can use: named, on, and still installed
 export const usableLoras = (rows, installed) => (rows || []).filter((l) => l.name && l.enabled !== false && installed.includes(l.name));
+
+// Reference pictures as { name, crop }: an older version saved bare names, or left holes
+export const asRefs = (list) => (list || []).map((r) => (typeof r === 'string' ? { name: r } : r)).filter((r) => r?.name);
+
+// Which reference slots a pick from slot i fills: its own, then the empty ones after the used ones, up to the template's most
+export function refSlots(i, used, most) {
+  const out = [i];
+  for (let k = used; k < most; k++) if (k !== i) out.push(k);
+  return out;
+}
+
+// the run's values for the template's lists (its model, its sampler): what was chosen and is still on offer. Anything else stays the template's own.
+export const editChoices = (fields, chosen) => Object.fromEntries((fields || [])
+  .filter((f) => f.kind === 'choice' && (f.options || []).includes(chosen?.[f.key])).map((f) => [f.key, chosen[f.key]]));

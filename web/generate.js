@@ -1,11 +1,11 @@
 import {
   $, h, store, clamp, clamp01, clone, cycleIndex, api, toast, undoToast, openOverlay, openSheet, closeSheet, sheetStillOpen, nameSheet,
-  button, iconBtn, mpInput, actions, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider, withHelp,
-  insertAtCursor, toggle, textArea, seedField as uiSeedField, imageInput, chips, chip,
+  button, iconBtn, actions, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider, withHelp,
+  insertAtCursor, toggle, textArea, seedField as uiSeedField, choiceField, chips, chip,
 } from './ui.js';
 import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
 import { clipLabel, clipUrl, openImagePicker, openVideoPicker, soundInput } from './media.js';
-import { pictureSlot } from './picture-drop.js';
+import { pictureForRun, pictureInput } from './picture-input.js';
 import { slotsFrom } from './pick-slots.js';
 import { RUN, fmtDur } from './run-state.js';
 import { notifyPrepare, keepAwake } from './notifications.js';
@@ -15,7 +15,7 @@ import { basicsPane, zoomPan } from './layout.js';
 
 import { clipInput } from './vfield.js';
 import { PREFS } from './prefs.js';
-import { FULL, openCrop, openSketch, templateAspect } from './editor.js';
+import { FULL, templateAspect } from './editor.js';
 import { MASK_DEFAULT, openMaskPainter } from './maskpaint.js';
 import { loraPicker } from './lora-pick.js';
 import { icon } from './icons.js';
@@ -550,25 +550,11 @@ function seedField(f) {
   return el;
 }
 
-function choiceField(f) {
-  const opts = [...f.options];
-  const cur = S.values[f.key];
-  if (cur != null && !opts.includes(cur)) opts.unshift(cur);
-  const sel = h('select', {}, opts.map((o) => h('option', { value: o }, f.options.includes(o) ? o : `${o} (missing)`)));
-  sel.value = cur;
-  sel.addEventListener('change', () => {
-    setVal(f.key, sel.value);
+function choiceBox(f) {
+  return choiceField(f.label, f.options, S.values[f.key], (v) => {
+    setVal(f.key, v);
     if (MODEL_INPUTS.includes(f.input) || S.tpl.fields.some((x) => x.when?.key === f.key)) renderFields();  // LoRA lists follow the model (folder filter); a setting shown only while this one is on
   });
-  let filter = null;
-  if (opts.length > 15) {
-    filter = h('input', { type: 'text', placeholder: `Filter ${opts.length} options…` });
-    filter.addEventListener('input', () => {
-      const q = filter.value.toLowerCase();
-      for (const o of sel.options) o.hidden = q && !o.value.toLowerCase().includes(q);
-    });
-  }
-  return field(f.label, filter, sel);
 }
 
 function textField(f) {
@@ -874,66 +860,44 @@ function boolField(f) {
   return el;
 }
 
-// the whole image greyed out, with the cropped part in colour on top
-function cropPreview(src, c) {
-  const pct = (n) => `${(n * 100).toFixed(2)}%`;
-  return h('span', { class: 'crop-preview' },
-    h('img', { class: 'under', src, alt: '' }),
-    h('img', { class: 'kept', src, alt: '', style: `clip-path:inset(${pct(c.y)} ${pct(1 - c.x - c.w)} ${pct(1 - c.y - c.h)} ${pct(c.x)})` }));
-}
-
 function imageField(f) {
   const v = S.values[f.key];
   if (S.imageMp[f.key] == null) S.imageMp[f.key] = f.mp ?? 1;
-  // several slots of one group (H3's References): pick several, and they fill this slot and the group's empty ones
-  const pick = () => {
-    const slots = slotsFrom(S.tpl?.fields, f.key, S.values);
-    let at = 0;
-    openImagePicker({
-      title: `${f.group} · ${f.label}`, mp: () => S.imageMp[f.key], multi: slots.length > 1, limit: slots.length,
-      onPick: (name, info) => {
-        const key = slots[at++];
-        if (!key) return;
-        setVal(key, name);
-        renderFields();
-        if (slots.length === 1 && info && info.width) toast(`Set ${f.label} (${info.width}×${info.height})`);
-      },
-    });
-  };
   // A crop is only a setting: the field keeps the original image, the thumb shows it with the
   // cut-off parts greyed out, and generate() sends a cropped copy (see cropForRun).
   const old = S.imageCrop[f.key];
   if (old && old.out && old.out === v) { setVal(f.key, old.src); delete old.out; return imageField(f); }  // saved by an older version
   const cropped = v && old && old.src === v ? old : null;
   if (!cropped) delete S.imageCrop[f.key];
-  const crop = async () => {
-    const img = new Image();
-    img.src = inputUrl(v);
-    openCrop({ img, crop: cropped ? cropped.crop : FULL, onApply: (c) => {   // (it opens at once and shows the picture loading)
-      if (c.w > 0.999 && c.h > 0.999) delete S.imageCrop[f.key];
-      else S.imageCrop[f.key] = { src: v, crop: c };
-      if (mf && S.values[mf.key]?.name && !maskFits(S.values[mf.key], v, S.imageCrop[f.key]?.crop)) toast('The mask was cleared: it was painted on the old crop');
-      persist(); renderFields();
-    } });
-  };
   const set = (name) => { setVal(f.key, name); renderFields(); };
   // a mask painted over this picture (its own pseudo field): it goes when the picture or its crop changes
   const mf = maskFieldOf(f);
   const mask = mf ? S.values[mf.key] : null;
   if (mask?.name && !maskFits(mask, v, cropped?.crop)) S.values[mf.key] = { ...mask, name: null, box: null, src: null, crop: null };
-  const el = imageInput({ label: f.label, name: v ? String(v).split('/').pop() + (cropped ? ' · cropped' : '') : '',
-    thumb: cropped ? cropPreview(thumbUrl(cropped.src, 256), cropped.crop) : v ? h('img', { src: thumbUrl(v, 256), alt: v }) : null,
-    pick, onClear: () => set(''), buttons: [
-      v ? button('Crop…', crop) : null,
+  const el = pictureInput({ label: f.label, title: `${f.group} · ${f.label}`, name: v || '', set, crop: cropped?.crop || null,
+    setCrop: (c) => {
+      if (c) S.imageCrop[f.key] = { src: v, crop: c }; else delete S.imageCrop[f.key];
+      if (mf && S.values[mf.key]?.name && !maskFits(S.values[mf.key], v, S.imageCrop[f.key]?.crop)) toast('The mask was cleared: it was painted on the old crop');
+      persist(); renderFields();
+    },
+    mp: () => S.imageMp[f.key], setMp: (n) => { S.imageMp[f.key] = n; persist(); }, aspect: templateAspect,
+    // several slots of one group (H3's References): pick several, and they fill this slot and the group's empty ones
+    slots: () => {
+      const keys = slotsFrom(S.tpl?.fields, f.key, S.values);
+      return keys.map((key) => (name, info) => {
+        setVal(key, name);
+        renderFields();
+        if (keys.length === 1 && info && info.width) toast(`Set ${f.label} (${info.width}×${info.height})`);
+      });
+    },
+    buttons: [
       // an inpaint template runs on the mask alone: its painter is the main action until there is one
       v && mf ? (mf.required && !mask?.name
         ? button([icon('brush'), 'Paint area…'], () => paintMask(f, mf, v, cropped?.crop || null), { cls: 'small primary', 'data-paint': '1' })
-        : button('Mask…', () => paintMask(f, mf, v, cropped?.crop || null))) : null,
-      button(v ? 'Draw on' : 'Draw', () => openSketch({ base: v || null, aspect: templateAspect(), onDone: set }))],
-    below: [mpInput(() => S.imageMp[f.key], (n) => { S.imageMp[f.key] = n; persist(); }),
-      v && mf && S.values[mf.key]?.name ? maskSettings(f, mf, v, cropped?.crop || null) : null] });
+        : button('Mask…', () => paintMask(f, mf, v, cropped?.crop || null))) : null],
+    below: [v && mf && S.values[mf.key]?.name ? maskSettings(f, mf, v, cropped?.crop || null) : null] });
   el.dataset.key = f.key;
-  return pictureSlot(el, { give: set, mp: () => S.imageMp[f.key], empty: !v });
+  return el;
 }
 
 // ---- masks: paint where the edit may change the picture (web/maskpaint.js); the server puts every result back
@@ -1116,7 +1080,7 @@ function fieldBody(f) {
     case 'int': return numberField(f, false);
     case 'float': return numberField(f, true);
     case 'seed': return seedField(f);
-    case 'choice': return choiceField(f);
+    case 'choice': return choiceBox(f);
     case 'bool': return boolField(f);
     case 'image': return imageField(f);
     case 'video': return videoField(f);
@@ -1186,9 +1150,7 @@ function unmatchedBraces(v) {
 // image and the crop, and only this run's values point at it.
 async function cropForRun(f, v) {
   const c = S.imageCrop[f.key];
-  if (!v || !c || c.src !== v) return v;
-  const r = await api('/api/inputs/crop', { method: 'POST', body: { name: v, crop: c.crop, mp: S.imageMp[f.key] ?? 1, multiple: 16 } });
-  return r.name;
+  return pictureForRun(v, c && c.src === v ? c.crop : null, S.imageMp[f.key] ?? 1);
 }
 
 function refreshSeedLabels() {

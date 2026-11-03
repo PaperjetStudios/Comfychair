@@ -562,6 +562,14 @@ class Storage(unittest.TestCase):
         self.assertEqual(db.input_origin(a), None)
         self.assertTrue(storage.input_files(b)[0].exists() and storage.input_files(late)[0].exists())
 
+    def test_a_pictures_crops_go_with_it(self):
+        name, other = self.free_picture(), self.free_picture()
+        sub = self.inp / config.COMFY_INPUT_SUBFOLDER
+        mine, theirs = touch(sub / storage.crop_name(name, "aaaa")), touch(sub / storage.crop_name(other, "aaaa"))
+        storage.delete_input(name)
+        self.assertFalse(mine.exists(), "a crop cut from the picture goes with it")
+        self.assertTrue(theirs.exists(), "another picture's crop stays")
+
     def test_unused_routes(self):
         name = self.free_picture()
         with TestClient(main.app) as c:

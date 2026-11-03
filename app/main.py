@@ -1080,9 +1080,9 @@ async def crop_input(body: dict = Body(...)):
     except Exception as e:
         raise HTTPException(400, f"Couldn't crop that image: {e}")
     origin = db.input_origin(body.get("name") or "")
-    name = await comfy.upload_image(png, f"crop_{key}.png", config.COMFY_INPUT_SUBFOLDER)
-    db.set_input_origin(name, origin)   # a cropped picture is still made from the same output
-    return {"name": name, "width": w, "height": h}
+    made = await comfy.upload_image(png, storage.crop_name(name, key), config.COMFY_INPUT_SUBFOLDER)
+    db.set_input_origin(made, origin)   # a cropped picture is still made from the same output
+    return {"name": made, "width": w, "height": h}
 
 
 @app.post("/api/generations/{gid}/to-input")

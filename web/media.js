@@ -441,6 +441,16 @@ export function askMaxMp(name, done, key = '3d') {
     actions(button('Cancel', closeSheet), button('Continue', go, { cls: 'primary' })));
 }
 
+// a cut of a loaded picture as a new picture of its own (the original stays)
+export async function cropCopy(img, c, mp = 0) {
+  const W = img.naturalWidth, H = img.naturalHeight, cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.round(c.w * W)); cv.height = Math.max(1, Math.round(c.h * H));
+  cv.getContext('2d').drawImage(img, c.x * W, c.y * H, c.w * W, c.h * H, 0, 0, cv.width, cv.height);
+  const blob = await pngBlob(cv);
+  if (!blob) throw new Error('Couldn\'t cut that picture');
+  return uploadImage(blob, { mp, source: 'crop' });
+}
+
 export function openImagePicker(opts) {
   const { title, mp: callerMp = () => 0, onPick, limit = Infinity } = opts;
   // the largest size: chosen here (opts.maxMp, kept on opts so it survives the sheets that replace the picker; remembered per kind of
@@ -640,12 +650,7 @@ export function openImagePicker(opts) {
     const { openCrop } = await import('./editor.js');   // (it imports this file)
     openCrop({ img, onCancel: reopen, onApply: async (c) => {
       try {
-        const W = img.naturalWidth, H = img.naturalHeight, cv = document.createElement('canvas');
-        cv.width = Math.max(1, Math.round(c.w * W)); cv.height = Math.max(1, Math.round(c.h * H));
-        cv.getContext('2d').drawImage(img, c.x * W, c.y * H, c.w * W, c.h * H, 0, 0, cv.width, cv.height);
-        const blob = await pngBlob(cv);
-        if (!blob) throw new Error('Couldn\'t cut that picture');
-        const r = await uploadImage(blob, { mp: mp(), source: 'crop' });
+        const r = await cropCopy(img, c, mp());
         inputs = null;
         picked(r.name, r);
         if (multi) reopen();

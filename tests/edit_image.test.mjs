@@ -1,7 +1,7 @@
 // node --test tests/edit_image.test.mjs: what the Edit image tool tells the model (web/edit-image.js).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { editPrompt, layerWord, seedStep, sigmasFor, usableLoras } from '../web/edit-image.js';
+import { asRefs, editChoices, editPrompt, layerWord, refSlots, seedStep, sigmasFor, usableLoras } from '../web/edit-image.js';
 
 test('the prompt, the context and the sentence that holds the rest still, in that order', () => {
   const t = editPrompt({ prompt: ' Make the jacket red. ', context: 'It is a film still.', keep: true });
@@ -56,4 +56,22 @@ test('any step count starts at 1, ends at 0 and only goes down', () => {
 test('only LoRAs that are named, on and installed are used', () => {
   const rows = [{ name: 'a', strength: 1 }, { name: '', strength: 1 }, { name: 'b', enabled: false }, { name: 'gone' }];
   assert.deepEqual(usableLoras(rows, ['a', 'b']).map((l) => l.name), ['a']);
+});
+
+test('references saved as bare names come back as { name }; holes go', () => {
+  assert.deepEqual(asRefs(['a.png', { name: 'b.png', crop: { x: 0, y: 0, w: 1, h: 1 } }, null, '']), [{ name: 'a.png' }, { name: 'b.png', crop: { x: 0, y: 0, w: 1, h: 1 } }]);
+  assert.deepEqual(asRefs(undefined), []);
+});
+
+test('picking several fills the slot, then the empty ones, up to the most', () => {
+  assert.deepEqual(refSlots(0, 0, 3), [0, 1, 2]);   // the first empty slot
+  assert.deepEqual(refSlots(0, 2, 3), [0, 2]);      // a used slot, with one empty
+  assert.deepEqual(refSlots(2, 2, 3), [2]);         // the last empty slot
+  assert.deepEqual(refSlots(1, 3, 3), [1]);         // all used: only itself
+});
+
+test('a chosen model or sampler goes only if the template still offers it', () => {
+  const fields = [{ kind: 'choice', key: 'm', options: ['a', 'b'] }, { kind: 'choice', key: 's', options: ['euler'] }, { kind: 'text', key: 'p' }];
+  assert.deepEqual(editChoices(fields, { m: 'b', s: 'gone', p: 'x' }), { m: 'b' });
+  assert.deepEqual(editChoices(fields, {}), {});
 });

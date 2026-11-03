@@ -1,10 +1,10 @@
 import { loraName, loraChoice, keyRangeFields, restyleLora } from './clip-effects.js';
 export { CLIP_FX, loraChoice, keyRangeFields, restyleLoras, runClipStep } from './clip-effects.js';
-import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle, textArea, pctFmt, colorField, seedField, sizeSelect, imageInput, store, info, icon, withHelp } from './ui.js';
+import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle, textArea, pctFmt, colorField, seedField, sizeSelect, store, info, icon, withHelp } from './ui.js';
 import { MAPS } from './maps.js';
-import { S, inputUrl, thumbUrl, onServer, switchTab } from './core.js';
-import { bareSource, cardMedia, outputCard, clipLabel, clipUrl, genLabel, openImagePicker, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
-import { pictureSlot } from './picture-drop.js';
+import { S, inputUrl, onServer, switchTab } from './core.js';
+import { bareSource, cardMedia, outputCard, clipLabel, clipUrl, genLabel, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
+import { pictureInput } from './picture-input.js';
 import { hooks as genHooks } from './generate.js';
 import { adoptGenerations, queueRun, roleField, runAndWait, template, valuesByRole, waitGen } from './make.js';
 import { openGeneration } from './run.js';
@@ -176,8 +176,6 @@ function sourceField(role = 'source') {
 }
 
 function firstField(optional) {
-  const pick = () => openImagePicker({ title: T.op === 'ingredients' ? 'Ingredients sheet' : ['animate', 'faceswap', 'drive', 'ltxdrive'].includes(T.op) ? 'Character' : 'First frame', mp: () => 0,
-    onPick: (name) => { T.first = name; changed(); } });
   const takeFrame = async () => {
     const url = clipUrl(T.source);
     if (!url) return toast('Choose a source clip first', true);
@@ -191,16 +189,16 @@ function firstField(optional) {
   const label = T.op === 'ingredients' ? 'Ingredients sheet' : T.op === 'ripple' ? 'Edited first frame' : T.op === 'layout' ? 'Look (first frame)'
     : ['animate', 'faceswap', 'drive', 'ltxdrive'].includes(T.op) ? 'Character'
     : T.op === 'extend' ? 'Start frame (optional)' : T.op === 'talk' ? 'Who speaks (a picture)' : optional ? 'Start image (optional)' : 'Start image';
-  const slot = (el) => pictureSlot(el, { give: (name) => { T.first = name; changed(); }, empty: !T.first });
-  return slot(imageInput({ label, name: T.first ? T.first.split('/').pop() : '', thumb: T.first ? h('img', { src: thumbUrl(T.first, 256), alt: '' }) : null,
-    pick, onClear: () => { T.first = null; changed(); },
+  return pictureInput({ label, title: T.op === 'ingredients' ? 'Ingredients sheet' : ['animate', 'faceswap', 'drive', 'ltxdrive'].includes(T.op) ? 'Character' : 'First frame',
+    name: T.first || '', set: (name) => { T.first = name; changed(); }, onClear: () => { T.first = null; changed(); },
+    mp: () => T.firstMp ?? 0, setMp: (n) => { T.firstMp = n; changed(false); },
     tip: T.op === 'ripple' ? 'Take the clip\'s first frame, change it (Edit in Generate with an edit template, or in the Image tab), then Choose… the edited picture here.'
       : T.op === 'animate' ? 'One person, whole body or face as in the clip. Best: Take from clip…, then repaint the person as the character (Edit in Generate), so pose and framing match.' : null,
     buttons: [
       T.source ? button('Take from clip…', takeFrame, { title: 'A frame of the source clip' }) : null,
       T.first && edit ? button('Edit in Generate', () => useInGenerate(T.first, 'Frame set: edit it, then pick the result here')) : null,
       T.first && edit ? button('Edit in the Image tab', () => addToEditor(T.first)) : null,
-      T.op === 'extend' && T.source ? button('Make start frame…', makeStartFrame, { title: 'The first frame on its canvas, to fill in with an image edit and your reference pictures' }) : null] }));
+      T.op === 'extend' && T.source ? button('Make start frame…', makeStartFrame, { title: 'The first frame on its canvas, to fill in with an image edit and your reference pictures' }) : null] });
 }
 
 // Extend frame's start frame: the clip's first frame (at its trim) on the canvas, the new parts flat grey, opened in
