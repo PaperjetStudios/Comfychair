@@ -2044,3 +2044,10 @@ body > .undo-dock { position: fixed; z-index: 57; top: 8px; left: 50%; transform
 .mask-thumb.off { opacity: .4; }
 .mask-thumb .paint-thumb { width: 100%; height: 100%; background: #000; border-radius: 0; }
 .curve-box > .seg { margin-right: 44px; }
+
+/* Downloads panel (web/downloads.js) */
+.dl-row { cursor: default; }
+.dl-head .btn { flex: 0 0 auto; }
+.dl-row .clip-progress { margin-top: 6px; }
+.dl-row .note { margin-top: 6px; }
+#dlIcon { display: inline-flex; vertical-align: middle; }

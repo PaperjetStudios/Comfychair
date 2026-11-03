@@ -14,6 +14,7 @@ import { factsOf, isMedia, kindDef, kindTile, kindOf, madeBy } from './kinds.js'
 import { runBar } from './run-bar.js';
 import { addToPrompt, builderState, loadTemplates, renderFields, saveBuilder, selectTemplate, setVal, stop } from './generate.js';
 import { queueRun } from './make.js';
+import { refreshDownloads, showDownloads } from './downloads.js';
 
 // ---------------------------------------------------------------------------
 // "it's done": a chime, ✓ in the tab title, and a system notification where allowed (HTTPS)
@@ -307,6 +308,7 @@ export function syncWithServer() {
       if (!S.projects.length) await loadProjects();
       if (!S.templates.length) await loadTemplates();
       try { const s = await api('/api/status'); setConn(s.comfy_connected); checkUiVersion(s.ui_version); } catch { /* the socket says the rest */ }
+      refreshDownloads();
       const jobs = await api('/api/jobs');
       const running = jobs.active.find((j) => j.status === 'running' && j.prompt_id);
       S.activePid = running ? running.prompt_id : null;
@@ -370,6 +372,7 @@ function onMessage(m) {
   switch (m.type) {
     case 'deck_comfy_status': setConn(d.connected); break;
     case 'deck_line': S.lineCount = d.count; showQueueCount(); break;
+    case 'deck_downloads': showDownloads(d); break;
     case 'status': {
       S.comfyCount = d.status?.exec_info?.queue_remaining ?? 0;
       showQueueCount();

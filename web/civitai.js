@@ -153,6 +153,11 @@ export async function openCivitai({ q = '', family = null, folders = [], onAdd =
         }, { cls: 'primary' }) : null,
         h('span', { class: 'hint' }, name));
       const dl = button('⤓ Download', () => start(false), { cls: 'primary' });
+      let jobId = null;
+      const stopBtn = button('Stop', async () => {
+        stopBtn.disabled = true;
+        try { await api(`/api/clip/job/${jobId}/cancel`, { method: 'POST', busy: false }); } catch (e) { toast(e.message, true); stopBtn.disabled = false; }
+      }, { cls: 'small hidden', title: 'Stop this download and throw away what came so far' });
       const start = async (confirmBig) => {
         if (busy || !f) return;
         busy = true; dl.disabled = true;
@@ -164,6 +169,8 @@ export async function openCivitai({ q = '', family = null, folders = [], onAdd =
         prog(0);
         try {
           const job = await api('/api/civitai/download', { method: 'POST', body: { versionId: v.id, fileId: f.id, family: st.family, confirm: confirmBig }, busy: false });
+          jobId = job.job;
+          stopBtn.classList.remove('hidden');
           const r = await waitJob(job, prog);   // (it carries on if the sheet is closed)
           v.downloaded = r.name;
           bar.classList.add('hidden');
@@ -173,8 +180,9 @@ export async function openCivitai({ q = '', family = null, folders = [], onAdd =
         } catch (e) {
           bar.classList.add('hidden');
           if (e.data?.needsConfirm && confirm(e.data.message)) { busy = false; return start(true); }
-          toast(e.message, true);
-        } finally { busy = false; dl.disabled = false; }
+          if (e.message === 'Cancelled') toast('Download stopped');
+          else toast(e.message, true);
+        } finally { busy = false; dl.disabled = false; stopBtn.classList.add('hidden'); stopBtn.disabled = false; }
       };
       if (v.downloaded) showAdd(v.downloaded, words);
       const imgs = v.images || [];
@@ -200,7 +208,7 @@ export async function openCivitai({ q = '', family = null, folders = [], onAdd =
         wordChips(),
         !files.length ? note('This version has no .safetensors file, so it can\'t be downloaded here.') : null,
         v.earlyAccess ? note('Early access: Civitai only lets buyers download this version for now.') : null,
-        h('div', { class: 'actions civ-actions' }, v.downloaded ? null : dl, linkBtn('↗ Civitai', `${m.link}?modelVersionId=${v.id}`, { target: '_blank', rel: 'noopener' })),
+        h('div', { class: 'actions civ-actions' }, v.downloaded ? null : dl, linkBtn('↗ Civitai', `${m.link}?modelVersionId=${v.id}`, { target: '_blank', rel: 'noopener' }), stopBtn),
         bar, after,
         m.description ? h('details', { class: 'desc' }, h('summary', {}, 'Description'),
           h('div', { class: 'hint pre' }, new DOMParser().parseFromString(m.description, 'text/html').body.textContent.trim())) : null);

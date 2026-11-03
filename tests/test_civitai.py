@@ -8,6 +8,7 @@ import shutil
 import stat
 import struct
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -32,6 +33,8 @@ def setUpModule():   # imported late, after DECK_DATA points at a temp folder (n
     cv.SECRETS = Path(tempfile.mkdtemp(prefix="deck-secrets-")) / "secrets.json"
     app = FastAPI()
     app.include_router(cv.router)
+    app.include_router(cv.downloads.router)
+    app.include_router(cv.clipimport.router)
     client = TestClient(app)
 
 
@@ -182,6 +185,118 @@ class Key(unittest.TestCase):
         cv._save_secrets({"civitai": {"key": KEY}})
         self.assertNotIn(KEY, cv.scrub(f"failed https://civitai.com/x?token={KEY}&a=1 {KEY}"))
         self.assertIn("token=***", cv.scrub("https://x/?token=zzz"))
+
+
+class SlowCivitai(FakeCivitai):
+    """Sends the first 2 MB of the file, then waits until the test lets it go on."""
+
+    def __init__(self):
+        super().__init__(body=safetensors_bytes(6 << 20))
+        self.sent, self.go = threading.Event(), threading.Event()
+
+    def __call__(self, req):
+        if req.url.host != "cdn.example.com":
+            return super().__call__(req)
+
+        def chunks():
+            yield self.body[:2 << 20]
+            self.sent.set()
+            self.go.wait(5)
+            yield self.body[2 << 20:]
+        return httpx.Response(200, content=chunks(), headers={"content-length": str(len(self.body))})
+
+
+class DownloadsPanel(unittest.TestCase):
+    def setUp(self):
+        cv.SECRETS.unlink(missing_ok=True)
+        cv._cache.clear()
+        shutil.rmtree(LORAS / "krea", ignore_errors=True)
+        client.delete("/api/downloads")
+
+    def begin(self, fake):
+        if isinstance(fake, SlowCivitai):
+            self.addCleanup(fake.go.set)
+        cv.TRANSPORT = httpx.MockTransport(fake)
+        return client.post("/api/civitai/download", json={"versionId": 77, "family": "krea"}).json()["job"]
+
+    def test_shows_progress_while_running_then_lands_in_the_history(self):
+        fake = SlowCivitai()
+        jid = self.begin(fake)
+        self.assertTrue(fake.sent.wait(5))
+        for _ in range(100):
+            a = client.get("/api/downloads").json()["active"]
+            if a and a[0]["got"]:
+                break
+            time.sleep(0.02)
+        self.assertEqual((a[0]["job"], a[0]["name"], a[0]["version"], a[0]["family"]), (jid, "Test LoRA", "v1", "krea"))
+        self.assertEqual(a[0]["total"], len(fake.body))
+        self.assertGreater(a[0]["got"], 0)
+        self.assertEqual(client.get("/api/downloads").json()["history"], [])
+        self.assertEqual(cv.downloads.summary()["count"], 1)
+        self.assertEqual(client.delete(f"/api/downloads/{a[0]['id']}").status_code, 409)
+        fake.go.set()
+        self.assertEqual(wait(jid)["state"], "done")
+        d = client.get("/api/downloads").json()
+        self.assertEqual(d["active"], [])
+        e = d["history"][0]
+        self.assertEqual((e["state"], e["file"], e["size"], e["gone"]), ("done", "My LoRA v1.safetensors", len(fake.body), False))
+        (LORAS / "krea" / e["file"]).unlink()
+        self.assertTrue(client.get("/api/downloads").json()["history"][0]["gone"])
+
+    def test_a_second_tap_follows_the_one_on_its_way(self):
+        fake = SlowCivitai()
+        jid = self.begin(fake)
+        self.assertEqual(client.post("/api/civitai/download", json={"versionId": 77, "family": "krea"}).json()["job"], jid)
+        fake.go.set()
+        wait(jid)
+
+    def test_stop_throws_away_what_came_and_says_stopped(self):
+        fake = SlowCivitai()
+        jid = self.begin(fake)
+        self.assertTrue(fake.sent.wait(5))
+        client.post(f"/api/clip/job/{jid}/cancel")
+        self.assertTrue(client.get("/api/downloads").json()["active"][0]["stopping"])
+        fake.go.set()
+        self.assertEqual(wait(jid)["state"], "cancelled")
+        self.assertEqual(list((LORAS / "krea").iterdir()), [])
+        e = client.get("/api/downloads").json()["history"][0]
+        self.assertEqual(e["state"], "stopped")
+        self.assertNotIn("error", e)
+
+    def test_a_failed_one_keeps_its_reason(self):
+        cv._save_secrets({"civitai": {"key": KEY}})
+        jid = self.begin(FakeCivitai(body=b"not a model at all"))
+        self.assertEqual(wait(jid)["state"], "error")
+        e = client.get("/api/downloads").json()["history"][0]
+        self.assertEqual(e["state"], "failed")
+        self.assertIn(".safetensors", e["error"])
+        self.assertNotIn(KEY, cv.downloads._file().read_text())
+
+    def test_one_the_app_lost_is_marked_and_its_part_goes(self):
+        folder = LORAS / "krea"
+        folder.mkdir(parents=True)
+        part = folder / "x.safetensors.0123456789ab.part"
+        part.write_bytes(b"half")
+        keep = folder / "y.safetensors.ba9876543210.part"   # (another's: it stays)
+        keep.write_bytes(b"half")
+        cv.downloads._record({"id": "0123456789ab", "state": "running", "name": "Lost", "folder": str(folder), "started": 1})
+        e = client.get("/api/downloads").json()["history"][0]
+        self.assertEqual(e["state"], "interrupted")
+        self.assertFalse(part.exists())
+        self.assertTrue(keep.exists())
+
+    def test_clear_and_forget_leave_the_files(self):
+        jid = self.begin(FakeCivitai())
+        wait(jid)
+        jid2 = self.begin(FakeCivitai(name="other.safetensors"))
+        wait(jid2)
+        h = client.get("/api/downloads").json()["history"]
+        self.assertEqual(len(h), 2)
+        client.delete(f"/api/downloads/{h[0]['id']}")
+        self.assertEqual([e["id"] for e in client.get("/api/downloads").json()["history"]], [h[1]["id"]])
+        client.delete("/api/downloads")
+        self.assertEqual(client.get("/api/downloads").json()["history"], [])
+        self.assertTrue((LORAS / "krea" / "other.safetensors").exists())
 
 
 class Download(unittest.TestCase):

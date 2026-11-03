@@ -19,7 +19,7 @@ from pathlib import Path
 import httpx
 from fastapi import APIRouter, Body, HTTPException
 
-from . import clipimport, config
+from . import clipimport, config, downloads
 
 router = APIRouter(prefix="/api/civitai")
 
@@ -356,7 +356,7 @@ def _download(job: dict, url: str, dest: Path, size: int | None, early: bool, me
     """Stream url into dest via dest.part. Runs in the job's thread."""
     key = get_key()
     dest.parent.mkdir(parents=True, exist_ok=True)
-    part = dest.with_name(dest.name + ".part")
+    part = dest.with_name(f"{dest.name}.{job.get('download') or job['id']}.part")   # (its own: two versions can share a file name)
     try:
         with httpx.Client(transport=TRANSPORT, timeout=httpx.Timeout(60.0, read=120.0), follow_redirects=True) as c:
             with c.stream("GET", url, headers=_headers(key)) as r:
@@ -370,14 +370,22 @@ def _download(job: dict, url: str, dest: Path, size: int | None, early: bool, me
                 if total > MAX_BYTES and not meta.get("_confirm"):
                     raise RuntimeError("The file is bigger than 4 GB")
                 got = 0
+                job["total"] = total
+                mark, marked = time.monotonic(), 0
                 with part.open("wb") as f:
                     for chunk in r.iter_bytes(1 << 20):
                         if job["cancel"]:
                             raise RuntimeError("Cancelled")
                         f.write(chunk)
                         got += len(chunk)
+                        job["got"] = got
                         if total:
                             job["progress"] = min(0.99, got / total)
+                        now = time.monotonic()
+                        if now - mark >= 1:
+                            rate = (got - marked) / (now - mark)
+                            job["speed"] = rate if not job.get("speed") else 0.7 * job["speed"] + 0.3 * rate
+                            mark, marked = now, got
                 if total and got < total:
                     raise RuntimeError(f"The download stopped early ({got} of {total} bytes)")
         with part.open("rb") as f:   # a safetensors file starts with its header length, then "{"
@@ -437,6 +445,10 @@ async def download(body: dict = Body(...)):
     early = v.get("availability") == "EarlyAccess"
     name = safe_filename(f.get("name"))
     dest = folder / name
+    key = (vid, f.get("id"), folder.name)
+    already = downloads.running_job(key)
+    if already:
+        return {"job": already}
 
     def work(job):
         if _same(dest, size, meta["sha256"]):
@@ -448,4 +460,5 @@ async def download(body: dict = Body(...)):
                 return _finish(d, meta, skipped=True)
         return _download(job, url, d, size, early, meta)
 
-    return clipimport._start(work, f"Downloading {model.get('name') or name}")
+    return downloads.start(work, f"Downloading {model.get('name') or name}", name=model.get("name") or name, folder=folder, key=key,
+                           version=v.get("name"), family=folder.name, link=meta["link"], total=size)

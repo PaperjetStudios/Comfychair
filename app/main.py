@@ -23,7 +23,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFil
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import accel, audioedit, civitai, clipimport, craft, delogo, gpu, h3upscale, posefind, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
+from . import accel, audioedit, civitai, clipimport, craft, delogo, downloads, gpu, h3upscale, posefind, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import projects, storage, store, network
 from . import playable
 from . import fetchpicture, keyexpr, looks, maskcomp, promptaid, sceneasset
@@ -363,14 +363,20 @@ async def held_run_failed(pid: str, msg: str):
 
 
 async def line_watch():
-    """Every device's Queue button counts what's waiting in the card's line too (ComfyUI's status messages don't)."""
+    """Every device's Queue button counts what's waiting in the card's line too (ComfyUI's status messages don't),
+    and its Downloads button shows what's coming in."""
     last = 0
+    last_dl = {"count": 0, "progress": 0}
     while True:
         await asyncio.sleep(1)
         n = gpu.count()
         if n != last:
             last = n
             await broadcast({"type": "deck_line", "data": {"count": n}})
+        d = downloads.summary()
+        if d != last_dl:
+            last_dl = d
+            await broadcast({"type": "deck_downloads", "data": d})
 
 
 async def reconcile_loop():
@@ -498,6 +504,7 @@ app.include_router(tracking.router)
 app.include_router(network.router)
 app.include_router(clipimport.router)
 app.include_router(civitai.router)
+app.include_router(downloads.router)
 app.include_router(voice.router)
 app.include_router(craft.router)
 app.include_router(previews.router)

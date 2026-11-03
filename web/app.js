@@ -9,6 +9,7 @@ import {
 import { S, loadProjects, setSwitchTab, setOpenProject, emitProject, onServer } from './core.js';
 import { generate, loadTemplates, selectTemplate, stop, wireTemplateFilter, wireZoom } from './generate.js';
 import './gentabs.js';   // Generate tabs + presets: plugs into generate.js through its hooks
+import { openDownloads, wireDownloads } from './downloads.js';
 import { RUN, checkUiVersion, connectWS, loadHistory, onResume, openJobs, runChip, sceneMod, sceneModule, setConn } from './run.js';
 import { renderEditor } from './editor.js';
 import { renderVideo, vidPause, wireVideoTransport } from './video.js';
@@ -124,6 +125,8 @@ document.addEventListener('deck-comfy-back', () => loadTemplates(true).catch(() 
 $('#genBtn').addEventListener('click', () => generate());
 $('#stopBtn').addEventListener('click', () => stop());
 $('#jobsBtn').addEventListener('click', openJobs);
+wireDownloads($('#dlBtn'));
+$('#dlBtn').addEventListener('click', openDownloads);
 $('#sheetBackdrop').addEventListener('click', closeSheet);
 $('#moreHistory').addEventListener('click', () => loadHistory(true));
 const setBatch = (n) => { S.batch = Math.max(1, Math.min(32, n)); $('#batchVal').textContent = S.batch; };
