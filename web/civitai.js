@@ -1,6 +1,6 @@
 // Civitai LoRA browser: search civitai.com for LoRAs made for one model family, look at a model's versions and
 // pictures, and download one into ComfyUI's LoRA folder for that family (app/civitai.py). Opens as a wide sheet.
-// openCivitai({ family, folders, onAdd, onWord, onDownloaded }):
+// openCivitai({ q, family, folders, onAdd, onWord, onDownloaded }) (q: words to start the search with):
 //   family: the LoRA folder to start on (h3, krea, ltx2.5…); folders: the folders to offer as chips
 //   onAdd({ name, trainedWords }): "Add to the stack" (name is the ComfyUI LoRA name, "<folder>/<file>")
 //   onWord(word): a trigger word tapped; onDownloaded(result): after a download, before the sheet shows Add
@@ -22,13 +22,13 @@ const put = (el, ...kids) => el.replaceChildren(...kids.flat(Infinity).filter((k
 let FAMILIES = null;   // {folder: {bases, more}} from the server, once
 const families = async () => (FAMILIES ||= await api('/api/civitai/families').catch(() => ({})));
 
-export async function openCivitai({ family = null, folders = [], onAdd = null, onWord = null, onDownloaded = null } = {}) {
+export async function openCivitai({ q = '', family = null, folders = [], onAdd = null, onWord = null, onDownloaded = null } = {}) {
   const fams = await families();
   const nsfw = PREFS.civitaiNsfw || 'soft';
   const clear = CLEAR[nsfw] ?? 2;
   const st = {
     family: family || store.get('deck.civitai.family', '') || folders[0] || 'krea',
-    q: '', sort: store.get('deck.civitai.sort', 'rated'), bases: null, cursor: null, done: false, loading: false, seq: 0,
+    q, sort: store.get('deck.civitai.sort', 'rated'), bases: null, cursor: null, done: false, loading: false, seq: 0,
   };
   const famList = [...new Set([...folders, ...Object.keys(fams)])].filter((f) => folders.includes(f) || !['flux', 'wan', 'ltx'].includes(f));
   const root = h('div', { class: 'civitai' });
@@ -38,7 +38,7 @@ export async function openCivitai({ family = null, folders = [], onAdd = null, o
   const more = h('div', { class: 'civ-more' });
   const baseRow = h('div', { class: 'chips civ-bases' });
 
-  const search = h('input', { type: 'search', placeholder: 'Search Civitai', 'aria-label': 'Search Civitai', enterkeyhint: 'search' });
+  const search = h('input', { type: 'search', placeholder: 'Search Civitai', 'aria-label': 'Search Civitai', enterkeyhint: 'search', value: q });
   let typing = 0;
   search.addEventListener('input', () => { clearTimeout(typing); typing = setTimeout(() => { st.q = search.value.trim(); reset(); }, 450); });
   search.addEventListener('keydown', (e) => { if (e.key === 'Enter') { clearTimeout(typing); st.q = search.value.trim(); reset(); search.blur(); } });

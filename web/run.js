@@ -1,3 +1,4 @@
+import { loraPicker } from './lora-pick.js';
 import { fetchHistory as loadHistory } from './generation-data.js';
 import { RUN, runTime, fmtDur } from './run-state.js';
 export { RUN, runTime, fmtDur } from './run-state.js';
@@ -729,9 +730,8 @@ export async function openH3Upscale(g, idx) {
         h('div', { class: 'lbl' }, 'Strength'),
         seg([['standard', 'Standard (2 steps)'], ['enhanced', 'Enhanced (3)']], regenStrength, (v) => { regenStrength = v; draw(); }),
         hint('Standard starts at 0.70 and is the recommended one; Enhanced starts at 0.80. The clip\'s sound goes in, so speech stays in sync.'),
-        info.loras.length > 1 ? field('Refiner', h('select', { 'aria-label': 'Refiner LoRA',
-          onchange: (e) => { lora = e.target.value; draw(); } },
-          ...info.loras.map((x) => h('option', { value: x.name, selected: x.name === lora }, x.name.split('/').pop())))) : null,
+        info.loras.length > 1 ? field('Refiner', loraPicker({ aria: 'Refiner LoRA', options: info.loras.map((x) => x.name), value: lora, label: (n) => n.split('/').pop(),
+          onPick: (n) => { lora = n; draw(); } })) : null,
         l ? hint(l.has_turbo ? 'This file has Turbo inside: the run\'s own turbo LoRA is left out of the second pass.'
           : 'Refiner only: the run\'s turbo LoRA stays in the chain.') : hint('No refiner LoRA found.'),
       ],

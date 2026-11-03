@@ -315,6 +315,16 @@ details.group:not([open]) > summary::after { transform: rotate(-90deg); }
 .lora-row { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
 .lora-row .top { display: flex; gap: 6px; align-items: center; }
 .lora-row .top select { flex: 1; }
+.lora-row .top .lora-pick { flex: 1; }
+.lora-pick { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; min-width: 0; min-height: 38px; padding: 6px 10px; text-align: left; color: inherit; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r); cursor: pointer; }
+.lora-pick-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.lora-pick-menu { display: grid; gap: 6px; width: min(460px, calc(100vw - 16px)); }
+.lora-pick-list { display: grid; gap: 1px; max-height: min(50vh, 420px); overflow-y: auto; }
+.lora-pick-row { display: block; width: 100%; min-height: 36px; padding: 6px 8px; text-align: left; color: inherit; background: none; border: 0; border-radius: 6px; overflow-wrap: anywhere; cursor: pointer; }
+.lora-pick-row:hover, .lora-pick-row.at { background: var(--surface-2); }
+.lora-pick-row.on { font-weight: 600; color: var(--accent, inherit); }
+.lora-pick-civ { border-top: 1px solid var(--line); border-radius: 0; margin-top: 4px; }
+.lora-pick-head { padding: 6px 8px 2px; }
 .lora-row.off { opacity: .5; }
 .range-val { flex: none !important; min-width: 3.2em; text-align: right; font-variant-numeric: tabular-nums; }
 .add-btn { justify-self: start; }

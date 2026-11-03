@@ -1,3 +1,4 @@
+import { loraPicker } from './lora-pick.js';
 import { api, h, field, rangeField } from './ui.js';
 import { S } from './core.js';
 import { bareSource } from './media.js';
@@ -8,9 +9,7 @@ import { roleField, runAndWait, template } from './make.js';
 export const loraName = (o) => o.split('/').pop().replace(/^ltx-2\.\d-22b-ic-lora-|\.safetensors$/g, '');
 // One LoRA picked from list, and its strength (the VFX tab and the Video tab's restyle step). none: a (none) choice.
 export function loraChoice(list, cur, onPick, strength, { none = false, onStrength = () => {} } = {}) {
-  const sel = h('select', { onchange: () => onPick(sel.value || null) },
-    none ? h('option', { value: '' }, '(none)') : null,
-    list.map((o) => h('option', { value: o, selected: cur === o }, loraName(o))));
+  const sel = loraPicker({ options: list, value: cur || '', label: loraName, empty: none ? '(none)' : null, onPick: (o) => onPick(o || null) });
   return [field('LoRA', sel), strength ? rangeField('Strength', strength.get, strength.set, { min: 0, max: 2, step: 0.05, fmt: (v) => v.toFixed(2), onChange: onStrength }) : null];
 }
 // The colour key's settings as they start, and its sliders: the same in the VFX tab, the Video tab's Colour key… sheet

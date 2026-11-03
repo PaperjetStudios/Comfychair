@@ -17,6 +17,7 @@ import { clipInput } from './vfield.js';
 import { PREFS } from './prefs.js';
 import { FULL, openCrop, openSketch, templateAspect } from './editor.js';
 import { MASK_DEFAULT, openMaskPainter } from './maskpaint.js';
+import { loraPicker } from './lora-pick.js';
 import { icon } from './icons.js';
 import { kreaTag } from './cast.js';
 import { openCivitai } from './civitai.js';
@@ -1066,16 +1067,23 @@ function loraField(f) {
     folderChips.replaceChildren(chips([['auto', auto ? `Auto · ${auto}` : 'Auto · all'], ['all', 'All'], ...folders.map((d) => [d, d])], mode,
       (k) => { S.loraFolder[f.key] = k; persist(); draw(); }, { cls: 'folder-chips' }));
   };
+  const civitai = (q = '') => openCivitai({ q, family: current() || auto || folders[0], folders, onWord: addToPrompt,
+    onDownloaded: () => loadTemplates(true),
+    onAdd: ({ name }) => {   // into an empty row if there is one, else a new row
+      const a = [...(S.values[f.key] || [])];
+      if (a.some((l) => l.name === name)) return false;
+      const i = a.findIndex((l) => !l.name);
+      if (i >= 0) a[i] = { ...a[i], name }; else a.push({ name, strength: 1, enabled: true });
+      setVal(f.key, a); renderFields();
+    } });
   const draw = () => {
     const folder = current();
     const opts = folder ? f.options.filter((o) => o.startsWith(folder + '/')) : f.options;
     list.replaceChildren(...rows().map((l, i) => {
-      const sel = h('select', {}, h('option', { value: '' }, `— choose LoRA${folder ? ` (${opts.length} in ${folder}/)` : ''} —`),
-        opts.map((o) => h('option', { value: o }, folder ? o.slice(folder.length + 1) : o)));
-      if (l.name && f.options.includes(l.name) && !opts.includes(l.name)) sel.append(h('option', { value: l.name }, `${l.name} (other folder)`));
-      if (l.name && !f.options.includes(l.name)) sel.append(h('option', { value: l.name }, `${l.name} (missing)`));
-      sel.value = l.name || '';
-      sel.addEventListener('change', () => { const a = [...rows()]; a[i] = { ...a[i], name: sel.value }; save(a); });
+      const sel = loraPicker({ options: opts, value: l.name || '', aria: 'LoRA', label: (o) => (folder && o.startsWith(`${folder}/`) ? o.slice(folder.length + 1) : o),
+        empty: `— choose LoRA${folder ? ` (${opts.length} in ${folder}/)` : ''} —`, others: f.options.filter((o) => !opts.includes(o)),
+        shown: !l.name ? null : !f.options.includes(l.name) ? `${l.name} (missing)` : !opts.includes(l.name) ? `${l.name} (other folder)` : null,
+        onPick: (name) => { const a = [...rows()]; a[i] = { ...a[i], name }; save(a); }, onCivitai: civitai });
       const range = numSlider({ min: -2, max: 2, step: 0.05, value: l.strength ?? 1, digits: 2, label: 'Strength' });
       range.addEventListener('change', () => { const a = [...rows()]; a[i] = { ...a[i], strength: parseFloat(range.value) }; setVal(f.key, a); });
       const on = h('input', { type: 'checkbox', checked: l.enabled !== false, title: 'Enabled' });
@@ -1093,15 +1101,7 @@ function loraField(f) {
     list,
     h('div', { class: 'row wrap' },
       button('+ Add LoRA', () => save([...rows(), { name: '', strength: 1, enabled: true }]), { cls: 'small add-btn' }),
-      button('⤓ Civitai…', () => openCivitai({ family: current() || auto || folders[0], folders, onWord: addToPrompt,
-        onDownloaded: () => loadTemplates(true),
-        onAdd: ({ name }) => {   // into an empty row if there is one, else a new row
-          const a = [...(S.values[f.key] || [])];
-          if (a.some((l) => l.name === name)) return false;
-          const i = a.findIndex((l) => !l.name);
-          if (i >= 0) a[i] = { ...a[i], name }; else a.push({ name, strength: 1, enabled: true });
-          setVal(f.key, a); renderFields();
-        } }), { cls: 'small', title: 'Find and download LoRAs on Civitai' })));
+      button('⤓ Civitai…', () => civitai(), { cls: 'small', title: 'Find and download LoRAs on Civitai' })));
 }
 
 function fieldEl(f) {
