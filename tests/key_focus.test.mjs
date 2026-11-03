@@ -1,7 +1,7 @@
 // node --test tests/key_focus.test.mjs: who gets a key while a control has the focus (web/key-focus.js).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ownsKey } from '../web/key-focus.js';
+import { editorRunKey, editorRunKeys, ownsKey } from '../web/key-focus.js';
 
 // a fake element: tag + attributes, inside the parents given (selectors are matched on the simple forms key-focus uses)
 function el(tag, { type, cls, role, parent = null } = {}) {
@@ -73,4 +73,51 @@ test('a player inside a dialog still gets its keys, and typing there still wins'
   assert.equal(inDialog(el('div', { parent: dialog })), false);
   assert.equal(inDialog(el('button', { parent: dialog })), false);
   assert.equal(inDialog(el('input', { type: 'text', parent: dialog })), true);
+});
+
+// A fake control inside a panel section with the title given.
+function inSection(title, tag = 'textarea', type) {
+  const section = { closest: () => null, querySelector: () => ({ textContent: title }) };
+  const me = {
+    type,
+    closest(sel) {
+      if (sel === 'section') return title ? section : null;
+      return sel.split(',').map((s) => s.trim()).includes(tag) ? me : null;
+    },
+  };
+  return me;
+}
+const run = (target, mods) => editorRunKey({ target, key: 'Enter', ...mods });
+const ctrl = { ctrlKey: true }, shift = { shiftKey: true };
+
+test('Ctrl+Enter on the Editor tab: the tool, from its own boxes or with nothing focused', () => {
+  assert.equal(run(inSection('Image tools'), ctrl), 'tool');
+  assert.equal(run(inSection('Image tools', 'input', 'number'), ctrl), 'tool');
+  assert.equal(run(inSection('Image tools', 'select'), ctrl), 'tool');
+  assert.equal(run(inSection(null, 'body'), ctrl), 'tool');
+  assert.equal(run(inSection(null, 'body'), { metaKey: true }), 'tool');
+});
+
+test('Inpaint: Ctrl+Enter is Fill, Shift+Enter stays a new line', () => {
+  assert.equal(run(inSection('Inpaint and extend'), ctrl), 'fill');
+  assert.equal(run(inSection('Inpaint and extend'), shift), null);
+});
+
+test('a box being typed in on another panel runs nothing; a slider there does not count as typing', () => {
+  assert.equal(run(inSection('Layer', 'input', 'text'), ctrl), null);
+  assert.equal(run(inSection('Layer', 'input', 'number'), shift), null);
+  assert.equal(run(inSection('Layer'), ctrl), null);
+  assert.equal(run(inSection('Layer', 'input', 'range'), ctrl), 'tool');
+  assert.equal(run(inSection('Layer', 'input', 'checkbox'), ctrl), 'tool');
+});
+
+test('only Ctrl+Enter or Shift+Enter are run keys', () => {
+  const keys = (k) => editorRunKeys({ key: 'Enter', ...k });
+  assert.equal(keys(ctrl), true);
+  assert.equal(keys(shift), true);
+  assert.equal(keys({ metaKey: true }), true);
+  assert.equal(keys({}), false);
+  assert.equal(keys({ ctrlKey: true, shiftKey: true }), false);
+  assert.equal(keys({ ctrlKey: true, altKey: true }), false);
+  assert.equal(editorRunKeys({ key: 'a', ctrlKey: true }), false);
 });

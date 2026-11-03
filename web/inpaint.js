@@ -180,6 +180,9 @@ async function fillLayers(eng, t, tab, denoise) {
   if (failed.length) toast(failureText('Inpaint', failed, ([l]) => l.label || l.name.split('/').pop()), true);
 }
 
+// Ctrl+Enter in this panel: as its Fill button
+export const runFill = (eng) => fill(eng);
+
 async function fill(eng, { denoise = ST.denoise } = {}) {
   const items = usableItems(eng);
   // items go to Klein 3: its layout boxes place each one, and a picture can be matched
@@ -366,7 +369,7 @@ export function inpaintSection(eng) {
       button('Keep as layer', () => { delete l.draft; eng.changed(); eng.render(); }, { cls: 'small primary', title: 'It joins the picture, and is sent with the next Fill' }),
       button('Discard', () => { E.layers.splice(E.layers.indexOf(l), 1); if (E.sel === l) E.sel = null; eng.changed(); eng.render(); }, { cls: 'small ghost' }))),
     h('div', { class: 'row wrap' },
-      button(FLIGHT.size ? 'Fill again' : 'Fill', () => fill(eng), { cls: 'small primary', disabled: !ts.length || (!cover && !usableItems(eng).length) }),
+      button(FLIGHT.size ? 'Fill again' : 'Fill', () => fill(eng), { cls: 'small primary', title: 'Ctrl+Enter', disabled: !ts.length || (!cover && !usableItems(eng).length) }),
       FLIGHT.size ? hint(`${FLIGHT.size} on its way…`) : null),
     ts.length ? null : hint('No inpaint template is installed (deck-krea2-inpaint).'),
     help('Add item draws a box for something new: describe it, optionally give a picture to match, and Fill (Flux 3 Klein places each box). Mark the area to redraw in the Masks panel; describe what should be there, and Fill: the rest of the picture comes back untouched and the result is a draft on top. Fill as often as you like: drafts are not sent. Keep the one you want as a layer. Extend grows the canvas and marks the new part for you.'));

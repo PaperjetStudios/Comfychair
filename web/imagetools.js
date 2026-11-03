@@ -1154,7 +1154,7 @@ export async function applyStep(step, name, { what = 'person' } = {}) {
   return (await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } })).name;
 }
 
-// Shift+Enter: the tool open in this panel, as its Run button
+// Ctrl+Enter or Shift+Enter: the tool open in this panel, as its Run button
 export const runImageTool = (eng) => (eng.E.layers.some((l) => !l.mask && !l.draft) ? run(eng) : toast('Add a picture first', true));
 
 export function imageToolsSection(eng) {
@@ -1175,7 +1175,7 @@ export function imageToolsSection(eng) {
       onclick: () => { if (here) return; ST.op = ids[0]; save(); eng.render(); } }, icon(ic), h('span', {}, label));
   }));
   return section('Image tools', null,
-    quick, select, help(`${o.help} ${on} Shift+Enter runs this tool.`.trim()),
+    quick, select, help(`${o.help} ${on} Ctrl+Enter or Shift+Enter runs this tool.`.trim()),
     !t ? hint(`${tplId(o)} isn't installed yet`) : null,
     field('Run on', seg([['whole', 'Whole picture'], ['selected', 'Selected layers']], ST.scope, (v) => { ST.scope = v; save(); eng.render(); }),
       help('Whole picture sends every visible layer together. Selected layers runs on each selected layer alone, one run each, with the result over that layer. A cropped layer sends its kept part. A turned or mirrored layer is sent unturned, and its result takes the same turn. A masked layer is sent whole: an Upscale, Detail or De-light result gets a copy of its mask, and other tools\' results get none. Remove from the red mask cuts the mask to each selected layer, and leaves out a layer it doesn\'t touch.')),
@@ -1249,5 +1249,5 @@ export function imageToolsSection(eng) {
     h('div', { class: 'row wrap' }, o.kind === 'swap' ? button('Mark it', () => swapMark(eng), { disabled: !t }) : null,
       o.kind === 'swap' ? button('Send to Generate', () => swapSend(eng), { disabled: !t }) : null,
       o.kind === 'swap' ? help('Send to Generate opens a tab per ticked model with the close-up, the reference, the prompt, the size and the LoRA set, to change and run there. What it makes there stays as made: it isn\'t put back on the whole picture.') : null,
-      button(o.kind === 'swap' ? 'Swap' : o.kind === 'remove' ? (ST.rfrom === 'words' ? 'Find and mark' : 'Remove') : FLIGHT.size ? 'Run again' : 'Run', () => run(eng), { cls: 'primary', disabled: !t, title: 'Shift+Enter' })));
+      button(o.kind === 'swap' ? 'Swap' : o.kind === 'remove' ? (ST.rfrom === 'words' ? 'Find and mark' : 'Remove') : FLIGHT.size ? 'Run again' : 'Run', () => run(eng), { cls: 'primary', disabled: !t, title: 'Ctrl+Enter or Shift+Enter' })));
 }

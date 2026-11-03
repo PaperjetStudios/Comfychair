@@ -25,3 +25,33 @@ export function ownsKey(e, { dialog = true, keyboard = tabbed } = {}) {
   }
   return keyboard && !!t.closest('button, a, [role=tab]');
 }
+
+// What Ctrl+Enter or Shift+Enter runs on the Editor tab, from where the focus is: 'tool' (the Image tool that's open),
+// 'fill' (Inpaint's Fill) or null. A box being typed in that belongs to another panel runs neither, and Shift+Enter in
+// Inpaint's own boxes stays a new line. Not for any other combination of keys: see editorRunKeys.
+export function editorRunKey(e) {
+  const t = e.target, title = t.closest?.('section')?.querySelector('.section-title span')?.textContent;
+  const typing = !!t.closest?.('textarea, [contenteditable]') || !['range', 'checkbox', 'radio', undefined].includes(t.closest?.('input')?.type);
+  if (title === 'Image tools') return 'tool';
+  if (title === 'Inpaint and extend' && (e.ctrlKey || e.metaKey)) return 'fill';
+  return typing ? null : 'tool';
+}
+// Ctrl+Enter or Shift+Enter, and not both: Ctrl+Shift+Enter is still Generate's, as it always was.
+export const editorRunKeys = (e) => e.key === 'Enter' && !e.altKey && (e.ctrlKey || e.metaKey) !== e.shiftKey;
+
+// A panel about to be built again: call what this returns afterwards, and a box being typed in has the focus back, with
+// the cursor where it was (a run landing, or Ctrl+Enter's own run, must not end the typing). It's found by its panel section and its place there.
+export function keepTyping(panel, root = document) {
+  const box = root.activeElement;
+  if (!box || !panel.contains(box) || !box.matches('textarea, input:not([type=range], [type=checkbox], [type=radio])')) return () => {};
+  const titled = (s) => s.querySelector('.section-title span')?.textContent, boxes = (s) => [...s.querySelectorAll('textarea, input')];
+  const home = box.closest('section'), title = home && titled(home);
+  if (!title) return () => {};
+  const at = boxes(home).indexOf(box), { selectionStart: a, selectionEnd: b } = box;
+  return () => {
+    const again = [...panel.querySelectorAll('section')].find((s) => titled(s) === title), next = again && boxes(again)[at];
+    if (next?.tagName !== box.tagName || next.type !== box.type) return;
+    next.focus({ preventScroll: true });
+    try { next.setSelectionRange(a, b); } catch { /* (a number box has no cursor to set) */ }
+  };
+}

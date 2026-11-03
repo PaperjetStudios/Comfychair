@@ -26,7 +26,8 @@ import { openPressMenu, pressMenu } from './press-menu.js';
 import * as G from './layer-geom.js';
 import { densePlan, gridItem, gridPlan, fitToCell } from './layer-grid.js';
 import { solidBounds } from './matte-edge.js';
-import { inpaintSection, masksSection } from './inpaint.js';
+import { inpaintSection, masksSection, runFill } from './inpaint.js';
+import { editorRunKey, editorRunKeys, keepTyping } from './key-focus.js';
 import { imageToolsSection, runImageTool } from './imagetools.js';
 
 // ---------------------------------------------------------------------------
@@ -1071,13 +1072,16 @@ export function createEditor(cfg) {
       e.preventDefault();
       pasteLayers();
     });
-    // Shift+Enter runs the Image tool that's open, from its own text boxes too; another panel's box keeps its new line. (On window: before paint.js's keys.)
+    // Ctrl+Enter or Shift+Enter runs the Image tool that's open, from its own text boxes too, and Ctrl+Enter in Inpaint runs Fill (editorRunKey).
+    // Generate's Ctrl+Enter (app.js) is for the other tabs: here it would start a run of a panel that isn't on show. (On window: before paint.js's keys.)
     window.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter' || !e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || e.repeat || !cfg.active() || sheetOpen()) return;
-      const box = editing(e);
-      if (box && !box.closest('section')?.querySelector('select[aria-label="Image tool"]')) return;
+      if (!editorRunKeys(e) || !cfg.active() || sheetOpen() || !E.layers.some((l) => !l.mask && !l.draft)) return;
+      const go = editorRunKey(e);
+      if (!go && e.shiftKey) return;   // (a new line in another panel's box)
       e.preventDefault(); e.stopPropagation();
-      runImageTool(eng);
+      if (!go || e.repeat) return;   // (a key held down starts one run)
+      if (e.target.matches?.('input')) e.target.dispatchEvent(new Event('change', { bubbles: true }));   // (a number just typed counts: it's only saved on change)
+      if (go === 'fill') runFill(eng); else runImageTool(eng);
     }, true);
     // V / C switch tool, Esc finishes a crop / deselects, Delete removes the selected layer, arrows nudge it
     document.addEventListener('keydown', (e) => {
@@ -1132,8 +1136,9 @@ export function createEditor(cfg) {
     if (!E.sel || !ready(E.sel)) E.cropping = false;
     if (cfg.renderPanel) cfg.renderPanel(eng);
     else if (cfg.panel) {
-      const top = cfg.panel.scrollTop;   // (the panel built again stays where it was scrolled)
+      const top = cfg.panel.scrollTop, typing = keepTyping(cfg.panel);   // (the panel built again stays where it was scrolled)
       cfg.panel.replaceChildren(...[].concat(cfg.panelParts(eng)).filter(Boolean));
+      typing();
       if (cfg.panel.scrollTop !== top) cfg.panel.scrollTop = top;
     }
     animBar();
