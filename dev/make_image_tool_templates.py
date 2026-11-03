@@ -10,6 +10,7 @@ deck-remove-lama   Big LaMa fills the masked area from what is round it, with no
                    gone. The mask comes from SAM3 (deck-mask-image) or is painted. The panel runs it on a crop round each marked
                    area (LaMa at 4K doesn't fit 12 GB) and maskcomp puts only the masked part back on the crop.
 deck-clean-image   A 1x restoration model at the picture's own size: noise, JPEG blocks or blur.
+deck-face-restore  GFPGAN on a face cropped to 512 px, for Restore (comfy_nodes/deck_facerestore).
 """
 import json
 from pathlib import Path
@@ -52,6 +53,13 @@ write("deck-remove-lama", {
     # (the blur and threshold grow the mask about twice the radius: LaMa needs a watermark's soft edge inside it)
     "fill": node("LamaRemover", images=["img", 0], masks=["mask", 0], mask_threshold=250, gaussblur_radius=8, invert_mask=False),
     "save": node("SaveImage", images=["fill", 0], filename_prefix="deck/removed"),
+})
+
+write("deck-face-restore", {
+    "img": {**node("LoadImage", image=""), "_meta": {"title": "@1 Picture [image]", "deck_keep_size": True}},
+    "um": node("UpscaleModelLoader", "@2 Model [model_name]", model_name="GFPGANv1.4.safetensors"),
+    "up": node("DeckFaceRestore", upscale_model=["um", 0], image=["img", 0]),
+    "save": node("SaveImage", images=["up", 0], filename_prefix="deck/faces"),
 })
 
 write("deck-clean-image", {

@@ -157,3 +157,37 @@ test('Duplicate: copies over the topmost, masks with them, nothing shared', () =
   const inG = S.duplicate([g, h], [{ id: 'x' }], [g], o);
   assert.equal(inG.copies[0].group, 'x', 'it stays in its group');
 });
+
+test('copy takes a layer with its mask, in stack order; a picked mask means its layer; masks for the brush and drafts stay out', () => {
+  const a = { key: 'a', name: 'a' }, m = { key: 'm', name: 'm', maskOf: 'a' }, b = { key: 'b', name: 'b' }, red = { name: 'r', mask: true }, d = { name: 'd', draft: true };
+  assert.deepEqual(S.clipOf([a, m, b, red, d], [b, a]), [a, m, b]);
+  assert.deepEqual(S.clipOf([a, m, b], [m]), [a, m]);
+  assert.deepEqual(S.clipOf([a, m, b, red, d], [red, d]), []);
+});
+
+test('pasted layers get new keys, a mask follows its layer, and a group comes along under a new id', () => {
+  let n = 0;
+  const saved = [{ key: 'a', name: 'a', group: 'g1', adjust: { sat: 1 } }, { key: 'm', name: 'm', maskOf: 'a', group: 'g1' }, { name: 'plain', group: 'gone' }];
+  const r = S.pastedLayers(saved, [{ id: 'g1', name: 'Faces' }, { id: 'g2', name: 'Other' }], { newKey: () => `k${++n}`, newGroup: () => 'new' });
+  assert.deepEqual(r.layers.map((l) => l.key), ['k1', 'k2', undefined]);
+  assert.equal(r.layers[1].maskOf, 'k1');
+  assert.deepEqual(r.layers.map((l) => l.group), ['new', 'new', undefined]);
+  assert.deepEqual(r.groups, [{ id: 'new', name: 'Faces' }]);
+  assert.notEqual(r.layers[0].adjust, saved[0].adjust, 'its own copy');
+  assert.equal(saved[0].key, 'a', 'the copied list stays, to paste again');
+});
+
+test('a mask whose layer did not come along is not pasted', () => {
+  const r = S.pastedLayers([{ key: 'm', name: 'm', maskOf: 'lost' }], [], { newKey: () => 'k', newGroup: () => 'g' });
+  assert.deepEqual(r.layers, []);
+});
+
+test('delete hidden takes hidden layers and their masks, not locked ones, drafts, or a mask hidden by itself on a showing layer', () => {
+  const a = { key: 'a', name: 'a', hidden: true }, am = { key: 'am', name: 'am', maskOf: 'a', hidden: true }, b = { key: 'b', name: 'b' }, bm = { key: 'bm', name: 'bm', maskOf: 'b', hidden: true };
+  const held = { key: 'c', name: 'c', hidden: true, locked: true }, red = { name: 'r', mask: true, hidden: true }, d = { name: 'd', draft: true, hidden: true };
+  const r = S.hiddenOnes([a, am, b, bm, held, red, d]);
+  assert.equal(r.count, 1);
+  assert.deepEqual(r.keep, [b, bm, held, red, d]);
+  assert.equal(S.hiddenOnes([b]).count, 0);
+});
+

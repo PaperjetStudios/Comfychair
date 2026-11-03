@@ -574,6 +574,8 @@ svg.ico.filled path { fill: currentColor; }
 .brush-ring.off { border-style: dashed; opacity: .6; }
 .paint-thumb { width: 44px; height: 44px; object-fit: contain; background: var(--checker); border-radius: var(--r-sm); }
 .icon-btn.ico-btn { display: inline-grid; place-items: center; }
+.tool-quick { display: grid; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); gap: 4px; margin-bottom: 8px; }
+.icon-btn.tool-quick-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: auto; height: auto; min-height: 52px; padding: 6px 2px; font-size: 11px; line-height: 1.1; }
 .panel-top > .icon-btn { flex: none; }
 .swatches button.on { border-color: var(--accent); }
 @media (pointer: coarse) { .paint-strip button, .paint-color { width: 44px; height: 44px; } }

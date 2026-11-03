@@ -160,3 +160,33 @@ export function duplicate(layers, groups, list, { newKey, img = (l) => l.img, na
   const at = layers.indexOf(topMask || top) + 1;
   return { layers: normalize([...layers.slice(0, at), ...made, ...layers.slice(at)], groups), copies };
 }
+
+// What Copy takes: the picked picture layers with their masks (a picked mask means its layer), in stack order.
+export function clipOf(layers, list) {
+  const own = new Set(list.map((l) => (l.maskOf ? layers.find((o) => o.key === l.maskOf && !o.maskOf) : l)));
+  return layers.filter((l) => {
+    if (l.mask || l.draft) return false;
+    return own.has(l) || (l.maskOf != null && [...own].some((o) => o?.key === l.maskOf));
+  });
+}
+// Saved layers (a document's form) made ready to go in another: new keys, a mask pointing at its layer's, a group of their own for those that were in one.
+// { newKey(), newGroup() } come from the caller. Returns { layers, groups }.
+export function pastedLayers(saved, groups, { newKey, newGroup }) {
+  const keys = new Map(), ids = new Map();
+  const layers = saved.map((l) => {
+    const c = structuredClone(l);
+    if (l.key != null) { keys.set(l.key, newKey()); c.key = keys.get(l.key); } else delete c.key;
+    if (l.group != null && groups.some((g) => g.id === l.group)) {
+      if (!ids.has(l.group)) ids.set(l.group, newGroup());
+      c.group = ids.get(l.group);
+    } else delete c.group;
+    return c;
+  });
+  for (const c of layers) if (c.maskOf != null) c.maskOf = keys.get(c.maskOf);
+  return { layers: layers.filter((c) => !('maskOf' in c) || c.maskOf != null), groups: groups.filter((g) => ids.has(g.id)).map((g) => ({ ...g, id: ids.get(g.id) })) };
+}
+// The hidden picture layers Delete hidden takes, with their masks: not a locked one, nor a mask, a draft or what is hidden only because its owner is
+export function hiddenOnes(layers) {
+  const gone = layers.filter((l) => l.hidden && !l.locked && !l.mask && !l.draft && !l.maskOf);
+  return { count: gone.length, keep: layers.filter((l) => !gone.includes(l) && !(l.maskOf != null && gone.some((o) => o.key === l.maskOf))) };
+}

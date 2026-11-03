@@ -32,5 +32,15 @@ class Clean(unittest.TestCase):
             self.assertIn(model, panel)
 
 
+class Faces(unittest.TestCase):
+    def test_the_face_model_runs_through_its_own_node(self):
+        wf = load("deck-face-restore")
+        self.assertEqual(wf["up"]["class_type"], "DeckFaceRestore")   # (core's Upscale Image gives it a tensor it can't take)
+        self.assertEqual(wf["um"]["class_type"], "UpscaleModelLoader")
+        self.assertEqual(wf["um"]["inputs"]["model_name"], "GFPGANv1.4.safetensors")
+        self.assertEqual(wf["save"]["inputs"]["images"], ["up", 0])
+        self.assertTrue(wf["img"]["_meta"]["deck_keep_size"])
+
+
 if __name__ == "__main__":
     unittest.main()

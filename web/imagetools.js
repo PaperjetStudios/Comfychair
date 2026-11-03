@@ -8,6 +8,8 @@ import * as G from './layer-geom.js';
 import { uploadMask } from './inpaint.js';
 import { isOn } from './adjust.js';
 import { boundsOf, boxesFor, foundIn, refineEdge, separateAreas, stairOf, termsOf, worthLooking } from './matte-edge.js';
+import { faceBox, keepBrightness, scratchMask, tilesOf } from './photo-restore.js';
+import { icon } from './icons.js';
 import { SWAP_MODELS, SWAP_PARTS, biggestArea, changedAround, joined, onlyWithin, scaleFor, softEdge, swapBox, swapLora, swapPrompt, swapRefPixels, without } from './swap-part.js';
 
 // ---------------------------------------------------------------------------
@@ -16,7 +18,12 @@ import { SWAP_MODELS, SWAP_PARTS, biggestArea, changedAround, joined, onlyWithin
 // a map (depth, edges, scribble, pose), an upscaled copy, a cut-out of the subject, or the mask (auto masking).
 // ---------------------------------------------------------------------------
 const KEY = 'deck.imagetools';
-const GROUPS = ['Maps', 'Cut out and mask', 'Swap', 'Clean up', 'Upscale', 'Detail'];
+const GROUPS = ['Maps', 'Cut out and mask', 'Swap', 'Clean up', 'Colour', 'Upscale', 'Detail'];
+// The row of buttons over the list: the main things, each opening its tool (the first of its tools, unless one of them is open)
+const QUICK = [
+  ['Upscale', 'enlarge', ['up', 'upfast']], ['Clean up', 'sparkle', ['clean']], ['Restore', 'photo', ['restore']], ['Colourise', 'palette', ['colorise']],
+  ['Remove', 'eraser', ['remove', 'unmark']], ['Cut out', 'cut', ['cutout', 'words', 'sheet']], ['Swap', 'swap', ['swap']], ['Detail', 'star', ['detail', 'delight']], ['Maps', 'grid', ['depth', 'canny', 'scribble', 'pose']],
+];
 // The restoration models of Clean up: each works at the picture's own size, and changes nothing else
 const CLEAN = {
   noise: { label: 'Noise', model: '1x_ISO_denoise_v1.pth', help: 'Takes out the grain of a photo shot in low light.' },
@@ -51,6 +58,9 @@ const UNMARK_PROMPT = 'Remove every watermark, stamp, logo and overlaid text fro
 const DELIGHT_PROMPT = 'Relight this picture evenly and softly from every side, like an overcast day or a light tent, so dark areas are brightened and nothing is in shadow. Show the true colours and surface of the materials. Keep every person and object whole, with everything they ride, hold, wear or stand on, and keep the shape, pose, details, background and framing exactly the same.';
 const OLD_DELIGHT_PROMPT = 'Remove all the lighting and shadows from this picture: light it evenly and softly from every side, like an overcast day or a light tent, so dark areas are brightened and nothing is in shadow. Show the true colours and surface of the materials. Keep the shape, pose, details, background and framing exactly the same.';
 
+// (it asks for colour only: the picture's own brightness goes back on the result, photo-restore.js keepBrightness)
+const COLOUR_PROMPT = 'Colorize this black and white photograph with natural, true-to-life colors: real skin tones, clothing, plants, sky and materials. Keep every person and object, the light, the shadows, the details and the framing exactly the same. Do not add or remove anything.';
+
 const OPS = [
   { id: 'depth', group: 'Maps', label: 'Depth map', tpl: MAPS.depth.still, kind: 'layer', depth: true,
     help: 'A grey depth map (near is white) of the picture: Video Depth Anything. A layer on top; use it as a reference picture or control.' },
@@ -74,6 +84,10 @@ const OPS = [
     help: 'For a faint watermark repeated across the whole picture, which can\'t be marked as an area: an edit model draws the picture again without it. It runs at about 2 MP, and can change small details, so compare the result with the original.' },
   { id: 'clean', group: 'Clean up', label: 'Clean: noise, JPEG blocks or blur', tpl: 'deck-clean-image', kind: 'clean',
     help: 'A restoration model at the picture\'s own size: quick, and it adds nothing that isn\'t there.' },
+  { id: 'restore', group: 'Clean up', label: 'Restore an old photo', tpl: 'deck-clean-image', kind: 'restore',
+    help: 'Runs the steps you tick, one after another, and lands the result as one new layer. Scratches and dust are found from how thin and how different they are (no model), and LaMa fills them in. Clean is a restoration model at the picture\'s own size. Faces: SAM3 finds each face and GFPGAN redraws it. Colour is as Colourise. Compare with the original: a thin line in the picture itself can be taken for a scratch.' },
+  { id: 'colorise', group: 'Colour', label: 'Colourise a black and white picture', kind: 'colorise',
+    help: 'An edit model adds colour, and only its colour is kept: the picture\'s own brightness goes back on it, so every detail stays at full size and faces can\'t change shape. The model works at about 2 MP. Its colours are a guess: the prompt can say what they should be (a red car, a blue dress). Try another model if they come out flat.' },
   { id: 'delight', group: 'Detail', label: 'De-light (even out dark or shadowed pictures)', kind: 'delight',
     help: 'An edit model takes the lighting out: dark pictures are brightened and hard shadows softened, with the shape and colours kept. Run it on a view before it goes to image or 3D generation. The result is a new layer; the prompt can be changed.' },
   { id: 'up', group: 'Upscale', label: 'Upscale (quality)', tpl: 'deck-upscale-image', kind: 'up',
@@ -83,7 +97,7 @@ const OPS = [
   { id: 'upfast', group: 'Upscale', label: 'Upscale (fast)', tpl: 'deck-upscale-image-fast', kind: 'up',
     help: '4x-UltraSharp: a quick, clean enlargement without the invented detail. Export size is set to match, so Download and Save as input come out bigger.' },
 ];
-const ST = { samSure: 0.2, samMost: 8, op: 'cutout', scope: 'whole', result: 'cutout', hide: true, fine: true, rfrom: 'words', rprompt: 'watermark', cmodel: 'noise', uprompt: UNMARK_PROMPT, prompt: 'person', rows: 1, cols: 4, sheetFast: false, swapPart: 'face', swapFrom: '', swapModels: ['klein9b'], swapWhere: 'find', swapExtra: '', scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, ...store.get(KEY, {}) };
+const ST = { samSure: 0.2, samMost: 8, op: 'cutout', scope: 'whole', result: 'cutout', hide: true, fine: true, rfrom: 'words', rprompt: 'watermark', cmodel: 'noise', uprompt: UNMARK_PROMPT, prompt: 'person', rows: 1, cols: 4, sheetFast: false, swapPart: 'face', swapFrom: '', swapModels: ['klein9b'], swapWhere: 'find', swapExtra: '', scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', stepScratch: true, stepClean: true, stepFaces: true, stepColour: false, scratchAmount: 'normal', faceAmount: 0.8, cprompt: COLOUR_PROMPT, dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, ...store.get(KEY, {}) };
 if (ST.lprompt === OLD_DELIGHT_PROMPT) ST.lprompt = DELIGHT_PROMPT;   // (the old default, saved in this browser; a prompt someone wrote stays)
 const save = () => store.set(KEY, ST);
 const FLIGHT = new Set();   // runs on their way back
@@ -93,7 +107,7 @@ const dm = () => DETAIL[ST.dmodel] || DETAIL.klein9b;
 const loraField = (t) => t?.fields.find((f) => f.kind === 'loras');
 const canSwap = (k) => { const t = template(SWAP_MODELS[k]?.tpl); return !!t && swapLora(k, ST.swapPart, loraField(t)?.options || []) !== false; };
 const swapModels = () => ST.swapModels.filter(canSwap);
-const tplId = (o) => (o.kind === 'swap' ? (SWAP_MODELS[swapModels()[0]] || SWAP_MODELS.klein9b).tpl : o.kind === 'delight' ? (DELIGHT[ST.lmodel] || DELIGHT.krea2).tpl : o.kind === 'sheet' ? (ST.sheetFast ? 'deck-sheet-cell-fast' : 'deck-sheet-cell') : o.kind === 'detail' ? dm().tpl : o.sd && ST.poser === 'sdpose' ? o.sd : o.tpl);
+const tplId = (o) => (o.kind === 'swap' ? (SWAP_MODELS[swapModels()[0]] || SWAP_MODELS.klein9b).tpl : o.kind === 'delight' || o.kind === 'colorise' ? (DELIGHT[ST.lmodel] || DELIGHT.krea2).tpl : o.kind === 'sheet' ? (ST.sheetFast ? 'deck-sheet-cell-fast' : 'deck-sheet-cell') : o.kind === 'detail' ? dm().tpl : o.sd && ST.poser === 'sdpose' ? o.sd : o.tpl);
 
 // (a run's file is asked for afresh: runs deleted along the way free their ids, so the next run's file can have the same name, and the browser would show the old one)
 const loadImg = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Could not load a picture')); i.src = src.startsWith('/files/') ? `${src}${src.includes('?') ? '&' : '?'}at=${Date.now()}${Math.random()}` : src; });
@@ -114,7 +128,7 @@ async function keptPart(eng, l) {
 }
 
 // The tools whose result has its layer's framing, so the layer's mask fits it
-const KEEPS_FRAMING = new Set(['up', 'detail', 'delight', 'remove', 'clean', 'swap']);
+const KEEPS_FRAMING = new Set(['up', 'detail', 'delight', 'remove', 'clean', 'swap', 'restore', 'colorise']);
 // The models give back a solid picture: a cut-out's see-through would be lost. A canvas that shows what a picture's see-through leaves, or null when it is solid
 function shapeOf(pic, sx, sy, sw, sh, w, h) {
   const cv = document.createElement('canvas');
@@ -709,10 +723,143 @@ function wholePicture(t, [w, h], maxPixels) {
   return { [fw.key]: sw, [fh.key]: sh };
 }
 
+// ---- Colourise and Restore: steps on a canvas that ends as one new layer. What each step sends and its run go when it's done ----
+const canvasFrom = (pic, W, H) => { const cv = canvasOf(W, H), c = cv.getContext('2d', { willReadFrequently: true }); c.imageSmoothingQuality = 'high'; c.drawImage(pic, 0, 0, W, H); return cv; };
+const send = async (cv, filename) => (await uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename, multiple: 1 })).name;
+const madeBy = async (run) => loadImg(run.outputs.find((x) => x.kind === 'image').url);
+// a run on a picture that is only a means: what it made, as a loaded picture
+async function throughModel(t, values, name) {
+  let run = null;
+  try {
+    run = await once({ template: t.id, values, batch: 1 });
+    return await madeBy(run);
+  } finally { if (run) await dropRun(run.id); await dropInput(name); }
+}
+
+// the canvas's colour from the edit model, on its own brightness
+async function addColour(cv, prompt) {
+  const t = template((DELIGHT[ST.lmodel] || DELIGHT.krea2).tpl);
+  if (!t) throw new Error('The colour model isn\'t installed');
+  const pic = t.fields.find((f) => f.kind === 'image' && /image to edit/i.test(f.group)) || t.fields.find((f) => f.kind === 'image');
+  const box = t.fields.find((f) => f.kind === 'text' && /^edit$/i.test(f.group) && !/negative/i.test(f.input));
+  const name = await send(cv, 'colourise.png');
+  const made = await throughModel(t, { ...valuesByRole(t, { seed: -1 }), [pic.key]: name, ...(box && { [box.key]: prompt }), ...wholePicture(t, [cv.width, cv.height]) }, name);
+  const W = cv.width, H = cv.height, c = cv.getContext('2d', { willReadFrequently: true }), d = c.getImageData(0, 0, W, H);
+  const over = canvasFrom(made, W, H).getContext('2d', { willReadFrequently: true }).getImageData(0, 0, W, H);
+  keepBrightness(d.data, over.data);
+  c.putImageData(over, 0, 0);
+}
+
+// a finished canvas as the new layer
+async function landCanvas(eng, o, tab, src, cv, label, board) {
+  if (eng.E.tab?.id !== tab) return toast(`${o.label} finished on another edit: run it again there`, true);
+  const r = await uploadImage(await pngBlob(cv), { mp: 0, source: 'editor', filename: `${board.toLowerCase()}.png`, multiple: 1, board });
+  eng.addImage(r.name, { label, ...placed(src, src.rect.x, src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) });
+  if (src.layer && ST.hide) src.layer.hidden = true;
+  eng.changed(); eng.render();
+  toast(`${o.label}: done, a new layer on top`);
+}
+
+async function colourise(eng, o, t, tab, src) {
+  const b = busy('Adding colour…');
+  FLIGHT.add(colourise); eng.render();
+  try {
+    const cv = canvasFrom(await loadImg(inputUrl(src.name)), src.px[0], src.px[1]);
+    await addColour(cv, ST.cprompt.trim() || COLOUR_PROMPT);
+    await landCanvas(eng, o, tab, src, cv, 'Colourised', 'Colourised');
+  } finally { FLIGHT.delete(colourise); b.done(); eng.render(); }
+}
+
+// LaMa on the marks of a mask (red, row by row), each fill going back through the marks only. Scattered marks would be a run each, so past a few it goes by tiles.
+async function fillMarks(cv, marks, b) {
+  const t = template('deck-remove-lama'), W = cv.width, H = cv.height;
+  const mf = t.fields.find((x) => x.kind === 'mask'), main = t.fields.find((x) => x.key === mf.image_key);
+  const maskCv = maskCanvas(marks, W, H), rc = cv.getContext('2d', { willReadFrequently: true });
+  let boxes = boxesFor(separateAreas(marks, W, H), W, H, 0.1);
+  if (boxes.length > 6) boxes = tilesOf(W, H, LAMA_MOST).filter((q) => { for (let y = q.y; y < q.y + q.h; y++) for (let x = q.x; x < q.x + q.w; x++) if (marks[y * W + x] > 127) return true; return false; });
+  const part = (pic, box, k) => { const out = canvasOf(Math.max(8, Math.round(box.w * k)), Math.max(8, Math.round(box.h * k))), c = out.getContext('2d'); c.imageSmoothingQuality = 'high'; c.drawImage(pic, box.x, box.y, box.w, box.h, 0, 0, out.width, out.height); return out; };
+  for (const [n, box] of boxes.entries()) {
+    b.set(`Scratches and dust (${n + 1} of ${boxes.length})…`);
+    const k = Math.min(1, Math.sqrt(LAMA_MOST / (box.w * box.h)));
+    const crop = await send(part(cv, box, k), 'scratches.png'), mask = await uploadMask(part(maskCv, box, k));
+    try {
+      const fill = await throughModel(t, { [main.key]: crop, [mf.key]: { feather: 2, grow: 4, fit: false, name: mask, src: crop, crop: null, box: { x: 0, y: 0, w: 1, h: 1 } } }, crop);
+      // only the marks change, whatever size the fill came back at
+      const piece = canvasOf(box.w, box.h), pc = piece.getContext('2d', { willReadFrequently: true });
+      pc.filter = 'blur(1.5px)'; pc.drawImage(maskCv, box.x, box.y, box.w, box.h, 0, 0, box.w, box.h); pc.filter = 'none';
+      const edge = pc.getImageData(0, 0, box.w, box.h);
+      for (let i = 0; i < edge.data.length; i += 4) { edge.data[i + 3] = Math.min(255, edge.data[i] * 2.5); }
+      pc.putImageData(edge, 0, 0);
+      pc.globalCompositeOperation = 'source-in';
+      pc.imageSmoothingQuality = 'high';
+      pc.drawImage(fill, 0, 0, box.w, box.h);
+      rc.drawImage(piece, box.x, box.y);
+    } finally { await dropInput(mask); }
+  }
+}
+
+// each face (areas: bounds on the canvas) through the face model and back through a soft oval, as strongly as asked
+async function redrawFaces(cv, areas, b) {
+  const t = template('deck-face-restore'), image = t.fields.find((f) => f.kind === 'image'), rc = cv.getContext('2d', { willReadFrequently: true });
+  const boxes = areas.map((a) => faceBox(a, cv.width, cv.height)).filter(Boolean);
+  for (const [n, box] of boxes.entries()) {
+    b.set(`Faces (${n + 1} of ${boxes.length})…`);
+    const close = canvasOf(512, 512), cc = close.getContext('2d');
+    cc.imageSmoothingQuality = 'high';
+    cc.drawImage(cv, box.x, box.y, box.w, box.h, 0, 0, 512, 512);
+    const name = await send(close, 'face.png');
+    const made = await throughModel(t, { [image.key]: name, ...valuesByRole(t, { seed: -1 }) }, name);
+    const piece = canvasOf(box.w, box.h), pc = piece.getContext('2d');
+    pc.imageSmoothingQuality = 'high';
+    pc.drawImage(made, 0, 0, box.w, box.h);
+    pc.globalCompositeOperation = 'destination-in';
+    const r = box.w / 2, g = pc.createRadialGradient(r, r, r * 0.68, r, r, r * 0.98);
+    g.addColorStop(0, '#000'); g.addColorStop(1, 'transparent');
+    pc.fillStyle = g; pc.fillRect(0, 0, box.w, box.h);
+    rc.globalAlpha = ST.faceAmount; rc.drawImage(piece, box.x, box.y); rc.globalAlpha = 1;
+  }
+  return boxes.length;
+}
+
+async function restorePhoto(eng, o, tab, src) {
+  const steps = [ST.stepScratch, ST.stepClean, ST.stepFaces, ST.stepColour];
+  if (!steps.some(Boolean)) return toast('Tick at least one step', true);
+  const needs = [ST.stepScratch && 'deck-remove-lama', ST.stepClean && 'deck-clean-image', ST.stepFaces && 'deck-face-restore', (ST.stepScratch || ST.stepFaces) && 'deck-mask-image'].filter(Boolean);
+  const missing = needs.find((id) => !template(id));
+  if (missing) return toast(`${missing} isn't installed`, true);
+  const b = busy('Restoring…');
+  FLIGHT.add(restorePhoto); eng.render();
+  try {
+    const [W, H] = src.px, cv = canvasFrom(await loadImg(inputUrl(src.name)), W, H), c = cv.getContext('2d', { willReadFrequently: true });
+    b.set('Finding faces…');
+    const faces = ST.stepScratch || ST.stepFaces ? redOf(await searchFor(src.name, W, H, ['face']), W, H) : null;
+    const areas = faces && boundsOf(faces, W, H) ? separateAreas(faces, W, H) : [];
+    if (ST.stepScratch) {
+      b.set('Looking for scratches and dust…');
+      await new Promise((go) => setTimeout(go, 30));   // (the message shows before the sums)
+      const marks = scratchMask(c.getImageData(0, 0, W, H).data, W, H, { amount: ST.scratchAmount, skip: areas.length ? faces : null });
+      if (marks.some((v) => v)) await fillMarks(cv, marks, b);
+    }
+    if (ST.stepClean) {
+      b.set('Cleaning…');
+      const t = template('deck-clean-image'), image = t.fields.find((f) => f.kind === 'image'), f = t.fields.find((x) => x.input === 'model_name'), name = await send(cv, 'clean.png');
+      const made = await throughModel(t, { [image.key]: name, ...(f && { [f.key]: (CLEAN[ST.cmodel] || CLEAN.noise).model }), ...valuesByRole(t, { seed: -1 }) }, name);
+      c.drawImage(made, 0, 0, W, H);
+    }
+    let redrawn = 0;
+    if (ST.stepFaces && areas.length) redrawn = await redrawFaces(cv, areas, b);
+    if (ST.stepFaces && !redrawn) toast('No face big enough was found: the other steps still ran');
+    if (ST.stepColour) { b.set('Adding colour…'); await addColour(cv, ST.cprompt.trim() || COLOUR_PROMPT); }
+    await landCanvas(eng, o, tab, src, cv, 'Restored', 'Restored');
+  } finally { FLIGHT.delete(restorePhoto); b.done(); eng.render(); }
+}
+
 async function runOne(eng, o, t, tab, src) {
   if (o.kind === 'sheet') return runSheet(eng, o, t, tab, src);
   if (o.kind === 'remove') return markFound(eng, o, src);
   if (o.kind === 'swap') return swapOnSource(eng, o, tab, src);
+  if (o.kind === 'colorise') return colourise(eng, o, t, tab, src);
+  if (o.kind === 'restore') return restorePhoto(eng, o, tab, src);
   const imageField = t.fields.find((f) => f.kind === 'image');
   const values = { [imageField.key]: src.name, ...valuesByRole(t, { seed: -1, ...(o.prompt && { prompt: ST.prompt.trim() }) }), ...samKnobs(t) };
   if (o.kind === 'delight') {   // the edit template's own picture and edit boxes (not its reference pictures)
@@ -798,8 +945,13 @@ export function imageToolsSection(eng) {
   const out = size && o.kind === 'up' ? `${Math.round(size[0] * ST.scale)}×${Math.round(size[1] * ST.scale)}` : null;
   const on = many > 1 ? `Runs on each of the ${many} selected layers, one after the other.`
     : many ? `Runs on the layer ${picked[0].label || picked[0].name.split('/').pop()}.` : ST.scope === 'whole' ? 'Runs on the whole picture.' : '';
+  const quick = h('div', { class: 'tool-quick' }, ...QUICK.filter(([, , ids]) => ids.some((id) => OPS.some((x) => x.id === id))).map(([label, ic, ids]) => {
+    const here = ids.includes(o.id);
+    return h('button', { type: 'button', class: `icon-btn tool-quick-btn${here ? ' on' : ''}`, title: label, 'aria-pressed': String(here),
+      onclick: () => { if (here) return; ST.op = ids[0]; save(); eng.render(); } }, icon(ic), h('span', {}, label));
+  }));
   return section('Image tools', null,
-    select, help(`${o.help} ${on}`.trim()),
+    quick, select, help(`${o.help} ${on}`.trim()),
     !t ? hint(`${tplId(o)} isn't installed yet`) : null,
     field('Run on', seg([['whole', 'Whole picture'], ['selected', 'Selected layers']], ST.scope, (v) => { ST.scope = v; save(); eng.render(); }),
       help('Whole picture sends every visible layer together. Selected layers runs on each selected layer alone, one run each, with the result over that layer. A cropped layer sends its kept part. A turned or mirrored layer is sent unturned, and its result takes the same turn. A masked layer is sent whole: an Upscale, Detail or De-light result gets a copy of its mask, and other tools\' results get none.')),
@@ -842,6 +994,19 @@ export function imageToolsSection(eng) {
     o.kind === 'clean' ? field('Take out', seg(Object.entries(CLEAN).map(([k, v]) => [k, v.label]), ST.cmodel, (v) => { ST.cmodel = v; save(); eng.render(); }, { wrap: true }),
       help((CLEAN[ST.cmodel] || CLEAN.noise).help)) : null,
     o.kind === 'sheet' ? field('Result', seg([['cutout', 'Cut out'], ['black', 'On black']], ST.result === 'black' ? 'black' : 'cutout', (v) => { ST.result = v; save(); eng.render(); })) : null,
+    o.kind === 'restore' ? toggle('Scratches and dust', ST.stepScratch, (v) => { ST.stepScratch = v; save(); eng.render(); }) : null,
+    o.kind === 'restore' && ST.stepScratch ? field('Take', seg([['light', 'Only clear ones'], ['normal', 'Normal'], ['strong', 'Faint ones too']], ST.scratchAmount, (v) => { ST.scratchAmount = v; save(); eng.render(); }),
+      help('How much a mark must stand out to count. Faint ones too also takes more of what is really in the picture: thin lines, wires, hair. Faces are left out of this step.')) : null,
+    o.kind === 'restore' ? toggle('Clean', ST.stepClean, (v) => { ST.stepClean = v; save(); eng.render(); }) : null,
+    o.kind === 'restore' && ST.stepClean ? field('Take out', seg(Object.entries(CLEAN).map(([k, v]) => [k, v.label]), ST.cmodel, (v) => { ST.cmodel = v; save(); eng.render(); }, { wrap: true }),
+      help((CLEAN[ST.cmodel] || CLEAN.noise).help)) : null,
+    o.kind === 'restore' ? toggle('Faces', ST.stepFaces, (v) => { ST.stepFaces = v; save(); eng.render(); },
+      { help: 'GFPGAN redraws each face at 512 px, so it helps a small or damaged face most; on a face much bigger than that, lower Face strength to keep its sharpness. It can change a likeness: compare with the original. A strongly tilted face comes out worse. Licence: GFPGAN is Apache 2.0, but its licence file lists NVIDIA StyleGAN2 and DFDNet terms that limit parts of it to non-commercial use.' }) : null,
+    o.kind === 'restore' && ST.stepFaces ? rangeField('Face strength', () => ST.faceAmount, (v) => { ST.faceAmount = v; save(); }, { min: 0.1, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` }) : null,
+    o.kind === 'restore' ? toggle('Add colour', ST.stepColour, (v) => { ST.stepColour = v; save(); eng.render(); }) : null,
+    o.kind === 'colorise' || (o.kind === 'restore' && ST.stepColour) ? field('Model', seg(Object.entries(DELIGHT).map(([k, v]) => [k, v.label]), ST.lmodel, (v) => { ST.lmodel = v; save(); eng.render(); }, { wrap: true }),
+      help((DELIGHT[ST.lmodel] || DELIGHT.krea2).help)) : null,
+    o.kind === 'colorise' || (o.kind === 'restore' && ST.stepColour) ? field('Prompt', textArea(() => ST.cprompt, (v) => { ST.cprompt = v; save(); }, { rows: 4, label: 'What colours to use' })) : null,
     o.kind === 'delight' ? field('Model', seg(Object.entries(DELIGHT).map(([k, v]) => [k, v.label]), ST.lmodel, (v) => { ST.lmodel = v; save(); eng.render(); }, { wrap: true }),
       help((DELIGHT[ST.lmodel] || DELIGHT.krea2).help)) : null,
     o.kind === 'delight' ? field('Prompt', textArea(() => ST[o.promptKey || 'lprompt'], (v) => { ST[o.promptKey || 'lprompt'] = v; save(); }, { rows: 4, label: o.promptKey ? 'What to remove' : 'How to light it' })) : null,

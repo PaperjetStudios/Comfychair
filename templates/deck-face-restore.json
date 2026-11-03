@@ -1,0 +1,44 @@
+{
+ "img": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@1 Picture [image]",
+   "deck_keep_size": true
+  }
+ },
+ "um": {
+  "class_type": "UpscaleModelLoader",
+  "inputs": {
+   "model_name": "GFPGANv1.4.safetensors"
+  },
+  "_meta": {
+   "title": "@2 Model [model_name]"
+  }
+ },
+ "up": {
+  "class_type": "DeckFaceRestore",
+  "inputs": {
+   "upscale_model": [
+    "um",
+    0
+   ],
+   "image": [
+    "img",
+    0
+   ]
+  }
+ },
+ "save": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "up",
+    0
+   ],
+   "filename_prefix": "deck/faces"
+  }
+ }
+}

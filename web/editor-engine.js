@@ -1,6 +1,6 @@
 import { ASPECTS, FULL, aspectCrop, cropSpan } from './crop-geometry.js';
 export { ASPECTS, FULL, aspectCrop, cropSpan } from './crop-geometry.js';
-import {
+import { store,
   h, api, clamp01, busy, toast, undoToast, sheetOpen, openSheet, closeSheet, loadingSheet, sheetStillOpen, button, iconBtn, actions,
   seg, field, section, hint, toggle, propNum, layerRowsEl, panelTop, help, colorField, rangeField, pctFmt, clamp, mpInput, uid,
 } from './ui.js';
@@ -35,6 +35,7 @@ import { imageToolsSection } from './imagetools.js';
 // ---------------------------------------------------------------------------
 export const BLANK = () => ({ v: 2, size: null, cols: 2, gap: 0, bg: '#000000', clear: false, out: 1, mp: 0, snap: true, arrange: null, anim: null, items: [], layers: [], groups: [] });
 // a saved payload (an edit tab, or the old `deck.editor`) as editor state
+const LAYER_CLIP = 'deck.layerclip';   // the layers Copy took, in a document's form: names of input pictures and their settings
 export function fromSaved(saved) {
   const e = { ...BLANK(), ...saved, arrange: saved.arrange || null };
   // layers: { name, crop: {x,y,w,h} as fractions, x, y (canvas px), scale, rotation (degrees, about the kept part's
@@ -966,6 +967,20 @@ export function createEditor(cfg) {
     });
     cv.parentElement.append(...paint.els);
 
+    // Ctrl+C / Ctrl+V: layers between edits. As copy and paste events: text being copied, a text box and a picture on the clipboard (the picture picker's Paste) are left alone
+    const editing = (e) => e.target.closest?.('input, textarea, select, [contenteditable]');
+    document.addEventListener('copy', (e) => {
+      if (!cfg.active() || sheetOpen() || editing(e) || !picked().length || String(getSelection() || '')) return;
+      e.preventDefault();
+      e.clipboardData?.setData('text/plain', 'ComfyChair layers');   // (so an older picture on the clipboard doesn't win the paste)
+      copySelected().catch((err) => toast(err.message, true));
+    });
+    document.addEventListener('paste', (e) => {
+      if (!cfg.active() || sheetOpen() || editing(e) || !store.get(LAYER_CLIP, null)) return;
+      if ([...(e.clipboardData?.items || [])].some((x) => x.type.startsWith('image/'))) return;
+      e.preventDefault();
+      pasteLayers();
+    });
     // V / C switch tool, Esc finishes a crop / deselects, Delete removes the selected layer, arrows nudge it
     document.addEventListener('keydown', (e) => {
       if (cfg.active() && !sheetOpen() && E.sel && (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'e' && !e.target.closest('input, textarea, select')) {
@@ -1090,10 +1105,11 @@ export function createEditor(cfg) {
     editorChanged();
   }
   function layerList() {
-    if (!E.layers.length) return hint('Add images from your inputs, generations or device, then tap one on the canvas to move, resize or crop it.');
+    if (!E.layers.length) return h('div', {}, hint('Add images from your inputs, generations or device, then tap one on the canvas to move, resize or crop it.'),
+      store.get(LAYER_CLIP, null) ? button([icon('paste'), 'Paste layers'], pasteLayers, { cls: 'small', title: 'The layers you copied (Ctrl+V)' }) : null);
     // (the list shows the top layer first: a place in it is the same place counted from the other end)
     const reorder = (from, to) => { E.layers = ST.moveRow(E.layers, E.groups, from, to); editorChanged(); };
-    const several = picked();
+    const several = picked(), hiddenCount = ST.hiddenOnes(E.layers).count;
     const bar = h('div', { class: 'row wrap layer-pick' },
       h('button', { type: 'button', class: `btn small${E.pickMode ? ' on' : ''}`, 'aria-pressed': String(!!E.pickMode),
         title: 'Taps on the list and the canvas add or drop layers from the selection (or hold Shift)',
@@ -1101,6 +1117,9 @@ export function createEditor(cfg) {
       button('All', () => { const vis = E.layers.filter((l) => !l.mask && !l.draft && !l.maskOf); E.sel = vis[vis.length - 1] || null; E.multi = vis.slice(0, -1); renderEditor(); }, { cls: 'small' }),
       several.length ? button('None', () => { E.sel = null; E.multi = []; E.pickMode = false; renderEditor(); }, { cls: 'small' }) : null,
       several.length > 1 ? button([icon('copy'), 'Group'], () => { E.layers = ST.makeGroup(E.layers, E.groups, several, uid()); E.multi = []; editorChanged(); }, { cls: 'small', title: 'These layers as one group: its own opacity and blend, and they move together in the list' }) : null,
+      several.length ? button([icon('copy'), 'Copy'], copySelected, { cls: 'small', title: 'To paste in another edit, its masks too (Ctrl+C)' }) : null,
+      store.get(LAYER_CLIP, null) ? button([icon('paste'), 'Paste'], pasteLayers, { cls: 'small', title: 'The layers you copied, on top, in the place they had (Ctrl+V)' }) : null,
+      hiddenCount ? button([icon('trash'), `Delete ${hiddenCount} hidden`], deleteHidden, { cls: 'small danger', title: 'Every hidden layer, its mask too. A locked one stays' }) : null,
       several.length ? button([icon('copy'), 'Duplicate'], duplicateSelected, { cls: 'small', title: 'A copy of each selected layer, its own mask too, on top of them in the same place (Ctrl+J)' }) : null,
       several.length === 1 ? button('Merge down', () => mergeDown(several[0]), { cls: 'small', disabled: !ST.mergeBelow(E.layers, several[0]), title: 'Into the layer below, as they look (Ctrl+E)' }) : null,
       several.length > 1 ? button('Merge selected', mergeSelected, { cls: 'small', disabled: ST.mergeSet(E.layers, several).length < 2, title: 'These layers as one picture, at the place of the topmost (Ctrl+E)' }) : null,
@@ -1261,6 +1280,41 @@ export function createEditor(cfg) {
       field('Match colour to', help('Gives each selected layer curves for the brightness and colour spread of the one picked, which stays as it is. Their average moves them all to a look in between, each layer counting the same whatever its size. A layer\'s sliders stay; its curves are replaced. Similar pictures match best: lower Strength when they show very different things. Select one layer to fine-tune its curves.'), pick),
       rangeField('Strength', () => matchStrength, (v) => { matchStrength = v; }, { min: 0, max: 1, step: 0.05, fmt: pctFmt }),
       button('Match colour', go, { cls: 'small primary', title: 'Curves on each selected layer' }));
+  }
+
+  // ---- Copy and paste layers, between the edits of this browser (store: they last until something else is copied) ----
+  async function copySelected() {
+    await paint.savePaint();   // (a painted layer needs its file first)
+    const list = ST.clipOf(E.layers, picked().filter(ready)), saved = dumpEditor(list);
+    if (!saved.layers.length) return toast('Select a picture layer first', true);
+    store.set(LAYER_CLIP, { layers: saved.layers, groups: saved.groups });
+    const n = saved.layers.filter((l) => !l.maskOf).length;
+    toast(`${n} ${n === 1 ? 'layer' : 'layers'} copied: open another edit and Paste`);
+    renderEditor();
+  }
+  function pasteLayers() {
+    const clip = store.get(LAYER_CLIP, null);
+    if (!clip?.layers?.length) return toast('Copy some layers first', true);
+    const r = ST.pastedLayers(clip.layers, clip.groups || [], { newKey: uid, newGroup: uid });
+    const made = fromSaved({ layers: r.layers }).layers;
+    E.groups = [...E.groups, ...r.groups];
+    E.layers = ST.normalize([...E.layers, ...made], E.groups);
+    const pics = made.filter((l) => !l.maskOf);
+    E.sel = pics[pics.length - 1] || null; E.multi = pics.slice(0, -1); E.cropping = false;
+    editorChanged();
+    toast(`${pics.length} ${pics.length === 1 ? 'layer' : 'layers'} pasted`);
+  }
+  function deleteHidden() {
+    const before = E.layers, tid = docId(), { count, keep } = ST.hiddenOnes(E.layers);
+    if (!count) return;
+    E.layers = ST.normalize(keep, E.groups);
+    if (E.sel && !E.layers.includes(E.sel)) E.sel = null;
+    E.multi = E.multi.filter((l) => E.layers.includes(l));
+    persistEditor(); renderEditor();
+    undoToast(`${count} hidden ${count === 1 ? 'layer' : 'layers'} removed`, () => {
+      if (docId() !== tid) return toast(cfg.elsewhere || 'Those layers were in another edit tab', true);
+      E.layers = before; persistEditor(); renderEditor();
+    });
   }
 
   // The panel for two or more selected layers: each change goes to every one of them

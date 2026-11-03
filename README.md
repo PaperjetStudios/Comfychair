@@ -213,7 +213,7 @@ still lists; it fails when run. You only need the files of the templates you use
 | [comfyui-krea2edit](https://github.com/lbouaraba/comfyui-krea2edit) (2.0+) | `deck-krea2-edit`, `deck-krea2-identity` |
 | [ComfyUI-MMAudio](https://github.com/kijai/ComfyUI-MMAudio) | `deck-mmaudio-foley` (with `comfy_nodes/deck_mmaudio`) |
 | [ComfyUI-Idol](https://github.com/Nynxz/ComfyUI-Idol) | `deck-3d-object-splat` |
-| `comfy_nodes/deck_*` (this repo) | face crop, pose smoothing, motion save, TAPNext++, rig save, MMAudio sampler: symlink each into `custom_nodes` |
+| `comfy_nodes/deck_*` (this repo) | face crop, face restore, pose smoothing, motion save, TAPNext++, rig save, MMAudio sampler: symlink each into `custom_nodes` |
 
 Three packs carry local fixes, each marked `(ComfyChair patch)`; an update or reinstall drops them, so grep for the
 marker afterwards and re-apply:
@@ -648,6 +648,9 @@ shut). On Story and the Image tab, **Group** joins selected layers, with one opa
 button gives a layer a mask: the eraser hides, the brush shows, and it moves with its layer. Undo also covers moves, order,
 hiding, blend and groups. The chips over the list add a grid, turn steps and size steps.
 
+**Between edits:** **Copy** (Ctrl+C) takes the selected layers with their masks and **Paste** (Ctrl+V) puts them in any edit tab, in the place they had; a group comes along.
+They still use the same picture files. **Delete hidden** removes every hidden layer and its mask, with Undo; a locked layer stays. **Match colour** (two or more selected) gives them curves to look like one of them, or like their average.
+
 **Image tools** (Image tab, panel **Image tools**; the same idea as the VFX tab's effects). Pick a tool, then **Run**.
 **Run on** chooses what it works on: **Whole picture** (every visible layer together) or **Selected layers** (each
 selected layer alone, one run each). The result lands as a layer on top. On a selected layer the result sits over that
@@ -655,6 +658,7 @@ layer: a cropped layer sends only its kept part, and a turned or mirrored layer 
 the same turn.
 A masked layer is sent whole, without its mask. An **Upscale**, **Detail pass**, **De-light**, **Remove** or **Clean** result gets a copy of the
 mask as it was when sent, at the result's size; other tools' results get none.
+The row of buttons at the top of the section opens the main tools; the list below it has them all.
 - **Maps:** **Depth map**, **Canny edges**, **Scribble** and **Pose**. Depth has **Detail** (Fine: the Large model,
   sharpest; Fast: the Small one, about five times quicker). Canny and Scribble have **Amount** (More lines, Normal,
   Fewer). Pose can read with DWPose (CPU) or SDPose (GPU, holds up better on hard poses, up to 2 people). These
@@ -670,6 +674,12 @@ mask as it was when sent, at the result's size; other tools' results get none.
   marked area (at 4K the whole picture doesn't fit 12 GB), so only those areas change. **Remove a watermark all over the
   picture** is for a faint repeated one: an edit model draws the picture again, at about 2 MP. **Clean** is a 1x restoration
   model at the picture's own size: noise, JPEG blocks or blur.
+- **Restore an old photo** runs the steps you tick and lands one new layer. **Scratches and dust** are found in the browser from how thin
+  and how different they are (`web/photo-restore.js`), faces left out, and LaMa fills them. **Clean** is as above. **Faces:** SAM3 finds each
+  face, GFPGAN redraws it at 512 px, and it goes back through a soft oval at **Face strength**. **Add colour** is as Colourise.
+  It needs `models/upscale_models/GFPGANv1.4.safetensors` (`deck-face-restore`, with `comfy_nodes/deck_facerestore` symlinked into `custom_nodes`). GFPGAN's licence file lists NVIDIA StyleGAN2
+  and DFDNet terms that limit parts of it to non-commercial use.
+- **Colourise:** an edit model adds colour at about 2 MP, then the picture's own brightness goes back on it, so details and faces stay as they are.
 - **Upscale:** quality (SeedVR2) or fast (4x-UltraSharp), at 2×, 3× or 4×, hiding the original if you like.
 - **Detail pass:** draws the picture again with more fine detail and the same layout, with Klein 9B, Klein 3, Krea 2
   or Qwen 2.1 (their i2i templates, with a **Strength** and a prompt of their own) or SeedVR2. The models differ a
