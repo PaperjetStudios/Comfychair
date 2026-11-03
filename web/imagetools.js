@@ -13,6 +13,7 @@ import { boundsOf, boxesFor, foundIn, refineEdge, separateAreas, stairOf, termsO
 import { faceBox, keepBrightness, scratchMask, tilesOf } from './photo-restore.js';
 import { icon } from './icons.js';
 import { eachOne, failureText } from './tool-batch.js';
+import { partPrompt, partSize, partsOf } from './skin-parts.js';
 import { besideX, layerOf, owedFor, owedRecord, sameRun, withOwed, withoutOwed } from './owed-runs.js';
 import { editPrompt, layerWord, seedStep, sigmasFor, usableLoras } from './edit-image.js';
 import { loraPicker } from './lora-pick.js';
@@ -28,7 +29,7 @@ const GROUPS = ['Edit', 'Maps', 'Cut out and mask', 'Swap', 'Clean up', 'Colour'
 // The row of buttons over the list: the main things, each opening its tool (the first of its tools, unless one of them is open)
 const QUICK = [
   ['Edit', 'edit', ['edit']], ['Upscale', 'enlarge', ['up', 'upfast']], ['Clean up', 'sparkle', ['clean']], ['Restore', 'photo', ['restore']], ['Colourise', 'palette', ['colorise']],
-  ['Remove', 'eraser', ['remove', 'unmark']], ['Cut out', 'cut', ['cutout', 'words', 'sheet']], ['Swap', 'swap', ['swap']], ['Face skin', 'person', ['skin']], ['Detail', 'star', ['detail', 'delight']], ['Maps', 'grid', ['depth', 'canny', 'scribble', 'pose']],
+  ['Remove', 'eraser', ['remove', 'unmark']], ['Cut out', 'cut', ['cutout', 'words', 'sheet']], ['Swap', 'swap', ['swap']], ['Skin', 'person', ['skin']], ['Detail', 'star', ['detail', 'delight']], ['Maps', 'grid', ['depth', 'canny', 'scribble', 'pose']],
 ];
 // The restoration models of Clean up: each works at the picture's own size, and changes nothing else
 const CLEAN = {
@@ -42,15 +43,18 @@ const LOOK_FOR = [['watermark', 'Watermark'], ['letters', 'Letters'], ['logo', '
 const DETAIL = {
   seedvr2: { label: 'SeedVR2 7B', tpl: 'deck-upscale-image', plain: true,
     help: 'Restores and sharpens at the picture\'s own size, with no prompt: the most faithful, nothing invented that isn\'t there. Best for soft or noisy pictures and photos.' },
-  skin: { label: 'Face skin', own: true, tpl: 'deck-klein9b-face-skin', lora: 'klein/Flux2 Klein 9B Realistic Detail LoRA.safetensors', strength: 0.3,
-    prompt: 'A candid close-up photograph of a face, natural skin with subtle texture and slight imperfections, soft daylight',
-    help: 'Finds the main face, redraws it larger with Klein 9B and a realistic detail LoRA, and blends it back: the rest of the picture stays as it is. 0.3 keeps the likeness and expression. 0.4 gives more skin but the expression can shift. At 0.5 pores are strongest, but moles or makeup may appear and the face can change. A pattern already in the skin gets stronger.' },
+  skin: { label: 'Skin', own: true, tpl: 'deck-klein9b-face-skin', lora: 'klein/Flux2 Klein 9B Realistic Detail LoRA.safetensors', strength: 0.3,
+    prompt: 'A candid close-up photograph of the {part}, natural skin with subtle texture and slight imperfections, soft daylight',
+    help: '{part} in the prompt becomes each body part in turn. On a face, 0.3 keeps the likeness and expression. 0.4 gives more skin but the expression can shift. At 0.5 pores are strongest, but moles or makeup may appear and the face can change. A pattern already in the skin gets stronger.' },
+  skinwhole: { label: 'Skin', own: true, tpl: 'deck-klein9b-skin-whole', lora: 'klein/Flux2 Klein 9B Realistic Detail LoRA.safetensors', strength: 0.3,
+    prompt: 'A candid photograph, natural skin with subtle texture and slight imperfections, soft daylight',
+    help: 'Klein 9B and a realistic detail LoRA draw the whole picture again at about 2 MP at most. Everything is redrawn, not only skin: faces can change, and clothes, tattoos and the background can too. Lower Strength keeps it closer to the original.' },
   klein9b: { label: 'Klein 9B', tpl: 'deck-klein9b-i2i', strength: 0.35, prompt: 'highly detailed, fine texture, sharp focus, crisp edges',
     help: 'FLUX.2 Klein 9B draws it again at low strength: adds believable fine detail (skin, fabric, foliage) from the prompt. A good all-rounder.' },
   klein3: { label: 'Klein 3', tpl: 'deck-klein3-i2i', strength: 0.35, prompt: 'highly detailed, fine texture, sharp focus, crisp edges',
     help: 'The newer Klein: a different look from Klein 9B, so try both on the same picture.' },
   krea2: { label: 'Krea 2', tpl: 'deck-krea2-i2i', strength: 0.3, prompt: 'highly realistic detailed photograph, natural light, rich texture, sharp focus',
-    help: 'Krea 2 turbo: strong on light and materials. On faces it can draw dotted pores and change the likeness, so use Face skin for those.' },
+    help: 'Krea 2 turbo: strong on light and materials. On faces it can draw dotted pores and change the likeness, so use Skin for those.' },
   qwen21: { label: 'Qwen 2.1', tpl: 'deck-qwen21-i2i', strength: 0.4, prompt: 'a detailed, polished version of this image with clean lines and fine texture',
     help: 'Qwen Image 2.1 turbo: good at clean lines, text and illustrations or graphics, less so for pores and skin.' },
 };
@@ -103,14 +107,14 @@ const OPS = [
     help: 'An edit model takes the lighting out: dark pictures are brightened and hard shadows softened, with the shape and colours kept. Run it on a view before it goes to image or 3D generation. The result is a new layer; the prompt can be changed.' },
   { id: 'up', group: 'Upscale', label: 'Upscale (quality)', tpl: 'deck-upscale-image', kind: 'up',
     help: 'SeedVR2 makes the picture bigger and sharper, adding detail. Slow, and the memory it needs grows with the size: 2× of a 1 MP picture is fine, 4× of a big one may not fit. The new layer sits the same size on the canvas; Export size (Export panel) is set to match, so Download and Save as input come out that much bigger.' },
-  { id: 'skin', group: 'Detail', label: 'Face skin detail', kind: 'detail', model: 'skin',
-    help: 'Finds the main face in each picture, redraws it larger with Klein 9B and a realistic detail LoRA, and blends it back: the rest stays as it is. One face per picture (the biggest). A picture with no face comes back unchanged. With several layers selected, each is run in turn and gets its own result over it.' },
+  { id: 'skin', group: 'Detail', label: 'Skin detail', kind: 'detail', get model() { return ST.skinWhere === 'parts' ? 'skin' : 'skinwhole'; },
+    help: 'Whole picture: the model draws all of it again. Body parts: finds each part you name in each picture, redraws it larger with Klein 9B and a realistic detail LoRA, and blends it back: the rest stays as it is. Each name is one pass on the best match, so name both arms separately (left arm, right arm), and a part it can\'t find is left unchanged. With several layers selected, each gets all the parts and one result over it. A tight part gains the most: a part is drawn at 1024 px (1536 on a large picture), so a very big one can come back softer. Tattoos can be redrawn at 0.3 and above, and naming the whole person can change the face.' },
   { id: 'detail', group: 'Detail', label: 'Detail pass', kind: 'detail',
     help: 'Draws the picture again with more fine detail and the same layout. Pick the model: they differ a lot by subject, so try two on the same picture. Low strength keeps it close to the original.' },
   { id: 'upfast', group: 'Upscale', label: 'Upscale (fast)', tpl: 'deck-upscale-image-fast', kind: 'up',
     help: '4x-UltraSharp: a quick, clean enlargement without the invented detail. Export size is set to match, so Download and Save as input come out bigger.' },
 ];
-const ST = { samSure: 0.2, samMost: 8, op: 'cutout', scope: 'whole', result: 'cutout', hide: true, fine: true, rfrom: 'words', rprompt: 'watermark', cmodel: 'noise', uprompt: UNMARK_PROMPT, prompt: 'person', rows: 1, cols: 4, sheetFast: false, swapPart: 'face', swapFrom: '', swapModels: ['klein9b'], swapWhere: 'find', swapExtra: '', scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', stepScratch: true, stepClean: true, stepFaces: true, stepColour: false, scratchAmount: 'normal', faceAmount: 0.8, cprompt: COLOUR_PROMPT, dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, eprompt: '', econtext: '', ekeep: true, erefs: [], ewhere: 'all', efind: '', eclose: true, egrow: 8, esoft: 16, emp: 2, ecount: 1, eseed: 0, eseedMode: 'random', esteps: 8, ecfg: 1, eneg: '', eloras: [], ...store.get(KEY, {}) };
+const ST = { skinWhere: 'whole', skinParts: 'face', samSure: 0.2, samMost: 8, op: 'cutout', scope: 'whole', result: 'cutout', hide: true, fine: true, rfrom: 'words', rprompt: 'watermark', cmodel: 'noise', uprompt: UNMARK_PROMPT, prompt: 'person', rows: 1, cols: 4, sheetFast: false, swapPart: 'face', swapFrom: '', swapModels: ['klein9b'], swapWhere: 'find', swapExtra: '', scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', stepScratch: true, stepClean: true, stepFaces: true, stepColour: false, scratchAmount: 'normal', faceAmount: 0.8, cprompt: COLOUR_PROMPT, dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, eprompt: '', econtext: '', ekeep: true, erefs: [], ewhere: 'all', efind: '', eclose: true, egrow: 8, esoft: 16, emp: 2, ecount: 1, eseed: 0, eseedMode: 'random', esteps: 8, ecfg: 1, eneg: '', eloras: [], ...store.get(KEY, {}) };
 if (ST.lprompt === OLD_DELIGHT_PROMPT) ST.lprompt = DELIGHT_PROMPT;   // (the old default, saved in this browser; a prompt someone wrote stays)
 const save = () => store.set(KEY, ST);
 const FLIGHT = new Set();   // runs on their way back
@@ -119,7 +123,7 @@ const op = () => OPS.find((o) => o.id === ST.op) || OPS[0];
 const loraField = (t) => t?.fields.find((f) => f.kind === 'loras');
 // a detail model that needs a LoRA shows only if it is installed
 const canDetail = (k) => { const m = DETAIL[k]; return !!m && (!m.own || op().model === k) && (!m.lora || (loraField(template(m.tpl))?.options || []).includes(m.lora)); };
-// (the Face skin tool is the detail pass with its own model fixed)
+// (the Skin tool is the detail pass with its own model fixed)
 const dmKey = () => (op().model && canDetail(op().model) ? op().model : canDetail(ST.dmodel) ? ST.dmodel : 'klein9b');
 const dm = () => DETAIL[dmKey()];
 const canSwap = (k) => { const t = template(SWAP_MODELS[k]?.tpl); return !!t && swapLora(k, ST.swapPart, loraField(t)?.options || []) !== false; };
@@ -401,6 +405,7 @@ async function run(eng) {
   if (!t) return toast(`${tplId(o)} isn't installed`, true);
   if (eng.loading()) return toast('The images are still loading', true);
   if (o.prompt && !ST.prompt.trim()) return toast('Say what to find first', true);
+  if (o.model === 'skin' && !partsOf(ST.skinParts).length) return toast('Say which body parts first', true);
   if (!eng.E.layers.some((l) => !l.mask && !l.draft)) return toast('Add a picture first', true);
   if (o.kind === 'remove' && ST.rfrom === 'words' && !termsOf(ST.rprompt).length) return toast('Say what to remove first', true);
   if (o.kind === 'remove' && !template('deck-mask-image')) return toast('deck-mask-image isn\'t installed', true);
@@ -1042,6 +1047,36 @@ function editFields(eng, t, size) {
   ];
 }
 
+// Skin detail on one picture: a pass per named part, each on the last one's result, in the background so the next layer can go in the line.
+// One new layer comes of it: the passes before the last are only a means, so their runs and pictures go.
+function skinParts(eng, o, t, tab, src, values, imageField) {
+  const parts = partsOf(ST.skinParts), what = t.fields.find((f) => f.input === 'text_prompt'), size = t.fields.find((f) => f.input === 'base_resolution');
+  const pf = t.fields.find((x) => x.kind === 'text' && /prompt/i.test(x.group) && !/negative/i.test(x.group));
+  if (!what || !pf) throw new Error(`${t.id} has no box for the body part`);
+  const who = src.layer ? ` on ${src.layer.label || src.layer.name.split('/').pop()}` : '', mark = {};
+  const pass = (name, part) => sent({ template: t.id, values: { ...values, [imageField.key]: name, [what.key]: part, [pf.key]: partPrompt(values[pf.key], part), ...(size && { [size.key]: partSize(src.px) }) }, batch: 1 });
+  toast(`${o.label}${who}: ${parts.join(', ')}. It lands as a new layer`);
+  FLIGHT.add(mark); eng.render();
+  (async () => {
+    let name = src.name;
+    try {
+      for (const part of parts.slice(0, -1)) {
+        const done = await pass(name, part);
+        const r = await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } });
+        await dropRun(done.id);
+        if (name !== src.name) await dropInput(name);
+        name = r.name;
+      }
+      const done = await pass(name, parts[parts.length - 1]);
+      if (eng.E.tab?.id !== tab) return toast(`${o.label} #${done.id} finished on another edit: it is in History`);
+      await land(eng, o, src, done);
+    } catch (e) { toast(`${o.label} failed${who}: ${e.message}`, true); } finally {
+      if (name !== src.name) await dropInput(name);
+      FLIGHT.delete(mark); eng.render();
+    }
+  })();
+}
+
 async function runOne(eng, o, t, tab, src) {
   if (o.kind === 'edit') return editOne(eng, o, t, tab, src);
   if (o.kind === 'sheet') return runSheet(eng, o, t, tab, src);
@@ -1082,6 +1117,7 @@ async function runOne(eng, o, t, tab, src) {
       if (pf) values[pf.key] = (ST.dprompt[dmKey()] ?? m.prompt).trim() || m.prompt;
     }
   }
+  if (o.model === 'skin') return skinParts(eng, o, t, tab, src, values, imageField);
   const [g] = await queueRun({ template: t.id, values, batch: 1 });
   toast(`${o.label} (#${g.id}): it lands as a new layer`);
   follow(eng, o, tab, src, g);
@@ -1200,6 +1236,8 @@ export function imageToolsSection(eng) {
       help((DELIGHT[ST.lmodel] || DELIGHT.krea2).help)) : null,
     o.kind === 'delight' ? field('Prompt', textArea(() => ST[o.promptKey || 'lprompt'], (v) => { ST[o.promptKey || 'lprompt'] = v; save(); }, { rows: 4, label: o.promptKey ? 'What to remove' : 'How to light it' })) : null,
     o.kind === 'detail' && !o.model ? field('Model', seg(Object.entries(DETAIL).filter(([k]) => canDetail(k)).map(([k, v]) => [k, v.label]), ST.dmodel, (v) => { ST.dmodel = v; save(); eng.render(); }, { wrap: true })) : null,
+    o.id === 'skin' ? field('Area', seg([['whole', 'Whole picture'], ['parts', 'Body parts']], ST.skinWhere, (v) => { ST.skinWhere = v; save(); eng.render(); })) : null,
+    o.model === 'skin' ? field('Body parts', textArea(() => ST.skinParts, (v) => { ST.skinParts = v; save(); }, { rows: 2, label: 'Body parts, separated by commas' })) : null,
     o.kind === 'detail' ? help(dm().help) : null,
     o.kind === 'detail' && !dm().plain ? field('Strength', h('input', { type: 'range', min: 0.1, max: 0.7, step: 0.05, 'aria-label': 'Strength',
       value: ST.dstrength[dmKey()] ?? dm().strength, oninput: (e) => { ST.dstrength[dmKey()] = +e.target.value; save(); e.target.nextSibling.textContent = e.target.value; } }),

@@ -196,7 +196,7 @@
    "base_resolution": 1024,
    "padding": 48,
    "min_crop_resolution": 128,
-   "max_crop_resolution": 1024
+   "max_crop_resolution": 16384
   },
   "_meta": {
    "title": "@8 Crop [base_resolution,padding]"

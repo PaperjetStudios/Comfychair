@@ -667,6 +667,10 @@ the same turn.
 A masked layer is sent whole, without its mask. An **Edit**, **Upscale**, **Detail pass**, **De-light**, **Remove** or **Clean** result gets a copy of the
 mask as it was when sent, at the result's size; other tools' results get none.
 The row of buttons at the top of the section opens the main tools; the list below it has them all.
+- **Skin detail** (Klein 9B and a realistic detail LoRA): on each selected layer, one result layer each. **Area**:
+  **Whole picture** draws all of it again at about 2 MP at most, so a larger picture's result has fewer pixels, and
+  anything in it can change. **Body parts** takes a list (`face, chest, left arm`), one pass per name on the best match,
+  and only those parts change, at the picture's own size. A part is drawn at 1024 px, or 1536 on a picture over 2048 px.
 - **Edit from a prompt** (Qwen 2.1): the same edit on many layers at once. **Prompt**, **Also know** (more context, on
   every run), **Keep the rest** (a sentence that holds the rest still) and up to three reference pictures (the picture
   being edited is Picture 1, references Picture 2 onward). `{layer}` in the prompt becomes each layer's name, and

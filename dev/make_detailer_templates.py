@@ -28,6 +28,7 @@ PROMPT = "A sharp, highly detailed close-up, natural skin texture, fine pores, c
 # Face skin: the best of the skin tests on real pictures (Krea 2 drew dotted pores, Qwen 2.1 stayed smooth)
 SKIN_LORA = "klein/Flux2 Klein 9B Realistic Detail LoRA.safetensors"
 SKIN_PROMPT = "A candid close-up photograph of a face, natural skin with subtle texture and slight imperfections, soft daylight"
+SKIN_WHOLE_PROMPT = "A candid photograph, natural skin with subtle texture and slight imperfections, soft daylight"
 
 
 def node(cls, title=None, **inputs):
@@ -56,7 +57,7 @@ def make(key, base, denoise, name="detail", prompt=PROMPT, lora=None):
                     image=["20", 0], confidence_threshold=0.3, text_prompt="face", max_detections=1)
     wf["32"] = node("ImageCropByMaskAndResize", "@8 Crop [base_resolution,padding]", image=["20", 0],
                     mask=["31", 0], base_resolution=1024, padding=48, min_crop_resolution=128,
-                    max_crop_resolution=1024)
+                    max_crop_resolution=16384)   # (the node cuts anything bigger down to this, source pixels: on a large picture only a patch of the thing)
     wf["33"] = node("GrowMaskWithBlur", "@8 Blend [expand,blur_radius]", mask=["32", 1], expand=6,
                     incremental_expandrate=0.0, tapered_corners=True, flip_input=False, blur_radius=12.0,
                     lerp_alpha=1.0, decay_factor=1.0, fill_holes=False)
@@ -82,3 +83,18 @@ def make(key, base, denoise, name="detail", prompt=PROMPT, lora=None):
 for key, (base, denoise) in MODELS.items():
     make(key, base, denoise)
 make("klein9b", "deck-klein9b-i2i", 0.3, name="face-skin", prompt=SKIN_PROMPT, lora=SKIN_LORA)
+
+
+def make_whole(base, name, denoise, prompt, lora):
+    """The whole picture redrawn with the skin LoRA: no search and no crop, the model sees everything."""
+    wf = json.loads((OUT / f"{base}.json").read_text())
+    wf[by_class(wf, "SaveImage")]["inputs"]["filename_prefix"] = name.replace("deck-", "").replace("-", "_")
+    wf[by_class(wf, "KSampler")]["inputs"]["denoise"] = denoise
+    wf[by_class(wf, "LoraLoaderModelOnly")]["inputs"]["lora_name"] = lora
+    for n in wf.values():
+        if n["class_type"] == "CLIPTextEncode" and n.get("_meta", {}).get("title", "").startswith("@1"):
+            n["inputs"]["text"] = prompt
+    (OUT / f"{name}.json").write_text(json.dumps(wf, indent=1) + "\n")
+
+
+make_whole("deck-klein9b-i2i", "deck-klein9b-skin-whole", 0.3, SKIN_WHOLE_PROMPT, SKIN_LORA)
