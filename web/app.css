@@ -503,6 +503,12 @@ details.desc[open] summary { margin-bottom: 6px; }
 .layer-name .hint { font-size: var(--fs-xs); }
 .layer-btns { display: flex; gap: 4px; }
 /* Settings → Projects (projects.js): drag the grip to reorder */
+.unused-group { margin-bottom: 12px; }
+.unused-head { display: flex; align-items: center; gap: 8px; min-height: var(--tap); cursor: pointer; }
+.unused-row { display: grid; grid-template-columns: auto 48px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 3px 0; cursor: pointer; }
+.unused-row img { width: 48px; height: 48px; object-fit: cover; border-radius: var(--r); background: var(--bg); }
+.unused-kind { font-size: 11px; line-height: 1.1; text-align: center; opacity: .7; }
+.unused-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .proj-list { display: grid; gap: 4px; }
 .proj-row { display: grid; grid-template-columns: 44px 1fr auto; gap: 8px; align-items: center; padding: 4px 6px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg); }
 .proj-row.sel { border-color: var(--accent); }
