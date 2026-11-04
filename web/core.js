@@ -36,6 +36,12 @@ export function addMine(pid) {
   store.set('deck.myPrompts', [...S.myPrompts].slice(-300));
 }
 export const isMine = (pid) => !!pid && S.myPrompts.has(pid);
+// The batch count, one for the action bar's stepper and the table's Make panel (each shows it again on deck:batch)
+export function setBatch(n) {
+  S.batch = Math.max(1, Math.min(32, Math.round(+n) || 1));
+  dispatchEvent(new CustomEvent('deck:batch', { detail: S.batch }));
+  return S.batch;
+}
 
 // Saved entries of a snippet category whose text is JSON (shots, presets), parsed into .p; keep(p)
 // picks the ones that apply here

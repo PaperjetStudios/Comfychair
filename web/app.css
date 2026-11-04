@@ -2248,6 +2248,28 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
 .make-frame-card img { width: 100%; aspect-ratio: 1; object-fit: contain; }
 .make-mode:empty { display: none; }
 .make-vfx > .make-vfx-open { margin-bottom: 6px; }
+
+/* ---- quick start ---- */
+.quick-start { display: flex; flex-direction: column; gap: var(--gap); }
+.qs-kinds { width: 100%; }
+.qs-kinds > button { flex: 1 1 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: max(var(--tap-sm), var(--touch-target)); }
+.qs-body { display: flex; flex-direction: column; gap: 10px; }
+.qs-size-row { display: flex; flex-direction: column; gap: 8px; }
+.qs-size-row .mp { max-width: 220px; }
+.qs-size { margin: 0; }
+.qs-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; }
+.qs-card { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: max(88px, var(--touch-target)); padding: 12px 8px;
+  border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface-2); color: var(--text); font: inherit; font-size: var(--fs-sm); cursor: pointer;
+  transition: background .15s, border-color .15s; }
+.qs-card:hover { border-color: var(--line-2); background: var(--surface-3); }
+.qs-card.on, .qs-card:focus-visible { border-color: var(--accent); background: var(--accent-soft); }
+.qs-card.hidden { display: none; }
+.qs-card svg { color: var(--accent); }
+.qs-card-title { text-align: center; }
+.qs-text.hidden { display: none; }
+.qs-prompt { display: flex; flex-direction: column; gap: 8px; }
+.qs-prompt textarea { width: 100%; }
+.qs-make { min-height: max(var(--tap-sm), var(--touch-target)); }
 .make-vfx .panel-body { padding: 0; }
 /* a live video frame with VFX on show: VFX's stage over the frame, the edit's own one hidden under it */
 .frame-mount > .vfx-under { display: none !important; }
@@ -2269,3 +2291,9 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
 .st-pane-view .st-thumb { width: 64px; }
 .st-pane-view .st-script { padding: 12px; max-width: none; }
 .st-pane-view .cs-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+
+/* ---- actionbar + fit frames ---- */
+/* the action bar is on every screen; over any full-screen view (a Classic screen's or a live frame's) it stays on hand */
+body:has(.tab.active .stage.maxed, .live-layer .stage.maxed) .actionbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 57; }
+body:has(.tab.view-max.panel-out) .actionbar { right: var(--ov-w); }   /* (only moves it while it is fixed) */
+.tab.active .stage.maxed, .live-layer .stage.maxed { padding-bottom: 76px; }

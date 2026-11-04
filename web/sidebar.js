@@ -11,6 +11,8 @@
 //   sidebar.refresh()         re-check which tabs show (each pane's `when`), after something they depend on changed
 //   sidebar.onShow(fn)        fn(name, el) whenever a pane comes on show; returns an unsubscribe
 //   sidebar.context()         { frames, live } the panes are following
+//   sidebar.addTo('frame', fn)  fn(el) each time the pane's owner draws it again (its children replaced), and now: a module
+//     adds a part of its own to a pane it doesn't draw (frame-image.js: Fit layers / Fixed size in the Frame pane)
 //
 // A pane's sections get the panel's jump strip (layout.js sideNav) as other panels do; a pane that holds a whole panel
 // of its own (the editor's) is marked `host` and gets none.
@@ -117,6 +119,13 @@ function follow() {
   if (pick) show(pick);
 }
 
+function addTo(name, fn) {
+  const el = pane(name);
+  const run = () => { try { fn(el); } catch (e) { console.error(e); } };
+  new MutationObserver(run).observe(el, { childList: true });
+  run();
+}
+
 function refresh() {
   syncTabs();
   if (!P.cur || !usable(P.cur)) follow();
@@ -124,7 +133,7 @@ function refresh() {
 }
 
 export const sidebar = {
-  pane, show, refresh,
+  pane, show, refresh, addTo,
   current: () => P.cur,
   context: () => P.ctx,
   onShow(fn) { P.fns.add(fn); return () => P.fns.delete(fn); },

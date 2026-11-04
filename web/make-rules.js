@@ -55,7 +55,7 @@ export function frameSize(pair, frame) {
 }
 
 // Where a result lands, by what was selected
-export const LANDS = { none: 'frame', image: 'layer', video: 'clip', scene: 'shelf', sound: 'shelf' };
+export const LANDS = { none: 'frame', image: 'layer', video: 'clip', scene: 'shelf', sound: 'mix' };
 
 // A video document with a run's clip at the end of its first video track (the clip's shape is video.js newItem's)
 export function withClip(payload, { src, url = null, label, dur = 0, kind = 'video' }, id) {

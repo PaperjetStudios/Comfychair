@@ -109,6 +109,13 @@ addEventListener('table:drop-frame', (e) => {
   ]], 'Add to the scene as');
 });
 
+// Pictures (table:drop-frame sources) into a 3D frame's scene, as background pictures ('picture') or 3D photos ('photo'),
+// without asking which (the quick-start sheet has asked already)
+export function addToScene(onto, sources, how) {
+  if (F.mounted && F.mounted !== onto.id) return Promise.reject(new Error('Leave the open 3D frame first'));
+  return dropInto(onto, [sources].flat().map((src) => ({ src })), how);
+}
+
 // a frame's picture into the project's pictures: its still (or the picture it was made from); { src }: a dropped thing's
 async function pictureOf(f) {
   if (f.src) {

@@ -219,12 +219,15 @@ function mediaInfo(url, kind) {
 }
 const sized = (w, h, d = { w: 1024, h: 1024 }) => (w && h ? { w: Math.round(w), h: Math.round(h) } : d);
 
-// An image frame whose edit holds one picture (an input's name) as its only layer, on a canvas the picture's size
+// An image frame whose edit holds one picture (an input's name) as its only layer, sized by its layers (frame-image.js:
+// fit), so the picture's own size; a picture of unknown size gets a fixed 1024×1024 canvas
 async function pictureFrame(name, at, w, h, label) {
   if (!w || !h) ({ w, h } = await mediaInfo(inputUrl(name), 'image'));
-  const s = sized(w, h), frame = newFrame('image', { ...at, ...s }, { label: label || 'Picture', preview: thumbUrl(name, 1024) });
+  const fit = !!(w && h), s = sized(w, h);
+  const frame = newFrame('image', { ...at, ...s }, { label: label || 'Picture', preview: thumbUrl(name, 1024),
+    fit, ...(fit ? { fitBox: { x: 0, y: 0, w: s.w, h: s.h } } : {}) });
   const layer = { name, crop: { x: 0, y: 0, w: 1, h: 1 }, x: 0, y: 0, scale: 1, opacity: 1, hidden: false, blend: 'normal', locked: false };
-  return { frame, payload: { ...BLANK(), size: { w: s.w, h: s.h }, layers: [layer] } };
+  return { frame, payload: { ...BLANK(), size: fit ? null : { w: s.w, h: s.h }, layers: [layer] } };
 }
 // A video frame with one clip on V1, or a sound frame with one sound on A1 (the items' shapes are video.js and sound.js newItem's)
 async function clipFrame(kind, src, url, label, at) {

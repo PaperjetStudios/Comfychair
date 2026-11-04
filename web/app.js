@@ -6,7 +6,7 @@
 import {
   $, h, store, api, toast, overlayOpened, overlayClosed, openSheet, closeSheet, button, iconBtn, help, chip as uiChip, setIcon,
 } from './ui.js';
-import { S, loadProjects, setSwitchTab, setOpenProject, emitProject, onServer } from './core.js';
+import { S, loadProjects, setBatch, setSwitchTab, setOpenProject, emitProject, onServer } from './core.js';
 import { generate, loadTemplates, selectTemplate, stop, wireTemplateFilter, wireZoom } from './generate.js';
 import './gentabs.js';   // Generate tabs + presets: plugs into generate.js through its hooks
 import { openDownloads, wireDownloads } from './downloads.js';
@@ -87,6 +87,21 @@ onServer('deck_projects', async (m) => {
   }
 });
 
+// The action bar is on every screen. On the table (or a frame live on it) its button runs the Make panel for the
+// selection (generate.js generate → make-panel.js runMake), says what that makes, and is off, with the reason as its
+// tooltip, when nothing can run there. Elsewhere it is Generate, for the Generate screen's template, as always.
+const tableOn = () => !!document.querySelector('#tab-table.active, #tab-table.live-host');
+let makeMod = null;
+import('./make-panel.js').then((m) => { makeMod = m; syncActionBar(); }).catch((e) => console.error('Make panel:', e));
+function syncActionBar() {
+  const b = $('#genBtn'), on = tableOn();
+  const st = on && makeMod ? makeMod.makeState() : { label: 'Generate', why: null };
+  if (b.textContent !== st.label) b.textContent = st.label;
+  if (st.why || b.dataset.why) b.disabled = !!st.why;   // (only what this set: generate() holds it off while it queues)
+  if (st.why) b.dataset.why = st.why; else delete b.dataset.why;
+  b.title = st.why || (on ? `${st.label} for what is selected on the table (Ctrl+Enter)` : 'Generate with the Generate screen\'s template (Ctrl+Enter)');
+}
+
 function switchTab(name) {
   document.querySelectorAll('button[data-tab]').forEach((b) => {
     b.classList.toggle('active', b.dataset.tab === name); b.setAttribute('aria-checked', b.dataset.tab === name);
@@ -107,7 +122,7 @@ function switchTab(name) {
   if (name === 'board') renderBoard(); else { closeGallery(); pauseBoard(); }
   if (name === 'scene') sceneModule().then((m) => { if (currentTab() === 'scene') m.show(); }).catch((e) => { console.error(e); toast(`3D view: ${e.message}${whereFrom(e)}`, true); });
   else if (sceneMod) sceneMod.hide();
-  $('.actionbar').classList.toggle('hidden', name !== 'generate');
+  syncActionBar();   // (the bar is on every screen: on the table it runs the Make panel)
 }
 // where an error came from: its first two places in our files (file:line), short enough for a toast on a tablet
 function whereFrom(e) {
@@ -145,9 +160,11 @@ wireDownloads($('#dlBtn'));
 $('#dlBtn').addEventListener('click', openDownloads);
 $('#sheetBackdrop').addEventListener('click', closeSheet);
 $('#moreHistory').addEventListener('click', () => loadHistory(true));
-const setBatch = (n) => { S.batch = Math.max(1, Math.min(32, n)); $('#batchVal').textContent = S.batch; };
 $('#batchMinus').addEventListener('click', () => setBatch(S.batch - 1));
 $('#batchPlus').addEventListener('click', () => setBatch(S.batch + 1));
+addEventListener('deck:batch', () => { $('#batchVal').textContent = S.batch; });   // (the table's Make panel sets it too)
+
+for (const ev of ['make:state', 'table:select', 'table:live', 'table:unlive', 'deck:generate']) addEventListener(ev, () => queueMicrotask(syncActionBar));
 $('#prefsBtn').addEventListener('click', openPrefs);
 $('#debugBtn').addEventListener('click', () => {
   const counts = Object.entries(S.debugCounts).map(([k, v]) => `${k}: ${v}`).join('\n');
@@ -169,7 +186,10 @@ addEventListener('storage', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.defaultPrevented) return;
   if (e.key === 'Escape') closeSheet();
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !e.target.closest('[role=dialog]')) $('#genBtn').click();
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !e.target.closest('[role=dialog]')) {
+    const b = $('#genBtn');
+    if (b.disabled && b.dataset.why) toast(b.dataset.why, true); else b.click();
+  }
 });
 
 // The other panels' layout lives in layout.js: splitters, icon tabs, maximize

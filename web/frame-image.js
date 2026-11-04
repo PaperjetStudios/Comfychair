@@ -4,14 +4,20 @@
 // become layers in it, each as its still; so do pictures dropped on it from the Shelf or a picker (sources).
 //
 // table.js's events (detail.handled = true when taken here): table:live, table:unlive, table:resize, table:drop-frame.
-import { $, h, api, toast } from './ui.js';
+//
+// A frame's size is fixed, or fitted to its layers (frame.fit === true: the editor's Canvas → Fit layers, E.size null).
+// A fitted frame's w/h are the area its layers covered when it was last open (frame.fitBox: { x, y, w, h } in the edit's
+// own pixels), so its tile has their shape and the Make panel their size. A frame without `fit` is fixed, as before.
+// Choosing Fit layers in the open editor fits the frame on coming back; a size set on the table (the handles, Size and
+// MP, the MP box, undo) makes it fixed; the Frame pane's Fit layers / Fixed size sets it either way.
+import { $, h, api, toast, field, help, seg } from './ui.js';
 import { CURRENT_EDIT, S } from './core.js';
-import { E, editTabs, editorStill, editorStillBlob, mountEditor, persistEditor, renderEditor, unmountEditor } from './editor.js';
+import { E, editTabs, editorFrame, editorStill, editorStillBlob, editorToFixed, mountEditor, persistEditor, renderEditor, unmountEditor } from './editor.js';
 import { uploadImage } from './media.js';
 import { draggingPicture, droppedFiles, dropKind } from './drop-files.js';
 import { isLive } from './live.js';
 import { sidebar } from './sidebar.js';
-import { frameChanged, refreshStills, tableFrames } from './table.js';
+import { frameChanged, refreshStills, selectedFrames, tableFrames } from './table.js';
 import { dropInput, editDoc, sourcePicture } from './table-frames.js';
 
 const F = { seq: 0, mounted: null };   // mounted: the id of the frame the editor is in
@@ -23,6 +29,7 @@ addEventListener('table:live', (e) => {
   const { frame, root } = e.detail;
   if (frame.kind !== 'image') return;
   e.detail.handled = true;
+  if (fitResized(frame)) { toFixed(frame); queueMicrotask(frameChanged); }   // (sized on the table since: Size and MP)
   live(frame, root);
 });
 
@@ -68,19 +75,111 @@ function wireDrop(root, frame) {
   });
 }
 
-// The frame's size is the edit's canvas: a size set on the table (Size and MP, the handles) is taken when it opens
+// The frame's size is the edit's canvas: a size set on the table (Size and MP, the handles) is taken when it opens.
+// A fitted frame leaves the editor fitting its layers (an animation keeps a fixed canvas: the frame turns fixed).
 function applySize(frame) {
-  const s = E.size;
-  if (s && s.w === frame.w && s.h === frame.h) return;
-  E.size = { w: frame.w, h: frame.h }; E.sizeShape = null;
+  if (frame.fit === true && E.anim) { toFixed(frame); queueMicrotask(frameChanged); }
+  if (frame.fit === true) {
+    if (!E.size) return;
+    E.size = null; E.sizeShape = null;
+  } else {
+    const s = E.size;
+    if (s && s.w === frame.w && s.h === frame.h) return;
+    if (!s) editorToFixed();   // (from fitting its layers: they stay where they show, the canvas's corner on theirs)
+    E.size = { w: frame.w, h: frame.h }; E.sizeShape = null;
+  }
   persistEditor(); renderEditor();
 }
 addEventListener('table:resize', (e) => {
   const { frame } = e.detail;
-  if (frame.kind !== 'image' || F.mounted !== frame.id) return;
+  if (frame.kind !== 'image') return;
+  if (frame.fit === true) toFixed(frame);   // (a size set on the table: fixed from now on)
+  if (F.mounted !== frame.id) return;
   e.detail.handled = true;
   applySize(frame);
 });
+// the handles (and undo) resize a frame that isn't open without table:resize: a fitted one turns fixed then
+addEventListener('table:move', (e) => {
+  let any = false;
+  for (const f of e.detail?.frames || []) if (f.kind === 'image' && fitResized(f)) { toFixed(f); any = true; }
+  if (any) queueMicrotask(frameChanged);
+});
+
+const fitResized = (f) => f.fit === true && !!f.fitBox && (f.fitBox.w !== f.w || f.fitBox.h !== f.h);
+function toFixed(f) { f.fit = false; delete f.fitBox; }
+// what the open editor shows for the frame now: its size, and fitted or not (on coming back, and for the Frame pane)
+function takeSize(frame) {
+  const was = JSON.stringify([frame.w, frame.h, frame.fit, frame.fitBox]);
+  if (E.size) { toFixed(frame); Object.assign(frame, { w: E.size.w, h: E.size.h }); }
+  else {
+    frame.fit = true;
+    const r = editorFrame();
+    if (r) { frame.fitBox = { x: r.x, y: r.y, w: r.w, h: r.h }; Object.assign(frame, { w: r.w, h: r.h }); }
+  }
+  return JSON.stringify([frame.w, frame.h, frame.fit, frame.fitBox]) !== was;
+}
+
+// The Frame pane's Fit layers / Fixed size, for an image frame (the pane is table.js's: this part is added each time it
+// is drawn). Open: the editor follows at once, and the frame takes its shape on coming back. Not open: its edit is
+// changed where it is saved, and drawn off screen for its new shape (later, when another image frame is open).
+sidebar.addTo('frame', (el) => {
+  el.querySelector('.frame-fit-field')?.remove();
+  const sel = selectedFrames() || [], f = sel.length === 1 ? sel[0] : null;
+  if (!f || f.kind !== 'image' || !f.doc) return;
+  if (fitResized(f)) { toFixed(f); queueMicrotask(frameChanged); }
+  const at = el.querySelector('.table-size')?.closest('.field');
+  if (!at) return;
+  const fit = F.mounted === f.id ? !E.size : f.fit === true;
+  const row = field('Picture size', seg([['fit', 'Fit layers'], ['fixed', 'Fixed size']], fit ? 'fit' : 'fixed', (v) => setFit(f, v === 'fit')),
+    help('Fit layers: the picture is just big enough for its layers, and the frame takes their shape. Fixed size: the frame\'s size is the canvas; resizing the frame on the table makes it fixed.'));
+  row.classList.add('frame-fit-field');
+  at.after(row);
+});
+
+async function setFit(f, on) {
+  if (F.mounted === f.id) {
+    if (on && E.anim) { toast('An animation keeps a fixed canvas', true); frameChanged(); return; }
+    if (on) { E.size = null; E.sizeShape = null; } else if (!E.size) editorToFixed();
+    persistEditor(); renderEditor();
+    f.fit = on; if (!on) delete f.fitBox;   // (its w/h follow when it is let go: takeSize)
+    frameChanged();
+    return;
+  }
+  if (on === (f.fit === true)) return;
+  const box = f.fitBox;
+  f.fit = on; if (!on) delete f.fitBox;
+  frameChanged();
+  try {
+    const t = editTabs();
+    if (t?.active?.id === f.doc) {   // (the Image tab has its edit, off screen)
+      if (on && E.anim) throw new Error('An animation keeps a fixed canvas');
+      if (on) { E.size = null; E.sizeShape = null; } else if (!E.size) editorToFixed();
+      if (!on) E.size = { w: f.w, h: f.h };
+      persistEditor();
+    } else {
+      await editDoc('image', f.doc, (p) => {
+        if (on && p.anim) throw new Error('An animation keeps a fixed canvas');
+        if (on) { p.size = null; return; }
+        if (!p.size && box && (box.x || box.y)) for (const l of p.layers || []) {   // (as Canvas → Fixed size: the layers stay where they show)
+          if (l.x == null) continue;
+          l.x -= box.x; l.y -= box.y;
+          for (const k of l.chans?.x || []) k.v -= box.x;
+          for (const k of l.chans?.y || []) k.v -= box.y;
+        }
+        p.size = { w: f.w, h: f.h };
+      });
+    }
+    // its shape: the edit drawn off screen, then the area its layers cover (the frame keeps its size while one is open)
+    if (on && (await drawOffscreen(f.doc)) && !E.size && t?.active?.id === f.doc && f.fit === true) {
+      if (takeSize(f)) frameChanged();
+    }
+  } catch (err) {
+    toast(err.message, true);
+    f.fit = !on; if (!on && box) f.fitBox = box;
+    frameChanged();
+  }
+  refreshStills(['image']);
+}
 
 addEventListener('table:unlive', (e) => {
   const { frame } = e.detail;
@@ -89,9 +188,8 @@ addEventListener('table:unlive', (e) => {
   if (F.mounted !== frame.id) return;
   e.detail.handled = true;
   F.mounted = null;
-  // a canvas size changed in the editor while open: the frame takes it
-  const s = E.size, resized = s && (s.w !== frame.w || s.h !== frame.h);
-  if (resized) Object.assign(frame, { w: s.w, h: s.h });
+  // a canvas size changed in the editor while open, or Fit layers picked: the frame takes it
+  const resized = takeSize(frame);
   const still = editorStill();   // (the composite is drawn at once, before anything moves; the upload follows)
   unmountEditor();
   if (resized) queueMicrotask(frameChanged);

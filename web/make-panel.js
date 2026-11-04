@@ -8,12 +8,15 @@
 //                        output size, and results land as layers in it (live or not: imagetools.js landMade, owed runs)
 //   a video frame:       video templates; Pick a frame puts an image frame's picture in a slot; results land as clips.
 //                        Or VFX (frame-vfx.js): the VFX tab's effects on the frame's own VFX document; results land as clips
-//   a 3D or sound frame: their templates; results are in the Shelf (Use as… from the toast)
+//   a 3D frame:          its templates; results are in the Shelf (Use as… from the toast)
+//   a sound frame:       sound templates; the sounds made go into its mix (frame-sound.js, as a drop)
 //
 //   renderMake(host, frames)   draw the panel into host for the selection (the sidebar calls it; table:select redraws it)
 //   runMake()                  Run (the Generate button and Ctrl+Enter call it while the table is on screen)
+//   makeState()                { label, why } for the action bar's button: what Run makes for the selection, and why
+//                              it can't (null when it can); `make:state` says when it may have changed
 import { h, api, store, toast, button, iconBtn, seg, field, hint, help, note, openSheet, closeSheet, runBar, actions } from './ui.js';
-import { S, CURRENT_EDIT, inputUrl, thumbUrl } from './core.js';
+import { S, CURRENT_EDIT, inputUrl, setBatch, thumbUrl } from './core.js';
 import { afterQueued, persist, preparePictures, renderFields, runBuilder, runValues, selectTemplate, stop } from './generate.js';
 import { borrow, giveBack, lentOut } from './gentabs.js';
 import { refused } from './tabs.js';
@@ -30,7 +33,7 @@ import { icon } from './icons.js';
 import { frameOfVfx, hideFrameVfx, showFrameVfx } from './frame-vfx.js';
 import { runVfx } from './vfx.js';
 
-const P = { fresh: [], ready: Promise.resolve(), host: null, frames: [], table: null, lentFor: null, els: null, prog: null, batch: Math.max(1, store.get('deck.make.batch', 1)) };
+const P = { fresh: [], ready: Promise.resolve(), host: null, frames: [], table: null, lentFor: null, els: null, prog: null, batchIn: null };
 const KIND_WORD = { none: 'a new frame', image: 'this picture', video: 'this video', scene: 'this 3D frame', sound: 'this sound frame' };
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
 const docUrl = (kind, id) => `/api/store/${DOC_KIND[kind]}/${id}${qs()}`;
@@ -55,6 +58,9 @@ export function renderMake(host = P.host, frames = P.frames) {
 }
 
 function draw() {
+  try { drawPanel(); } finally { tellState(); }
+}
+function drawPanel() {
   const host = P.host;
   if (!host) return;
   if (!S.templates?.length) { host.replaceChildren(note('The templates are still loading.', 'warn')); P.lentFor = null; return; }
@@ -88,12 +94,38 @@ export function useVfxMode(on) {
 }
 function syncMode(kind, frame) {
   const on = vfxOn(kind, frame);
-  P.els.mode.replaceChildren(kind === 'video' && frame?.doc
-    ? seg([['make', 'Templates'], ['vfx', 'VFX']], on ? 'vfx' : 'make', (v) => useVfxMode(v === 'vfx')) : null);
+  P.els.mode.replaceChildren(...(kind === 'video' && frame?.doc   // (nothing else: replaceChildren(null) would show "null")
+    ? [seg([['make', 'Templates'], ['vfx', 'VFX']], on ? 'vfx' : 'make', (v) => useVfxMode(v === 'vfx'))] : []));
   for (const k of ['head', 'picker', 'notes', 'basics', 'fields']) P.els[k].classList.toggle('hidden', on);
   P.els.vfx.classList.toggle('hidden', !on);
   if (on) showFrameVfx(P.els.vfx, frame); else hideFrameVfx();
+  tellState();
 }
+
+// What Run makes for the selection, as the action bar's button says it, and why it can't run (null when it can)
+const RUN_WORD = { none: 'Generate', image: 'Generate', video: 'Make video', scene: 'Make 3D', sound: 'Make sound' };
+export function makeState() {
+  let frames = [];
+  try { frames = selection() || []; } catch { /* the table isn't up yet */ }
+  const { kind, frame } = makeTarget(frames), vfx = vfxOn(kind, frame);
+  const label = vfx ? 'Run VFX' : RUN_WORD[kind] || 'Generate';
+  let why = null;
+  if (!vfx) {
+    if (!S.templates?.length) why = 'The templates are still loading';
+    else if (!templatesFor(S.templates, kind).length) why = `No template makes anything for ${KIND_WORD[kind]}`;
+    else if (frame && DOC_KIND[kind] && !frame.doc) why = `${frame.label || 'This frame'} has no document yet`;
+    else if (lentOut() && P.lentFor === `${kind}:${frame?.id || ''}` && S.tpl?.error) why = `${S.tpl.name} has an error: pick another template`;
+  }
+  return { label, why };
+}
+export const makeLabel = () => makeState().label;
+let stateDue = false;
+function tellState() {
+  if (stateDue) return;
+  stateDue = true;
+  queueMicrotask(() => { stateDue = false; dispatchEvent(new CustomEvent('make:state')); });
+}
+addEventListener('deck:batch', () => { if (P.batchIn && document.activeElement !== P.batchIn) P.batchIn.value = S.batch; });
 
 // what the borrowed fields draw into, and what they show differently here
 function target(kind, frame) {
@@ -139,8 +171,9 @@ function drawHead(kind, frame, list) {
   if (t && shown.some((x) => x.id === t.id)) sel.value = t.id;
   const famSeg = seg(fams.map((f) => [f, f]), fam, (f) => { const first = list.find((x) => (x.family || 'Other') === f); if (first) choose(kind, first.id); }, { wrap: true });
   P.els.picker.replaceChildren(fams.length > 1 ? famSeg : null, sel);
-  const batchIn = h('input', { type: 'number', min: 1, max: 16, value: P.batch, inputMode: 'numeric', 'aria-label': 'How many',
-    onchange: () => { P.batch = Math.min(16, Math.max(1, Math.round(+batchIn.value) || 1)); batchIn.value = P.batch; store.set('deck.make.batch', P.batch); } });
+  // (the batch is the action bar's: the stepper there and this box set the same S.batch)
+  const batchIn = P.batchIn = h('input', { type: 'number', min: 1, max: 32, value: S.batch, inputMode: 'numeric', 'aria-label': 'How many',
+    onchange: () => { batchIn.value = setBatch(batchIn.value); } });
   const owed = kind === 'image' && frame?.doc ? owedTo(frame.doc).length : 0;
   P.prog ||= { bar: h('div', { class: 'make-prog-bar' }), text: h('span', { class: 'make-prog-text' }) };
   P.els.head.replaceChildren(
@@ -150,8 +183,9 @@ function drawHead(kind, frame, list) {
     h('div', { class: 'make-prog' }, P.prog.bar, P.prog.text),
     hint(frame ? `For ${frame.label || 'the frame'} · ${landsWord(kind)}${owed ? ` · ${owed} on the way` : ''}` : `Lands as ${landsWord(kind)}`, 'make-for'));
   mirrorProgress();
+  tellState();
 }
-const landsWord = (kind) => ({ frame: 'a new frame beside the last', layer: 'new layers in it', clip: 'clips on its timeline', shelf: 'lands in the Shelf' })[LANDS[kind]];
+const landsWord = (kind) => ({ frame: 'a new frame beside the last', layer: 'new layers in it', clip: 'clips on its timeline', mix: 'sounds in its mix', shelf: 'lands in the Shelf' })[LANDS[kind]];
 
 function choose(kind, id) {
   store.set(`deck.make.tpl.${kind}`, id);
@@ -243,7 +277,7 @@ export async function runMake() {
       if (s) { values[pair[0].key] = s.w; values[pair[1].key] = s.h; }
     }
     await preparePictures(values, new Set(imgF ? [imgF.key] : []));
-    const batch = P.batch;
+    const batch = S.batch;
     const gens = await queueRun({ template: t.id, values, batch, builder: runBuilder(), timeout: 120000 });
     afterQueued(gens, batch);
     await land(kind, frame, t, gens, sent, values);
@@ -260,7 +294,7 @@ function land(kind, frame, t, gens, sent, values) {
   if (kind === 'image') return landLayers(frame, t, gens, sent);
   for (const g of gens) {
     waitGen(g.id).then((done) => (kind === 'none' ? landFrames(done, values, t) : kind === 'video' ? landClips(frame, done)
-      : inShelf(done))).catch((e) => toast(`${t.name} failed: ${e.message}`, true));
+      : kind === 'sound' && frame?.doc ? landSounds(frame, done) : inShelf(done))).catch((e) => toast(`${t.name} failed: ${e.message}`, true));
   }
 }
 
@@ -268,6 +302,7 @@ function land(kind, frame, t, gens, sent, values) {
 async function landLayers(frame, t, gens, sent) {
   const eng = liveEngine(frame);
   let rect = eng?.frame?.();
+  if (!rect && frame.fit && frame.fitBox) rect = { ...frame.fitBox };   // (a frame sized by its layers: where they were last)
   if (!rect) {
     const d = await api(docUrl('image', frame.doc), { busy: false }).catch(() => null);
     rect = canvasRect(d?.payload, frame);
@@ -355,7 +390,15 @@ function durationOf(url) {
   });
 }
 
-// 3D and sound frames, and anything with nowhere to go: the result is in the Shelf (History) already
+// sound frame: each sound it made into its mix (frame-sound.js takes it as a drop: the open mix when it is live)
+function landSounds(frame, done) {
+  const outs = (done.outputs || []).map((o, index) => ({ o, index })).filter(({ o }) => o.kind === 'audio');
+  if (!outs.length) return inShelf(done);
+  const still = Table.frameById(frame.id);
+  if (!still || !Table.dropOntoFrame(still, outs.map(({ index }) => ({ generation: done.id, index })))) inShelf(done);
+}
+
+// 3D frames, and anything with nowhere to go: the result is in the Shelf (History) already
 function inShelf(done) {
   toast(`#${done.id} is done: it is in the Shelf`, false, { label: 'Use as…', fn: async () => (await import('./useas.js')).openUseAs(done, 0) });
 }

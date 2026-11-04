@@ -47,6 +47,7 @@ import { KIND_ICON, copyDoc, createDoc, dropInput, editDoc, frameEl, frameFor, k
 import { sidebar } from './sidebar.js';
 
 const ZMIN = 0.02, ZMAX = 8, DRAG_PX = 4, SNAP_PX = 8, DWELL_MS = 600, NUDGE = 1;
+const DOUBLE_MS = 380, DOUBLE_PX = 24;   // a double tap: the second within this long and this near (screen pixels)
 const SOURCE_TYPE = 'application/x-deck-source';   // an in-app drag's payload: JSON { generation, index } | { input } | { media }
 const NEW_KINDS = ['image', 'video', 'scene', 'sound', 'note'];
 
@@ -228,9 +229,22 @@ function newAtCentre(kind) {
   const s = kind === 'sound' ? { w: 1024, h: 256 } : kind === 'note' ? { w: 480, h: 320 } : M.sizeForMp(1, 1, 1);
   return makeFrame(kind, { x: c.x - s.w / 2, y: c.y - s.h / 2, ...s });
 }
-function kindMenu(x, y, make, label = 'New frame') {
-  openPressMenu(x, y, [NEW_KINDS.map((k) => ({ label: M.KIND_LABEL[k], run: () => make(k) }))], label);
+// more(): the quick-start sheet for the same place (quick-start.js)
+function kindMenu(x, y, make, label = 'New frame', more = null) {
+  openPressMenu(x, y, [NEW_KINDS.map((k) => ({ label: M.KIND_LABEL[k], run: () => make(k) })),
+    more ? [{ label: 'Quick start…', run: more }] : []].filter((g) => g.length), label);
 }
+// The quick-start sheet (quick-start.js) for a table point: { x, y, rect?, kind?, centre? }
+export function quickStart(at) {
+  return import('./quick-start.js').then((m) => m.openQuickStart(at)).catch((e) => toast(`Couldn't open the quick start: ${e.message}`, true));
+}
+// for quick-start.js: a new frame of a kind over rect (its document made from payload; extra: the frame's own fields,
+// such as make, set before the table says it is selected), and the grid
+export function newFrameAt(kind, rect, { payload, extra = {} } = {}) {
+  const f = M.newFrame(kind, rect, { label: nextLabel(kind), ...extra });
+  return makeFrame(kind, f, { payload, frame: f });
+}
+export const tableGrid = () => ({ ...T.grid });
 
 // Live: the frame's mount root fills the stage less a margin, in .live-layer (unscaled: engines work at 1:1); the
 // table behind is fitted to the frame and dimmed; the frame's module mounts its engine in the root and fits it there.
@@ -502,7 +516,7 @@ function stageMenu(e) {
   if (f) return frameMenu(e.clientX, e.clientY, f);
   const r = D.stage.getBoundingClientRect(), p = M.toTable(T.view, e.clientX - r.left, e.clientY - r.top);
   const at = (k) => (k === 'sound' ? { w: 1024, h: 256 } : k === 'note' ? { w: 480, h: 320 } : M.sizeForMp(1, 1, 1));
-  kindMenu(e.clientX, e.clientY, (k) => makeFrame(k, { ...p, ...at(k) }), 'New frame here');
+  kindMenu(e.clientX, e.clientY, (k) => makeFrame(k, { ...p, ...at(k) }), 'New frame here', () => quickStart({ ...p }));
 }
 
 // ---------------------------------------------------------------------------
@@ -522,7 +536,7 @@ function onDown(e) {
   if (inLive(e) || e.target.closest('.max-btn, .pull-tab, textarea')) return;
   if (e.pointerType === 'touch') {
     U.pts.set(e.pointerId, local(e));
-    if (U.pts.size === 2) { cancelOp(); U.op = isLive() ? null : { type: 'pinch', last: [...U.pts.values()] }; return; }
+    if (U.pts.size === 2) { U.lastEmpty = null; cancelOp(); U.op = isLive() ? null : { type: 'pinch', last: [...U.pts.values()] }; return; }
     if (U.pts.size > 2) return;
   }
   if (e.button === 2) return;   // (the menu comes with contextmenu)
@@ -530,6 +544,7 @@ function onDown(e) {
   try { D.stage.setPointerCapture(e.pointerId); } catch { /* the pointer is gone */ }
   const base = { id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false };
   const handle = e.target.closest('.frame-handle'), f = frameAt(e);
+  if (isLive() || handle || f || e.button !== 0 || U.space) U.lastEmpty = null;   // (only tap, tap on empty table counts)
   if (isLive()) U.op = { ...base, type: 'backdrop' };   // (the table behind a live frame: a tap beside it lets go of it)
   else if (e.button === 1 || (e.button === 0 && U.space)) U.op = { ...base, type: 'pan', v0: { ...T.view } };
   else if (handle) {
@@ -540,7 +555,7 @@ function onDown(e) {
 }
 function startMove(e, f, base) {
   // a second tap on the same frame opens it (a dblclick would land on the stage, which holds the pointer)
-  if (!e.shiftKey && U.lastTap?.id === f.id && Date.now() - U.lastTap.t < 400) { U.lastTap = null; U.op = null; goLive(f); return; }
+  if (!e.shiftKey && U.lastTap?.id === f.id && Date.now() - U.lastTap.t < DOUBLE_MS) { U.lastTap = null; U.op = null; goLive(f); return; }
   if (e.shiftKey) {
     if (U.sel.has(f.id)) { U.sel.delete(f.id); renderFrames(); return; }
     U.sel.add(f.id);
@@ -650,13 +665,23 @@ function endMove(e, op) {
   if (!e.shiftKey && U.sel.size > 1) { U.sel = new Set([op.tap.id]); renderFrames(); }   // a tap in a selection picks that one
 }
 function endMarquee(e, op) {
-  if (!op.moved) { U.sel = op.shift ? U.sel : new Set(); renderFrames(); return; }
+  if (!op.moved) {
+    U.sel = op.shift ? U.sel : new Set(); renderFrames();
+    // a second tap on empty table, soon and near the first: the quick-start sheet there (a box or a pan in between
+    // forgets the first tap)
+    const t = Date.now(), last = U.lastEmpty;
+    U.lastEmpty = null;
+    if (!op.shift && last && t - last.t < DOUBLE_MS && Math.hypot(e.clientX - last.cx, e.clientY - last.cy) < DOUBLE_PX) quickStart({ x: last.p.x, y: last.p.y });
+    else if (!op.shift) U.lastEmpty = { t, cx: e.clientX, cy: e.clientY, p: op.p0 };
+    return;
+  }
+  U.lastEmpty = null;
   if (op.shift || M.framesIn(T.frames, op.rect).length) return;
   // a box over nothing: a frame that size, of the kind picked (its corners on the grid when that's on)
   const g = (v, a) => M.snapValue(v, a, [], T.grid, 0, { edges: false });
   const r = op.rect, x = g(r.x, 'x'), y = g(r.y, 'y');
   const rect = { x, y, w: Math.max(M.MIN_SIDE, g(r.x + r.w, 'x') - x), h: Math.max(M.MIN_SIDE, g(r.y + r.h, 'y') - y) };
-  kindMenu(e.clientX, e.clientY, (k) => makeFrame(k, rect));
+  kindMenu(e.clientX, e.clientY, (k) => makeFrame(k, rect), 'New frame', () => quickStart({ x: rect.x, y: rect.y, rect }));
 }
 // a gesture given up (a second finger, the menu, a cancelled pointer): whatever it moved goes back
 function cancelOp(op = U.op) {
@@ -790,14 +815,21 @@ export async function dropOnTable(list, clientX, clientY) {
   const r = D.stage.getBoundingClientRect(), ok = here();
   let at = M.toTable(T.view, clientX - r.left, clientY - r.top), made = 0;
   for (const src of [list].flat()) {
-    let got;
-    try { got = await frameFor(src, at); } catch (err) { toast(err.message, true); continue; }
-    if (!ok()) { dropInput(got?.fresh); return; }   // (another table opened meanwhile: a picture uploaded for it goes)
-    if (!got) { toast('That can\'t go on the table', true); continue; }
-    got.frame.label = got.frame.label || nextLabel(got.frame.kind);
-    if (await makeFrame(got.frame.kind, got.frame, { ...got, ok })) { made++; at = { x: got.frame.x + got.frame.w + 40, y: got.frame.y }; }
+    const f = await sourceFrameAt(src, at, ok);
+    if (f === false) return;
+    if (f) { made++; at = { x: f.x + f.w + 40, y: f.y }; }
   }
   if (made > 1) toast(`Added ${made} frames`);
+}
+// One dropped thing as a frame of its own, its top-left at the table point `at` (frameFor): the frame, null when it
+// couldn't be made, false when another table opened meanwhile
+export async function sourceFrameAt(src, at, ok = here()) {
+  let got;
+  try { got = await frameFor(src, at); } catch (err) { toast(err.message, true); return null; }
+  if (!ok()) { dropInput(got?.fresh); return false; }   // (another table opened meanwhile: a picture uploaded for it goes)
+  if (!got) { toast('That can\'t go on the table', true); return null; }
+  got.frame.label = got.frame.label || nextLabel(got.frame.kind);
+  return makeFrame(got.frame.kind, got.frame, { ...got, ok });
 }
 
 // ---------------------------------------------------------------------------
@@ -812,7 +844,7 @@ function renderPanel() {
     onclick: () => { U.sel = new Set([f.id]); renderFrames(); reveal(f); }, ondblclick: () => goLive(f) },
   icon(KIND_ICON[f.kind]), h('span', { class: 'table-row-name' }, f.label), h('span', { class: 'table-row-size' }, `${f.w}×${f.h}`), f.locked ? icon('lock') : null);
   D.panel.replaceChildren(
-    section('Frames', null, help('Drag on empty table to make a frame there. Double-click a frame, or press Enter, to open it at full size; Esc comes back. Wheel zooms, Space + drag pans, F fits.'),
+    section('Frames', null, help('Drag on empty table to make a frame there; double-tap empty table for the quick starts. Double-click a frame, or press Enter, to open it at full size; Esc comes back. Wheel zooms, Space + drag pans, F fits.'),
       T.frames.length ? h('div', { class: 'table-rows' }, [...T.frames].reverse().map(row)) : hint('No frames yet.')),
     section('Frame', null, one ? frameFields(one) : hint(s.length ? `${s.length} frames selected` : 'Select a frame.')));
 }
@@ -862,7 +894,10 @@ function buildBar() {
   const gridSize = h('select', { 'aria-label': 'Grid size', onchange: () => { T.grid.size = +gridSize.value; applyView(); changed(); } },
     [16, 32, 64, 128, 256].map((v) => h('option', { value: v }, `${v} px`)));
   D.syncBar = () => { gridChip.classList.toggle('on', !!T.grid.on); gridSize.value = String(T.grid.size); };
-  const newBtn = button('＋ New frame ▾', (e) => { const r = newBtn.getBoundingClientRect(); kindMenu(r.left, r.bottom + 4, newAtCentre); });
+  const newBtn = button('＋ New frame ▾', () => {
+    const r = newBtn.getBoundingClientRect(), { w, h: hh } = stageSize();
+    kindMenu(r.left, r.bottom + 4, newAtCentre, 'New frame', () => quickStart({ ...M.toTable(T.view, w / 2, hh / 2), centre: true }));
+  });
   D.zoom = h('button', { type: 'button', class: 'btn small ghost table-zoom', title: 'Zoom: tap for 100%', onclick: () => zoomTo(1) }, '100%');
   D.bar = h('div', { class: 'table-bar' },
     button('Fit', () => fit(U.sel.size ? selected() : T.frames), { title: 'Fit all, or the selected frames (F)' }),

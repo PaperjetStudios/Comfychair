@@ -3,8 +3,9 @@
 // drives it; tests/table_model.test.mjs checks it in node.
 //
 //   payload: { v: 1, view: { x, y, z }, grid: { on, size },
-//              frames: [{ id, kind, doc, x, y, w, h, label, locked?, story?: { scene, shot }, text?, preview? }], story? }
-// (text: a note's words; preview: the picture an image frame was made from, shown until its document has a still)
+//              frames: [{ id, kind, doc, x, y, w, h, label, locked?, story?: { scene, shot }, text?, preview?, fit?, fitBox? }], story? }
+// (text: a note's words; preview: the picture an image frame was made from, shown until its document has a still;
+// fit: an image frame sized by its layers, w, h then the area they cover, fitBox: that area in the edit (frame-image.js))
 // Table units are pixels at zoom 1. A frame's w, h is its canvas size. The screen point of a table point p is
 // p * z + (x, y). Frames later in the list sit on top.
 

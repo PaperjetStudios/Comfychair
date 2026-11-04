@@ -182,6 +182,10 @@ export function unmountEditor() {
 }
 export const persistEditor = () => ED.changed();
 export const renderEditor = () => ED.render();
+// The picture's area: { x, y, w, h } of the fixed canvas, or around its visible layers when it fits them (null: none yet)
+export const editorFrame = () => ED.frame();
+// Fit layers → a fixed canvas the size they fill now, the layers moved so they stay where they show (Canvas → Fixed size)
+export const editorToFixed = () => ED.toFixed();
 export const editTabs = () => tabs;
 
 tabs = new TabSet({ kind: 'edit-tabs', host: $('#tab-editor'), newName: (n) => `Edit ${n}`, seed: () => (store.get(SEEDED, false) ? null : ED.dump()),

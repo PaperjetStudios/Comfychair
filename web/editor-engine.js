@@ -2066,7 +2066,7 @@ export function createEditor(cfg) {
   }
   const eng = {
     E, render: renderEditor, draw: drawEditorCanvas, changed: persistEditor, load, dump: dumpEditor, compose: composeEditor,
-    blob: editorBlob, frame: editorFrame, composeMask, drawLayer, layerPicture, bounds, layerRect, ready, loading: () => E.layers.some((l) => !l.broken && !ready(l)), addImage, pause: editorPause,
+    blob: editorBlob, frame: editorFrame, toFixed: toFixedSize, composeMask, drawLayer, layerPicture, bounds, layerRect, ready, loading: () => E.layers.some((l) => !l.broken && !ready(l)), addImage, pause: editorPause,
     zoom: viewZoom, get paint() { return paint; },
     // the panel's parts, for the host to lay out
     topRow, layerList, layerProps: () => (picked().length > 1 ? groupProps(picked()) : E.sel?.maskOf ? maskProps(E.sel) : E.sel ? [layerProps(E.sel), E.cropping ? null : adjustProps(E.sel)] : null), picked, animProps, canvasProps, exportProps,
