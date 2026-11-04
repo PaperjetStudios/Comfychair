@@ -12,7 +12,9 @@
 //
 // Events for the frame-kind modules (on window, detail.handled = true when taken):
 //   table:live       { frame, root, table }   mount the frame's engine in root (live.js has the gate)
-//   table:unlive     { frame, root }          save and let go; root is removed after
+//   table:unlive     { frame, root, wait: [] } save and let go; root is removed after. A module that saves after this
+//                    pushes that promise into wait: the table waits for them before trashing a document (deleting the
+//                    frame or its table), so a late save never meets a trashed document
 //   table:drop-frame { from: [frame], sources: [src], onto: frame, table }   frames held over another and let go there,
 //                    or things dropped on it from the Shelf, a picker or the computer (sources: { generation, index } |
 //                    { input } | { media, kind?, url?, label? } | File, as frameFor takes; table-frames.js sourcePicture /
@@ -21,7 +23,7 @@
 //   table:select     { frames: [frame], table }  the selection changed (sidebar.js follows it)
 //   table:resize     { frame, table }            a frame's size was set while it is live (its module applies it)
 //   table:move       { frames: [frame], table }  frames were moved by a drag, the arrows (once they stop) or Undo
-import { $, h, api, store, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, toggle, help, mpInput } from './ui.js';
+import { $, h, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, toggle, help, mpInput } from './ui.js';
 import { S, onServer, onProject } from './core.js';
 import { TabSet } from './tabs.js';
 import { currentTab } from './navigation.js';
@@ -35,7 +37,7 @@ import { wireTableNav } from './table-nav.js';
 import { droppedFiles, draggingPicture } from './drop-files.js';
 import { isLive, liveFrame, liveRoot, setLive } from './live.js';
 import * as M from './table-model.js';
-import { KIND_ICON, copyDoc, createDoc, frameEl, frameFor, kindOfDoc, loadStills, owedCounts, renameDoc, restoreDoc, syncFrame, trashDoc } from './table-frames.js';
+import { KIND_ICON, copyDoc, createDoc, editDoc, frameEl, frameFor, kindOfDoc, loadStills, owedCounts, renameDoc, restoreDoc, syncFrame, trashDoc } from './table-frames.js';
 import { sidebar } from './sidebar.js';
 
 const ZMIN = 0.02, ZMAX = 8, DRAG_PX = 4, SNAP_PX = 8, DWELL_MS = 600, NUDGE = 1;
@@ -43,49 +45,63 @@ const SOURCE_TYPE = 'application/x-deck-source';   // an in-app drag's payload: 
 const NEW_KINDS = ['image', 'video', 'scene', 'sound', 'note'];
 
 let T = M.blankTable();   // the open table
-const U = { sel: new Set(), els: new Map(), wired: false, lastTap: null, tabs: null, mode: null, retryAt: 0, op: null, pts: new Map(), space: false, panelSig: '',
-  before: null /* the view before a frame went live */, nudge: null /* arrows held: { ids, before, t } */ };
+const U = { sel: new Set(), els: new Map(), wired: false, lastTap: null, tabs: null, op: null, pts: new Map(), space: false, panelSig: '',
+  before: null /* the view before a frame went live */, nudge: null /* arrows held: { ids, before, t } */,
+  loaded: null /* { id, pid } of the table loaded last */, leaving: Promise.resolve() /* the last live frame's saves (table:unlive wait) */ };
 const H = { past: [], future: [] };   // undo: [{ undo(), redo() }] for this table's moves, resizes and deletes
 const D = {};             // its elements
 
 // ---------------------------------------------------------------------------
-// saving: a `tables` document through TabSet, or this device's storage until the server knows the kind
+// saving: a `tables` document through TabSet
 // ---------------------------------------------------------------------------
-const localKey = () => `deck.tables.${S.project ?? 'none'}`;
 const adapter = {
   empty: M.blankTable,
   migrate: M.migrateTable,
   dump: () => T,
-  load(p) { unlive(); T = M.migrateTable(p); U.sel.clear(); H.past = []; H.future = []; U.nudge = null; syncUndo(); D.syncBar?.(); renderAll(); refreshStills(); },
+  load(p, doc) {
+    const next = M.migrateTable(p), key = { id: doc?.id ?? null, pid: S.project };
+    const same = U.loaded && U.loaded.id === key.id && U.loaded.pid === key.pid;
+    U.loaded = key;
+    if (same) return reloaded(next);
+    unlive(); cancelOp();
+    T = next; U.sel.clear(); H.past = []; H.future = []; U.nudge = null;
+    syncUndo(); D.syncBar?.(); renderAll(); refreshStills();
+  },
 };
-// Can the server keep tables yet? (app/store.py answers 400 for a kind it doesn't know.) Once it can, the table moves
-// there: TabSet seeds its first document with the one kept here.
-async function serverTakesTables() {
-  try { await api(`/api/store/tables${S.project != null ? `?project_id=${S.project}` : ''}`, { busy: false }); return true; } catch { return false; }
+// The open table saved elsewhere (another device, a story module): its new contents, keeping what is going on here. The
+// frames that are still there keep their objects (a live frame's module and a drag hold them), their selection and the
+// live one; undo steps stay (they find frames by id).
+function reloaded(next) {
+  const old = new Map(T.frames.map((f) => [f.id, f]));
+  next.frames = next.frames.map((nf) => {
+    const f = old.get(nf.id);
+    if (!f) return nf;
+    for (const k of Object.keys(f)) if (!(k in nf)) delete f[k];
+    return Object.assign(f, nf);
+  });
+  T = next;
+  const ids = new Set(T.frames.map((f) => f.id));
+  for (const id of [...U.sel]) if (!ids.has(id)) U.sel.delete(id);
+  if (liveFrame() && !ids.has(liveFrame().id)) unlive();
+  else if (liveFrame()) placeLive();
+  if (U.op && [...(U.op.ids || []), U.op.f?.id].some((id) => id && !ids.has(id))) cancelOp();
+  U.panelSig = '';
+  D.syncBar?.(); renderAll(); refreshStills();
 }
-async function startStore() {
-  if (U.mode === 'server') return U.tabs.start();
-  if (await serverTakesTables()) {
-    U.mode = 'server';
-    let seeded = false;
-    if (!U.tabs) {
-      U.tabs = new TabSet({ kind: 'tables', host: D.tab, newName: (n) => `Table ${n}`, adapter,
-        seed: () => { seeded = true; return store.get(localKey(), null) || T; } });
-      const strip = U.tabs.render.bind(U.tabs);   // (its own strip stays off the bar: the top tabs are drawn from its list)
-      U.tabs.render = () => { strip(); D.nav?.render(); };
-    }
-    await U.tabs.start();
-    if (seeded) store.set(localKey(), null);
-    return;
+function startStore() {
+  if (!U.tabs) {
+    U.tabs = new TabSet({ kind: 'tables', host: D.tab, newName: (n) => `Table ${n}`, adapter });
+    const strip = U.tabs.render.bind(U.tabs);   // (its own strip stays off the bar: the top tabs are drawn from its list)
+    U.tabs.render = () => { strip(); D.nav?.render(); };
   }
-  U.mode = 'local';
-  adapter.load(store.get(localKey(), null) || M.blankTable());
-  D.nav?.render();
+  return U.tabs.start();
 }
-function changed() {
-  if (U.mode === 'server') return U.tabs.changed();
-  store.set(localKey(), T);
-  if (Date.now() > U.retryAt) { U.retryAt = Date.now() + 15000; serverTakesTables().then((ok) => { if (ok && U.mode === 'local') startStore(); }); }
+const changed = () => U.tabs?.changed();
+// The table open now and its project, to check after an await: true while they are still the ones open (a result that
+// comes back after the table or project changed is dropped, or goes to its own table)
+function here() {
+  const id = U.tabs?.active?.id, pid = S.project;
+  return () => U.tabs?.active?.id === id && S.project === pid;
 }
 
 // ---------------------------------------------------------------------------
@@ -174,11 +190,14 @@ export async function refreshStills(kinds = [...new Set(T.frames.map((f) => f.ki
 // ---------------------------------------------------------------------------
 const nextLabel = (kind) => `${M.KIND_LABEL[kind]} ${T.frames.filter((f) => f.kind === kind).length + 1}`;
 // A frame of a kind over rect, with its document made first (from payload, else the kind's empty one)
-async function makeFrame(kind, rect, { payload, frame } = {}) {
+// ok: here() taken before whatever the caller awaited (default: now)
+async function makeFrame(kind, rect, { payload, frame, ok = here() } = {}) {
   const f = frame || M.newFrame(kind, rect, { label: nextLabel(kind) });
   if (kind !== 'note') {
     try { f.doc = await createDoc(f, payload); } catch (e) { toast(`Couldn't make the frame: ${e.message}`, true); return null; }
+    if (!ok()) { trashDoc(f).catch(() => {}); return null; }   // (another table opened meanwhile: the document goes too)
   }
+  if (!ok()) return null;
   T.frames.push(f);
   U.sel = new Set([f.id]);
   renderFrames(); changed();
@@ -214,50 +233,85 @@ export function goLive(f) {
   U.before = { ...T.view };
   const root = h('div', { class: 'frame-mount', 'data-frame': f.id });
   D.live.append(root);
+  if (!setLive(f, root)) { root.remove(); U.before = null; return; }
   D.stage.classList.add('table-live');
-  setLive(f, root);
   placeLive({ animate: true });
   renderFrames();
   dispatchEvent(new CustomEvent('table:live', { detail: { frame: f, root, table: T, handled: false } }));
 }
+// Resolves once the frame's module has saved (table:unlive wait); with nothing live, once the last one has
 export function unlive() {
   const f = liveFrame();
-  if (!f) return;
+  if (!f) return U.leaving;
   const root = liveRoot();
   exitMaxedIn(root);   // (a full screen inside it goes first: its stage is about to move)
-  dispatchEvent(new CustomEvent('table:unlive', { detail: { frame: f, root } }));
+  const detail = { frame: f, root, wait: [] };
+  dispatchEvent(new CustomEvent('table:unlive', { detail }));
+  U.leaving = Promise.allSettled([U.leaving, ...detail.wait]).then(() => {});
   setLive(null);
   root?.remove();
   D.stage?.classList.remove('table-live');
   if (U.before) { setView(U.before, { animate: true, save: false }); U.before = null; }
   renderFrames();
   refreshStills([f.kind]);   // (its still may have changed while it was open)
+  return U.leaving;
 }
 
-// Delete: the frames go, their documents to the server's trash; Undo brings both back. A locked frame stays.
+// Delete: the frames go, their documents to the server's trash; Undo brings both back. A locked frame stays. A frame
+// whose document couldn't be trashed comes back; Undo brings back the ones whose document could be restored, into their
+// own table (the one open, or saved to it on the server when another is open by then).
 async function deleteFrames(ids) {
+  const ok = here(), tid = U.tabs?.active?.id;
   const gone = T.frames.filter((f) => ids.has(f.id) && !f.locked);
   if (!gone.length) return;
   if (gone.some((f) => f.id === liveFrame()?.id)) unlive();
+  await U.leaving;   // (a live frame's last save lands before its document is trashed)
+  if (!ok()) return;
   const at = new Map(gone.map((f) => [f.id, T.frames.indexOf(f)]));
-  const table = T;
+  const putBack = (list) => {
+    for (const f of [...list].sort((a, b) => at.get(a.id) - at.get(b.id))) if (!byId(f.id)) T.frames.splice(Math.min(at.get(f.id), T.frames.length), 0, f);
+  };
+  let trashed = [];
   const take = async () => {
-    T.frames = T.frames.filter((f) => !gone.some((g) => g.id === f.id));
+    const still = here(), drop = new Set(gone.map((f) => f.id));
+    T.frames = T.frames.filter((f) => !drop.has(f.id));
     U.sel.clear(); renderFrames(); changed();
-    try { await Promise.all(gone.map(trashDoc)); } catch (e) { toast(`Couldn't delete a frame's document: ${e.message}`, true); }
+    const res = await Promise.allSettled(gone.map(trashDoc));
+    trashed = gone.filter((f, i) => res[i].status === 'fulfilled');
+    const kept = gone.filter((f, i) => res[i].status === 'rejected');
+    if (kept.length) {
+      toast(`Couldn't delete ${kept.length === 1 ? `"${kept[0].label}"` : `${kept.length} frames`}: ${res.find((r) => r.status === 'rejected').reason?.message}`, true);
+      if (still()) { putBack(kept); renderFrames(); changed(); }
+    }
   };
   const back = async () => {
-    try { await Promise.all(gone.map(restoreDoc)); } catch (e) { toast(e.message, true); }
-    for (const f of gone) if (!byId(f.id)) T.frames.splice(Math.min(at.get(f.id), T.frames.length), 0, f);
-    U.sel = new Set(gone.map((f) => f.id)); renderFrames(); changed();
+    const still = here(), list = trashed;
+    const res = await Promise.allSettled(list.map(restoreDoc));
+    const fine = list.filter((f, i) => res[i].status === 'fulfilled');
+    if (fine.length < list.length) toast(`Couldn't bring back ${list.length - fine.length === 1 ? 'a frame' : `${list.length - fine.length} frames`}: ${res.find((r) => r.status === 'rejected').reason?.message}`, true);
+    if (!fine.length) return;
+    if (still() && U.tabs?.active?.id === tid) {
+      putBack(fine);
+      U.sel = new Set(fine.map((f) => f.id)); renderFrames(); changed();
+      return;
+    }
+    // another table (or project) is open now: the frames go back into their own table's saved document
+    try {
+      await editDoc('tables', tid, (p) => {
+        p.frames ||= [];
+        const have = new Set(p.frames.map((f) => f.id));
+        for (const f of fine) if (!have.has(f.id)) p.frames.splice(Math.min(at.get(f.id), p.frames.length), 0, f);
+      });
+      toast(fine.length === 1 ? `"${fine[0].label}" is back on its table` : `${fine.length} frames are back on their table`);
+    } catch (e) { toast(`Couldn't put the frames back on their table: ${e.message}`, true); }
   };
-  const entry = { undo: back, redo: take };
   await take();
+  if (!trashed.length) return;
+  const entry = { undo: back, redo: take };
   record(entry);
-  undoToast(gone.length === 1 ? `Deleted "${gone[0].label}"` : `Deleted ${gone.length} frames`, () => {
-    if (T !== table) return;   // (another table is open now)
-    if (H.past.at(-1) === entry) return undo();   // (the same step as Ctrl+Z: it can be redone)
-    if (!byId(gone[0].id)) back();
+  undoToast(trashed.length === 1 ? `Deleted "${trashed[0].label}"` : `Deleted ${trashed.length} frames`, () => {
+    if (H.past.at(-1) === entry && U.tabs?.active?.id === tid) return undo();   // (the same step as Ctrl+Z: it can be redone)
+    if (!byId(trashed[0].id)) back();
   });
 }
 
@@ -298,14 +352,16 @@ function tellMoved(frames) {
 }
 // Duplicate: each copy beside its original, with a copy of its document
 async function duplicateFrames(ids) {
-  const made = [];
+  const made = [], ok = here();
   for (const f of T.frames.filter((x) => ids.has(x.id))) {
     const g = { ...structuredClone(f), id: M.newFrame(f.kind, f).id, label: `${f.label} copy`, locked: false };
     Object.assign(g, M.nextBeside([...T.frames, ...made], f.kind, { w: f.w, h: f.h }));
     try { g.doc = f.doc ? await copyDoc(f, g.label) : null; } catch (e) { toast(`Couldn't copy "${f.label}": ${e.message}`, true); continue; }
     made.push(g);
+    if (!ok()) break;
   }
   if (!made.length) return;
+  if (!ok()) { for (const g of made) trashDoc(g).catch(() => {}); return; }   // (another table opened meanwhile: the copies go)
   T.frames.push(...made);
   U.sel = new Set(made.map((f) => f.id)); renderFrames(); changed();
 }
@@ -661,14 +717,15 @@ export function dropOntoFrame(frame, list) {
 export async function dropOnTable(list, clientX, clientY) {
   if (!U.wired) await startTables();
   if (dropOntoFrame(frameAtPoint(clientX, clientY), list)) return;
-  const r = D.stage.getBoundingClientRect();
+  const r = D.stage.getBoundingClientRect(), ok = here();
   let at = M.toTable(T.view, clientX - r.left, clientY - r.top), made = 0;
   for (const src of [list].flat()) {
     let got;
     try { got = await frameFor(src, at); } catch (err) { toast(err.message, true); continue; }
+    if (!ok()) return;   // (another table opened meanwhile)
     if (!got) { toast('That can\'t go on the table', true); continue; }
     got.frame.label = got.frame.label || nextLabel(got.frame.kind);
-    if (await makeFrame(got.frame.kind, got.frame, got)) { made++; at = { x: got.frame.x + got.frame.w + 40, y: got.frame.y }; }
+    if (await makeFrame(got.frame.kind, got.frame, { ...got, ok })) { made++; at = { x: got.frame.x + got.frame.w + 40, y: got.frame.y }; }
   }
   if (made > 1) toast(`Added ${made} frames`);
 }
@@ -771,14 +828,18 @@ function wire() {
   new ResizeObserver(() => placeLive()).observe(D.stage);
   registerUndo('table', { undo, redo, can: () => [H.past.length > 0, H.future.length > 0] });
   D.nav = wireTableNav({
-    list: () => (U.mode === 'server' ? U.tabs.docs : [{ id: 'local', name: 'Table' }]),
-    active: () => (U.mode === 'server' ? U.tabs.active?.id : 'local'),
+    list: () => U.tabs?.docs || [],
+    active: () => U.tabs?.active?.id,
     shown: () => currentTab() === 'table',
     open: openTable,
     create: () => tableOp(() => U.tabs.create()),
     rename: (id) => tableOp(async () => { if (await switchTable(id)) U.tabs.rename(); }),
     duplicate: (id) => tableOp(() => duplicateTable(id)),
-    remove: (id) => tableOp(async () => { if (await switchTable(id)) { unlive(); await U.tabs.remove(); } }),
+    remove: (id) => tableOp(async () => {
+      if (!(await switchTable(id))) return;
+      await unlive();   // (its live frame's last save lands before the table's documents are trashed)
+      if (U.tabs.active?.id === id) await U.tabs.remove();
+    }),
     reorder: (from, to) => tableOp(() => U.tabs.reorder(from, to)),
   });
   onNavigate(() => D.nav.render());
@@ -787,7 +848,7 @@ function wire() {
     if (!kind || !T.frames.some((f) => f.kind === kind && f.doc === m.id)) return;
     clearTimeout(stillT); stillT = setTimeout(() => refreshStills([kind]), 300);
   });
-  onProject(() => { unlive(); if (U.mode === 'local' || !U.mode) startStore(); });
+  onProject(() => unlive());   // (the TabSet loads the project's tables itself)
   // a result waiting for an image frame's document (imagetools.js keeps them in deck.imagetools.owed): its badge follows
   let owedT = 0;
   const owedSoon = () => { clearTimeout(owedT); owedT = setTimeout(renderFrames, 200); };
@@ -814,15 +875,14 @@ export async function renderTable() {
 // ---------------------------------------------------------------------------
 // the project's tables: the top tabs (table-nav.js draws them from the `tables` TabSet's list)
 // ---------------------------------------------------------------------------
-// a tab's action, which needs the server's tables (this device's own one table has no others)
+// a tab's action: on the Table screen
 async function tableOp(fn) {
-  if (U.mode !== 'server') return toast('Tables are kept on this device until the server is back', true);
+  if (!U.tabs) return;
   if (currentTab() !== 'table') navigate('table');
   try { await fn(); } catch (e) { toast(e.message, true); }
 }
 // that table open (the Table screen on show too); true once it is the one open
 async function switchTable(id) {
-  if (U.mode !== 'server') return id === 'local';
   if (U.tabs.active?.id !== id) { flushNudge(); await U.tabs.switchTo(id); }
   return U.tabs.active?.id === id;
 }
@@ -832,7 +892,7 @@ export async function openTable(id) {
 }
 // Alt + ← →: the table before or after this one
 export function stepTable(dir) {
-  const list = U.mode === 'server' ? U.tabs.docs : [];
+  const list = U.tabs?.docs || [];
   if (currentTab() !== 'table') return navigate('table');
   const i = list.findIndex((d) => d.id === U.tabs?.active?.id), j = i + dir;
   if (i >= 0 && j >= 0 && j < list.length) openTable(list[j].id);
@@ -841,9 +901,9 @@ export function stepTable(dir) {
 // one would take the other's)
 async function duplicateTable(id) {
   if (!(await switchTable(id))) return;
-  unlive();
+  await unlive();   // (its live frame's last save is in the copy)
   if (!(await U.tabs.leave())) return;
-  const a = U.tabs.active, copy = structuredClone(T);
+  const a = U.tabs.active, copy = structuredClone(T), pid = S.project;
   for (const f of copy.frames) {
     f.id = M.newFrame(f.kind, f).id;
     if (f.doc) {
@@ -852,6 +912,7 @@ async function duplicateTable(id) {
   }
   copy.frames = copy.frames.filter((f) => f.doc || f.kind === 'note');
   delete copy.story;   // (a story stays with its own table)
+  if (S.project !== pid) { for (const f of copy.frames) trashDoc(f).catch(() => {}); return; }   // (another project opened meanwhile)
   const doc = await U.tabs.create1({ name: `${a.name} copy`.slice(0, 120), payload: copy, order: a.order + 0.5 });
   U.tabs.open(doc);
 }

@@ -1,7 +1,7 @@
 // node --test tests/story_rows.test.mjs: a story laid out as a table (web/shot-rows.js)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyOrder, fromNote, noteText, orderFromRows, planReconcile, rowsOf, rowsOfFrames, shotSize, storyLayout } from '../web/shot-rows.js';
+import { applyOrder, autoLabelled, carryRows, fromNote, noteText, orderFromRows, planReconcile, rowsOf, rowsOfFrames, shotSize, storyLayout } from '../web/shot-rows.js';
 
 const note = (id, scene, x, y) => ({ id, kind: 'note', story: { scene }, x, y, w: 100, h: 100 });
 const shot = (id, scene, s, x, y) => ({ id, kind: 'image', story: { scene, shot: s }, x, y, w: 160, h: 100 });
@@ -71,4 +71,29 @@ test('a note is the heading then the summary; a shot frame is its canvas, else a
   assert.deepEqual(shotSize({ comp: { size: { w: 1368, h: 768 } } }, 16 / 9), { w: 1368, h: 768 });
   const s = shotSize({}, 16 / 9);
   assert.ok(Math.abs(s.w * s.h - 1e6) < 0.05e6 && s.w % 16 === 0 && s.h % 16 === 0);
+});
+
+test('a note moved on its own carries its row: the scene\'s shots that stayed go with it', () => {
+  const P = story();
+  const frames = [note('n', 'A', 0, 900), shot('1', 'A', 'a1', 200, 0), shot('2', 'A', 'a2', 500, 400), note('m', 'B', 0, 300), shot('3', 'B', 'b1', 200, 300)];
+  const laid = new Map([['n', { x: 0, y: 0 }], ['1', { x: 200, y: 0 }], ['2', { x: 400, y: 0 }], ['m', { x: 0, y: 300 }], ['3', { x: 200, y: 300 }]]);
+  assert.equal(carryRows(frames, laid), true);
+  assert.deepEqual([frames[1].x, frames[1].y], [200, 900], 'a1 stayed put: carried');
+  assert.deepEqual([frames[2].x, frames[2].y], [500, 400], 'a2 was moved by hand: left where it was dropped');
+  assert.deepEqual([frames[4].x, frames[4].y], [200, 300], 'another scene\'s shot: not carried');
+  applyOrder(P, orderFromRows(rowsOf(frames)));
+  assert.equal(ids(P), 'B:b1,a2 A:a1');
+  assert.equal(carryRows([note('k', 'A', 0, 0)], new Map([['k', { x: 0, y: 0 }]])), false);
+});
+
+test('a shot frame keeps the story\'s label until it is renamed on the table', () => {
+  assert.equal(autoLabelled({ label: '1.2 Rain', story: { shot: 'a', auto: '1.2 Rain' } }), true);
+  assert.equal(autoLabelled({ label: 'My best shot', story: { shot: 'a', auto: '1.2 Rain' } }), false);
+  assert.equal(autoLabelled({ label: '2.1', story: { shot: 'a' } }), true, 'from before story.auto: a number first');
+  assert.equal(autoLabelled({ label: 'Hero', story: { shot: 'a' } }), false);
+});
+
+test('rows: a note snapped edge to edge against the next scene\'s starts its own row', () => {
+  const rows = rowsOf([note('n', 'A', 0, 0), shot('1', 'A', 'a1', 200, 0), note('m', 'B', 0, 100), shot('2', 'B', 'b1', 200, 100)]);
+  assert.deepEqual(rows.map((r) => r.map((f) => f.id)), [['n', '1'], ['m', '2']]);
 });

@@ -11,9 +11,9 @@
 //
 //   renderMake(host, frames)   draw the panel into host for the selection (the sidebar calls it; table:select redraws it)
 //   runMake()                  Run (the Generate button and Ctrl+Enter call it while the table is on screen)
-import { h, api, store, toast, button, iconBtn, seg, field, hint, note, openSheet, closeSheet, runBar, actions } from './ui.js';
+import { h, api, store, toast, button, iconBtn, seg, field, hint, help, note, openSheet, closeSheet, runBar, actions } from './ui.js';
 import { S, CURRENT_EDIT, inputUrl, thumbUrl } from './core.js';
-import { afterQueued, fieldScope, persist, preparePictures, renderFields, runBuilder, runValues, selectTemplate, stop } from './generate.js';
+import { afterQueued, persist, preparePictures, renderFields, runBuilder, runValues, selectTemplate, stop } from './generate.js';
 import { borrow, giveBack, lentOut } from './gentabs.js';
 import { queueRun, waitGen } from './make.js';
 import { pngBlob, uploadImage } from './media.js';
@@ -26,23 +26,20 @@ import * as Table from './table.js';
 import { LANDS, canvasRect, familiesOf, frameImageField, frameSize, makeTarget, pickTemplate, sizePair, templatesFor, withClip } from './make-rules.js';
 import { icon } from './icons.js';
 
-const P = { ready: Promise.resolve(), host: null, frames: [], table: null, lentFor: null, els: null, prog: null, batch: Math.max(1, store.get('deck.make.batch', 1)) };
+const P = { fresh: [], ready: Promise.resolve(), host: null, frames: [], table: null, lentFor: null, els: null, prog: null, batch: Math.max(1, store.get('deck.make.batch', 1)) };
 const KIND_WORD = { none: 'a new frame', image: 'this picture', video: 'this video', scene: 'this 3D frame', sound: 'this sound frame' };
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
 const docUrl = (kind, id) => `/api/store/${DOC_KIND[kind]}/${id}${qs()}`;
 const lastTpl = (kind) => store.get(`deck.make.tpl.${kind}`, null);
 
 // the selection: from the event, else what the table says now
-const selection = () => (typeof Table.selectedFrames === 'function' ? Table.selectedFrames() : null) || P.frames;
+const selection = () => Table.selectedFrames() || P.frames;
 const tableNow = () => {
-  const frames = typeof Table.tableFrames === 'function' ? Table.tableFrames() : P.table?.frames;
+  const frames = Table.tableFrames() || P.table?.frames;
   return frames ? { frames, view: P.table?.view } : null;
 };
 // a frame changed (its settings): the table saves it as it is
-function frameSaved() {
-  if (typeof Table.frameChanged === 'function') Table.frameChanged();
-  else if (typeof Table.changed === 'function') Table.changed();
-}
+const frameSaved = () => Table.frameChanged();
 
 // ---------------------------------------------------------------------------
 // drawing
@@ -88,8 +85,18 @@ function target(kind, frame) {
 function keep(kind, frame, p) {
   if (p?.template) store.set(`deck.make.tpl.${kind}`, p.template);
   if (!frame) { store.set('deck.make.none', p); return; }
-  frame.make = p;
+  frame.make = { ...p, ...settleInputs(frame, p) };
   frameSaved();
+}
+
+// The pictures Pick a frame copied in for this frame (frame.make.inputs, saved with it): one stays while a slot still uses it, and goes when
+// the slot takes another picture or is cleared. What is left when the frame itself is deleted goes with Settings → Projects → Clean up leftovers
+// (the table deletes frames in table.js, which can't reach this list).
+function settleInputs(frame, p) {
+  const used = JSON.stringify(p.values || {});
+  const all = [...new Set([...(frame.make?.inputs || []), ...P.fresh.splice(0)])];
+  for (const n of all) if (!used.includes(JSON.stringify(n))) dropInput(n);
+  return { inputs: all.filter((n) => used.includes(JSON.stringify(n))) };
 }
 
 // the frame's size is the output size (an image or video frame)
@@ -138,7 +145,7 @@ function framePictureEl(frame) {
   const still = stillOf(frame);
   return field(['Picture', h('span', {}, 'this frame')],
     h('div', { class: 'make-frame-pic' }, still ? h('img', { src: still, alt: '' }) : h('span', { class: 'hint' }, 'Empty frame')),
-    hint('The frame as it looks when Run is pressed.'));
+    help('The frame as it looks when Run is pressed.'));
 }
 
 // Pick a frame: an image frame's picture into a video template's slot
@@ -150,7 +157,7 @@ function pickFrame(f, set) {
       const still = stillOf(x);
       return h('button', { type: 'button', class: 'make-frame-card', disabled: !still, onclick: async () => {
         closeSheet();
-        try { set((await frameUpload(x, S.imageMp[f.key] ?? 1)).name); } catch (e) { toast(e.message, true); }
+        try { const up = await frameUpload(x, S.imageMp[f.key] ?? 1); P.fresh.push(up.name); set(up.name); } catch (e) { toast(e.message, true); }
       } }, still ? h('img', { src: still, alt: '' }) : h('span', { class: 'hint' }, 'Empty'), h('span', {}, x.label || 'Frame'));
     })),
     actions(button('Cancel', closeSheet, { cls: 'small ghost' })));
@@ -254,7 +261,7 @@ async function landLayers(frame, t, gens, sent) {
 async function landFrames(done, values, t) {
   const pair = sizePair(t), size = pair ? { w: Number(values[pair[0].key]) || 1024, h: Number(values[pair[1].key]) || 1024 } : { w: 1024, h: 1024 };
   const outs = (done.outputs || []).map((o, index) => ({ o, index })).filter(({ o }) => o.kind === 'image' || o.kind === 'video');
-  if (!outs.length || typeof Table.dropOnTable !== 'function') return inShelf(done);
+  if (!outs.length) return inShelf(done);
   for (const { o, index } of outs) {
     const T = tableNow(), stage = document.querySelector('#tab-table .table-stage');
     const r = stage?.getBoundingClientRect() || { left: 0, top: 0, width: 0, height: 0 };
@@ -348,4 +355,3 @@ import('./sidebar.js').then(({ sidebar }) => {
   if (el && !P.host) renderMake(el, P.frames);
 }).catch(() => { /* no sidebar yet: whoever has a place for the panel calls renderMake */ });
 
-export const makeDebug = () => ({ P, scope: fieldScope(), landClips, appendClip });

@@ -2,8 +2,8 @@
 // to change the order the picker shows; rename, duplicate (a background copy, with progress) and delete
 // (asks first, naming the project and its size, and wants the name typed). The server tells every device
 // about each change (deck_projects), so the list and #projectSel stay in step everywhere.
-import { h, api, toast, openSheet, closeSheet, button, iconBtn, section, help, info as infoBtn, note, actions } from './ui.js';
-import { S, loadProjects, onServer, openProject } from './core.js';
+import { h, api, store, toast, openSheet, closeSheet, button, iconBtn, section, help, info as infoBtn, note, actions } from './ui.js';
+import { S, emitProject, loadProjects, onProject, onServer, openProject } from './core.js';
 
 const P = { list: null, stats: {}, jobs: new Map(), drag: null, back: null };
 
@@ -123,7 +123,7 @@ function info(p) {
   if (P.jobs.has(p.id)) return copyText(P.jobs.get(p.id));
   const s = P.stats[p.id];
   if (!s) return '…';
-  return `${fmtBytes(s.bytes)} · ${s.generations} generation${s.generations === 1 ? '' : 's'}`;
+  return `${fmtBytes(s.bytes)} · ${s.generations} generation${s.generations === 1 ? '' : 's'} · ${(p.version || 1) >= 2 ? 'version 2.0' : 'version 1'}`;
 }
 
 function draw() {
@@ -143,6 +143,7 @@ function draw() {
         iconBtn('Move down', '↓', () => move(i, i + 1), { disabled: i === n - 1 }),
         p.id === S.project ? null : iconBtn(`Open ${p.name}`, '↗', () => openProject(p.id).then(draw)),
         iconBtn(`Rename ${p.name}`, '✎', (e) => rename(p, e.currentTarget.closest('.proj-row'))),
+        (p.version || 1) >= 2 ? null : button('Upgrade to 2.0', () => confirmUpgrade(p), { cls: 'small', disabled: copying }),
         iconBtn(`Duplicate ${p.name}`, '⧉', () => duplicate(p), { disabled: copying }),
         iconBtn(`Delete ${p.name}`, '🗑', () => confirmDelete(p), { disabled: copying || n <= 1, class: 'icon-btn danger' })));
   }));
@@ -225,6 +226,47 @@ function rename(p, row) {
   slot.replaceWith(box);
   box.focus(); box.select();
 }
+
+// ---- version 1 (saved tabs) to 2.0 (tables): POST /api/projects/{id}/upgrade lays every saved edit, video, 3D scene and mix out on an Imported table
+// and makes a table per story. The server tells every device (deck_projects, reason 'upgraded').
+const UPGRADE_TEXT = 'Lays every saved edit, video, 3D scene and mix out on an Imported table and makes a table per story. Nothing is deleted.';
+function confirmUpgrade(p) {
+  openSheet(h('h3', {}, `Upgrade "${p.name}" to 2.0?`), note(UPGRADE_TEXT),
+    actions(button('Upgrade', () => { closeSheet(); upgrade(p); }, { cls: 'primary' }),
+      button('Cancel', () => (P.back ? P.back() : closeSheet()), { cls: 'ghost' })));
+}
+export async function upgrade(p) {
+  try {
+    const r = await api(`/api/projects/${p.id}/upgrade`, { method: 'POST', body: {}, busy: `Upgrading ${p.name}…` });
+    await upgraded(p.id);
+    toast(r.already ? `"${p.name}" is already 2.0` : `"${p.name}" is now 2.0: ${r.tables?.length || 0} table${r.tables?.length === 1 ? '' : 's'} made`);
+  } catch (e) { toast(e.message, true); }
+}
+// the project row has its new version; if it is the open one, the tables load again (every TabSet starts over on a project change)
+let reloading = 0;
+async function upgraded(id) {
+  const open = S.project === id && ((S.projects.find((q) => q.id === id)?.version) || 1) < 2;
+  await loadProjects();
+  if (open && S.project === id) emitProject();
+  if (live()) refresh();
+}
+onServer('deck_projects', (m) => {
+  if (m.data?.reason !== 'upgraded' || reloading === m.data.id) return;
+  reloading = m.data.id;
+  upgraded(m.data.id).finally(() => { setTimeout(() => { reloading = 0; }, 1000); });
+});
+
+// opening a version-1 project: once per project, a toast offers the upgrade
+function offerUpgrade() {
+  const p = S.projects.find((q) => q.id === S.project);
+  if (!p || (p.version || 1) >= 2) return;
+  const key = `deck.upgrade.offered.${p.id}`;
+  if (store.get(key, false)) return;
+  store.set(key, true);
+  toast(`"${p.name}" still uses saved tabs. Upgrade it to 2.0 (tables)?`, false, { label: 'Upgrade', fn: () => confirmUpgrade(p) });
+}
+onProject(() => setTimeout(offerUpgrade, 800));
+setTimeout(offerUpgrade, 3000);   // (the project open at start: S.projects has loaded by then)
 
 async function duplicate(p) {
   try {

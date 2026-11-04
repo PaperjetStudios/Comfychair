@@ -12,7 +12,7 @@ import { draggingPicture, droppedFiles, dropKind } from './drop-files.js';
 import { isLive } from './live.js';
 import { sidebar } from './sidebar.js';
 import { frameChanged, refreshStills } from './table.js';
-import { sourcePicture } from './table-frames.js';
+import { editDoc, sourcePicture } from './table-frames.js';
 
 const F = { seq: 0, mounted: null };   // mounted: the id of the frame the editor is in
 const eng = () => CURRENT_EDIT.eng;
@@ -95,11 +95,12 @@ addEventListener('table:unlive', (e) => {
   const still = editorStill();   // (the composite is drawn at once, before anything moves; the upload follows)
   unmountEditor();
   if (resized) queueMicrotask(frameChanged);
-  (async () => {
+  e.detail.wait?.push((async () => {   // (the table waits for the save before trashing the edit)
     try { await editTabs().leave(); } catch (err) { console.warn(err); }
     await still.catch(() => {});
     refreshStills(['image']);
-  })();
+    drawStale();
+  })());
 });
 
 // ---- frames dropped on an image frame: each one's picture as a layer ----
@@ -119,11 +120,29 @@ async function stillBlob(f) {
   if (d.still?.url) return (await fetch(d.still.url)).blob();
   // never opened, so never drawn (a frame made from a dropped picture): the editor opens it off screen, draws it and keeps its still
   if (!d.payload?.layers?.length) return null;
-  const t = editTabs();
-  await t.ready(); await t.switchTo(f.doc);
-  if (t.active?.id !== f.doc) return null;
-  await settledStill();
+  if (isLive('image')) throw new Error(`"${f.label}" has no picture yet: open it once, or leave the open image frame first`);
+  if (!(await drawOffscreen(f.doc))) return null;
   return editorStillBlob();
+}
+
+// An edit opened in the editor off screen, drawn once its pictures load, and its still kept. Never while an image frame
+// is live: that would take the editor from under it; the edit is drawn once the live frame lets go (drawStale).
+const STALE = new Set();   // edits whose still is behind, to draw when no image frame is live
+async function drawOffscreen(doc) {
+  if (isLive('image')) { STALE.add(doc); return false; }
+  const t = editTabs();
+  await t.ready(); await t.switchTo(doc);
+  if (t.active?.id !== doc || isLive('image')) return false;
+  await settledStill();
+  return true;
+}
+async function drawStale() {
+  for (const doc of [...STALE]) {
+    if (isLive('image')) return;
+    STALE.delete(doc);
+    try { await drawOffscreen(doc); } catch (err) { console.warn(err); }
+  }
+  refreshStills(['image']);
 }
 
 // sources: pictures from the Shelf, a picker or the computer (table-frames.js sourcePicture), each a layer as it is
@@ -131,7 +150,8 @@ async function dropInto(onto, pics, sources = []) {
   const layers = [];
   const centred = (name, label, w, hh) => ({ name, label, x: Math.round((onto.w - (w || onto.w)) / 2), y: Math.round((onto.h - (hh || onto.h)) / 2) });
   for (const f of pics) {
-    const blob = await stillBlob(f);
+    let blob = null;
+    try { blob = await stillBlob(f); } catch (err) { toast(err.message, true); continue; }
     if (!blob) { toast(`"${f.label}" has no picture yet`, true); continue; }
     const r = await uploadImage(blob, { source: 'edit-tab', filename: 'edit.png' });
     layers.push(centred(r.name, f.label || null, r.width, r.height));
@@ -151,28 +171,19 @@ async function dropInto(onto, pics, sources = []) {
     if (!isLive(onto.id)) await settledStill();
   } else {
     await putLayers(onto, layers);
-    // its still is drawn by the editor: open the edit there (off screen) and draw it once the pictures are in
-    try {
-      await t.ready(); await t.switchTo(onto.doc);
-      if (t.active?.id === onto.doc) await settledStill();
-    } catch (err) { console.warn(err); }
+    // its still is drawn by the editor: open the edit there (off screen) and draw it once the pictures are in (or later)
+    try { await drawOffscreen(onto.doc); } catch (err) { console.warn(err); }
   }
   refreshStills(['image']);
   toast(layers.length === 1 ? `Added a layer to "${onto.label}"` : `Added ${layers.length} layers to "${onto.label}"`);
 }
 
-// the layers appended to the saved edit, at its rev (once more if another save moved it meanwhile)
-async function putLayers(onto, layers) {
-  const url = `/api/store/edit-tabs/${onto.doc}${qs()}`;
-  for (let i = 0; i < 2; i++) {
-    const d = await api(url, { busy: false }), p = d.payload || {};
+// the layers appended to the saved edit (table-frames.js editDoc: at its rev, once more if another save moved it)
+function putLayers(onto, layers) {
+  return editDoc('image', onto.doc, (p) => {
     p.layers = [...(p.layers || []), ...layers.map((l) => ({ name: l.name, crop: { x: 0, y: 0, w: 1, h: 1 }, x: l.x, y: l.y, scale: 1, opacity: 1, hidden: false,
       blend: 'normal', locked: false, label: l.label, key: Math.random().toString(36).slice(2, 10) }))];
-    const r = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rev: d.rev, payload: p }) });
-    if (r.ok) return;
-    if (r.status !== 409) throw new Error(`the server said ${r.status}`);
-  }
-  throw new Error('it was being saved elsewhere');
+  });
 }
 
 // the still once the editor's pictures have loaded (up to ~10 s)

@@ -11,7 +11,7 @@ import { fetchHistory } from './generation-data.js';
 // Drag a tile onto the table: a mouse uses the browser's own drag (the table takes SOURCE_TYPE); a finger or pen holds a
 // moment, then drags a ghost, and the drop calls dropOnTable at that point. Double-click drops at the table's centre.
 // ---------------------------------------------------------------------------
-const SOURCE_TYPE = 'application/x-deck-source';
+const SOURCE_TYPE = 'application/x-deck-source';   // (the same string as table.js's, which doesn't export it)
 const SH = { el: null, body: null, tab: store.get('deck.shelf.tab', 'outputs'), filter: store.get('deck.shelf.filter', 'all'),
   open: store.get('deck.shelf.open', false), w: store.get('deck.shelf.w', 240), timer: 0, btn: null, inputs: null };
 
@@ -172,8 +172,13 @@ function build(stage) {
     e.preventDefault(); grip.setPointerCapture(e.pointerId);
     const x0 = e.clientX, w0 = SH.w;
     const mv = (ev) => setWidth(w0 + ev.clientX - x0);
-    const up = () => { grip.removeEventListener('pointermove', mv); grip.removeEventListener('pointerup', up); store.set('deck.shelf.w', SH.w); };
-    grip.addEventListener('pointermove', mv); grip.addEventListener('pointerup', up);
+    const up = () => {   // (also when the system takes the pointer: pointercancel, lostpointercapture)
+      for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) grip.removeEventListener(t, up);
+      grip.removeEventListener('pointermove', mv);
+      store.set('deck.shelf.w', SH.w);
+    };
+    grip.addEventListener('pointermove', mv);
+    for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) grip.addEventListener(t, up);
   });
   SH.el = h('aside', { class: 'shelf', 'aria-label': 'Shelf: outputs, history and pictures' }, tabs, SH.body, grip);
   stage.prepend(SH.el);

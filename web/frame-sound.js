@@ -5,7 +5,8 @@
 import { h, toast } from './ui.js';
 import { isLive } from './live.js';
 import { sidebar } from './sidebar.js';
-import { drawer, dropOnto, putStill } from './frame-video.js';
+import { drawer, dropOnto } from './frame-video.js';
+import { putStill } from './table-frames.js';
 import { mountSound, renderSound, sndPause, soundStill, soundTabs, wireSound } from './sound.js';
 
 let cur = null;   // { frame, root, dead, pane }
@@ -41,7 +42,7 @@ addEventListener('table:unlive', (e) => {
   const { frame } = e.detail, my = cur;
   if (frame.kind !== 'sound' || !my || my.frame.id !== frame.id) return;
   cur = null; my.dead = true;
-  leaveSound(my).catch((err) => console.error(err));
+  e.detail.wait?.push(leaveSound(my).catch((err) => console.error(err)));   // (the table waits for the save before trashing the mix)
 });
 
 async function leaveSound(my) {

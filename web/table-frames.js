@@ -15,7 +15,7 @@ const SOUND_SIZE = { w: 1024, h: 256 };   // a sound frame is a strip: its wavef
 
 // ---- documents ----
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
-const docUrl = (kind, id = '', tail = '') => `/api/store/${DOC_KIND[kind]}${id ? `/${id}` : ''}${tail}${qs()}`;
+const docUrl = (kind, id = '', tail = '') => `/api/store/${DOC_KIND[kind] || kind}${id ? `/${id}` : ''}${tail}${qs()}`;
 
 // A new document's payload for a frame kind: the same empty shape each screen's TabSet adapter makes. Only the image one
 // is exported (editor-engine.js BLANK); the others are copied from video.js editAdapter.empty, sound.js adapter.empty and
@@ -48,33 +48,70 @@ export const trashDoc = (f) => (f.doc ? api(docUrl(f.kind, f.doc), { method: 'DE
 export const restoreDoc = (f) => (f.doc ? api(docUrl(f.kind, f.doc, '/restore'), { method: 'POST', busy: false }) : Promise.resolve());
 
 // The screen's TabSet for a frame kind (each kind has one, and its open document must be renamed through it, or its next
-// save meets a newer rev). The modules are loaded already (app.js); import() just hands them over.
+// save meets a newer rev). The modules are loaded already (app.js); import() just hands them over. The 3D one only once
+// the 3D engine has loaded (run.js sceneMod): before that it has no document open.
 const TABSET = {
   image: () => import('./editor.js').then((m) => m.editTabs()),
   video: () => import('./video.js').then((m) => m.videoTabs()),
   sound: () => import('./sound.js').then((m) => m.soundTabs()),
+  scene: () => import('./run.js').then((m) => m.sceneMod?.sceneTabs?.() || null),
 };
-// A frame's label is its document's name: through its kind's TabSet when that has it open, else a name-only PUT at its rev
-// (one retry when another save moved the rev meanwhile)
+// A frame's label is its document's name: through its kind's TabSet when that has it open, else a name-only edit at its rev
 export async function renameDoc(f, name) {
   if (!f.doc || !DOC_KIND[f.kind]) return;
   name = String(name).slice(0, 120);
   const t = await TABSET[f.kind]?.().catch(() => null);
   if (t?.active?.id === f.doc) {
     if (t.active.name === name) return;
-    t.pendingName = name; t.active.name = name;
+    if (typeof t.rename === 'function' && t.rename.length) { await t.rename(name); return; }
+    t.pendingName = name; t.active.name = name;   // (a TabSet without rename(name))
     t.setDirty(true); t.render();
     await t.flush();
     return;
   }
-  for (let i = 0; i < 2; i++) {
-    const d = await api(docUrl(f.kind, f.doc), { busy: false });
-    if (d.name === name) return;
-    const r = await fetch(docUrl(f.kind, f.doc), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rev: d.rev, name }) });
-    if (r.ok) return;
-    if (r.status !== 409) throw new Error(`the server said ${r.status}`);
+  await editDoc(f.kind, f.doc, (_, doc) => {
+    if (doc.name === name) return false;
+    doc.name = name;
+  });
+}
+
+// ---- documents edited from outside their engine (a drop on a frame that isn't open, a rename, an Undo into another table) ----
+// Read, change, PUT at the rev read; a stale rev (409: another save came between) is read and changed once more.
+// kind: a frame kind ('image'…) or a store kind ('tables'…). mutate(payload, doc) changes the payload in place (or
+// doc.name), and must do nothing else (it can run twice): uploads and fetches go before. It returns false to save nothing.
+// Resolves true once saved, false when mutate said not to.
+export async function editDoc(kind, id, mutate) {
+  for (let again = false; ; again = true) {
+    const d = await api(docUrl(kind, id), { busy: false });
+    const doc = { name: d.name, payload: clone(d.payload || {}) };
+    if (mutate(doc.payload, doc) === false) return false;
+    try { await api(docUrl(kind, id), { method: 'PUT', body: { rev: d.rev, name: doc.name, payload: doc.payload }, busy: false }); return true; }
+    catch (e) { if (e.status !== 409 || again) throw e; }
   }
-  throw new Error('it was being saved elsewhere');
+}
+
+// ---- a document's still: its frame's picture on the table ----
+async function shrink(blob, max = 1024) {   // (a frame's still is a thumbnail, not the document's full size)
+  try {
+    const bmp = await createImageBitmap(blob), k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+    if (k === 1) return blob;
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(bmp.width * k)); cv.height = Math.max(1, Math.round(bmp.height * k));
+    cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
+    return (await new Promise((res) => cv.toBlob(res, 'image/png'))) || blob;
+  } catch { return blob; }
+}
+// PUT a document's still (null: it has nothing to show, so it keeps none), then the table's stills of that kind again
+export async function putStill(kind, id, blob) {
+  const url = docUrl(kind, id, '/still');
+  try {
+    if (!blob) await fetch(url, { method: 'DELETE' });
+    else {
+      const r = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: await shrink(blob) });
+      if (!r.ok && r.status !== 404) console.warn('still not saved:', r.status);   // 404: the document is gone
+    }
+  } catch { /* offline: the next time it is open */ }
+  (await import('./table.js')).refreshStills([kind]).catch(() => {});   // (the table asked once as the frame let go, before this one was saved)
 }
 
 // ---- results waiting: runs imagetools.js still owes an edit (deck.imagetools.owed), counted per document id ----
@@ -227,7 +264,11 @@ export async function sourcePicture(src) {
     const r = await uploadImage(src);
     return { name: r.name, width: r.width, height: r.height, label: src.name.replace(/\.\w+$/, '') };
   }
-  if (src.input) return { name: src.input, width: src.width || 0, height: src.height || 0, label: src.label || src.input.split('/').pop() };
+  if (src.input) {
+    let { width = 0, height = 0 } = src;
+    if (!width || !height) ({ w: width, h: height } = await mediaInfo(inputUrl(src.input), 'image'));   // (a layer is centred by its size)
+    return { name: src.input, width, height, label: src.label || src.input.split('/').pop() };
+  }
   if (src.generation != null) {
     const index = src.index || 0, g = await genOf(src.generation);
     if (g?.outputs?.[index]?.kind !== 'image') return null;

@@ -68,3 +68,8 @@ test('a clip goes at the end of the first video track', () => {
   assert.deepEqual([it.track, it.at, it.out, it.src.generation, it.id], ['v1', 5, 6, 3, 'n']);
   assert.equal(withClip({}, { src: {}, dur: 0 }, 'm').items[0].track, 'v1');
 });
+test('a copy sent for owed runs is kept in the record so it can go after the last one', () => {
+  const base = { px: [1, 1], rect: {}, name: 'frame_1.png' };
+  assert.equal(owedRecord('d', 'make', { ...base, copy: true }, { id: 1 }).copy, 'frame_1.png');
+  assert.equal('copy' in owedRecord('d', 'make', base, { id: 1 }), false);
+});

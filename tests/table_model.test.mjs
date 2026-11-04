@@ -132,3 +132,15 @@ test('a live frame\'s backdrop: the frame fitted to the stage, any zoom', () => 
   assert.ok(Math.abs((100 + 504) * v.z + v.x - 370) < 1e-9 && Math.abs((100 + 504) * v.z + v.y - 300) < 1e-9);
   assert.equal(liveBackdrop(F('b', 0, 0, 320, 180), 1000, 600, 20).z, 3);
 });
+
+test('engine TabSets sit empty on a version-2 project only', async () => {
+  const { sitsEmpty } = await import('../web/table-model.js');
+  for (const k of ['edit-tabs', 'video-tabs', 'sound-tabs', 'scene-tabs', 'vfx-tabs', 'gen-tabs']) {
+    assert.equal(sitsEmpty(k, { version: 2 }), true);
+    assert.equal(sitsEmpty(k, { version: 1 }), false);
+    assert.equal(sitsEmpty(k, {}), false);
+    assert.equal(sitsEmpty(k, undefined), false);
+  }
+  assert.equal(sitsEmpty('tables', { version: 2 }), false);
+  assert.equal(sitsEmpty('story-tabs', { version: 2 }), false);
+});

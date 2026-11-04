@@ -116,8 +116,8 @@ function seeThrough(helper) { helper.material.depthTest = false; helper.material
 // WebGL context, so the viewer (its canvas, bars, overlays), the transport and the panel's body are the same elements
 // wherever it shows: a mount moves them into its host. host: the element that is on show (the tab, a frame's root),
 // with a .stage holding the viewer; transport: the key bar and sheet; panel: where body (#sceneBody) sits; active():
-// is it on show (the keys and the hints ask); full: the host has a full screen (scene-keys.js maxBar).
-export const SCN = { host: null, viewer: null, canvas: null, transport: null, panel: null, body: null, full: true,
+// is it on show (the keys and the hints ask).
+export const SCN = { host: null, viewer: null, canvas: null, transport: null, panel: null, body: null,
   active: () => !!SCN.host?.classList.contains('active') };
 export const sceneStage = () => SCN.host?.querySelector('.stage') || null;
 

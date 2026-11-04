@@ -2,6 +2,7 @@
 // weighted feel of a handle, the snapping settings (remembered per device) and the toggles for them.
 import { h, store, openSheet, closeSheet, seg, field, button, actions, help, iconize, popover, toggle } from './ui.js';
 import { snapAlong } from './gizmo-orient.js';
+import { snapNearest, snapStep } from './snap-math.js';
 
 // ---- snapping settings: one set for all gizmos, saved on this device ----
 const DEFAULTS = { grid: false, gridPct: 5, edges: true, rot: false, rotStep: 15, scale: false, scaleStep: 5 };
@@ -13,16 +14,7 @@ export const snapOn = (key, ev) => !!snap[key] && !ev?.altKey;
 // A button on a viewer's gizmo bar (snapping, the hand tools): on shows it picked; an icon-only one is named by its title
 export const gzChip = (label, onclick, { on = false, title = null } = {}) =>
   h('button', { type: 'button', class: 'gz-chip' + (on ? ' on' : ''), title, 'aria-label': label.length <= 2 ? title : null, onclick }, label);
-export const snapStep = (v, step) => Math.round(v / step) * step;
-// the smallest shift (d) that puts one of vals on one of targets within thr, and that target (at); null if none is that near
-export function snapNearest(vals, targets, thr) {
-  let best = null;
-  for (const v of vals) for (const t of targets) {
-    const d = t - v;
-    if (Math.abs(d) <= thr && (!best || Math.abs(d) < Math.abs(best.d))) best = { d, at: t };
-  }
-  return best;
-}
+export { snapStep, snapNearest };   // (web/snap-math.js: no DOM, so the table's model uses it too)
 export const normDeg = (d) => ((((d + 180) % 360) + 360) % 360) - 180;
 
 // ---- weight: critically damped springs ----

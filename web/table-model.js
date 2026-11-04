@@ -8,10 +8,16 @@
 // Table units are pixels at zoom 1. A frame's w, h is its canvas size. The screen point of a table point p is
 // p * z + (x, y). Frames later in the list sit on top.
 
+import { snapNearest, snapStep } from './snap-math.js';
+
 export const KINDS = ['image', 'video', 'scene', 'sound', 'note'];
 // the saved document kind each frame kind owns (a note has none: its text is on the frame)
 export const DOC_KIND = { image: 'edit-tabs', video: 'video-tabs', scene: 'scene-tabs', sound: 'sound-tabs' };
 export const KIND_LABEL = { image: 'Image', video: 'Video', scene: '3D', sound: 'Sound', note: 'Note' };
+// On a version-2 project the work lives on tables and these engines' documents belong to a frame: their TabSets (tabs.js) make no blank
+// "Edit 1" / "Mix 1" / "main" of their own and may sit with no open document. Version 1 keeps the old behaviour.
+export const ENGINE_KINDS = new Set(['edit-tabs', 'video-tabs', 'sound-tabs', 'scene-tabs', 'vfx-tabs', 'gen-tabs']);
+export const sitsEmpty = (kind, project) => ENGINE_KINDS.has(kind) && (project?.version || 1) >= 2;
 export const MIN_SIDE = 16;
 
 const rid = () => Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
@@ -89,17 +95,8 @@ export function resizeFrame(frame, handle, dx, dy, { keepAspect = false, min = M
 }
 
 // ---- snapping ----
-// The smallest shift (d) that puts one of vals on one of targets within thr, and that target (at); null if none is that
-// near. (A copy of gizmo.js snapNearest: gizmo.js loads ui.js, which needs a document, so it can't be imported here.)
-export function snapNearest(vals, targets, thr) {
-  let best = null;
-  for (const v of vals) for (const t of targets) {
-    const d = t - v;
-    if (Math.abs(d) <= thr && (!best || Math.abs(d) < Math.abs(best.d))) best = { d, at: t };
-  }
-  return best;
-}
-export const snapStep = (v, step) => Math.round(v / step) * step;
+// (snapNearest and snapStep: web/snap-math.js, which gizmo.js shares)
+export { snapNearest, snapStep };
 
 // where a moving edge at v lands: on another frame's edge or centre within thr, else on the grid (when it is on)
 export function snapValue(v, axis, others, grid, thr, { edges = true } = {}) {

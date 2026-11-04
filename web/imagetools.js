@@ -346,23 +346,33 @@ const FOLLOWING = new Set();   // run ids this page is already waiting for
 // (a cut-out's landing needs the template and the matte's own steps, so it isn't kept. false: nothing kept, or storage is off in this browser)
 function rememberOwed(o, tab, src, g, nth) {
   if (!tab || o.kind === 'matte') return false;
-  store.set(OWED, withOwed(owedList(), owedRecord(tab, o.id, src, g, nth)));
+  putOwed(owedRecord(tab, o.id, src, g, nth));
   return owedList().some((r) => r.id === g.id);
 }
-const forgetOwed = (id) => store.set(OWED, withoutOwed(owedList(), id));
-// taken off the list before landing, so a second window with this edit open doesn't land it too
-function takeOwed(id) {
-  if (!owedList().some((r) => r.id === id)) return false;
-  forgetOwed(id);
-  return true;
+// the list with this record in it. Records that fall off (a week old) let go of their copy too
+function putOwed(rec) {
+  const before = owedList(), next = withOwed(before, rec);
+  store.set(OWED, next);
+  for (const r of before) if (r.id !== rec.id && !next.includes(r)) releaseCopy(r);
 }
+// a copy sent for owed runs (rec.copy) is deleted once no owed record still needs it
+const releaseCopy = (rec) => { if (rec?.copy && !owedList().some((r) => r.copy === rec.copy)) dropInput(rec.copy); };
+function unOwe(id) {
+  const rec = owedList().find((r) => r.id === id);
+  if (rec) store.set(OWED, withoutOwed(owedList(), id));
+  return rec || null;
+}
+const forgetOwed = (id) => releaseCopy(unOwe(id));
+// taken off the list before landing, so a second window with this edit open doesn't land it too. null: not on the list
+const takeOwed = (id) => unOwe(id);
 
 // a finished run into its edit, if that's the one open
 async function settle(eng, o, tab, src, done, nth, kept) {
   if (eng.E.tab?.id !== tab) return toast(kept ? `${o.label} #${done.id} finished on another edit: it lands when you go back to it` : `${o.label} #${done.id} finished on another edit: it is in History`);
-  if (kept && !takeOwed(done.id)) return;
+  const rec = kept ? takeOwed(done.id) : null;
+  if (kept && !rec) return;
   if (src.layer && !eng.E.layers.includes(src.layer)) src.layer = layerOf(eng.E.layers, src.was);   // (the edit was opened again: its layers are new objects)
-  await land(eng, o, src, done, { nth });
+  try { await land(eng, o, src, done, { nth }); } finally { releaseCopy(rec); }
 }
 
 // One queued run, from here until it lands. nth: which variation of its picture
@@ -408,7 +418,7 @@ export function landMade(tab, src, g, { label = MAKE_OP.label, nth = 0 } = {}) {
   const eng = CURRENT_EDIT.eng;
   const s = Object.assign(src, { layer: src.layer || null, was: src.was || null, mask: src.mask || null, label });   // (one object for a whole batch: its copy goes after the last)
   if (eng) return follow(eng, { ...MAKE_OP, label }, tab, s, g, nth);
-  store.set(OWED, withOwed(owedList(), owedRecord(tab, MAKE_OP.id, s, g, nth)));   // (no editor in this page yet: it lands when one opens the edit)
+  putOwed(owedRecord(tab, MAKE_OP.id, s, g, nth));   // (no editor in this page yet: it lands when one opens the edit)
 }
 export const owedTo = (tab) => owedFor(owedList(), tab);
 

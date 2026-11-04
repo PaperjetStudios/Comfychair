@@ -38,7 +38,6 @@ export { addPicture } from './scene-picture.js';
 const PAGE = { host: $('#tab-scene'), viewer: $('#sceneViewer'), canvas: $('#sceneCanvas'), transport: $('#sceneTransport'),
   panel: $('#scenePanel'), body: h('div', { id: 'sceneBody' }) };
 PAGE.active = () => PAGE.host.classList.contains('active');
-PAGE.full = true;
 PAGE.panel.replaceChildren(PAGE.body);
 Object.assign(SCN, PAGE);
 
@@ -120,10 +119,10 @@ export const sceneHasContent = () => !!(SC.objects.length || SC.room);
 // Mount the engine into a host (a 3D frame's root). It has one WebGL context bound to its canvas, so the elements move:
 // the viewer (canvas, bars, overlays) takes the place of `viewer` (a slot in host's .stage), the key bar and sheet take
 // the place of `transport`, and the panel's body goes into `panel` (the sidebar's pane). active(): is it on show (the
-// keys ask); fullscreen: false for a host that can't have one (scene-keys.js maxBar). unmountScene() puts them all back
-// in the 3D tab; mounting the tab's own host does the same.
+// keys ask). Each host has its own full screen (scene-keys.js maxBar). unmountScene() puts them all back in the 3D tab;
+// mounting the tab's own host does the same.
 let away = null;   // while mounted elsewhere: [[element, its slot in the host (none for the body), its mark in the page]]
-export function mountScene({ host, viewer, transport, panel, active = () => host.classList.contains('active'), fullscreen = true }) {
+export function mountScene({ host, viewer, transport, panel, active = () => host.classList.contains('active') }) {
   boot();
   if (host === PAGE.host) return unmountScene();
   if (SCN.host === host) return;
@@ -137,7 +136,7 @@ export function mountScene({ host, viewer, transport, panel, active = () => host
   stopPlay();
   const was = SCN.host;
   away = [move(PAGE.viewer, viewer), move(PAGE.transport, transport), move(PAGE.body, null)];
-  Object.assign(SCN, { host, panel, active, full: fullscreen });
+  Object.assign(SCN, { host, panel, active });
   host.classList.add('scene-host');
   moved(was);
 }

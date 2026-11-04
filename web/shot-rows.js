@@ -10,9 +10,12 @@ import * as M from './table-model.js';
 export const isSceneNote = (f) => f?.kind === 'note' && !!f.story?.scene && !f.story.shot;
 export const isShotFrame = (f) => f?.kind === 'image' && !!f.story?.shot;
 export const isStoryFrame = (f) => isSceneNote(f) || isShotFrame(f);
+// A shot frame's label is the story's ("1.2 What we see…", kept in story.auto) until it is renamed on the table
+export const autoLabelled = (f) => (f.story?.auto != null ? f.label === f.story.auto : /^\d+\.\d+(\s|$)/.test(f.label || ''));
 
-// Frames in rows: a frame whose middle is inside a row's height so far joins it; each row left to right.
-// (table-model.js rowsOf when it is there; this is the same rule, for when it isn't)
+// Frames in rows: a frame whose middle is inside a row's height so far joins it; each row left to right. (Not
+// table-model.js rowsOf, which joins frames whose edges touch or overlap: a note dropped edge to edge against the
+// next scene's, as snapping does, would merge the two scenes.)
 export function rowsOfFrames(frames) {
   const list = [...frames].sort((a, b) => (a.y + a.h / 2) - (b.y + b.h / 2));
   const rows = [];
@@ -23,15 +26,7 @@ export function rowsOfFrames(frames) {
   }
   return rows.map((r) => r.frames.sort((a, b) => a.x - b.x));
 }
-// table-model.js rowsOf's answer (whatever its exact shape: rows of frames, or { frames } each), else ours
-export function rowsOf(frames, { gap = 40 } = {}) {
-  let rows = null;
-  if (typeof M.rowsOf === 'function') {
-    try { rows = M.rowsOf(frames, { gap }); } catch { rows = null; }
-    rows = Array.isArray(rows) ? rows.map((r) => (Array.isArray(r) ? r : r?.frames)).filter(Array.isArray) : null;
-  }
-  return (rows || rowsOfFrames(frames)).map((r) => [...r].sort((a, b) => a.x - b.x));
-}
+export const rowsOf = (frames) => rowsOfFrames(frames);
 
 // The scenes and their shots in the order rows of frames show them: [{ scene, shots: [shot ids] }].
 // Each note starts its scene; shots before a row's first note go to that note's scene, a row with no note joins the
@@ -50,6 +45,24 @@ export function orderFromRows(rows) {
   if (!out.length) return null;
   out[0].shots.unshift(...carry);
   return out;
+}
+
+// A scene's note moved on its own carries its row: the scene's shot frames still where the last layout put them (laid:
+// Map frame id -> { x, y }) move with it, so a note dragged above another scene takes its shots along instead of
+// leaving them in a row with no note (which would join the scene above). True when anything was carried.
+export function carryRows(frames, laid) {
+  const moved = (f) => { const p = laid.get(f.id); return !!p && (p.x !== f.x || p.y !== f.y); };
+  const notes = frames.filter((f) => isSceneNote(f) && moved(f));
+  const stay = new Set(frames.filter((f) => isShotFrame(f) && laid.has(f.id) && !moved(f)));
+  let any = false;
+  for (const n of notes) {
+    const p = laid.get(n.id), dx = n.x - p.x, dy = n.y - p.y;
+    for (const f of stay) {
+      if (f.story.scene !== n.story.scene) continue;
+      f.x += dx; f.y += dy; stay.delete(f); any = true;
+    }
+  }
+  return any;
 }
 
 const shape = (story) => story.scenes.map((sc) => `${sc.id}:${sc.shots.map((s) => s.id).join(',')}`).join('|');

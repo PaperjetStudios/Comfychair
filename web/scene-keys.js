@@ -1012,12 +1012,8 @@ export function renderTransport() {
 // One per host (the 3D tab, each 3D frame): its pull tab sits in that host's .stage; its button is in the viewer while
 // the engine is mounted there (syncMaxBar swaps it when the engine moves).
 const stage = () => sceneStage();
-// A host mounted without full screen (a frame on a table: a fixed stage inside the table's transformed layer has no
-// size) gets a hidden stand-in, so F and the button do nothing there.
 const FULLS = new WeakMap();   // host -> its full screen
-const noFull = { btn: h('button', { type: 'button', class: 'max-btn hidden', 'aria-hidden': 'true', tabIndex: -1 }), exit: () => {} };
 const fullOf = (host) => {
-  if (!SCN.full) return noFull;
   if (!FULLS.has(host)) FULLS.set(host, fullScreen(host, { viewer: SCN.viewer, title: 'Full screen the 3D view' }));
   return FULLS.get(host);
 };
@@ -1025,10 +1021,10 @@ export const maxBar = () => fullOf(SCN.host).btn;
 // the engine moved from host `was` (scene.js mountScene): that one leaves full screen and its button goes for this host's
 export function syncMaxBar(was) {
   if (!was || was === SCN.host) return;
-  const old = FULLS.get(was) || noFull;
-  old.exit();
+  const old = FULLS.get(was);
+  old?.exit();
   const btn = maxBar();
-  if (old.btn !== btn && old.btn.isConnected) old.btn.replaceWith(btn);
+  if (old && old.btn !== btn && old.btn.isConnected) old.btn.replaceWith(btn);
 }
 
 // ---- the keyboard (the sheet, when it was the last thing touched) ---------------------------------

@@ -3,7 +3,7 @@
 //
 //   isLive()            any frame live; isLive(id) that frame; isLive(kind) a frame of that kind ('image', 'video'…)
 //   liveFrame()         the live frame, or null;  liveRoot(): the element its engine mounts into
-//   setLive(frame, root) / setLive(null)
+//   setLive(frame, root) / setLive(null)   true when done; false (and nothing changed) for a root outside a `main > .tab`
 //   onLive(fn)          fn(frame | null, root | null) after every change; returns an unsubscribe
 //
 // For now, a trick keeps the old per-tab checks working unchanged: the live frame's mount root carries `tab active`
@@ -21,16 +21,19 @@ export const isLive = (key = null) => !!L.frame && (key == null || L.frame.id ==
 export function onLive(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 
 export function setLive(frame, root = null) {
-  if (frame && L.frame?.id === frame.id && L.root === root) return;
+  if (frame && L.frame?.id === frame.id && L.root === root) return true;
+  const host = frame && root ? root.closest('main > .tab') : null;
+  if (frame && root && !host) { console.error('setLive: the frame\'s root is not inside a screen (main > .tab)'); return false; }   // (else every screen would lose .active)
   if (L.frame) release();
   if (frame && root) {
-    L.host = root.closest('main > .tab');
+    L.host = host;
     for (const t of document.querySelectorAll('main > .tab')) t.classList.remove('active');
-    L.host?.classList.add('live-host');
+    L.host.classList.add('live-host');
     root.classList.add('tab', 'active');
     Object.assign(L, { frame, root });
   }
   for (const fn of [...listeners]) { try { fn(L.frame, L.root); } catch (e) { console.error(e); } }
+  return true;
 }
 
 // the live frame's root lets go of the tab classes; its host is the open tab again if it is still the one on screen

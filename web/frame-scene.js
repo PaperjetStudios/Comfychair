@@ -11,10 +11,9 @@ import { isLive } from './live.js';
 import { uploadImage } from './media.js';
 import { sceneModule } from './run.js';
 import { sidebar } from './sidebar.js';
-import { sourcePicture, stillOf } from './table-frames.js';
+import { putStill, sourcePicture, stillOf } from './table-frames.js';
 import { frameChanged, refreshStills } from './table.js';
 import { openPressMenu } from './press-menu.js';
-import { putStill } from './frame-video.js';
 
 const F = { seq: 0, mounted: null, m: null, size: null };   // mounted: the frame the engine is in; size: the scene's when it went live
 
@@ -80,11 +79,13 @@ addEventListener('table:unlive', (e) => {
   m.unmountScene();
   sidebar.pane('layers').replaceChildren();
   if (resized) queueMicrotask(frameChanged);
-  if (still) saveStill(t, id, still);
+  e.detail.wait?.push(saveStill(t, id, still));   // (the table waits for the save before trashing the scene)
 });
 
+// its scene saved, then its still (still: a promise of one, or null when the scene open was another and none was drawn)
 async function saveStill(t, id, still) {
   const ok = await t.flush().catch(() => false);
+  if (!still) return;
   const blob = await still.catch(() => null);
   if (ok || !t.conflict) await putStill('scene', id, blob);
   refreshStills(['scene']);

@@ -8,14 +8,13 @@ import { S, inputUrl, thumbUrl } from './core.js';
 import { isLive } from './live.js';
 import { heightGrip } from './layout.js';
 import { uploadImage } from './media.js';
-import { refreshStills } from './table.js';
 import { DOC_KIND } from './table-model.js';
-import { sourceClip, sourcePicture, stillOf } from './table-frames.js';
+import { editDoc, putStill, sourceClip, sourcePicture, stillOf } from './table-frames.js';
 import { sidebar } from './sidebar.js';
 import { addToTimeline, mountVideo, newItem, renderVideo, setSequenceSize, videoStill, videoTabs, vidPause, wireVideoTransport } from './video.js';
 
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
-const docUrl = (kind, id, tail = '') => `/api/store/${DOC_KIND[kind]}/${id}${tail}${qs()}`;
+const docUrl = (kind, id) => `/api/store/${DOC_KIND[kind]}/${id}${qs()}`;
 
 // ---- the timeline drawer: a .timeline-wrap under the table's stage, one strip (tools + timeline) per engine ----
 let DR = null;
@@ -47,40 +46,6 @@ export function drawer() {
   return DR;
 }
 
-// ---- stills ----
-async function shrink(blob, max = 1024) {   // (a frame's still is a thumbnail, not the sequence's full size)
-  try {
-    const bmp = await createImageBitmap(blob), k = Math.min(1, max / Math.max(bmp.width, bmp.height));
-    if (k === 1) return blob;
-    const cv = document.createElement('canvas');
-    cv.width = Math.max(1, Math.round(bmp.width * k)); cv.height = Math.max(1, Math.round(bmp.height * k));
-    cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
-    return (await new Promise((res) => cv.toBlob(res, 'image/png'))) || blob;
-  } catch { return blob; }
-}
-// PUT a document's still (null: it has nothing to show, so it keeps none)
-export async function putStill(kind, id, blob) {
-  const url = docUrl(kind, id, '/still');
-  try {
-    if (!blob) await fetch(url, { method: 'DELETE' });
-    else {
-      const r = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: await shrink(blob) });
-      if (!r.ok && r.status !== 404) console.warn('still not saved:', r.status);   // 404: the document is gone
-    }
-  } catch { /* offline: the next time it is open */ }
-  refreshStills([kind]).catch(() => {});   // (the table asked once as the frame let go, before this one was saved)
-}
-
-// ---- documents edited from outside (a drop on a frame that isn't open) ----
-// Fetch, change, PUT with the rev we read; a stale rev (409) is read again once.
-export async function editDoc(kind, id, mutate) {
-  for (let again = false; ; again = true) {
-    const d = await api(docUrl(kind, id), { busy: false }), payload = clone(d.payload || {});
-    await mutate(payload);
-    try { await api(docUrl(kind, id), { method: 'PUT', body: { rev: d.rev, name: d.name, payload }, busy: false }); return; }
-    catch (e) { if (e.status !== 409 || again) throw e; }
-  }
-}
 const trackEnd = (p, track) => (p.items || []).filter((i) => i.track === track).reduce((m, i) => Math.max(m, i.at + Math.max(0.1, (i.out ?? (i.dur || 3)) - i.in)), 0);
 
 // Another document's clips as new tracks of this payload (src kept). toSound: only sound a sound edit can hold.
@@ -102,25 +67,31 @@ function copyClips(from, into, toSound) {
   return map.size;
 }
 
-// A picture frame's still as an input of the project, then a picture clip at the end of the first video track
-async function pictureClip(f, payload) {
+// The first video track of a payload (one made if it has none)
+function videoTrack(payload) {
+  let tr = (payload.tracks || []).find((t) => t.kind === 'video');
+  if (!tr) (payload.tracks ||= []).push(tr = { id: uid(), kind: 'video' });
+  return tr;
+}
+// an item at the end of its track
+function append(payload, it) {
+  it.at = trackEnd(payload, it.track);
+  (payload.items ||= []).push(it);
+}
+// A picture frame's still as an input of the project (uploaded now), then a change that adds it as a picture clip at the
+// end of the first video track
+async function pictureClip(f) {
   const url = stillOf(f) || f.preview;
   if (!url) throw new Error(`"${f.label}" has no picture yet: open it once`);
   const blob = await (await fetch(url)).blob();
   const r = await uploadImage(blob, { mp: 0, source: 'table', filename: 'frame.png' });
-  let tr = (payload.tracks || []).find((t) => t.kind === 'video');
-  if (!tr) (payload.tracks ||= []).push(tr = { id: uid(), kind: 'video' });
-  const it = newItem({ kind: 'image', src: { input: r.name }, url: inputUrl(r.name), thumb: thumbUrl(r.name, 160), label: f.label || r.name }, tr.id);
-  it.at = trackEnd(payload, tr.id);
-  (payload.items ||= []).push(it);
+  const m = { kind: 'image', src: { input: r.name }, url: inputUrl(r.name), thumb: thumbUrl(r.name, 160), label: f.label || r.name };
+  return (payload) => append(payload, newItem(m, videoTrack(payload).id));
 }
-async function sceneClip(f, payload) {
+async function sceneClip(f) {
   const d = await api(docUrl('scene', f.doc), { busy: false }), p = d.payload || {};
-  let tr = (payload.tracks || []).find((t) => t.kind === 'video');
-  if (!tr) (payload.tracks ||= []).push(tr = { id: uid(), kind: 'video' });
-  const it = newItem({ kind: 'scene', src: { scene: f.doc, look: 'color' }, label: d.name || f.label, dur: p.seconds || 6, nat: [p.width || 768, p.height || 448] }, tr.id);
-  it.at = trackEnd(payload, tr.id);
-  (payload.items ||= []).push(it);
+  const m = { kind: 'scene', src: { scene: f.doc, look: 'color' }, label: d.name || f.label, dur: p.seconds || 6, nat: [p.width || 768, p.height || 448] };
+  return (payload) => append(payload, newItem(m, videoTrack(payload).id));
 }
 
 // a dropped thing as the media a timeline takes: a clip or a sound, or (not for a sound frame) a picture
@@ -135,44 +106,49 @@ function pushMedia(payload, m, toSound) {
   const want = m.kind === 'audio' ? 'audio' : 'video';
   let tr = (payload.tracks || []).find((t) => (toSound ? true : t.kind === want));
   if (!tr) (payload.tracks ||= []).push(tr = toSound ? { id: uid() } : { id: uid(), kind: want });
-  const it = toSound
+  append(payload, toSound
     ? { id: uid(), track: tr.id, kind: m.kind === 'video' ? 'video' : 'audio', src: m.src, url: m.url, label: m.label, dur: m.dur || 0, at: 0, in: 0, out: m.dur || null,
       volume: 1, pan: 0, fadeIn: 0, fadeOut: 0 }
-    : newItem(m, tr.id);
-  it.at = trackEnd(payload, tr.id);
-  (payload.items ||= []).push(it);
+    : newItem(m, tr.id));
 }
 
 // frames dropped on a video or sound frame: their clips join its edit; so do d.sources (things from the Shelf, a picker
-// or the computer). `engine` is the open tab set of that kind.
+// or the computer). `engine` is the open tab set of that kind. Everything is uploaded and read first, then the edit is
+// changed in one save (editDoc may run the change twice; the uploads must not).
 export async function dropOnto(d, kind, engine) {
   const onto = d.onto, from = (d.from || []).filter((f) => f.id !== onto.id && f.kind !== 'note');
   if (!onto.doc) { toast('That frame has no document yet', true); return; }
-  const toSound = kind === 'sound', jobs = [];
+  const toSound = kind === 'sound', preps = [];
   for (const src of d.sources || []) {
-    jobs.push({ run: async (p) => {
+    preps.push(async () => {
       const m = await sourceMedia(src, toSound);
       if (!m) throw new Error(toSound ? 'only a sound or a clip can go on a sound frame' : 'that can\'t go on a timeline');
-      pushMedia(p, m, toSound);
-    } });
+      return (p) => pushMedia(p, m, toSound);
+    });
   }
   for (const f of from) {
-    if (f.kind === 'image' && !toSound) jobs.push({ f, run: (p) => pictureClip(f, p) });
-    else if (f.kind === 'scene' && !toSound) jobs.push({ f, run: (p) => sceneClip(f, p) });
+    if (f.kind === 'image' && !toSound) preps.push(() => pictureClip(f));
+    else if (f.kind === 'scene' && !toSound) preps.push(() => sceneClip(f));
     else if ((f.kind === 'video' || f.kind === 'sound') && f.doc) {
-      jobs.push({ f, run: async (p) => {
+      preps.push(async () => {
         const src = f.kind === 'video' ? videoTabs() : (await import('./sound.js')).soundTabs();
         if (src?.active?.id === f.doc) await src.flush();   // (an open edit's latest changes first)
-        const doc = await api(docUrl(f.kind, f.doc), { busy: false });
-        if (!copyClips(doc.payload || {}, p, toSound)) throw new Error(`"${f.label}" has nothing ${toSound ? 'to hear' : 'on its timeline'} yet`);
-      } });
+        const doc = await api(docUrl(f.kind, f.doc), { busy: false }), from = doc.payload || {};
+        if (!copyClips(from, {}, toSound)) throw new Error(`"${f.label}" has nothing ${toSound ? 'to hear' : 'on its timeline'} yet`);
+        return (p) => copyClips(from, p, toSound);
+      });
     } else toast(`A ${f.kind} frame can't go on a ${kind} frame`, true);
   }
-  if (!jobs.length) return;
+  if (!preps.length) return;
+  const changes = [];
+  for (const prep of preps) {
+    try { changes.push(await prep()); } catch (e) { toast(`Couldn't add to "${onto.label}": ${e.message}`, true); }
+  }
+  if (!changes.length) return;
   try {
     if (engine?.active?.id === onto.doc) await engine.flush();   // (so the edit's own changes are not lost to a stale rev)
-    await editDoc(kind, onto.doc, async (p) => { for (const j of jobs) await j.run(p); });
-    toast(jobs.length > 1 ? `Added ${jobs.length} frames to "${onto.label}"` : `Added to "${onto.label}"`);
+    await editDoc(kind, onto.doc, (p) => { for (const c of changes) c(p); });
+    toast(changes.length > 1 ? `Added ${changes.length} things to "${onto.label}"` : `Added to "${onto.label}"`);
   } catch (e) { toast(`Couldn't add to "${onto.label}": ${e.message}`, true); }
 }
 
@@ -210,7 +186,7 @@ addEventListener('table:unlive', (e) => {
   const { frame } = e.detail, my = cur;
   if (frame.kind !== 'video' || !my || my.frame.id !== frame.id) return;
   cur = null; my.dead = true;
-  leaveVideo(my).catch((err) => console.error(err));
+  e.detail.wait?.push(leaveVideo(my).catch((err) => console.error(err)));   // (the table waits for the save before trashing the edit)
 });
 
 async function leaveVideo(my) {

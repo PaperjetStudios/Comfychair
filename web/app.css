@@ -2128,7 +2128,7 @@ body > .undo-dock { position: fixed; z-index: 57; top: 8px; left: 50%; transform
    the table behind is dimmed, its own frame hidden (the mount stands in for it), its full-screen button put away */
 /* (no z-index on either: a stacking context here would hold a full-screen stage inside it under the top bar) */
 .live-layer { position: absolute; inset: 0; pointer-events: none; }
-.live-layer > .frame-mount { z-index: auto; pointer-events: auto; border: 1px solid var(--line-2); border-radius: var(--r); overflow: hidden; box-shadow: var(--shadow); }
+.live-layer > .frame-mount { height: auto; z-index: auto; pointer-events: auto; border: 1px solid var(--line-2); border-radius: var(--r); overflow: hidden; box-shadow: var(--shadow); }
 .table-live .frame:not(.live) { opacity: .35; pointer-events: none; }
 .table-live .frame.live { visibility: hidden; }
 .table-stage.table-live > .max-btn { display: none; }

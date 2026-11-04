@@ -19,6 +19,8 @@ import { charPanel, renderCast } from './charstage.js';
 import { castLines, dialogueLines, findCharacter, mentioned, packPictures, pictureTag, plain, refPicture, speakerOf, viewLabel, VIEWS as LOOK_VIEWS, wantedView } from './cast.js';
 import { registerUndo } from './undo-dock.js';
 import { ANGLES, MOVES, SIZES } from './shot-words.js';
+import { loadStills, stillOf } from './table-frames.js';
+import { onNavigate } from './navigation.js';
 
 // ---------------------------------------------------------------------------
 // story: a storyboard for writing a story down and sorting it out. A story is a title, notes (free writing or a
@@ -42,7 +44,9 @@ import { ANGLES, MOVES, SIZES } from './shot-words.js';
 //
 // A story can also be a table (frame-story.js): a row per scene, a frame per shot, each shot's frame an edit document of
 // its own (s.doc). This module keeps the story; that one keeps the table and the story in step, and draws the outline,
-// script and cast views here into the table's Story pane (renderStoryView).
+// script and cast views here into the table's Story pane (renderStoryView). A shot with an edit has one picture, the
+// edit's: the canvas view shows its still and opens it (the Image tab, or its frame on the table), never s.comp, and
+// "Put it on the canvas" puts a frame into the edit. Its frames (s.frames) are the record of what was made for it.
 // ---------------------------------------------------------------------------
 
 const DURS = [1, 2, 3, 4, 5, 6, 8, 10];
@@ -364,7 +368,7 @@ const blankComp = () => ({ ...COMP_BLANK(), size: compSize(), bg: '#ffffff' });
 
 function compChanged() {
   const at = locate(CV.shot);
-  if (!at) return;
+  if (!at || at.s.doc) return;
   at.s.comp = CV.eng.dump();
   persist();
   clearTimeout(CV.timer);
@@ -458,12 +462,58 @@ async function drawOnFrame(s) {
 }
 // one of the shot's frames on its canvas, as a new layer covering it (a refined or generated picture to keep working on)
 async function frameToCanvas(s, f) {
+  if (s.doc) return frameToDoc(s, f);
   if (U.view !== 'canvas') { U.view = 'canvas'; store.set('deck.story.view', 'canvas'); }
   U.sel = s.id;
   renderStage(); renderPanel();
   await openShot(s.id);
   try { await addPicture(await frameInput(f), { label: 'Frame', cover: true }); } catch (e) { toast(e.message, true); }
 }
+// ---- a shot with an edit of its own (s.doc: its story is laid out as a table) ----
+// frame-story.js sets these while the story's table is open: toFrame(s, name) puts a picture into the shot's frame on
+// the table (true when it did), openFrame(s) opens the frame (true when it did)
+const DOC = { toFrame: null, openFrame: null };
+export function shotDocHooks(hooks) { Object.assign(DOC, hooks); }
+const docStill = (s) => (s.doc ? stillOf({ kind: 'image', doc: s.doc }) : null);
+let stillsFor = null;   // the story whose edits' stills were read (again each time the Story tab is shown)
+function docStills() {
+  if (stillsFor === U.doc || !allShots().some((s) => s.doc)) return;
+  stillsFor = U.doc;
+  loadStills(['image']).then(() => { if (shown()) refreshThumbs(); }).catch(() => {});
+}
+// the shot's edit in the Image tab (its frame on the table when that is open), with a picture added when name is given
+async function openShotDoc(s, name = null) {
+  if (CV.shot === s.id) await leaveCanvas();
+  if (name ? DOC.toFrame && await DOC.toFrame(s, name) : DOC.openFrame && await DOC.openFrame(s)) return;
+  try {
+    const ed = await import('./editor.js'), t = ed.editTabs();
+    await t.ready();
+    switchTab('editor');
+    await t.switchTo(s.doc);
+    if (t.active?.id !== s.doc) return toast('Couldn\'t open the shot\'s edit', true);
+    if (name) { (await import('./core.js')).CURRENT_EDIT.eng?.addImage(name, { label: 'Frame' }); }
+  } catch (e) { toast(e.message, true); }
+}
+async function frameToDoc(s, f) {
+  try { await openShotDoc(s, await frameInput(f)); } catch (e) { toast(e.message, true); }
+}
+// the canvas view on a shot with an edit: its picture, and a way into it
+function docView(s) {
+  const url = docStill(s) || (chosen(s) ? frameThumb(chosen(s), 1024) : null);
+  return h('div', { class: 'viewer st-cv-viewer st-cv-doc' },
+    h('div', { class: 'placeholder st-cv-empty' },
+      url ? h('img', { src: url, alt: '', class: 'st-cv-frame' }) : h('span', { class: 'st-noframe' }, icon('image')),
+      h('div', { class: 'row wrap st-cv-start' },
+        button([icon('canvas'), 'Open the shot\'s edit'], () => openShotDoc(s), { cls: 'small primary', title: 'The shot\'s picture is its frame on the story\'s table: draw and lay it out there' }))));
+}
+// the canvas let go of (a shot with an edit is shown): its last strokes saved, nothing held
+async function leaveCanvas() {
+  if (!CV.shot) return;
+  const my = ++CV.seq;
+  await settleCanvas();
+  if (my === CV.seq) { CV.shot = null; clearTimeout(CV.timer); }
+}
+
 function startBlank() {
   if (!CV.eng.E.size) CV.eng.E.size = compSize();
   CV.eng.paint.setTool('brush');   // (an empty canvas gets a white layer to paint on)
@@ -502,7 +552,7 @@ function makeCanvas() {
   registerUndo('story', { undo: () => CV.eng?.paint?.undo(), redo: () => CV.eng?.paint?.redo() });   // (the shot canvas's painting)
   CV.eng = createEditor({
     canvas: CV.canvas, empty: CV.empty, panel: $('#storyBody'),
-    active: () => shown() && U.view === 'canvas',
+    active: () => shown() && U.view === 'canvas' && !!CV.shot && CV.shot === U.sel,
     onChange: compChanged,
     docId: () => CV.shot,
     elsewhere: 'That was on another shot',
@@ -1046,6 +1096,8 @@ const grip = (kind, id) => h('span', { class: 'st-grip', role: 'button', 'aria-l
 // ---- the stage: the outline or the board ----
 const statusDot = (s) => h('span', { class: `st-status ${s.status}`, title: label3(STATUS, s.status) });
 function thumbOf(s) {
+  const d = docStill(s);
+  if (d) return h('img', { src: d, alt: '', loading: 'lazy', draggable: false });
   const f = chosen(s);
   if (f) return h('img', { src: frameThumb(f), alt: '', loading: 'lazy', draggable: false });
   if (s.pending.length) return h('span', { class: 'st-making' }, h('span', { class: 'st-spin' }), 'Making…');
@@ -1106,7 +1158,7 @@ function sceneEl(sc, si, board) {
 function canvasStage(st) {
   if (!U.sel || !locate(U.sel)) U.sel = allShots()[0]?.id || null;
   const at = locate(U.sel);
-  if (at && CV.shot !== at.s.id) openShot(at.s.id);
+  if (at?.s.doc) { leaveCanvas(); docStills(); } else if (at && CV.shot !== at.s.id) openShot(at.s.id);
   if (!at) return st.replaceChildren(placeholder('No shots yet'), h('div', { class: 'st-end' }, button([icon('plus'), 'Scene'], () => addScene(), { cls: 'small' })));
   const { sc, si, s, i } = at, list = allShots(), k = list.indexOf(s);
   const head = h('div', { class: 'st-cv-head' },
@@ -1130,8 +1182,8 @@ function canvasStage(st) {
     sc.shots.map(tile),
     h('button', { type: 'button', class: 'st-film-add', onclick: () => addShot(sc, sc.shots[sc.shots.length - 1]), 'aria-label': 'A shot at the end of the scene' }, icon('plus')));
   drawEmpty();
-  st.replaceChildren(head, CV.viewer, ...layersDock(), film);
-  if (!DOCK.el.childElementCount) renderPanel();   // (the first time: the panel's draw fills it)
+  st.replaceChildren(head, ...(s.doc ? [docView(s)] : [CV.viewer, ...layersDock()]), film);
+  if (!DOCK.el?.childElementCount) renderPanel();   // (the first time: the panel's draw fills it)
   requestAnimationFrame(() => film.querySelector('.sel')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
 }
 // only the pictures changed (a canvas was saved): the strip and cards follow, the panel too unless something in it is
@@ -1179,6 +1231,7 @@ function scriptStage(st) {
 export function renderStage() {
   const st = $('#storyStage');
   if (!st) return;
+  if (shown()) docStills();
   const board = U.view === 'board';
   st.classList.toggle('board', board);
   st.classList.toggle('canvas', U.view === 'canvas');
@@ -1251,7 +1304,7 @@ function shotSection(at, { pane = false } = {}) {
       drifted(fr) ? h('span', { class: 'st-drift', title: lookNote(fr) }, icon('warn'), 'Look drifted') : null,
       fr.canvas ? h('span', { class: 'st-frame-tag' }, 'Canvas')
         : h('div', { class: 'st-frame-btns' },
-          iconBtn('Put it on the canvas', icon('canvas'), () => frameToCanvas(s, fr), { class: 'icon-btn' }),
+          iconBtn(s.doc ? 'Put it on the shot\'s frame, as a layer' : 'Put it on the canvas', icon('canvas'), () => frameToCanvas(s, fr), { class: 'icon-btn' }),
           iconBtn('Remove this frame', icon('close'), () => removeFrame(s, fr), { class: 'icon-btn' })))),
     s.pending.map((id) => h('div', { class: 'st-frame st-frame-wait', style: `aspect-ratio:${ratio()}` },
       h('span', { class: 'st-spin' }), h('span', {}, S.history.get(id)?.status === 'running' ? 'Making…' : 'Waiting…'))));
@@ -1265,7 +1318,8 @@ function shotSection(at, { pane = false } = {}) {
     field('Camera move', toggleChips(MOVES, 'move')),
     field('Length', seg(DURS.map((d) => [d, `${d} s`]), s.dur, (v) => { s.dur = v; changed(); }, { wrap: true })),
     field('Status', seg(STATUS, s.status, (v) => { s.status = v; changed(); })),
-    U.view !== 'canvas' && !pane ? button([icon('canvas'), 'Open on the canvas'], () => { U.view = 'canvas'; store.set('deck.story.view', 'canvas'); select(s.id); }, { title: 'Draw and lay out this shot\'s frame' }) : null,
+    s.doc && !pane ? button([icon('canvas'), 'Open the shot\'s edit'], () => openShotDoc(s), { title: 'The shot\'s picture is its frame on the story\'s table' }) : null,
+    U.view !== 'canvas' && !pane && !s.doc ? button([icon('canvas'), 'Open on the canvas'], () => { U.view = 'canvas'; store.set('deck.story.view', 'canvas'); select(s.id); }, { title: 'Draw and lay out this shot\'s frame' }) : null,
     field([`Frames`, h('span', {}, `${framesOf(s).length}`)],
       help('The canvas is the picture drawn and laid out on the canvas view. Tap a frame to make it the shot\'s chosen one (the storyboard shows it, Shots to video uses it); tap the chosen one to see it big. The canvas button on a frame puts it on the canvas as a new layer.'),
       frames,
@@ -1379,7 +1433,7 @@ function fillPanel() {
   if (U.view === 'cast') return castPanel(body);
   const at = U.sel && locate(U.sel);
   if (!at) U.sel = null;
-  const ed = U.view === 'canvas' && at && CV.shot === at.s.id ? CV.eng : null;
+  const ed = U.view === 'canvas' && at && !at.s.doc && CV.shot === at.s.id ? CV.eng : null;   // (a shot with an edit: no canvas here)
   drawDock(ed);
   const parts = [ed?.paintProps(), at ? shotSection(at) : section('Shot', null, placeholder('Tap a shot to edit it here')),
     ...(ed ? [ed.canvasProps(), ed.masksProps(), ed.inpaintProps(), ed.toolsProps(), ed.exportProps()] : []),
@@ -1398,7 +1452,7 @@ function fillPanel() {
   }
 }
 export function renderPanel() {
-  if (U.view === 'canvas' && CV.eng && CV.shot && CV.shot === U.sel) CV.eng.render();   // (it fills the panel, fillPanel)
+  if (U.view === 'canvas' && CV.eng && CV.shot && CV.shot === U.sel && !locate(U.sel)?.s.doc) CV.eng.render();   // (it fills the panel, fillPanel)
   else fillPanel();
 }
 
@@ -1419,7 +1473,7 @@ const adapter = {
   beforeLeave: settleCanvas,   // the open shot's strokes and picture are saved into the story being left
   load(p, doc) {
     P = migrate(p);
-    if (U.doc !== doc?.id) { U.doc = doc?.id; CV.shot = null; ++CV.seq; clearTimeout(CV.timer); }   // another story: its shots' canvases
+    if (U.doc !== doc?.id) { U.doc = doc?.id; CV.shot = null; ++CV.seq; clearTimeout(CV.timer); stillsFor = null; }   // another story: its shots' canvases
     if (!locate(U.sel)) U.sel = null;
     renderStage(); renderPanel();
     setTimeout(catchUp, 0);
@@ -1433,7 +1487,8 @@ export function wireStory() {
   tabs = new TabSet({ kind: 'story-tabs', host: $('#tab-story'), scope: 'project', newName: (n) => `Story ${n}`, adapter });
   fullScreen($('#tab-story'));
   makeCanvas();
-  import('./frame-story.js').catch((e) => console.error(e));   // (a story laid out as a table; loaded after this module, which it uses)
+  import('./frame-story.js').catch((e) => console.error(e));
+  onNavigate((name) => { if (name === 'story') { stillsFor = null; docStills(); } });   // (the shots' edits may have changed meanwhile)   // (a story laid out as a table; loaded after this module, which it uses)
   onCharacters(() => { if (!shown()) return; if (U.view === 'script' || U.view === 'cast') renderStage(); renderPanel(); });
   // a frame run for a shot here ends: this device queued it, so this device files the pictures (another device
   // showing the same story gets them with the save); anything else just redraws its waiting tiles

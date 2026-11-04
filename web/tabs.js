@@ -15,9 +15,11 @@ import { S, onServer, onProject } from './core.js';
 import { keyboardFocus } from './key-focus.js';
 import { docStrip } from './layout.js';
 import { dropIndex, slideOf } from './tab-order.js';
+import { sitsEmpty } from './table-model.js';
 
 const SAVE_DELAY = 1000, DRAG_PX = 6, HOLD_MS = 350, EDGE_PX = 40;
 const TIMEOUT = 30000;
+
 
 export class TabSet {
   constructor(o) {
@@ -58,6 +60,9 @@ export class TabSet {
     document.addEventListener('visibilitychange', () => { if (document.hidden) { this.stash(); this.flush(); } else if (this.started) this.refresh(); });
     addEventListener('pagehide', () => { this.stash(); this.flush(); });
   }
+
+  // true when this project's tables own the documents, so this set makes none of its own
+  get ownedByTables() { return this.scope !== 'global' && sitsEmpty(this.kind, S.projects?.find((p) => p.id === this.pid)); }
 
   // ---- addressing ----
   get qs() { return this.scope === 'global' ? '?scope=global' : this.pid != null ? `?project_id=${this.pid}` : ''; }
@@ -116,6 +121,10 @@ export class TabSet {
       if (ep !== this.epoch) return;
       this.docs = list;
       let doc;
+      if (!list.length && this.ownedByTables) {
+        this.setOffline(false); this.render(); this.gate();
+        return;
+      }
       if (!list.length) {
         // first run here: 'main' is a fixed id so two devices seeding at once end up with one tab
         doc = await this.create1({ id: 'main', name: this.newName(1), payload: (this.seed && this.seed()) || this.adapter.empty() });
@@ -245,6 +254,7 @@ export class TabSet {
       this.setOffline(true);
       return false;
     }
+    if (r.status === 409 && r.data?.error && !r.data?.doc) { toast(r.data.error, true); return false; }   // (a refusal with a reason, not a changed document)
     if (r.status === 409) { this.showConflict(r.data?.doc ?? null); return false; }
     this.setOffline(false);
     tab.rev = r.data.rev; tab.name = r.data.name;
@@ -334,6 +344,7 @@ export class TabSet {
     try {
       let doc;
       if (this.docs.length) doc = await api(this.url(this.docs[Math.min(i, this.docs.length - 1)].id), { busy: false });
+      else if (this.ownedByTables) { this.render(); return; }
       else doc = await this.create1({ name: this.newName(1), payload: this.adapter.empty() });
       if (ep === this.epoch) this.open(doc);
     } catch (e) { if (!quiet) toast(e.message, true); this.render(); }
@@ -350,7 +361,7 @@ export class TabSet {
     if (r.net) throw new Error('Can\'t reach ComfyChair (is the server running and on this network?)');
     if (r.ok) { this.upsert(r.data); return r.data; }
     if (r.status === 409 && r.data?.doc) { this.upsert(r.data.doc); return r.data.doc; }
-    throw new Error(r.data?.detail || `Couldn't create the tab (${r.status})`);
+    throw new Error(r.data?.detail || r.data?.error || `Couldn't create the tab (${r.status})`);
   }
   async create() {
     if (!(await this.leave())) return;
@@ -366,17 +377,30 @@ export class TabSet {
     if (!(await this.leave())) return;
     const a = this.active;
     try {
+      if (this.kind === 'tables') {   // (a table owns copies of its documents: the server makes the copy, a copied payload would be refused)
+        const r = await fetch(this.url(a.id, '/duplicate'), { method: 'POST' });
+        let data = null; try { data = await r.json(); } catch { /* not JSON */ }
+        if (!r.ok) throw new Error(data?.error || data?.detail || `Couldn't duplicate the table (${r.status})`);
+        this.upsert(data); this.open(data);
+        return;
+      }
       this.open(await this.create1({ name: `${a.name} copy`.slice(0, 120), payload: clone(this.adapter.dump()), order: a.order + 0.5 }));
     } catch (e) { toast(e.message, true); }
   }
-  rename() {
+  // rename(name) sets the open tab's name and saves it. rename() asks for the name first.
+  async rename(name) {
     const a = this.active;
-    nameSheet({ title: 'Rename tab', placeholder: a.name, saveLabel: 'Rename', save: async (name) => {
-      if (!name) throw new Error('Type a name');
-      this.pendingName = name.slice(0, 120); a.name = this.pendingName;
-      this.setDirty(true); this.render();
-      await this.flush();
-    } });
+    if (!a) return false;
+    if (name === undefined) {
+      nameSheet({ title: 'Rename tab', placeholder: a.name, saveLabel: 'Rename', save: async (n) => {
+        if (!n) throw new Error('Type a name');
+        await this.rename(n);
+      } });
+      return false;
+    }
+    this.pendingName = String(name).slice(0, 120); a.name = this.pendingName;
+    this.setDirty(true); this.render();
+    return this.flush();
   }
   async remove() {
     const a = this.active;
@@ -387,13 +411,13 @@ export class TabSet {
     const idx = this.docs.findIndex((d) => d.id === a.id), ep = this.epoch;
     try {
       // never leave zero tabs: the blank one exists before the old one goes
-      const fresh = this.docs.length <= 1 ? await this.create1({ name: this.newName(1), payload: this.adapter.empty() }) : null;
+      const fresh = this.docs.length <= 1 && !this.ownedByTables ? await this.create1({ name: this.newName(1), payload: this.adapter.empty() }) : null;
       try { await api(this.url(a.id), { method: 'DELETE', busy: false }); } catch (e) { if (!/not found/i.test(e.message)) throw e; }
       try { localStorage.removeItem(this.bakKey(a.id)); } catch { /* storage unavailable */ }
       this.docs = this.docs.filter((d) => d.id !== a.id);
-      const next = fresh || await api(this.url(this.docs[Math.min(idx, this.docs.length - 1)].id), { busy: false });
+      const next = fresh || (this.docs.length ? await api(this.url(this.docs[Math.min(idx, this.docs.length - 1)].id), { busy: false }) : null);
       if (ep !== this.epoch) return;
-      this.open(next);
+      if (next) this.open(next); else { this.active = null; this.render(); }
       undoToast(`Deleted "${a.name}"`, async () => {
         try {
           if (ep !== this.epoch || !(await this.leave())) return;
