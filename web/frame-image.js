@@ -11,7 +11,7 @@ import { uploadImage } from './media.js';
 import { draggingPicture, droppedFiles, dropKind } from './drop-files.js';
 import { isLive } from './live.js';
 import { sidebar } from './sidebar.js';
-import { frameChanged, refreshStills } from './table.js';
+import { frameChanged, refreshStills, tableFrames } from './table.js';
 import { editDoc, sourcePicture } from './table-frames.js';
 
 const F = { seq: 0, mounted: null };   // mounted: the id of the frame the editor is in
@@ -191,3 +191,21 @@ async function settledStill() {
   for (let i = 0; i < 40 && eng()?.loading(); i++) await new Promise((r) => setTimeout(r, 250));
   await editorStill();
 }
+
+// A deleted frame's Make-panel pictures (frame.make.inputs: copies the panel made in the project's pictures) go with it.
+// Undo brings the frame back but not these (they are copies, not the user's own pictures; the frame's Make settings
+// then show them missing, and its inputs list is emptied so nothing tries to drop them twice). A picture another frame
+// on this table still lists stays (Ctrl+D copies a frame's make settings). Pictures a character uses are refused by the
+// server and stay too.
+addEventListener('table:deleted', (e) => {
+  const left = new Set(tableFrames().flatMap((f) => f.make?.inputs || []));
+  for (const f of e.detail?.frames || []) {
+    const names = f.make?.inputs;
+    if (!Array.isArray(names) || !names.length) continue;
+    f.make = { ...f.make, inputs: [] };
+    for (const n of names) {
+      if (left.has(n)) continue;
+      api(`/api/inputs?name=${encodeURIComponent(n)}`, { method: 'DELETE', busy: false }).catch(() => {});
+    }
+  }
+});

@@ -195,7 +195,7 @@ function rangeBar() {
     B.from != null || B.to != null ? button('Clear range', () => set(null, null), { cls: 'small ghost' }) : null);
 }
 
-async function togglePin(g) {
+export async function togglePin(g) {
   try { const r = await api(`/api/generations/${g.id}/pin`, { method: 'POST', body: { pinned: !g.pinned } }); S.history.set(r.id, r); boardChanged(r); }
   catch (err) { toast(err.message, true); }
 }
@@ -419,6 +419,10 @@ export const isH3Run = (g) => /^deck-h3-|^h3 (upscale|regenerate)$/.test(g?.temp
 async function boardFinish() {
   const all = boardSelected().filter(({ o }) => o.kind === 'video');
   if (!all.length) return toast('Select a clip first', true);
+  return finishClips(all);
+}
+// [{ g, i }] clips (the Board's selection, a Shelf tile): H3 runs finished in place, one other set up in Generate
+export async function finishClips(all) {
   const clips = all.filter(({ g }) => isH3Run(g)), other = all.filter(({ g }) => !isH3Run(g));
   if (other.length > 1) toast(`${other.length} clips aren't H3 runs: use Use as → Finish with H3 on each`, true);
   let n = 0;
@@ -439,7 +443,7 @@ async function boardFinish() {
     }
   }
   if (other.length === 1) {
-    setBoardSelecting(false);
+    if (B.selecting) setBoardSelecting(false);
     await finishWithH3(other[0].g, other[0].i);
     if (n) toast(`${n} finish${n === 1 ? '' : 'es'} queued; #${other[0].g.id} is set up in Generate`);
   } else if (n) toast(`${n} finish${n === 1 ? '' : 'es'} queued`);
@@ -583,7 +587,7 @@ export function boardChanged(g) {
 
 // ---- board gallery: full screen, one big preview with a sliding row of thumbnails under it.
 // Swipe (or ← →) to move through what the board is showing; pin, mark for deletion, edit.
-export const GAL = { el: null, items: [], idx: 0, key: null };
+export const GAL = { el: null, items: [], idx: 0, key: null, source: null };
 const galThumbs = new IntersectionObserver((entries) => {   // video thumbnails load their first frame once scrolled to
   for (const e of entries) if (e.isIntersecting) { e.target.preload = 'metadata'; galThumbs.unobserve(e.target); }
 }, { rootMargin: '0px 400px' });
@@ -637,8 +641,10 @@ function galleryAudio(o) {
     h('div', { class: 'gal-audio-bar' }, play, scrub, time)));
 }
 
-function openGallery(key) {
-  GAL.items = boardItems();
+// items: what to step through instead of the Board's (a function giving [{ g, o, i, key }]: the Shelf's tiles)
+export function openGallery(key, items = null) {
+  GAL.source = items;
+  GAL.items = (items || boardItems)();
   GAL.idx = Math.max(0, GAL.items.findIndex((x) => x.key === key));
   if (!GAL.items.length) return;
   pauseBoard();
@@ -674,7 +680,7 @@ export function closeGallery(viaBack = false) {
   const key = GAL.items[GAL.idx]?.key;
   GAL.max?.exit(); GAL.max = null;
   GAL.el.querySelectorAll('video, audio').forEach((v) => v.pause());
-  GAL.el.remove(); GAL.el = null; galThumbs.disconnect();
+  GAL.el.remove(); GAL.el = null; GAL.source = null; galThumbs.disconnect();
   if (viaBack !== true) overlayClosed(galleryBack);
   if ($('#tab-board').classList.contains('active')) {
     renderBoard().then(() => $(`#board .tile[data-key="${key}"]`)?.scrollIntoView({ block: 'center' }));
@@ -684,7 +690,7 @@ export function closeGallery(viaBack = false) {
 // After pins / marks / deletes: rebuild the list, staying on the same item (or its neighbour if it went)
 export function galleryRefresh() {
   const key = GAL.items[GAL.idx]?.key;
-  GAL.items = boardItems();
+  GAL.items = (GAL.source || boardItems)();
   if (!GAL.items.length) return closeGallery();
   const at = GAL.items.findIndex((x) => x.key === key);
   const same = at >= 0;

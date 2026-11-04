@@ -6,7 +6,8 @@
 //   nothing (or a note): text-to-image and text-to-video; each result is a new frame beside the last
 //   an image frame:      image templates; the frame's picture goes into the template's first picture, its size is the
 //                        output size, and results land as layers in it (live or not: imagetools.js landMade, owed runs)
-//   a video frame:       video templates; Pick a frame puts an image frame's picture in a slot; results land as clips
+//   a video frame:       video templates; Pick a frame puts an image frame's picture in a slot; results land as clips.
+//                        Or VFX (frame-vfx.js): the VFX tab's effects on the frame's own VFX document; results land as clips
 //   a 3D or sound frame: their templates; results are in the Shelf (Use as… from the toast)
 //
 //   renderMake(host, frames)   draw the panel into host for the selection (the sidebar calls it; table:select redraws it)
@@ -25,6 +26,8 @@ import { DOC_KIND, nextBeside, toStage } from './table-model.js';
 import * as Table from './table.js';
 import { LANDS, canvasRect, familiesOf, frameImageField, frameSize, makeTarget, pickTemplate, sizePair, templatesFor, withClip } from './make-rules.js';
 import { icon } from './icons.js';
+import { frameOfVfx, hideFrameVfx, showFrameVfx } from './frame-vfx.js';
+import { runVfx } from './vfx.js';
 
 const P = { fresh: [], ready: Promise.resolve(), host: null, frames: [], table: null, lentFor: null, els: null, prog: null, batch: Math.max(1, store.get('deck.make.batch', 1)) };
 const KIND_WORD = { none: 'a new frame', image: 'this picture', video: 'this video', scene: 'this 3D frame', sound: 'this sound frame' };
@@ -56,12 +59,12 @@ function draw() {
   if (!S.templates?.length) { host.replaceChildren(note('The templates are still loading.', 'warn')); P.lentFor = null; return; }
   const { kind, frame } = makeTarget(P.frames);
   const list = templatesFor(S.templates, kind);
-  if (!list.length) { host.replaceChildren(note(`No template here makes anything for ${KIND_WORD[kind]}.`, 'warn')); return; }
+  if (!list.length) { hideFrameVfx(); host.replaceChildren(note(`No template here makes anything for ${KIND_WORD[kind]}.`, 'warn')); return; }
   const key = `${kind}:${frame?.id || ''}`;
   if (P.lentFor !== key || !host.contains(P.els?.fields)) {
     P.els = { fields: h('div', { class: 'make-fields' }), notes: h('div', { class: 'make-notes' }), basics: h('div', { class: 'make-basics' }),
-      picker: h('div', { class: 'make-picker' }), head: h('div', { class: 'make-head' }) };
-    host.replaceChildren(h('div', { class: 'make-panel' }, P.els.head, P.els.picker, P.els.notes, P.els.basics, P.els.fields));
+      picker: h('div', { class: 'make-picker' }), head: h('div', { class: 'make-head' }), mode: h('div', { class: 'make-mode' }), vfx: h('div', { class: 'make-vfx hidden' }) };
+    host.replaceChildren(h('div', { class: 'make-panel' }, P.els.mode, P.els.head, P.els.picker, P.els.notes, P.els.basics, P.els.fields, P.els.vfx));
     P.lentFor = key;
     const settings = frame ? frame.make || null : store.get('deck.make.none', null);
     const fits = settings?.template && list.some((t) => t.id === settings.template);
@@ -69,9 +72,26 @@ function draw() {
     P.ready = borrow(fits ? settings : null, { template: want, target: target(kind, frame), save: (p) => keep(kind, frame, p) })
       .then(() => { if (P.lentFor === key) { fitFrame(kind, frame); drawHead(kind, frame, list); } });
     drawHead(kind, frame, list);
+    syncMode(kind, frame);
     return;
   }
   drawHead(kind, frame, list);
+  syncMode(kind, frame);
+}
+
+// A video frame's Make pane: Templates (the borrowed fields) or VFX (frame-vfx.js), one at a time
+const vfxOn = (kind, frame) => kind === 'video' && !!frame?.doc && store.get('deck.make.mode.video', 'make') === 'vfx';
+export function useVfxMode(on) {
+  store.set('deck.make.mode.video', on ? 'vfx' : 'make');
+  if (P.host) draw();
+}
+function syncMode(kind, frame) {
+  const on = vfxOn(kind, frame);
+  P.els.mode.replaceChildren(kind === 'video' && frame?.doc
+    ? seg([['make', 'Templates'], ['vfx', 'VFX']], on ? 'vfx' : 'make', (v) => useVfxMode(v === 'vfx')) : null);
+  for (const k of ['head', 'picker', 'notes', 'basics', 'fields']) P.els[k].classList.toggle('hidden', on);
+  P.els.vfx.classList.toggle('hidden', !on);
+  if (on) showFrameVfx(P.els.vfx, frame); else hideFrameVfx();
 }
 
 // what the borrowed fields draw into, and what they show differently here
@@ -200,6 +220,7 @@ export async function runMake() {
   const sel = selection();
   if (sel !== P.frames) P.frames = sel || [];
   const { kind, frame } = makeTarget(P.frames);
+  if (vfxOn(kind, frame)) return runVfx();
   if (!P.host || !lentOut() || P.lentFor !== `${kind}:${frame?.id || ''}`) draw();
   await P.ready;   // (a fresh borrow loads first)
   const t = S.tpl;
@@ -278,15 +299,35 @@ async function landFrames(done, values, t) {
 // video frame: each output a clip at the end of its first video track, in the open timeline if this frame is live
 async function landClips(frame, done) {
   const outs = (done.outputs || []).map((o, index) => ({ o, index })).filter(({ o }) => o.kind === 'video' || o.kind === 'image');
+  let n = 0;
   for (const { o, index } of outs) {
-    const media = { kind: o.kind, src: { generation: done.id, index }, url: o.url, label: `#${done.id}`, dur: o.duration || 0 };
-    const vid = isLive(frame.id) ? await import('./video.js') : null;
-    if (vid && vid.videoTabs?.()?.active?.id === frame.doc) { await vid.addToTimeline(media); continue; }
-    if (!media.dur && o.kind === 'video') media.dur = await durationOf(o.url);
-    if (!(await appendClip(frame, media))) toast(`#${done.id} is done but couldn't go on ${frame.label}'s timeline: it is in the Shelf`, true);
+    if (await landClip(frame, { kind: o.kind, src: { generation: done.id, index }, url: o.url, label: `#${done.id}`, dur: o.duration || 0 }, false)) n++;
+    else toast(`#${done.id} is done but couldn't go on ${frame.label}'s timeline: it is in the Shelf`, true);
   }
-  if (outs.length) toast(`#${done.id}: on ${frame.label || 'the video'}'s timeline`);
+  if (n) toast(`#${done.id}: on ${frame.label || 'the video'}'s timeline`);
 }
+// one clip onto a video frame's timeline (the open one when it is live); true once it is there
+export async function landClip(frame, media, tell = true) {
+  const vid = isLive(frame.id) ? await import('./video.js') : null;
+  let ok = true;
+  if (vid && vid.videoTabs?.()?.active?.id === frame.doc) await vid.addToTimeline(media);
+  else {
+    if (!media.dur && media.kind === 'video') media.dur = await durationOf(media.url);
+    ok = await appendClip(frame, media);
+  }
+  if (tell) toast(ok ? `On ${frame.label || 'the video'}'s timeline` : `Couldn't put it on ${frame.label}'s timeline`, !ok);
+  return ok;
+}
+
+// a VFX run made for a frame's VFX document: its result lands as a clip on that frame (a server job may be done already)
+addEventListener('vfx:queued', (e) => {
+  const frame = e.detail?.doc ? frameOfVfx(e.detail.doc) : null;
+  if (!frame?.doc) return;
+  for (const g of e.detail.gens || []) {
+    (g.status === 'done' ? Promise.resolve(g) : waitGen(g.id)).then((done) => landClips(frame, done))
+      .catch((err) => toast(`#${g.id} failed: ${err.message}`, true));
+  }
+});
 // the clip into the frame's saved document (its rev, so an edit elsewhere isn't overwritten: read again and retry)
 async function appendClip(frame, media) {
   for (let tries = 0; tries < 3; tries++) {
@@ -341,6 +382,7 @@ addEventListener('table:live', (e) => { P.table = e.detail?.table || P.table; if
 addEventListener('table:unlive', () => { if (P.host) draw(); });
 onNavigate((name) => {
   if (name === 'table') { if (P.host) draw(); return; }
+  hideFrameVfx();   // (and the VFX tab its engine)
   if (lentOut()) giveBack();   // (another screen: the Generate tab's own fields come back)
   P.lentFor = null;
 });

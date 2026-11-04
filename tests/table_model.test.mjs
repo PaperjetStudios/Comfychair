@@ -144,3 +144,24 @@ test('engine TabSets sit empty on a version-2 project only', async () => {
   assert.equal(sitsEmpty('tables', { version: 2 }), false);
   assert.equal(sitsEmpty('story-tabs', { version: 2 }), false);
 });
+
+// ---- the empty documents a table frame starts with (web/empty-docs.js, shared with the engines' TabSet adapters) ----
+import { readFileSync } from 'node:fs';
+import { emptyPayload, emptyVideo, emptySound, emptyScene, defaultScene } from '../web/empty-docs.js';
+
+test('a frame\'s blank document is the engine\'s own empty one', () => {
+  assert.deepEqual(emptyPayload('video'), emptyVideo());
+  assert.deepEqual(emptyPayload('sound'), emptySound());
+  assert.deepEqual(emptyPayload('scene'), emptyScene());
+  assert.equal(emptyPayload('note'), null);
+  assert.deepEqual(emptyVideo().tracks.map((t) => t.id), ['v1', 'v2', 'a1']);
+  assert.equal(emptySound('wav').out.format, 'wav');
+  assert.notEqual(emptyScene(), emptyScene());   // (fresh each time: nothing shared between documents)
+  assert.equal(defaultScene().objects.length, 0);
+  // the engines use these (a copy gone stale would not)
+  const src = (f) => readFileSync(new URL(`../web/${f}`, import.meta.url), 'utf8');
+  assert.match(src('video.js'), /empty: emptyVideo,/);
+  assert.match(src('sound.js'), /empty: \(\) => emptySound\(/);
+  assert.match(src('scene-data.js'), /import \{ defaultScene \} from '\.\/empty-docs\.js'/);
+  assert.match(src('table-frames.js'), /return emptyPayload\(kind\)/);
+});

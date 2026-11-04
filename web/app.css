@@ -2245,6 +2245,14 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
 .make-frame-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
 .make-frame-card { display: flex; flex-direction: column; gap: 4px; align-items: center; padding: 6px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-2); color: inherit; }
 .make-frame-card img { width: 100%; aspect-ratio: 1; object-fit: contain; }
+.make-mode:empty { display: none; }
+.make-vfx > .make-vfx-open { margin-bottom: 6px; }
+.make-vfx .panel-body { padding: 0; }
+/* a live video frame with VFX on show: VFX's stage over the frame, the edit's own one hidden under it */
+.frame-mount > .vfx-under { display: none !important; }
+.frame-mount > .vfx-frame-stage > .viewer { position: relative; background: var(--checker); }
+/* the Shelf's Shift-click selection */
+.shelf-tile.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* ---- story tables ---- */
 /* a shot frame's badge on its label bar (frame-story.js): how far along, its clips, runs on the way */

@@ -127,20 +127,33 @@ const UI = { wipe: 0.5, draw: null, srcInfo: null, playing: false, neg: false, c
 let vtp = null;   // the transport bar (playback.js)
 // Where the engine shows (mountVfx): the page's VFX tab today, any host element later (a frame on a table).
 // transport is the bar on show (renderTransport swaps it for a new one); body is the pane's content box.
-const VF = { host: null, stage: null, transport: null, panel: null, body: null, max: null, active: () => !!VF.host?.classList.contains('active') };
+// pickClip(set): a mount's own way to choose a clip (a frame's clips); addClip(media): where Add to the timeline puts a take.
+const VF = { host: null, stage: null, transport: null, panel: null, body: null, max: null, active: () => !!VF.host?.classList.contains('active'),
+  pickClip: null, addClip: null };
 const inBody = (sel) => VF.body?.querySelector(sel) || null;
 
 // ---- inputs ----
 function changed(redraw = true) { tabs?.changed(); if (redraw) render(); }
 
 // From the Video tab (or anywhere): open a VFX tab on this clip
+// (a frame on a table can take it instead: onSendToVfx)
+let sendHook = null;
+export const onSendToVfx = (fn) => { sendHook = fn; };
 export async function sendToVfx(src, { label = null, trim = null } = {}) {
+  if (sendHook && await sendHook(src, { label, trim })) return;
   switchTab('vfx');
   await ensureTabs();
   T.source = { ...bareSource(src), ...(trim && { trim }), ...(label && { label }) };
   T.showing = null; UI.srcInfo = null;
   changed();
   toast('Clip set as the VFX source: pick an effect');
+}
+
+// The open document's source clip, set from outside (a frame's Clip tools → VFX)
+export function setVfxSource(src) {
+  T.source = { ...bareSource(src), ...(src.trim && { trim: src.trim }), ...(src.label && { label: src.label }) };
+  T.showing = null; UI.srcInfo = null;
+  changed();
 }
 
 // From the Board or History ("Use as…"): one input of the open VFX tab. role: 'source' | 'matte' (clips),
@@ -175,7 +188,8 @@ function sourceField(role = 'source') {
     onEdit: (val) => { T.source = val; changed(false); drawViewer(); poseLine(); },
     loader: () => ({ rate: 0, nth: 1, mapped: true }), budget: () => (fxDef.needs.includes('len') ? { secs: T.len } : null),
     below: isSrc && fxDef.posed ? h('div', { class: 'vfx-pose' }) : null,
-    buttons: isSrc ? [] : [button('From results…', () => pickResult(set), { title: 'A cut-out (Alpha Gen) or mask result from this tab' })] });
+    buttons: [VF.pickClip ? button('Pick a clip', () => VF.pickClip(set, title), { title: 'A clip on this frame\'s timeline, or on another video frame' }) : null,
+      ...(isSrc ? [] : [button('From results…', () => pickResult(set), { title: 'A cut-out (Alpha Gen) or mask result from this tab' })])].filter(Boolean) });
   return tip ? withHelp(el, tip) : el;
 }
 
@@ -319,6 +333,7 @@ async function runDelogo() {
     S.history.set(g.id, g);
     if (quality) adoptGenerations([g]);
     T.results.push(g.id); T.showing = quality ? T.showing : g.id;
+    told([g]);
     UI.draw = null;
     changed();
     if (quality) toast(`Queued Remove watermark as #${g.id}`);
@@ -556,7 +571,10 @@ function takeActions(g) {
   const o = g.outputs[i];
   const src = { generation: g.id, index: i };
   return resultActions(g, { kind: 'video', first: [
-    button('Add to the timeline', async () => { await addToTimeline({ kind: 'video', src, url: o.url, label: genLabel(g), dur: o.duration || 0 }); toast('Added to the Video timeline'); }, { cls: 'small primary' }),
+    button('Add to the timeline', async () => {
+      const media = { kind: 'video', src, url: o.url, label: genLabel(g), dur: o.duration || 0 };
+      if (VF.addClip) await VF.addClip(media); else { await addToTimeline(media); toast('Added to the Video timeline'); }
+    }, { cls: 'small primary' }),
     button('Use as source', () => { T.source = src; UI.srcInfo = null; T.showing = null; changed(); }),
     button('Use as matte / mask', () => { T.matte = src; T.op = T.op === 'alpha' || T.op === 'mask' ? (T.op === 'alpha' ? 'mattekey' : 'cleanplate') : T.op; changed(); })],
   more: [button('Open in EffectCraft', (ev) => craftVfx(ev.currentTarget), { title: 'The source, matte and every take as layers, to keep working on the computer' }),
@@ -617,6 +635,7 @@ async function runMatte() {
     const g = await api('/api/video/matte', { method: 'POST', body, timeout: 900000, busy: 'Refining the matte…' });
     S.history.set(g.id, g);
     T.results.push(g.id); T.showing = g.id;
+    told([g]);
     changed();
   } catch (err) { toast('Clean up matte failed: ' + err.message, true); }
 }
@@ -791,6 +810,9 @@ async function buildRun(e, loose = false) {
   return { t, values, rv };
 }
 
+// vfx:queued { gens, doc }: runs this effect made for the VFX document doc (a frame on a table lands them as clips)
+const told = (gens, doc = tabs?.active?.id || null) => dispatchEvent(new CustomEvent('vfx:queued', { detail: { gens, doc } }));
+
 const parentOf = () => (T.source?.generation != null ? { generation: T.source.generation, index: T.source.index || 0, frame: null } : null);
 
 async function run() {
@@ -805,13 +827,14 @@ async function run() {
   if (typeof b === 'string') return toast(b, true);
   const { t, values, rv } = b;
   const parent = parentOf();   // the source clip, also when the run gets a canvas made from it
-  const tab = T, face = { kind: 'vfx', state: tabState() };
+  const tab = T, face = { kind: 'vfx', state: tabState() }, doc = tabs?.active?.id || null;
   // queue template tt (null: this effect's own, with values) with values by role; how: added to the toast (null: no toast)
   const queue = async (tt, roles, how) => {
     const vals = roles ? valuesByRole(tt, roles) : values;
     const gens = await queueRun({ template: (tt || t).id, values: vals, parent, face });
     tab.results.push(...gens.map((g) => g.id));
     if (tab === T) changed(); else tabs?.changed();
+    told(gens, doc);
     if (how !== null) toast(`Queued ${e.label} as #${gens[0].id}${how ? `, ${how}` : ''}`);
     return gens[0];
   };
@@ -848,6 +871,7 @@ async function runKey(e) {
     const g = await api('/api/video/key', { method: 'POST', body, timeout: 900000, busy: 'Keying…' });
     S.history.set(g.id, g);
     T.results.push(g.id); T.showing = g.id;
+    told([g]);
     changed();
   } catch (err) { toast('Keying failed: ' + err.message, true); }
 }
@@ -1161,24 +1185,36 @@ export function renderVfx() { ensureTabs().catch(() => {}); render(); }
 export function vfxPause() { UI.playing = false; for (const v of [V.a, V.b]) v?.pause(); vtp?.update(); }
 
 // The page's VFX tab: mounts the engine into its own section (app.js calls this once at start)
+let PAGE = null;
 export function wireVfx() {
   const panel = $('#vfxPanel');
   if (!panel) return;
-  mountVfx({ host: $('#tab-vfx'), stage: $('#vfxStage'), transport: $('#tab-vfx .stage > .transport'), panel, body: h('div', { id: 'vfxBody' }) });
+  PAGE = { host: $('#tab-vfx'), stage: $('#vfxStage'), transport: $('#tab-vfx .stage > .transport'), panel, body: h('div', { id: 'vfxBody' }) };
+  mountVfx(PAGE);
 }
+// The engine back on the page's VFX tab (after a frame had it)
+export function vfxHome() {
+  if (!PAGE || VF.host === PAGE.host) return;
+  vfxPause();
+  PAGE.transport = PAGE.host.querySelector('.stage > .transport') || PAGE.transport;   // (the bar it left there)
+  mountVfx(PAGE);
+}
+export const vfxMountedIn = () => VF.host;
 
 // Mount the engine into a host: { host, stage (where the videos go), transport (a placeholder the bar replaces), panel }
 // and optionally body (the pane's content box) and active (is it on show). The tabs, keys and listeners are made on
 // the first mount; mounting the same host again does nothing.
 const FULLS = new WeakMap();   // host -> its full screen (layout.js adds the pull tab to the stage once per host)
-export function mountVfx({ host, stage, transport: bar, panel, body = h('div'), active = () => host.classList.contains('active') }) {
+// full: give the host a full screen (the page's tab; a frame has its own); pickClip, addClip: see VF.
+export function mountVfx({ host, stage, transport: bar, panel, body = h('div'), active = () => host.classList.contains('active'), full = true, pickClip = null, addClip = null }) {
   if (VF.host === host) return;
   const again = !!tabs;
-  Object.assign(VF, { host, stage, transport: bar, panel, body, active });
+  vfxPause();
+  Object.assign(VF, { host, stage, transport: bar, panel, body, active, pickClip, addClip });
   panel.replaceChildren(body);
   delete stage.dataset.want; delete stage.dataset.trim;   // (drawViewer makes the videos again, in this stage)
-  if (!FULLS.has(host)) FULLS.set(host, fullScreen(host, { onChange: () => sizeOverlay() }));
-  VF.max = FULLS.get(host);
+  if (full && !FULLS.has(host)) FULLS.set(host, fullScreen(host, { onChange: () => sizeOverlay() }));
+  VF.max = full ? FULLS.get(host) : null;
   if (!again) wireOnce();
   else render();
 }
@@ -1201,6 +1237,10 @@ function wireOnce() {
 
 // the open VFX tabs (tabs.js), for a frame to switch to its own
 export const vfxTabs = () => tabs;
+// for a frame's mount: Run (Ctrl+Enter), the overlay fitted again after its stage was shown, and the last save
+export const runVfx = () => run();
+export function vfxResize() { sizeOverlay(); layoutCanvas(); }
+export const vfxFlush = () => tabs?.flush() ?? Promise.resolve(true);
 
 // The frame the result (or else the source) shows, as a PNG Blob (a frame's still on a table): the first frame
 // until it is played or scrubbed. Null with no video, or one that does not load within 5 s.

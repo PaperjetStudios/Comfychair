@@ -23,6 +23,8 @@ import { snap, snapOn, snapStep, snapNearest, normDeg, Weight, WEIGHT, DEAD_PX, 
 import { openCraftSheet, sendToCraft } from './craft.js';
 import { laneAbove } from './maps.js';
 import { mapsSection } from './video-maps.js';
+import { emptyVideo, videoTracks } from './empty-docs.js';
+export { emptyVideo };
 
 // ---------------------------------------------------------------------------
 // video: a Premiere-style timeline. Video tracks stack (V2 draws over V1), audio tracks mix, and
@@ -45,7 +47,7 @@ export function newItem({ kind, src, url = null, label, thumb = null, dur = 0, n
     x: 0, y: 0, scale: 1, fit: 'fit', opacity: 1, volume: 1, fadeIn: 0, fadeOut: 0 };
 }
 
-const defaultTracks = () => [{ id: 'v1', kind: 'video' }, { id: 'v2', kind: 'video' }, { id: 'a1', kind: 'audio' }];
+const defaultTracks = videoTracks;
 V.tracks = defaultTracks();
 
 // Where the engine shows (mountVideo): the page's Video tab today, any host element later (a frame on a table).
@@ -1375,7 +1377,7 @@ export async function videoStill() {
 
 // What a tab holds: the edit itself. (Zoom and Loop are this device's, not the edit's.)
 const editAdapter = {
-  empty: () => ({ tracks: defaultTracks(), items: [], size: null, fps: 0, range: null }),
+  empty: emptyVideo,
   migrate: migrateEdit,
   dump: () => ({ tracks: V.tracks, items: V.items, size: V.size, fps: V.fps, ...(V.range && { range: V.range }) }),
   load(p) {

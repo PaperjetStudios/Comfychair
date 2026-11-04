@@ -9,6 +9,7 @@ import { uploadImage, uploadMedia } from './media.js';
 import { dropKind } from './drop-files.js';
 import { DOC_KIND, KIND_LABEL, newFrame } from './table-model.js';
 import { owedFor } from './owed-runs.js';
+import { emptyPayload } from './empty-docs.js';
 
 export const KIND_ICON = { image: 'image', video: 'film', scene: 'cube', sound: 'sound', note: 'text' };
 const SOUND_SIZE = { w: 1024, h: 256 };   // a sound frame is a strip: its waveform, not a picture
@@ -17,17 +18,11 @@ const SOUND_SIZE = { w: 1024, h: 256 };   // a sound frame is a strip: its wavef
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
 const docUrl = (kind, id = '', tail = '') => `/api/store/${DOC_KIND[kind] || kind}${id ? `/${id}` : ''}${tail}${qs()}`;
 
-// A new document's payload for a frame kind: the same empty shape each screen's TabSet adapter makes. Only the image one
-// is exported (editor-engine.js BLANK); the others are copied from video.js editAdapter.empty, sound.js adapter.empty and
-// scene-data.js defaultScene (that module loads three.js, too heavy to pull in for an empty scene).
+// A new document's payload for a frame kind: the same empty shape each screen's TabSet adapter makes (empty-docs.js is
+// where video.js, sound.js and scene-data.js take theirs from; the image one is editor-engine.js BLANK).
 export function blankPayload(kind) {
   if (kind === 'image') return BLANK();
-  if (kind === 'video') return { tracks: [{ id: 'v1', kind: 'video' }, { id: 'v2', kind: 'video' }, { id: 'a1', kind: 'audio' }], items: [], size: null, fps: 0, range: null };
-  if (kind === 'sound') return { tracks: [{ id: 'a1' }, { id: 'a2' }, { id: 'a3' }], items: [], out: { name: '', format: store.get('deck.sound.format', 'm4a'), gain: 1, normalize: false }, gens: [] };
-  if (kind === 'scene') return { v: 1, width: 768, height: 448, seconds: 6, lenMode: 'match', blur: 2, room: null,
-    camera: { id: 'cam0', name: 'Camera', base: { px: 0, py: 1.6, pz: 5, tx: 0, ty: 1, tz: 0, fov: 45, roll: 0 }, chans: {}, ease: 'smooth' }, cams: [],
-    cuts: [], shotText: {}, tcStart: '01:00:00:00', renderShots: 'take', objects: [] };
-  return null;
+  return emptyPayload(kind);
 }
 
 // Make the frame's document (named after the frame) and return its id. The id is made the way tabs.js create1 makes one.
@@ -44,8 +39,18 @@ export async function copyDoc(frame, label) {
   return createDoc({ ...frame, label }, clone(d.payload));
 }
 // deleting a frame trashes its document (kept 30 days on the server); Undo restores it
-export const trashDoc = (f) => (f.doc ? api(docUrl(f.kind, f.doc), { method: 'DELETE', busy: false }).catch((e) => { if (!/not found/i.test(e.message)) throw e; }) : Promise.resolve());
-export const restoreDoc = (f) => (f.doc ? api(docUrl(f.kind, f.doc, '/restore'), { method: 'POST', busy: false }) : Promise.resolve());
+export async function trashDoc(f) {
+  if (!f.doc) return;
+  const t = await TABSET[f.kind]?.().catch(() => null);   // (the kind's TabSet is told first: its list losing the document is our doing, not another device's)
+  t?.forget?.(f.doc);
+  try { await api(docUrl(f.kind, f.doc), { method: 'DELETE', busy: false }); }
+  catch (e) { if (!/not found/i.test(e.message)) { t?.unforget?.(f.doc); throw e; } }
+}
+export async function restoreDoc(f) {
+  if (!f.doc) return;
+  (await TABSET[f.kind]?.().catch(() => null))?.unforget?.(f.doc);
+  return api(docUrl(f.kind, f.doc, '/restore'), { method: 'POST', busy: false });
+}
 
 // The screen's TabSet for a frame kind (each kind has one, and its open document must be renamed through it, or its next
 // save meets a newer rev). The modules are loaded already (app.js); import() just hands them over. The 3D one only once

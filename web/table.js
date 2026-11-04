@@ -23,6 +23,10 @@
 //   table:select     { frames: [frame], table }  the selection changed (sidebar.js follows it)
 //   table:resize     { frame, table }            a frame's size was set while it is live (its module applies it)
 //   table:move       { frames: [frame], table }  frames were moved by a drag, the arrows (once they stop) or Undo
+//   table:open       { table, doc }              a table document was loaded or made (its frames are drawn); doc is the
+//                    TabSet's doc ({ id, name, … }). Not fired for the open table saved elsewhere (it is the same table).
+//   table:deleted    { frames: [frame] }         frames were deleted (their documents are in the server's trash); a frame
+//                    module drops what only the frame itself owned. Undo brings the frames back, not that.
 import { $, h, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, toggle, help, mpInput } from './ui.js';
 import { S, onServer, onProject } from './core.js';
 import { TabSet } from './tabs.js';
@@ -65,7 +69,10 @@ const adapter = {
     if (same) return reloaded(next);
     unlive(); cancelOp();
     T = next; U.sel.clear(); H.past = []; H.future = []; U.nudge = null;
+    U.fitDue = T.view.x === 0 && T.view.y === 0 && T.view.z === 1; U.laid = false;   // (a table never viewed: fit its frames once)
     syncUndo(); D.syncBar?.(); renderAll(); refreshStills();
+    fitAll();
+    dispatchEvent(new CustomEvent('table:open', { detail: { table: T, doc } }));
   },
 };
 // The open table saved elsewhere (another device, a story module): its new contents, keeping what is going on here. The
@@ -135,6 +142,7 @@ const selected = () => T.frames.filter((f) => U.sel.has(f.id));
 export const tableFrames = () => T.frames;
 export const selectedFrames = () => selected();
 export const frameById = (id) => byId(id);
+export const activeTableId = () => U.tabs?.active?.id ?? null;
 export function frameChanged() { U.panelSig = ''; renderFrames(); changed(); }
 
 // The frames' elements follow the list (its order is the stacking order); each is made once and kept
@@ -279,6 +287,7 @@ async function deleteFrames(ids) {
     const res = await Promise.allSettled(gone.map(trashDoc));
     trashed = gone.filter((f, i) => res[i].status === 'fulfilled');
     const kept = gone.filter((f, i) => res[i].status === 'rejected');
+    if (trashed.length) dispatchEvent(new CustomEvent('table:deleted', { detail: { frames: trashed } }));
     if (kept.length) {
       toast(`Couldn't delete ${kept.length === 1 ? `"${kept[0].label}"` : `${kept.length} frames`}: ${res.find((r) => r.status === 'rejected').reason?.message}`, true);
       if (still()) { putBack(kept); renderFrames(); changed(); }
@@ -367,9 +376,38 @@ async function duplicateFrames(ids) {
 }
 function setLocked(list, on) { for (const f of list) f.locked = on; renderFrames(); changed(); }
 function restack(fn) { T.frames = fn(T.frames, [...U.sel]); renderFrames(); changed(); }
-function fit(list = T.frames) {
+function fit(list = T.frames, { animate = true } = {}) {
   const { w, h: hh } = stageSize();
-  setView(M.fitView(M.boundsOf(list), w, hh, 48, { min: ZMIN, max: 1 }), { animate: true });
+  setView(M.fitView(M.boundsOf(list), w, hh, 48, { min: ZMIN, max: 1 }), { animate });
+}
+// The first look at a table whose view was never set: all its frames in view, once. It waits for a stage with a size (the
+// Table screen on show) and for frames; a story table (frame-story.js lays its rows first) waits for fitAll({ laid: true }).
+// Returns true when it fitted.
+export function fitAll({ laid = false } = {}) {
+  if (laid) U.laid = true;
+  if (!U.fitDue || !D.stage || !T.frames.length || (T.story && !U.laid) || isLive()) return false;
+  const { w, h: hh } = stageSize();
+  if (!w || !hh) return false;
+  U.fitDue = false;
+  fit(T.frames, { animate: false });
+  return true;
+}
+// Select these frames (by id) as a tap on one would, and with scroll: true bring them into view (the zoom stays, unless
+// they are bigger than the stage). A live frame keeps the table as it is. Fires table:select when the selection changed.
+export function selectFrames(ids, { scroll = false } = {}) {
+  if (isLive() || !D.stage) return false;
+  const list = T.frames.filter((f) => ids.includes(f.id));
+  U.sel = new Set(list.map((f) => f.id));
+  renderFrames();
+  if (scroll && list.length) {
+    const { w, h: hh } = stageSize(), { x, y, z } = T.view, b = M.boundsOf(list);
+    const inside = b.x * z + x >= 0 && b.y * z + y >= 0 && (b.x + b.w) * z + x <= w && (b.y + b.h) * z + y <= hh;
+    if (!inside && w && hh) {
+      if (b.w * z > w || b.h * z > hh) fit(list);
+      else setView({ x: w / 2 - (b.x + b.w / 2) * z, y: hh / 2 - (b.y + b.h / 2) * z, z }, { animate: true });
+    }
+  }
+  return true;
 }
 // a frame brought into view at the zoom there is now (from the panel's list)
 function reveal(f) {
@@ -870,6 +908,7 @@ export async function renderTable() {
   if (!U.wired) return startTables();
   unlive();
   applyView(); D.syncBar?.(); renderFrames();
+  fitAll();   // (a table opened while another screen was on show had no stage size)
 }
 
 // ---------------------------------------------------------------------------

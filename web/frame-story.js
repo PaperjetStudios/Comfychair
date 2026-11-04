@@ -44,15 +44,16 @@ const frameOfShot = (id) => frames().find((f) => R.isShotFrame(f) && f.story.sho
 const shotNum = (at) => `${at.si + 1}.${at.i + 1}`;
 
 // ---------------------------------------------------------------------------
-// which table is open: table.js has no "a table opened" event yet, so the tables TabSet's remembered tab is read
-// (tabs.js keeps it as deck.tab.tables.<project>) when the frames change, the selection changes, and now and then
+// which table is open: table.js says so with table:open (the table and its document); the tables TabSet's remembered tab
+// (tabs.js keeps it as deck.tab.tables.<project>) is read once at start-up, before any table has opened, and when the
+// frames change or the selection does
 // ---------------------------------------------------------------------------
 function reset() {
   FS.tableId = null; FS.storyId = null; FS.seen = new Map(); FS.stash = new Map(); FS.laid = new Map(); FS.wantSel = null; FS.named = new Set();
 }
-async function detect(table = null) {
+async function detect(table = null, docId = null) {
   if (S.project !== FS.pid) { FS.pid = S.project; FS.storyOf.clear(); reset(); }
-  const tid = store.get(`deck.tab.tables.${S.project ?? 'none'}`, null);
+  const tid = docId || store.get(`deck.tab.tables.${S.project ?? 'none'}`, null);
   if (!tid) return setTable(null, null);
   // (the event's table, when it is the open one and says its story: at start-up an event can carry the blank table
   // the open one is loaded into, so only a story it names is taken; anything else is asked of the server once)
@@ -60,7 +61,7 @@ async function detect(table = null) {
   if (!FS.storyOf.has(tid)) {
     let d = null;
     try { d = await api(`/api/store/tables/${tid}${qs()}`, { busy: false }); } catch { /* not saved yet, or gone */ }
-    if (store.get(`deck.tab.tables.${S.project ?? 'none'}`, null) !== tid) return;   // (another table meanwhile)
+    if ((docId ? Table.activeTableId?.() : store.get(`deck.tab.tables.${S.project ?? 'none'}`, null)) !== tid) return;   // (another table meanwhile)
     FS.storyOf.set(tid, d?.payload?.story || null);
   }
   setTable(tid, FS.storyOf.get(tid));
@@ -224,6 +225,7 @@ async function reconcile() {
   FS.seen = new Map(list.filter(R.isShotFrame).map((f) => [f.story.shot, f.id]));
   if (story) St.storyChanged();
   if (table) Table.frameChanged();
+  if (!FS.relay) Table.fitAll({ laid: true });   // (the first time this table opens, once its rows are laid: all of it in view)
   for (const f of renamed) { FS.named.add(f.id); renameDoc(f, f.label).catch((e) => console.warn('shot edit name', e)); }
   if (FS.wantSel) { const f = frameOfShot(FS.wantSel); if (f) { FS.wantSel = null; selectFrame(f); } }
   badges();
@@ -282,17 +284,11 @@ async function stills() {
 // ---------------------------------------------------------------------------
 // selection, both ways
 // ---------------------------------------------------------------------------
-// a frame selected on the table, as a tap on it would (table.js has no selectFrames yet: a pointer down and up on it)
+// a frame selected on the table, as a tap on it would (and brought into view when it is off screen)
 function selectFrame(f) {
-  if (typeof Table.selectFrames === 'function') return Table.selectFrames([f.id]);
-  if (isLive()) return;
   const sel = Table.selectedFrames?.() || [];
   if (sel.length === 1 && sel[0].id === f.id) return;
-  const el = document.querySelector(`.table-frames .frame[data-id="${f.id}"] .frame-label`);
-  if (!el) return;
-  const r = el.getBoundingClientRect(), o = { bubbles: true, cancelable: true, pointerId: 31337, pointerType: 'mouse', isPrimary: true, button: 0, buttons: 1, clientX: r.left + 4, clientY: r.top + r.height / 2 };
-  el.dispatchEvent(new PointerEvent('pointerdown', o));
-  el.dispatchEvent(new PointerEvent('pointerup', { ...o, buttons: 0 }));
+  Table.selectFrames([f.id], { scroll: true });
 }
 addEventListener('table:select', (e) => {
   detect(e.detail?.table);
@@ -324,7 +320,7 @@ addEventListener('table:move', (e) => {
   if (!onStoryTable() || !(e.detail?.frames || []).some(R.isStoryFrame)) return;
   soon(60, { rows: true });
 });
-addEventListener('table:open', (e) => detect(e.detail?.table));   // (if table.js gains one)
+addEventListener('table:open', (e) => detect(e.detail?.table, e.detail?.doc?.id));
 addEventListener('table:unlive', () => { if (FS.storyId) soon(200, { rows: FS.rows }); });
 // (in case a move ends without table:move: a story frame not where the layout put it, once the pointer is up)
 addEventListener('pointerdown', (e) => { if (e.target.closest?.('#tab-table .table-stage')) FS.down = true; }, true);
@@ -348,8 +344,6 @@ function watchFrames() {
   return true;
 }
 const watchT = setInterval(() => { if (watchFrames()) clearInterval(watchT); }, 500);
-// another table picked from the tabs, while the table is on screen
-setInterval(() => { if (document.querySelector('#tab-table.active')) detect(); }, 800);
 onProject(() => { FS.pid = undefined; detect(); });
 
 // a note's words typed on the table: the scene's heading (first line) and summary

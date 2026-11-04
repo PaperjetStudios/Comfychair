@@ -183,7 +183,7 @@ FRAME_DOC_KINDS = {"image": "edit-tabs", "video": "video-tabs", "scene": "scene-
 
 
 def _owned_docs(doc: dict) -> list[tuple[str, str]]:
-    """(kind, id) of the documents a table's frames own."""
+    """(kind, id) of the documents a table's frames own: each frame's doc, and a video frame's VFX settings (frame.vfx)."""
     out = []
     frames = (doc.get("payload") or {}).get("frames")
     if not isinstance(frames, list):
@@ -191,9 +191,9 @@ def _owned_docs(doc: dict) -> list[tuple[str, str]]:
     for f in frames:
         if not isinstance(f, dict):
             continue
-        k, i = FRAME_DOC_KINDS.get(f.get("kind")), f.get("doc")
-        if k and isinstance(i, str) and ID_RE.fullmatch(i) and (k, i) not in out:
-            out.append((k, i))
+        for k, i in ((FRAME_DOC_KINDS.get(f.get("kind")), f.get("doc")), ("vfx-tabs", f.get("vfx"))):
+            if k and isinstance(i, str) and ID_RE.fullmatch(i) and (k, i) not in out:
+                out.append((k, i))
     return out
 
 
@@ -327,6 +327,8 @@ async def duplicate_table(did: str, project_id: int | None = None, scope: str | 
             k = FRAME_DOC_KINDS.get(f.get("kind"))
             if (k, f.get("doc")) in made:
                 f["doc"] = made[(k, f["doc"])]
+            if ("vfx-tabs", f.get("vfx")) in made:
+                f["vfx"] = made[("vfx-tabs", f["vfx"])]
     new = uuid.uuid4().hex[:12]
     doc = {"id": new, "kind": "tables", "name": f"{src.get('name') or did} copy"[:120],
            "order": max((x.get("order", 0) for x in _docs(d)), default=-1) + 1, "rev": 1, "updated": now, "payload": payload}

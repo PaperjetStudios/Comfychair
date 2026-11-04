@@ -30,6 +30,7 @@ export class TabSet {
     this.epoch = 0;               // bumped on (re)load so slow answers for an old project are dropped
     this.dirty = false; this.dirtyGen = 0; this.pendingName = null;
     this.inflight = null; this.timer = 0; this.conflict = null; this.offline = false;
+    this.trashedHere = new Set();   // ids this page deleted itself (forget): their going from the list is no news
     this.loading = false; this.drag = null; this.started = false; this.refreshSeq = 0; this.switchSeq = 0;
     this.row = h('div', { class: 'tabrow', role: 'tablist' });
     this.row.setAttribute('aria-label', 'Documents');
@@ -59,6 +60,18 @@ export class TabSet {
     // hidden / closing: save now (small bodies go with keepalive so they survive the page going away)
     document.addEventListener('visibilitychange', () => { if (document.hidden) { this.stash(); this.flush(); } else if (this.started) this.refresh(); });
     addEventListener('pagehide', () => { this.stash(); this.flush(); });
+  }
+
+  // A document this page is about to delete itself (a table frame's, table-frames.js trashDoc): when it drops out of the
+  // list, say nothing and fetch nothing. unforget(id): the delete failed, or an Undo restored it.
+  forget(id) { if (id) this.trashedHere.add(id); }
+  unforget(id) { this.trashedHere.delete(id); }
+  // On a project whose tables own the documents, no document open: the panel's engine shows an empty one (not the last
+  // project's or the deleted frame's content). The adapter takes the empty payload with id null.
+  clearPanel() {
+    if (this.active || !this.ownedByTables) return;
+    this.setDirty(false);
+    this.apply(this.adapter.empty(), { id: null, name: '', rev: 0, order: 0 });
   }
 
   // true when this project's tables own the documents, so this set makes none of its own
@@ -122,7 +135,7 @@ export class TabSet {
       this.docs = list;
       let doc;
       if (!list.length && this.ownedByTables) {
-        this.setOffline(false); this.render(); this.gate();
+        this.setOffline(false); this.render(); this.gate(); this.clearPanel();
         return;
       }
       if (!list.length) {
@@ -329,6 +342,10 @@ export class TabSet {
   }
   // the active tab isn't in the list: check it's really gone (the list may predate a create of ours)
   async vanished(a, ep, was) {
+    if (this.trashedHere.delete(a.id)) {   // our own delete (a table frame going): nothing to check, nothing to say
+      if (ep === this.epoch && this.active === a) await this.dropActive(true, was);
+      return;
+    }
     try { await api(this.url(a.id), { busy: false }); return; } catch (e) { if (!/not found/i.test(e.message)) return; }
     if (ep !== this.epoch || this.active !== a) return;
     if (this.dirty || this.inflight) { if (!this.conflict) this.showConflict(null); return; }
@@ -344,7 +361,7 @@ export class TabSet {
     try {
       let doc;
       if (this.docs.length) doc = await api(this.url(this.docs[Math.min(i, this.docs.length - 1)].id), { busy: false });
-      else if (this.ownedByTables) { this.render(); return; }
+      else if (this.ownedByTables) { this.render(); this.clearPanel(); return; }
       else doc = await this.create1({ name: this.newName(1), payload: this.adapter.empty() });
       if (ep === this.epoch) this.open(doc);
     } catch (e) { if (!quiet) toast(e.message, true); this.render(); }
@@ -417,7 +434,7 @@ export class TabSet {
       this.docs = this.docs.filter((d) => d.id !== a.id);
       const next = fresh || (this.docs.length ? await api(this.url(this.docs[Math.min(idx, this.docs.length - 1)].id), { busy: false }) : null);
       if (ep !== this.epoch) return;
-      if (next) this.open(next); else { this.active = null; this.render(); }
+      if (next) this.open(next); else { this.active = null; this.render(); this.clearPanel(); }
       undoToast(`Deleted "${a.name}"`, async () => {
         try {
           if (ep !== this.epoch || !(await this.leave())) return;

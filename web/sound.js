@@ -15,6 +15,8 @@ import { workArea } from './workarea.js';
 import { cutItems, playFrom, tickT } from './workarea-math.js';
 import { resultActions } from './useas.js';
 import { fullScreen } from './layout.js';
+import { emptySound, soundTracks } from './empty-docs.js';
+export { emptySound };
 
 // ---------------------------------------------------------------------------
 // sound: a multi-track sound editor laid out like the Video tab. Tracks mix (mute, solo, level, pan),
@@ -31,7 +33,7 @@ const N = {
   els: new Map(), waves: new Map(), exports: [], gens: [],   // gens: this mix's sound generations (ids), newest last
   out: { name: '', format: store.get('deck.sound.format', 'm4a'), gain: 1, normalize: false },
 };
-const defaultTracks = () => [{ id: 'a1' }, { id: 'a2' }, { id: 'a3' }];
+const defaultTracks = soundTracks;
 N.tracks = defaultTracks();
 
 function newItem({ kind, src, url, label, dur = 0 }, track) {
@@ -684,7 +686,7 @@ async function exportSound() {
 const migrate = (p) => ({ tracks: p.tracks?.length ? p.tracks : defaultTracks(), items: p.items || [], out: { ...N.out, ...(p.out || {}) }, gens: p.gens || [],
   range: p.range || null });   // range: the work area (workarea.js), seconds
 const adapter = {
-  empty: () => ({ tracks: defaultTracks(), items: [], out: { name: '', format: N.out.format, gain: 1, normalize: false }, gens: [] }),
+  empty: () => emptySound(N.out.format),
   migrate,
   dump: () => ({ tracks: N.tracks, items: N.items, out: N.out, gens: N.gens.slice(-30), ...(N.range && { range: N.range }) }),
   load(p) {

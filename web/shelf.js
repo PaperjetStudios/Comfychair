@@ -1,7 +1,11 @@
 import { $, h, api, store, icon, seg, placeholder, toast, button } from './ui.js';
 import { S, onServer, onProject, thumbUrl } from './core.js';
-import { B, FILTER_KINDS, genTime, dayKey, dayName, usedBadge, loadAttached, loadAllProjectGenerations } from './board.js';
-import { dropOnTable } from './table.js';
+import { B, FILTER_KINDS, genTime, dayKey, dayName, usedBadge, loadAttached, loadAllProjectGenerations, openGallery, togglePin, finishClips } from './board.js';
+import { dropOnTable, selectedFrames } from './table.js';
+import { stillOf } from './table-frames.js';
+import { openPressMenu, pressMenu } from './press-menu.js';
+import { openUseAs } from './useas.js';
+import { openCompare } from './compare.js';
 import { kindOf, cardPicture, kindDef } from './kinds.js';
 import { genLabel, outputCard } from './media.js';
 import { fetchHistory } from './generation-data.js';
@@ -13,7 +17,8 @@ import { fetchHistory } from './generation-data.js';
 // ---------------------------------------------------------------------------
 const SOURCE_TYPE = 'application/x-deck-source';   // (the same string as table.js's, which doesn't export it)
 const SH = { el: null, body: null, tab: store.get('deck.shelf.tab', 'outputs'), filter: store.get('deck.shelf.filter', 'all'),
-  open: store.get('deck.shelf.open', false), w: store.get('deck.shelf.w', 240), timer: 0, btn: null, inputs: null };
+  open: store.get('deck.shelf.open', false), w: store.get('deck.shelf.w', 240), timer: 0, btn: null, inputs: null,
+  sel: new Set() };   // sel: "<run id>:<output index>", Shift-click picks tiles for Compare and Delete
 
 const tableOn = () => !!document.querySelector('#tab-table.active, #tab-table.live-host');
 const stageEl = () => document.querySelector('#tab-table .table-stage');
@@ -90,10 +95,72 @@ function outputItems() {
   return items;
 }
 function outputTile({ g, o, i }) {
-  const mark = kindOf(o) === 'image' ? null : icon(kindDef(o).icon);
-  const tile = h('div', { class: 'tile shelf-tile', 'data-gen': g.id, 'data-key': `${g.id}:${i}`, title: `${genLabel(g)}: drag onto the table` },
+  const mark = kindOf(o) === 'image' ? null : icon(kindDef(o).icon), key = `${g.id}:${i}`;
+  const tile = h('div', { class: `tile shelf-tile${SH.sel.has(key) ? ' sel' : ''}`, 'data-gen': g.id, 'data-key': key,
+    title: `${genLabel(g)}: drag onto the table · Shift-click to select · right-click or hold for more` },
     cardPicture(o, g, 160), usedBadge(g), h('div', { class: 'tile-meta' }, genLabel(g), mark));
+  tile.addEventListener('click', (e) => {
+    if (e.shiftKey) { if (SH.sel.has(key)) SH.sel.delete(key); else SH.sel.add(key); }
+    else if (SH.sel.size) SH.sel.clear();
+    else return;
+    syncSel();
+  });
+  pressMenu(tile, (e) => tileMenu(e, { g, o, i, key }, outputList));
   return draggable(tile, { generation: g.id, index: i });
+}
+function syncSel() {
+  SH.body?.querySelectorAll('.shelf-tile[data-key]').forEach((t) => t.classList.toggle('sel', SH.sel.has(t.dataset.key)));
+}
+
+// ---- a tile's menu (right click, long hold): open, use, compare, finish, pin, delete. With more than one tile selected
+// (Shift-click), Compare and Delete take the selection.
+const outputList = () => outputItems().map((x) => ({ ...x, key: `${x.g.id}:${x.i}` }));
+function selectedItems() {
+  return [...SH.sel].map((k) => { const [id, i] = k.split(':').map(Number), g = S.history.get(id); return g?.outputs?.[i] ? { g, o: g.outputs[i], i, key: k } : null; }).filter(Boolean);
+}
+const looks = (o) => ['image', 'video'].includes(kindOf(o));
+function frameSide() {   // the selected frame's still, for Compare
+  const f = (selectedFrames() || []).find((x) => x.kind !== 'note' && stillOf(x));
+  return f ? { o: { url: stillOf(f), kind: 'image' }, label: f.label || 'Frame' } : null;
+}
+function tileMenu(e, it, list) {
+  const many = SH.sel.has(it.key) && SH.sel.size > 1 ? selectedItems() : null;
+  const { g, o, i } = it, frame = frameSide();
+  const two = many?.length === 2 && many.every((x) => looks(x.o)) ? many : null;
+  const gens = [...new Map((many || [it]).map((x) => [x.g.id, x.g])).values()];
+  openPressMenu(e.clientX, e.clientY, [
+    [{ label: 'Open', run: () => openGallery(it.key, () => { const l = list(); return l.some((x) => x.key === it.key) ? l : [it, ...l]; }) },
+      { label: 'Use as…', run: () => openUseAs(g, i) }],
+    [two ? { label: 'Compare the two', run: () => openCompare(two.slice().reverse().map((x) => ({ o: x.o, label: genLabel(x.g) }))) } : null,
+      { label: frame ? `Compare with ${frame.label}` : 'Compare with the selected frame', disabled: !frame || !looks(o),
+        run: () => openCompare([frame, { o, label: genLabel(g) }]) }].filter(Boolean),
+    o.kind === 'video' ? [{ label: 'Finish (H3 1080p)', run: () => finishClips([{ g, o, i }]) }] : [],
+    [{ label: g.pinned ? 'Unpin' : 'Pin', on: !!g.pinned, run: async () => { await togglePin(g); later(); } }],
+    [{ label: gens.length > 1 ? `Delete ${gens.length}` : 'Delete', danger: true, run: () => deleteRuns(gens) }],
+  ].filter((grp) => grp.length), 'Output');
+}
+
+// Delete whole runs. One something uses is refused by the server (409) and the toast names what uses it.
+async function deleteRuns(gens) {
+  if (!gens.length) return;
+  const extra = gens.reduce((n, g) => n + (g.outputs?.length || 1), 0) - gens.length;
+  if (!confirm(`Delete ${gens.length === 1 ? `#${gens[0].id}` : `${gens.length} generations`} and their files? This can't be undone.`
+    + (extra ? `\n\nThat also deletes ${extra} other output${extra > 1 ? 's' : ''} of ${gens.length === 1 ? 'that run' : 'those runs'}.` : ''))) return;
+  if (gens.length === 1) {
+    try { await api(`/api/generations/${gens[0].id}`, { method: 'DELETE', busy: 'Deleting…' }); }
+    catch (e) { toast(e.status === 409 ? `#${gens[0].id} can't go: ${e.message}` : e.message, true); return; }
+    S.history.delete(gens[0].id);
+    toast(`Deleted #${gens[0].id}`);
+  } else {
+    let r;
+    try { r = await api('/api/generations/delete', { method: 'POST', body: { ids: gens.map((g) => g.id) }, busy: 'Deleting…' }); }
+    catch (e) { toast(e.message, true); return; }
+    for (const id of r.deleted) S.history.delete(id);
+    const used = (r.kept || []).map((k) => `#${k.id} (${(k.used_by || []).map((o) => `${o.label} ${o.name}`.trim()).join(', ')})`);
+    toast(`Deleted ${r.deleted.length}${used.length ? `; kept, in use: ${used.join('; ')}` : ''}${r.failed?.length ? `; ${r.failed.length} failed` : ''}`, !!used.length || !!r.failed?.length);
+  }
+  SH.sel.clear();
+  later();
 }
 async function drawOutputs(body) {
   if (B.loadedFor !== S.project) {
@@ -117,7 +184,10 @@ function drawHistory(body) {
     const c = outputCard(g, { onPick: () => {} });
     c.classList.add('shelf-run');
     const o = g.outputs?.[0];
-    return g.status === 'done' && o && kindOf(o) !== 'file' ? draggable(c, { generation: g.id, index: 0 }) : c;
+    if (g.status !== 'done' || !o || kindOf(o) === 'file') return c;
+    const it = { g, o, i: 0, key: `${g.id}:0` };
+    pressMenu(c, (e) => tileMenu(e, it, () => [it]));
+    return draggable(c, { generation: g.id, index: 0 });
   };
   body.replaceChildren(...(runs.length ? [h('div', { class: 'shelf-grid' }, runs.map(card)),
     S.historyDone ? null : button('More', async () => { await fetchHistory(true); draw(); }, { cls: 'small' })]

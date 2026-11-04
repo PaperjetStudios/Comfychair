@@ -5,6 +5,7 @@ import { TabSet } from './tabs.js';
 import { SWATCHES } from './paint.js';
 import { BLANK, createEditor } from './editor-engine.js';
 import { landOwed } from './imagetools.js';
+import { putStill } from './table-frames.js';
 import { registerUndo } from './undo-dock.js';
 
 export { ASPECTS, FULL, aspectCrop, cropSpan, openCrop } from './editor-engine.js';
@@ -192,9 +193,9 @@ tabs = new TabSet({ kind: 'edit-tabs', host: $('#tab-editor'), newName: (n) => `
       if (E.tab?.id !== doc.id) stillNow(); else clearTimeout(stillTimer);   // a tab being left gets its still now (the draw is synchronous)
       stillDue = false;
       ED.load(payload);
-      E.tab = { id: doc.id, qs: tabs.qs };
+      E.tab = doc.id ? { id: doc.id, qs: tabs.qs } : null;   // (no id: tabs.js resetting the engine when no document is open)
       store.set(SEEDED, true);
-      if (!doc.still && E.layers.length) stillSoon();
+      if (doc.id && !doc.still && E.layers.length) stillSoon();
       renderEditor();
       landOwed(ED);   // (runs that finished, or are still going, since this edit was last open here)
     },
@@ -248,12 +249,9 @@ async function stillNow() {
   if (ED.loading()) { stillTimer = setTimeout(stillNow, 1000); return; }   // images still loading
   stillDue = false;
   const { has, cv } = stillCanvas();
-  const url = `/api/store/edit-tabs/${tab.id}/still${tab.qs}`;
-  try {
-    if (!has) { await fetch(url, { method: 'DELETE' }); return; }   // nothing to show any more
-    const blob = await new Promise((res) => cv.toBlob(res, 'image/png'));
-    const r = blob && await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: blob });
-    if (r && !r.ok && r.status !== 404) console.warn('still not saved:', r.status);   // 404: the tab is gone
+  try {   // (table-frames.js putStill: null deletes the still, the table's stills follow)
+    const blob = has ? await new Promise((res) => cv.toBlob(res, 'image/png')) : null;
+    await putStill('image', tab.id, blob);
   } catch { stillDue = true; }   // offline: the next edit tries again
 }
 
