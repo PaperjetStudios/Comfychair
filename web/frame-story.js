@@ -400,8 +400,9 @@ document.addEventListener('input', (e) => {
 
 // a run queued for a shot's frame: it waits on the shot, as Generate frame / Redraw / Make the video do (story.js settle)
 addEventListener('make:queued', (e) => {
-  const { frame, kind, gens } = e.detail || {};
+  const { frame, kind, gens, into, edit } = e.detail || {};
   if (!R.isShotFrame(frame) || !onStoryTable()) return;
+  if (edit && into && into.id !== frame.id) return;   // (an Edit run's result frame beside the row is not the shot's picture)
   const at = St.shotAt(frame.story.shot), ids = (gens || []).map((g) => g.id).filter((id) => id != null);
   if (!at || !ids.length) return;
   (kind === 'video' ? at.s.vpending : at.s.pending).push(...ids);

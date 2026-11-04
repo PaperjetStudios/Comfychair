@@ -164,9 +164,7 @@ export async function resultFrame(source, { kind = source.kind, label } = {}) {
   const extra = { label: String(label || `Result · ${source.label || KIND_LABEL[source.kind]}`).slice(0, 120),
     ...(kind === 'image' && { fit: true, fitBox: box }) };   // (never the source's story place: a result for a shot sits beside its row, not as the shot)
   const payload = kind === 'image' ? { ...BLANK(), size: null } : blankPayload(kind);
-  const was = (Table.selectedFrames() || []).map((f) => f.id);
-  const f = await Table.newFrameAt(kind, { ...at, ...size }, { payload, extra });
-  if (f && was.length) Table.selectFrames(was);   // (newFrameAt selects the new one: a run on several frames keeps them)
+  const f = await Table.newFrameAt(kind, { ...at, ...size }, { payload, extra, select: false });   // (a run on several frames keeps them selected)
   return f || null;
 }
 

@@ -116,6 +116,7 @@ const OPS = [
     help: '4x-UltraSharp: a quick, clean enlargement without the invented detail. Export size is set to match, so Download and Save as input come out bigger.' },
 ];
 const ST = { skinWhere: 'whole', skinParts: 'face', samSure: 0.2, samMost: 8, op: 'cutout', scope: 'whole', result: 'cutout', hide: true, fine: true, rfrom: 'words', rprompt: 'watermark', cmodel: 'noise', uprompt: UNMARK_PROMPT, prompt: 'person', rows: 1, cols: 4, sheetFast: false, swapPart: 'face', swapFrom: '', swapCrop: null, swapMp: 0, swapModels: ['klein9b'], swapWhere: 'find', swapExtra: '', scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', stepScratch: true, stepClean: true, stepFaces: true, stepColour: false, scratchAmount: 'normal', faceAmount: 0.8, cprompt: COLOUR_PROMPT, dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, eprompt: '', econtext: '', ekeep: true, erefs: [], erefMp: {}, echoice: {}, ewhere: 'all', efind: '', eclose: true, egrow: 8, esoft: 16, emp: 2, ecount: 1, eseed: 0, eseedMode: 'random', esteps: 8, ecfg: 1, eneg: '', eloras: [], ...store.get(KEY, {}) };
+export const toolState = () => ST;   // (the settings the Layers pane and the Edit pane share)
 ST.erefs = asRefs(ST.erefs);   // (saved as bare names by an older version)
 if (ST.lprompt === OLD_DELIGHT_PROMPT) ST.lprompt = DELIGHT_PROMPT;   // (the old default, saved in this browser; a prompt someone wrote stays)
 const save = () => store.set(KEY, ST);
@@ -1258,7 +1259,7 @@ async function runOne(eng, o, t, tab, src, batch = 1) {
 
 // A tool on a picture that isn't the open editor's (a frame on the table, through the Edit pane, the frame menu or several
 // frames at once). id: a tool's id (TOOLS). tab: the image frame's edit its result lands in (the source frame's own, or a
-// new frame's: table-frames.js resultFrame). src: frame-source.js frameSource(frame), or any { name, px, rect, copy }.
+// new frame's: table-frames.js resultFrame). src: frame-source.js frameSource(frame), or any { name, px, rect, copy }; none with eng: the open picture, every layer together.
 // eng: the editor, when the caller knows it has `tab` open (else the open one is used if it has, else the saved edit).
 // Settings are the panel's (ST, shared with the Layers pane). Throws the reason it can't run (whyNot). Resolves once
 // queued (a queued tool) or done (a tool whose steps run here): { gens } (the queued runs; [] for the latter).
@@ -1267,11 +1268,12 @@ export async function runToolOn(id, { tab, src, eng = null, batch = 1 } = {}) {
   const o = OPS.find((x) => x.id === id);
   if (!o) throw new Error(`No image tool "${id}"`);
   if (!tab) throw new Error('No edit for the result to land in');
-  if (!src?.name) throw new Error('No picture to run it on');
   const t = template(tplId(o));
   const why = whyNot(o, t);
   if (why) throw new Error(why);
   const e = engFor(tab, eng || CURRENT_EDIT.eng);
+  if (!src && e === eng) src = { ...await sourceOf(e, null, o), copy: true };   // (no picture given: the open frame's, every layer together)
+  if (!src?.name) throw new Error('No picture to run it on');
   Object.assign(src, { layer: src.layer || null, was: src.was || null, mask: src.mask || null, rect: src.rect || { x: 0, y: 0, w: src.px[0], h: src.px[1] } });
   let gens;
   try { gens = await runOne(e, o, t, tab, src, batch); } catch (err) {

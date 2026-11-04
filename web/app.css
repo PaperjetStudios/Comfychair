@@ -2321,7 +2321,7 @@ body:has(.tab.view-max.panel-out) .actionbar { right: var(--ov-w); }   /* (only 
 .sb-pane[data-pane="edit"] option.edit-grey { color: var(--muted, #888); }
 .sb-pane[data-pane="edit"] .edit-fields:empty { display: none; }
 .sb-pane[data-pane="edit"] .edit-why { margin: 6px 0; }
-.sb-pane[data-pane="edit"] .edit-run { min-height: var(--touch-target, 44px); }
+.sb-pane[data-pane="edit"] .edit-run { flex: 1 0 auto; min-height: max(var(--tap), var(--touch-target)); }
 .sb-pane[data-pane="edit"] .edit-status { display: grid; gap: 2px; margin-top: 6px; }
 .sb-pane[data-pane="edit"] .edit-status:empty { display: none; }
 .sb-pane[data-pane="edit"] .edit-status-row { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }

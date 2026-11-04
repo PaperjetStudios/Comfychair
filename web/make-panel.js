@@ -84,9 +84,6 @@ function drawPanel() {
   drawHead(kind, frame, list);
 }
 
-// (VFX moved to the Edit pane: Make is templates only. Kept for callers that still switch a video frame back to templates)
-export function useVfxMode() {}
-
 // What Run makes for the selection, as the action bar's button says it, and why it can't run (null when it can)
 const RUN_WORD = { none: 'Generate', image: 'Generate', video: 'Make video', scene: 'Make 3D', sound: 'Make sound' };
 export function makeState() {

@@ -172,7 +172,6 @@ async function fromText(Q, kind, start, size, prompt) {
     extra: { make: makePayload(t, { prompt }, baseFor(t)) } });
   if (!f) return;
   const mp = await import('./make-panel.js');
-  if (kind === 'video') mp.useVfxMode(false);   // (a video frame's Make pane may be on VFX: this is a template's run)
   sidebar.show('make');
   await mp.runMake();
 }
@@ -184,7 +183,6 @@ async function withPicture(Q, kind, start, size, name, payload) {
   const f = await Table.newFrameAt(kind, rectOf(Q, size), { payload: payload || (kind === 'video' ? { ...emptyVideo(), size: [size.w, size.h], fps: Q.c.fps } : undefined),
     extra: { make: makePayload(t, { picture: name }, baseFor(t)) } });
   if (!f) return;
-  if (kind === 'video') (await import('./make-panel.js')).useVfxMode(false);
   sidebar.show('make');
 }
 

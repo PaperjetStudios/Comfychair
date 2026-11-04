@@ -97,14 +97,18 @@ async function runFrame(op, frame, opts, { batch, target, selection }) {
   }
   const ctx = { target: t, into, tab: into.doc, batch, live, frames: selection,
     onRun: (gens, to) => keep(gens, { ...to, op: op.id }) };
-  const res = await runOp(op.kind, op.id, frame, opts, ctx);
+  const made = into !== frame ? into : null;   // (the empty frame made for the result: it goes again if nothing comes)
+  const unmake = () => (made ? import('./table.js').then((T) => T.removeFrames([made.id])).catch(() => {}) : null);
+  let res;
+  try { res = await runOp(op.kind, op.id, frame, opts, ctx); } catch (e) { await unmake(); throw e; }
   const gens = res?.gens || [];
   if (res?.into) into = res.into;
+  if (made && into !== made && !gens.length && !res?.job) unmake();   // (it put its result elsewhere itself)
   if (gens.length) for (const g of gens) counted(into.doc, waitGen(g.id));
   else if (res?.job) counted(into.doc, res.job);
   if (res?.job) {
     res.job.then(() => { if (into !== frame) fire('edit:landed', { frame, into, op: op.id }); })
-      .catch((e) => toast(`${op.label} failed on ${frame.label || 'a frame'}: ${e.message}`, true))
+      .catch((e) => { toast(`${op.label} failed on ${frame.label || 'a frame'}: ${e.message}`, true); if (!gens.length && into === made) unmake(); })
       .finally(() => { for (const g of gens) { dropOwed(g.id); R.mine.delete(g.id); } });
   }
   fire('edit:queued', { frame, kind: op.kind, op: op.id, gens, into, target: t });

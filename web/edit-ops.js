@@ -79,9 +79,7 @@ export function opFields(kind, id, opts, ctx = {}) {
   const picture = (label = 'Picture') => pictureInput({ label, name: opts.first || '', set: (n) => { opts.first = n || ''; redraw(); } });
   if (kind === 'image') {
     if (!IT) { itReady.then(() => ctx.redraw?.()); return [hint('Loading the image tools…')]; }
-    const t = IT.TOOLS?.find?.((x) => x.id === id) || IT.TOOLS?.[id];
-    if (!t || !IT.toolFields) return [];
-    return IT.toolFields(t, template(t.tpl) || undefined, { redraw: () => ctx.redraw?.(), size: ctx.size || null, eng: null }) || [];
+    return IT.toolFields(id, undefined, { redraw: () => ctx.redraw?.(), size: ctx.size || null, eng: null }) || [];
   }
   switch (`${kind}:${id}`) {
     case 'video:grab':

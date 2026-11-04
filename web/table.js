@@ -228,7 +228,7 @@ const nextLabel = (kind) => `${M.KIND_LABEL[kind]} ${T.frames.filter((f) => f.ki
 // A frame of a kind over rect, with its document made first (from payload, else the kind's empty one)
 // ok: here() taken before whatever the caller awaited (default: now). fresh: a picture uploaded for the frame's document
 // (frameFor), deleted when the frame isn't made: nothing else owns it
-async function makeFrame(kind, rect, { payload, frame, fresh = null, ok = here() } = {}) {
+async function makeFrame(kind, rect, { payload, frame, fresh = null, ok = here(), select = true } = {}) {
   const f = frame || M.newFrame(kind, rect, { label: nextLabel(kind) });
   if (kind !== 'note') {
     try { f.doc = await createDoc(f, payload); } catch (e) { toast(`Couldn't make the frame: ${e.message}`, true); dropInput(fresh); return null; }
@@ -236,7 +236,7 @@ async function makeFrame(kind, rect, { payload, frame, fresh = null, ok = here()
   }
   if (!ok()) { dropInput(fresh); return null; }
   T.frames.push(f);
-  U.sel = new Set([f.id]);
+  if (select) U.sel = new Set([f.id]);
   renderFrames(); changed();
   return f;
 }
@@ -256,10 +256,10 @@ export function quickStart(at) {
   return import('./quick-start.js').then((m) => m.openQuickStart(at)).catch((e) => toast(`Couldn't open the quick start: ${e.message}`, true));
 }
 // for quick-start.js: a new frame of a kind over rect (its document made from payload; extra: the frame's own fields,
-// such as make, set before the table says it is selected), and the grid
-export function newFrameAt(kind, rect, { payload, extra = {} } = {}) {
+// such as make, set before the table says it is selected; select: false leaves the selection as it is), and the grid
+export function newFrameAt(kind, rect, { payload, extra = {}, select = true } = {}) {
   const f = M.newFrame(kind, rect, { label: nextLabel(kind), ...extra });
-  return makeFrame(kind, f, { payload, frame: f });
+  return makeFrame(kind, f, { payload, frame: f, select });
 }
 export const tableGrid = () => ({ ...T.grid });
 
@@ -419,6 +419,20 @@ async function deleteFrames(ids) {
     if (H.past.at(-1) === entry && U.tabs?.active?.id === tid) return undo();   // (the same step as Ctrl+Z: it can be redone)
     if (!byId(trashed[0].id)) back();
   });
+}
+// Frames made for a result that never came (an Edit run that failed before anything was queued): off the table, their
+// documents to the trash, no undo step and no toast
+export async function removeFrames(ids) {
+  const drop = new Set(ids);
+  const gone = T.frames.filter((f) => drop.has(f.id));
+  if (!gone.length) return;
+  if (gone.some((f) => f.id === liveFrame()?.id)) { unlive(); await U.leaving; }
+  T.frames = ST.normalize(T.frames.filter((f) => !drop.has(f.id)), T.groups);
+  for (const f of gone) U.sel.delete(f.id);
+  renderFrames(); changed();
+  await Promise.allSettled(gone.map((f) => trashDoc(f)));
+  for (const f of gone) if (f.vfx) trashDoc(vfxOf(f)).catch(() => {});
+  dispatchEvent(new CustomEvent('table:deleted', { detail: { frames: gone } }));
 }
 
 // ---------------------------------------------------------------------------

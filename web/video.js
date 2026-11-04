@@ -1476,7 +1476,7 @@ export function mountVideo({ host, stage = host.querySelector('.stage'), canvas,
   if (vzoomed()) setView(VZ.z, VZ.tx, VZ.ty);   // (the zoom moves to the new canvas)
   wireDrop(host, mounted.signal);
   if (fullscreen && !FULLS.has(host)) FULLS.set(host, fullScreen(host, { onChange: () => requestDraw() }));
-  vidMax = FULLS.get(host) || null;   // (a frame on the table has the table's own full screen)
+  vidMax = FULLS.get(host) || null;
   tlTools.replaceChildren(...timelineTools());
   TL.wire();   // (this host's timeline element; once per element)
   if (again) renderVideo();   // (the first mount draws once the tab loads)
