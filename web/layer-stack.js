@@ -39,11 +39,12 @@ export function normalize(layers, groups = []) {
   for (const l of out) if (l.group && !groups.some((g) => g.id === l.group)) delete l.group;
   return out;
 }
-// these layers as one group, at the place of the topmost of them; a mask follows its owner
-export function makeGroup(layers, groups, picked, id, name = `Group ${groups.length + 1}`) {
+// these layers as one group, at the place of the topmost of them; a mask follows its owner. extra: the group's own fields
+// (a table's frames have no opacity or blend: table.js passes {})
+export function makeGroup(layers, groups, picked, id, name = `Group ${groups.length + 1}`, extra = { opacity: 1, blend: 'normal' }) {
   const members = picked.filter((l) => !l.maskOf);
   if (members.length < 2) return layers;
-  groups.push({ id, name, opacity: 1, blend: 'normal', collapsed: false });
+  groups.push({ id, name, ...extra, collapsed: false });
   const top = Math.max(...members.map((l) => layers.indexOf(l)));
   const rest = layers.filter((l, i) => !members.includes(l) || i === top);
   const at = rest.indexOf(layers[top]);

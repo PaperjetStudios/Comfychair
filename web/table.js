@@ -10,6 +10,12 @@
 // root (the `table:live` event) and fits its picture inside. Esc or a tap beside it brings the table back.
 // Moves, resizes and deletes undo (Ctrl+Z, the top bar's ↶) while nothing is live.
 //
+// The frames are a layer stack, with the editor's rules (web/layer-stack.js): the list's order is the stacking order
+// (bottom first), frames group (T.groups; a member says frame.group), hide (not drawn, picked, boxed or fitted, but kept
+// where it is) and lock (not moved, sized or deleted). The Frame pane lists them as the editor lists layers (ui.js
+// layerRowsEl), and the list and the table share one menu (layer-menu.js frameMenu). Arrange ▾ on the bar aligns,
+// spreads, sizes and tidies the selection (table-model.js). Changes to the stack undo as the moves do.
+//
 // Events for the frame-kind modules (on window, detail.handled = true when taken):
 //   table:live       { frame, root, table }   mount the frame's engine in root (live.js has the gate)
 //   table:unlive     { frame, root, wait: [] } save and let go; root is removed after. A module that saves after this
@@ -29,7 +35,7 @@
 //                    module drops what only the frame itself owned. Undo brings the frames back, not that.
 //   table:menu       { frame, frames, groups }   the frame menu is about to open: a module adds its own groups of items
 //                    (press-menu.js's shape) to groups; they go before Delete
-import { $, h, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, toggle, help, mpInput } from './ui.js';
+import { $, h, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, toggle, help, mpInput, layerRowsEl, iconBtn, uid } from './ui.js';
 import { S, onServer, onProject } from './core.js';
 import { TabSet } from './tabs.js';
 import { currentTab } from './navigation.js';
@@ -43,7 +49,9 @@ import { wireTableNav } from './table-nav.js';
 import { droppedFiles, draggingPicture } from './drop-files.js';
 import { isLive, liveFrame, liveRoot, setLive } from './live.js';
 import * as M from './table-model.js';
-import { KIND_ICON, copyDoc, createDoc, dropInput, editDoc, frameEl, frameFor, kindOfDoc, loadStills, owedCounts, renameDoc, restoreDoc, syncFrame, trashDoc } from './table-frames.js';
+import * as ST from './layer-stack.js';
+import { frameMenu as frameMenuGroups, frameArrangeMenu, pickedFor } from './layer-menu.js';
+import { KIND_ICON, copyDoc, createDoc, dropInput, editDoc, frameEl, frameFor, kindOfDoc, loadStills, owedCounts, renameDoc, restoreDoc, stillOf, syncFrame, trashDoc, pausePreviews, previewMode, setPreviewMode } from './table-frames.js';
 import { sidebar } from './sidebar.js';
 
 const ZMIN = 0.02, ZMAX = 8, DRAG_PX = 4, SNAP_PX = 8, DWELL_MS = 600, NUDGE = 1;
@@ -160,15 +168,18 @@ export function dropStory(storyId) {
 function renderFrames() {
   const seen = new Set(), live = liveFrame(), owed = owedCounts();
   T.frames.forEach((f, i) => {
+    f.key = f.id;   // (what the stack rules know a frame by)
     let el = U.els.get(f.id);
     if (!el) { el = frameEl(f, { onText: (t) => { f.text = t; changed(); } }); U.els.set(f.id, el); }
     if (D.frames.children[i] !== el) D.frames.insertBefore(el, D.frames.children[i] || null);
     syncFrame(el, f, { selected: U.sel.has(f.id), live: live?.id === f.id, owed: f.kind === 'image' ? owed.get(f.doc) || 0 : 0 });
+    el.classList.toggle('frame-hidden', !!f.hidden);
     seen.add(f.id);
   });
   for (const [id, el] of U.els) if (!seen.has(id)) { el.remove(); U.els.delete(id); }
   renderHandles();
   renderPanel();
+  D.syncArrange?.();
   tellSelection();
 }
 // table:select, each time the selected frames are other ones than last time
@@ -185,7 +196,7 @@ const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 function renderHandles() {
   D.handles.replaceChildren();
   const s = selected();
-  if (s.length !== 1 || s[0].locked || isLive()) return;
+  if (s.length !== 1 || s[0].locked || s[0].hidden || isLive()) return;
   const f = s[0];
   for (const hd of HANDLES) {
     const x = f.x + (hd.includes('w') ? 0 : hd.includes('e') ? f.w : f.w / 2), y = f.y + (hd.includes('n') ? 0 : hd.includes('s') ? f.h : f.h / 2);
@@ -262,6 +273,7 @@ export function goLive(f) {
   if (liveFrame()?.id === f.id) return;
   unlive();
   cancelOp();
+  pausePreviews();   // (the tiles' clips stop: the live frame has the screen)
   U.sel = new Set([f.id]);
   U.before = { ...T.view };
   const root = h('div', { class: 'frame-mount', 'data-frame': f.id });
@@ -303,14 +315,19 @@ async function deleteFrames(ids) {
   if (gone.some((f) => f.id === liveFrame()?.id)) unlive();
   await U.leaving;   // (a live frame's last save lands before its document is trashed)
   if (!ok()) return;
-  const at = new Map(gone.map((f) => [f.id, T.frames.indexOf(f)]));
+  const at = new Map(gone.map((f) => [f.id, T.frames.indexOf(f)])), hadGroups = T.groups.map((g) => ({ ...g }));
+  // (a group they emptied comes back with them)
   const putBack = (list) => {
     for (const f of [...list].sort((a, b) => at.get(a.id) - at.get(b.id))) if (!byId(f.id)) T.frames.splice(Math.min(at.get(f.id), T.frames.length), 0, f);
+    for (const g of hadGroups) if (!T.groups.some((o) => o.id === g.id) && list.some((f) => f.group === g.id)) T.groups.push({ ...g });
+    T.frames = ST.normalize(T.frames, T.groups);
   };
   let trashed = [];
   const take = async () => {
     const still = here(), drop = new Set(gone.map((f) => f.id));
-    T.frames = T.frames.filter((f) => !drop.has(f.id));
+    const groupOf = new Map(gone.map((f) => [f.id, f.group]));
+    T.frames = ST.normalize(T.frames.filter((f) => !drop.has(f.id)), T.groups);
+    for (const f of gone) if (groupOf.get(f.id)) f.group = groupOf.get(f.id);   // (normalize left them be: they keep it for Undo)
     U.sel.clear(); renderFrames(); changed();
     const res = await Promise.allSettled(gone.map(trashDoc));
     trashed = gone.filter((f, i) => res[i].status === 'fulfilled');
@@ -397,6 +414,7 @@ async function duplicateFrames(ids) {
   const gone = (g) => { trashDoc(g).catch(() => {}); if (g.vfx) trashDoc(vfxOf(g)).catch(() => {}); };
   for (const f of T.frames.filter((x) => ids.has(x.id))) {
     const g = { ...structuredClone(f), id: M.newFrame(f.kind, f).id, label: `${f.label} copy`, locked: false };
+    g.key = g.id;
     if (g.make) g.make = { ...g.make, inputs: [] };
     Object.assign(g, M.nextBeside([...T.frames, ...made], f.kind, { w: f.w, h: f.h }));
     try { g.doc = f.doc ? await copyDoc(f, g.label) : null; } catch (e) { toast(`Couldn't copy "${f.label}": ${e.message}`, true); continue; }
@@ -409,12 +427,51 @@ async function duplicateFrames(ids) {
   }
   if (!made.length) return;
   if (!ok()) { for (const g of made) gone(g); return; }   // (another table opened meanwhile: the copies go)
-  T.frames.push(...made);
+  T.frames = ST.normalize([...T.frames, ...made], T.groups);   // (a copy of a member joins its group, at its top)
   U.sel = new Set(made.map((f) => f.id)); renderFrames(); changed();
 }
-function setLocked(list, on) { for (const f of list) f.locked = on; renderFrames(); changed(); }
-function restack(fn) { T.frames = fn(T.frames, [...U.sel]); renderFrames(); changed(); }
-function fit(list = T.frames, { animate = true } = {}) {
+
+// ---------------------------------------------------------------------------
+// the stack: groups, hide, lock, z-order; each change one undo step (table-model.js stackSnap)
+// ---------------------------------------------------------------------------
+function stackStep(fn) {
+  const before = M.stackSnap(T.frames, T.groups);
+  fn();
+  T.frames = ST.normalize(T.frames, T.groups);
+  const after = M.stackSnap(T.frames, T.groups);
+  if (!M.sameSnap(before, after)) record({ undo: () => putSnap(before), redo: () => putSnap(after) });
+  U.panelSig = ''; renderFrames(); changed();
+}
+function putSnap(snap) {
+  const r = M.applySnap(T.frames, snap);
+  T.frames = r.frames; T.groups = r.groups;
+  if (liveFrame()?.hidden) unlive();
+  U.panelSig = ''; renderFrames(); changed();
+}
+// the selected frames in the order they were picked (Same size goes by the first)
+const pickedList = () => [...U.sel].map(byId).filter(Boolean);
+function setLocked(list, on) { stackStep(() => { for (const f of list) { if (on) f.locked = true; else delete f.locked; } }); }
+function setHidden(list, on) {
+  if (on && list.some((f) => f.id === liveFrame()?.id)) unlive();
+  stackStep(() => { for (const f of list) { if (on) f.hidden = true; else delete f.hidden; } });
+}
+// H and L, and the menu: all of them on when any is off, else all off
+const toggleHidden = (list = selected()) => list.length && setHidden(list, !list.every((f) => f.hidden));
+const toggleLocked = (list = selected()) => list.length && setLocked(list, !list.every((f) => f.locked));
+function restack(fn) { stackStep(() => { T.frames = fn(T.frames, [...U.sel]); }); }
+const stepBy = (dir) => restack((fs, ids) => M.stepZ(fs, ids, dir));
+function groupSelected() {
+  const list = selected();
+  if (list.length < 2) return;
+  stackStep(() => { T.frames = ST.makeGroup(T.frames, T.groups, list, uid(), `Group ${T.groups.length + 1}`, {}); });
+}
+function ungroupSelected(ids = [...new Set(selected().map((f) => f.group).filter(Boolean))]) {
+  if (!ids.length) return;
+  stackStep(() => { for (const id of ids) T.frames = ST.ungroup(T.frames, T.groups, id); });
+}
+// Fit: the selected frames on show, else all of them
+const fitSel = () => fit(M.shown(selected()).length ? M.shown(selected()) : M.shown(T.frames));
+function fit(list = M.shown(T.frames), { animate = true } = {}) {
   const { w, h: hh } = stageSize();
   setView(M.fitView(M.boundsOf(list), w, hh, 48, { min: ZMIN, max: 1 }), { animate });
 }
@@ -427,7 +484,7 @@ export function fitAll({ laid = false } = {}) {
   const { w, h: hh } = stageSize();
   if (!w || !hh) return false;
   U.fitDue = false;
-  fit(T.frames, { animate: false });
+  fit(M.shown(T.frames).length ? M.shown(T.frames) : T.frames, { animate: false });
   return true;
 }
 // Select these frames (by id) as a tap on one would, and with scroll: true bring them into view (the zoom stays, unless
@@ -493,21 +550,52 @@ function setSize(f, s) {
 // ---------------------------------------------------------------------------
 // the frame menu (right click, long hold)
 // ---------------------------------------------------------------------------
-function frameMenu(x, y, f) {
-  if (!U.sel.has(f.id)) U.sel = new Set([f.id]);
+// One menu for a frame on the table and its row in the Frame pane's list (layer-menu.js frameMenu says what's offered).
+// f: the frame pressed (it, or the selection it is in, is what the menu acts on); none: the selection as it is.
+function frameMenu(x, y, f = null) {
+  if (f) U.sel = new Set(pickedFor(selected(), f).map((s) => s.id));
   renderFrames();
-  const list = selected(), one = list.length === 1, locked = list.every((s) => s.locked);
-  const groups = [];   // (other modules' items: table:menu)
-  dispatchEvent(new CustomEvent('table:menu', { detail: { frame: f, frames: list, groups, table: T } }));
-  openPressMenu(x, y, [
-    [{ label: 'Open', keys: 'Enter', disabled: !one, run: () => goLive(f) }],
-    [{ label: 'Duplicate', keys: 'Ctrl+D', run: () => duplicateFrames(new Set(U.sel)) },
-      { label: 'Size and MP…', disabled: !one, run: () => sizeSheet(f) },
-      { label: locked ? 'Unlock' : 'Lock', run: () => setLocked(list, !locked) }],
-    [{ label: 'Bring to front', run: () => restack(M.toFront) }, { label: 'Send to back', run: () => restack(M.toBack) }],
-    ...groups.filter((g) => g?.length),
-    [{ label: one ? 'Delete' : `Delete ${list.length}`, keys: 'Del', danger: true, disabled: locked, run: () => deleteFrames(new Set(U.sel)) }],
-  ], 'Frame');
+  const list = selected(), one = list.length === 1 ? list[0] : null;
+  if (!list.length) return;
+  const extra = [];   // (other modules' items: table:menu)
+  dispatchEvent(new CustomEvent('table:menu', { detail: { frame: f || one || list[0], frames: list, groups: extra, table: T } }));
+  const run = {
+    open: () => goLive(one), rename: () => renameRow(one.id), duplicate: () => duplicateFrames(new Set(U.sel)),
+    group: groupSelected, ungroup: () => ungroupSelected(), hide: () => toggleHidden(list), lock: () => toggleLocked(list),
+    front: () => restack(M.toFront), forward: () => stepBy(1), backward: () => stepBy(-1), back: () => restack(M.toBack),
+    size: () => sizeSheet(one), delete: () => deleteFrames(new Set(U.sel)),
+  };
+  const groups = frameMenuGroups({ selected: list.length, openable: !!one && one.kind !== 'note' && !one.hidden, grouped: list.some((s) => s.group),
+    hidden: list.every((s) => s.hidden), locked: list.every((s) => s.locked), extra: extra.filter((g) => g?.length) });
+  const parts = { align: ['align'], distribute: ['distribute', 'tidy'], size: ['size'] };
+  openPressMenu(x, y, groups.map((g) => g.map((it) => (it.run ? it : { ...it,
+    run: it.sub ? () => arrangeMenu(x, y, parts[it.sub]) : run[it.id] }))), 'Frame');
+}
+// Arrange: what frameArrangeMenu offers, those parts of it (all of them from the bar's Arrange ▾)
+function arrangeMenu(x, y, parts = ['align', 'distribute', 'tidy', 'size']) {
+  const all = frameArrangeMenu(), n = selected().filter((f) => !f.hidden).length;
+  openPressMenu(x, y, parts.map((p) => all[p].map((it) => ({ ...it, disabled: n < 2, run: () => arrange(it.id) }))), 'Arrange');
+}
+// The selection (shown ones, in the order picked) aligned, spread, sized or tidied: one undo step, on the grid when it is on
+function arrange(id) {
+  const list = pickedList().filter((f) => !f.hidden);
+  if (list.length < 2) return;
+  const step = T.grid.on ? T.grid.size : 0, gap = T.grid.on ? T.grid.size : 40;
+  const [what, how] = id.split(':');
+  const out = what === 'align' ? M.alignFrames(list, how, { step })
+    : what === 'spread' ? M.distributeFrames(list, how, { step })
+      : what === 'centres' ? M.distributeFrames(list, how, { centres: true, step })
+        : what === 'tidy' ? M.tidyRows(list, { mode: how, gap, step })
+          : what === 'size' ? (how === 'largest' ? M.sameSize(list, 'both', { to: 'largest' }) : M.sameSize(list, how)) : null;
+  if (!out) return;
+  const ids = new Set(list.map((f) => f.id)), before = geomOf(ids);
+  for (const g of out) {
+    const f = byId(g.id), resized = f.w !== g.w || f.h !== g.h;
+    Object.assign(f, { x: g.x, y: g.y, w: g.w, h: g.h });
+    if (resized && liveFrame()?.id === f.id) { placeLive(); dispatchEvent(new CustomEvent('table:resize', { detail: { frame: f, table: T } })); }
+  }
+  recordGeom(before, geomOf(ids));
+  renderFrames(); changed(); tellMoved(list);
 }
 function stageMenu(e) {
   cancelOp();
@@ -529,7 +617,7 @@ function frameAt(e) {
   return el ? byId(el.dataset.id) : null;
 }
 const inLive = (e) => !!e.target.closest?.('.live-layer .frame-mount');
-const othersOf = (ids) => T.frames.filter((f) => !ids.has(f.id));
+const othersOf = (ids) => M.shown(T.frames).filter((f) => !ids.has(f.id));
 const snapThr = () => SNAP_PX / T.view.z;
 
 function onDown(e) {
@@ -561,7 +649,7 @@ function startMove(e, f, base) {
     U.sel.add(f.id);
   } else if (!U.sel.has(f.id)) U.sel = new Set([f.id]);
   renderFrames();
-  const ids = new Set(selected().filter((s) => !s.locked).map((s) => s.id));
+  const ids = new Set(selected().filter((s) => !s.locked && !s.hidden).map((s) => s.id));
   U.op = { ...base, type: 'move', ids, tap: f, start: new Map(T.frames.filter((s) => ids.has(s.id)).map((s) => [s.id, { x: s.x, y: s.y }])), p0: tablePt(e) };
 }
 
@@ -610,7 +698,7 @@ function dragMarquee(e, op) {
   const r = M.rectFrom(op.p0, tablePt(e));
   op.rect = r;
   Object.assign(D.marquee.style, { display: 'block', left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
-  const hit = M.framesIn(T.frames, r);
+  const hit = M.framesIn(M.shown(T.frames), r);
   U.sel = new Set([...op.base, ...hit.map((f) => f.id)]);
   renderFrames();
 }
@@ -676,7 +764,7 @@ function endMarquee(e, op) {
     return;
   }
   U.lastEmpty = null;
-  if (op.shift || M.framesIn(T.frames, op.rect).length) return;
+  if (op.shift || M.framesIn(M.shown(T.frames), op.rect).length) return;
   // a box over nothing: a frame that size, of the kind picked (its corners on the grid when that's on)
   const g = (v, a) => M.snapValue(v, a, [], T.grid, 0, { edges: false });
   const r = op.rect, x = g(r.x, 'x'), y = g(r.y, 'y');
@@ -721,12 +809,20 @@ function onKey(e) {
   }
   const step = e.shiftKey ? NUDGE * 10 : NUDGE;
   const arrows = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+  const low = k.toLowerCase(), any = U.sel.size > 0;
   let fn = null;
   if (k === 'Delete' || k === 'Backspace') fn = () => deleteFrames(new Set(U.sel));
-  else if (arrows[k] && U.sel.size) fn = () => nudge(arrows[k]);
-  else if (ctrl && k.toLowerCase() === 'd') fn = () => duplicateFrames(new Set(U.sel));
-  else if (ctrl && k.toLowerCase() === 'a') fn = () => { U.sel = new Set(T.frames.map((f) => f.id)); renderFrames(); };
-  else if (!ctrl && k.toLowerCase() === 'f') fn = () => fit(U.sel.size ? selected() : T.frames);
+  else if (arrows[k] && any) fn = () => nudge(arrows[k]);
+  else if (ctrl && (low === 'd' || low === 'j') && !e.shiftKey) fn = () => duplicateFrames(new Set(U.sel));
+  else if (ctrl && low === 'a') fn = () => { U.sel = new Set(M.shown(T.frames).map((f) => f.id)); renderFrames(); };
+  else if (ctrl && low === 'g') fn = () => (e.shiftKey ? ungroupSelected() : groupSelected());
+  else if (ctrl && (e.code === 'BracketRight' || e.code === 'BracketLeft') && any) {   // (by code: Shift turns ] into })
+    const up = e.code === 'BracketRight';
+    fn = () => (e.shiftKey ? restack(up ? M.toFront : M.toBack) : stepBy(up ? 1 : -1));
+  } else if (!ctrl && low === 'h' && !e.shiftKey && any) fn = () => toggleHidden();
+  else if (!ctrl && low === 'l' && !e.shiftKey && any) fn = () => toggleLocked();
+  // (F alone is full screen, as in every tab: layout.js fullScreen; Shift+F fits)
+  else if (!ctrl && k === 'F' && e.shiftKey) fn = fitSel;
   else if (!ctrl && k === '0') fn = () => zoomTo(1);
   else if (!ctrl && k === 'Enter' && U.sel.size === 1) fn = () => goLive(selected()[0]);
   if (!fn) return;
@@ -735,7 +831,8 @@ function onKey(e) {
 // The arrows move the selection a pixel (ten with Shift); a run of presses is one step to undo, and table:move goes once
 // they stop
 function nudge([dx, dy]) {
-  const ids = new Set([...U.sel]), key = [...ids].sort().join(',');
+  const ids = new Set(selected().filter((f) => !f.hidden).map((f) => f.id)), key = [...ids].sort().join(',');
+  if (!ids.size) return;
   if (U.nudge?.key !== key) { flushNudge(); U.nudge = { key, ids, before: geomOf(ids) }; }
   T.frames = M.moveFrames(T.frames, [...ids], dx, dy);
   renderFrames(); changed();
@@ -798,7 +895,7 @@ function frameAtPoint(clientX, clientY) {
     return r && clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom ? liveFrame() : null;
   }
   const r = D.stage.getBoundingClientRect();
-  return M.hitFrame(T.frames, M.toTable(T.view, clientX - r.left, clientY - r.top));
+  return M.hitFrame(M.shown(T.frames), M.toTable(T.view, clientX - r.left, clientY - r.top));
 }
 // Things dropped into a frame (table:drop-frame with sources): true when its module took them
 export function dropOntoFrame(frame, list) {
@@ -837,16 +934,113 @@ export async function sourceFrameAt(src, at, ok = here()) {
 // ---------------------------------------------------------------------------
 function renderPanel() {
   const s = selected(), one = s.length === 1 ? s[0] : null;
-  const sig = JSON.stringify([[...U.sel], T.frames.map((f) => [f.id, f.label, f.w, f.h, f.locked, ...(U.sel.has(f.id) ? [f.x, f.y] : [])])]);
+  const sig = JSON.stringify([[...U.sel], T.groups, T.frames.map((f) => [f.id, f.label, f.w, f.h, f.locked, f.hidden, f.group, stillOf(f) || f.preview || '',
+    ...(U.sel.has(f.id) ? [f.x, f.y] : [])])]);
   if (sig === U.panelSig || D.panel.contains(document.activeElement) && document.activeElement.matches('input')) return;
   U.panelSig = sig;
-  const row = (f) => h('button', { type: 'button', class: `table-row${U.sel.has(f.id) ? ' on' : ''}`, 'aria-pressed': String(U.sel.has(f.id)),
-    onclick: () => { U.sel = new Set([f.id]); renderFrames(); reveal(f); }, ondblclick: () => goLive(f) },
-  icon(KIND_ICON[f.kind]), h('span', { class: 'table-row-name' }, f.label), h('span', { class: 'table-row-size' }, `${f.w}×${f.h}`), f.locked ? icon('lock') : null);
   D.panel.replaceChildren(
-    section('Frames', null, help('Drag on empty table to make a frame there; double-tap empty table for the quick starts. Double-click a frame, or press Enter, to open it at full size; Esc comes back. Wheel zooms, Space + drag pans, F fits.'),
-      T.frames.length ? h('div', { class: 'table-rows' }, [...T.frames].reverse().map(row)) : hint('No frames yet.')),
+    section('Frames', null, help('Drag on empty table to make a frame there; double-tap empty table for the quick starts. Double-click a frame, or press Enter, to open it at full size; Esc comes back. Wheel zooms, Space + drag pans, Shift+F fits, F is full screen. The list is the frames as layers, the top one drawn on top: drag a row by its grip to restack it, or onto a group\'s row to put it in the group. Shift-click a row for a range, Ctrl-click to add or drop one. Double-click a name to rename it. Right click a row or a frame, or hold a finger on it, for the rest. Keys: Ctrl+G groups, Ctrl+Shift+G ungroups, Ctrl+J duplicates, Ctrl+] and Ctrl+[ step up and down, with Shift to the top and bottom, H hides, L locks. A hidden frame keeps its place but is left out of the table, the box, Fit and a story\'s rows. Arrange on the bar lines up two or more frames, on the grid when it is on.'),
+      T.frames.length ? frameList() : hint('No frames yet.')),
     section('Frame', null, one ? frameFields(one) : hint(s.length ? `${s.length} frames selected` : 'Select a frame.')));
+}
+// The frames as the editor lists layers (ui.js layerRowsEl; layer-stack.js rowsOf, moveRow): top first, groups as rows
+function frameList() {
+  const rows = ST.rowsOf(T.frames, T.groups);
+  const thumbOf = (f) => {
+    const url = stillOf(f) || f.preview || null;
+    return url ? h('img', { src: url, alt: '', draggable: false, loading: 'lazy' }) : h('span', { class: 'frame-row-kind' }, icon(KIND_ICON[f.kind]));
+  };
+  const eye = (list) => {
+    const off = list.every((f) => f.hidden);
+    return iconBtn(off ? 'Show (H)' : 'Hide (H)', icon(off ? 'eyeoff' : 'eye'), () => setHidden(list, !off), { class: `icon-btn ico-btn${off ? ' on' : ''}` });
+  };
+  const lock = (list) => {
+    const on = list.every((f) => f.locked);
+    return iconBtn(on ? 'Unlock (L)' : 'Lock (L)', icon(on ? 'lock' : 'unlock'), () => setLocked(list, !on), { class: `icon-btn ico-btn${on ? ' on' : ''}` });
+  };
+  const groupRow = (g) => {
+    const members = T.frames.filter((f) => f.group === g.id);
+    return {
+      cls: 'frame-group-row', sel: members.length > 0 && members.every((f) => U.sel.has(f.id)), off: members.every((f) => f.hidden),
+      onclick: (ev) => rowTap(ev, { group: g, members }),
+      thumb: h('span', { class: 'layer-group-mark' }, icon('copy')), name: g.name, hint: `${members.length} frames`,
+      buttons: [iconBtn(g.collapsed ? 'Open the group' : 'Fold the group', icon(g.collapsed ? 'right' : 'chevdown'), () => stackStep(() => { g.collapsed = !g.collapsed; })),
+        lock(members), eye(members), iconBtn('Ungroup (Ctrl+Shift+G)', icon('close'), () => ungroupSelected([g.id]))],
+    };
+  };
+  const list = layerRowsEl(rows.map(({ group: g, layer: f, in: inGroup }) => (g ? groupRow(g) : {
+    cls: `frame-row${inGroup ? ' in-group' : ''}`, sel: U.sel.has(f.id), off: !!f.hidden,
+    onclick: (ev) => rowTap(ev, { frame: f }),
+    thumb: thumbOf(f),
+    name: [icon(KIND_ICON[f.kind]), h('span', { class: 'frame-row-label' }, f.label)],
+    hint: `${f.w}×${f.h}${f.hidden ? ' · hidden' : ''}`,
+    buttons: [lock([f]), eye([f])],
+  })), { onReorder: (from, to) => stackStep(() => { T.frames = ST.moveRow(T.frames, T.groups, from, to); }) });
+  [...list.children].forEach((el, i) => { el.dataset.row = rows[i].group ? `g:${rows[i].group.id}` : rows[i].layer.id; });
+  pressMenu(list, (e) => {
+    const it = rows[[...list.children].indexOf(e.target.closest('.layer-row'))];
+    if (it?.group) U.sel = new Set(T.frames.filter((f) => f.group === it.group.id).map((f) => f.id));
+    frameMenu(e.clientX, e.clientY, it?.layer || null);
+  }, { ok: (e) => !e.target.closest('button, .layer-grip, input') });
+  return list;
+}
+// A tap on a row: Shift picks the range from the last row tapped, Ctrl (or Alt) adds or drops it, else it alone (and
+// in view). The same row tapped again soon: on its name, rename it; elsewhere, open it. A group's row picks its members.
+function rowTap(ev, { frame: f = null, group: g = null, members = [] }) {
+  const id = f ? f.id : `g:${g.id}`, now = Date.now(), again = U.rowTap?.id === id && now - U.rowTap.t < DOUBLE_MS;
+  U.rowTap = again ? null : { id, t: now };
+  if (again && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey) {
+    if (ev.target.closest?.('.layer-name')) return renameRow(id);
+    if (f && f.kind !== 'note' && !f.hidden) return goLive(f);
+    return;
+  }
+  const these = f ? [f] : members;
+  if (ev.shiftKey && U.anchor && byId(U.anchor)) {
+    const range = ST.rangeOf(T.frames, byId(U.anchor), these[these.length - 1]);
+    U.sel = new Set([...range, ...these].map((x) => x.id));
+  } else if (ev.ctrlKey || ev.metaKey || ev.altKey) {
+    const all = these.every((x) => U.sel.has(x.id));
+    for (const x of these) { if (all) U.sel.delete(x.id); else U.sel.add(x.id); }
+  } else {
+    U.sel = new Set(these.map((x) => x.id));
+    const shownOnes = M.shown(these);
+    if (shownOnes.length && !isLive()) { if (f) reveal(f); else selectFrames(shownOnes.map((x) => x.id), { scroll: true }); }
+  }
+  if (f) U.anchor = f.id;
+  renderFrames();
+}
+// A row's name typed over (a frame's renames its document too; a group's is the group's own)
+function renameRow(id) {
+  if (sidebar.current() !== 'frame') sidebar.show('frame');
+  const row = D.panel.querySelector(`.layer-row[data-row="${CSS.escape(id)}"] .layer-name`);
+  const g = id.startsWith('g:') ? T.groups.find((x) => `g:${x.id}` === id) : null, f = g ? null : byId(id);
+  if (!row || (!g && !f)) return;
+  const was = g ? g.name : f.label, ok = here();
+  const input = h('input', { type: 'text', class: 'frame-row-rename', value: was, maxLength: 120, 'aria-label': 'Name' });
+  let done = false;
+  const finish = (keep) => {
+    if (done) return;
+    done = true;
+    const v = input.value.trim();
+    if (keep && v && v !== was && ok()) {
+      if (g) stackStep(() => { g.name = v; });
+      else if (byId(f.id) === f) {
+        f.label = v; changed();
+        renameDoc(f, f.label).catch((e) => toast(`Couldn't rename its document: ${e.message}`, true));
+      }
+    }
+    input.blur();
+    U.panelSig = ''; renderFrames();
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+  input.addEventListener('pointerdown', (e) => e.stopPropagation());
+  input.addEventListener('click', (e) => e.stopPropagation());
+  row.replaceChildren(input);
+  input.focus(); input.select();
 }
 function frameFields(f) {
   // (a box typed in keeps the panel from redrawing: it may still be on show after another table opened, or the frame went)
@@ -898,11 +1092,21 @@ function buildBar() {
     const r = newBtn.getBoundingClientRect(), { w, h: hh } = stageSize();
     kindMenu(r.left, r.bottom + 4, newAtCentre, 'New frame', () => quickStart({ ...M.toTable(T.view, w / 2, hh / 2), centre: true }));
   });
+  const arrangeBtn = button([icon('rows'), 'Arrange ▾'], () => {
+    const r = arrangeBtn.getBoundingClientRect();
+    arrangeMenu(r.left, r.bottom + 4);
+  }, { title: 'Align, spread, size or tidy the selected frames (two or more)' });
+  D.syncArrange = () => { arrangeBtn.disabled = selected().filter((f) => !f.hidden).length < 2 || isLive(); };
+  const PREVIEW = [['hover', 'On hover'], ['always', 'Always'], ['off', 'Off']];
+  const previewBtn = button('Previews ▾', () => {
+    const r = previewBtn.getBoundingClientRect(), now = previewMode();
+    openPressMenu(r.left, r.bottom + 4, [PREVIEW.map(([m, label]) => ({ label, on: m === now, run: () => setPreviewMode(m) }))], 'Previews');
+  }, { title: 'When video and sound frames play their preview on the table' });
   D.zoom = h('button', { type: 'button', class: 'btn small ghost table-zoom', title: 'Zoom: tap for 100%', onclick: () => zoomTo(1) }, '100%');
   D.bar = h('div', { class: 'table-bar' },
-    button('Fit', () => fit(U.sel.size ? selected() : T.frames), { title: 'Fit all, or the selected frames (F)' }),
+    button('Fit', fitSel, { title: 'Fit all, or the selected frames (Shift+F)' }),
     button('100%', () => zoomTo(1), { title: 'Zoom to 100% (0)' }),
-    gridChip, gridSize, snapBar(['edges'], () => {}), newBtn, h('span', { class: 'table-bar-gap' }), D.zoom);
+    gridChip, gridSize, snapBar(['edges'], () => {}), newBtn, arrangeBtn, previewBtn, h('span', { class: 'table-bar-gap' }), D.zoom);
 }
 
 // ---------------------------------------------------------------------------
@@ -1016,6 +1220,6 @@ async function duplicateTable(id) {
 // another screen came on: let go of the live frame and any gesture
 export function pauseTable() {
   if (!U.wired) return;
-  cancelOp(); closePressMenu(); unlive();
+  cancelOp(); closePressMenu(); unlive(); pausePreviews();
   U.space = false;
 }

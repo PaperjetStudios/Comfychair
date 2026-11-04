@@ -2,14 +2,17 @@
 // snapping, z-order), the view (fit, zoom about a point) and the row layout a story table uses. table.js draws and
 // drives it; tests/table_model.test.mjs checks it in node.
 //
-//   payload: { v: 1, view: { x, y, z }, grid: { on, size },
-//              frames: [{ id, kind, doc, x, y, w, h, label, locked?, story?: { scene, shot }, text?, preview?, fit?, fitBox? }], story? }
+//   payload: { v: 1, view: { x, y, z }, grid: { on, size }, groups: [{ id, name, collapsed }],
+//              frames: [{ id, key, kind, doc, x, y, w, h, label, locked?, hidden?, group?, story?: { scene, shot }, text?, preview?, fit?, fitBox? }], story? }
+// The frames are a layer stack (web/layer-stack.js rules: groups, rows, moving rows): key is the frame's id, group the
+// id of its group in groups (members sit next to each other). A hidden frame isn't drawn, picked, boxed or fitted; it keeps its place.
 // (text: a note's words; preview: the picture an image frame was made from, shown until its document has a still;
 // fit: an image frame sized by its layers, w, h then the area they cover, fitBox: that area in the edit (frame-image.js))
 // Table units are pixels at zoom 1. A frame's w, h is its canvas size. The screen point of a table point p is
 // p * z + (x, y). Frames later in the list sit on top.
 
 import { snapNearest, snapStep } from './snap-math.js';
+import { normalize } from './layer-stack.js';
 
 export const KINDS = ['image', 'video', 'scene', 'sound', 'note'];
 // the saved document kind each frame kind owns (a note has none: its text is on the frame)
@@ -25,25 +28,32 @@ const rid = () => Math.random().toString(36).slice(2, 10) + Math.random().toStri
 const num = (v, d) => (Number.isFinite(+v) ? +v : d);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
-export const blankTable = () => ({ v: 1, view: { x: 0, y: 0, z: 1 }, grid: { on: true, size: 64 }, frames: [] });
+export const blankTable = () => ({ v: 1, view: { x: 0, y: 0, z: 1 }, grid: { on: true, size: 64 }, groups: [], frames: [] });
 
 // A saved payload made whole (an older or partial one, or one from another device), so the surface can trust it
 export function migrateTable(p) {
   const b = blankTable(), v = p?.view || {}, g = p?.grid || {};
   const out = { ...p, v: 1, view: { x: num(v.x, 0), y: num(v.y, 0), z: num(v.z, 1) || 1 },
     grid: { on: g.on ?? b.grid.on, size: Math.max(4, num(g.size, b.grid.size)) },
+    groups: (Array.isArray(p?.groups) ? p.groups : []).filter((x) => x?.id != null).map((x) => ({ id: String(x.id), name: String(x.name ?? 'Group'), collapsed: !!x.collapsed })),
     frames: (p?.frames || []).filter((f) => f && KINDS.includes(f.kind)).map((f) => ({ ...f,
       id: String(f.id || rid()), doc: f.doc ?? null, label: f.label ?? KIND_LABEL[f.kind],
       x: num(f.x, 0), y: num(f.y, 0), w: Math.max(MIN_SIDE, num(f.w, 512)), h: Math.max(MIN_SIDE, num(f.h, 512)) })) };
+  for (const f of out.frames) { f.key = f.id; if (f.group != null) f.group = String(f.group); }
+  out.frames = normalize(out.frames, out.groups);   // (members together; a group with no frames, or a frame's lost group, goes)
   if (!out.story) delete out.story;
   return out;
 }
 
 // A new frame over rect (table units), sides at least MIN_SIDE. extra: doc, label, text, story…
 export function newFrame(kind, rect, extra = {}) {
-  return { id: rid(), kind, doc: null, label: KIND_LABEL[kind] || kind,
+  const f = { id: rid(), kind, doc: null, label: KIND_LABEL[kind] || kind,
     x: Math.round(rect.x), y: Math.round(rect.y), w: Math.max(MIN_SIDE, Math.round(rect.w)), h: Math.max(MIN_SIDE, Math.round(rect.h)), ...extra };
+  f.key = f.id;
+  return f;
 }
+// the frames on show (a hidden one keeps its place but is skipped by the pointer, the box, Fit and the story's rows)
+export const shown = (frames) => frames.filter((f) => !f.hidden);
 
 // ---- geometry ----
 // a rect from two corners in any order
@@ -172,4 +182,124 @@ export function sizeForMp(w, h, mp) {
   const k = Math.sqrt((mp * 1e6) / (w * h));
   const r16 = (v) => Math.max(16, Math.round(v / 16) * 16);
   return { w: r16(w * k), h: r16(h * k) };
+}
+
+// ---- the stack: z-order steps and what Undo puts back ----
+// The frames with those ids one step up (dir 1: toward the end of the list, on top) or down (-1). A frame in a group
+// steps among its group's members and stays in it; a frame outside steps over a whole group; a group whose members are
+// all picked steps as one. A picked neighbour holds a frame back (the picked keep their order). A new list.
+export function stepZ(frames, ids, dir) {
+  const sel = new Set(ids);
+  const whole = new Set([...new Set(frames.map((f) => f.group).filter(Boolean))].filter((g) => frames.filter((f) => f.group === g).every((f) => sel.has(f.id))));
+  // units, bottom first: { items, inside: the group it moves within, or null, picked }
+  const units = [];
+  for (const f of frames) {
+    if (f.group && whole.has(f.group)) {
+      const last = units[units.length - 1];
+      if (last?.whole === f.group) last.items.push(f); else units.push({ items: [f], inside: null, whole: f.group, picked: true });
+    } else units.push({ items: [f], inside: f.group || null, picked: sel.has(f.id) });
+  }
+  const order = dir > 0 ? [...units].reverse() : [...units];
+  for (const u of order) {
+    if (!u.picked) continue;
+    const k = units.indexOf(u);
+    let j = k + dir;
+    const v = units[j];
+    if (!v || v.picked) continue;
+    if (u.inside) { if (v.inside !== u.inside) continue; }
+    else if (v.inside) { while (units[j + dir]?.inside === v.inside) j += dir; }   // (over the whole group)
+    units.splice(k, 1);
+    units.splice(j, 0, u);   // (j counted before u came out: up, that is just past v; down, just before it)
+  }
+  return units.flatMap((u) => u.items);
+}
+
+// What a change to the stack changes (order, groups, group, hidden, locked), to put back by id: a frame gone since stays gone
+export function stackSnap(frames, groups = []) {
+  return { order: frames.map((f) => f.id), groups: groups.map((g) => ({ ...g })),
+    f: Object.fromEntries(frames.map((f) => [f.id, { group: f.group, hidden: f.hidden, locked: f.locked }])) };
+}
+export const sameSnap = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// The snapshot put back on these frames (the same objects): their order, groups and fields. Frames not in it (made
+// since) keep their place after the ones that are. Returns { frames, groups }.
+export function applySnap(frames, snap) {
+  const at = new Map(snap.order.map((id, i) => [id, i]));
+  const known = frames.filter((f) => at.has(f.id)).sort((a, b) => at.get(a.id) - at.get(b.id));
+  const out = [...known, ...frames.filter((f) => !at.has(f.id))];
+  for (const f of known) for (const [k, v] of Object.entries(snap.f[f.id])) { if (v === undefined) delete f[k]; else f[k] = v; }
+  const groups = snap.groups.map((g) => ({ ...g }));
+  return { frames: normalize(out, groups), groups };
+}
+
+// ---- arrange: align, distribute, same size, tidy ----
+// Each takes the frames to arrange (in the order they were picked) and returns new objects for them, in the same order,
+// with their new x, y (w, h for sameSize). A locked frame stays as it is. step: the grid's size when it is on, else 0:
+// the line they align to, where a spread starts, each spread frame's leading edge and a tidy's corner land on it.
+const onStep = (v, step) => (step ? snapStep(v, step) : Math.round(v));
+const free = (f) => !f.locked;
+
+// edge: 'left' | 'hcenter' | 'right' | 'top' | 'vcenter' | 'bottom', to the bounds of all of them
+export function alignFrames(frames, edge, { step = 0 } = {}) {
+  if (frames.length < 2) return frames.map((f) => ({ ...f }));
+  const b = boundsOf(frames);
+  const x = edge === 'left' || edge === 'hcenter' || edge === 'right';
+  const [p, s] = x ? ['x', 'w'] : ['y', 'h'];
+  const kind = { left: 0, top: 0, hcenter: 0.5, vcenter: 0.5, right: 1, bottom: 1 }[edge];
+  if (kind == null) throw new Error(`no such edge: ${edge}`);
+  const line = onStep(b[p] + b[s] * kind, step);
+  return frames.map((f) => (free(f) ? { ...f, [p]: Math.round(line - f[s] * kind) } : { ...f }));
+}
+
+// axis 'x' | 'y'. By default the gaps between them come out even, the first and last staying put (centres: true: their
+// centres evenly spaced instead); gap: a fixed gap from the first. Ordered by where they are along the axis.
+export function distributeFrames(frames, axis, { gap = null, centres = false, step = 0 } = {}) {
+  if (frames.length < 2) return frames.map((f) => ({ ...f }));
+  const [p, s] = axis === 'y' ? ['y', 'h'] : ['x', 'w'];
+  const sorted = [...frames].sort((a, b) => a[p] + a[s] / 2 - (b[p] + b[s] / 2));
+  const first = sorted[0], last = sorted[sorted.length - 1], n = sorted.length;
+  const to = new Map();
+  if (centres && gap == null) {
+    const c0 = first[p] + first[s] / 2, c1 = last[p] + last[s] / 2;
+    sorted.forEach((f, i) => to.set(f, c0 + ((c1 - c0) * i) / (n - 1) - f[s] / 2));
+  } else {
+    const g = gap ?? (last[p] + last[s] - first[p] - sorted.reduce((a, f) => a + f[s], 0)) / (n - 1);
+    let at = first[p];
+    for (const f of sorted) { to.set(f, at); at += f[s] + g; }
+  }
+  return frames.map((f) => (free(f) ? { ...f, [p]: f === first && gap == null ? f[p] : onStep(to.get(f), step) } : { ...f }));
+}
+
+// which: 'w' | 'h' | 'both'; to: 'first' (the first of frames: the first picked) or 'largest' (by area)
+export function sameSize(frames, which, { to = 'first' } = {}) {
+  if (frames.length < 2) return frames.map((f) => ({ ...f }));
+  const ref = to === 'largest' ? frames.reduce((a, f) => (f.w * f.h > a.w * a.h ? f : a)) : frames[0];
+  return frames.map((f) => {
+    if (!free(f)) return { ...f };
+    return { ...f, ...(which !== 'h' ? { w: ref.w } : {}), ...(which !== 'w' ? { h: ref.h } : {}) };
+  });
+}
+
+// Laid out tidy from where the first of them (in reading order) is: mode 'row' (side by side), 'column' (stacked) or
+// 'grid' (as near square as the count allows; cols to say). Each row is as tall as its tallest, each frame centred
+// in it; a stack's frames are centred on its widest. Sizes stay (a frame's size is its canvas). gap between them.
+export function tidyRows(frames, { mode = 'grid', gap = 40, cols = 0, step = 0 } = {}) {
+  if (frames.length < 2) return frames.map((f) => ({ ...f }));
+  const reading = [...frames].sort((a, b) => (mode === 'row' ? a.x - b.x : mode === 'column' ? a.y - b.y : (a.y - b.y) || (a.x - b.x)));
+  const b = boundsOf(frames), x0 = onStep(b.x, step), y0 = onStep(b.y, step);
+  const to = new Map();
+  if (mode === 'column') {
+    const wide = Math.max(...reading.map((f) => f.w));
+    let y = y0;
+    for (const f of reading) { to.set(f, { x: Math.round(x0 + (wide - f.w) / 2), y }); y += f.h + gap; }
+  } else {
+    const n = mode === 'row' ? reading.length : Math.max(1, cols || Math.ceil(Math.sqrt(reading.length)));
+    let y = y0;
+    for (let i = 0; i < reading.length; i += n) {
+      const row = reading.slice(i, i + n), tall = Math.max(...row.map((f) => f.h));
+      let x = x0;
+      for (const f of row) { to.set(f, { x, y: Math.round(y + (tall - f.h) / 2) }); x += f.w + gap; }
+      y += tall + gap;
+    }
+  }
+  return frames.map((f) => (free(f) ? { ...f, ...to.get(f) } : { ...f }));
 }

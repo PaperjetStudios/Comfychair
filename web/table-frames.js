@@ -5,12 +5,14 @@
 import { h, api, store, icon, uid, clone } from './ui.js';
 import { S, inputUrl, thumbUrl } from './core.js';
 import { BLANK } from './editor-engine.js';
-import { uploadImage, uploadMedia } from './media.js';
+import { itemUrl, uploadImage, uploadMedia } from './media.js';
+import { wavePeaks } from './timeline.js';
 import { dropKind } from './drop-files.js';
 import { DOC_KIND, KIND_LABEL, newFrame } from './table-model.js';
 import { owedFor } from './owed-runs.js';
 import { emptyPayload } from './empty-docs.js';
 import { refused, refusal } from './tabs.js';
+import { isLive } from './live.js';
 
 export const KIND_ICON = { image: 'image', video: 'film', scene: 'cube', sound: 'sound', note: 'text' };
 const SOUND_SIZE = { w: 1024, h: 256 };   // a sound frame is a strip: its waveform, not a picture
@@ -147,11 +149,13 @@ export function owedCounts() {
 
 // ---- stills: each document kind's list rows carry their still ({ url }) ----
 const STILLS = new Map();   // 'kind:id' -> url
+const PREV_EPOCH = new Map();   // kind -> how many times its stills were loaded
 export const stillOf = (f) => (f.doc ? STILLS.get(`${f.kind}:${f.doc}`) || null : null);
 export async function loadStills(kinds) {
   await Promise.all([...new Set(kinds)].filter((k) => DOC_KIND[k]).map(async (k) => {
     let rows;
     try { rows = await api(docUrl(k), { busy: false }); } catch { return; }
+    PREV_EPOCH.set(k, (PREV_EPOCH.get(k) || 0) + 1);   // (a document may have changed: its tile's clip and waveform are read again)
     for (const key of [...STILLS.keys()]) if (key.startsWith(`${k}:`)) STILLS.delete(key);
     for (const r of rows || []) if (r.still?.url) STILLS.set(`${k}:${r.id}`, r.still.url);
   }));
@@ -172,11 +176,12 @@ export function frameEl(f, { onText }) {
   } else {
     body.append(h('img', { class: 'frame-still hidden', alt: '', draggable: false }),
       h('div', { class: 'frame-ph' }, icon(KIND_ICON[f.kind], 40), h('span', {}, KIND_LABEL[f.kind])));
-
   }
   const badge = h('span', { class: 'frame-owed hidden', role: 'status' });   // (in the label bar, so a live frame's engine never covers it)
-  return h('div', { class: `frame frame-${f.kind}`, 'data-id': f.id, role: 'group' },
+  const el = h('div', { class: `frame frame-${f.kind}`, 'data-id': f.id, role: 'group' },
     h('div', { class: 'frame-label' }, icon(KIND_ICON[f.kind]), name, size, badge), body);
+  if (f.kind === 'video' || f.kind === 'sound') watchTile(el);
+  return el;
 }
 
 // bring an element up to its frame: where it sits, its label, its still, and its state
@@ -202,8 +207,195 @@ export function syncFrame(el, f, { selected = false, live = false, owed = 0 } = 
     img.classList.toggle('hidden', !url);
     el.querySelector('.frame-ph').classList.toggle('hidden', !!url);
   }
+  if (f.kind === 'video' || f.kind === 'sound') syncPreview(el, f);
   const ta = el.querySelector('.frame-text');
   if (ta && document.activeElement !== ta && ta.value !== (f.text || '')) ta.value = f.text || '';
+}
+
+// ---- tile previews: a video frame's tile plays its first clip, a sound frame's tile draws its waveform ----
+// The first clip (a sequence of several previews its first only) comes from the frame's document: its first video item (video)
+// or audio item (sound), read when the tile first shows and again whenever the kind's stills reload (a `store` message).
+// A clip plays muted and looped from its `in` point to its `out`; which tiles play is decided in pump(), below.
+const PREVS = new Map();   // 'kind:id' -> { epoch, item: { url, in, out } | null }
+const WAVES = new Map();   // url -> { peaks, rate } | 'none'
+const TILES = new Set();   // the video and sound tiles made (each el has el._pv)
+const MAX_PLAYING = 4;
+const PTR = { x: -1e9, y: -1e9 };
+let sweepT = 0, pumpQ = 0, ptrWired = false;
+
+// 'hover' (default): a tile plays while the pointer is over it or it is selected; 'always': every tile on screen (4 at a
+// time, the nearest to the pointer or the selection); 'off': stills only
+export const previewMode = () => { const m = store.get('deck.table.previews', 'hover'); return m === 'always' || m === 'off' ? m : 'hover'; };
+export function setPreviewMode(mode) {
+  store.set('deck.table.previews', mode === 'always' || mode === 'off' ? mode : 'hover');
+  pump();
+}
+const reduced = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function watchTile(el) {
+  if (el._pv) return;
+  const st = el._pv = { hover: false, vis: false, seen: false, video: null, canvas: null, key: null, url: null, cin: 0, cout: 0, loading: false, ro: null, io: null };
+  el.addEventListener('pointerenter', () => { st.hover = true; pump(); });
+  el.addEventListener('pointerleave', () => { st.hover = false; pump(); });
+  if (typeof IntersectionObserver === 'function') {
+    st.io = new IntersectionObserver((es) => { st.vis = es[es.length - 1].isIntersecting; if (!el.isConnected && st.seen) releaseTile(el); else pump(); });
+    st.io.observe(el);
+  } else st.vis = true;
+  TILES.add(el);
+  if (!ptrWired && typeof addEventListener === 'function') {
+    ptrWired = true;
+    addEventListener('pointermove', (e) => { PTR.x = e.clientX; PTR.y = e.clientY; }, { passive: true });
+  }
+  clearInterval(sweepT); sweepT = setInterval(() => { sweep(); pump(); }, 1500);
+}
+// tiles that left the DOM let go of their video (and stop being looked after)
+function sweep() {
+  for (const el of TILES) {
+    const st = el._pv;
+    if (el.isConnected) st.seen = true;
+    else if (st.seen) releaseTile(el);
+  }
+  if (!TILES.size) { clearInterval(sweepT); sweepT = 0; }
+}
+function dropSource(v) { try { v.pause(); v.removeAttribute('src'); v.load(); } catch { /* gone */ } }
+function releaseTile(el) {
+  const st = el._pv;
+  if (!st) return;
+  if (st.video) dropSource(st.video);
+  st.ro?.disconnect(); st.io?.disconnect();
+  TILES.delete(el); el._pv = null;
+}
+// another screen came on (pauseTable calls this): every preview stops and lets go of its clip; the next pump re-attaches
+export function pausePreviews() {
+  for (const el of TILES) if (el._pv?.video) dropSource(el._pv.video);
+}
+
+async function loadPrev(el, f) {
+  const st = el._pv, key = `${f.kind}:${f.doc}`, epoch = PREV_EPOCH.get(f.kind) || 0;
+  if (!st || st.loading) return;
+  st.loading = true;
+  let item = null, ok = true;
+  try {
+    const d = await api(docUrl(f.kind, f.doc), { busy: false });
+    const want = f.kind === 'video' ? 'video' : 'audio';
+    const its = (d.payload?.items || []).filter((it) => it.kind === want && itemUrl(it));
+    const it = its.sort((a, b) => (a.at || 0) - (b.at || 0))[0];
+    if (it) item = { url: itemUrl(it), in: Math.max(0, it.in || 0), out: it.out > (it.in || 0) ? it.out : 0 };
+  } catch { ok = false; }
+  st.loading = false;
+  if (!ok) return;
+  PREVS.set(key, { epoch, item });
+  if (el._pv && el.isConnected) applyPreview(el, f);
+}
+
+// bring a tile's video or waveform up to its frame
+function syncPreview(el, f) {
+  const st = el._pv;
+  if (!st) return;
+  if (!st.seen && el.isConnected) st.seen = true;
+  if (!f.doc) { st.key = null; applyPreview(el, f); return; }
+  const key = `${f.kind}:${f.doc}`, e = PREVS.get(key);
+  if (!e || e.epoch !== (PREV_EPOCH.get(f.kind) || 0)) loadPrev(el, f);
+  st.key = key;
+  applyPreview(el, f);
+}
+function applyPreview(el, f) {
+  const st = el._pv, body = el.querySelector('.frame-body'), img = el.querySelector('.frame-still');
+  if (!st || !body) return;
+  const item = st.key ? PREVS.get(st.key)?.item || null : null;
+  if (f.kind === 'video') {
+    if (!item) { if (st.video) { dropSource(st.video); st.video.remove(); st.video = null; } st.url = null; return; }
+    let v = st.video;
+    if (!v) {
+      v = st.video = h('video', { class: 'frame-clip hidden', muted: true, loop: true, playsinline: true, preload: 'metadata', tabindex: -1, 'aria-hidden': 'true', draggable: false });
+      v.muted = true; v.loop = true; v.playsInline = true;
+      v.addEventListener('loadedmetadata', () => { if (st.cin > 0 && v.currentTime < st.cin) v.currentTime = st.cin; });
+      v.addEventListener('loadeddata', () => showClip(el));
+      v.addEventListener('timeupdate', () => { if (st.cout && v.currentTime >= st.cout) v.currentTime = st.cin; });
+      v.addEventListener('error', () => { st.bad = true; v.classList.add('hidden'); });
+      body.insertBefore(v, el.querySelector('.frame-ph'));
+    }
+    const poster = img?.getAttribute('src') || '';
+    if (poster) v.setAttribute('poster', poster); else v.removeAttribute('poster');
+    if (st.url !== item.url || st.cin !== item.in || st.cout !== item.out) {
+      const moved = st.url !== item.url;
+      st.url = item.url; st.cin = item.in; st.cout = item.out; st.bad = false;
+      if (moved && v.getAttribute('src')) dropSource(v);   // (the pump attaches the new one when it plays)
+      else if (v.getAttribute('src') && st.cin > 0) v.currentTime = st.cin;
+    }
+    showClip(el);
+    pump();
+  } else {
+    if (!st.canvas) {
+      st.canvas = h('canvas', { class: 'frame-wave hidden', 'aria-hidden': 'true' });
+      body.insertBefore(st.canvas, el.querySelector('.frame-ph'));
+      if (typeof ResizeObserver === 'function') { st.ro = new ResizeObserver(() => drawWave(el)); st.ro.observe(body); }
+    }
+    if (!item) { st.url = null; st.canvas.classList.add('hidden'); return; }
+    if (st.url !== item.url || st.cin !== item.in || st.cout !== item.out) { st.url = item.url; st.cin = item.in; st.cout = item.out; }
+    const w = WAVES.get(item.url);
+    if (!w) {
+      WAVES.set(item.url, 'loading');
+      wavePeaks(item.url, 100).then((p) => WAVES.set(item.url, p), () => WAVES.set(item.url, 'none'))
+        .then(() => { for (const t of TILES) if (t._pv?.url === item.url) drawWave(t); });
+    }
+    drawWave(el);
+  }
+}
+// the clip is shown over the still once it has a picture of its own (or the still, as its poster); the icon goes
+function showClip(el) {
+  const st = el._pv, v = st?.video;
+  if (!v) return;
+  const shown = !st.bad && (!!v.getAttribute('poster') || v.readyState >= 2);
+  v.classList.toggle('hidden', !shown);
+  if (shown) el.querySelector('.frame-ph')?.classList.add('hidden');
+}
+function drawWave(el) {
+  const st = el._pv, cv = st?.canvas, body = el.querySelector('.frame-body');
+  if (!cv || !body) return;
+  const w = WAVES.get(st.url), ok = w && typeof w === 'object' && w.peaks?.length;
+  cv.classList.toggle('hidden', !ok);
+  if (!ok) return;
+  const W = Math.max(1, body.clientWidth), H = Math.max(1, body.clientHeight), dpr = Math.min(2, devicePixelRatio || 1);
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  const g = cv.getContext('2d');
+  g.scale(dpr, dpr);
+  const rate = w.rate, a = Math.min(w.peaks.length - 1, Math.floor(st.cin * rate)), b = st.cout ? Math.min(w.peaks.length, Math.ceil(st.cout * rate)) : w.peaks.length;
+  const n = Math.max(1, b - a), top = Math.max(0.05, ...w.peaks.slice(a, b));
+  g.fillStyle = getComputedStyle(el).getPropertyValue('--accent').trim() || '#7aa2ff';
+  const bars = Math.max(1, Math.min(Math.floor(W / 2), n));   // (a bar a pixel pair at most)
+  for (let i = 0; i < bars; i++) {
+    let m = 0;
+    for (let j = a + Math.floor(i * n / bars), e = a + Math.max(Math.floor((i + 1) * n / bars), Math.floor(i * n / bars) + 1); j < e; j++) m = Math.max(m, w.peaks[j] || 0);
+    const hh = Math.max(1, (m / top) * H * 0.9);
+    g.fillRect(i * (W / bars), (H - hh) / 2, Math.max(1, W / bars - 1), hh);
+  }
+}
+
+// Which videos play. Wanted: on screen, not while any frame is live, motion not reduced, and (hover) pointed at or selected,
+// or (always) any. At most MAX_PLAYING play: the pointed-at one first, then the selected, then the nearest to the pointer.
+export function pump() {
+  if (pumpQ) return;
+  pumpQ = requestAnimationFrame?.(() => { pumpQ = 0; pumpNow(); }) || setTimeout(() => { pumpQ = 0; pumpNow(); }, 16);
+}
+export function pumpNow() {
+  const mode = previewMode(), idle = mode === 'off' || reduced() || isLive();
+  const want = [];
+  for (const el of TILES) {
+    const st = el._pv, v = st.video;
+    if (!v || !el.isConnected) continue;
+    if (!st.vis) { if (v.getAttribute('src')) dropSource(v); continue; }   // (off screen, or its screen is not on show)
+    const sel = el.classList.contains('selected');
+    if (idle || st.bad || !(mode === 'always' || st.hover || sel)) { v.pause(); continue; }
+    const r = el.getBoundingClientRect(), d = Math.hypot(r.left + r.width / 2 - PTR.x, r.top + r.height / 2 - PTR.y);
+    want.push({ el, st, v, rank: st.hover ? 0 : sel ? 1 : 2, d });
+  }
+  want.sort((a, b) => a.rank - b.rank || a.d - b.d);
+  want.forEach(({ st, v }, i) => {
+    if (i >= MAX_PLAYING) { v.pause(); return; }
+    if (!v.getAttribute('src')) { v.src = st.url; if (st.cin > 0) v.addEventListener('loadedmetadata', () => { v.currentTime = st.cin; }, { once: true }); }
+    if (v.paused) v.play().catch(() => {});
+  });
 }
 
 // ---- frames from dropped things ----

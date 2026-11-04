@@ -10,7 +10,7 @@ import {
 const F = (id, x, y, w, h, more = {}) => ({ id, kind: 'image', doc: null, label: id, x, y, w, h, ...more });
 
 test('a blank table and a partial payload made whole', () => {
-  assert.deepEqual(blankTable(), { v: 1, view: { x: 0, y: 0, z: 1 }, grid: { on: true, size: 64 }, frames: [] });
+  assert.deepEqual(blankTable(), { v: 1, view: { x: 0, y: 0, z: 1 }, grid: { on: true, size: 64 }, groups: [], frames: [] });
   const t = migrateTable({ view: { z: 0 }, frames: [{ id: 'a', kind: 'video', x: '5' }, { kind: 'bogus' }, null] });
   assert.equal(t.view.z, 1);
   assert.equal(t.frames.length, 1);

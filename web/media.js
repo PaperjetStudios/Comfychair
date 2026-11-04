@@ -211,6 +211,8 @@ export function clipUrl(v) {
   if (v.generation != null) return S.history.get(v.generation)?.outputs[v.index || 0]?.url || null;
   return v.media ? `/files/media/${encodeURIComponent(v.media)}` : null;
 }
+// where a timeline item (video.js / sound.js items[]) plays: its source's current url, else the one it was saved with
+export const itemUrl = (it) => (it ? clipUrl(it.src) || it.url || null : null);
 export function clipLabel(v) {
   if (!v) return 'none';
   if (v.generation != null) { const g = S.history.get(v.generation); return g ? genLabel(g) : `#${v.generation} (not loaded)`; }

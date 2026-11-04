@@ -39,3 +39,39 @@ export function menuSpot(x, y, w, h, W, H, edge = 4) {
 export function cropShapeMenu(aspects, current) {
   return [aspects.map(([label, aspect]) => ({ id: label, label, aspect, on: aspect === (current ?? null) }))];
 }
+
+// ---- the table's frames: the same kind of menu, for a stack of frames (table.js; tests/table_stack.test.mjs) ----
+// What Arrange offers (the table bar's Arrange ▾ shows all of it; the frame menu's Align ▸, Distribute ▸ and Same size ▸
+// show a part each). Everything needs two or more frames selected.
+export function frameArrangeMenu() {
+  return {
+    align: [{ id: 'align:left', label: 'Left edges' }, { id: 'align:hcenter', label: 'Centres across' }, { id: 'align:right', label: 'Right edges' },
+      { id: 'align:top', label: 'Top edges' }, { id: 'align:vcenter', label: 'Centres down' }, { id: 'align:bottom', label: 'Bottom edges' }],
+    distribute: [{ id: 'spread:x', label: 'Even gaps across' }, { id: 'spread:y', label: 'Even gaps down' },
+      { id: 'centres:x', label: 'Even centres across' }, { id: 'centres:y', label: 'Even centres down' }],
+    tidy: [{ id: 'tidy:row', label: 'Side by side' }, { id: 'tidy:column', label: 'Stacked' }, { id: 'tidy:grid', label: 'Grid' }],
+    size: [{ id: 'size:w', label: 'Same width' }, { id: 'size:h', label: 'Same height' }, { id: 'size:both', label: 'Same size' },
+      { id: 'size:largest', label: 'Same size as the largest' }],
+  };
+}
+
+// s: { selected, openable (one frame that opens), grouped (one of them is in a group), hidden (all of them hidden), locked (all locked), extra: [[item]] }
+// extra: other modules' groups (table:menu), before Delete. An item with `sub` opens that part of frameArrangeMenu.
+export function frameMenu(s) {
+  const n = s.selected;
+  if (!n) return [];
+  const groups = [
+    [{ id: 'open', label: 'Open', keys: 'Enter', disabled: !s.openable }, { id: 'rename', label: 'Rename', disabled: n !== 1 }],
+    [{ id: 'duplicate', label: 'Duplicate', keys: 'Ctrl+J' },
+      n > 1 ? { id: 'group', label: 'Group', keys: 'Ctrl+G' } : null,
+      s.grouped ? { id: 'ungroup', label: 'Ungroup', keys: 'Ctrl+Shift+G' } : null],
+    [{ id: 'hide', label: s.hidden ? 'Show' : 'Hide', keys: 'H' }, { id: 'lock', label: s.locked ? 'Unlock' : 'Lock', keys: 'L' }],
+    [{ id: 'front', label: 'Bring to front', keys: 'Ctrl+Shift+]' }, { id: 'forward', label: 'Bring forward', keys: 'Ctrl+]' },
+      { id: 'backward', label: 'Send backward', keys: 'Ctrl+[' }, { id: 'back', label: 'Send to back', keys: 'Ctrl+Shift+[' }],
+    [{ id: 'align', label: 'Align ▸', sub: 'align', disabled: n < 2 }, { id: 'distribute', label: 'Distribute ▸', sub: 'distribute', disabled: n < 2 },
+      { id: 'sameSize', label: 'Same size ▸', sub: 'size', disabled: n < 2 }, { id: 'size', label: 'Size and MP…', disabled: n !== 1 }],
+    ...(s.extra || []),
+    [{ id: 'delete', label: n > 1 ? `Delete ${n}` : 'Delete', keys: 'Del', danger: true, disabled: !!s.locked }],
+  ];
+  return groups.map((g) => g.filter(Boolean)).filter((g) => g.length);
+}

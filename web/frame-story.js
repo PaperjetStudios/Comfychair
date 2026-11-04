@@ -248,7 +248,7 @@ async function reconcile() {
   }
   // the rows laid again (not while a frame is open or being dragged: it would move under the hand)
   if (!isLive() && !FS.down) {
-    const pos = R.storyLayout(P, list, { x0: Math.round(origin.x), y0: Math.round(origin.y) });
+    const pos = R.storyLayout(P, M.shown(list), { x0: Math.round(origin.x), y0: Math.round(origin.y) });   // (a hidden frame keeps its place)
     for (const f of list) {
       const p = pos.get(f.id);
       if (p && (f.x !== p.x || f.y !== p.y)) { f.x = p.x; f.y = p.y; table = true; }
