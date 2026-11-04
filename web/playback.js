@@ -134,12 +134,18 @@ export function keysHelp({ step, area = null, keys = false }) {
     .filter(Boolean).join(' · ');
 }
 
-// The player's keys while active() (its tab is open and nothing is being typed in). more(e): the tab's own keys.
-export function playKeys(active, tpOf, more = () => ({})) {
+// The player's keys while active() (its tab is open and nothing is being typed in). more(e): the tab's own keys;
+// combos(e): the tab's Ctrl / Meta keys, a map by lower-cased key (nothing else runs while Ctrl or Meta is held).
+export function playKeys(active, tpOf, more = () => ({}), combos = () => ({})) {
   document.addEventListener('keydown', (e) => {
     const tp = tpOf();
     if (e.defaultPrevented || !tp || !active() || document.querySelector('.tab.active[aria-busy=true]') ||
-      ownsKey(e) || e.ctrlKey || e.metaKey) return;
+      ownsKey(e)) return;
+    if (e.ctrlKey || e.metaKey) {   // the tab's Ctrl / Meta combos (undo, copy, ...), keyed by the lower-cased key
+      const fn = combos(e)[e.key.toLowerCase()];
+      if (fn) { e.preventDefault(); fn(); }
+      return;
+    }
     const range = tp.area?.keyFn(e);   // the work area: I / O, Shift+I / Shift+O, Alt+X
     if (range) { e.preventDefault(); if (e.shiftKey) tp.stop(); range(); tp.update(); return; }
     const fn = {

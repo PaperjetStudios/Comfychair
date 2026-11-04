@@ -70,3 +70,41 @@ test('a submenu opens beside its item, flips left at the right edge and moves up
   assert.deepEqual(subSpot({ left: 800, right: 990, top: 750 }, 200, 100, 1000, 800), { left: 600, top: 696, flipped: true });
   assert.deepEqual(subSpot({ left: 2, right: 150, top: 10 }, 300, 100, 320, 800), { left: 4, top: 10, flipped: true });
 });
+
+// ---- the timeline's menus ----
+import { clipMenu, keyMenu, rulerMenu, trackMenu } from '../web/layer-menu.js';
+
+test('clip menu: clipboard, split, delete, selecting; Paste only with something copied', () => {
+  const m = clipMenu({ n: 1, canPaste: true, canSplit: true, locked: false, hasKeys: false, kind: 'video' });
+  assert.deepEqual(ids(m), [['cut', 'copy', 'paste', 'duplicate'], ['split', 'crossfade'], ['rippleDelete', 'delete'], ['selectTrack', 'selectAfter']]);
+  assert.ok(!clipMenu({ n: 1, kind: 'video' }).flat().some((i) => i.id === 'paste'));
+  assert.equal(clipMenu({ n: 1, canSplit: false, kind: 'video' }).flat().find((i) => i.id === 'split').disabled, true);
+});
+test('clip menu: several clips, sound clips, nothing picked, locked', () => {
+  const several = clipMenu({ n: 3, canSplit: true, kind: 'video' }).flat();
+  assert.equal(several.find((i) => i.id === 'delete').label, 'Delete 3');
+  assert.ok(!several.some((i) => i.id === 'crossfade'));
+  assert.ok(!clipMenu({ n: 1, kind: 'audio' }).flat().some((i) => i.id === 'crossfade'));
+  assert.deepEqual(ids(clipMenu({ n: 0, canPaste: true })), [['paste'], ['selectTrack', 'selectAfter']]);
+  assert.ok(clipMenu({ n: 1, locked: true, kind: 'video' }).flat().find((i) => i.id === 'delete').disabled);
+});
+test('track menu: Hide is for video; Remove only when empty and not the last of its kind', () => {
+  const v = trackMenu({ kind: 'video', locked: true, empty: true, only: false }).flat();
+  assert.equal(v.find((i) => i.id === 'lock').label, 'Unlock');
+  assert.ok(v.some((i) => i.id === 'hide'));
+  assert.ok(!v.find((i) => i.id === 'remove').disabled);
+  assert.ok(!trackMenu({ kind: 'audio' }).flat().some((i) => i.id === 'hide'));
+  assert.ok(trackMenu({ kind: 'audio', empty: false }).flat().find((i) => i.id === 'remove').disabled);
+  assert.ok(trackMenu({ kind: 'audio', empty: true, only: true }).flat().find((i) => i.id === 'remove').disabled);
+  assert.equal(trackMenu({ kind: 'video', solo: true }).flat().find((i) => i.id === 'solo').on, true);
+});
+test('ruler menu: marker and work area items appear only when they apply', () => {
+  assert.deepEqual(ids(rulerMenu({})), [['addMarker'], ['areaStart', 'areaEnd']]);
+  assert.deepEqual(ids(rulerMenu({ marker: true, hasRange: true })), [['addMarker', 'renameMarker', 'removeMarker'], ['areaStart', 'areaEnd', 'areaClear']]);
+});
+test('key menu: Ease opens the names it is given', () => {
+  const m = keyMenu({ n: 2, canPaste: true, eases: ['linear', 'ease-in'] });
+  assert.deepEqual(ids(m), [['copy', 'paste', 'delete'], ['ease']]);
+  assert.deepEqual(m[1][0].subItems.map((i) => i.label), ['linear', 'ease-in']);
+  assert.deepEqual(ids(keyMenu({ n: 0, canPaste: true, eases: ['linear'] })), [['paste']]);
+});

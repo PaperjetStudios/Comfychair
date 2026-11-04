@@ -82,3 +82,57 @@ export function frameMenu(s) {
   ];
   return groups.map((g) => g.filter(Boolean)).filter((g) => g.length);
 }
+
+// ---- the timeline's menus (Video and Sound; tests/layer_menu.test.mjs). Same shape; what doesn't apply isn't listed. ----
+// s: { n (clips picked), canPaste, canSplit (the playhead is inside a picked clip), locked, hasKeys, kind }
+export function clipMenu(s) {
+  const n = s.n || 0;
+  const groups = [
+    [n ? { id: 'cut', label: 'Cut', keys: 'Ctrl+X', disabled: !!s.locked } : null,
+      n ? { id: 'copy', label: 'Copy', keys: 'Ctrl+C' } : null,
+      s.canPaste ? { id: 'paste', label: 'Paste', keys: 'Ctrl+V', disabled: !!s.locked } : null,
+      n ? { id: 'duplicate', label: 'Duplicate', keys: 'Ctrl+J', disabled: !!s.locked } : null],
+    [n ? { id: 'split', label: 'Split at playhead', keys: 'S', disabled: !s.canSplit || !!s.locked } : null,
+      n === 1 && s.kind !== 'audio' ? { id: 'crossfade', label: 'Cross-fade with the one before', disabled: !!s.locked } : null],
+    [n ? { id: 'rippleDelete', label: 'Ripple delete', keys: 'Shift+Delete', disabled: !!s.locked } : null,
+      n ? { id: 'delete', label: n > 1 ? `Delete ${n}` : 'Delete', keys: 'Delete', danger: true, disabled: !!s.locked } : null],
+    [{ id: 'selectTrack', label: 'Select all on this track' }, { id: 'selectAfter', label: 'Select everything after the playhead' }],
+  ];
+  return groups.map((g) => g.filter(Boolean)).filter((g) => g.length);
+}
+
+// s: { kind ('video' | 'audio'), locked, solo, muted, hidden, empty, only (the only track of its kind) }
+export function trackMenu(s) {
+  const groups = [
+    [{ id: 'rename', label: 'Rename' }, { id: 'lock', label: s.locked ? 'Unlock' : 'Lock' }],
+    [{ id: 'solo', label: 'Solo', on: !!s.solo }, { id: 'mute', label: 'Mute', on: !!s.muted },
+      s.kind === 'video' ? { id: 'hide', label: 'Hide', on: !!s.hidden } : null],
+    [{ id: 'addVideo', label: 'Add video track' }, { id: 'addAudio', label: 'Add audio track' },
+      { id: 'remove', label: 'Remove track', danger: true, disabled: !s.empty || !!s.only }],
+  ];
+  return groups.map((g) => g.filter(Boolean)).filter((g) => g.length);
+}
+
+// s: { marker (a marker is under the press), hasRange (a work area is set) }
+export function rulerMenu(s) {
+  const groups = [
+    [{ id: 'addMarker', label: 'Add marker here', keys: 'M' },
+      s.marker ? { id: 'renameMarker', label: 'Rename marker' } : null,
+      s.marker ? { id: 'removeMarker', label: 'Remove marker', danger: true } : null],
+    [{ id: 'areaStart', label: 'Set work area start here' }, { id: 'areaEnd', label: 'Set work area end here' },
+      s.hasRange ? { id: 'areaClear', label: 'Clear work area' } : null],
+  ];
+  return groups.map((g) => g.filter(Boolean)).filter((g) => g.length);
+}
+
+// s: { n (keys picked), canPaste, eases: [names] }; an item with `sub` opens that list (`sub: 'ease'`, items in `subItems`)
+export function keyMenu(s) {
+  const n = s.n || 0, eases = s.eases || [];
+  const groups = [
+    [n ? { id: 'copy', label: 'Copy', keys: 'Ctrl+C' } : null,
+      s.canPaste ? { id: 'paste', label: 'Paste', keys: 'Ctrl+V' } : null,
+      n ? { id: 'delete', label: n > 1 ? `Delete ${n}` : 'Delete', keys: 'Delete', danger: true } : null],
+    [n && eases.length ? { id: 'ease', label: 'Ease ▸', sub: 'ease', subItems: eases.map((e) => ({ id: `ease:${e}`, label: e })) } : null],
+  ];
+  return groups.map((g) => g.filter(Boolean)).filter((g) => g.length);
+}
