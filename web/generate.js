@@ -1,5 +1,5 @@
 import {
-  $, h, store, clamp, clamp01, clone, cycleIndex, api, toast, undoToast, openOverlay, openSheet, closeSheet, sheetStillOpen, nameSheet,
+  $, h, store, clamp, clamp01, clone, cycleIndex, api, toast, undoToast, openOverlay, openSheet, closeSheet, nameSheet,
   button, iconBtn, actions, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider, withHelp,
   insertAtCursor, toggle, textArea, seedField as uiSeedField, choiceField, chips, chip,
 } from './ui.js';
@@ -17,10 +17,9 @@ import { clipInput } from './vfield.js';
 import { PREFS } from './prefs.js';
 import { FULL, templateAspect } from './editor.js';
 import { MASK_DEFAULT, openMaskPainter } from './maskpaint.js';
-import { loraPicker } from './lora-pick.js';
+import { loraStack } from './lora-pick.js';
 import { icon } from './icons.js';
 import { kreaTag } from './cast.js';
-import { openCivitai } from './civitai.js';
 import { openDescribe, openImprove, tplTarget } from './prompthelp.js';
 
 // ---------------------------------------------------------------------------
@@ -131,7 +130,7 @@ let basicsPane$ = null;
 // the template's order, ahead of the model. (To be configurable in Settings.)
 export const GROUP_ORDER = [
   /^(prompt|edit|shot|negative|subject|caption|text)\b/i,
-  /image|picture|photo|video|clip|reference|character|front|source|mask|boxes|people|cut out/i,
+  /image|picture|photo|video|clip|reference|character|front|source|mask|boxes|people|cut out|sound/i,
   /lora/i,
   /control|denoise|strength|upscale|colou?r|look/i,
   /size|resolution|length|duration|layout|frames/i,
@@ -1016,56 +1015,9 @@ function autoLoraFolder(folders) {
 }
 
 function loraField(f) {
-  const list = h('div', { class: 'stack' });
-  const rows = () => S.values[f.key] || [];
-  const save = (arr) => { setVal(f.key, arr); draw(); };
-  const folders = [...new Set(f.options.filter((o) => o.includes('/')).map((o) => o.split('/')[0]))].sort();
-  const auto = autoLoraFolder(folders);
-  const folderChips = h('div');
-  const current = () => {
-    const mode = S.loraFolder[f.key] ?? 'auto';
-    return mode === 'auto' ? auto : mode === 'all' ? null : mode;
-  };
-  const drawChips = () => {
-    const mode = S.loraFolder[f.key] ?? 'auto';
-    folderChips.replaceChildren(chips([['auto', auto ? `Auto · ${auto}` : 'Auto · all'], ['all', 'All'], ...folders.map((d) => [d, d])], mode,
-      (k) => { S.loraFolder[f.key] = k; persist(); draw(); }, { cls: 'folder-chips' }));
-  };
-  const civitai = (q = '') => openCivitai({ q, family: current() || auto || folders[0], folders, onWord: addToPrompt,
-    onDownloaded: () => loadTemplates(true),
-    onAdd: ({ name }) => {   // into an empty row if there is one, else a new row
-      const a = [...(S.values[f.key] || [])];
-      if (a.some((l) => l.name === name)) return false;
-      const i = a.findIndex((l) => !l.name);
-      if (i >= 0) a[i] = { ...a[i], name }; else a.push({ name, strength: 1, enabled: true });
-      setVal(f.key, a); renderFields();
-    } });
-  const draw = () => {
-    const folder = current();
-    const opts = folder ? f.options.filter((o) => o.startsWith(folder + '/')) : f.options;
-    list.replaceChildren(...rows().map((l, i) => {
-      const sel = loraPicker({ options: opts, value: l.name || '', aria: 'LoRA', label: (o) => (folder && o.startsWith(`${folder}/`) ? o.slice(folder.length + 1) : o),
-        empty: `— choose LoRA${folder ? ` (${opts.length} in ${folder}/)` : ''} —`, others: f.options.filter((o) => !opts.includes(o)),
-        shown: !l.name ? null : !f.options.includes(l.name) ? `${l.name} (missing)` : !opts.includes(l.name) ? `${l.name} (other folder)` : null,
-        onPick: (name) => { const a = [...rows()]; a[i] = { ...a[i], name }; save(a); }, onCivitai: civitai });
-      const range = numSlider({ min: -2, max: 2, step: 0.05, value: l.strength ?? 1, digits: 2, label: 'Strength' });
-      range.addEventListener('change', () => { const a = [...rows()]; a[i] = { ...a[i], strength: parseFloat(range.value) }; setVal(f.key, a); });
-      const on = h('input', { type: 'checkbox', checked: l.enabled !== false, title: 'Enabled' });
-      on.addEventListener('change', () => { const a = [...rows()]; a[i] = { ...a[i], enabled: on.checked }; save(a); });
-      return h('div', { class: 'lora-row' + (l.enabled === false ? ' off' : '') },
-        h('div', { class: 'top' }, on, sel,
-          l.name ? iconBtn('LoRA info from Civitai', 'i', () => openLoraInfo(l.name), { class: 'icon-btn info-btn' }) : null,
-          iconBtn('Remove LoRA', '✕', () => save(rows().filter((_, j) => j !== i)))),
-        h('div', { class: 'row lora-strength' }, h('span', { class: 'hint' }, 'Strength'), range));
-    }));
-  };
-  drawChips(); draw();
-  return field(['LoRA stack', h('span', {}, f.options.length ? `${f.options.length} available` : 'none found')],
-    folders.length ? folderChips : null,
-    list,
-    h('div', { class: 'row wrap' },
-      button('+ Add LoRA', () => save([...rows(), { name: '', strength: 1, enabled: true }]), { cls: 'small add-btn' }),
-      button('⤓ Civitai…', () => civitai(), { cls: 'small', title: 'Find and download LoRAs on Civitai' })));
+  return loraStack({ options: f.options, get: () => S.values[f.key] || [], set: (rows) => setVal(f.key, rows),
+    mode: () => S.loraFolder[f.key] ?? 'auto', setMode: (k) => { S.loraFolder[f.key] = k; persist(); }, auto: autoLoraFolder,
+    onWord: addToPrompt, onDownloaded: () => loadTemplates(true), onAdded: renderFields });
 }
 
 function fieldEl(f) {
@@ -1319,34 +1271,6 @@ function openBoxEditor(f) {
   const close = openOverlay(overlay, { dirty: () => JSON.stringify(clean()) !== start, ask: 'Throw away your changes to the boxes?',
     onClose: () => ro.disconnect() });
   draw();
-}
-
-// ---------------------------------------------------------------------------
-// LoRA info from Civitai (looked up by the file's hash through rgthree-comfy)
-// ---------------------------------------------------------------------------
-async function openLoraInfo(name) {
-  const seq = openSheet(h('h3', {}, name.split('/').pop()),
-    placeholder('Looking it up on Civitai… The first lookup hashes the file, which can take a little while.'));
-  let r;
-  try { r = await api(`/api/lora-info?name=${encodeURIComponent(name)}`, { timeout: 240000 }); } catch (e) {
-    if (sheetStillOpen(seq)) openSheet(h('h3', {}, name.split('/').pop()), note(e.message, 'err'));
-    return;
-  }
-  if (!sheetStillOpen(seq)) return;  // closed, or something else opened, while it was looking
-  const textOf = (html) => new DOMParser().parseFromString(html || '', 'text/html').body.textContent.trim();
-  const words = r.trained_words.map((w) => chip(w, (e) => { addToPrompt(w); e.target.classList.add('added'); }, { title: 'Add to prompt' }));
-  openSheet(h('h3', {}, r.name),
-    !r.found ? note('Not found on Civitai (the file may be private, renamed from elsewhere, or not uploaded there).') : null,
-    h('table', { class: 'params' },
-      h('tr', {}, h('td', {}, 'File'), h('td', {}, r.file)),
-      r.base_model ? h('tr', {}, h('td', {}, 'Base model'), h('td', {}, r.base_model)) : null,
-      r.link ? h('tr', {}, h('td', {}, 'Civitai'), h('td', {}, h('a', { href: r.link, target: '_blank', rel: 'noopener' }, 'Open model page'))) : null),
-    words.length ? field(['Trigger words', h('span', {}, 'tap to add to the prompt')], h('div', { class: 'chips' }, words)) : null,
-    r.description ? h('details', { class: 'desc' }, h('summary', {}, 'Description'), h('div', { class: 'hint pre' }, textOf(r.description))) : null,
-    r.media.length ? h('div', { class: 'grid gallery' }, r.media.map((m) =>
-      h('div', { class: 'card' }, h('div', { class: 'media' }, m.type === 'video'
-        ? h('video', { src: m.url, muted: true, loop: true, playsInline: true, controls: true, preload: 'metadata' })
-        : h('img', { src: m.url, loading: 'lazy', alt: '' }))))) : null);
 }
 
 // Append text to the template's main prompt (the first multi-line text field).

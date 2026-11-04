@@ -14,6 +14,7 @@ log = logging.getLogger("comfydeck.comfy")
 VIDEO_NODES = ("VHS_VideoCombine", "SaveVideo", "CreateVideo", "SaveWEBM", "SaveAnimatedWEBP")
 
 
+FREE_NODE = "DeckFreeVRAM"
 MODEL_INPUTS = ("unet_name", "ckpt_name", "clip_name", "clip_name1", "clip_name2", "clip_name3", "model_name", "mmaudio_model")
 
 
@@ -21,6 +22,11 @@ def models_in(workflow: dict) -> frozenset:
     """The big model files a workflow loads (diffusion models, checkpoints, text encoders), not LoRAs or VAEs."""
     return frozenset(v for n in workflow.values() if isinstance(n, dict)
                      for k, v in (n.get("inputs") or {}).items() if k in MODEL_INPUTS and isinstance(v, str) and v)
+
+
+def wants_whole_card(workflow: dict) -> bool:
+    """A run that needs the card empty even after a run of the same models: Trellis 2 peaks around 10 GB of the 12."""
+    return any(m.startswith("trellis_2") for m in models_in(workflow))
 
 
 def is_video(workflow: dict) -> bool:
@@ -99,6 +105,7 @@ class Comfy:
         self._ws = None
         self._last_msg = 0.0  # loop time of the last websocket message
         self._checks = set()
+        self.freeing = set()   # prompt ids of FREE_NODE runs not yet done (the Queue panel names them)
         self._failed = {}   # held runs ComfyUI wouldn't take: prompt id -> what it said
         self.on_held_failed = None   # async (prompt id, message): set by main, marks the run's row
 
@@ -226,7 +233,11 @@ class Comfy:
             await self.on_held_failed(pid, msg)
 
     async def _send(self, workflow: dict, body: dict) -> dict:
-        await self._free_on_model_change(workflow)
+        if wants_whole_card(workflow):
+            await self._free_card_now()
+            self._last_models = models_in(workflow)
+        else:
+            await self._free_on_model_change(workflow)
         since = asyncio.get_running_loop().time()
         r = await self.http.post("/prompt", json=body)
         if r.status_code < 400:
@@ -259,6 +270,56 @@ class Comfy:
             except httpx.HTTPError:
                 pass
         self._last_models = models
+
+    # Emptying the card at a set place in the queue: a run of its own (comfy_nodes/deck_vram), which also stops the idle comfy_env
+    # workers /free can't reach. /free alone happens once, after the job running when it arrives, so it misses runs queued together.
+    @staticmethod
+    def _free_workflow() -> dict:
+        return {"1": {"class_type": FREE_NODE, "inputs": {"nonce": uuid.uuid4().hex}}}
+
+    async def _unload(self):
+        await self.http.post("/free", json={"unload_models": True, "free_memory": True})
+
+    async def _free_card_now(self):
+        """On the way to ComfyUI: straight before the run being sent. Without the node (not linked in, or no restart yet), /free."""
+        pid = str(uuid.uuid4())
+        try:
+            r = await self.http.post("/prompt", json={"prompt": self._free_workflow(), "prompt_id": pid, "client_id": self.client_id})
+            if r.status_code < 400:
+                self._forget_when_done(pid)
+                return
+            log.warning("%s wasn't accepted (is comfy_nodes/deck_vram linked in?): asking /free instead", FREE_NODE)
+            await self._unload()
+        except httpx.HTTPError:
+            pass
+
+    async def free_card(self) -> dict:
+        """The Free VRAM button: in the queue and the card's line like any run, so nothing running or waiting is cut short."""
+        try:
+            r = await self.queue(self._free_workflow())
+        except ComfyError:
+            await self._unload()
+            return {"workers": False}
+        self._forget_when_done(r["prompt_id"])
+        self._last_models = None
+        return {"workers": True}
+
+    def _forget_when_done(self, prompt_id: str):
+        """ComfyUI keeps no history of it, as with any run."""
+        async def wait():
+            try:
+                for _ in range(7200):
+                    await asyncio.sleep(2)
+                    if prompt_id in await self.history(prompt_id):
+                        return await self.forget(prompt_id)
+            except httpx.HTTPError:
+                pass
+            finally:
+                self.freeing.discard(prompt_id)
+        self.freeing.add(prompt_id)
+        task = asyncio.create_task(wait())
+        self._checks.add(task)
+        task.add_done_callback(self._checks.discard)
 
     async def history(self, prompt_id: str) -> dict:
         if prompt_id in self._failed:

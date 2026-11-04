@@ -111,3 +111,70 @@ class ControlTemplates(unittest.TestCase):
             out = tpl.apply(wf, {"20.image": "map.png", "21.image": "", "22.image": "", "23.image": ""})
             self.assertIn("20", out)
             self.assertNotIn("21", out)
+
+    def test_krea_control_follows_the_map_and_keeps_loras(self):
+        for kind, mode, norm in (("depth", "grayscale", "per_image_minmax"), ("anything", "rgb", "none")):
+            wf = load(f"deck-krea2-{kind}-control")
+            self.assertEqual(tpl.family(f"deck-krea2-{kind}-control", wf), "Krea")
+            self.assertEqual((wf["30"]["inputs"]["channel_mode"], wf["30"]["inputs"]["normalize"]), (mode, norm))
+            self.assertEqual(wf["7"]["inputs"]["width"], ["15", 0])   # the output takes the map's size
+            out = tpl.apply(wf, {"20.image": "map.png", "31.strength": 0.7, "31.end_percent": 0.6,
+                                 "4.__loras": [{"name": "krea/style.safetensors", "strength": 0.5}]})
+            self.assertEqual(out["31"]["inputs"]["strength"], 0.7)
+            self.assertEqual(out["31"]["inputs"]["end_percent"], 0.6)
+            self.assertEqual(out["8"]["inputs"]["model"], ["32", 0])
+            self.assertEqual(out[out["31"]["inputs"]["model"][0]]["inputs"]["lora_name"], "krea/style.safetensors")
+            out = tpl.apply(wf, {"20.image": "map.png", "4.__loras": []})   # no style LoRA: the Control LoRA still loads
+            self.assertEqual(out["31"]["inputs"]["model"], ["1", 0])
+            self.assertEqual(out["32"]["inputs"]["control_latent"], ["30", 0])
+
+
+class ControlVideoSound(unittest.TestCase):
+    def test_ltx_moves_to_the_sound_and_keeps_it(self):
+        out = tpl.apply(load("deck-ltx-ctrl2v"), {"src.video": "c.mp4", "snd.audio_file": "line.wav", "img.image": ""})
+        self.assertEqual(out["av"]["inputs"]["audio_latent"], ["afrz", 0])
+        self.assertEqual(out["vid"]["inputs"]["audio"], ["scut", 0])
+        self.assertEqual(out["nf"]["inputs"]["values.c"], ["snd", 1])
+
+    def test_ltx_without_a_sound_makes_its_own_as_before(self):
+        out = tpl.apply(load("deck-ltx-ctrl2v"), {"src.video": "c.mp4", "snd.audio_file": "", "img.image": ""})
+        for gone in ("snd", "scut", "aenc", "afrz"):
+            self.assertNotIn(gone, out)
+        self.assertEqual(out["av"]["inputs"]["audio_latent"], ["alat", 0])
+        self.assertEqual(out["vid"]["inputs"]["audio"], ["adec", 0])
+        self.assertEqual(out["nf"]["inputs"]["expression"], "floor((min(a, b*24+1)-1)/8)*8+1")
+        self.assertNotIn("values.c", out["nf"]["inputs"])
+
+    def test_h3_hold_templates_change_only_shift_and_reference_size(self):
+        for base, chain_end in (("deck-h3-ref2v", "60"), ("deck-h3-ctrl2v", "51")):
+            a, b = load(base), load(f"{base}-hold")
+            self.assertEqual(b["60"]["inputs"], {"model": ["30", 0], "shift_video": 6.0, "shift_audio": 3.0})
+            self.assertEqual(b["7"]["inputs"]["ref_image_size"], "max")
+            self.assertEqual(b["11"]["inputs"]["model"], [chain_end, 0])
+            self.assertEqual(b["10"]["inputs"]["model"], [chain_end, 0])
+            # Everything else follows the base, so a comparison run changes only these settings
+            for wf in (a, b):
+                wf.pop("60", None)
+                wf["7"]["inputs"].pop("ref_image_size")
+                wf["15"]["inputs"].pop("filename_prefix")
+                for n in ("10", "11", "51"):
+                    if n in wf:
+                        wf[n]["inputs"].pop("model")
+            self.assertEqual(a, b)
+
+    def test_h3_hold_shift_is_a_setting_that_reaches_the_run(self):
+        for name in ("deck-h3-ref2v-hold", "deck-h3-ctrl2v-hold"):
+            keys = [f["key"] for f in tpl.describe(tpl.get(TEMPLATES, name), None)["fields"]]
+            self.assertIn("60.shift_video", keys)
+            self.assertIn("60.shift_audio", keys)
+        out = tpl.apply(load("deck-h3-ctrl2v-hold"), {"52.video": "c.mp4", "60.shift_video": 12.0})
+        self.assertEqual(out["60"]["inputs"]["shift_video"], 12.0)
+        self.assertEqual(out["51"]["inputs"]["model"], ["60", 0])
+        self.assertEqual(out["11"]["inputs"]["model"], ["51", 0])
+
+    def test_h3_sound_references_close_up_when_empty(self):
+        out = tpl.apply(load("deck-h3-ctrl2v"), {"52.video": "c.mp4", "24.audio_file": "", "25.audio_file": "v.wav"})
+        self.assertNotIn("24", out)
+        self.assertEqual(out["7"]["inputs"]["ref_audios.ref_audio_0"], ["25", 0])
+        self.assertNotIn("ref_audios.ref_audio_1", out["7"]["inputs"])
+

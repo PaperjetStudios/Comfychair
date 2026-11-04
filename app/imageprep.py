@@ -74,6 +74,36 @@ def prep(data: bytes, max_mp: float = 0, multiple: int = 8, crop: dict | None = 
     return out.getvalue(), im.size[0], im.size[1]
 
 
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def _without_png_text(data: bytes) -> bytes:
+    """A PNG's bytes without its text chunks (ComfyUI writes the prompt and workflow there), as prep's re-save leaves them out."""
+    out, i = [data[:8]], 8
+    while i + 12 <= len(data):
+        end = i + 12 + int.from_bytes(data[i:i + 4], "big")
+        if data[i + 4:i + 8] not in (b"tEXt", b"iTXt", b"zTXt"):
+            out.append(data[i:end])
+        i = end
+    return b"".join(out)
+
+
+def ready_png(path: Path, max_mp: float = 0, multiple: int = 8, crop: dict | None = None):
+    """(png_bytes, width, height) when a file is already what frame_from_image and prep would give, or None. Encoding a
+    2 MP picture twice over takes about 1.5 s, on every run an Image tool lands."""
+    if crop:
+        return None
+    with Image.open(path) as im:
+        w, h = im.size
+        if (im.format != "PNG" or im.mode not in ("RGB", "RGBA") or getattr(im, "n_frames", 1) > 1
+                or im.getexif().get(0x0112, 1) != 1   # (turned by its EXIF)
+                or (max_mp and w * h > max_mp * 1_000_000)
+                or (multiple > 1 and (w % multiple or h % multiple))):
+            return None
+    data = Path(path).read_bytes()
+    return (_without_png_text(data), w, h) if data.startswith(_PNG_SIGNATURE) else None
+
+
 def size_of(data: bytes) -> tuple[int, int]:
     """(width, height) as prep sees it: turned by its EXIF."""
     return ImageOps.exif_transpose(Image.open(io.BytesIO(data))).size

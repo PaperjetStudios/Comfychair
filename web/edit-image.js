@@ -1,6 +1,14 @@
 // The Edit tool's words and numbers, with no DOM (tests/edit_image.test.mjs): what the model is told for one picture, its seed in a batch,
 // and the turbo model's step list.
 
+// What the model sees where a picture is see-through: it is given colour only, so without this it would see whatever colour the clear pixels hide
+export const NEUTRAL_GREY = '#808080';
+// any pixel see-through, in canvas RGBA data (below 240, as in shapeOf: Qwen's own pictures come back with noisy alpha, 248-255)
+export function anyClear(rgba) {
+  for (let i = 3; i < rgba.length; i += 4) if (rgba[i] < 240) return true;
+  return false;
+}
+
 const KEEP = 'Change only what is asked. Keep everything else exactly as it is: the same framing, pose, details and background.';
 
 // The prompt, what else you said, and the sentence that holds the rest still. {layer} becomes the layer's name, so one prompt can say something different for each

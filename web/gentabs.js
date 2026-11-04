@@ -173,14 +173,12 @@ function pick(id, over) {
 }
 
 // ---- the tabs ----
-const mount = h('div', { id: 'genTabs', class: 'gen-tabs' });
-$('.tpl-row').before(mount);
 // Keep prompt: on, a template change carries the prompt, pictures, size and fixed seed over (see carry)
 const keepBtn = toggle('Keep the prompt and pictures when the template changes', keepOn(), (on) => store.set('deck.gen.keepOnSwitch', on));
 keepBtn.classList.add('keep-toggle');
 keepBtn.title = 'On: a new template keeps the prompt, negative prompt, pictures, size and a fixed seed. Off: the tab starts fresh.';
 $('.tpl-row:not(.tpl-filter)').after(keepBtn);
-export const tabs = new TabSet({ kind: 'gen-tabs', mount, scope: 'project', newName: (n) => `Tab ${n}`,
+export const tabs = new TabSet({ kind: 'gen-tabs', host: $('#tab-generate'), scope: 'project', newName: (n) => `Tab ${n}`,
   adapter: { empty, load, dump, migrate: (p) => (p && p.v === 1 && p.template ? p : empty()) }, seed, onSwitch: () => updatePicker() });
 const baseStart = tabs.start.bind(tabs);
 tabs.start = async () => { await loadPresets(); return baseStart(); };   // presets first: the tab's values depend on them

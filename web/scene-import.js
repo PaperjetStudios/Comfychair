@@ -8,7 +8,7 @@
 // folder (POST /api/scene/asset); the layer only holds its URL.
 import * as THREE from './vendor/three.module.min.js';
 import { maxMpRow, resizeInput } from './media.js';
-import { blenderButton } from './blender.js';
+import { blenderButton, blenderSplatButton } from './blender.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { store, actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip, field, seg, info, rangeField, mediaCard, placeholder, iconBtn } from './ui.js';
 import { inputUrl, thumbUrl } from './core.js';
@@ -24,7 +24,7 @@ import {
   setPreviewLevel, setSharp, sharpOn
 } from './splat-levels.js';
 import {
-  GROWS, boxAround, boxBottomTo, fillFactor, keptShare, medianOf, pickAlong, reachOf, samplePoints, sameTrim, shapeMesh, standShift, trimBody, trimSphere
+  GROWS, boxAround, boxBottomTo, boxOn, fillFactor, keptShare, medianOf, pickAlong, reachOf, samplePoints, sameTrim, shapeMesh, standShift, trimBody, trimOn, trimSphere
 } from './splat-shape.js';
 import { LOOPS, RATES, DEFAULT_RATE, addFrame, frameCount, frameIndex, frameList, frameTrimOf, framesOnWhole, hasFrameKeys, removeFrame, sceneFrameShowing, shapeFor, swapFrames } from './splat-frames.js';
 
@@ -708,6 +708,7 @@ function itemSection(o) {
       ? button('Clean up in Blender…', () => openCleanup(o), { cls: 'small',
         title: 'Blender remeshes it into tidy quads, takes faces off, or smooths it, and adds the result as a new layer' }) : null,
     o.type === 'model' ? blenderButton(o.url, o.name) : null,
+    o.type === 'splat' ? blenderSplatButton(o, trimOn(o) || boxOn(o)) : null,
     o.type === 'model' ? h('div', { class: 'row wrap' },
       button('Rig it as a person', () => rigModel(o), { cls: 'small',
         title: 'Make It Animatable gives it the figure\'s skeleton, so poses, moves and mocap drive it' }),

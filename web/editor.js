@@ -147,7 +147,6 @@ export function templateAspect() {
 // composition, and a still of each kept beside it for the pickers.
 // ---------------------------------------------------------------------------
 const SEEDED = 'deck.editor.seeded';   // set once a tab has loaded: the old single-editor state then lives in the tabs
-const tabMount = h('div', { class: 'editor-tabs' });
 let tabs = null;
 registerUndo('editor', { undo: () => ED.paint?.undo(), redo: () => ED.paint?.redo() });   // (the painting's history: undo-dock.js)
 const ED = createEditor({
@@ -158,7 +157,7 @@ const ED = createEditor({
   name: () => tabs?.active?.name,
   beforeRender: () => { if (!tabs.started) tabs.start(); },
   newEdit: (payload) => tabs.createFrom(payload, 'layers'),
-  panelParts: (ed) => h('div', { class: 'panel-body' }, tabMount, ed.topRow(),
+  panelParts: (ed) => h('div', { class: 'panel-body' }, ed.topRow(),
     // (a mask being painted: its section first, with what to see and do; otherwise the panel order, app-wide)
     ed.layerList(), ed.E.sel?.maskOf ? ed.layerProps() : null, ed.paintProps(), ed.masksProps(), ed.inpaintProps(), ed.toolsProps(), ed.E.sel?.maskOf ? null : ed.layerProps(), ed.animProps(), ed.canvasProps(), ed.exportProps()),
 });
@@ -166,7 +165,7 @@ export const { E } = ED;
 export const persistEditor = () => ED.changed();
 export const renderEditor = () => ED.render();
 
-tabs = new TabSet({ kind: 'edit-tabs', mount: tabMount, host: $('#tab-editor'), newName: (n) => `Edit ${n}`, seed: () => (store.get(SEEDED, false) ? null : ED.dump()),
+tabs = new TabSet({ kind: 'edit-tabs', host: $('#tab-editor'), newName: (n) => `Edit ${n}`, seed: () => (store.get(SEEDED, false) ? null : ED.dump()),
   adapter: {
     empty: BLANK,
     dump: () => ED.dump(),

@@ -92,6 +92,14 @@ assert.equal(G.seeThrough(new Uint8ClampedArray([9, 9, 9, 252])), false);
   assert.ok(!G.pastEdge({ x: 0.2, y: 0.2, w: 0.5, h: 0.5 }));
   assert.ok(G.pastEdge({ x: -0.1, y: 0, w: 1.1, h: 1 }));
   assert.ok(G.pastEdge({ x: 0, y: 0, w: 1, h: 1.25 }));
+  const past = { crop: { x: -0.1, y: 0, w: 1.1, h: 1 } }, inside = { crop: { x: 0.1, y: 0, w: 0.5, h: 1 } }, other = {};
+  const at = (l, o = {}) => G.growFate({ l }, { cropping: true, sel: l, layers: [l, other], ...o });
+  assert.equal(G.growFate(null, { cropping: true, sel: past, layers: [past] }), null);
+  assert.equal(at(past), null);   // it waits for its button
+  assert.equal(at(past, { cropping: false }), 'undo');
+  assert.equal(at(past, { sel: other }), 'undo');
+  assert.equal(at(inside), 'clear');   // dragged back inside: a plain crop
+  assert.equal(at(past, { layers: [other] }), 'clear');
   assert.deepEqual(G.grownPicture({ x: -0.25, y: 0, w: 1.25, h: 1.5 }, 200, 100), { w: 250, h: 150, ix: 50, iy: -0 });
   assert.deepEqual(G.grownPicture({ x: 0.5, y: -0.5, w: 1, h: 1 }, 200, 100), { w: 200, h: 100, ix: -100, iy: 50 });
 }

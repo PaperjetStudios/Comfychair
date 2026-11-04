@@ -753,6 +753,15 @@ async def queue_state():
     return {**await comfy.queue_state(), "line": gpu.count()}   # line: the card's own, ComfyUI's queue doesn't show it
 
 
+@app.post("/api/queue/free")
+async def free_vram():
+    """Empty the card once what's running and waiting ahead of this is done: ComfyUI's models, its stored results, the idle workers."""
+    try:
+        return await comfy.free_card()
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"ComfyUI can't be reached: {e}")
+
+
 @app.post("/api/queue/cancel")
 async def cancel_queued(body: dict = Body(...)):
     pid = body.get("prompt_id")
@@ -1097,15 +1106,19 @@ async def generation_to_input(gid: int, body: dict = Body(default={})):
     out = g["outputs"][idx]
     path = output_file(g, out)
     which = body.get("frame", "last")
+    mp, multiple, crop = float(body.get("mp", 0)), int(body.get("multiple", 8)), body.get("crop")
     try:
-        if out["kind"] == "video":
-            raw = await asyncio.to_thread(imageprep.frame_from_video, path, which)
-        elif out["kind"] == "image":
-            raw = await asyncio.to_thread(imageprep.frame_from_image, path, which)
+        ready = await asyncio.to_thread(imageprep.ready_png, path, mp, multiple, crop) if out["kind"] == "image" else None
+        if ready:
+            png, w, h = ready
         else:
-            raise HTTPException(400, "That output isn't an image or video")
-        png, w, h = await asyncio.to_thread(imageprep.prep, raw, float(body.get("mp", 0)),
-                                            int(body.get("multiple", 8)), body.get("crop"))
+            if out["kind"] == "video":
+                raw = await asyncio.to_thread(imageprep.frame_from_video, path, which)
+            elif out["kind"] == "image":
+                raw = await asyncio.to_thread(imageprep.frame_from_image, path, which)
+            else:
+                raise HTTPException(400, "That output isn't an image or video")
+            png, w, h = await asyncio.to_thread(imageprep.prep, raw, mp, multiple, crop)
     except HTTPException:
         raise
     except Exception as e:
@@ -1305,7 +1318,7 @@ async def jobs():
         pos, pid, held = pos + 1, item["pid"], item.get("kind") == "comfy"
         g = db.get_by_prompt(pid)
         if not g:
-            active.append({"prompt_id": pid, "template": "(started outside ComfyChair)", "line": held, "status": "running" if pos == 0 and q.get("queue_running") else "queued"})
+            active.append({"prompt_id": pid, "template": "Freeing VRAM" if pid in comfy.freeing else "(started outside ComfyChair)", "line": held, "status": "running" if pos == 0 and q.get("queue_running") else "queued"})
             continue
         running = g["status"] == "running" or (pos == 0 and bool(q.get("queue_running")))
         active.append({**g, "status": "running" if running else "queued", "position": pos, "line": held,

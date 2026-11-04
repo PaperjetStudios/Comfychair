@@ -97,6 +97,68 @@ def wait(jid):
     raise AssertionError("job never ended")
 
 
+class FilesOfAVersion(unittest.TestCase):
+    """One version can hold several LoRAs (debokeh-lite and debokeh-strong); two versions can share a file name."""
+
+    def setUp(self):
+        shutil.rmtree(LORAS / "qwen", ignore_errors=True)
+        (LORAS / "qwen").mkdir()
+
+    def have(self, name, **side):
+        (LORAS / "qwen" / name).write_bytes(safetensors_bytes())
+        if side:
+            (LORAS / "qwen" / (name + cv.SIDECAR)).write_text(json.dumps(side))
+
+    def version(self, vid, *files):
+        return cv._version({"id": vid, "name": "v1", "files": [{"id": i, "name": n, "type": "Model", "sizeKB": 4} for i, n in files]},
+                           cv.downloaded_index())
+
+    def test_having_one_file_leaves_the_other_to_download(self):
+        self.have("debokeh-lite.safetensors", versionId=7, fileId=1)
+        v = self.version(7, (1, "debokeh-lite.safetensors"), (2, "debokeh-strong.safetensors"))
+        self.assertEqual(v["downloaded"], "qwen/debokeh-lite.safetensors")
+        self.assertEqual(v["files"][0]["downloaded"], "qwen/debokeh-lite.safetensors")
+        self.assertIsNone(v["files"][1]["downloaded"])
+
+    def test_both_files_are_seen(self):
+        self.have("debokeh-lite.safetensors", versionId=7, fileId=1)
+        self.have("debokeh-strong.safetensors", versionId=7, fileId=2)
+        v = self.version(7, (1, "debokeh-lite.safetensors"), (2, "debokeh-strong.safetensors"))
+        self.assertEqual([f["downloaded"] for f in v["files"]], ["qwen/debokeh-lite.safetensors", "qwen/debokeh-strong.safetensors"])
+
+    def test_another_versions_file_of_the_same_name_does_not_count(self):
+        self.have("style.safetensors", versionId=7, fileId=1)
+        v = self.version(8, (2, "style.safetensors"))
+        self.assertIsNone(v["downloaded"])
+        self.assertIsNone(v["files"][0]["downloaded"])
+
+    def test_a_kept_second_copy_is_found_by_its_ids(self):
+        self.have("style.safetensors", versionId=7, fileId=1)
+        self.have("style_v8.safetensors", versionId=8, fileId=2)
+        self.assertEqual(self.version(8, (2, "style.safetensors"))["files"][0]["downloaded"], "qwen/style_v8.safetensors")
+
+    def test_a_file_put_there_by_hand_is_known_by_name(self):
+        self.have("Hand Made.safetensors")
+        v = self.version(9, (3, "hand made.safetensors"), (4, "other.safetensors"))
+        self.assertEqual(v["files"][0]["downloaded"], "qwen/Hand Made.safetensors")
+        self.assertIsNone(v["files"][1]["downloaded"])
+
+    def test_the_second_file_downloads_beside_the_first(self):
+        self.have("debokeh-lite.safetensors", versionId=77, fileId=1)
+        fake = FakeCivitai(name="debokeh-strong.safetensors")
+        cv.TRANSPORT = httpx.MockTransport(fake)
+        job = client.post("/api/civitai/download", json={"versionId": 77, "fileId": 9, "family": "qwen"}).json()["job"]
+        for _ in range(200):
+            s = client.get(f"/api/clip/job/{job}").json()
+            if s["state"] != "running":
+                break
+            time.sleep(0.02)
+        self.assertEqual(s["state"], "done", s)
+        self.assertEqual(s["result"]["name"], "qwen/debokeh-strong.safetensors")
+        have = cv.downloaded_index()
+        self.assertEqual(have["fileIds"], {1: "qwen/debokeh-lite.safetensors", 9: "qwen/debokeh-strong.safetensors"})
+
+
 class Families(unittest.TestCase):
     def test_known_families(self):
         self.assertEqual(cv.bases_for("krea")[0], ["Krea 2"])
@@ -110,6 +172,15 @@ class Families(unittest.TestCase):
     def test_prefix_and_unknown(self):
         self.assertEqual(cv.bases_for("LTX2.4")[0], cv.bases_for("ltx")[0])
         self.assertEqual(cv.bases_for("ace"), ([], []))
+
+    def test_search_asks_for_nsfw_unless_it_is_off(self):
+        # (Civitai treats a missing nsfw as false: it would hide NSFW models and pictures on every setting)
+        fake = FakeCivitai()
+        cv.TRANSPORT = httpx.MockTransport(fake)
+        for setting, sent in (("off", "false"), ("soft", "true"), ("all", "true")):
+            cv._cache.clear()
+            client.get("/api/civitai/search", params={"family": "krea", "nsfw": setting})
+            self.assertEqual(fake.seen[-1].url.params["nsfw"], sent, setting)
 
     def test_search_maps_family_and_filters_versions(self):
         fake = FakeCivitai()

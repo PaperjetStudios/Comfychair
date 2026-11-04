@@ -56,7 +56,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }   /* Android Ch
 body {
   background: var(--bg); color: var(--text);
   font: 15px/1.4 var(--font);
-  display: grid; grid-template-rows: auto 1fr auto; height: 100dvh; overflow: hidden;
+  display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; height: 100dvh; overflow: hidden;
   -webkit-tap-highlight-color: transparent;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
   scrollbar-color: var(--line-2) transparent;
@@ -231,7 +231,7 @@ input[type=color] { width: 64px; height: var(--tap); border: 1px solid var(--lin
 #projectSel { max-width: 180px; }
 
 /* ---- layout: a stage (preview) and a settings panel, with a splitter between ---- */
-main { min-height: 0; position: relative; }
+main { grid-row: 3; min-height: 0; position: relative; }
 .tab { display: none; height: 100%; min-height: 0; }
 .tab.active { display: grid; }
 #tab-generate, #tab-editor, #tab-video, #tab-sound, #tab-vfx, #tab-scene, #tab-story { grid-template-columns: minmax(0, 1fr) 16px var(--panel-w); }
@@ -271,7 +271,7 @@ main { min-height: 0; position: relative; }
 
 .panel { background: var(--surface); overflow-y: auto; overflow-x: hidden; padding: var(--gap); min-height: 0; overscroll-behavior: contain; }
 /* the panels built in code (Editor, Video, 3D) stack their parts with the same spacing */
-.panel-body { display: grid; gap: var(--gap); }
+.panel-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--gap); }
 .panel-top > .btn.ghost { flex: none; }
 .tpl-row { display: flex; gap: 8px; margin-bottom: 10px; }
 .keep-toggle { margin: -4px 0 10px; font-size: var(--fs-sm); color: var(--muted); min-height: 32px; }
@@ -292,7 +292,7 @@ details.group > summary::after { content: "▾"; margin-left: auto; color: var(-
 details.group:not([open]) > summary::after { transform: rotate(-90deg); }
 @media (hover: hover) { details.group > summary:hover { background: var(--surface); } }
 .group-body { padding: 0 14px 14px; display: grid; gap: 14px; }
-.section { padding: 12px 14px 14px; display: grid; gap: 12px; }
+.section { padding: 12px 14px 14px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }   /* (a long layer name is cut short, not the panel) */
 .section-title { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-weight: 600; min-height: 30px; }
 .section-title > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .section-sub, .layer-title { margin-top: -8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -339,7 +339,7 @@ details.group:not([open]) > summary::after { transform: rotate(-90deg); }
 /* ---- action bar ---- */
 .actionbar {
   display: flex; gap: 10px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
-  border-top: 1px solid var(--line); background: var(--surface); align-items: center;
+  border-top: 1px solid var(--line); background: var(--surface); align-items: center; grid-row: 4;
 }
 #genBtn { flex: 1; font-size: 18px; min-height: 54px; }
 #stopBtn { min-height: 54px; }
@@ -1050,28 +1050,31 @@ body:has(.text-pop:not(.hidden)) .toast { z-index: 63; }
   .working::after, .tab-chip.spin, .toast { animation: none; }
 }
 
-/* ---- saved tabs (tabs.js): chips that wrap and scroll up and down past three rows, a ＋ that stays put, and a quiet note when not saved ---- */
-.tabstrip { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
-.tabrow { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; min-width: 0; max-height: 140px; overflow: hidden auto; scrollbar-width: thin; padding: 2px 0; position: relative; }
-.tabchip { display: inline-flex; align-items: center; gap: 6px; flex: none; max-width: 220px; min-height: 40px; padding: 0 14px; border: 1px solid var(--line);
-  background: var(--surface-2); border-radius: var(--r); cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: pan-y; white-space: nowrap;
-  transition: background .15s, border-color .15s; }
-.tabchip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; padding-right: 4px; }
+/* ---- saved tabs (tabs.js, layout.js docStrip): one thin bar under the main navigation, Photoshop's document tabs: a row that scrolls sideways, a ＋ right after it, and a quiet note when not saved ---- */
+.docbar { grid-row: 2; --doc-h: max(28px, var(--touch-target)); background: var(--bg); border-bottom: 1px solid var(--line); min-width: 0; }
+.tabstrip { display: flex; align-items: stretch; height: var(--doc-h); min-width: 0; }
+.tabrow { display: flex; flex: 0 1 auto; min-width: 0; overflow: auto hidden; scrollbar-width: none; position: relative; }
+.tabrow::-webkit-scrollbar { display: none; }
+.tabchip { position: relative; display: inline-flex; align-items: center; gap: 4px; flex: none; max-width: 200px; padding: 0 12px; border-right: 1px solid var(--line);
+  background: transparent; color: var(--muted); font-size: var(--fs-sm); cursor: pointer; user-select: none; -webkit-user-select: none; touch-action: pan-x; white-space: nowrap;
+  transition: background .15s, color .15s; }
+.tabchip.on { background: var(--surface-2); color: var(--text); padding-right: 2px; }
+.tabchip.on::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--accent); }
 .tabchip.shifting { transition: transform .15s; }
-.tabchip.lift { transition: none; z-index: 2; box-shadow: var(--shadow-sm); opacity: .92; }
-.tab-switch { display: inline-flex; align-items: center; gap: 6px; min-width: var(--touch-target); min-height: inherit; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; font: inherit; }
+.tabchip.lift { transition: none; z-index: 2; background: var(--surface-3); box-shadow: var(--shadow-sm); opacity: .92; }
+.tab-switch { display: inline-flex; align-items: center; gap: 6px; min-width: var(--touch-target); height: 100%; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; font: inherit; }
 .tab { position: relative; }
 .document-loading { position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--gap); padding: 24px; background: var(--surface); text-align: center; }
 .actionbar[inert] { opacity: .5; }
 .tab-name { overflow: hidden; text-overflow: ellipsis; }
-.tab-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-ink); flex: none; display: none; }
+.tab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; display: none; }
 .tab-dot.on { display: block; }
-.tab-more { min-width: 34px; min-height: 34px; border: 0; border-radius: 50%; background: transparent; color: inherit; font-size: 18px; cursor: pointer; }
-.tab-plus { flex: none; margin-top: 2px; border-radius: var(--r); }
-.tabs-state { flex: none; border: 0; background: transparent; color: var(--warn-text); font-size: var(--fs-xs); padding: 4px 6px; }
+.tab-more { width: max(22px, var(--touch-target)); height: 100%; padding: 0; border: 0; background: transparent; color: inherit; font-size: 15px; cursor: pointer; }
+.tab-plus.icon-btn { flex: none; width: max(28px, var(--touch-target)); min-width: 0; min-height: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--muted); font-size: 15px; }
+.tabs-state { flex: none; align-self: center; border: 0; background: transparent; color: var(--warn-text); font-size: var(--fs-xs); padding: 4px 6px; }
 .tabs-state.conflict { background: var(--warn-bg); border-radius: var(--r-sm); cursor: pointer; }
 .tab-menu { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
-@media (hover: hover) { .tabchip:hover:not(.on) { border-color: var(--line-2); background: var(--surface-3); } }
+@media (hover: hover) { .tabchip:hover:not(.on) { color: var(--text); background: var(--surface-2); } .tab-plus.icon-btn:hover { color: var(--text); background: var(--surface-2); } }
 
 /* generate tabs */
 .preset-btn { flex: 0 1 44%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1086,8 +1089,6 @@ body:has(.text-pop:not(.hidden)) .toast { z-index: 63; }
 /* editor tabs */
 .frame-bar { align-items: center; justify-content: space-between; }
 .frame-bar .hint { margin: 0; }
-/* video tabs */
-.tab-strip { min-width: 0; padding: 2px 0 6px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }   /* scrolls away with the settings */
 .viewer .gizmo { touch-action: none; z-index: 2; }
 .gz-bar { position: absolute; left: 8px; top: 8px; z-index: 3; display: flex; gap: 4px; flex-wrap: wrap; max-width: calc(100% - 16px); }
 .gz-chip {
@@ -1097,7 +1098,6 @@ body:has(.text-pop:not(.hidden)) .toast { z-index: 63; }
 .gz-chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 /* 3d tabs */
-.scene-head { display: grid; gap: 6px; background: var(--surface); padding: 6px 8px 6px; margin: calc(-1 * var(--gap)) calc(-1 * var(--gap)) var(--gap); border-bottom: 1px solid var(--line); }
 #sceneBody { min-width: 0; }
 
 /* generate button as a progress bar */
@@ -1296,6 +1296,10 @@ button.sheet-caret { width: 22px; }
 .section-jump > select { min-width: 0; }
 /* a section the side strip jumps to lands with its heading in view */
 .panel .section, .panel details.group { scroll-margin-top: 8px; }
+/* A section's run buttons stay at the panel's foot until the section has gone by (ui.js runBar) */
+.panel { scroll-padding-bottom: 64px; }
+.run-bar { position: sticky; bottom: calc(-1 * var(--gap)); z-index: 3; padding: 8px 0; background: inherit; border-top: 1px solid var(--line); }
+.panel-body > .run-bar { background: var(--surface); }
 .side-nav {
   position: sticky; top: 0; align-self: start; z-index: 4; display: flex; flex-direction: column; gap: 2px; padding: 3px;
   margin: calc(-1 * var(--gap)) 0 0 calc(-1 * var(--gap)); padding-top: calc(var(--gap) + 3px); padding-bottom: calc(var(--gap) + 3px);
@@ -1310,7 +1314,6 @@ button.sheet-caret { width: 22px; }
 .side-tab.on { background: var(--surface-2); color: var(--accent); }
 .side-tab.on::before { content: ''; position: absolute; left: -3px; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--accent); }
 @media (hover: hover) { .side-tab:hover:not(.on) { background: var(--surface-2); color: var(--text); } }
-.panel.has-nav > .scene-head, .panel.has-nav > .tab-strip { margin-left: 0; }
 
 /* ---- maximize: one ⛶ on every viewer; the stage is pinned over the page (and goes real full screen) ---- */
 .max-btn {

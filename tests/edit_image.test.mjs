@@ -1,7 +1,13 @@
 // node --test tests/edit_image.test.mjs: what the Edit image tool tells the model (web/edit-image.js).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { asRefs, editChoices, editPrompt, layerWord, refSlots, seedStep, sigmasFor, usableLoras } from '../web/edit-image.js';
+import { anyClear, asRefs, editChoices, editPrompt, layerWord, refSlots, seedStep, sigmasFor, usableLoras } from '../web/edit-image.js';
+
+test('a picture counts as see-through if any pixel is clearly so, not for the noisy alpha Qwen leaves', () => {
+  assert.equal(anyClear(new Uint8ClampedArray([1, 2, 3, 255, 4, 5, 6, 248])), false);
+  assert.equal(anyClear(new Uint8ClampedArray([1, 2, 3, 255, 4, 5, 6, 239])), true);
+  assert.equal(anyClear(new Uint8ClampedArray([0, 0, 0, 0])), true);
+});
 
 test('the prompt, the context and the sentence that holds the rest still, in that order', () => {
   const t = editPrompt({ prompt: ' Make the jacket red. ', context: 'It is a film still.', keep: true });

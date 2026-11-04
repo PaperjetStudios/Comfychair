@@ -345,6 +345,9 @@ export const linkBtn = (text, href, attrs = {}) => h('a', { class: 'btn small', 
 
 // A row of buttons, as at the bottom of a sheet
 export const actions = (...kids) => h('div', { class: 'actions' }, kids);
+// A section's run buttons: they stay at the foot of the side panel until the section they run has been scrolled past.
+// Give each its own block: two in one block would stick on top of each other.
+export const runBar = (...kids) => h('div', { class: 'row wrap run-bar' }, kids);
 
 // the image file buttons that take a paste: one listener, and only the newest one on screen gets it
 let PASTES = [], pasteOn = false;

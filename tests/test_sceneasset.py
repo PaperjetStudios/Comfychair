@@ -141,6 +141,26 @@ class OpenInBlender(unittest.TestCase):
         self.assertTrue(env["TMPDIR"].startswith(tempfile.gettempdir()))
         shutil.rmtree(env["TMPDIR"], ignore_errors=True)
 
+    def test_a_splat_opens_turned_the_way_its_layer_says(self):
+        for name in ("s.ply", "s.spz"):
+            (self.dir / name).write_bytes(b"x")
+            url = f"/files/projects/blender-test/.deck/assets/a1/{name}"
+            for flip, tail in ((True, [str(self.dir / name), "flip"]), (False, [str(self.dir / name)])):
+                proc = mock.Mock()
+                proc.wait.side_effect = subprocess.TimeoutExpired("blender", 2)
+                with mock.patch.object(sceneasset.subprocess, "Popen", return_value=proc) as popen:
+                    r = self._client("127.0.0.1").post("/api/scene/blender", json={"url": url, "flip": flip})
+                self.assertEqual(r.status_code, 200)
+                cmd = popen.call_args.args[0]
+                self.assertEqual(cmd[cmd.index("--") + 1:], tail)
+                shutil.rmtree(popen.call_args.kwargs["env"]["TMPDIR"], ignore_errors=True)
+
+    def test_blender_cant_read_the_other_splat_formats(self):
+        (self.dir / "s.ksplat").write_bytes(b"x")
+        r, popen, _ = self._post("127.0.0.1", "/files/projects/blender-test/.deck/assets/a1/s.ksplat")
+        self.assertEqual(r.status_code, 404)
+        popen.assert_not_called()
+
     def test_another_device_cant_open_a_window_here(self):
         r, popen, _ = self._post("192.168.3.50", self.url)
         self.assertEqual(r.status_code, 403)

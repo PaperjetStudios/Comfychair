@@ -34,3 +34,8 @@ export function menuSpot(x, y, w, h, W, H, edge = 4) {
   const left = x + w + edge > W ? x - w : x, top = y + h + edge > H ? y - h : y;
   return { left: Math.max(edge, Math.min(left, W - w - edge)), top: Math.max(edge, Math.min(top, H - h - edge)) };
 }
+
+// The menu of a crop box: its shapes (aspects: [label, width/height or null for free]), with the one in use ticked
+export function cropShapeMenu(aspects, current) {
+  return [aspects.map(([label, aspect]) => ({ id: label, label, aspect, on: aspect === (current ?? null) }))];
+}

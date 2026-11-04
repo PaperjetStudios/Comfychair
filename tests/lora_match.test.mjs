@@ -1,7 +1,7 @@
 // node --test tests/lora_match.test.mjs: searching a list of LoRAs (web/lora-match.js).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { matchNames } from '../web/lora-match.js';
+import { foldersOf, matchNames, withLora } from '../web/lora-match.js';
 
 const list = ['krea/Anime_Style.safetensors', 'krea/detail_tweaker-v2.safetensors', 'qwen/more-detail.safetensors', 'qwen/Detail Slider.safetensors'];
 
@@ -19,4 +19,12 @@ test('a name starting with the first word comes first, the rest stay in order', 
 test('it can search what is shown, not the value', () => {
   const objs = [{ n: 'a', t: 'Blue' }, { n: 'b', t: 'Red' }];
   assert.deepEqual(matchNames(objs, 'red', (o) => o.t), [objs[1]]);
+});
+
+test('folders: each once, sorted, a name with no folder adds none', () => assert.deepEqual(foldersOf(['qwen/a', 'krea/b', 'qwen/c', 'd']), ['krea', 'qwen']));
+test('a downloaded LoRA takes the empty row, else a new one, and never goes in twice', () => {
+  const on = { name: 'a', strength: 0.5, enabled: false };
+  assert.deepEqual(withLora([on, { name: '', strength: 0.7, enabled: true }], 'b'), [on, { name: 'b', strength: 0.7, enabled: true }]);
+  assert.deepEqual(withLora([on], 'b'), [on, { name: 'b', strength: 1, enabled: true }]);
+  assert.equal(withLora([on], 'a'), null);
 });

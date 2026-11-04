@@ -1,4 +1,5 @@
-"""A clip's frame by index (the object sheet's views): app/imageprep.frame_from_video."""
+"""A clip's frame by index (the object sheet's views): app/imageprep.frame_from_video. A finished PNG sent back as it is: ready_png."""
+import io
 import os
 import subprocess
 import tempfile
@@ -57,6 +58,48 @@ class Frames(unittest.TestCase):
     def test_a_negative_frame_is_refused(self):
         with self.assertRaises(RuntimeError):
             imageprep.frame_from_video(self.clip, -1)
+
+
+class ReadyPng(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.path = Path(self.dir.name) / "out.png"
+
+    def save(self, size=(64, 32), mode="RGB", fmt="PNG", **kw):
+        from PIL import Image
+        Image.new(mode, size).save(self.path, fmt, **kw)
+        return self.path
+
+    def test_same_pixels_and_size_as_encoding_it_again_without_the_prompt(self):
+        from PIL import Image
+        from PIL.PngImagePlugin import PngInfo
+        info = PngInfo()
+        info.add_text("prompt", "a secret prompt")
+        info.add_itxt("workflow", "a secret workflow")
+        self.save((64, 32), "RGBA", pnginfo=info)
+        png, w, h = imageprep.ready_png(self.path, 0, 1)
+        self.assertEqual((w, h), (64, 32))
+        self.assertNotIn(b"secret", png)
+        got, want = Image.open(io.BytesIO(png)), Image.open(self.path)
+        self.assertEqual(got.tobytes(), want.tobytes())
+        self.assertEqual(got.mode, "RGBA")
+
+    def test_anything_that_would_change_goes_the_long_way(self):
+        self.save((64, 32))
+        self.assertIsNone(imageprep.ready_png(self.path, 0, 1, {"x": 0, "y": 0, "w": 0.5, "h": 1}), "cropped")
+        self.assertIsNone(imageprep.ready_png(self.path, 0.001, 1), "made smaller")
+        self.assertIsNone(imageprep.ready_png(self.path, 0, 10), "not a multiple")
+        self.assertIsNotNone(imageprep.ready_png(self.path, 0, 16))
+        self.save((64, 32), "L")
+        self.assertIsNone(imageprep.ready_png(self.path, 0, 1), "grey")
+        self.save((64, 32), fmt="JPEG")
+        self.assertIsNone(imageprep.ready_png(self.path, 0, 1), "not a PNG")
+        from PIL import Image
+        ex = Image.Exif()
+        ex[0x0112] = 6
+        Image.new("RGB", (64, 32)).save(self.path, "PNG", exif=ex)
+        self.assertIsNone(imageprep.ready_png(self.path, 0, 1), "turned by its EXIF")
 
 
 if __name__ == "__main__":

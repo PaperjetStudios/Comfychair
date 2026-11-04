@@ -1,12 +1,12 @@
 import { loraPicker } from './lora-pick.js';
 import { fetchHistory as loadHistory } from './generation-data.js';
-import { RUN, runTime, fmtDur } from './run-state.js';
+import { RUN, runTime, fmtDur, stepClock, runEstimate, fmtPerStep } from './run-state.js';
 export { RUN, runTime, fmtDur } from './run-state.js';
 import { notifyPrepare, notifyDone, keepAwake } from './notifications.js';
 export { notifyPrepare } from './notifications.js';
 import {
   $, h, store, api, toast, SHEET, sheetOpen, openSheet, closeSheet, button, linkBtn, actions, hint, placeholder, note,
-  mediaCard, seg, setIcon, field,
+  mediaCard, seg, setIcon, field, withHelp,
 } from './ui.js';
 import { S, fmtT, isMine, loadProjects, switchTab, emitServer, onServer } from './core.js';
 import { genLabel, mediaEl, openImagePicker, outputCard, uploadImage } from './media.js';
@@ -145,7 +145,7 @@ export function runChip(value, max, text) {
 // elapsed / stages: picking up a run that was already going (after a reload or a dropped connection)
 function runStart(pid, { elapsed = 0, stages = [] } = {}) {
   const t0 = Date.now() - elapsed * 1000;
-  Object.assign(RUN, { pid, stages, current: null, title: '', step: null, t0, stageT0: Date.now(), done: new Set(), endedAt: 0 });
+  Object.assign(RUN, { pid, stages, current: null, title: '', step: null, clock: null, t0, stageT0: Date.now(), done: new Set(), endedAt: 0 });
   clearInterval(RUN.timer);
   RUN.timer = setInterval(runText, 1000);
   drawStages(); runText();
@@ -162,7 +162,7 @@ function runStage(d) {
     // everything before the current stage in the list is finished
     const i = RUN.stages.indexOf(d.stage);
     RUN.stages.slice(0, Math.max(0, i)).forEach((s) => RUN.done.add(s));
-    RUN.current = d.stage; RUN.stageT0 = Date.now(); RUN.step = null;
+    RUN.current = d.stage; RUN.stageT0 = Date.now(); RUN.step = null; RUN.clock = null;
   }
   RUN.title = d.title;
   drawStages(); runText();
@@ -198,6 +198,12 @@ function runText() {
   if (!RUN.current) text = `Starting… · ${total}`;
   else if (RUN.step) {
     [val, max] = RUN.step;
+    const whole = runEstimate(RUN.clock, RUN.t0, Date.now());
+    // the bar clips long text, so the estimate comes before the node's name
+    if (whole != null) {
+      setProgress(val, max, `${RUN.current} · step ${val}/${max} · ${fmtPerStep(RUN.clock.per)} · total ${total} of ~${fmtDur(whole)} · ${RUN.title} · ${inStage}`);
+      return;
+    }
     text = `${RUN.current} · ${RUN.title} · step ${val}/${max} · ${inStage}`;
   } else if (RUN.current === 'Sampling') {
     // before the first step ComfyUI is moving the model onto the GPU
@@ -406,6 +412,7 @@ function onMessage(m) {
         break;
       }
       RUN.step = [d.value, d.max];
+      RUN.clock = stepClock(RUN.clock, d.value, d.max, Date.now());
       emitServer({ type: 'deck_progress', data: { value: d.value, max: d.max } });   // (the Video tab's effects show it)
       if (RUN.pid) runText(); else setProgress(d.value, d.max, `${nodeName(d.node || S.executingNode)} · ${d.value}/${d.max}`);
       break;
@@ -650,7 +657,14 @@ async function runAgain(g) {
 let jobsTimer = null;
 export async function openJobs() {
   const box = h('div', { class: 'jobs' });
-  openSheet(h('h3', {}, 'Queue'), box);
+  const freeVram = button('Free VRAM', async () => {
+    try {
+      const r = await api('/api/queue/free', { method: 'POST' });
+      toast(r.workers ? 'The card empties once what\'s ahead in the queue is done' : 'ComfyUI\'s models unload once the run in hand is done. SAM3 and UniRig keep theirs until ComfyUI restarts');
+    } catch (e) { toast(e.message, true); }
+  }, { cls: 'small' });
+  openSheet(h('h3', {}, 'Queue'), withHelp(h('div', { class: 'row' }, freeVram),
+    'Unloads ComfyUI\'s models and stored results and stops the idle SAM3 and UniRig workers. It waits its turn in the queue, so nothing is cut short. The next run loads its models again. A Trellis run does this by itself.'), box);
   const refresh = async () => {
     if (!sheetOpen() || !box.isConnected) { clearInterval(jobsTimer); jobsTimer = null; return; }
     let d;

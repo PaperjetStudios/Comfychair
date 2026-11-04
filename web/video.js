@@ -1,5 +1,5 @@
 import {
-  $, h, store, uid, api, busy, toast, undoToast, clamp, openSheet, closeSheet, button, iconBtn, linkBtn, actions, fileButton, seg,
+  $, h, store, uid, api, busy, toast, undoToast, clamp, openSheet, closeSheet, button, runBar, iconBtn, linkBtn, actions, fileButton, seg,
   field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, toggle, textArea, pctFmt, colorField, sizeSelect, canvasFont, icon,
 } from './ui.js';
 import { S, fmtT, inputUrl, onServer, thumbUrl } from './core.js';
@@ -21,6 +21,8 @@ import { canTrack, openTrack } from './track.js';
 import { CLIP_FX, KEY_DEFAULT, keyRangeFields, loraChoice, restyleLoras, runClipStep } from './clip-effects.js';
 import { snap, snapOn, snapStep, snapNearest, normDeg, Weight, WEIGHT, DEAD_PX, deadzone, snapBar, gzChip } from './gizmo.js';
 import { openCraftSheet, sendToCraft } from './craft.js';
+import { laneAbove } from './maps.js';
+import { mapsSection } from './video-maps.js';
 
 // ---------------------------------------------------------------------------
 // video: a Premiere-style timeline. Video tracks stack (V2 draws over V1), audio tracks mix, and
@@ -1037,18 +1039,25 @@ function renderVideoPanel() {
       it.kind === 'scene' ? sceneFields(it) : null,
       it.kind === 'video' && canKey(it.fx?.orig || it) ? fxFields(it) : null,
       clipSoundFields(it, len, { level: it.kind !== 'image' && it.kind !== 'scene', levelNote: (v) => (v > 1 ? ' (preview plays at 100%)' : ''),
-        keyed: (label, ch, o) => clipKeyed(it, label, ch, o), ...clipLive }),
-      h('div', { class: 'row wrap' },
-        button('✂ Split at playhead', TL.split, { title: 'S' }),
-        button('⤫ Cross-fade with previous', () => TL.crossfadePrev(it)),
-        it.kind === 'video' && canKey(it) ? button('VFX…', async () => (await import('./vfx.js')).sendToVfx(it.src, { label: it.label, trim: { start: it.in, len: (it.out ?? it.dur) - it.in } }), { title: 'Open this clip in the VFX tab' }) : null,
-        it.kind === 'video' ? button('Sound → Sound tab', () => soundToSoundTab(it.src, { trim: { start: it.in || 0, len: itLen(it) }, name: `${it.label}-sound` }),
-          { title: 'This clip\'s sound (the part on the timeline) on the Sound tab\'s timeline' }) : null,
-        it.kind === 'video' && canKey(it) ? button('Colour key…', () => openKey(it), { title: 'Cut out a green screen, or use a matte, so lower tracks show through' }) : null,
-        it.kind === 'video' && canTrack(it.src) ? button('Track motion', () => trackClip(it), { title: 'Follow the picture\'s movement and make a 3D camera from it. With a range set, only the part of this clip inside it' }) : null,
-        isVisual(it) ? button('Reset framing', () => { Object.assign(it, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); delete it.rotation; delete it.anchor; for (const ch of ['x', 'y', 'scale', 'rotation', 'opacity']) delete it.chans?.[ch]; timelineChanged(); }) : null,
-        button('Delete clip', TL.deleteSelected, { cls: 'small danger', title: 'Delete' })));
+        keyed: (label, ch, o) => clipKeyed(it, label, ch, o), ...clipLive }));
   })() : null;
+  // the clip's actions, as the Image tab's icon row
+  const clipTools = it ? (() => {
+    const tool = (label, ic, onclick, title = label) => h('button', { type: 'button', class: 'icon-btn tool-quick-btn', title, onclick }, icon(ic), h('span', {}, label));
+    const can = it.kind === 'video' && canKey(it);
+    return section('Clip tools', null, h('div', { class: 'tool-quick' },
+      tool('Split', 'cut', TL.split, 'Split at the playhead (S)'),
+      tool('Cross-fade', 'wave', () => TL.crossfadePrev(it), 'Cross-fade with the previous clip'),
+      can ? tool('VFX', 'sparkle', async () => (await import('./vfx.js')).sendToVfx(it.src, { label: it.label, trim: { start: it.in, len: (it.out ?? it.dur) - it.in } }), 'Open this clip in the VFX tab') : null,
+      it.kind === 'video' ? tool('Sound', 'sound', () => soundToSoundTab(it.src, { trim: { start: it.in || 0, len: itLen(it) }, name: `${it.label}-sound` }),
+        'This clip\'s sound (the part on the timeline) on the Sound tab\'s timeline') : null,
+      can ? tool('Key', 'contrast', () => openKey(it), 'Colour key: cut out a green screen, or use a matte, so lower tracks show through') : null,
+      it.kind === 'video' && canTrack(it.src) ? tool('Track', 'target', () => trackClip(it), 'Follow the picture\'s movement and make a 3D camera from it. With a range set, only the part of this clip inside it') : null,
+      isVisual(it) ? tool('Reset', 'reset', () => { Object.assign(it, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); delete it.rotation; delete it.anchor; for (const ch of ['x', 'y', 'scale', 'rotation', 'opacity']) delete it.chans?.[ch]; timelineChanged(); }, 'Reset the framing') : null,
+      tool('Delete', 'trash', TL.deleteSelected, 'Delete this clip (Del)')));
+  })() : null;
+  const maps = it && (it.kind === 'video' ? canKey(it) : it.kind === 'image' && (it.src?.input || it.src?.generation != null))
+    ? mapsSection(it, { lengthOf: itLen, range: () => WA.stored(), render: renderVideoPanel, land: landMap }) : null;
   const colour = it && isVisual(it) ? colourSection(it) : null;
 
   const sizeSel = sizeSelect(SIZES, V.size, (s) => { V.size = s; timelineChanged(); });
@@ -1069,7 +1078,7 @@ function renderVideoPanel() {
       button('+ Sound / files', addMediaFiles),
       button('+ 3D scene…', addScene, { title: 'A 3D tab as a live clip' }),
       V.items.length ? button('Clear all', clearAll, { cls: 'small ghost' }) : null),
-    clip, colour, !clip && (V.items.length
+    clipTools, maps, clip, colour, !clip && (V.items.length
       ? help('Tap a clip to edit it. Drag clips to move them (also onto other tracks), drag their ends to trim, and overlap two clips on a track to cross-fade. Higher video tracks draw on top.')
       : hint('Add generated clips, images or sound. They line up on V1 / A1; drag them onto V2 to layer them over V1.')),
     section('Sequence', null,
@@ -1126,7 +1135,7 @@ function fxFields(it) {
     fx.busy ? h('div', { class: 'fx-busy', role: 'status' }, h('span', { class: 'spinner' }),
       h('div', { class: 'grow' }, h('b', {}, `Rendering ${fx.busy}`), h('div', { class: 'hint fx-text' }, fxStatus(it, true))),
       h('div', { class: 'fx-bar' })) : fx.orig ? hint('Showing the rendered result.') : null,
-    h('div', { class: 'row wrap' },
+    runBar(
       button(fx.busy ? 'Rendering…' : fx.orig ? 'Render again' : 'Render effects', () => bakeFx(it.id), { cls: 'primary' + (fx.busy ? ' working' : ''), disabled: !fx.steps.length || !!fx.busy }),
       fx.orig ? button('Remove effects', () => unbakeFx(it)) : null,
       len > 10 ? hint('Only the first 10 s get the effects.') : null));
@@ -1194,6 +1203,18 @@ async function bakeFx(id) {
     out: Math.min(r.dur || secs, base.out - base.in), dur: r.dur || secs });
   timelineChanged();
   toast('Effects rendered: the clip now plays the result');
+}
+
+// A control map (video-maps.js) lands over its clip: the next track up with room, or a new one, in step and framed the same
+async function landMap(it, span, generation, media) {
+  if (!V.items.includes(it)) return toast(`Map done as #${generation} (its clip is gone: find it in History)`);
+  const lane = laneAbove(V.tracks, V.items, it, span.at, span.len, itLen) || addTrack('video');
+  const made = await addToTimeline(media, { track: lane, at: span.at });
+  if (media.kind === 'video') made.out = Math.min(media.dur, span.len);
+  for (const k of ['x', 'y', 'scale', 'fit', 'rotation', 'anchor']) if (it[k] !== undefined) made[k] = it[k];
+  made.volume = 0;
+  timelineChanged();
+  toast('Map added over the clip');
 }
 
 // ---- keying: a copy of the clip with alpha (server: /api/video/key), swapped in where the clip is ----
@@ -1409,9 +1430,8 @@ function wireDrop() {
 }
 
 export function wireVideoTransport() {
-  const mount = h('div', { class: 'vid-tabs' });
-  $('#videoPanel').replaceChildren(mount, h('div', { id: 'vidBody' }));
-  tabs = new TabSet({ kind: 'video-tabs', mount, scope: 'project', newName: (n) => `Edit ${n}`, adapter: editAdapter, seed: legacyTimeline,
+  $('#videoPanel').replaceChildren(h('div', { id: 'vidBody' }));
+  tabs = new TabSet({ kind: 'video-tabs', host: $('#tab-video'), scope: 'project', newName: (n) => `Edit ${n}`, adapter: editAdapter, seed: legacyTimeline,
     onSwitch: () => store.set('deck.video.seeded', true) });
   wireGizmo();
   wireDrop();

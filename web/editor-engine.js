@@ -17,12 +17,12 @@ import { keyJumps } from './timeline.js';
 import { workArea } from './workarea.js';
 import { frameSpan, playFrom, tickT } from './workarea-math.js';
 import { framesToClip } from './scene-comp.js';
-import { BLENDS, blendOp, createPaint, isCanvas, makeCanvas } from './paint.js';
+import { BLENDS, blendOp, createPaint, fillField, isCanvas, makeCanvas } from './paint.js';
 import * as A from './adjust.js';
 import { gradedPicture, histOfPicture } from './adjust-draw.js';
 import { adjustPanel } from './adjust-panel.js';
 import { icon } from './icons.js';
-import { layerMenu, pickedFor } from './layer-menu.js';
+import { cropShapeMenu, layerMenu, pickedFor } from './layer-menu.js';
 import { openPressMenu, pressMenu } from './press-menu.js';
 import * as G from './layer-geom.js';
 import { densePlan, gridItem, gridPlan, fitToCell } from './layer-grid.js';
@@ -49,7 +49,7 @@ export function fromSaved(saved) {
   // the last one is drawn on top. size: a fixed {w,h} canvas, or null to fit around the layers. anim: see below.
   e.layers = (saved.layers || []).map((l) => ({ name: l.name, crop: { ...(l.crop || FULL) },
     x: l.x, y: l.y, scale: l.x == null ? 1 : l.scale, opacity: l.opacity ?? 1, hidden: !!l.hidden,
-    blend: l.blend || 'normal', locked: !!l.locked, ...(l.label ? { label: l.label === 'Inpaint mask' ? 'Mask' : l.label } : {}), ...(l.mask ? { mask: true } : {}), ...(l.draft ? { draft: true } : {}), ...(l.canvas ? { canvas: true } : {}), ...(l.clip ? { clip: true } : {}),
+    blend: l.blend || 'normal', locked: !!l.locked, ...(l.label ? { label: l.label === 'Inpaint mask' ? 'Mask' : l.label } : {}), ...(l.mask ? { mask: true } : {}), ...(l.draft ? { draft: true } : {}), ...(l.canvas ? { canvas: true } : {}), ...(l.fill ? { fill: l.fill } : {}), ...(l.clip ? { clip: true } : {}),
     ...(l.rotation ? { rotation: +l.rotation } : {}), ...(l.flipX ? { flipX: true } : {}), ...(l.flipY ? { flipY: true } : {}),
     ...(l.chans ? { chans: structuredClone(l.chans) } : {}),
     ...(l.key ? { key: l.key } : {}), ...(l.group ? { group: l.group } : {}), ...(l.maskOf ? { maskOf: l.maskOf } : {}), ...(l.maskOff ? { maskOff: true } : {}), ...(l.maskFor ? { maskFor: l.maskFor } : {}), ...(l.adjust ? { adjust: structuredClone(l.adjust) } : {}) }));
@@ -79,11 +79,18 @@ export function createEditor(cfg) {
   // (Layers only ever name input images, so nothing here is a data URL or a blob. A new blank canvas has no file
   // until its first save, a moment later: it's left out until then.)
   const dumpEditor = (list = E.layers) => ({ v: 2, size: E.size, cols: E.cols, gap: E.gap, bg: E.bg, clear: !!E.clear, out: E.out || 1, mp: E.mp, snap: E.snap, arrange: E.arrange, anim: E.anim, items: E.items, groups: E.groups,
-    layers: list.filter((l) => l.name).map((l) => ({ ...(l.key ? { key: l.key } : {}), ...(l.group ? { group: l.group } : {}), ...(l.maskOf ? { maskOf: l.maskOf } : {}), ...(l.maskOff ? { maskOff: true } : {}), ...(l.maskFor ? { maskFor: l.maskFor } : {}), ...(l.adjust ? { adjust: l.adjust } : {}), name: l.name, crop: l.crop, x: l.x, y: l.y, scale: l.scale, opacity: l.opacity, hidden: l.hidden,
-      blend: l.blend || 'normal', locked: !!l.locked, label: l.label || null, chans: l.chans || null, ...(l.mask ? { mask: true } : {}), ...(l.draft ? { draft: true } : {}), ...(l.canvas ? { canvas: true } : {}), ...(l.clip ? { clip: true } : {}),
+    layers: list.filter((l) => l.name).map((l) => (E.grow?.l === l ? { ...l, ...E.grow.was } : l)).map((l) => ({ ...(l.key ? { key: l.key } : {}), ...(l.group ? { group: l.group } : {}), ...(l.maskOf ? { maskOf: l.maskOf } : {}), ...(l.maskOff ? { maskOff: true } : {}), ...(l.maskFor ? { maskFor: l.maskFor } : {}), ...(l.adjust ? { adjust: l.adjust } : {}), name: l.name, crop: l.crop, x: l.x, y: l.y, scale: l.scale, opacity: l.opacity, hidden: l.hidden,
+      blend: l.blend || 'normal', locked: !!l.locked, label: l.label || null, chans: l.chans || null, ...(l.mask ? { mask: true } : {}), ...(l.draft ? { draft: true } : {}), ...(l.canvas ? { canvas: true } : {}), ...(l.fill ? { fill: l.fill } : {}), ...(l.clip ? { clip: true } : {}),
       ...(l.rotation ? { rotation: l.rotation } : {}), ...(l.flipX ? { flipX: true } : {}), ...(l.flipY ? { flipY: true } : {}) })) });
   // every edit ends up here: an animated layer keys what moved, then the host saves (the Editor tab's tab and still)
-  function persistEditor() { noteStack(); keyPose(); cfg.onChange?.(); }
+  // (a crop waiting for its Extend button isn't an edit yet: what's noted and saved is the layer without it)
+  function persistEditor() {
+    settleGrow();
+    const g = E.grow, now = g && { crop: g.l.crop, x: g.l.x, y: g.l.y };
+    if (g) Object.assign(g.l, g.was);
+    noteStack(); keyPose(); cfg.onChange?.();
+    if (g) Object.assign(g.l, now);
+  }
 
   // ---- undo for the stack itself: what a change did (moved, reordered, hid, grouped...) goes on the painter's history, next to its strokes ----
   let stackWas = null, stackAt = 0;
@@ -290,8 +297,24 @@ export function createEditor(cfg) {
 
   // what a layer is drawn from: its pixels (with the stroke being painted, l.live), through its Colour adjustments
   let adjusting = false;   // (a slider or curve is moving: big pictures are graded small until it stops)
+  // a blank canvas's own background (l.fill) goes behind its pixels here, so changing it never touches what was painted
+  const PAPER = new WeakMap();   // l.img -> its pixels on their background
+  function onPaper(l, src) {
+    const W = src.naturalWidth || src.width, H = src.naturalHeight || src.height;
+    if (!l.fill || !W || !H) return src;
+    const rev = l.paintRev || 0;
+    let p = PAPER.get(l.img);
+    if (p && p.src === src && p.fill === l.fill && p.rev === rev && src !== l.live) return p.cv;
+    if (!p) { p = { cv: document.createElement('canvas') }; PAPER.set(l.img, p); }
+    if (p.cv.width !== W || p.cv.height !== H) { p.cv.width = W; p.cv.height = H; }
+    const c = p.cv.getContext('2d');
+    c.fillStyle = l.fill; c.fillRect(0, 0, W, H);
+    c.drawImage(src, 0, 0, W, H);
+    Object.assign(p, { src, fill: l.fill, rev });
+    return p.cv;
+  }
   function pixelsOf(l) {
-    const src = l.live || l.img;
+    const src = onPaper(l, l.live || l.img);
     if (!A.isOn(l.adjust)) return src;
     return gradedPicture(src, l.adjust, { owner: l.img, rev: l.paintRev || 0, quick: adjusting, live: !!l.live });
   }
@@ -359,13 +382,13 @@ export function createEditor(cfg) {
   }
   // A layer's picture at its file's size, with its adjustments in (what an Image tool is sent)
   function layerPicture(l) {
-    const m = l.maskFor === 'adjust' ? maskOfLayer(l) : null, graded = A.isOn(l.adjust) ? gradedPicture(l.img, l.adjust, { owner: l.img, rev: l.paintRev || 0 }) : l.img;
-    if (!m || graded === l.img) return graded;
+    const base = onPaper(l, l.img), m = l.maskFor === 'adjust' ? maskOfLayer(l) : null, graded = A.isOn(l.adjust) ? gradedPicture(base, l.adjust, { owner: l.img, rev: l.paintRev || 0 }) : base;
+    if (!m || graded === base) return graded;
     const W = l.img.naturalWidth || l.img.width, H = l.img.naturalHeight || l.img.height;
     const make = () => { const cv = document.createElement('canvas'); cv.width = W; cv.height = H; return cv; };
     const over = make(), oc = over.getContext('2d'), out = make(), c = out.getContext('2d');
     oc.drawImage(graded, 0, 0, W, H); oc.globalCompositeOperation = 'destination-in'; oc.drawImage(m.img, 0, 0, W, H);
-    c.drawImage(l.img, 0, 0, W, H); c.drawImage(over, 0, 0);
+    c.drawImage(base, 0, 0, W, H); c.drawImage(over, 0, 0);
     return out;
   }
   // Over the picture on screen while a mask is being worked on: what it hides in red, or the mask itself in black and white
@@ -550,8 +573,35 @@ export function createEditor(cfg) {
 
   // Set a layer's crop without moving the image under it (turned, too)
   function setLayerCrop(l, c) { Object.assign(l, G.cropKeepingPlace(l, c)); }
+  // The crop's shape: the largest centred box of it, and corner drags keep to it. Free (null) leaves the box and lets the corners go.
+  function setCropAspect(l, a) {
+    E.aspect = a;
+    if (a) setLayerCrop(l, aspectCrop(l.img.naturalWidth, l.img.naturalHeight, a));
+    editorChanged();
+  }
   const GROW_GREY = '#808080';   // what an edit model is told to fill in
-  const pastOn = (e) => e.ctrlKey || e.metaKey || !!E.cropPast;
+  const pastOn = (e) => e.ctrlKey || e.metaKey || !!E.cropPast || !!E.grow;
+  // A crop past the edges waits (E.grow, layer-geom.js growFate) until Extend makes it a picture, or Cancel or leaving the crop puts it back.
+  function settleGrow() {
+    const fate = G.growFate(E.grow, E);
+    if (!fate) return;
+    if (fate === 'undo') Object.assign(E.grow.l, E.grow.was);
+    E.grow = null;
+  }
+  function cancelGrow() {
+    if (!E.grow) return;
+    Object.assign(E.grow.l, E.grow.was);
+    E.grow = null;
+    renderEditor();
+  }
+  function applyGrow() {
+    if (!E.grow) return;
+    const { l, was } = E.grow, c = l.crop, at = { x: l.x, y: l.y };
+    Object.assign(l, was);
+    E.grow = null;
+    growLayer(l, c, at);
+    renderEditor();
+  }
   // A crop past the picture's edges (c, the kept part at canvas place at): a new picture of that box, the new part neutral grey, over the layer, which hides.
   // A new layer and not this one changed: the painter's undo holds pixels of this one's size. The picture's see-through stays; a mask shows the new part.
   async function growLayer(l, c, at) {
@@ -744,6 +794,7 @@ export function createEditor(cfg) {
       ctx.stroke();
     }
     const tb = screenBox(E.cropping ? imageBounds(sel) : bounds(sel));
+    if (E.grow) { const o = screenBox(bounds(sel)), x1 = Math.max(tb.x + tb.w, o.x + o.w), y1 = Math.max(tb.y + tb.h, o.y + o.h); tb.x = Math.min(tb.x, o.x); tb.y = Math.min(tb.y, o.y); tb.w = x1 - tb.x; tb.h = y1 - tb.y; }   // (clear of the box past the picture)
     if (!E.cropping && !sel.locked && !plain(sel)) { const { rot } = boxPoints(sel); tb.y = Math.min(tb.y, rot.y - 12); tb.h += screenBox(bounds(sel)).y - tb.y; }   // (clear of the rotate handle)
     placeEditorToolbar(tb, w, hh);
   }
@@ -755,6 +806,7 @@ export function createEditor(cfg) {
     for (const b of bar.querySelectorAll('[data-mode]')) b.classList.toggle('on', (b.dataset.mode === 'crop') === E.cropping);
     bar.querySelector('[data-snap]').classList.toggle('on', E.snap);
     bar.querySelector('[data-mode=crop]').classList.toggle('hidden', plain(E.sel));
+    for (const b of bar.querySelectorAll('[data-grow]')) b.classList.toggle('hidden', !E.grow);
     const bw = bar.offsetWidth, bh = bar.offsetHeight, m = 6, clear = 18;   // clear the corner handles
     let top = r.y - bh - clear;
     if (top < m) top = r.y + r.h + clear;
@@ -799,10 +851,31 @@ export function createEditor(cfg) {
     const frac = (l, p) => { const q = G.canvasToImage(l, p); return { x: q.x / l.img.naturalWidth, y: q.y / l.img.naturalHeight }; };
     let drag = null, lastTap = { t: 0, l: null }, lastCorner = { t: 0, k: null }, held = [];
     // a second finger turns the press into a pinch (paint.js): what the first finger moved goes back
+    // Alt+drag on a layer: past a small move the picked layers get copies, and the drag carries on with those. One undo step, with the move.
+    const startCopy = (p) => {
+      if (Math.hypot(p.x - drag.p0.x, p.y - drag.p0.y) * EV.s < 4) return false;
+      drag.alt = false;
+      const stack = E.layers, was = { sel: E.sel, multi: E.multi }, r = copyPicked();
+      if (!r) return true;   // (nothing that copies: a plain move)
+      Object.assign(drag, { copied: { stack, was }, l: r.copies[r.from.indexOf(drag.l)] || E.sel });
+      const others = r.copies.filter((c) => c !== drag.l);
+      if (others.length) drag.group = others.map((m) => [m, m.x, m.y]); else delete drag.group;
+      renderEditor();
+      return true;
+    };
+    // the drag didn't finish: the copies go
+    const dropCopies = () => {
+      if (!drag?.copied) return;
+      E.layers = drag.copied.stack;
+      Object.assign(E, drag.copied.was);
+      drag.copied = null;
+      renderEditor();
+    };
     const cancelDrag = () => {
       if (!drag) return;
       for (const [l, x, y, scale, crop, rotation] of held) Object.assign(l, { x, y, scale, crop, rotation });
       drag.out?.end();
+      dropCopies();
       drag = null; EVheld = false; E.guides = [];
       lastTap = { t: 0, l: null };   // (a pinch's first finger isn't half a double-tap)
       drawEditorCanvas();
@@ -821,16 +894,26 @@ export function createEditor(cfg) {
     };
     // Right click or a long hold on the canvas, with no tool that uses the press itself: the layers' menu, for the layer under it
     const canvasMenuOk = () => !!EV && !EA.exporting && !paint.painting() && !paint.boxing() && !E.cropping && !E.itemDraw && !E.pickMode;
+    // While cropping, the same press offers the crop's shape. (A hold outside the picture has finished the crop by the time it fires: no menu then.)
+    const cropMenuOk = () => !!EV && !EA.exporting && !paint.painting() && E.cropping && !!E.sel && ready(E.sel);
+    let cropPress = false;
     pressMenu(cv, (e) => {
       cancelDrag(); EVheld = false;
+      if (cropPress) {
+        if (!cropMenuOk()) return;
+        const l = E.sel;
+        drawEditorCanvas();
+        openPressMenu(e.clientX, e.clientY, cropShapeMenu(ASPECTS, E.aspect).map((g) => g.map((it) => ({ ...it, run: () => setCropAspect(l, it.aspect) }))), 'Crop shape');
+        return;
+      }
       const hit = visibleLayers().reverse().find((l) => !l.locked && G.insideLayer(l, point(e)));
       if (hit) ST.setPicked(E, pickedFor(picked(), hit));
       renderEditor();
       openLayerMenu(e.clientX, e.clientY);
-    }, { ok: canvasMenuOk });
+    }, { ok: () => { cropPress = cropMenuOk(); return cropPress || canvasMenuOk(); } });
     cv.addEventListener('pointerdown', (e) => {
       if (!EV || EA.exporting || e.pointerType === 'touch') return;
-      if (e.button === 2 && canvasMenuOk()) { e.stopImmediatePropagation(); e.preventDefault(); return; }   // (it isn't a drag: the menu comes with its contextmenu event)
+      if (e.button === 2 && (canvasMenuOk() || cropMenuOk())) { e.stopImmediatePropagation(); e.preventDefault(); return; }   // (it isn't a drag: the menu comes with its contextmenu event)
       if (e.button === 1 || (e.button === 0 && spaceHeld)) { e.stopImmediatePropagation(); e.preventDefault(); startPan(e); }
     }, true);
     cv.addEventListener('pointermove', (e) => {
@@ -870,7 +953,7 @@ export function createEditor(cfg) {
         if (k && k === lastCorner.k && performance.now() - lastCorner.t < 350) { lastCorner = { t: 0, k: null }; EVheld = false; trimCrop(sel); return; }
         lastCorner = { t: performance.now(), k };
         if (k) drag = { crop: true, was, fx: k.includes('w') ? c.x + c.w : c.x, fy: k.includes('n') ? c.y + c.h : c.y };
-        else if (G.insideLayer(sel, p)) drag = { crop: true, was, move: true, q0: q, c0: { ...c } };
+        else if (G.insideLayer(sel, p)) drag = { crop: true, was, move: true, q0: pastOn(e) ? raw : q, c0: { ...c } };
         else if (raw.x >= 0 && raw.x <= 1 && raw.y >= 0 && raw.y <= 1) drag = { crop: true, was, fx: q.x, fy: q.y };
         else if (pastOn(e)) drag = { crop: true, was, fx: raw.x, fy: raw.y };   // (from outside the picture)
         else { EVheld = false; E.cropping = false; renderEditor(); }   // tapping outside the image finishes the crop
@@ -910,7 +993,7 @@ export function createEditor(cfg) {
       if (e.shiftKey || E.pickMode) { EVheld = false; togglePick(hit); renderEditor(); return; }
       lastTap = { t: now, l: hit };
       const group = picked();
-      drag = { l: hit, p0: p, x0: hit.x, y0: hit.y, was: { sel: E.sel, multi: E.multi }, out: canGive(hit) ? pictureDrag(cv, () => layerThumb(hit)) : null };
+      drag = { l: hit, p0: p, x0: hit.x, y0: hit.y, was: { sel: E.sel, multi: E.multi }, alt: e.altKey, out: !e.altKey && canGive(hit) ? pictureDrag(cv, () => layerThumb(hit)) : null };
       if (group.length > 1 && group.includes(hit)) drag.group = group.filter((m) => m !== hit && !m.locked).map((m) => [m, m.x, m.y]);   // (the selection moves together)
       else if (E.sel !== hit || E.multi.length) { pickOnly(hit); renderEditor(); }
     });
@@ -989,18 +1072,19 @@ export function createEditor(cfg) {
         l.x = Math.round(left ? drag.ax - drag.cw * l.scale : drag.ax);
         l.y = Math.round(up ? drag.ay - drag.ch * l.scale : drag.ay);
       } else {
+        if (drag.alt && !startCopy(p)) return;
         const l = drag.l;
         l.x = Math.round(drag.x0 + p.x - drag.p0.x);
         l.y = Math.round(drag.y0 + p.y - drag.p0.y);
         E.guides = [];
-        if (E.snap && !e.altKey) {   // edges and centre snap to the canvas and the other layers
+        if (E.snap && (!e.altKey || drag.copied)) {   // edges and centre snap to the canvas and the other layers (Alt skips it, unless it's making the copy)
           const t = snapTargets(l), thr = SNAP / EV.s, r = bounds(l);
           const sx = snapNearest([r.x, r.x + r.w / 2, r.x + r.w], t.xs, thr);
           const sy = snapNearest([r.y, r.y + r.h / 2, r.y + r.h], t.ys, thr);
           if (sx) { l.x = Math.round(l.x + sx.d); E.guides.push({ x: sx.at }); }
           if (sy) { l.y = Math.round(l.y + sy.d); E.guides.push({ y: sy.at }); }
         }
-        if (snapOn('grid', e) && editorFrame()) {   // the grid wins over the edges
+        if (snapOn('grid', drag.copied ? null : e) && editorFrame()) {   // the grid wins over the edges
           const f = editorFrame(), step = ST.gridStep(f.w, gridSnap.gridPct), r = bounds(l);
           l.x = Math.round(l.x + ST.onGrid(r.x, f.x, step) - r.x); l.y = Math.round(l.y + ST.onGrid(r.y, f.y, step) - r.y);
           E.guides = [];
@@ -1020,11 +1104,11 @@ export function createEditor(cfg) {
         lastTap = { t: 0, l: null };
         giveLayer(drag.l, slot);
       }
+      if (e?.type === 'pointercancel') dropCopies();
       const moved = drag && drag.moved;
-      if (drag?.crop && E.sel && G.pastEdge(E.sel.crop)) {   // past the edges: the layer goes back as it was, and a new picture with the grey in it goes over it
-        const l = E.sel, c = l.crop, at = { x: l.x, y: l.y };
-        Object.assign(l, drag.was);
-        if (e?.type !== 'pointercancel') growLayer(l, c, at);
+      if (drag?.crop && E.sel && G.pastEdge(E.sel.crop)) {   // past the edges: it waits for Extend, and the first was is what Cancel goes back to
+        if (e?.type === 'pointercancel') Object.assign(E.sel, drag.was);
+        else E.grow ||= { l: E.sel, was: drag.was };
       }
       boxShown = null;
       if (drag?.box && !drag.live) {   // a click: the layer under it, as a box that small would touch it
@@ -1041,8 +1125,10 @@ export function createEditor(cfg) {
     };
     cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
     cv.parentElement.append(toolbar = h('div', { class: 'layer-toolbar hidden', role: 'toolbar', 'aria-label': 'Layer tool' },
-      h('button', { type: 'button', 'data-mode': 'transform', title: 'Move and resize (V)', 'aria-label': 'Transform', onclick: () => setEditorMode(false) }, icon('move')),
+      h('button', { type: 'button', 'data-mode': 'transform', title: 'Move and resize (V). Alt+drag a layer to copy it', 'aria-label': 'Transform', onclick: () => setEditorMode(false) }, icon('move')),
       h('button', { type: 'button', 'data-mode': 'crop', title: 'Crop (C)', 'aria-label': 'Crop', onclick: () => setEditorMode(true) }, icon('crop')),
+      h('button', { type: 'button', class: 'on hidden', 'data-grow': '', title: 'Make the new picture, with neutral grey in the new part (Enter)', onclick: applyGrow }, 'Extend'),
+      h('button', { type: 'button', class: 'hidden', 'data-grow': '', title: 'Put the crop back (Esc)', 'aria-label': 'Cancel the extension', onclick: cancelGrow }, icon('close')),
       h('span', { class: 'sep' }),
       h('button', { type: 'button', 'data-snap': '', title: 'Snap to the canvas and other layers (hold Alt to skip)', 'aria-label': 'Snap',
         onclick: () => { E.snap = !E.snap; persistEditor(); drawEditorCanvas(); } }, icon('target'))));
@@ -1091,6 +1177,7 @@ export function createEditor(cfg) {
       if (!go && e.shiftKey) return;   // (a new line in another panel's box)
       e.preventDefault(); e.stopPropagation();
       if (!go || e.repeat) return;   // (a key held down starts one run)
+      if (E.grow) return toast('Press Extend or Cancel on the crop first', true);
       if (e.target.matches?.('input')) e.target.dispatchEvent(new Event('change', { bubbles: true }));   // (a number just typed counts: it's only saved on change)
       if (go === 'fill') runFill(eng); else runImageTool(eng);
     }, true);
@@ -1109,9 +1196,9 @@ export function createEditor(cfg) {
       const l = E.sel, n = e.shiftKey ? 10 : 1;
       const nudge = (dx, dy) => { if (E.cropping || !ready(l)) return; l.x += dx; l.y += dy; persistEditor(); };
       const keys = {
-        Escape: () => { if (E.cropping) E.cropping = false; else if (E.multi.length) E.multi = []; else E.sel = null; },
+        Escape: () => { if (E.grow) cancelGrow(); else if (E.cropping) E.cropping = false; else if (E.multi.length) E.multi = []; else E.sel = null; },
         v: () => { E.cropping = false; }, c: () => { if (!plain(l)) { E.cropping = true; E.aspect = null; } },
-        Enter: () => { E.cropping = false; },
+        Enter: () => { if (E.grow) applyGrow(); else E.cropping = false; },
         Delete: () => (E.multi.length ? deleteSelected() : removeLayer(l)), Backspace: () => (E.multi.length ? deleteSelected() : removeLayer(l)),
         ArrowLeft: () => nudge(-n, 0), ArrowRight: () => nudge(n, 0), ArrowUp: () => nudge(0, -n), ArrowDown: () => nudge(0, n),
       };
@@ -1144,6 +1231,7 @@ export function createEditor(cfg) {
     if (E.sel && !E.layers.includes(E.sel)) { E.sel = E.multi.find((l) => E.layers.includes(l)) || null; E.multi = E.multi.filter((l) => l !== E.sel); }
     E.multi = E.multi.filter((l) => E.layers.includes(l) && l !== E.sel);
     if (!E.sel) { E.multi = []; E.pickMode = false; }
+    settleGrow();
     if (!E.sel || !ready(E.sel)) E.cropping = false;
     if (cfg.renderPanel) cfg.renderPanel(eng);
     else if (cfg.panel) {
@@ -1211,7 +1299,8 @@ export function createEditor(cfg) {
 
   // Top of the list is drawn on top; tap a row to select that layer
   // a copy of each selected layer over them, in the same place, picked (undo takes it away: a change to the stack). A painted layer gets a canvas of its own.
-  function duplicateSelected() {
+  function duplicateSelected() { if (copyPicked()) editorChanged(); }
+  function copyPicked() {
     const copyCanvas = (l) => {
       if (!(l.img instanceof HTMLCanvasElement)) return l.img;
       const cv = makeCanvas(l.img.width, l.img.height);   // (paint.js's: it says its size as a picture does, or the copy never counts as loaded)
@@ -1219,9 +1308,9 @@ export function createEditor(cfg) {
       return cv;
     };
     const r = ST.duplicate(E.layers, E.groups, picked().filter(ready), { newKey: uid, img: copyCanvas, name: layerName });
-    if (!r.copies.length) return toast('Select a picture layer first', true);
+    if (!r.copies.length) { toast('Select a picture layer first', true); return null; }
     E.layers = r.layers; E.sel = r.copies[r.copies.length - 1]; E.multi = r.copies.slice(0, -1);
-    editorChanged();
+    return r;
   }
   function layerList() {
     if (!E.layers.length) return h('div', {}, hint('Add images from your inputs, generations or device, then tap one on the canvas to move, resize or crop it.'),
@@ -1582,7 +1671,7 @@ export function createEditor(cfg) {
             E.layers = before; persistEditor(); renderEditor();
           });
         }, { cls: 'small danger' })),
-      help('Drag any selected layer on the canvas to move them all. Opacity, Blend and the buttons change every selected layer; the Image tools panel, set to Selected layers, runs on each one in turn. Select one layer to edit it alone.'));
+      help('Drag any selected layer on the canvas to move them all, or Alt+drag to copy them. Opacity, Blend and the buttons change every selected layer; the Image tools panel, set to Selected layers, runs on each one in turn. Select one layer to edit it alone.'));
   }
 
   function layerProps(l) {
@@ -1592,15 +1681,13 @@ export function createEditor(cfg) {
     const W = l.img.naturalWidth, H = l.img.naturalHeight, c = l.crop;
     if (E.cropping) {
       return section('Crop', done,
-        help('Drag the box or its corners on the canvas. Double-tap a corner to trim the crop to the solid part of a picture with see-through in it. Switch back to Transform, or tap outside the image, when you\'re done.'),
-        toggle('Past the edges', !!E.cropPast, (v) => { E.cropPast = v; renderEditor(); }, { help: 'Or hold Ctrl while you drag. The box can go past the picture, and the new part is neutral grey. Letting go makes a new layer over this one, which hides. Then Image tools → Edit from a prompt can fill the grey in. This worked in a test: Fill the plain grey area, continuing the picture naturally. Keep everything else exactly the same. The model draws the whole picture again, so a face can change a little: to keep the rest exact, paint the grey as the red mask and use The red mask.' }),
-        field('Aspect', seg(ASPECTS.map(([label, a]) => [a, label]), E.aspect, (a) => {
-          E.aspect = a;
-          if (a) setLayerCrop(l, aspectCrop(W, H, a));
-          editorChanged();
-        }, { wrap: true })),
-        hint(`Keeping ${Math.round(c.w * W)}×${Math.round(c.h * H)} of ${W}×${H} px`),
-        h('div', { class: 'row' },
+        help('Drag the box or its corners on the canvas. Right-click or long-hold it to pick a shape. Double-tap a corner to trim the crop to the solid part of a picture with see-through in it. Switch back to Transform, or tap outside the image, when you\'re done.'),
+        toggle('Past the edges', !!E.cropPast, (v) => { E.cropPast = v; renderEditor(); }, { help: 'Or hold Ctrl while you drag. The box can go past the picture, and the new part is neutral grey. Adjust it as often as you like, then press Extend (or Enter) to make a new layer over this one, which hides. Cancel (or Esc) puts the crop back, and so does leaving the crop without extending. Then Image tools → Edit from a prompt can fill the grey in. This worked in a test: Fill the plain grey area, continuing the picture naturally. Keep everything else exactly the same. The model draws the whole picture again, so a face can change a little: to keep the rest exact, paint the grey as the red mask and use The red mask.' }),
+        field('Aspect', seg(ASPECTS.map(([label, a]) => [a, label]), E.aspect, (a) => setCropAspect(l, a), { wrap: true })),
+        hint(E.grow ? `Extending ${W}×${H} to ${Math.round(c.w * W)}×${Math.round(c.h * H)} px` : `Keeping ${Math.round(c.w * W)}×${Math.round(c.h * H)} of ${W}×${H} px`),
+        E.grow ? h('div', { class: 'row' },
+          button('Extend', applyGrow, { cls: 'small primary', title: 'Enter' }),
+          button('Cancel', cancelGrow, { title: 'Esc' })) : h('div', { class: 'row' },
           button('Finish crop', () => { E.cropping = false; renderEditor(); }, { cls: 'small primary' }),
           button('Reset crop', () => { E.aspect = null; setLayerCrop(l, { ...FULL }); editorChanged(); })));
     }
@@ -1647,6 +1734,11 @@ export function createEditor(cfg) {
         cropped && !flat ? button('Reset crop', () => { setLayerCrop(l, { ...FULL }); editorChanged(); }) : null,
         button('100%', () => { setScale(1); editorChanged(); })),
       flat && isCanvas(l) ? canvasSizeFields(l) : null,
+      flat && !l.mask ? fillField('Background', () => l.fill || null, (c) => {
+        if (c) l.fill = c; else delete l.fill;
+        l.paintRev = (l.paintRev || 0) + 1;   // (what its Colour adjustments were worked out from has changed)
+        persistEditor(); drawEditorCanvas();
+      }, help('Behind what is painted on this canvas. Painted strokes stay as they are, and the eraser shows it. On a canvas made before this could change, an old fill is part of the painting and stays on top.')) : null,
       alignControls(l),
       del,
       help('Drag it on the canvas to move it, a corner to resize, or the round handle above it to turn it (it pulls to 15° steps; Shift steps by 15°, Alt turns freely); it snaps to the canvas and other layers (hold Alt, or turn off Snap, to place it freely). Switch to Crop in the toolbar above it (or double-tap).' + (flat ? ' A canvas is resized (below), not turned or cropped.' : '')));
@@ -1797,7 +1889,7 @@ export function createEditor(cfg) {
     return cv;
   }
   const canGive = (l) => ready(l) && !l.mask && !l.draft && !l.maskOf;
-  const layerThumb = (l) => (isCanvas(l) ? canvasThumb(l.img) : h('img', { src: thumbUrl(l.name, 160), alt: '' }));
+  const layerThumb = (l) => (isCanvas(l) || (l.fill && ready(l)) ? canvasThumb(onPaper(l, l.img)) : h('img', { src: thumbUrl(l.name, 160), alt: '' }));
   // a layer dragged onto a picture slot (a tool's reference, say): the slot gets an input of it as it shows; the layer stays in the stack
   async function giveLayer(l, slot) {
     const b = busy('Copying the layer…');
@@ -1889,7 +1981,7 @@ export function createEditor(cfg) {
     try {
       list = await Promise.all(layers.map(async (l) => {
         const base = { name: layerName(l).replace(/\.[a-z]+$/i, ''), hidden: !!l.hidden, opacity: l.opacity ?? 1, blend: l.blend || 'normal' };
-        if (G.turned(l) || maskOfLayer(l) || A.isOn(l.adjust)) { const { name, b } = await baked(l); return { ...base, src: { input: name }, crop: { ...FULL }, rect: { x: b.x - f.x, y: b.y - f.y, w: b.w, h: b.h } }; }
+        if (G.turned(l) || maskOfLayer(l) || A.isOn(l.adjust) || l.fill) { const { name, b } = await baked(l); return { ...base, src: { input: name }, crop: { ...FULL }, rect: { x: b.x - f.x, y: b.y - f.y, w: b.w, h: b.h } }; }
         const r = layerRect(l);
         return { ...base, src: { input: l.name }, crop: l.crop, rect: { x: r.x - f.x, y: r.y - f.y, w: r.w, h: r.h } };
       }));
@@ -1936,6 +2028,7 @@ export function createEditor(cfg) {
     editorPause();
     if (!visibleLayers().length) return toast('Add some images first', true);
     if (E.layers.some((l) => !l.broken && !ready(l))) return toast('The images are still loading', true);
+    if (E.grow) return toast('Press Extend or Cancel on the crop first', true);
     const { fps, len } = E.anim, t0 = E.t, label = btn.textContent;
     const { first, count: n } = frameSpan(WA.exportRange(), Math.max(1, Math.round(len * fps)), fps);   // Range only: the work area's frames
     const cv = document.createElement('canvas');
@@ -1966,7 +2059,7 @@ export function createEditor(cfg) {
   // another document in this host: its state, posed at the start, nothing selected
   function load(payload) {
     editorPause();
-    Object.assign(E, fromSaved(payload || {}), { sel: null, multi: [], pickMode: false, cropping: false, aspect: null, guides: [], t: 0 });
+    Object.assign(E, fromSaved(payload || {}), { sel: null, multi: [], pickMode: false, cropping: false, grow: null, aspect: null, guides: [], t: 0 });
     E.layers = ST.normalize(E.layers, E.groups);
     stackWas = null;   // (a fresh start for this document's undo)
     poseAt(0);

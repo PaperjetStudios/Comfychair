@@ -1,7 +1,7 @@
 // node --test tests/layer_menu.test.mjs: what the layers' menu offers, in what order, and where it goes (web/layer-menu.js)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { layerMenu, menuSpot, pickedFor } from '../web/layer-menu.js';
+import { cropShapeMenu, layerMenu, menuSpot, pickedFor } from '../web/layer-menu.js';
 
 const ids = (m) => m.map((g) => g.map((i) => i.id));
 const base = { layers: 3, selected: 0, pictures: 0, hidden: 0, clip: false, pickMode: false, newEdit: true, mergeDown: true, mergeSet: true };
@@ -53,4 +53,13 @@ test('the menu stays on screen, flipping away from the edge it would pass', () =
   assert.deepEqual(menuSpot(100, 100, 200, 300, 1000, 800), { left: 100, top: 100 });
   assert.deepEqual(menuSpot(900, 700, 200, 300, 1000, 800), { left: 700, top: 400 });
   assert.deepEqual(menuSpot(10, 100, 200, 900, 300, 800), { left: 10, top: 4 });
+});
+
+test('a crop box offers its shapes in order, with the one in use ticked', () => {
+  const shapes = [['Free', null], ['16:9', 16 / 9], ['9:16', 9 / 16]];
+  const on = (cur) => cropShapeMenu(shapes, cur)[0].filter((i) => i.on).map((i) => i.label);
+  assert.deepEqual(cropShapeMenu(shapes, null)[0].map((i) => [i.label, i.aspect]), [['Free', null], ['16:9', 16 / 9], ['9:16', 9 / 16]]);
+  assert.deepEqual(on(null), ['Free']);
+  assert.deepEqual(on(undefined), ['Free']);
+  assert.deepEqual(on(9 / 16), ['9:16']);
 });

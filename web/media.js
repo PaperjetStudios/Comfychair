@@ -45,7 +45,7 @@ export function pickerSheet(title, bar, load) {
   const grid = h('div', { class: 'grid gallery' });
   const draw = async () => {
     grid.replaceChildren(placeholder('Loading…'));
-    try { const cards = await load(); grid.replaceChildren(...[cards].flat()); }
+    try { const cards = await load(); grid.replaceChildren(...[cards].flat(Infinity).filter(Boolean)); }
     catch (e) { grid.replaceChildren(note(e.message, 'err')); }
   };
   draw.seq = openSheet(h('h3', {}, title), h('div', { class: 'picker-bar' }, bar), grid);

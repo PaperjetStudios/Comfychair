@@ -8,7 +8,7 @@
 //   Merge: the layers drawn as one new picture, at the place of the topmost, in their group if they share one. Undo brings them back.
 //   Undo: stackState() is what a change to the stack changes (no pixels); applyState() puts it back on the same layer objects.
 // ---------------------------------------------------------------------------
-const FIELDS = ['crop', 'x', 'y', 'scale', 'opacity', 'hidden', 'blend', 'locked', 'label', 'rotation', 'flipX', 'flipY', 'group', 'maskOf', 'maskOff', 'clip', 'adjust', 'maskFor'];
+const FIELDS = ['crop', 'x', 'y', 'scale', 'opacity', 'hidden', 'blend', 'locked', 'label', 'rotation', 'flipX', 'flipY', 'group', 'maskOf', 'maskOff', 'clip', 'adjust', 'maskFor', 'fill'];
 const copy = (v) => (v && typeof v === 'object' ? { ...v } : v);
 
 export function stackState(layers, groups = []) {
@@ -138,12 +138,12 @@ export const onGrid = (v, from, step) => from + Math.round((v - from) / step) * 
 
 // Duplicate: a copy of each of list (a mask in it stands for its owner; the red Masks layer and drafts are left out) over the topmost of
 // them, in the same order and place, with its own mask copied too. A copy keeps its group. { newKey(), img(layer), name(layer) } come from
-// the caller: img says what a copy draws (a painted layer's canvas can't be shared). Returns { layers, copies }.
+// the caller: img says what a copy draws (a painted layer's canvas can't be shared). Returns { layers, copies, from }: copies[i] is of from[i].
 export function duplicate(layers, groups, list, { newKey, img = (l) => l.img, name = (l) => l.label || l.name }) {
   const own = new Set();
   for (const l of list) own.add(l.maskOf ? layers.find((o) => o.key === l.maskOf && !o.maskOf) : l);
   const from = layers.filter((l) => own.has(l) && !l.mask && !l.draft);
-  if (!from.length) return { layers, copies: [] };
+  if (!from.length) return { layers, copies: [], from };
   const twin = (l, extra) => {
     const c = { ...l, crop: { ...l.crop }, img: img(l), ...extra };
     for (const k of ['chans', 'adjust']) if (l[k]) c[k] = structuredClone(l[k]);
@@ -158,7 +158,7 @@ export function duplicate(layers, groups, list, { newKey, img = (l) => l.img, na
   }
   const top = from[from.length - 1], topMask = top.key != null ? layers.find((o) => o.maskOf === top.key) : null;
   const at = layers.indexOf(topMask || top) + 1;
-  return { layers: normalize([...layers.slice(0, at), ...made, ...layers.slice(at)], groups), copies };
+  return { layers: normalize([...layers.slice(0, at), ...made, ...layers.slice(at)], groups), copies, from };
 }
 
 // What Copy takes: the picked picture layers with their masks (a picked mask means its layer), in stack order.

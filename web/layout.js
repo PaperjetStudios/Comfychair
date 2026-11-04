@@ -182,13 +182,33 @@ export function basicsPane(viewer, id, { title = 'Size, length and seed' } = {})
 }
 
 // ---------------------------------------------------------------------------
+// docStrip: a panel's strip of saved tabs sits on the one thin bar under the main navigation (index.html #docBar),
+// Photoshop's way. Only the open panel's strip shows, and the bar goes when that panel has none (Board, History).
+// onShow runs each time the strip comes back on show: a hidden strip can't scroll its open tab into view.
+// ---------------------------------------------------------------------------
+export function docStrip(host, strip, onShow = null) {
+  const bar = $('#docBar');
+  const sync = () => {
+    const on = host.classList.contains('active'), was = !strip.classList.contains('hidden');
+    strip.classList.toggle('hidden', !on);
+    bar.classList.toggle('hidden', !bar.querySelector(':scope > :not(.hidden)'));
+    if (on && !was) onShow?.();
+  };
+  strip.classList.add('hidden');
+  bar.append(strip);
+  sync();
+  new MutationObserver(sync).observe(host, { attributes: true, attributeFilter: ['class'] });
+}
+
+// ---------------------------------------------------------------------------
 // sidebar icon tabs (Blender's Properties editor): a column of icon buttons at the left of a
 // panel that shows one parameter group at a time, or all of them. Navigation only: the groups
 // themselves stay where they are. sideNav watches the panel, so it follows every redraw.
 // find() -> [{ el, label }] for the groups there are now.
 // ---------------------------------------------------------------------------
 const ICONS = [
-  [/image tools/i, ['M5 19L16 8', 'M14 6l4 4', 'M18 3v3M16.5 4.5h3M6 5v2M5 6h2']],   // (a wand)
+  [/image tools|clip tools/i, ['M5 19L16 8', 'M14 6l4 4', 'M18 3v3M16.5 4.5h3M6 5v2M5 6h2']],   // (a wand)
+  [/control map/i, ['M12 3l8 4.5v9L12 21l-8-4.5v-9z', 'M12 12l8-4.5M12 12v9M12 12L4 7.5']],
   [/prompt|text|caption|subject|negative/i, ['M4 6h16M4 12h16M4 18h10']],
   [/image|picture|photo|input|reference|source/i, ['M3 5h18v14H3z', 'M3 16l5-5 4 4 3-3 6 6', 'M9 9.5h.01']],
   [/video|clip|movie|frames?/i, ['M3 5h18v14H3z', 'M8 5v14M16 5v14M3 10h5M3 14h5M16 10h5M16 14h5']],

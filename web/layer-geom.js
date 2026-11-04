@@ -68,6 +68,14 @@ export function sentToFrame(l, f, [w, h]) {
 }
 // A crop that goes past the picture's edges (Ctrl while cropping), and the picture it makes: w×h, with the old W×H picture drawn at ix, iy
 export const pastEdge = (c) => c.x < -1e-4 || c.y < -1e-4 || c.x + c.w > 1 + 1e-4 || c.y + c.h > 1 + 1e-4;
+// E.grow = { l, was }: a crop past the edges waiting for its Extend button, was being the layer's crop and place without it.
+// What becomes of it: null it waits on, 'clear' it's over and the crop stays (back inside the picture, or the layer's gone),
+// 'undo' the crop goes back to was (the crop was left, or another layer picked, without extending).
+export function growFate(g, { cropping, sel, layers }) {
+  if (!g) return null;
+  if (!layers.includes(g.l) || !pastEdge(g.l.crop)) return 'clear';
+  return cropping && sel === g.l ? null : 'undo';
+}
 export function grownPicture(c, W, H) {
   return { w: Math.max(1, Math.round(c.w * W)), h: Math.max(1, Math.round(c.h * H)), ix: -Math.round(c.x * W), iy: -Math.round(c.y * H) };
 }

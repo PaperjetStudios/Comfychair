@@ -235,14 +235,19 @@ def i2v(last=False):
 def ctrl2v():
     """Control union: a depth, pose or edge clip (the 3D tab's renders, VFX Depth map or Pose preview, or any clip of
     them) leads the motion and layout through the union-control IC-LoRA (an LTX-2.3 LoRA; ref0.5, so the guide is half
-    size and both sides are x64), with an optional start picture for the look. New sound from the prompt."""
+    size and both sides are x64), with an optional start picture for the look. New sound from the prompt, or an optional
+    @6 Sound the clip moves to and keeps, as in a2v (the clip is then no longer than the sound)."""
     g = G()
     models(g)
     text(g)
     g.add("src", node("VHS_LoadVideoPath", "@1 Control video [video]", video="", force_rate=FPS, custom_width=0, custom_height=0,
                       frame_load_cap=0, skip_first_frames=0, select_every_nth=1))
     g.add("secs", node("PrimitiveFloat", "@3 Length (seconds)", value=5.0))
-    math(g, "nf", f"floor((min(a, b*{FPS}+1)-1)/8)*8+1", "frames: 8n+1 within the clip and Length", a=["src", 1], b=["secs", 0])
+    g.add("snd", node("VHS_LoadAudio", "@6 Sound [audio_file]", audio_file="", seek_seconds=0, duration=0))
+    plain = f"floor((min(a, b*{FPS}+1)-1)/8)*8+1"
+    math(g, "nf", f"max(9, floor((min(a, b*{FPS}+1, c*{FPS})-1)/8)*8+1)", "frames: 8n+1 within the clip, Length and the sound",
+         a=["src", 1], b=["secs", 0], c=["snd", 1])
+    g["nf"]["_meta"]["deck_unplugged"] = {"expression": plain}
     g.add("cut", node("ImageFromBatch", image=["src", 0], batch_index=0, length=["nf", 1]))
     g.add("short", node("PrimitiveInt", "@4 Resolution (short side)", value=576))
     g.add("size", node("GetImageSize", image=["cut", 0]))
@@ -266,10 +271,21 @@ def ctrl2v():
                         latent=["i2v", 0], image=["rs", 0], frame_idx=0, strength=1.0, latent_downscale_factor=["lora", 1],
                         crop="disabled", use_tiled_encode=False, tile_size=256, tile_overlap=64, use_streaming=False, tile_frames=97))
     audio_latent(g, ["nf", 1])
-    g.add("av", node("LTXVConcatAVLatent", video_latent=["guide", 2], audio_latent=["alat", 0]))
+    # the picked sound, encoded and frozen; left empty, these go and the clip's sound comes from the prompt (alat, adec)
+    math(g, "dur", f"a/{FPS}", "the clip's length in seconds", a=["nf", 1])
+    for nid, n in (("scut", node("TrimAudioDuration", "the sound, as long as the clip", audio=["snd", 0], start_index=0.0, duration=["dur", 0])),
+                   ("aenc", node("LTXVAudioVAEEncode", "encode the sound", audio=["scut", 0], audio_vae=["avae", 0])),
+                   ("afrz", node("LTXVFreezeLatent", "the sound stays as it is", latent=["aenc", 0]))):
+        n["_meta"]["deck_drop"] = True
+        g.add(nid, n)
+    av = node("LTXVConcatAVLatent", "picture and sound", video_latent=["guide", 2], audio_latent=["afrz", 0])
+    av["_meta"]["deck_unplugged"] = {"audio_latent": ["alat", 0]}
+    g.add("av", av)
     sample(g, ["lora", 0], ["guide", 0], ["guide", 1], ["av", 0])
     g.add("crop", node("LTXVCropGuides", positive=["guide", 0], negative=["guide", 1], latent=["sep", 0]))
     decode(g, ["crop", 2], "ltx-ctrl2v", audio=True)
+    g["vid"]["inputs"]["audio"] = ["scut", 0]
+    g["vid"]["_meta"] = {"title": "the clip", "deck_unplugged": {"audio": ["adec", 0]}}
     return g
 
 

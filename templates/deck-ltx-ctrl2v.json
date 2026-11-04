@@ -95,10 +95,21 @@
    "title": "@3 Length (seconds)"
   }
  },
+ "snd": {
+  "class_type": "VHS_LoadAudio",
+  "inputs": {
+   "audio_file": "",
+   "seek_seconds": 0,
+   "duration": 0
+  },
+  "_meta": {
+   "title": "@6 Sound [audio_file]"
+  }
+ },
  "nf": {
   "class_type": "ComfyMathExpression",
   "inputs": {
-   "expression": "floor((min(a, b*24+1)-1)/8)*8+1",
+   "expression": "max(9, floor((min(a, b*24+1, c*24)-1)/8)*8+1)",
    "values.a": [
     "src",
     1
@@ -106,10 +117,17 @@
    "values.b": [
     "secs",
     0
+   ],
+   "values.c": [
+    "snd",
+    1
    ]
   },
   "_meta": {
-   "title": "frames: 8n+1 within the clip and Length"
+   "title": "frames: 8n+1 within the clip, Length and the sound",
+   "deck_unplugged": {
+    "expression": "floor((min(a, b*24+1)-1)/8)*8+1"
+   }
   }
  },
  "cut": {
@@ -352,6 +370,67 @@
    ]
   }
  },
+ "dur": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "a/24",
+   "values.a": [
+    "nf",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "the clip's length in seconds"
+  }
+ },
+ "scut": {
+  "class_type": "TrimAudioDuration",
+  "inputs": {
+   "audio": [
+    "snd",
+    0
+   ],
+   "start_index": 0.0,
+   "duration": [
+    "dur",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "the sound, as long as the clip",
+   "deck_drop": true
+  }
+ },
+ "aenc": {
+  "class_type": "LTXVAudioVAEEncode",
+  "inputs": {
+   "audio": [
+    "scut",
+    0
+   ],
+   "audio_vae": [
+    "avae",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "encode the sound",
+   "deck_drop": true
+  }
+ },
+ "afrz": {
+  "class_type": "LTXVFreezeLatent",
+  "inputs": {
+   "latent": [
+    "aenc",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "the sound stays as it is",
+   "deck_drop": true
+  }
+ },
  "av": {
   "class_type": "LTXVConcatAVLatent",
   "inputs": {
@@ -360,9 +439,18 @@
     2
    ],
    "audio_latent": [
-    "alat",
+    "afrz",
     0
    ]
+  },
+  "_meta": {
+   "title": "picture and sound",
+   "deck_unplugged": {
+    "audio_latent": [
+     "alat",
+     0
+    ]
+   }
   }
  },
  "noise": {
@@ -497,9 +585,18 @@
    ],
    "fps": 24,
    "audio": [
-    "adec",
+    "scut",
     0
    ]
+  },
+  "_meta": {
+   "title": "the clip",
+   "deck_unplugged": {
+    "audio": [
+     "adec",
+     0
+    ]
+   }
   }
  },
  "save": {

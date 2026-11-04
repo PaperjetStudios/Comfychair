@@ -1,9 +1,9 @@
-import { h, api, store, toast, busy, button, chip, choiceField, section, field, rangeField, seedField, seg, hint, help, toggle, textArea } from './ui.js';
+import { h, api, store, toast, busy, button, runBar, chip, choiceField, section, field, rangeField, seedField, seg, hint, help, toggle, textArea } from './ui.js';
 import { S, inputUrl, switchTab } from './core.js';
 import { pngBlob, uploadImage } from './media.js';
 import { pictureForRun, pictureInput } from './picture-input.js';
 import { queueRun, template, valuesByRole, waitGen } from './make.js';
-import { MAPS } from './maps.js';
+import { MAPS, mapRoles } from './maps.js';
 import { editSizeFor, editSizeTo } from './edit-size.js';
 import * as G from './layer-geom.js';
 import * as Stack from './layer-stack.js';
@@ -16,8 +16,8 @@ import { icon } from './icons.js';
 import { eachOne, failureText } from './tool-batch.js';
 import { partPrompt, partSize, partsOf } from './skin-parts.js';
 import { besideX, layerOf, owedFor, owedRecord, sameRun, withOwed, withoutOwed } from './owed-runs.js';
-import { asRefs, editChoices, editPrompt, layerWord, refSlots, seedStep, sigmasFor, usableLoras } from './edit-image.js';
-import { loraPicker } from './lora-pick.js';
+import { anyClear, asRefs, NEUTRAL_GREY, editChoices, editPrompt, layerWord, refSlots, seedStep, sigmasFor, usableLoras } from './edit-image.js';
+import { loraStack } from './lora-pick.js';
 import { SWAP_MODELS, SWAP_PARTS, biggestArea, changedAround, joined, onlyWithin, scaleFor, softEdge, swapBox, swapLora, swapPrompt, swapRefPixels, without } from './swap-part.js';
 
 // ---------------------------------------------------------------------------
@@ -80,9 +80,9 @@ const OPS = [
     help: 'Say what to change, and Qwen 2.1 draws each picture again with that change. Select many layers to run the same edit on each. Each result lands as a new layer over its original. The model works at the size set below, bigger or smaller than the picture, and the result lands at the size of its original. With an area the rest stays pixel for pixel.' },
   { id: 'depth', group: 'Maps', label: 'Depth map', tpl: MAPS.depth.still, kind: 'layer', depth: true,
     help: 'A grey depth map (near is white) of the picture: Video Depth Anything. A layer on top; use it as a reference picture or control.' },
-  { id: 'canny', group: 'Maps', label: 'Canny edges', tpl: MAPS.canny.still, kind: 'layer', edges: [0.2, 0.4, 0.6],
+  { id: 'canny', group: 'Maps', label: 'Canny edges', tpl: MAPS.canny.still, kind: 'layer', edges: true,
     help: 'White edges on black: the Canny map that edge control and edit models follow.' },
-  { id: 'scribble', group: 'Maps', label: 'Scribble', tpl: MAPS.scribble.still, kind: 'layer', edges: [16, 28, 40],
+  { id: 'scribble', group: 'Maps', label: 'Scribble', tpl: MAPS.scribble.still, kind: 'layer', edges: true,
     help: 'A loose line drawing, white lines on black: softer and simpler than Canny.' },
   { id: 'pose', group: 'Maps', label: 'Pose', tpl: MAPS.pose.still, sd: MAPS.pose.stillSd, kind: 'layer',
     help: 'The body, hands and face landmarks as an OpenPose-style picture. DWPose runs on the CPU; SDPose uses the GPU and holds up better on hard poses (up to 2 people).' },
@@ -149,13 +149,16 @@ async function keptPart(eng, l) {
   return { name: up.name, px: [cv.width, cv.height] };
 }
 
+const isPaintFile = (name) => /\/paint\/[^/]+$/.test(name);
+
 // The tools whose result has its layer's framing, so the layer's mask fits it
 const KEEPS_FRAMING = new Set(['up', 'detail', 'delight', 'remove', 'clean', 'swap', 'restore', 'colorise', 'edit']);
 // what the tool works on: a layer (null: every layer together). { name (an input), rect (where it sits on the canvas before
 // any turn), layer (or null), was (the layer's place when sent: its turn goes on the result), mask (its mask when sent, for a tool in KEEPS_FRAMING), px }. A model sees a layer unturned.
 async function sourceOf(eng, l, o) {
   if (l) {
-    const part = G.plainCrop(l.crop) && !isOn(l.adjust) ? { name: l.name, px: G.sentPixels(l) } : await keptPart(eng, l);
+    // (a painted layer's file is kept here only, out of ComfyUI, so a run can't load it: it goes as a copy too)
+    const part = G.plainCrop(l.crop) && !isOn(l.adjust) && !isPaintFile(l.name) ? { name: l.name, px: G.sentPixels(l) } : { ...await keptPart(eng, l), copy: true };
     return { ...part, rect: eng.layerRect(l), layer: l, was: { ...l }, mask: KEEPS_FRAMING.has(o.kind) ? maskAsSent(eng, l) : null };
   }
   const f = eng.frame(), pic = document.createElement('canvas');
@@ -365,10 +368,14 @@ async function settle(eng, o, tab, src, done, nth, kept) {
 // One queued run, from here until it lands. nth: which variation of its picture
 function follow(eng, o, tab, src, g, nth = 0) {
   const kept = rememberOwed(o, tab, src, g, nth);
+  src.runs = (src.runs || 0) + 1;
   FOLLOWING.add(g.id); FLIGHT.add(g.id); eng.render();
   waitGen(g.id).then((done) => settle(eng, o, tab, src, done, nth, kept))
     .catch((e) => { forgetOwed(g.id); toast(`${o.label} failed${src.layer ? ` on ${layerWord(src.layer)}` : ''}: ${e.message}`, true); })
-    .finally(() => { FOLLOWING.delete(g.id); FLIGHT.delete(g.id); eng.render(); });
+    .finally(() => {
+      FOLLOWING.delete(g.id); FLIGHT.delete(g.id); eng.render();
+      if (!--src.runs && src.copy) dropInput(src.name);   // (the last run from a copy sent only for these)
+    });
 }
 
 // a kept run, picked up again once the edit's pictures have loaded
@@ -406,6 +413,7 @@ async function run(eng) {
   if (o.kind === 'swap' && !template('deck-mask-image')) return toast('deck-mask-image isn\'t installed', true);
   if (!t) return toast(`${tplId(o)} isn't installed`, true);
   if (eng.loading()) return toast('The images are still loading', true);
+  if (eng.E.grow) return toast('Press Extend or Cancel on the crop first', true);
   if (o.prompt && !ST.prompt.trim()) return toast('Say what to find first', true);
   if (o.model === 'skin' && !partsOf(ST.skinParts).length) return toast('Say which body parts first', true);
   if (!eng.E.layers.some((l) => !l.mask && !l.draft)) return toast('Add a picture first', true);
@@ -423,7 +431,10 @@ async function run(eng) {
     const list = ST.scope === 'selected' ? targets(eng) : [null];
     if (!list.length) return toast('Select a layer first', true);
     // (each selected layer is its own run, queued one after another; one failing to send doesn't stop the rest)
-    const { failed } = await eachOne(list, async (l) => runOne(eng, o, t, tab, await sourceOf(eng, l, o)));
+    const { failed } = await eachOne(list, async (l) => {
+      const src = await sourceOf(eng, l, o);
+      try { return await runOne(eng, o, t, tab, src); } catch (e) { if (src.copy) await dropInput(src.name); throw e; }   // (never queued: nothing will read the copy)
+    });
     if (failed.length) toast(failureText(o.label, failed, (l) => l?.label || l?.name?.split('/').pop() || 'the picture'), true);
   } catch (e) { toast(e.message, true); } finally { b.done(); }
 }
@@ -936,6 +947,7 @@ async function editArea(eng, o, t, tab, src, red, b) {
   const box = ST.eclose ? swapBox(area, W, H, 0.35) : { x: 0, y: 0, w: W, h: H }, pic = await loadImg(inputUrl(src.name));
   const [sw, sh] = editSizeTo(box.w, box.h, 32, ST.emp * 1e6), seen = canvasOf(sw, sh), sc = seen.getContext('2d');
   sc.imageSmoothingQuality = 'high';
+  sc.fillStyle = NEUTRAL_GREY; sc.fillRect(0, 0, sw, sh);
   sc.drawImage(pic, box.x, box.y, box.w, box.h, 0, 0, sw, sh);
   const edge = softEdge(red, W, H, ST.egrow, ST.esoft), name = await send(seen, 'edit-area.png');
   FLIGHT.add(editArea); eng.render();
@@ -990,6 +1002,17 @@ async function editOnLayers(eng, o, t, tab, f, m) {
   } finally { b.done(); }
 }
 
+// A see-through picture goes to the model on grey, as a copy; a solid one goes as it is
+async function solidOf(src) {
+  const [W, H] = src.px, cv = canvasFrom(await loadImg(inputUrl(src.name)), W, H), c = cv.getContext('2d', { willReadFrequently: true });
+  if (!anyClear(c.getImageData(0, 0, W, H).data)) return src;
+  c.globalCompositeOperation = 'destination-over';
+  c.fillStyle = NEUTRAL_GREY; c.fillRect(0, 0, W, H);
+  const name = await send(cv, 'edit.png');
+  if (src.copy) await dropInput(src.name);   // (the grey one replaces it)
+  return { ...src, name, copy: true };
+}
+
 // One picture of the batch. Everything: the runs go in the queue and land as they finish. Found by name: SAM3 first, then the area's edit.
 async function editOne(eng, o, t, tab, src) {
   if (ST.ewhere === 'words') {
@@ -998,11 +1021,14 @@ async function editOne(eng, o, t, tab, src) {
       const red = redOf(await searchFor(src.name, W, H, termsOf(ST.efind)), W, H);
       if (!boundsOf(red, W, H)) throw new Error(`SAM3 found no "${ST.efind.trim()}": try other words, or a lower How sure`);
       return await editArea(eng, o, t, tab, src, red, b);
-    } finally { b.done(); }
+    } finally { b.done(); if (src.copy) await dropInput(src.name); }
   }
-  const gens = await queueRun({ template: t.id, values: await editValues(t, src.name, editSizeTo(src.px[0], src.px[1], 32, ST.emp * 1e6), src), batch: ST.ecount });
+  const sent = await solidOf(src);
+  let gens;
+  try { gens = await queueRun({ template: t.id, values: await editValues(t, sent.name, editSizeTo(src.px[0], src.px[1], 32, ST.emp * 1e6), sent), batch: ST.ecount }); }
+  catch (e) { if (sent.copy) await dropInput(sent.name); throw e; }
   toast(`${o.label}: ${gens.length > 1 ? `${gens.length} runs` : `#${gens[0].id}`} queued; each lands as a new layer`);
-  gens.forEach((g, nth) => follow(eng, o, tab, src, g, nth));
+  gens.forEach((g, nth) => follow(eng, o, tab, sent, g, nth));
 }
 
 // the Edit tool's settings
@@ -1044,15 +1070,11 @@ function editFields(eng, t, size) {
       help: 'How hard the model follows the prompt. At 1 it can stop short: asked for red leather, a denim jacket came back red denim, and at 2.5 it came back leather. Above 1 each run takes about twice as long, and the Avoid box is used.' }),
     ...(t?.fields || []).filter((f) => f.kind === 'choice').map((f) => choiceField(f.group, f.options, ST.echoice[f.key] ?? f.value, (v) => { ST.echoice[f.key] = v; save(); })),
     ST.ecfg > 1 ? field('Avoid', textArea(() => ST.eneg, (v) => { ST.eneg = v; save(); }, { rows: 2, label: 'What to avoid', placeholder: 'Blurry, extra fingers' })) : null,
-    lf ? field(['LoRAs', h('span', {}, `${usableLoras(ST.eloras, installed).length} on`)],
-      help('LoRAs change what an edit can do and how it looks. They run in the order listed, on every run. Your Qwen folder comes first, and search finds the others, which are for other models and rarely work here. Some need a trigger word: put it in the prompt. Untick one to compare the same seed without it (Seed: Fixed).'),
-      ...ST.eloras.map((l, i) => h('div', { class: `lora-row${l.enabled === false ? ' off' : ''}` },
-        h('div', { class: 'top' }, h('input', { type: 'checkbox', checked: l.enabled !== false, title: 'Enabled', 'aria-label': 'LoRA on', onchange: (e) => { l.enabled = e.target.checked; redo(); } }), loraPicker({ options: installed.filter((n) => /^qwen\//i.test(n)), others: installed.filter((n) => !/^qwen\//i.test(n)), value: l.name, empty: '— choose LoRA —', label: (n) => n.replace(/^qwen\//i, ''), aria: 'LoRA',
-          onPick: (name) => { ST.eloras[i].name = name; redo(); } }),
-        button('✕', () => { ST.eloras.splice(i, 1); redo(); }, { cls: 'small', title: 'Remove LoRA' })),
-        l.name && !installed.includes(l.name) ? hint('Not installed: left out of the run') : null,
-        rangeField('Strength', () => l.strength, (v) => { l.strength = v; save(); }, { min: -1, max: 2, step: 0.05 }))),
-      button('+ Add LoRA', () => { ST.eloras.push({ name: '', strength: 1, enabled: true }); redo(); }, { cls: 'small add-btn' })) : null,
+    lf ? loraStack({ options: installed, get: () => ST.eloras, set: (rows) => { ST.eloras = rows; save(); },
+      mode: () => ST.eloraFolder ?? 'auto', setMode: (k) => { ST.eloraFolder = k; save(); }, auto: (folders) => folders.find((d) => /^qwen$/i.test(d)) || null,
+      tip: 'LoRAs change what an edit can do and how it looks. They run in the order listed, on every run. Auto shows your Qwen folder, and search finds the others, which are for other models and rarely work here. Some need a trigger word: put it in the prompt. Untick one to compare the same seed without it (Seed: Fixed).',
+      onWord: (w) => { if (!ST.eprompt.includes(w)) { ST.eprompt = ST.eprompt.trimEnd() ? `${ST.eprompt.trimEnd()}, ${w}` : w; save(); eng.render(); } },
+      onDownloaded: async () => (await import('./generate.js')).loadTemplates(true), onAdded: () => eng.render() }) : null,
   ];
 }
 
@@ -1110,11 +1132,7 @@ async function runOne(eng, o, t, tab, src) {
     const f = t.fields.find((x) => x.input === 'scale_by');
     if (f) values[f.key] = o.id === 'upfast' ? ST.scale / 4 : ST.scale;
   }
-  if (o.depth) {   // the same models and sizes the VFX tab's Depth map sets (vfx.js valuesFor)
-    const small = ST.depthModel === 'small';
-    Object.assign(values, valuesByRole(t, { depthModel: small ? 'video_depth_anything_vits.pth' : 'video_depth_anything_vitl.pth', depthSize: small ? 518 : 448 }));
-  }
-  if (o.edges) Object.assign(values, valuesByRole(t, { edgeAmount: o.edges[{ more: 0, less: 2 }[ST.edgeAmount] ?? 1] }));   // Canny's low threshold; XDoG's threshold
+  if (o.depth || o.edges) Object.assign(values, valuesByRole(t, mapRoles(o.id, ST)));
   if (o.kind === 'detail') {   // the picture's own size (about 2 MP at most, sides a multiple of 16), the chosen strength and prompt
     const m = dm(), set = (input, v) => { const f = t.fields.find((x) => x.input === input); if (f) values[f.key] = v; };
     if (m.plain) set('scale_by', 1);
@@ -1255,7 +1273,7 @@ export function imageToolsSection(eng) {
     o.kind === 'up' ? field(['Enlarge', out ? h('span', {}, out) : null], seg([[2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); eng.render(); })) : null,
     (KEEPS_FRAMING.has(o.kind) || o.kind === 'sheet' || (o.kind === 'matte' && ST.result !== 'mask')) && onLayers && !(o.kind === 'edit' && ST.ewhere === 'painted' && ST.scope !== 'selected')
       ? toggle('Hide the original', ST.hide, (v) => { ST.hide = v; save(); }) : null,
-    h('div', { class: 'row wrap' }, o.kind === 'swap' ? button('Mark it', () => swapMark(eng), { disabled: !t }) : null,
+    runBar(o.kind === 'swap' ? button('Mark it', () => swapMark(eng), { disabled: !t }) : null,
       o.kind === 'swap' ? button('Send to Generate', () => swapSend(eng), { disabled: !t }) : null,
       o.kind === 'swap' ? help('Send to Generate opens a tab per ticked model with the close-up, the reference, the prompt, the size and the LoRA set, to change and run there. What it makes there stays as made: it isn\'t put back on the whole picture.') : null,
       button(o.kind === 'swap' ? 'Swap' : o.kind === 'remove' ? (ST.rfrom === 'words' ? 'Find and mark' : 'Remove') : FLIGHT.size ? 'Run again' : 'Run', () => run(eng), { cls: 'primary', disabled: !t, title: 'Ctrl+Enter or Shift+Enter' })));

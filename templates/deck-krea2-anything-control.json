@@ -1,0 +1,242 @@
+{
+ "1": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "krea2_turbo_fp8_scaled.safetensors",
+   "weight_dtype": "default"
+  },
+  "_meta": {
+   "title": "@9 Model [unet_name]"
+  }
+ },
+ "2": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen3vl_4b_fp8_scaled.safetensors",
+   "type": "krea2",
+   "device": "default"
+  },
+  "_meta": {
+   "title": "Load CLIP"
+  }
+ },
+ "3": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "qwen_image_vae.safetensors"
+  },
+  "_meta": {
+   "title": "Load VAE"
+  }
+ },
+ "4": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "model": [
+    "1",
+    0
+   ],
+   "lora_name": "none",
+   "strength_model": 1.0
+  },
+  "_meta": {
+   "title": "@4 LoRAs"
+  }
+ },
+ "5": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "text": "A woman in a red coat on a rainy street at night, wet pavement, neon reflections, highly realistic detailed photograph",
+   "clip": [
+    "2",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "@1 Prompt"
+  }
+ },
+ "6": {
+  "class_type": "ConditioningZeroOut",
+  "inputs": {
+   "conditioning": [
+    "5",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Negative (zeroed)"
+  }
+ },
+ "7": {
+  "class_type": "EmptyLatentImage",
+  "inputs": {
+   "width": [
+    "15",
+    0
+   ],
+   "height": [
+    "15",
+    1
+   ],
+   "batch_size": 1
+  },
+  "_meta": {
+   "title": "Latent"
+  }
+ },
+ "8": {
+  "class_type": "KSampler",
+  "inputs": {
+   "seed": 0,
+   "steps": 8,
+   "cfg": 1.0,
+   "sampler_name": "euler",
+   "scheduler": "simple",
+   "denoise": 1.0,
+   "model": [
+    "32",
+    0
+   ],
+   "positive": [
+    "5",
+    0
+   ],
+   "negative": [
+    "6",
+    0
+   ],
+   "latent_image": [
+    "7",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "@5 Sampler [seed,steps,sampler_name,scheduler]"
+  }
+ },
+ "9": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "8",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "VAE Decode"
+  }
+ },
+ "10": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "filename_prefix": "krea2_anything_control",
+   "images": [
+    "9",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Save Image"
+  }
+ },
+ "20": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  },
+  "_meta": {
+   "title": "@2 Control picture (silhouette, pose, rough layout)"
+  }
+ },
+ "14": {
+  "class_type": "ImageScaleToTotalPixels",
+  "inputs": {
+   "image": [
+    "20",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "megapixels": 1.0,
+   "resolution_steps": 16
+  },
+  "_meta": {
+   "title": "Size from the control picture"
+  }
+ },
+ "15": {
+  "class_type": "GetImageSize",
+  "inputs": {
+   "image": [
+    "14",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Image size"
+  }
+ },
+ "30": {
+  "class_type": "Krea2ControlPlusImageEncode",
+  "inputs": {
+   "control_image": [
+    "14",
+    0
+   ],
+   "vae": [
+    "3",
+    0
+   ],
+   "latent": [
+    "7",
+    0
+   ],
+   "resize": "match_latent_size",
+   "upscale_method": "lanczos",
+   "crop": "center",
+   "channel_mode": "rgb",
+   "normalize": "none",
+   "invert": false,
+   "batch_mode": "independent_images"
+  },
+  "_meta": {
+   "title": "Encode the control picture"
+  }
+ },
+ "31": {
+  "class_type": "Krea2ControlPlusLoRALoader",
+  "inputs": {
+   "model": [
+    "4",
+    0
+   ],
+   "lora_name": "krea/krea2-anythng_step_007000.safetensors",
+   "strength": 1.0,
+   "start_percent": 0.0,
+   "end_percent": 1.0
+  },
+  "_meta": {
+   "title": "@3 Control [strength,end_percent]"
+  }
+ },
+ "32": {
+  "class_type": "Krea2ControlPlusApply",
+  "inputs": {
+   "model": [
+    "31",
+    0
+   ],
+   "control_latent": [
+    "30",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Apply the control"
+  }
+ }
+}

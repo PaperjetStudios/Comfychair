@@ -77,9 +77,8 @@ export function init(helpers) {
   setSC(defaultScene());   // what shows until the tab opens
   hooks.ready = async () => { boot(); await ensureTabs(); };
   hooks.persist = () => tabs?.changed(); hooks.history = renderToolbar; hooks.tab = () => tabs?.active?.id ?? null; hooks.held = renderKeys;
-  const mount = h('div', { class: 'scene-tabs' });
-  $('#scenePanel').replaceChildren(h('div', { class: 'scene-head' }, mount), h('div', { id: 'sceneBody' }));
-  tabs = new TabSet({ kind: 'scene-tabs', mount, scope: 'project', newName: (n) => `Scene ${n}`, adapter: sceneAdapter, seed: legacyScene });
+  $('#scenePanel').replaceChildren(h('div', { id: 'sceneBody' }));
+  tabs = new TabSet({ kind: 'scene-tabs', host: $('#tab-scene'), scope: 'project', newName: (n) => `Scene ${n}`, adapter: sceneAdapter, seed: legacyScene });
   // Match generate: the length follows the Generate panel's video template
   addEventListener('deck:generate', () => { if (ready && $('#tab-scene').classList.contains('active')) syncLength(); });
 }

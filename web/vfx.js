@@ -1,7 +1,7 @@
 import { loraName, loraChoice, keyRangeFields, restyleLora } from './clip-effects.js';
 export { CLIP_FX, loraChoice, keyRangeFields, restyleLoras, runClipStep } from './clip-effects.js';
-import { $, h, api, toast, clamp, button, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle, textArea, pctFmt, colorField, seedField, sizeSelect, store, info, icon, withHelp } from './ui.js';
-import { MAPS } from './maps.js';
+import { $, h, api, toast, clamp, button, runBar, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle, textArea, pctFmt, colorField, seedField, sizeSelect, store, info, icon, withHelp } from './ui.js';
+import { MAPS, mapRoles } from './maps.js';
 import { S, inputUrl, onServer, switchTab } from './core.js';
 import { bareSource, cardMedia, outputCard, clipLabel, clipUrl, genLabel, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
 import { pictureInput } from './picture-input.js';
@@ -469,11 +469,12 @@ function render() {
     needs.has('size') ? field('Size', sizeSelect(SIZES, T.size, (s) => { T.size = s; changed(false); })) : null,
     needs.has('seed') ? seedField('Seed', { get: () => T.seed, set: (v) => { T.seed = v; changed(false); }, increment: false,
       mode: () => (T.seed < 0 ? 'random' : 'fixed'), setMode: (m) => { if (m === 'random') T.seed = -1; else if (T.seed < 0) T.seed = lastSeed(e) ?? 0; changed(false); },
-      last: () => lastSeed(e) }) : null,
-    h('div', { class: 'row wrap' }, runBtn, e.job ? null : button('Open in Generate', openInGenerate,
-      { disabled: !!missing, title: 'The same template and values in a new Generate tab, to change any setting there' })));
+      last: () => lastSeed(e) }) : null);
+  // (outside Settings: it runs what all these sections set, so it stays until the last of them has gone by)
+  const runRow = runBar(runBtn, e.job ? null : button('Open in Generate', openInGenerate,
+    { disabled: !!missing, title: 'The same template and values in a new Generate tab, to change any setting there' }));
 
-  body.replaceChildren(h('div', { class: 'panel-body' }, effect, inputs, prompt, settings, resultsSection()));
+  body.replaceChildren(h('div', { class: 'panel-body' }, effect, inputs, prompt, settings, runRow, resultsSection()));
   drawViewer();
   poseLine();
 }
@@ -752,15 +753,7 @@ async function buildRun(e, loose = false) {
     put('blend', T.blend || 'face');
     for (const k of ['grow', 'feather', 'chin']) put(k, T.face?.[k] ?? FACE[k]);
   }
-  if (e.needs.includes('depthModel')) {   // Large at 448 px fits a 12 GB card (dev/make_quick_templates.py SIZES)
-    const small = T.depthModel === 'small';
-    put('depthModel', small ? 'video_depth_anything_vits.pth' : 'video_depth_anything_vitl.pth');
-    put('depthSize', small ? 518 : 448);
-  }
-  if (e.needs.includes('edgeAmount')) {
-    const k = ['more', 'normal', 'less'].indexOf(T.edgeAmount || 'normal');
-    put('edgeAmount', e.id === 'canny' ? [0.2, 0.4, 0.6][k] : [16, 28, 40][k]);   // Canny's low threshold; XDoG's threshold
-  }
+  if (e.needs.includes('depthModel') || e.needs.includes('edgeAmount')) for (const [k, v] of Object.entries(mapRoles(e.id, T))) put(k, v);
   if (e.needs.includes('outsize')) put('outsize', T.outsize || 'FullHD');
   if (e.needs.includes('sam')) { const s = T.sam || SAM; put('score', s.score); put('direction', s.direction === 'forward' ? 'forward' : 'both'); put('which', s.which); }
   if (e.needs.includes('alpha')) {
@@ -1166,9 +1159,8 @@ export function vfxPause() { UI.playing = false; for (const v of [V.a, V.b]) v?.
 export function wireVfx() {
   const panel = $('#vfxPanel');
   if (!panel) return;
-  const mount = h('div', { class: 'vfx-tabs' });
-  panel.replaceChildren(mount, h('div', { id: 'vfxBody' }));
-  tabs = new TabSet({ kind: 'vfx-tabs', mount, scope: 'project', newName: (n) => `Effect ${n}`,
+  panel.replaceChildren(h('div', { id: 'vfxBody' }));
+  tabs = new TabSet({ kind: 'vfx-tabs', host: $('#tab-vfx'), scope: 'project', newName: (n) => `Effect ${n}`,
     adapter: {
       empty: BLANK,
       migrate: (p) => ({ ...BLANK(), ...p, talk: { ...BLANK().talk, ...(p.talk || {}) }, key: { ...BLANK().key, ...(p.key || {}) }, points: { ...BLANK().points, ...(p.points || {}) } }),

@@ -1,5 +1,5 @@
 import {
-  $, h, store, uid, clone, api, toast, undoToast, button, iconBtn, seg, field, section, help, info, note, placeholder,
+  $, h, store, uid, clone, api, toast, undoToast, button, runBar, iconBtn, seg, field, section, help, info, note, placeholder,
   fileButton, textArea, chip, icon, openSheet, closeSheet, actions, openOverlay, hint,
 } from './ui.js';
 import { S, inputUrl, isMine, onServer, previewUrl, switchTab, thumbUrl } from './core.js';
@@ -806,7 +806,7 @@ function refineSection(at) {
     field('Prompt', bound(s, 'rprompt', { rows: 2, placeholder: 'Leave empty for one made from the shot', label: 'Redraw prompt', mention: true }),
       info(refinePrompt(s, t, pics), 'The prompt it makes')),
     field('Pictures per run', seg([1, 2, 3, 4].map((n) => [n, String(n)]), P.refine.batch, (v) => { P.refine.batch = +v; persist(); renderPanel(); })),
-    button([icon('sparkle'), 'Redraw'], () => refineShot(s), { cls: 'primary', disabled: !f || !t, title: f ? '' : 'Draw on the canvas or add a frame first' }));
+    runBar(button([icon('sparkle'), 'Redraw'], () => refineShot(s), { cls: 'primary', disabled: !f || !t, title: f ? '' : 'Draw on the canvas or add a frame first' })));
 }
 function videoSection(at) {
   const { s } = at, t = videoTemplate(s), ts = videoTemplates();
@@ -846,8 +846,8 @@ function videoSection(at) {
     field('Prompt', bound(s, 'vprompt', { rows: 2, placeholder: 'Leave empty for one made from the shot', label: 'Video prompt', mention: true }),
       info(videoPrompt(s, t, pics), 'The prompt it makes')),
     field([`Clips`, h('span', {}, `${s.clips.length}`)], clips),
-    button([icon('video'), 'Make the video'], () => makeVideo(s), { cls: 'primary', disabled: !chosen(s) || !t || (sound && !vo),
-      title: `${t?.name || t?.id || ''}, ${Math.max(+s.dur || 3, vo ? Math.ceil(vo.seconds + 0.5) : 0)} s` }));
+    runBar(button([icon('video'), 'Make the video'], () => makeVideo(s), { cls: 'primary', disabled: !chosen(s) || !t || (sound && !vo),
+      title: `${t?.name || t?.id || ''}, ${Math.max(+s.dur || 3, vo ? Math.ceil(vo.seconds + 0.5) : 0)} s` })));
 }
 // which picture of each character goes to the model: the view the camera wants (Auto), or one the shot picks
 function refsField(s, t) {
@@ -1385,9 +1385,8 @@ const adapter = {
 
 export const storyEngine = () => CV.eng;   // (for a browser check of the canvas)
 export function wireStory() {
-  const mount = h('div', { class: 'vid-tabs' });
-  $('#storyPanel').replaceChildren(mount, h('div', { id: 'storyBody', class: 'panel-body' }));
-  tabs = new TabSet({ kind: 'story-tabs', mount, scope: 'project', newName: (n) => `Story ${n}`, adapter });
+  $('#storyPanel').replaceChildren(h('div', { id: 'storyBody', class: 'panel-body' }));
+  tabs = new TabSet({ kind: 'story-tabs', host: $('#tab-story'), scope: 'project', newName: (n) => `Story ${n}`, adapter });
   fullScreen($('#tab-story'));
   makeCanvas();
   onCharacters(() => { if (!shown()) return; if (U.view === 'script' || U.view === 'cast') renderStage(); renderPanel(); });

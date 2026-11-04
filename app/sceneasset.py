@@ -444,7 +444,7 @@ async def photo_splat(body: dict = Body(...)):
 
 # ---- Open in Blender: its window, on this PC's own screen ----
 OPENER = config.BASE_DIR / "look" / "blender_open.py"
-OPENS = {".glb", ".gltf", ".fbx", ".obj"}
+OPENS = {".glb", ".gltf", ".fbx", ".obj", ".ply", ".spz"}   # (Blender reads these two splat formats, not .splat or .ksplat)
 
 
 def _same_pc(request: Request) -> bool:
@@ -490,8 +490,8 @@ async def blender_status(request: Request):
 
 @router.post("/blender")
 async def blender_open(request: Request, body: dict = Body(...)):
-    """{url (a model in a project)} -> {ok}: the model opened in Blender's window, for a look or for work by hand. The
-    file isn't changed. Blender runs on after this returns, and after ComfyChair restarts (a scope of its own, when the
+    """{url (a model or splat in a project), flip (a splat layer's Upside down)} -> {ok}: it opens in Blender's window, for
+    a look or for work by hand. The file isn't changed. Blender runs on after this returns, and after ComfyChair restarts (a scope of its own, when the
     user's session has one), and its temporary folder goes when it closes."""
     if not _same_pc(request):
         raise HTTPException(403, "Blender opens on the PC ComfyChair runs on: use a browser on that PC")
@@ -504,6 +504,8 @@ async def blender_open(request: Request, body: dict = Body(...)):
     tmp = tempfile.mkdtemp(prefix="deck-blender-")
     env.update(TMPDIR=tmp, TEMP=tmp, TMP=tmp)
     cmd = ["sh", "-c", '"$@"; rm -rf "$TMPDIR"', "blender", str(BLENDER), "--python", str(OPENER), "--", str(src)]
+    if body.get("flip") is True and src.suffix.lower() in {".ply", ".spz"}:
+        cmd.append("flip")
     if shutil.which("systemd-run") and env.get("DBUS_SESSION_BUS_ADDRESS"):
         cmd = ["systemd-run", "--user", "--scope", "--collect", "--quiet", *cmd]
 

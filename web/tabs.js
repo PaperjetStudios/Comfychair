@@ -1,9 +1,9 @@
 // One tab system for every panel. A panel makes a TabSet with a payload adapter and gets: a strip of
-// tabs (create, rename, duplicate, delete with Undo, drag to reorder), each saved as a document of
+// tabs on the bar under the main navigation (layout.js docStrip; create, rename, duplicate, delete with Undo, drag to reorder), each saved as a document of
 // its own kind in the project folder (app/store.py), debounced autosave, live updates from other
 // devices, and conflict handling. It never touches the panel's UI: it only calls adapter.load/dump.
 //
-//   const tabs = new TabSet({ kind: 'gen-tabs', mount, scope: 'project', newName: (n) => `Tab ${n}`,
+//   const tabs = new TabSet({ kind: 'gen-tabs', host: $('#tab-generate'), scope: 'project', newName: (n) => `Tab ${n}`,
 //     adapter: { empty(), load(payload, doc), dump(), migrate?(payload), beforeLeave?() }, seed?(), onSwitch?(doc) });
 //   (beforeLeave: awaited before the tab is saved and left, for writes the payload must name first)
 //   await tabs.start();   // when the panel first needs its tabs (it also reloads itself on project change)
@@ -13,6 +13,7 @@
 import { h, api, store, toast, undoToast, openSheet, closeSheet, nameSheet, button, actions, uid, clone } from './ui.js';
 import { S, onServer, onProject } from './core.js';
 import { keyboardFocus } from './key-focus.js';
+import { docStrip } from './layout.js';
 import { dropIndex, slideOf } from './tab-order.js';
 
 const SAVE_DELAY = 1000, DRAG_PX = 6, HOLD_MS = 350, EDGE_PX = 40;
@@ -37,12 +38,18 @@ export class TabSet {
       if (to == null) return;
       e.preventDefault(); buttons[to].focus(); buttons[to].click();
     });
+    // one row, like a browser's: the wheel runs along it
+    this.row.addEventListener('wheel', (e) => {
+      if (e.deltaX || this.row.scrollWidth <= this.row.clientWidth) return;
+      e.preventDefault(); this.row.scrollLeft += e.deltaY;
+    }, { passive: false });
     // while a tab is lifted for dragging, the strip must not scroll under the finger
     this.row.addEventListener('touchmove', (e) => { if (this.drag?.started && e.cancelable) e.preventDefault(); }, { passive: false });
     this.state = h('button', { type: 'button', class: 'tabs-state hidden', onclick: () => this.conflict && this.showConflict() });
     this.plus = h('button', { type: 'button', class: 'icon-btn tab-plus', 'aria-label': 'New tab', title: 'New tab', onclick: () => this.create() }, '＋');
-    this.mount.classList.add('tab-strip');   // (every panel's strip looks and stays put the same: app.css)
-    this.mount.replaceChildren(h('div', { class: 'tabstrip' }, this.row, this.plus, this.state));
+    this.mount = h('div', { class: 'tabstrip' }, this.row, this.plus, this.state);
+    docStrip(this.host, this.mount, () => this.reveal());
+    new ResizeObserver(() => this.reveal()).observe(this.row);   // (a narrower window, a tablet turned)
 
     onServer('store', (m) => this.onStore(m));
     onServer('ws_open', () => { if (!this.active) this.start(); else { this.refresh(); if (this.dirty) this.flush(); } });
@@ -78,9 +85,7 @@ export class TabSet {
   }
   // Block every editor surface until its saved document is ready, including project switches.
   gate(message = null) {
-    const host = this.host || this.mount.closest('.tab');
-    if (!host) return;
-    this.host = host;
+    const { host } = this;
     if (!message) {
       for (const [el, inert] of this.blocked || []) el.inert = inert;
       this.blocked = null; this.loadStatus?.remove();
@@ -89,7 +94,7 @@ export class TabSet {
     }
     if (!this.loadStatus) this.loadStatus = h('div', { class: 'document-loading', role: 'status', 'aria-live': 'polite' });
     if (!this.blocked) this.blocked = new Map();
-    const surfaces = [...host.children];
+    const surfaces = [...host.children, this.mount];
     if (host.id === 'tab-generate') surfaces.push(document.querySelector('.actionbar'));
     for (const el of surfaces) if (el && el !== this.loadStatus && !this.blocked.has(el)) { this.blocked.set(el, el.inert); el.inert = true; }
     host.setAttribute('aria-busy', 'true');
@@ -421,16 +426,17 @@ export class TabSet {
         on ? h('span', { class: 'tab-dot' + (this.dirty ? ' on' : '') }) : null),
       on ? h('button', { type: 'button', class: 'tab-more', 'aria-label': 'Tab options', onclick: (e) => { e.stopPropagation(); this.menu(); } }, '⋯') : null);
     }));
-    // keep the open tab in view by scrolling the strip itself: scrollIntoView also scrolls every scrolling
-    // ancestor, which threw the settings panel back to the top after each save
-    const on = this.row.querySelector('.tabchip.on');
-    if (on) {
-      const r = this.row, top = on.offsetTop;
-      if (top < r.scrollTop) r.scrollTop = top;
-      else if (top + on.offsetHeight > r.scrollTop + r.clientHeight) r.scrollTop = top + on.offsetHeight - r.clientHeight;
-    }
+    this.reveal();
     this.showState();
     if (focused) this.row.querySelector('.tabchip.on .tab-switch')?.focus({ preventScroll: true });
+  }
+  // keep the open tab in view by scrolling the strip itself: scrollIntoView also scrolls every scrolling ancestor
+  reveal() {
+    const on = this.row.querySelector('.tabchip.on');
+    if (!on) return;
+    const r = this.row, left = on.offsetLeft;
+    if (left < r.scrollLeft) r.scrollLeft = left;
+    else if (left + on.offsetWidth > r.scrollLeft + r.clientWidth) r.scrollLeft = left + on.offsetWidth - r.clientWidth;
   }
 
   // Drag to reorder. Mouse: after moving a few pixels. Touch: after holding still for a moment (a
@@ -457,7 +463,7 @@ export class TabSet {
       d.chips = chips;
       d.from = chips.indexOf(chip); d.to = d.from;
       d.rects = chips.map((c) => ({ left: c.offsetLeft, top: c.offsetTop, w: c.offsetWidth, h: c.offsetHeight }));
-      d.scroll0 = this.row.scrollTop;
+      d.scroll0 = this.row.scrollLeft;
       d.started = true;
       try { chip.setPointerCapture(d.pid); } catch { /* pointer gone */ }
       chips.forEach((c) => c.classList.add('shifting'));
@@ -469,10 +475,10 @@ export class TabSet {
     const tick = () => {
       if (!d.started) return;
       const r = this.row.getBoundingClientRect();
-      if (d.lastY < r.top + EDGE_PX) this.row.scrollTop -= Math.ceil((EDGE_PX - (d.lastY - r.top)) / 4);
-      else if (d.lastY > r.bottom - EDGE_PX) this.row.scrollTop += Math.ceil((EDGE_PX - (r.bottom - d.lastY)) / 4);
-      const dx = d.lastX - d.x0, dy = d.lastY - d.y0 + (this.row.scrollTop - d.scroll0);
-      const me = d.rects[d.from], to = dropIndex(d.rects, d.from, me.left + me.w / 2 + dx, me.top + me.h / 2 + dy);
+      if (d.lastX < r.left + EDGE_PX) this.row.scrollLeft -= Math.ceil((EDGE_PX - (d.lastX - r.left)) / 4);
+      else if (d.lastX > r.right - EDGE_PX) this.row.scrollLeft += Math.ceil((EDGE_PX - (r.right - d.lastX)) / 4);
+      const dx = d.lastX - d.x0 + (this.row.scrollLeft - d.scroll0), dy = 0;   // (one row: it only slides along)
+      const me = d.rects[d.from], to = dropIndex(d.rects, d.from, me.left + me.w / 2 + dx, me.top + me.h / 2);
       d.to = to;
       d.chips.forEach((c, i) => {
         if (i === d.from) { c.style.transform = `translate(${dx}px, ${dy}px)`; return; }

@@ -45,6 +45,81 @@ def fake_comfy(refuse=False):
 
 
 WF = {"1": {"class_type": "KSampler", "inputs": {}}}
+TRELLIS = {"1": {"class_type": "UNETLoader", "inputs": {"unet_name": "trellis_2_int8_convrot.safetensors"}}}
+OTHER = {"1": {"class_type": "UNETLoader", "inputs": {"unet_name": "pixal3d_int8_convrot.safetensors"}}}
+
+
+class FreeCard(unittest.IsolatedAsyncioTestCase):
+    """A Trellis run has the card emptied right before it, in the queue."""
+    def comfy(self, node_known=True):
+        c = comfy_mod.Comfy("http://comfy.test")
+        c.sent, c.freed, c.forgot = [], 0, []
+
+        def handler(request):
+            if request.url.path == "/prompt":
+                body = json.loads(request.content)
+                kinds = [n["class_type"] for n in body["prompt"].values()]
+                if not node_known and kinds == [comfy_mod.FREE_NODE]:
+                    return httpx.Response(400, json={"error": {"message": "invalid prompt"}})
+                c.sent.append(kinds[0])
+                return httpx.Response(200, json={"prompt_id": body["prompt_id"], "number": 1, "node_errors": {}})
+            if request.url.path == "/free":
+                c.freed += 1
+            if request.url.path == "/history" and request.method == "POST":
+                c.forgot += json.loads(request.content)["delete"]
+            if request.url.path.startswith("/history/"):
+                return httpx.Response(200, json={request.url.path.rsplit("/", 1)[1]: {}})
+            return httpx.Response(200, json={})
+        c.http = httpx.AsyncClient(base_url="http://comfy.test", transport=httpx.MockTransport(handler))
+        c._last_models = None
+        self.addAsyncCleanup(self.stop_tasks, c)
+        return c
+
+    async def stop_tasks(self, c):
+        for t in list(c._checks):
+            t.cancel()
+
+    async def test_every_trellis_run_gets_it_even_with_the_same_models(self):
+        c = self.comfy()
+        for _ in range(2):
+            await c.queue(json.loads(json.dumps(TRELLIS)))
+        self.assertEqual(c.sent, [comfy_mod.FREE_NODE, "UNETLoader"] * 2)
+        self.assertEqual(c.freed, 0)
+
+    async def test_other_runs_only_on_a_change_of_models(self):
+        c = self.comfy()
+        for _ in range(2):
+            await c.queue(json.loads(json.dumps(OTHER)))
+        self.assertEqual(c.sent, ["UNETLoader"] * 2)
+        self.assertEqual(c.freed, 0)
+
+    async def test_without_the_node_it_asks_free_and_the_run_still_goes(self):
+        c = self.comfy(node_known=False)
+        await c.queue(json.loads(json.dumps(TRELLIS)))
+        self.assertEqual(c.sent, ["UNETLoader"])
+        self.assertEqual(c.freed, 1)
+
+    async def test_the_button_says_when_it_could_not_stop_the_workers(self):
+        self.assertEqual(await self.comfy().free_card(), {"workers": True})
+        c = self.comfy(node_known=False)
+        self.assertEqual(await c.free_card(), {"workers": False})
+        self.assertEqual(c.freed, 1)
+
+    async def test_comfyui_keeps_no_history_of_it(self):
+        c = self.comfy()
+        await c.free_card()
+        real = asyncio.sleep
+
+        async def quick(_):
+            await real(0)
+        with mock.patch.object(comfy_mod.asyncio, "sleep", quick):
+            for _ in range(200):
+                if c.forgot:
+                    break
+                await real(0)
+        self.assertEqual(len(c.forgot), 1)
+        await real(0)
+        self.assertEqual(c.freeing, set())
 
 
 class HoldOpen:

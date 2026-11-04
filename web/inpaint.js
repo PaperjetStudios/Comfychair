@@ -1,4 +1,4 @@
-import { h, api, store, toast, busy, button, section, field, seg, hint, help, toggle, textArea, rangeField, propNum, openSheet, closeSheet, actions } from './ui.js';
+import { h, api, store, toast, busy, button, runBar, section, field, seg, hint, help, toggle, textArea, rangeField, propNum, openSheet, closeSheet, actions } from './ui.js';
 import { ASPECT_PRESETS, S } from './core.js';
 import { pngBlob, uploadImage, openImagePicker } from './media.js';
 import { pictureSlot } from './picture-drop.js';
@@ -192,6 +192,7 @@ async function fill(eng, { denoise = ST.denoise } = {}) {
   if (!t) return toast(items.length ? 'Add item needs the Flux 3 Klein inpaint template' : 'No inpaint template is installed', true);
   if (!items.length && !eng.composeMask()) return toast('Mark the area to redraw first: paint the mask, or select and Add to mask', true);
   if (eng.loading()) return toast('The images are still loading', true);
+  if (eng.E.grow) return toast('Press Extend or Cancel on the crop first', true);
   if (ST.scope === 'selected' && items.length) return toast('Add item works on the whole picture: set Run on to Whole picture', true);
   const tab = eng.E.tab?.id, b = busy('Sending the picture…');
   try {
@@ -369,7 +370,7 @@ export function inpaintSection(eng) {
     ...drafts.map((l) => h('div', { class: 'row wrap' }, hint(`${l.label}: a draft`),
       button('Keep as layer', () => { delete l.draft; eng.changed(); eng.render(); }, { cls: 'small primary', title: 'It joins the picture, and is sent with the next Fill' }),
       button('Discard', () => { E.layers.splice(E.layers.indexOf(l), 1); if (E.sel === l) E.sel = null; eng.changed(); eng.render(); }, { cls: 'small ghost' }))),
-    h('div', { class: 'row wrap' },
+    runBar(
       button(FLIGHT.size ? 'Fill again' : 'Fill', () => fill(eng), { cls: 'small primary', title: 'Ctrl+Enter', disabled: !ts.length || (!cover && !usableItems(eng).length) }),
       FLIGHT.size ? hint(`${FLIGHT.size} on its way…`) : null),
     ts.length ? null : hint('No inpaint template is installed (deck-krea2-inpaint).'),

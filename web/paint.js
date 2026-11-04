@@ -1,6 +1,7 @@
 import { distanceField, spreadInto } from './mask-spread.js';
 import { h, store, toast, clamp, seg, field, section, help, rangeField, button, hint, pctFmt, colorField, openSheet, closeSheet, actions, propNum } from './ui.js';
 import { icon } from './icons.js';
+import { NEUTRAL_GREY } from './edit-image.js';
 import { ASPECT_PRESETS } from './core.js';
 import { snapNearest } from './gizmo.js';
 import { apply, bounds, canvasToImage, corners, imageToCanvas, invert, layerMatrix, mul } from './layer-geom.js';
@@ -48,6 +49,22 @@ export function makeCanvas(w, hh) {
   return cv;
 }
 export const isCanvas = (l) => l.img instanceof HTMLCanvasElement;
+
+// A blank canvas's background: see-through (null), White, Neutral grey or any colour. get(): its colour now; set(colour or null).
+export function fillField(label, get, set, ...kids) {
+  const box = h('div', {});
+  const kindOf = (v) => (!v ? 'clear' : v === '#ffffff' ? 'white' : v === NEUTRAL_GREY ? 'grey' : 'colour');
+  let shown = kindOf(get()), last = shown === 'colour' ? get() : store.get('deck.paint.blankColour', '#3366cc');
+  const draw = () => box.replaceChildren(
+    field(label, seg([['clear', 'See-through'], ['white', 'White'], ['grey', 'Neutral grey'], ['colour', 'Colour']], shown, (k) => {
+      shown = k;
+      set({ clear: null, white: '#ffffff', grey: NEUTRAL_GREY, colour: last }[k]);
+      draw();
+    }, { wrap: true }), ...kids),
+    shown === 'colour' ? colorField('Colour', () => last, (c) => { last = c; store.set('deck.paint.blankColour', c); set(c); }) : '');
+  draw();
+  return box;
+}
 // The layer's pixels as a canvas to paint on (an image layer is copied into one the first time)
 function layerCanvas(l) {
   if (isCanvas(l)) return l.img;
@@ -139,14 +156,15 @@ export function createPaint(ctx) {
   // ---- layer pixels ----
 
   // A new blank layer to paint on: the canvas's size by default, see-through or filled
-  function addBlank({ w, h: hh, fill = null }) {
+  // (fill: painted into its pixels. paper: a background kept apart from them, so it can change later)
+  function addBlank({ w, h: hh, fill = null, paper = null }) {
     const cv = makeCanvas(Math.round(w), Math.round(hh));
     if (fill) { const c = cv.getContext('2d'); c.fillStyle = fill; c.fillRect(0, 0, cv.width, cv.height); }
     const f = X.frame();
     let n = 1;
     while (E().layers.some((o) => o.label === `Canvas ${n}`)) n++;   // the first free number in this edit
     const l = { name: null, label: `Canvas ${n}`, canvas: true, crop: { x: 0, y: 0, w: 1, h: 1 }, x: f ? f.x : 0, y: f ? f.y : 0, scale: 1, opacity: 1,
-      hidden: false, blend: 'normal', img: cv };
+      hidden: false, blend: 'normal', img: cv, ...(paper && { fill: paper }) };
     E().layers.push(l);
     E().sel = l; E().cropping = false;
     dirty(l, 200);
@@ -155,7 +173,8 @@ export function createPaint(ctx) {
   }
   function blankSheet() {
     const f = X.frame(), dw = f ? f.w : 1024, dh = f ? f.h : 1024;
-    let w = dw, hh = dh, fill = store.get('deck.paint.blankFill', 'clear');
+    const said = store.get('deck.paint.blankFill', null);   // (once a word: see-through, white or the canvas's colour)
+    let w = dw, hh = dh, paper = said === 'bg' ? E().bg : said === 'white' ? '#ffffff' : said === 'clear' ? null : said;
     // its size: the canvas's own by default, or a shape and megapixels tapped; Custom types the sides
     let shape = 'canvas', mp = 1;
     const sizeBox = h('div', {});
@@ -176,11 +195,11 @@ export function createPaint(ctx) {
     drawSize();
     openSheet(h('h3', {}, 'Blank canvas'),
       field(['Size', sizeOut], shapeSeg), sizeBox,
-      field('Fill', seg([['clear', 'See-through'], ['white', 'White'], ['bg', 'Background colour']], fill, (v) => { fill = v; store.set('deck.paint.blankFill', v); })),
+      fillField('Background', () => paper, (c) => { paper = c; store.set('deck.paint.blankFill', c); }),
       actions(
         button('Add canvas', () => {
           closeSheet();
-          addBlank({ w, h: hh, fill: fill === 'white' ? '#ffffff' : fill === 'bg' ? E().bg : null });
+          addBlank({ w, h: hh, paper });
           if (!painting()) setTool('brush');
         }, { cls: 'small primary' }),
         button('Cancel', closeSheet, { cls: 'small ghost' })));

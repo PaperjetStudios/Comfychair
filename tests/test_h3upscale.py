@@ -36,6 +36,15 @@ class Build(unittest.TestCase):
         self.assertEqual(len(outs), 1)                                                     # only the new save
         self.assertNotIn("up_cond", wf)
 
+    def test_hold_template_upscales_and_regenerate_drops_turbo_under_its_shift(self):
+        src = self.wf("deck-h3-ref2v-hold")
+        wf, size = up.build(src, "/out/clip.mp4", 768, 448, 1.5)
+        self.assertEqual(size, (1152, 672))
+        self.assertEqual(wf["up_guide"]["inputs"]["model"], ["60", 0])
+        up.drop_turbo(src, src["11"]["inputs"]["model"])
+        self.assertNotIn("30", src)
+        self.assertEqual(src["60"]["inputs"]["model"], ["6", 0])
+
     def test_i2v_runs_its_node_again_at_the_new_size(self):
         src = self.wf("deck-h3-i2v")
         wf, (w, h) = up.build(src, "/out/clip.mp4", 768, 448, 1.25)

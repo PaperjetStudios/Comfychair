@@ -211,9 +211,10 @@ still lists; it fails when run. You only need the files of the templates you use
 | [Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler) | H3 upscale (`POST /api/h3/upscale`) |
 | [Veda-on-ComfyUI](https://github.com/veda-sparse/Veda-on-ComfyUI) | optional Veda sparse attention for H3 (Advanced) |
 | [comfyui-krea2edit](https://github.com/lbouaraba/comfyui-krea2edit) (2.0+) | `deck-krea2-edit`, `deck-krea2-identity` |
+| [comfyui-krea2-controlnetPlus](https://github.com/tori29umai0123/comfyui-krea2-controlnetPlus) | `deck-krea2-depth-control`, `deck-krea2-anything-control` |
 | [ComfyUI-MMAudio](https://github.com/kijai/ComfyUI-MMAudio) | `deck-mmaudio-foley` (with `comfy_nodes/deck_mmaudio`) |
 | [ComfyUI-Idol](https://github.com/Nynxz/ComfyUI-Idol) | `deck-3d-object-splat` |
-| `comfy_nodes/deck_*` (this repo) | face crop, face restore, pose smoothing, motion save, TAPNext++, rig save, MMAudio sampler: symlink each into `custom_nodes` |
+| `comfy_nodes/deck_*` (this repo) | face crop, face restore, pose smoothing, motion save, TAPNext++, rig save, MMAudio sampler, Free VRAM (`deck_vram`, for Trellis and the Queue panel's button): symlink each into `custom_nodes` |
 
 Three packs carry local fixes, each marked `(ComfyChair patch)`; an update or reinstall drops them, so grep for the
 marker afterwards and re-apply:
@@ -243,6 +244,8 @@ IC-LoRAs, each for one template:
 
 | Folder | File | Template |
 |---|---|---|
+| `loras/krea` | [`depth-control-lora.safetensors`](https://huggingface.co/Patil/Krea-2-depth-controlnet) (862 MB) | `deck-krea2-depth-control` |
+| `loras/krea` | [`krea2-anythng_step_007000.safetensors`](https://huggingface.co/tori29umai/krea2-controlnet) (862 MB) | `deck-krea2-anything-control` |
 | `loras/ltx2.3` | `ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors` | `deck-ltx-ctrl2v`, `deck-ltx-drive*` |
 | `loras/ltx2.5` | `ltx-2.3-22b-ic-lora-in-outpainting-0.9.safetensors` | `deck-ltx-inpaint` |
 | `loras/ltx2.5` | `ltx-2.3-22b-ic-lora-motion-track-control-ref0.5.safetensors` | `deck-ltx-tracks` |
@@ -450,7 +453,11 @@ and the **Cut out (Alpha Gen)** matte, say): Either, Both, First minus second or
 frames, edge levels, feather and invert. It runs with ffmpeg on the server (`videoedit.matte_filters`) and lands in
 History as a new matte for Apply matte or Clean plate.
 
-**Keying** needs no template: the Video tab's **Colour key…** button on a clip, and the VFX tab's **Colour key**
+**Control maps** (Video tab, with a clip or picture selected): Depth, Canny, Scribble or Pose of the clip, or of the part
+inside the **Range**, up to 20 s. The map lands on the next track up with room (a new track if none has), in step with the
+clip and framed the same. A map still running when the page reloads isn't placed; it's in History.
+
+**Keying** needs no template: the Video tab's **Key** button on a clip, and the VFX tab's **Colour key**
 and **Apply matte** effects, call `POST /api/video/key`. It writes a VP9 webm with alpha into History.
 The Video preview and its export put a keyed clip over the tracks below it.
 
@@ -486,6 +493,8 @@ slider sets it, by default so the camera starts 1.5 m above the found floor). Bo
 Choose the method under Solve 3D camera, Solve, then Create 3D scene.
 To track only part of a clip, set a **Range** on the Video tab's ruler (I / O, or the Range button) and use **Range → Track motion on the range**, or the clip's own **Track motion** button: the sheet opens with Start and End on the part of the clip inside the range.
 
+**Holding references** (`deck-h3-ref2v-hold`, `deck-h3-ctrl2v-hold`, from `dev/make_h3_hold_templates.py`): the same graphs as `deck-h3-ref2v` and `deck-h3-ctrl2v` with **Shift** 6 / 3 instead of the default 12 / 3, and `ref_image_size` `max` instead of `match`. `max` keeps up to 2048 px on a reference's short edge, so it is much slower and takes more of the card; use the picture slot's Max MP to cap it. Not yet tested on a GPU.
+
 **Character sheets** (`deck-h3-charsheet`): give it a picture of a character as Reference 1 and it
 makes a 12 s portrait clip: a 6 s orbit on a grey studio backdrop, then cuts at 6, 7.5, 9 and 10.5 s to
 close-ups (face front, three-quarter, profile, waist up). It saves the clip plus a sheet: frames
@@ -499,6 +508,10 @@ For detail on the body, `deck-h3-charsheet-body` (13 s, 8 pictures, 4 per row): 
 Shorter sheets for a model of the upper body, same inputs and settings: `deck-h3-charsheet-bust` (8 s, 6 pictures, 3 per row: front, side, back, other side, then close-ups of the face front and three-quarter) and `deck-h3-charsheet-bust4` (5.5 s, 4 pictures: front, side, back, face front). The camera frames head to mid-waist the whole way. They come from `dev/make_bust_sheet_templates.py`; frames are untested on a GPU, so change **Sheet frames** if the orbit lands off.
 `deck-h3-objectsheet` is the same for props and other objects: the close-ups are front, three-quarter,
 the top (high angle) and a small detail.
+
+**Sound on a control video**: `deck-ltx-ctrl2v`'s **Sound** is what the clip moves to (lips, beats, timing) and keeps; the clip
+is then no longer than the sound. Left empty, it makes new sound from the prompt. `deck-h3-ctrl2v`'s **Sound references**
+are like ref2v's: H3 still makes the clip's sound, and the prompt calls them `<Audio 1>`, `<Audio 2>`.
 
 **Blocking a shot** (`deck-h3-ctrl2v` + the **3D** tab): ref2v plus H3's Fun ControlNet, driven by a
 control video. The 3D tab works like the Image tab: **+ Add** people (soft, featureless mannequins), boxes,
@@ -892,7 +905,13 @@ subject into the painted shape (a mask that stops at the shoulders gives a headl
 has a ControlNet, so each is the model's edit template with its first picture read as a map: the shapes, edges and
 distances stay where they are, and the prompt says what they become. The reference slots stay, for a look or a person
 to borrow. Make the maps in the Image tab's **Image tools**, the VFX tab's Quick effects (from a picture) or the 3D
-tab (**Save depth frame**, **Save pose frame**). Krea 2 and MOSS are left out: their edit modes give the map back.
+tab (**Save depth frame**, **Save pose frame**). MOSS is left out: its edit mode gives the map back.
+
+**Krea 2 control** (`deck-krea2-depth-control`, `deck-krea2-anything-control`, from the same script) uses real Control
+LoRAs on Krea 2 Turbo, so the prompt describes the picture and the map only steers it. Depth takes a depth map (white is
+near); Anything takes a silhouette, pose or rough layout and follows it loosely. **Strength** sets how closely it follows;
+**End percent** lets go of the map partway through, for freer detail. The output takes the map's shape at 1 MP. Style
+LoRAs go in as usual, ahead of the Control LoRA. Don't add a Control LoRA to the ordinary LoRA list.
 
 Masks are greyscale PNGs (white = change), saved by `POST /api/inputs/mask` under `data/inputs/mask/` and in
 ComfyUI's `input/comfydeck/mask/`; they stay out of the input pickers. The run's settings hold the mask as

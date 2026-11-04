@@ -4,7 +4,7 @@
 //   family: the LoRA folder to start on (h3, krea, ltx2.5…); folders: the folders to offer as chips
 //   onAdd({ name, trainedWords }): "Add to the stack" (name is the ComfyUI LoRA name, "<folder>/<file>")
 //   onWord(word): a trigger word tapped; onDownloaded(result): after a download, before the sheet shows Add
-// The Generate LoRA stack uses it; VFX's restyle and Story's refine LoRAs can call it the same way.
+// The LoRA stack (lora-pick.js) uses it; VFX's restyle and Story's refine LoRAs can call it the same way.
 import { api, button, chip, chips, closeSheet, field, h, help, icon, iconBtn, linkBtn, note, openSheet, placeholder, seg,
   store, toast } from './ui.js';
 import { waitJob } from './clipimport.js';
@@ -133,7 +133,8 @@ export async function openCivitai({ q = '', family = null, folders = [], onAdd =
     } catch { /* the card's own data will do */ }
     if (detailView.classList.contains('hidden')) return;
     if (!m.versions?.length) m.versions = m0.versions;
-    let vi = 0, fileId = null, busy = false;
+    let vi = 0, fileId = null;
+    const busy = new Set();   // the file ids coming in now: each file of a version downloads on its own
     const body = h('div', { class: 'civ-body' });
     const draw = () => {
       const v = m.versions[vi];
@@ -152,15 +153,16 @@ export async function openCivitai({ q = '', family = null, folders = [], onAdd =
           toast(added ? `Added ${name.split('/').pop()} to the LoRA stack` : 'It is already in the LoRA stack');
         }, { cls: 'primary' }) : null,
         h('span', { class: 'hint' }, name));
-      const dl = button('⤓ Download', () => start(false), { cls: 'primary' });
+      const dl = button(busy.has(fileId) ? 'Downloading…' : '⤓ Download', () => start(false), { cls: 'primary' });
+      dl.disabled = busy.has(fileId);
       let jobId = null;
       const stopBtn = button('Stop', async () => {
         stopBtn.disabled = true;
         try { await api(`/api/clip/job/${jobId}/cancel`, { method: 'POST', busy: false }); } catch (e) { toast(e.message, true); stopBtn.disabled = false; }
       }, { cls: 'small hidden', title: 'Stop this download and throw away what came so far' });
       const start = async (confirmBig) => {
-        if (busy || !f) return;
-        busy = true; dl.disabled = true;
+        if (!f || busy.has(f.id)) return;
+        busy.add(f.id); dl.disabled = true;
         const prog = (p, label) => {
           bar.classList.remove('hidden');
           bar.firstChild.style.width = `${Math.round((p || 0) * 100)}%`;
@@ -172,19 +174,19 @@ export async function openCivitai({ q = '', family = null, folders = [], onAdd =
           jobId = job.job;
           stopBtn.classList.remove('hidden');
           const r = await waitJob(job, prog);   // (it carries on if the sheet is closed)
-          v.downloaded = r.name;
+          f.downloaded = r.name;
+          v.downloaded ||= r.name;
           bar.classList.add('hidden');
           toast(r.skipped ? `${r.file} was already in ${r.family}/` : `Downloaded ${r.file} to ${r.family}/`);
           await onDownloaded?.(r);
-          draw();
         } catch (e) {
           bar.classList.add('hidden');
-          if (e.data?.needsConfirm && confirm(e.data.message)) { busy = false; return start(true); }
+          if (e.data?.needsConfirm && confirm(e.data.message)) { busy.delete(f.id); return await start(true); }
           if (e.message === 'Cancelled') toast('Download stopped');
           else toast(e.message, true);
-        } finally { busy = false; dl.disabled = false; stopBtn.classList.add('hidden'); stopBtn.disabled = false; }
+        } finally { busy.delete(f.id); draw(); }
       };
-      if (v.downloaded) showAdd(v.downloaded, words);
+      if (f?.downloaded) showAdd(f.downloaded, words);
       const imgs = v.images || [];
       put(body,
         m.versions.length > 1 ? field('Version', chips(m.versions.map((x, i) => [i, `${x.name}${x.downloaded ? ' · downloaded' : ''}`]), vi, (i) => { vi = Number(i); draw(); }, { cls: 'civ-versions' })) : null,
@@ -203,12 +205,12 @@ export async function openCivitai({ q = '', family = null, folders = [], onAdd =
           h('tr', {}, h('td', {}, 'Downloads'), h('td', {}, fmtCount(m.stats?.downloads))),
           f ? h('tr', {}, h('td', {}, 'File'), h('td', {}, `${f.name} · ${fmtKB(f.sizeKB)}`)) : null,
           h('tr', {}, h('td', {}, 'Saved to'), h('td', {}, `loras/${st.family}/`))),
-        files.length > 1 ? field('File', seg(files.map((x) => [x.id, `${x.name.replace(/\.safetensors$/i, '')} · ${fmtKB(x.sizeKB)}`]), fileId,
+        files.length > 1 ? field('File', seg(files.map((x) => [x.id, `${x.name.replace(/\.safetensors$/i, '')} · ${fmtKB(x.sizeKB)}${x.downloaded ? ' · downloaded' : ''}`]), fileId,
           (id) => { fileId = Number(id); draw(); }, { wrap: true })) : null,
         wordChips(),
         !files.length ? note('This version has no .safetensors file, so it can\'t be downloaded here.') : null,
         v.earlyAccess ? note('Early access: Civitai only lets buyers download this version for now.') : null,
-        h('div', { class: 'actions civ-actions' }, v.downloaded ? null : dl, linkBtn('↗ Civitai', `${m.link}?modelVersionId=${v.id}`, { target: '_blank', rel: 'noopener' }), stopBtn),
+        h('div', { class: 'actions civ-actions' }, f?.downloaded ? null : dl, linkBtn('↗ Civitai', `${m.link}?modelVersionId=${v.id}`, { target: '_blank', rel: 'noopener' }), stopBtn),
         bar, after,
         m.description ? h('details', { class: 'desc' }, h('summary', {}, 'Description'),
           h('div', { class: 'hint pre' }, new DOMParser().parseFromString(m.description, 'text/html').body.textContent.trim())) : null);

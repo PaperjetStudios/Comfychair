@@ -1,5 +1,5 @@
 import {
-  $, h, store, uid, api, toast, undoToast, clamp, button, iconBtn, linkBtn, seg, field, section, hint, help, info, note,
+  $, h, store, uid, api, toast, undoToast, clamp, button, runBar, iconBtn, linkBtn, seg, field, section, hint, help, info, note,
   placeholder, fileButton, rangeField, insertAtCursor, panFmt, pctFmt, toggle, textArea, chip, icon,
 } from './ui.js';
 import { DELIVERY, INLINE_TAGS, parseScript, withDelivery, withName } from './dialogue.js';
@@ -405,7 +405,7 @@ function makerSection() {
     rangeField('Length', () => G.len ?? mk.len, (v) => { G.len = v; }, { min: 1, max: mk.maxLen, step: 0.5, digits: 1, fmt: (v) => `${v} s` }),
     mk.lyrics ? rangeField('BPM', () => G.bpm, (v) => { G.bpm = Math.round(v); }, { min: 40, max: 220, step: 1, digits: 0, fmt: (v) => `${Math.round(v)}` }) : null,
     key ? field('Key', key) : null,
-    h('div', { class: 'row wrap' }, button('✦ Make it', makeSound, { cls: 'primary', disabled: !t })),
+    runBar(button('✦ Make it', makeSound, { cls: 'primary', disabled: !t })),
     results);
 }
 
@@ -467,7 +467,7 @@ function voiceSection() {
     hint(it ? `Takes the speech out of “${it.label}” (the part on the timeline) and puts it on the track below.` : 'Select a clip on the timeline, or choose a sound here.'),
     it ? null : soundInput(null, (v) => { picked = v; }, { title: 'A sound with someone speaking' }),
     stepBox('vocals', 'Take out music and effects'), stepBox('dereverb', 'Take out echo'), stepBox('denoise', 'Take out noise'),
-    h('div', { class: 'row wrap' }, button('✦ Clean up the voice', () => cleanVoice(it, picked), { cls: 'primary', disabled: !!VX.busy })));
+    runBar(button('✦ Clean up the voice', () => cleanVoice(it, picked), { cls: 'primary', disabled: !!VX.busy })));
 
   // 2. voices
   const nv = VX.nv;
@@ -541,7 +541,7 @@ function voiceSection() {
     eng[0] === 'index' ? rangeField('Delivery strength', () => VX.intensity, (v) => { VX.intensity = v; store.set('deck.sound.intensity', v); },
       { min: 0.2, max: 1, step: 0.05, help: 'How strongly the delivery words colour the line: low is a hint, 1 is all the way.' }) : null,
     field('Language', lang),
-    h('div', { class: 'row wrap' }, button('🗣 Speak the lines', speakScript, { cls: 'primary', disabled: !!VX.busy || !(VX.voices || []).length })));
+    runBar(button('🗣 Speak the lines', speakScript, { cls: 'primary', disabled: !!VX.busy || !(VX.voices || []).length })));
 
   return section('Voice', null, help('AI voice tools: pull a voice out of a clip, keep it, and write new lines in it. They use the GPU, so ComfyUI has to be idle.'),
     busy, clean, voices, dialogue);
@@ -645,7 +645,7 @@ function renderPanel() {
       (v) => { N.out.format = v; store.set('deck.sound.format', v); persist(); })),
     num('Master level', () => N.out.gain, (v) => { N.out.gain = v; }, { min: 0, max: 2, step: 0.01, fmt: pctFmt }),
     toggle('Even out the loudness (−16 LUFS, for speech and streaming)', N.out.normalize, (on) => { N.out.normalize = on; persist(); }),
-    h('div', { class: 'row wrap' }, button('⤓ Export sound', exportSound, { cls: 'primary' }), WA.onlyToggle()),
+    runBar(button('⤓ Export sound', exportSound, { cls: 'primary' }), WA.onlyToggle()),
     N.exports.length ? h('div', { class: 'snd-exports' }, N.exports.slice(-3).reverse().map((m) =>
       h('div', { class: 'snd-export' }, h('b', {}, m.label), h('audio', { src: m.url, controls: true, preload: 'none' }),
         h('div', { class: 'row wrap' }, linkBtn('Download', m.url, { download: m.name }),
@@ -687,9 +687,8 @@ const adapter = {
 };
 
 export function wireSound() {
-  const mount = h('div', { class: 'vid-tabs' });
-  $('#soundPanel').replaceChildren(mount, h('div', { id: 'sndBody' }));
-  tabs = new TabSet({ kind: 'sound-tabs', mount, scope: 'project', newName: (n) => `Mix ${n}`, adapter });
+  $('#soundPanel').replaceChildren(h('div', { id: 'sndBody' }));
+  tabs = new TabSet({ kind: 'sound-tabs', host: $('#tab-sound'), scope: 'project', newName: (n) => `Mix ${n}`, adapter });
   stp = transport({ playing: () => N.playing, play: sndPlay, pause: sndPause, seek: sndSeek, t: () => N.t, len: seqEnd },
     { step: { by: 5, key: 0.1, back: '⏪', fwd: '⏩', label: '5 s', pause: false },
       loop: { get: () => N.loop, set: (on) => { N.loop = on; store.set('deck.sound.loop', on); } }, area: WA,

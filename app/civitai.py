@@ -197,24 +197,31 @@ def safe_filename(name: str) -> str:
 
 
 def downloaded_index() -> dict:
-    """{versionIds: {id: "<folder>/<file>"}, files: {lower-case file name: "<folder>/<file>"}} over every LoRA root."""
-    vids, files = {}, {}
+    """{versionIds: {id: name}, fileIds: {id: name}, files: {lower-case file name: name}} over every LoRA root, where name
+    is "<folder>/<file>". files holds only LoRAs with no sidecar (put there by hand): the name is all that's known of
+    them. One with a sidecar is known by its ids, so another version's file of the same name doesn't pass for it."""
+    vids, fids, files, known = {}, {}, {}, set()
     for root in lora_roots():
         for dirpath, _dirs, names in os.walk(root):
             rel = Path(dirpath).relative_to(root)
             for n in names:
+                if not n.endswith(SIDECAR) or not (Path(dirpath) / n[: -len(SIDECAR)]).exists():
+                    continue
+                try:
+                    side = json.loads((Path(dirpath) / n).read_text())
+                except (OSError, ValueError):
+                    continue
+                lora = (rel / n).as_posix()[: -len(SIDECAR)]
+                known.add((root, lora))
+                if side.get("versionId"):
+                    vids.setdefault(int(side["versionId"]), lora)
+                if side.get("fileId"):
+                    fids[int(side["fileId"])] = lora
+            for n in names:
                 name = (rel / n).as_posix()
-                if n.endswith(".safetensors"):
+                if n.endswith(".safetensors") and (root, name) not in known:
                     files.setdefault(n.lower(), name)
-                elif n.endswith(SIDECAR):
-                    try:
-                        vid = json.loads((Path(dirpath) / n).read_text()).get("versionId")
-                    except (OSError, ValueError):
-                        continue
-                    lora = name[: -len(SIDECAR)]
-                    if vid and (Path(dirpath) / n[: -len(SIDECAR)]).exists():
-                        vids[int(vid)] = lora
-    return {"versionIds": vids, "files": files}
+    return {"versionIds": vids, "fileIds": fids, "files": files}
 
 
 # ---- search -------------------------------------------------------------------------------------------------
@@ -239,13 +246,13 @@ def _version(v: dict, have: dict) -> dict:
               "safetensors": str(f.get("name") or "").lower().endswith(".safetensors")}
              for f in v.get("files") or [] if f.get("type") in ("Model", None)]
     vid = v.get("id")
-    local = have["versionIds"].get(vid)
-    if not local:
-        for f in files:
-            n = safe_filename(f["name"]).lower()
-            if f["safetensors"] and n in have["files"]:
-                local = have["files"][n]
-                break
+    # (a version can hold several LoRAs, a lite and a strong one: having one of them isn't having the others)
+    for f in files:
+        f["downloaded"] = have["fileIds"].get(f["id"]) or (have["files"].get(safe_filename(f["name"]).lower()) if f["safetensors"] else None)
+    ours = [f for f in files if f["safetensors"]]
+    local = have["versionIds"].get(vid) or next((f["downloaded"] for f in ours if f["downloaded"]), None)
+    if len(ours) == 1:
+        ours[0]["downloaded"] = ours[0]["downloaded"] or local
     return {"id": vid, "name": v.get("name"), "baseModel": v.get("baseModel"), "trainedWords": v.get("trainedWords") or [],
             "earlyAccess": v.get("availability") == "EarlyAccess", "files": files,
             "images": [_image(i) for i in (v.get("images") or [])[:12]], "downloaded": local}
@@ -305,8 +312,8 @@ async def search(q: str = "", family: str = "", base: str = "", sort: str = "rat
         query = family   # a family Civitai has no base model for: search its name
     if query:
         params.append(("query", query[:120]))
-    if nsfw == "off":
-        params.append(("nsfw", "false"))
+    # (left out, Civitai answers as if it were false: safe-for-work models and pictures only, with or without a key)
+    params.append(("nsfw", "false" if nsfw == "off" else "true"))
     if cursor:
         params.append(("cursor", cursor))
     data = await _get_json(f"{API}/models", params)
