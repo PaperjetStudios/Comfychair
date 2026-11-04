@@ -412,9 +412,10 @@ async def rename(pid: int, body: dict = Body(...)):
     name = (body.get("name") or "").strip()
     if not name and "version" not in body:
         raise HTTPException(400, "Name required")
+    if "version" in body and pid in _busy_ids():   # before renaming: a 409 leaves the project as it was
+        raise HTTPException(409, "That project is being copied or upgraded: wait for it to finish")
     if name:
         db.rename_project(pid, name[:120])
-    if name:
         await _tell(reason="renamed", id=pid)
     if "version" in body:
         await run_upgrade(pid)   # same path as POST /upgrade: existing documents land on a table
@@ -452,11 +453,19 @@ def upgrade_project(pid: int) -> dict:
                                             "updated": now, "payload": payload})
         made.append(did)
 
+    owned, storied = set(), set()   # what existing tables (made by the new UI under version 1) already have
+    for t in store._docs(base):
+        owned.update(store._owned_docs(t, story=False))
+        if isinstance((t.get("payload") or {}).get("story"), str):
+            storied.add(t["payload"]["story"])
+
     try:
         frames, y = [], 0
         for kind, fk in FRAME_KINDS:
             row_h, x = 0, 0
             for doc in store._docs(store._dir(kind, pid, None)):
+                if (kind, doc["id"]) in owned:
+                    continue
                 w, h = _frame_size(kind, doc.get("payload") or {})
                 frames.append({"id": uuid.uuid4().hex[:12], "kind": fk, "doc": doc["id"], "x": x, "y": y, "w": w, "h": h,
                                "label": doc.get("name") or ""})
@@ -467,6 +476,8 @@ def upgrade_project(pid: int) -> dict:
         if frames:
             put("Imported", {"v": 1, "view": {"x": 0, "y": 0, "z": 1}, "grid": {"on": True, "size": 64}, "frames": frames})
         for st in store._docs(store._dir("story-tabs", pid, None)):
+            if st["id"] in storied:
+                continue
             put(st.get("name") or "Story", {"v": 1, "view": {"x": 0, "y": 0, "z": 1}, "grid": {"on": True, "size": 64},
                                             "frames": [], "story": st["id"]})
         db.set_project_version(pid, 2)

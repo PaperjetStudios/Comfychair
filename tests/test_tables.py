@@ -229,5 +229,52 @@ class Tables(unittest.TestCase):
         # a plain PUT naming another table's docs is refused
         self.c.post("/api/store/tables/t1/restore", params=q)
         r = self.c.put("/api/store/tables/t3", params=q, json={"name": "x", "payload": {"frames": [{"id": "z", "kind": "image", "doc": "e1"}]}})
-        self.assertEqual((r.status_code, r.json()), (409, {"error": "Those documents belong to another table"}))
+        self.assertEqual((r.status_code, r.json()), (409, {"detail": "Those documents belong to another table"}))
         self.assertEqual(self.c.post("/api/store/tables/nope/duplicate", params=q).status_code, 404)
+
+    def test_upgrade_skips_docs_and_stories_tables_already_have(self):
+        q = {"project_id": self.pid}
+        db.set_project_version(self.pid, 1)
+        self.put("edit-tabs", "e1", {}); self.put("edit-tabs", "e2", {}); self.put("video-tabs", "v1", {"a": 1})
+        self.put("story-tabs", "s1", {}); self.put("story-tabs", "s2", {})
+        self.put("tables", "t1", {"v": 1, "frames": [{"id": "f", "kind": "image", "doc": "e1"}, {"id": "g", "kind": "video", "doc": "v1"}], "story": "s1"})
+        r = self.c.post(f"/api/projects/{self.pid}/upgrade")
+        self.assertEqual(r.status_code, 200, r.text)
+        tabs = [self.c.get(f"/api/store/tables/{i}", params=q).json() for i in self.ids("tables")]
+        imp = next(t for t in tabs if t["name"] == "Imported")
+        self.assertEqual([f["doc"] for f in imp["payload"]["frames"]], ["e2"])
+        self.assertEqual(sorted(t["payload"].get("story") or "" for t in tabs), ["", "s1", "s2"])
+        self.assertEqual(self.c.put("/api/store/tables/" + imp["id"], params=q, json={"rev": 1, "payload": imp["payload"]}).status_code, 200)
+
+    def test_duplicate_drops_story_and_story_tabs_follow_their_table(self):
+        q = {"project_id": self.pid}
+        self.put("story-tabs", "s1", {"x": 1})
+        self.put("tables", "t1", {"v": 1, "frames": [], "story": "s1"})
+        t2 = self.c.post("/api/store/tables/t1/duplicate", params=q).json()
+        self.assertNotIn("story", t2["payload"])
+        self.assertEqual(self.c.delete("/api/store/tables/t1", params=q).status_code, 200)
+        self.assertEqual(self.ids("story-tabs"), set())
+        self.assertEqual(self.c.post("/api/store/tables/t1/restore", params=q).status_code, 200)
+        self.assertEqual(self.ids("story-tabs"), {"s1"})
+        # a story doc deleted on its own: tables unlink it, keep everything else
+        self.assertEqual(self.c.delete("/api/store/story-tabs/s1", params=q).status_code, 200)
+        t1 = self.c.get("/api/store/tables/t1", params=q).json()
+        self.assertNotIn("story", t1["payload"])
+        self.assertEqual(self.ids("tables"), {"t1", t2["id"]})
+
+    def test_ownership_409_is_detail_without_doc_and_story_is_not_a_frame_doc(self):
+        q = {"project_id": self.pid}
+        self.put("tables", "t1", {"frames": [], "story": "s1"})
+        self.put("tables", "t2", {"frames": [], "story": "s1"})   # same story is not an ownership clash
+        self.put("edit-tabs", "e1", {}); self.put("tables", "t3", {"frames": [{"id": "a", "kind": "image", "doc": "e1"}]})
+        r = self.c.put("/api/store/tables/t4", params=q, json={"payload": {"frames": [{"id": "a", "kind": "image", "doc": "e1"}]}})
+        self.assertEqual((r.status_code, r.json()), (409, {"detail": "Those documents belong to another table"}))
+        self.assertNotIn("doc", r.json())
+
+    def test_patch_name_and_version_while_busy_does_not_rename(self):
+        db.set_project_version(self.pid, 1)
+        name = db.get_project(self.pid)["name"]
+        with mock.patch.object(projects, "_busy_ids", lambda: {self.pid}):
+            r = self.c.patch(f"/api/projects/{self.pid}", json={"name": "Renamed", "version": 2})
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(db.get_project(self.pid)["name"], name)

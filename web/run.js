@@ -122,10 +122,12 @@ function setProgress(value, max, text) {
   runChip(value, max, text || '');
 }
 
-// The same progress on the Generate tab, for when another tab is open: a chip with the percentage
-// (a spinner before the steps start), then ✓ or ! when it ends. CSS hides it on the Generate tab itself.
+// The same progress for when another screen is open: a chip on Classic ▾ (the Generate screen's own button is in its
+// menu, out of sight) with the percentage (a spinner before the steps start), then ✓ or ! when it ends. CSS hides it
+// while Generate is on show; the Generate button's --run bar is mirrored onto Classic ▾ (world.js).
 export function runChip(value, max, text) {
-  const chip = $('#runChip'), tab = chip.parentElement;
+  const chip = $('#runChip'), tab = $('button[data-tab="generate"]'), classic = $('#classicBtn');
+  classic.dataset.title ||= classic.title;
   const state = !text ? null : /^Finished/.test(text) ? 'done' : /^(Stopped|Failed)/.test(text) ? 'fail'
     : /another device/.test(text) ? 'other' : 'run';
   // a ✓ or ! stays until the Generate tab is opened, so it's still there after a long time away
@@ -135,6 +137,7 @@ export function runChip(value, max, text) {
   setIcon(chip, state === 'done' ? '✓' : state === 'fail' ? '!' : pct != null ? `${pct}%` : '');
   tab.style.setProperty('--run', state === 'run' && pct != null ? `${pct}%` : '0%');
   tab.title = state ? `Generate · ${text}` : 'Generate';
+  classic.title = state ? `Generate · ${text}` : classic.dataset.title;
 }
 
 // ---------------------------------------------------------------------------

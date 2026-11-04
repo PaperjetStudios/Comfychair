@@ -108,11 +108,16 @@ export function heightGrip(grip, { size, set, max = () => innerHeight * 0.6 }) {
 // ---------------------------------------------------------------------------
 // maximize: the same ⛶ button, top right of the viewer, in every panel. Real Fullscreen API where
 // there is one (Esc leaves it), else the stage is pinned over the page (Esc / back leaves it).
-// maximizable(stage, viewer, { onChange, native }) -> { toggle, exit, on }
+// maximizable(stage, viewer, { onChange, native }) -> { toggle, exit, on, btn, stage, dispose }
+// dispose(): out of full screen and its button gone, for a stage that is going away (a live frame's mount)
 // native: the element that goes real full screen (default the stage). The page itself keeps sheets,
 // pickers and toasts on show over the pinned stage, which a full-screen stage would hide.
 // ---------------------------------------------------------------------------
 const MAXED = [];   // open ones, innermost last
+// the browser's own full screen left (its Esc, a gesture): one listener for all of them, the open ones look
+const syncNative = () => { for (const m of [...MAXED]) m.sync(); };
+document.addEventListener('fullscreenchange', syncNative);
+document.addEventListener('webkitfullscreenchange', syncNative);
 export function maximizable(stage, viewer, { onChange = null, cls = 'maxed', title = 'Full screen', native: fsEl = stage } = {}) {
   let native = false, active = false;
   const btn = h('button', { type: 'button', class: 'max-btn', 'aria-label': title, 'aria-pressed': 'false', title: `${title} (Esc leaves)` }, '⛶');
@@ -138,9 +143,8 @@ export function maximizable(stage, viewer, { onChange = null, cls = 'maxed', tit
     requestAnimationFrame(() => dispatchEvent(new Event('resize')));   // canvases refit to the new size
   };
   const sync = () => { if (active && native && !(document.fullscreenElement || document.webkitFullscreenElement)) { native = false; set(false); } };
-  document.addEventListener('fullscreenchange', sync);
-  document.addEventListener('webkitfullscreenchange', sync);
-  const api = { toggle: () => set(!active), exit: () => set(false), on: () => active, btn, stage };
+  const api = { toggle: () => set(!active), exit: () => set(false), on: () => active, btn, stage, sync,
+    dispose: () => { set(false); btn.remove(); } };
   btn.addEventListener('click', (e) => { e.stopPropagation(); api.toggle(); });
   btn.addEventListener('pointerdown', (e) => e.stopPropagation());   // the viewer underneath pans / draws
   viewer.append(btn);
@@ -406,7 +410,9 @@ export function zoomPan(viewer, layer, { min = 1, max = 8, snapOne = false, canZ
 // stage pinned over it, and the tab's own settings panel pulls out over the view from a handle on the right
 // edge. It is the same live panel, pinned by CSS (.tab.view-max), so nothing moves or rebuilds. Tap the handle
 // to show or hide it, drag it to size it, or back past the edge to put it away. Kept per device, per tab.
-//   const max = fullScreen(tab, { viewer, title, onChange });   // max: maximizable's { toggle, exit, on, btn }
+//   const max = fullScreen(tab, { viewer, title, onChange, name });   // max: maximizable's { toggle, exit, on, btn, dispose }
+// name: what the pull panel's open state and width are kept under (default the tab's id; a live frame's mount has none,
+// so its module names it). dispose(): out of full screen, its button and pull tab gone (a mount being let go).
 // The f key toggles it in every tab that has one (as in the players): a tab whose own keys take f first (playback.js
 // playKeys, which marks the key handled) is left to them.
 // ---------------------------------------------------------------------------
@@ -424,8 +430,8 @@ window.addEventListener('keydown', (e) => {   // (on window: it runs after every
   const max = fullNow();
   if (max) { e.preventDefault(); max.toggle(); }
 });
-export function fullScreen(tab, { viewer = tab.querySelector('.viewer'), title = 'Full screen', onChange = null } = {}) {
-  const key = `deck.pull.${tab.id}`;
+export function fullScreen(tab, { viewer = tab.querySelector('.viewer'), title = 'Full screen', onChange = null, name = tab.id } = {}) {
+  const key = `deck.pull.${name || 'frame'}`;
   const P = { open: store.get(`${key}.open`, false) === true, w: +store.get(`${key}.w`, 380) || 380 };
   const most = () => Math.max(260, innerWidth - 60);
   const hd = h('button', { type: 'button', class: 'pull-tab', 'aria-label': 'Settings panel', 'aria-expanded': P.open,
@@ -466,5 +472,7 @@ export function fullScreen(tab, { viewer = tab.querySelector('.viewer'), title =
     onChange: (on) => { tab.classList.toggle('view-max', on); apply(); onChange?.(on); } });
   for (const t of [...FULL.keys()]) if (!t.isConnected) FULL.delete(t);
   FULL.set(tab, max);
+  const drop = max.dispose;
+  max.dispose = () => { drop(); hd.remove(); if (FULL.get(tab) === max) FULL.delete(tab); };
   return max;
 }

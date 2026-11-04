@@ -3,8 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   blankTable, migrateTable, newFrame, hitFrame, framesIn, moveFrames, resizeFrame, snapRect, snapValue, boundsOf, fitView,
-  zoomAt, toTable, toStage, liveView, rowLayout, nextBeside, mpOf, sizeForMp, toFront, toBack, rectFrom,
-  rowsOf, layoutRows, liveBackdrop,
+  zoomAt, toTable, toStage, rowLayout, nextBeside, mpOf, sizeForMp, toFront, toBack, rectFrom,
+  liveBackdrop,
 } from '../web/table-model.js';
 
 const F = (id, x, y, w, h, more = {}) => ({ id, kind: 'image', doc: null, label: id, x, y, w, h, ...more });
@@ -82,7 +82,6 @@ test('bounds, fit and zoom about a point', () => {
   const z = zoomAt({ x: 10, y: 20, z: 1 }, 110, 220, 2);
   assert.deepEqual(toTable(z, 110, 220), toTable({ x: 10, y: 20, z: 1 }, 110, 220));
   assert.equal(zoomAt({ x: 0, y: 0, z: 1 }, 0, 0, 100, 0.1, 4).z, 4);
-  assert.deepEqual(liveView(F('a', 100, 100, 200, 100), 1000, 600), { x: 300, y: 150, z: 1 });
 });
 
 test('row layout: shots left to right, scenes one under another', () => {
@@ -104,26 +103,6 @@ test('megapixels: the same shape, sides on 16', () => {
   assert.equal(s.w % 16, 0); assert.equal(s.h % 16, 0);
   assert.ok(Math.abs(s.w / s.h - 16 / 9) < 0.02);
   assert.ok(Math.abs(mpOf(s.w, s.h) - 1) < 0.03);
-});
-
-test('rows: frames grouped by overlapping tops and bottoms, each row left to right', () => {
-  const fs = [F('c', 300, 10, 100, 100), F('a', 0, 0, 100, 100), F('b', 150, 40, 100, 100), F('d', 0, 400, 50, 50), F('e', -90, 420, 50, 50)];
-  assert.deepEqual(rowsOf(fs).map((r) => r.map((f) => f.id)), [['a', 'b', 'c'], ['e', 'd']]);
-  // apart by 20: two rows, unless the gap lets them join
-  const two = [F('a', 0, 0, 100, 100), F('b', 200, 120, 100, 100)];
-  assert.equal(rowsOf(two).length, 2);
-  assert.deepEqual(rowsOf(two, { gap: 30 }).map((r) => r.map((f) => f.id)), [['a', 'b']]);
-  assert.deepEqual(rowsOf([]), []);
-  // a row grows as frames join it: c overlaps b, which overlaps a
-  assert.equal(rowsOf([F('a', 0, 0, 10, 100), F('b', 20, 90, 10, 100), F('c', 40, 180, 10, 100)]).length, 1);
-});
-
-test('layoutRows lays rows out from a corner, the same as rowLayout', () => {
-  const rows = [[F('a', 9, 9, 100, 50), F('b', 9, 9, 200, 80)], [F('c', 9, 9, 10, 10)]];
-  const out = layoutRows(rows, { x: 5, y: 7, gap: 10, rowGap: 20 });
-  assert.deepEqual(out.map((r) => r.map((f) => [f.id, f.x, f.y])), [[['a', 5, 7], ['b', 115, 7]], [['c', 5, 107]]]);
-  assert.deepEqual(out, rowLayout(rows, { gap: 10, rowGap: 20, x0: 5, y0: 7 }));
-  assert.equal(rows[0][0].x, 9);   // (new objects)
 });
 
 test('a live frame\'s backdrop: the frame fitted to the stage, any zoom', () => {

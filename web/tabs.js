@@ -21,6 +21,11 @@ const SAVE_DELAY = 1000, DRAG_PX = 6, HOLD_MS = 350, EDGE_PX = 40;
 const TIMEOUT = 30000;
 
 
+// A 409 is either a stale rev (the body has `doc`: the server's copy, null when it was deleted) or a refusal (no `doc`
+// key: `detail` says why, e.g. documents that belong to another table). A refusal is said, never retried or resolved.
+export const refused = (r) => r?.status === 409 && !!r.data && typeof r.data === 'object' && !('doc' in r.data);
+export const refusal = (r) => r.data?.detail || r.data?.error || 'The server refused that change';
+
 export class TabSet {
   constructor(o) {
     Object.assign(this, { scope: 'project', newName: (n) => `Tab ${n}`, ...o });
@@ -267,7 +272,7 @@ export class TabSet {
       this.setOffline(true);
       return false;
     }
-    if (r.status === 409 && r.data?.error && !r.data?.doc) { toast(r.data.error, true); return false; }   // (a refusal with a reason, not a changed document)
+    if (refused(r)) { toast(refusal(r), true); return false; }   // (a refusal with a reason, not a changed document: no conflict sheet)
     if (r.status === 409) { this.showConflict(r.data?.doc ?? null); return false; }
     this.setOffline(false);
     tab.rev = r.data.rev; tab.name = r.data.name;
@@ -377,6 +382,7 @@ export class TabSet {
     const r = await this.put(id, { rev: 0, name, payload, ...(order != null ? { order } : {}) });
     if (r.net) throw new Error('Can\'t reach ComfyChair (is the server running and on this network?)');
     if (r.ok) { this.upsert(r.data); return r.data; }
+    if (refused(r)) throw new Error(refusal(r));
     if (r.status === 409 && r.data?.doc) { this.upsert(r.data.doc); return r.data.doc; }
     throw new Error(r.data?.detail || r.data?.error || `Couldn't create the tab (${r.status})`);
   }

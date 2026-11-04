@@ -133,8 +133,6 @@ export function zoomAt(view, px, py, factor, min = 0.02, max = 8) {
 }
 export const toTable = (view, px, py) => ({ x: (px - view.x) / view.z, y: (py - view.y) / view.z });
 export const toStage = (view, x, y) => ({ x: x * view.z + view.x, y: y * view.z + view.y });
-// the view that puts a frame at zoom exactly 1, centred in the stage (a live frame: engines can't work scaled)
-export const liveView = (f, stageW, stageH) => ({ x: Math.round(stageW / 2 - (f.x + f.w / 2)), y: Math.round(stageH / 2 - (f.y + f.h / 2)), z: 1 });
 
 // ---- layouts ----
 // Rows of frames (a story's scenes, each a row of shots) laid left to right, each row below the last. Returns the same
@@ -147,22 +145,6 @@ export function rowLayout(rows, { gap = 40, rowGap = 80, x0 = 0, y0 = 0 } = {}) 
     y += Math.max(0, ...row.map((f) => f.h)) + rowGap;
     return out;
   });
-}
-
-// the same, named as the story table asks for it: layoutRows(rows, { x, y, gap, rowGap })
-export const layoutRows = (rows, { x = 0, y = 0, gap = 40, rowGap = 80 } = {}) => rowLayout(rows, { gap, rowGap, x0: x, y0: y });
-
-// The frames grouped into rows, the way they sit: a frame joins a row when its top and bottom overlap the row's (the
-// frames already in it, from top to bottom), or come within gap of it. Rows run top to bottom, each one left to right.
-// (A story table reads its scenes and shot order back from where the frames were dragged.)
-export function rowsOf(frames, { gap = 0 } = {}) {
-  const rows = [];
-  for (const f of [...frames].sort((a, b) => a.y - b.y || a.x - b.x)) {
-    const row = rows.find((r) => f.y < r.bottom + gap && f.y + f.h > r.top - gap);
-    if (row) { row.list.push(f); row.top = Math.min(row.top, f.y); row.bottom = Math.max(row.bottom, f.y + f.h); }
-    else rows.push({ top: f.y, bottom: f.y + f.h, list: [f] });
-  }
-  return rows.sort((a, b) => a.top - b.top).map((r) => r.list.sort((a, b) => a.x - b.x || a.y - b.y));
 }
 
 // the view that shows a live frame's place on the table behind its mount (the frame fitted to the stage, pad clear)

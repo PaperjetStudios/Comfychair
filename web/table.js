@@ -27,6 +27,8 @@
 //                    TabSet's doc ({ id, name, … }). Not fired for the open table saved elsewhere (it is the same table).
 //   table:deleted    { frames: [frame] }         frames were deleted (their documents are in the server's trash); a frame
 //                    module drops what only the frame itself owned. Undo brings the frames back, not that.
+//   table:menu       { frame, frames, groups }   the frame menu is about to open: a module adds its own groups of items
+//                    (press-menu.js's shape) to groups; they go before Delete
 import { $, h, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, toggle, help, mpInput } from './ui.js';
 import { S, onServer, onProject } from './core.js';
 import { TabSet } from './tabs.js';
@@ -41,7 +43,7 @@ import { wireTableNav } from './table-nav.js';
 import { droppedFiles, draggingPicture } from './drop-files.js';
 import { isLive, liveFrame, liveRoot, setLive } from './live.js';
 import * as M from './table-model.js';
-import { KIND_ICON, copyDoc, createDoc, editDoc, frameEl, frameFor, kindOfDoc, loadStills, owedCounts, renameDoc, restoreDoc, syncFrame, trashDoc } from './table-frames.js';
+import { KIND_ICON, copyDoc, createDoc, dropInput, editDoc, frameEl, frameFor, kindOfDoc, loadStills, owedCounts, renameDoc, restoreDoc, syncFrame, trashDoc } from './table-frames.js';
 import { sidebar } from './sidebar.js';
 
 const ZMIN = 0.02, ZMAX = 8, DRAG_PX = 4, SNAP_PX = 8, DWELL_MS = 600, NUDGE = 1;
@@ -62,6 +64,8 @@ const adapter = {
   empty: M.blankTable,
   migrate: M.migrateTable,
   dump: () => T,
+  // (a live frame lets go first: its last changes, such as a canvas size its module writes back, are saved on this table)
+  beforeLeave: () => unlive(),
   load(p, doc) {
     const next = M.migrateTable(p), key = { id: doc?.id ?? null, pid: S.project };
     const same = U.loaded && U.loaded.id === key.id && U.loaded.pid === key.pid;
@@ -144,6 +148,12 @@ export const selectedFrames = () => selected();
 export const frameById = (id) => byId(id);
 export const activeTableId = () => U.tabs?.active?.id ?? null;
 export function frameChanged() { U.panelSig = ''; renderFrames(); changed(); }
+// The open table's story is gone (deleted on the Classic screen): the table stops being a story's (its frames stay)
+export function dropStory(storyId) {
+  if (!T.story || T.story !== storyId) return false;
+  delete T.story; changed();
+  return true;
+}
 
 // The frames' elements follow the list (its order is the stacking order); each is made once and kept
 function renderFrames() {
@@ -198,14 +208,15 @@ export async function refreshStills(kinds = [...new Set(T.frames.map((f) => f.ki
 // ---------------------------------------------------------------------------
 const nextLabel = (kind) => `${M.KIND_LABEL[kind]} ${T.frames.filter((f) => f.kind === kind).length + 1}`;
 // A frame of a kind over rect, with its document made first (from payload, else the kind's empty one)
-// ok: here() taken before whatever the caller awaited (default: now)
-async function makeFrame(kind, rect, { payload, frame, ok = here() } = {}) {
+// ok: here() taken before whatever the caller awaited (default: now). fresh: a picture uploaded for the frame's document
+// (frameFor), deleted when the frame isn't made: nothing else owns it
+async function makeFrame(kind, rect, { payload, frame, fresh = null, ok = here() } = {}) {
   const f = frame || M.newFrame(kind, rect, { label: nextLabel(kind) });
   if (kind !== 'note') {
-    try { f.doc = await createDoc(f, payload); } catch (e) { toast(`Couldn't make the frame: ${e.message}`, true); return null; }
-    if (!ok()) { trashDoc(f).catch(() => {}); return null; }   // (another table opened meanwhile: the document goes too)
+    try { f.doc = await createDoc(f, payload); } catch (e) { toast(`Couldn't make the frame: ${e.message}`, true); dropInput(fresh); return null; }
+    if (!ok()) { trashDoc(f).catch(() => {}); return null; }   // (another table opened meanwhile: the document goes too, and its picture with it)
   }
-  if (!ok()) return null;
+  if (!ok()) { dropInput(fresh); return null; }
   T.frames.push(f);
   U.sel = new Set([f.id]);
   renderFrames(); changed();
@@ -265,6 +276,9 @@ export function unlive() {
   return U.leaving;
 }
 
+// a video frame's VFX document (frame-vfx.js), as table-frames.js trashDoc / restoreDoc / copyDoc take it
+const vfxOf = (f) => ({ kind: 'vfx-tabs', doc: f.vfx, label: `${f.label || 'Video'} · VFX` });
+
 // Delete: the frames go, their documents to the server's trash; Undo brings both back. A locked frame stays. A frame
 // whose document couldn't be trashed comes back; Undo brings back the ones whose document could be restored, into their
 // own table (the one open, or saved to it on the server when another is open by then).
@@ -286,6 +300,7 @@ async function deleteFrames(ids) {
     U.sel.clear(); renderFrames(); changed();
     const res = await Promise.allSettled(gone.map(trashDoc));
     trashed = gone.filter((f, i) => res[i].status === 'fulfilled');
+    for (const f of trashed) if (f.vfx) trashDoc(vfxOf(f)).catch((e) => console.warn('frame VFX', e));   // (a video frame's VFX document goes with it)
     const kept = gone.filter((f, i) => res[i].status === 'rejected');
     if (trashed.length) dispatchEvent(new CustomEvent('table:deleted', { detail: { frames: trashed } }));
     if (kept.length) {
@@ -297,6 +312,7 @@ async function deleteFrames(ids) {
     const still = here(), list = trashed;
     const res = await Promise.allSettled(list.map(restoreDoc));
     const fine = list.filter((f, i) => res[i].status === 'fulfilled');
+    await Promise.allSettled(fine.filter((f) => f.vfx).map((f) => restoreDoc(vfxOf(f))));
     if (fine.length < list.length) toast(`Couldn't bring back ${list.length - fine.length === 1 ? 'a frame' : `${list.length - fine.length} frames`}: ${res.find((r) => r.status === 'rejected').reason?.message}`, true);
     if (!fine.length) return;
     if (still() && U.tabs?.active?.id === tid) {
@@ -359,18 +375,26 @@ async function redo() { const e = H.future.pop(); if (!e) return; H.past.push(e)
 function tellMoved(frames) {
   if (frames.length) dispatchEvent(new CustomEvent('table:move', { detail: { frames, table: T } }));
 }
-// Duplicate: each copy beside its original, with a copy of its document
+// Duplicate: each copy beside its original, with a copy of its document and of its VFX document. The Make panel's
+// pictures (make.inputs) stay the original's: the copy's settings still name them, but deleting the copy, or its slot
+// taking another picture, never deletes them.
 async function duplicateFrames(ids) {
   const made = [], ok = here();
+  const gone = (g) => { trashDoc(g).catch(() => {}); if (g.vfx) trashDoc(vfxOf(g)).catch(() => {}); };
   for (const f of T.frames.filter((x) => ids.has(x.id))) {
     const g = { ...structuredClone(f), id: M.newFrame(f.kind, f).id, label: `${f.label} copy`, locked: false };
+    if (g.make) g.make = { ...g.make, inputs: [] };
     Object.assign(g, M.nextBeside([...T.frames, ...made], f.kind, { w: f.w, h: f.h }));
     try { g.doc = f.doc ? await copyDoc(f, g.label) : null; } catch (e) { toast(`Couldn't copy "${f.label}": ${e.message}`, true); continue; }
+    if (f.vfx) {
+      try { g.vfx = await copyDoc(vfxOf(f), `${g.label} · VFX`); }
+      catch (e) { g.vfx = null; if (e.status !== 404) toast(`Couldn't copy "${f.label}"'s VFX: ${e.message}`, true); }   // (404: never saved; the copy makes its own)
+    }
     made.push(g);
     if (!ok()) break;
   }
   if (!made.length) return;
-  if (!ok()) { for (const g of made) trashDoc(g).catch(() => {}); return; }   // (another table opened meanwhile: the copies go)
+  if (!ok()) { for (const g of made) gone(g); return; }   // (another table opened meanwhile: the copies go)
   T.frames.push(...made);
   U.sel = new Set(made.map((f) => f.id)); renderFrames(); changed();
 }
@@ -419,6 +443,7 @@ function reveal(f) {
 // Size and MP: a frame's canvas size, typed, or from megapixels at the same shape
 // ---------------------------------------------------------------------------
 function sizeSheet(f) {
+  const ok = here(), id = f.id;
   let w = f.w, hh = f.h, keep = true;
   const ar = () => f.w / f.h;
   const num = (v, step, label) => h('input', { type: 'number', inputMode: 'decimal', min: step === 16 ? 16 : 0.01, step, value: v, 'aria-label': label });
@@ -431,7 +456,11 @@ function sizeSheet(f) {
     help('The frame\'s size is its canvas size. The image, video or 3D document takes it the next time the frame is opened. Megapixels keep the shape and round each side to 16.'),
     h('div', { class: 'grid-2' }, field('Width', wIn), field('Height', hIn)), field('Megapixels', mpIn),
     toggle('Keep the shape', keep, (on) => { keep = on; }),
-    actions(button('Apply', () => { closeSheet(); setSize(f, { w, h: hh }); }, { cls: 'small primary' }),
+    actions(button('Apply', () => {   // (on the table it was opened on, and the frame still there)
+      closeSheet();
+      const g = ok() && byId(id);
+      if (g) setSize(g, { w, h: hh }); else toast('That frame is on another table now', true);
+    }, { cls: 'small primary' }),
       button('Cancel', closeSheet, { cls: 'small ghost' })));
 }
 
@@ -454,12 +483,15 @@ function frameMenu(x, y, f) {
   if (!U.sel.has(f.id)) U.sel = new Set([f.id]);
   renderFrames();
   const list = selected(), one = list.length === 1, locked = list.every((s) => s.locked);
+  const groups = [];   // (other modules' items: table:menu)
+  dispatchEvent(new CustomEvent('table:menu', { detail: { frame: f, frames: list, groups, table: T } }));
   openPressMenu(x, y, [
     [{ label: 'Open', keys: 'Enter', disabled: !one, run: () => goLive(f) }],
     [{ label: 'Duplicate', keys: 'Ctrl+D', run: () => duplicateFrames(new Set(U.sel)) },
       { label: 'Size and MP…', disabled: !one, run: () => sizeSheet(f) },
       { label: locked ? 'Unlock' : 'Lock', run: () => setLocked(list, !locked) }],
     [{ label: 'Bring to front', run: () => restack(M.toFront) }, { label: 'Send to back', run: () => restack(M.toBack) }],
+    ...groups.filter((g) => g?.length),
     [{ label: one ? 'Delete' : `Delete ${list.length}`, keys: 'Del', danger: true, disabled: locked, run: () => deleteFrames(new Set(U.sel)) }],
   ], 'Frame');
 }
@@ -760,7 +792,7 @@ export async function dropOnTable(list, clientX, clientY) {
   for (const src of [list].flat()) {
     let got;
     try { got = await frameFor(src, at); } catch (err) { toast(err.message, true); continue; }
-    if (!ok()) return;   // (another table opened meanwhile)
+    if (!ok()) { dropInput(got?.fresh); return; }   // (another table opened meanwhile: a picture uploaded for it goes)
     if (!got) { toast('That can\'t go on the table', true); continue; }
     got.frame.label = got.frame.label || nextLabel(got.frame.kind);
     if (await makeFrame(got.frame.kind, got.frame, { ...got, ok })) { made++; at = { x: got.frame.x + got.frame.w + 40, y: got.frame.y }; }
@@ -785,9 +817,12 @@ function renderPanel() {
     section('Frame', null, one ? frameFields(one) : hint(s.length ? `${s.length} frames selected` : 'Select a frame.')));
 }
 function frameFields(f) {
+  // (a box typed in keeps the panel from redrawing: it may still be on show after another table opened, or the frame went)
+  const ok = here(), mine = () => (ok() ? byId(f.id) === f : false);
   const name = h('input', { type: 'text', value: f.label, maxLength: 120, 'aria-label': 'Label' });
-  name.addEventListener('input', () => { f.label = name.value; syncFrame(U.els.get(f.id), f, { selected: true, live: liveFrame()?.id === f.id }); });
+  name.addEventListener('input', () => { if (!mine()) return; f.label = name.value; syncFrame(U.els.get(f.id), f, { selected: true, live: liveFrame()?.id === f.id }); });
   name.addEventListener('change', () => {
+    if (!mine()) { U.panelSig = ''; renderPanel(); return; }
     f.label = name.value.trim() || M.KIND_LABEL[f.kind]; U.panelSig = ''; renderFrames(); changed();
     renameDoc(f, f.label).catch((e) => toast(`Couldn't rename its document: ${e.message}`, true));   // (the document bar and pickers show the frame's name)
   });
@@ -795,6 +830,7 @@ function frameFields(f) {
   const num = (k) => {
     const el = h('input', { type: 'number', inputMode: 'numeric', step: 1, value: Math.round(f[k]), 'aria-label': k.toUpperCase(), disabled: !!f.locked });
     el.addEventListener('change', () => {
+      if (!mine()) { U.panelSig = ''; renderPanel(); return; }
       if (f.locked || !Number.isFinite(+el.value)) return;
       const before = geomOf(new Set([f.id]));
       f[k] = Math.round(+el.value);
@@ -804,7 +840,7 @@ function frameFields(f) {
     });
     return el;
   };
-  const mp = mpInput(() => M.mpOf(f.w, f.h).toFixed(2), (n) => { if (n > 0) setSize(f, M.sizeForMp(f.w, f.h, n)); });
+  const mp = mpInput(() => M.mpOf(f.w, f.h).toFixed(2), (n) => { if (n > 0 && mine()) setSize(f, M.sizeForMp(f.w, f.h, n)); });
   mp.querySelector('span').textContent = 'MP';
   return [field('Label', name),
     field('Size', h('div', { class: 'row wrap' }, h('span', { class: 'table-size' }, `${f.w}×${f.h} · ${M.mpOf(f.w, f.h).toFixed(2)} MP`),
@@ -936,24 +972,11 @@ export function stepTable(dir) {
   const i = list.findIndex((d) => d.id === U.tabs?.active?.id), j = i + dir;
   if (i >= 0 && j >= 0 && j < list.length) openTable(list[j].id);
 }
-// A copy of a table beside it, its frames each with a copy of their document (two frames never share one: deleting
-// one would take the other's)
+// A copy of a table beside it: the server copies it with a copy of each document its frames own (two frames never share
+// one: deleting one would take the other's), their VFX documents too, and leaves a story with its own table
 async function duplicateTable(id) {
   if (!(await switchTable(id))) return;
-  await unlive();   // (its live frame's last save is in the copy)
-  if (!(await U.tabs.leave())) return;
-  const a = U.tabs.active, copy = structuredClone(T), pid = S.project;
-  for (const f of copy.frames) {
-    f.id = M.newFrame(f.kind, f).id;
-    if (f.doc) {
-      try { f.doc = await copyDoc(f, f.label); } catch (e) { toast(`Couldn't copy "${f.label}": ${e.message}`, true); f.doc = null; }
-    }
-  }
-  copy.frames = copy.frames.filter((f) => f.doc || f.kind === 'note');
-  delete copy.story;   // (a story stays with its own table)
-  if (S.project !== pid) { for (const f of copy.frames) trashDoc(f).catch(() => {}); return; }   // (another project opened meanwhile)
-  const doc = await U.tabs.create1({ name: `${a.name} copy`.slice(0, 120), payload: copy, order: a.order + 0.5 });
-  U.tabs.open(doc);
+  await U.tabs.duplicate();   // (its leave() lets go of a live frame first: beforeLeave; its last save is in the copy)
 }
 // another screen came on: let go of the live frame and any gesture
 export function pauseTable() {

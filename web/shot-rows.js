@@ -13,9 +13,9 @@ export const isStoryFrame = (f) => isSceneNote(f) || isShotFrame(f);
 // A shot frame's label is the story's ("1.2 What we see…", kept in story.auto) until it is renamed on the table
 export const autoLabelled = (f) => (f.story?.auto != null ? f.label === f.story.auto : /^\d+\.\d+(\s|$)/.test(f.label || ''));
 
-// Frames in rows: a frame whose middle is inside a row's height so far joins it; each row left to right. (Not
-// table-model.js rowsOf, which joins frames whose edges touch or overlap: a note dropped edge to edge against the
-// next scene's, as snapping does, would merge the two scenes.)
+// Frames in rows: a frame whose middle is inside a row's height so far joins it; each row left to right. (Not frames
+// whose edges touch or overlap: a note dropped edge to edge against the next scene's, as snapping does, would merge the
+// two scenes.)
 export function rowsOfFrames(frames) {
   const list = [...frames].sort((a, b) => (a.y + a.h / 2) - (b.y + b.h / 2));
   const rows = [];
@@ -26,7 +26,6 @@ export function rowsOfFrames(frames) {
   }
   return rows.map((r) => r.frames.sort((a, b) => a.x - b.x));
 }
-export const rowsOf = (frames) => rowsOfFrames(frames);
 
 // The scenes and their shots in the order rows of frames show them: [{ scene, shots: [shot ids] }].
 // Each note starts its scene; shots before a row's first note go to that note's scene, a row with no note joins the
@@ -124,27 +123,21 @@ export function planReconcile(story, frames, { seen = new Map() } = {}) {
   return { missingShots, goneShots, copies, missingNotes, remove };
 }
 
-// The size of a shot's frame: its edit's canvas when it has one, else the story's shape at about a megapixel
-export function shotSize(s, ratio) {
-  const z = s?.comp?.size;
+// The size of a shot's frame: its edit's canvas (size, read from the edit; else the old canvas s.comp, for a shot with
+// no edit yet), else the story's shape at about a megapixel
+export function shotSize(s, ratio, size = s?.comp?.size) {
+  const z = size;
   if (z?.w > 0 && z?.h > 0) return { w: Math.round(z.w), h: Math.round(z.h) };
   return M.sizeForMp(ratio, 1, 1);
 }
 export const NOTE_W = 480;
 
 // The rows laid out: a scene's note then its shots, scene under scene, from (x0, y0). Returns Map frame id -> { x, y }.
-// (table-model.js layoutRows when it is there, else rowLayout)
 export function storyLayout(story, frames, { x0 = 0, y0 = 0, gap = 40, rowGap = 120 } = {}) {
   const note = new Map(), shot = new Map();
   for (const f of frames) { if (isSceneNote(f)) note.set(f.story.scene, f); else if (isShotFrame(f)) shot.set(f.story.shot, f); }
   const rows = story.scenes.map((sc) => [note.get(sc.id), ...sc.shots.map((s) => shot.get(s.id))].filter(Boolean)).filter((r) => r.length);
-  let laid = null;
-  if (typeof M.layoutRows === 'function') {
-    try { laid = M.layoutRows(rows, { x: x0, y: y0, gap, rowGap }); } catch { laid = null; }
-    const flat = Array.isArray(laid) ? laid.flat() : [];
-    if (flat.length !== rows.flat().length || !flat.every((f) => f && f.id && Number.isFinite(f.x) && Number.isFinite(f.y))) laid = null;
-  }
-  laid ||= M.rowLayout(rows, { x0, y0, gap, rowGap });
+  const laid = M.rowLayout(rows, { x0, y0, gap, rowGap });
   return new Map(laid.flat().map((f) => [f.id, { x: Math.round(f.x), y: Math.round(f.y) }]));
 }
 

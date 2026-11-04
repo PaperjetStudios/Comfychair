@@ -10,6 +10,7 @@ import { dropKind } from './drop-files.js';
 import { DOC_KIND, KIND_LABEL, newFrame } from './table-model.js';
 import { owedFor } from './owed-runs.js';
 import { emptyPayload } from './empty-docs.js';
+import { refused, refusal } from './tabs.js';
 
 export const KIND_ICON = { image: 'image', video: 'film', scene: 'cube', sound: 'sound', note: 'text' };
 const SOUND_SIZE = { w: 1024, h: 256 };   // a sound frame is a strip: its waveform, not a picture
@@ -26,8 +27,9 @@ export function blankPayload(kind) {
 }
 
 // Make the frame's document (named after the frame) and return its id. The id is made the way tabs.js create1 makes one.
+// (frame.kind may also be a document kind itself: { kind: 'vfx-tabs', doc } for a video frame's VFX document)
 export async function createDoc(frame, payload = blankPayload(frame.kind)) {
-  if (!DOC_KIND[frame.kind]) return null;
+  if (!DOC_KIND[frame.kind] && !/-tabs$/.test(frame.kind || '')) return null;
   const id = uid() + uid();
   await api(docUrl(frame.kind, id), { method: 'PUT', body: { rev: 0, name: String(frame.label || KIND_LABEL[frame.kind]).slice(0, 120), payload }, busy: false });
   return id;
@@ -60,7 +62,14 @@ const TABSET = {
   video: () => import('./video.js').then((m) => m.videoTabs()),
   sound: () => import('./sound.js').then((m) => m.soundTabs()),
   scene: () => import('./run.js').then((m) => m.sceneMod?.sceneTabs?.() || null),
+  'vfx-tabs': () => import('./vfx.js').then((m) => m.vfxTabs() || null),
 };
+
+// A picture uploaded for something that then wasn't made (its save failed, another table opened): nothing owns it, so
+// it goes (a name of null is nothing to do)
+export function dropInput(name) {
+  for (const n of [name].flat()) if (n) api(`/api/inputs?name=${encodeURIComponent(n)}`, { method: 'DELETE', busy: false }).catch(() => {});
+}
 // A frame's label is its document's name: through its kind's TabSet when that has it open, else a name-only edit at its rev
 export async function renameDoc(f, name) {
   if (!f.doc || !DOC_KIND[f.kind]) return;
@@ -81,7 +90,8 @@ export async function renameDoc(f, name) {
 }
 
 // ---- documents edited from outside their engine (a drop on a frame that isn't open, a rename, an Undo into another table) ----
-// Read, change, PUT at the rev read; a stale rev (409: another save came between) is read and changed once more.
+// Read, change, PUT at the rev read; a stale rev (409 with the server's `doc`: another save came between) is read and
+// changed once more. A refusal (409 with no `doc`, tabs.js refused) throws its reason at once.
 // kind: a frame kind ('image'…) or a store kind ('tables'…). mutate(payload, doc) changes the payload in place (or
 // doc.name), and must do nothing else (it can run twice): uploads and fetches go before. It returns false to save nothing.
 // Resolves true once saved, false when mutate said not to.
@@ -90,8 +100,16 @@ export async function editDoc(kind, id, mutate) {
     const d = await api(docUrl(kind, id), { busy: false });
     const doc = { name: d.name, payload: clone(d.payload || {}) };
     if (mutate(doc.payload, doc) === false) return false;
-    try { await api(docUrl(kind, id), { method: 'PUT', body: { rev: d.rev, name: doc.name, payload: doc.payload }, busy: false }); return true; }
-    catch (e) { if (e.status !== 409 || again) throw e; }
+    let r;
+    try {
+      const res = await fetch(docUrl(kind, id), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rev: d.rev, name: doc.name, payload: doc.payload }) });
+      let data = null; try { data = await res.json(); } catch { /* not JSON */ }
+      r = { ok: res.ok, status: res.status, data };
+    } catch { throw new Error('Can\'t reach ComfyChair (is the server running and on this network?)'); }
+    if (r.ok) return true;
+    const err = new Error(refused(r) ? refusal(r) : r.data?.detail || r.data?.error || `Couldn't save (${r.status})`);
+    err.status = r.status;
+    if (r.status !== 409 || refused(r) || again) throw err;
   }
 }
 
@@ -235,7 +253,7 @@ export async function frameFor(src, at) {
     const label = `#${g.id}`;
     if (o.kind === 'image') {
       const r = await api(`/api/generations/${g.id}/to-input`, { method: 'POST', body: { index, frame: 'first', mp: 0, multiple: 1 } });
-      return pictureFrame(r.name, at, r.width, r.height, label);
+      return { ...(await pictureFrame(r.name, at, r.width, r.height, label)), fresh: r.name };
     }
     if (o.kind === 'video' || o.kind === 'audio') return clipFrame(o.kind, { generation: g.id, index }, o.url, label, at);
     return null;
@@ -252,7 +270,7 @@ async function fileFrame(file, at) {
   const kind = dropKind(file);
   if (kind === 'image') {
     const r = await uploadImage(file);
-    return pictureFrame(r.name, at, r.width, r.height, file.name.replace(/\.\w+$/, ''));
+    return { ...(await pictureFrame(r.name, at, r.width, r.height, file.name.replace(/\.\w+$/, ''))), fresh: r.name };
   }
   const m = await uploadMedia(file);
   if (m.kind !== 'video' && m.kind !== 'audio') return null;
@@ -261,13 +279,14 @@ async function fileFrame(file, at) {
 
 // ---- things dropped into a frame (table:drop-frame sources): as a picture, or as a clip ----
 const genOf = async (id) => S.history?.get?.(id) || api(`/api/generations/${id}`, { busy: false });
-// A dropped thing as one of the project's pictures: { name, width, height, label }, or null for something that isn't one
-// (a run's picture is copied into the project's pictures, as a frame made from it is)
+// A dropped thing as one of the project's pictures: { name, width, height, label, fresh }, or null for something that isn't
+// one (a run's picture is copied into the project's pictures, as a frame made from it is). fresh: uploaded or copied
+// here, not one of the project's pictures already (the caller drops it when what it was for isn't saved: dropInput)
 export async function sourcePicture(src) {
   if (src instanceof File) {
     if (dropKind(src) !== 'image') return null;
     const r = await uploadImage(src);
-    return { name: r.name, width: r.width, height: r.height, label: src.name.replace(/\.\w+$/, '') };
+    return { name: r.name, width: r.width, height: r.height, label: src.name.replace(/\.\w+$/, ''), fresh: true };
   }
   if (src.input) {
     let { width = 0, height = 0 } = src;
@@ -278,7 +297,7 @@ export async function sourcePicture(src) {
     const index = src.index || 0, g = await genOf(src.generation);
     if (g?.outputs?.[index]?.kind !== 'image') return null;
     const r = await api(`/api/generations/${g.id}/to-input`, { method: 'POST', body: { index, frame: 'first', mp: 0, multiple: 1 } });
-    return { name: r.name, width: r.width, height: r.height, label: `#${g.id}` };
+    return { name: r.name, width: r.width, height: r.height, label: `#${g.id}`, fresh: true };
   }
   if (src.media && src.kind === 'image') {
     const url = src.url || `/files/media/${encodeURIComponent(src.media)}`;

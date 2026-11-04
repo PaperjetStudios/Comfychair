@@ -32,6 +32,7 @@ export { addModel, openObjectSheet } from './scene-import.js';
 export { useAsRef } from './scene-ref.js';
 export { motionOnto } from './scene-motion.js';
 export { sceneStill } from './scene-export.js';
+export { dropFull } from './scene-keys.js';
 export { addPicture } from './scene-picture.js';
 
 // The page's 3D tab: where the engine's elements live when no frame has them (index.html). The body is made here.

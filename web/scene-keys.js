@@ -1014,9 +1014,14 @@ export function renderTransport() {
 const stage = () => sceneStage();
 const FULLS = new WeakMap();   // host -> its full screen
 const fullOf = (host) => {
-  if (!FULLS.has(host)) FULLS.set(host, fullScreen(host, { viewer: SCN.viewer, title: 'Full screen the 3D view' }));
+  if (!FULLS.has(host)) FULLS.set(host, fullScreen(host, { viewer: SCN.viewer, title: 'Full screen the 3D view', name: host.id || 'frame-scene' }));
   return FULLS.get(host);
 };
+// a host going away (a 3D frame's mount, let go): its full screen goes with it
+export function dropFull(host) {
+  FULLS.get(host)?.dispose();
+  FULLS.delete(host);
+}
 export const maxBar = () => fullOf(SCN.host).btn;
 // the engine moved from host `was` (scene.js mountScene): that one leaves full screen and its button goes for this host's
 export function syncMaxBar(was) {

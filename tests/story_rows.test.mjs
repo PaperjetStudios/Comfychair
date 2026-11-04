@@ -1,7 +1,7 @@
 // node --test tests/story_rows.test.mjs: a story laid out as a table (web/shot-rows.js)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyOrder, autoLabelled, carryRows, fromNote, noteText, orderFromRows, planReconcile, rowsOf, rowsOfFrames, shotSize, storyLayout } from '../web/shot-rows.js';
+import { applyOrder, autoLabelled, carryRows, fromNote, noteText, orderFromRows, planReconcile, rowsOfFrames, shotSize, storyLayout } from '../web/shot-rows.js';
 
 const note = (id, scene, x, y) => ({ id, kind: 'note', story: { scene }, x, y, w: 100, h: 100 });
 const shot = (id, scene, s, x, y) => ({ id, kind: 'image', story: { scene, shot: s }, x, y, w: 160, h: 100 });
@@ -14,7 +14,7 @@ const ids = (P) => P.scenes.map((sc) => `${sc.id}:${sc.shots.map((s) => s.id).jo
 test('rows: frames whose middle is in a row join it, each row left to right', () => {
   const rows = rowsOfFrames([shot('2', 'A', 'a2', 400, 10), note('n', 'A', 0, 0), shot('1', 'A', 'a1', 200, 0), note('m', 'B', 0, 300)]);
   assert.deepEqual(rows.map((r) => r.map((f) => f.id)), [['n', '1', '2'], ['m']]);
-  assert.deepEqual(rowsOf([note('m', 'B', 0, 300), note('n', 'A', 0, 0)]).map((r) => r.map((f) => f.id)), [['n'], ['m']]);
+  assert.deepEqual(rowsOfFrames([note('m', 'B', 0, 300), note('n', 'A', 0, 0)]).map((r) => r.map((f) => f.id)), [['n'], ['m']]);
 });
 
 test('order: a frame dragged into another row moves its shot to that scene, in x order', () => {
@@ -69,6 +69,8 @@ test('a note is the heading then the summary; a shot frame is its canvas, else a
   assert.equal(noteText({ slug: '', summary: '' }), '');
   assert.deepEqual(fromNote('  EXT. TWO \nShe runs.\nFast.'), { slug: 'EXT. TWO', summary: 'She runs.\nFast.' });
   assert.deepEqual(shotSize({ comp: { size: { w: 1368, h: 768 } } }, 16 / 9), { w: 1368, h: 768 });
+  // a shot with an edit: the edit's canvas, as read from it, before anything of an old canvas
+  assert.deepEqual(shotSize({ comp: { size: { w: 1368, h: 768 } } }, 16 / 9, { w: 640, h: 480 }), { w: 640, h: 480 });
   const s = shotSize({}, 16 / 9);
   assert.ok(Math.abs(s.w * s.h - 1e6) < 0.05e6 && s.w % 16 === 0 && s.h % 16 === 0);
 });
@@ -81,7 +83,7 @@ test('a note moved on its own carries its row: the scene\'s shots that stayed go
   assert.deepEqual([frames[1].x, frames[1].y], [200, 900], 'a1 stayed put: carried');
   assert.deepEqual([frames[2].x, frames[2].y], [500, 400], 'a2 was moved by hand: left where it was dropped');
   assert.deepEqual([frames[4].x, frames[4].y], [200, 300], 'another scene\'s shot: not carried');
-  applyOrder(P, orderFromRows(rowsOf(frames)));
+  applyOrder(P, orderFromRows(rowsOfFrames(frames)));
   assert.equal(ids(P), 'B:b1,a2 A:a1');
   assert.equal(carryRows([note('k', 'A', 0, 0)], new Map([['k', { x: 0, y: 0 }]])), false);
 });
@@ -94,6 +96,6 @@ test('a shot frame keeps the story\'s label until it is renamed on the table', (
 });
 
 test('rows: a note snapped edge to edge against the next scene\'s starts its own row', () => {
-  const rows = rowsOf([note('n', 'A', 0, 0), shot('1', 'A', 'a1', 200, 0), note('m', 'B', 0, 100), shot('2', 'B', 'b1', 200, 100)]);
+  const rows = rowsOfFrames([note('n', 'A', 0, 0), shot('1', 'A', 'a1', 200, 0), note('m', 'B', 0, 100), shot('2', 'B', 'b1', 200, 100)]);
   assert.deepEqual(rows.map((r) => r.map((f) => f.id)), [['n', '1'], ['m', '2']]);
 });

@@ -9,7 +9,7 @@ import { isLive } from './live.js';
 import { heightGrip } from './layout.js';
 import { uploadImage } from './media.js';
 import { DOC_KIND } from './table-model.js';
-import { editDoc, putStill, sourceClip, sourcePicture, stillOf } from './table-frames.js';
+import { dropInput, editDoc, putStill, sourceClip, sourcePicture, stillOf } from './table-frames.js';
 import { sidebar } from './sidebar.js';
 import { addToTimeline, mountVideo, newItem, renderVideo, setSequenceSize, videoStill, videoTabs, vidPause, wireVideoTransport } from './video.js';
 
@@ -80,11 +80,12 @@ function append(payload, it) {
 }
 // A picture frame's still as an input of the project (uploaded now), then a change that adds it as a picture clip at the
 // end of the first video track
-async function pictureClip(f) {
+async function pictureClip(f, fresh = []) {
   const url = stillOf(f) || f.preview;
   if (!url) throw new Error(`"${f.label}" has no picture yet: open it once`);
   const blob = await (await fetch(url)).blob();
   const r = await uploadImage(blob, { mp: 0, source: 'table', filename: 'frame.png' });
+  fresh.push(r.name);
   const m = { kind: 'image', src: { input: r.name }, url: inputUrl(r.name), thumb: thumbUrl(r.name, 160), label: f.label || r.name };
   return (payload) => append(payload, newItem(m, videoTrack(payload).id));
 }
@@ -94,12 +95,13 @@ async function sceneClip(f) {
   return (payload) => append(payload, newItem(m, videoTrack(payload).id));
 }
 
-// a dropped thing as the media a timeline takes: a clip or a sound, or (not for a sound frame) a picture
+// a dropped thing as the media a timeline takes: a clip or a sound, or (not for a sound frame) a picture. fresh: the
+// picture's name when it was uploaded or copied for this (sourcePicture), to delete if the timeline isn't saved with it
 export async function sourceMedia(src, toSound = false) {
   const c = await sourceClip(src);
   if (c) return c;
   const p = toSound ? null : await sourcePicture(src);
-  return p ? { kind: 'image', src: { input: p.name }, url: inputUrl(p.name), thumb: thumbUrl(p.name, 160), label: p.label || p.name } : null;
+  return p ? { kind: 'image', src: { input: p.name }, url: inputUrl(p.name), thumb: thumbUrl(p.name, 160), label: p.label || p.name, fresh: p.fresh ? p.name : null } : null;
 }
 // media at the end of the payload's first track that takes it (a sound edit's tracks take anything it can hear)
 function pushMedia(payload, m, toSound) {
@@ -118,16 +120,17 @@ function pushMedia(payload, m, toSound) {
 export async function dropOnto(d, kind, engine) {
   const onto = d.onto, from = (d.from || []).filter((f) => f.id !== onto.id && f.kind !== 'note');
   if (!onto.doc) { toast('That frame has no document yet', true); return; }
-  const toSound = kind === 'sound', preps = [];
+  const toSound = kind === 'sound', preps = [], fresh = [];   // fresh: pictures uploaded for this, deleted if it isn't saved
   for (const src of d.sources || []) {
     preps.push(async () => {
       const m = await sourceMedia(src, toSound);
       if (!m) throw new Error(toSound ? 'only a sound or a clip can go on a sound frame' : 'that can\'t go on a timeline');
+      if (m.fresh) fresh.push(m.fresh);
       return (p) => pushMedia(p, m, toSound);
     });
   }
   for (const f of from) {
-    if (f.kind === 'image' && !toSound) preps.push(() => pictureClip(f));
+    if (f.kind === 'image' && !toSound) preps.push(() => pictureClip(f, fresh));
     else if (f.kind === 'scene' && !toSound) preps.push(() => sceneClip(f));
     else if ((f.kind === 'video' || f.kind === 'sound') && f.doc) {
       preps.push(async () => {
@@ -149,7 +152,7 @@ export async function dropOnto(d, kind, engine) {
     if (engine?.active?.id === onto.doc) await engine.flush();   // (so the edit's own changes are not lost to a stale rev)
     await editDoc(kind, onto.doc, (p) => { for (const c of changes) c(p); });
     toast(changes.length > 1 ? `Added ${changes.length} things to "${onto.label}"` : `Added to "${onto.label}"`);
-  } catch (e) { toast(`Couldn't add to "${onto.label}": ${e.message}`, true); }
+  } catch (e) { dropInput(fresh); toast(`Couldn't add to "${onto.label}": ${e.message}`, true); }
 }
 
 // ---- live ----
@@ -211,7 +214,8 @@ addEventListener('table:drop-frame', (e) => {
       for (const src of sources) {
         try {
           const m = await sourceMedia(src);
-          if (m) await addToTimeline(m); else toast('That can\'t go on a timeline', true);
+          if (!m) { toast('That can\'t go on a timeline', true); continue; }
+          try { await addToTimeline(m); } catch (err) { dropInput(m.fresh); throw err; }
         } catch (err) { toast(`Couldn't add it: ${err.message}`, true); }
       }
       for (const f of from) {
@@ -219,7 +223,8 @@ addEventListener('table:drop-frame', (e) => {
           const url = stillOf(f) || f.preview;
           if (!url) { toast(`"${f.label}" has no picture yet: open it once`, true); continue; }
           const r = await uploadImage(await (await fetch(url)).blob(), { mp: 0, source: 'table', filename: 'frame.png' });
-          await addToTimeline({ kind: 'image', src: { input: r.name }, url: inputUrl(r.name), thumb: thumbUrl(r.name, 160), label: f.label || r.name });
+          try { await addToTimeline({ kind: 'image', src: { input: r.name }, url: inputUrl(r.name), thumb: thumbUrl(r.name, 160), label: f.label || r.name }); }
+          catch (err) { dropInput(r.name); throw err; }
         } catch (err) { toast(`Couldn't add "${f.label}": ${err.message}`, true); }
       }
     })();

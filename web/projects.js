@@ -236,11 +236,13 @@ function confirmUpgrade(p) {
       button('Cancel', () => (P.back ? P.back() : closeSheet()), { cls: 'ghost' })));
 }
 export async function upgrade(p) {
+  reloading = p.id;   // (the deck_projects 'upgraded' message must not reload a second time)
   try {
     const r = await api(`/api/projects/${p.id}/upgrade`, { method: 'POST', body: {}, busy: `Upgrading ${p.name}…` });
     await upgraded(p.id);
     toast(r.already ? `"${p.name}" is already 2.0` : `"${p.name}" is now 2.0: ${r.tables?.length || 0} table${r.tables?.length === 1 ? '' : 's'} made`);
   } catch (e) { toast(e.message, true); }
+  finally { setTimeout(() => { if (reloading === p.id) reloading = 0; }, 1000); }
 }
 // the project row has its new version; if it is the open one, the tables load again (every TabSet starts over on a project change)
 let reloading = 0;
@@ -251,6 +253,7 @@ async function upgraded(id) {
   if (live()) refresh();
 }
 onServer('deck_projects', (m) => {
+  if (m.data?.reason === 'deleted') { try { localStorage.removeItem(`deck.upgrade.offered.${m.data.id}`); } catch {} }
   if (m.data?.reason !== 'upgraded' || reloading === m.data.id) return;
   reloading = m.data.id;
   upgraded(m.data.id).finally(() => { setTimeout(() => { reloading = 0; }, 1000); });

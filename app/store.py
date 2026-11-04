@@ -148,11 +148,14 @@ async def put_doc(kind: str, did: str, body: dict = Body(...), project_id: int |
     path = d / f"{did}.json"
     cur = _read(path)
     if kind == "tables" and payload is not None:   # one table per document: a copied payload must go through /duplicate
-        mine = set(_owned_docs({"payload": payload}))
+        mine = set(_owned_docs({"payload": payload}, story=False))
         if mine:
+            taken = set()   # one pass over the tables dir
             for other in _docs(d):
-                if other.get("id") != did and mine & set(_owned_docs(other)):
-                    return JSONResponse({"error": "Those documents belong to another table"}, status_code=409)
+                if other.get("id") != did:
+                    taken.update(_owned_docs(other, story=False))
+            if mine & taken:   # (no `doc` key: the client tells this from a stale rev by that)
+                raise HTTPException(409, detail="Those documents belong to another table")
     if cur is not None and name is None and payload is None and order is not None:
         doc = {**cur, "order": order, "updated": time.time()}  # order-only: no rev check, no rev bump
         _write(path, doc)
@@ -182,10 +185,15 @@ async def put_doc(kind: str, did: str, body: dict = Body(...), project_id: int |
 FRAME_DOC_KINDS = {"image": "edit-tabs", "video": "video-tabs", "scene": "scene-tabs", "sound": "sound-tabs"}
 
 
-def _owned_docs(doc: dict) -> list[tuple[str, str]]:
-    """(kind, id) of the documents a table's frames own: each frame's doc, and a video frame's VFX settings (frame.vfx)."""
+def _owned_docs(doc: dict, story: bool = True) -> list[tuple[str, str]]:
+    """(kind, id) of the documents a table owns: each frame's doc, a video frame's VFX settings (frame.vfx), and (story=True)
+    its story-tabs doc (payload.story). The one-owner check passes story=False: that is not a frame doc."""
     out = []
-    frames = (doc.get("payload") or {}).get("frames")
+    pl = doc.get("payload") or {}
+    st = pl.get("story")
+    if story and isinstance(st, str) and ID_RE.fullmatch(st):
+        out.append(("story-tabs", st))
+    frames = pl.get("frames")
     if not isinstance(frames, list):
         return out
     for f in frames:
@@ -251,6 +259,7 @@ async def delete_doc(kind: str, did: str, project_id: int | None = None, scope: 
             old.unlink(missing_ok=True)
             old.with_suffix(".png").unlink(missing_ok=True)
     ts = time.time_ns()
+    unlink = kind == "story-tabs" and scope != "global"
     owned = _owned_docs(doc) if kind == "tables" and scope != "global" else []   # (global tables own nothing)
     _trash_file(d, kind, did, ts)   # its still goes with it, same timestamp
     await _tell(kind, did, doc["rev"], project_id, scope, deleted=True)
@@ -259,6 +268,14 @@ async def delete_doc(kind: str, did: str, project_id: int | None = None, scope: 
         gone = _read(od / f"{i}.json")
         if gone and _trash_file(od, k, i, ts):
             await _tell(k, i, gone["rev"], project_id, scope, deleted=True)
+    if unlink:   # a table that pointed at this story forgets it (so the client stops retrying)
+        for t in _docs(_dir("tables", project_id, scope)):
+            pl = t.get("payload")
+            if isinstance(pl, dict) and pl.get("story") == did:
+                pl = {k: v for k, v in pl.items() if k != "story"}
+                t = {**t, "payload": pl, "rev": t["rev"] + 1, "updated": time.time()}
+                _write(_dir("tables", project_id, scope) / f"{t['id']}.json", t)
+                await _tell("tables", t["id"], t["rev"], project_id, scope)
     return doc
 
 
@@ -301,10 +318,11 @@ async def duplicate_table(did: str, project_id: int | None = None, scope: str | 
     if not src:
         raise HTTPException(404, "Not found")
     payload = json.loads(json.dumps(src.get("payload") or {}))
+    payload.pop("story", None)   # the copy has no story: two tables must not drive one
     now = time.time()
     made = {}   # (kind, old id) -> new id
     if scope != "global":
-        for k, i in _owned_docs(src):
+        for k, i in _owned_docs(src, story=False):
             od = _dir(k, project_id, scope)
             old = _read(od / f"{i}.json")
             if not old:

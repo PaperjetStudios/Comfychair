@@ -64,7 +64,7 @@ addEventListener('table:resize', (e) => {
 });
 
 addEventListener('table:unlive', (e) => {
-  const { frame } = e.detail;
+  const { frame, root } = e.detail;
   if (frame.kind !== 'scene') return;
   F.seq++;
   if (F.mounted !== frame.id) return;
@@ -77,6 +77,7 @@ addEventListener('table:unlive', (e) => {
   const still = t.active?.id === id ? m.sceneStill() : null;   // (drawn and read now, before the engine moves)
   m.hide();
   m.unmountScene();
+  m.dropFull(root);   // (the mount's own full screen: its pull tab and button go with it)
   sidebar.pane('layers').replaceChildren();
   if (resized) queueMicrotask(frameChanged);
   e.detail.wait?.push(saveStill(t, id, still));   // (the table waits for the save before trashing the scene)

@@ -1,12 +1,13 @@
-import { $, h, api, store, icon, seg, placeholder, toast, button } from './ui.js';
+import { $, h, api, store, icon, seg, placeholder, toast, button, openSheet, closeSheet, section, hint, actions } from './ui.js';
 import { S, onServer, onProject, thumbUrl } from './core.js';
 import { B, FILTER_KINDS, genTime, dayKey, dayName, usedBadge, loadAttached, loadAllProjectGenerations, openGallery, togglePin, finishClips } from './board.js';
-import { dropOnTable, selectedFrames } from './table.js';
+import { dropOnTable, selectedFrames, tableFrames } from './table.js';
 import { stillOf } from './table-frames.js';
 import { openPressMenu, pressMenu } from './press-menu.js';
 import { openUseAs } from './useas.js';
 import { openCompare } from './compare.js';
 import { kindOf, cardPicture, kindDef } from './kinds.js';
+import { DOC_KIND } from './table-model.js';
 import { genLabel, outputCard } from './media.js';
 import { fetchHistory } from './generation-data.js';
 
@@ -138,6 +139,55 @@ function tileMenu(e, it, list) {
     [{ label: g.pinned ? 'Unpin' : 'Pin', on: !!g.pinned, run: async () => { await togglePin(g); later(); } }],
     [{ label: gens.length > 1 ? `Delete ${gens.length}` : 'Delete', danger: true, run: () => deleteRuns(gens) }],
   ].filter((grp) => grp.length), 'Output');
+}
+
+// ---- the frame menu on the table (table.js table:menu): Compare with another frame or a Shelf tile; Finish a video
+// frame's clips (the runs on its timeline) as the Board's Finish does
+addEventListener('table:menu', (e) => {
+  const { frame: f, frames = [], groups } = e.detail || {};
+  if (!f || f.kind === 'note' || frames.length !== 1) return;
+  const still = stillOf(f);
+  groups.push([{ label: 'Compare with…', disabled: !still, run: () => compareSheet(f) }]);
+  if (f.kind === 'video' && f.doc) groups.push([{ label: 'Finish (H3 1080p)', run: () => finishFrame(f) }]);
+});
+// a sheet of what the frame's still can be compared with: the table's other frames' stills, then the Shelf's pictures
+// and clips (the ones selected there first)
+function compareSheet(f) {
+  const me = { o: { url: stillOf(f), kind: 'image' }, label: f.label || 'Frame' };
+  if (!me.o.url) return toast(`"${f.label}" has no picture yet: open it once`, true);
+  const go = (other) => { closeSheet(); openCompare([me, other]); };
+  const card = (img, label, other) => h('button', { type: 'button', class: 'make-frame-card', onclick: () => go(other) },
+    img ? h('img', { src: img, alt: '', loading: 'lazy' }) : h('span', { class: 'hint' }, label), h('span', {}, label));
+  const others = tableFrames().filter((x) => x.id !== f.id && x.kind !== 'note' && stillOf(x));
+  const picked = new Set(SH.sel);
+  const outs = outputList().filter((x) => looks(x.o)).sort((a, b) => picked.has(b.key) - picked.has(a.key)).slice(0, 48);
+  openSheet(h('h3', {}, `Compare "${f.label}" with…`),
+    section('Frames', null, others.length ? h('div', { class: 'make-frame-list' }, others.map((x) => card(stillOf(x), x.label || 'Frame', { o: { url: stillOf(x), kind: 'image' }, label: x.label || 'Frame' })))
+      : hint('No other frame on this table has a picture yet.')),
+    section('Shelf', null, outs.length ? h('div', { class: 'make-frame-list' }, outs.map((x) => {
+      const c = card(null, genLabel(x.g), { o: x.o, label: genLabel(x.g) });
+      c.firstChild.replaceWith(cardPicture(x.o, x.g, 160));
+      return c;
+    })) : hint('Nothing made in this project yet.')),
+    actions(button('Cancel', closeSheet, { cls: 'small ghost' })));
+}
+// a video frame's clips that are runs (its timeline's items), finished with H3 (board.js finishClips)
+async function finishFrame(f) {
+  let d;
+  try { d = await api(`/api/store/${DOC_KIND.video}/${f.doc}${S.project != null ? `?project_id=${S.project}` : ''}`, { busy: false }); }
+  catch (err) { return toast(err.message, true); }
+  const seen = new Set(), clips = [];
+  for (const it of d.payload?.items || []) {
+    const src = it.src || {}, key = `${src.generation}:${src.index || 0}`;
+    if (src.generation == null || it.kind !== 'video' || seen.has(key)) continue;
+    seen.add(key);
+    let g = S.history.get(src.generation);
+    if (!g) { try { g = await api(`/api/generations/${src.generation}`, { busy: false }); } catch { continue; } }
+    const o = g?.outputs?.[src.index || 0];
+    if (o?.kind === 'video') clips.push({ g, o, i: src.index || 0 });
+  }
+  if (!clips.length) return toast(`"${f.label}" has no made clips on its timeline (dropped files can't be finished)`, true);
+  return finishClips(clips);
 }
 
 // Delete whole runs. One something uses is refused by the server (409) and the toast names what uses it.

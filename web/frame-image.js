@@ -12,7 +12,7 @@ import { draggingPicture, droppedFiles, dropKind } from './drop-files.js';
 import { isLive } from './live.js';
 import { sidebar } from './sidebar.js';
 import { frameChanged, refreshStills, tableFrames } from './table.js';
-import { editDoc, sourcePicture } from './table-frames.js';
+import { dropInput, editDoc, sourcePicture } from './table-frames.js';
 
 const F = { seq: 0, mounted: null };   // mounted: the id of the frame the editor is in
 const eng = () => CURRENT_EDIT.eng;
@@ -60,7 +60,7 @@ function wireDrop(root, frame) {
     for (const f of files) {
       try {
         const r = await uploadImage(f);
-        if (F.mounted !== frame.id) return;
+        if (F.mounted !== frame.id) { dropInput(r.name); return; }   // (the frame was let go meanwhile: nothing has it)
         eng().addImage(r.name, { label: f.name.replace(/\.\w+$/, '') });
       } catch (err) { return toast(`Upload failed: ${err.message}`, true); }
     }
@@ -147,19 +147,21 @@ async function drawStale() {
 
 // sources: pictures from the Shelf, a picker or the computer (table-frames.js sourcePicture), each a layer as it is
 async function dropInto(onto, pics, sources = []) {
-  const layers = [];
+  const layers = [], fresh = [];   // fresh: pictures uploaded here, deleted again when the edit can't be saved with them
   const centred = (name, label, w, hh) => ({ name, label, x: Math.round((onto.w - (w || onto.w)) / 2), y: Math.round((onto.h - (hh || onto.h)) / 2) });
   for (const f of pics) {
     let blob = null;
     try { blob = await stillBlob(f); } catch (err) { toast(err.message, true); continue; }
     if (!blob) { toast(`"${f.label}" has no picture yet`, true); continue; }
     const r = await uploadImage(blob, { source: 'edit-tab', filename: 'edit.png' });
+    fresh.push(r.name);
     layers.push(centred(r.name, f.label || null, r.width, r.height));
   }
   for (const src of sources) {
     let p = null;
     try { p = await sourcePicture(src); } catch (err) { toast(err.message, true); continue; }
     if (!p) { toast('Only a picture can go into an image frame', true); continue; }
+    if (p.fresh) fresh.push(p.name);
     layers.push(centred(p.name, p.label || null, p.width, p.height));
   }
   if (!layers.length) return;
@@ -170,7 +172,7 @@ async function dropInto(onto, pics, sources = []) {
     renderEditor();
     if (!isLive(onto.id)) await settledStill();
   } else {
-    await putLayers(onto, layers);
+    try { await putLayers(onto, layers); } catch (err) { dropInput(fresh); throw err; }
     // its still is drawn by the editor: open the edit there (off screen) and draw it once the pictures are in (or later)
     try { await drawOffscreen(onto.doc); } catch (err) { console.warn(err); }
   }

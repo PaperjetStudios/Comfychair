@@ -16,6 +16,7 @@ import { h, api, store, toast, button, iconBtn, seg, field, hint, help, note, op
 import { S, CURRENT_EDIT, inputUrl, thumbUrl } from './core.js';
 import { afterQueued, persist, preparePictures, renderFields, runBuilder, runValues, selectTemplate, stop } from './generate.js';
 import { borrow, giveBack, lentOut } from './gentabs.js';
+import { refused } from './tabs.js';
 import { queueRun, waitGen } from './make.js';
 import { pngBlob, uploadImage } from './media.js';
 import { landMade, owedTo } from './imagetools.js';
@@ -338,6 +339,7 @@ async function appendClip(frame, media) {
       body: JSON.stringify({ rev: d.rev, name: d.name, payload }) }).catch(() => null);
     if (r?.ok) return true;
     if (r?.status !== 409) return false;
+    if (refused({ status: 409, data: await r.json().catch(() => null) })) return false;   // (a refusal, not a newer rev: no retry)
   }
   return false;
 }

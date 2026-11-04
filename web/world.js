@@ -1,5 +1,7 @@
 import { $ } from './ui.js';
 import { stepTable } from './table.js';
+import { isLive } from './live.js';
+import { ownsKey } from './key-focus.js';
 
 // ---------------------------------------------------------------------------
 // Moving between tables: the top tabs are the project's tables (table-nav.js). Alt + ← → opens the table before or
@@ -11,6 +13,7 @@ import { stepTable } from './table.js';
 // ---- keys: Alt + ← → ----
 addEventListener('keydown', (e) => {
   if (e.defaultPrevented || !e.altKey || e.ctrlKey || e.metaKey || e.target.closest?.('input, textarea, select, [role=dialog]')) return;
+  if (isLive() || ownsKey(e)) return;   // (a live frame's engine, or a box or panel that owns its keys, has them)
   const dir = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
   if (dir) { e.preventDefault(); stepTable(dir); }
 });

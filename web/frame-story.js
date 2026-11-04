@@ -18,7 +18,7 @@ import * as M from './table-model.js';
 import { blankPayload, createDoc, copyDoc, loadStills, renameDoc, restoreDoc, stillOf, trashDoc } from './table-frames.js';
 import { BLANK as COMP_BLANK } from './editor-engine.js';
 import { sidebar } from './sidebar.js';
-import { isLive } from './live.js';
+import { isLive, liveFrame } from './live.js';
 import { onCharacters } from './characters.js';
 import { uploadImage } from './media.js';
 import { canvasRect, withClip } from './make-rules.js';
@@ -38,7 +38,7 @@ const FS = {
 const VIEWS = [['outline', 'Outline'], ['script', 'Script'], ['cast', 'Characters']];
 if (!VIEWS.some(([v]) => v === FS.view)) FS.view = 'outline';
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
-const frames = () => (typeof Table.tableFrames === 'function' ? Table.tableFrames() : []);
+const frames = () => Table.tableFrames();
 const storyOpen = () => !!FS.storyId && St.storyTabs()?.active?.id === FS.storyId;
 const frameOfShot = (id) => frames().find((f) => R.isShotFrame(f) && f.story.shot === id) || null;
 const shotNum = (at) => `${at.si + 1}.${at.i + 1}`;
@@ -61,7 +61,7 @@ async function detect(table = null, docId = null) {
   if (!FS.storyOf.has(tid)) {
     let d = null;
     try { d = await api(`/api/store/tables/${tid}${qs()}`, { busy: false }); } catch { /* not saved yet, or gone */ }
-    if ((docId ? Table.activeTableId?.() : store.get(`deck.tab.tables.${S.project ?? 'none'}`, null)) !== tid) return;   // (another table meanwhile)
+    if ((docId ? Table.activeTableId() : store.get(`deck.tab.tables.${S.project ?? 'none'}`, null)) !== tid) return;   // (another table meanwhile)
     FS.storyOf.set(tid, d?.payload?.story || null);
   }
   setTable(tid, FS.storyOf.get(tid));
@@ -88,19 +88,36 @@ async function openStory() {
   const t = St.storyTabs();
   if (!t || !FS.storyId) return false;
   try { await t.ready(); } catch { /* it says why */ }
-  if (t.active?.id !== FS.storyId) await t.switchTo(FS.storyId);
-  return t.active?.id === FS.storyId;
+  if (t.active?.id === FS.storyId) return true;
+  // (a story deleted on the Classic screen: the table stops being its, once, instead of failing at every look)
+  const id = FS.storyId, tid = FS.tableId;
+  try { await api(t.url(id), { busy: false }); } catch (e) { if (e.status === 404) { storyGone(tid, id); return false; } }
+  if (FS.storyId !== id) return false;
+  await t.switchTo(id);
+  return t.active?.id === id;
+}
+function storyGone(tid, id) {
+  FS.storyOf.set(tid, null);
+  if (FS.tableId === tid && FS.storyId === id) {
+    Table.dropStory(id);   // (the server drops it from the saved table too: this is the open copy)
+    setTable(tid, null);
+  }
 }
 
 const editDocs = async () => new Set((await api(`/api/store/edit-tabs${qs()}`, { busy: false })).map((r) => r.id));
 const shotLabel = (at) => { const w = at.s.what.trim().replace(/\s+/g, ' '); return `${shotNum(at)}${w ? ` ${w.length > 40 ? `${w.slice(0, 39)}…` : w}` : ''}`; };
-// A shot's edit: a copy of the one it was duplicated from, else its old canvas (s.comp), else a blank white one
+// A shot's edit: a copy of the one it was duplicated from, else its old canvas (s.comp), else a blank white one.
+// Returns { id, size } (size: the canvas, when known here)
 async function shotDoc(at, have) {
   const { s } = at, label = shotLabel(at);
-  if (s.docFrom && have.has(s.docFrom)) return copyDoc({ kind: 'image', doc: s.docFrom }, label);
+  if (s.docFrom && have.has(s.docFrom)) return { id: await copyDoc({ kind: 'image', doc: s.docFrom }, label), size: null };
   const size = R.shotSize(s, St.storyRatio());
   const payload = s.comp ? { ...clone(s.comp), size: s.comp.size || size } : { ...COMP_BLANK(), size, bg: '#ffffff' };
-  return createDoc({ kind: 'image', label }, payload);
+  return { id: await createDoc({ kind: 'image', label }, payload), size: payload.size };
+}
+// the size of a shot's edit's canvas (a frame made for a shot that has an edit already), else null
+async function editSize(doc) {
+  try { const z = (await api(`/api/store/edit-tabs/${doc}${qs()}`, { busy: false })).payload?.size; return z?.w > 0 && z?.h > 0 ? z : null; } catch { return null; }
 }
 
 async function reconcile() {
@@ -116,7 +133,7 @@ async function reconcile() {
   if (rows) {
     const mine = list.filter(R.isStoryFrame);
     R.carryRows(mine, FS.laid);   // (a scene's note dragged on its own takes its shots along)
-    story = R.applyOrder(P, R.orderFromRows(R.rowsOf(mine))) || story;
+    story = R.applyOrder(P, R.orderFromRows(R.rowsOfFrames(mine))) || story;
   }
   // frames back from an Undo on the table: their shots come back where they were
   for (const f of list) {
@@ -146,6 +163,11 @@ async function reconcile() {
   }
   // frames for nothing in the story (a shot or scene deleted in the outline): they go, and a shot's edit to the trash
   if (plan.remove.length) {
+    // (a shot's frame open now lets go first, and its last save lands, before its edit goes to the trash)
+    if (plan.remove.includes(liveFrame()?.id)) {
+      await Table.unlive();
+      if (!still()) { if (story && storyOpen()) St.storyChanged(); return; }
+    }
     const gone = new Set(plan.remove), docs = new Set(St.storyShots().map((s) => s.doc).filter(Boolean));
     for (let i = list.length - 1; i >= 0; i--) {
       const f = list[i];
@@ -157,11 +179,14 @@ async function reconcile() {
     table = true;
   }
   // every shot has its edit: the frame's when it has one, else made once (from its old canvas)
+  // (a shot with an edit keeps nothing of its old canvas: s.comp's pictures would count as in use for good)
   for (const s of St.storyShots()) {
     const f = frameOfShot(s.id);
     if (f?.doc && !s.doc) { s.doc = f.doc; story = true; }
     if (f && s.doc && f.doc !== s.doc) { f.doc = s.doc; table = true; }
+    if (s.doc && s.comp) { delete s.comp; story = true; }
   }
+  const sizes = new Map();   // shot id -> its new edit's canvas
   const need = St.storyShots().filter((s) => !s.doc || !frameOfShot(s.id));
   if (need.length) {
     let have;
@@ -173,7 +198,14 @@ async function reconcile() {
       }
       const at = St.shotAt(s.id);
       if (!at) continue;
-      try { s.doc = await shotDoc(at, have); delete s.docFrom; have.add(s.doc); story = true; } catch (e) { toast(`Couldn't make shot ${shotNum(at)}'s edit: ${e.message}`, true); }
+      let made = null;
+      try { made = await shotDoc(at, have); } catch (e) { toast(`Couldn't make shot ${shotNum(at)}'s edit: ${e.message}`, true); }
+      if (made && !still()) {   // (another table or story opened meanwhile: the shot never got it, so it goes)
+        trashDoc({ kind: 'image', doc: made.id }).catch((e) => console.warn(e));
+        if (story && storyOpen()) St.storyChanged();
+        return;
+      }
+      if (made) { s.doc = made.id; delete s.docFrom; delete s.comp; have.add(s.doc); story = true; if (made.size) sizes.set(s.id, made.size); }
       if (!still()) { if (story && storyOpen()) St.storyChanged(); return; }
     }
   }
@@ -187,9 +219,11 @@ async function reconcile() {
   }
   for (const s of St.storyShots()) {
     if (frameOfShot(s.id) || !s.doc) continue;
+    if (!sizes.has(s.id)) { const z = await editSize(s.doc); if (!still()) { if (story && storyOpen()) St.storyChanged(); return; } if (z) sizes.set(s.id, z); }
     const at = St.shotAt(s.id);
+    if (!at) continue;
     const label = shotLabel(at);
-    list.push(M.newFrame('image', { x: origin.x, y: origin.y, ...R.shotSize(s, ratio) }, { label, doc: s.doc, story: { scene: at.sc.id, shot: s.id, auto: label } }));
+    list.push(M.newFrame('image', { x: origin.x, y: origin.y, ...R.shotSize(s, ratio, sizes.get(s.id)) }, { label, doc: s.doc, story: { scene: at.sc.id, shot: s.id, auto: label } }));
     table = true;
   }
   // labels, scenes and notes' words follow the story. A shot frame's label is "1.2 What we see…" and its edit is named
@@ -286,7 +320,7 @@ async function stills() {
 // ---------------------------------------------------------------------------
 // a frame selected on the table, as a tap on it would (and brought into view when it is off screen)
 function selectFrame(f) {
-  const sel = Table.selectedFrames?.() || [];
+  const sel = Table.selectedFrames();
   if (sel.length === 1 && sel[0].id === f.id) return;
   Table.selectFrames([f.id], { scroll: true });
 }
@@ -350,7 +384,7 @@ onProject(() => { FS.pid = undefined; detect(); });
 document.addEventListener('input', (e) => {
   const fe = e.target.closest?.('.frame.frame-note');
   if (!fe || !onStoryTable()) return;
-  const f = Table.frameById?.(fe.dataset.id);
+  const f = Table.frameById(fe.dataset.id);
   if (!R.isSceneNote(f)) return;
   const sc = St.storyDoc().scenes.find((x) => x.id === f.story.scene);
   if (!sc) return;
@@ -411,12 +445,12 @@ const tableShown = () => !!document.querySelector('#tab-table.active') && onStor
 async function openFrame(s) {
   const f = tableShown() && frameOfShot(s.id);
   if (!f) return false;
-  Table.goLive?.(f);
+  Table.goLive(f);
   return true;
 }
 async function toFrame(s, name) {
   const f = tableShown() && frameOfShot(s.id);
-  if (!f || !Table.goLive) return false;
+  if (!f) return false;
   Table.goLive(f);
   const ed = await import('./editor.js');
   for (let i = 0; i < 60; i++) {   // (the frame's edit opening: a few seconds at most)
@@ -461,7 +495,7 @@ async function toVideo() {
   const size = M.sizeForMp(St.storyRatio(), 1, 1), title = St.storyDoc().title.trim() || St.storyTabs()?.active?.name || 'Story';
   const f = M.newFrame('video', { x: b.x + b.w + 160, y: b.y, ...size }, { label: `${title} · video` });
   try { f.doc = await createDoc(f, p); } catch (e) { return toast(`Couldn't make the video: ${e.message}`, true); }
-  if (frames() !== list) return toast('The table changed: try again', true);
+  if (frames() !== list) { trashDoc(f).catch(() => {}); return toast('The table changed: try again', true); }   // (nothing holds the video made for it)
   list.push(f);
   Table.frameChanged();
   selectFrame(f);
@@ -495,14 +529,14 @@ function makeSection(at) {
   const { s } = at, f = frameOfShot(s.id), rt = St.refineTemplate(s), vt = St.videoTemplate(s), ok = !!(St.chosenFrame(s) || (f && stillOf(f)));
   return section('Make', null,
     h('div', { class: 'row wrap' },
-      f ? button([icon('fit'), 'Open the frame'], () => Table.goLive?.(f), { cls: 'small primary', title: 'Draw and lay out the shot\'s picture (Enter)' }) : null,
+      f ? button([icon('fit'), 'Open the frame'], () => Table.goLive(f), { cls: 'small primary', title: 'Draw and lay out the shot\'s picture (Enter)' }) : null,
       f ? button([icon('image'), 'Use the frame\'s picture'], () => takePicture(s, f), { title: 'The frame\'s picture as the shot\'s chosen frame: Redraw and Make the video start from it' }) : null),
     h('div', { class: 'row wrap' },
       button([icon('sparkle'), 'Redraw'], () => withPicture(s, f, (x) => St.refineShot(x)), { disabled: !rt || !ok, title: rt ? `${rt.name || rt.id}, the story's Redraw settings` : 'No image-to-image or edit template is installed' }),
       button([icon('video'), 'Make the video'], () => withPicture(s, f, (x) => St.makeVideo(x)), { disabled: !vt || !ok, title: vt ? `${vt.name || vt.id}, ${s.dur} s` : 'No image-to-video template is installed' })));
 }
 function addShot() {
-  const P = St.storyDoc(), sel = Table.selectedFrames?.() || [];
+  const P = St.storyDoc(), sel = Table.selectedFrames();
   const one = sel.length === 1 ? sel[0] : null, scene = one?.story?.scene || St.shotAt(St.selectedShot())?.sc.id;
   const sc = P.scenes.find((x) => x.id === scene) || P.scenes[P.scenes.length - 1];
   if (!sc) return St.addScene();

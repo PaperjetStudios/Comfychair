@@ -216,6 +216,7 @@ input[type=color] { width: 64px; height: var(--tap); border: 1px solid var(--lin
 .tab-chip.done { background: var(--ok); color: var(--ok-ink); }
 .tab-chip.fail { background: var(--bad); color: var(--bad-ink); }
 .tabs button.active .tab-chip { display: none; }
+body:has(#tool-generate.active) #runChip { display: none; }   /* (on Classic ▾: not while Generate is on show) */
 .tabs button[data-tab=generate]::after { content: ''; position: absolute; left: 0; bottom: 0; height: 3px; width: var(--run, 0%); background: var(--accent); transition: width .3s; }
 .tabs button.active[data-tab=generate]::after { display: none; }
 @media (max-width: 1400px) {   /* (monospace labels are wide) */
