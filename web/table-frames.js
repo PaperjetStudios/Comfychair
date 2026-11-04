@@ -216,3 +216,45 @@ async function fileFrame(file, at) {
   if (m.kind !== 'video' && m.kind !== 'audio') return null;
   return clipFrame(m.kind, { media: m.name }, m.url, m.label, at);
 }
+
+// ---- things dropped into a frame (table:drop-frame sources): as a picture, or as a clip ----
+const genOf = async (id) => S.history?.get?.(id) || api(`/api/generations/${id}`, { busy: false });
+// A dropped thing as one of the project's pictures: { name, width, height, label }, or null for something that isn't one
+// (a run's picture is copied into the project's pictures, as a frame made from it is)
+export async function sourcePicture(src) {
+  if (src instanceof File) {
+    if (dropKind(src) !== 'image') return null;
+    const r = await uploadImage(src);
+    return { name: r.name, width: r.width, height: r.height, label: src.name.replace(/\.\w+$/, '') };
+  }
+  if (src.input) return { name: src.input, width: src.width || 0, height: src.height || 0, label: src.label || src.input.split('/').pop() };
+  if (src.generation != null) {
+    const index = src.index || 0, g = await genOf(src.generation);
+    if (g?.outputs?.[index]?.kind !== 'image') return null;
+    const r = await api(`/api/generations/${g.id}/to-input`, { method: 'POST', body: { index, frame: 'first', mp: 0, multiple: 1 } });
+    return { name: r.name, width: r.width, height: r.height, label: `#${g.id}` };
+  }
+  if (src.media && src.kind === 'image') {
+    const url = src.url || `/files/media/${encodeURIComponent(src.media)}`;
+    return sourcePicture(new File([await (await fetch(url)).blob()], src.media, { type: 'image/png' }));
+  }
+  return null;
+}
+// A dropped clip or sound as a timeline's media: { kind: 'video' | 'audio', src, url, label, dur }, or null
+export async function sourceClip(src) {
+  let m = null;
+  if (src instanceof File) {
+    if (dropKind(src) === 'image') return null;
+    const u = await uploadMedia(src);
+    if (u.kind === 'video' || u.kind === 'audio') m = { kind: u.kind, src: { media: u.name }, url: u.url, label: u.label };
+  } else if (src.generation != null) {
+    const index = src.index || 0, g = await genOf(src.generation), o = g?.outputs?.[index];
+    if (o?.kind === 'video' || o?.kind === 'audio') m = { kind: o.kind, src: { generation: g.id, index }, url: o.url, label: `#${g.id}` };
+  } else if (src.media && src.kind !== 'image') {
+    const label = src.label || src.media.split('_').slice(1).join('_') || src.media;
+    m = { kind: src.kind === 'audio' ? 'audio' : 'video', src: { media: src.media }, url: src.url || `/files/media/${encodeURIComponent(src.media)}`, label };
+  }
+  if (!m) return null;
+  m.dur = (await mediaInfo(m.url, m.kind)).dur || 0;
+  return m;
+}

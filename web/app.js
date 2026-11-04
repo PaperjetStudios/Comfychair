@@ -17,7 +17,8 @@ import { renderVfx, vfxPause, wireVfx } from './vfx.js';
 import { renderSound, sndPause, wireSound } from './sound.js';
 import { renderStory, wireStory } from './story.js';
 import { B, closeGallery, pauseBoard, renderBoard } from './board.js';
-import { pauseTable, renderTable } from './table.js';
+import { pauseTable, renderTable, startTables } from './table.js';
+import { openPressMenu } from './press-menu.js';
 import './sidebar.js';       // the table's tabbed sidebar (Make, Layers, Frame…)
 import './frame-image.js';   // image frames: the editor, live on the table
 import './frame-video.js';   // video frames: the sequence and its timeline drawer
@@ -30,7 +31,7 @@ import { stamp } from './shot-words.js';
 import { openDescribe, openImprove, tplTarget } from './prompthelp.js';
 import { wireUndoDock } from './undo-dock.js';
 import { currentTab, switchTab as navigate, wireTabKeys } from './navigation.js';
-import './world.js';   // the spaces (Make, Edit, View), travel between tools, a map of where you are
+import './world.js';   // Alt + arrows and a swipe along the top bar move between tables
 
 // ---------------------------------------------------------------------------
 // full screen (hides the browser bars on the tablet)
@@ -87,11 +88,13 @@ onServer('deck_projects', async (m) => {
 });
 
 function switchTab(name) {
-  document.querySelectorAll('.tabs button').forEach((b) => {
-    b.classList.toggle('active', b.dataset.tab === name); b.setAttribute('aria-selected', b.dataset.tab === name);
-    b.tabIndex = b.dataset.tab === name ? 0 : -1;
-    if (b.dataset.tab === name) b.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  document.querySelectorAll('button[data-tab]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.tab === name); b.setAttribute('aria-checked', b.dataset.tab === name);
   });
+  // the old screens are under Classic ▾: it shows which one is open (the tables' own tabs are table-nav.js's)
+  const classic = $('#classicBtn'), on = name !== 'table';
+  classic.classList.toggle('active', on);
+  classic.querySelector('.tab-label').textContent = on ? `Classic · ${$(`button[data-tab="${name}"]`)?.title || name}` : 'Classic';
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${name}`));
   if (name === 'table') renderTable(); else pauseTable();
   if (name === 'generate' && !RUN.pid) runChip(0, 0, $('#progText').textContent);   // lets go of a finished ✓ / !
@@ -115,15 +118,21 @@ function whereFrom(e) {
 setSwitchTab(switchTab);
 // the page's own buttons (index.html) show line icons too, not the symbols written there
 for (const b of document.querySelectorAll('button, a.btn')) if (!b.children.length && b.textContent.trim()) setIcon(b, b.textContent.trim());
-document.querySelectorAll('.tabs button').forEach((b) => {
+document.querySelectorAll('button[data-tab]').forEach((b) => {
   b.id = `tool-${b.dataset.tab}`;
   b.setAttribute('aria-controls', `tab-${b.dataset.tab}`);
-  b.tabIndex = b.classList.contains('active') ? 0 : -1;
   const panel = $(`#tab-${b.dataset.tab}`);
   panel.setAttribute('role', 'tabpanel'); panel.setAttribute('aria-labelledby', b.id);
   b.addEventListener('click', () => navigate(b.dataset.tab));
 });
+$('#tab-table').setAttribute('role', 'tabpanel');
 wireTabKeys($('.tabs'));
+// Classic ▾: the screens from before tables, until the frames do all they did
+$('#classicBtn').addEventListener('click', () => {
+  const r = $('#classicBtn').getBoundingClientRect();
+  openPressMenu(r.left, r.bottom + 4, [[...document.querySelectorAll('button[data-tab]')].map((b) => ({
+    label: b.title, on: currentTab() === b.dataset.tab, run: () => navigate(b.dataset.tab) }))], 'Classic screens');
+});
 
 $('#tplSel').addEventListener('change', (e) => selectTemplate(e.target.value));
 wireTemplateFilter();
@@ -466,12 +475,13 @@ function wireTextPopup() {
   // an installed app can stay open for days: look for a newer UI every few minutes while it's on screen
   setInterval(() => { if (!document.hidden) api('/api/status').then((s) => checkUiVersion(s.ui_version), () => {}); }, 5 * 60000);
   await Promise.all([loadProjects(), loadPrefs()]);
+  startTables();   // (the top tabs are the project's tables, on every screen)
   await loadTemplates();
   loadHistory();
   // a refresh keeps the panel being worked in; opening the address fresh (a new browser tab) starts on the Table
   let last = null;
   try { last = sessionStorage.getItem('deck.lastTab'); } catch { /* no session storage */ }
-  navigate(last && document.querySelector(`.tabs button[data-tab="${last}"]`) ? last : 'table');
+  navigate(last && document.querySelector(`button[data-tab="${last}"]`) ? last : 'table');
   connectWS();   // its first open runs syncWithServer: picks up a run that's already going
   // The service worker (HTTPS only) keeps an offline page and lets Android show "done" notifications
   if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});

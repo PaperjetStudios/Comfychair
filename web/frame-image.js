@@ -1,7 +1,7 @@
 // Image frames on the table: going live mounts the editor (editor.js mountEditor) in the frame at 1:1, with its panel in
 // the sidebar's Layers pane; coming back draws the still, saves and puts the editor back where it was. The frame's
 // document is an edit tab (edit-tabs), opened through the Image tab's one TabSet. Frames dropped on an image frame
-// become layers in it, each as its still.
+// become layers in it, each as its still; so do pictures dropped on it from the Shelf or a picker (sources).
 //
 // table.js's events (detail.handled = true when taken here): table:live, table:unlive, table:resize, table:drop-frame.
 import { $, h, api, toast } from './ui.js';
@@ -12,6 +12,7 @@ import { draggingPicture, droppedFiles, dropKind } from './drop-files.js';
 import { isLive } from './live.js';
 import { sidebar } from './sidebar.js';
 import { frameChanged, refreshStills } from './table.js';
+import { sourcePicture } from './table-frames.js';
 
 const F = { seq: 0, mounted: null };   // mounted: the id of the frame the editor is in
 const eng = () => CURRENT_EDIT.eng;
@@ -41,7 +42,7 @@ async function live(frame, root) {
   wireDrop(root, frame);
   mountEditor({ host: root, active: () => isLive(frame.id) });
   F.mounted = frame.id;
-  sidebar.pane('layers').append($('#editorPanel'));   // (mountEditor put the panel beside the stage; it belongs in the sidebar)
+  sidebar.pane('layers', { title: 'Layers', icon: 'rows', host: true }).append($('#editorPanel'));   // (mountEditor put the panel beside the stage; it belongs in the sidebar)
   applySize(frame);
   sidebar.refresh();
 }
@@ -103,12 +104,12 @@ addEventListener('table:unlive', (e) => {
 
 // ---- frames dropped on an image frame: each one's picture as a layer ----
 addEventListener('table:drop-frame', (e) => {
-  const { from, onto } = e.detail;
+  const { from = [], sources = [], onto } = e.detail;
   if (onto.kind !== 'image' || !onto.doc) return;
   const pics = from.filter((f) => f.kind === 'image' && f.doc && f.id !== onto.id);
-  if (!pics.length) return;
+  if (!pics.length && !sources.length) return;
   e.detail.handled = true;
-  dropInto(onto, pics).catch((err) => toast(`Couldn't add the layers: ${err.message}`, true));
+  dropInto(onto, pics, sources).catch((err) => toast(`Couldn't add the layers: ${err.message}`, true));
 });
 
 // a frame's picture: its edit's still (the open edit's composite now, if that's the one: its still may be behind)
@@ -125,14 +126,21 @@ async function stillBlob(f) {
   return editorStillBlob();
 }
 
-async function dropInto(onto, pics) {
+// sources: pictures from the Shelf, a picker or the computer (table-frames.js sourcePicture), each a layer as it is
+async function dropInto(onto, pics, sources = []) {
   const layers = [];
+  const centred = (name, label, w, hh) => ({ name, label, x: Math.round((onto.w - (w || onto.w)) / 2), y: Math.round((onto.h - (hh || onto.h)) / 2) });
   for (const f of pics) {
     const blob = await stillBlob(f);
     if (!blob) { toast(`"${f.label}" has no picture yet`, true); continue; }
     const r = await uploadImage(blob, { source: 'edit-tab', filename: 'edit.png' });
-    const w = r.width || onto.w, hh = r.height || onto.h;
-    layers.push({ name: r.name, label: f.label || null, x: Math.round((onto.w - w) / 2), y: Math.round((onto.h - hh) / 2) });
+    layers.push(centred(r.name, f.label || null, r.width, r.height));
+  }
+  for (const src of sources) {
+    let p = null;
+    try { p = await sourcePicture(src); } catch (err) { toast(err.message, true); continue; }
+    if (!p) { toast('Only a picture can go into an image frame', true); continue; }
+    layers.push(centred(p.name, p.label || null, p.width, p.height));
   }
   if (!layers.length) return;
   const t = editTabs();

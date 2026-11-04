@@ -64,6 +64,26 @@ class KreaEdit(unittest.TestCase):
         wf = load("deck-krea2-edit")
         self.assertEqual(tpl.family("deck-krea2-edit", wf), "Krea")
 
+    def test_family_no_accidental_match(self):
+        self.assertNotEqual(tpl.family("deck-face-restore", load("deck-face-restore")), "ACE-Step")
+        self.assertEqual(tpl.family("deck-ace-music", load("deck-ace-music")), "ACE-Step")
+        # a user template with an unrelated id falls back to node class names, on word starts only
+        self.assertEqual(tpl.family("mine", {"1": {"class_type": "TextEncodeAceStepAudio1.5", "inputs": {}}}), "ACE-Step")
+        self.assertEqual(tpl.family("mine", {"1": {"class_type": "DeckFaceRestore", "inputs": {}}}), "Other")
+
+    def test_family_matches_id_prefix(self):
+        want = {"ltx": "LTX-2.5", "h3": "MiniMax H3", "qwen": "Qwen Image", "klein": "Flux Klein", "krea": "Krea",
+                "moss": "MOSS", "ace": "ACE-Step", "depth": "Depth", "sam3": "SAM3", "pose": "Pose"}
+        root = Path(tpl.__file__).resolve().parent.parent / "templates"
+        for f in sorted(root.glob("deck-*.json")):
+            tid = f.stem
+            first = tid.split("-")[1]
+            label = tpl.family(tid, json.loads(f.read_text()))
+            for key, fam in want.items():
+                if first.startswith(key) and "inpaint" not in tid:
+                    self.assertEqual(label, fam, tid)
+            self.assertNotEqual(label, "ACE-Step" if first != "ace" else "", tid)
+
 
 class MossEdit(unittest.TestCase):
     def test_empty_references_close_up(self):

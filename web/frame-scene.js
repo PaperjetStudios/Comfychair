@@ -2,7 +2,8 @@
 // key sheet move into the frame and its panel into the sidebar's pane. There is one engine and one WebGL context, so
 // the elements move between the page's 3D tab and the frame; coming back draws the still (the shot camera's view),
 // saves and puts them back. The frame's document is a scene (scene-tabs), opened through the 3D tab's one TabSet.
-// Image frames dropped on a 3D frame go into its scene as a background picture or a 3D photo.
+// Image frames dropped on a 3D frame go into its scene as a background picture or a 3D photo; so do pictures dropped on
+// it from the Shelf or a picker (table:drop-frame sources).
 //
 // table.js's events (detail.handled = true when taken here): table:live, table:unlive, table:resize, table:drop-frame.
 import { h, toast } from './ui.js';
@@ -10,14 +11,14 @@ import { isLive } from './live.js';
 import { uploadImage } from './media.js';
 import { sceneModule } from './run.js';
 import { sidebar } from './sidebar.js';
-import { stillOf } from './table-frames.js';
+import { sourcePicture, stillOf } from './table-frames.js';
 import { frameChanged, refreshStills } from './table.js';
 import { openPressMenu } from './press-menu.js';
 import { putStill } from './frame-video.js';
 
 const F = { seq: 0, mounted: null, m: null, size: null };   // mounted: the frame the engine is in; size: the scene's when it went live
 
-const PANE = { title: 'Objects', icon: 'cube', host: false, when: (c) => c.live?.kind === 'scene' };
+const PANE = { title: 'Objects', icon: 'cube', host: false };
 
 // ---- live ----
 addEventListener('table:live', (e) => {
@@ -47,7 +48,7 @@ async function live(frame, root) {
   root.classList.add('scene-frame');
   root.replaceChildren(h('div', { class: 'stage editor-stage' }, viewer, transport));
   const pane = sidebar.pane('layers', PANE);
-  m.mountScene({ host: root, viewer, transport, panel: pane, active: () => isLive(frame.id), fullscreen: false });   // (the table has its own)
+  m.mountScene({ host: root, viewer, transport, panel: pane, active: () => isLive(frame.id) });   // (its full screen is the frame's own)
   F.mounted = frame.id;
   m.setSceneSize(frame.w, frame.h);   // (the frame's size is the scene's picture)
   F.size = m.sceneSize();
@@ -93,7 +94,7 @@ async function saveStill(t, id, still) {
 addEventListener('table:drop-frame', (e) => {
   const d = e.detail;
   if (d.handled || d.onto.kind !== 'scene' || !d.onto.doc) return;
-  const pics = d.from.filter((f) => f.kind === 'image' && f.id !== d.onto.id);
+  const pics = [...(d.from || []).filter((f) => f.kind === 'image' && f.id !== d.onto.id), ...(d.sources || []).map((src) => ({ src }))];
   if (!pics.length) return;
   d.handled = true;
   if (F.mounted && F.mounted !== d.onto.id) { toast('Leave the open 3D frame first', true); return; }
@@ -106,8 +107,13 @@ addEventListener('table:drop-frame', (e) => {
   ]], 'Add to the scene as');
 });
 
-// a frame's picture into the project's pictures: its still (or the picture it was made from)
+// a frame's picture into the project's pictures: its still (or the picture it was made from); { src }: a dropped thing's
 async function pictureOf(f) {
+  if (f.src) {
+    const p = await sourcePicture(f.src);
+    if (!p) throw new Error('Only a picture can go into a 3D frame this way');
+    return p.name;
+  }
   const url = stillOf(f) || f.preview;
   if (!url) throw new Error(`"${f.label}" has no picture yet: open it once`);
   const r = await uploadImage(await (await fetch(url)).blob(), { mp: 0, source: 'table', filename: 'frame.png' });

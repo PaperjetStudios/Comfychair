@@ -1,18 +1,26 @@
 // The table: one surface where the project's images, videos, sounds, 3D scenes and notes sit as frames, to move, size
 // and open in place. Each frame owns a saved document of its kind (table-frames.js); the table itself is a document
-// of kind `tables` (app/store.py), listed on the document bar like any other.
+// of kind `tables` (app/store.py). The project's tables are the top tabs (table-nav.js), not a strip on the document bar.
 //
 // The view: the wheel (or a trackpad pinch) zooms about the pointer, two fingers pan and pinch, Space + drag or the
 // middle button pans. A drag on empty space draws a box: over frames it selects them, over nothing it asks what kind
-// of frame to make there. A frame goes live (Enter, a double-click, Open): the table puts it at 1:1 and a frame-kind
-// module mounts its engine in it (the `table:live` event); Esc or a tap beside it brings the table back.
+// of frame to make there. A frame goes live (Enter, a double-click, Open): its mount root sits in .live-layer over the
+// stage (not in the zoomed .table-world, so it is at 1:1 and a fixed full screen inside it works), filling the stage
+// less a margin, with the table behind it dimmed and fitted to the frame; a frame-kind module mounts its engine in the
+// root (the `table:live` event) and fits its picture inside. Esc or a tap beside it brings the table back.
+// Moves, resizes and deletes undo (Ctrl+Z, the top bar's ↶) while nothing is live.
 //
 // Events for the frame-kind modules (on window, detail.handled = true when taken):
 //   table:live       { frame, root, table }   mount the frame's engine in root (live.js has the gate)
 //   table:unlive     { frame, root }          save and let go; root is removed after
-//   table:drop-frame { from: [frame], onto: frame, table }   a frame held over another and let go there
+//   table:drop-frame { from: [frame], sources: [src], onto: frame, table }   frames held over another and let go there,
+//                    or things dropped on it from the Shelf, a picker or the computer (sources: { generation, index } |
+//                    { input } | { media, kind?, url?, label? } | File, as frameFor takes; table-frames.js sourcePicture /
+//                    sourceClip turn one into a picture or a clip). Either list may be empty. Not handled: the sources
+//                    become frames of their own beside it.
 //   table:select     { frames: [frame], table }  the selection changed (sidebar.js follows it)
 //   table:resize     { frame, table }            a frame's size was set while it is live (its module applies it)
+//   table:move       { frames: [frame], table }  frames were moved by a drag, the arrows (once they stop) or Undo
 import { $, h, api, store, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, toggle, help, mpInput } from './ui.js';
 import { S, onServer, onProject } from './core.js';
 import { TabSet } from './tabs.js';
@@ -20,7 +28,10 @@ import { currentTab } from './navigation.js';
 import { ownsKey } from './key-focus.js';
 import { openPressMenu, pressMenu, closePressMenu } from './press-menu.js';
 import { gzChip, snap as snapPrefs, snapBar } from './gizmo.js';
-import { fullScreen } from './layout.js';
+import { exitMaxedIn, fullScreen } from './layout.js';
+import { registerUndo, syncUndo } from './undo-dock.js';
+import { onNavigate, switchTab as navigate } from './navigation.js';
+import { wireTableNav } from './table-nav.js';
 import { droppedFiles, draggingPicture } from './drop-files.js';
 import { isLive, liveFrame, liveRoot, setLive } from './live.js';
 import * as M from './table-model.js';
@@ -32,7 +43,9 @@ const SOURCE_TYPE = 'application/x-deck-source';   // an in-app drag's payload: 
 const NEW_KINDS = ['image', 'video', 'scene', 'sound', 'note'];
 
 let T = M.blankTable();   // the open table
-const U = { sel: new Set(), els: new Map(), wired: false, lastTap: null, tabs: null, mode: null, retryAt: 0, op: null, pts: new Map(), space: false, panelSig: '' };
+const U = { sel: new Set(), els: new Map(), wired: false, lastTap: null, tabs: null, mode: null, retryAt: 0, op: null, pts: new Map(), space: false, panelSig: '',
+  before: null /* the view before a frame went live */, nudge: null /* arrows held: { ids, before, t } */ };
+const H = { past: [], future: [] };   // undo: [{ undo(), redo() }] for this table's moves, resizes and deletes
 const D = {};             // its elements
 
 // ---------------------------------------------------------------------------
@@ -43,7 +56,7 @@ const adapter = {
   empty: M.blankTable,
   migrate: M.migrateTable,
   dump: () => T,
-  load(p) { unlive(); T = M.migrateTable(p); U.sel.clear(); D.syncBar?.(); renderAll(); refreshStills(); },
+  load(p) { unlive(); T = M.migrateTable(p); U.sel.clear(); H.past = []; H.future = []; U.nudge = null; syncUndo(); D.syncBar?.(); renderAll(); refreshStills(); },
 };
 // Can the server keep tables yet? (app/store.py answers 400 for a kind it doesn't know.) Once it can, the table moves
 // there: TabSet seeds its first document with the one kept here.
@@ -55,14 +68,19 @@ async function startStore() {
   if (await serverTakesTables()) {
     U.mode = 'server';
     let seeded = false;
-    U.tabs ||= new TabSet({ kind: 'tables', host: D.tab, newName: (n) => `Table ${n}`, adapter,
-      seed: () => { seeded = true; return store.get(localKey(), null) || T; } });
+    if (!U.tabs) {
+      U.tabs = new TabSet({ kind: 'tables', host: D.tab, newName: (n) => `Table ${n}`, adapter,
+        seed: () => { seeded = true; return store.get(localKey(), null) || T; } });
+      const strip = U.tabs.render.bind(U.tabs);   // (its own strip stays off the bar: the top tabs are drawn from its list)
+      U.tabs.render = () => { strip(); D.nav?.render(); };
+    }
     await U.tabs.start();
     if (seeded) store.set(localKey(), null);
     return;
   }
   U.mode = 'local';
   adapter.load(store.get(localKey(), null) || M.blankTable());
+  D.nav?.render();
 }
 function changed() {
   if (U.mode === 'server') return U.tabs.changed();
@@ -176,19 +194,29 @@ function kindMenu(x, y, make, label = 'New frame') {
   openPressMenu(x, y, [NEW_KINDS.map((k) => ({ label: M.KIND_LABEL[k], run: () => make(k) }))], label);
 }
 
-// Live: the table moves so the frame is at 1:1 in the middle, the others dim, and the frame's module mounts in it
+// Live: the frame's mount root fills the stage less a margin, in .live-layer (unscaled: engines work at 1:1); the
+// table behind is fitted to the frame and dimmed; the frame's module mounts its engine in the root and fits it there.
+const livePad = () => { const { w, h: hh } = stageSize(); return Math.round(Math.max(8, Math.min(32, Math.min(w, hh) * 0.03))); };
+function placeLive({ animate = false } = {}) {
+  const f = liveFrame(), root = liveRoot();
+  if (!f || !root) return;
+  const { w, h: hh } = stageSize(), pad = livePad();
+  root.style.inset = `${pad}px`;
+  if (w && hh) setView(M.liveBackdrop(f, w, hh, pad, { min: ZMIN, max: ZMAX }), { animate, save: false });
+}
 export function goLive(f) {
   if (!f) return;
   if (f.kind === 'note') { U.els.get(f.id)?.querySelector('textarea')?.focus(); return; }
   if (liveFrame()?.id === f.id) return;
   unlive();
+  cancelOp();
   U.sel = new Set([f.id]);
-  const { w, h: hh } = stageSize();
-  setView(M.liveView(f, w, hh), { animate: true });
-  const root = h('div', { class: 'frame-mount' });
-  U.els.get(f.id)?.querySelector('.frame-body').append(root);
+  U.before = { ...T.view };
+  const root = h('div', { class: 'frame-mount', 'data-frame': f.id });
+  D.live.append(root);
   D.stage.classList.add('table-live');
   setLive(f, root);
+  placeLive({ animate: true });
   renderFrames();
   dispatchEvent(new CustomEvent('table:live', { detail: { frame: f, root, table: T, handled: false } }));
 }
@@ -196,10 +224,12 @@ export function unlive() {
   const f = liveFrame();
   if (!f) return;
   const root = liveRoot();
+  exitMaxedIn(root);   // (a full screen inside it goes first: its stage is about to move)
   dispatchEvent(new CustomEvent('table:unlive', { detail: { frame: f, root } }));
   setLive(null);
   root?.remove();
   D.stage?.classList.remove('table-live');
+  if (U.before) { setView(U.before, { animate: true, save: false }); U.before = null; }
   renderFrames();
   refreshStills([f.kind]);   // (its still may have changed while it was open)
 }
@@ -210,14 +240,61 @@ async function deleteFrames(ids) {
   if (!gone.length) return;
   if (gone.some((f) => f.id === liveFrame()?.id)) unlive();
   const at = new Map(gone.map((f) => [f.id, T.frames.indexOf(f)]));
-  T.frames = T.frames.filter((f) => !gone.includes(f));
-  U.sel.clear(); renderFrames(); changed();
-  try { await Promise.all(gone.map(trashDoc)); } catch (e) { toast(`Couldn't delete a frame's document: ${e.message}`, true); }
-  undoToast(gone.length === 1 ? `Deleted "${gone[0].label}"` : `Deleted ${gone.length} frames`, async () => {
+  const table = T;
+  const take = async () => {
+    T.frames = T.frames.filter((f) => !gone.some((g) => g.id === f.id));
+    U.sel.clear(); renderFrames(); changed();
+    try { await Promise.all(gone.map(trashDoc)); } catch (e) { toast(`Couldn't delete a frame's document: ${e.message}`, true); }
+  };
+  const back = async () => {
     try { await Promise.all(gone.map(restoreDoc)); } catch (e) { toast(e.message, true); }
-    for (const f of gone) T.frames.splice(Math.min(at.get(f.id), T.frames.length), 0, f);
+    for (const f of gone) if (!byId(f.id)) T.frames.splice(Math.min(at.get(f.id), T.frames.length), 0, f);
     U.sel = new Set(gone.map((f) => f.id)); renderFrames(); changed();
+  };
+  const entry = { undo: back, redo: take };
+  await take();
+  record(entry);
+  undoToast(gone.length === 1 ? `Deleted "${gone[0].label}"` : `Deleted ${gone.length} frames`, () => {
+    if (T !== table) return;   // (another table is open now)
+    if (H.past.at(-1) === entry) return undo();   // (the same step as Ctrl+Z: it can be redone)
+    if (!byId(gone[0].id)) back();
   });
+}
+
+// ---------------------------------------------------------------------------
+// undo: steps of this table's own (where frames sit, their sizes, deletes); a document's own edits undo in its engine
+// ---------------------------------------------------------------------------
+function record(entry) {
+  H.past.push(entry);
+  if (H.past.length > 200) H.past.shift();
+  H.future = [];
+  syncUndo();
+}
+// where frames sit and how big they are, to go back to (only the frames still on the table)
+const geomOf = (ids = null) => T.frames.filter((f) => !ids || ids.has(f.id)).map((f) => ({ id: f.id, x: f.x, y: f.y, w: f.w, h: f.h }));
+const sameGeom = (a, b) => a.length === b.length && a.every((g, i) => ['id', 'x', 'y', 'w', 'h'].every((k) => g[k] === b[i][k]));
+function applyGeom(list) {
+  const moved = [];
+  for (const g of list) {
+    const f = byId(g.id);
+    if (!f) continue;
+    const resized = f.w !== g.w || f.h !== g.h;
+    Object.assign(f, g); moved.push(f);
+    if (resized && liveFrame()?.id === f.id) { placeLive(); dispatchEvent(new CustomEvent('table:resize', { detail: { frame: f, table: T } })); }
+  }
+  U.sel = new Set(moved.map((f) => f.id));
+  renderFrames(); changed();
+  tellMoved(moved);
+}
+function recordGeom(before, after) {
+  if (sameGeom(before, after)) return;
+  record({ undo: () => applyGeom(before), redo: () => applyGeom(after) });
+}
+async function undo() { const e = H.past.pop(); if (!e) return; H.future.push(e); syncUndo(); await e.undo(); syncUndo(); }
+async function redo() { const e = H.future.pop(); if (!e) return; H.past.push(e); syncUndo(); await e.redo(); syncUndo(); }
+// table:move, for the story table (its shot order follows where the frames are)
+function tellMoved(frames) {
+  if (frames.length) dispatchEvent(new CustomEvent('table:move', { detail: { frames, table: T } }));
 }
 // Duplicate: each copy beside its original, with a copy of its document
 async function duplicateFrames(ids) {
@@ -266,10 +343,11 @@ function sizeSheet(f) {
 
 // a frame's size set from the sheet or the panel; a live frame's module takes it at once (table:resize), others on opening
 function setSize(f, s) {
+  const before = geomOf(new Set([f.id]));
   Object.assign(f, s);
+  recordGeom(before, geomOf(new Set([f.id])));
   if (liveFrame()?.id === f.id) {
-    const { w, h: hh } = stageSize();
-    setView(M.liveView(f, w, hh), { save: false });
+    placeLive();
     dispatchEvent(new CustomEvent('table:resize', { detail: { frame: f, table: T } }));
   }
   renderFrames(); changed();
@@ -310,7 +388,7 @@ function frameAt(e) {
   const el = e.target.closest?.('.frame');
   return el ? byId(el.dataset.id) : null;
 }
-const inLive = (e) => !!e.target.closest?.('.frame.live .frame-body');
+const inLive = (e) => !!e.target.closest?.('.live-layer .frame-mount');
 const othersOf = (ids) => T.frames.filter((f) => !ids.has(f.id));
 const snapThr = () => SNAP_PX / T.view.z;
 
@@ -318,7 +396,7 @@ function onDown(e) {
   if (inLive(e) || e.target.closest('.max-btn, .pull-tab, textarea')) return;
   if (e.pointerType === 'touch') {
     U.pts.set(e.pointerId, local(e));
-    if (U.pts.size === 2) { cancelOp(); U.op = { type: 'pinch', last: [...U.pts.values()] }; return; }
+    if (U.pts.size === 2) { cancelOp(); U.op = isLive() ? null : { type: 'pinch', last: [...U.pts.values()] }; return; }
     if (U.pts.size > 2) return;
   }
   if (e.button === 2) return;   // (the menu comes with contextmenu)
@@ -326,7 +404,8 @@ function onDown(e) {
   try { D.stage.setPointerCapture(e.pointerId); } catch { /* the pointer is gone */ }
   const base = { id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false };
   const handle = e.target.closest('.frame-handle'), f = frameAt(e);
-  if (e.button === 1 || (e.button === 0 && U.space) || isLive()) U.op = { ...base, type: 'pan', v0: { ...T.view } };
+  if (isLive()) U.op = { ...base, type: 'backdrop' };   // (the table behind a live frame: a tap beside it lets go of it)
+  else if (e.button === 1 || (e.button === 0 && U.space)) U.op = { ...base, type: 'pan', v0: { ...T.view } };
   else if (handle) {
     const r = byId([...U.sel][0]);
     U.op = { ...base, type: 'resize', f: r, start: { ...r }, handle: handle.dataset.handle };
@@ -414,9 +493,13 @@ function onUp(e) {
   U.op = null;
   showGuides(); D.marquee.style.display = 'none';
   if (e.type === 'pointercancel') return cancelOp(op);
-  if (op.type === 'pan') { if (op.moved) changed(); else if (isLive()) unlive(); return; }
+  if (op.type === 'backdrop') { if (!op.moved && isLive()) unlive(); return; }
+  if (op.type === 'pan') { if (op.moved) changed(); return; }
   if (op.type === 'move') return endMove(e, op);
-  if (op.type === 'resize') { if (op.moved) changed(); return; }
+  if (op.type === 'resize') {
+    if (op.moved) { recordGeom([{ id: op.f.id, x: op.start.x, y: op.start.y, w: op.start.w, h: op.start.h }], geomOf(new Set([op.f.id]))); changed(); tellMoved([op.f]); }
+    return;
+  }
   if (op.type === 'marquee') endMarquee(e, op);
 }
 function endMove(e, op) {
@@ -431,7 +514,12 @@ function endMove(e, op) {
     if (!detail.handled) toast('Not yet: frames can\'t go into other frames yet');
     return;
   }
-  if (op.moved) return changed();
+  if (op.moved) {
+    const moved = [...op.start.keys()].map(byId).filter(Boolean);
+    recordGeom([...op.start].map(([id, s]) => { const f = byId(id); return { id, x: s.x, y: s.y, w: f?.w, h: f?.h }; }), geomOf(new Set(op.start.keys())));
+    changed(); tellMoved(moved);
+    return;
+  }
   U.lastTap = { id: op.tap.id, t: Date.now() };
   if (!e.shiftKey && U.sel.size > 1) { U.sel = new Set([op.tap.id]); renderFrames(); }   // a tap in a selection picks that one
 }
@@ -459,7 +547,7 @@ function onWheel(e) {
   if (inLive(e)) return;
   e.preventDefault();
   const p = local(e);
-  if (isLive()) return setView({ ...T.view, x: T.view.x - e.deltaX, y: T.view.y - e.deltaY });   // live stays at 1:1
+  if (isLive()) return;   // (the table behind a live frame stays put: the bar's Fit and 100% move it)
   const k = e.ctrlKey ? 0.01 : 0.0025;   // (a trackpad pinch comes as the wheel with Ctrl, in small steps)
   let v = M.zoomAt(T.view, p.x, p.y, Math.exp(-e.deltaY * k), ZMIN, ZMAX);
   if (e.deltaX && !e.ctrlKey) v = { ...v, x: v.x - e.deltaX };
@@ -475,11 +563,16 @@ function onKey(e) {
   if (e.code === 'Space' && !isLive()) { U.space = true; D.stage.classList.add('panning'); e.preventDefault(); return; }
   if (isLive() || e.altKey) return;
   const ctrl = e.ctrlKey || e.metaKey, k = e.key;
+  if (ctrl && (k.toLowerCase() === 'z' || k.toLowerCase() === 'y')) {
+    e.preventDefault();
+    if (k.toLowerCase() === 'y' || e.shiftKey) redo(); else undo();
+    return;
+  }
   const step = e.shiftKey ? NUDGE * 10 : NUDGE;
   const arrows = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
   let fn = null;
   if (k === 'Delete' || k === 'Backspace') fn = () => deleteFrames(new Set(U.sel));
-  else if (arrows[k] && U.sel.size) fn = () => { T.frames = M.moveFrames(T.frames, [...U.sel], ...arrows[k]); renderFrames(); changed(); };
+  else if (arrows[k] && U.sel.size) fn = () => nudge(arrows[k]);
   else if (ctrl && k.toLowerCase() === 'd') fn = () => duplicateFrames(new Set(U.sel));
   else if (ctrl && k.toLowerCase() === 'a') fn = () => { U.sel = new Set(T.frames.map((f) => f.id)); renderFrames(); };
   else if (!ctrl && k.toLowerCase() === 'f') fn = () => fit(U.sel.size ? selected() : T.frames);
@@ -487,6 +580,22 @@ function onKey(e) {
   else if (!ctrl && k === 'Enter' && U.sel.size === 1) fn = () => goLive(selected()[0]);
   if (!fn) return;
   e.preventDefault(); fn();
+}
+// The arrows move the selection a pixel (ten with Shift); a run of presses is one step to undo, and table:move goes once
+// they stop
+function nudge([dx, dy]) {
+  const ids = new Set([...U.sel]), key = [...ids].sort().join(',');
+  if (U.nudge?.key !== key) { flushNudge(); U.nudge = { key, ids, before: geomOf(ids) }; }
+  T.frames = M.moveFrames(T.frames, [...ids], dx, dy);
+  renderFrames(); changed();
+  clearTimeout(U.nudge.t); U.nudge.t = setTimeout(flushNudge, 500);
+}
+function flushNudge() {
+  const n = U.nudge;
+  if (!n) return;
+  U.nudge = null; clearTimeout(n.t);
+  recordGeom(n.before, geomOf(n.ids));
+  tellMoved(T.frames.filter((f) => n.ids.has(f.id)));
 }
 // Esc (on window: after the engines' own Esc, which marks it handled when it used it)
 function onEsc(e) {
@@ -502,8 +611,27 @@ function zoomTo(z) {
 // ---------------------------------------------------------------------------
 // drops: files from the computer, and things dragged from elsewhere in the app (SOURCE_TYPE)
 // ---------------------------------------------------------------------------
-const wantDrop = (e) => !isLive() && ([...(e.dataTransfer?.types || [])].includes(SOURCE_TYPE) || draggingPicture(e.dataTransfer));
+// (while a frame is live: only an in-app drag over it; files dropped on it are its module's own)
+const wantDrop = (e) => {
+  const types = [...(e.dataTransfer?.types || [])];
+  if (isLive()) return types.includes(SOURCE_TYPE) && inLive(e);
+  return types.includes(SOURCE_TYPE) || draggingPicture(e.dataTransfer);
+};
+function onDragOver(e) {
+  if (!wantDrop(e)) return;
+  e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+  hoverDrop(isLive() ? null : frameAtPoint(e.clientX, e.clientY));
+}
+// the frame a drop would go into, outlined while something is held over it
+function hoverDrop(f) {
+  const id = f && f.kind !== 'note' && f.doc ? f.id : null;
+  if (U.dropOver === id) return;
+  U.els.get(U.dropOver)?.classList.remove('drop-onto');
+  U.dropOver = id;
+  U.els.get(id)?.classList.add('drop-onto');
+}
 async function onDrop(e) {
+  hoverDrop(null);
   if (!wantDrop(e)) return;
   e.preventDefault();   // (picture-drop.js leaves a drop already taken)
   const raw = e.dataTransfer.getData(SOURCE_TYPE);
@@ -512,8 +640,27 @@ async function onDrop(e) {
   try { list = raw ? [JSON.parse(raw)].flat() : await got; } catch (err) { return toast(err.message, true); }
   await dropOnTable(list, e.clientX, e.clientY);
 }
-// Things dropped at a screen point become frames there, side by side. src: see table-frames.js frameFor.
+// the frame under a screen point: the live one when the point is on its mount (and no other while one is live)
+function frameAtPoint(clientX, clientY) {
+  if (isLive()) {
+    const r = liveRoot()?.getBoundingClientRect();
+    return r && clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom ? liveFrame() : null;
+  }
+  const r = D.stage.getBoundingClientRect();
+  return M.hitFrame(T.frames, M.toTable(T.view, clientX - r.left, clientY - r.top));
+}
+// Things dropped into a frame (table:drop-frame with sources): true when its module took them
+export function dropOntoFrame(frame, list) {
+  if (!frame || frame.kind === 'note' || !frame.doc) return false;
+  const detail = { from: [], sources: [list].flat(), onto: frame, table: T, handled: false };
+  dispatchEvent(new CustomEvent('table:drop-frame', { detail }));
+  return detail.handled;
+}
+// Things dropped at a screen point: over a frame, into it (an image frame takes pictures as layers, a video frame clips,
+// a 3D frame pictures); else frames of their own there, side by side. src: see table-frames.js frameFor.
 export async function dropOnTable(list, clientX, clientY) {
+  if (!U.wired) await startTables();
+  if (dropOntoFrame(frameAtPoint(clientX, clientY), list)) return;
   const r = D.stage.getBoundingClientRect();
   let at = M.toTable(T.view, clientX - r.left, clientY - r.top), made = 0;
   for (const src of [list].flat()) {
@@ -552,7 +699,14 @@ function frameFields(f) {
   // where it sits: typed table pixels (a locked frame stays put)
   const num = (k) => {
     const el = h('input', { type: 'number', inputMode: 'numeric', step: 1, value: Math.round(f[k]), 'aria-label': k.toUpperCase(), disabled: !!f.locked });
-    el.addEventListener('change', () => { if (f.locked || !Number.isFinite(+el.value)) return; f[k] = Math.round(+el.value); if (liveFrame()?.id === f.id) { const { w, h: hh } = stageSize(); setView(M.liveView(f, w, hh), { save: false }); } renderFrames(); changed(); });
+    el.addEventListener('change', () => {
+      if (f.locked || !Number.isFinite(+el.value)) return;
+      const before = geomOf(new Set([f.id]));
+      f[k] = Math.round(+el.value);
+      recordGeom(before, geomOf(new Set([f.id])));
+      if (liveFrame()?.id === f.id) placeLive();
+      renderFrames(); changed(); tellMoved([f]);
+    });
     return el;
   };
   const mp = mpInput(() => M.mpOf(f.w, f.h).toFixed(2), (n) => { if (n > 0) setSize(f, M.sizeForMp(f.w, f.h, n)); });
@@ -597,7 +751,8 @@ function wire() {
   D.guides = h('div', { class: 'table-guides' });
   D.marquee = h('div', { class: 'table-marquee' });
   D.world = h('div', { class: 'table-world' }, D.frames, D.guides, D.marquee, D.handles);
-  D.stage.append(D.world);
+  D.live = h('div', { class: 'live-layer' });   // (a live frame's mount: over the stage, outside the zoomed world)
+  D.stage.append(D.world, D.live);
   buildBar();
   D.tab.querySelector('.stage').prepend(D.bar);
   fullScreen(D.tab, { viewer: D.stage, title: 'Full screen table' });
@@ -606,13 +761,27 @@ function wire() {
   D.stage.addEventListener('pointerup', onUp);
   D.stage.addEventListener('pointercancel', onUp);
   D.stage.addEventListener('wheel', onWheel, { passive: false });
-  D.stage.addEventListener('dragover', (e) => { if (wantDrop(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
+  D.stage.addEventListener('dragover', onDragOver);
+  D.stage.addEventListener('dragleave', (e) => { if (!D.stage.contains(e.relatedTarget)) hoverDrop(null); });
   D.stage.addEventListener('drop', onDrop);
   pressMenu(D.stage, stageMenu, { ok: (e) => !isLive() && !e.target.closest?.('.max-btn, .pull-tab') });
   document.addEventListener('keydown', onKey);
   document.addEventListener('keyup', (e) => { if (e.code === 'Space') { U.space = false; D.stage.classList.remove('panning'); } });
   addEventListener('keydown', onEsc);
-  new ResizeObserver(() => { const f = liveFrame(); if (f) { const { w, h: hh } = stageSize(); setView(M.liveView(f, w, hh), { save: false }); } }).observe(D.stage);
+  new ResizeObserver(() => placeLive()).observe(D.stage);
+  registerUndo('table', { undo, redo, can: () => [H.past.length > 0, H.future.length > 0] });
+  D.nav = wireTableNav({
+    list: () => (U.mode === 'server' ? U.tabs.docs : [{ id: 'local', name: 'Table' }]),
+    active: () => (U.mode === 'server' ? U.tabs.active?.id : 'local'),
+    shown: () => currentTab() === 'table',
+    open: openTable,
+    create: () => tableOp(() => U.tabs.create()),
+    rename: (id) => tableOp(async () => { if (await switchTable(id)) U.tabs.rename(); }),
+    duplicate: (id) => tableOp(() => duplicateTable(id)),
+    remove: (id) => tableOp(async () => { if (await switchTable(id)) { unlive(); await U.tabs.remove(); } }),
+    reorder: (from, to) => tableOp(() => U.tabs.reorder(from, to)),
+  });
+  onNavigate(() => D.nav.render());
   onServer('store', (m) => {
     const kind = kindOfDoc(m.kind);
     if (!kind || !T.frames.some((f) => f.kind === kind && f.doc === m.id)) return;
@@ -626,16 +795,65 @@ function wire() {
   addEventListener('storage', (e) => { if (e.key === 'deck.imagetools.owed') owedSoon(); });
 }
 
-// The Table screen comes on: wire it the first time, load the table, and show it. Coming back to it while a frame is
+// Wire the table and load the project's tables (app.js calls it at start, so the top tabs are there on any screen)
+let starting = null;
+export function startTables() {
+  if (U.wired) return starting || Promise.resolve();
+  wire();
+  starting = startStore().catch((e) => toast(`Couldn't load the table: ${e.message}`, true));
+  return starting;
+}
+// The Table screen comes on: load the table if that hasn't happened, and show it. Coming back to it while a frame is
 // live brings the table back (the screen's own button is "the whole table").
 export async function renderTable() {
-  if (!U.wired) {
-    wire();
-    await startStore().catch((e) => toast(`Couldn't load the table: ${e.message}`, true));
-    return;
-  }
+  if (!U.wired) return startTables();
   unlive();
   applyView(); D.syncBar?.(); renderFrames();
+}
+
+// ---------------------------------------------------------------------------
+// the project's tables: the top tabs (table-nav.js draws them from the `tables` TabSet's list)
+// ---------------------------------------------------------------------------
+// a tab's action, which needs the server's tables (this device's own one table has no others)
+async function tableOp(fn) {
+  if (U.mode !== 'server') return toast('Tables are kept on this device until the server is back', true);
+  if (currentTab() !== 'table') navigate('table');
+  try { await fn(); } catch (e) { toast(e.message, true); }
+}
+// that table open (the Table screen on show too); true once it is the one open
+async function switchTable(id) {
+  if (U.mode !== 'server') return id === 'local';
+  if (U.tabs.active?.id !== id) { flushNudge(); await U.tabs.switchTo(id); }
+  return U.tabs.active?.id === id;
+}
+export async function openTable(id) {
+  if (currentTab() !== 'table') navigate('table');
+  if (await switchTable(id)) D.nav.render();
+}
+// Alt + ← →: the table before or after this one
+export function stepTable(dir) {
+  const list = U.mode === 'server' ? U.tabs.docs : [];
+  if (currentTab() !== 'table') return navigate('table');
+  const i = list.findIndex((d) => d.id === U.tabs?.active?.id), j = i + dir;
+  if (i >= 0 && j >= 0 && j < list.length) openTable(list[j].id);
+}
+// A copy of a table beside it, its frames each with a copy of their document (two frames never share one: deleting
+// one would take the other's)
+async function duplicateTable(id) {
+  if (!(await switchTable(id))) return;
+  unlive();
+  if (!(await U.tabs.leave())) return;
+  const a = U.tabs.active, copy = structuredClone(T);
+  for (const f of copy.frames) {
+    f.id = M.newFrame(f.kind, f).id;
+    if (f.doc) {
+      try { f.doc = await copyDoc(f, f.label); } catch (e) { toast(`Couldn't copy "${f.label}": ${e.message}`, true); f.doc = null; }
+    }
+  }
+  copy.frames = copy.frames.filter((f) => f.doc || f.kind === 'note');
+  delete copy.story;   // (a story stays with its own table)
+  const doc = await U.tabs.create1({ name: `${a.name} copy`.slice(0, 120), payload: copy, order: a.order + 0.5 });
+  U.tabs.open(doc);
 }
 // another screen came on: let go of the live frame and any gesture
 export function pauseTable() {

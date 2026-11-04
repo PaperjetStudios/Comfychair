@@ -1,6 +1,7 @@
 // A sound frame on the table, live: the Sound engine (sound.js mountSound) mounts inside the frame, its Tracks pane
 // goes in the sidebar, its timeline in the table's drawer (frame-video.js builds it). Letting go saves the mix and its
-// still and gives the engine back to the page's Sound tab. Frames dropped on a sound frame add their sound to it.
+// still and gives the engine back to the page's Sound tab. Frames dropped on a sound frame add their sound to it, as do
+// sounds and clips from the Shelf or a picker (table:drop-frame sources, frame-video.js dropOnto).
 import { h, toast } from './ui.js';
 import { isLive } from './live.js';
 import { sidebar } from './sidebar.js';
@@ -28,10 +29,10 @@ async function goLiveSound(frame, root) {
   const empty = h('div', { class: 'placeholder' }, 'Add sounds, or the sound of clips, to the tracks below');
   const bar = h('div', { class: 'transport' });
   root.append(h('div', { class: 'stage editor-stage' }, h('div', { class: 'viewer snd-viewer' }, canvas, empty), bar));
-  const dr = drawer(), pane = my.pane = sidebar.pane('layers', { title: 'Tracks', icon: 'sound', host: false, when: (c) => c.live?.kind === 'sound' });
+  const dr = drawer(), pane = my.pane = sidebar.pane('layers', { title: 'Tracks', icon: 'sound', host: false });
   dr.show('sound');
   mountSound({ host: root, canvas, empty, transport: bar, tools: dr.panes.sound.tools, timeline: dr.panes.sound.tl, panel: pane,
-    active: () => isLive(frame.id), fullscreen: false });
+    active: () => isLive(frame.id) });   // (its full screen is the frame's own: the mount is outside the table's zoom)
   renderSound();
   sidebar.refresh(); sidebar.show('layers');
 }

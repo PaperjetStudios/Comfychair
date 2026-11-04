@@ -383,11 +383,22 @@ def family(tid: str, wf: dict) -> str:
     for key, label in FAMILIES:
         if words and words[0].startswith(key):
             return label
-    classes = " ".join(n.get("class_type", "") for n in wf.values()).lower()
-    for key, label in FAMILIES:   # a template of the user's own: by its nodes
-        if key in classes:
+    names = [n.get("class_type", "") for n in wf.values()]
+    for key, label in FAMILIES:   # a template of the user's own: by its node class names
+        if any(_starts_word(c, key) for c in names):
             return label
     return "Other"
+
+
+def _starts_word(cls: str, key: str) -> bool:
+    """Does the CamelCase class name have a word starting with key (AceStep, SAM3Grounding, HYMotion)? A match
+    inside a word doesn't count: DeckFaceRestore is not ACE."""
+    low, i = cls.lower(), 0
+    while (i := low.find(key, i)) >= 0:
+        if i == 0 or cls[i].isupper() or not cls[i - 1].isalpha():
+            return True
+        i += 1
+    return False
 
 
 def tag_style(wf: dict) -> str | None:

@@ -1,6 +1,7 @@
 // A video frame on the table, live: the Video engine (video.js mountVideo) mounts inside the frame, its Clips pane
 // goes in the sidebar, and its timeline in the drawer under the table. Letting go saves the edit and its still and
-// puts the engine back on the page's Video tab. Also what happens when frames are dropped onto a video frame.
+// puts the engine back on the page's Video tab. Also what happens when frames, or things from the Shelf or a picker
+// (table:drop-frame sources), are dropped onto a video frame: pictures become picture clips, clips and sounds clips.
 // The drawer (and the doc-editing helpers) are shared with frame-sound.js.
 import { h, api, store, toast, uid, clone } from './ui.js';
 import { S, inputUrl, thumbUrl } from './core.js';
@@ -9,7 +10,7 @@ import { heightGrip } from './layout.js';
 import { uploadImage } from './media.js';
 import { refreshStills } from './table.js';
 import { DOC_KIND } from './table-model.js';
-import { stillOf } from './table-frames.js';
+import { sourceClip, sourcePicture, stillOf } from './table-frames.js';
 import { sidebar } from './sidebar.js';
 import { addToTimeline, mountVideo, newItem, renderVideo, setSequenceSize, videoStill, videoTabs, vidPause, wireVideoTransport } from './video.js';
 
@@ -122,11 +123,39 @@ async function sceneClip(f, payload) {
   (payload.items ||= []).push(it);
 }
 
-// frames dropped on a video or sound frame: their clips join its edit. `engine` is the open tab set of that kind.
+// a dropped thing as the media a timeline takes: a clip or a sound, or (not for a sound frame) a picture
+export async function sourceMedia(src, toSound = false) {
+  const c = await sourceClip(src);
+  if (c) return c;
+  const p = toSound ? null : await sourcePicture(src);
+  return p ? { kind: 'image', src: { input: p.name }, url: inputUrl(p.name), thumb: thumbUrl(p.name, 160), label: p.label || p.name } : null;
+}
+// media at the end of the payload's first track that takes it (a sound edit's tracks take anything it can hear)
+function pushMedia(payload, m, toSound) {
+  const want = m.kind === 'audio' ? 'audio' : 'video';
+  let tr = (payload.tracks || []).find((t) => (toSound ? true : t.kind === want));
+  if (!tr) (payload.tracks ||= []).push(tr = toSound ? { id: uid() } : { id: uid(), kind: want });
+  const it = toSound
+    ? { id: uid(), track: tr.id, kind: m.kind === 'video' ? 'video' : 'audio', src: m.src, url: m.url, label: m.label, dur: m.dur || 0, at: 0, in: 0, out: m.dur || null,
+      volume: 1, pan: 0, fadeIn: 0, fadeOut: 0 }
+    : newItem(m, tr.id);
+  it.at = trackEnd(payload, tr.id);
+  (payload.items ||= []).push(it);
+}
+
+// frames dropped on a video or sound frame: their clips join its edit; so do d.sources (things from the Shelf, a picker
+// or the computer). `engine` is the open tab set of that kind.
 export async function dropOnto(d, kind, engine) {
   const onto = d.onto, from = (d.from || []).filter((f) => f.id !== onto.id && f.kind !== 'note');
   if (!onto.doc) { toast('That frame has no document yet', true); return; }
   const toSound = kind === 'sound', jobs = [];
+  for (const src of d.sources || []) {
+    jobs.push({ run: async (p) => {
+      const m = await sourceMedia(src, toSound);
+      if (!m) throw new Error(toSound ? 'only a sound or a clip can go on a sound frame' : 'that can\'t go on a timeline');
+      pushMedia(p, m, toSound);
+    } });
+  }
   for (const f of from) {
     if (f.kind === 'image' && !toSound) jobs.push({ f, run: (p) => pictureClip(f, p) });
     else if (f.kind === 'scene' && !toSound) jobs.push({ f, run: (p) => sceneClip(f, p) });
@@ -168,10 +197,10 @@ async function goLiveVideo(frame, root) {
   const canvas = h('canvas', { class: 'vid-canvas' }), empty = h('div', { class: 'placeholder' }, 'Add clips, images or sound to the timeline');
   const bar = h('div', { class: 'transport' });
   root.append(h('div', { class: 'stage editor-stage' }, h('div', { class: 'viewer' }, canvas, empty), bar));
-  const dr = drawer(), pane = my.pane = sidebar.pane('layers', { title: 'Clips', icon: 'film', host: false, when: (c) => c.live?.kind === 'video' });
+  const dr = drawer(), pane = my.pane = sidebar.pane('layers', { title: 'Clips', icon: 'film', host: false });
   dr.show('video');
   mountVideo({ host: root, canvas, empty, transport: bar, panel: pane, tlTools: dr.panes.video.tools, timeline: dr.panes.video.tl,
-    active: () => isLive(frame.id), fullscreen: false });
+    active: () => isLive(frame.id) });   // (its full screen is the frame's own: the mount is outside the table's zoom)
   if (frame.w && frame.h) setSequenceSize(frame.w, frame.h);
   renderVideo();
   sidebar.refresh(); sidebar.show('layers');
@@ -199,10 +228,17 @@ addEventListener('table:drop-frame', (e) => {
   const d = e.detail;
   if (d.handled || d.onto.kind !== 'video') return;
   d.handled = true;
-  const imagesOnly = d.from.length && d.from.every((f) => f.kind === 'image');
+  const from = d.from || [], sources = d.sources || [];
+  const imagesOnly = from.every((f) => f.kind === 'image') && (from.length || sources.length);
   if (imagesOnly && videoTabs()?.active?.id === d.onto.doc && isLive(d.onto.id)) {   // live: onto the timeline as the Clips pane does
     (async () => {
-      for (const f of d.from) {
+      for (const src of sources) {
+        try {
+          const m = await sourceMedia(src);
+          if (m) await addToTimeline(m); else toast('That can\'t go on a timeline', true);
+        } catch (err) { toast(`Couldn't add it: ${err.message}`, true); }
+      }
+      for (const f of from) {
         try {
           const url = stillOf(f) || f.preview;
           if (!url) { toast(`"${f.label}" has no picture yet: open it once`, true); continue; }

@@ -108,3 +108,109 @@ class Tables(unittest.TestCase):
             if not any(j["state"] == "copying" for j in self.c.get("/api/projects/jobs").json()):
                 break
             time.sleep(0.05)
+
+    def tab_names(self):
+        return [x["name"] for x in self.c.get("/api/store/tables", params={"project_id": self.pid}).json()]
+
+    def test_restore_leaves_a_doc_deleted_separately_earlier(self):
+        q = {"project_id": self.pid}
+        for k, i in (("edit-tabs", "a"), ("edit-tabs", "b"), ("video-tabs", "c")):
+            self.put(k, i, {"x": 1})
+        self.put("tables", "t1", {"v": 1, "frames": [{"id": "1", "kind": "image", "doc": "a"}, {"id": "2", "kind": "image", "doc": "b"},
+                                                    {"id": "3", "kind": "video", "doc": "c"}]})
+        self.assertEqual(self.c.delete("/api/store/edit-tabs/a", params=q).status_code, 200)
+        self.assertEqual(self.c.delete("/api/store/tables/t1", params=q).status_code, 200)
+        self.assertEqual(self.c.post("/api/store/tables/t1/restore", params=q).status_code, 200)
+        self.assertEqual(self.ids("edit-tabs"), {"b"})
+        self.assertEqual(self.ids("video-tabs"), {"c"})
+
+    def test_bad_frames_do_not_break_delete_and_global_scope_cascades_nothing(self):
+        q = {"project_id": self.pid}
+        self.put("tables", "bad", {"v": 1, "frames": 5})
+        self.assertEqual(self.c.delete("/api/store/tables/bad", params=q).status_code, 200)
+        self.assertEqual(self.ids("tables"), set())
+        self.put("edit-tabs", "e1", {"x": 1})
+        g = self.c.put("/api/store/tables/gt", params={"scope": "global"},
+                       json={"name": "g", "payload": {"frames": [{"id": "1", "kind": "image", "doc": "e1"}]}})
+        self.assertEqual(g.status_code, 200)
+        self.assertEqual(self.c.delete("/api/store/tables/gt", params={"scope": "global"}).status_code, 200)
+        self.assertEqual(self.ids("edit-tabs"), {"e1"})
+        self.assertEqual(self.c.post("/api/store/tables/gt/restore", params={"scope": "global"}).status_code, 200)
+        self.c.delete("/api/store/tables/gt", params={"scope": "global"})
+
+    def test_upgrade_twice_makes_one_imported_table_and_busy_gives_409(self):
+        db.set_project_version(self.pid, 1)
+        self.put("edit-tabs", "e1", {})
+        projects.UPGRADING.add(self.pid)
+        try:
+            self.assertEqual(self.c.post(f"/api/projects/{self.pid}/upgrade").status_code, 409)
+        finally:
+            projects.UPGRADING.discard(self.pid)
+        self.assertEqual(self.c.post(f"/api/projects/{self.pid}/upgrade").status_code, 200)
+        self.assertEqual(self.c.post(f"/api/projects/{self.pid}/upgrade").json(), {"already": True})
+        self.assertEqual(self.tab_names().count("Imported"), 1)
+
+    def test_upgrade_failure_leaves_no_tables_and_version_1(self):
+        db.set_project_version(self.pid, 1)
+        self.put("edit-tabs", "e1", {})
+        self.put("story-tabs", "st1", {}, name="S")
+        real, n = store._write, []
+
+        def flaky(path, doc):
+            if doc.get("kind") == "tables":
+                n.append(1)
+                if len(n) == 2:
+                    raise OSError("disk")
+            return real(path, doc)
+        with mock.patch.object(store, "_write", flaky), self.assertRaises(OSError):
+            projects.upgrade_project(self.pid)
+        self.assertEqual(self.ids("tables"), set())
+        self.assertEqual(db.get_project(self.pid)["version"], 1)
+        self.assertNotIn(self.pid, projects.UPGRADING)
+
+    def test_patch_version_runs_the_upgrade(self):
+        db.set_project_version(self.pid, 1)
+        self.put("edit-tabs", "e1", {})
+        r = self.c.patch(f"/api/projects/{self.pid}", json={"version": 2})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["version"], 2)
+        self.assertEqual(self.tab_names(), ["Imported"])
+
+    def test_fresh_install_sandbox_is_version_2(self):
+        import subprocess
+        import sys
+        d = tempfile.mkdtemp(prefix="deck-fresh-")
+        out = subprocess.run([sys.executable, "-c", "from app import db; print([(p['name'], p['version']) for p in db.list_projects()])"],
+                             env={**os.environ, "DECK_DATA": d}, cwd=str(config.BASE_DIR), capture_output=True, text=True)
+        self.assertIn("[('Sandbox', 2)]", out.stdout, out.stderr)
+
+    def test_duplicate_table_copies_its_docs_and_put_refuses_shared_docs(self):
+        q = {"project_id": self.pid}
+        self.put("edit-tabs", "e1", {"x": 1}, name="Pic")
+        self.put("video-tabs", "v1", {"y": 2})
+        self.c.put("/api/store/edit-tabs/e1/still", params=q, content=b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x02\0\0\0\x02" + b"\0" * 20)
+        self.put("tables", "t1", {"v": 1, "frames": [{"id": "f1", "kind": "image", "doc": "e1"}, {"id": "f2", "kind": "video", "doc": "v1"},
+                                                    {"id": "f3", "kind": "note", "text": "n"}]}, name="Main")
+        r = self.c.post("/api/store/tables/t1/duplicate", params=q)
+        self.assertEqual(r.status_code, 200, r.text)
+        t2 = r.json()
+        self.assertEqual((t2["kind"], t2["name"], t2["rev"]), ("tables", "Main copy", 1))
+        self.assertNotEqual(t2["id"], "t1")
+        self.assertGreater(t2["order"], 0)
+        f = t2["payload"]["frames"]
+        self.assertTrue(all(x["id"] not in ("f1", "f2", "f3") for x in f))
+        self.assertNotIn(f[0]["doc"], ("e1", "v1"))
+        self.assertEqual(f[2]["text"], "n")
+        self.assertEqual(len(self.ids("edit-tabs")), 2)
+        cp = self.c.get(f"/api/store/edit-tabs/{f[0]['doc']}", params=q).json()
+        self.assertEqual((cp["name"], cp["payload"], cp["still"]["w"]), ("Pic", {"x": 1}, 2))
+        self.assertIn(f[0]["doc"], cp["still"]["url"])
+        self.assertEqual(self.c.get(f"/api/store/video-tabs/{f[1]['doc']}", params=q).json()["payload"], {"y": 2})
+        # deleting the original leaves the copy's docs alone
+        self.c.delete("/api/store/tables/t1", params=q)
+        self.assertEqual(self.ids("edit-tabs"), {f[0]["doc"]})
+        # a plain PUT naming another table's docs is refused
+        self.c.post("/api/store/tables/t1/restore", params=q)
+        r = self.c.put("/api/store/tables/t3", params=q, json={"name": "x", "payload": {"frames": [{"id": "z", "kind": "image", "doc": "e1"}]}})
+        self.assertEqual((r.status_code, r.json()), (409, {"error": "Those documents belong to another table"}))
+        self.assertEqual(self.c.post("/api/store/tables/nope/duplicate", params=q).status_code, 404)

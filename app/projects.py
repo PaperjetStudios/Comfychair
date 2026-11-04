@@ -43,8 +43,11 @@ def _job_view(j: dict) -> dict:
     return {k: j[k] for k in ("id", "src", "dst", "name", "done", "total", "state", "error")}
 
 
+UPGRADING: set[int] = set()   # projects being moved to version 2 right now
+
+
 def _busy_ids() -> set[int]:
-    return {p for j in JOBS.values() if j["state"] == "copying" for p in (j["src"], j["dst"])}
+    return {p for j in JOBS.values() if j["state"] == "copying" for p in (j["src"], j["dst"])} | UPGRADING
 
 
 # ---- paths: only ever inside the projects folder ----------------------------
@@ -411,9 +414,10 @@ async def rename(pid: int, body: dict = Body(...)):
         raise HTTPException(400, "Name required")
     if name:
         db.rename_project(pid, name[:120])
+    if name:
+        await _tell(reason="renamed", id=pid)
     if "version" in body:
-        db.set_project_version(pid, 2)
-    await _tell(reason="renamed" if name else "version", id=pid)
+        await run_upgrade(pid)   # same path as POST /upgrade: existing documents land on a table
     return db.get_project(pid)
 
 
@@ -434,59 +438,67 @@ def _frame_size(kind: str, payload: dict) -> tuple[int, int]:
     return w or FRAME_DEFAULT, h or FRAME_DEFAULT
 
 
-def upgrade_project(pid: int, p: dict) -> dict:
-    """Version 1 to 2: one "Imported" table with a frame per tab doc (a row per kind), one empty table per story."""
+def upgrade_project(pid: int) -> dict:
+    """Version 1 to 2: one "Imported" table with a frame per tab doc (a row per kind), one empty table per story.
+    All or nothing: a failure removes the tables already written and re-raises."""
     base = store._dir("tables", pid, None)
     now = time.time()
-
-    def put(kind, did, name, payload, d):
-        store._write(d / f"{did}.json", {"id": did, "kind": kind, "name": name, "order": 0, "rev": 1, "updated": now, "payload": payload})
-
-    frames, y = [], 0
-    for kind, fk in FRAME_KINDS:
-        row_h, x = 0, 0
-        for doc in store._docs(store._dir(kind, pid, None)):
-            w, h = _frame_size(kind, doc.get("payload") or {})
-            frames.append({"id": uuid.uuid4().hex[:12], "kind": fk, "doc": doc["id"], "x": x, "y": y, "w": w, "h": h,
-                           "label": doc.get("name") or ""})
-            x += w + FRAME_GAP
-            row_h = max(row_h, h)
-        if row_h:
-            y += row_h + FRAME_GAP
+    order = max((x.get("order", 0) for x in store._docs(base)), default=-1) + 1
     made = []
-    existing = store._docs(base)
-    order = max((x.get("order", 0) for x in existing), default=-1) + 1
-    if frames:
+
+    def put(name, payload):
         did = uuid.uuid4().hex[:12]
-        put("tables", did, "Imported", {"v": 1, "view": {"x": 0, "y": 0, "z": 1}, "grid": {"on": True, "size": 64}, "frames": frames}, base)
+        store._write(base / f"{did}.json", {"id": did, "kind": "tables", "name": name, "order": order + len(made), "rev": 1,
+                                            "updated": now, "payload": payload})
         made.append(did)
-    for st in store._docs(store._dir("story-tabs", pid, None)):
-        did = uuid.uuid4().hex[:12]
-        put("tables", did, st.get("name") or "Story", {"v": 1, "view": {"x": 0, "y": 0, "z": 1}, "grid": {"on": True, "size": 64},
-                                                        "frames": [], "story": st["id"]}, base)
-        made.append(did)
-    for n, did in enumerate(made):   # keep them after any existing tables
-        path = base / f"{did}.json"
-        d = store._read(path)
-        d["order"] = order + n
-        store._write(path, d)
+
+    try:
+        frames, y = [], 0
+        for kind, fk in FRAME_KINDS:
+            row_h, x = 0, 0
+            for doc in store._docs(store._dir(kind, pid, None)):
+                w, h = _frame_size(kind, doc.get("payload") or {})
+                frames.append({"id": uuid.uuid4().hex[:12], "kind": fk, "doc": doc["id"], "x": x, "y": y, "w": w, "h": h,
+                               "label": doc.get("name") or ""})
+                x += w + FRAME_GAP
+                row_h = max(row_h, h)
+            if row_h:
+                y += row_h + FRAME_GAP
+        if frames:
+            put("Imported", {"v": 1, "view": {"x": 0, "y": 0, "z": 1}, "grid": {"on": True, "size": 64}, "frames": frames})
+        for st in store._docs(store._dir("story-tabs", pid, None)):
+            put(st.get("name") or "Story", {"v": 1, "view": {"x": 0, "y": 0, "z": 1}, "grid": {"on": True, "size": 64},
+                                            "frames": [], "story": st["id"]})
+        db.set_project_version(pid, 2)
+    except BaseException:
+        for did in made:
+            (base / f"{did}.json").unlink(missing_ok=True)
+        raise
     return {"tables": made}
+
+
+async def run_upgrade(pid: int) -> dict:
+    """The upgrade under the project's busy mark: {"already": true} for version 2, 409 if a copy or upgrade is running."""
+    p = db.get_project(pid)
+    if not p:
+        raise HTTPException(404, "No such project")
+    if pid in _busy_ids():
+        raise HTTPException(409, "That project is being copied or upgraded: wait for it to finish")
+    if (p.get("version") or 1) >= 2:
+        return {"already": True}
+    UPGRADING.add(pid)
+    try:
+        out = await asyncio.to_thread(upgrade_project, pid)
+    finally:
+        UPGRADING.discard(pid)
+    await _tell(reason="upgraded", id=pid)
+    return {"ok": True, **out, "project": db.get_project(pid)}
 
 
 @router.post("/{pid}/upgrade")
 async def upgrade(pid: int):
     """Version 1 to 2. Returns {"ok": true, "tables": [ids made], "project": row}, or {"already": true} for a version-2 project."""
-    p = db.get_project(pid)
-    if not p:
-        raise HTTPException(404, "No such project")
-    if pid in _busy_ids():
-        raise HTTPException(409, "That project is being copied: wait for the copy to finish")
-    if (p.get("version") or 1) >= 2:
-        return {"already": True}
-    out = await asyncio.to_thread(upgrade_project, pid, p)
-    db.set_project_version(pid, 2)
-    await _tell(reason="upgraded", id=pid)
-    return {"ok": True, **out, "project": db.get_project(pid)}
+    return await run_upgrade(pid)
 
 
 @router.post("/{pid}/duplicate")

@@ -140,7 +140,7 @@ export function maximizable(stage, viewer, { onChange = null, cls = 'maxed', tit
   const sync = () => { if (active && native && !(document.fullscreenElement || document.webkitFullscreenElement)) { native = false; set(false); } };
   document.addEventListener('fullscreenchange', sync);
   document.addEventListener('webkitfullscreenchange', sync);
-  const api = { toggle: () => set(!active), exit: () => set(false), on: () => active, btn };
+  const api = { toggle: () => set(!active), exit: () => set(false), on: () => active, btn, stage };
   btn.addEventListener('click', (e) => { e.stopPropagation(); api.toggle(); });
   btn.addEventListener('pointerdown', (e) => e.stopPropagation());   // the viewer underneath pans / draws
   viewer.append(btn);
@@ -152,6 +152,10 @@ document.addEventListener('keydown', (e) => {
   e.stopImmediatePropagation();
   MAXED[MAXED.length - 1].exit();
 }, true);
+// leave every full screen whose stage is inside el (a live frame on the table letting go of its engine)
+export function exitMaxedIn(el) {
+  for (const m of [...MAXED].reverse()) if (el?.contains(m.stage)) m.exit();
+}
 
 // ---------------------------------------------------------------------------
 // basicsPane: the settings used every run (size, length, seed ...) live in a pane over the viewer, not in
@@ -186,8 +190,10 @@ export function basicsPane(viewer, id, { title = 'Size, length and seed' } = {})
 // Photoshop's way. Only the open panel's strip shows, and the bar goes when that panel has none (Board, History).
 // onShow runs each time the strip comes back on show: a hidden strip can't scroll its open tab into view.
 // ---------------------------------------------------------------------------
+// A host marked data-no-strip (the table: its documents are the top tabs, table.js) keeps its strip off the bar.
 export function docStrip(host, strip, onShow = null) {
   const bar = $('#docBar');
+  if (host.dataset.noStrip != null) { strip.classList.add('hidden'); return; }
   const sync = () => {
     const on = host.classList.contains('active'), was = !strip.classList.contains('hidden');
     strip.classList.toggle('hidden', !on);
@@ -404,11 +410,18 @@ export function zoomPan(viewer, layer, { min = 1, max = 8, snapOne = false, canZ
 // The f key toggles it in every tab that has one (as in the players): a tab whose own keys take f first (playback.js
 // playKeys, which marks the key handled) is left to them.
 // ---------------------------------------------------------------------------
+// The tab on show is the .tab.active, or a live frame's mount on the table (live.js gives it `tab active`): its own full
+// screen, else the one of a stage moved into it (the Image tab's editor, mounted in an image frame).
 const FULL = new Map();   // tab element -> its fullScreen
+const fullNow = () => {
+  for (const tab of [...FULL.keys()]) if (!tab.isConnected) FULL.delete(tab);   // (a live frame's mount, let go)
+  const all = [...FULL];
+  return (all.find(([tab]) => tab.classList.contains('active')) || all.find(([, m]) => m.stage.closest('.tab.active')))?.[1] || null;
+};
 window.addEventListener('keydown', (e) => {   // (on window: it runs after every document listener, so it sees theirs)
   if (e.key !== 'f' || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.target.closest?.('input, textarea, select, [contenteditable], [role=dialog]')) return;
-  const max = [...FULL].find(([tab]) => tab.classList.contains('active'))?.[1];
+  const max = fullNow();
   if (max) { e.preventDefault(); max.toggle(); }
 });
 export function fullScreen(tab, { viewer = tab.querySelector('.viewer'), title = 'Full screen', onChange = null } = {}) {
@@ -451,6 +464,7 @@ export function fullScreen(tab, { viewer = tab.querySelector('.viewer'), title =
   stage.append(hd);
   const max = maximizable(stage, viewer, { title, native: document.documentElement,
     onChange: (on) => { tab.classList.toggle('view-max', on); apply(); onChange?.(on); } });
+  for (const t of [...FULL.keys()]) if (!t.isConnected) FULL.delete(t);
   FULL.set(tab, max);
   return max;
 }

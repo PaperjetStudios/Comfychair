@@ -54,7 +54,7 @@ def migrate(conn):
     if "version" not in cols:  # 1 = tabs as before; 2 = tables (new projects start at 2; POST /api/projects/{id}/upgrade moves 1 to 2)
         conn.execute("ALTER TABLE projects ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
     if not conn.execute("SELECT 1 FROM projects LIMIT 1").fetchone():
-        conn.execute("INSERT INTO projects(name, created) VALUES (?, ?)", ("Sandbox", time.time()))
+        conn.execute("INSERT INTO projects(name, created, version) VALUES (?, ?, 2)", ("Sandbox", time.time()))  # fresh install: tables
     conn.execute("UPDATE projects SET sort=id WHERE sort IS NULL")
     conn.commit()
 

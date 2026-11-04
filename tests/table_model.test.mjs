@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   blankTable, migrateTable, newFrame, hitFrame, framesIn, moveFrames, resizeFrame, snapRect, snapValue, boundsOf, fitView,
   zoomAt, toTable, toStage, liveView, rowLayout, nextBeside, mpOf, sizeForMp, toFront, toBack, rectFrom,
+  rowsOf, layoutRows, liveBackdrop,
 } from '../web/table-model.js';
 
 const F = (id, x, y, w, h, more = {}) => ({ id, kind: 'image', doc: null, label: id, x, y, w, h, ...more });
@@ -103,4 +104,31 @@ test('megapixels: the same shape, sides on 16', () => {
   assert.equal(s.w % 16, 0); assert.equal(s.h % 16, 0);
   assert.ok(Math.abs(s.w / s.h - 16 / 9) < 0.02);
   assert.ok(Math.abs(mpOf(s.w, s.h) - 1) < 0.03);
+});
+
+test('rows: frames grouped by overlapping tops and bottoms, each row left to right', () => {
+  const fs = [F('c', 300, 10, 100, 100), F('a', 0, 0, 100, 100), F('b', 150, 40, 100, 100), F('d', 0, 400, 50, 50), F('e', -90, 420, 50, 50)];
+  assert.deepEqual(rowsOf(fs).map((r) => r.map((f) => f.id)), [['a', 'b', 'c'], ['e', 'd']]);
+  // apart by 20: two rows, unless the gap lets them join
+  const two = [F('a', 0, 0, 100, 100), F('b', 200, 120, 100, 100)];
+  assert.equal(rowsOf(two).length, 2);
+  assert.deepEqual(rowsOf(two, { gap: 30 }).map((r) => r.map((f) => f.id)), [['a', 'b']]);
+  assert.deepEqual(rowsOf([]), []);
+  // a row grows as frames join it: c overlaps b, which overlaps a
+  assert.equal(rowsOf([F('a', 0, 0, 10, 100), F('b', 20, 90, 10, 100), F('c', 40, 180, 10, 100)]).length, 1);
+});
+
+test('layoutRows lays rows out from a corner, the same as rowLayout', () => {
+  const rows = [[F('a', 9, 9, 100, 50), F('b', 9, 9, 200, 80)], [F('c', 9, 9, 10, 10)]];
+  const out = layoutRows(rows, { x: 5, y: 7, gap: 10, rowGap: 20 });
+  assert.deepEqual(out.map((r) => r.map((f) => [f.id, f.x, f.y])), [[['a', 5, 7], ['b', 115, 7]], [['c', 5, 107]]]);
+  assert.deepEqual(out, rowLayout(rows, { gap: 10, rowGap: 20, x0: 5, y0: 7 }));
+  assert.equal(rows[0][0].x, 9);   // (new objects)
+});
+
+test('a live frame\'s backdrop: the frame fitted to the stage, any zoom', () => {
+  const v = liveBackdrop(F('a', 100, 100, 1008, 1008), 740, 600, 20);
+  assert.ok(Math.abs(v.z - 560 / 1008) < 1e-9);
+  assert.ok(Math.abs((100 + 504) * v.z + v.x - 370) < 1e-9 && Math.abs((100 + 504) * v.z + v.y - 300) < 1e-9);
+  assert.equal(liveBackdrop(F('b', 0, 0, 320, 180), 1000, 600, 20).z, 3);
 });

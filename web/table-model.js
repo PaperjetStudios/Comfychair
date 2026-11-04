@@ -152,6 +152,25 @@ export function rowLayout(rows, { gap = 40, rowGap = 80, x0 = 0, y0 = 0 } = {}) 
   });
 }
 
+// the same, named as the story table asks for it: layoutRows(rows, { x, y, gap, rowGap })
+export const layoutRows = (rows, { x = 0, y = 0, gap = 40, rowGap = 80 } = {}) => rowLayout(rows, { gap, rowGap, x0: x, y0: y });
+
+// The frames grouped into rows, the way they sit: a frame joins a row when its top and bottom overlap the row's (the
+// frames already in it, from top to bottom), or come within gap of it. Rows run top to bottom, each one left to right.
+// (A story table reads its scenes and shot order back from where the frames were dragged.)
+export function rowsOf(frames, { gap = 0 } = {}) {
+  const rows = [];
+  for (const f of [...frames].sort((a, b) => a.y - b.y || a.x - b.x)) {
+    const row = rows.find((r) => f.y < r.bottom + gap && f.y + f.h > r.top - gap);
+    if (row) { row.list.push(f); row.top = Math.min(row.top, f.y); row.bottom = Math.max(row.bottom, f.y + f.h); }
+    else rows.push({ top: f.y, bottom: f.y + f.h, list: [f] });
+  }
+  return rows.sort((a, b) => a.top - b.top).map((r) => r.list.sort((a, b) => a.x - b.x || a.y - b.y));
+}
+
+// the view that shows a live frame's place on the table behind its mount (the frame fitted to the stage, pad clear)
+export const liveBackdrop = (f, stageW, stageH, pad, { min = 0.02, max = 8 } = {}) => fitView(f, stageW, stageH, pad, { min, max });
+
 // A free spot (top-left) for a new frame of size w × h beside the last frame of that kind (else right of everything,
 // else the origin), moved on to the right until it overlaps nothing.
 export function nextBeside(frames, kind, { w = 512, h = 512, gap = 40 } = {}) {

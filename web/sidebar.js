@@ -4,6 +4,8 @@
 // of selection is remembered on this device (deck.sidebar.<kind>: none, image, video…, live-image, live-video…).
 //
 //   const el = sidebar.pane('make', { title: 'Make', icon: 'sparkle', when?: (ctx) => bool })   the pane's element
+//     (calling it again updates the title and icon. A shared pane's `when` is the sidebar's own, not the caller's:
+//     `layers` shows while any frame with an engine is live, whichever module mounted last; see WHEN)
 //   sidebar.show('frame')     put a pane on show (as a tap on its tab does, without remembering it)
 //   sidebar.current()         the name on show
 //   sidebar.refresh()         re-check which tabs show (each pane's `when`), after something they depend on changed
@@ -20,6 +22,9 @@ const P = { panes: new Map(), order: [], cur: null, strip: null, body: null, roo
 const DEFAULTS = { make: { title: 'Make', icon: 'sparkle' }, layers: { title: 'Layers', icon: 'rows' }, frame: { title: 'Frame', icon: 'fit' },
   story: { title: 'Story', icon: 'story' }, shelf: { title: 'Shelf', icon: 'board' } };
 const ORDER = ['make', 'layers', 'frame', 'story', 'shelf'];
+// when the sidebar's own panes show, from its context (a `when` passed for these is ignored: several modules share them)
+const ENGINE_KINDS = ['image', 'video', 'sound', 'scene'];
+const WHEN = { layers: (c) => ENGINE_KINDS.includes(c.live?.kind) };
 
 function build() {
   if (P.built) return true;
@@ -59,7 +64,7 @@ function pane(name, { title, icon: ic, when, host } = {}) {
     const el = h('div', { class: 'sb-pane hidden', id: `pane-${name}`, role: 'tabpanel', 'data-pane': name, 'aria-label': title || d.title });
     const tab = h('button', { type: 'button', class: 'sb-tab', role: 'tab', 'aria-selected': 'false', 'aria-controls': el.id, tabIndex: -1,
       onclick: () => { show(name); store.set(`deck.sidebar.${ctxKind()}`, name); } });
-    p = { name, el, tab, when: null, host: false, nav: null };
+    p = { name, el, tab, when: WHEN[name] || null, host: false, nav: null };
     P.panes.set(name, p);
     const rank = (n) => { const i = ORDER.indexOf(n); return i < 0 ? 99 : i; };
     P.order.push(name); P.order.sort((a, b) => rank(a) - rank(b));
@@ -70,9 +75,11 @@ function pane(name, { title, icon: ic, when, host } = {}) {
   if (title || !p.title) { p.title = title || d.title; p.tab.title = p.title; p.tab.setAttribute('aria-label', p.title); p.el.setAttribute('aria-label', p.title); }
   if (ic || !p.icon) { p.icon = ic || d.icon; p.tab.replaceChildren(icon(p.icon), h('span', { class: 'sb-tab-label' }, p.title)); }
   else p.tab.querySelector('.sb-tab-label').textContent = p.title;
-  if (when !== undefined) p.when = when;
+  if (when !== undefined && !WHEN[name]) p.when = when;
   if (host !== undefined) { p.host = !!host; p.el.classList.toggle('sb-host', p.host); }
-  if (!p.host && !p.nav) p.nav = sideNav(p.el, `sidebar ${name}`, sectionTargets(p.el));
+  // (a pane that is a whole panel's host some of the time, the shared `layers`, has no strip while it is one)
+  if (!p.host && !p.nav) { const find = sectionTargets(p.el); p.nav = sideNav(p.el, `sidebar ${name}`, () => (p.host ? [] : find())); }
+  else p.nav?.refresh();
   syncTabs();
   if (!P.cur) follow();
   return p.el;
@@ -130,4 +137,4 @@ addEventListener('table:unlive', (e) => { P.ctx = { frames: e.detail?.frame ? [e
 
 // the panes everyone uses are there from the start, in their order
 for (const n of ['make', 'frame']) pane(n);
-pane('layers', { host: true, when: (c) => c.live?.kind === 'image' });
+pane('layers', { host: true });

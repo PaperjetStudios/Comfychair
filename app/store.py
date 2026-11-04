@@ -15,8 +15,10 @@ point at: deleting the table trashes them too, restoring it brings them back."""
 import json
 import os
 import re
+import shutil
 import tempfile
 import time
+import uuid
 
 from urllib.parse import quote
 
@@ -145,6 +147,12 @@ async def put_doc(kind: str, did: str, body: dict = Body(...), project_id: int |
         raise HTTPException(413, "Payload too large (5 MB max)")
     path = d / f"{did}.json"
     cur = _read(path)
+    if kind == "tables" and payload is not None:   # one table per document: a copied payload must go through /duplicate
+        mine = set(_owned_docs({"payload": payload}))
+        if mine:
+            for other in _docs(d):
+                if other.get("id") != did and mine & set(_owned_docs(other)):
+                    return JSONResponse({"error": "Those documents belong to another table"}, status_code=409)
     if cur is not None and name is None and payload is None and order is not None:
         doc = {**cur, "order": order, "updated": time.time()}  # order-only: no rev check, no rev bump
         _write(path, doc)
@@ -177,7 +185,10 @@ FRAME_DOC_KINDS = {"image": "edit-tabs", "video": "video-tabs", "scene": "scene-
 def _owned_docs(doc: dict) -> list[tuple[str, str]]:
     """(kind, id) of the documents a table's frames own."""
     out = []
-    for f in ((doc.get("payload") or {}).get("frames") or []):
+    frames = (doc.get("payload") or {}).get("frames")
+    if not isinstance(frames, list):
+        return out
+    for f in frames:
         if not isinstance(f, dict):
             continue
         k, i = FRAME_DOC_KINDS.get(f.get("kind")), f.get("doc")
@@ -199,13 +210,15 @@ def _trash_file(d, kind, did, ts=None):
     return True
 
 
-def _restore_file(d, did):
-    """Bring the newest trashed copy of did back unless one exists; True if restored."""
+def _restore_file(d, did, ts=None):
+    """Bring the newest trashed copy of did back unless one exists (only the copy trashed at ts, if given); True if restored."""
     path = d / f"{did}.json"
     if path.exists() or not (d / ".trash").is_dir():
         return False
     copies = sorted(((int(p.name[len(did) + 1:-5]), p) for p in (d / ".trash").glob(f"{did}.*.json")
                      if p.name[len(did) + 1:-5].isdigit()), key=lambda t: t[0])
+    if ts is not None:
+        copies = [c for c in copies if c[0] == ts]
     if not copies:
         return False
     src = copies[-1][1]
@@ -238,16 +251,14 @@ async def delete_doc(kind: str, did: str, project_id: int | None = None, scope: 
             old.unlink(missing_ok=True)
             old.with_suffix(".png").unlink(missing_ok=True)
     ts = time.time_ns()
-    os.replace(path, d / ".trash" / f"{did}.{ts}.json")
-    if (d / f"{did}.png").exists():  # its still goes with it, same timestamp
-        os.replace(d / f"{did}.png", d / ".trash" / f"{did}.{ts}.png")
+    owned = _owned_docs(doc) if kind == "tables" and scope != "global" else []   # (global tables own nothing)
+    _trash_file(d, kind, did, ts)   # its still goes with it, same timestamp
     await _tell(kind, did, doc["rev"], project_id, scope, deleted=True)
-    if kind == "tables":   # the docs its frames own go with it (a missing one is fine)
-        for k, i in _owned_docs(doc):
-            od = _dir(k, project_id, scope)
-            gone = _read(od / f"{i}.json")
-            if gone and _trash_file(od, k, i):
-                await _tell(k, i, gone["rev"], project_id, scope, deleted=True)
+    for k, i in owned:   # the docs its frames own go with it, same timestamp (a missing one is fine)
+        od = _dir(k, project_id, scope)
+        gone = _read(od / f"{i}.json")
+        if gone and _trash_file(od, k, i, ts):
+            await _tell(k, i, gone["rev"], project_id, scope, deleted=True)
     return doc
 
 
@@ -263,7 +274,7 @@ async def restore_doc(kind: str, did: str, project_id: int | None = None, scope:
                      if p.name[len(did) + 1:-5].isdigit()), key=lambda t: t[0]) if (d / ".trash").is_dir() else []
     if not copies:
         raise HTTPException(404, "Nothing to restore")
-    src = copies[-1][1]
+    ts, src = copies[-1]
     still = src.with_suffix(".png")
     if still.exists():
         os.replace(still, d / f"{did}.png")
@@ -273,11 +284,56 @@ async def restore_doc(kind: str, did: str, project_id: int | None = None, scope:
     _write(path, doc)
     src.unlink()
     await _tell(kind, did, doc["rev"], project_id, scope)
-    if kind == "tables":
+    if kind == "tables" and scope != "global":   # only the docs trashed together with this table
         for k, i in _owned_docs(doc):
             od = _dir(k, project_id, scope)
-            if _restore_file(od, i):
+            if _restore_file(od, i, ts):
                 await _tell(k, i, (_read(od / f"{i}.json") or {}).get("rev", 0), project_id, scope)
+    return doc
+
+
+@router.post("/tables/{did}/duplicate")
+async def duplicate_table(did: str, project_id: int | None = None, scope: str | None = None):
+    """A copy of a table that owns copies of its documents: {the new table doc}. Frames point at the copies (new frame ids too)."""
+    d = _dir("tables", project_id, scope)
+    _check_id(did)
+    src = _read(d / f"{did}.json")
+    if not src:
+        raise HTTPException(404, "Not found")
+    payload = json.loads(json.dumps(src.get("payload") or {}))
+    now = time.time()
+    made = {}   # (kind, old id) -> new id
+    if scope != "global":
+        for k, i in _owned_docs(src):
+            od = _dir(k, project_id, scope)
+            old = _read(od / f"{i}.json")
+            if not old:
+                continue
+            new = uuid.uuid4().hex[:12]
+            doc = {**old, "id": new, "rev": 1, "updated": now}
+            doc.pop("still", None)
+            png = od / f"{i}.png"
+            if png.exists():
+                shutil.copyfile(png, od / f"{new}.png")
+                st = old.get("still") or {}
+                doc["still"] = {**st, "url": _still_url(od / f"{new}.png", 1), "rev": 1}
+            _write(od / f"{new}.json", doc)
+            made[(k, i)] = new
+    if isinstance(payload.get("frames"), list):
+        for f in payload["frames"]:
+            if not isinstance(f, dict):
+                continue
+            f["id"] = uuid.uuid4().hex[:12]
+            k = FRAME_DOC_KINDS.get(f.get("kind"))
+            if (k, f.get("doc")) in made:
+                f["doc"] = made[(k, f["doc"])]
+    new = uuid.uuid4().hex[:12]
+    doc = {"id": new, "kind": "tables", "name": f"{src.get('name') or did} copy"[:120],
+           "order": max((x.get("order", 0) for x in _docs(d)), default=-1) + 1, "rev": 1, "updated": now, "payload": payload}
+    _write(d / f"{new}.json", doc)
+    for (k, _), i in made.items():
+        await _tell(k, i, 1, project_id, scope)
+    await _tell("tables", new, 1, project_id, scope)
     return doc
 
 

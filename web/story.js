@@ -39,6 +39,10 @@ import { ANGLES, MOVES, SIZES } from './shot-words.js';
 // finishes: the run ids wait on the shot (pending) until then, so a reload or another tab picks them up too.
 // A frame can go on to Generate, VFX or the Editor, and "Shots to video" lays the chosen frames on the Video tab's
 // timeline in order, each for its shot's length.
+//
+// A story can also be a table (frame-story.js): a row per scene, a frame per shot, each shot's frame an edit document of
+// its own (s.doc). This module keeps the story; that one keeps the table and the story in step, and draws the outline,
+// script and cast views here into the table's Story pane (renderStoryView).
 // ---------------------------------------------------------------------------
 
 const DURS = [1, 2, 3, 4, 5, 6, 8, 10];
@@ -54,7 +58,7 @@ const ROLE = {
   batchSize: (f) => f.kind === 'int' && f.input === 'batch_size',
 };
 
-const newShot = (o = {}) => ({ id: uid(), what: '', action: '', size: '', angle: '', move: '', dur: 3, status: 'idea', frames: [], pick: null, pending: [], comp: null, canvas: null,
+const newShot = (o = {}) => ({ id: uid(), what: '', action: '', size: '', angle: '', move: '', dur: 3, status: 'idea', frames: [], pick: null, pending: [], comp: null, doc: null, canvas: null,
   clips: [], clip: null, vpending: [], mask: null, voice: null, rtpl: null, rprompt: '', vtpl: null, vprompt: '', toNext: true, refs: {}, ...o });
 const newScene = (o = {}) => ({ id: uid(), slug: '', summary: '', collapsed: false, shots: [newShot()], ...o });
 const BLANK = () => ({ title: '', notes: '', style: '', aspect: '16:9', tpl: null, batch: 1, scenes: [newScene()],
@@ -68,6 +72,12 @@ let tabs = null;
 const ensureTabs = () => tabs.ready();
 const persist = () => tabs?.changed();
 const shown = () => $('#tab-story')?.classList.contains('active');
+
+// Others following the story (frame-story.js: a story laid out as a table): fn(type, detail) on
+// 'change' (a structural edit), 'select' (the shot being edited) and 'load' (another story, or this one again)
+const HOOKS = new Set();
+export function onStory(fn) { HOOKS.add(fn); return () => HOOKS.delete(fn); }
+function tell(type, detail = null) { for (const fn of [...HOOKS]) { try { fn(type, detail); } catch (e) { console.error(e); } } }
 
 // ---- the story's parts ----
 function locate(id) {
@@ -93,7 +103,7 @@ const camText = (s) => [label3(SIZES, s.size), label3(ANGLES, s.angle), label3(M
 
 // ---- editing ----
 // structural edits redraw both sides; typing only saves (a redraw would take the cursor away)
-function changed() { persist(); renderStage(); renderPanel(); }
+function changed() { persist(); renderStage(); renderPanel(); tell('change'); }
 
 // A text box (or one-line input) bound to obj[key]. Every box bound to the same thing follows as you type (a shot's
 // description shows in its row, its card and the panel), and [data-show] spans take the text.
@@ -122,16 +132,18 @@ function addScene(after = null) {
   const at = after ? P.scenes.indexOf(after) + 1 : P.scenes.length;
   P.scenes.splice(at, 0, sc);
   U.sel = sc.shots[0].id;
-  changed();
-  requestAnimationFrame(() => $(`#storyStage [data-id="${sc.id}"] .st-slug`)?.focus());
+  changed(); tell('select', U.sel);
+  requestAnimationFrame(() => document.querySelector(`#storyStage [data-id="${sc.id}"] .st-slug, .st-view [data-id="${sc.id}"] .st-slug`)?.focus());
+  return sc;
 }
 function addShot(sc, after = null) {
   const s = newShot(after ? { size: after.size, angle: after.angle, dur: after.dur } : {});
   sc.collapsed = false;
   sc.shots.splice(after ? sc.shots.indexOf(after) + 1 : sc.shots.length, 0, s);
   U.sel = s.id;
-  changed();
-  requestAnimationFrame(() => $(`#storyStage [data-id="${s.id}"] textarea`)?.focus());
+  changed(); tell('select', U.sel);
+  if (shown()) requestAnimationFrame(() => $(`#storyStage [data-id="${s.id}"] textarea`)?.focus());
+  return s;
 }
 // up / down one place; past the end of its scene it moves on into the next (or back into the one before)
 function moveShot(id, d) {
@@ -153,6 +165,7 @@ function moveScene(sc, d) {
 const copyShot = (s) => {
   const c = clone(s);
   c.id = uid(); c.pending = []; c.vpending = [];
+  if (c.doc) { c.docFrom = c.doc; c.doc = null; }   // (on a story table the copy gets its own copy of the edit: frame-story.js)
   c.frames = c.frames.map((f) => ({ ...f, id: uid(), was: f.id }));
   c.pick = c.frames.find((f) => f.was === s.pick)?.id || null;
   c.frames.forEach((f) => delete f.was);
@@ -197,10 +210,12 @@ function deleteScene(sc) {
     if (!locate(U.sel)) U.sel = null;
   });
 }
-function select(id) {
+// quiet: the selection came from elsewhere (a frame picked on the table), so nobody is told
+function select(id, { quiet = false } = {}) {
   U.sel = id;
-  if (U.view === 'canvas' && id) { openShot(id); renderStage(); renderPanel(); return; }
-  for (const el of document.querySelectorAll('#storyStage [data-kind="shot"]')) el.classList.toggle('sel', el.dataset.id === U.sel);
+  if (!quiet) tell('select', id);
+  if (U.view === 'canvas' && id && shown()) { openShot(id); renderStage(); renderPanel(); return; }
+  for (const el of document.querySelectorAll('#storyStage [data-kind="shot"], .st-view [data-kind="shot"]')) el.classList.toggle('sel', el.dataset.id === U.sel);
   renderPanel();
 }
 // the shot before or after the selected one, across scenes
@@ -905,19 +920,25 @@ async function finishTakes() {
   } else if (n) toast(`${n} shot${n === 1 ? '' : 's'} finishing at 1080P`);
 }
 
-async function shotsToVideo() {
+// Every shot with a clip or a frame, in order, as timeline media (video.js addToTimeline's shape): its clip, else its
+// chosen frame for the shot's length. missing: how many shots have neither; seconds: how long it all runs.
+export function storyMedia() {
   const list = [];
   P.scenes.forEach((sc, si) => sc.shots.forEach((s, i) => { const f = chosen(s), c = clipOf(s); if (f || c) list.push({ s, f, c, n: `${si + 1}.${i + 1}`, sc }); }));
-  if (!list.length) return toast('No shot has a frame yet', true);
-  const missing = allShots().length - list.length;
+  const media = list.map(({ s, f, c, n, sc }) => (c
+    ? { kind: 'video', src: { generation: c.gen, index: c.index }, url: c.url, label: `${n}${sc.slug ? ` ${sc.slug}` : ''}`, len: +s.dur || 3, shot: s.id }
+    : { kind: 'image', src: f.input ? { input: f.input } : { generation: f.gen, index: f.index }, url: frameUrl(f),
+      thumb: frameThumb(f, 160), label: `${n}${sc.slug ? ` ${sc.slug}` : ''}`, len: +s.dur || 3, shot: s.id }));
+  return { media, missing: allShots().length - list.length, seconds: secs(list.map((x) => x.s)) };
+}
+async function shotsToVideo() {
+  const { media, missing, seconds } = storyMedia();
+  if (!media.length) return toast('No shot has a frame yet', true);
   try {
     const { layOnTimeline } = await import('./video.js');
     switchTab('video');
-    await layOnTimeline(list.map(({ s, f, c, n, sc }) => (c
-      ? { kind: 'video', src: { generation: c.gen, index: c.index }, url: c.url, label: `${n}${sc.slug ? ` ${sc.slug}` : ''}` }
-      : { kind: 'image', src: f.input ? { input: f.input } : { generation: f.gen, index: f.index }, url: frameUrl(f),
-        thumb: frameThumb(f, 160), label: `${n}${sc.slug ? ` ${sc.slug}` : ''}`, len: +s.dur || 3 })));
-    toast(`${list.length} shot${list.length === 1 ? '' : 's'} on the Video timeline (${fmtSecs(secs(list.map((x) => x.s)))})${missing ? `; ${missing} without a frame left out` : ''}`);
+    await layOnTimeline(media.map(({ shot, ...m }) => m));
+    toast(`${media.length} shot${media.length === 1 ? '' : 's'} on the Video timeline (${fmtSecs(seconds)})${missing ? `; ${missing} without a frame left out` : ''}`);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -951,7 +972,7 @@ async function copyText() {
 function dragStart(e, kind, id) {
   if (e.button > 0) return;
   e.preventDefault(); e.stopPropagation();
-  const stage = $('#storyStage'), el = e.currentTarget.closest(`[data-kind="${kind}"]`);
+  const stage = e.currentTarget.closest('#storyStage, .st-view') || $('#storyStage'), el = e.currentTarget.closest(`[data-kind="${kind}"]`);
   if (!el) return;
   try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
   const r = el.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top;
@@ -960,7 +981,7 @@ function dragStart(e, kind, id) {
   Object.assign(ghost.style, { width: `${r.width}px`, left: `${r.left}px`, top: `${r.top}px` });
   document.body.append(ghost);
   el.classList.add('st-lifted');
-  const grid = kind === 'shot' && U.view === 'board';
+  const grid = kind === 'shot' && U.view === 'board' && stage.id === 'storyStage';
   let at = null, x = e.clientX, y = e.clientY, raf = 0;
   const mark = (t) => {
     stage.querySelectorAll('.drop-before, .drop-after, .drop-into').forEach((n) => n.classList.remove('drop-before', 'drop-after', 'drop-into'));
@@ -1170,13 +1191,34 @@ export function renderStage() {
   }
   if (U.view === 'canvas') { canvasStage(st); renderBar(); return; }
   if (U.view === 'script') { scriptStage(st); renderBar(); return; }
+  st.replaceChildren(...outlineParts(board));
+  renderBar();
+}
+// the outline (or the board): the title and notes, the scenes with their shots, a new scene at the end
+function outlineParts(board) {
   const head = board ? h('div', { class: 'st-head' }, h('b', { class: 'st-board-title', 'data-show': 'story.title', 'data-empty': tabs?.active?.name || 'Story' }, P.title || tabs?.active?.name || 'Story'))
     : h('div', { class: 'st-head' },
       bound(P, 'title', { line: true, placeholder: tabs?.active?.name || 'Title', label: 'Title', cls: 'st-title' }),
       bound(P, 'notes', { rows: 4, placeholder: 'Notes, ideas, the script: anything goes here', label: 'Notes', cls: 'st-notes', mention: true }));
-  st.replaceChildren(head, ...P.scenes.map((sc, si) => sceneEl(sc, si, board)),
-    h('div', { class: 'st-end' }, button([icon('plus'), 'Scene'], () => addScene(), { cls: 'small' })));
-  renderBar();
+  return [head, ...P.scenes.map((sc, si) => sceneEl(sc, si, board)),
+    h('div', { class: 'st-end' }, button([icon('plus'), 'Scene'], () => addScene(), { cls: 'small' }))];
+}
+
+// One of the story's views drawn into another host (the table's Story pane): 'outline', 'script' or 'cast'. The
+// rows, grips and boxes work as on the Story tab. onGoShot(link): a character's "in this shot" link was followed.
+export function renderStoryView(host, view, { onGoShot = goShot } = {}) {
+  host.classList.add('st-view');
+  host.dataset.view = view;
+  if (view === 'script') return scriptStage(host);
+  if (view === 'cast') {
+    const stage = h('div', { class: 'st-view-cast' });
+    const open = (id) => { U.char = id; tell('cast', id); };
+    renderCast(stage, { open: U.char, onOpen: open, onBack: () => open(null) });
+    const c = U.char && characterById(U.char);
+    host.replaceChildren(stage, ...(c ? charPanel(c, { done: () => open(null), goShot: onGoShot }) : []));
+    return;
+  }
+  host.replaceChildren(...outlineParts(false));
 }
 
 // the bar's buttons: an icon and a word, just the icon on a phone (the word stays its name)
@@ -1195,7 +1237,8 @@ function renderBar() {
 }
 
 // ---- the side panel: the shot being edited, then the story's frame settings ----
-function shotSection(at) {
+// pane: drawn in the table's Story pane (no canvas view there: the shot's frame on the table is its canvas)
+function shotSection(at, { pane = false } = {}) {
   const { sc, si, s, i } = at, n = `${si + 1}.${i + 1}`, f = chosen(s);
   const toggleChips = (list, key) => h('div', { class: 'chips' }, list.map(([v, l]) => chip(l, () => { s[key] = s[key] === v ? '' : v; changed(); }, { on: s[key] === v })));
   const t = storyTemplate();
@@ -1222,7 +1265,7 @@ function shotSection(at) {
     field('Camera move', toggleChips(MOVES, 'move')),
     field('Length', seg(DURS.map((d) => [d, `${d} s`]), s.dur, (v) => { s.dur = v; changed(); }, { wrap: true })),
     field('Status', seg(STATUS, s.status, (v) => { s.status = v; changed(); })),
-    U.view !== 'canvas' ? button([icon('canvas'), 'Open on the canvas'], () => { U.view = 'canvas'; store.set('deck.story.view', 'canvas'); select(s.id); }, { title: 'Draw and lay out this shot\'s frame' }) : null,
+    U.view !== 'canvas' && !pane ? button([icon('canvas'), 'Open on the canvas'], () => { U.view = 'canvas'; store.set('deck.story.view', 'canvas'); select(s.id); }, { title: 'Draw and lay out this shot\'s frame' }) : null,
     field([`Frames`, h('span', {}, `${framesOf(s).length}`)],
       help('The canvas is the picture drawn and laid out on the canvas view. Tap a frame to make it the shot\'s chosen one (the storyboard shows it, Shots to video uses it); tap the chosen one to see it big. The canvas button on a frame puts it on the canvas as a new layer.'),
       frames,
@@ -1380,6 +1423,7 @@ const adapter = {
     if (!locate(U.sel)) U.sel = null;
     renderStage(); renderPanel();
     setTimeout(catchUp, 0);
+    tell('load', doc?.id ?? null);
   },
 };
 
@@ -1389,6 +1433,7 @@ export function wireStory() {
   tabs = new TabSet({ kind: 'story-tabs', host: $('#tab-story'), scope: 'project', newName: (n) => `Story ${n}`, adapter });
   fullScreen($('#tab-story'));
   makeCanvas();
+  import('./frame-story.js').catch((e) => console.error(e));   // (a story laid out as a table; loaded after this module, which it uses)
   onCharacters(() => { if (!shown()) return; if (U.view === 'script' || U.view === 'cast') renderStage(); renderPanel(); });
   // a frame run for a shot here ends: this device queued it, so this device files the pictures (another device
   // showing the same story gets them with the save); anything else just redraws its waiting tiles
@@ -1421,3 +1466,29 @@ export function addBoardShots(rows) {
 
 // for the headless UI checks (dev/): the live state
 export const storyDebug = () => ({ P, U, tabs });
+
+// ---- for a story laid out as a table (frame-story.js) ----
+export const storyTabs = () => tabs;
+export const storyDoc = () => P;                      // the open story (change it, then storyChanged)
+export const storyChanged = changed;                  // a structural edit: save, redraw, tell
+export const storyPersist = persist;                  // words typed: save only
+export const selectedShot = () => U.sel;
+export const selectShot = select;
+export const shotAt = locate;                         // { sc, si, s, i } of a shot id, or null
+export const storyShots = allShots;
+export const storyRatio = ratio;
+export const chosenFrame = chosen;
+export const frameSrcUrl = frameUrl;
+export const shotClip = clipOf;
+export const shotStatus = (s) => label3(STATUS, s.status);
+export const newStoryScene = (o) => newScene(o);
+export { addScene, addShot, refineShot, makeVideo, refineTemplate, videoTemplate };
+export const shotPanel = (at) => shotSection(at, { pane: true });
+// a copy of shot id put after it (a frame duplicated on the table): the copy, with patch on it, not yet saved
+export function shotCopyAfter(id, patch = {}) {
+  const at = locate(id);
+  if (!at) return null;
+  const c = Object.assign(copyShot(at.s), patch);
+  at.sc.shots.splice(at.i + 1, 0, c);
+  return c;
+}
