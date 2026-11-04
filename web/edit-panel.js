@@ -15,6 +15,8 @@ import { S, setBatch } from './core.js';
 import { sidebar } from './sidebar.js';
 import { icon } from './icons.js';
 import * as Table from './table.js';
+import { setupsRow } from './setups.js';
+import { editKey } from './setups-rules.js';
 
 const KINDS = ['image', 'video', 'sound', 'scene'];
 const WORD = { image: 'Image', video: 'Video', sound: 'Sound', scene: '3D' };
@@ -111,6 +113,8 @@ function sectionFor(kind) {
     })))));
   if (op) {
     if (op.help) kids.push(help(op.help));
+    kids.push(setupsRow({ key: editKey(kind, op.id), get: () => ops().opValues(kind, op.id, optsFor(kind, op.id)),
+      set: (v) => { ops().setOpValues(kind, op.id, optsFor(kind, op.id), v); draw(); } }));
     if (why) {
       kids.push(hint(why, 'edit-why'),
         button([icon('fit'), 'Open the frame'], () => {

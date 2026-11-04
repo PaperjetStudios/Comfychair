@@ -227,7 +227,7 @@ def media_used(name: str) -> str | None:
 
 # ---- what's attached: a run nothing may delete while something uses it ----
 _NOT_USE_KEYS = {"parent", "pending", "vpending"}   # where a run came from, and runs still on their way, aren't uses
-_NOT_USE_KINDS = {"view-marks", "prefs", "gen-presets"}
+_NOT_USE_KINDS = {"view-marks", "prefs", "gen-presets", "setups"}   # settings, not uses of a run
 _KIND_LABEL = {"characters": "Character", "story-tabs": "Story", "scene-tabs": "3D", "scenes": "3D scene", "video-tabs": "Video",
                "sound-tabs": "Sound", "vfx-tabs": "VFX", "edit-tabs": "Image", "gen-tabs": "Generate", "objects": "3D object", "tracks": "Tracks", "tables": "Table"}
 

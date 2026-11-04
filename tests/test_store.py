@@ -8,7 +8,7 @@ os.environ.setdefault("DECK_COMFY_DIR", "")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import config, db, main, store  # noqa: E402
+from app import config, db, main, storage, store  # noqa: E402
 
 
 class Store(unittest.TestCase):
@@ -115,6 +115,21 @@ class Store(unittest.TestCase):
         self.assertEqual([d["name"] for d in self.c.get(self.url(kind="characters")).json()], ["Mara"])
         self.assertEqual(self.c.delete(self.url("c1", kind="characters")).status_code, 200)
         self.assertEqual(self.c.post(self.url("c1", kind="characters", tail="/restore")).json()["payload"], mara)
+
+    def test_setups_kind(self):
+        """A setup is a parameter block's saved values, global: every project lists it; full=true carries the payload."""
+        g = "?scope=global"
+        setup = {"v": 1, "key": "edit:image.qwen21-edit", "values": {"prompt": "make it night", "loras": []}}
+        r = self.c.put(self.url("s1", kind="setups", q=g), json={"rev": 0, "name": "Night", "payload": setup})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue((config.LIBRARY_DIR / "setups" / "s1.json").is_file())
+        lst = self.c.get(self.url(kind="setups", q=g + "&full=true")).json()
+        self.assertIn({"id": "s1", "name": "Night", "payload": setup}, [{k: x[k] for k in ("id", "name", "payload")} for x in lst])
+        self.assertNotIn("payload", self.c.get(self.url(kind="setups", q=g)).json()[0])
+        self.assertIn("setups", storage._NOT_USE_KINDS)   # holds no runs: never pins one against delete
+        self.assertEqual(self.c.delete(self.url("s1", kind="setups", q=g)).status_code, 200)
+        self.assertEqual(self.c.post(self.url("s1", kind="setups", q=g, tail="/restore")).json()["payload"], setup)
+        self.c.delete(self.url("s1", kind="setups", q=g))
 
     def test_bad_body(self):
         self.fresh()

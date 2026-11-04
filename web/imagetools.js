@@ -13,6 +13,8 @@ import { isOn } from './adjust.js';
 import { boundsOf, boxesFor, foundIn, refineEdge, separateAreas, stairOf, termsOf, worthLooking } from './matte-edge.js';
 import { faceBox, keepBrightness, scratchMask, tilesOf } from './photo-restore.js';
 import { icon } from './icons.js';
+import { setupsRow } from './setups.js';
+import { pick as pickKeys, toolKey } from './setups-rules.js';
 import { eachOne, failureText } from './tool-batch.js';
 import { partPrompt, partSize, partsOf } from './skin-parts.js';
 import { besideX, layerOf, owedFor, owedRecord, sameRun, withOwed, withoutOwed } from './owed-runs.js';
@@ -1391,6 +1393,37 @@ export function toolFields(o, t, { redraw = () => {}, size = null, eng = null } 
     o.kind === 'up' ? field(['Enlarge', out ? h('span', {}, out) : null], seg([[2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); redraw(); })) : null,
   ].filter(Boolean);
 }
+// What belongs to one tool (a setup of it, setups.js tool:<id>): the settings toolFields draws for it, whatever mode they are in.
+// Where it runs (scope) and Hide the original stay with the panel.
+const SAM = ['samSure', 'samMost'];
+const EDIT_KEYS = ['eprompt', 'econtext', 'ekeep', 'erefs', 'erefMp', 'ewhere', 'efind', ...SAM, 'eclose', 'egrow', 'esoft', 'emp', 'ecount',
+  'eseed', 'eseedMode', 'esteps', 'ecfg', 'echoice', 'eneg', 'eloras', 'eloraFolder'];
+const KIND_KEYS = { edit: EDIT_KEYS, matte: ['result', 'fine'], sheet: ['prompt', 'rows', 'cols', 'sheetFast', 'scale', 'result', 'samSure'],
+  swap: ['swapPart', 'swapFrom', 'swapCrop', 'swapMp', 'swapModels', 'swapWhere', 'swapExtra', ...SAM], remove: ['rfrom', 'rprompt', ...SAM],
+  clean: ['cmodel'], restore: ['stepScratch', 'scratchAmount', 'stepClean', 'cmodel', 'stepFaces', 'faceAmount', 'stepColour', 'lmodel', 'cprompt'],
+  colorise: ['lmodel', 'cprompt'], delight: ['lmodel'], detail: ['dmodel', 'dstrength', 'dprompt'], up: ['scale'] };
+export function toolKeys(id) {
+  const o = OPS.find((x) => x.id === id);
+  if (!o) return [];
+  const keys = [...(KIND_KEYS[o.kind] || [])];
+  if (o.prompt && !keys.includes('prompt')) keys.push('prompt');
+  if (o.id === 'words') keys.push(...SAM);
+  if (o.depth) keys.push('depthModel');
+  if (o.edges) keys.push('edgeAmount');
+  if (o.sd) keys.push('poser');
+  if (o.kind === 'delight') keys.push(o.promptKey || 'lprompt');
+  if (o.id === 'skin') keys.push('skinWhere', 'skinParts');
+  return [...new Set(keys)].filter((k) => !(o.model && k === 'dmodel'));   // (Skin detail has its own model)
+}
+export const toolValues = (id) => pickKeys(ST, toolKeys(id));
+export function setToolValues(id, v) {
+  for (const k of toolKeys(id)) if (v && v[k] !== undefined) ST[k] = JSON.parse(JSON.stringify(v[k]));
+  ST.erefs = asRefs(ST.erefs);
+  save();
+}
+// the Setups row of a tool (redraw: the panel it sits in draws again)
+export const toolSetups = (id, redraw) => setupsRow({ key: toolKey(id), label: 'Setup', get: () => toolValues(id), set: (v) => { setToolValues(id, v); redraw(); } });
+
 // The tools, for a list or menu of them: { id, group, label, kind, help, tpl (the template it uses now, with its settings) }
 export const TOOLS = OPS.map((o) => ({ id: o.id, group: o.group, label: o.label, kind: o.kind, help: o.help, get tpl() { return tplId(o); } }));
 export const TOOL_GROUPS = GROUPS;
@@ -1415,7 +1448,7 @@ export function imageToolsSection(eng) {
       onclick: () => { if (here) return; ST.op = ids[0]; save(); eng.render(); } }, icon(ic), h('span', {}, label));
   }));
   return section('Image tools', null,
-    quick, select, help(`${o.help} ${on} Ctrl+Enter or Shift+Enter runs this tool.`.trim()),
+    quick, select, toolSetups(o.id, () => eng.render()), help(`${o.help} ${on} Ctrl+Enter or Shift+Enter runs this tool.`.trim()),
     !t ? hint(`${tplId(o)} isn't installed yet`) : null,
     field('Run on', seg([['whole', 'Whole picture'], ['selected', 'Selected layers']], ST.scope, (v) => { ST.scope = v; save(); eng.render(); }),
       help('Whole picture sends every visible layer together. Selected layers runs on each selected layer alone, one run each, with the result over that layer. A cropped layer sends its kept part. A turned or mirrored layer is sent unturned, and its result takes the same turn. A masked layer is sent whole: an Upscale, Detail or De-light result gets a copy of its mask, and other tools\' results get none. Remove from the red mask cuts the mask to each selected layer, and leaves out a layer it doesn\'t touch.')),

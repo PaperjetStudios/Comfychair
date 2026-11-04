@@ -15,6 +15,8 @@ import { inputUrl, thumbUrl } from './core.js';
 import { C, OBJ as OBJ_CH, R, SC, current, frames, matchSceneTo, newObject, namesFor, sampleChan, save, selItem, setKey, write } from './scene-data.js';
 import { heightOf as figureHeight } from './figure.js';
 import { addModeSection } from './scene-modes.js';
+import { setupsRow } from './setups.js';
+import { sceneKey } from './setups-rules.js';
 import { SCN, LOADERS, SPLAT_PASS, activeCamera, boxEditing, boxHost, levelBox, refresh, setBoxEdit, setFloor, controls, changed, draw, fit, lookThrough, passHooks, pose, recentre, renderer, scene, select } from './scene-view.js';
 import { LIBRARY } from './scene-library.js';
 import { askHeight } from './scene-scale.js';
@@ -679,6 +681,7 @@ function openCleanup(o) {
   const rebuild = CLEAN.mode === 'quads' || CLEAN.mode === 'voxel';
   openSheet(h('h3', {}, 'Clean up in Blender'),
     hint(o.name),
+    setupsRow({ key: sceneKey('cleanup'), get: () => clone(CLEAN), set: (v) => { Object.assign(CLEAN, { mode: 'quads', amount: {}, tex: 2048 }, clone(v)); again(); } }),
     field('What to do', seg(Object.entries(CLEAN_MODES).map(([k, v]) => [k, v.label]), CLEAN.mode, (v) => { CLEAN.mode = v; again(); })),
     help(m.help),
     field(`Amount (${m.unit})`, h('input', { type: 'number', min: m.min, max: m.max, step: m.step, value: amount,

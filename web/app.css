@@ -288,6 +288,10 @@ main { grid-row: 3; min-height: 0; position: relative; }
 /* the panels built in code (Editor, Video, 3D) stack their parts with the same spacing */
 .panel-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--gap); }
 .panel-top > .btn.ghost { flex: none; }
+/* setups.js: a block's saved setups, one line above its fields */
+.setups-row { gap: 6px; flex-wrap: nowrap; }
+.setups-row > .setups-pick { flex: 1 1 auto; min-width: 0; }
+.setups-row > .btn, .setups-row > .icon-btn { flex: none; }
 .tpl-row { display: flex; gap: 8px; margin-bottom: 10px; }
 .keep-toggle { margin: -4px 0 10px; font-size: var(--fs-sm); color: var(--muted); min-height: 32px; }
 .tpl-filter { margin-bottom: 6px; }

@@ -28,6 +28,8 @@ import { toggleGrid3 } from './gizmo.js';
 import { hasMode, modeDef, modeList, modeOf, modeSections } from './scene-modes.js';
 import { syncRef, toggleRef } from './scene-ref.js';
 import { addPicture, fitPicture, sceneToPicture } from './scene-picture.js';
+import { setupsRow } from './setups.js';
+import { sceneKey } from './setups-rules.js';
 import { keysPast, stretchAll } from './keys.js';
 import { offsetField } from './scene-offset.js';
 import { refOn as scaleRefOn, scaleProps, setRef as setScaleRef, startStand } from './scene-scale.js';
@@ -493,9 +495,25 @@ function openRender() {
 }
 
 // the panel's Render area: one big button (options live in its popup), a still, and the finished videos
+// A setup of the scene's output (setups.js scene:out): how the prompts name and write things, and how renders are made
+const OUT_SC = ['renderShots', 'depthRange', 'depthFrom', 'splatBlur', 'blur', 'poseHands', 'poseFace'];
+function outValues() {
+  const v = { promptNames: !!R.promptNames, shotFmt: R.shotFmt, renderKinds: kindsOn() };
+  for (const k of OUT_SC) v[k] = SC[k] ?? null;
+  return v;
+}
+function setOutValues(v) {
+  if ('promptNames' in v) R.promptNames = !!v.promptNames;
+  if (v.shotFmt) { R.shotFmt = v.shotFmt === 'ltx' ? 'ltx' : 'h3'; store.set('deck.scene.shotfmt', R.shotFmt); }
+  if (Array.isArray(v.renderKinds)) store.set('deck.scene.renderkinds', v.renderKinds);
+  for (const k of OUT_SC) if (k in v) { if (v[k] == null) delete SC[k]; else SC[k] = v[k]; }
+  save(); renderPanel();
+}
+
 export function renderProps() {
   const use = (g, what) => button(`Use ${what} #${g.id} in H3 control`, () => C.useControlVideo(g, SC));
   return section('Render', null,
+    setupsRow({ key: sceneKey('out'), label: 'Setup', get: outValues, set: setOutValues }),
     busy ? button('✕ Cancel render', cancelRender, { cls: 'danger big-btn', title: 'Stop the render: nothing is saved' })
       : button('🎬 Render…', openRender, { cls: 'primary big-btn', title: 'Pick which videos to render (depth, pose, colour) and how' }),
     h('div', { class: 'row wrap' }, button('📷 Save frame', saveFrame, { title: 'Save this frame (Shift+S)' }),

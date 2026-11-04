@@ -16,6 +16,8 @@ import { cutItems, playFrom, tickT } from './workarea-math.js';
 import { resultActions } from './useas.js';
 import { fullScreen } from './layout.js';
 import { emptySound, soundTracks } from './empty-docs.js';
+import { setupsRow } from './setups.js';
+import { SOUND_VOICE, pick as pickKeys, soundMakerKey } from './setups-rules.js';
 export { emptySound };
 
 // ---------------------------------------------------------------------------
@@ -387,6 +389,9 @@ async function makeSound() {
     toast(`Queued ${mk.label.toLowerCase()} as #${gens[0].id}`);
   } catch (e) { toast(e.message, true); }
 }
+// what a setup of a maker keeps (setups.js sound:maker.<id>): its words and settings, not the clip it makes sound for
+const MAKER_KEYS = ['prompt', 'lyrics', 'len', 'seed', 'bpm', 'key'];
+const MAKER_BLANK = { prompt: '', lyrics: '', len: null, seed: -1, bpm: 90, key: null };
 function makerSection() {
   const mk = MAKERS.find((m) => m.id === G.op) || MAKERS[0];
   const t = S.templates.find((x) => x.id === mk.tpl);
@@ -412,6 +417,7 @@ function makerSection() {
   return section('Make a sound', null,
     seg(MAKERS.map((m) => [m.id, m.label]), G.op, (v) => { G.op = v; G.len = null; store.set('deck.sound.maker', v); renderPanel(); }),
     help(mk.help),
+    setupsRow({ key: soundMakerKey(mk.id), get: () => pickKeys(G, MAKER_KEYS), set: (v) => { for (const k of MAKER_KEYS) G[k] = v[k] ?? MAKER_BLANK[k]; renderPanel(); } }),
     t ? null : note(`Template ${mk.tpl} isn't installed yet${mk.id === 'music' ? ': it needs the ACE-Step 1.5 models (see README, Sound tab)' : ''}.`),
     clipRow, field(mk.lyrics ? 'Style' : mk.clip ? 'Prompt (optional)' : 'Description', prompt), lyrics ? field('Lyrics (optional)', lyrics) : null,
     rangeField('Length', () => G.len ?? mk.len, (v) => { G.len = v; }, { min: 1, max: mk.maxLen, step: 0.5, digits: 1, fmt: (v) => `${v} s` }),
@@ -462,6 +468,16 @@ async function cleanVoice(it, picked) {
   } catch (e) { toast(e.message, true); }
 }
 
+// what a setup of the voice tools keeps (setups.js sound:voice): the clean-up steps, the engine, its strength and the
+// language; not the script or the voices themselves
+const voiceValues = () => ({ steps: [...VX.clean.steps], engine: VX.engine, intensity: VX.intensity, lang: VX.lang });
+function setVoiceValues(v) {
+  if (Array.isArray(v.steps)) VX.clean.steps = [...v.steps];
+  if (v.engine) { VX.engine = v.engine; store.set('deck.sound.engine', v.engine); }
+  if (typeof v.intensity === 'number') { VX.intensity = v.intensity; store.set('deck.sound.intensity', v.intensity); }
+  if (v.lang) VX.lang = v.lang;
+  renderPanel();
+}
 function voiceSection() {
   if (!VX.status) { voicesLoad(); return section('Voice', null, placeholder('Loading…')); }
   if (!VX.status.installed) {
@@ -556,7 +572,7 @@ function voiceSection() {
     runBar(button('🗣 Speak the lines', speakScript, { cls: 'primary', disabled: !!VX.busy || !(VX.voices || []).length })));
 
   return section('Voice', null, help('AI voice tools: pull a voice out of a clip, keep it, and write new lines in it. They use the GPU, so ComfyUI has to be idle.'),
-    busy, clean, voices, dialogue);
+    setupsRow({ key: SOUND_VOICE, get: voiceValues, set: setVoiceValues }), busy, clean, voices, dialogue);
 }
 
 // The script box's chips: voice names start the line, delivery words go in its "(…)", tags at the cursor.

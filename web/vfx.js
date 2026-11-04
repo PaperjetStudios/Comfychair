@@ -19,6 +19,8 @@ import { fullScreen } from './layout.js';
 import { sendToCraft } from './craft.js';
 import { characterById, characters, loadCharacters, mainPicture } from './characters.js';
 import { TALK_ENGINES, talkKey, talkPrompt, talkSeconds } from './talk.js';
+import { setupsRow } from './setups.js';
+import { omit, vfxKey } from './setups-rules.js';
 
 // ---------------------------------------------------------------------------
 // VFX: one effect per tab, run on a clip (or from a still) with LTX-2.5 and friends. Each effect
@@ -131,6 +133,22 @@ let vtp = null;   // the transport bar (playback.js)
 const VF = { host: null, stage: null, transport: null, panel: null, body: null, max: null, active: () => !!VF.host?.classList.contains('active'),
   pickClip: null, addClip: null };
 const inBody = (sel) => VF.body?.querySelector(sel) || null;
+
+// A setup of an effect (setups.js vfx:<op>): the tab's settings for it (prompt, LoRAs, length, size, seed, key, talk,
+// blend, face, refine…), less what it runs on (the clips, pictures, sounds, points, boxes, paths) and the takes.
+const NOT_SETUP = ['op', 'source', 'first', 'matte', 'matte2', 'sound', 'voice', 'points', 'pointsAt', 'tracks', 'boxes', 'results', 'showing'];
+export function vfxValues() {
+  const v = omit(T, NOT_SETUP);
+  if (v.talk) delete v.talk.said;   // (the line spoken last: a take, not a setting)
+  return v;
+}
+export function setVfxValues(v) {
+  const keep = Object.fromEntries(NOT_SETUP.map((k) => [k, T[k]]));
+  const talkSaid = T.talk?.said ?? null;
+  T = { ...BLANK(), ...omit(v, NOT_SETUP), ...keep };
+  if (T.talk) T.talk.said = talkSaid;
+  changed();
+}
 
 // ---- inputs ----
 function changed(redraw = true) { tabs?.changed(); if (redraw) render(); }
@@ -437,6 +455,7 @@ function render() {
       ...GROUPS.map((g) => h('optgroup', { label: g },
         ...EFFECTS.filter((x) => x.group === g).map((x) => h('option', { value: x.id, selected: x.id === e.id }, x.label))))),
     help(e.help),
+    setupsRow({ key: vfxKey(e.id), get: vfxValues, set: setVfxValues }),
     missing ? note(`Template ${tplId(e)} isn't installed yet. It comes with the LTX-2.5 setup.`) : null,
     t?.error ? note(t.error, 'err') : null);
 

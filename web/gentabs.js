@@ -172,6 +172,22 @@ function pick(id, over) {
   toast(kept.length ? `${t.name}: kept the ${kept.join(', ')}` : `${t.name}: this tab starts fresh`, false, kept.length ? [undo, fresh] : undo);
 }
 
+// ---- setups (setups.js tpl:<template>): the open template's fields as a key -> value map, less a run's own content
+// (pictures, clips, boxes, masks, the seed); the prompt is kept. Showing one lays its values over the fields (as
+// "reuse these settings" does), Undo in setups.js.
+export function setupValues() {
+  const t = S.tpl;
+  if (!t) return {};
+  return Object.fromEntries(t.fields.filter((f) => !SHOT_KINDS.has(f.kind)).map((f) => [f.key, clone(S.values[f.key])]));
+}
+export function applySetupValues(v) {
+  const t = S.tpl;
+  if (!t || !v) return;
+  const over = {};
+  for (const f of t.fields) if (!SHOT_KINDS.has(f.kind) && validFor(f, v[f.key])) over[f.key] = clone(v[f.key]);
+  pick(t.id, over);
+}
+
 // ---- the tabs ----
 // Keep prompt: on, a template change carries the prompt, pictures, size and fixed seed over (see carry)
 const keepBtn = toggle('Keep the prompt and pictures when the template changes', keepOn(), (on) => store.set('deck.gen.keepOnSwitch', on));

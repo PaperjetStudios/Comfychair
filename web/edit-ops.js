@@ -4,6 +4,7 @@
 //
 //   optsOf(kind, id)                    the op's options as kept on this device (deck.edit.<kind>.<id>), defaults filled in
 //   saveOpts(kind, id, opts)            keep them
+//   opValues / setOpValues(kind, id, opts[, v])   what a setup of the op keeps, and showing one (setups.js)
 //   opFields(kind, id, opts, ctx)       DOM[]: the op's options (ctx: { redraw(), frames }); opts is changed in place and kept
 //   runOp(kind, id, frame, opts, ctx)   one run on one frame. ctx: { target ('frame' | 'layer' | 'self'), into (the frame its
 //                                       result goes in: a new one beside, or this one), tab (into's document), batch, live,
@@ -19,6 +20,7 @@ import { pictureInput } from './picture-input.js';
 import { isLive } from './live.js';
 import { DOC_KIND } from './table-model.js';
 import { opById, resultLabel } from './edit-rules.js';
+import { omit } from './setups-rules.js';
 
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
 
@@ -57,6 +59,20 @@ export function optsOf(kind, id) {
 export function saveOpts(kind, id, opts) {
   if (kind === 'image') return;
   store.set(KEY(kind, id), opts);
+}
+
+// What a setup of an op keeps (setups.js): its options, less the clip or picture it was pointed at. An image op is its
+// Image tool's settings (imagetools.js toolValues).
+const PER_SHOT = ['matte', 'first'];
+export function opValues(kind, id, opts) {
+  if (kind === 'image') return IT?.toolValues?.(id) || {};
+  return omit(opts, PER_SHOT);
+}
+export function setOpValues(kind, id, opts, v) {   // (opts changed in place, then kept)
+  if (kind === 'image') { IT?.setToolValues?.(id, v); return; }
+  for (const k of Object.keys(opts)) if (!PER_SHOT.includes(k)) delete opts[k];
+  Object.assign(opts, OP_DEFAULTS[`${kind}:${id}`] ? JSON.parse(JSON.stringify(OP_DEFAULTS[`${kind}:${id}`])) : {}, omit(v, PER_SHOT));
+  saveOpts(kind, id, opts);
 }
 
 // ---- the Image tools, loaded once (they come with the editor) ----

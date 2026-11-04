@@ -18,7 +18,9 @@
 import { h, api, store, toast, button, iconBtn, seg, field, hint, help, note, openSheet, closeSheet, runBar, actions } from './ui.js';
 import { S, CURRENT_EDIT, setBatch } from './core.js';
 import { afterQueued, persist, preparePictures, renderFields, runBuilder, runValues, selectTemplate, stop } from './generate.js';
-import { borrow, giveBack, lentOut } from './gentabs.js';
+import { applySetupValues, borrow, giveBack, lentOut, setupValues } from './gentabs.js';
+import { setupsRow } from './setups.js';
+import { tplKey } from './setups-rules.js';
 import { refused } from './tabs.js';
 import { queueRun, waitGen } from './make.js';
 import { uploadImage } from './media.js';
@@ -150,7 +152,9 @@ function drawHead(kind, frame, list) {
     shown.map((x) => h('option', { value: x.id }, x.name + (x.error ? ' (error)' : ''))));
   if (t && shown.some((x) => x.id === t.id)) sel.value = t.id;
   const famSeg = seg(fams.map((f) => [f, f]), fam, (f) => { const first = list.find((x) => (x.family || 'Other') === f); if (first) choose(kind, first.id); }, { wrap: true });
-  P.els.picker.replaceChildren(fams.length > 1 ? famSeg : null, sel);
+  // the template's saved setups (and this project's Generate defaults for it, read-only, until it has a setup)
+  P.els.picker.replaceChildren(fams.length > 1 ? famSeg : null, sel,
+    t ? setupsRow({ key: tplKey(t.id), get: setupValues, set: (v) => { applySetupValues(v); fitFrame(kind, frame); } }) : null);
   // (the batch is the action bar's: the stepper there and this box set the same S.batch)
   const batchIn = P.batchIn = h('input', { type: 'number', min: 1, max: 32, value: S.batch, inputMode: 'numeric', 'aria-label': 'How many',
     onchange: () => { batchIn.value = setBatch(batchIn.value); } });

@@ -11,7 +11,11 @@ it back; trashed copies older than 30 days are dropped on the next delete in tha
 A "tables" payload (the project's canvas of frames): {v:1, view:{x,y,z}, grid:{on,size},
 frames:[{id, kind:'image'|'video'|'scene'|'sound'|'note', doc:<store id of edit-tabs|video-tabs|scene-tabs|sound-tabs>,
 x,y,w,h,label,locked?,text?,story?:{scene,shot}}], story?:<story-tabs id>}. The table owns the docs its frames
-point at: deleting the table trashes them too, restoring it brings them back."""
+point at: deleting the table trashes them too, restoring it brings them back.
+
+A "setups" payload (a parameter block's saved values, global so every project sees it): {v:1, key, values, note?}.
+`key` names the block (tpl:<template>, edit:<kind>.<op>, vfx:<op>, tool:<id>, sound:maker.<id>, sound:voice,
+scene:out); `values` is that block's own value map. A setup holds no runs and no files."""
 import json
 import os
 import re
@@ -28,7 +32,7 @@ from fastapi.responses import JSONResponse
 from . import config, db, storage
 
 # The one place that says which kinds exist. Add a name here to start storing a new one.
-KINDS = ("gen-tabs", "gen-presets", "edit-tabs", "video-tabs", "sound-tabs", "scene-tabs", "vfx-tabs", "story-tabs", "tables", "characters", "objects", "scenes", "tracks", "prefs", "view-marks")
+KINDS = ("gen-tabs", "gen-presets", "edit-tabs", "video-tabs", "sound-tabs", "scene-tabs", "vfx-tabs", "story-tabs", "tables", "characters", "objects", "scenes", "tracks", "prefs", "view-marks", "setups")
 MAX_PAYLOAD = 5 * 1024 * 1024
 MAX_STILL = 12 * 1024 * 1024
 PNG_SIG = b"\x89PNG\r\n\x1a\n"
@@ -112,9 +116,11 @@ def _conflict(cur):
 
 
 @router.get("/{kind}")
-async def list_docs(kind: str, project_id: int | None = None, scope: str | None = None):
+async def list_docs(kind: str, project_id: int | None = None, scope: str | None = None, full: bool = False):
+    """The documents' headers; full=true adds each payload (small kinds such as setups, read in one call)."""
     d = _dir(kind, project_id, scope)
-    return [{k: x.get(k) for k in ("id", "name", "order", "rev", "updated", "still")} for x in _docs(d)]
+    keys = ("id", "name", "order", "rev", "updated", "still") + (("payload",) if full else ())
+    return [{k: x.get(k) for k in keys} for x in _docs(d)]
 
 
 @router.get("/{kind}/{did}")
