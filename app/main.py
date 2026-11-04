@@ -903,7 +903,7 @@ async def upload(file: UploadFile = File(...), mp: float = Form(0), multiple: in
             db.set_input_origin(name, {"generation": o["generation"], "index": o.get("index", 0), "frame": o.get("frame")})
     if board:   # (something the user made here and keeps: it shows on the Board with the runs)
         await saved_run(name, png, _project(project_id), board[:80])
-    return {"name": name, "width": w, "height": h}
+    return {"name": name, "width": w, "height": h, "existed": False}   # (every upload is a new file: uuid name)
 
 
 async def saved_run(name: str, png: bytes, project_id, label: str) -> int:
@@ -967,13 +967,14 @@ async def save_paint(request: Request):
     fname = f"{hashlib.sha1(data).hexdigest()[:20]}.png"
     folder = config.INPUT_DIR / PAINT_SUB
     folder.mkdir(exist_ok=True)
-    if not (folder / fname).is_file():
+    existed = (folder / fname).is_file()
+    if not existed:
         tmp = folder / f".{fname}.tmp"
         tmp.write_bytes(data)
         tmp.replace(folder / fname)
     else:
         os.utime(folder / fname)   # the same pixels again: fresh, so prune_paint leaves it until its tab names it
-    return {"name": f"{config.COMFY_INPUT_SUBFOLDER}/{PAINT_SUB}/{fname}", "width": w, "height": h}
+    return {"name": f"{config.COMFY_INPUT_SUBFOLDER}/{PAINT_SUB}/{fname}", "width": w, "height": h, "existed": existed}
 
 
 @app.post("/api/inputs/mask")
@@ -998,9 +999,10 @@ async def save_mask(request: Request):
     fname = f"{hashlib.sha1(png).hexdigest()[:20]}.png"
     folder = config.INPUT_DIR / MASK_SUB
     folder.mkdir(exist_ok=True)
+    existed = (folder / fname).is_file()
     (folder / fname).write_bytes(png)
     name = await comfy.upload_image(png, fname, f"{config.COMFY_INPUT_SUBFOLDER}/{MASK_SUB}")
-    return {"name": name, "width": w, "height": h}
+    return {"name": name, "width": w, "height": h, "existed": existed}
 
 
 PAINT_KINDS = ("edit-tabs", "story-tabs")   # the store kinds whose documents name paint files
@@ -1063,16 +1065,17 @@ async def resize_input(body: dict = Body(...)):
         data = await input_bytes(name)
         w, h = await asyncio.to_thread(imageprep.size_of, data)
         if w * h <= mp * 1_000_000:
-            return {"name": name, "width": w, "height": h}
+            return {"name": name, "width": w, "height": h, "existed": True}   # (its own name: not a copy made now)
         png, w, h = await asyncio.to_thread(imageprep.prep, data, mp, 1, None)
     except Exception as e:
         raise HTTPException(400, f"Couldn't resample that picture: {e}")
     fname = hashlib.sha1(data + repr(mp).encode()).hexdigest()[:12] + ".png"
+    existed = (config.INPUT_DIR / fname).is_file()
     (config.INPUT_DIR / fname).write_bytes(png)
     made = await comfy.upload_image(png, fname, config.COMFY_INPUT_SUBFOLDER)
     db.add_input(made, _project(body.get("project_id")), "smaller")
     db.set_input_origin(made, db.input_origin(name))   # (still made from the same output, if it was)
-    return {"name": made, "width": w, "height": h}
+    return {"name": made, "width": w, "height": h, "existed": existed}
 
 
 @app.post("/api/inputs/crop")
@@ -1089,9 +1092,11 @@ async def crop_input(body: dict = Body(...)):
     except Exception as e:
         raise HTTPException(400, f"Couldn't crop that image: {e}")
     origin = db.input_origin(body.get("name") or "")
-    made = await comfy.upload_image(png, storage.crop_name(name, key), config.COMFY_INPUT_SUBFOLDER)
+    cname = storage.crop_name(name, key)
+    existed = bool(config.COMFY_INPUT_DIR) and (config.COMFY_INPUT_DIR / config.COMFY_INPUT_SUBFOLDER / cname).is_file()
+    made = await comfy.upload_image(png, cname, config.COMFY_INPUT_SUBFOLDER)
     db.set_input_origin(made, origin)   # a cropped picture is still made from the same output
-    return {"name": made, "width": w, "height": h}
+    return {"name": made, "width": w, "height": h, "existed": existed}
 
 
 @app.post("/api/generations/{gid}/to-input")
@@ -1126,7 +1131,7 @@ async def generation_to_input(gid: int, body: dict = Body(default={})):
     name = await upload_prepared(png, g["project_id"], "generation")
     source = {"generation": gid, "index": idx, "frame": which if out["kind"] == "video" else None}
     db.set_input_origin(name, source)
-    return {"name": name, "width": w, "height": h, "source": source}
+    return {"name": name, "width": w, "height": h, "source": source, "existed": False}   # (uuid name: always a new file)
 
 
 @app.get("/api/generations/{gid}/sheet-marks")
