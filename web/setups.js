@@ -11,7 +11,7 @@
 // "(project)" entries, so nothing saved the old way is lost; Save… copies one into a setup.
 import { h, api, toast, undoToast, nameSheet, button, iconBtn, store, uid, clone } from './ui.js';
 import { S, onServer, onProject } from './core.js';
-import { differs, forKey, fromPreset, sortSetups, toSetup, tplOfKey } from './setups-rules.js';
+import { differs, forKey, fromPreset, movedKey, sortSetups, toSetup, tplOfKey } from './setups-rules.js';
 
 const url = (id = '', tail = '') => `/api/store/setups${id ? `/${id}` : ''}${tail}?scope=global`;
 let all = null, loading = null;   // every setup ({ id, name, rev, updated, key, values })
@@ -30,8 +30,26 @@ function load(force = false) {
   if (loading) return loading;
   if (all && !force) return Promise.resolve(all);
   return (loading = api(`${url()}&full=true`, { busy: false })
-    .then((list) => { all = (list || []).map(toSetup); }, () => { all ||= []; })
+    .then((list) => { all = (list || []).map(toSetup); moveOld(); }, () => { all ||= []; })
     .finally(() => { loading = null; drawAll(); }));
+}
+// once: setups saved under an old key (a VFX effect's vfx:<op>) move to the key they have now (edit:video.<op>), and
+// so does the one picked for it on this device
+let moving = false;
+async function moveOld() {
+  const old = (all || []).filter((s) => movedKey(s.key));
+  if (moving || !old.length) return;
+  moving = true;
+  try {
+    for (const s of old) {
+      const k = movedKey(s.key);
+      const res = await put(s.id, { rev: s.rev, payload: { v: 1, key: k, values: s.values, ...(s.note && { note: s.note }) } });
+      if (res.ok) upsert(toSetup(res.data));
+      const was = store.get(pickKey(s.key), null);
+      if (was && !store.get(pickKey(k), null)) store.set(pickKey(k), was);
+      if (was) store.set(pickKey(s.key), null);
+    }
+  } finally { moving = false; drawAll(); }
 }
 const upsert = (s) => { all = [...(all || []).filter((x) => x.id !== s.id), s]; };
 

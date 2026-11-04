@@ -7,7 +7,7 @@
 //   an image frame:      image templates; the frame's picture goes into the template's first picture, its size is the
 //                        output size, and results land as layers in it (live or not: imagetools.js landMade, owed runs)
 //   a video frame:       video templates; Pick a frame puts an image frame's picture in a slot; results land as clips.
-//                        (VFX is the Edit pane's now: frame-vfx.js; its results still land here as clips, vfx:queued)
+//                        (VFX effects are the Edit pane's video ops: edit-ops.js lands their results)
 //   a 3D frame:          its templates; results are in the Shelf (Use as… from the toast)
 //   a sound frame:       sound templates; the sounds made go into its mix (frame-sound.js, as a drop)
 //
@@ -32,7 +32,6 @@ import { DOC_KIND, nextBeside, toStage } from './table-model.js';
 import * as Table from './table.js';
 import { LANDS, canvasRect, familiesOf, frameImageField, frameSize, makeTarget, pickTemplate, sizePair, templatesFor, withClip } from './make-rules.js';
 import { icon } from './icons.js';
-import { frameOfVfx } from './frame-vfx.js';
 import { framePicture, frameSource } from './frame-source.js';
 
 const P = { fresh: [], ready: Promise.resolve(), host: null, frames: [], table: null, lentFor: null, els: null, prog: null, batchIn: null };
@@ -320,15 +319,6 @@ export async function landClip(frame, media, tell = true) {
   return ok;
 }
 
-// a VFX run made for a frame's VFX document: its result lands as a clip on that frame (a server job may be done already)
-addEventListener('vfx:queued', (e) => {
-  const frame = e.detail?.doc ? frameOfVfx(e.detail.doc) : null;
-  if (!frame?.doc) return;
-  for (const g of e.detail.gens || []) {
-    (g.status === 'done' ? Promise.resolve(g) : waitGen(g.id)).then((done) => landClips(frame, done))
-      .catch((err) => toast(`#${g.id} failed: ${err.message}`, true));
-  }
-});
 // the clip into the frame's saved document (its rev, so an edit elsewhere isn't overwritten: read again and retry)
 async function appendClip(frame, media) {
   for (let tries = 0; tries < 3; tries++) {

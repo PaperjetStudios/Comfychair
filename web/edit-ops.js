@@ -11,22 +11,31 @@
 //                                       frames (the selection), onRun(gens, to) (a run queued that lands later) }.
 //                                       Resolves { gens? (queued runs), job? (a promise of the landed result), landed? }
 //   OP_DEFAULTS                         the starting options per 'kind:id'
-import { api, button, field, h, help, hint, rangeField, seg, store, textArea, toggle, colorField } from './ui.js';
+//   frameOps(frame, id), setFrameOps(frames, id, patch)   what a frame keeps for an op (frame.ops[id], saved with the table:
+//                                       the marks placed on it, its mattes, key, canvas and results); a video op with `vfx`
+//                                       runs on its options over this (vfxState)
+//   cachedClip(frame, then)             the frame's first clip as last read (null until read; then() once it is)
+//   liveClipTime(frame)                 seconds into that clip at the open frame's playhead (points keep it)
+//   compareFor(frame, id)               a function that wipes the frame's clip against its newest result of the op on the open
+//                                       frame (frame-overlay.js compare), or null when there's none
+import { api, field, h, help, hint, rangeField, seg, store, textArea, toast, toggle } from './ui.js';
 import { CURRENT_EDIT, S } from './core.js';
-import { bareSource, clipLabel, grabFrame, openVideoPicker, soundSource } from './media.js';
-import { adoptGenerations, queueRun, template, valuesByRole, waitGen, ROLES } from './make.js';
-import { CLIP_FX, KEY_DEFAULT, keyRangeFields, loraChoice, restyleLoras, runClipStep } from './clip-effects.js';
-import { pictureInput } from './picture-input.js';
+import { bareSource, clipUrl, grabFrame, soundSource } from './media.js';
+import { adoptGenerations, queueRun, roleField, template, valuesByRole, waitGen, ROLES } from './make.js';
+import { CLIP_FX, loraChoice, restyleLoras, runClipStep } from './clip-effects.js';
 import { isLive } from './live.js';
 import { DOC_KIND } from './table-model.js';
-import { opById, resultLabel } from './edit-rules.js';
+import { OPS, opById, resultLabel } from './edit-rules.js';
+import { ALPHA, BLANK, CANVAS, FRAME_KEYS, KEY as KEY_SET, NOT_SETUP, REFINE, SAM, boxesFromFind, buildRun, delogoBody, delogoRunBody, effectById, keyBody, matteBody,
+  missingInput, needsOf, poseBody } from './vfx-rules.js';
+import { imageNat, imageSize, vfxFields } from './vfx-fields.js';
+import { characterById } from './characters.js';
 import { omit } from './setups-rules.js';
 
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
 
 export const OP_DEFAULTS = {
   'video:grab': { at: '' },
-  'video:delogo': { mode: 'quality' },
   'video:maps': { op: 'depth', depthModel: 'large', edgeAmount: 'normal', poser: 'dwpose' },
   'video:restyle': { lora: null, strength: 1, prompt: '' },
   'video:upscale': { prompt: '', outsize: 'FullHD' },
@@ -34,16 +43,6 @@ export const OP_DEFAULTS = {
   'video:upvideofast': { scale: 2 },
   'video:cleanplate': { prompt: '' },
   'video:replace': { target: '', prompt: '' },
-  'video:mask': { prompt: '' },
-  'video:colorkey': { color: '#00ff00', ...KEY_DEFAULT },
-  'video:mattekey': { matte: null, invert: false },
-  'video:refine': { matte: null },
-  'video:inpaint': { matte: null, prompt: '' },
-  'video:animate': { first: '' },
-  'video:faceswap': { first: '' },
-  'video:drive': { first: '', prompt: '' },
-  'video:ltxdrive': { first: '', prompt: '' },
-  'video:layout': { first: '', prompt: '' },
   'video:foley': { prompt: '', len: 8 },
   'sound:voice': { steps: ['vocals', 'dereverb', 'denoise'] },
   'sound:foley': { prompt: '', len: 8 },
@@ -51,6 +50,67 @@ export const OP_DEFAULTS = {
   'sound:normalise': { normalize: true },
   'scene:cleanup': { mode: 'quads', amount: null, tex: 2048 },
 };
+// a VFX op's options: the VFX tab's settings (vfx-rules.js BLANK), less what the frame keeps; len null: the clip's length
+const vfxDefaults = () => ({ ...omit(BLANK(), [...FRAME_KEYS, 'op', 'source', 'results', 'showing']), len: null, first: null, poser: 'dwpose',
+  outsize: 'FullHD', sam: { ...SAM }, alpha: { ...ALPHA } });
+for (const o of OPS.video) if (o.vfx) OP_DEFAULTS[`video:${o.id}`] = vfxDefaults();
+
+// ---- what a frame keeps per op (frame.ops[id]), saved with the table ----
+export const frameOps = (frame, id) => frame?.ops?.[id] || {};
+let TableMod = null;
+const tableReady = import('./table.js').then((m) => { TableMod = m; return m; }).catch(() => null);
+export function setFrameOps(frames, id, patch) {
+  for (const f of frames || []) {
+    if (!f) continue;
+    f.ops = { ...(f.ops || {}), [id]: { ...(f.ops?.[id] || {}), ...JSON.parse(JSON.stringify(patch)) } };
+  }
+  if (TableMod) TableMod.frameChanged(); else tableReady.then((m) => m?.frameChanged());
+}
+// a VFX op's state on a frame: its options, the frame's marks, mattes and key over them
+export function vfxState(kind, id, opts, frame) {
+  return { ...(OP_DEFAULTS[`${kind}:${id}`] ? JSON.parse(JSON.stringify(OP_DEFAULTS[`${kind}:${id}`])) : {}), ...JSON.parse(JSON.stringify(opts || {})),
+    points: { positive: [], negative: [] }, pointsAt: 0, boxes: [], tracks: [], matte: null, matte2: null,
+    key: { ...KEY_SET }, refine: { ...REFINE }, canvas: { ...CANVAS }, ...JSON.parse(JSON.stringify(frameOps(frame, id))) };
+}
+
+// ---- the frame's first clip, kept as last read: its length for the fields, the playhead's time in it for points ----
+const CLIPS = new Map();   // frame id -> { doc, clip, at }
+export function cachedClip(frame, then = null) {
+  if (!frame) return null;
+  const c = CLIPS.get(frame.id);
+  if (!c || c.doc !== frame.doc || performance.now() - c.at > 4000) {
+    const rec = { doc: frame.doc, clip: c?.clip ?? null, at: performance.now() };
+    CLIPS.set(frame.id, rec);
+    clipOf(frame).then((clip) => { const was = JSON.stringify(rec.clip); rec.clip = clip; if (JSON.stringify(clip) !== was) then?.(); }, () => {});
+  }
+  return CLIPS.get(frame.id).clip;
+}
+let VID = null;
+const vidReady = import('./video.js').then((m) => { VID = m; }).catch(() => null);
+export function liveClipTime(frame) {
+  const clip = CLIPS.get(frame?.id)?.clip, it = clip?.item;
+  const t = VID?.videoTime?.() ?? 0;
+  return it ? Math.max(0, (it.in || 0) + t - (it.at || 0)) : t;
+}
+// the newest result of op id on frame that is a clip, wiped against the frame's clip on the open frame
+export function compareFor(frame, id) {
+  const ids = frameOps(frame, id).results || [];
+  if (!ids.length) return null;
+  return async () => {
+    let g = null;
+    for (const gid of [...ids].reverse()) {
+      const x = S.history.get(gid) || await api(`/api/generations/${gid}`, { busy: false }).catch(() => null);
+      if (x?.status === 'done' && x.outputs?.some((o) => o.kind === 'video')) { g = x; break; }
+    }
+    if (!g) throw new Error('No result to compare yet: it is still being made, or it was deleted');
+    const clip = await clipOf(frame);
+    const a = clip && (clipUrl(clip) || clip.url);
+    if (!a) throw new Error(`${frame.label || 'This frame'} has no clip to compare`);
+    const { overlay } = await import('./frame-overlay.js');
+    await vidReady;
+    if (!overlay.compare(a, g.outputs.find((o) => o.kind === 'video').url, { labels: [clip.label || 'Clip', `#${g.id}`] })) throw new Error('Open the frame to compare');
+  };
+}
 const KEY = (kind, id) => `deck.edit.${kind}.${id}`;
 export function optsOf(kind, id) {
   if (kind === 'image') return IT?.toolState?.() || {};   // (the Image tools keep their own settings)
@@ -63,16 +123,21 @@ export function saveOpts(kind, id, opts) {
 
 // What a setup of an op keeps (setups.js): its options, less the clip or picture it was pointed at. An image op is its
 // Image tool's settings (imagetools.js toolValues).
-const PER_SHOT = ['matte', 'first'];
-export function opValues(kind, id, opts) {
+// A VFX op's setup also keeps the frame's key, matte clean-up and canvas (the first selected frame's; shown on all of them).
+const PER_SHOT = [...new Set(['matte', 'first', ...NOT_SETUP])];
+const FRAME_SETTINGS = ['key', 'refine', 'canvas'];
+export function opValues(kind, id, opts, frames = []) {
   if (kind === 'image') return IT?.toolValues?.(id) || {};
-  return omit(opts, PER_SHOT);
+  const o = opById(kind, id), f = frameOps(frames[0], id);
+  return omit({ ...opts, ...(o?.vfx ? Object.fromEntries(FRAME_SETTINGS.filter((k) => f[k] != null).map((k) => [k, f[k]])) : {}) }, PER_SHOT);
 }
-export function setOpValues(kind, id, opts, v) {   // (opts changed in place, then kept)
+export function setOpValues(kind, id, opts, v, frames = []) {   // (opts changed in place, then kept)
   if (kind === 'image') { IT?.setToolValues?.(id, v); return; }
+  const vfx = !!opById(kind, id)?.vfx;
   for (const k of Object.keys(opts)) if (!PER_SHOT.includes(k)) delete opts[k];
-  Object.assign(opts, OP_DEFAULTS[`${kind}:${id}`] ? JSON.parse(JSON.stringify(OP_DEFAULTS[`${kind}:${id}`])) : {}, omit(v, PER_SHOT));
+  Object.assign(opts, OP_DEFAULTS[`${kind}:${id}`] ? JSON.parse(JSON.stringify(OP_DEFAULTS[`${kind}:${id}`])) : {}, omit(v, vfx ? [...PER_SHOT, ...FRAME_SETTINGS] : PER_SHOT));
   saveOpts(kind, id, opts);
+  if (vfx && frames.length) setFrameOps(frames, id, Object.fromEntries(FRAME_SETTINGS.map((k) => [k, v[k] ?? (k === 'key' ? { ...KEY_SET } : k === 'refine' ? { ...REFINE } : { ...CANVAS })])));
 }
 
 // ---- the Image tools, loaded once (they come with the editor) ----
@@ -88,22 +153,26 @@ export function opFields(kind, id, opts, ctx = {}) {
   const keep = () => saveOpts(kind, id, opts), redraw = () => { keep(); ctx.redraw?.(); };
   const set = (k) => (v) => { opts[k] = v; keep(); };
   const prompt = (label, k = 'prompt', placeholder = '') => field(label, textArea(() => opts[k] || '', set(k), { rows: 2, placeholder, label }));
-  const matte = () => field('Matte clip', h('div', { class: 'row wrap' },
-    h('span', { class: 'grow' }, opts.matte ? clipLabel(opts.matte) : 'None yet'),
-    button('Pick…', () => openVideoPicker({ title: 'The matte clip (white = keep)', onPick: (v) => { opts.matte = { ...bareSource(v), ...(v.label && { label: v.label }) }; redraw(); } }),
-      { cls: 'small' })));
-  const picture = (label = 'Picture') => pictureInput({ label, name: opts.first || '', set: (n) => { opts.first = n || ''; redraw(); } });
   if (kind === 'image') {
     if (!IT) { itReady.then(() => ctx.redraw?.()); return [hint('Loading the image tools…')]; }
     return IT.toolFields(id, undefined, { redraw: () => ctx.redraw?.(), size: ctx.size || null, eng: null }) || [];
+  }
+  if (o.vfx) {   // a VFX effect: its fields on the op's options and the first frame's own state (every selected frame gets changes)
+    const frames = (ctx.frames || []).filter((f) => f.kind === kind), frame = frames[0] || null;
+    const st = vfxState(kind, id, opts, frame);
+    return vfxFields(o, effectById(o.vfx), st, {
+      set: (k, v, rd = false) => { opts[k] = v; keep(); if (rd) ctx.redraw?.(); },
+      setFrame: (k, v) => { setFrameOps(frames, id, { [k]: v }); ctx.redraw?.(); },
+      redraw: () => ctx.redraw?.(), frame, live: !!ctx.live,
+      tool: ctx.tool || null, setTool: ctx.setTool || (() => {}), neg: !!ctx.neg, setNeg: ctx.setNeg || (() => {}),
+      compare: ctx.live && frame ? (() => { const go = compareFor(frame, id); return go && (() => go().catch((e) => toast(e.message, true))); })() : null,
+      clipLen: cachedClip(frame, () => ctx.redraw?.())?.trim?.len ?? null,
+      find: () => findBoxes(frame, opts).then(() => ctx.redraw?.(), (e) => toast(e.message, true)) });
   }
   switch (`${kind}:${id}`) {
     case 'video:grab':
       return [field('At (seconds into the clip)', h('input', { type: 'number', min: 0, step: 0.04, value: opts.at ?? '', placeholder: 'its first frame',
         onchange: (e) => { opts.at = e.target.value; keep(); } })), help('Blank: the clip\'s first frame (its in point). The still lands as a new image frame, or as a layer in an image frame that is selected too.')];
-    case 'video:delogo':
-      return [field('How', seg([['quality', 'Quality'], ['fast', 'Fast']], opts.mode, (v) => { opts.mode = v; redraw(); })),
-        help('Find looks for a mark that stays put while the picture moves; on a still shot it finds nothing, and the frame must be opened to draw the boxes. Quality fills them with ProPainter; Fast is instant but smears.')];
     case 'video:maps':
       return [seg([['depth', 'Depth'], ['canny', 'Canny'], ['scribble', 'Scribble'], ['pose', 'Pose']], opts.op, (v) => { opts.op = v; redraw(); }, { wrap: true }),
         opts.op === 'depth' ? field('Detail', seg([['large', 'Fine'], ['small', 'Fast']], opts.depthModel, (v) => { opts.depthModel = v; redraw(); })) : null,
@@ -118,15 +187,6 @@ export function opFields(kind, id, opts, ctx = {}) {
       return [field('Upscale', seg([[2, '×2'], [4, '×4']], opts.scale, (v) => { opts.scale = v; redraw(); }))];
     case 'video:cleanplate': return [prompt('Remove', 'prompt', 'What to take out, e.g. the people')];
     case 'video:replace': return [prompt('Find', 'target', 'What to replace, e.g. the red car'), prompt('Paint', 'prompt', 'The whole shot with the new thing in it')];
-    case 'video:mask': return [prompt('Find', 'prompt', 'What to mask, e.g. the dog')];
-    case 'video:colorkey':
-      return [colorField('Key colour', () => opts.color, (c) => { opts.color = c; keep(); }), ...keyRangeFields(opts, keep)];
-    case 'video:mattekey': return [matte(), toggle('Invert (keep what\'s black)', !!opts.invert, (on) => { opts.invert = on; keep(); })];
-    case 'video:refine': return [matte(), help('The matte cleaned up with the VFX tab\'s settings; open the full VFX panel to change them.')];
-    case 'video:inpaint': return [matte(), prompt('Paint', 'prompt', 'The whole shot with the new thing in it')];
-    case 'video:animate': case 'video:faceswap': return [picture('Character')];
-    case 'video:drive': case 'video:ltxdrive': return [picture('Still'), prompt('Prompt', 'prompt', 'The person, their clothes and what they do')];
-    case 'video:layout': return [picture('First frame'), prompt('Prompt')];
     case 'video:foley': case 'sound:foley':
       return [prompt('Prompt (optional)', 'prompt', 'What to hear, e.g. footsteps on wet gravel'),
         rangeField('Length', () => opts.len ?? 8, (v) => { opts.len = v; }, { min: 1, max: 30, step: 0.5, digits: 1, fmt: (v) => `${v} s`, onChange: keep })];
@@ -325,24 +385,12 @@ async function foley(frame, opts, ctx, label, kinds) {
 
 // the clip effects of the Video tab (clip-effects.js runClipStep): run and waited for, then landed
 const STEP_OF = { restyle: (x) => ({ op: 'restyle', prompt: x.prompt, lora: x.lora, strength: x.strength }), cleanplate: (x) => ({ op: 'cleanplate', prompt: x.prompt }),
-  replace: (x) => ({ op: 'replace', target: x.target, prompt: x.prompt }), cutout: () => ({ op: 'cutout' }), upscale: (x) => ({ op: 'upscale', prompt: x.prompt, outsize: x.outsize }),
-  colorkey: (x) => ({ op: 'colorkey', color: x.color, similarity: x.similarity, blend: x.blend, spill: x.spill, invert: x.invert }) };
-// effects run through the frame's own VFX document (frame-vfx.js), so they are also in its VFX Output
-const VFX_PATCH = {
-  mask: (x) => ({ prompt: x.prompt || '', points: { positive: [], negative: [] } }),
-  alpha: () => ({ matte: null }),
-  mattekey: (x) => ({ matte: x.matte, key: { ...KEY_DEFAULT, color: '#00ff00', invert: !!x.invert } }),
-  refine: (x) => ({ matte: x.matte, matte2: null }),
-  inpaint: (x) => ({ matte: x.matte, prompt: x.prompt || '' }),
-  animate: (x) => ({ first: x.first || null }), faceswap: (x) => ({ first: x.first || null }),
-  drive: (x) => ({ first: x.first || null, prompt: x.prompt || '' }), ltxdrive: (x) => ({ first: x.first || null, prompt: x.prompt || '' }),
-  layout: (x) => ({ first: x.first || null, prompt: x.prompt || '' }),
-};
-
+  replace: (x) => ({ op: 'replace', target: x.target, prompt: x.prompt }), cutout: () => ({ op: 'cutout' }), upscale: (x) => ({ op: 'upscale', prompt: x.prompt, outsize: x.outsize }) };
 async function runVideo(o, frame, opts, ctx, label) {
   const into = ctx.into;
   if (o.id === 'grab') return grab(frame, opts, ctx);
   if (o.id === 'foley') return foley(frame, opts, ctx, label, ['video']);
+  if (o.vfx) return runVfx(o, frame, opts, ctx, label);
   const src = await needClip(frame, ['video']);
   const n = Math.max(1, ctx.batch || 1);
   if (STEP_OF[o.id]) {
@@ -369,7 +417,6 @@ async function runVideo(o, frame, opts, ctx, label) {
     const gens = await queueRun({ template: t.id, values, batch: n });
     return { gens, job: follow(gens, into, ctx, label) };
   }
-  if (o.id === 'delogo') return delogo(src, opts, ctx, label);
   if (o.id === 'finish') {
     if (src.generation == null) throw new Error('Only a run can be finished: this clip is a file');
     const g = S.history.get(src.generation) || await api(`/api/generations/${src.generation}`, { busy: false });
@@ -382,33 +429,74 @@ async function runVideo(o, frame, opts, ctx, label) {
     adoptGenerations([r]);
     return { gens: [r], job: follow([r], into, ctx, label) };
   }
-  if (VFX_PATCH[o.id]) {
-    if (['mattekey', 'refine', 'inpaint'].includes(o.id) && !opts.matte) throw new Error('Pick the matte clip first');
-    if (['animate', 'faceswap', 'drive', 'ltxdrive', 'layout'].includes(o.id) && !opts.first) throw new Error('Choose the picture first');
-    const fv = await import('./frame-vfx.js'), { runVfxOn } = await import('./vfx.js');
-    const doc = await fv.ensureDoc(frame);
-    const all = [], jobs = [];
-    const onQueued = (gens, { aside }) => { if (aside) return; all.push(...gens); jobs.push(follow(gens, into, ctx, label)); };
-    for (let i = 0; i < n; i++) {
-      await runVfxOn(doc, { op: o.id, source: { ...bareSource(src), ...(src.trim && { trim: src.trim }), ...(src.label && { label: src.label }) },
-        ...(src.trim?.len && { len: Math.min(30, Math.max(1, Math.round(src.trim.len))) }), ...VFX_PATCH[o.id](opts) }, { onQueued });
-    }
-    return { gens: all, job: Promise.all(jobs) };
-  }
   throw new Error(`${o.label} can't run from here yet`);
 }
 
-// Remove watermark with Find: the boxes found on the clip, then filled (POST /api/video/delogo, as the VFX tab's)
-async function delogo(src, opts, ctx, label) {
-  const body = { source: bareSource(src), trim: src.trim || null, crop: null };
-  const found = await api('/api/video/delogo/find', { method: 'POST', body, timeout: 300000, busy: false });
-  if (!found.boxes?.length) throw new Error('Nothing stays put in this clip: open the frame and draw the boxes in the VFX panel');
-  const quality = opts.mode !== 'fast';
-  const g = await api('/api/video/delogo', { method: 'POST', timeout: quality ? 120000 : 3600000, busy: false,
-    body: { ...body, boxes: found.boxes, mode: quality ? 'quality' : 'fast', project_id: S.project } });
-  S.history.set(g.id, g);
-  if (quality) adoptGenerations([g]);
-  return { gens: [g], job: follow([g], ctx.into, ctx, label) };
+// ---------------------------------------------------------------------------
+// the VFX effects: the op's options over the frame's own state (its marks, mattes, key), on the frame's first clip.
+// Template effects queue through vfx-rules.js buildRun (as the VFX tab's Run); keying, matte clean-up and watermark
+// removal are server jobs (vfx-rules.js keyBody, matteBody, delogoRunBody). Each run is kept on the frame (results).
+// ---------------------------------------------------------------------------
+const probe = (source) => api('/api/videos/probe', { method: 'POST', body: { source: bareSource(source) }, busy: false }).catch(() => null);
+const remember = (frame, id, gens) => setFrameOps([frame], id, { results: [...(frameOps(frame, id).results || []), ...gens.map((g) => g.id)].slice(-8) });
+
+// st for frame: the op's options, its frame state, and the frame's clip as the source (when the effect takes one)
+async function stateOn(o, frame, opts) {
+  const e = effectById(o.vfx), st = vfxState('video', o.id, opts, frame);
+  const clip = needsOf(e).has('source') ? await needClip(frame, ['video']) : null;
+  st.source = clip ? { ...bareSource(clip), ...(clip.trim && { trim: clip.trim }), ...(clip.label && { label: clip.label }) } : null;
+  if (st.len == null) st.len = Math.min(e.maxLen || 10, Math.max(1, Math.round(clip?.trim?.len || 5)));
+  return { e, st };
+}
+
+// Remove watermark's Find: the boxes it finds go on the frame (fractions of the whole frame), added to any drawn there
+export async function findBoxes(frame, opts) {
+  const { st } = await stateOn(opById('video', 'delogo'), frame, opts);
+  const r = await api('/api/video/delogo/find', { method: 'POST', body: delogoBody(st), timeout: 300000, busy: 'Looking for a watermark…' });
+  if (!r.boxes?.length) throw new Error('Nothing stays put in this clip: draw the boxes on the open frame');
+  const boxes = [...(st.boxes || []), ...boxesFromFind(st, r.boxes)];
+  setFrameOps([frame], 'delogo', { boxes });
+  toast(`Found ${r.boxes.length}: check them on the frame`);
+  return boxes;
+}
+
+async function runVfx(o, frame, opts, ctx, label) {
+  const { e, st } = await stateOn(o, frame, opts);
+  const into = ctx.into, n = Math.max(1, ctx.batch || 1);
+  const job = async (url, body, timeout = 900000) => {
+    const g = await api(url, { method: 'POST', body, timeout, busy: false });
+    S.history.set(g.id, g);
+    remember(frame, o.id, [g]);
+    return { gens: [g], job: follow([g], into, ctx, label) };
+  };
+  if (e.job === 'delogo') {
+    if (!st.boxes?.length) st.boxes = await findBoxes(frame, opts);
+    const r = await job('/api/video/delogo', delogoRunBody(st, S.project), st.delogo !== 'fast' ? 120000 : 3600000);
+    if (st.delogo !== 'fast') adoptGenerations(r.gens);
+    return r;
+  }
+  const miss = missingInput(e, st);
+  if (miss) throw new Error(miss);
+  if (e.job === 'key') return job('/api/video/key', keyBody(e, st, S.project));
+  if (e.job === 'matte') return job('/api/video/matte', matteBody(st, S.project));
+  let info;
+  const deps = { template: (id) => S.templates.find((t) => t.id === id) || null, roleField, imageSize, imageNat, character: characterById,
+    sourceInfo: async () => (info ??= st.source ? await probe(st.source) : null),
+    aspect: async () => { const i = st.source ? (info ??= await probe(st.source)) : null; return i?.width ? i.width / i.height : 16 / 9; },
+    canvas: (body) => api('/api/video/canvas', { method: 'POST', busy: false, timeout: 900000, body }) };
+  const b = await buildRun(e, st, deps);
+  if (typeof b === 'string') throw new Error(b);
+  let { t, values } = b;
+  if (e.posed && st.source) {   // a drive follows the clip's ready pose video when there is one (a Pose preview of the same clip)
+    const posed = template(e.posed);
+    const pose = posed ? await api('/api/pose/find', { method: 'POST', body: poseBody(st, S.project), busy: false }).catch(() => null) : null;
+    if (pose) { t = posed; values = valuesByRole(posed, { ...b.rv, pose: { generation: pose.generation, index: pose.index } }); }
+  }
+  const parent = st.source?.generation != null ? { generation: st.source.generation, index: st.source.index || 0, frame: null } : null;
+  const { results, ...kept } = st;
+  const gens = await queueRun({ template: t.id, values, batch: n, parent, face: { kind: 'vfx', state: { ...kept, op: e.id } } });
+  remember(frame, o.id, gens);
+  return { gens, job: follow(gens, into, ctx, label) };
 }
 
 // Grab frame: a still of the clip at opts.at (its in point when blank). Into the selected image frame as a layer when one is

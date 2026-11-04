@@ -2,8 +2,9 @@
 // One section per kind in the selection ("Image · 3 frames"): quick icons, the op list (grouped), its options, where the
 // result lands, and Run. Ops that need painting or a live engine are listed greyed with the reason and an "Open the frame"
 // button. The rules are in edit-rules.js, the ops' fields and runners in edit-ops.js, the many-frame runner in edit-run.js
-// (loaded on demand: a missing one leaves a note here). The video section also hosts the frame's full VFX panel
-// (frame-vfx.js showFrameVfx); `edit:show { kind, op, frame }` (op 'vfx': that panel) opens the pane on a frame.
+// (loaded on demand: a missing one leaves a note here). A video op with marks to place (points, boxes, paths, a colour:
+// op.tools) puts them over the open frame's picture (frame-overlay.js) while the pane is on show; they are kept on the
+// frame (frame.ops[op]). Clip tools → VFX on an open video frame opens this pane on it.
 //
 //   showOp(kind, id, frames)   select an op in the pane (the frame menu's Edit ▸ items) and put the pane on show
 //   runEdit()                  Run for the section last used (Ctrl+Enter and the action bar call it while the pane is on show)
@@ -20,7 +21,7 @@ import { editKey } from './setups-rules.js';
 
 const KINDS = ['image', 'video', 'sound', 'scene'];
 const WORD = { image: 'Image', video: 'Video', sound: 'Sound', scene: '3D' };
-const P = { el: null, frames: [], mods: {}, loaded: false, loading: null, focus: null, status: new Map(), pending: new Map(), into: new Map(), batchIns: new Set(), vfx: null, opts: new Map() };
+const P = { el: null, frames: [], mods: {}, loaded: false, loading: null, focus: null, status: new Map(), pending: new Map(), into: new Map(), batchIns: new Set(), opts: new Map(), ov: null };
 
 // ---------------------------------------------------------------------------
 // the modules we lean on, loaded on demand (a failure leaves a note instead of a pane)
@@ -47,7 +48,7 @@ const liveIn = (kind, frames) => { const l = sidebar.context().live; return !!l 
 // why op can't run on this kind's selected frames now ('' when it can)
 export function whyNot(op, kind) {
   if (!op) return 'Nothing to run';
-  return rules().whyNot(op, { live: liveIn(kind, ofKind(kind)), opts: optsFor(kind, op.id) }) || '';
+  return rules().whyNot(op, { live: liveIn(kind, ofKind(kind)), opts: { ...optsFor(kind, op.id), ...ops().frameOps(ofKind(kind)[0], op.id) } }) || '';
 }
 function currentOp(kind) {
   const list = P.ops.get(kind) || [];
@@ -86,10 +87,10 @@ export function draw() {
   if (!rules() || !ops() || !runner()) { el.replaceChildren(note(`The Edit tools aren't available (${(P.errs || []).join('; ')}).`, 'warn')); return; }
   plan();
   const kinds = KINDS.filter((k) => ofKind(k).length && (P.ops.get(k) || []).length);
-  if (!kinds.length) { hideVfx(); el.replaceChildren(note(P.frames.length ? 'Nothing to edit on these frames yet.' : 'Select a frame to edit it.', 'info')); tellState(); return; }
+  if (!kinds.length) { syncOverlay(null, null, []); el.replaceChildren(note(P.frames.length ? 'Nothing to edit on these frames yet.' : 'Select a frame to edit it.', 'info')); tellState(); return; }
   if (!kinds.includes(P.focus)) P.focus = kinds[0];
-  if (!kinds.includes('video')) hideVfx();
   el.replaceChildren(...kinds.map(sectionFor));
+  if (!kinds.includes('video')) syncOverlay(null, null, []);
   tellState();
 }
 
@@ -113,8 +114,8 @@ function sectionFor(kind) {
     })))));
   if (op) {
     if (op.help) kids.push(help(op.help));
-    kids.push(setupsRow({ key: editKey(kind, op.id), get: () => ops().opValues(kind, op.id, optsFor(kind, op.id)),
-      set: (v) => { ops().setOpValues(kind, op.id, optsFor(kind, op.id), v); draw(); } }));
+    kids.push(setupsRow({ key: editKey(kind, op.id), get: () => ops().opValues(kind, op.id, optsFor(kind, op.id), frames),
+      set: (v) => { ops().setOpValues(kind, op.id, optsFor(kind, op.id), v, frames); draw(); } }));
     if (why) {
       kids.push(hint(why, 'edit-why'),
         button([icon('fit'), 'Open the frame'], () => {
@@ -124,7 +125,12 @@ function sectionFor(kind) {
     }
     // the options (shown greyed or not: an option can be what makes it need the open frame)
     const host = h('div', { class: 'edit-fields' });
-    try { host.append(...ops().opFields(kind, op.id, optsFor(kind, op.id), { redraw: draw, frames, size: null }).filter(Boolean)); }
+    const live = liveIn(kind, frames.slice(0, 1)), ov = P.ov?.overlay.state();
+    try {
+      host.append(...ops().opFields(kind, op.id, optsFor(kind, op.id), { redraw: draw, frames, size: null, live,
+        tool: live && ov?.frame?.id === frames[0]?.id ? ov.tool : null, neg: !!ov?.neg,
+        setTool: (t) => { P.ov?.overlay.tool(t); draw(); }, setNeg: (on) => { P.ov?.overlay.neg(on); draw(); } }).filter(Boolean));
+    } 
     catch (e) { console.error(e); host.append(note(`${op.label}: ${e.message}`, 'warn')); }
     if (host.childNodes.length) kids.push(host);
     const targets = rules().targetsOf(op);
@@ -136,7 +142,7 @@ function sectionFor(kind) {
     kids.push(runRow(kind, op, frames, why));
     kids.push(statusList(kind, frames));
   }
-  if (kind === 'video') kids.push(vfxRow(frames));
+  if (kind === 'video') syncOverlay(kind, op, frames);
   const sec = section(`${WORD[kind]} · ${frames.length} ${frames.length === 1 ? 'frame' : 'frames'}`, null, ...kids);
   sec.dataset.kind = kind;
   sec.addEventListener('pointerdown', () => { if (P.focus !== kind) { P.focus = kind; tellState(); } }, true);
@@ -170,31 +176,22 @@ function statusList(kind, frames) {
   return el;
 }
 
-// Video: "Full VFX panel…" hosts frame-vfx.js's panel, which draws points, boxes and mattes on the frame's own viewer
-function vfxRow(frames) {
-  const frame = frames[0];
-  const host = h('div', { class: 'edit-vfx hidden' });
-  const on = P.vfx?.id === frame?.id;
-  const btn = button([icon('film'), 'Full VFX panel…'], () => toggleVfx(host, frame, btn), { cls: 'small edit-vfx-btn' });
-  btn.setAttribute('aria-expanded', String(on));
-  if (on) queueMicrotask(() => toggleVfx(host, frame, btn, true));
-  return h('div', { class: 'edit-vfx-wrap' }, btn, host);
+// The marks of the video op on show over the open frame (frame-overlay.js): only for one selected frame that is open, with
+// the Edit pane on show. Each change is kept on the frame (frame.ops[op]) and the pane redrawn (its counts).
+const MARKS = ['points', 'pointsAt', 'boxes', 'tracks', 'key'];
+function syncOverlay(kind, op, frames) {
+  const frame = frames.length === 1 ? frames[0] : null;
+  const on = !!(op && kind === 'video' && frame && liveIn('video', [frame]) && editActive());
+  if (!on && !P.ov) return;
+  (P.ovLoad ||= import('./frame-overlay.js').then((m) => { P.ov = m; return m; })).then((m) => {
+    if (!on) { m.overlay.hide(); return; }
+    ops().cachedClip(frame, draw);   // (points keep the clip's time at the playhead)
+    m.overlay.show(frame, { tools: op?.tools || [], value: ops().frameOps(frame, op.id),
+      time: () => ops().liveClipTime(frame),
+      onChange: (v) => { ops().setFrameOps([frame], op.id, Object.fromEntries(MARKS.filter((k) => v[k] !== undefined).map((k) => [k, v[k]]))); redrawLater(); } });
+  }).catch((e) => console.warn('frame overlay', e));
 }
-async function toggleVfx(host, frame, btn, keep = false) {
-  if (P.vfx && !keep) { hideVfx(); host.classList.add('hidden'); btn.setAttribute('aria-expanded', 'false'); return; }
-  try {
-    const m = await import('./frame-vfx.js');
-    P.vfx = { id: frame.id };
-    host.classList.remove('hidden'); btn.setAttribute('aria-expanded', 'true');
-    P.vfxMod = m;
-    await m.showFrameVfx(host, frame);
-  } catch (e) { P.vfx = null; host.replaceChildren(note(`The VFX panel isn't available (${e.message}).`, 'warn')); host.classList.remove('hidden'); }
-}
-function hideVfx() {
-  if (!P.vfx) return;
-  P.vfx = null;
-  try { P.vfxMod?.hideFrameVfx(); } catch { /* */ }
-}
+addEventListener('overlay:tool', () => redrawLater());
 
 function pick(kind, id) {
   store.set(`deck.edit.op.${kind}`, id);
@@ -270,14 +267,17 @@ addEventListener('edit:pending', (e) => {
   if (doc != null) { if (n) P.pending.set(doc, n); else P.pending.delete(doc); }
   redrawLater();
 });
-// Clip tools → VFX (frame-vfx.js onSendToVfx): the pane on show with that frame's VFX panel open
-addEventListener('edit:show', (e) => {
-  const { kind, op, frame } = e.detail || {};
-  if (op === 'vfx' && frame) { P.vfx = { id: frame.id }; P.focus = 'video'; showOp(kind || 'video', null, [frame]); return; }
-  showOp(kind, op, frame ? [frame] : null);
-});
+// Clip tools → VFX on an open video frame: this pane on show on it (its effects run on the frame's first clip)
+import('./vfx.js').then(({ onSendToVfx }) => onSendToVfx(async () => {
+  const l = sidebar.context().live;
+  if (l?.kind !== 'video') return false;
+  P.focus = 'video';
+  showOp('video', null, [l]);
+  toast('Pick an effect: it runs on this frame\'s clip');
+  return true;
+})).catch(() => {});
 for (const ev of ['table:select', 'table:live', 'table:unlive']) addEventListener(ev, () => { setTimeout(() => { if (editActive()) draw(); else tellState(); }, 0); });
-sidebar.onShow((name) => { if (name === 'edit') draw(); else hideVfx(); tellState(); });
+sidebar.onShow((name) => { if (name === 'edit') draw(); else syncOverlay(null, null, []); tellState(); });
 
 P.el = sidebar.pane('edit', { title: 'Edit', icon: 'brush', when: (c) => c.frames.some((f) => f.kind !== 'note') });
 load();

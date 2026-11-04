@@ -184,22 +184,18 @@ class Tables(unittest.TestCase):
                              env={**os.environ, "DECK_DATA": d}, cwd=str(config.BASE_DIR), capture_output=True, text=True)
         self.assertIn("[('Sandbox', 2)]", out.stdout, out.stderr)
 
-    def test_a_video_frames_vfx_doc_goes_with_its_table_and_is_copied_with_it(self):
+    def test_a_video_frames_old_vfx_doc_is_not_owned_by_its_table(self):
+        # (frame.vfx is read into the frame's own state and trashed by the page; the table neither copies nor trashes it)
         q = {"project_id": self.pid}
         self.put("video-tabs", "v1", {"a": 1})
         self.put("vfx-tabs", "x1", {"op": "mask"})
-        self.put("vfx-tabs", "page", {"op": "ripple"})
         self.put("tables", "t1", {"v": 1, "frames": [{"id": "f1", "kind": "video", "doc": "v1", "vfx": "x1"}]})
         t2 = self.c.post("/api/store/tables/t1/duplicate", params=q).json()
-        cp = t2["payload"]["frames"][0]["vfx"]
-        self.assertNotEqual(cp, "x1")
-        self.assertEqual(self.c.get(f"/api/store/vfx-tabs/{cp}", params=q).json()["payload"], {"op": "mask"})
+        self.assertEqual(t2["payload"]["frames"][0]["vfx"], "x1")
         self.assertEqual(self.c.delete("/api/store/tables/t1", params=q).status_code, 200)
-        self.assertEqual(self.ids("vfx-tabs"), {"page", cp})
-        self.assertEqual(self.c.post("/api/store/tables/t1/restore", params=q).status_code, 200)
-        self.assertEqual(self.ids("vfx-tabs"), {"page", "x1", cp})
+        self.assertEqual(self.ids("vfx-tabs"), {"x1"})
         r = self.c.put("/api/store/tables/t3", params=q, json={"name": "x", "payload": {"frames": [{"id": "z", "kind": "video", "vfx": "x1"}]}})
-        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.status_code, 200, r.text)
 
     def test_duplicate_table_copies_its_docs_and_put_refuses_shared_docs(self):
         q = {"project_id": self.pid}

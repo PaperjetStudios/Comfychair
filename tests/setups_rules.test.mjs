@@ -1,14 +1,19 @@
 // node --test tests/setups_rules.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { differs, editKey, forKey, fromPreset, omit, pick, sceneKey, sortSetups, soundMakerKey, stable, toSetup, toolKey, tplKey, tplOfKey, vfxKey, SOUND_VOICE } from '../web/setups-rules.js';
+import { differs, editKey, movedKey, forKey, fromPreset, omit, pick, sceneKey, sortSetups, soundMakerKey, stable, toSetup, toolKey, tplKey, tplOfKey, vfxKey, SOUND_VOICE } from '../web/setups-rules.js';
 
 test('keys name the block', () => {
   assert.equal(tplKey('deck-qwen21-edit'), 'tpl:deck-qwen21-edit');
   assert.equal(editKey('video', 'restyle'), 'edit:video.restyle');
   assert.equal(editKey('image', 'edit'), 'tool:edit');   // the Edit pane's image ops are the Image tools
   assert.equal(toolKey('edit'), 'tool:edit');
-  assert.equal(vfxKey('ripple'), 'vfx:ripple');
+  assert.equal(vfxKey('ripple'), 'edit:video.ripple');   // a VFX effect's setups are its Edit op's
+  assert.equal(vfxKey('lora'), 'edit:video.restyle');
+  assert.equal(vfxKey('depth'), 'edit:video.maps');
+  assert.equal(movedKey('vfx:mask'), 'edit:video.mask');
+  assert.equal(movedKey('edit:video.mask'), null);
+  assert.equal(movedKey('vfx:'), null);
   assert.equal(soundMakerKey('music'), 'sound:maker.music');
   assert.equal(SOUND_VOICE, 'sound:voice');
   assert.equal(sceneKey('out'), 'scene:out');

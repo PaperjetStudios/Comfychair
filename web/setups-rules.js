@@ -6,14 +6,19 @@
 //   tpl:<template id>          a template's fields (the Make pane): field key -> value, as gen-presets keep them
 //   edit:<kind>.<op>           an Edit pane op (video, sound, 3D); an image op is the Image tool it runs (tool:<id>)
 //   tool:<id>                  an Image tool (the Layers pane and the Edit pane share its settings)
-//   vfx:<op>                   a VFX effect
+//   (vfx:<op>, a VFX effect, was its own key: it is the Edit pane's video op now, edit:video.<op>; setups.js moves old ones)
 //   sound:maker.<id> / sound:voice   the Sound tab's Make a sound (per maker) and Voice sections
 //   scene:<op>                 the 3D tab's prompt and render settings (scene:out)
 
 export const tplKey = (id) => (id ? `tpl:${id}` : null);
 export const toolKey = (id) => (id ? `tool:${id}` : null);
 export const editKey = (kind, op) => (!kind || !op ? null : kind === 'image' ? toolKey(op) : `edit:${kind}.${op}`);
-export const vfxKey = (op) => (op ? `vfx:${op}` : null);
+// a VFX effect's setups are its Edit op's (the VFX tab and the Edit pane share them); effects the Edit pane runs as
+// another op: LoRA restyle is Restyle, the maps are Control map
+const VFX_TO_EDIT = { lora: 'restyle', depth: 'maps', canny: 'maps', scribble: 'maps', pose: 'maps' };
+export const vfxKey = (op) => (op ? `edit:video.${VFX_TO_EDIT[op] || op}` : null);
+// an old key (vfx:<op>) as it is now, or null when it is not an old one
+export const movedKey = (key) => (typeof key === 'string' && key.startsWith('vfx:') && key.length > 4 ? vfxKey(key.slice(4)) : null);
 export const soundMakerKey = (id) => (id ? `sound:maker.${id}` : null);
 export const SOUND_VOICE = 'sound:voice';
 export const sceneKey = (op) => (op ? `scene:${op}` : null);

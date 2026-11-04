@@ -2255,7 +2255,6 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
 .make-frame-card { display: flex; flex-direction: column; gap: 4px; align-items: center; padding: 6px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-2); color: inherit; }
 .make-frame-card img { width: 100%; aspect-ratio: 1; object-fit: contain; }
 .make-mode:empty { display: none; }
-.make-vfx > .make-vfx-open { margin-bottom: 6px; }
 
 /* ---- quick start ---- */
 .quick-start { display: flex; flex-direction: column; gap: var(--gap); }
@@ -2278,10 +2277,6 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
 .qs-prompt { display: flex; flex-direction: column; gap: 8px; }
 .qs-prompt textarea { width: 100%; }
 .qs-make { min-height: max(var(--tap-sm), var(--touch-target)); }
-.make-vfx .panel-body { padding: 0; }
-/* a live video frame with VFX on show: VFX's stage over the frame, the edit's own one hidden under it */
-.frame-mount > .vfx-under { display: none !important; }
-.frame-mount > .vfx-frame-stage > .viewer { position: relative; background: var(--checker); }
 /* the Shelf's Shift-click selection */
 .shelf-tile.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
 
@@ -2330,8 +2325,6 @@ body:has(.tab.view-max.panel-out) .actionbar { right: var(--ov-w); }   /* (only 
 .sb-pane[data-pane="edit"] .edit-status:empty { display: none; }
 .sb-pane[data-pane="edit"] .edit-status-row { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
 .sb-pane[data-pane="edit"] .edit-status-row.failed .hint { color: var(--danger, #e66); }
-.sb-pane[data-pane="edit"] .edit-vfx-wrap { margin-top: 8px; display: grid; gap: 6px; }
-.sb-pane[data-pane="edit"] .edit-vfx.hidden { display: none; }
 
 /* ---- round2 B ---- */
 /* a sound tile's still is the server's waveform of its first sound (table-frames.js showStill): stretched to the strip */
@@ -2343,7 +2336,6 @@ body:has(.tab.view-max.panel-out) .actionbar { right: var(--ov-w); }   /* (only 
 .live-layer > .frame-mount > :not(.live-bar) { grid-row: 2; grid-column: 1; min-height: 0; }
 .live-bar { grid-row: 1; grid-column: 1; display: flex; align-items: center; gap: 6px; height: 36px; min-height: 36px; padding: 0 4px 0 10px;
   border-bottom: 1px solid var(--line); background: var(--surface); color: var(--text); }
-.frame-mount > .live-bar.vfx-under { display: flex !important; }
 .live-bar-kind { display: grid; place-items: center; color: var(--muted); }
 .live-bar-kind .ico { width: 18px; height: 18px; }
 .live-bar-name { min-width: 0; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 6px; border: 1px solid transparent;
@@ -2366,3 +2358,17 @@ body:has(.tab.view-max.panel-out) .actionbar { right: var(--ov-w); }   /* (only 
 .frame-find-chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .frame-list-host .layer-row { content-visibility: auto; contain-intrinsic-size: auto 44px; }
 .frame-scene-row .layer-name > span:first-child { font-weight: 600; }
+
+/* a live video frame's marks for an Edit op (frame-overlay.js) and its compare, over the frame's viewer */
+.frame-ov { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+.viewer > .frame-ov > .fov-cv { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; }
+.frame-ov.on > .fov-cv { pointer-events: auto; cursor: crosshair; touch-action: none; }
+.fov-bar { position: absolute; bottom: 6px; left: 6px; max-width: calc(100% - 12px); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; pointer-events: auto;
+  padding: 4px 6px; border-radius: 8px; background: color-mix(in srgb, var(--surface, #222) 85%, transparent); }
+.fov-bar.hidden { display: none; }
+.frame-cmp { position: absolute; inset: 0; z-index: 5; background: #000; display: grid; grid-template-rows: 1fr auto; }
+.frame-cmp-stage { position: relative; display: flex; align-items: center; justify-content: center; container-type: size; min-height: 0; }
+.frame-cmp > .frame-cmp-bar { position: static; border-radius: 0; }
+.edit-marks { display: grid; gap: 6px; }
+.frame-cmp-stage > .vfx-media:not(.side) > video { width: 100cqw; height: 100cqh; max-width: none; max-height: none; }
+.frame-cmp-stage > .vfx-media.side > video { width: calc(50cqw - 2px); height: 100cqh; }

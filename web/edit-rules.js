@@ -11,6 +11,7 @@
 //   selfLands: it places its result itself (a grabbed frame: a frame of the picture's own size, or a layer in the selected
 //           image frame): no result frame is made for it first
 //   why:    for needs 'live', why
+//   vfx:    the VFX effect it runs (web/vfx-rules.js EFFECTS); tools: what it places on the open frame (frame-overlay.js)
 //
 //   OPS                         { image: [...], video: [...], sound: [...], scene: [...] }
 //   opById(kind, id)            the op, or null
@@ -27,7 +28,6 @@
 
 const LIVE_PAINT = 'It is painted on the open frame';
 const LIVE_MARKS = 'The marks are placed on the open frame';
-const LIVE_POINTS = 'Points, boxes and paths are placed on the open frame';
 const LIVE_TIMELINE = 'It works on the open frame\'s timeline';
 
 const IMAGE = [
@@ -58,35 +58,47 @@ const IMAGE = [
   { id: 'inpaint', group: 'Edit', label: 'Inpaint', icon: 'brush', needs: 'live', why: LIVE_PAINT, help: 'Paints something new where you paint.' },
 ];
 
+// Every effect of the VFX tab is a video op here (vfx: its web/vfx-rules.js effect, run from the op's options and the
+// frame's own state, frame.ops[op]); tools: what it places on the open frame (web/frame-overlay.js: 'points', 'boxes',
+// 'paths', 'matte', 'color'); a tool's marks are optional unless the op needs the open frame
 const VIDEO = [
   { id: 'grab', group: 'Quick', label: 'Grab frame', icon: 'camera', quick: 'Grab', lands: 'image', once: true, selfLands: true,
     help: 'A still of the clip at a time you choose: a new image frame, or a layer in the selected image frame.' },
-  { id: 'delogo', group: 'Quick', label: 'Remove watermark', icon: 'eraser', quick: 'Remove', help: 'Finds a mark that stays put while the picture moves and fills it in (ProPainter).' },
+  { id: 'delogo', group: 'Quick', label: 'Remove watermark', icon: 'eraser', quick: 'Remove', vfx: 'delogo', tools: ['boxes'],
+    help: 'Boxes drawn over the mark on the open frame are filled in (ProPainter); with none, Find looks for a mark that stays put while the picture moves.' },
   { id: 'maps', group: 'Quick', label: 'Control map', icon: 'grid', quick: 'Maps', help: 'A depth, edge, scribble or pose map of the clip.' },
   { id: 'restyle', group: 'Restyle', label: 'LoRA restyle', icon: 'sparkle', quick: 'Restyle', tpl: 'deck-ltx-v2v-lora', help: 'The clip through an IC-LoRA, with a prompt for the result.' },
+  { id: 'ripple', group: 'Restyle', label: 'Ripple edit', icon: 'edit', vfx: 'ripple', tpl: 'deck-ltx-ripple',
+    live: (o) => (o?.first ? null : 'Its first frame is taken from the open frame (or choose an edited one)'),
+    help: 'A change to the first frame carried through the clip: take the frame, change it in the Image tab, choose it here.' },
   { id: 'upscale', group: 'Restyle', label: 'Upscale (LTX)', icon: 'enlarge', quick: 'Upscale', tpl: 'deck-ltx-upscale', help: 'More detail at Full HD or 4K. Slow.' },
   { id: 'upvideo', group: 'Restyle', label: 'Upscale (SeedVR2)', icon: 'enlarge', tpl: 'deck-upscale-video', help: 'SeedVR2 on every frame: sharper, the picture kept.' },
   { id: 'upvideofast', group: 'Restyle', label: 'Upscale (fast)', icon: 'enlarge', tpl: 'deck-upscale-video-fast', help: 'A quick upscale model on every frame.' },
   { id: 'finish', group: 'Restyle', label: 'Finish (H3 1080p)', icon: 'star', help: 'An H3 run drawn again at 1080p by its refiner.' },
   { id: 'cleanplate', group: 'Remove', label: 'Clean plate', icon: 'eraser', tpl: 'deck-ltx-cleanplate', help: 'Removes people and moving things and fills in the background.' },
   { id: 'replace', group: 'Remove', label: 'Replace what you name', icon: 'swap', help: 'Finds what you name (SAM3) and paints the prompt in its place.' },
-  { id: 'mask', group: 'Matte', label: 'Mask by words (SAM3)', icon: 'select', tpl: 'deck-sam3-video-mask', help: 'What you name, followed through the clip, as a mask clip.' },
+  { id: 'inpaint', group: 'Remove', label: 'Replace with a matte', icon: 'brush', vfx: 'inpaint', tpl: 'deck-ltx-inpaint', help: 'Paints something new where a matte clip is white.' },
+  { id: 'mask', group: 'Matte', label: 'Mask (SAM3)', icon: 'select', vfx: 'mask', tpl: 'deck-sam3-video-mask', tools: ['points'],
+    live: (o) => (String(o?.prompt || '').trim() || o?.points?.positive?.length ? null : 'Tap the thing on the open frame, or name it'),
+    help: 'Tap the thing on the frame (or name it) and SAM3 follows it through the clip: a mask clip.' },
   { id: 'cutout', group: 'Matte', label: 'Cut out (Alpha Gen)', icon: 'cut', quick: 'Cut out', help: 'The main subject cut out: the rest goes see-through.' },
-  { id: 'alpha', group: 'Matte', label: 'Matte (Alpha Gen)', icon: 'contrast', tpl: 'deck-ltx-alpha', help: 'A black and white matte of the main subject (white = keep).' },
-  { id: 'colorkey', group: 'Matte', label: 'Colour key', icon: 'contrast', help: 'Keys out a green or blue screen (no GPU).' },
-  { id: 'mattekey', group: 'Matte', label: 'Apply a matte', icon: 'contrast', help: 'A matte clip (white = keep) as the clip\'s see-through channel.' },
-  { id: 'refine', group: 'Matte', label: 'Clean up a matte', icon: 'contrast', help: 'Grow, shrink, fill holes, steady, soften a matte clip (no GPU).' },
-  { id: 'inpaint', group: 'Remove', label: 'Replace with a matte', icon: 'brush', tpl: 'deck-ltx-inpaint', help: 'Paints something new where a matte clip is white.' },
-  { id: 'animate', group: 'Performance', label: 'Replace character', icon: 'person', tpl: 'deck-h3-animate', help: 'The person in the clip re-rendered as the character in a picture.' },
-  { id: 'faceswap', group: 'Performance', label: 'Face only', icon: 'person', tpl: 'deck-h3-faceswap', help: 'Only the face swapped for a picture\'s.' },
-  { id: 'drive', group: 'Performance', label: 'Drive a still', icon: 'figure', tpl: 'deck-h3-drive', help: 'A picture acts out the clip (H3).' },
-  { id: 'ltxdrive', group: 'Performance', label: 'Drive a still (LTX)', icon: 'figure', tpl: 'deck-ltx-drive', help: 'A picture acts out the clip (LTX-2.5).' },
-  { id: 'layout', group: 'Performance', label: 'Layout to render', icon: 'cube', tpl: 'deck-ltx-layout', help: 'A rough layout clip as a finished shot, from a first frame.' },
+  { id: 'alpha', group: 'Matte', label: 'Matte (Alpha Gen)', icon: 'contrast', vfx: 'alpha', tpl: 'deck-ltx-alpha', help: 'A black and white matte of the main subject (white = keep).' },
+  { id: 'colorkey', group: 'Matte', label: 'Colour key', icon: 'contrast', vfx: 'colorkey', tools: ['color'], help: 'Keys out a green or blue screen (no GPU).' },
+  { id: 'mattekey', group: 'Matte', label: 'Apply a matte', icon: 'contrast', vfx: 'mattekey', help: 'A matte clip (white = keep) as the clip\'s see-through channel.' },
+  { id: 'refine', group: 'Matte', label: 'Clean up a matte', icon: 'contrast', vfx: 'refine', help: 'Grow, shrink, fill holes, steady, soften a matte clip, or combine two (no GPU).' },
+  { id: 'animate', group: 'Performance', label: 'Replace character', icon: 'person', vfx: 'animate', tpl: 'deck-h3-animate', help: 'The person in the clip re-rendered as the character in a picture.' },
+  { id: 'faceswap', group: 'Performance', label: 'Face only', icon: 'person', vfx: 'faceswap', tpl: 'deck-h3-faceswap', help: 'Only the face swapped for a picture\'s.' },
+  { id: 'drive', group: 'Performance', label: 'Drive a still', icon: 'figure', vfx: 'drive', tpl: 'deck-h3-drive', help: 'A picture acts out the clip (H3).' },
+  { id: 'ltxdrive', group: 'Performance', label: 'Drive a still (LTX)', icon: 'figure', vfx: 'ltxdrive', tpl: 'deck-ltx-drive', help: 'A picture acts out the clip (LTX-2.5).' },
+  { id: 'talk', group: 'Performance', label: 'Talking shot', icon: 'mic', vfx: 'talk', tpl: 'deck-ltx-a2v', help: 'Someone in a picture says a line, lips in time: a new clip.' },
+  { id: 'layout', group: 'Generate', label: 'Layout to render', icon: 'cube', vfx: 'layout', tpl: 'deck-ltx-layout', help: 'A rough layout clip as a finished shot, from a first frame.' },
+  { id: 'extend', group: 'Generate', label: 'Extend frame', icon: 'maximize', vfx: 'extend', tpl: 'deck-ltx-inpaint', help: 'The clip on a bigger canvas, the rest painted in.' },
+  { id: 'tracks', group: 'Generate', label: 'Motion paths', icon: 'line', vfx: 'tracks', tpl: 'deck-ltx-tracks', tools: ['paths'],
+    live: (o) => (o?.tracks?.length ? null : 'Paths are drawn on the open frame'), help: 'Paths drawn on the start image: things under a path\'s start move along it.' },
+  { id: 't2v', group: 'Generate', label: 'Text / image to video', icon: 'film', vfx: 't2v', tpl: 'deck-ltx-t2v', help: 'A new clip from a prompt, optionally from a still.' },
+  { id: 'a2v', group: 'Generate', label: 'Sound to video', icon: 'sound', vfx: 'a2v', tpl: 'deck-ltx-a2v', help: 'A clip that moves to a sound: speech, music or effects.' },
+  { id: 'ingredients', group: 'Generate', label: 'Ingredients sheet', icon: 'grid', vfx: 'ingredients', tpl: 'deck-ltx-ingredients', help: 'People and props cut out on white, put in one shot.' },
   { id: 'foley', group: 'Sound', label: 'Sound from the clip', icon: 'sound', tpl: 'deck-mmaudio-foley', lands: 'sound', help: 'Foley timed to the picture (MMAudio): a new sound frame.' },
-  { id: 'ripple', group: 'Restyle', label: 'Ripple edit', icon: 'edit', needs: 'live', why: 'Its first frame is changed in the open frame', help: 'A change to the first frame carried through the clip.' },
-  { id: 'extend', group: 'Generate', label: 'Extend frame', icon: 'maximize', needs: 'live', why: 'The canvas is placed on the open frame', help: 'A bigger canvas, painted in.' },
-  { id: 'tracks', group: 'Generate', label: 'Motion paths', icon: 'line', needs: 'live', why: LIVE_POINTS, help: 'Paths drawn on the start image.' },
-  { id: 'points', group: 'Matte', label: 'Mask by tapping', icon: 'target', needs: 'live', why: LIVE_POINTS, help: 'Tap the thing and SAM3 follows it.' },
   { id: 'stabilise', group: 'Quick', label: 'Stabilise', icon: 'target', needs: 'live', why: 'Its track is set on the open frame', help: 'Steadies a shaky clip.' },
   { id: 'trim', group: 'Quick', label: 'Split, trim, cross-fade', icon: 'cut', needs: 'live', why: LIVE_TIMELINE, help: 'Timeline edits.' },
 ];

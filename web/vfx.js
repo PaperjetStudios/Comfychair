@@ -1,7 +1,6 @@
 import { loraName, loraChoice, keyRangeFields, restyleLora } from './clip-effects.js';
 export { CLIP_FX, loraChoice, keyRangeFields, restyleLoras, runClipStep } from './clip-effects.js';
 import { $, h, api, toast, clamp, button, runBar, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle, textArea, pctFmt, colorField, seedField, sizeSelect, store, info, icon, withHelp } from './ui.js';
-import { MAPS, mapRoles } from './maps.js';
 import { S, inputUrl, onServer, switchTab } from './core.js';
 import { bareSource, cardMedia, outputCard, clipLabel, clipUrl, genLabel, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
 import { pictureInput } from './picture-input.js';
@@ -18,9 +17,12 @@ import { TabSet } from './tabs.js';
 import { fullScreen } from './layout.js';
 import { sendToCraft } from './craft.js';
 import { characterById, characters, loadCharacters, mainPicture } from './characters.js';
-import { TALK_ENGINES, talkKey, talkPrompt, talkSeconds } from './talk.js';
+import { TALK_ENGINES, talkKey } from './talk.js';
 import { setupsRow } from './setups.js';
 import { omit, vfxKey } from './setups-rules.js';
+import { ALPHA, ASPECTS, BLANK, CANVAS, EFFECTS, FACE, FPS, GROUPS, NOT_SETUP, REFINE, RES, SAM, SIZES, boxesFromFind, buildRun as buildRunOf,
+  canvasAspect as canvasAspectOf, clipBox as clipBoxOf, cropOf as cropOfSt, delogoBody as delogoBodyOf, delogoRunBody, fx, keyBody, lenFrames, matteBody,
+  missingInput as missingOf, poseBody as poseBodyOf, resOf as resOfSt, talkPromptOf as talkPromptFor, tplIdOf } from './vfx-rules.js';
 
 // ---------------------------------------------------------------------------
 // VFX: one effect per tab, run on a clip (or from a still) with LTX-2.5 and friends. Each effect
@@ -28,95 +30,10 @@ import { omit, vfxKey } from './setups-rules.js';
 // server job (keying). The viewer wipes between the source and a result; points and motion
 // paths are drawn on it. Results go back to the Video timeline.
 // ---------------------------------------------------------------------------
-const FPS = 24;   // LTX runs at 24 fps; lengths are 8n+1 frames
-
-// group: the sideNav-like family; tpl: the template it runs; needs: the inputs it shows
-const EFFECTS = [
-  { id: 'delogo', group: 'Quick', label: 'Remove watermark', job: 'delogo', needs: ['source', 'boxes'],
-    help: 'Draw a box over each logo, caption or mark (or tap Find). Quality fills the boxes with ProPainter from what the other frames show behind them; the rest of the picture is left exactly as it was. Fast is instant but smears the box.' },
-  { id: 'depth', group: 'Quick', label: 'Depth map', tpl: MAPS.depth.video, still: MAPS.depth.still, maxLen: 20, needs: ['source?', 'first?', 'len', 'depthModel'],
-    lenHelp: 'Up to 20 s at 24 fps. The depth is worked out over the whole clip, so it stays steady from frame to frame.',
-    help: 'A grey depth map (near is white) of a clip, or of a picture when there is no clip: Video Depth Anything. Use it as H3 control, in Layout to render, or for compositing.' },
-  { id: 'canny', group: 'Quick', label: 'Canny edges', tpl: MAPS.canny.video, still: MAPS.canny.still, maxLen: 20, needs: ['source?', 'first?', 'len', 'edgeAmount'],
-    lenHelp: 'Up to 20 s at 24 fps.',
-    help: 'White edges on black, of a clip or (with no clip) of a picture: the Canny map that edge control and edit models follow. Use it as a reference picture or as control, or for compositing.' },
-  { id: 'scribble', group: 'Quick', label: 'Scribble', tpl: MAPS.scribble.video, still: MAPS.scribble.still, maxLen: 20, needs: ['source?', 'first?', 'len', 'edgeAmount'],
-    lenHelp: 'Up to 20 s at 24 fps.',
-    help: 'A loose line drawing of a clip or (with no clip) of a picture: white lines on black, softer and simpler than Canny. Use it as a reference picture or as control, or for compositing.' },
-  { id: 'ripple', group: 'Restyle', label: 'Ripple edit', tpl: 'deck-ltx-ripple', needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
-    help: 'Change the first frame (in Generate with an edit template, or in the Image tab), and the change carries through the whole clip.' },
-  { id: 'lora', group: 'Restyle', label: 'LoRA restyle', tpl: 'deck-ltx-v2v-lora', needs: ['source', 'loras', 'prompt', 'len', 'res', 'seed'],
-    help: 'Runs the clip through an IC-LoRA: deblur, colourise, restore, day to night, head swap and so on. Pick the LoRA and its strength, and describe the result in the prompt (for colourise, name the colours): with an empty prompt the change is faint.' },
-  { id: 'alpha', group: 'Matte', label: 'Cut out (Alpha Gen)', tpl: 'deck-ltx-alpha', masked: 'deck-ltx-alpha-crop', needs: ['source', 'matte?', 'alpha', 'len', 'res', 'seed'],
-    help: 'Makes a black-and-white matte of the main subject (white = keep). Then use it with "Apply matte", or as a mask. Give it a mask of one thing (Mask (SAM3), from the same clip) and it works on a crop round that thing: a sharper matte in the same time, of just that thing.' },
-  { id: 'colorkey', group: 'Matte', label: 'Colour key', job: 'key', needs: ['source', 'keycolor'],
-    help: 'Cuts out a green or blue screen. Quick: runs on the server with ffmpeg, no GPU.' },
-  { id: 'mattekey', group: 'Matte', label: 'Apply matte', job: 'key', needs: ['source', 'matte', 'invert'],
-    help: 'Uses a matte clip (white = keep) as the clip\'s see-through channel, so lower tracks show through.' },
-  { id: 'refine', group: 'Matte', label: 'Clean up matte', job: 'matte', needs: ['source?', 'matte', 'matte2', 'refine'],
-    help: 'Cleans up a matte or mask (white = keep), or combines two: SAM3\'s and Alpha Gen\'s, say. Grow or shrink it, fill holes, steady it, harden or soften the edge. Quick: ffmpeg on the server, no GPU. Then Use as matte / mask.' },
-  { id: 'mask', group: 'Remove', label: 'Mask (SAM3)', tpl: 'deck-sam3-video-mask', needs: ['source', 'points', 'prompt', 'sam', 'len'],
-    help: 'Tap the thing to cut out on the frame (Exclude marks what to leave out), or describe it. SAM3 follows it through the clip and makes a mask clip.' },
-  { id: 'inpaint', group: 'Remove', label: 'Replace', tpl: 'deck-ltx-inpaint', mult: 64, needs: ['source', 'matte', 'prompt', 'len', 'res', 'seed'],
-    help: 'Paints something new where a mask clip is white (make one with Mask (SAM3) or Alpha Gen) and keeps the rest of the picture. Describe the whole shot with the new thing in it.' },
-  { id: 'extend', group: 'Generate', label: 'Extend frame', tpl: 'deck-ltx-inpaint', mult: 64, needs: ['source', 'canvas', 'first?', 'prompt', 'len', 'res', 'seed'],
-    help: 'Puts the clip on a bigger or differently shaped canvas (portrait to landscape, say) and paints the rest (outpainting). Pick the canvas, then drag the clip on the preview or set its size and place. Describe the whole wider shot. For new parts that should look like a reference (a character, a room), make a start frame: the first frame on its canvas, filled in by an image edit with your references; the clip then grows out of it.' },
-  { id: 'cleanplate', group: 'Remove', label: 'Clean plate', tpl: 'deck-ltx-cleanplate', needs: ['source', 'prompt', 'len', 'res', 'seed'],
-    help: 'Removes people and other moving things from the whole clip and fills in the background. Name what to remove in the prompt.' },
-  { id: 't2v', group: 'Generate', label: 'Text / image to video', tpl: 'deck-ltx-t2v', needs: ['first?', 'voice', 'prompt', 'len', 'size', 'loras', 'seed'],
-    help: 'A new clip from a prompt, optionally starting from a still. Give it a Voice (a few seconds of someone speaking) and the speech in the clip takes on that voice.' },
-  { id: 'a2v', group: 'Generate', label: 'Sound to video', tpl: 'deck-ltx-a2v', needs: ['sound', 'first?', 'prompt', 'len', 'size', 'loras', 'seed'],
-    help: 'A clip that moves to a sound: speech (lips follow it), music (movement follows the beat) or effects. Pick the sound (a sound file, or the sound of a clip, cut to the part you want), describe the shot, and optionally a start image. The clip is as long as the sound, up to Length, and keeps the sound as it is.' },
-  { id: 'layout', group: 'Generate', label: 'Layout to render', tpl: 'deck-ltx-layout', mult: 64, needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
-    help: 'Turns a rough layout clip (a 3D tab render in Clay or Colour, or blocked-out footage) into a finished shot that keeps its layout and motion.' },
-  { id: 'tracks', group: 'Generate', label: 'Motion paths', tpl: 'deck-ltx-tracks', mult: 64, needs: ['first', 'tracks', 'prompt', 'len', 'res', 'seed'],
-    help: 'Draw paths on the start image: things under a path\'s start move along it.' },
-  { id: 'ingredients', group: 'Generate', label: 'Ingredients sheet', tpl: 'deck-ltx-ingredients', mult: 64, needs: ['first', 'prompt', 'len', 'res', 'seed'],
-    help: 'One image with the people and props cut out on a plain white background (Alpha Gen can cut them out), and the place in the prompt. Two whole photos side by side come back as a split screen.' },
-  { id: 'upscale', group: 'Generate', label: 'Upscale', tpl: 'deck-ltx-upscale', needs: ['source', 'prompt', 'len', 'outsize', 'seed'],
-    help: 'Adds detail at a larger size. Describe the look (light, film, sharpness), not the things in it.' },
-  { id: 'animate', group: 'Performance', label: 'Replace character', tpl: 'deck-h3-animate', needs: ['source', 'first', 'len', 'res', 'steps', 'seed'],
-    res: [[384, '384p'], [480, '480p'], [576, '576p']], maxLen: 30,
-    help: 'Re-renders the person in the clip as the character in the still: the clip\'s motion, face, camera, light and sound are kept (Viggle-Animate on H3). Long clips run in 5 s windows.' },
-  { id: 'faceswap', group: 'Performance', label: 'Face only', tpl: 'deck-h3-faceswap', needs: ['source', 'first', 'len', 'res', 'steps', 'blend', 'seed'],
-    res: [[384, '384'], [512, '512'], [640, '640']], maxLen: 30,
-    help: 'Swaps only the face: it is followed through the clip, re-rendered as the character\'s face with the same expressions, and blended back. Hair, body and the rest of the shot stay. Works best when the face is large in frame.' },
-  { id: 'drive', group: 'Performance', label: 'Drive a still', tpl: 'deck-h3-drive', sd: 'deck-h3-drive-sd', posed: 'deck-h3-drive-posed', needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
-    res: [[384, '384p'], [448, '448p'], [576, '576p']], maxLen: 15,
-    help: 'The character in the still acts out the clip: body, hands and face follow the clip\'s pose (H3 with pose control), in a new shot described by the prompt. Call the character <Subject 1> and the still <Picture 1>, and name their clothes and look: otherwise the outfit can drift.' },
-  { id: 'ltxdrive', group: 'Performance', label: 'Drive a still (LTX)', tpl: 'deck-ltx-drive', sd: 'deck-ltx-drive-sd', posed: 'deck-ltx-drive-posed', mult: 64, needs: ['source', 'first', 'prompt', 'len', 'res', 'seed'],
-    res: [[448, '448p'], [576, '576p'], [704, '704p']],
-    help: 'Like Drive a still, on LTX-2.5: the still is the first frame and the clip\'s pose (body, hands, face) moves it. Keeps the still\'s scene and look closely. Describe the person and what they do; the sound is made from the prompt.' },
-  { id: 'talk', group: 'Performance', label: 'Talking shot', tpl: 'deck-ltx-a2v', needs: ['line', 'first', 'prompt', 'size', 'loras', 'seed'],
-    help: 'Someone in a picture says a line, with their lips in time: pick a character (their picture and voice) or a picture and a voice, write the line and Speak it (or choose a sound of someone speaking). Works best with the face clear and turned towards the camera; the closer the face, the crisper the lips. The clip is as long as the line and keeps its sound. LTX-2.5 sound to video.' },
-  { id: 'pose', group: 'Performance', label: 'Pose preview', tpl: MAPS.pose.video, sd: MAPS.pose.sd, still: MAPS.pose.still, stillSd: MAPS.pose.stillSd, needs: ['source?', 'first?', 'len'],
-    help: 'Shows what Drive a still will follow: the clip\'s body, hands and face as a stick figure. With no clip, the picture\'s pose as a picture, to use as a reference.' },
-];
-const GROUPS = ['Quick', 'Restyle', 'Matte', 'Remove', 'Generate', 'Performance'];
-const fx = (id) => EFFECTS.find((e) => e.id === id) || EFFECTS[0];
-
-// effects that follow a pose can read it with DWPose (CPU) or SDPose (GPU): e.sd is the SDPose take on e.tpl
-const tplId = (e) => (e.still && !T.source && T.first ? (e.stillSd && T.poser === 'sdpose' ? e.stillSd : e.still) : e.sd && T.poser === 'sdpose' ? e.sd : e.masked && T.matte ? e.masked : e.tpl);
+// (the effects, their settings' defaults and what a run sends: web/vfx-rules.js, shared with the Edit pane's video ops)
+const tplId = (e) => tplIdOf(e, T);
 const tplOf = (e) => tplId(e) && S.templates.find((t) => t.id === tplId(e));
-
-// Viggle-Animate's distilled schedules (shift 3): points = Euler updates + 1
-const STEPS = { 3: '1.0, 0.8571428571428571, 0.6, 0.0',
-  5: '1.0, 0.9230769230769231, 0.8181818181818182, 0.6666666666666666, 0.42857142857142855, 0.0',
-  7: '1.0, 0.9473684210526315, 0.8823529411764706, 0.8, 0.6923076923076923, 0.5454545454545454, 0.3333333333333333, 0.0' };
-const RES = [[544, '544p'], [704, '704p'], [1088, '1088p']];
-const resOf = (e) => { const r = e.res || RES; return r.some(([v]) => v === T.res) ? T.res : r[1][0]; };
-
-const SIZES = [['Match source', null], ['1280×704', [1280, 704]], ['704×1280', [704, 1280]], ['960×544', [960, 544]],
-  ['544×960', [544, 960]], ['1024×1024', [1024, 1024]], ['1920×1088', [1920, 1088]]];
-
-const FACE = { grow: 1.05, feather: 0.25, chin: 0.82 };   // Face only's blend outline (Deck Face Uncrop)
-// Clean up matte (POST /api/video/matte): combine two mattes, then grow/shrink, fill holes, steady, edge, feather
-const REFINE = { combine: 'union', grow: 0, close: 0, smooth: 0, feather: 0, low: 0, high: 1, invert: false };
-// Extend frame: the canvas's shape (width / height; 0 = the source's own) and where the clip sits on it
-const CANVAS = { aspect: 16 / 9, scale: 1, cx: 0.5, cy: 0.5 };
-const BLANK = () => ({ op: 'ripple', source: null, first: null, matte: null, sound: null, voice: null, prompt: '', loras: [], len: 5, res: 704, size: null, seed: -1,
-  points: { positive: [], negative: [] }, pointsAt: 0, tracks: [], key: { color: '#00ff00', similarity: 0.12, blend: 0.08, spill: 0.5, invert: false },
-  talk: { char: null, voice: null, engine: 'qwen', text: '', delivery: '', said: null }, steps: 3, blend: 'face', face: { ...FACE }, results: [], showing: null, matte2: null, refine: { ...REFINE }, canvas: { ...CANVAS }, boxes: [], delogo: 'quality' });
+const resOf = (e) => resOfSt(e, T);
 let T = BLANK();
 let tabs = null;
 // What a run keeps of the tab that made it (params.__face), so History's Edit can open it here again: the settings, not the takes
@@ -136,7 +53,6 @@ const inBody = (sel) => VF.body?.querySelector(sel) || null;
 
 // A setup of an effect (setups.js vfx:<op>): the tab's settings for it (prompt, LoRAs, length, size, seed, key, talk,
 // blend, face, refine…), less what it runs on (the clips, pictures, sounds, points, boxes, paths) and the takes.
-const NOT_SETUP = ['op', 'source', 'first', 'matte', 'matte2', 'sound', 'voice', 'points', 'pointsAt', 'tracks', 'boxes', 'results', 'showing'];
 export function vfxValues() {
   const v = omit(T, NOT_SETUP);
   if (v.talk) delete v.talk.said;   // (the line spoken last: a take, not a setting)
@@ -326,16 +242,14 @@ function boxesFields() {
     help('Make each box a little bigger than the mark, shadow and glow included. Find looks for edges that stay put while the picture moves; on a still shot it finds nothing.'),
   ];
 }
-const cropOf = () => T.source?.crop || { x: 0, y: 0, w: 1, h: 1 };
-const clipFracs = (b) => { const c = cropOf(); return { x: (b.x - c.x) / c.w, y: (b.y - c.y) / c.h, w: b.w / c.w, h: b.h / c.h }; };
-const delogoBody = () => ({ source: bareSource(T.source), trim: T.source.trim || null, crop: T.source.crop || null });
+const cropOf = () => cropOfSt(T);
+const delogoBody = () => delogoBodyOf(T);
 
 async function findBoxes() {
   try {
     const r = await api('/api/video/delogo/find', { method: 'POST', body: delogoBody(), timeout: 300000, busy: 'Looking for a watermark…' });
     if (!r.boxes.length) return toast('Nothing stays put in this clip: draw the boxes yourself', true);
-    const c = cropOf();   // back to fractions of the whole frame
-    T.boxes.push(...r.boxes.map((b) => ({ x: c.x + b.x * c.w, y: c.y + b.y * c.h, w: b.w * c.w, h: b.h * c.h })));
+    T.boxes.push(...boxesFromFind(T, r.boxes));   // back to fractions of the whole frame
     UI.draw = 'boxes';
     changed();
     toast(`Found ${r.boxes.length}: check them on the picture`);
@@ -347,7 +261,7 @@ async function runDelogo() {
   const quality = T.delogo !== 'fast';
   try {
     const g = await api('/api/video/delogo', { method: 'POST', timeout: quality ? 120000 : 3600000, busy: quality ? 'Queueing…' : 'Removing the watermark…',
-      body: { ...delogoBody(), boxes: T.boxes.map(clipFracs), mode: quality ? 'quality' : 'fast', project_id: S.project } });
+      body: delogoRunBody(T, S.project) });
     S.history.set(g.id, g);
     if (quality) adoptGenerations([g]);
     T.results.push(g.id); T.showing = quality ? T.showing : g.id;
@@ -369,10 +283,7 @@ function tracksFields() {
 
 // ---- Talking shot: who, the line, its voice, spoken by the Sound tab's engines into T.sound (web/talk.js) ----
 const tk = () => (T.talk ||= { ...BLANK().talk });
-function talkPromptOf() {
-  const L = tk(), c = characterById(L.char);
-  return talkPrompt({ who: c?.name, look: c?.look, text: L.text, delivery: L.delivery });
-}
+const talkPromptOf = () => talkPromptFor({ ...T, talk: tk() }, characterById(tk().char));
 // the "prompt it makes" ⓘ, swapped for a new one as the line is typed (a redraw would take the box's focus)
 function talkInfo() {
   const b = info(talkPromptOf(), 'The prompt it makes');
@@ -521,8 +432,7 @@ function render() {
 // ---- the drives' pose video: a finished Pose preview of the same clip, trim, crop and poser is followed instead of
 // reading the pose again (POST /api/pose/find); without one, the drive makes it first ----
 const POSE_TPL = { dwpose: 'deck-pose-video', sdpose: 'deck-pose-sdpose' };
-const poseBody = () => ({ source: bareSource(T.source), trim: T.source.trim || null, crop: T.source.crop || null,
-  poser: T.poser || 'dwpose', len: T.len, project_id: S.project });
+const poseBody = () => poseBodyOf(T, S.project);
 const findPose = () => api('/api/pose/find', { method: 'POST', body: poseBody(), busy: false });
 
 // the "Pose ready · #id" line under the source, looked up again when the clip, trim, crop, poser or Length change
@@ -575,7 +485,6 @@ async function drivePosed(e, rv, queue) {
   return true;
 }
 
-const lenFrames = (secs) => Math.max(1, Math.round((secs * FPS) / 8)) * 8 + 1;
 
 function resultsSection() {
   const gens = T.results.map((id) => S.history.get(id)).filter(Boolean);
@@ -649,8 +558,7 @@ function refineFields() {
 }
 
 async function runMatte() {
-  const r = T.refine || REFINE;
-  const body = { a: bareSource(T.matte), ...(T.matte2 && { b: bareSource(T.matte2) }), ...r, project_id: S.project };
+  const body = matteBody(T, S.project);
   try {
     const g = await api('/api/video/matte', { method: 'POST', body, timeout: 900000, busy: 'Refining the matte…' });
     S.history.set(g.id, g);
@@ -662,16 +570,10 @@ async function runMatte() {
 }
 
 // ---- Extend frame: the canvas and the clip's place on it ----
-const ASPECTS = [[0, 'Source'], [16 / 9, '16:9'], [9 / 16, '9:16'], [1, '1:1'], [4 / 5, '4:5'], [21 / 9, '21:9']];
-// the source's shape after its crop: only the cropped part goes on the canvas
-const srcAspect = () => { const c = cropOf(); return (V.a?.videoWidth ? V.a.videoWidth / V.a.videoHeight : 16 / 9) * (c.w / c.h); };
-const canvasAspect = () => (T.canvas?.aspect || srcAspect());
-// the clip's box on the canvas, in fractions of the canvas (app/videoedit.canvas_plan does the same in pixels)
-function clipBox() {
-  const c = T.canvas || CANVAS, sa = srcAspect(), A = canvasAspect();
-  const [w, h] = sa > A ? [c.scale, (c.scale * A) / sa] : [(c.scale * sa) / A, c.scale];
-  return { left: c.cx - w / 2, top: c.cy - h / 2, w, h };
-}
+// the source's shape (the whole frame's; vfx-rules.js takes its crop): only the cropped part goes on the canvas
+const wholeAspect = () => (V.a?.videoWidth ? V.a.videoWidth / V.a.videoHeight : 16 / 9);
+const canvasAspect = () => canvasAspectOf(T, wholeAspect());
+const clipBox = () => clipBoxOf(T, wholeAspect());
 function canvasFields() {
   const c = (T.canvas ||= { ...CANVAS });
   const num = (k, label, opts) => rangeField(label, () => c[k], (v) => { c[k] = v; layoutCanvas(); }, { onChange: () => changed(false), ...opts });
@@ -722,7 +624,6 @@ function pickResult(onPick) {
 }
 
 // SAM3 on a clip: as the template has them (dev/make_ltx_templates.py)
-const SAM = { score: 0.3, direction: 'both', which: -1 };
 function samFields() {
   const s = (T.sam ||= { ...SAM });
   return [rangeField('How sure', () => s.score, (v) => { s.score = v; }, { min: 0.05, max: 0.95, step: 0.05, onChange: () => changed(false),
@@ -733,7 +634,6 @@ function samFields() {
     help: 'All puts everything SAM3 found in one mask. A number takes one of them, by SAM3\'s own numbering: it doesn\'t go by position, and some numbers are empty, so try a few. A number past the last one gives all of them.' })];
 }
 // Alpha Gen: as the templates have them. The crop's only count with a mask clip (deck-ltx-alpha-crop).
-const ALPHA = { strength: 1, hold: 1, margin: 0.2, follow: 'auto', steady: 0.85, onlyMask: true, grow: 0.06 };
 function alphaFields() {
   const a = (T.alpha ||= { ...ALPHA }), num = (k, label, o) => rangeField(label, () => a[k], (v) => { a[k] = v; }, { onChange: () => changed(false), ...o });
   return [num('strength', 'Matte strength', { min: 0, max: 1.5, step: 0.05, help: 'How strongly the matte model is applied. It was trained at 1.' }),
@@ -759,86 +659,22 @@ function faceFields() {
 }
 
 // ---- running ----
-// what's missing before effect e can run, or null
-function missingInput(e) {
-  if (e.needs.includes('source') && !T.source) return 'Choose a source clip first';
-  if (e.needs.includes('matte') && !T.matte) return 'Choose a matte clip first';
-  if (e.needs.includes('first') && !T.first) return 'Choose the start image first';
-  if (e.needs.includes('sound') && !T.sound) return 'Choose the sound first';
-  if (e.needs.includes('line') && !T.sound) return 'Speak the line first, or choose a sound';
-  if (e.still && !T.source && !T.first) return 'Choose a clip or a picture first';
-  return null;
-}
+// what's missing before effect e can run, or null (delogo says so itself, with its message)
+const missingInput = (e) => (e.job === 'delogo' ? missingOf({ ...e, job: null }, T) : missingOf(e, T));
 
+// What a template effect sends (vfx-rules.js buildRun on this tab's state), or why it can't. loose: for Open in Generate
+const buildRun = (e, loose = false) => buildRunOf(e, T, { loose, template: (id) => S.templates.find((t) => t.id === id) || null, roleField,
+  imageSize, sourceInfo: srcInfo, imageNat, character: characterById, aspect: wholeAspect,
+  canvas: (body) => api('/api/video/canvas', { method: 'POST', busy: 'Setting up the canvas…', timeout: 900000, body }) });
 
-// What a template effect sends: { t (the template, with its SDPose / still variant), values (by field key), rv (the
-// same by role, for the drives' posed and pose templates) }, or a message saying why it can't. loose: for Open in
-// Generate, where missing things can be filled in later
-async function buildRun(e, loose = false) {
-  const t = tplOf(e);
-  if (!t) return `Template ${tplId(e)} isn't installed yet`;
-  const values = {}, rv = {};
-  const put = (role, v) => { const f = roleField(t, role); if (f && v !== undefined && v !== null) { values[f.key] = v; rv[role] = v; } };
-  put('source', T.source && { ...bareSource(T.source), ...(T.source.trim && { trim: T.source.trim }), ...(T.source.crop && { crop: T.source.crop }) });
-  put('matte', T.matte && bareSource(T.matte));
-  if (e.needs.some((n) => n.startsWith('first'))) put('first', T.first);   // (one picture per tab: only the effects that take one)
-  if (e.needs.includes('sound')) put('sound', T.sound);
-  if (e.needs.includes('voice')) put('voice', T.voice);
-  put('prompt', T.prompt.trim() ? T.prompt : undefined);   // empty: keep the template's own prompt
-  put('len', e.needs.includes('len') ? T.len : undefined);
-  put('seed', e.needs.includes('seed') ? T.seed : undefined);
-  if (e.needs.includes('loras')) {
-    if (roleField(t, 'loras')) put('loras', T.loras);
-    else if (T.loras[0]) { put('lora', T.loras[0].name); put('strength', T.loras[0].strength); }
-  }
-  if (e.needs.includes('res')) put('res', resOf(e));
-  if (e.needs.includes('steps')) put('steps', STEPS[T.steps] || STEPS[3]);
-  if (e.needs.includes('blend')) {
-    put('blend', T.blend || 'face');
-    for (const k of ['grow', 'feather', 'chin']) put(k, T.face?.[k] ?? FACE[k]);
-  }
-  if (e.needs.includes('depthModel') || e.needs.includes('edgeAmount')) for (const [k, v] of Object.entries(mapRoles(e.id, T))) put(k, v);
-  if (e.needs.includes('outsize')) put('outsize', T.outsize || 'FullHD');
-  if (e.needs.includes('sam')) { const s = T.sam || SAM; put('score', s.score); put('direction', s.direction === 'forward' ? 'forward' : 'both'); put('which', s.which); }
-  if (e.needs.includes('alpha')) {
-    const a = T.alpha || ALPHA;
-    put('strength', a.strength); put('hold', a.hold);
-    if (T.matte) { put('margin', a.margin); put('follow', a.follow); put('steady', a.steady); put('onlyMask', a.onlyMask); put('grow', a.grow); }
-  }
-  if (e.needs.includes('line')) {   // the spoken line, the prompt made from it, the clip as long as it, at about 0.9 MP
-    put('sound', T.sound);
-    put('prompt', T.prompt.trim() ? T.prompt : talkPromptOf());
-    if (T.talk?.said?.seconds) put('len', talkSeconds(T.talk.said.seconds, roleField(t, 'len')?.max || 20));
-  }
-  const size = T.size || (e.needs.includes('size') && T.first ? await imageSize(T.first, e.needs.includes('line') ? 1280 * 704 : 0) : null);
-  if (e.needs.includes('size') && size) { put('width', size[0]); put('height', size[1]); }
-  if (e.needs.includes('points')) {
-    const pts = await pointsPx(), clicked = pts.positive.length > 0;
-    put('pointsPos', JSON.stringify(pts.positive)); put('pointsNeg', JSON.stringify(pts.negative));
-    put('mode', clicked ? 'point' : 'text');
-    put('pframe', clicked ? Math.max(0, Math.round((T.pointsAt - (T.source?.trim?.start || 0)) * FPS)) : 0);
-    if (!clicked && !T.prompt.trim() && !loose) return 'Tap the thing on the picture, or describe it';
-  }
-  if (e.needs.includes('tracks') && T.first) put('tracks', JSON.stringify(await tracksPx(t, values)));
-  if (e.needs.includes('canvas') && T.source) {   // the clip on its canvas, and the mask of what to paint, made on the server first
-    try {
-      const c = T.canvas || CANVAS, a = canvasAspect();
-      const r = await api('/api/video/canvas', { method: 'POST', busy: 'Setting up the canvas…', timeout: 900000,
-        body: { source: bareSource(T.source), trim: T.source.trim || null, crop: T.source.crop || null, aspect: a, scale: c.scale, cx: c.cx, cy: c.cy } });
-      put('source', r.video); put('matte', r.mask);
-    } catch (err) { return 'Couldn\'t set up the canvas: ' + err.message; }
-  }
-  return { t, values, rv };
-}
-
-// vfx:queued { gens, doc }: runs this effect made for the VFX document doc (a frame on a table lands them as clips)
-// RUN.onQueued: a run started by runVfxOn takes its runs itself (aside: a run made on the way, a drive's pose) instead of the event
+// vfx:queued { gens, doc }: runs this effect made for the VFX document doc. RUN.onQueued: whoever started a run takes its
+// runs itself (aside: a run made on the way, a drive's pose) instead of the event
 const RUN = { onQueued: null, raise: false };
 const told = (gens, doc = tabs?.active?.id || null, aside = false) => {
   if (RUN.onQueued) RUN.onQueued(gens, { doc, aside });
   else dispatchEvent(new CustomEvent('vfx:queued', { detail: { gens, doc } }));
 };
-// a run's failure: a toast, or thrown for runVfxOn
+// a run's failure: a toast, or thrown (RUN.raise)
 const failed = (msg) => { if (RUN.raise) throw new Error(msg); toast(msg, true); return null; };
 
 const parentOf = () => (T.source?.generation != null ? { generation: T.source.generation, index: T.source.index || 0, frame: null } : null);
@@ -874,23 +710,6 @@ async function run() {
   return first;
 }
 
-// Run effect patch.op on the VFX document doc (a video frame's: frame-vfx.js ensureDoc), with patch over its settings,
-// from outside the VFX panel (the Edit pane). The document is opened in the VFX tabs (as the frame's VFX section does),
-// changed, saved and run. onQueued(gens, { doc, aside }) gets every run it makes (also a drive's posed run, queued
-// after its pose); without it they go out as vfx:queued as usual. Resolves with the first runs; throws why it can't run.
-export async function runVfxOn(doc, patch = {}, { onQueued = null } = {}) {
-  if (!tabs) throw new Error('the VFX engine is not ready');
-  if (!tabs.started) await tabs.start(); else if (tabs.starting) await tabs.starting;
-  for (let k = 0; k < 2 && tabs.active?.id !== doc; k++) await tabs.switchTo(doc);
-  if (tabs.active?.id !== doc) throw new Error('its VFX settings would not open');
-  Object.assign(T, JSON.parse(JSON.stringify(patch)));
-  UI.srcInfo = null; UI.draw = null;
-  changed();
-  const keep = { ...RUN };
-  Object.assign(RUN, { onQueued, raise: true });
-  try { return (await run()) || []; } finally { Object.assign(RUN, keep); }
-}
-
 // The effect's template with the values Run would send, in a new Generate tab: every field can be changed there.
 // A drive with a ready pose video opens the posed template on it.
 async function openInGenerate() {
@@ -913,9 +732,7 @@ async function openInGenerate() {
 }
 
 async function runKey(e) {
-  const body = { source: bareSource(T.source), trim: T.source.trim || null, mode: e.id === 'colorkey' ? 'color' : 'matte', project_id: S.project };
-  if (e.id === 'colorkey') Object.assign(body, T.key);
-  else Object.assign(body, { matte: bareSource(T.matte), invert: T.key.invert });
+  const body = keyBody(e, T, S.project);
   try {
     const g = await api('/api/video/key', { method: 'POST', body, timeout: 900000, busy: 'Keying…' });
     S.history.set(g.id, g);
@@ -937,26 +754,7 @@ const imageSize = (name, area = 0) => new Promise((res) => {
   im.src = inputUrl(name);
 });
 
-// the points are kept as fractions of the (cropped) frame; SAM3 wants pixels of the clip it reads
-async function pointsPx() {
-  const info = await srcInfo();
-  const c = T.source?.crop || { x: 0, y: 0, w: 1, h: 1 };
-  const W = (info?.width || 1) * c.w, H = (info?.height || 1) * c.h;
-  const px = (p) => ({ x: ((p.x - c.x) / c.w) * W, y: ((p.y - c.y) / c.h) * H });
-  return { positive: T.points.positive.map(px), negative: T.points.negative.map(px) };
-}
-// paths are fractions of the start image; the tracks node wants pixels of the image as the template resizes it
-// (short side to Resolution, both sides multiples of 32), or of an explicit Width / Height
-async function tracksPx(t, values) {
-  const nat = await new Promise((res) => { const im = new Image(); im.onload = () => res([im.naturalWidth, im.naturalHeight]); im.onerror = () => res(null); im.src = inputUrl(T.first); });
-  let w = values[roleField(t, 'width')?.key], hgt = values[roleField(t, 'height')?.key];
-  if (!(w && hgt) && nat) {
-    const k = T.res / Math.min(nat[0], nat[1]), m = fx(T.op).mult || 32;
-    w = Math.round((nat[0] * k) / m) * m; hgt = Math.round((nat[1] * k) / m) * m;
-  }
-  w ||= 1; hgt ||= 1;
-  return T.tracks.map((tr) => tr.map((p) => ({ x: Math.round(p.x * w), y: Math.round(p.y * hgt) })));
-}
+const imageNat = (name) => new Promise((res) => { const im = new Image(); im.onload = () => res([im.naturalWidth, im.naturalHeight]); im.onerror = () => res(null); im.src = inputUrl(name); });
 async function srcInfo() {
   if (!T.source) return null;
   if (!UI.srcInfo) { try { UI.srcInfo = await api('/api/videos/probe', { method: 'POST', body: { source: bareSource(T.source) } }); } catch { UI.srcInfo = null; } }

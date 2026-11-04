@@ -35,7 +35,7 @@
 //                    module drops what only the frame itself owned. Undo brings the frames back, not that.
 //   table:menu       { frame, frames, groups }   the frame menu is about to open: a module adds its own groups of items
 //                    (press-menu.js's shape) to groups; they go before Delete
-import { $, h, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, toggle, help, mpInput, layerRowsEl, iconBtn, uid } from './ui.js';
+import { $, h, api, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, toggle, help, mpInput, layerRowsEl, iconBtn, uid } from './ui.js';
 import { S, onServer, onProject } from './core.js';
 import { TabSet } from './tabs.js';
 import { currentTab } from './navigation.js';
@@ -89,6 +89,7 @@ const adapter = {
     syncUndo(); D.syncBar?.(); renderAll(); refreshStills();
     fitAll();
     dispatchEvent(new CustomEvent('table:open', { detail: { table: T, doc } }));
+    moveVfxDocs().catch((e) => console.warn('old frame VFX', e));
   },
 };
 // The open table saved elsewhere (another device, a story module): its new contents, keeping what is going on here. The
@@ -352,8 +353,26 @@ export function unlive() {
   return U.leaving;
 }
 
-// a video frame's VFX document (frame-vfx.js), as table-frames.js trashDoc / restoreDoc / copyDoc take it
+// a video frame's old VFX document (frame.vfx: the Edit pane's full VFX panel kept one), as table-frames.js trashDoc /
+// restoreDoc take it. A frame's VFX state is its own now (frame.ops): moveVfxDocs reads an old one in once and trashes it.
 const vfxOf = (f) => ({ kind: 'vfx-tabs', doc: f.vfx, label: `${f.label || 'Video'} · VFX` });
+async function moveVfxDocs() {
+  const old = T.frames.filter((f) => f.kind === 'video' && f.vfx);
+  if (!old.length) return;
+  const ok = here(), qs = S.project != null ? `?project_id=${S.project}` : '';
+  const { mergeOps, migrateVfxDoc } = await import('./vfx-rules.js');
+  let moved = 0;
+  for (const f of old) {
+    let d = null;
+    try { d = await api(`/api/store/vfx-tabs/${f.vfx}${qs}`, { busy: false }); } catch (e) { if (e.status !== 404) continue; }   // (not now: next time)
+    if (!ok()) return;
+    const id = f.vfx;
+    if (d) f.ops = mergeOps(migrateVfxDoc(d.payload), f.ops);
+    delete f.vfx; moved++;
+    if (d && !T.frames.some((g) => g.vfx === id)) trashDoc(vfxOf({ ...f, vfx: id })).catch((e) => console.warn('old frame VFX', e));
+  }
+  if (moved && ok()) changed();
+}
 
 // Delete: the frames go, their documents to the server's trash; Undo brings both back. A locked frame stays. A frame
 // whose document couldn't be trashed comes back; Undo brings back the ones whose document could be restored, into their
@@ -470,22 +489,19 @@ async function redo() { const e = H.future.pop(); if (!e) return; H.past.push(e)
 function tellMoved(frames) {
   if (frames.length) dispatchEvent(new CustomEvent('table:move', { detail: { frames, table: T } }));
 }
-// Duplicate: each copy beside its original, with a copy of its document and of its VFX document. The Make panel's
+// Duplicate: each copy beside its original, with a copy of its document (and its own op state, frame.ops). The Make panel's
 // pictures (make.inputs) stay the original's: the copy's settings still name them, but deleting the copy, or its slot
 // taking another picture, never deletes them.
 async function duplicateFrames(ids) {
   const made = [], ok = here();
-  const gone = (g) => { trashDoc(g).catch(() => {}); if (g.vfx) trashDoc(vfxOf(g)).catch(() => {}); };
+  const gone = (g) => { trashDoc(g).catch(() => {}); };
   for (const f of T.frames.filter((x) => ids.has(x.id))) {
     const g = { ...structuredClone(f), id: M.newFrame(f.kind, f).id, label: `${f.label} copy`, locked: false };
     g.key = g.id;
     if (g.make) g.make = { ...g.make, inputs: [] };
     Object.assign(g, M.nextBeside([...T.frames, ...made], f.kind, { w: f.w, h: f.h }));
     try { g.doc = f.doc ? await copyDoc(f, g.label) : null; } catch (e) { toast(`Couldn't copy "${f.label}": ${e.message}`, true); continue; }
-    if (f.vfx) {
-      try { g.vfx = await copyDoc(vfxOf(f), `${g.label} · VFX`); }
-      catch (e) { g.vfx = null; if (e.status !== 404) toast(`Couldn't copy "${f.label}"'s VFX: ${e.message}`, true); }   // (404: never saved; the copy makes its own)
-    }
+    delete g.vfx;   // (an old VFX document stays the original's: moveVfxDocs reads it into that frame)
     made.push(g);
     if (!ok()) break;
   }

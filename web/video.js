@@ -1368,6 +1368,27 @@ async function snapshotFrame() {
       button('Close', closeSheet, { cls: 'small ghost' })));
 }
 
+// Where the sequence's picture is on screen (the viewer's canvas, fitted, zoomed and panned): { left, top, width,
+// height } in client pixels, or null when not mounted. frame-overlay.js draws marks over it.
+export function frameRect() {
+  const cv = VD.canvas;
+  if (!cv?.isConnected) return null;
+  const r = cv.getBoundingClientRect(), [W, H] = seqSize(), k = Math.min(r.width / W, r.height / H);
+  if (!(k > 0)) return null;
+  return { left: r.left + (r.width - W * k) / 2, top: r.top + (r.height - H * k) / 2, width: W * k, height: H * k };
+}
+// the colour of the picture under the playhead at (fx, fy), fractions of the frame: '#rrggbb', or null
+export function framePixel(fx, fy) {
+  const cv = VD.canvas;
+  if (!cv?.width) return null;
+  try {
+    const d = cv.getContext('2d').getImageData(clamp(Math.floor(fx * cv.width), 0, cv.width - 1), clamp(Math.floor(fy * cv.height), 0, cv.height - 1), 1, 1).data;
+    return '#' + [d[0], d[1], d[2]].map((v) => v.toString(16).padStart(2, '0')).join('');
+  } catch { return null; }
+}
+// the playhead (seconds on the timeline)
+export const videoTime = () => V.t;
+
 // The frame under the playhead at the sequence size, as a PNG Blob (a frame's still on a table); null with no clips
 export async function videoStill() {
   if (!V.items.length || !VD.canvas) return null;

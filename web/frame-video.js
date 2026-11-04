@@ -1,4 +1,5 @@
 // A video frame on the table, live: the Video engine (video.js mountVideo) mounts inside the frame, its Clips pane
+// (and, when an Edit op asks, frame-overlay.js's marks over its viewer: mountOverlay)
 // goes in the sidebar, and its timeline in the drawer under the table. Letting go saves the edit and its still and
 // puts the engine back on the page's Video tab. Also what happens when frames, or things from the Shelf or a picker
 // (table:drop-frame sources), are dropped onto a video frame: pictures become picture clips, clips and sounds clips.
@@ -157,6 +158,15 @@ export async function dropOnto(d, kind, engine) {
 
 // ---- live ----
 let cur = null;   // { frame, root, dead, pane }
+// The live frame's viewer, or null (not live, or not mounted yet). frame-overlay.js puts its marks and its compare
+// over it: mountOverlay(frame, el) appends el there (true), or says it can't yet (false).
+export const viewerOf = (frame) => (cur && !cur.dead && cur.frame.id === frame?.id ? cur.root.querySelector(':scope > .editor-stage > .viewer') : null);
+export function mountOverlay(frame, el) {
+  const v = viewerOf(frame);
+  if (!v) return false;
+  if (el.parentElement !== v) v.append(el);
+  return true;
+}
 addEventListener('table:live', (e) => {
   const d = e.detail;
   if (d.frame.kind !== 'video') return;

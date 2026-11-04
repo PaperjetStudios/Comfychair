@@ -14,7 +14,7 @@ x,y,w,h,label,locked?,text?,story?:{scene,shot}}], story?:<story-tabs id>}. The 
 point at: deleting the table trashes them too, restoring it brings them back.
 
 A "setups" payload (a parameter block's saved values, global so every project sees it): {v:1, key, values, note?}.
-`key` names the block (tpl:<template>, edit:<kind>.<op>, vfx:<op>, tool:<id>, sound:maker.<id>, sound:voice,
+`key` names the block (tpl:<template>, edit:<kind>.<op> (old vfx:<op> keys move there), tool:<id>, sound:maker.<id>, sound:voice,
 scene:out); `values` is that block's own value map. A setup holds no runs and no files."""
 import json
 import os
@@ -192,8 +192,9 @@ FRAME_DOC_KINDS = {"image": "edit-tabs", "video": "video-tabs", "scene": "scene-
 
 
 def _owned_docs(doc: dict, story: bool = True) -> list[tuple[str, str]]:
-    """(kind, id) of the documents a table owns: each frame's doc, a video frame's VFX settings (frame.vfx), and (story=True)
-    its story-tabs doc (payload.story). The one-owner check passes story=False: that is not a frame doc."""
+    """(kind, id) of the documents a table owns: each frame's doc and (story=True) its story-tabs doc (payload.story). The
+    one-owner check passes story=False: that is not a frame doc. (A video frame's old VFX document, frame.vfx, is read into
+    the frame's own state and trashed by the page when its table opens: it is not owned here.)"""
     out = []
     pl = doc.get("payload") or {}
     st = pl.get("story")
@@ -205,9 +206,9 @@ def _owned_docs(doc: dict, story: bool = True) -> list[tuple[str, str]]:
     for f in frames:
         if not isinstance(f, dict):
             continue
-        for k, i in ((FRAME_DOC_KINDS.get(f.get("kind")), f.get("doc")), ("vfx-tabs", f.get("vfx"))):
-            if k and isinstance(i, str) and ID_RE.fullmatch(i) and (k, i) not in out:
-                out.append((k, i))
+        k, i = FRAME_DOC_KINDS.get(f.get("kind")), f.get("doc")
+        if k and isinstance(i, str) and ID_RE.fullmatch(i) and (k, i) not in out:
+            out.append((k, i))
     return out
 
 
