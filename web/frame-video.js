@@ -14,7 +14,7 @@ import { DOC_KIND } from './table-model.js';
 import { dropInput, editDoc, putStill, sourceClip, sourcePicture, stillOf } from './table-frames.js';
 import { sidebar } from './sidebar.js';
 import { frameChanged, selectedFrames } from './table.js';
-import { addToTimeline, mountVideo, newItem, renderVideo, setSequenceSize, videoStill, videoTabs, vidPause, wireVideoTransport } from './video.js';
+import { addToTimeline, fpsOf, mountVideo, newItem, renderVideo, setFps, setSequenceSize, videoStill, videoTabs, vidPause, wireVideoTransport } from './video.js';
 
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
 const docUrl = (kind, id) => `/api/store/${DOC_KIND[kind]}/${id}${qs()}`;
@@ -253,7 +253,7 @@ const SEQ_FPS = [[0, 'Match first clip'], [16, '16'], [24, '24'], [25, '25'], [3
 const openVideoHere = (f) => isLive(f.id) && videoTabs()?.active?.id === f.doc;
 async function setSeq(f, patch) {
   if (openVideoHere(f)) {
-    if (patch.fps !== undefined) { const { videoDebug } = await import('./video.js'); videoDebug().V.fps = patch.fps; videoTabs().changed(); renderVideo(); }
+    if (patch.fps !== undefined) setFps(patch.fps);
     if (patch.size) setSequenceSize(...patch.size);
     return;
   }
@@ -269,7 +269,7 @@ sidebar.addTo('frame', (el) => {
   const sec = section('Sequence', null, body);
   sec.classList.add('frame-seq'); sec.dataset.frame = f.id;
   el.append(sec);
-  (openVideoHere(f) ? import('./video.js').then((m) => ({ fps: m.videoDebug().V.fps || 0 }))
+  (openVideoHere(f) ? Promise.resolve({ fps: fpsOf() })
     : api(docUrl('video', f.doc), { busy: false }).then((d) => ({ fps: d.payload?.fps || 0 }))).then((o) => {
     const sizeKey = `${f.w}x${f.h}`;
     body.replaceChildren(

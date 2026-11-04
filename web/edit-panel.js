@@ -6,7 +6,9 @@
 // op.tools) puts them over the open frame's picture (frame-overlay.js) while the pane is on show; they are kept on the
 // frame (frame.ops[op]). Clip tools → VFX on an open video frame opens this pane on it. On the open image frame, with
 // the result as a layer, Run on picks the whole picture or the selected layers (imagetools.js toolState().scope). A
-// selected note gets a Make from this note button: its words are the Make pane's prompt (make-panel.js).
+// selected note gets a Make from this note button: its words are the Make pane's prompt (make-panel.js). What the
+// selection can make of a kind none of it is (edit-rules.js crossOps: pictures and sounds into a video) is a section of
+// its own ("Make video · from 2 frames"), its result always a new frame.
 //
 //   showOp(kind, id, frames)   select an op in the pane (the frame menu's Edit ▸ items) and put the pane on show
 //   runEdit()                  Run for the section last used (Ctrl+Enter and the action bar call it while the pane is on show)
@@ -59,6 +61,7 @@ function currentOp(kind) {
   return list.find((o) => o.id === want) || list.find((o) => !whyNot(o, kind)) || list[0] || null;
 }
 function targetOf(op, kind) {
+  if (isCross(kind)) return 'frame';   // (a cross-kind op's result is always a new frame)
   const can = rules().targetsOf(op), kept = store.get(`deck.edit.target.${kind}`, null);
   return can.includes(kept) ? kept : rules().defaultTarget(op, liveIn(kind, ofKind(kind)));
 }
@@ -71,13 +74,25 @@ function selection() {
   try { frames = Table.selectedFrames() || []; } catch { frames = sidebar.context().frames || []; }
   return frames.filter((f) => f.kind !== 'note');
 }
-const ofKind = (kind) => P.frames.filter((f) => f.kind === kind);
+// a kind's frames: those of it, or for a cross kind (no frame of it selected, "Make video") the frames its ops take
+const ofKind = (kind) => {
+  const cross = P.cross.get(kind);
+  if (!cross) return P.frames.filter((f) => f.kind === kind);
+  const takes = new Set(cross.flatMap((o) => o.takes || []));
+  return P.frames.filter((f) => takes.has(f.kind));
+};
+const isCross = (kind) => P.cross.has(kind);
 
+// the ops per kind of the selection, then what it can make of a kind none of it is (edit-rules.js crossOps)
 function plan() {
   P.frames = selection();
   P.ops = rules().opsFor(P.frames);
+  P.cross = new Map();
+  for (const o of rules().crossOps?.(P.frames) || []) if (!P.ops.has(o.kind)) P.cross.set(o.kind, [...(P.cross.get(o.kind) || []), o]);
+  for (const [kind, list] of P.cross) P.ops.set(kind, list);
 }
 P.ops = new Map();
+P.cross = new Map();
 
 // ---------------------------------------------------------------------------
 // drawing
@@ -89,22 +104,22 @@ export function draw() {
   if (!P.loaded) { el.replaceChildren(note('The Edit tools are loading.', 'warn')); load(); return; }
   if (!rules() || !ops() || !runner()) { el.replaceChildren(note(`The Edit tools aren't available (${(P.errs || []).join('; ')}).`, 'warn')); return; }
   plan();
-  const kinds = KINDS.filter((k) => ofKind(k).length && (P.ops.get(k) || []).length);
+  const kinds = KINDS.filter((k) => ofKind(k).length && (P.ops.get(k) || []).length).sort((a, b) => isCross(a) - isCross(b));   // (Make video last)
   const notes = notesSection();
   if (!kinds.length) { syncOverlay(null, null, []); el.replaceChildren(notes || note(P.frames.length ? 'Nothing to edit on these frames yet.' : 'Select a frame to edit it.', 'info')); tellState(); return; }
   if (!kinds.includes(P.focus)) P.focus = kinds[0];
   el.replaceChildren(...kinds.map(sectionFor), notes || '');
-  if (!kinds.includes('video')) syncOverlay(null, null, []);
+  if (!kinds.includes('video') || isCross('video')) syncOverlay(null, null, []);
   tellState();
 }
 
 function sectionFor(kind) {
-  const frames = ofKind(kind), op = currentOp(kind);
+  const frames = ofKind(kind), op = currentOp(kind), cross = isCross(kind);
   const why = whyNot(op, kind);
   const kids = [];
   // quick icons (the Image tools' pattern): each opens the first of its ops that can run here
   const have = new Set((P.ops.get(kind) || []).map((o) => o.id));
-  const quick = rules().quickOf(kind).filter((q) => q.ids.some((id) => have.has(id)));
+  const quick = cross ? [] : rules().quickOf(kind).filter((q) => q.ids.some((id) => have.has(id)));
   if (quick.length) kids.push(h('div', { class: 'tool-quick' }, ...quick.map((q) => {
     const here = q.ids.includes(op?.id);
     return h('button', { type: 'button', class: `icon-btn tool-quick-btn${here ? ' on' : ''}`, title: q.label, 'aria-pressed': String(here),
@@ -112,7 +127,8 @@ function sectionFor(kind) {
   })));
   // the op list: one optgroup per group, ops that need the frame open say so
   kids.push(h('select', { 'aria-label': `${WORD[kind]} edit`, class: 'edit-op', onchange: (e) => pick(kind, e.target.value) },
-    ...rules().groupsOf(kind).map(({ group, ops: list }) => h('optgroup', { label: group }, ...list.map((o) => {
+    ...rules().groupsOf(kind).map(({ group, ops: list }) => ({ group, ops: list.filter((o) => have.has(o.id)) })).filter((g) => g.ops.length)
+      .map(({ group, ops: list }) => h('optgroup', { label: group }, ...list.map((o) => {
       const w = whyNot(o, kind);
       return h('option', { value: o.id, selected: o.id === op?.id, class: w ? 'edit-grey' : '', title: w || '' }, o.label + (w ? ' (open the frame)' : ''));
     })))));
@@ -138,7 +154,7 @@ function sectionFor(kind) {
     catch (e) { console.error(e); host.append(note(`${op.label}: ${e.message}`, 'warn')); }
     if (host.childNodes.length) kids.push(host);
     const targets = rules().targetsOf(op);
-    if (!why && !op.selfLands && targets.length > 1) {
+    if (!why && !cross && !op.selfLands && targets.length > 1) {
       kids.push(field('Result', seg([['frame', 'New frame'], ['layer', kind === 'image' ? 'Layer in this frame' : 'In this frame']], targetOf(op, kind), (x) => {
         store.set(`deck.edit.target.${kind}`, x); draw();
       }), help('New frame puts each result in a new frame beside the one it came from. In this frame adds it to that frame itself: a layer, a clip or a track.')));
@@ -152,8 +168,10 @@ function sectionFor(kind) {
     kids.push(runRow(kind, op, frames, why));
     kids.push(statusList(kind, frames));
   }
-  if (kind === 'video') syncOverlay(kind, op, frames);
-  const sec = section(`${WORD[kind]} · ${frames.length} ${frames.length === 1 ? 'frame' : 'frames'}`, null, ...kids);
+  if (kind === 'video' && !cross) syncOverlay(kind, op, frames);
+  const sec = section(cross ? `Make ${WORD[kind].toLowerCase()} · from ${frames.length} ${frames.length === 1 ? 'frame' : 'frames'}`
+    : `${WORD[kind]} · ${frames.length} ${frames.length === 1 ? 'frame' : 'frames'}`, null, ...kids);
+  if (cross) sec.classList.add('edit-cross');
   sec.dataset.kind = kind;
   sec.addEventListener('pointerdown', () => { if (P.focus !== kind) { P.focus = kind; tellState(); } }, true);
   sec.addEventListener('focusin', () => { if (P.focus !== kind) { P.focus = kind; tellState(); } });

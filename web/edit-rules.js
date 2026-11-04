@@ -122,8 +122,6 @@ const VIDEO = [
 const SOUND = [
   { id: 'voice', group: 'Voice', label: 'Clean the voice', icon: 'mic', quick: 'Voice', help: 'The voice alone, out of music, noise and echo.' },
   { id: 'foley', group: 'Make', label: 'Sound from a clip', icon: 'film', tpl: 'deck-mmaudio-foley', help: 'Foley for the first clip in the mix (MMAudio).' },
-  { id: 'gain', group: 'Mix', label: 'Master level', icon: 'sound', needs: 'doc', once: true, help: 'The mix\'s level on export.' },
-  { id: 'normalise', group: 'Mix', label: 'Even out the loudness', icon: 'wave', needs: 'doc', once: true, help: '−16 LUFS on export, for speech and streaming.' },
   { id: 'newvoice', group: 'Voice', label: 'New voice', icon: 'mic', needs: 'live', why: 'It is made in the open frame\'s voice tools', help: 'A voice kept to speak new lines.' },
   { id: 'speak', group: 'Voice', label: 'Speak a line', icon: 'text', needs: 'live', why: 'Lines are placed on the open frame\'s tracks', help: 'New lines in a kept voice.' },
 ];
@@ -141,7 +139,7 @@ export const OPS = Object.freeze({ image: fill('image', IMAGE), video: fill('vid
 const GROUP_ORDER = {
   image: ['Edit', 'Upscale', 'Clean up', 'Colour', 'Cut out', 'Detail', 'Maps', '3D'],
   video: ['Quick', 'Restyle', 'Remove', 'Matte', 'Performance', 'Generate', 'Sound', 'Sheet'],
-  sound: ['Voice', 'Make', 'Mix'],
+  sound: ['Voice', 'Make'],
   scene: ['Model', 'Splat'],
 };
 export const KIND_WORD = { image: 'image', video: 'video', sound: 'sound', scene: '3D' };

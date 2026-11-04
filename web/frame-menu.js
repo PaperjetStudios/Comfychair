@@ -2,6 +2,7 @@
 //   Edit ▸          the selected frames' edits (edit-rules.js menuGroupsFor; several kinds: "Edit image ▸", "Edit video ▸";
 //                   pictures and sounds: "Make video ▸"). A pick opens that edit in the Edit pane (edit-panel.js showOp) for
 //                   the frames selected. What used to be Use as (3D, Track motion, Its sound, Render, Finish…) is an op there.
+//   Make from this note   a selected note with words: the Make pane on show (its words are the prompt: make-panel.js)
 //   Compare with…   one frame with a picture (shelf.js compareSheet)
 //   Open in …       an image frame in PhotoCraft (its picture), a video frame's edit in EffectCraft (its clips)
 // Nothing here opens another screen: a result is a frame beside it, or a layer or clip in it.
@@ -59,6 +60,9 @@ export function frameExtras(frames) {
   const groups = [], one = frames.length === 1 ? frames[0] : null;
   const edit = editEntries(frames);
   if (edit.length) groups.push(edit);
+  const words = frames.some((f) => f.kind === 'note' && String(f.text || '').trim());
+  if (frames.some((f) => f.kind === 'note')) groups.push([{ label: 'Make from this note', disabled: !words, title: words ? 'Its words are the prompt in the Make pane' : 'This note has no words yet',
+    run: tryIt(async () => (await import('./sidebar.js')).sidebar.show('make')) }]);
   if (one && one.kind !== 'note' && one.doc) {
     const more = [];
     if (one.kind === 'image' && R.source) more.push({ label: 'Open in PhotoCraft', title: 'Its picture as a PhotoCraft document, on the computer', run: tryIt(() => craftImage(one)) });

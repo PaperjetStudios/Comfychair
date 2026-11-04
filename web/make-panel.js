@@ -418,7 +418,7 @@ async function landScene(frame, done) {
 
 // anything with nowhere to go: the result is in the Shelf (History) already
 function inShelf(done) {
-  toast(`#${done.id} is done: it is in the Shelf`, false, { label: 'Use as…', fn: async () => (await import('./useas.js')).openUseAs(done, 0) });
+  toast(`#${done.id} is done: it is in the Shelf`, false, { label: 'On the table…', fn: async () => (await import('./useas.js')).openUseAs(done, 0) });
 }
 
 // ---------------------------------------------------------------------------

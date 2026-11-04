@@ -62,7 +62,7 @@ test('a run per frame of the op\'s kind, with the batch; no document or doubles 
   assert.deepEqual(skipped.map((s) => s.frame.id), ['e']);
   assert.equal(planRuns([a], opById('image', 'up'), 99).runs[0].batch, 32);
   assert.equal(planRuns([a], opById('image', 'up'), 'x').runs[0].batch, 1);
-  assert.equal(planRuns([F('s', 'sound')], opById('sound', 'gain'), 4).runs[0].batch, 1, 'a setting is changed once');
+  assert.equal(planRuns([F('s', 'sound')], opById('sound', 'foley'), 4).runs[0].batch, 4, 'a sound op runs as many times as asked');
   assert.deepEqual(planRuns([a], null).runs, []);
 });
 test('the menu: one kind gives its groups under Edit; several give Edit image / Edit video', () => {
@@ -88,7 +88,7 @@ test('where results land: a new frame from the table, a layer in an open frame, 
   assert.equal(defaultTarget(up), 'frame');
   assert.equal(defaultTarget(up, true), 'layer');
   assert.deepEqual(targetsOf(opById('scene', 'cleanup')), ['self']);
-  assert.equal(defaultTarget(opById('sound', 'gain'), false), 'self');
+  assert.equal(defaultTarget(opById('scene', 'cleanup'), false), 'self');
   assert.deepEqual(targetsOf(null), []);
   assert.equal(resultKind(opById('video', 'grab')), 'image');
   assert.equal(resultKind(opById('video', 'foley')), 'sound');

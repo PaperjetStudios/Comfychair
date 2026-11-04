@@ -8,18 +8,21 @@
 // the reference over the view. A Track motion result, a dropped model and a run's 3D output make new 3D frames
 // (sceneFrameFrom, table-frames.js frameFor). Its panel's Render and Save frame hand what they make to onSceneOut.
 //
+// The Frame pane gets a 3D section for one selected 3D frame: its size (the scene's picture), length, frame rate and which
+// videos Render makes (scene-ui.js / scene-data.js setters; off screen through withSceneDoc or its saved document).
+//
 // table.js's events (detail.handled = true when taken here): table:live, table:unlive, table:resize, table:drop-frame.
-import { api, h, toast } from './ui.js';
+import { api, field, h, help, hint, rangeField, section, toast, toggle, chips } from './ui.js';
 import { isLive } from './live.js';
 import { uploadImage } from './media.js';
 import { sceneModule } from './run.js';
 import { sidebar } from './sidebar.js';
-import { besideSpot, putStill, sourcePicture, stillOf } from './table-frames.js';
+import { besideSpot, editDoc, putStill, sourcePicture, stillOf } from './table-frames.js';
 import { nextBeside } from './table-model.js';
 import { dropKind } from './drop-files.js';
 import { kindOf } from './kinds.js';
 import { S } from './core.js';
-import { frameChanged, refreshStills } from './table.js';
+import { frameChanged, refreshStills, selectedFrames } from './table.js';
 import { openPressMenu } from './press-menu.js';
 
 const F = { seq: 0, mounted: null, m: null, size: null };   // mounted: the frame the engine is in; size: the scene's when it went live
@@ -340,4 +343,48 @@ const OUTS = new Set();
 export function onSceneOut(fn) { OUTS.add(fn); return () => OUTS.delete(fn); }
 function tell(frame, out) {
   for (const fn of OUTS) { try { fn(frame, out); } catch (err) { console.error(err); } }
+}
+
+// ---- the Frame pane's 3D section: size, length, frame rate, what Render makes ----
+sidebar.addTo('frame', (el) => {
+  const sel = selectedFrames() || [], f = sel.length === 1 ? sel[0] : null;
+  const had = el.querySelector(':scope > .frame-scene-props');
+  if (had && had.dataset.frame === (f?.kind === 'scene' && f.doc ? f.id : '')) return;   // (already there: its own insert calls this again)
+  had?.remove();
+  if (!f || f.kind !== 'scene' || !f.doc) return;
+  const body = h('div', { class: 'frame-scene-body' }, h('span', { class: 'hint' }, 'Loading…'));
+  const sec = section('3D scene', null, body);
+  sec.classList.add('frame-scene-props'); sec.dataset.frame = f.id;
+  el.append(sec);
+  fillSceneSection(f, body).catch((e) => body.replaceChildren(h('span', { class: 'hint' }, `Couldn't read the scene: ${e.message}`)));
+});
+
+async function fillSceneSection(f, body) {
+  const [D, ui] = await Promise.all([import('./scene-data.js'), import('./scene-ui.js')]);
+  const live = () => F.mounted === f.id;
+  const p = live() ? { seconds: D.SC.seconds } : (await api(`/api/store/scene-tabs/${f.doc}${S.project != null ? `?project_id=${S.project}` : ''}`, { busy: false }))?.payload || {};
+  let secs = Number(p.seconds) || 5;
+  const sizeKey = `${f.w}x${f.h}`;
+  const kinds = new Set(ui.renderKinds());
+  body.replaceChildren(
+    field('Size', chips(D.SIZES.map((s) => [s.join('x'), s.join('×')]), sizeKey, (v) => setSceneFrameSize(f, ...v.split('x').map(Number))),
+      help('The frame\'s size is the scene\'s picture: renders are this size. Any other size: Size and MP… above.')),
+    rangeField('Length', () => secs, (v) => { secs = v; }, { min: ui.LENGTHS[0], max: ui.LENGTHS[1], step: 0.5,
+      fmt: (v) => `${+Number(v).toFixed(2)} s · ${D.framesFor(v)} frames`,
+      onChange: () => withSceneDoc(f, async () => { ui.newLength(secs); }).catch((e) => toast(e.message, true)) }),
+    hint(`${D.FPS} fps (a 3D scene's frame rate is fixed)`),
+    field('Render makes', h('div', { class: 'row wrap' }, ...ui.RENDER_KINDS.map(([id, label]) => toggle(label, kinds.has(id), (on) => {
+      if (on) kinds.add(id); else kinds.delete(id);
+      ui.setRenderKinds([...kinds]);
+    }))), help('The videos Render… makes of the scene, one after another: depth, pose (the posable people) and colour.')));
+}
+
+// a 3D frame's size: the frame on the table, and its scene's picture (the open one at once, else its saved document)
+async function setSceneFrameSize(f, w, hh) {
+  if (!w || !hh) return;
+  f.w = w; f.h = hh; frameChanged();
+  try {
+    if (F.mounted === f.id) { F.m.setSceneSize(w, hh); F.size = F.m.sceneSize(); }
+    else await editDoc('scene', f.doc, (p) => { if (p.width === w && p.height === hh) return false; p.width = w; p.height = hh; });
+  } catch (e) { toast(e.message, true); }
 }

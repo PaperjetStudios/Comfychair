@@ -123,16 +123,19 @@ function takeSize(frame) {
 // is drawn). Open: the editor follows at once, and the frame takes its shape on coming back. Not open: its edit is
 // changed where it is saved, and drawn off screen for its new shape (later, when another image frame is open).
 sidebar.addTo('frame', (el) => {
-  el.querySelector('.frame-fit-field')?.remove();
   const sel = selectedFrames() || [], f = sel.length === 1 ? sel[0] : null;
-  if (!f || f.kind !== 'image' || !f.doc) return;
-  if (fitResized(f)) { toFixed(f); queueMicrotask(frameChanged); }
+  const ok = f && f.kind === 'image' && f.doc;
+  if (ok && fitResized(f)) { toFixed(f); queueMicrotask(frameChanged); }
+  const fit = ok ? (F.mounted === f.id ? !E.size : f.fit === true) : null;
+  const had = el.querySelector('.frame-fit-field');
+  if (had && ok && had.dataset.frame === f.id && had.dataset.fit === String(fit)) return;   // (already there: its own insert calls this again)
+  had?.remove();
+  if (!ok) return;
   const at = el.querySelector('.table-size')?.closest('.field');
   if (!at) return;
-  const fit = F.mounted === f.id ? !E.size : f.fit === true;
   const row = field('Picture size', seg([['fit', 'Fit layers'], ['fixed', 'Fixed size']], fit ? 'fit' : 'fixed', (v) => setFit(f, v === 'fit')),
     help('Fit layers: the picture is just big enough for its layers, and the frame takes their shape. Fixed size: the frame\'s size is the canvas; resizing the frame on the table makes it fixed.'));
-  row.classList.add('frame-fit-field');
+  row.classList.add('frame-fit-field'); row.dataset.frame = f.id; row.dataset.fit = String(fit);
   at.after(row);
 });
 

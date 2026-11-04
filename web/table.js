@@ -1306,7 +1306,7 @@ function wire() {
     owedSoon();
   });
   addEventListener('table:select', () => { if (!isLive()) requestAnimationFrame(showSelectedRow); });
-  import('./frame-menu.js').catch((e) => console.warn('frame menu', e));   // (Edit ▸, Use as ▸, Compare, Finish, Open in …: table:menu)
+  import('./frame-menu.js').catch((e) => console.warn('frame menu', e));   // (Edit ▸, Make from this note, Compare, Open in …: table:menu)
   import('./story.js').then((m) => { U.story = m; }).catch(() => {});   // (a story table's scene names, for the list)
 }
 

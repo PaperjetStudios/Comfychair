@@ -802,7 +802,7 @@ function clipEl(it) {
   const bg = it.kind === 'video' ? posterFor(it) : it.kind === 'image' ? it.thumb || it.url : null;
   const gone = it.kind === 'scene' && COMP.sceneOf(it.src.scene)?.state === 'missing';
   return h('div', { class: `tl-clip ${it.kind}` + (V.sel === it.id ? ' sel' : '') + (gone ? ' gone' : '') + (it.fx?.busy ? ' fx-busy-clip' : ''), 'data-id': it.id,
-    title: gone ? 'This 3D scene was deleted from the 3D tab' : null,
+    title: gone ? 'This 3D scene was deleted' : null,
     style: `left:${it.at * V.pps}px;width:${Math.max(6, itLen(it) * V.pps)}px` + (bg ? `;background-image:url("${bg}")` : '') },
     it.kind === 'audio' ? h('canvas', { class: 'wave' }) : null,
     h('span', { class: 'tl-label' }, gone ? icon('warn') : null, it.label),
@@ -907,7 +907,7 @@ function addScene() {
   let look = 'color';
   pickerSheet('Add a 3D scene', [
     seg(COMP_LOOKS, look, (k) => { look = k; }),
-    help('Tap a scene to add it with this look. It stays linked: edits in the 3D tab show up here.', 'grow'),
+    help('Tap a scene to add it with this look. It stays linked: edits to the scene show up here.', 'grow'),
     button('Done', closeSheet)], async () => {
     const rows = await COMP.listScenes();
     return rows.length ? rows.map((r) => mediaCard(h('div', { class: 'scene-thumb' }, '3D'), r.name, async (c) => {
@@ -916,7 +916,7 @@ function addScene() {
       if (!d || d.state !== 'ok') return toast('Couldn\'t open that 3D scene', true);
       await addToTimeline({ kind: 'scene', src: { scene: r.id, look }, label: d.name, dur: d.dur, nat: d.nat });
       toast('Added');
-    })) : placeholder('This project has no 3D tabs yet. Make a scene in the 3D tab first.');
+    })) : placeholder('This project has no 3D scenes yet. Make one first.');
   });
 }
 
@@ -1020,8 +1020,8 @@ function sceneFields(it) {
   const d = COMP.sceneOf(it.src.scene);
   return [
     field('Look', seg(COMP_LOOKS, it.src.look || 'color', (k) => { it.src = { ...it.src, look: k }; timelineChanged(); })),
-    d?.state === 'missing' ? note('This 3D scene was deleted from the 3D tab. The clip stays; pick another scene or delete it.', 'err')
-      : help(`Live from the 3D tab “${d?.name || it.label}”: changes there show here and in every video tab using it. Exports render it at the export size.`),
+    d?.state === 'missing' ? note('This 3D scene was deleted. The clip stays; pick another scene or delete it.', 'err')
+      : help(`Live from the 3D scene “${d?.name || it.label}”: changes there show here and in every video edit using it. Exports render it at the export size.`),
   ];
 }
 
@@ -1101,7 +1101,7 @@ function renderVideoPanel() {
       button('+ Clips', addFromHistory, { cls: 'small primary' }),
       button('+ Images', addImages),
       button('+ Sound / files', addMediaFiles),
-      button('+ 3D scene…', addScene, { title: 'A 3D tab as a live clip' }),
+      button('+ 3D scene…', addScene, { title: 'A 3D scene as a live clip' }),
       V.items.length ? button('Clear all', clearAll, { cls: 'small ghost' }) : null),
     clipTools, maps, clip, colour, !clip && (V.items.length
       ? help('Tap a clip to edit it. Drag clips to move them (also onto other tracks), drag their ends to trim, and overlap two clips on a track to cross-fade. Higher video tracks draw on top.')
@@ -1572,6 +1572,14 @@ export function setSequenceSize(w, h) {
   if (V.size && V.size[0] === w && V.size[1] === h) return;
   V.size = [w, h]; timelineChanged();
 }
+
+// The sequence frame rate (0: match the first clip), as the Frame pane's Sequence section sets it
+export function setFps(n) {
+  const fps = Math.max(0, Number(n) || 0);
+  if (V.fps === fps) return;
+  V.fps = fps; timelineChanged();
+}
+export const fpsOf = () => V.fps || 0;
 
 // the open video edits (tabs.js), for a frame to switch to its own
 export const videoTabs = () => tabs;

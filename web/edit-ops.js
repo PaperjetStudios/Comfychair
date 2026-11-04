@@ -50,8 +50,6 @@ export const OP_DEFAULTS = {
   'video:foley': { prompt: '', len: 8 },
   'sound:voice': { steps: ['vocals', 'dereverb', 'denoise'] },
   'sound:foley': { prompt: '', len: 8 },
-  'sound:gain': { gain: 1 },
-  'sound:normalise': { normalize: true },
   'scene:cleanup': { mode: 'quads', amount: null, tex: 2048 },
 };
 // a VFX op's options: the VFX tab's settings (vfx-rules.js BLANK), less what the frame keeps; len null: the clip's length
@@ -199,10 +197,6 @@ export function opFields(kind, id, opts, ctx = {}) {
     case 'sound:voice':
       return [field('Steps', h('div', { class: 'row wrap' }, ...[['vocals', 'Voice only'], ['dereverb', 'Less echo'], ['denoise', 'Less noise']].map(([k, label]) =>
         toggle(label, opts.steps.includes(k), (on) => { opts.steps = on ? [...new Set([...opts.steps, k])] : opts.steps.filter((x) => x !== k); keep(); }))))];
-    case 'sound:gain':
-      return [rangeField('Master level', () => opts.gain ?? 1, (v) => { opts.gain = v; }, { min: 0, max: 2, step: 0.01, fmt: (v) => `${Math.round(v * 100)} %`, onChange: keep })];
-    case 'sound:normalise':
-      return [toggle('Even out the loudness (−16 LUFS)', opts.normalize !== false, (on) => { opts.normalize = on; keep(); })];
     case 'scene:cleanup': {
       const modes = SCENE_MODES || (loadModes().then(() => ctx.redraw?.()), null);
       if (!modes) return [hint('Loading…')];
@@ -426,16 +420,6 @@ async function run3d(o, frame, ctx, label) {
 
 async function runSound(o, frame, opts, ctx, label) {
   const into = ctx.into;
-  if (o.id === 'gain' || o.id === 'normalise') {
-    const patch = o.id === 'gain' ? { gain: Number(opts.gain ?? 1) } : { normalize: opts.normalize !== false };
-    const snd = isLive(frame.id) ? await import('./sound.js') : null;
-    if (snd && snd.soundTabs?.()?.active?.id === frame.doc) snd.setOut(patch);
-    else {
-      const { editDoc } = await import('./table-frames.js');
-      await editDoc('sound', frame.doc, (p) => { p.out = { ...(p.out || {}), ...patch }; });
-    }
-    return { landed: true };
-  }
   if (o.id === 'voice') {
     const st = await api('/api/voice/status', { busy: false }).catch(() => null);
     if (st && !st.installed) throw new Error('The AI voice tools aren\'t installed on the server yet (README: Voice tools)');

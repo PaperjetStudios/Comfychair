@@ -243,7 +243,7 @@ function sceneTargets(g, o, src, label, toInput, go, { k = kindOf(o), index = 0,
         { title: 'Into deck-h3-refine with Regenerate on: the refiner LoRA draws it again at 1080P (LTX clips and scene renders too)' }) : null,
       g?.template === '3d scene' ? go('Open its scene in 3D', async () => (await scene()).open(g.params.scene, g.id)) : null,
       go('Reference clip', async () => (await scene()).useAsRef({ kind: 'video', src, url: o.url, label })),
-      go('Track motion (a 3D camera)', async () => (await import('./track.js')).openTrack({ src, url: o.url, label }),
+      go('Track motion (a 3D camera)', async () => (await import('./frame-scene.js')).trackToScene({ src, url: o.url, label }),
         { title: 'Follow the picture\'s movement and make a 3D camera from it' })].filter(Boolean);
   }
   if (!g || data && k !== 'motion') return [];   // (a model's places need its run; a menu doesn't offer Blender: it needs a button)

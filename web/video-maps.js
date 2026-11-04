@@ -73,7 +73,7 @@ export function mapsSection(it, ctx) {
   const quick = h('div', { class: 'tool-quick' }, ...OPS.map((x) => h('button', { type: 'button', class: `icon-btn tool-quick-btn${x.id === o.id ? ' on' : ''}`, title: x.label,
     'aria-pressed': String(x.id === o.id), onclick: () => pick({ op: x.id }) }, icon(x.ic), h('span', {}, x.label))));
   return section('Control maps', null,
-    quick, help(`${o.help} The map lands on a track above the clip, lined up with it. Use it as a control video in the VFX tab, or for compositing.`),
+    quick, help(`${o.help} The map lands on a track above the clip, lined up with it. Pick it as a control video in a video edit, or composite with it.`),
     !t ? hint(`${tplOf(o, still)} isn't installed yet`) : null,
     inRange ? field('Run on', seg([['clip', 'Whole clip'], ['range', 'The range']], ST.scope, (v) => pick({ scope: v }))) : null,
     o.id === 'depth' ? field('Detail', seg([['large', 'Fine'], ['small', 'Fast']], ST.depthModel, (v) => pick({ depthModel: v })),

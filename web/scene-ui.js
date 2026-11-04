@@ -429,6 +429,14 @@ function lengthProps() {
 // which videos the Render popup makes, one after another
 const KINDS = [['depth', 'Depth video', renderDepthVideo], ['pose', 'Pose video', renderPoseVideo], ['colour', 'Colour video', renderColorVideo]];
 const kindsOn = () => { const k = store.get('deck.scene.renderkinds', ['depth']); return Array.isArray(k) && k.length ? k : ['depth']; };
+// the Render popup's ticks, as the Frame pane's 3D section reads and sets them (frame-scene.js)
+export const renderKinds = () => kindsOn();
+export function setRenderKinds(kinds) {
+  const k = (kinds || []).filter((x) => KINDS.some(([id]) => id === x));
+  store.set('deck.scene.renderkinds', k.length ? k : ['depth']);
+}
+export const RENDER_KINDS = KINDS.map(([id, label]) => [id, label]);
+export const LENGTHS = LEN;
 
 // Where the Render section's output goes. A 3D frame on the table sets these while it is open (frame-scene.js): rendered(gens)
 // gets the videos one Render made, saved(picture, kind) a Save frame / depth / pose picture ('frame' | 'depth' | 'pose').
