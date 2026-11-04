@@ -40,7 +40,7 @@ async function live(frame, root) {
   const t = editTabs();
   try {
     await t.ready();
-    await t.switchTo(frame.doc);   // (it says itself when it couldn't: a conflict on the edit being left, a missing document)
+    await t.openQuiet(frame.doc);   // (it says itself when it couldn't: a conflict on the edit being left, a missing document)
   } catch (err) { toast(err.message, true); }
   // (switchTo drops out quietly when another switch came after it: only mount if this frame is still the one, and its edit the one open)
   if (seq !== F.seq || !isLive(frame.id)) return;
@@ -230,10 +230,10 @@ const STALE = new Set();   // edits whose still is behind, to draw when no image
 export async function drawOffscreen(doc) {
   if (isLive('image')) { STALE.add(doc); return false; }
   const t = editTabs();
-  await t.ready(); await t.switchTo(doc);
+  await t.ready(); await t.openQuiet(doc);
   if (t.active?.id !== doc || isLive('image')) return false;
   await settledStill();
-  return true;
+  return t.active?.id === doc;   // (the Image screen shown meanwhile takes its own tab back: tabs.js reclaim)
 }
 async function drawStale() {
   for (const doc of [...STALE]) {

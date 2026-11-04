@@ -10,6 +10,7 @@ import { pictureDrag } from './picture-drop.js';
 import { snap as gridSnap, snapBar, snapNearest, snapOn, snapStep } from './gizmo.js';
 import * as ST from './layer-stack.js';
 import { openCraftSheet, sendToCraft } from './craft.js';
+import { isLive, liveFrame } from './live.js';
 import { animated, anyKeys, keyTimes, keyedRange, refreshKeyed, value } from './keyed.js';
 import { putKey } from './keys.js';
 import { playKeys, transport } from './playback.js';
@@ -1546,10 +1547,10 @@ export function createEditor(cfg) {
     E.layers = ST.normalize(E.layers.filter((l) => !list.includes(l)), E.groups);
     E.sel = null; E.multi = []; E.cropping = false;
     persistEditor();
-    await cfg.newEdit({ ...saved, size: null, anim: null, arrange: null, items: [] });
-    if (docId() === tid) { E.layers = before; persistEditor(); renderEditor(); return toast('Couldn\'t open a new edit: the layers stay here', true); }
+    const made = await cfg.newEdit({ ...saved, size: null, anim: null, arrange: null, items: [] });   // (true: a new frame beside the live one took them)
+    if (made === false || (made !== true && docId() === tid)) { E.layers = before; persistEditor(); renderEditor(); return toast('Couldn\'t open a new edit: the layers stay here', true); }
     const n = saved.layers.filter((l) => !l.maskOf).length;
-    toast(`${n} ${n === 1 ? 'layer' : 'layers'} moved to this new edit`);
+    toast(`${n} ${n === 1 ? 'layer' : 'layers'} moved to ${made === true ? 'a new frame beside this one' : 'this new edit'}`);
   }
   function deleteSelected() {
     const before = E.layers, was = picked(), tid = docId(), { keep, count } = ST.withoutPicked(E.layers, was);
@@ -1860,17 +1861,21 @@ export function createEditor(cfg) {
         editorNum('Gap (px)', E.gap, (v) => { E.gap = v; }, { min: 0, max: 400 })));
   }
 
-  // what the edit makes: a picture to use as an input, a download, or a PhotoCraft document
+  // this edit is an image frame open on the table: the frame (its results go in frames beside it, not to another screen)
+  const onTable = () => (isLive('image') && liveFrame()?.doc === docId() ? liveFrame() : null);
+  // what the edit makes: a picture to use as an input (on the table: Flatten, a new image frame), a download, a PhotoCraft document
   function exportProps() {
     if (!E.layers.length) return null;
+    const table = !!onTable();
     return section('Export', null,
-      E.anim ? h('div', { class: 'row wrap' }, button('Export clip', (ev) => exportEditorClip(ev.currentTarget), { cls: 'primary', title: 'The animation as a video in History' }),
+      E.anim ? h('div', { class: 'row wrap' }, button('Export clip', (ev) => exportEditorClip(ev.currentTarget), { cls: 'primary', title: table ? 'The animation as a clip, in a new video frame beside this one' : 'The animation as a video in History' }),
         WA.onlyToggle()) : null,
       field(['Export size', h('span', {}, (() => { const f = editorFrame(); return f ? `${Math.round(f.w * (E.out || 1))}×${Math.round(f.h * (E.out || 1))}` : ''; })())],
         seg([[1, '1×'], [2, '2×'], [3, '3×'], [4, '4×']], E.out || 1, (v) => { E.out = v; persistEditor(); renderEditor(); })),
       mpInput(() => E.mp, (n) => { E.mp = n; persistEditor(); }),
       h('div', { class: 'row wrap' },
-        button(E.anim ? 'Save this frame as input' : 'Save as input', saveEditor, { cls: E.anim ? 'small' : 'small primary' }),
+        table ? button(E.anim ? 'Flatten this frame' : 'Flatten', saveEditor, { cls: E.anim ? 'small' : 'small primary', title: 'Every layer as one picture, in a new image frame beside this one' })
+          : button(E.anim ? 'Save this frame as input' : 'Save as input', saveEditor, { cls: E.anim ? 'small' : 'small primary' }),
         button('Download', downloadEditor),
         button('Open in PhotoCraft', (ev) => craftEditor(ev.currentTarget), { title: 'Every layer as its own layer, to keep editing on the computer' }),
         button('Craft documents…', () => openCraftSheet())));
@@ -1986,7 +1991,7 @@ export function createEditor(cfg) {
         return { ...base, src: { input: l.name }, crop: l.crop, rect: { x: r.x - f.x, y: r.y - f.y, w: r.w, h: r.h } };
       }));
     } catch (e) { return toast(`Couldn't ready a turned layer: ${e.message}`, true); }
-    sendToCraft('photo', { title: cfg.name?.() || 'Edit', canvas: { w: f.w, h: f.h, bg: E.bg }, layers: list }, btn);
+    sendToCraft('photo', { title: cfg.name?.() || 'Edit', canvas: { w: f.w, h: f.h, bg: E.bg }, layers: list }, btn, { frame: onTable() });
   }
 
   // a picture as a new layer on top (o: label, fit 'cover' or 'contain' to fill the canvas whatever its size, locked...)
@@ -2016,6 +2021,13 @@ export function createEditor(cfg) {
     try {
       const blob = await editorBlob(false, E.out || 1);
       if (!blob) return toast('Add some images first', true);
+      const at = onTable();
+      if (at) {   // (on the table: a new image frame beside this one, of the picture's own size)
+        const r = await uploadImage(blob, { mp: E.mp, source: 'editor', filename: 'editor.png' });
+        const f = await (await import('./edit-ops.js')).frameBeside(at, { input: r.name, width: r.width, height: r.height }, { label: `Flat · ${at.label || 'image'}` });
+        if (!f) throw new Error('it couldn\'t go on the table (it is in your pictures)');
+        return toast(`${f.label}: a new frame beside this one`);
+      }
       const r = await uploadImage(blob, { mp: E.mp, source: 'editor', filename: 'editor.png', board: 'Saved picture' });
       (await import('./generate.js')).useInGenerate(r.name, `Saved ${r.width}×${r.height}`);
     } catch (e) { toast('Save failed: ' + e.message, true); }
@@ -2043,7 +2055,12 @@ export function createEditor(cfg) {
         items: [{ track: 'v1', at: 0, in: 0, out: made.duration, name: cfg.name?.() || 'Edit', src: { clip: made.clip },
           x: 0, y: 0, scale: 1, fit: 'fit', opacity: 1, volume: 1 }] } });
       S.history.set(g.id, g);
-      (await import('./run.js')).openGeneration(g.id);
+      const at = onTable();
+      if (at) {   // (on the table: the clip lands in a new video frame beside this one when it is rendered)
+        const { runBeside } = await import('./edit-ops.js');
+        runBeside(at, g, 'video', 'Clip').then((f) => toast(`${f.label}: the clip is in a new frame`), () => {});
+        toast('Rendering: the clip goes in a new video frame beside this one');
+      } else (await import('./run.js')).openGeneration(g.id);
     } catch (e) { toast('Export failed: ' + e.message, true); }
     finally { EA.exporting = false; poseAt(E.t = t0); drawEditorCanvas(); btn.disabled = false; btn.textContent = label; }
   }

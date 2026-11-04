@@ -87,7 +87,8 @@ export async function runOnFrames(op, frames, opts = optsOf(op.kind, op.id), { b
 
 async function runFrame(op, frame, opts, { batch, target, selection }) {
   const live = isLive(frame.id);
-  const t = target || defaultTarget(op, live);
+  const cross = frame.kind !== op.kind;   // (a cross-kind op, edit-rules.js takes: its result is always a new frame)
+  const t = cross ? 'frame' : target || defaultTarget(op, live);
   let into = frame;
   if (t === 'frame' && !op.selfLands) {
     const tf = await import('./table-frames.js');

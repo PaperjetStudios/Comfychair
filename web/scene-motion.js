@@ -161,12 +161,22 @@ async function run(id, template, values, label, then = apply) {
   } catch (e) { toast(e.message, true); }
 }
 
-// A past run's motion (History, the Board, Use as…) onto a figure: the one selected, else the first in the scene
+// A past run's motion (History, the Board, Use as…) or a motion file (a File: .npz or .json) onto a figure: the one
+// selected, else the first in the scene. True once it is on.
 export async function motionOnto(src, label) {
   const o = SC.objects.find((x) => x.id === R.sel && (x.type === 'figure' || x.type === 'rigged')) || figures()[0];
-  if (!o) return toast('Add a person to the scene first, then use the motion on them', true);
-  try { await apply(o.id, await api('/api/motion/from', { method: 'POST', body: { generation: src.generation, index: src.index, clean: cleanOf() } }), label); }
-  catch (e) { toast(e.message, true); }
+  if (!o) { toast('Add a person to the scene first, then use the motion on them', true); return false; }
+  try {
+    let m;
+    if (src instanceof File) {
+      if (!/\.(npz|json)$/i.test(src.name)) throw new Error(`${src.name}: only .npz and .json motion files can be read`);
+      const form = new FormData(); form.append('file', src);
+      form.append('smooth', PLACE.steady === false ? '0' : '1'); form.append('bones', PLACE.bones === false ? '0' : '1');
+      m = await api('/api/motion/file', { method: 'POST', form });
+    } else m = await api('/api/motion/from', { method: 'POST', body: { generation: src.generation, index: src.index, clean: cleanOf() } });
+    await apply(o.id, m, label || src.name);
+    return true;
+  } catch (e) { toast(e.message, true); return false; }
 }
 
 // the placement choices, the same in the panel and the two sheets; onto: which figure (when there are several)

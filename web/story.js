@@ -936,14 +936,15 @@ const toggleBtn = (label, on, set) => h('button', { type: 'button', class: `btn 
 // ---- the whole story at once ----
 // Every shot's clip drawn again at 1080P with Open-H3-Regenerate's refiner LoRA; the finished clips land as each
 // shot's chosen clip when they end (settle marks them regen), so Shots to video takes them over the drafts.
-// Only H3 runs finish in place (board.js isH3Run): one other clip is set up in Generate (Use as → Finish with H3).
+// Only H3 runs finish in place (board.js isH3Run): one other clip is set up in Generate (Finish with H3; on the table, a
+// new video frame of it with the Finish op opened).
 async function finishTakes() {
   const all = allShots().map((s) => ({ s, c: clipOf(s) })).filter((x) => x.c && x.c.gen != null && !x.c.regen);
   if (!all.length) return toast('No shot has a clip yet', true);
   const gen = async (id) => S.history.get(id) || api(`/api/generations/${id}`, { busy: false }).catch(() => null);
   const list = [], other = [];
   for (const x of all) (isH3Run(await gen(x.c.gen)) ? list : other).push(x);
-  if (other.length > 1) toast(`${other.length} clips aren't H3 runs: use Use as → Finish with H3 on each`, true);
+  if (other.length > 1) toast(`${other.length} clips aren't H3 runs: Finish with H3 each on its own (or Upscale it)`, true);
   let n = 0;
   if (list.length) {
     let info;
@@ -1329,7 +1330,7 @@ function shotSection(at, { pane = false } = {}) {
       h('div', { class: 'row wrap' },
         button([icon('image'), 'From pictures…'], () => pickFrames(s), { title: 'Pictures already here: this project\'s, every input, edits' }),
         fileButton([icon('upload'), 'Upload…'], (fs) => uploadFrames(s, fs), { accept: 'image/*', multiple: true }))),
-    f ? field('Send the chosen frame', h('div', { class: 'row wrap' },
+    f && !pane ? field('Send the chosen frame', h('div', { class: 'row wrap' },   // (not on the table: it would open another screen)
       button('To Generate', () => toGenerate(f, lbl), { title: 'Into the picture field of the template open in Generate' }),
       button('To VFX', () => toVfx(f, lbl), { title: 'The VFX tab\'s start image' }),
       button('To the Image tab', () => toEditor(f)))) : null,

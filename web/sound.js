@@ -655,9 +655,11 @@ function renderPanel() {
       button('💾 Save its sound', async () => {
         try {
           const m = await extractSound(it.src, { trim: { start: it.in, len: itLen(it) }, name: `${it.label}-cut` });
-          toast(`${m.label}: in the media library, ready as a reference`);
+          if (inFrame()) await toSoundFrame(m, `${it.label} · sound`);
+          else toast(`${m.label}: in the media library, ready as a reference`);
         } catch (e) { toast(e.message, true); }
-      }, { title: 'This cut as its own sound file in the media library (to use as a reference in Generate / VFX)' })),
+      }, { title: inFrame() ? 'This cut as a sound file of its own, in a new sound frame beside this one'
+        : 'This cut as its own sound file in the media library (to use as a reference in Generate / VFX)' })),
     h('div', { class: 'row wrap' }, button('🎙 Make a voice from this clip', () => voiceFromClip(it), { cls: 'primary' }))) : null;
 
   const track = tr ? section(`Track · ${trackName(tr)}`, null,
@@ -679,19 +681,38 @@ function renderPanel() {
         h('div', { class: 'row wrap' }, linkBtn('Download', m.url, { download: m.name }),
           button('Add to the mix', () => addSource({ media: m.name })))))) : null);
 
-  body.replaceChildren(...[add, clip, track, makerSection(), voiceSection(), out].filter(Boolean));   // (add, the selected thing, making, then the export)
+  // (a sound frame on the table: Make makes its sounds, and its output settings and Export are the Frame pane's: frame-sound.js)
+  body.replaceChildren(...(inFrame() ? [add, clip, track, voiceSection()] : [add, clip, track, makerSection(), voiceSection(), out]).filter(Boolean));   // (add, the selected thing, making, then the export)
+}
+// the engine is in a frame on the table, not the Sound tab
+const inFrame = () => !!SD.host && SD.host.id !== 'tab-sound';
+// a sound file made from the open frame: a new sound frame beside it holds it (frame-sound.js)
+async function toSoundFrame(m, label) {
+  const fs = await import('./frame-sound.js');
+  await fs.soundFrameFor(m, label);
+}
+
+// One mix (a sound document's payload: tracks, items, out) as a sound file: app/audioedit.render, into the media library
+export async function renderMix(p, { name = 'mix', items = p.items } = {}) {
+  const out = { ...N.out, ...(p.out || {}) };
+  return api('/api/sound/render', { method: 'POST', timeout: 900000, busy: 'Mixing the sound…', body: {
+    tracks: p.tracks, name: out.name || name, format: out.format, gain: out.gain, normalize: out.normalize,
+    items: items.map((it) => ({ track: it.track, src: it.src, at: it.at, in: it.in, out: it.out ?? it.dur ?? null,
+      volume: it.volume ?? 1, pan: it.pan || 0, chans: it.chans || null, fade_in: it.fadeIn || 0, fade_out: it.fadeOut || 0 })) } });
+}
+// The open mix's work area (Range only) as it would export, or a reason it can't
+export function openMixItems() {
+  if (!N.items.length) return { why: 'Add some sound first' };
+  const items = cutItems(N.items, WA.exportRange(), { len: itLen });   // Range only: the work area, from 0
+  return items.length ? { items, payload: { tracks: N.tracks, out: N.out } } : { why: 'Nothing is in the work area' };
 }
 
 async function exportSound() {
-  if (!N.items.length) return toast('Add some sound first', true);
-  const items = cutItems(N.items, WA.exportRange(), { len: itLen });   // Range only: the work area, from 0
-  if (!items.length) return toast('Nothing is in the work area', true);
+  const got = openMixItems();
+  if (got.why) return toast(got.why, true);
   await tabs?.flush();
   try {
-    const m = await api('/api/sound/render', { method: 'POST', timeout: 900000, busy: 'Mixing the sound…', body: {
-      tracks: N.tracks, name: N.out.name || tabs?.active?.name || 'mix', format: N.out.format, gain: N.out.gain, normalize: N.out.normalize,
-      items: items.map((it) => ({ track: it.track, src: it.src, at: it.at, in: it.in, out: it.out ?? it.dur ?? null,
-        volume: it.volume ?? 1, pan: it.pan || 0, chans: it.chans || null, fade_in: it.fadeIn || 0, fade_out: it.fadeOut || 0 })) } });
+    const m = await renderMix(got.payload, { name: tabs?.active?.name || 'mix', items: got.items });
     N.exports.push(m);
     toast(`Saved ${m.label} (${m.duration} s) to the media library`);
     renderPanel();
@@ -772,8 +793,8 @@ export function soundStill() {
   paintStage(cv, W, H, 1);
   return new Promise((res) => cv.toBlob(res, 'image/png'));
 }
-// The open mix's export settings from outside (the Edit pane's Master level / Even out the loudness on a live sound
-// frame): patch is part of { gain, normalize, format, name }. Saved with the mix. Returns the settings as they are now.
+// The open mix's export settings from outside (the Frame pane's Output section on a live sound frame: frame-sound.js):
+// patch is part of { gain, normalize, format, name }. Saved with the mix. Returns the settings as they are now.
 export function setOut(patch = {}) {
   const ok = ['gain', 'normalize', 'format', 'name'];
   for (const k of ok) if (patch[k] !== undefined) N.out[k] = patch[k];

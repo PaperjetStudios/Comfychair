@@ -295,13 +295,26 @@ async function importOne(main, extras) {
   toast(`${o.name} added: ${fmtLen(size.y * o.fit)} tall${o.fit === 1 ? '' : ` (×${o.fit})`}`);
 }
 
-async function importFiles(files) {
+// Model and splat files from this device into the open scene (a .mtl and textures go with their one model): how many came in
+export async function importFiles(files) {
   const mains = files.filter((f) => MODELS.has(extOf(f.name)) || SPLATS.has(extOf(f.name)));
-  if (!mains.length) return toast('Pick a .glb, .gltf, .obj or .fbx model, or a .ply, .splat, .ksplat or .spz splat', true);
+  if (!mains.length) { toast('Pick a .glb, .gltf, .obj or .fbx model, or a .ply, .splat, .ksplat or .spz splat', true); return 0; }
   const extras = mains.length === 1 ? files.filter((f) => EXTRAS.has(extOf(f.name))) : [];  // (a .mtl and textures go with their one model)
+  let n = 0;
   for (const m of mains) {
-    try { await importOne(m, extras); } catch (e) { toast(`${m.name}: ${e.message}`, true); }
+    try { await importOne(m, extras); n++; } catch (e) { toast(`${m.name}: ${e.message}`, true); }
   }
+  return n;
+}
+// A file a model or splat layer can be made from (by its name)
+export const isSceneFile = (name) => MODELS.has(extOf(name)) || SPLATS.has(extOf(name));
+
+// Once every model and splat layer of the open scene has its file drawn (or ms has passed): a still drawn then shows them
+export async function whenLoaded(ms = 20000) {
+  const t0 = Date.now();
+  const waiting = () => SC.objects.some((o) => !o.hidden && (o.type === 'model' || o.type === 'splat') && o.url
+    && !(R.meshes.get(o.id)?.userData?.model || R.meshes.get(o.id)?.userData?.splat));
+  while (waiting() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 150));
 }
 
 // ---- a 3D object from photos (Pixal3D; TRELLIS.2 for comparing) -----------------------------

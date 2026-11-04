@@ -4,14 +4,21 @@
 // saves and puts them back. The frame's document is a scene (scene-tabs), opened through the 3D tab's one TabSet.
 // Image frames dropped on a 3D frame go into its scene as a background picture or a 3D photo; so do pictures dropped on
 // it from the Shelf or a picker (table:drop-frame sources).
+// Models, splats and motions dropped on it (files, or a run's outputs) go into its scene (landInScene); a clip goes in as
+// the reference over the view. A Track motion result, a dropped model and a run's 3D output make new 3D frames
+// (sceneFrameFrom, table-frames.js frameFor). Its panel's Render and Save frame hand what they make to onSceneOut.
 //
 // table.js's events (detail.handled = true when taken here): table:live, table:unlive, table:resize, table:drop-frame.
-import { h, toast } from './ui.js';
+import { api, h, toast } from './ui.js';
 import { isLive } from './live.js';
 import { uploadImage } from './media.js';
 import { sceneModule } from './run.js';
 import { sidebar } from './sidebar.js';
-import { putStill, sourcePicture, stillOf } from './table-frames.js';
+import { besideSpot, putStill, sourcePicture, stillOf } from './table-frames.js';
+import { nextBeside } from './table-model.js';
+import { dropKind } from './drop-files.js';
+import { kindOf } from './kinds.js';
+import { S } from './core.js';
 import { frameChanged, refreshStills } from './table.js';
 import { openPressMenu } from './press-menu.js';
 
@@ -35,8 +42,8 @@ async function live(frame, root) {
   const t = m.sceneTabs();
   try {
     await t.ready();
-    for (let k = 0; k < 2 && t.active?.id !== frame.doc; k++) {   // (switchTo gives up quietly when it is raced)
-      await t.switchTo(frame.doc);
+    for (let k = 0; k < 2 && t.active?.id !== frame.doc; k++) {   // (openQuiet gives up quietly when it is raced)
+      await t.openQuiet(frame.doc);
       if (seq !== F.seq || !isLive(frame.id)) return;
     }
   } catch (err) { toast(err.message, true); }
@@ -49,6 +56,11 @@ async function live(frame, root) {
   const pane = sidebar.pane('layers', PANE);
   m.mountScene({ host: root, viewer, transport, panel: pane, active: () => isLive(frame.id) });   // (its full screen is the frame's own)
   F.mounted = frame.id;
+  const ui = F.ui = await import('./scene-ui.js');   // (loaded with the engine already)
+  if (F.mounted === frame.id) {
+    ui.OUT.rendered = (gens) => tell(frame, { gens });
+    ui.OUT.saved = (picture, kind) => tell(frame, { picture, kind });
+  }
   m.setSceneSize(frame.w, frame.h);   // (the frame's size is the scene's picture)
   F.size = m.sceneSize();
   m.show();
@@ -70,6 +82,7 @@ addEventListener('table:unlive', (e) => {
   if (F.mounted !== frame.id) return;
   e.detail.handled = true;
   F.mounted = null;
+  if (F.ui) F.ui.OUT.rendered = F.ui.OUT.saved = null;
   const m = F.m, t = m.sceneTabs(), id = frame.doc;
   // the size changed in the panel while open: the frame takes it
   const s = m.sceneSize(), resized = F.size && (s.w !== F.size.w || s.h !== F.size.h);
@@ -92,22 +105,32 @@ async function saveStill(t, id, still) {
   refreshStills(['scene']);
 }
 
-// ---- image frames dropped on a 3D frame: into its scene ----
+// ---- things dropped on a 3D frame: into its scene ----
+// Image frames and pictures ask how (a background picture or a 3D photo); models, splats, motions and clips go straight in.
 addEventListener('table:drop-frame', (e) => {
   const d = e.detail;
   if (d.handled || d.onto.kind !== 'scene' || !d.onto.doc) return;
-  const pics = [...(d.from || []).filter((f) => f.kind === 'image' && f.id !== d.onto.id), ...(d.sources || []).map((src) => ({ src }))];
-  if (!pics.length) return;
+  const frames = (d.from || []).filter((f) => f.kind === 'image' && f.id !== d.onto.id), srcs = d.sources || [];
+  if (!frames.length && !srcs.length) return;
   d.handled = true;
   if (F.mounted && F.mounted !== d.onto.id) { toast('Leave the open 3D frame first', true); return; }
-  const r = document.querySelector(`.frame[data-id="${CSS.escape(d.onto.id)}"]`)?.getBoundingClientRect();
+  dropOnScene(d.onto, frames, srcs).catch((err) => toast(`Couldn't add to the scene: ${err.message}`, true));
+});
+
+async function dropOnScene(onto, frames, srcs) {
+  const items = await sceneItems(srcs);
+  const pics = [...frames, ...items.filter((i) => i.kind === 'image').map((i) => ({ src: i.src }))];
+  const rest = items.filter((i) => i.kind !== 'image');
+  if (rest.length) await landItems(onto, rest);
+  if (!pics.length) return;
+  const r = document.querySelector(`.frame[data-id="${CSS.escape(onto.id)}"]`)?.getBoundingClientRect();
   const x = r ? r.left + r.width / 2 : innerWidth / 2, y = r ? r.top + r.height / 2 : innerHeight / 2;
-  const go = (how) => dropInto(d.onto, pics, how).catch((err) => toast(`Couldn't add to the scene: ${err.message}`, true));
+  const go = (how) => dropInto(onto, pics, how).catch((err) => toast(`Couldn't add to the scene: ${err.message}`, true));
   openPressMenu(x, y, [[
     { label: pics.length > 1 ? 'Background pictures' : 'Background picture', run: () => go('picture') },
     { label: pics.length > 1 ? '3D photos (MoGe, on the card)' : '3D photo (MoGe, on the card)', run: () => go('photo') },
   ]], 'Add to the scene as');
-});
+}
 
 // Pictures (table:drop-frame sources) into a 3D frame's scene, as background pictures ('picture') or 3D photos ('photo'),
 // without asking which (the quick-start sheet has asked already)
@@ -151,20 +174,28 @@ async function dropInto(onto, pics, how) {
 // scene is opened off screen (the 3D tab's TabSet, so its saves keep their rev), and once fn is done it is saved and
 // drawn as the frame's still (not when fn returns false: nothing changed). Resolves with what fn returned. The Edit
 // pane's 3D ops and pictures dropped on a 3D frame come through here.
-export async function withSceneDoc(frame, fn) {
+// One at a time: the engine has one scene open, so a second job waits for the first (never call it from inside fn).
+let queue = Promise.resolve();
+export function withSceneDoc(frame, fn) {
+  const run = queue.then(() => sceneDocNow(frame, fn));
+  queue = run.catch(() => {});
+  return run;
+}
+async function sceneDocNow(frame, fn) {
   if (!frame?.doc) throw new Error('This frame has no scene');
   const m = F.m = await sceneModule(), t = m.sceneTabs();
   const live = F.mounted === frame.id;
   if (!live) {
     if (F.mounted) throw new Error('Leave the open 3D frame first');
     await t.ready();
-    for (let k = 0; k < 2 && t.active?.id !== frame.doc; k++) await t.switchTo(frame.doc);
+    for (let k = 0; k < 2 && t.active?.id !== frame.doc; k++) await t.openQuiet(frame.doc);
     if (t.active?.id !== frame.doc) throw new Error('its scene would not open');
     if (F.mounted) throw new Error('another 3D frame opened meanwhile');
     m.show();   // (the engine is built and drawn in the hidden 3D tab)
   }
   const out = await fn(m, { live });
   if (!live && out !== false && !F.mounted && t.active?.id === frame.doc) {
+    await (await import('./scene-import.js')).whenLoaded();   // (the models' and splats' files)
     await new Promise((r) => setTimeout(r, 400));   // (the pictures' textures load)
     if (!F.mounted && t.active?.id === frame.doc) {
       const still = m.sceneStill();
@@ -173,4 +204,140 @@ export async function withSceneDoc(frame, fn) {
     }
   }
   return out;
+}
+
+// ---- what goes into a scene ----
+const MOTION_FILE = /\.(npz|bvh|json)$/i;
+// Dropped things or a run's outputs as what a scene takes: [{ kind: 'mesh' | 'splat' | 'motion' | 'image' | 'video', ... }]
+// (things a scene can't take are told and left out). outputs: a generation ({ id, outputs }: all of them), or a list of
+// { generation, index } (a run's output), its output objects ({ url, kind?, filename, generation?, index? }), Files,
+// { input } (a picture) or { media, kind } (the media library).
+async function sceneItems(outputs) {
+  const list = Array.isArray(outputs) ? outputs : outputs?.outputs && outputs.id != null
+    ? outputs.outputs.map((o, index) => ({ ...o, generation: outputs.id, index })) : [outputs].filter(Boolean);
+  const out = [];
+  for (const x of list) {
+    let it = null;
+    if (x instanceof File) {
+      const imp = await import('./scene-import.js');
+      const k = imp.isSceneFile(x.name) ? 'mesh' : MOTION_FILE.test(x.name) ? 'motion' : dropKind(x);
+      it = k === 'mesh' || k === 'motion' ? { kind: k, file: x, label: x.name.replace(/\.\w+$/, '') }
+        : k === 'image' ? { kind: 'image', src: x } : null;
+    } else if (x.input) it = { kind: 'image', src: x, name: x.input };
+    else if (x.media) {
+      const url = x.url || `/files/media/${encodeURIComponent(x.media)}`, label = x.label || x.media;
+      it = x.kind === 'image' ? { kind: 'image', src: x } : x.kind === 'audio' ? null : { kind: 'video', src: { media: x.media }, url, label };
+    } else if (x.generation != null || x.url) {
+      let o = x.url ? x : null;
+      const gen = x.generation ?? null, index = x.index || 0;
+      if (!o) {
+        const g = S.history?.get?.(gen) || await api(`/api/generations/${gen}`, { busy: false });
+        o = g?.outputs?.[index];
+      }
+      if (o) {
+        const k = kindOf(o), label = x.label || (gen != null ? `#${gen}` : (o.filename || '').replace(/\.\w+$/, ''));
+        const src = gen != null ? { generation: gen, index } : null;
+        if (k === 'mesh' || k === 'splat' || k === 'motion') it = { kind: k, url: o.url, label, gen, index, src };
+        else if (k === 'image' && src) it = { kind: 'image', src };
+        else if (k === 'video' && src) it = { kind: 'video', src, url: o.url, label };
+      }
+    }
+    if (it) out.push(it);
+    else toast(`${x.name || x.filename || x.label || 'That'} can't go into a 3D scene`, true);
+  }
+  return out;
+}
+
+// one item into the open scene (m: scene.js): true once it is in
+async function putIn(m, it) {
+  const imp = await import('./scene-import.js');
+  if (it.file && it.kind === 'mesh') return (await imp.importFiles([it.file])) > 0;
+  if (it.kind === 'mesh') return !!(await m.addModel(it.url, it.label, { gen: it.gen, index: it.index }));
+  if (it.kind === 'splat') return !!(await imp.addSplat(it.url, it.label, { gen: it.gen, index: it.index }));
+  if (it.kind === 'motion') {
+    if (!it.file && !it.src) throw new Error('That motion is not a run\'s: drop its file instead');
+    await figureFor();
+    return !!(await m.motionOnto(it.file || it.src, it.label));
+  }
+  if (it.kind === 'image') { await m.addPicture(it.name || await pictureOf({ src: it.src })); return true; }
+  if (it.kind === 'video') { await m.useAsRef({ kind: 'video', src: it.src, url: it.url, label: it.label }); return true; }
+  return false;
+}
+// a motion needs someone to go on: a figure is added when the scene has nobody posable
+async function figureFor() {
+  const D = await import('./scene-data.js'), V = await import('./scene-view.js');
+  if (D.SC.objects.some((o) => o.type === 'figure' || o.type === 'rigged')) return;
+  const o = D.newObject('figure', { x: 0, z: 0 });
+  D.SC.objects.push(o); D.save(); V.select(o.id);
+}
+
+async function landItems(frame, items) {
+  let n = 0;
+  await withSceneDoc(frame, async (m, { live }) => {
+    for (const it of items) {
+      try { if (await putIn(m, it)) n++; } catch (err) { toast(err.message, true); }
+      if (!live && F.mounted) break;   // (it went live meanwhile: the rest is the live frame's)
+    }
+    return n > 0;
+  });
+  return n;
+}
+
+// A run's outputs (or dropped things: see sceneItems) into a 3D frame's scene: models, splats, motions (onto a figure,
+// one added if there is none), pictures as background pictures and clips as the reference. Opened off screen unless
+// the frame is live, saved, and its still drawn again. Resolves with how many went in.
+export async function landInScene(frame, outputs) {
+  if (frame?.kind !== 'scene' || !frame.doc) throw new Error('That isn\'t a 3D frame');
+  const items = await sceneItems(outputs);
+  return items.length ? landItems(frame, items) : 0;
+}
+
+// A new 3D frame holding a scene payload (a scene-tabs document's), beside `beside` (a frame) or after the last 3D
+// frame; its still is drawn. Resolves with the frame (null if not made).
+export async function sceneFrameFrom(payload, { label = '', beside = null, select = true } = {}) {
+  const Table = await import('./table.js');
+  const frames = Table.tableFrames() || [];
+  const size = { w: Math.round(payload?.width) || 1024, h: Math.round(payload?.height) || 576 };
+  const at = beside ? besideSpot(frames, beside, size) : nextBeside(frames, 'scene', size);
+  const f = await Table.newFrameAt('scene', { ...at, ...size }, { payload, extra: label ? { label: String(label).slice(0, 120) } : {}, select });
+  if (f) sceneStillSoon(f);
+  return f || null;
+}
+
+// The Track motion sheet for a clip ({ src, url, label, from?, to? }): Create 3D scene makes a new 3D frame beside
+// `frame` (the clip's own frame; default after the last 3D frame). Resolves once the sheet is open.
+export async function trackToScene(clip, { frame = null } = {}) {
+  const { openTrack } = await import('./track.js');
+  return openTrack({ ...clip, frame, onScene: (sc, name) => sceneFrameFrom(sc, { label: name, beside: frame }) });
+}
+
+// The 3D Render section's run on a frame's scene, off screen unless it is live: kinds 'depth' | 'pose' | 'colour'
+// (default: the Render popup's ticks). Resolves with the generations made ([] when cancelled or failed before any);
+// landing them is the caller's.
+export async function renderScene(frame, { kinds } = {}) {
+  return withSceneDoc(frame, async () => (await import('./scene-ui.js')).renderVideos(kinds));
+}
+// One picture of a frame's scene at its playhead: 'frame' (lit clay), 'depth' or 'pose', kept in the project's pictures.
+// Resolves with it ({ name, width, height }) or null; landing it is the caller's.
+export async function sceneImage(frame, kind = 'frame') {
+  const r = await withSceneDoc(frame, async () => {
+    const E = await import('./scene-export.js');
+    return (kind === 'frame' ? await E.saveFrame() : await E.saveStill(kind)) || false;
+  });
+  return r || null;
+}
+
+// Its still drawn again soon (off screen; a live frame's is drawn as it closes). Resolves true once drawn.
+export function sceneStillSoon(frame) {
+  if (!frame?.doc || F.mounted === frame.id) return Promise.resolve(false);
+  return withSceneDoc(frame, async () => true).then(() => true, () => false);
+}
+
+// ---- the open 3D frame's Render and Save frame output ----
+// fn(frame, { gens } | { picture, kind }) gets what the live frame's panel made: the videos of one Render, or a Save
+// frame / depth / pose picture (kind 'frame' | 'depth' | 'pose'). Returns a function that stops it.
+const OUTS = new Set();
+export function onSceneOut(fn) { OUTS.add(fn); return () => OUTS.delete(fn); }
+function tell(frame, out) {
+  for (const fn of OUTS) { try { fn(frame, out); } catch (err) { console.error(err); } }
 }

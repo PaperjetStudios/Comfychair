@@ -3,7 +3,7 @@ import {
   field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, toggle, textArea, pctFmt, colorField, sizeSelect, canvasFont, icon,
 } from './ui.js';
 import { S, fmtT, inputUrl, onServer, thumbUrl } from './core.js';
-import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, soundToSoundTab, uploadImage, uploadMedia, withMediaDelete } from './media.js';
+import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, soundFrameFrom, soundToSoundTab, uploadImage, uploadMedia, withMediaDelete } from './media.js';
 import { draggingPicture, dropKind, droppedFiles } from './drop-files.js';
 import { openGeneration } from './run.js';
 import { TabSet } from './tabs.js';
@@ -24,6 +24,7 @@ import { openCraftSheet, sendToCraft } from './craft.js';
 import { laneAbove } from './maps.js';
 import { mapsSection } from './video-maps.js';
 import { emptyVideo, videoTracks } from './empty-docs.js';
+import { isLive, liveFrame } from './live.js';
 export { emptyVideo };
 
 // ---------------------------------------------------------------------------
@@ -112,6 +113,8 @@ const WA = workArea({ get: () => V.range, set: (r) => { V.range = r; persistTime
   } });
 
 // Track motion for a clip: its source span, cut to the work area when there is one (the part of the clip inside it)
+// this edit is a frame open on the table (its results go in frames beside it, never to another screen)
+const onTable = () => isLive('video') && liveFrame()?.doc === tabs?.active?.id;
 function trackClip(it) {
   const s = it.in || 0, e = it.out ?? it.dur, r = WA.stored();
   let from = s, to = it.out ?? undefined;
@@ -119,7 +122,12 @@ function trackClip(it) {
     const a = Math.max(it.at, r.a), b = Math.min(it.at + itLen(it), r.b);
     if (b - a > 1e-3) { from = +(s + a - it.at).toFixed(4); to = +(s + b - it.at).toFixed(4); }
   }
-  openTrack({ src: it.src, url: it.url, label: it.label, from, to: to ?? e });
+  const clip = { src: it.src, url: it.url, label: it.label, from, to: to ?? e };
+  if (!onTable()) return openTrack(clip);
+  import('./frame-scene.js').then((m) => {   // (on the table: a new 3D frame beside this one)
+    if (typeof m.trackToScene !== 'function') throw new Error('Track motion into a 3D frame isn\'t ready yet');
+    return m.trackToScene(clip, { frame: liveFrame() });
+  }).catch((err) => toast(err.message, true));
 }
 // the clip a range's Track motion uses: a picked one that touches the range, else the one at the playhead, else the first
 function rangeClip() {
@@ -1061,9 +1069,11 @@ function renderVideoPanel() {
     return section('Clip tools', null, h('div', { class: 'tool-quick' },
       tool('Split', 'cut', TL.split, 'Split at the playhead (S)'),
       tool('Cross-fade', 'wave', () => TL.crossfadePrev(it), 'Cross-fade with the previous clip'),
-      can ? tool('VFX', 'sparkle', async () => (await import('./vfx.js')).sendToVfx(it.src, { label: it.label, trim: { start: it.in, len: (it.out ?? it.dur) - it.in } }), 'Open this clip in the VFX tab') : null,
-      it.kind === 'video' ? tool('Sound', 'sound', () => soundToSoundTab(it.src, { trim: { start: it.in || 0, len: itLen(it) }, name: `${it.label}-sound` }),
-        'This clip\'s sound (the part on the timeline) on the Sound tab\'s timeline') : null,
+      can && !onTable() ? tool('VFX', 'sparkle', async () => (await import('./vfx.js')).sendToVfx(it.src, { label: it.label, trim: { start: it.in, len: (it.out ?? it.dur) - it.in } }), 'Open this clip in the VFX tab') : null,
+      it.kind === 'video' ? tool('Sound', 'sound', () => (onTable()
+        ? soundFrameFrom(it.src, { trim: { start: it.in || 0, len: itLen(it) }, name: `${it.label}-sound`, near: liveFrame() })
+        : soundToSoundTab(it.src, { trim: { start: it.in || 0, len: itLen(it) }, name: `${it.label}-sound` })),
+      onTable() ? 'This clip\'s sound (the part on the timeline) as a new sound frame' : 'This clip\'s sound (the part on the timeline) on the Sound tab\'s timeline') : null,
       can ? tool('Key', 'contrast', () => openKey(it), 'Colour key: cut out a green screen, or use a matte, so lower tracks show through') : null,
       it.kind === 'video' && canTrack(it.src) ? tool('Track', 'target', () => trackClip(it), 'Follow the picture\'s movement and make a 3D camera from it. With a range set, only the part of this clip inside it') : null,
       isVisual(it) ? tool('Reset', 'reset', () => { Object.assign(it, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); delete it.rotation; delete it.anchor; for (const ch of ['x', 'y', 'scale', 'rotation', 'opacity']) delete it.chans?.[ch]; timelineChanged(); }, 'Reset the framing') : null,
@@ -1077,7 +1087,9 @@ function renderVideoPanel() {
   const fpsSel = h('select', {}, [[0, 'Match first clip'], [16, '16'], [24, '24'], [25, '25'], [30, '30'], [60, '60']].map(([v, label]) =>
     h('option', { value: v, selected: V.fps === v }, label)));
   fpsSel.addEventListener('change', () => { V.fps = Number(fpsSel.value); timelineChanged(); });
-  const exportBtn = button('Export video', () => exportVideo(exportBtn), { cls: 'primary' });
+  const exportBtn = onTable()
+    ? button('Render', () => renderOp(exportBtn), { cls: 'primary', title: 'The timeline as one clip, in a new video frame beside this one' })
+    : button('Export video', () => exportVideo(exportBtn), { cls: 'primary' });
 
   const clearAll = () => {
     if (!confirm('Remove every clip from the timeline?')) return;
@@ -1097,7 +1109,7 @@ function renderVideoPanel() {
     section('Sequence', null,
       hint(`${seqSize().join('×')} · ${V.fps || 'auto'} fps · ${fmtT(seqEnd())}`, 'section-sub'),
       h('div', { class: 'grid-2' }, field('Frame size', sizeSel), field('Frame rate', fpsSel))),
-    V.items.length ? section('Export', null, help('The export lands in History.'),
+    V.items.length ? section('Export', null, help(onTable() ? 'Render makes the timeline one clip, in a new video frame beside this one.' : 'The export lands in History.'),
       h('div', { class: 'row wrap' }, exportBtn, WA.onlyToggle(),
         button('Open in EffectCraft', (ev) => craftVideo(ev.currentTarget), { cls: 'small', title: 'Each clip as a layer in a comp, to keep editing on the computer' }),
         button('Craft documents…', () => openCraftSheet(), { cls: 'small' }))) : null));
@@ -1325,6 +1337,22 @@ async function exportVideo(btn) {
   finally { btn.disabled = false; btn.textContent = label; }
 }
 
+// On the table: Render is the frame's Render op (edit-run.js: a new video frame beside it); renderLive is its run
+async function renderOp(btn) {
+  vidPause();
+  btn.disabled = true;
+  try {
+    const [{ runOnFrames }, { opById }] = await Promise.all([import('./edit-run.js'), import('./edit-rules.js')]);
+    await runOnFrames(opById('video', 'render'), [liveFrame()], {}, { target: 'frame' });
+  } catch (e) { toast('Render failed: ' + e.message, true); }
+  finally { btn.disabled = false; }
+}
+export async function renderLive() {
+  vidPause();
+  const btn = { textContent: '' };   // (3D scene clips report their progress on it)
+  return api('/api/video/render', { method: 'POST', body: await timelineBody(btn), busy: 'Rendering…' });
+}
+
 // The timeline as an EffectCraft comp: a layer per clip, stacked by track, with its timing, framing and fades
 async function craftVideo(btn) {
   vidPause();
@@ -1333,7 +1361,7 @@ async function craftVideo(btn) {
   try {
     const body = await timelineBody(btn);
     btn.textContent = label;
-    await sendToCraft('video', { ...body, title: tabs?.active?.name || 'Video edit' }, btn);
+    await sendToCraft('video', { ...body, title: tabs?.active?.name || 'Video edit' }, btn, { frame: onTable() ? liveFrame() : null });
   } catch (e) { toast('Couldn\'t send it: ' + e.message, true); }
   finally { btn.disabled = false; btn.textContent = label; }
 }
@@ -1358,7 +1386,15 @@ async function snapshotFrame() {
     h('div', { class: 'media-big' }, h('img', { src: url, alt: '' })),
     hint(`${cv.width}×${cv.height}`, 'sheet-hint'),
     actions(
-      button('Save as input', async () => {
+      onTable() ? button('New image frame', async () => {   // (the Grab frame op's landing: a frame of the picture's size beside this one)
+        try {
+          const r = await uploadImage(blob, { mp: 0, source: 'snapshot', filename: name });
+          const at = liveFrame(), f = await (await import('./edit-ops.js')).frameBeside(at, { input: r.name, width: r.width, height: r.height }, { label: `Frame ${tc(V.t)} · ${at?.label || 'video'}` });
+          if (!f) throw new Error('It couldn\'t go on the table: it is in your pictures');
+          dispatchEvent(new CustomEvent('edit:grabbed', { detail: { frame: at, input: r.name, into: f } }));
+          closeSheet(); toast(`${f.label} is beside this frame`);
+        } catch (e) { toast('Save failed: ' + e.message, true); }
+      }, { cls: 'small primary' }) : button('Save as input', async () => {
         try {
           const r = await uploadImage(blob, { mp: 0, source: 'snapshot', filename: name, board: 'Saved frame' });
           (await import('./generate.js')).useInGenerate(r.name, `Saved ${r.width}×${r.height}`);

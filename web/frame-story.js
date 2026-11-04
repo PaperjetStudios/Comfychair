@@ -11,11 +11,14 @@
 //     so its pictures and clips land in the shot's frames and clips too (story.js settle / catchUp)
 // The table's sidebar gets a Story pane: the story's outline, script and characters, the selected shot's fields, its
 // Redraw and Make video, and To video (a video frame beside the rows with the chosen frames and clips on it).
+// A video made for a shot from this table (Make the video, or the Make panel on its frame) lands as a video frame right
+// after the shot's frame (story: { scene, shot, clip: true }; the next one goes on that frame's timeline); s.clips stays
+// the record, and the shot's frame says how many clips it has.
 import { h, api, store, toast, button, section, seg, hint, icon, uid, clone } from './ui.js';
 import { S, CURRENT_EDIT, onServer, onProject } from './core.js';
 import * as Table from './table.js';
 import * as M from './table-model.js';
-import { blankPayload, createDoc, copyDoc, loadStills, renameDoc, restoreDoc, stillOf, trashDoc } from './table-frames.js';
+import { blankPayload, createDoc, copyDoc, editDoc, loadStills, renameDoc, restoreDoc, stillOf, trashDoc } from './table-frames.js';
 import { BLANK as COMP_BLANK } from './editor-engine.js';
 import { sidebar } from './sidebar.js';
 import { isLive, liveFrame } from './live.js';
@@ -41,6 +44,16 @@ const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
 const frames = () => Table.tableFrames();
 const storyOpen = () => !!FS.storyId && St.storyTabs()?.active?.id === FS.storyId;
 const frameOfShot = (id) => frames().find((f) => R.isShotFrame(f) && f.story.shot === id) || null;
+const clipFrameOf = (id) => frames().find((f) => R.isClipFrame(f) && f.story.shot === id) || null;
+// the runs whose videos land as clip frames (gen id -> shot id), kept across a reload: a run can end while the page is away
+const LAND = 'deck.story.landclips';
+const landing = () => { const m = store.get(LAND, {}); return m && typeof m === 'object' ? m : {}; };
+function landClips(shot, ids) {
+  if (!ids.length) return;
+  const m = landing();
+  for (const id of ids) m[id] = shot;
+  store.set(LAND, m);
+}
 const shotNum = (at) => `${at.si + 1}.${at.i + 1}`;
 
 // ---------------------------------------------------------------------------
@@ -93,7 +106,7 @@ async function openStory() {
   const id = FS.storyId, tid = FS.tableId;
   try { await api(t.url(id), { busy: false }); } catch (e) { if (e.status === 404) { storyGone(tid, id); return false; } }
   if (FS.storyId !== id) return false;
-  await t.switchTo(id);
+  await t.openQuiet(id);
   return t.active?.id === id;
 }
 function storyGone(tid, id) {
@@ -161,6 +174,8 @@ async function reconcile() {
     f.story = { scene: St.shotAt(c.id).sc.id, shot: c.id };
     story = table = true;
   }
+  // a clip frame duplicated: the copy is a plain video frame (the shot's clip frame is the first)
+  for (const id of plan.strayClips) { const f = list.find((x) => x.id === id); if (f) { delete f.story; table = true; } }
   // frames for nothing in the story (a shot or scene deleted in the outline): they go, and a shot's edit to the trash
   if (plan.remove.length) {
     // (a shot's frame open now lets go first, and its last save lands, before its edit goes to the trash)
@@ -226,6 +241,9 @@ async function reconcile() {
     list.push(M.newFrame('image', { x: origin.x, y: origin.y, ...R.shotSize(s, ratio, sizes.get(s.id)) }, { label, doc: s.doc, story: { scene: at.sc.id, shot: s.id, auto: label } }));
     table = true;
   }
+  // a video made for a shot from here: on its clip frame's timeline, the frame made beside the shot's when it has none
+  if (!(await landShotClips(list, ratio))) { if (story && storyOpen()) St.storyChanged(); return; }
+  if (FS.clipFramed) { FS.clipFramed = false; table = true; }
   // labels, scenes and notes' words follow the story. A shot frame's label is "1.2 What we see…" and its edit is named
   // the same, unless it was renamed on the table (then it is the user's: it stays)
   const renamed = [];
@@ -264,6 +282,47 @@ async function reconcile() {
   if (FS.wantSel) { const f = frameOfShot(FS.wantSel); if (f) { FS.wantSel = null; selectFrame(f); } }
   badges();
   await stills();
+}
+
+// The shots' clips whose runs are marked to land (landing()): each onto its shot's clip frame. False when the table or
+// story changed under it (the reconcile stops).
+async function landShotClips(list, ratio) {
+  const m = landing(), ids = Object.keys(m);
+  if (!ids.length) return true;
+  const still = () => storyOpen() && frames() === list;
+  // (a run that failed, or a shot deleted since: nothing will land for it in this story)
+  const shots = St.storyShots(), alive = new Set(shots.flatMap((s) => [...s.vpending, ...s.clips.map((c) => c.gen)]).map(String));
+  const dead = ids.filter((id) => !alive.has(String(id)) && shots.some((s) => s.id === m[id]));
+  if (dead.length) { for (const id of dead) delete m[id]; store.set(LAND, m); }
+  for (const s of St.storyShots()) {
+    const clips = s.clips.filter((c) => m[c.gen] === s.id);
+    if (!clips.length) continue;
+    const at = St.shotAt(s.id), shotF = frameOfShot(s.id);
+    if (!at || !shotF) continue;
+    let p = null;
+    for (const c of clips) {
+      const dur = await durationOf(c.url);
+      p = withClip(p || blankPayload('video'), { src: { generation: c.gen, index: c.index }, url: c.url, label: `${shotNum(at)} #${c.gen}`, dur, kind: 'video' }, uid());
+    }
+    if (!still()) return false;
+    const have = clipFrameOf(s.id);
+    if (have && isLive(have.id)) continue;   // (its open timeline would meet a newer save: it lands once the frame is let go)
+    try {
+      if (have?.doc) {
+        await editDoc('video', have.doc, (pay) => { let q = pay; for (const it of p.items) q = withClip(q, it, it.id); Object.assign(pay, q); });
+      } else {
+        const f = M.newFrame('video', { x: shotF.x + shotF.w + 40, y: shotF.y, w: shotF.w, h: shotF.h }, { label: `${shotLabel(at)} · video`, story: { scene: at.sc.id, shot: s.id, clip: true } });
+        f.doc = await createDoc(f, p);
+        if (!still()) { trashDoc(f).catch(() => {}); return false; }
+        list.push(f);
+        FS.clipFramed = true;
+      }
+    } catch (e) { toast(`Couldn't put shot ${shotNum(at)}'s video on the table: ${e.message}`, true); continue; }
+    const now = landing();
+    for (const c of clips) delete now[c.gen];
+    store.set(LAND, now);
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -406,6 +465,7 @@ addEventListener('make:queued', (e) => {
   const at = St.shotAt(frame.story.shot), ids = (gens || []).map((g) => g.id).filter((id) => id != null);
   if (!at || !ids.length) return;
   (kind === 'video' ? at.s.vpending : at.s.pending).push(...ids);
+  if (kind === 'video') landClips(at.s.id, ids);
   if (kind !== 'video') at.s.layered = [...new Set([...(at.s.layered || []), ...ids])];   // (the Make panel landed them as layers)
   St.storyChanged();
 });
@@ -534,7 +594,11 @@ function makeSection(at) {
       f ? button([icon('image'), 'Use the frame\'s picture'], () => takePicture(s, f), { title: 'The frame\'s picture as the shot\'s chosen frame: Redraw and Make the video start from it' }) : null),
     h('div', { class: 'row wrap' },
       button([icon('sparkle'), 'Redraw'], () => withPicture(s, f, (x) => St.refineShot(x)), { disabled: !rt || !ok, title: rt ? `${rt.name || rt.id}, the story's Redraw settings` : 'No image-to-image or edit template is installed' }),
-      button([icon('video'), 'Make the video'], () => withPicture(s, f, (x) => St.makeVideo(x)), { disabled: !vt || !ok, title: vt ? `${vt.name || vt.id}, ${s.dur} s` : 'No image-to-video template is installed' })));
+      button([icon('video'), 'Make the video'], () => withPicture(s, f, async (x) => {
+        const was = new Set(x.vpending);
+        await St.makeVideo(x);
+        landClips(x.id, x.vpending.filter((id) => !was.has(id)));
+      }), { disabled: !vt || !ok, title: vt ? `${vt.name || vt.id}, ${s.dur} s` : 'No image-to-video template is installed' })));
 }
 function addShot() {
   const P = St.storyDoc(), sel = Table.selectedFrames();

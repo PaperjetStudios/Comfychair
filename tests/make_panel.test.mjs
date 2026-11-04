@@ -1,7 +1,8 @@
 // node --test tests/make_panel.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canvasRect, familiesOf, frameImageField, frameSize, makeTarget, pickTemplate, sizePair, templatesFor, withClip } from '../web/make-rules.js';
+import { OP_TEMPLATES, canvasRect, carryWords, familiesOf, frameImageField, frameSize, makeFrames, makeTarget, noteText, pickTemplate, settingsFor, settingsPayload,
+  sizePair, templatesFor, withClip } from '../web/make-rules.js';
 import { owedFor, owedRecord } from '../web/owed-runs.js';
 
 const T = (id, media, family = 'X', fields = []) => ({ id, media, family, fields });
@@ -28,20 +29,49 @@ test('the selection: the first frame that is not a note, else nothing', () => {
 test('nothing selected: text to image and text to video, and a template of your own that takes no picture', () => {
   assert.deepEqual(ids('none'), ['deck-krea2-t2i', 'deck-ltx-t2v', 'my-flux']);
 });
-test('an image frame: image jobs, not inpaint (it needs a painted area) or the maps', () => {
-  assert.deepEqual(ids('image'), ['deck-krea2-t2i', 'deck-krea2-edit', 'deck-qwen21-i2i', 'deck-upscale-image', 'my-flux']);
+test('an image frame: image jobs, not inpaint (it needs a painted area), the maps, or what an Edit op runs (upscale)', () => {
+  assert.deepEqual(ids('image'), ['deck-krea2-t2i', 'deck-krea2-edit', 'deck-qwen21-i2i', 'my-flux']);
 });
-test('a video frame: video templates, not the VFX ones', () => {
-  assert.deepEqual(ids('video'), ['deck-ltx-t2v', 'deck-ltx-i2v', 'deck-h3-flf2v', 'deck-upscale-video']);
+test('a video frame: video templates, not the VFX ones or an Edit op\'s (upscale); text to video stays', () => {
+  assert.deepEqual(ids('video'), ['deck-ltx-t2v', 'deck-ltx-i2v', 'deck-h3-flf2v']);
 });
-test('3D and sound frames get their own families', () => {
-  assert.deepEqual(ids('scene'), ['deck-3d-object', 'deck-autorig-human', 'deck-mocap']);
-  assert.deepEqual(ids('sound'), ['deck-ltx-t2a', 'deck-ace-music', 'deck-mmaudio-foley']);
+test('3D and sound frames get their own families, less what their Edit ops run (rigging, foley)', () => {
+  assert.deepEqual(ids('scene'), ['deck-3d-object', 'deck-mocap']);
+  assert.deepEqual(ids('sound'), ['deck-ltx-t2a', 'deck-ace-music']);
+});
+test('the Edit ops\' templates are the ones left out, kind by kind', () => {
+  for (const id of ['deck-upscale-image', 'deck-clean-image', 'deck-cutout-image', 'deck-qwen21-edit']) assert.ok(OP_TEMPLATES.image.has(id), id);
+  assert.ok(!OP_TEMPLATES.image.has('deck-krea2-edit'));
+  const up = T('deck-clean-image', 'image', 'Clean', [img]);
+  assert.deepEqual(templatesFor([up], 'image'), []);
+  assert.deepEqual(templatesFor([up], 'none'), []);
+});
+test('a run per selected frame of the kind; a note\'s words are the prompt', () => {
+  const a = { id: 'a', kind: 'image' }, b = { id: 'b', kind: 'image' }, v = { id: 'v', kind: 'video' }, n = { id: 'n', kind: 'note', text: '  a red fox  ', label: 'Idea' };
+  assert.deepEqual(makeFrames([n, a, v, b]).map((f) => f.id), ['a', 'b']);
+  assert.deepEqual(makeFrames([n]), []);
+  assert.deepEqual(makeFrames([]), []);
+  assert.deepEqual(noteText([a, n]), { note: n, text: 'a red fox' });
+  assert.equal(noteText([a, { id: 'e', kind: 'note', text: ' ' }]), null);
+});
+test('the panel\'s own settings: the template defaults with the frame\'s changes, and back to only the changes', () => {
+  const P = { key: '3.text', kind: 'text', node: '3', input: 'text', multiline: true, group: 'Prompt', value: '' };
+  const C = { key: '4.model', kind: 'choice', node: '4', input: 'model', options: ['a', 'b'], value: 'a' };
+  const t = T('deck-x-t2i', 'image', 'X', [P, C, { ...W, value: 1024 }, { ...H, value: 1024 }]);
+  const st = settingsFor(t, { template: 'deck-x-t2i', overrides: { '3.text': 'hi', '4.model': 'gone', '2.width': 512 }, seedMode: { s: 'fixed' } });
+  assert.deepEqual(st.values, { '3.text': 'hi', '4.model': 'a', '2.width': 512, '2.height': 1024 });
+  assert.deepEqual(st.seedMode, { s: 'fixed' });
+  assert.equal(st.pb, null);
+  const p = settingsPayload(st, { inputs: ['x.png'] });
+  assert.deepEqual([p.template, p.overrides, p.inputs], ['deck-x-t2i', { '3.text': 'hi', '2.width': 512 }, ['x.png']]);
+  assert.deepEqual(settingsFor(t, { template: 'other', overrides: { '3.text': 'no' } }).values['3.text'], '');
+  const t2 = T('deck-y-t2i', 'image', 'Y', [{ ...P, key: '9.text' }]);
+  assert.equal(carryWords(st, settingsFor(t2)).values['9.text'], 'hi');
 });
 test('families and the template shown: the kept one if it still fits, else the first', () => {
   const l = templatesFor(ALL, 'image');
-  assert.deepEqual(familiesOf(l), ['Krea', 'Other', 'Qwen Image', 'Upscale']);
-  assert.equal(pickTemplate(l, 'deck-ltx-i2v', null, 'deck-upscale-image'), 'deck-upscale-image');
+  assert.deepEqual(familiesOf(l), ['Krea', 'Other', 'Qwen Image']);
+  assert.equal(pickTemplate(l, 'deck-ltx-i2v', null, 'deck-qwen21-i2i'), 'deck-qwen21-i2i');
   assert.equal(pickTemplate(l, null), 'deck-krea2-t2i');
   assert.equal(pickTemplate([], 'x'), null);
 });

@@ -811,7 +811,9 @@ async function swapPainted(eng, o, tab) {
 
 // Send to Generate: a tab per ticked model, set up as Swap would run it, to change its settings and run it there. The close-up and
 // reference stay (the tabs use them); what the model makes stays as made, not put back on the picture.
+const tableOn = () => !!document.querySelector('#tab-table.active, #tab-table.live-host');   // (on the table: no Send to Generate)
 async function swapSend(eng) {
+  if (tableOn()) return toast('Swap runs here on the table: Send to Generate is on the Image screen only', true);
   if (!ST.swapFrom) return toast('Pick the picture to take it from first', true);
   const wanted = swapModels(), part = ST.swapPart, o = op();
   if (!wanted.length) return toast('Tick an installed model first', true);
@@ -1457,7 +1459,7 @@ export function imageToolsSection(eng) {
     (KEEPS_FRAMING.has(o.kind) || o.kind === 'sheet' || (o.kind === 'matte' && ST.result !== 'mask')) && onLayers && !(o.kind === 'edit' && ST.ewhere === 'painted' && ST.scope !== 'selected')
       ? toggle('Hide the original', ST.hide, (v) => { ST.hide = v; save(); }) : null,
     runBar(o.kind === 'swap' ? button('Mark it', () => swapMark(eng), { disabled: !t }) : null,
-      o.kind === 'swap' ? button('Send to Generate', () => swapSend(eng), { disabled: !t }) : null,
-      o.kind === 'swap' ? help('Send to Generate opens a tab per ticked model with the close-up, the reference, the prompt, the size and the LoRA set, to change and run there. What it makes there stays as made: it isn\'t put back on the whole picture.') : null,
+      o.kind === 'swap' && !tableOn() ? button('Send to Generate', () => swapSend(eng), { disabled: !t }) : null,
+      o.kind === 'swap' && !tableOn() ? help('Send to Generate opens a tab per ticked model with the close-up, the reference, the prompt, the size and the LoRA set, to change and run there. What it makes there stays as made: it isn\'t put back on the whole picture.') : null,
       button(o.kind === 'swap' ? 'Swap' : o.kind === 'remove' ? (ST.rfrom === 'words' ? 'Find and mark' : 'Remove') : inFlight(E.tab?.id ?? null) ? 'Run again' : 'Run', () => run(eng), { cls: 'primary', disabled: !t, title: 'Ctrl+Enter or Shift+Enter' })));
 }

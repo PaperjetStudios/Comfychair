@@ -1,7 +1,7 @@
 // node --test tests/edit_rules.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { OPS, canRun, defaultTarget, groupsOf, menuGroupsFor, opById, opsFor, planRuns, quickOf, resultKind, resultLabel, targetsOf, whyNot } from '../web/edit-rules.js';
+import { OPS, canRun, crossOps, defaultTarget, groupsOf, menuGroupsFor, opById, opsFor, planRuns, quickOf, resultKind, resultLabel, targetsOf, whyNot } from '../web/edit-rules.js';
 
 const F = (id, kind, extra = {}) => ({ id, kind, label: id.toUpperCase(), doc: `d-${id}`, ...extra });
 
@@ -67,8 +67,9 @@ test('a run per frame of the op\'s kind, with the batch; no document or doubles 
 });
 test('the menu: one kind gives its groups under Edit; several give Edit image / Edit video', () => {
   const one = menuGroupsFor([F('a', 'image')]);
-  assert.equal(one.length, 1);
+  assert.equal(one.length, 2, 'Edit, then Make video (an Ingredients sheet from the picture)');
   assert.equal(one[0].title, 'Edit');
+  assert.equal(one[1].title, 'Make video');
   const flat = one[0].groups.flat();
   assert.equal(flat.length, OPS.image.length);
   assert.equal(flat.find((x) => x.id === 'remove').disabled, true);
@@ -76,7 +77,7 @@ test('the menu: one kind gives its groups under Edit; several give Edit image / 
   const live = menuGroupsFor([F('a', 'image')], { live: () => true })[0].groups.flat();
   assert.equal(live.find((x) => x.id === 'remove').disabled, false);
   const two = menuGroupsFor([F('a', 'image'), F('v', 'video'), F('n', 'note')]);
-  assert.deepEqual(two.map((x) => x.title), ['Edit image', 'Edit video']);
+  assert.deepEqual(two.map((x) => x.title), ['Edit image', 'Edit video'], 'a video frame there: no Make video');
   const opts = menuGroupsFor([F('a', 'image')], { opts: (k, id) => (id === 'edit' ? { ewhere: 'painted' } : {}) })[0].groups.flat();
   assert.equal(opts.find((x) => x.id === 'edit').disabled, true);
   assert.equal(menuGroupsFor([F('n', 'note')]).length, 0);
@@ -94,4 +95,33 @@ test('where results land: a new frame from the table, a layer in an open frame, 
   assert.equal(resultKind(opById('video', 'restyle')), 'video');
   assert.equal(resultLabel(up, F('a', 'image')), 'Upscale (quality) · A');
   assert.equal(resultLabel(up, { kind: 'image' }), 'Upscale (quality) · image');
+});
+
+test('no op of any kind opens another screen: what used to be Use as is an op that lands in a frame', () => {
+  for (const [kind, id, lands] of [['image', 'photo3d', 'scene'], ['image', 'object3d', 'scene'], ['image', 'splat', 'scene'],
+    ['video', 'sound', 'sound'], ['video', 'render', 'video'], ['video', 'track', 'scene'], ['video', 'views', 'image'], ['video', 'h3up', 'video'], ['video', 'finish', 'video']]) {
+    const o = opById(kind, id);
+    assert.ok(o, `${kind}:${id}`);
+    assert.equal(resultKind(o), lands, `${kind}:${id} lands`);
+    if (id !== 'finish') assert.deepEqual(targetsOf(o), ['frame'], `${kind}:${id} is always a frame of its own`);
+    assert.equal(canRun(o), true, `${kind}:${id} runs from the table`);
+  }
+});
+test('cross-kind ops: pictures and a sound make a video frame; one run, from the first frame they take', () => {
+  const a = F('a', 'image'), s = F('s', 'sound'), v = F('v', 'video'), n = F('n', 'note');
+  assert.deepEqual(crossOps([a, s]).map((o) => o.id).sort(), ['a2v', 'ingredients', 'talk']);
+  assert.deepEqual(crossOps([s]).map((o) => o.id).sort(), ['a2v', 'talk']);
+  assert.deepEqual(crossOps([a, v]), [], 'a video frame selected: its own ops run on it');
+  assert.deepEqual(crossOps([n]), []);
+  const m = menuGroupsFor([s, a]);
+  assert.deepEqual(m.map((x) => x.title), ['Edit sound', 'Edit image', 'Make video']);
+  assert.equal(m[2].kind, 'video');
+  assert.ok(m[2].groups.flat().every((x) => !x.disabled));
+  const a2v = opById('video', 'a2v');
+  const p = planRuns([n, s, a, F('b', 'image')], a2v, 4);
+  assert.equal(p.runs.length, 1);
+  assert.equal(p.runs[0].frame, s);
+  assert.equal(p.runs[0].frame.kind, 'sound');
+  assert.deepEqual(planRuns([v, s], a2v).runs.map((r) => r.frame), [v], 'on a video frame it is an ordinary op');
+  assert.deepEqual(planRuns([F('e', 'image', { doc: null })], opById('video', 'ingredients')).skipped.length, 1);
 });

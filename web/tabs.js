@@ -10,6 +10,8 @@
 //   tabs.changed();       // after every edit: marks dirty, saves ~1 s later
 //   await tabs.flush();   // save now (before generate/render, on hide); true when saved
 //   tabs.active           // { id, name, rev, order } of the tab on show, or null
+//   await tabs.openQuiet(id)  // as switchTo, for a table frame or an off-screen job: the strip's remembered tab stays
+//                              // as it was, and the screen's own tab comes back when it is shown again (reclaim)
 import { h, api, store, toast, undoToast, openSheet, closeSheet, nameSheet, button, actions, uid, clone } from './ui.js';
 import { S, onServer, onProject } from './core.js';
 import { keyboardFocus } from './key-focus.js';
@@ -56,7 +58,7 @@ export class TabSet {
     this.state = h('button', { type: 'button', class: 'tabs-state hidden', onclick: () => this.conflict && this.showConflict() });
     this.plus = h('button', { type: 'button', class: 'icon-btn tab-plus', 'aria-label': 'New tab', title: 'New tab', onclick: () => this.create() }, '＋');
     this.mount = h('div', { class: 'tabstrip' }, this.row, this.plus, this.state);
-    docStrip(this.host, this.mount, () => this.reveal());
+    docStrip(this.host, this.mount, () => { this.reclaim(); this.reveal(); });   // (the screen shown: its own tab back after a quiet open)
     new ResizeObserver(() => this.reveal()).observe(this.row);   // (a narrower window, a tablet turned)
 
     onServer('store', (m) => this.onStore(m));
@@ -165,7 +167,10 @@ export class TabSet {
   }
 
   // ---- showing a tab ----
-  open(doc) {
+  // quiet: opened for a table frame or an off-screen job, not picked on the strip. The remembered tab (deck.tab.<kind>)
+  // stays the one the screen last showed, so the Classic screen does not reopen whatever frame was last touched.
+  open(doc, { quiet = false } = {}) {
+    this.quiet = quiet;
     this.active = { id: doc.id, name: doc.name, rev: doc.rev, order: doc.order };
     this.upsert(doc);
     let payload = this.migrate(doc.payload), restored = false;
@@ -178,7 +183,7 @@ export class TabSet {
     this.conflict = null;
     this.setDirty(restored);
     if (restored) this.timer = setTimeout(() => this.flush(), SAVE_DELAY);
-    store.set(`deck.tab.${this.kind}.${this.key}`, doc.id);
+    if (!quiet) store.set(`deck.tab.${this.kind}.${this.key}`, doc.id);
     this.render();
     this.onSwitch?.(doc);
   }
@@ -200,15 +205,27 @@ export class TabSet {
     if (this.conflict) { toast('Resolve the conflict on this tab first', true); this.showConflict(); return false; }
     return true;
   }
-  async switchTo(id) {
-    if (this.active?.id === id) return;
+  async switchTo(id, { quiet = false } = {}) {
+    if (this.active?.id === id) {   // (picked on the strip while a frame had it quietly: now it is the remembered one)
+      if (!quiet && this.quiet) { this.quiet = false; store.set(`deck.tab.${this.kind}.${this.key}`, id); }
+      return;
+    }
     const seq = ++this.switchSeq, ep = this.epoch;
     if (!(await this.leave()) || seq !== this.switchSeq || ep !== this.epoch) return;
     try {
       const doc = await api(this.url(id), { busy: false });
       if (seq !== this.switchSeq || ep !== this.epoch) return;
-      this.open(doc);
+      this.open(doc, { quiet });
     } catch (e) { toast(`Couldn't open the tab: ${e.message}`, true); this.refresh(); }
+  }
+  // Same load, gate and save-before-leaving as switchTo; deck.tab.<kind> is left alone
+  openQuiet(id) { return this.switchTo(id, { quiet: true }); }
+  // The screen's own tab back, when the screen is shown after a quiet open (a frame, an off-screen job) took the set
+  reclaim() {
+    if (!this.quiet || !this.started || this.reclaiming) return;
+    const want = store.get(`deck.tab.${this.kind}.${this.key}`, null);
+    if (!want || want === this.active?.id || !this.docs.some((d) => d.id === want)) { this.quiet = false; return; }
+    this.reclaiming = this.switchTo(want).finally(() => { this.reclaiming = null; });
   }
 
   // ---- editing / saving ----
@@ -368,7 +385,7 @@ export class TabSet {
       if (this.docs.length) doc = await api(this.url(this.docs[Math.min(i, this.docs.length - 1)].id), { busy: false });
       else if (this.ownedByTables) { this.render(); this.clearPanel(); return; }
       else doc = await this.create1({ name: this.newName(1), payload: this.adapter.empty() });
-      if (ep === this.epoch) this.open(doc);
+      if (ep === this.epoch) this.open(doc, { quiet: !!this.quiet });   // (a frame's document gone: its neighbour is not picked either)
     } catch (e) { if (!quiet) toast(e.message, true); this.render(); }
   }
 

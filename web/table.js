@@ -1010,7 +1010,9 @@ export async function sourceFrameAt(src, at, ok = here()) {
   if (!ok()) { dropInput(got?.fresh); return false; }   // (another table opened meanwhile: a picture uploaded for it goes)
   if (!got) { toast('That can\'t go on the table', true); return null; }
   got.frame.label = got.frame.label || nextLabel(got.frame.kind);
-  return makeFrame(got.frame.kind, got.frame, { ...got, ok });
+  const f = await makeFrame(got.frame.kind, got.frame, { ...got, ok });
+  if (f && got.after) got.after(f);   // (a 3D frame's scene is filled once it is made: table-frames.js frameFor)
+  return f;
 }
 
 // ---------------------------------------------------------------------------

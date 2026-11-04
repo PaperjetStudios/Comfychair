@@ -16,6 +16,10 @@
 //                                       runs on its options over this (vfxState)
 //   cachedClip(frame, then)             the frame's first clip as last read (null until read; then() once it is)
 //   liveClipTime(frame)                 seconds into that clip at the open frame's playhead (points keep it)
+//   frameBeside(source, src, { label }) a new frame made from src (table-frames.js frameFor's shape) beside source, or
+//                                       beside the selection (no source) / at the table's start; resolves the frame or null
+//   runBeside(source, g, kind, label, ctx)  a run queued elsewhere (a sheet: Mark views, H3 upscale, a 3D object) landing in a
+//                                       new frame of kind beside source once it is done (a 3D frame through frame-scene.js)
 //   compareFor(frame, id)               a function that wipes the frame's clip against its newest result of the op on the open
 //                                       frame (frame-overlay.js compare), or null when there's none
 import { api, field, h, help, hint, rangeField, seg, store, textArea, toast, toggle } from './ui.js';
@@ -113,6 +117,7 @@ export function compareFor(frame, id) {
 }
 const KEY = (kind, id) => `deck.edit.${kind}.${id}`;
 export function optsOf(kind, id) {
+  if (kind === 'image' && opById(kind, id)?.group === '3D') return {};
   if (kind === 'image') return IT?.toolState?.() || {};   // (the Image tools keep their own settings)
   return { ...(OP_DEFAULTS[`${kind}:${id}`] || {}), ...store.get(KEY(kind, id), {}) };
 }
@@ -153,6 +158,7 @@ export function opFields(kind, id, opts, ctx = {}) {
   const keep = () => saveOpts(kind, id, opts), redraw = () => { keep(); ctx.redraw?.(); };
   const set = (k) => (v) => { opts[k] = v; keep(); };
   const prompt = (label, k = 'prompt', placeholder = '') => field(label, textArea(() => opts[k] || '', set(k), { rows: 2, placeholder, label }));
+  if (kind === 'image' && o.group === '3D') return [];   // (a 3D object's views and model are picked on its sheet)
   if (kind === 'image') {
     if (!IT) { itReady.then(() => ctx.redraw?.()); return [hint('Loading the image tools…')]; }
     return IT.toolFields(id, undefined, { redraw: () => ctx.redraw?.(), size: ctx.size || null, eng: null }) || [];
@@ -299,6 +305,7 @@ export async function runOp(kind, id, frame, opts = optsOf(kind, id), ctx = {}) 
   const o = opById(kind, id);
   if (!o) throw new Error(`Unknown edit ${kind}:${id}`);
   const into = ctx.into || frame, label = `${o.label} · ${frame.label || 'frame'}`;
+  if (kind === 'image' && o.group === '3D') return run3d(o, frame, { ...ctx, into }, label);
   if (kind === 'image') return runImage(o, frame, ctx);
   if (kind === 'scene') return runScene(o, frame, opts);
   if (kind === 'sound') return runSound(o, frame, opts, { ...ctx, into }, label);
@@ -346,6 +353,77 @@ function runScene(o, frame, opts) {
   return { job };
 }
 
+// ---------------------------------------------------------------------------
+// results that are frames of their own: beside the frame they came from
+// ---------------------------------------------------------------------------
+export async function frameBeside(source, src, { label = '' } = {}) {
+  const Table = await import('./table.js'), { besideSpot } = await import('./table-frames.js');
+  const frames = Table.tableFrames() || [];
+  const near = source || Table.selectedFrames?.()?.[0] || frames.reduce((a, f) => (!a || f.x + f.w > a.x + a.w ? f : a), null);
+  const size = { w: src.width || near?.w || 1024, h: src.height || near?.h || 1024 };
+  const at = near ? besideSpot(frames, near, size) : { x: 0, y: 0 };
+  const f = await Table.sourceFrameAt(label && !(src instanceof Blob) ? { ...src, label } : src, at);
+  if (f && label && f.label !== label) { f.label = label.slice(0, 120); Table.frameChanged(); }
+  return f || null;
+}
+// a run's outputs into a 3D frame's scene: frame-scene.js landInScene when it is there, else the scene opened off screen
+export async function intoScene(into, g, label = '') {
+  const fs = await import('./frame-scene.js');
+  const outs = (g.outputs || []).map((o, index) => ({ ...o, generation: g.id, index, template: g.template }));
+  if (typeof fs.landInScene === 'function' && g.template !== '3d photo') return fs.landInScene(into, outs);   // (a MoGe photo keeps its camera: addPhoto)
+  const si = await import('./scene-import.js');
+  return fs.withSceneDoc(into, async (m) => {
+    if (g.template === '3d photo') { await m.addPhoto(g); return true; }
+    const glb = outs.find((o) => /\.glb$/i.test(o.filename || ''));
+    if (glb) { await si.addModel(glb.url, label || `#${g.id}`, { gen: g.id, index: glb.index }); return true; }
+    const sp = outs.find((o) => o.kind === 'splat' || /\.(ply|spz|ksplat|splat)$/i.test(o.filename || ''));
+    if (sp) { await si.addSplat(sp.url, label || `#${g.id}`, { gen: g.id, index: sp.index }); return true; }
+    throw new Error(`#${g.id} made nothing a 3D frame takes`);
+  });
+}
+export function runBeside(source, g, kind, label, ctx = {}) {
+  S.history.set(g.id, S.history.get(g.id) || g);
+  adoptGenerations([g]);
+  return (async () => {
+    const { resultFrame } = await import('./table-frames.js');
+    const into = await resultFrame(source, { kind, label: resultLabel({ label }, source) });
+    if (!into?.doc) throw new Error('The new frame for the result couldn\'t be made: it is in the Shelf');
+    if (kind !== 'scene') ctx.onRun?.([g], { tab: into.doc, frame: into.id, kind: into.kind, label });
+    const done = g.status === 'done' ? g : await waitGen(g.id);
+    if (kind === 'scene') await intoScene(into, done, label); else await landOutput(into, done, { label });
+    return into;
+  })().catch((e) => { toast(`${label}: ${e.message}`, true); throw e; });
+}
+
+// Photo in 3D (MoGe), a 3D object (its sheet: Pixal3D or Trellis), a splat (SHARP): the frame's picture into a 3D frame
+async function run3d(o, frame, ctx, label) {
+  const { frameSource } = await import('./frame-source.js');
+  const src = await frameSource(frame, { multiple: 1 });
+  if (!src) throw new Error(`${frame.label || 'That frame'} is empty`);
+  if (o.id === 'photo3d') {
+    const g = await api('/api/scene/photo', { method: 'POST', body: { image: src.name, project_id: S.project }, busy: false });
+    S.history.set(g.id, g);
+    return { gens: [g], job: waitGen(g.id).then((done) => intoScene(ctx.into, done, label)) };
+  }
+  if (o.id === 'splat') {
+    const { waitJob } = await import('./clipimport.js');
+    const job = (async () => {
+      const r = await waitJob(await api('/api/scene/splat', { method: 'POST', body: { image: src.name, project_id: S.project }, busy: false }));
+      const g = { id: null, template: 'splat', outputs: [{ kind: 'splat', url: r.url, filename: r.name, image: src.name, lens: r.lens, levels: r.levels, box: r.box }] };
+      const fs = await import('./frame-scene.js');
+      if (typeof fs.landInScene === 'function') return fs.landInScene(ctx.into, g.outputs);
+      const si = await import('./scene-import.js');
+      return fs.withSceneDoc(ctx.into, async () => { await si.addSplat(r.url, label); return true; });
+    })();
+    return { job };
+  }
+  // a 3D object: its sheet picks the views and the model; the run, once queued, lands in a new 3D frame beside this one
+  await (await import('./run.js')).sceneModule();
+  const si = await import('./scene-import.js');
+  si.openObjectSheet(src.name, frame.label || '', { Front: src.name }, { character: { queued: (g) => { runBeside(frame, g, 'scene', label, ctx).catch(() => {}); } } });
+  return { landed: true };
+}
+
 async function runSound(o, frame, opts, ctx, label) {
   const into = ctx.into;
   if (o.id === 'gain' || o.id === 'normalise') {
@@ -360,7 +438,7 @@ async function runSound(o, frame, opts, ctx, label) {
   }
   if (o.id === 'voice') {
     const st = await api('/api/voice/status', { busy: false }).catch(() => null);
-    if (st && !st.installed) throw new Error('The AI voice tools aren\'t installed on the server yet (README: Sound tab → Voice tools)');
+    if (st && !st.installed) throw new Error('The AI voice tools aren\'t installed on the server yet (README: Voice tools)');
     const src = await needClip(frame, ['audio', 'video']);
     const { waitJob } = await import('./clipimport.js');
     const started = await api('/api/voice/isolate', { method: 'POST', busy: false,
@@ -390,9 +468,42 @@ async function runVideo(o, frame, opts, ctx, label) {
   const into = ctx.into;
   if (o.id === 'grab') return grab(frame, opts, ctx);
   if (o.id === 'foley') return foley(frame, opts, ctx, label, ['video']);
+  if (o.id === 'render') return render(frame, ctx, label);
+  if (o.id === 'track') {
+    const [fs, clip] = await Promise.all([import('./frame-scene.js'), needClip(frame, ['video'])]);
+    if (typeof fs.trackToScene !== 'function') throw new Error('Track motion into a 3D frame isn\'t ready yet');
+    const from = clip.trim?.start || 0, to = clip.trim?.len ? from + clip.trim.len : undefined;   // (its sheet's Create 3D scene makes the frame)
+    await fs.trackToScene({ src: bareSource(clip), url: clip.url || clipUrl(clip), label: clip.label || frame.label, from, ...(to != null && { to }) }, { frame });
+    return { landed: true };
+  }
   if (o.vfx) return runVfx(o, frame, opts, ctx, label);
   const src = await needClip(frame, ['video']);
   const n = Math.max(1, ctx.batch || 1);
+  if (o.id === 'sound') {
+    const job = api('/api/audio/extract', { method: 'POST', busy: false, timeout: 600000,
+      body: { source: bareSource(src), trim: src.trim || null, name: `${src.label || frame.label || 'clip'}-sound` } })
+      .then((m) => landMade(into, { media: m.name, kind: 'audio' }, `${src.label || frame.label || 'Clip'} (sound)`));
+    return { job };
+  }
+  if (o.id === 'views' || o.id === 'h3up') {
+    if (src.generation == null) throw new Error(`${o.label} works on a run's clip: this clip is a file`);
+    const g = S.history.get(src.generation) || await api(`/api/generations/${src.generation}`, { busy: false });
+    const idx = src.index || 0;
+    if (o.id === 'views') {
+      const { markClipOf } = await import('./markview-math.js');
+      const at = g.outputs?.[idx]?.kind === 'video' ? idx : markClipOf(g, idx);
+      if (at == null || at < 0) throw new Error(`#${g.id} has no clip to mark`);
+      await (await import('./markviews.js')).openMarkViews(g, at, {
+        onMade: (m, name) => frameBeside(frame, { input: name }, { label: `${m.label} · ${frame.label || 'views'}` }).catch((e) => toast(e.message, true)) });
+      return { landed: true };
+    }
+    if (!/^deck-h3-|^h3 (upscale|regenerate)$/.test(g?.template || '')) {
+      const { SHEET_TEMPLATES } = await import('./markview-math.js');
+      if (!SHEET_TEMPLATES.has(g?.template)) throw new Error(`#${g.id} isn't an H3 run or a character sheet: Upscale (LTX) or Upscale (SeedVR2) take any clip`);
+    }
+    (await import('./run.js')).openH3Upscale(g, idx, { onRun: (r) => runBeside(frame, r, 'video', label, ctx).catch(() => {}) });
+    return { landed: true };
+  }
   if (STEP_OF[o.id]) {
     if (o.id === 'restyle' && !opts.lora) throw new Error('Pick the LoRA first');
     if (o.id === 'replace' && !opts.target?.trim()) throw new Error('Say what to replace first');
@@ -420,7 +531,7 @@ async function runVideo(o, frame, opts, ctx, label) {
   if (o.id === 'finish') {
     if (src.generation == null) throw new Error('Only a run can be finished: this clip is a file');
     const g = S.history.get(src.generation) || await api(`/api/generations/${src.generation}`, { busy: false });
-    if (!/^deck-h3-|^h3 (upscale|regenerate)$/.test(g?.template || '')) throw new Error(`#${src.generation} isn't an H3 run: use Use as → Finish with H3 on it`);
+    if (!/^deck-h3-|^h3 (upscale|regenerate)$/.test(g?.template || '')) throw new Error(`#${src.generation} isn't an H3 run: Upscale (LTX) or Upscale (SeedVR2) finish any clip`);
     const info = await api('/api/h3/regen', { busy: false });
     if (!info.available) throw new Error(info.reason || 'Regenerate needs its refiner LoRA in models/loras');
     const r = await api('/api/h3/upscale', { method: 'POST', busy: false,
@@ -441,12 +552,30 @@ const probe = (source) => api('/api/videos/probe', { method: 'POST', body: { sou
 const remember = (frame, id, gens) => setFrameOps([frame], id, { results: [...(frameOps(frame, id).results || []), ...gens.map((g) => g.id)].slice(-8) });
 
 // st for frame: the op's options, its frame state, and the frame's clip as the source (when the effect takes one)
-async function stateOn(o, frame, opts) {
-  const e = effectById(o.vfx), st = vfxState('video', o.id, opts, frame);
-  const clip = needsOf(e).has('source') ? await needClip(frame, ['video']) : null;
+async function stateOn(o, frame, opts, ctx = {}) {
+  const cross = frame.kind !== 'video';   // (a cross-kind op: its picture and sound are the selected frames')
+  const e = effectById(o.vfx), st = vfxState('video', o.id, opts, cross ? null : frame);
+  if (cross) await fromSelection(e, st, ctx.frames || [frame]);
+  const clip = !cross && needsOf(e).has('source') ? await needClip(frame, ['video']) : null;
   st.source = clip ? { ...bareSource(clip), ...(clip.trim && { trim: clip.trim }), ...(clip.label && { label: clip.label }) } : null;
   if (st.len == null) st.len = Math.min(e.maxLen || 10, Math.max(1, Math.round(clip?.trim?.len || 5)));
   return { e, st };
+}
+
+// a cross-kind op's inputs from the selection: the first image frame's picture (the start image), the first sound frame's
+// first sound (the sound, or the voice for a talking shot)
+async function fromSelection(e, st, frames) {
+  const need = needsOf(e);
+  const pic = frames.find((f) => f.kind === 'image' && f.doc);
+  if (pic && [...need].some((n) => n.startsWith('first'))) {
+    const { frameSource } = await import('./frame-source.js');
+    st.first = (await frameSource(pic, { multiple: 1 }))?.name || st.first;
+  }
+  const snd = frames.find((f) => f.kind === 'sound' && f.doc);
+  if (snd && (need.has('sound') || need.has('line'))) {
+    const c = await needClip(snd, ['audio', 'video']);
+    st.sound = { ...bareSource(c), ...(c.trim && { trim: c.trim }), ...(c.label && { label: c.label }) };
+  }
 }
 
 // Remove watermark's Find: the boxes it finds go on the frame (fractions of the whole frame), added to any drawn there
@@ -461,7 +590,7 @@ export async function findBoxes(frame, opts) {
 }
 
 async function runVfx(o, frame, opts, ctx, label) {
-  const { e, st } = await stateOn(o, frame, opts);
+  const { e, st } = await stateOn(o, frame, opts, ctx);
   const into = ctx.into, n = Math.max(1, ctx.batch || 1);
   const job = async (url, body, timeout = 900000) => {
     const g = await api(url, { method: 'POST', body, timeout, busy: false });
@@ -497,6 +626,27 @@ async function runVfx(o, frame, opts, ctx, label) {
   const gens = await queueRun({ template: t.id, values, batch: n, parent, face: { kind: 'vfx', state: { ...kept, op: e.id } } });
   remember(frame, o.id, gens);
   return { gens, job: follow(gens, into, ctx, label) };
+}
+
+// Render: the frame's whole timeline as one clip (the open frame's as it is now: video.js renderLive draws its 3D clips;
+// else its saved document, which can't hold a 3D clip until it is opened), into a new video frame
+async function render(frame, ctx, label) {
+  let g;
+  if (isLive(frame.id) && VID?.videoTabs?.()?.active?.id === frame.doc && VID.renderLive) g = await VID.renderLive();
+  else {
+    const d = await api(docUrl('video', frame.doc), { busy: false });
+    const p = d?.payload || {}, items = (p.items || []).filter((it) => it.src || it.kind === 'scene');
+    if (!items.length) throw new Error(`${frame.label || 'This frame'} has nothing on its timeline`);
+    if (items.some((it) => it.kind === 'scene')) throw new Error('Its 3D clips are drawn on the open frame: open it, then Render');
+    g = await api('/api/video/render', { method: 'POST', busy: false, body: { project_id: S.project, tab: { id: frame.doc, name: d.name || frame.label },
+      width: p.size?.[0], height: p.size?.[1], fps: p.fps || null,
+      tracks: (p.tracks || []).map(({ id, kind, hidden, muted }) => ({ id, kind, hidden, muted })),
+      items: items.map((it) => ({ track: it.track, at: it.at, name: it.label, src: it.src, in: it.in, out: it.out ?? it.dur, x: it.x, y: it.y, scale: it.scale,
+        fit: it.fit, rotation: it.rotation || 0, anchor_x: it.anchor?.x, anchor_y: it.anchor?.y, opacity: it.opacity, volume: it.volume, chans: it.chans || null,
+        fade_in: it.fadeIn, fade_out: it.fadeOut })) } });
+  }
+  S.history.set(g.id, g);
+  return { gens: [g], job: follow([g], ctx.into, ctx, label) };
 }
 
 // Grab frame: a still of the clip at opts.at (its in point when blank). Into the selected image frame as a layer when one is

@@ -4,7 +4,9 @@
 // button. The rules are in edit-rules.js, the ops' fields and runners in edit-ops.js, the many-frame runner in edit-run.js
 // (loaded on demand: a missing one leaves a note here). A video op with marks to place (points, boxes, paths, a colour:
 // op.tools) puts them over the open frame's picture (frame-overlay.js) while the pane is on show; they are kept on the
-// frame (frame.ops[op]). Clip tools → VFX on an open video frame opens this pane on it.
+// frame (frame.ops[op]). Clip tools → VFX on an open video frame opens this pane on it. On the open image frame, with
+// the result as a layer, Run on picks the whole picture or the selected layers (imagetools.js toolState().scope). A
+// selected note gets a Make from this note button: its words are the Make pane's prompt (make-panel.js).
 //
 //   showOp(kind, id, frames)   select an op in the pane (the frame menu's Edit ▸ items) and put the pane on show
 //   runEdit()                  Run for the section last used (Ctrl+Enter and the action bar call it while the pane is on show)
@@ -18,6 +20,7 @@ import { icon } from './icons.js';
 import * as Table from './table.js';
 import { setupsRow } from './setups.js';
 import { editKey } from './setups-rules.js';
+import { toolState } from './imagetools.js';
 
 const KINDS = ['image', 'video', 'sound', 'scene'];
 const WORD = { image: 'Image', video: 'Video', sound: 'Sound', scene: '3D' };
@@ -87,9 +90,10 @@ export function draw() {
   if (!rules() || !ops() || !runner()) { el.replaceChildren(note(`The Edit tools aren't available (${(P.errs || []).join('; ')}).`, 'warn')); return; }
   plan();
   const kinds = KINDS.filter((k) => ofKind(k).length && (P.ops.get(k) || []).length);
-  if (!kinds.length) { syncOverlay(null, null, []); el.replaceChildren(note(P.frames.length ? 'Nothing to edit on these frames yet.' : 'Select a frame to edit it.', 'info')); tellState(); return; }
+  const notes = notesSection();
+  if (!kinds.length) { syncOverlay(null, null, []); el.replaceChildren(notes || note(P.frames.length ? 'Nothing to edit on these frames yet.' : 'Select a frame to edit it.', 'info')); tellState(); return; }
   if (!kinds.includes(P.focus)) P.focus = kinds[0];
-  el.replaceChildren(...kinds.map(sectionFor));
+  el.replaceChildren(...kinds.map(sectionFor), notes || '');
   if (!kinds.includes('video')) syncOverlay(null, null, []);
   tellState();
 }
@@ -139,6 +143,12 @@ function sectionFor(kind) {
         store.set(`deck.edit.target.${kind}`, x); draw();
       }), help('New frame puts each result in a new frame beside the one it came from. In this frame adds it to that frame itself: a layer, a clip or a track.')));
     }
+    if (!why && kind === 'image' && liveIn(kind, frames.slice(0, 1)) && targetOf(op, kind) === 'layer') {
+      const ST = toolState();
+      kids.push(field('Run on', seg([['whole', 'Whole picture'], ['selected', 'Selected layers']], ST.scope === 'selected' ? 'selected' : 'whole', (v) => {
+        ST.scope = v; store.set('deck.imagetools', ST); draw();
+      }), help('Whole picture: the open picture as it looks. Selected layers: each selected layer on its own, its result a layer over it.')));
+    }
     kids.push(runRow(kind, op, frames, why));
     kids.push(statusList(kind, frames));
   }
@@ -148,6 +158,19 @@ function sectionFor(kind) {
   sec.addEventListener('pointerdown', () => { if (P.focus !== kind) { P.focus = kind; tellState(); } }, true);
   sec.addEventListener('focusin', () => { if (P.focus !== kind) { P.focus = kind; tellState(); } });
   return sec;
+}
+
+// the selected notes: their words drive Make (make-panel.js takes a selected note's text as the prompt)
+function notesSection() {
+  let sel = [];
+  try { sel = Table.selectedFrames() || []; } catch { sel = sidebar.context().frames || []; }
+  const notes = sel.filter((f) => f.kind === 'note');
+  if (!notes.length) return null;
+  const words = notes.find((f) => String(f.text || '').trim());
+  return section(`Note · ${notes.length} ${notes.length === 1 ? 'note' : 'notes'}`, null,
+    words ? hint(`"${String(words.text).trim().slice(0, 120)}"`, 'edit-note-text') : hint('This note has no words yet', 'edit-why'),
+    button([icon('sparkle'), 'Make from this note'], () => sidebar.show('make'), { cls: 'primary edit-note-make', disabled: !words,
+      title: 'Its words are the prompt in the Make pane' }));
 }
 
 // Run, ×batch and Stop: as the Make panel's
@@ -279,5 +302,5 @@ import('./vfx.js').then(({ onSendToVfx }) => onSendToVfx(async () => {
 for (const ev of ['table:select', 'table:live', 'table:unlive']) addEventListener(ev, () => { setTimeout(() => { if (editActive()) draw(); else tellState(); }, 0); });
 sidebar.onShow((name) => { if (name === 'edit') draw(); else syncOverlay(null, null, []); tellState(); });
 
-P.el = sidebar.pane('edit', { title: 'Edit', icon: 'brush', when: (c) => c.frames.some((f) => f.kind !== 'note') });
+P.el = sidebar.pane('edit', { title: 'Edit', icon: 'brush', when: (c) => c.frames.length > 0 });
 load();

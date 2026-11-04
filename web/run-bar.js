@@ -3,7 +3,8 @@
 // file that isn't a clip.
 //   runBar(el, g, sel, { onPick(i), has(i)?, before()? })
 //   el: the bar (class strip; empty hides it); sel: the output on show; has: this view can show that output (else its
-//   thumbnail is off); before(): close this view (the buttons go to the Generate tab)
+//   thumbnail is off); before(): close this view (the buttons go to the Generate tab; on the table they make a new video
+//   frame of the clip with that Edit op opened on it, table-out.js editAs)
 import { button, h, info, toast } from './ui.js';
 import { S } from './core.js';
 import { cardPicture, kindOf } from './kinds.js';
@@ -28,7 +29,16 @@ export function runBar(el, g, sel, { onPick, has = () => true, before = null } =
     before?.();
     try { await fn(await import('./run.js')); } catch (e) { toast(e.message, true); }
   };
-  const acts = clip < 0 ? [] : [
+  const table = !!document.querySelector('#tab-table.active, #tab-table.live-host');
+  const op = (label, id, tip) => [button(label, async () => {
+    before?.();
+    try { await (await import('./table-out.js')).editAs(g, clip, id); } catch (e) { toast(e.message, true); }
+  }, { cls: 'small' }), info(tip)];
+  const acts = clip < 0 ? [] : table ? [
+    ...op('Upscale', 'upvideo', 'A new video frame of the clip, with SeedVR2\'s upscale opened on it in the Edit pane.'),
+    ...op('Upscale (fast)', 'upvideofast', 'A new video frame of the clip, with the fast upscale opened on it in the Edit pane.'),
+    ...op('Finish', 'finish', 'A new video frame of the clip, with Finish (H3 1080p) opened on it in the Edit pane.'),
+  ] : [
     ...CLIP_UPSCALES.filter(([id]) => installed(id)).flatMap(([id, label, tip]) => [button(label, run((m) => m.useClipIn(id, g, clip)), { cls: 'small' }), info(tip)]),
     installed('deck-h3-refine') ? button('Refine', run((m) => m.useRefineClip(g, clip)), { cls: 'small' }) : null,
     installed('deck-h3-refine') ? info('Into the Generate tab, in deck-h3-refine: H3 draws the clip again from part-way, sharper, with your references.') : null,

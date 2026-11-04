@@ -530,7 +530,7 @@ export async function openGeneration(id) {
   // when its template is there; where each kind can go (3D, the Editor, Craft, Upscale, Track motion…) is Use as…
   const primary = { cls: 'small primary' };
   const buttons = () => [...(isEdit || !S.templates.some((t) => t.id === g.template) ? [] : [   // key, matte, imports…: no template to run again
-    button('Replay & edit', () => { reuse(g); closeSheet(); }, primary),
+    tableOn() ? null : button('Replay & edit', () => { reuse(g); closeSheet(); }, primary),   // (it opens Generate: not from the table)
     button('Run again', () => runAgain(g)),
   ]), ...takeButtons(g, idx, { onDeleted: () => closeSheet() }),
   !isEdit ? linkBtn('Workflow JSON', `/api/generations/${g.id}/workflow`) : null].filter(Boolean);
@@ -562,8 +562,19 @@ export async function sceneModule() {
   return sceneLoad;
 }
 
-// A depth video from the 3D tab into deck-h3-ctrl2v: its control video, size and length.
+// On the table nothing opens another screen: a run these would set up in Generate becomes a new video frame beside the
+// open (or selected) frame instead, with the Edit op that does the same opened on it where there is one
+const tableOn = () => !!document.querySelector('#tab-table.active, #tab-table.live-host');
+async function clipFrame(g, index = 0, op = null) {
+  const T = await import('./table-out.js');
+  if (op) return T.editAs(g, index, op);
+  const f = await T.newFrameOf(g, index);
+  if (f) toast(`#${g.id} is a new video frame: its Edit ▸ has what it can become`);
+}
+
+// A depth video from the 3D tab into deck-h3-ctrl2v: its control video, size and length. (On the table: a video frame of it.)
 export async function useControlVideo(g, sc) {
+  if (tableOn()) return clipFrame(g, 0);
   if (!S.templates.find((t) => t.id === 'deck-h3-ctrl2v')) return toast('Template deck-h3-ctrl2v is missing', true);
   S.history.set(g.id, S.history.get(g.id) || g);
   switchTab('generate');
@@ -581,6 +592,7 @@ export async function useControlVideo(g, sc) {
 
 // A clip into a template's video field, in the Generate tab (a run bar's Upscale)
 export function useClipIn(id, g, index = 0) {
+  if (tableOn()) return clipFrame(g, index, { 'deck-upscale-video': 'upvideo', 'deck-upscale-video-fast': 'upvideofast' }[id] || null);
   if (!S.templates.find((t) => t.id === id)) return toast(`Template ${id} is missing`, true);
   S.history.set(g.id, S.history.get(g.id) || g);
   switchTab('generate');
@@ -595,6 +607,7 @@ export function useClipIn(id, g, index = 0) {
 // A clip (a 3D colour render, a splat camera move) into deck-h3-refine: H3 draws it again from part-way, with references.
 // depth: a depth render of the same camera, to hold the shapes (optional)
 export async function useRefineClip(g, index = 0, depth = null) {
+  if (tableOn()) return clipFrame(g, index);
   if (!S.templates.find((t) => t.id === 'deck-h3-refine')) return toast('Template deck-h3-refine is missing', true);
   S.history.set(g.id, S.history.get(g.id) || g);
   switchTab('generate');
@@ -609,6 +622,7 @@ export async function useRefineClip(g, index = 0, depth = null) {
 // Any clip into deck-h3-refine with Regenerate already on (its refiner LoRA and 0.70 schedule): the finished take
 // works for LTX clips and scene renders too, not only H3's own runs.
 export async function finishWithH3(g, index = 0) {
+  if (tableOn()) return clipFrame(g, index, 'finish');
   await useRefineClip(g, index);
   const info = await api('/api/h3/regen', { busy: false }).catch(() => null);
   const lora = info?.loras?.[0]?.name;
@@ -711,7 +725,8 @@ export async function openJobs() {
 
 // A finished H3 clip sampled again bigger (app/h3upscale.py), or finished with Open-H3-Regenerate's refiner LoRA:
 // its own 2/3-step schedule (RESEARCH-h3-regenerate.md), the clip's sound kept so lips stay in sync.
-export async function openH3Upscale(g, idx) {
+// onRun(run): the run queued goes there (the table's Upscale (H3) op: a new video frame) instead of its Details
+export async function openH3Upscale(g, idx, { onRun = null } = {}) {
   const o = g.outputs[idx], w = o.width || 0, hgt = o.height || 0;
   let info = { available: false, loras: [], reason: 'ComfyUI is offline' };
   try { info = await api('/api/h3/regen', { busy: false }); } catch { /* keep the reason */ }
@@ -730,7 +745,8 @@ export async function openH3Upscale(g, idx) {
         const body = { generation: g.id, index: idx, scale: up ? scale : 1.5, strength };
         if (!up) body.regen = { quality: regenStrength, lora, target: target === '1080p' ? '1080p' : 'scale' };
         const n = await api('/api/h3/upscale', { method: 'POST', body });
-        S.history.set(n.id, n); closeSheet(); openGeneration(n.id);
+        S.history.set(n.id, n); closeSheet();
+        if (onRun) onRun(n); else openGeneration(n.id);
       } catch (e) { toast(e.message, true); go.disabled = false; }
     }, { cls: 'primary' });
     openSheet(h('h3', {}, `${up ? 'Upscale' : 'Regenerate'} #${g.id}`),

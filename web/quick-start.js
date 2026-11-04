@@ -1,7 +1,7 @@
 // The quick-start sheet: a double tap on empty table (or Quick start… in the New frame menus) asks what to start
 // there. The five kinds sit in a row at the top; under each, its starts as big cards, one tap each. A start makes its
 // frame with the frame's top-left at the tapped point (on the grid when it is on), selects it, and for the starts
-// from text runs the Make panel's Run on it, so the result lands in that frame. Everything goes through the table's
+// from text or from a picture (a video, a 3D object) runs the Make panel's Run on it, so the result lands in that frame. Everything goes through the table's
 // own paths (table.js newFrameAt / sourceFrameAt / dropOntoFrame, frame-scene.js addToScene); nothing new is saved
 // apart from the choices remembered on this device (quick-start-rules.js).
 //
@@ -29,7 +29,7 @@ export function openQuickStart({ x = 0, y = 0, rect = null, kind = null, centre 
   tabs.classList.add('qs-kinds');
   const draw = () => body.replaceChildren(...PANES[Q.c.kind](Q));
   openSheet(h('h3', {}, rect ? `New frame · ${rect.w}×${rect.h}` : 'New frame'),
-    help('Each card makes a frame here in one tap. From text makes the frame and runs the Make panel on it, so the result lands in the frame. Double-tap empty table to open this again.'),
+    help('Each card makes a frame here in one tap. From text, and a video or 3D object from a picture, make the frame and run the Make panel on it, so the result lands in the frame. Double-tap empty table to open this again.'),
     h('div', { class: 'quick-start' }, tabs, body));
   draw();
 }
@@ -176,14 +176,16 @@ async function fromText(Q, kind, start, size, prompt) {
   await mp.runMake();
 }
 
-// From a picture, to run later: the frame with its Make settings holding the picture, the Make pane on show (not run)
+// From a picture: the frame with its Make settings holding the picture, selected, then Run (the result lands in it)
 async function withPicture(Q, kind, start, size, name, payload) {
   const t = templateFor(start, kind);
   if (!t) return;
   const f = await Table.newFrameAt(kind, rectOf(Q, size), { payload: payload || (kind === 'video' ? { ...emptyVideo(), size: [size.w, size.h], fps: Q.c.fps } : undefined),
     extra: { make: makePayload(t, { picture: name }, baseFor(t)) } });
   if (!f) return;
+  const mp = await import('./make-panel.js');
   sidebar.show('make');
+  await mp.runMake();
 }
 
 // ---- paste ----

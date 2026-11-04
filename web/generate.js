@@ -31,6 +31,13 @@ export function stateKey(id) { return `deck.tpl.${id}`; }
 // edit, flush() before a run, decorate() after fields are drawn, pick() for a template change,
 // templatesLoaded() once the template list is in, openShot() for "open as new tab"
 export const hooks = {};
+// The state the fields show and edit: the Generate tab's (S) unless a panel draws them on its own (fieldTarget({ state }):
+// the table's Make panel). A panel's state is { tpl, values, seedMode, imageMp, imageCrop, sizeMode, loraFolder, pb,
+// save() } and its save() is called after every edit, where the Generate tab's persist() would be.
+let FS = S;
+const saveF = () => (FS === S ? persist() : FS.save?.());
+const setF = (key, v) => { FS.values[key] = v; saveF(); };
+export const fieldState = () => FS;
 // The old per-template localStorage copy is still written: it is the starting point of a project's first tab
 export function persist() {
   if (!S.tpl) return;
@@ -154,12 +161,12 @@ function isBasic(f, all) {
 }
 
 // Where the fields are drawn. The Generate tab's panel (#fields, #tplNotes and the pane over its viewer) unless another
-// panel borrows them (make-panel.js): renderFields({ host, notes, basics, scope, replace, imageButtons }) draws there
+// panel draws them (make-panel.js): renderFields({ host, notes, basics, scope, replace, imageButtons, state }) draws there
 // and keeps drawing there until fieldTarget(null) gives them back. host: the groups; notes: the template's warnings;
 // basics: an element (or { body, sync }) for the size, length and seed; scope: the element holding them all;
 // replace(f): an element in place of field f, or null; imageButtons(f): more buttons on an image field's slot.
 let FT = null;
-export function fieldTarget(t = null) { FT = t; }
+export function fieldTarget(t = null) { FT = t; FS = t?.state || S; }
 export const fieldScope = () => FT?.scope || $('#tab-generate');
 export const fieldsBorrowed = () => !!FT;
 function basicsTarget() {
@@ -169,8 +176,8 @@ function basicsTarget() {
 }
 
 export function renderFields(target = null) {
-  if (target) FT = target;
-  const t = S.tpl;
+  if (target) fieldTarget(target);
+  const t = FS.tpl;
   if (!t) return;
   const notes = [];
   if (t.error) notes.push(note(t.error, 'err'));
@@ -218,7 +225,7 @@ export function renderFields(target = null) {
   if (!S.snippets) loadSnippets().then(() => renderFields());
 }
 
-// Show a template with a ready state (what a tab holds): values already in S.values; the rest here
+// Show a template with a ready state (what a tab holds): values already in FS.values; the rest here
 export function installState(t, st) {
   S.tpl = t;
   fillTemplates();   // (the template in use is always listed)
@@ -242,27 +249,27 @@ const SHOT_CATEGORY = 'Saved shot';
 
 function captureShot() {
   const pb = builderState();
-  return { workflow: S.tpl.id, values: clone(S.values), seedMode: clone(S.seedMode), sizeMode: clone(S.sizeMode),
-    imageCrop: clone(S.imageCrop), imageMp: clone(S.imageMp), builder: pb.on ? clone(pb) : null };
+  return { workflow: FS.tpl.id, values: clone(FS.values), seedMode: clone(FS.seedMode), sizeMode: clone(FS.sizeMode),
+    imageCrop: clone(FS.imageCrop), imageMp: clone(FS.imageMp), builder: pb.on ? clone(pb) : null };
 }
 
 function applyShot(p) {
-  for (const f of S.tpl.fields) {
+  for (const f of FS.tpl.fields) {
     if (!(f.key in p.values)) continue;
     const v = p.values[f.key];
     if (f.kind === 'choice' && f.options.length && !f.options.includes(v)) continue;  // model or option gone
-    S.values[f.key] = v;
+    FS.values[f.key] = v;
   }
-  S.seedMode = p.seedMode || {}; S.sizeMode = p.sizeMode || {}; S.imageCrop = p.imageCrop || {}; S.imageMp = p.imageMp || {};
+  FS.seedMode = p.seedMode || {}; FS.sizeMode = p.sizeMode || {}; FS.imageCrop = p.imageCrop || {}; FS.imageMp = p.imageMp || {};
   const pb = builderState();
-  if (p.builder) S.pb = { ...clone(p.builder), on: true };
+  if (p.builder) FS.pb = { ...clone(p.builder), on: true };
   else pb.on = false;  // the prompt was written as plain text: show it that way
-  saveBuilder(); persist(); renderFields();
+  saveB(); saveF(); renderFields();
 }
 
 function shotBar() {
-  const curKey = `deck.shot.${S.tpl.id}`;
-  const entries = () => savedEntries(SHOT_CATEGORY, (p) => p.workflow === S.tpl.id).sort((a, b) => a.created - b.created);
+  const curKey = `deck.shot.${FS.tpl.id}`;
+  const entries = () => savedEntries(SHOT_CATEGORY, (p) => p.workflow === FS.tpl.id).sort((a, b) => a.created - b.created);
   const curId = () => String(store.get(curKey, ''));
   const loaded = () => entries().find((y) => String(y.id) === curId());
   const l = entries(), i = l.findIndex((x) => String(x.id) === curId());
@@ -279,7 +286,7 @@ function shotBar() {
     switchTo(String(x.id), x.p, `Loaded setup "${x.name}"`);
   };
   const saveNew = () => nameSheet({ title: 'Save setup', placeholder: 'Name, e.g. "Market walk – wide"',
-    hint: `Saves everything in ${S.tpl.name}: the prompt (and its parts), images, LoRAs and every setting.`,
+    hint: `Saves everything in ${FS.tpl.name}: the prompt (and its parts), images, LoRAs and every setting.`,
     save: async (name) => {
       const r = await saveSnippet({ category: SHOT_CATEGORY, name: name || `Setup ${entries().length + 1}`, text: JSON.stringify(captureShot()) });
       store.set(curKey, String(r.id));
@@ -299,7 +306,7 @@ function shotBar() {
     store.set(curKey, '');
     try { await deleteSnippet(x, `Deleted setup "${x.name}"`, renderFields); } catch (e) { toast(e.message, true); }
   };
-  const defaults = () => switchTo('', { values: Object.fromEntries(S.tpl.fields.map((f) => [f.key, f.value])) }, 'Back to the template defaults');
+  const defaults = () => switchTo('', { values: Object.fromEntries(FS.tpl.fields.map((f) => [f.key, f.value])) }, 'Back to the template defaults');
   return cycleBar({ title: 'Setups', what: 'saved setup', prev: () => go(-1), next: () => go(1), cls: 'saved-bar shot-bar',
     buttons: [iconBtn('Save over this setup', '💾', saveOver), iconBtn('Save as a new setup', '＋', saveNew),
       iconBtn('Open this setup in a new tab', '⧉', () => { const x = loaded(); if (!x) return toast('No saved setup loaded'); hooks.openShot?.(x.p, x.name); }),
@@ -318,11 +325,11 @@ const PRESET_CATEGORY = 'Saved settings';
 const PRESET_KINDS = new Set(['int', 'float', 'choice', 'bool', 'seed', 'loras']);
 const SCOPES = [['workflow', 'This workflow'], ['model', 'This model'], ['global', 'Everywhere']];
 
-function fieldClass(f) { return (S.tpl.groups.find((g) => g.node === f.node) || {}).class || f.node; }
+function fieldClass(f) { return (FS.tpl.groups.find((g) => g.node === f.node) || {}).class || f.node; }
 function semKey(f) { return f.kind === 'loras' ? `${fieldClass(f)}.__loras.${/turbo/i.test(f.group) ? 'turbo' : 'stack'}` : `${fieldClass(f)}.${f.input}`; }
 function currentModel() {
-  const mf = S.tpl.fields.find((x) => MODEL_INPUTS.includes(x.input));
-  return mf ? S.values[mf.key] : null;
+  const mf = FS.tpl.fields.find((x) => MODEL_INPUTS.includes(x.input));
+  return mf ? FS.values[mf.key] : null;
 }
 const keyFor = (f, scope) => (scope === 'workflow' ? f.key : semKey(f));
 
@@ -330,15 +337,15 @@ function captureGroup(fs, scope, group) {
   const values = {}, modes = {};
   for (const f of fs) {
     const k = keyFor(f, scope);
-    values[k] = S.values[f.key];
-    if (f.kind === 'seed') modes[k] = S.seedMode[f.key] || 'random';
-    if (f.input === 'width' && S.sizeMode[f.key]) modes[`${k}#size`] = S.sizeMode[f.key];
+    values[k] = FS.values[f.key];
+    if (f.kind === 'seed') modes[k] = FS.seedMode[f.key] || 'random';
+    if (f.input === 'width' && FS.sizeMode[f.key]) modes[`${k}#size`] = FS.sizeMode[f.key];
   }
-  return { scope, workflow: S.tpl.id, group, model: currentModel(), values, modes };
+  return { scope, workflow: FS.tpl.id, group, model: currentModel(), values, modes };
 }
 
 function groupEntryApplies(p, fs, group) {
-  if (p.scope === 'workflow') return p.workflow === S.tpl.id && p.group === group;
+  if (p.scope === 'workflow') return p.workflow === FS.tpl.id && p.group === group;
   if (p.scope === 'model' && (!p.model || p.model !== currentModel())) return false;
   return fs.some((f) => semKey(f) in p.values);
 }
@@ -349,9 +356,9 @@ function applyGroupEntry(p, fs) {
     if (!(k in p.values)) continue;
     const v = p.values[k];
     if (f.kind === 'choice' && f.options.length && !f.options.includes(v)) continue;  // model or option gone
-    S.values[f.key] = v;
-    if (p.modes[k]) S.seedMode[f.key] = p.modes[k];
-    if (p.modes[`${k}#size`]) S.sizeMode[f.key] = p.modes[`${k}#size`];
+    FS.values[f.key] = v;
+    if (p.modes[k]) FS.seedMode[f.key] = p.modes[k];
+    if (p.modes[`${k}#size`]) FS.sizeMode[f.key] = p.modes[`${k}#size`];
   }
 }
 
@@ -362,7 +369,7 @@ function groupPresetBar(g, fs) {
   const order = ['workflow', 'model', 'global'];
   const entries = () => [{ id: '', name: 'Template default' }, ...savedEntries(PRESET_CATEGORY, (p) => groupEntryApplies(p, fs, g.label))
     .sort((a, b) => order.indexOf(a.p.scope) - order.indexOf(b.p.scope) || a.created - b.created)];
-  const curKey = `deck.saved.${S.tpl.id}.${g.label}`;
+  const curKey = `deck.saved.${FS.tpl.id}.${g.label}`;
   const curId = () => String(store.get(curKey, ''));
   const loaded = () => entries().find((y) => String(y.id) === curId());
   const pos = h('span', { class: 'snip-pos' });
@@ -374,8 +381,8 @@ function groupPresetBar(g, fs) {
     const l = entries(), x = l[cycleIndex(Math.max(0, l.findIndex((y) => String(y.id) === curId())), d, l.length)];
     store.set(curKey, String(x.id));
     if (x.p) applyGroupEntry(x.p, fs);
-    else for (const f of fs) { S.values[f.key] = f.value; delete S.seedMode[f.key]; delete S.sizeMode[f.key]; }
-    persist(); renderFields();
+    else for (const f of fs) { FS.values[f.key] = f.value; delete FS.seedMode[f.key]; delete FS.sizeMode[f.key]; }
+    saveF(); renderFields();
   };
   const saveOver = async () => {
     const x = loaded();
@@ -389,7 +396,7 @@ function groupPresetBar(g, fs) {
     let scope = 'workflow';
     nameSheet({ title: `Save ${g.label}`, placeholder: `Name, e.g. "${g.label} – fast"`, hint: `Saves: ${fs.map((f) => f.label).join(', ')}.`,
       extra: [seg(SCOPES, scope, (k) => { scope = k; }),
-        help(`This workflow: ${S.tpl.name}. This model: ${currentModel() || '(no model setting here)'}. Everywhere: any template with the same kind of node.`)],
+        help(`This workflow: ${FS.tpl.name}. This model: ${currentModel() || '(no model setting here)'}. Everywhere: any template with the same kind of node.`)],
       save: async (name) => {
         if (scope === 'model' && !currentModel()) throw new Error('This template has no model setting');
         const r = await saveSnippet({ category: PRESET_CATEGORY, name: name || g.label, text: JSON.stringify(captureGroup(fs, scope, g.label)) });
@@ -422,7 +429,7 @@ function groupFieldEls(fs) {
     if (f.kind === 'mask') continue;   // drawn inside its picture's field
     const instead = FT?.replace?.(f);
     if (instead) { instead.dataset.key ||= f.key; out.push(instead); continue; }
-    if (f.when && S.values[f.when.key] === f.when.not) continue;   // only while another setting is on (a sheet's Strength)
+    if (f.when && FS.values[f.when.key] === f.when.not) continue;   // only while another setting is on (a sheet's Strength)
     out.push(fieldEl(f));
   }
   return out;
@@ -444,26 +451,26 @@ function sizeField(fw, fh) {
   const step = Math.max(fw.step || 8, fh.step || 8, 16);  // 16 suits every latent; resize nodes allow 1
   const lim = (n, f) => Math.min(f.max ?? Infinity, Math.max(f.min ?? step, n));
   // "Match image": the shape of the template's first image (as cropped), at the chosen megapixels
-  const imgField = (S.tpl?.fields || []).find((x) => x.kind === 'image' && (!fw.image_node || x.node === fw.image_node));
+  const imgField = (FS.tpl?.fields || []).find((x) => x.kind === 'image' && (!fw.image_node || x.node === fw.image_node));
   const imageAspect = () => {
-    const name = imgField && S.values[imgField.key];
+    const name = imgField && FS.values[imgField.key];
     const d = name && inputDims(name, () => { if (m.aspect === 'image') { applyPreset(); draw(); } });
     if (!d) return null;
-    const c = S.imageCrop[imgField.key]?.src === name ? S.imageCrop[imgField.key].crop : FULL;
+    const c = FS.imageCrop[imgField.key]?.src === name ? FS.imageCrop[imgField.key].crop : FULL;
     return (d[0] * c.w) / (d[1] * c.h);
   };
-  let m = S.sizeMode[fw.key];
-  if (!m && fw.match_image && imgField) m = S.sizeMode[fw.key] = { aspect: 'image', mp: 1 };
+  let m = FS.sizeMode[fw.key];
+  if (!m && fw.match_image && imgField) m = FS.sizeMode[fw.key] = { aspect: 'image', mp: 1 };
   if (!m) {  // derive from the current numbers: nearest preset (within 3%), else custom
-    const w = Number(S.values[fw.key]), hh = Number(S.values[fh.key]);
+    const w = Number(FS.values[fw.key]), hh = Number(FS.values[fh.key]);
     const near = ASPECT_PRESETS.find(([, a]) => Math.abs(w / hh / a - 1) < 0.03);
     m = { aspect: near ? near[0] : 'custom', mp: Math.round((w * hh) / 1e4) / 100 };
-    S.sizeMode[fw.key] = m;
+    FS.sizeMode[fw.key] = m;
   }
   const readout = h('span', {});
   const custom = h('div', { class: 'size-custom' }, numberField(fw, false), numberField(fh, false));
   const showReadout = () => {
-    const w = S.values[fw.key], hh = S.values[fh.key];
+    const w = FS.values[fw.key], hh = FS.values[fh.key];
     readout.textContent = m.aspect === 'image' && !imageAspect() ? 'matches the image once one is set'
       : `${w}×${hh} · ${((w * hh) / 1e6).toFixed(2)} MP`;
   };
@@ -473,13 +480,13 @@ function sizeField(fw, fh) {
     const px = m.mp * 1e6;
     const w = lim(Math.round(Math.sqrt(px * a) / step) * step, fw);
     const hh = lim(Math.round(Math.sqrt(px / a) / step) * step, fh);
-    S.values[fw.key] = w; S.values[fh.key] = hh;
+    FS.values[fw.key] = w; FS.values[fh.key] = hh;
     custom.querySelectorAll('input[type=number]').forEach((inp, i) => { inp.value = i ? hh : w; });
-    persist(); showReadout();
+    saveF(); showReadout();
   };
   const aspects = [...(imgField ? [['image', 'Match image']] : []), ...ASPECT_PRESETS.map(([k]) => [k, k]), ['custom', 'Custom']];
   let pick = false;   // Match image and Custom fold the proportions into one button; it unfolds them
-  const aspectSeg = seg(aspects, m.aspect, (id) => { m.aspect = id; pick = false; applyPreset(); persist(); draw(); }, { wrap: true });
+  const aspectSeg = seg(aspects, m.aspect, (id) => { m.aspect = id; pick = false; applyPreset(); saveF(); draw(); }, { wrap: true });
   const aspectBtn = h('button', { type: 'button', class: 'icon-btn aspect-btn', onclick: () => { pick = true; draw(); } }, '⊞');
   const draw = () => {
     aspectSeg.set(m.aspect);
@@ -545,40 +552,40 @@ function numberField(f, isFloat) {
   };
   const hasRange = lo != null && hi != null && (hi - lo) / step <= 4000 && (hi - lo) <= 10000;
   // with a known range the box is a slider (a bar behind the number); without one it still scrubs
-  const input = hasRange ? numSlider({ min: lo, max: hi, step, value: S.values[f.key], digits: dec, label: f.label })
-    : h('input', { type: 'number', inputMode: isFloat ? 'decimal' : 'numeric', step, min: lo ?? undefined, max: hi ?? undefined, value: S.values[f.key] });
+  const input = hasRange ? numSlider({ min: lo, max: hi, step, value: FS.values[f.key], digits: dec, label: f.label })
+    : h('input', { type: 'number', inputMode: isFloat ? 'decimal' : 'numeric', step, min: lo ?? undefined, max: hi ?? undefined, value: FS.values[f.key] });
   // some numbers also have tapped presets (PRESETS)
   const taps = isFloat && PRESETS[f.input];
   const presets = taps
-    ? chips(taps.map((x) => [x, f.input === 'denoise' ? x.toFixed(1) : String(x)]), Number(S.values[f.key]), (x) => sync(Number(x), null), { cls: 'denoise-presets' }) : null;
+    ? chips(taps.map((x) => [x, f.input === 'denoise' ? x.toFixed(1) : String(x)]), Number(FS.values[f.key]), (x) => sync(Number(x), null), { cls: 'denoise-presets' }) : null;
   const sync = (n, from) => {
-    n = clamp(n); setVal(f.key, n);
+    n = clamp(n); setF(f.key, n);
     if (from !== input) input.set ? input.set(n) : (input.value = n);
     presets?.set(n);
   };
   input.addEventListener('change', () => sync(parseFloat(input.value), input));
   input.addEventListener('input', () => { if (input.dataset.scrubbing) sync(parseFloat(input.value), input); });
-  const bump = (dir) => sync(Number(S.values[f.key]) + dir * step, null);
+  const bump = (dir) => sync(Number(FS.values[f.key]) + dir * step, null);
   return field([f.label, hasRange ? h('span', {}, `${lo}–${hi}`) : null], stepper(input, bump), presets);
 }
 
 function seedField(f) {
-  const el = uiSeedField(f.label, { get: () => S.values[f.key], set: (v) => setVal(f.key, v),
-    mode: () => S.seedMode[f.key] || 'random', setMode: (m) => { S.seedMode[f.key] = m; persist(); }, last: () => S.lastSeed[f.key] ?? null });
+  const el = uiSeedField(f.label, { get: () => FS.values[f.key], set: (v) => setF(f.key, v),
+    mode: () => FS.seedMode[f.key] || 'random', setMode: (m) => { FS.seedMode[f.key] = m; saveF(); }, last: () => S.lastSeed[f.key] ?? null });
   el.dataset.key = f.key;
   return el;
 }
 
 function choiceBox(f) {
-  return choiceField(f.label, f.options, S.values[f.key], (v) => {
-    setVal(f.key, v);
-    if (MODEL_INPUTS.includes(f.input) || S.tpl.fields.some((x) => x.when?.key === f.key)) renderFields();  // LoRA lists follow the model (folder filter); a setting shown only while this one is on
+  return choiceField(f.label, f.options, FS.values[f.key], (v) => {
+    setF(f.key, v);
+    if (MODEL_INPUTS.includes(f.input) || FS.tpl.fields.some((x) => x.when?.key === f.key)) renderFields();  // LoRA lists follow the model (folder filter); a setting shown only while this one is on
   });
 }
 
 function textField(f) {
   if (isMainPrompt(f)) return promptField(f);
-  return field(f.label, textArea(() => S.values[f.key], (v) => setVal(f.key, v), { rows: f.multiline ? 4 : 1, grow: !!f.multiline }));
+  return field(f.label, textArea(() => FS.values[f.key], (v) => setF(f.key, v), { rows: f.multiline ? 4 : 1, grow: !!f.multiline }));
 }
 
 // ---------------------------------------------------------------------------
@@ -597,16 +604,16 @@ export function mainPromptKey(t) {
 }
 function isMainPrompt(f) {
   if (f.kind !== 'text' || !f.multiline || /negative/i.test(f.input + ' ' + f.group)) return false;
-  return mainPromptKey(S.tpl) === f.key;
+  return mainPromptKey(FS.tpl) === f.key;
 }
 
 // Reference tags for this model, numbered from what the template has (image slots, boxes).
 function promptTags() {
-  const fs = S.tpl?.fields || [];
+  const fs = FS.tpl?.fields || [];
   const images = Math.max(1, fs.filter((x) => x.kind === 'image').length);
-  const boxes = Math.max(1, ...fs.filter((x) => x.kind === 'boxes').map((x) => (S.values[x.key] || []).length));
+  const boxes = Math.max(1, ...fs.filter((x) => x.kind === 'boxes').map((x) => (FS.values[x.key] || []).length));
   const n = (k, from = 1) => Array.from({ length: k }, (_, i) => i + from);
-  switch (S.tpl?.tag_style) {
+  switch (FS.tpl?.tag_style) {
     case 'h3': return [...n(images).map((i) => `<Picture ${i}>`), ...n(3).map(subjectTag)];
     case 'klein': return [...n(images, 0).map((i) => `<ref_image_${i}>`), ...n(boxes).map((i) => `<obj_${i}>`)];
     case 'qwen': return n(images).map((i) => `Picture ${i}`);
@@ -618,7 +625,7 @@ function promptTags() {
 
 // The reference tag a subject can point at, in this model's own syntax (null: model has none).
 function pictureTag(n) {
-  switch (S.tpl?.tag_style) {
+  switch (FS.tpl?.tag_style) {
     case 'h3': return `<Picture ${n}>`;
     case 'klein': return `<ref_image_${n - 1}>`;
     case 'qwen': return `Picture ${n}`;
@@ -630,7 +637,7 @@ function pictureTag(n) {
 
 // How a prompt names subject N. MiniMax H3's reference guide labels them <Subject N> and defines each
 // once ("<Subject 1> is the young woman in <Picture 1>, …"); other models get a plain "Subject N".
-const subjectTag = (i) => (S.tpl?.tag_style === 'h3' ? `<Subject ${i}>` : `Subject ${i}`);
+const subjectTag = (i) => (FS.tpl?.tag_style === 'h3' ? `<Subject ${i}>` : `Subject ${i}`);
 
 // Labels are added here, so saved characters stay label-free and fit any slot.
 const stripSubjectLabel = (t) => String(t || '').replace(/^\s*<?subject\s*\d+>?\s*(?:[:.\-–]|is\b)\s*/i, '');
@@ -640,7 +647,7 @@ function subjectLines(subjects) {
     const text = stripSubjectLabel(x.text).trim().replace(/[.\s]+$/, '');
     if (!text) return '';
     const tag = x.pic ? pictureTag(x.pic) : null;
-    if (S.tpl?.tag_style === 'h3') {   // "<Subject 1> is a woman in a red coat, as shown in <Picture 1>."
+    if (FS.tpl?.tag_style === 'h3') {   // "<Subject 1> is a woman in a red coat, as shown in <Picture 1>."
       const desc = /^[A-Z][a-z\s]/.test(text) && !/^I\b/.test(text) ? text[0].toLowerCase() + text.slice(1) : text;
       const pic = tag && !text.includes(tag) ? `, as shown in ${tag}` : '';
       return `${subjectTag(i + 1)} is ${desc}${pic}.`;
@@ -697,26 +704,28 @@ function snippetEditor({ cat, label, get, set, placeholder, extra = [], below = 
 // One builder for every template (stored on this device), so subjects and parts follow you when you
 // switch workflow. Whole builders can be saved as named "prompt sets" on the server.
 export function builderState() {
-  if (!S.pb) {
-    S.pb = store.get('deck.builder', null);
-    if (!S.pb) {  // carry over what an older version kept per template
-      const old = Object.values((S.tpl && store.get(stateKey(S.tpl.id), {}).builder) || {})[0];
-      S.pb = old ? { on: !!old.on, parts: old.parts || {}, subjects: old.subjects } : { on: false, parts: {} };
+  if (!FS.pb && FS !== S) FS.pb = { on: false, parts: {}, subjects: [{ text: '', pic: null }] };   // (a panel's own state: a blank builder)
+  if (!FS.pb) {
+    FS.pb = store.get('deck.builder', null);
+    if (!FS.pb) {  // carry over what an older version kept per template
+      const old = Object.values((FS.tpl && store.get(stateKey(FS.tpl.id), {}).builder) || {})[0];
+      FS.pb = old ? { on: !!old.on, parts: old.parts || {}, subjects: old.subjects } : { on: false, parts: {} };
     }
-    if (!S.pb.subjects) {
-      S.pb.subjects = [{ text: stripSubjectLabel(S.pb.parts.Subject || ''), pic: null }];
-      delete S.pb.parts.Subject;
+    if (!FS.pb.subjects) {
+      FS.pb.subjects = [{ text: stripSubjectLabel(FS.pb.parts.Subject || ''), pic: null }];
+      delete FS.pb.parts.Subject;
     }
   }
-  return S.pb;
+  return FS.pb;
 }
-export const saveBuilder = () => { store.set('deck.builder', S.pb); hooks.edited?.(); };
+export const saveBuilder = () => { store.set('deck.builder', S.pb); hooks.edited?.(); };   // (the Generate tab's)
+const saveB = () => (FS === S ? saveBuilder() : FS.save?.());
 const SET_CATEGORY = 'Prompt set';
 
 function promptField(f) {
-  const order = PARTS[S.tpl?.tag_style === 'h3' ? 'video' : 'image'];
+  const order = PARTS[FS.tpl?.tag_style === 'h3' ? 'video' : 'image'];
   const st = builderState();
-  const images = Math.max(1, (S.tpl?.fields || []).filter((x) => x.kind === 'image').length);
+  const images = Math.max(1, (FS.tpl?.fields || []).filter((x) => x.kind === 'image').length);
   const body = h('div', { class: 'prompt-body' });
   const final = h('div', { class: 'hint final-prompt' });
 
@@ -725,7 +734,7 @@ function promptField(f) {
   const chipsRow = h('div', { class: 'chips tag-chips' });   // (rebuilt as the tags change: plain chips, not a choice)
   const drawChips = () => {
     const tags = promptTags().filter((t) => !/^<?Subject \d+>?$/.test(t));
-    const n = st.on ? Math.max(1, st.subjects.length) : (S.tpl?.tag_style === 'h3' ? 3 : 0);
+    const n = st.on ? Math.max(1, st.subjects.length) : (FS.tpl?.tag_style === 'h3' ? 3 : 0);
     for (let i = 1; i <= n; i++) tags.push(subjectTag(i));
     chipsRow.replaceChildren(...tags.map((t) => chip(t, () => { if (lastTA) insertAtCursor(lastTA, t); else toast('Tap into a text box first'); }, { keepFocus: true })));
     chipsRow.classList.toggle('hidden', !tags.length);
@@ -738,9 +747,9 @@ function promptField(f) {
 
   const sync = () => {
     if (!st.on) return;
-    setVal(f.key, composePrompt(st, order));
-    final.textContent = S.values[f.key] || '(empty)';
-    saveBuilder();
+    setF(f.key, composePrompt(st, order));
+    final.textContent = FS.values[f.key] || '(empty)';
+    saveB();
   };
   // redraw without the panel jumping
   const redraw = () => { const p = $('.panel'), y = p ? p.scrollTop : 0; draw(); if (p) p.scrollTop = y; };
@@ -749,7 +758,7 @@ function promptField(f) {
     const move = (d) => {
       const j = i + d;
       if (j < 0 || j >= st.subjects.length) return;
-      [st.subjects[i], st.subjects[j]] = [st.subjects[j], st.subjects[i]]; saveBuilder(); redraw();
+      [st.subjects[i], st.subjects[j]] = [st.subjects[j], st.subjects[i]]; saveB(); redraw();
     };
     const pics = pictureTag(1) ? h('select', { class: 'subject-pic', 'aria-label': `Reference picture for subject ${i + 1}` },
       h('option', { value: '' }, 'No reference picture'),
@@ -827,11 +836,11 @@ function promptField(f) {
     if (st.on) {
       body.replaceChildren(setsBar(), ...order.flatMap((cat) => cat !== 'Subject' ? [partEl(cat)] : [
         h('div', { class: 'subjects' }, st.subjects.map(subjectEl),
-          button('+ Add subject', () => { st.subjects.push({ text: '', pic: null }); saveBuilder(); redraw(); })),
+          button('+ Add subject', () => { st.subjects.push({ text: '', pic: null }); saveB(); redraw(); })),
       ]), h('details', { class: 'desc' }, h('summary', {}, 'Final prompt'), final));
       sync();
     } else {
-      const ta = track(textArea(() => S.values[f.key], (v) => setVal(f.key, v), { rows: 4 }));
+      const ta = track(textArea(() => FS.values[f.key], (v) => setF(f.key, v), { rows: 4 }));
       body.replaceChildren(ta);
     }
     body.prepend(chipsRow);
@@ -844,16 +853,16 @@ function promptField(f) {
       await loadSnippets();
       // first time: keep what's already written, in "Other"
       const empty = !Object.values(st.parts).some((v) => (v || '').trim()) && !st.subjects.some((x) => (x.text || '').trim());
-      if (empty && (S.values[f.key] || '').trim()) st.parts.Other = S.values[f.key];
+      if (empty && (FS.values[f.key] || '').trim()) st.parts.Other = FS.values[f.key];
     }
-    st.on = !st.on; saveBuilder(); redraw();
+    st.on = !st.on; saveB(); redraw();
   });
   if (st.on) loadSnippets().then(draw); else draw();
   // the prompt helper (prompthelp.js): a version picked from the builder becomes the plain prompt (Undo brings it back)
-  const io = { get: () => S.values[f.key] || '', target: tplTarget(),
-    set: (v) => { if (st.on) { st.on = false; saveBuilder(); } setVal(f.key, v); redraw(); },
-    snapshot: () => ({ on: st.on, v: S.values[f.key] || '' }),
-    restore: (x) => { st.on = x.on; saveBuilder(); if (!x.on) setVal(f.key, x.v); redraw(); } };
+  const io = { get: () => FS.values[f.key] || '', target: tplTarget(FS.tpl),
+    set: (v) => { if (st.on) { st.on = false; saveB(); } setF(f.key, v); redraw(); },
+    snapshot: () => ({ on: st.on, v: FS.values[f.key] || '' }),
+    restore: (x) => { st.on = x.on; saveB(); if (!x.on) setF(f.key, x.v); redraw(); } };
   const aid = h('span', { class: 'pa-btns' + (io.target ? '' : ' hidden') },
     iconBtn('Improve this prompt', '✦', () => openImprove(io)),
     iconBtn('Describe a picture', '👁', () => openDescribe(io)));
@@ -874,37 +883,37 @@ const PART_HINTS = {
 };
 
 function boolField(f) {
-  const el = toggle(f.label, S.values[f.key], (on) => setVal(f.key, on));
+  const el = toggle(f.label, FS.values[f.key], (on) => setF(f.key, on));
   el.classList.add('field');   // (gentabs marks overridden fields by .field[data-key])
   return el;
 }
 
 function imageField(f) {
-  const v = S.values[f.key];
-  if (S.imageMp[f.key] == null) S.imageMp[f.key] = f.mp ?? 1;
+  const v = FS.values[f.key];
+  if (FS.imageMp[f.key] == null) FS.imageMp[f.key] = f.mp ?? 1;
   // A crop is only a setting: the field keeps the original image, the thumb shows it with the
   // cut-off parts greyed out, and generate() sends a cropped copy (see cropForRun).
-  const old = S.imageCrop[f.key];
-  if (old && old.out && old.out === v) { setVal(f.key, old.src); delete old.out; return imageField(f); }  // saved by an older version
+  const old = FS.imageCrop[f.key];
+  if (old && old.out && old.out === v) { setF(f.key, old.src); delete old.out; return imageField(f); }  // saved by an older version
   const cropped = v && old && old.src === v ? old : null;
-  if (!cropped) delete S.imageCrop[f.key];
-  const set = (name) => { setVal(f.key, name); renderFields(); };
+  if (!cropped) delete FS.imageCrop[f.key];
+  const set = (name) => { setF(f.key, name); renderFields(); };
   // a mask painted over this picture (its own pseudo field): it goes when the picture or its crop changes
   const mf = maskFieldOf(f);
-  const mask = mf ? S.values[mf.key] : null;
-  if (mask?.name && !maskFits(mask, v, cropped?.crop)) S.values[mf.key] = { ...mask, name: null, box: null, src: null, crop: null };
+  const mask = mf ? FS.values[mf.key] : null;
+  if (mask?.name && !maskFits(mask, v, cropped?.crop)) FS.values[mf.key] = { ...mask, name: null, box: null, src: null, crop: null };
   const el = pictureInput({ label: f.label, title: `${f.group} · ${f.label}`, name: v || '', set, crop: cropped?.crop || null,
     setCrop: (c) => {
-      if (c) S.imageCrop[f.key] = { src: v, crop: c }; else delete S.imageCrop[f.key];
-      if (mf && S.values[mf.key]?.name && !maskFits(S.values[mf.key], v, S.imageCrop[f.key]?.crop)) toast('The mask was cleared: it was painted on the old crop');
-      persist(); renderFields();
+      if (c) FS.imageCrop[f.key] = { src: v, crop: c }; else delete FS.imageCrop[f.key];
+      if (mf && FS.values[mf.key]?.name && !maskFits(FS.values[mf.key], v, FS.imageCrop[f.key]?.crop)) toast('The mask was cleared: it was painted on the old crop');
+      saveF(); renderFields();
     },
-    mp: () => S.imageMp[f.key], setMp: (n) => { S.imageMp[f.key] = n; persist(); }, aspect: templateAspect,
+    mp: () => FS.imageMp[f.key], setMp: (n) => { FS.imageMp[f.key] = n; saveF(); }, aspect: templateAspect,
     // several slots of one group (H3's References): pick several, and they fill this slot and the group's empty ones
     slots: () => {
-      const keys = slotsFrom(S.tpl?.fields, f.key, S.values);
+      const keys = slotsFrom(FS.tpl?.fields, f.key, FS.values);
       return keys.map((key) => (name, info) => {
-        setVal(key, name);
+        setF(key, name);
         renderFields();
         if (keys.length === 1 && info && info.width) toast(`Set ${f.label} (${info.width}×${info.height})`);
       });
@@ -914,7 +923,7 @@ function imageField(f) {
       v && mf ? (mf.required && !mask?.name
         ? button([icon('brush'), 'Paint area…'], () => paintMask(f, mf, v, cropped?.crop || null), { cls: 'small primary', 'data-paint': '1' })
         : button('Mask…', () => paintMask(f, mf, v, cropped?.crop || null))) : null],
-    below: [v && mf && S.values[mf.key]?.name ? maskSettings(f, mf, v, cropped?.crop || null) : null] });
+    below: [v && mf && FS.values[mf.key]?.name ? maskSettings(f, mf, v, cropped?.crop || null) : null] });
   el.dataset.key = f.key;
   return el;
 }
@@ -926,34 +935,34 @@ const GROWS = [[0, 'None'], [4, '4 px'], [8, '8 px'], [16, '16 px'], [32, '32 px
 // inpainting a small area at the model's full size is the point: Crop to mask starts on there
 const maskDefault = (mf) => (mf.required && mf.fit ? { ...MASK_DEFAULT, fit: true } : MASK_DEFAULT);
 // an inpaint template's mask not painted yet (generate() stops on it)
-const needsMask = () => (S.tpl?.fields || []).find((x) => x.kind === 'mask' && x.required && !S.values[x.key]?.name) || null;
-const maskFieldOf = (f) => (S.tpl?.fields || []).find((x) => x.kind === 'mask' && x.image_key === f.key) || null;
+const needsMask = () => (FS.tpl?.fields || []).find((x) => x.kind === 'mask' && x.required && !FS.values[x.key]?.name) || null;
+const maskFieldOf = (f) => (FS.tpl?.fields || []).find((x) => x.kind === 'mask' && x.image_key === f.key) || null;
 const sameCrop = (a, b) => JSON.stringify(a || null) === JSON.stringify(b || null);
 const maskFits = (m, v, crop) => !!v && m.src === v && sameCrop(m.crop, crop);
 
 function paintMask(f, mf, v, crop) {
-  const m = S.values[mf.key];
+  const m = FS.values[mf.key];
   openMaskPainter({ picture: v, crop, mask: m?.name || null, onDone: async (blob, box) => {
     const keep = { ...maskDefault(mf), ...(m || {}) };
     if (!blob) {
       if (m?.name) toast('Nothing painted: the mask is off');
-      setVal(mf.key, { ...keep, name: null, box: null, src: null, crop: null }); renderFields();
+      setF(mf.key, { ...keep, name: null, box: null, src: null, crop: null }); renderFields();
       return;
     }
     const r = await fetch('/api/inputs/mask', { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: blob });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
-    setVal(mf.key, { ...keep, name: (await r.json()).name, src: v, crop, box });
+    setF(mf.key, { ...keep, name: (await r.json()).name, src: v, crop, box });
     renderFields();
   } });
 }
 
 function maskSettings(f, mf, v, crop) {
-  const m = { ...maskDefault(mf), ...S.values[mf.key] };
-  const put = (o) => { setVal(mf.key, { ...m, ...o }); renderFields(); };
+  const m = { ...maskDefault(mf), ...FS.values[mf.key] };
+  const put = (o) => { setF(mf.key, { ...m, ...o }); renderFields(); };
   const remove = () => {
-    const was = S.values[mf.key];
+    const was = FS.values[mf.key];
     put({ name: null, box: null, src: null, crop: null });
-    undoToast('Mask removed', () => { setVal(mf.key, was); renderFields(); });
+    undoToast('Mask removed', () => { setF(mf.key, was); renderFields(); });
   };
   const num = (x) => Number(x);
   const what = mf.required
@@ -978,12 +987,12 @@ function maskSettings(f, mf, v, crop) {
 // Trim and crop live in the value ({generation|media, trim, crop}), so tabs, shots and Run again
 // keep them; the server applies them (loader inputs or an ffmpeg copy, see app/videoprep.py).
 function videoField(f) {
-  const v = S.values[f.key];
-  const set = (val) => { setVal(f.key, val); renderFields(); };
-  const el = clipInput({ label: f.label, value: v, url: clipUrl(v), name: clipLabel(v), onChange: set, onEdit: (val) => setVal(f.key, val),
+  const v = FS.values[f.key];
+  const set = (val) => { setF(f.key, val); renderFields(); };
+  const el = clipInput({ label: f.label, value: v, url: clipUrl(v), name: clipLabel(v), onChange: set, onEdit: (val) => setF(f.key, val),
     pick: () => openVideoPicker({ title: `${f.group} · ${f.label}`, onPick: set }),
     loader: () => videoLoader(f), budget: () => videoBudget(f) });
-  loaderKnown(S.tpl.id)?.then(() => el.refresh());
+  loaderKnown(FS.tpl.id)?.then(() => el.refresh());
   el.dataset.key = f.key;
   return el;
 }
@@ -991,7 +1000,7 @@ function videoField(f) {
 // a sound: a sound file or a clip's sound, with a cut ({generation|media, trim}); the server readies it
 // for the loader (app/audioedit.prep)
 function audioField(f) {
-  const el = soundInput(S.values[f.key] || null, (v) => setVal(f.key, v), { title: `${f.group} · ${f.label}`, label: f.label });
+  const el = soundInput(FS.values[f.key] || null, (v) => setF(f.key, v), { title: `${f.group} · ${f.label}`, label: f.label });
   el.dataset.key = f.key;
   return el;
 }
@@ -1000,8 +1009,8 @@ function audioField(f) {
 // for the server to use (they usually aren't tagged fields, so read them from the workflow itself)
 const loaderWf = new Map();   // template id -> { wf, p: Promise }
 function videoLoader(f) {
-  const inp = loaderWf.get(S.tpl.id)?.wf?.[f.node]?.inputs;
-  const val = (name) => S.values[`${f.node}.${name}`] ?? inp?.[name];
+  const inp = loaderWf.get(FS.tpl.id)?.wf?.[f.node]?.inputs;
+  const val = (name) => FS.values[`${f.node}.${name}`] ?? inp?.[name];
   return { rate: Number(val('force_rate')) || 0, nth: Number(val('select_every_nth')) || 1,
     mapped: !inp || ('skip_first_frames' in inp && 'frame_load_cap' in inp) };
 }
@@ -1016,8 +1025,8 @@ function loaderKnown(id) {
 
 // the template's own length setting ("Length (seconds)", a frame count), if it has one, as a budget for the trim
 function videoBudget(f) {
-  const lf = S.tpl.fields.find((x) => x.node !== f.node && (x.kind === 'int' || x.kind === 'float') && /\b(length|duration|seconds|frames?)\b/i.test(x.label));
-  const n = lf && Number(S.values[lf.key]);
+  const lf = FS.tpl.fields.find((x) => x.node !== f.node && (x.kind === 'int' || x.kind === 'float') && /\b(length|duration|seconds|frames?)\b/i.test(x.label));
+  const n = lf && Number(FS.values[lf.key]);
   if (!(n > 0)) return null;
   return /second|duration/i.test(lf.label) && !/frame/i.test(lf.label) ? { secs: n } : { frames: n };
 }
@@ -1028,15 +1037,15 @@ const MODEL_INPUTS = ['unet_name', 'ckpt_name'];
 const FOLDER_ALIASES = { h3: ['h3', 'minimax'], klein: ['klein', 'flux'], krea: ['krea'], qwen: ['qwen'], wan: ['wan'], ltx: ['ltx'] };
 
 function autoLoraFolder(folders) {
-  const mf = (S.tpl?.fields || []).find((x) => MODEL_INPUTS.includes(x.input));
-  const model = String((mf && S.values[mf.key]) || '').toLowerCase();
+  const mf = (FS.tpl?.fields || []).find((x) => MODEL_INPUTS.includes(x.input));
+  const model = String((mf && FS.values[mf.key]) || '').toLowerCase();
   if (!model) return null;
   return folders.find((d) => (FOLDER_ALIASES[d.toLowerCase()] || [d.toLowerCase()]).some((w) => model.includes(w))) || null;
 }
 
 function loraField(f) {
-  return loraStack({ options: f.options, get: () => S.values[f.key] || [], set: (rows) => setVal(f.key, rows),
-    mode: () => S.loraFolder[f.key] ?? 'auto', setMode: (k) => { S.loraFolder[f.key] = k; persist(); }, auto: autoLoraFolder,
+  return loraStack({ options: f.options, get: () => FS.values[f.key] || [], set: (rows) => setF(f.key, rows),
+    mode: () => FS.loraFolder[f.key] ?? 'auto', setMode: (k) => { FS.loraFolder[f.key] = k; saveF(); }, auto: autoLoraFolder,
     onWord: addToPrompt, onDownloaded: () => loadTemplates(true), onAdded: renderFields });
 }
 
@@ -1069,19 +1078,19 @@ function fieldBody(f) {
 // The values a run of the shown template sends, as Generate sends them: random seeds as -1. null when the user said no.
 export function runValues() {
   const values = {};
-  for (const f of S.tpl.fields) {
-    let v = S.values[f.key];
-    if (f.kind === 'seed') v = (S.seedMode[f.key] || 'random') === 'random' ? -1 : Number(v);
+  for (const f of FS.tpl.fields) {
+    let v = FS.values[f.key];
+    if (f.kind === 'seed') v = (FS.seedMode[f.key] || 'random') === 'random' ? -1 : Number(v);
     values[f.key] = v;
   }
-  const odd = S.tpl.fields.filter((f) => f.kind === 'text' && unmatchedBraces(values[f.key]));
+  const odd = FS.tpl.fields.filter((f) => f.kind === 'text' && unmatchedBraces(values[f.key]));
   if (odd.length && !confirm(`${odd.map((f) => f.label).join(', ')}: the { } don't match, so some wildcard text would go to the model as written. Generate anyway?`)) return null;
   return values;
 }
 // Pictures as their cropped copies, masks with the picture they were painted on (as generate() sends them). skip: keys left as they are.
 export async function preparePictures(values, skip = new Set()) {
-  for (const f of S.tpl.fields) if (f.kind === 'image' && !skip.has(f.key)) values[f.key] = await cropForRun(f, values[f.key]);
-  for (const f of S.tpl.fields) {   // the picture goes as its cropped copy: the mask belongs to that (so Replay & edit keeps it)
+  for (const f of FS.tpl.fields) if (f.kind === 'image' && !skip.has(f.key)) values[f.key] = await cropForRun(f, values[f.key]);
+  for (const f of FS.tpl.fields) {   // the picture goes as its cropped copy: the mask belongs to that (so Replay & edit keeps it)
     const m = f.kind === 'mask' ? values[f.key] : null;
     if (m?.name) values[f.key] = { ...m, src: values[f.image_key], crop: null };
   }
@@ -1089,18 +1098,18 @@ export async function preparePictures(values, skip = new Set()) {
 }
 // what the prompt builder sends with a run (null: the prompt was written as plain text)
 export function runBuilder() {
-  const pf = S.tpl.fields.find(isMainPrompt);
-  return pf && builderState().on ? { parts: S.pb.parts, subjects: S.pb.subjects } : null;
+  const pf = FS.tpl.fields.find(isMainPrompt);
+  return pf && builderState().on ? { parts: FS.pb.parts, subjects: FS.pb.subjects } : null;
 }
 // After a run is queued: the seeds it used, and the next seed for Increment
 export function afterQueued(gens, batch = S.batch) {
   const lastGen = gens[gens.length - 1];
-  for (const f of S.tpl.fields) {
+  for (const f of FS.tpl.fields) {
     if (f.kind !== 'seed') continue;
     S.lastSeed[f.key] = lastGen.params[f.key];
-    if (S.seedMode[f.key] === 'increment') S.values[f.key] = Number(S.values[f.key]) + batch;
+    if (FS.seedMode[f.key] === 'increment') FS.values[f.key] = Number(FS.values[f.key]) + batch;
   }
-  persist(); refreshSeedLabels();
+  saveF(); refreshSeedLabels();
 }
 
 export async function generate() {
@@ -1110,11 +1119,11 @@ export async function generate() {
     return (await import('./make-panel.js')).runMake();
   }
   if ($('#tab-generate').hasAttribute('aria-busy')) return;
-  if (!S.tpl || S.tpl.error) return toast('Pick a working template first', true);
+  if (!FS.tpl || FS.tpl.error) return toast('Pick a working template first', true);
   const values = runValues();
   if (!values) return;
   const nm = needsMask();
-  if (nm) return toast(S.values[nm.image_key] ? 'Paint the area to change first' : 'Pick a picture, then paint the area to change', true);
+  if (nm) return toast(FS.values[nm.image_key] ? 'Paint the area to change first' : 'Pick a picture, then paint the area to change', true);
   const btn = $('#genBtn'); btn.disabled = true;
   if (hooks.flush && !(await hooks.flush())) toast("Couldn't save this tab yet; running anyway");   // the saved tab should match what runs
   notifyPrepare();  // inside the tap: browsers only allow sound and notification prompts from a gesture
@@ -1122,7 +1131,7 @@ export async function generate() {
   try {
     await preparePictures(values);
     const builder = runBuilder();
-    const gens = await queueRun({ template: S.tpl.id, values, batch: S.batch, builder, timeout: 120000 });   // (what it's made from: the server reads it off the inputs)
+    const gens = await queueRun({ template: FS.tpl.id, values, batch: S.batch, builder, timeout: 120000 });   // (what it's made from: the server reads it off the inputs)
     S.workingFor?.ran(gens);   // made for a character (web/characters.js setWorkingFor): it comes back to them
     afterQueued(gens);
     toast(gens.length > 1 ? `Queued ${gens.length}` : 'Queued');
@@ -1146,17 +1155,17 @@ function unmatchedBraces(v) {
 // An image field's crop is applied per run: the server makes (or reuses) a copy named after the
 // image and the crop, and only this run's values point at it.
 async function cropForRun(f, v) {
-  const c = S.imageCrop[f.key];
-  return pictureForRun(v, c && c.src === v ? c.crop : null, S.imageMp[f.key] ?? 1);
+  const c = FS.imageCrop[f.key];
+  return pictureForRun(v, c && c.src === v ? c.crop : null, FS.imageMp[f.key] ?? 1);
 }
 
 function refreshSeedLabels() {
-  for (const f of S.tpl.fields) {
+  for (const f of FS.tpl.fields) {
     if (f.kind !== 'seed') continue;
     const el = fieldScope()?.querySelector(`.field[data-key="${CSS.escape(f.key)}"]`);
     if (!el?.querySelector('.last-seed')) continue;
     el.querySelector('.last-seed').textContent = S.lastSeed[f.key] != null ? `last: ${S.lastSeed[f.key]}` : '';
-    el.querySelector('input[type=number]').value = S.values[f.key];
+    el.querySelector('input[type=number]').value = FS.values[f.key];
   }
 }
 
@@ -1184,7 +1193,7 @@ export async function stop(pid = RUN.pid, { ask = true } = {}) {
 // Stored as fractions of the canvas, so they fit any output size.
 // ---------------------------------------------------------------------------
 function boxesField(f) {
-  const boxes = S.values[f.key] || [];
+  const boxes = FS.values[f.key] || [];
   const preview = h('div', { class: 'boxes-preview', style: `aspect-ratio:${boxBackdrop().aspect}` },
     boxes.map((b, i) => h('span', { class: 'bx' + (b.type === 'text' ? ' text' : ''),
       style: `left:${b.x * 100}%;top:${b.y * 100}%;width:${b.w * 100}%;height:${b.h * 100}%` }, String(i + 1))));
@@ -1195,7 +1204,7 @@ function boxesField(f) {
     h('button', { type: 'button', class: 'boxes-btn', onclick: edit }, preview),
     h('div', { class: 'row' },
       button(boxes.length ? 'Edit boxes' : 'Draw boxes', edit),
-      boxes.length ? button('Clear', () => { setVal(f.key, []); renderFields(); }) : null),
+      boxes.length ? button('Clear', () => { setF(f.key, []); renderFields(); }) : null),
     hint(boxes.length ? boxes.map((b, i) => `${i + 1}: ${b.type === 'text' ? `text "${b.text || ''}"` : b.desc || 'object'}${b.ref ? ' + reference' : ''}`).join(' · ')
         : f.refs ? 'Optional. Mark where things go; describe each box, and give it a reference image if you like. In the prompt, refer to box 1 as <obj_1>.'
           : 'Optional. Mark where things go and describe each box.'));
@@ -1203,12 +1212,12 @@ function boxesField(f) {
 
 // The canvas the boxes are drawn on: the image being edited if there is one, else the output size.
 function boxBackdrop() {
-  const img = (S.tpl?.fields || []).find((f) => f.kind === 'image' && S.values[f.key]);
-  return { image: img ? S.values[img.key] : null, aspect: img ? (S.imgAspect?.[S.values[img.key]] || 1) : templateAspect() };
+  const img = (FS.tpl?.fields || []).find((f) => f.kind === 'image' && FS.values[f.key]);
+  return { image: img ? FS.values[img.key] : null, aspect: img ? (S.imgAspect?.[FS.values[img.key]] || 1) : templateAspect() };
 }
 
 function openBoxEditor(f) {
-  let boxes = (S.values[f.key] || []).map((b) => ({ ...b }));
+  let boxes = (FS.values[f.key] || []).map((b) => ({ ...b }));
   let sel = boxes.length ? 0 : -1;
   let { image, aspect } = boxBackdrop();
   const canvas = h('div', { class: 'box-canvas' });
@@ -1302,7 +1311,7 @@ function openBoxEditor(f) {
       h('div', { class: 'spacer' }),
       button('Cancel', () => close(), { cls: 'small ghost' }),
       button('Done', () => {
-        setVal(f.key, clean());
+        setF(f.key, clean());
         close(false, true); renderFields();
       }, { cls: 'small primary' })),
     h('div', { class: 'box-body' }, stage, list));
@@ -1311,7 +1320,7 @@ function openBoxEditor(f) {
   const tidy = (bs) => bs.map(({ x, y, w, h: hh, type, desc, text, ref }) =>
     ({ x, y, w, h: hh, type: type || 'obj', desc: desc || '', text: text || '', ...(ref && type !== 'text' ? { ref } : {}) }));
   const clean = () => tidy(boxes);
-  const start = JSON.stringify(tidy(S.values[f.key] || []));
+  const start = JSON.stringify(tidy(FS.values[f.key] || []));
   // Cancel or the back gesture with changes: ask, rather than lose them
   const close = openOverlay(overlay, { dirty: () => JSON.stringify(clean()) !== start, ask: 'Throw away your changes to the boxes?',
     onClose: () => ro.disconnect() });
@@ -1320,20 +1329,20 @@ function openBoxEditor(f) {
 
 // Append text to the template's main prompt (the first multi-line text field).
 export function addToPrompt(text) {
-  const f = (S.tpl?.fields || []).find((x) => x.kind === 'text' && x.multiline) || (S.tpl?.fields || []).find((x) => x.kind === 'text');
+  const f = (FS.tpl?.fields || []).find((x) => x.kind === 'text' && x.multiline) || (FS.tpl?.fields || []).find((x) => x.kind === 'text');
   if (!f) return toast('This template has no prompt field', true);
-  const cur = String(S.values[f.key] || '').trimEnd();
+  const cur = String(FS.values[f.key] || '').trimEnd();
   if (cur.includes(text)) return toast(`"${text}" is already in the prompt`);
   const st = builderState();
   if (st.on && isMainPrompt(f)) {   // Build from parts writes this field from its parts: add it to one, or the next sync drops it
-    const order = PARTS[S.tpl?.tag_style === 'h3' ? 'video' : 'image'];
+    const order = PARTS[FS.tpl?.tag_style === 'h3' ? 'video' : 'image'];
     const part = order.includes('Style') ? 'Style' : order[order.length - 1];
     const was = (st.parts[part] || '').trimEnd();
     st.parts[part] = was ? `${was}, ${text}` : text;
-    setVal(f.key, composePrompt(st, order)); saveBuilder();
+    setF(f.key, composePrompt(st, order)); saveB();
     renderFields(); return toast(`Added "${text}" to ${part}`);
   }
-  setVal(f.key, cur ? `${cur}, ${text}` : text);
+  setF(f.key, cur ? `${cur}, ${text}` : text);
   renderFields(); toast(`Added "${text}" to ${f.group}`);
 }
 

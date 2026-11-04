@@ -8,7 +8,8 @@ import { SHEET_TEMPLATES, markClipOf } from './markview-math.js';
 
 // ---------------------------------------------------------------------------
 // "Use as…" (Board gallery, History details): every place a finished output can go, grouped by tab, only the
-// ones that take its kind. Picking one sets it there and opens that tab.
+// ones that take its kind. Picking one sets it there and opens that tab. Classic screens only: on the table the same
+// buttons give table-out.js's Into the selected frame / New frame / Edit ▸.
 // ---------------------------------------------------------------------------
 
 // The buttons under a picked take, the same in every tab: the tab's own first (first), then Use as…, Details and
@@ -31,7 +32,8 @@ export function takeButtons(g, i, { details = false, onDeleted = null } = {}) {
     } catch (e) { toast(e.message, true); }
   }, { title: 'Keep it at hand: the Board\'s ★ Pinned' });
   return [o && ['image', 'video'].includes(kindOf(o)) ? button('Compare…', () => pickCompare(g, i), { title: 'Wipe or put side by side with a picture it was made from, or another take' }) : null,
-    o && hasPlaces(o) ? button('Use as…', () => openUseAs(g, i), { title: 'Every place it can go: Generate, VFX, Video, Sound, the Image tab, 3D' }) : null,
+    o && hasPlaces(o) ? (tableOn() ? button('On the table…', () => openUseAs(g, i), { title: 'Into the selected frame, a new frame, or a new frame with an edit' })
+      : button('Use as…', () => openUseAs(g, i), { title: 'Every place it can go: Generate, VFX, Video, Sound, the Image tab, 3D' })) : null,
     pin,
     details ? button('Details', async () => (await import('./run.js')).openGeneration(g.id)) : null,
     o ? linkBtn('Download', o.url, { download: o.filename }) : null,
@@ -65,9 +67,12 @@ export function pickCompare(g, i) {
 // Every place a finished output can go, by its kind (kinds.js), grouped by tab. Picking one sets it there and
 // opens that tab. before: runs first when a place is picked (the gallery closes itself).
 export const hasPlaces = (o) => kindOf(o) !== 'file';
+// (on the table nothing opens another screen: the output goes into a frame, or is one: table-out.js)
+const tableOn = () => !!document.querySelector('#tab-table.active, #tab-table.live-host');
 export function openUseAs(g, index, { before = null } = {}) {
   const o = g.outputs[index];
   if (!o) return;
+  if (tableOn()) { import('./table-out.js').then((m) => m.openOutputSheet(g, index, { before })).catch((e) => toast(e.message, true)); return; }
   const k = kindOf(o), src = { generation: g.id, index }, label = genLabel(g);
   // an image (or a clip's first / last frame) in ComfyUI's input folder, as Generate's image fields and the Editor take it
   const toInput = (frame = 'first', mp = 0, multiple = 1) => api(`/api/generations/${g.id}/to-input`, { method: 'POST',
@@ -80,20 +85,6 @@ export function openUseAs(g, index, { before = null } = {}) {
   openSheet(h('h3', {}, `Use ${label} as…`), hint(`${kindDef(o).name}${factsOf(o) ? ` · ${factsOf(o)}` : ''}`),
     ...(groups.length ? groups.map(([tab, btns]) => section(tab, null, h('div', { class: 'row wrap use-as' }, btns)))
       : [hint('Nothing takes this kind of file yet: Download has it.')]));
-}
-
-// The same places as menu groups (press-menu.js's shape), for something that isn't a run: a frame on the table
-// (frame-menu.js). kind: image | video | audio; src: what Generate's clip and sound fields take ({ generation, index } |
-// { input } | { media }); url: its file; toInput(frame, mp, multiple) -> { name, width, height }: a picture of it in
-// ComfyUI's input folder. g: its run when it is one (adds what needs the run). -> [{ title, items: [{ label, title, run }] }]
-export function useAsGroups({ kind, src, label, url = null, toInput, g = null, index = 0, before = null }) {
-  const o = g?.outputs?.[index] || { kind, url };
-  const go = (text, fn, attrs = {}) => ({ label: text, title: attrs.title || null, run: async () => {
-    before?.();
-    try { await fn(); } catch (e) { toast(e.message, true); }
-  } });
-  return placeGroups({ g, o, index, k: kind, src, label, toInput, go, data: true })
-    .map(([title, items]) => ({ title, items: items.filter((it) => it && it.run) })).filter((x) => x.items.length);
 }
 
 // Every place, grouped by tab: [[title, [button | item]]], only the non-empty ones. data: items, not buttons (no run: g null

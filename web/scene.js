@@ -12,7 +12,7 @@ import { $, clone, h, store, toast } from './ui.js';
 import {
   C, R, SC, defaultScene, dropHolds, frames, hooks, resetHistory, save, setC, setSC, upgrade
 } from './scene-data.js';
-import { buildToolbar, renderKeys, renderPanel, renderToolbar, showAll, syncHud, syncLength, syncMode, wireKeys } from './scene-ui.js';
+import { buildToolbar, renderKeys, renderPanel, renderToolbar, showAll, syncHud, syncMode, wireKeys } from './scene-ui.js';
 import { loadPlaySettings, syncMaxBar } from './scene-keys.js';
 import { SCN, fit, setup } from './scene-view.js';
 import { initScale } from './scene-scale.js';
@@ -70,7 +70,7 @@ const sceneAdapter = {
     setSC(p); R.sel = null; R.joint = null; R.f = Math.min(R.f, frames() - 1);
     R.lastRender = null; R.renders = {};
     resetHistory(); syncMode();
-    if (ready) { showAll(); setTimeout(syncLength); }   // (after the tab has settled: matching the length is a saved edit)
+    if (ready) showAll();
   },
 };
 
@@ -88,14 +88,12 @@ export function init(helpers) {
   hooks.ready = async () => { boot(); await ensureTabs(); };
   hooks.persist = () => tabs?.changed(); hooks.history = renderToolbar; hooks.tab = () => tabs?.active?.id ?? null; hooks.held = renderKeys;
   tabs = new TabSet({ kind: 'scene-tabs', host: $('#tab-scene'), scope: 'project', newName: (n) => `Scene ${n}`, adapter: sceneAdapter, seed: legacyScene });
-  // Match generate: the length follows the Generate panel's video template
-  addEventListener('deck:generate', () => { if (ready && SCN.active()) syncLength(); });
 }
 
 export function show() {
   boot();
   showAll();
-  ensureTabs().then(() => syncLength()).catch(() => {});
+  ensureTabs().catch(() => {});
 }
 
 export function hide() { if (ready) { stopPlay(); tabs?.flush(); } }

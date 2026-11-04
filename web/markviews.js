@@ -50,7 +50,8 @@ function saveMarks(g, s) {
   return s.saving;
 }
 
-export async function openMarkViews(g, index) {
+// onMade(mark, name): each picture made goes there too (the table's Mark views op: an image frame beside the clip's)
+export async function openMarkViews(g, index, { onMade = null } = {}) {
   const out = g.outputs[index], fps = out.fps || 24, st = load();
   const s = await openSession(g);
   const keepBoxes = () => store.set(KEY, { steps: st.steps });
@@ -112,7 +113,12 @@ export async function openMarkViews(g, index) {
       h('span', { class: 'mv-thumb' }, h('img', { src: thumbUrl(r.name, 240), alt: '', loading: 'lazy' })), h('span', { class: 'ch-view-lbl' }, r.label))));
     use.replaceChildren(...(Object.keys(picks).length ? [button('Make a 3D object from these…', async () => {
       await (await import('./run.js')).sceneModule();   // (the 3D tab may not have been opened yet)
-      (await import('./scene-import.js')).openObjectSheet(Object.values(picks)[0], '', picks);
+      const table = onMade && document.querySelector('#tab-table.active, #tab-table.live-host');
+      const queued = table ? { queued: async (r) => {   // (on the table: the model lands in a new 3D frame)
+        const T = await import('./table.js'), near = T.selectedFrames?.()?.[0];
+        (await import('./edit-ops.js')).runBeside(near || { x: 0, y: 0, w: 0, h: 0, label: `#${g.id}` }, r, 'scene', '3D object').catch(() => {});
+      } } : null;
+      (await import('./scene-import.js')).openObjectSheet(Object.values(picks)[0], '', picks, queued ? { character: queued } : {});
     }, { cls: 'small', title: 'Front, Left, Back and Right go into the 3D object\'s slots' })] : []),
     ...(made.length ? [button('Send to the look pack', sendToPack, { cls: 'small', title: 'Into the character picked above' })] : []));
   };
@@ -166,6 +172,7 @@ export async function openMarkViews(g, index) {
       else {
         if (s.marks.includes(m)) { m.name = name; saveMarks(g, s); }   // (moved while it ran: the new frame still needs making)
         ok++;
+        onMade?.(m, name);
       }
       say(`${ok} of ${todo.length} made${landed < todo.length ? ': the rest are in the queue' : ''}`);
     });

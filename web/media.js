@@ -320,12 +320,25 @@ export async function extractSound(source, { trim = null, name = null } = {}) {
 
 // A clip's sound, taken out and put on the Sound tab's timeline (the Sound tab opens on it)
 export async function soundToSoundTab(source, { trim = null, name = null } = {}) {
+  if (document.querySelector('#tab-table.active, #tab-table.live-host')) return soundFrameFrom(source, { trim, name });   // (never another screen from the table)
   try {
     const m = await api('/api/audio/extract', { method: 'POST', body: { source, trim, name }, busy: 'Taking the sound out…', timeout: 600000 });
     switchTab('sound');
     await (await import('./sound.js')).addToSound({ media: m.name });
     toast(`${m.label} is on the Sound tab (and in the media library)`);
     return m;
+  } catch (e) { toast('Couldn\'t take the sound out: ' + e.message, true); return null; }
+}
+
+// On the table: a clip's sound taken out as a new sound frame beside near (the frame it came from; else beside the
+// selection). Resolves the frame, or null (a toast says why)
+export async function soundFrameFrom(source, { trim = null, name = null, near = null } = {}) {
+  try {
+    const m = await api('/api/audio/extract', { method: 'POST', body: { source, trim, name }, busy: 'Taking the sound out…', timeout: 600000 });
+    const f = await (await import('./edit-ops.js')).frameBeside(near, { media: m.name, kind: 'audio', url: m.url, label: m.label }, { label: m.label });
+    if (!f) throw new Error('it couldn\'t go on the table (it is in the media library)');
+    toast(`${m.label} is a new sound frame`);
+    return f;
   } catch (e) { toast('Couldn\'t take the sound out: ' + e.message, true); return null; }
 }
 

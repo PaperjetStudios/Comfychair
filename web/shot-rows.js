@@ -4,12 +4,14 @@
 //
 // A story table's frames: a note per scene at the start of its row (story: { scene }) and an image frame per shot
 // (story: { scene, shot }), whose document is the shot's edit (s.doc). Rows are scenes top to bottom; a row's frames
-// left to right are its note and its shots in order.
+// left to right are its note and its shots in order. A shot's video lands as a video frame right after its shot's
+// frame (story: { scene, shot, clip: true }); the shot's clips (s.clips) stay the record.
 import * as M from './table-model.js';
 
 export const isSceneNote = (f) => f?.kind === 'note' && !!f.story?.scene && !f.story.shot;
 export const isShotFrame = (f) => f?.kind === 'image' && !!f.story?.shot;
-export const isStoryFrame = (f) => isSceneNote(f) || isShotFrame(f);
+export const isClipFrame = (f) => f?.kind === 'video' && !!f.story?.shot && !!f.story.clip;
+export const isStoryFrame = (f) => isSceneNote(f) || isShotFrame(f) || isClipFrame(f);
 // A shot frame's label is the story's ("1.2 What we see…", kept in story.auto) until it is renamed on the table
 export const autoLabelled = (f) => (f.story?.auto != null ? f.label === f.story.auto : /^\d+\.\d+(\s|$)/.test(f.label || ''));
 
@@ -52,7 +54,7 @@ export function orderFromRows(rows) {
 export function carryRows(frames, laid) {
   const moved = (f) => { const p = laid.get(f.id); return !!p && (p.x !== f.x || p.y !== f.y); };
   const notes = frames.filter((f) => isSceneNote(f) && moved(f));
-  const stay = new Set(frames.filter((f) => isShotFrame(f) && laid.has(f.id) && !moved(f)));
+  const stay = new Set(frames.filter((f) => (isShotFrame(f) || isClipFrame(f)) && laid.has(f.id) && !moved(f)));
   let any = false;
   for (const n of notes) {
     const p = laid.get(n.id), dx = n.x - p.x, dy = n.y - p.y;
@@ -94,13 +96,18 @@ export function applyOrder(story, order) {
 //   goneShots:    [shot id]          shots whose frame was deleted on the table
 //   copies:       [{ frame, shot }]  a second frame for a shot (a duplicated frame): it becomes a copy of the shot
 //   missingNotes: [scene id]         scenes with no note
-//   remove:       [frame id]         notes and shot frames for nothing in the story, and second notes
+//   remove:       [frame id]         notes, shot frames and clip frames for nothing in the story, and second notes
+//   strayClips:   [frame id]         a second clip frame for a shot (a duplicated one): it is a plain video frame now
 export function planReconcile(story, frames, { seen = new Map() } = {}) {
   const shotIds = new Map(story.scenes.flatMap((sc) => sc.shots.map((s) => [s.id, sc.id])));
   const sceneIds = new Set(story.scenes.map((sc) => sc.id));
-  const byShot = new Map(), byScene = new Map(), remove = [];
+  const byShot = new Map(), byScene = new Map(), clipOf = new Map(), remove = [], strayClips = [];
   for (const f of frames) {
-    if (isShotFrame(f)) {
+    if (isClipFrame(f)) {
+      if (!shotIds.has(f.story.shot)) remove.push(f.id);
+      else if (clipOf.has(f.story.shot)) strayClips.push(f.id);
+      else clipOf.set(f.story.shot, f);
+    } else if (isShotFrame(f)) {
       if (!shotIds.has(f.story.shot)) { remove.push(f.id); continue; }
       (byShot.get(f.story.shot) || byShot.set(f.story.shot, []).get(f.story.shot)).push(f);
     } else if (isSceneNote(f)) {
@@ -120,7 +127,7 @@ export function planReconcile(story, frames, { seen = new Map() } = {}) {
     if (!list.length) missingNotes.push(sc.id);
     remove.push(...list.slice(1).map((f) => f.id));
   }
-  return { missingShots, goneShots, copies, missingNotes, remove };
+  return { missingShots, goneShots, copies, missingNotes, remove, strayClips };
 }
 
 // The size of a shot's frame: its edit's canvas (size, read from the edit; else the old canvas s.comp, for a shot with
@@ -134,9 +141,13 @@ export const NOTE_W = 480;
 
 // The rows laid out: a scene's note then its shots, scene under scene, from (x0, y0). Returns Map frame id -> { x, y }.
 export function storyLayout(story, frames, { x0 = 0, y0 = 0, gap = 40, rowGap = 120 } = {}) {
-  const note = new Map(), shot = new Map();
-  for (const f of frames) { if (isSceneNote(f)) note.set(f.story.scene, f); else if (isShotFrame(f)) shot.set(f.story.shot, f); }
-  const rows = story.scenes.map((sc) => [note.get(sc.id), ...sc.shots.map((s) => shot.get(s.id))].filter(Boolean)).filter((r) => r.length);
+  const note = new Map(), shot = new Map(), clip = new Map();
+  for (const f of frames) {
+    if (isSceneNote(f)) note.set(f.story.scene, f);
+    else if (isShotFrame(f)) shot.set(f.story.shot, f);
+    else if (isClipFrame(f) && !clip.has(f.story.shot)) clip.set(f.story.shot, f);
+  }
+  const rows = story.scenes.map((sc) => [note.get(sc.id), ...sc.shots.flatMap((s) => [shot.get(s.id), clip.get(s.id)])].filter(Boolean)).filter((r) => r.length);
   const laid = M.rowLayout(rows, { x0, y0, gap, rowGap });
   return new Map(laid.flat().map((f) => [f.id, { x: Math.round(f.x), y: Math.round(f.y) }]));
 }

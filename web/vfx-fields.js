@@ -208,9 +208,14 @@ function firstField(e, st, io) {
   const edit = ['ripple', 'animate', 'faceswap', 'drive', 'ltxdrive'].includes(e.id);
   return pictureInput({ label: FIRST_LABEL[e.id] || (optional ? 'Start image (optional)' : 'Start image'), name: st.first || '',
     set: (n) => io.set('first', n || null, true), onClear: () => io.set('first', null, true),
-    tip: e.id === 'ripple' ? 'Take the frame, change it in the Image tab (or Generate with an edit template), then Choose… the edited picture here.' : null,
+    tip: e.id === 'ripple' ? 'Take the frame (or Grab frame), change it in its image frame (Edit from a prompt, Swap…), then Choose… the edited picture here.' : null,
     buttons: [io.live ? button('Take this frame', take, { title: 'The open frame\'s picture at the playhead' }) : null,
-      st.first && edit ? button('Edit in the Image tab', async () => (await import('./editor.js')).addToEditor(st.first)) : null] });
+      st.first && edit ? button('As an image frame', async () => {   // (to change it there: its result is chosen here after)
+        try {
+          const f = await (await import('./edit-ops.js')).frameBeside(io.frame || null, { input: st.first }, { label: `Start · ${io.frame?.label || 'image'}` });
+          if (f) toast(`${f.label} is beside the frame: change it there, then Choose… it here`);
+        } catch (err) { toast(err.message, true); }
+      }, { title: 'The picture as an image frame beside this one, to change with its Edit ops' }) : null] });
 }
 
 // ---- Talking shot: who, the line, its voice, spoken by the Sound tab's engines into the op's sound ----
@@ -252,7 +257,7 @@ function lineFields(st, io) {
     cast.length ? field('Character', sel('Character', [['', 'None'], ...cast.filter((c) => c.name.trim()).map((c) => [c.id, c.name])], L.char, pickChar),
       help('Their main picture becomes the start image and their voice speaks the line; their look goes in the prompt.')) : null,
     field('Voice', vs.length ? sel('Voice', [['', 'Choose…'], ...vs.map((v) => [v.id, v.name])], L.voice, (v) => { L.voice = v; save(true); })
-      : hint('No voices saved yet: make one in the Sound tab (Voice tools).')),
+      : hint('No voices saved yet: a sound frame\'s Edit ▸ New voice makes one.')),
     field('Line', textArea(() => L.text, (v) => { L.text = v; save(); }, { rows: 2, label: 'The line', placeholder: 'What they say' })),
     field('Delivery', h('input', { type: 'text', value: L.delivery || '', placeholder: 'calm, angry, whispering…', 'aria-label': 'How it is said',
       onchange: (ev) => { L.delivery = ev.target.value.trim(); save(); } }), help('IndexTTS-2 and Fish S2 act it out (Qwen ignores it). It also goes in the prompt.')),

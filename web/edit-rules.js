@@ -8,9 +8,12 @@
 //   live:   for an op that is headless with some options and not with others: (opts) -> why it needs the open frame, or null
 //   lands:  what kind of frame a result is ('image' for a frame grabbed from a video); the frame's own kind when not given
 //   once:   no batch (a setting changed, not a run made)
+//   newFrame: its result is always a frame of its own (Render, a 3D result, Its sound, Mark views): no layer target
 //   selfLands: it places its result itself (a grabbed frame: a frame of the picture's own size, or a layer in the selected
 //           image frame): no result frame is made for it first
 //   why:    for needs 'live', why
+//   takes:  a cross-kind op (a video op made from other frames): the kinds it takes from a selection with no frame of its
+//           own kind (pictures and sounds into a new video frame); one run for the whole selection, beside its first frame
 //   vfx:    the VFX effect it runs (web/vfx-rules.js EFFECTS); tools: what it places on the open frame (frame-overlay.js)
 //
 //   OPS                         { image: [...], video: [...], sound: [...], scene: [...] }
@@ -25,6 +28,7 @@
 //   targetsOf(op)               the landing choices ['frame', 'layer'] (or ['self'] for an op on the document itself)
 //   defaultTarget(op, live)     'layer' when the frame is live, else 'frame' ('self' when that's all there is)
 //   resultKind(op)              the kind of frame its result goes in
+//   crossOps(frames)            the cross-kind ops a selection with no frame of their kind can run (takes)
 
 const LIVE_PAINT = 'It is painted on the open frame';
 const LIVE_MARKS = 'The marks are placed on the open frame';
@@ -56,6 +60,10 @@ const IMAGE = [
   { id: 'scribble', group: 'Maps', label: 'Scribble', icon: 'grid', help: 'A loose line drawing.' },
   { id: 'pose', group: 'Maps', label: 'Pose', icon: 'figure', help: 'Body, hands and face as a stick figure.' },
   { id: 'inpaint', group: 'Edit', label: 'Inpaint', icon: 'brush', needs: 'live', why: LIVE_PAINT, help: 'Paints something new where you paint.' },
+  { id: 'photo3d', group: '3D', label: 'Photo in 3D', icon: 'cube', lands: 'scene', once: true, newFrame: true, help: 'MoGe turns the picture into a mesh with its camera: a new 3D frame.' },
+  { id: 'object3d', group: '3D', label: 'Make a 3D object', icon: 'cube', lands: 'scene', once: true, newFrame: true, selfLands: true,
+    help: 'Pixal3D or Trellis: a textured model from the picture (or its other views), in a new 3D frame.' },
+  { id: 'splat', group: '3D', label: 'Splat (SHARP)', icon: 'cloud', lands: 'scene', once: true, newFrame: true, help: 'SHARP turns the picture into a Gaussian splat: a new 3D frame.' },
 ];
 
 // Every effect of the VFX tab is a video op here (vfx: its web/vfx-rules.js effect, run from the op's options and the
@@ -70,7 +78,7 @@ const VIDEO = [
   { id: 'restyle', group: 'Restyle', label: 'LoRA restyle', icon: 'sparkle', quick: 'Restyle', tpl: 'deck-ltx-v2v-lora', help: 'The clip through an IC-LoRA, with a prompt for the result.' },
   { id: 'ripple', group: 'Restyle', label: 'Ripple edit', icon: 'edit', vfx: 'ripple', tpl: 'deck-ltx-ripple',
     live: (o) => (o?.first ? null : 'Its first frame is taken from the open frame (or choose an edited one)'),
-    help: 'A change to the first frame carried through the clip: take the frame, change it in the Image tab, choose it here.' },
+    help: 'A change to the first frame carried through the clip: Grab frame, change that image frame with its Edit ops, choose it here.' },
   { id: 'upscale', group: 'Restyle', label: 'Upscale (LTX)', icon: 'enlarge', quick: 'Upscale', tpl: 'deck-ltx-upscale', help: 'More detail at Full HD or 4K. Slow.' },
   { id: 'upvideo', group: 'Restyle', label: 'Upscale (SeedVR2)', icon: 'enlarge', tpl: 'deck-upscale-video', help: 'SeedVR2 on every frame: sharper, the picture kept.' },
   { id: 'upvideofast', group: 'Restyle', label: 'Upscale (fast)', icon: 'enlarge', tpl: 'deck-upscale-video-fast', help: 'A quick upscale model on every frame.' },
@@ -90,15 +98,23 @@ const VIDEO = [
   { id: 'faceswap', group: 'Performance', label: 'Face only', icon: 'person', vfx: 'faceswap', tpl: 'deck-h3-faceswap', help: 'Only the face swapped for a picture\'s.' },
   { id: 'drive', group: 'Performance', label: 'Drive a still', icon: 'figure', vfx: 'drive', tpl: 'deck-h3-drive', help: 'A picture acts out the clip (H3).' },
   { id: 'ltxdrive', group: 'Performance', label: 'Drive a still (LTX)', icon: 'figure', vfx: 'ltxdrive', tpl: 'deck-ltx-drive', help: 'A picture acts out the clip (LTX-2.5).' },
-  { id: 'talk', group: 'Performance', label: 'Talking shot', icon: 'mic', vfx: 'talk', tpl: 'deck-ltx-a2v', help: 'Someone in a picture says a line, lips in time: a new clip.' },
+  { id: 'talk', group: 'Performance', label: 'Talking shot', icon: 'mic', vfx: 'talk', tpl: 'deck-ltx-a2v', takes: ['image', 'sound'], help: 'Someone in a picture says a line, lips in time: a new clip.' },
   { id: 'layout', group: 'Generate', label: 'Layout to render', icon: 'cube', vfx: 'layout', tpl: 'deck-ltx-layout', help: 'A rough layout clip as a finished shot, from a first frame.' },
   { id: 'extend', group: 'Generate', label: 'Extend frame', icon: 'maximize', vfx: 'extend', tpl: 'deck-ltx-inpaint', help: 'The clip on a bigger canvas, the rest painted in.' },
   { id: 'tracks', group: 'Generate', label: 'Motion paths', icon: 'line', vfx: 'tracks', tpl: 'deck-ltx-tracks', tools: ['paths'],
     live: (o) => (o?.tracks?.length ? null : 'Paths are drawn on the open frame'), help: 'Paths drawn on the start image: things under a path\'s start move along it.' },
   { id: 't2v', group: 'Generate', label: 'Text / image to video', icon: 'film', vfx: 't2v', tpl: 'deck-ltx-t2v', help: 'A new clip from a prompt, optionally from a still.' },
-  { id: 'a2v', group: 'Generate', label: 'Sound to video', icon: 'sound', vfx: 'a2v', tpl: 'deck-ltx-a2v', help: 'A clip that moves to a sound: speech, music or effects.' },
-  { id: 'ingredients', group: 'Generate', label: 'Ingredients sheet', icon: 'grid', vfx: 'ingredients', tpl: 'deck-ltx-ingredients', help: 'People and props cut out on white, put in one shot.' },
+  { id: 'a2v', group: 'Generate', label: 'Sound to video', icon: 'sound', vfx: 'a2v', tpl: 'deck-ltx-a2v', takes: ['image', 'sound'], help: 'A clip that moves to a sound: speech, music or effects.' },
+  { id: 'ingredients', group: 'Generate', label: 'Ingredients sheet', icon: 'grid', vfx: 'ingredients', tpl: 'deck-ltx-ingredients', takes: ['image'], help: 'People and props cut out on white, put in one shot.' },
   { id: 'foley', group: 'Sound', label: 'Sound from the clip', icon: 'sound', tpl: 'deck-mmaudio-foley', lands: 'sound', help: 'Foley timed to the picture (MMAudio): a new sound frame.' },
+  { id: 'sound', group: 'Sound', label: 'Its sound', icon: 'sound', lands: 'sound', once: true, newFrame: true, help: 'The clip\'s own sound taken out: a new sound frame.' },
+  { id: 'render', group: 'Quick', label: 'Render', icon: 'film', once: true, newFrame: true, help: 'The frame\'s whole timeline as one clip: a new video frame.' },
+  { id: 'track', group: 'Quick', label: 'Track motion', icon: 'target', lands: 'scene', once: true, newFrame: true, selfLands: true,
+    help: 'Follows the picture\'s movement and makes a 3D camera from it: a new 3D frame.' },
+  { id: 'views', group: 'Sheet', label: 'Mark views', icon: 'grid', lands: 'image', once: true, newFrame: true, selfLands: true,
+    help: 'Scrub the clip and mark frames as angles: each becomes a picture, in a new image frame. The clip must be a run.' },
+  { id: 'h3up', group: 'Sheet', label: 'Upscale (H3)', icon: 'enlarge', once: true, newFrame: true, selfLands: true,
+    help: 'An H3 run (or a character sheet\'s clip) sampled again bigger, or finished by its refiner: a new video frame.' },
   { id: 'stabilise', group: 'Quick', label: 'Stabilise', icon: 'target', needs: 'live', why: 'Its track is set on the open frame', help: 'Steadies a shaky clip.' },
   { id: 'trim', group: 'Quick', label: 'Split, trim, cross-fade', icon: 'cut', needs: 'live', why: LIVE_TIMELINE, help: 'Timeline edits.' },
 ];
@@ -123,8 +139,8 @@ const SCENE = [
 const fill = (kind, list) => list.map((o) => Object.freeze({ needs: kind === 'image' ? 'still' : kind === 'scene' ? 'doc' : 'clip', ...o, kind }));
 export const OPS = Object.freeze({ image: fill('image', IMAGE), video: fill('video', VIDEO), sound: fill('sound', SOUND), scene: fill('scene', SCENE) });
 const GROUP_ORDER = {
-  image: ['Edit', 'Upscale', 'Clean up', 'Colour', 'Cut out', 'Detail', 'Maps'],
-  video: ['Quick', 'Restyle', 'Remove', 'Matte', 'Performance', 'Generate', 'Sound'],
+  image: ['Edit', 'Upscale', 'Clean up', 'Colour', 'Cut out', 'Detail', 'Maps', '3D'],
+  video: ['Quick', 'Restyle', 'Remove', 'Matte', 'Performance', 'Generate', 'Sound', 'Sheet'],
   sound: ['Voice', 'Make', 'Mix'],
   scene: ['Model', 'Splat'],
 };
@@ -170,6 +186,13 @@ export function groupsOf(kind) {
 export function planRuns(frames = [], op, batch = 1) {
   const runs = [], skipped = [], seen = new Set();
   const n = op?.once ? 1 : Math.max(1, Math.min(32, Math.round(Number(batch) || 1)));
+  if (op?.takes && !frames.some((f) => f?.kind === op.kind)) {   // a cross-kind op: one run, from the first frame it takes
+    const from = frames.filter((f) => f && op.takes.includes(f.kind));
+    const first = from.find((f) => f.doc);
+    if (first) runs.push({ frame: first, batch: n });
+    for (const f of from) if (!f.doc) skipped.push({ frame: f, why: 'it has no document yet' });
+    return { runs, skipped };
+  }
   for (const f of frames) {
     if (!f || seen.has(f.id)) continue;
     seen.add(f.id);
@@ -180,24 +203,35 @@ export function planRuns(frames = [], op, batch = 1) {
   return { runs, skipped };
 }
 
-// The frame menu's Edit entries: one kind → its groups; several kinds → one entry per kind ("Edit image ▸")
-// live(frame): is that frame open
+// The cross-kind ops a selection can run: those of a kind none of its frames is, taking a kind one of them is
+export function crossOps(frames = []) {
+  const kinds = new Set(frames.map((f) => f?.kind));
+  return Object.values(OPS).flat().filter((o) => o.takes && !kinds.has(o.kind) && o.takes.some((k) => kinds.has(k)));
+}
+
+// The frame menu's Edit entries: one kind → its groups; several kinds → one entry per kind ("Edit image ▸"); then what the
+// selection can make of another kind ("Make video ▸": pictures and sounds into a video frame). live(frame): is that frame open
 export function menuGroupsFor(frames = [], { live = () => false, opts = () => ({}) } = {}) {
   const kinds = opsFor(frames), many = kinds.size > 1;
-  return [...kinds.keys()].map((kind) => {
+  const cross = crossOps(frames), byKind = new Map();
+  for (const o of cross) byKind.set(o.kind, [...(byKind.get(o.kind) || []), o]);
+  const made = [...byKind].map(([kind, ops]) => ({ kind, cross: true, title: `Make ${KIND_WORD[kind]}`,
+    groups: [ops.map((o) => ({ id: o.id, kind, label: o.label, icon: o.icon, disabled: false, why: null }))] }));
+  return [...[...kinds.keys()].map((kind) => {
     const of = frames.filter((f) => f.kind === kind), isLive = of.length === 1 && !!live(of[0]);
     return { kind, title: many ? `Edit ${KIND_WORD[kind]}` : 'Edit',
       groups: groupsOf(kind).map(({ ops }) => ops.map((o) => {
         const why = whyNot(o, { live: isLive, opts: opts(kind, o.id) });
         return { id: o.id, kind, label: o.label, icon: o.icon, disabled: !!why, why: why || null };
       })) };
-  });
+  }), ...made];
 }
 
 export const resultKind = (op) => op?.lands || op?.kind || null;
 export function targetsOf(op) {
   if (!op) return [];
   if (op.kind === 'scene' || op.needs === 'doc') return ['self'];
+  if (op.newFrame) return ['frame'];
   return ['frame', 'layer'];
 }
 export function defaultTarget(op, live = false) {

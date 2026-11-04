@@ -18,7 +18,7 @@ import {
 } from './scene-view.js';
 import { ORIENTS, nextOrient } from './gizmo-orient.js';
 import { drawnScale } from './origin-math.js';
-import { busy, cancelRender, letGo, play, renderColorVideo, renderDepthVideo, renderPoseVideo, saveFrame, saveStill, seek, stopPlay } from './scene-export.js';
+import { RENDERED, busy, cancelRender, letGo, play, renderColorVideo, renderDepthVideo, renderPoseVideo, saveFrame as saveFramePic, saveStill as saveStillPic, seek, stopPlay } from './scene-export.js';
 import { AREA, jumpKey, keyHere, maxBar, renderKeys, renderTransport, toEnd, toStart, unkeyHere, wireSheetKeys } from './scene-keys.js';
 import { commandFor, keysList } from './scene-shortcuts.js';
 import { PIP, togglePip, wirePip } from './scene-pip.js';
@@ -373,23 +373,9 @@ function cameraProps() {
     help('The view is the camera: drag empty space to orbit, two fingers to pan and zoom. With keys and Auto key on, each move sets a key at the playhead; with Auto key off it is only a look around until ◆ Key. Cut on the toolbar follows the shot list while the clip plays. While another camera is on show, a drag does not move this one.'));
 }
 
-// ---- the video's length: the Generate panel's video template's (Match generate), or set here (Custom).
-// SC.lenMode: 'match' | 'custom' (scenes from before it are custom); 2–15 s, half seconds allowed.
+// ---- the video's length: set here; 2–15 s, half seconds allowed. (A scene's old SC.lenMode is left as it is: unused.)
 const LEN = [2, 15];
 const fmtSecs = (v) => String(+Number(v).toFixed(2));
-// the length of the video template picked in Generate, in seconds (a frame count goes over its fps,
-// else 24), or null when what is picked there isn't a video template with a length
-export function generateSeconds() {
-  const t = C?.S?.tpl;
-  if (!t?.fields || !(t.fields.some((f) => f.kind === 'video') || Object.values(t.node_titles || {}).some((n) => /video/i.test(n)))) return null;
-  const isNum = (f) => f.kind === 'float' || f.kind === 'int', txt = (f) => `${f.label} ${f.input}`;
-  const f = t.fields.find((x) => isNum(x) && /length|seconds|duration|frames/i.test(txt(x)));
-  const val = (x) => +(C.S.values?.[x.key] ?? x.value);
-  if (!f || !(val(f) > 0)) return null;
-  const inFrames = /frame/i.test(txt(f)) || (/^(length|num_frames)$/.test(f.input) && !/sec|duration/i.test(f.label));
-  const fps = t.fields.find((x) => isNum(x) && /fps|frame.?rate/i.test(txt(x)));
-  return inFrames ? val(f) / ((fps && val(fps)) || FPS) : val(f);
-}
 // a new length: keys after the end go, the playhead stays inside
 function setLength(v) {
   SC.seconds = Math.round(clamp(v, ...LEN) * 100) / 100;
@@ -402,22 +388,22 @@ const lengthChanged = () => { save(); refresh(); renderTransport(); renderPanel(
 const animated = () => [...camsOf(), ...SC.objects];
 const clampLen = (v) => Math.round(clamp(v, ...LEN) * 100) / 100;
 // a new length; when it would cut keys off the end, ask first: stretch the animation to fit, or cut them
-export function newLength(v, mode = SC.lenMode) {
+export function newLength(v) {
   const s = clampLen(v), cut = keysPast(animated(), framesFor(s)) + (SC.cuts || []).filter((c) => c.f >= framesFor(s)).length;
-  if (!cut) { setLength(s); SC.lenMode = mode; lengthChanged(); return; }
+  if (!cut) { setLength(s); lengthChanged(); return; }
   openSheet(h('h3', {}, `Shorten to ${fmtSecs(s)} s?`),
     h('p', {}, `${cut} key${cut > 1 ? 's are' : ' is'} past ${fmtSecs(s)} s.`),
     actions(button('Cancel', () => { closeSheet(); renderPanel(); }),
-      button('✂ Cut them', () => { closeSheet(); setLength(s); SC.lenMode = mode; lengthChanged(); }, { cls: 'small danger' }),
-      button('⇔ Stretch to fit', () => { closeSheet(); stretchTo(s, mode); }, { cls: 'small primary' })));
+      button('✂ Cut them', () => { closeSheet(); setLength(s); lengthChanged(); }, { cls: 'small danger' }),
+      button('⇔ Stretch to fit', () => { closeSheet(); stretchTo(s); }, { cls: 'small primary' })));
 }
 // the whole animation stretched (or squeezed) to a new length, from frame 0: one undo step
-function stretchTo(v, mode = 'custom') {
+function stretchTo(v) {
   const s = clampLen(v), before = clone(SC), ok = sameTab(), was = SC.seconds, from = frames();
   SC.seconds = s;
   stretchAll(animated(), from, frames());
   stretchCuts(from, frames());
-  setLength(s); SC.lenMode = mode; TEMP.clear();
+  setLength(s); TEMP.clear();
   lengthChanged();
   undoToast(`Keys stretched ×${(s / was).toFixed(2)} to ${fmtSecs(s)} s`, () => {
     if (!ok()) return;
@@ -425,60 +411,67 @@ function stretchTo(v, mode = 'custom') {
   });
 }
 function openStretch() {
-  const g = generateSeconds();
   let want = SC.seconds;
   openSheet(h('h3', {}, 'Stretch keys to…'),
     rangeField('New length', () => want, (v) => { want = v; }, { min: LEN[0], max: LEN[1], step: 0.5, fmt: (v) => `${fmtSecs(v)} s · ${framesFor(v)} frames` }),
     help('Every key of every layer moves in time with the new length, from the start: longer slows the whole animation down, shorter speeds it up. Keys that land on the same frame merge.'),
     actions(button('Cancel', closeSheet),
-      g != null ? button(`Match Generate length · ${fmtSecs(clampLen(g))} s`, () => { closeSheet(); stretchTo(g, 'match'); }) : null,
-      button('⇔ Stretch', () => { closeSheet(); if (Math.abs(want - SC.seconds) >= 0.005) stretchTo(want, 'custom'); }, { cls: 'small primary' })));
-}
-// Match generate: take the Generate template's length when it differs (on show, and when Generate changes)
-export function syncLength() {
-  if (SC?.lenMode !== 'match') return;
-  const g = generateSeconds();
-  if (g == null || Math.abs(clamp(g, ...LEN) - SC.seconds) < 0.005) return;
-  newLength(g, 'match');
+      button('⇔ Stretch', () => { closeSheet(); if (Math.abs(want - SC.seconds) >= 0.005) stretchTo(want); }, { cls: 'small primary' })));
 }
 function lengthProps() {
-  const mode = SC.lenMode === 'match' ? 'match' : 'custom', g = generateSeconds();
-  const choice = seg([['match', 'Match Generate', 'The length of the video template picked in Generate'], ['custom', 'Custom']], mode, (v) => {
-    SC.lenMode = v;
-    if (v === 'match' && g != null) syncLength(); else { save(); renderPanel(); }
-  });
   const label = `Length · ${fmtSecs(SC.seconds)} s · ${frames()} frames`;
   const stretch = h('div', { class: 'row wrap' }, button('⇔ Stretch keys to…', openStretch, { title: 'A new length with the whole animation stretched or squeezed to fit' }));
-  if (mode === 'match') {
-    return [field([label, h('span', { class: 'hint' }, g == null ? 'no video template in Generate' : C.S.tpl.name)], choice,
-      help('Follows the length of the video template picked in Generate (2–15 s). With no video template there, the length stays as it is.')), stretch];
-  }
   let want = SC.seconds;
-  return [field(label, choice),
-    rangeField('Custom length', () => want, (v) => { want = v; }, { min: LEN[0], max: LEN[1], step: 0.5, fmt: (v) => `${fmtSecs(v)} s · ${framesFor(v)} frames`,
-      onChange: () => { if (Math.abs(want - SC.seconds) < 0.005) return; newLength(want, 'custom'); } }), stretch];
+  return [rangeField(label, () => want, (v) => { want = v; }, { min: LEN[0], max: LEN[1], step: 0.5, fmt: (v) => `${fmtSecs(v)} s · ${framesFor(v)} frames`,
+    onChange: () => { if (Math.abs(want - SC.seconds) < 0.005) return; newLength(want); } }), stretch];
 }
 
 // which videos the Render popup makes, one after another
 const KINDS = [['depth', 'Depth video', renderDepthVideo], ['pose', 'Pose video', renderPoseVideo], ['colour', 'Colour video', renderColorVideo]];
 const kindsOn = () => { const k = store.get('deck.scene.renderkinds', ['depth']); return Array.isArray(k) && k.length ? k : ['depth']; };
 
+// Where the Render section's output goes. A 3D frame on the table sets these while it is open (frame-scene.js): rendered(gens)
+// gets the videos one Render made, saved(picture, kind) a Save frame / depth / pose picture ('frame' | 'depth' | 'pose').
+// Null (the 3D tab): they stay in History and the project's pictures.
+export const OUT = { rendered: null, saved: null };
+
+// The videos of kinds ('depth' | 'pose' | 'colour', default the Render popup's ticks) rendered one after another over the
+// current scene: the generations they made (a cancelled or failed one stops the rest; what was made before it is kept)
+export async function renderVideos(kinds = kindsOn()) {
+  const figs = SC.objects.some((o) => o.type === 'figure' && !o.hidden);
+  const todo = KINDS.filter(([k]) => kinds.includes(k) && (k !== 'pose' || figs));
+  const made = RENDERED.list = [];
+  try {
+    for (const [, , fn] of todo) if (!await fn()) break;
+  } finally { RENDERED.list = null; renderPanel(); }
+  return made;
+}
+async function saveFrame() {
+  const r = await saveFramePic();
+  if (r) OUT.saved?.(r, 'frame');
+  return r;
+}
+async function saveStill(kind) {
+  const r = await saveStillPic(kind);
+  if (r) OUT.saved?.(r, kind);
+  return r;
+}
+
 function openRender() {
   const figs = SC.objects.some((o) => o.type === 'figure' && !o.hidden);
   const on = kindsOn().filter((k) => k !== 'pose' || figs);
   const flip = (k, v) => { const next = KINDS.map(([x]) => x).filter((x) => (x === k ? v : on.includes(x))); store.set('deck.scene.renderkinds', next); openRender(); };
   const go = async () => {
-    const todo = KINDS.filter(([k]) => on.includes(k));
-    if (!todo.length) return toast('Tick at least one video to render', true);
+    if (!on.length) return toast('Tick at least one video to render', true);
     closeSheet();
-    for (const [, , fn] of todo) if (!await fn()) break;   // (a cancelled or failed one stops the rest)
-    renderPanel();
+    const to = OUT.rendered, gens = await renderVideos(on);
+    if (gens.length) to?.(gens);
   };
   openSheet(h('h3', {}, 'Render'),
     help('Tick what to render. They run one after another over the same shot, and a cancelled or failed one stops the rest.'),
     field('Videos', h('div', { class: 'row wrap' }, ...KINDS.filter(([k]) => k !== 'pose' || figs).map(([k, l]) => toggle(l, on.includes(k), (v) => flip(k, v))))),
     field('Render', seg([['take', 'One take'], ['each', 'Each shot']], SC.renderShots === 'each' ? 'each' : 'take', (v) => { SC.renderShots = v; save(); }),
-      help('One take is a single video, with the cuts in it. Each shot renders one video per shot. The toast can lay those on the Video timeline.')),
+      help('One take is a single video, with the cuts in it. Each shot renders one video per shot.')),
     h('div', { class: 'row wrap' }, AREA.onlyToggle()),   // (Range only: the key sheet's work area)
     on.includes('depth') ? section('Depth', null,
       field(['Depth range', info('Follow the shot: each moment gets its own near and far (eased over about a second), so the depth keeps its contrast when the camera travels. A cut starts that range again. Whole clip: one near and far for the whole clip (steady greys, but a long camera move squeezes part of it into a few greys, and depth control lets go there).')],
@@ -511,7 +504,6 @@ function setOutValues(v) {
 }
 
 export function renderProps() {
-  const use = (g, what) => button(`Use ${what} #${g.id} in H3 control`, () => C.useControlVideo(g, SC));
   return section('Render', null,
     setupsRow({ key: sceneKey('out'), label: 'Setup', get: outValues, set: setOutValues }),
     busy ? button('✕ Cancel render', cancelRender, { cls: 'danger big-btn', title: 'Stop the render: nothing is saved' })
@@ -520,8 +512,6 @@ export function renderProps() {
       button('Save depth frame', () => saveStill('depth'), { disabled: busy, title: 'The depth of this frame, kept as a picture to use as a reference' }),
       SC.objects.some((o) => (o.type === 'figure' || o.type === 'rigged') && !o.hidden)
         ? button('Save pose frame', () => saveStill('pose'), { disabled: busy, title: 'The posable people of this frame as OpenPose stick figures, kept as a picture' }) : null),
-    R.renders.depth || R.renders.pose ? h('div', { class: 'row wrap' },
-      R.renders.depth ? use(R.renders.depth, 'depth') : null, R.renders.pose ? use(R.renders.pose, 'pose') : null) : null,
     h('p', { id: 'sceneStatus', class: 'hint' }, statusText));
 }
 

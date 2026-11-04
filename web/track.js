@@ -7,6 +7,7 @@ import {
 } from './ui.js';
 import { fmtTime } from './playback.js';
 import { S, fmtT, switchTab } from './core.js';
+import { currentTab } from './navigation.js';
 import { sceneModule } from './run.js';
 import { sceneFromSolve, sceneFromTrack, smooth, worldFromSolve } from './track-math.js';
 
@@ -22,7 +23,9 @@ const hash = (s) => { let x = 5381; for (const c of s) x = ((x * 33) ^ c.charCod
 export const keyFor = (src) => (src.generation != null ? `g${src.generation}_${src.index || 0}` : `m_${hash(String(src.media || src.clip || ''))}`);
 export const canTrack = (src) => !!src && (src.generation != null || !!src.media);
 
-// opts: { src: { generation, index } | { media }, url, label, from, to } (from / to: seconds of the clip to start with)
+// opts: { src: { generation, index } | { media }, url, label, from, to, frame?, onScene? } (from / to: seconds of the clip to
+// start with; frame: the table frame the clip is in, the new 3D frame goes beside it; onScene(sc, name): where Create 3D
+// scene's scene goes instead of a new 3D frame on the table, or a 3D tab on the Classic screens)
 export async function openTrack(opts) {
   const { src } = opts, id = keyFor(src);
   let doc = null;
@@ -198,8 +201,13 @@ export async function openTrack(opts) {
     const sv = T.set.solve !== 'none' ? T.solves[T.set.solve] : null;
     const tag = `_${Date.now().toString(36)}`;   // (layer ids of their own: see track-math.js sceneOf)
     const sc = sv ? sceneFromSolve(sv, r, { ...T.set, tag }) : sceneFromTrack(r, { ...T.set, tag });
-    closeSheet(); switchTab('scene');
-    (await sceneModule()).open(sc, null, `Track${sv ? ` (${SOLVE_NAME[T.set.solve]})` : ''}: ${opts.label || 'clip'}`);
+    const name = `Track${sv ? ` (${SOLVE_NAME[T.set.solve]})` : ''}: ${opts.label || 'clip'}`;
+    closeSheet();
+    // on the table: a new 3D frame (beside opts.frame when given: frame-scene.js trackToScene); the Classic screens: a 3D tab
+    if (opts.onScene) return opts.onScene(sc, name);
+    if (currentTab() === 'table') return (await import('./frame-scene.js')).sceneFrameFrom(sc, { label: name, beside: opts.frame || null });
+    switchTab('scene');
+    (await sceneModule()).open(sc, null, name);
   }
 
   function render() {

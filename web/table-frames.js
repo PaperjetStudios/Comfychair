@@ -1,8 +1,10 @@
 // What a frame on the table is made of, apart from where it sits: its element (a label bar over a still, a placeholder
 // or a note's text), the saved document it owns (made, copied, trashed and restored through app/store.py), the stills
-// those documents keep, and frames made from things dropped on the table (a picture, a clip, a sound, a file).
+// those documents keep, and frames made from things dropped on the table (a picture, a clip, a sound, a 3D model, a splat,
+// a motion, a file).
 // table.js places and drives the frames; table-model.js has their geometry.
-import { h, api, store, icon, uid, clone } from './ui.js';
+import { h, api, store, icon, uid, clone, toast } from './ui.js';
+import { kindOf } from './kinds.js';
 import { S, inputUrl, previewUrl, thumbUrl } from './core.js';
 import { BLANK } from './editor-engine.js';
 import { itemUrl, uploadImage, uploadMedia } from './media.js';
@@ -489,9 +491,20 @@ async function clipFrame(kind, src, url, label, at) {
   return { frame, payload: { ...blankPayload('video'), items: [it] } };
 }
 
-// A dropped thing as { frame, payload } (the frame's document is made from payload by the caller), its top-left at `at`.
-// src: { generation, index } (a run's output), { input } (a picture in the project), { media, kind?, url?, label? } (the
-// media library) or a File. Returns null for something no frame can hold.
+// A 3D model, a splat or a motion (a run's output or a File) as a new 3D frame: its scene starts empty, and once the
+// frame is made (after) the thing goes into it and its still is drawn (frame-scene.js landInScene)
+const SCENE_FILE = /\.(glb|gltf|obj|fbx|ply|splat|ksplat|spz|npz|bvh)$/i;
+function sceneFrame(src, at, label) {
+  const size = { w: 1024, h: 576 };
+  const frame = newFrame('scene', { ...at, ...size }, { label });
+  return { frame, payload: { ...blankPayload('scene'), width: size.w, height: size.h },
+    after: (f) => import('./frame-scene.js').then((m) => m.landInScene(f, [src]))
+      .catch((e) => toast(`Couldn't fill "${f.label}": ${e.message}`, true)) };
+}
+
+// A dropped thing as { frame, payload, after? } (the frame's document is made from payload by the caller, then after(frame)
+// is called), its top-left at `at`. src: { generation, index } (a run's output), { input } (a picture in the project),
+// { media, kind?, url?, label? } (the media library) or a File. Returns null for something no frame can hold.
 export async function frameFor(src, at) {
   if (src instanceof File) return fileFrame(src, at);
   if (src.input) return pictureFrame(src.input, at, src.width, src.height, src.label);
@@ -505,6 +518,7 @@ export async function frameFor(src, at) {
       return { ...(await pictureFrame(r.name, at, r.width, r.height, label)), fresh: r.name };
     }
     if (o.kind === 'video' || o.kind === 'audio') return clipFrame(o.kind, { generation: g.id, index }, o.url, label, at);
+    if (['mesh', 'splat', 'motion'].includes(kindOf(o))) return sceneFrame({ generation: g.id, index }, at, label);
     return null;
   }
   if (src.media) {
@@ -516,6 +530,7 @@ export async function frameFor(src, at) {
 }
 // a file from the computer: a picture goes into the project's pictures, a clip or sound into the media library
 async function fileFrame(file, at) {
+  if (SCENE_FILE.test(file.name)) return sceneFrame(file, at, file.name.replace(/\.\w+$/, ''));
   const kind = dropKind(file);
   if (kind === 'image') {
     const r = await uploadImage(file);

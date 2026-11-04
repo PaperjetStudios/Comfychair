@@ -1,24 +1,27 @@
-// The table's Make panel: a template's fields for what is selected on the table, and Run. It borrows the Generate tab's
-// own fields (generate.js renderFields into this panel, gentabs.js borrow), so presets, seed modes, LoRAs, saved setups
-// and the prompt builder work the same; each frame keeps its own settings (frame.make, a Generate tab's payload, saved
-// with the table), and nothing selected keeps one set for this device.
+// The table's Make panel: a template's fields for what is selected on the table, and Run. It draws the Generate tab's
+// own field controls (generate.js renderFields with its own state: fieldTarget { state }), so seed modes, LoRAs, saved
+// setups and the prompt builder work the same, but its settings are its own: each frame keeps them (frame.make, saved
+// with the table), and nothing selected keeps one set for this device. The Generate tab's template and values are never
+// touched (make-rules.js settingsFor / settingsPayload).
 //
 //   nothing (or a note): text-to-image and text-to-video; each result is a new frame beside the last
 //   an image frame:      image templates; the frame's picture goes into the template's first picture, its size is the
 //                        output size, and results land as layers in it (live or not: imagetools.js landMade, owed runs)
 //   a video frame:       video templates; Pick a frame puts an image frame's picture in a slot; results land as clips.
 //                        (VFX effects are the Edit pane's video ops: edit-ops.js lands their results)
-//   a 3D frame:          its templates; results are in the Shelf (Use as… from the toast)
+//   a 3D frame:          its templates; results go into the scene (frame-scene.js landInScene), else the Shelf
 //   a sound frame:       sound templates; the sounds made go into its mix (frame-sound.js, as a drop)
+// Templates an Edit op runs on that kind (an upscale, a clean-up) are the Edit pane's, not offered here (make-rules.js).
+// Several frames of a kind selected: Run on N frames, one run each with the shown settings, each landing in its own
+// frame. A selected note with words: they are the prompt.
 //
 //   renderMake(host, frames)   draw the panel into host for the selection (the sidebar calls it; table:select redraws it)
 //   runMake()                  Run (the Generate button and Ctrl+Enter call it while the table is on screen)
 //   makeState()                { label, why } for the action bar's button: what Run makes for the selection, and why
 //                              it can't (null when it can); `make:state` says when it may have changed
-import { h, api, store, toast, button, iconBtn, seg, field, hint, help, note, openSheet, closeSheet, runBar, actions } from './ui.js';
+import { h, api, store, toast, button, iconBtn, seg, field, hint, help, note, openSheet, closeSheet, runBar, actions, clone } from './ui.js';
 import { S, CURRENT_EDIT, setBatch } from './core.js';
-import { afterQueued, persist, preparePictures, renderFields, runBuilder, runValues, selectTemplate, stop } from './generate.js';
-import { applySetupValues, borrow, giveBack, lentOut, setupValues } from './gentabs.js';
+import { afterQueued, fieldState, fieldTarget, fieldsBorrowed, mainPromptKey, preparePictures, renderFields, runBuilder, runValues, stop } from './generate.js';
 import { setupsRow } from './setups.js';
 import { tplKey } from './setups-rules.js';
 import { refused } from './tabs.js';
@@ -26,19 +29,22 @@ import { queueRun, waitGen } from './make.js';
 import { uploadImage } from './media.js';
 import { landMade, owedTo } from './imagetools.js';
 import { isLive } from './live.js';
-import { onNavigate } from './navigation.js';
+import { currentTab, onNavigate } from './navigation.js';
 import { stillOf } from './table-frames.js';
 import { DOC_KIND, nextBeside, toStage } from './table-model.js';
 import * as Table from './table.js';
-import { LANDS, canvasRect, familiesOf, frameImageField, frameSize, makeTarget, pickTemplate, sizePair, templatesFor, withClip } from './make-rules.js';
+import { LANDS, canvasRect, carryWords, familiesOf, frameImageField, frameSize, makeFrames, makeTarget, noteText, pickTemplate, settingsFor, settingsPayload,
+  sizePair, templatesFor, withClip } from './make-rules.js';
 import { icon } from './icons.js';
 import { framePicture, frameSource } from './frame-source.js';
 
-const P = { fresh: [], ready: Promise.resolve(), host: null, frames: [], table: null, lentFor: null, els: null, prog: null, batchIn: null };
+const P = { fresh: [], host: null, frames: [], table: null, key: null, st: null, els: null, prog: null, batchIn: null };
 const KIND_WORD = { none: 'a new frame', image: 'this picture', video: 'this video', scene: 'this 3D frame', sound: 'this sound frame' };
+const SHOT_KINDS = new Set(['image', 'video', 'boxes', 'seed', 'mask']);   // a run's own content, not a setting (gentabs.js)
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
 const docUrl = (kind, id) => `/api/store/${DOC_KIND[kind]}/${id}${qs()}`;
 const lastTpl = (kind) => store.get(`deck.make.tpl.${kind}`, null);
+const onTable = () => currentTab() === 'table';
 
 // the selection: from the event, else what the table says now
 const selection = () => Table.selectedFrames() || P.frames;
@@ -48,6 +54,7 @@ const tableNow = () => {
 };
 // a frame changed (its settings): the table saves it as it is
 const frameSaved = () => Table.frameChanged();
+const keyOf = (kind, frame) => `${kind}:${frame?.id || ''}`;
 
 // ---------------------------------------------------------------------------
 // drawing
@@ -64,39 +71,44 @@ function draw() {
 function drawPanel() {
   const host = P.host;
   if (!host) return;
-  if (!S.templates?.length) { host.replaceChildren(note('The templates are still loading.', 'warn')); P.lentFor = null; return; }
+  if (!S.templates?.length) { host.replaceChildren(note('The templates are still loading.', 'warn')); P.key = null; return; }
   const { kind, frame } = makeTarget(P.frames);
   const list = templatesFor(S.templates, kind);
-  if (!list.length) { host.replaceChildren(note(`No template here makes anything for ${KIND_WORD[kind]}.`, 'warn')); return; }
-  const key = `${kind}:${frame?.id || ''}`;
-  if (P.lentFor !== key || !host.contains(P.els?.fields)) {
-    P.els = { fields: h('div', { class: 'make-fields' }), notes: h('div', { class: 'make-notes' }), basics: h('div', { class: 'make-basics' }),
-      picker: h('div', { class: 'make-picker' }), head: h('div', { class: 'make-head' }) };
-    host.replaceChildren(h('div', { class: 'make-panel' }, P.els.head, P.els.picker, P.els.notes, P.els.basics, P.els.fields));
-    P.lentFor = key;
-    const settings = frame ? frame.make || null : store.get('deck.make.none', null);
-    const fits = settings?.template && list.some((t) => t.id === settings.template);
-    const want = pickTemplate(list, fits ? settings.template : null, frame?.make?.template, lastTpl(kind));
-    P.ready = borrow(fits ? settings : null, { template: want, target: target(kind, frame), save: (p) => keep(kind, frame, p) })
-      .then(() => { if (P.lentFor === key) { fitFrame(kind, frame); drawHead(kind, frame, list); } });
-    drawHead(kind, frame, list);
-    return;
+  if (!list.length) { host.replaceChildren(note(`No template here makes anything for ${KIND_WORD[kind]}.`, 'warn')); P.key = null; return; }
+  if (!onTable()) return;   // (the fields are drawn once the table is on screen: the Generate tab keeps its own meanwhile)
+  const key = keyOf(kind, frame);
+  if (P.key !== key || !host.contains(P.els?.fields) || !list.some((t) => t.id === P.st?.tpl?.id) || fieldState() !== P.st) {
+    if (P.key !== key || !host.contains(P.els?.fields)) {
+      P.els = { fields: h('div', { class: 'make-fields' }), notes: h('div', { class: 'make-notes' }), basics: h('div', { class: 'make-basics' }),
+        picker: h('div', { class: 'make-picker' }), head: h('div', { class: 'make-head' }) };
+      host.replaceChildren(h('div', { class: 'make-panel' }, P.els.head, P.els.picker, P.els.notes, P.els.basics, P.els.fields));
+    }
+    if (P.key !== key || !list.some((t) => t.id === P.st?.tpl?.id)) {
+      const settings = frame ? frame.make || null : store.get('deck.make.none', null);
+      const want = pickTemplate(list, settings?.template, lastTpl(kind));
+      P.st = withSave(settingsFor(list.find((t) => t.id === want), settings), kind, frame);
+    }
+    P.key = key;
+    renderFields(target(kind, frame));
+    fitFrame(kind, frame);
   }
   drawHead(kind, frame, list);
 }
+const withSave = (st, kind, frame) => Object.assign(st, { save: () => keep(kind, frame) });
 
-// What Run makes for the selection, as the action bar's button says it, and why it can't run (null when it can)
+// What Run makes for the selection, as the action bar's button says it, and why it can't (null when it can)
 const RUN_WORD = { none: 'Generate', image: 'Generate', video: 'Make video', scene: 'Make 3D', sound: 'Make sound' };
 export function makeState() {
   let frames = [];
   try { frames = selection() || []; } catch { /* the table isn't up yet */ }
-  const { kind, frame } = makeTarget(frames);
-  const label = RUN_WORD[kind] || 'Generate';
+  const { kind, frame } = makeTarget(frames), n = makeFrames(frames).length;
+  const label = (RUN_WORD[kind] || 'Generate') + (n > 1 ? ` on ${n} frames` : '');
   let why = null;
+  const st = P.key === keyOf(kind, frame) ? P.st : null;
   if (!S.templates?.length) why = 'The templates are still loading';
   else if (!templatesFor(S.templates, kind).length) why = `No template makes anything for ${KIND_WORD[kind]}`;
   else if (frame && DOC_KIND[kind] && !frame.doc) why = `${frame.label || 'This frame'} has no document yet`;
-  else if (lentOut() && P.lentFor === `${kind}:${frame?.id || ''}` && S.tpl?.error) why = `${S.tpl.name} has an error: pick another template`;
+  else if (st?.tpl?.error) why = `${st.tpl.name} has an error: pick another template`;
   return { label, why };
 }
 export const makeLabel = () => makeState().label;
@@ -108,26 +120,29 @@ function tellState() {
 }
 addEventListener('deck:batch', () => { if (P.batchIn && document.activeElement !== P.batchIn) P.batchIn.value = S.batch; });
 
-// what the borrowed fields draw into, and what they show differently here
+// where the fields draw, on this panel's own settings, and what they show differently here
 function target(kind, frame) {
-  return { host: P.els.fields, notes: P.els.notes, basics: P.els.basics, scope: P.host,
-    replace: (f) => (kind === 'image' && frame && f === frameImageField(S.tpl) ? framePictureEl(frame) : null),
+  return { host: P.els.fields, notes: P.els.notes, basics: P.els.basics, scope: P.host, state: P.st,
+    replace: (f) => (kind === 'image' && frame && f === frameImageField(P.st.tpl) ? framePictureEl(frame)
+      : f.key === mainPromptKey(P.st.tpl) ? notePromptEl() : null),
     imageButtons: (f, set) => (kind === 'video' ? [button([icon('image'), 'Pick a frame'], () => pickFrame(f, set))] : []) };
 }
 
 // the settings of this frame (or of nothing selected) changed: keep them
-function keep(kind, frame, p) {
-  if (p?.template) store.set(`deck.make.tpl.${kind}`, p.template);
-  if (!frame) { store.set('deck.make.none', p); return; }
-  frame.make = { ...p, ...settleInputs(frame, p) };
+function keep(kind, frame) {
+  const st = P.st;
+  if (!st?.tpl) return;
+  store.set(`deck.make.tpl.${kind}`, st.tpl.id);
+  if (!frame) { store.set('deck.make.none', settingsPayload(st)); return; }
+  frame.make = settingsPayload(st, settleInputs(frame, st));
   frameSaved();
 }
 
 // The pictures Pick a frame copied in for this frame (frame.make.inputs, saved with it): one stays while a slot still uses it, and goes when
 // the slot takes another picture or is cleared. What is left when the frame itself is deleted goes with Settings → Projects → Clean up leftovers
 // (the table deletes frames in table.js, which can't reach this list).
-function settleInputs(frame, p) {
-  const used = JSON.stringify(p.values || {});
+function settleInputs(frame, st) {
+  const used = JSON.stringify(st.values || {});
   const all = [...new Set([...(frame.make?.inputs || []), ...P.fresh.splice(0)])];
   for (const n of all) if (!used.includes(JSON.stringify(n))) dropInput(n);
   return { inputs: all.filter((n) => used.includes(JSON.stringify(n))) };
@@ -135,45 +150,67 @@ function settleInputs(frame, p) {
 
 // the frame's size is the output size (an image or video frame)
 function fitFrame(kind, frame) {
-  if (!frame || (kind !== 'image' && kind !== 'video')) return;
-  const pair = sizePair(S.tpl), s = frameSize(pair, frame);
-  if (!s || (S.values[pair[0].key] === s.w && S.values[pair[1].key] === s.h)) return;
-  S.values[pair[0].key] = s.w; S.values[pair[1].key] = s.h;
-  S.sizeMode[pair[0].key] = { aspect: 'custom', mp: Math.round((s.w * s.h) / 1e4) / 100 };
-  renderFields(); persist();   // (saved with the frame's settings)
+  const st = P.st;
+  if (!frame || !st || (kind !== 'image' && kind !== 'video')) return;
+  const pair = sizePair(st.tpl), s = frameSize(pair, frame);
+  if (!s || (st.values[pair[0].key] === s.w && st.values[pair[1].key] === s.h)) return;
+  st.values[pair[0].key] = s.w; st.values[pair[1].key] = s.h;
+  st.sizeMode[pair[0].key] = { aspect: 'custom', mp: Math.round((s.w * s.h) / 1e4) / 100 };
+  renderFields(); keep(kind, frame);
+}
+
+// the template's saved setups: its fields as a key -> value map, less a run's own content (setups.js tpl:<template>)
+function setupValues() {
+  const st = P.st;
+  return st ? Object.fromEntries(st.tpl.fields.filter((f) => !SHOT_KINDS.has(f.kind)).map((f) => [f.key, clone(st.values[f.key])])) : {};
+}
+function applySetup(kind, frame, v) {
+  const st = P.st;
+  if (!st || !v) return;
+  for (const f of st.tpl.fields) {
+    if (SHOT_KINDS.has(f.kind) || v[f.key] === undefined || (f.kind === 'choice' && f.options?.length && !f.options.includes(v[f.key]))) continue;
+    st.values[f.key] = clone(v[f.key]);
+  }
+  st.sizeMode = {};
+  renderFields(); keep(kind, frame); fitFrame(kind, frame);
 }
 
 function drawHead(kind, frame, list) {
-  const t = S.tpl;
+  const t = P.st?.tpl;
   const fams = familiesOf(list), fam = t ? t.family || 'Other' : fams[0];
   const shown = list.filter((x) => (x.family || 'Other') === fam);
   const sel = h('select', { 'aria-label': 'Template', onchange: () => choose(kind, sel.value) },
     shown.map((x) => h('option', { value: x.id }, x.name + (x.error ? ' (error)' : ''))));
   if (t && shown.some((x) => x.id === t.id)) sel.value = t.id;
   const famSeg = seg(fams.map((f) => [f, f]), fam, (f) => { const first = list.find((x) => (x.family || 'Other') === f); if (first) choose(kind, first.id); }, { wrap: true });
-  // the template's saved setups (and this project's Generate defaults for it, read-only, until it has a setup)
   P.els.picker.replaceChildren(fams.length > 1 ? famSeg : null, sel,
-    t ? setupsRow({ key: tplKey(t.id), get: setupValues, set: (v) => { applySetupValues(v); fitFrame(kind, frame); } }) : null);
+    t ? setupsRow({ key: tplKey(t.id), get: setupValues, set: (v) => applySetup(kind, frame, v) }) : null);
   // (the batch is the action bar's: the stepper there and this box set the same S.batch)
   const batchIn = P.batchIn = h('input', { type: 'number', min: 1, max: 32, value: S.batch, inputMode: 'numeric', 'aria-label': 'How many',
     onchange: () => { batchIn.value = setBatch(batchIn.value); } });
   const owed = kind === 'image' && frame?.doc ? owedTo(frame.doc).length : 0;
+  const n = makeFrames(P.frames).length;
   P.prog ||= { bar: h('div', { class: 'make-prog-bar' }), text: h('span', { class: 'make-prog-text' }) };
   P.els.head.replaceChildren(
-    runBar(button([icon('sparkle'), 'Run'], () => runMake(), { cls: 'primary make-run', title: 'Run (Ctrl+Enter)' }),
+    runBar(button([icon('sparkle'), n > 1 ? `Run on ${n} frames` : 'Run'], () => runMake(), { cls: 'primary make-run', title: 'Run (Ctrl+Enter)' }),
       h('label', { class: 'make-batch' }, '×', batchIn),
       iconBtn('Stop this device\'s run', icon('close'), () => stop())),
     h('div', { class: 'make-prog' }, P.prog.bar, P.prog.text),
-    hint(frame ? `For ${frame.label || 'the frame'} · ${landsWord(kind)}${owed ? ` · ${owed} on the way` : ''}` : `Lands as ${landsWord(kind)}`, 'make-for'));
+    hint(n > 1 ? `For ${n} frames, one run each · ${landsWord(kind)}` : frame ? `For ${frame.label || 'the frame'} · ${landsWord(kind)}${owed ? ` · ${owed} on the way` : ''}` : `Lands as ${landsWord(kind)}`, 'make-for'));
   mirrorProgress();
   tellState();
 }
-const landsWord = (kind) => ({ frame: 'a new frame beside the last', layer: 'new layers in it', clip: 'clips on its timeline', mix: 'sounds in its mix', shelf: 'lands in the Shelf' })[LANDS[kind]];
+const landsWord = (kind) => ({ frame: 'a new frame beside the last', layer: 'new layers in it', clip: 'clips on its timeline', mix: 'sounds in its mix', scene: 'in its scene' })[LANDS[kind]];
 
+// another template: it starts from what this frame kept for it (if anything), with the prompt carried over
 function choose(kind, id) {
-  store.set(`deck.make.tpl.${kind}`, id);
-  selectTemplate(id);   // (gentabs.js pick: Keep prompt carries the prompt and pictures over, with an Undo)
+  const t = (S.templates || []).find((x) => x.id === id);
+  if (!t || !P.st) return;
   const { frame } = makeTarget(P.frames);
+  const kept = frame ? frame.make : store.get('deck.make.none', null);
+  P.st = withSave(carryWords(P.st, settingsFor(t, kept?.template === id ? kept : null)), kind, frame);
+  keep(kind, frame);
+  renderFields(target(kind, frame));
   fitFrame(kind, frame);
   draw();
 }
@@ -185,6 +222,14 @@ function framePictureEl(frame) {
     h('div', { class: 'make-frame-pic' }, still ? h('img', { src: still, alt: '' }) : h('span', { class: 'hint' }, 'Empty frame')),
     help('The frame as it looks when Run is pressed.'));
 }
+// a selected note's words, in place of the prompt: they are what is sent
+function notePromptEl() {
+  const got = noteText(P.frames);
+  if (!got) return null;
+  return field(['Prompt', h('span', {}, `from ${got.note.label || 'the note'}`)],
+    h('div', { class: 'make-note-text' }, got.text),
+    help('A note is selected: its words are the prompt. Deselect the note to type one here.'));
+}
 
 // Pick a frame: an image frame's picture into a video template's slot
 function pickFrame(f, set) {
@@ -195,7 +240,7 @@ function pickFrame(f, set) {
       const still = stillOf(x);
       return h('button', { type: 'button', class: 'make-frame-card', disabled: !still, onclick: async () => {
         closeSheet();
-        try { const up = await frameUpload(x, S.imageMp[f.key] ?? 1); P.fresh.push(up.name); set(up.name); } catch (e) { toast(e.message, true); }
+        try { const up = await frameUpload(x, P.st?.imageMp[f.key] ?? 1); P.fresh.push(up.name); set(up.name); } catch (e) { toast(e.message, true); }
       } }, still ? h('img', { src: still, alt: '' }) : h('span', { class: 'hint' }, 'Empty'), h('span', {}, x.label || 'Frame'));
     })),
     actions(button('Cancel', closeSheet, { cls: 'small ghost' })));
@@ -212,7 +257,7 @@ async function frameUpload(frame, mp = 0) {
 const dropInput = (name) => api(`/api/inputs?name=${encodeURIComponent(name)}`, { method: 'DELETE', busy: false }).catch(() => {});
 
 // ---------------------------------------------------------------------------
-// Run
+// Run: one run per selected frame of the kind (nothing selected: one run, new frames)
 // ---------------------------------------------------------------------------
 let running = false;
 export async function runMake() {
@@ -220,37 +265,45 @@ export async function runMake() {
   const sel = selection();
   if (sel !== P.frames) P.frames = sel || [];
   const { kind, frame } = makeTarget(P.frames);
-  if (!P.host || !lentOut() || P.lentFor !== `${kind}:${frame?.id || ''}`) draw();
-  await P.ready;   // (a fresh borrow loads first)
-  const t = S.tpl;
-  if (!t || t.error) return toast('Pick a working template first', true);
+  if (!P.host || P.key !== keyOf(kind, frame) || fieldState() !== P.st) draw();
+  const st = P.st, t = st?.tpl;
+  if (!t || t.error || P.key !== keyOf(kind, frame)) return toast('Pick a working template first', true);
   if (!templatesFor([t], kind).length) return toast(`${t.name} doesn't make anything for ${KIND_WORD[kind]}`, true);
-  if (frame && DOC_KIND[kind] && !frame.doc) return toast(`${frame.label || 'This frame'} has no document yet`, true);
-  const values = runValues();
-  if (!values) return;
+  const targets = kind === 'none' ? [null] : makeFrames(P.frames);
+  const noDoc = targets.find((f) => f && DOC_KIND[kind] && !f.doc);
+  if (noDoc) return toast(`${noDoc.label || 'A frame'} has no document yet`, true);
+  const base = runValues();
+  if (!base) return;
+  const words = noteText(P.frames), pk = mainPromptKey(t);
+  if (words && pk) base[pk] = words.text;
+  const builder = words ? null : runBuilder();
   running = true;
-  let sent = null;
+  let queued = 0;
   try {
-    const imgF = kind === 'image' ? frameImageField(t) : null;
-    if (imgF) {
-      sent = await frameSource(frame, { multiple: 16 });
-      values[imgF.key] = sent.name;
+    for (const f of targets) {
+      let sent = null;
+      try {
+        const values = clone(base);
+        const imgF = kind === 'image' ? frameImageField(t) : null;
+        if (imgF) { sent = await frameSource(f, { multiple: 16 }); values[imgF.key] = sent.name; }
+        if (f && (kind === 'image' || kind === 'video')) {   // (each frame's own size)
+          const pair = sizePair(t), s = frameSize(pair, f);
+          if (s) { values[pair[0].key] = s.w; values[pair[1].key] = s.h; }
+        }
+        await preparePictures(values, new Set(imgF ? [imgF.key] : []));
+        const batch = S.batch;
+        const gens = await queueRun({ template: t.id, values, batch, builder, timeout: 120000 });
+        afterQueued(gens, batch);
+        await land(kind, f, t, gens, sent, values);
+        dispatchEvent(new CustomEvent('make:queued', { detail: { frame: f, kind, gens } }));
+        queued += gens.length;
+      } catch (e) {
+        if (sent) dropInput(sent.name);
+        toast(targets.length > 1 ? `${f?.label || 'A frame'}: ${e.message}` : e.message, true);
+      }
     }
-    if (frame && (kind === 'image' || kind === 'video')) {   // (the frame's size, even if the fields were drawn for another)
-      const pair = sizePair(t), s = frameSize(pair, frame);
-      if (s) { values[pair[0].key] = s.w; values[pair[1].key] = s.h; }
-    }
-    await preparePictures(values, new Set(imgF ? [imgF.key] : []));
-    const batch = S.batch;
-    const gens = await queueRun({ template: t.id, values, batch, builder: runBuilder(), timeout: 120000 });
-    afterQueued(gens, batch);
-    await land(kind, frame, t, gens, sent, values);
-    dispatchEvent(new CustomEvent('make:queued', { detail: { frame, kind, gens } }));
-    toast(`${gens.length > 1 ? `Queued ${gens.length}` : 'Queued'}: ${landsWord(kind)}`);
-    drawHead(kind, frame, templatesFor(S.templates, kind));
-  } catch (e) {
-    if (sent) dropInput(sent.name);
-    toast(e.message, true);
+    if (queued) toast(`${queued > 1 ? `Queued ${queued}` : 'Queued'}${targets.length > 1 ? ` on ${targets.length} frames` : ''}: ${landsWord(kind)}`);
+    if (P.els) drawHead(kind, frame, templatesFor(S.templates, kind));
   } finally { running = false; }
 }
 
@@ -258,7 +311,8 @@ function land(kind, frame, t, gens, sent, values) {
   if (kind === 'image') return landLayers(frame, t, gens, sent);
   for (const g of gens) {
     waitGen(g.id).then((done) => (kind === 'none' ? landFrames(done, values, t) : kind === 'video' ? landClips(frame, done)
-      : kind === 'sound' && frame?.doc ? landSounds(frame, done) : inShelf(done))).catch((e) => toast(`${t.name} failed: ${e.message}`, true));
+      : kind === 'sound' && frame?.doc ? landSounds(frame, done) : kind === 'scene' && frame ? landScene(frame, done) : inShelf(done)))
+      .catch((e) => toast(`${t.name} failed: ${e.message}`, true));
   }
 }
 
@@ -353,7 +407,16 @@ export function landSounds(frame, done) {
   if (!still || !Table.dropOntoFrame(still, outs.map(({ index }) => ({ generation: done.id, index })))) inShelf(done);
 }
 
-// 3D frames, and anything with nowhere to go: the result is in the Shelf (History) already
+// 3D frame: what it made goes into its scene (frame-scene.js landInScene(frame, outputs), each output with its generation
+// and index), else it is in the Shelf
+async function landScene(frame, done) {
+  const fs = await import('./frame-scene.js').catch(() => null);
+  if (!fs?.landInScene) return inShelf(done);
+  const outs = (done.outputs || []).map((o, index) => ({ ...o, generation: done.id, index }));
+  try { await fs.landInScene(Table.frameById(frame.id) || frame, outs); } catch (e) { toast(e.message, true); inShelf(done); }
+}
+
+// anything with nowhere to go: the result is in the Shelf (History) already
 function inShelf(done) {
   toast(`#${done.id} is done: it is in the Shelf`, false, { label: 'Use as…', fn: async () => (await import('./useas.js')).openUseAs(done, 0) });
 }
@@ -382,13 +445,13 @@ addEventListener('table:live', (e) => { P.table = e.detail?.table || P.table; if
 addEventListener('table:unlive', () => { if (P.host) draw(); });
 onNavigate((name) => {
   if (name === 'table') { if (P.host) draw(); return; }
-  if (lentOut()) giveBack();   // (another screen: the Generate tab's own fields come back)
-  P.lentFor = null;
+  if (fieldsBorrowed()) { fieldTarget(null); if (S.tpl) renderFields(); }   // (another screen: the fields draw the Generate tab's own again)
+  P.key = null;
 });
 // the template list came in (or changed): draw again
 let tplSeen = null;
 addEventListener('deck:generate', () => {
-  if (S.templates !== tplSeen) { tplSeen = S.templates; if (P.host && !lentOut()) draw(); }
+  if (S.templates !== tplSeen) { tplSeen = S.templates; P.key = null; if (P.host) draw(); }
 });
 // the sidebar's Make pane, once it exists
 import('./sidebar.js').then(({ sidebar }) => {

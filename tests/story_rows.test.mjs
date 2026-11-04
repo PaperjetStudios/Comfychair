@@ -64,6 +64,21 @@ test('layout: a row per scene, note first, from the origin', () => {
   assert.deepEqual(pos.get('3'), { x: 150, y: 220 });
 });
 
+test('a shot\'s clip frame: laid right after its shot, kept out of the order, gone with its shot, a second one stray', () => {
+  const P = story();
+  const clip = (id, scene, sh, x, y) => ({ id, kind: 'video', x, y, w: 100, h: 100, story: { scene, shot: sh, clip: true } });
+  const frames = [note('n', 'A', 0, 0), shot('1', 'A', 'a1', 0, 0), clip('c', 'A', 'a1', 0, 0), clip('c2', 'A', 'a1', 0, 0), shot('2', 'A', 'a2', 0, 0), clip('cz', 'A', 'zz', 0, 0)];
+  const pos = storyLayout(P, frames, { x0: 10, y0: 20, gap: 40, rowGap: 100 });
+  assert.deepEqual(pos.get('c'), { x: 350, y: 20 });
+  assert.deepEqual(pos.get('2'), { x: 490, y: 20 });
+  assert.equal(pos.has('c2'), false);
+  const plan = planReconcile(P, frames, { seen: new Map([['a1', '1'], ['a2', '2']]) });
+  assert.deepEqual(plan.remove, ['cz']);
+  assert.deepEqual(plan.strayClips, ['c2']);
+  assert.deepEqual(plan.copies, []);
+  assert.deepEqual(orderFromRows(rowsOfFrames(frames.slice(0, 5))), [{ scene: 'A', shots: ['a1', 'a2'] }]);
+});
+
 test('a note is the heading then the summary; a shot frame is its canvas, else about a megapixel', () => {
   assert.equal(noteText({ slug: 'INT. ONE', summary: 'Rain.' }), 'INT. ONE\nRain.');
   assert.equal(noteText({ slug: '', summary: '' }), '');

@@ -137,6 +137,10 @@ function canRender() {
   return false;
 }
 
+// The videos a render makes, gathered while RENDERED.list is an array (scene-ui.js renderVideos): each one saved goes
+// in, steps to another (depth from the picture's colour video) come out again
+export const RENDERED = { list: null };
+
 // true once it is saved (false: cancelled, failed or not started)
 export async function renderDepthVideo(part = null, { objectsOnly = false } = {}) {
   if (!objectsOnly && (SC.depthFrom === 'picture' || SC.depthFrom === 'combo')) return depthFromPicture(part);
@@ -196,18 +200,19 @@ async function depthFromPicture(part = null) {
     // (marked as the 3D tab's, with the scene's size and length, so Use as offers it as an H3 control video: useas.js)
     const face = { kind: '3d', scene: { width: SC.width, height: SC.height, seconds: n / FPS } };
     const [g] = await queueRun({ template: 'deck-depth-video', values, face });
-    let done = await waitGen(g.id);
+    let done = await waitGen(g.id), geo = null;
     if (combo) {
       setStatus('Drawing the 3D objects’ depth…');
       const prev = R.lastRender;
       if (!await renderDepthVideo(part, { objectsOnly: true })) return false;
-      const geo = R.lastRender === prev ? null : R.lastRender;
+      geo = R.lastRender === prev ? null : R.lastRender;
       if (geo) done = await api('/api/scene/depth-combine', { method: 'POST', body: { picture: done.id, geometry: geo.id } });
     }
     R.lastRender = R.renders.depth = done;
+    // (what this render made is the depth video: the colour video and the objects' depth were steps to it)
+    if (RENDERED.list) RENDERED.list = RENDERED.list.filter((x) => x !== color && x !== geo).concat(done);
     setStatus(`Depth video #${done.id} is in History`);
-    toast(combo ? 'Depth from the picture, with the 3D objects laid in, saved' : 'Depth from the picture saved', false,
-      { label: 'Use in H3 control', fn: () => C.useControlVideo(done, SC) });
+    toast(combo ? 'Depth from the picture, with the 3D objects laid in, saved' : 'Depth from the picture saved');
     return true;
   } catch (e) {
     if (!(e instanceof Cancelled)) { setStatus(''); toast(e.message, true); }
@@ -274,23 +279,9 @@ async function renderEach(fn) {
     if (!ok) return false;
     made.push({ s, g: R.lastRender });
   }
-  toast(`${made.length} shot${made.length === 1 ? '' : 's'} saved`, false, { label: 'Shots to Video tab', fn: () => layShotVideos(made) });
+  toast(`${made.length} shot${made.length === 1 ? '' : 's'} saved`);
   return true;
 }
-async function layShotVideos(made) {
-  const { layOnTimeline } = await import('./video.js');
-  const { switchTab } = await import('./core.js');
-  switchTab('video');
-  const list = [];
-  for (const { s, g } of made) {
-    const o = g?.outputs?.[0];
-    if (!o?.url) continue;
-    list.push({ kind: 'video', src: { generation: g.id, index: 0 }, url: o.url, label: `Shot ${s.i} · ${s.cam.name}`, dur: o.duration || 0 });
-  }
-  await layOnTimeline(list);
-  toast(`${list.length} shot${list.length === 1 ? '' : 's'} on the Video timeline`);
-}
-
 async function sendVideo(form, kind, blur, { quiet = false, label = '' } = {}) {
   form.append('fps', FPS); form.append('blur', blur); form.append('kind', kind); form.append('scene', JSON.stringify(SC));
   if (C.S.project != null) form.append('project_id', C.S.project);
@@ -305,10 +296,8 @@ async function sendVideo(form, kind, blur, { quiet = false, label = '' } = {}) {
   setStatus(`${what} #${g.id} is in History`);
   R.lastRender = g;
   if (kind !== 'color') R.renders[kind] = R.lastRender;
-  if (!quiet) {
-    if (kind === 'color') toast(`${what} saved`);
-    else toast(`${what} saved`, false, { label: 'Use in H3 control', fn: () => C.useControlVideo(g, SC) });
-  }
+  RENDERED.list?.push(g);
+  if (!quiet) toast(`${what} saved`);
   return g;
 }
 
@@ -386,6 +375,7 @@ export async function sceneStill() {
 
 // One depth or pose picture of the frame at the playhead, kept as an input picture (like Save frame): to use as a
 // reference picture in Generate and the Editor. Depth is from the 3D shapes and the splats' dots (splat-depth.js).
+// Resolves with the picture saved ({ name, width, height }), else false.
 export async function saveStill(kind) {
   if (busy || !canRender()) return false;
   const figs = SC.objects.filter((o) => (o.type === 'figure' || o.type === 'rigged') && !o.hidden);
@@ -413,22 +403,24 @@ export async function saveStill(kind) {
     }
     const r = await C.uploadImage(blob, { source: 'scene', filename: `scene-${kind}.png` });
     toast(`Saved the ${kind} picture as ${r.name.split('/').pop()}`);
-    return true;
+    return r;
   } catch (e) { toast(e.message, true); return false; }
   finally { clip = null; scene.background = bg; busy = false; R.real = false; R.f = keep; fit(); refresh(); renderPanel(); }
 }
 
+// The lit clay frame kept as an input picture, after a moment to take it back: resolves with it, else null
 export async function saveFrame() {
-  if (!canRender()) return;
+  if (!canRender()) return null;
   const blob = await clayBlob();
   fit(); refresh();
   // a moment to take back a tap by mistake before it is kept (an input image can't be deleted after)
   let stop = false;
   toast('Saving the frame…', false, { label: '✕ Cancel', fn: () => { stop = true; toast('Frame not saved'); }, stay: true });
   await new Promise((r) => setTimeout(r, 1500));
-  if (stop) return;
+  if (stop) return null;
   try {
     const r = await C.uploadImage(blob, { source: 'scene', filename: 'scene.png' });
     toast(`Saved frame as ${r.name.split('/').pop()}`);
-  } catch (e) { toast(e.message, true); }
+    return r;
+  } catch (e) { toast(e.message, true); return null; }
 }

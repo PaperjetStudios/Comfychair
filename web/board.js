@@ -5,7 +5,7 @@ import {
 } from './ui.js';
 import { fmtTime } from './playback.js';
 import { runBar } from './run-bar.js';
-import { bareSource, extractSound, genLabel, soundInput, soundToSoundTab } from './media.js';
+import { bareSource, extractSound, genLabel, soundFrameFrom, soundInput, soundToSoundTab } from './media.js';
 import { S, switchTab, onServer } from './core.js';
 import { finishWithH3, openGeneration } from './run.js';
 import { openUseAs, pickCompare } from './useas.js';
@@ -50,9 +50,14 @@ const usedText = (owners) => owners.map((o) => `${o.label} ${o.name}`.trim()).jo
 // where to go to let a run go: the tab its owner is in (a story and a character are both in Story)
 const OWNER_TAB = { characters: 'story', 'story-tabs': 'story', 'scene-tabs': 'scene', scenes: 'scene', objects: 'scene', 'video-tabs': 'video',
   'sound-tabs': 'sound', 'vfx-tabs': 'vfx', 'edit-tabs': 'editor', 'gen-tabs': 'generate' };
-function openOwner(o) {
+const tableOn = () => !!document.querySelector('#tab-table.active, #tab-table.live-host');
+async function openOwner(o) {
   closeSheet();
   closeGallery();
+  if (tableOn()) {   // (on the table: the frame whose document holds it, selected and shown; never another screen)
+    if (!(await (await import('./table-out.js')).revealOwner(o))) toast(`${o.label} ${o.name}`.trim() + ' isn\'t a frame on a table here', true);
+    return;
+  }
   switchTab(OWNER_TAB[o.kind] || 'board');
   if (o.kind === 'characters') import('./story.js').then((m) => m.openCharacterView?.(o.id));
 }
@@ -276,7 +281,9 @@ function openSoundSheet(g, i) {
       hint('Saves the clip\'s sound as its own file in the media library, to edit in the Sound tab or use as a reference.'),
       h('div', { class: 'row wrap' }, button('Take the sound out', async () => {
         try { await extractSound(video, { name: `${g.id}-${g.template}-sound` }); closeSheet(); } catch (e) { toast(e.message, true); }
-      }, { cls: 'primary' }), button('Into the Sound tab', async () => {
+      }, { cls: 'primary' }), tableOn() ? button('New sound frame', async () => {
+        closeSheet(); closeGallery(); await soundFrameFrom(video, { name: `${g.id}-${g.template}-sound` });
+      }, { title: 'Take the sound out as a sound frame of its own, beside the selected frame' }) : button('Into the Sound tab', async () => {
         closeSheet(); await soundToSoundTab(video, { name: `${g.id}-${g.template}-sound` });
       }, { title: 'Take the sound out and put it on the Sound tab\'s timeline' }))),
     section('Put a sound on it', null,
@@ -414,7 +421,8 @@ function boardSelected() {   // [{g, o, i}] in board order
 // The selected clips drawn again at 1080P by Open-H3-Regenerate (its refiner LoRA); each lands on the Board as a new
 // take, a child of its draft. The 1080P second pass is 2 steps from 0.70 and keeps the clip's sound.
 // Only MiniMax H3 runs can be finished in place (/api/h3/upscale reads the run's own workflow): one other clip goes
-// the Use as → Finish with H3 way (deck-h3-refine with Regenerate on, in Generate); more than one can't.
+// the Finish with H3 way (deck-h3-refine with Regenerate on, in Generate); more than one can't. (On the table, Finish is the
+// video frame's Finish op, and a clip that isn't an H3 run takes Upscale (LTX) or Upscale (SeedVR2) there.)
 export const isH3Run = (g) => /^deck-h3-|^h3 (upscale|regenerate)$/.test(g?.template || '');
 async function boardFinish() {
   const all = boardSelected().filter(({ o }) => o.kind === 'video');
@@ -424,7 +432,7 @@ async function boardFinish() {
 // [{ g, i }] clips (the Board's selection, a Shelf tile): H3 runs finished in place, one other set up in Generate
 export async function finishClips(all) {
   const clips = all.filter(({ g }) => isH3Run(g)), other = all.filter(({ g }) => !isH3Run(g));
-  if (other.length > 1) toast(`${other.length} clips aren't H3 runs: use Use as → Finish with H3 on each`, true);
+  if (other.length > 1) toast(`${other.length} clips aren't H3 runs: Finish with H3 each on its own (or Upscale it)`, true);
   let n = 0;
   if (clips.length) {
     let info;
@@ -757,8 +765,9 @@ function galleryRender(newMedia = false) {
     owners ? button([icon('link'), `In use: ${usedText(owners)}`], () => keptSheet([{ id: g.id, used_by: owners }], 0), { cls: 'small' }) : null,
     button(g.pinned ? '★ Pinned' : '☆ Pin', () => togglePin(g), { cls: 'small' + (g.pinned ? ' on' : ''), title: 'P' }),
     button(marked ? '🗑 Marked' : '🗑 Mark', () => { toggleMarked(g.id); boardChanged(g); }, { cls: 'small' + (marked ? ' danger on' : ''), title: 'D' }),
-    o.kind === 'image' ? button('✎ Edit here', () => { closeGallery(); itemsToEditor([cur]); }, { title: 'E: replaces the open Image tab\'s layers (Undo brings them back)' }) : null,
-    button('Use as…', () => openUseAs(g, i, { before: () => closeGallery() }), { cls: 'small primary', title: 'U: send it to Generate, VFX, Video, Sound, the Image tab or 3D' }),
+    o.kind === 'image' && !tableOn() ? button('✎ Edit here', () => { closeGallery(); itemsToEditor([cur]); }, { title: 'E: replaces the open Image tab\'s layers (Undo brings them back)' }) : null,
+    tableOn() ? button('On the table…', () => openUseAs(g, i, { before: () => closeGallery() }), { cls: 'small primary', title: 'U: into the selected frame, a new frame, or a new frame with an edit' })
+      : button('Use as…', () => openUseAs(g, i, { before: () => closeGallery() }), { cls: 'small primary', title: 'U: send it to Generate, VFX, Video, Sound, the Image tab or 3D' }),
     ['image', 'video'].includes(kindOf(o)) ? button([icon('swap'), 'Compare'], () => pickCompare(g, i), { title: 'C: wipe or side by side with another' }) : null,
     o.kind === 'image' || o.kind === 'video' ? button('✂ Crop', () => openCropCopy(g, i), { title: 'Make a cropped copy' }) : null,
     o.kind === 'video' ? button('♪ Sound', () => openSoundSheet(g, i), { title: 'Take the sound out, or put a sound on this clip' }) : null,
@@ -808,7 +817,7 @@ document.addEventListener('keydown', (e) => {
     t: () => galleryStrip(),
     p: () => togglePin(S.history.get(cur.g.id) || cur.g),
     d: () => { toggleMarked(cur.g.id); boardChanged(cur.g); },
-    e: () => { if (cur.o.kind === 'image') { closeGallery(); itemsToEditor([cur]); } },
+    e: () => { if (cur.o.kind === 'image' && !tableOn()) { closeGallery(); itemsToEditor([cur]); } },
     u: () => openUseAs(S.history.get(cur.g.id) || cur.g, cur.i, { before: () => closeGallery() }),
     c: () => { if (['image', 'video'].includes(kindOf(cur.o))) pickCompare(S.history.get(cur.g.id) || cur.g, cur.i); },
     ' ': () => { const m = GAL.el.querySelector('.gal-main video, .gal-main audio'); if (m) { if (m.paused) m.play().catch(() => {}); else m.pause(); } },

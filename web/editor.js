@@ -7,6 +7,7 @@ import { BLANK, createEditor } from './editor-engine.js';
 import { landOwed } from './imagetools.js';
 import { putStill } from './table-frames.js';
 import { registerUndo } from './undo-dock.js';
+import { isLive, liveFrame } from './live.js';
 
 export { ASPECTS, FULL, aspectCrop, cropSpan, openCrop } from './editor-engine.js';
 
@@ -162,10 +163,10 @@ const ED = createEditor({
   onChange: () => { tabs.changed(); stillSoon(); },   // the tab saves itself shortly and its still follows
   name: () => tabs?.active?.name,
   beforeRender: () => { if (!tabs.started) tabs.start(); },
-  newEdit: (payload) => tabs.createFrom(payload, 'layers'),
+  newEdit: (payload) => (isLive('image') ? newFrameFrom(payload) : tabs.createFrom(payload, 'layers')),
   panelParts: (ed) => h('div', { class: 'panel-body' }, ed.topRow(),
     // (a mask being painted: its section first, with what to see and do; otherwise the panel order, app-wide)
-    ed.layerList(), ed.E.sel?.maskOf ? ed.layerProps() : null, ed.paintProps(), ed.masksProps(), ed.inpaintProps(), ed.toolsProps(), ed.E.sel?.maskOf ? null : ed.layerProps(), ed.animProps(), ed.canvasProps(), ed.exportProps()),
+    ed.layerList(), ed.E.sel?.maskOf ? ed.layerProps() : null, ed.paintProps(), ed.masksProps(), ed.inpaintProps(), ed.E.sel?.maskOf ? null : ed.layerProps(), ed.animProps(), ed.canvasProps(), ed.exportProps()),
 });
 export const { E } = ED;
 // Mount the editor into `els.host` (stage first, panel after), and `els.active()` says when it takes keys. The TabSet keeps its host.
@@ -187,6 +188,21 @@ export const editorFrame = () => ED.frame();
 // Fit layers → a fixed canvas the size they fill now, the layers moved so they stay where they show (Canvas → Fixed size)
 export const editorToFixed = () => ED.toFixed();
 export const editTabs = () => tabs;
+
+// Inside a live image frame, "Move to new edit" / "Open in a new edit": a new image frame beside it holding those layers
+// (the engine stays on the live frame's edit). Resolves true once made, false when it couldn't be (said why).
+async function newFrameFrom(payload) {
+  const src = liveFrame();
+  try {
+    const tf = await import('./table-frames.js');
+    const f = await tf.resultFrame(src, { label: `${src.label || 'Image'} layers` });
+    if (!f?.doc) throw new Error('the new frame couldn\'t be made');
+    await tf.editDoc('image', f.doc, (p) => { Object.assign(p, payload); });
+    const fi = await import('./frame-image.js');
+    fi.drawOffscreen(f.doc).catch(() => {});   // (an image frame is live: its still is drawn once that lets go)
+    return true;
+  } catch (e) { toast(`Couldn't make a new frame: ${e.message}`, true); return false; }
+}
 
 tabs = new TabSet({ kind: 'edit-tabs', host: $('#tab-editor'), newName: (n) => `Edit ${n}`, seed: () => (store.get(SEEDED, false) ? null : ED.dump()),
   adapter: {

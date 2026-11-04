@@ -1,13 +1,12 @@
 import { $, h, api, store, icon, seg, placeholder, toast, button, openSheet, closeSheet, section, hint, actions } from './ui.js';
 import { S, onServer, onProject, thumbUrl } from './core.js';
-import { B, FILTER_KINDS, genTime, dayKey, dayName, usedBadge, loadAttached, loadAllProjectGenerations, openGallery, togglePin, finishClips } from './board.js';
+import { B, FILTER_KINDS, genTime, dayKey, dayName, usedBadge, loadAttached, loadAllProjectGenerations, openGallery, togglePin } from './board.js';
 import { dropOnTable, selectedFrames, tableFrames } from './table.js';
 import { stillOf } from './table-frames.js';
 import { openPressMenu, pressMenu } from './press-menu.js';
-import { openUseAs } from './useas.js';
+import { outputGroups } from './table-out.js';
 import { openCompare } from './compare.js';
 import { kindOf, cardPicture, kindDef } from './kinds.js';
-import { DOC_KIND } from './table-model.js';
 import { genLabel, outputCard } from './media.js';
 import { fetchHistory } from './generation-data.js';
 
@@ -113,7 +112,8 @@ function syncSel() {
   SH.body?.querySelectorAll('.shelf-tile[data-key]').forEach((t) => t.classList.toggle('sel', SH.sel.has(t.dataset.key)));
 }
 
-// ---- a tile's menu (right click, long hold): open, use, compare, finish, pin, delete. With more than one tile selected
+// ---- a tile's menu (right click, long hold): open; into the selected frame, a new frame, or a new frame with an Edit op
+// (table-out.js: Finish and the upscales are ops there); compare, pin, delete. With more than one tile selected
 // (Shift-click), Compare and Delete take the selection.
 const outputList = () => outputItems().map((x) => ({ ...x, key: `${x.g.id}:${x.i}` }));
 function selectedItems() {
@@ -130,19 +130,17 @@ function tileMenu(e, it, list) {
   const two = many?.length === 2 && many.every((x) => looks(x.o)) ? many : null;
   const gens = [...new Map((many || [it]).map((x) => [x.g.id, x.g])).values()];
   openPressMenu(e.clientX, e.clientY, [
-    [{ label: 'Open', run: () => openGallery(it.key, () => { const l = list(); return l.some((x) => x.key === it.key) ? l : [it, ...l]; }) },
-      { label: 'Use as…', run: () => openUseAs(g, i) }],
+    [{ label: 'Open', run: () => openGallery(it.key, () => { const l = list(); return l.some((x) => x.key === it.key) ? l : [it, ...l]; }) }],
+    ...outputGroups(g, i),
     [two ? { label: 'Compare the two', run: () => openCompare(two.slice().reverse().map((x) => ({ o: x.o, label: genLabel(x.g) }))) } : null,
       { label: frame ? `Compare with ${frame.label}` : 'Compare with the selected frame', disabled: !frame || !looks(o),
         run: () => openCompare([frame, { o, label: genLabel(g) }]) }].filter(Boolean),
-    o.kind === 'video' ? [{ label: 'Finish (H3 1080p)', run: () => finishClips([{ g, o, i }]) }] : [],
     [{ label: g.pinned ? 'Unpin' : 'Pin', on: !!g.pinned, run: async () => { await togglePin(g); later(); } }],
     [{ label: gens.length > 1 ? `Delete ${gens.length}` : 'Delete', danger: true, run: () => deleteRuns(gens) }],
   ].filter((grp) => grp.length), 'Output');
 }
 
-// ---- for the frame menu on the table (frame-menu.js puts these in it): Compare with another frame or a Shelf tile;
-// Finish a video frame's clips (the runs on its timeline) as the Board's Finish does
+// ---- for the frame menu on the table (frame-menu.js puts it in it): Compare with another frame or a Shelf tile
 // a sheet of what the frame's still can be compared with: the table's other frames' stills, then the Shelf's pictures
 // and clips (the ones selected there first)
 export function compareSheet(f) {
@@ -164,25 +162,6 @@ export function compareSheet(f) {
     })) : hint('Nothing made in this project yet.')),
     actions(button('Cancel', closeSheet, { cls: 'small ghost' })));
 }
-// a video frame's clips that are runs (its timeline's items), finished with H3 (board.js finishClips)
-export async function finishFrame(f) {
-  let d;
-  try { d = await api(`/api/store/${DOC_KIND.video}/${f.doc}${S.project != null ? `?project_id=${S.project}` : ''}`, { busy: false }); }
-  catch (err) { return toast(err.message, true); }
-  const seen = new Set(), clips = [];
-  for (const it of d.payload?.items || []) {
-    const src = it.src || {}, key = `${src.generation}:${src.index || 0}`;
-    if (src.generation == null || it.kind !== 'video' || seen.has(key)) continue;
-    seen.add(key);
-    let g = S.history.get(src.generation);
-    if (!g) { try { g = await api(`/api/generations/${src.generation}`, { busy: false }); } catch { continue; } }
-    const o = g?.outputs?.[src.index || 0];
-    if (o?.kind === 'video') clips.push({ g, o, i: src.index || 0 });
-  }
-  if (!clips.length) return toast(`"${f.label}" has no made clips on its timeline (dropped files can't be finished)`, true);
-  return finishClips(clips);
-}
-
 // Delete whole runs. One something uses is refused by the server (409) and the toast names what uses it.
 async function deleteRuns(gens) {
   if (!gens.length) return;

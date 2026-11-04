@@ -3,8 +3,9 @@
 // goes in the sidebar, and its timeline in the drawer under the table. Letting go saves the edit and its still and
 // puts the engine back on the page's Video tab. Also what happens when frames, or things from the Shelf or a picker
 // (table:drop-frame sources), are dropped onto a video frame: pictures become picture clips, clips and sounds clips.
-// The drawer (and the doc-editing helpers) are shared with frame-sound.js.
-import { h, api, store, toast, uid, clone } from './ui.js';
+// The drawer (and the doc-editing helpers) are shared with frame-sound.js. Its size and frame rate are a section of the
+// Frame pane (Sequence).
+import { h, api, store, toast, uid, clone, chips, field, help, section, seg } from './ui.js';
 import { S, inputUrl, thumbUrl } from './core.js';
 import { isLive } from './live.js';
 import { heightGrip } from './layout.js';
@@ -12,6 +13,7 @@ import { uploadImage } from './media.js';
 import { DOC_KIND } from './table-model.js';
 import { dropInput, editDoc, putStill, sourceClip, sourcePicture, stillOf } from './table-frames.js';
 import { sidebar } from './sidebar.js';
+import { frameChanged, selectedFrames } from './table.js';
 import { addToTimeline, mountVideo, newItem, renderVideo, setSequenceSize, videoStill, videoTabs, vidPause, wireVideoTransport } from './video.js';
 
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
@@ -181,7 +183,7 @@ async function goLiveVideo(frame, root) {
   await tabs.ready();
   if (my.dead) return;
   if (!frame.doc) throw new Error('this frame has no edit yet');
-  for (let k = 0; k < 2 && tabs.active?.id !== frame.doc; k++) { await tabs.switchTo(frame.doc); if (my.dead) return; }   // (switchTo gives up quietly when it is raced)
+  for (let k = 0; k < 2 && tabs.active?.id !== frame.doc; k++) { await tabs.openQuiet(frame.doc); if (my.dead) return; }   // (openQuiet gives up quietly when it is raced)
   if (tabs.active?.id !== frame.doc) throw new Error('the edit would not open');
   const canvas = h('canvas', { class: 'vid-canvas' }), empty = h('div', { class: 'placeholder' }, 'Add clips, images or sound to the timeline');
   const bar = h('div', { class: 'transport' });
@@ -241,4 +243,41 @@ addEventListener('table:drop-frame', (e) => {
     return;
   }
   dropOnto(d, 'video', videoTabs());
+});
+
+// ---- the Frame pane's Sequence section for one video frame: its size (the frame's, as the sequence's) and frame rate ----
+// The open edit's when the frame is live (video.js setSequenceSize; the frame rate on the edit itself), else saved
+// into its document.
+const SEQ_SIZES = [[1920, 1080], [1280, 720], [1080, 1920], [1024, 576]];
+const SEQ_FPS = [[0, 'Match first clip'], [16, '16'], [24, '24'], [25, '25'], [30, '30'], [60, '60']];
+const openVideoHere = (f) => isLive(f.id) && videoTabs()?.active?.id === f.doc;
+async function setSeq(f, patch) {
+  if (openVideoHere(f)) {
+    if (patch.fps !== undefined) { const { videoDebug } = await import('./video.js'); videoDebug().V.fps = patch.fps; videoTabs().changed(); renderVideo(); }
+    if (patch.size) setSequenceSize(...patch.size);
+    return;
+  }
+  await editDoc('video', f.doc, (p) => { if (patch.fps !== undefined) p.fps = patch.fps; if (patch.size) p.size = patch.size; });
+}
+sidebar.addTo('frame', (el) => {
+  const sel = selectedFrames() || [], f = sel.length === 1 ? sel[0] : null;
+  const had = el.querySelector(':scope > .frame-seq');
+  if (had && had.dataset.frame === (f?.kind === 'video' && f.doc ? f.id : '')) return;   // (already there: its own insert calls this again)
+  had?.remove();
+  if (!f || f.kind !== 'video' || !f.doc) return;
+  const body = h('div', { class: 'frame-seq-body' }, h('span', { class: 'hint' }, 'Loading…'));
+  const sec = section('Sequence', null, body);
+  sec.classList.add('frame-seq'); sec.dataset.frame = f.id;
+  el.append(sec);
+  (openVideoHere(f) ? import('./video.js').then((m) => ({ fps: m.videoDebug().V.fps || 0 }))
+    : api(docUrl('video', f.doc), { busy: false }).then((d) => ({ fps: d.payload?.fps || 0 }))).then((o) => {
+    const sizeKey = `${f.w}x${f.h}`;
+    body.replaceChildren(
+      field('Size', chips(SEQ_SIZES.map((s) => [s.join('x'), s.join('×')]), sizeKey, (v) => {
+        const [w, hh] = v.split('x').map(Number);
+        f.w = w; f.h = hh; frameChanged();
+        setSeq(f, { size: [w, hh] }).catch((e) => toast(e.message, true));
+      }), help('The frame\'s size is the sequence\'s: an export is this size. Any other size: Size and MP… above.')),
+      field('Frame rate', seg(SEQ_FPS.map(([v, l]) => [String(v), l]), String(o.fps || 0), (v) => setSeq(f, { fps: Number(v) }).catch((e) => toast(e.message, true)), { wrap: true })));
+  }).catch((e) => body.replaceChildren(h('span', { class: 'hint' }, `Couldn't read the edit: ${e.message}`)));
 });
