@@ -152,14 +152,31 @@ function isBasic(f, all) {
   return BASIC_INPUT.test(f.input) || BASIC_LABEL.test(f.label || '');
 }
 
-export function renderFields() {
+// Where the fields are drawn. The Generate tab's panel (#fields, #tplNotes and the pane over its viewer) unless another
+// panel borrows them (make-panel.js): renderFields({ host, notes, basics, scope, replace, imageButtons }) draws there
+// and keeps drawing there until fieldTarget(null) gives them back. host: the groups; notes: the template's warnings;
+// basics: an element (or { body, sync }) for the size, length and seed; scope: the element holding them all;
+// replace(f): an element in place of field f, or null; imageButtons(f): more buttons on an image field's slot.
+let FT = null;
+export function fieldTarget(t = null) { FT = t; }
+export const fieldScope = () => FT?.scope || $('#tab-generate');
+export const fieldsBorrowed = () => !!FT;
+function basicsTarget() {
+  if (!FT) return (basicsPane$ ||= basicsPane($('#tab-generate .viewer'), 'generate'));
+  const b = FT.basics;
+  return b?.body ? b : { body: b || h('div'), sync: () => {} };
+}
+
+export function renderFields(target = null) {
+  if (target) FT = target;
   const t = S.tpl;
+  if (!t) return;
   const notes = [];
   if (t.error) notes.push(note(t.error, 'err'));
   for (const w of t.warnings) notes.push(note(w, 'warn'));
   if (S.workingFor) notes.unshift(h('div', { class: 'working-for' }, icon('person'), h('span', {}, `Working for ${S.workingFor.label}`),
     iconBtn('Stop working for them', icon('close'), () => { S.workingFor.clear(); renderFields(); }, { class: 'icon-btn' })));
-  $('#tplNotes').replaceChildren(...notes);
+  (FT ? FT.notes : $('#tplNotes'))?.replaceChildren(...notes);
 
   const openState = store.get('deck.groupsOpen', {});
   const groups = [];
@@ -178,15 +195,15 @@ export function renderFields() {
   }
   // A full redraw must not move the user: keep the panel's scroll and the focused control
   // (unless the template changed and the user asked for the top then: Settings ⚙)
-  const root = $('#fields'), panel = root.closest('.panel');
+  const root = FT ? FT.host : $('#fields'), panel = root.closest('.panel');
   const y = panel && !(PREFS.tplScrollTop && shownTpl && shownTpl !== t.id) ? panel.scrollTop : 0;
   shownTpl = t.id;
-  const scope = $('#tab-generate'), ae = document.activeElement, fe = ae && scope.contains(ae) ? ae.closest('.field[data-key]') : null;
+  const scope = fieldScope(), ae = document.activeElement, fe = ae && scope.contains(ae) ? ae.closest('.field[data-key]') : null;
   const at = fe ? { key: fe.dataset.key, i: [...fe.querySelectorAll(ae.tagName)].indexOf(ae), s: ae.selectionStart, e: ae.selectionEnd } : null;
   root.replaceChildren(...groups, shotBar());   // (the panel order, app-wide: what goes in, how it's made, then the saved shots)
-  basicsPane$ ||= basicsPane($('#tab-generate .viewer'), 'generate');
-  basicsPane$.body.replaceChildren(...groupFieldEls(basics));
-  basicsPane$.sync();
+  const bp = basicsTarget();
+  bp.body.replaceChildren(...groupFieldEls(basics));
+  bp.sync();
   hooks.decorate?.();
   if (panel) panel.scrollTop = y;
   if (at && at.i >= 0) {
@@ -402,6 +419,8 @@ function groupFieldEls(fs) {
     }
     if (f.kind === 'int' && f.input === 'height' && fs.some((x) => x.node === f.node && x.input === 'width' && x.kind === 'int')) continue;
     if (f.kind === 'mask') continue;   // drawn inside its picture's field
+    const instead = FT?.replace?.(f);
+    if (instead) { instead.dataset.key ||= f.key; out.push(instead); continue; }
     if (f.when && S.values[f.when.key] === f.when.not) continue;   // only while another setting is on (a sheet's Strength)
     out.push(fieldEl(f));
   }
@@ -889,7 +908,7 @@ function imageField(f) {
         if (keys.length === 1 && info && info.width) toast(`Set ${f.label} (${info.width}×${info.height})`);
       });
     },
-    buttons: [
+    buttons: [...(FT?.imageButtons?.(f, set) || []),
       // an inpaint template runs on the mask alone: its painter is the main action until there is one
       v && mf ? (mf.required && !mask?.name
         ? button([icon('brush'), 'Paint area…'], () => paintMask(f, mf, v, cropped?.crop || null), { cls: 'small primary', 'data-paint': '1' })
@@ -1046,9 +1065,8 @@ function fieldBody(f) {
 // ---------------------------------------------------------------------------
 // generate / stop
 // ---------------------------------------------------------------------------
-export async function generate() {
-  if ($('#tab-generate').hasAttribute('aria-busy')) return;
-  if (!S.tpl || S.tpl.error) return toast('Pick a working template first', true);
+// The values a run of the shown template sends, as Generate sends them: random seeds as -1. null when the user said no.
+export function runValues() {
   const values = {};
   for (const f of S.tpl.fields) {
     let v = S.values[f.key];
@@ -1056,7 +1074,41 @@ export async function generate() {
     values[f.key] = v;
   }
   const odd = S.tpl.fields.filter((f) => f.kind === 'text' && unmatchedBraces(values[f.key]));
-  if (odd.length && !confirm(`${odd.map((f) => f.label).join(', ')}: the { } don't match, so some wildcard text would go to the model as written. Generate anyway?`)) return;
+  if (odd.length && !confirm(`${odd.map((f) => f.label).join(', ')}: the { } don't match, so some wildcard text would go to the model as written. Generate anyway?`)) return null;
+  return values;
+}
+// Pictures as their cropped copies, masks with the picture they were painted on (as generate() sends them). skip: keys left as they are.
+export async function preparePictures(values, skip = new Set()) {
+  for (const f of S.tpl.fields) if (f.kind === 'image' && !skip.has(f.key)) values[f.key] = await cropForRun(f, values[f.key]);
+  for (const f of S.tpl.fields) {   // the picture goes as its cropped copy: the mask belongs to that (so Replay & edit keeps it)
+    const m = f.kind === 'mask' ? values[f.key] : null;
+    if (m?.name) values[f.key] = { ...m, src: values[f.image_key], crop: null };
+  }
+  return values;
+}
+// what the prompt builder sends with a run (null: the prompt was written as plain text)
+export function runBuilder() {
+  const pf = S.tpl.fields.find(isMainPrompt);
+  return pf && builderState().on ? { parts: S.pb.parts, subjects: S.pb.subjects } : null;
+}
+// After a run is queued: the seeds it used, and the next seed for Increment
+export function afterQueued(gens, batch = S.batch) {
+  const lastGen = gens[gens.length - 1];
+  for (const f of S.tpl.fields) {
+    if (f.kind !== 'seed') continue;
+    S.lastSeed[f.key] = lastGen.params[f.key];
+    if (S.seedMode[f.key] === 'increment') S.values[f.key] = Number(S.values[f.key]) + batch;
+  }
+  persist(); refreshSeedLabels();
+}
+
+export async function generate() {
+  // Generate (and Ctrl+Enter) on the table runs its Make panel for the selection (web/make-panel.js)
+  if (document.querySelector('#tab-table.active, #tab-table.live-host')) return (await import('./make-panel.js')).runMake();
+  if ($('#tab-generate').hasAttribute('aria-busy')) return;
+  if (!S.tpl || S.tpl.error) return toast('Pick a working template first', true);
+  const values = runValues();
+  if (!values) return;
   const nm = needsMask();
   if (nm) return toast(S.values[nm.image_key] ? 'Paint the area to change first' : 'Pick a picture, then paint the area to change', true);
   const btn = $('#genBtn'); btn.disabled = true;
@@ -1064,22 +1116,11 @@ export async function generate() {
   notifyPrepare();  // inside the tap: browsers only allow sound and notification prompts from a gesture
   keepAwake(true);
   try {
-    for (const f of S.tpl.fields) if (f.kind === 'image') values[f.key] = await cropForRun(f, values[f.key]);
-    for (const f of S.tpl.fields) {   // the picture goes as its cropped copy: the mask belongs to that (so Replay & edit keeps it)
-      const m = f.kind === 'mask' ? values[f.key] : null;
-      if (m?.name) values[f.key] = { ...m, src: values[f.image_key], crop: null };
-    }
-    const pf = S.tpl.fields.find(isMainPrompt);
-    const builder = pf && builderState().on ? { parts: S.pb.parts, subjects: S.pb.subjects } : null;
+    await preparePictures(values);
+    const builder = runBuilder();
     const gens = await queueRun({ template: S.tpl.id, values, batch: S.batch, builder, timeout: 120000 });   // (what it's made from: the server reads it off the inputs)
     S.workingFor?.ran(gens);   // made for a character (web/characters.js setWorkingFor): it comes back to them
-    const lastGen = gens[gens.length - 1];
-    for (const f of S.tpl.fields) {
-      if (f.kind !== 'seed') continue;
-      S.lastSeed[f.key] = lastGen.params[f.key];
-      if (S.seedMode[f.key] === 'increment') S.values[f.key] = Number(S.values[f.key]) + S.batch;
-    }
-    persist(); refreshSeedLabels();
+    afterQueued(gens);
     toast(gens.length > 1 ? `Queued ${gens.length}` : 'Queued');
   } catch (e) {
     if (!S.queueRemaining && !RUN.pid) keepAwake(false);
@@ -1108,8 +1149,8 @@ async function cropForRun(f, v) {
 function refreshSeedLabels() {
   for (const f of S.tpl.fields) {
     if (f.kind !== 'seed') continue;
-    const el = document.querySelector(`.field[data-key="${CSS.escape(f.key)}"]`);
-    if (!el) continue;
+    const el = fieldScope()?.querySelector(`.field[data-key="${CSS.escape(f.key)}"]`);
+    if (!el?.querySelector('.last-seed')) continue;
     el.querySelector('.last-seed').textContent = S.lastSeed[f.key] != null ? `last: ${S.lastSeed[f.key]}` : '';
     el.querySelector('input[type=number]').value = S.values[f.key];
   }

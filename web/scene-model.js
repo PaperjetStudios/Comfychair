@@ -10,7 +10,7 @@ import {
 } from './ui.js';
 import { R, SC, TYPES, makers, newObject, save } from './scene-data.js';
 import { modeOf, registerMode } from './scene-modes.js';
-import { activeCamera, aimFree, controls, draw, renderer, scene, select } from './scene-view.js';
+import { SCN, activeCamera, aimFree, controls, draw, renderer, scene, select } from './scene-view.js';
 import { setSceneMode } from './scene-ui.js';
 import { S, onProject, onServer } from './core.js';
 import { snap, snapBar, snapOn, snapStep } from './gizmo.js';
@@ -284,7 +284,7 @@ const stageOn = () => !!ED && G?.visible && ED.data.kind === 'mesh';
 const stepM = () => snap.gridPct / 100;   // the snap step in metres: the gizmo's grid setting, taken as centimetres
 let tap = null, dragH = null;
 function wire() {
-  const cv = $('#sceneCanvas');
+  const cv = SCN.canvas;
   cv.addEventListener('pointerdown', (e) => {
     if (!stageOn()) return;
     if (hnd && ED.tool === 'extrude') {   // the handle is a finger-sized target on the screen, not the little ball

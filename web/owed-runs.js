@@ -3,10 +3,11 @@
 
 const WEEK = 7 * 24 * 3600 * 1000;
 
-// What a run needs to land later. src: what was sent; its layer's place is copied, as a layer can't be stored.
+// What a run needs to land later. src: what was sent; its layer's place is copied, as a layer can't be stored. src.label: the new
+// layer's name, for a run that isn't one of the Image tools (the table's Make panel).
 export function owedRecord(tab, opId, src, g, nth = 0, now = Date.now()) {
   const w = src.was;
-  return { id: g.id, prompt: g.prompt_id, tab, op: opId, nth, at: now, name: src.name, px: src.px, rect: src.rect,
+  return { id: g.id, prompt: g.prompt_id, tab, op: opId, nth, at: now, name: src.name, px: src.px, rect: src.rect, ...(src.label ? { label: src.label } : {}),
     was: w ? { name: w.name, ...(w.key ? { key: w.key } : {}), crop: w.crop, x: w.x, y: w.y, scale: w.scale, w: w.img?.naturalWidth || w.w, h: w.img?.naturalHeight || w.h,
       rotation: w.rotation || 0, flipX: !!w.flipX, flipY: !!w.flipY } : null };
 }

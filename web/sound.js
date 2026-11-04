@@ -306,6 +306,8 @@ function stageHit(e) {
 function wireTimeline() {
   TL.wire();
   const cv = SD.canvas;
+  if (WIRED.has(cv)) return;
+  WIRED.add(cv);
   const seekAt = (ev) => { const g = stageGeom(); sndSeek(clamp((ev.clientX - g.r.left) / g.plotW, 0, 1) * stageSpan()); };
   cv.addEventListener('pointerdown', (e) => {
     e.preventDefault();
@@ -694,14 +696,20 @@ const adapter = {
   },
 };
 
+const FULLS = new WeakMap();   // host -> its full screen (layout.js adds the pull tab to the stage once per host)
+const WIRED = new WeakSet();   // canvases that have their pointer listeners
 // Point the engine at its elements. Call again to move it to another host; wireSound() does the Sound tab's.
 export function mountSound(els) {
-  const { active, ...rest } = els;
+  const { active, fullscreen = true, ...rest } = els;
   Object.assign(SD, rest, { active: active || (() => SD.host?.classList.contains('active')) });
   SD.panel.replaceChildren(SD.body = h('div', { id: 'sndBody' }));
-  if (stp.el !== SD.transport) SD.transport.replaceWith(stp.el);
+  if (stp.el !== SD.transport) {
+    if (stp.el.isConnected) stp.el.replaceWith(h('div', { class: 'transport', id: 'sndTransport' }));   // (a slot for the bar, should the Sound tab mount again)
+    SD.transport.replaceWith(stp.el);
+  }
   SD.transport = stp.el;
-  SD.max = fullScreen(SD.host, { onChange: () => drawStage() });
+  if (fullscreen && !FULLS.has(SD.host)) FULLS.set(SD.host, fullScreen(SD.host, { onChange: () => drawStage() }));
+  SD.max = FULLS.get(SD.host) || null;   // (a frame on the table has the table's own full screen)
   SD.tools.replaceChildren(
     button('✂ Split', TL.split, { title: 'Split at playhead (S)' }),
     button('🗑 Delete', TL.deleteSelected, { title: 'Delete selected clip (Del)' }),
@@ -723,7 +731,7 @@ function wireOnce() {
       extra: [h('button', { type: 'button', id: 'sndSplit', class: 'icon-btn', 'aria-label': 'Split at the playhead', title: 'Split at the playhead (S)', onclick: TL.split }, '✂'), delBtn] });
   onServer('deck_generation', ({ data }) => { if (N.gens.includes(data?.id) && SD.active()) setTimeout(renderPanel, 0); });
   playKeys(() => SD.active(), () => stp, () => ({
-    s: TL.split, c: TL.split, d: TL.duplicate, f: SD.max.toggle,
+    s: TL.split, c: TL.split, d: TL.duplicate, f: () => SD.max?.toggle(),
     Delete: TL.deleteSelected, Backspace: TL.deleteSelected,
     '=': () => TL.zoom(N.pps * 1.5), '+': () => TL.zoom(N.pps * 1.5), '-': () => TL.zoom(N.pps / 1.5),
   }));
@@ -735,6 +743,7 @@ export function wireSound() {
   if (!stp) wireOnce();
   mountSound({ host: $('#tab-sound'), canvas: $('#sndCanvas'), empty: $('#sndEmpty'), transport,
     tools: $('#sndTools'), timeline: $('#sndTimeline'), panel: $('#soundPanel') });
+  $('#sndCanvas').classList.add('snd-canvas'); $('#sndTimeline').classList.add('snd-timeline');
 }
 
 // The stage as a PNG (null: nothing on it), for a frame's still. Drawn off-screen at the stage's size.

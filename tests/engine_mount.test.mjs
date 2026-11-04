@@ -32,7 +32,7 @@ for (const [file, wire, once, exportsWanted] of [
 test('video.js: the timeline strip is only searched inside the mounted timeline', async () => {
   const all = await src('video.js'), s = all.replace(body(all, 'export function wireVideoTransport() {'), '');
   const uses = [...s.matchAll(/['"`]#timeline\b[^'"`]*['"`]/g)].map((m) => m[0]);
-  assert.deepEqual(uses, ["'#timeline'"]);   // timeline.js's el, until it takes an element
+  assert.deepEqual(uses, []);   // (timeline.js's el is a getter on the mount's element)
 });
 
 test('a mount of the same host does nothing; per-mount listeners go with an AbortController', async () => {

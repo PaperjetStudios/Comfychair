@@ -226,8 +226,11 @@ export function timeline(st, o) {
     select(it);
     dragClip(e, it, mode);
   }
+  const wired = new WeakSet();   // (a mount can come back to an element it already wired)
   function wire() {
     const tl = box();
+    if (!tl || wired.has(tl)) return;
+    wired.add(tl);
     tl.addEventListener('pointerdown', (e) => {
       const clip = e.target.closest('.tl-clip');
       if (clip) startClipDrag(e, clip);

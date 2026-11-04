@@ -18,6 +18,11 @@ import { renderSound, sndPause, wireSound } from './sound.js';
 import { renderStory, wireStory } from './story.js';
 import { B, closeGallery, pauseBoard, renderBoard } from './board.js';
 import { pauseTable, renderTable } from './table.js';
+import './sidebar.js';       // the table's tabbed sidebar (Make, Layers, Frame…)
+import './frame-image.js';   // image frames: the editor, live on the table
+import './frame-video.js';   // video frames: the sequence and its timeline drawer
+import './frame-sound.js';   // sound frames: the mix and the drawer's sound strip
+import './frame-scene.js';   // 3D frames: the scene engine, live on the table
 import { fullScreen, sectionTargets, sideNav, wireSplitters } from './layout.js';
 import { loadPrefs, openPrefs } from './prefs.js';
 import { EDIT_PHRASES, IMAGE_PHRASES, VIDEO_PHRASES } from './phrases.js';
@@ -163,7 +168,7 @@ function wireLayout() {
   wireSplitters();
   for (const id of ['generate', 'editor']) fullScreen($(`#tab-${id}`));   // (f toggles it: layout.js fullScreen)
   sideNav($('#tab-generate .panel'), 'generate', sectionTargets($('#fields')));
-  sideNav($('#tablePanel'), 'table', sectionTargets($('#tablePanel')));
+  // (#tablePanel is the sidebar: sidebar.js gives each of its panes its own jump strip)
   sideNav($('#editorPanel'), 'editor', sectionTargets($('#editorPanel')));
   sideNav($('#videoPanel'), 'video', sectionTargets($('#videoPanel')));
   sideNav($('#vfxPanel'), 'vfx', sectionTargets($('#vfxPanel')));

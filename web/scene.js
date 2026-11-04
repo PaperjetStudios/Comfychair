@@ -10,11 +10,11 @@
 import { TabSet } from './tabs.js';
 import { $, clone, h, store, toast } from './ui.js';
 import {
-  C, R, SC, defaultScene, dropHolds, frames, hooks, resetHistory, setC, setSC, upgrade
+  C, R, SC, defaultScene, dropHolds, frames, hooks, resetHistory, save, setC, setSC, upgrade
 } from './scene-data.js';
-import { buildToolbar, renderKeys, renderToolbar, showAll, syncLength, syncMode, wireKeys } from './scene-ui.js';
-import { loadPlaySettings } from './scene-keys.js';
-import { setup } from './scene-view.js';
+import { buildToolbar, renderKeys, renderPanel, renderToolbar, showAll, syncHud, syncLength, syncMode, wireKeys } from './scene-ui.js';
+import { loadPlaySettings, syncMaxBar } from './scene-keys.js';
+import { SCN, fit, setup } from './scene-view.js';
 import { initScale } from './scene-scale.js';
 import { stopPlay } from './scene-export.js';
 import { registerBuiltins } from './scene-builtin.js';
@@ -31,6 +31,16 @@ export { addPhoto, makePhoto } from './scene-view.js';
 export { addModel, openObjectSheet } from './scene-import.js';
 export { useAsRef } from './scene-ref.js';
 export { motionOnto } from './scene-motion.js';
+export { sceneStill } from './scene-export.js';
+export { addPicture } from './scene-picture.js';
+
+// The page's 3D tab: where the engine's elements live when no frame has them (index.html). The body is made here.
+const PAGE = { host: $('#tab-scene'), viewer: $('#sceneViewer'), canvas: $('#sceneCanvas'), transport: $('#sceneTransport'),
+  panel: $('#scenePanel'), body: h('div', { id: 'sceneBody' }) };
+PAGE.active = () => PAGE.host.classList.contains('active');
+PAGE.full = true;
+PAGE.panel.replaceChildren(PAGE.body);
+Object.assign(SCN, PAGE);
 
 registerCamera();     // camera moves (a section of Camera mode)
 registerBuiltins();   // (the dependencies have run by now; a mode registered later goes after them)
@@ -77,10 +87,9 @@ export function init(helpers) {
   setSC(defaultScene());   // what shows until the tab opens
   hooks.ready = async () => { boot(); await ensureTabs(); };
   hooks.persist = () => tabs?.changed(); hooks.history = renderToolbar; hooks.tab = () => tabs?.active?.id ?? null; hooks.held = renderKeys;
-  $('#scenePanel').replaceChildren(h('div', { id: 'sceneBody' }));
   tabs = new TabSet({ kind: 'scene-tabs', host: $('#tab-scene'), scope: 'project', newName: (n) => `Scene ${n}`, adapter: sceneAdapter, seed: legacyScene });
   // Match generate: the length follows the Generate panel's video template
-  addEventListener('deck:generate', () => { if (ready && $('#tab-scene').classList.contains('active')) syncLength(); });
+  addEventListener('deck:generate', () => { if (ready && SCN.active()) syncLength(); });
 }
 
 export function show() {
@@ -90,6 +99,66 @@ export function show() {
 }
 
 export function hide() { if (ready) { stopPlay(); tabs?.flush(); } }
+
+// the open scenes (tabs.js), for a 3D frame to switch to its own (the engine is built first: opening a scene draws it)
+export const sceneTabs = () => { boot(); return tabs; };
+// the open scene's picture size, as a 3D frame's size on the table asks (in steps of 16, as the size menu has them).
+// true when it changed (and is saved).
+export function setSceneSize(w, hh) {
+  const W = Math.max(64, Math.round(w / 16) * 16), H = Math.max(64, Math.round(hh / 16) * 16);
+  if (!w || !hh || (SC.width === W && SC.height === H)) return false;
+  SC.width = W; SC.height = H;
+  save();
+  if (ready) { fit(); renderPanel(); }
+  return true;
+}
+export const sceneSize = () => ({ w: SC.width, h: SC.height });
+// does the open scene have anything in it (a frame's drop asks before it draws a still)
+export const sceneHasContent = () => !!(SC.objects.length || SC.room);
+
+// ---- where it shows: the 3D tab, or a frame on a table ----------------------------------------------------------
+// Mount the engine into a host (a 3D frame's root). It has one WebGL context bound to its canvas, so the elements move:
+// the viewer (canvas, bars, overlays) takes the place of `viewer` (a slot in host's .stage), the key bar and sheet take
+// the place of `transport`, and the panel's body goes into `panel` (the sidebar's pane). active(): is it on show (the
+// keys ask); fullscreen: false for a host that can't have one (scene-keys.js maxBar). unmountScene() puts them all back
+// in the 3D tab; mounting the tab's own host does the same.
+let away = null;   // while mounted elsewhere: [[element, its slot in the host (none for the body), its mark in the page]]
+export function mountScene({ host, viewer, transport, panel, active = () => host.classList.contains('active'), fullscreen = true }) {
+  boot();
+  if (host === PAGE.host) return unmountScene();
+  if (SCN.host === host) return;
+  unmountScene();
+  const move = (el, slot) => {
+    const mark = document.createComment('the 3D engine is in a frame');
+    el.before(mark);
+    if (slot) slot.replaceWith(el); else panel.replaceChildren(el);
+    return [el, slot, mark];
+  };
+  stopPlay();
+  const was = SCN.host;
+  away = [move(PAGE.viewer, viewer), move(PAGE.transport, transport), move(PAGE.body, null)];
+  Object.assign(SCN, { host, panel, active, full: fullscreen });
+  host.classList.add('scene-host');
+  moved(was);
+}
+export function unmountScene() {
+  if (!away) return;
+  stopPlay();
+  const was = SCN.host;
+  for (const [el, slot, mark] of away) {
+    if (slot) el.replaceWith(slot);   // (the host gets its slot back, should it mount again)
+    mark.replaceWith(el);
+  }
+  away = null;
+  was?.classList.remove('scene-host');
+  Object.assign(SCN, PAGE);
+  moved(was);
+}
+// after a move: the full screen, the HUD and the canvas's size follow the host (the viewer's ResizeObserver refits too)
+function moved(was) {
+  syncMaxBar(was); syncHud(was);
+  fit();
+}
 
 // a new project has its own scenes (the tabs reload themselves)
 export function projectChanged() {

@@ -11,7 +11,9 @@
 //   table:live       { frame, root, table }   mount the frame's engine in root (live.js has the gate)
 //   table:unlive     { frame, root }          save and let go; root is removed after
 //   table:drop-frame { from: [frame], onto: frame, table }   a frame held over another and let go there
-import { $, h, api, store, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, toggle, help } from './ui.js';
+//   table:select     { frames: [frame], table }  the selection changed (sidebar.js follows it)
+//   table:resize     { frame, table }            a frame's size was set while it is live (its module applies it)
+import { $, h, api, store, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, toggle, help, mpInput } from './ui.js';
 import { S, onServer, onProject } from './core.js';
 import { TabSet } from './tabs.js';
 import { currentTab } from './navigation.js';
@@ -22,7 +24,8 @@ import { fullScreen } from './layout.js';
 import { droppedFiles, draggingPicture } from './drop-files.js';
 import { isLive, liveFrame, liveRoot, setLive } from './live.js';
 import * as M from './table-model.js';
-import { KIND_ICON, copyDoc, createDoc, frameEl, frameFor, kindOfDoc, loadStills, restoreDoc, syncFrame, trashDoc } from './table-frames.js';
+import { KIND_ICON, copyDoc, createDoc, frameEl, frameFor, kindOfDoc, loadStills, owedCounts, renameDoc, restoreDoc, syncFrame, trashDoc } from './table-frames.js';
+import { sidebar } from './sidebar.js';
 
 const ZMIN = 0.02, ZMAX = 8, DRAG_PX = 4, SNAP_PX = 8, DWELL_MS = 600, NUDGE = 1;
 const SOURCE_TYPE = 'application/x-deck-source';   // an in-app drag's payload: JSON { generation, index } | { input } | { media }
@@ -94,20 +97,33 @@ function setView(v, { animate = false, save = true } = {}) {
 }
 const byId = (id) => T.frames.find((f) => f.id === id) || null;
 const selected = () => T.frames.filter((f) => U.sel.has(f.id));
+// for the frame modules and the sidebar: the open table's frames (the objects themselves: change one, then frameChanged)
+export const tableFrames = () => T.frames;
+export const selectedFrames = () => selected();
+export const frameById = (id) => byId(id);
+export function frameChanged() { U.panelSig = ''; renderFrames(); changed(); }
 
 // The frames' elements follow the list (its order is the stacking order); each is made once and kept
 function renderFrames() {
-  const seen = new Set(), live = liveFrame();
+  const seen = new Set(), live = liveFrame(), owed = owedCounts();
   T.frames.forEach((f, i) => {
     let el = U.els.get(f.id);
     if (!el) { el = frameEl(f, { onText: (t) => { f.text = t; changed(); } }); U.els.set(f.id, el); }
     if (D.frames.children[i] !== el) D.frames.insertBefore(el, D.frames.children[i] || null);
-    syncFrame(el, f, { selected: U.sel.has(f.id), live: live?.id === f.id });
+    syncFrame(el, f, { selected: U.sel.has(f.id), live: live?.id === f.id, owed: f.kind === 'image' ? owed.get(f.doc) || 0 : 0 });
     seen.add(f.id);
   });
   for (const [id, el] of U.els) if (!seen.has(id)) { el.remove(); U.els.delete(id); }
   renderHandles();
   renderPanel();
+  tellSelection();
+}
+// table:select, each time the selected frames are other ones than last time
+function tellSelection() {
+  const sig = [...U.sel].sort().join(',');
+  if (sig === U.selSig) return;
+  U.selSig = sig;
+  dispatchEvent(new CustomEvent('table:select', { detail: { frames: selected(), table: T } }));
 }
 function renderAll() { applyView(); renderFrames(); }
 
@@ -130,7 +146,7 @@ function showGuides(guides = []) {
 
 // the stills come from each document kind's list; a frame's document saving elsewhere sends a `store` message
 let stillT = 0;
-async function refreshStills(kinds = [...new Set(T.frames.map((f) => f.kind))]) {
+export async function refreshStills(kinds = [...new Set(T.frames.map((f) => f.kind))]) {
   await loadStills(kinds);
   renderFrames();
 }
@@ -244,8 +260,19 @@ function sizeSheet(f) {
     help('The frame\'s size is its canvas size. The image, video or 3D document takes it the next time the frame is opened. Megapixels keep the shape and round each side to 16.'),
     h('div', { class: 'grid-2' }, field('Width', wIn), field('Height', hIn)), field('Megapixels', mpIn),
     toggle('Keep the shape', keep, (on) => { keep = on; }),
-    actions(button('Apply', () => { closeSheet(); Object.assign(f, { w, h: hh }); renderFrames(); changed(); }, { cls: 'small primary' }),
+    actions(button('Apply', () => { closeSheet(); setSize(f, { w, h: hh }); }, { cls: 'small primary' }),
       button('Cancel', closeSheet, { cls: 'small ghost' })));
+}
+
+// a frame's size set from the sheet or the panel; a live frame's module takes it at once (table:resize), others on opening
+function setSize(f, s) {
+  Object.assign(f, s);
+  if (liveFrame()?.id === f.id) {
+    const { w, h: hh } = stageSize();
+    setView(M.liveView(f, w, hh), { save: false });
+    dispatchEvent(new CustomEvent('table:resize', { detail: { frame: f, table: T } }));
+  }
+  renderFrames(); changed();
 }
 
 // ---------------------------------------------------------------------------
@@ -463,7 +490,7 @@ function onKey(e) {
 }
 // Esc (on window: after the engines' own Esc, which marks it handled when it used it)
 function onEsc(e) {
-  if (e.key !== 'Escape' || e.defaultPrevented || !onTable() || e.target.closest?.('input, textarea, select, [contenteditable]')) return;
+  if (e.key !== 'Escape' || e.defaultPrevented || !onTable() || ownsKey(e) || e.target.closest?.('input, textarea, select, [contenteditable]')) return;
   if (isLive()) { e.preventDefault(); unlive(); }
   else if (U.sel.size) { U.sel.clear(); renderFrames(); }
 }
@@ -500,11 +527,11 @@ export async function dropOnTable(list, clientX, clientY) {
 }
 
 // ---------------------------------------------------------------------------
-// the panel (for now: the frames, and the selected one's label, size and lock; a tabbed sidebar replaces it)
+// the sidebar's Frame pane: the frames, and the selected one's label, size, place and lock
 // ---------------------------------------------------------------------------
 function renderPanel() {
   const s = selected(), one = s.length === 1 ? s[0] : null;
-  const sig = JSON.stringify([[...U.sel], T.frames.map((f) => [f.id, f.label, f.w, f.h, f.locked])]);
+  const sig = JSON.stringify([[...U.sel], T.frames.map((f) => [f.id, f.label, f.w, f.h, f.locked, ...(U.sel.has(f.id) ? [f.x, f.y] : [])])]);
   if (sig === U.panelSig || D.panel.contains(document.activeElement) && document.activeElement.matches('input')) return;
   U.panelSig = sig;
   const row = (f) => h('button', { type: 'button', class: `table-row${U.sel.has(f.id) ? ' on' : ''}`, 'aria-pressed': String(U.sel.has(f.id)),
@@ -518,10 +545,23 @@ function renderPanel() {
 function frameFields(f) {
   const name = h('input', { type: 'text', value: f.label, maxLength: 120, 'aria-label': 'Label' });
   name.addEventListener('input', () => { f.label = name.value; syncFrame(U.els.get(f.id), f, { selected: true, live: liveFrame()?.id === f.id }); });
-  name.addEventListener('change', () => { f.label = name.value.trim() || M.KIND_LABEL[f.kind]; U.panelSig = ''; renderFrames(); changed(); });
+  name.addEventListener('change', () => {
+    f.label = name.value.trim() || M.KIND_LABEL[f.kind]; U.panelSig = ''; renderFrames(); changed();
+    renameDoc(f, f.label).catch((e) => toast(`Couldn't rename its document: ${e.message}`, true));   // (the document bar and pickers show the frame's name)
+  });
+  // where it sits: typed table pixels (a locked frame stays put)
+  const num = (k) => {
+    const el = h('input', { type: 'number', inputMode: 'numeric', step: 1, value: Math.round(f[k]), 'aria-label': k.toUpperCase(), disabled: !!f.locked });
+    el.addEventListener('change', () => { if (f.locked || !Number.isFinite(+el.value)) return; f[k] = Math.round(+el.value); if (liveFrame()?.id === f.id) { const { w, h: hh } = stageSize(); setView(M.liveView(f, w, hh), { save: false }); } renderFrames(); changed(); });
+    return el;
+  };
+  const mp = mpInput(() => M.mpOf(f.w, f.h).toFixed(2), (n) => { if (n > 0) setSize(f, M.sizeForMp(f.w, f.h, n)); });
+  mp.querySelector('span').textContent = 'MP';
   return [field('Label', name),
     field('Size', h('div', { class: 'row wrap' }, h('span', { class: 'table-size' }, `${f.w}×${f.h} · ${M.mpOf(f.w, f.h).toFixed(2)} MP`),
       button('Size and MP…', () => sizeSheet(f)))),
+    f.kind !== 'note' ? mp : null,
+    h('div', { class: 'grid-2' }, field('X', num('x')), field('Y', num('y'))),
     toggle('Locked', !!f.locked, (on) => setLocked([f], on)),
     h('div', { class: 'row wrap' }, f.kind !== 'note' ? button('Open', () => goLive(f), { cls: 'small primary' }) : null,
       button('Duplicate', () => duplicateFrames(new Set([f.id]))),
@@ -550,7 +590,7 @@ function buildBar() {
 // ---------------------------------------------------------------------------
 function wire() {
   U.wired = true;
-  D.tab = $('#tab-table'); D.panel = $('#tablePanel');
+  D.tab = $('#tab-table'); D.panel = sidebar.pane('frame');
   D.stage = D.tab.querySelector('.table-stage');
   D.frames = h('div', { class: 'table-frames' });
   D.handles = h('div', { class: 'table-handles' });
@@ -579,6 +619,11 @@ function wire() {
     clearTimeout(stillT); stillT = setTimeout(() => refreshStills([kind]), 300);
   });
   onProject(() => { unlive(); if (U.mode === 'local' || !U.mode) startStore(); });
+  // a result waiting for an image frame's document (imagetools.js keeps them in deck.imagetools.owed): its badge follows
+  let owedT = 0;
+  const owedSoon = () => { clearTimeout(owedT); owedT = setTimeout(renderFrames, 200); };
+  onServer('deck_generation', owedSoon);
+  addEventListener('storage', (e) => { if (e.key === 'deck.imagetools.owed') owedSoon(); });
 }
 
 // The Table screen comes on: wire it the first time, load the table, and show it. Coming back to it while a frame is

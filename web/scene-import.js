@@ -15,7 +15,7 @@ import { inputUrl, thumbUrl } from './core.js';
 import { C, OBJ as OBJ_CH, R, SC, current, frames, matchSceneTo, newObject, namesFor, sampleChan, save, selItem, setKey, write } from './scene-data.js';
 import { heightOf as figureHeight } from './figure.js';
 import { addModeSection } from './scene-modes.js';
-import { LOADERS, SPLAT_PASS, activeCamera, boxEditing, boxHost, levelBox, refresh, setBoxEdit, setFloor, controls, changed, draw, fit, lookThrough, passHooks, pose, recentre, renderer, scene, select } from './scene-view.js';
+import { SCN, LOADERS, SPLAT_PASS, activeCamera, boxEditing, boxHost, levelBox, refresh, setBoxEdit, setFloor, controls, changed, draw, fit, lookThrough, passHooks, pose, recentre, renderer, scene, select } from './scene-view.js';
 import { LIBRARY } from './scene-library.js';
 import { askHeight } from './scene-scale.js';
 import { baseOf, fitForHeight, fmtLen, importFit, unitToMetres } from './scale-math.js';
@@ -1135,7 +1135,7 @@ export const importButton = (cls = 'small primary') => button('📦 Import model
 export function registerImport({ newTab }) {
   hostNewTab = newTab;
   // files dropped on the 3D view come in as layers, like the chooser's
-  const view = document.getElementById('sceneViewer');
+  const view = SCN.viewer;
   if (view) {
     const files = (e) => e.dataTransfer?.types?.includes('Files');
     view.addEventListener('dragover', (e) => { if (files(e)) e.preventDefault(); });

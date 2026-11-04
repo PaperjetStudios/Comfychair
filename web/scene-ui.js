@@ -14,7 +14,7 @@ import { rigProps } from './scene-rig.js';
 import { boneProps } from './scene-skin.js';
 import {
   HAND, addObject, aimCameraAt, axesToView, camGizmo, cameraFromView, canPivot, canTurnAxes, faceCamera, lookAtLayer, originMode, turnAxesBy, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, makeSplatHere, newCameraPose, orientLabel,
-  originEditing, originTo, boxHost, setBoxEdit, pivotMoved, pivotToView, pose, putOrigin, rebuildRoom, recentre, refresh, removeLayer, removeSelected, resetPivot, select, selectJoint, setFree, setMode, setOrient, setOriginEdit, syncMeshes, viewer
+  originEditing, originTo, boxHost, setBoxEdit, pivotMoved, pivotToView, pose, putOrigin, rebuildRoom, recentre, refresh, removeLayer, removeSelected, resetPivot, select, selectJoint, setFree, setMode, setOrient, setOriginEdit, syncMeshes, viewer, SCN
 } from './scene-view.js';
 import { ORIENTS, nextOrient } from './gizmo-orient.js';
 import { drawnScale } from './origin-math.js';
@@ -574,7 +574,7 @@ function renderModes() {
 
 // the panel: the mode's own contents, then whatever has been plugged into that mode (addModeSection)
 export function renderPanel() {
-  const body = $('#sceneBody');
+  const body = SCN.body;
   if (!body || !SC) return;
   const def = modeOf();
   body.replaceChildren(h('div', { class: 'panel-body' }, def.panel(), modeSections(def.key).map((build) => build()), def.out?.()));
@@ -645,7 +645,7 @@ export function buildToolbar() {
       onclick: () => { R.viewCut = !R.viewCut; store.set('deck.scene.viewcut', R.viewCut); pose(R.f); draw(); renderToolbar(); } }, 'Cut'),
     h('button', { type: 'button', class: 'ico', 'data-overlays': '', 'aria-label': 'Overlays', title: 'Overlays: depth, reference picture, scale person',
       onclick: (e) => overlayMenu(e.currentTarget) }, icon('contrast'))));
-  wirePip({ viewer, canvas: $('#sceneCanvas'), draw, aspect: () => SC.width / SC.height });
+  wirePip({ viewer, canvas: SCN.canvas, draw, aspect: () => SC.width / SC.height });
   viewer.append(h('button', { type: 'button', class: 'max-btn hud-btn', id: 'sceneHud', onclick: () => setHud(!hudOff()) }));
   setHud(hudOff());
   // Undo / Redo: the app's dock (undo-dock.js), in the top bar and over the full-screen view
@@ -692,7 +692,7 @@ const HUD = 'deck.scene.hudOff';
 const hudOff = () => store.get(HUD, false) === true;
 function setHud(off) {
   store.set(HUD, !!off);
-  $('#tab-scene').classList.toggle('hud-off', !!off);
+  SCN.host.classList.toggle('hud-off', !!off);
   const b = $('#sceneHud');
   if (b) {
     b.replaceChildren(icon(off ? 'eye' : 'eyeoff'));
@@ -701,15 +701,21 @@ function setHud(off) {
   }
 }
 
+// the engine moved to another host (scene.js mountScene): the HUD's state goes with it
+export function syncHud(was) {
+  if (was && was !== SCN.host) was.classList.remove('hud-off');
+  setHud(hudOff());
+}
+
 export function wireKeys() {
   wireSheetKeys();
   // the panel's sliders, number boxes and buttons while it plays: held over the keys from touch to letting go
   // (a moment after, so the slider's change and the button's click are part of the hold)
-  document.addEventListener('pointerdown', (e) => { if (e.target.closest?.('#sceneBody')) holdStart('panel'); }, true);
+  document.addEventListener('pointerdown', (e) => { if (SCN.body?.contains(e.target)) holdStart('panel'); }, true);
   const up = () => setTimeout(() => letGo('panel'));
   addEventListener('pointerup', up, true); addEventListener('pointercancel', up, true);
   document.addEventListener('keydown', (e) => {
-    if (!$('#tab-scene').classList.contains('active') || sheetOpen()
+    if (!SCN.active() || sheetOpen()
       || e.target.closest('input, textarea, select')) return;
     if (e.ctrlKey || e.metaKey) {
       const k = e.key.toLowerCase();
@@ -723,9 +729,13 @@ export function wireKeys() {
     else if (e.key.toLowerCase() === 'k') { e.preventDefault(); setAutoKey(!R.autoKey); }
     else if (e.key.toLowerCase() === 'v') { e.preventDefault(); toggleFree(); }
     else if (e.key.toLowerCase() === 'h') { e.preventDefault(); setHud(!hudOff()); }
-    else if (e.key.toLowerCase() === 'n') { const p = $('#tab-scene .stage.maxed .pull-tab'); if (p) { e.preventDefault(); p.dispatchEvent(new MouseEvent('click', { bubbles: true })); } }
+    else if (e.key.toLowerCase() === 'n') { const p = SCN.host.querySelector('.stage.maxed .pull-tab'); if (p) { e.preventDefault(); p.dispatchEvent(new MouseEvent('click', { bubbles: true })); } }
     else if (e.key.toLowerCase() === 'q') { e.preventDefault(); setOrient(nextOrient(R.orient)); toast(`Gizmo axes: ${orientLabel()}`); }
-    else if (e.key === 'Escape') { if (HAND.on) handMode(null); else if (R.boxEdit && R.boxEdit === R.sel) setBoxEdit(false); else if (originEditing()) setOriginEdit(false); else if (R.joint) selectJoint(null); else select(null); }
+    else if (e.key === 'Escape') {   // (marked handled when it let go of something: a table's Esc then leaves the frame live)
+      const used = HAND.on || (R.boxEdit && R.boxEdit === R.sel) || originEditing() || !!R.joint || R.sel != null;
+      if (HAND.on) handMode(null); else if (R.boxEdit && R.boxEdit === R.sel) setBoxEdit(false); else if (originEditing()) setOriginEdit(false); else if (R.joint) selectJoint(null); else select(null);
+      if (used) e.preventDefault();
+    }
     else if ((e.key === 'Delete' || e.key === 'Backspace') && R.sel) { e.preventDefault(); removeSelected(); }
     else if (e.key === ' ') { e.preventDefault(); play(); }
     else if (e.key.toLowerCase() === 'p') { e.preventDefault(); stopPlay(); seek(AREA.stored()?.a ?? 0); play(); }   // from the start of the range

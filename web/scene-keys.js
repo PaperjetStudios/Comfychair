@@ -9,7 +9,7 @@ import {
 import {
   CURVES, EASES, allKeys, bounds, copy, handleOf, isScalar, kindOf, moveBy, moveHandle, paste, prune, quatDeg, reduceKeys, remove, restore, scaleAround, setBroken, setChan, setEase, snapshot, track
 } from './keys.js';
-import { changed, draw, pose, select } from './scene-view.js';
+import { SCN, changed, draw, pose, sceneStage, select } from './scene-view.js';
 import { busy, play, seek, stopPlay } from './scene-export.js';
 import { newLength, setAutoKey } from './scene-ui.js';
 import { modeOf } from './scene-modes.js';
@@ -188,7 +188,7 @@ function ruler() {
 const HINTS = { dope: 'Double-tap a row to add a key there', graph: 'Double-tap the graph to add a point at that height' };
 function hintOnce() {  // said once per device, the first time each view is shown
   const seen = store.get('deck.scene.keyhints', {});
-  if (seen[UI.mode] || !$('#tab-scene')?.classList.contains('active')) return;
+  if (seen[UI.mode] || !SCN.active()) return;
   seen[UI.mode] = true; store.set('deck.scene.keyhints', seen); toast(HINTS[UI.mode]);
 }
 let gRange = null;   // the graph's value range, held still while a key is dragged
@@ -926,7 +926,7 @@ function grip() {
   let d = null;
   const mv = (e) => {
     if (!d) return;
-    const max = Math.max(160, ($('#tab-scene .stage')?.clientHeight || 600) * 0.55);
+    const max = Math.max(160, (sceneStage()?.clientHeight || 600) * 0.55);
     applySheetH(Math.round(Math.max(72, Math.min(max, d.h - (e.clientY - d.y)))));
     renderKeys();
   };
@@ -976,7 +976,7 @@ export function renderTransport() {
   lanes.addEventListener('pointercancel', cancel);
   lanes.addEventListener('wheel', wheel, { passive: false });
   G0 = null; ptrs.clear();
-  $('#sceneTransport').replaceChildren(
+  SCN.transport.replaceChildren(
     h('div', { class: 'key-head' }, h('div', { class: 'row scene-keybar' },
       button('⚙', () => { const on = !store.get(TK, true); store.set(TK, on); applyTools(on); }, { id: 'sceneToolsBtn', cls: 'small kt', title: 'Show or hide the key tools', 'aria-label': 'Key tools' }),
       h('span', { class: 'tp-btns' },
@@ -1004,21 +1004,39 @@ export function renderTransport() {
     grip(),
     h('div', { id: 'sceneSheet', class: 'scene-sheet' }, h('div', { id: 'sceneNames', class: 'sheet-names' }), lanes));
   applySheetH(); applyTools();
-  $('#sceneTransport').classList.toggle('hidden', modeOf().lanes === 'none');
+  SCN.transport.classList.toggle('hidden', modeOf().lanes === 'none');
   renderTime(); renderKeys();
 }
 
 // ---- the 3D viewport, full screen: the shared full screen (layout.js fullScreen, the panel pulls out) --------
-const stage = () => $('#tab-scene .stage');
-let sceneMax = null;
-export const maxBar = () => (sceneMax ||= fullScreen($('#tab-scene'), { viewer: $('#sceneViewer'), title: 'Full screen the 3D view' })).btn;
+// One per host (the 3D tab, each 3D frame): its pull tab sits in that host's .stage; its button is in the viewer while
+// the engine is mounted there (syncMaxBar swaps it when the engine moves).
+const stage = () => sceneStage();
+// A host mounted without full screen (a frame on a table: a fixed stage inside the table's transformed layer has no
+// size) gets a hidden stand-in, so F and the button do nothing there.
+const FULLS = new WeakMap();   // host -> its full screen
+const noFull = { btn: h('button', { type: 'button', class: 'max-btn hidden', 'aria-hidden': 'true', tabIndex: -1 }), exit: () => {} };
+const fullOf = (host) => {
+  if (!SCN.full) return noFull;
+  if (!FULLS.has(host)) FULLS.set(host, fullScreen(host, { viewer: SCN.viewer, title: 'Full screen the 3D view' }));
+  return FULLS.get(host);
+};
+export const maxBar = () => fullOf(SCN.host).btn;
+// the engine moved from host `was` (scene.js mountScene): that one leaves full screen and its button goes for this host's
+export function syncMaxBar(was) {
+  if (!was || was === SCN.host) return;
+  const old = FULLS.get(was) || noFull;
+  old.exit();
+  const btn = maxBar();
+  if (old.btn !== btn && old.btn.isConnected) old.btn.replaceWith(btn);
+}
 
 // ---- the keyboard (the sheet, when it was the last thing touched) ---------------------------------
 let focus = false;
 export function wireSheetKeys() {
-  document.addEventListener('pointerdown', (e) => { focus = !!e.target.closest('#sceneTransport'); }, true);
+  document.addEventListener('pointerdown', (e) => { focus = !!SCN.transport?.contains(e.target); }, true);
   document.addEventListener('keydown', (e) => {
-    if (!$('#tab-scene').classList.contains('active') || sheetOpen() || e.target.closest('input, textarea, select')) return;
+    if (!SCN.active() || sheetOpen() || e.target.closest('input, textarea, select')) return;
     const k = e.key.toLowerCase(), eat = () => { e.preventDefault(); e.stopImmediatePropagation(); };
     const range = AREA.keyFn(e);   // the work area, wherever the 3D tab has the keys: I / O at the playhead, Shift+I / Shift+O go to them, Alt+X clears
     if (range) { eat(); if (e.shiftKey) stopPlay(); range(); return; }

@@ -11,7 +11,7 @@
 import { $, h, api, toast, undoToast, openSheet, closeSheet, nameSheet, sheetOpen, button, actions, store, uid, clone , help, toggle } from './ui.js';
 import { S, onServer, onProject } from './core.js';
 import { TabSet } from './tabs.js';
-import { hooks, installState, mainPromptKey, persist, renderFields, stateKey } from './generate.js';
+import { fieldScope, fieldTarget, hooks, installState, mainPromptKey, persist, renderFields, stateKey } from './generate.js';
 
 const SHOT_KINDS = new Set(['image', 'video', 'boxes', 'seed', 'mask']);   // content of one run, not a setting
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -145,7 +145,7 @@ function carry(oldT, oldVals, oldState, t) {
 }
 function pick(id, over) {
   const t = tplById(id);
-  if (!t || !tabs.active) { if (S.tpl) $('#tplSel').value = S.tpl.id; return; }
+  if (!t || !(tabs.active || lent)) { if (S.tpl) $('#tplSel').value = S.tpl.id; return; }
   if (S.tpl && id === S.tpl.id) {   // same template ("reuse these settings"): lay the values over this tab
     if (!over) return;
     for (const [k, v] of Object.entries(over)) if (k in S.values) S.values[k] = v;
@@ -178,17 +178,58 @@ const keepBtn = toggle('Keep the prompt and pictures when the template changes',
 keepBtn.classList.add('keep-toggle');
 keepBtn.title = 'On: a new template keeps the prompt, negative prompt, pictures, size and a fixed seed. Off: the tab starts fresh.';
 $('.tpl-row:not(.tpl-filter)').after(keepBtn);
+// While the fields are lent (below), the tab strip sees the open tab as it was: what it saves, and what it loads, is that
 export const tabs = new TabSet({ kind: 'gen-tabs', host: $('#tab-generate'), scope: 'project', newName: (n) => `Tab ${n}`,
-  adapter: { empty, load, dump, migrate: (p) => (p && p.v === 1 && p.template ? p : empty()) }, seed, onSwitch: () => updatePicker() });
+  adapter: { empty, load: (p) => (lent ? (lent.home = p) : load(p)), dump: () => (lent ? lent.home : dump()),
+    migrate: (p) => (p && p.v === 1 && p.template ? p : empty()) }, seed, onSwitch: () => updatePicker() });
+
+// ---- lent: another panel shows its own settings in these fields (the table's Make panel: one set per frame) ----
+// borrow(payload, { save, target }): the open tab is saved and set aside, payload (a tab's shape, or null for a fresh one
+// of template `template`) is shown in target (generate.js renderFields), and every edit calls save(payload).
+// giveBack() puts the open tab back. Presets, Keep prompt and the prompt builder work as in a tab.
+let lent = null;   // { home: the open tab's payload, save }
+export const lentOut = () => !!lent;
+export async function borrow(payload, { save, target, template = null }) {
+  if (!lent) {
+    if (tabs.active) await tabs.flush();
+    lent = { home: tabs.active && S.tpl ? dump() : null, save };
+  }
+  lent.save = save;
+  const t = tplById(payload?.template) || tplById(template) || S.tpl || S.templates[0];
+  if (!t) return;
+  fieldTarget(target);
+  lent.quiet = true;
+  try { load(payload?.template ? payload : { v: 1, template: t.id, presetId: null, overrides: {}, builder: null }); } finally { lent.quiet = false; }
+}
+export function giveBack() {
+  if (!lent) return;
+  const home = lent.home;
+  lent = null;
+  fieldTarget(null);
+  if (home) load(home); else if (S.tpl) renderFields();
+  updatePicker();
+}
 const baseStart = tabs.start.bind(tabs);
 tabs.start = async () => { await loadPresets(); return baseStart(); };   // presets first: the tab's values depend on them
 
 hooks.templatesLoaded = () => {
+  if (lent) {   // (the open tab loads into lent.home, and is shown when it comes back)
+    const p = dump(); lent.quiet = true; try { load(p); } finally { lent.quiet = false; }
+    if (!tabs.started) tabs.start();
+    return;
+  }
   if (tabs.started && tabs.active) { const p = dump(); load(p); updatePicker(); } else tabs.start();   // a reload of the templates re-reads the tab against them
 };
 hooks.pick = pick;
 hooks.flush = () => tabs.flush();
 hooks.edited = () => {
+  if (lent) {
+    if (lent.quiet || !S.tpl) return;
+    cur.overrides = diff();
+    lent.save(dump());
+    decorate();
+    return;
+  }
   if (!tabs.active || tabs.loading || !S.tpl) return;
   cur.overrides = diff();
   tabs.changed();
@@ -214,7 +255,7 @@ const pairKeys = (t, f) => {   // width and height are one control
   return q ? [f.key, q.key] : [f.key];
 };
 function decorate() {
-  const root = $('#tab-generate');   // (the sidebar's fields and the pane over the viewer)
+  const root = fieldScope();   // (the sidebar's fields and the pane over the viewer, or the panel they are lent to)
   if (!root || !S.tpl) return;
   root.querySelectorAll('.ovr-btn').forEach((b) => b.remove());
   root.querySelectorAll('.field.ovr').forEach((e) => e.classList.remove('ovr'));
@@ -383,7 +424,7 @@ async function countUsers(id) {
   return n;
 }
 
-const typing = () => !!document.activeElement?.closest?.('#fields, .basics-pane') || sheetOpen();
+const typing = () => !!document.activeElement?.closest?.('#fields, .basics-pane, .make-fields') || sheetOpen();
 let idle = 0;
 function redrawWhenIdle() {
   clearTimeout(idle);
@@ -409,3 +450,6 @@ onServer('store', (m) => {
 });
 onServer('ws_open', () => { if (tabs.started) loadPresets(); });
 onProject(() => { presets.clear(); seen.clear(); });
+
+// The table's Make panel borrows these fields (above); it wires itself to the table and the sidebar once loaded
+import('./make-panel.js').catch((e) => console.error('Make panel:', e));

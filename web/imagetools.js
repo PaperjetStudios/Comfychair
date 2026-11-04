@@ -1,5 +1,5 @@
 import { h, api, store, toast, busy, button, runBar, chip, choiceField, section, field, rangeField, seedField, seg, hint, help, toggle, textArea } from './ui.js';
-import { S, inputUrl, switchTab } from './core.js';
+import { CURRENT_EDIT, S, inputUrl, switchTab } from './core.js';
 import { pngBlob, uploadImage } from './media.js';
 import { pictureForRun, pictureInput } from './picture-input.js';
 import { queueRun, template, valuesByRole, waitGen } from './make.js';
@@ -380,7 +380,7 @@ function follow(eng, o, tab, src, g, nth = 0) {
 
 // a kept run, picked up again once the edit's pictures have loaded
 async function resumeOwed(eng, rec) {
-  const o = OPS.find((x) => x.id === rec.op), tab = rec.tab;
+  const o = rec.op === MAKE_OP.id ? { ...MAKE_OP, label: rec.label || MAKE_OP.label } : OPS.find((x) => x.id === rec.op), tab = rec.tab;
   FOLLOWING.add(rec.id); FLIGHT.add(rec.id); eng.render();
   try {
     if (!o) return forgetOwed(rec.id);
@@ -398,6 +398,19 @@ async function resumeOwed(eng, rec) {
     await settle(eng, o, tab, src, done, rec.nth, true);
   } catch (e) { forgetOwed(rec.id); toast(`${o?.label || 'A tool'} failed: ${e.message}`, true); } finally { FOLLOWING.delete(rec.id); FLIGHT.delete(rec.id); eng.render(); }
 }
+
+// A run made from the table's Make panel (web/make-panel.js) for the image frame whose edit is `tab`: it lands there as a
+// new layer, followed and kept like a tool's run, so it lands when that edit next opens if it isn't open now (landOwed).
+// src: { name (the picture sent, or null), px, rect (where it goes on the canvas), copy (name is a copy made for this run) }.
+// label: the new layer's name. nth: which of a batch it is (variations go side by side); pass the same src for each.
+const MAKE_OP = { id: 'make', kind: 'make', label: 'Made' };
+export function landMade(tab, src, g, { label = MAKE_OP.label, nth = 0 } = {}) {
+  const eng = CURRENT_EDIT.eng;
+  const s = Object.assign(src, { layer: src.layer || null, was: src.was || null, mask: src.mask || null, label });   // (one object for a whole batch: its copy goes after the last)
+  if (eng) return follow(eng, { ...MAKE_OP, label }, tab, s, g, nth);
+  store.set(OWED, withOwed(owedList(), owedRecord(tab, MAKE_OP.id, s, g, nth)));   // (no editor in this page yet: it lands when one opens the edit)
+}
+export const owedTo = (tab) => owedFor(owedList(), tab);
 
 // Called when an edit opens: whatever it's still owed that nothing in this page is waiting for
 export function landOwed(eng) {

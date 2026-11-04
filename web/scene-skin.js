@@ -297,7 +297,7 @@ export function boneProps(o) {
     names.length ? field('Name', h('div', { class: 'row' },
       h('input', { type: 'text', value: SK.bone || '', 'aria-label': 'Bone name', placeholder: 'Bone name',
         onchange: (e) => renameBone(o, e.target.value) }),
-      button('Rename', () => renameBone(o, document.querySelector('#sceneBody input[aria-label="Bone name"]')?.value),
+      button('Rename', (e) => renameBone(o, e.currentTarget.closest('.row')?.querySelector('input[aria-label="Bone name"]')?.value),
         { cls: 'small', title: 'Rename this bone, and the keys it holds, in the model and in the layer' }))) : null,
     h('div', { class: 'row wrap' },
       button('Turn it', () => turn(o), { cls: 'small primary', disabled: !names.length }),

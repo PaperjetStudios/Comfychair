@@ -40,7 +40,7 @@ const V = {
 };
 
 // kind 'scene': a 3D tab live-linked as a clip (scene-comp.js); src { scene, look }, nat its natural size, dur the scene's length
-function newItem({ kind, src, url = null, label, thumb = null, dur = 0, nat = null }, track) {
+export function newItem({ kind, src, url = null, label, thumb = null, dur = 0, nat = null }, track) {
   return { id: uid(), track, kind, src, url, label, thumb, dur, ...(nat ? { nat } : {}), at: 0, in: 0, out: kind === 'image' ? 3 : dur || null,
     x: 0, y: 0, scale: 1, fit: 'fit', opacity: 1, volume: 1, fadeIn: 0, fadeOut: 0 };
 }
@@ -85,7 +85,7 @@ const ensureTabs = () => tabs.ready();
 function persistTimeline() { tabs?.changed(); }
 
 // the timeline itself (timeline.js, shared with the Sound tab): a sound clip only goes on an audio track, a picture on a video track
-const TL = timeline(V, { el: '#timeline', headW: HEAD_W, minLen: MIN_LEN, zoom: [4, 400], ppsKey: 'deck.video.pps',
+const TL = timeline(V, { el: () => VD.timeline, headW: HEAD_W, minLen: MIN_LEN, zoom: [4, 400], ppsKey: 'deck.video.pps',
   pause: () => vidPause(), seek: (t) => vidSeek(t), showTime: () => { vtp?.update(); refreshKeyed(VD.panel); },
   changed: () => timelineChanged(), dragged: () => { renderTimeline(); syncMedia(); requestDraw(); }, rendered: () => renderTimeline(),
   selected: () => renderVideoPanel(), deselected: () => { renderTimeline(); renderVideoPanel(); },
@@ -1448,6 +1448,7 @@ function wireDrop(tab, signal) {   // (the listeners go when the mount's signal 
 export function wireVideoTransport() {
   mountVideo({ host: $('#tab-video'), canvas: $('#vidCanvas'), empty: $('#vidEmpty'), transport: $('#tab-video .stage > .transport'),
     panel: $('#videoPanel'), body: h('div', { id: 'vidBody' }), tlTools: $('#tlTools'), timeline: $('#timeline') });
+  $('#vidCanvas').classList.add('vid-canvas');
 }
 
 // Mount the engine into a host: { host, canvas, empty, transport (a slot the bar takes), panel, tlTools, timeline } and optionally stage
@@ -1456,7 +1457,7 @@ export function wireVideoTransport() {
 let mounted = null;   // the current mount's AbortController: its listeners go when another host mounts
 const FULLS = new WeakMap();   // host -> its full screen (layout.js adds the pull tab to the stage once per host)
 export function mountVideo({ host, stage = host.querySelector('.stage'), canvas, viewer = canvas.parentElement, empty, transport: bar,
-  panel, tlTools, timeline: tl, body = h('div'), active = () => host.classList.contains('active') }) {
+  panel, tlTools, timeline: tl, body = h('div'), active = () => host.classList.contains('active'), fullscreen = true }) {
   if (VD.host === host) return;
   mounted?.abort();
   mounted = new AbortController();
@@ -1472,9 +1473,10 @@ export function mountVideo({ host, stage = host.querySelector('.stage'), canvas,
   placeGizmo(viewer);
   if (vzoomed()) setView(VZ.z, VZ.tx, VZ.ty);   // (the zoom moves to the new canvas)
   wireDrop(host, mounted.signal);
-  if (!FULLS.has(host)) FULLS.set(host, fullScreen(host, { onChange: () => requestDraw() }));
-  vidMax = FULLS.get(host);
+  if (fullscreen && !FULLS.has(host)) FULLS.set(host, fullScreen(host, { onChange: () => requestDraw() }));
+  vidMax = FULLS.get(host) || null;   // (a frame on the table has the table's own full screen)
   tlTools.replaceChildren(...timelineTools());
+  TL.wire();   // (this host's timeline element; once per element)
   if (again) renderVideo();   // (the first mount draws once the tab loads)
 }
 
@@ -1489,7 +1491,6 @@ function wireOnce() {
   vtp = transport({ playing: () => V.playing, play: vidPlay, pause: vidPause, seek: vidSeek, t: () => V.t, len: seqEnd },
     { step: { by: () => 1 / fpsNow(), label: 'one frame' }, fps: fpsNow, loop: { get: () => V.loop, set: (on) => { V.loop = on; store.set('deck.video.loop', on); } },
       area: WA, keys: keyJumps(() => clipKeyTimes(TL, TL.selItem() ? [TL.selItem()] : V.items)), extra: [button('📷 Save frame', snapshotFrame, { title: 'Save this frame as an image' }), VD.load] });
-  TL.wire();
   // Premiere-ish keys while the Video engine is on show (playback.js: Space, arrows, Home / End)
   playKeys(() => VD.active(), () => vtp, () => ({
     s: TL.split, c: TL.split, f: toggleVideoFullscreen,
@@ -1506,6 +1507,12 @@ const timelineTools = () => [
   iconBtn('Zoom out', '−', () => TL.zoom(V.pps / 1.5)),
   button('Fit', TL.fit),
   iconBtn('Zoom in', '+', () => TL.zoom(V.pps * 1.5))];
+
+// The sequence size, as the Sequence section sets it (a frame on the table brings its own width and height)
+export function setSequenceSize(w, h) {
+  if (V.size && V.size[0] === w && V.size[1] === h) return;
+  V.size = [w, h]; timelineChanged();
+}
 
 // the open video edits (tabs.js), for a frame to switch to its own
 export const videoTabs = () => tabs;

@@ -8,6 +8,7 @@ import { BLANK } from './editor-engine.js';
 import { uploadImage, uploadMedia } from './media.js';
 import { dropKind } from './drop-files.js';
 import { DOC_KIND, KIND_LABEL, newFrame } from './table-model.js';
+import { owedFor } from './owed-runs.js';
 
 export const KIND_ICON = { image: 'image', video: 'film', scene: 'cube', sound: 'sound', note: 'text' };
 const SOUND_SIZE = { w: 1024, h: 256 };   // a sound frame is a strip: its waveform, not a picture
@@ -46,6 +47,44 @@ export async function copyDoc(frame, label) {
 export const trashDoc = (f) => (f.doc ? api(docUrl(f.kind, f.doc), { method: 'DELETE', busy: false }).catch((e) => { if (!/not found/i.test(e.message)) throw e; }) : Promise.resolve());
 export const restoreDoc = (f) => (f.doc ? api(docUrl(f.kind, f.doc, '/restore'), { method: 'POST', busy: false }) : Promise.resolve());
 
+// The screen's TabSet for a frame kind (each kind has one, and its open document must be renamed through it, or its next
+// save meets a newer rev). The modules are loaded already (app.js); import() just hands them over.
+const TABSET = {
+  image: () => import('./editor.js').then((m) => m.editTabs()),
+  video: () => import('./video.js').then((m) => m.videoTabs()),
+  sound: () => import('./sound.js').then((m) => m.soundTabs()),
+};
+// A frame's label is its document's name: through its kind's TabSet when that has it open, else a name-only PUT at its rev
+// (one retry when another save moved the rev meanwhile)
+export async function renameDoc(f, name) {
+  if (!f.doc || !DOC_KIND[f.kind]) return;
+  name = String(name).slice(0, 120);
+  const t = await TABSET[f.kind]?.().catch(() => null);
+  if (t?.active?.id === f.doc) {
+    if (t.active.name === name) return;
+    t.pendingName = name; t.active.name = name;
+    t.setDirty(true); t.render();
+    await t.flush();
+    return;
+  }
+  for (let i = 0; i < 2; i++) {
+    const d = await api(docUrl(f.kind, f.doc), { busy: false });
+    if (d.name === name) return;
+    const r = await fetch(docUrl(f.kind, f.doc), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rev: d.rev, name }) });
+    if (r.ok) return;
+    if (r.status !== 409) throw new Error(`the server said ${r.status}`);
+  }
+  throw new Error('it was being saved elsewhere');
+}
+
+// ---- results waiting: runs imagetools.js still owes an edit (deck.imagetools.owed), counted per document id ----
+export function owedCounts() {
+  const list = store.get('deck.imagetools.owed', []), out = new Map();
+  if (!Array.isArray(list)) return out;
+  for (const tab of new Set(list.map((r) => r?.tab).filter(Boolean))) out.set(tab, owedFor(list, tab).length);
+  return out;
+}
+
 // ---- stills: each document kind's list rows carry their still ({ url }) ----
 const STILLS = new Map();   // 'kind:id' -> url
 export const stillOf = (f) => (f.doc ? STILLS.get(`${f.kind}:${f.doc}`) || null : null);
@@ -73,13 +112,16 @@ export function frameEl(f, { onText }) {
   } else {
     body.append(h('img', { class: 'frame-still hidden', alt: '', draggable: false }),
       h('div', { class: 'frame-ph' }, icon(KIND_ICON[f.kind], 40), h('span', {}, KIND_LABEL[f.kind])));
+
   }
+  const badge = h('span', { class: 'frame-owed hidden', role: 'status' });   // (in the label bar, so a live frame's engine never covers it)
   return h('div', { class: `frame frame-${f.kind}`, 'data-id': f.id, role: 'group' },
-    h('div', { class: 'frame-label' }, icon(KIND_ICON[f.kind]), name, size), body);
+    h('div', { class: 'frame-label' }, icon(KIND_ICON[f.kind]), name, size, badge), body);
 }
 
 // bring an element up to its frame: where it sits, its label, its still, and its state
-export function syncFrame(el, f, { selected = false, live = false } = {}) {
+// owed: how many results are waiting to land in it (they land when it next goes live)
+export function syncFrame(el, f, { selected = false, live = false, owed = 0 } = {}) {
   Object.assign(el.style, { left: `${f.x}px`, top: `${f.y}px`, width: `${f.w}px`, height: `${f.h}px` });
   el.querySelector('.frame-name').textContent = f.label || KIND_LABEL[f.kind];
   el.querySelector('.frame-size').textContent = `${f.w}×${f.h}`;
@@ -87,6 +129,12 @@ export function syncFrame(el, f, { selected = false, live = false } = {}) {
   el.classList.toggle('selected', selected);
   el.classList.toggle('locked', !!f.locked);
   el.classList.toggle('live', live);
+  const badge = el.querySelector('.frame-owed');
+  if (badge) {
+    badge.classList.toggle('hidden', !owed);
+    badge.textContent = owed ? `${owed} waiting` : '';
+    badge.title = owed ? `${owed} result${owed > 1 ? 's' : ''} waiting: open the frame to land ${owed > 1 ? 'them' : 'it'}` : '';
+  }
   const img = el.querySelector('.frame-still');
   if (img) {
     const url = stillOf(f) || f.preview || null;   // (preview: the picture a frame was made from, until its document has a still)

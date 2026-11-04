@@ -366,6 +366,24 @@ export async function clayBlob() {
   R.depth = wasDepth;
   return blob;
 }
+// The shot camera's view at the playhead, at the output size, as a PNG Blob: a 3D frame's still on the table. Drawn
+// as it shows (not clay), without the view's tools. The pixels are read before the first await, so the caller can move
+// the engine away straight after calling. null when the scene has nothing in it.
+export async function sceneStill() {
+  if (!renderer || (!SC.objects.length && !SC.room)) return null;
+  const W = SC.width, H = SC.height, wasDepth = R.depth;
+  const rt = new THREE.WebGLRenderTarget(W, H, { colorSpace: THREE.SRGBColorSpace });
+  let png;
+  try {
+    R.depth = false;
+    draw('still');   // (the grid, gizmo, frustum and dots go; draw renders nothing itself for a render)
+    camera.aspect = W / H; camera.updateProjectionMatrix();
+    renderer.setRenderTarget(rt); renderer.render(scene, camera); renderer.setRenderTarget(null);
+    png = targetToBlob(rt, W, H, false);   // (reads the pixels at once)
+  } finally { rt.dispose(); R.depth = wasDepth; fit(); }
+  return png;
+}
+
 // One depth or pose picture of the frame at the playhead, kept as an input picture (like Save frame): to use as a
 // reference picture in Generate and the Editor. Depth is from the 3D shapes and the splats' dots (splat-depth.js).
 export async function saveStill(kind) {

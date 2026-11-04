@@ -1,4 +1,5 @@
 import { $, iconBtn, h } from './ui.js';
+import { isLive, liveFrame, onLive } from './live.js';
 
 // ---------------------------------------------------------------------------
 // Undo / Redo for whichever tab is open, in one place: the top bar, and floating at the top of a full-screen view.
@@ -9,7 +10,10 @@ import { $, iconBtn, h } from './ui.js';
 // ---------------------------------------------------------------------------
 const REG = new Map();
 let dock = null, undoB = null, redoB = null;
-const activeTab = () => document.querySelector('main > .tab.active')?.id?.replace(/^tab-/, '') || '';
+// (a live frame on the table: its engine's history, by the key that engine registered under)
+const LIVE_KEY = { image: 'editor', video: 'video', sound: 'sound', scene: 'scene' };
+const activeTab = () => (isLive() ? LIVE_KEY[liveFrame().kind] || liveFrame().kind
+  : document.querySelector('main > .tab.active')?.id?.replace(/^tab-/, '') || '');
 const now = () => REG.get(activeTab()) || null;
 
 export function registerUndo(tab, u) { REG.set(tab, u); syncUndo(); }
@@ -35,5 +39,6 @@ export function wireUndoDock() {
   for (const ev of ['pointerup', 'keyup']) addEventListener(ev, () => setTimeout(syncUndo), true);
   const mo = new MutationObserver(syncUndo);
   for (const t of document.querySelectorAll('main > .tab')) mo.observe(t, { attributes: true, attributeFilter: ['class'] });
+  onLive(() => syncUndo());
   syncUndo();
 }

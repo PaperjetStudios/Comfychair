@@ -1,3 +1,4 @@
+import './shelf.js';   // (the Table's Shelf wires itself)
 import {
   $, h, store, api, toast, undoToast, overlayOpened, overlayClosed, sheetOpen, button, iconBtn, linkBtn, seg, placeholder,
   numSlider, field, section, hint, openSheet, closeSheet, icon, iconize, setIcon,
@@ -31,7 +32,7 @@ const boardVideos = new IntersectionObserver((entries) => {
   }
 }, { threshold: 0.25 });
 
-async function loadAllProjectGenerations() {
+export async function loadAllProjectGenerations() {
   let before = null;
   for (let page = 0; page < 20; page++) {
     const rows = await api(`/api/generations?limit=200${S.project != null ? `&project_id=${S.project}` : ''}${before ? `&before=${before}` : ''}`);
@@ -41,7 +42,7 @@ async function loadAllProjectGenerations() {
   }
   B.loadedFor = S.project;
 }
-async function loadAttached() {
+export async function loadAttached() {
   try { B.attached = new Map(Object.entries(await api('/api/generations/attached', { busy: false })).map(([k, v]) => [Number(k), v])); }
   catch { /* offline: the server still refuses, and says why */ }
 }
@@ -55,7 +56,7 @@ function openOwner(o) {
   switchTab(OWNER_TAB[o.kind] || 'board');
   if (o.kind === 'characters') import('./story.js').then((m) => m.openCharacterView?.(o.id));
 }
-const usedBadge = (g) => {
+export const usedBadge = (g) => {
   const owners = B.attached.get(g.id);
   return owners ? h('span', { class: 'tile-used', title: `In use: ${usedText(owners)}`, 'aria-label': `In use: ${usedText(owners)}` }, icon('link')) : null;
 };
@@ -116,7 +117,7 @@ export async function renderBoard() {
 
 // what the board shows with the current filter, newest first: [{g, o, i, key}]
 // a filter's kinds: 3D is models and splats; every kind the app makes is on the board (not plain files)
-const FILTER_KINDS = { image: ['image'], video: ['video'], audio: ['audio'], motion: ['motion'], '3d': ['mesh', 'splat'] };
+export const FILTER_KINDS = { image: ['image'], video: ['video'], audio: ['audio'], motion: ['motion'], '3d': ['mesh', 'splat'] };
 function boardItems() {
   const items = [];
   const gens = [...S.history.values()].filter((g) => g.project_id === S.project && g.status === 'done').sort((a, b) => b.id - a.id);
@@ -139,10 +140,10 @@ function boardItems() {
 }
 
 // ---- dates: the board in day folders, and a date and time range to narrow it
-const genTime = (g) => g.finished || g.created || 0;
-const dayKey = (t) => { const d = new Date(t * 1000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+export const genTime = (g) => g.finished || g.created || 0;
+export const dayKey = (t) => { const d = new Date(t * 1000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 const dayStart = (key) => new Date(`${key}T00:00:00`).getTime() / 1000;
-function dayName(key) {
+export function dayName(key) {
   const today = dayKey(Date.now() / 1000), yest = dayKey(Date.now() / 1000 - 86400);
   if (key === today) return 'Today';
   if (key === yest) return 'Yesterday';
