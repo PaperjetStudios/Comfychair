@@ -213,6 +213,50 @@ export function clipUrl(v) {
 }
 // where a timeline item (video.js / sound.js items[]) plays: its source's current url, else the one it was saved with
 export const itemUrl = (it) => (it ? clipUrl(it.src) || it.url || null : null);
+// ---- grab a frame: a still of a clip, into the inputs ----
+// what: a video frame on a table (its first clip: frame-source.js frameClip), or a clip source ({generation, index} |
+// {media}, optional trim {start, len}, or with its url). at: seconds in the clip's own time; its in point when not given.
+// Resolves the input's name (also as grabFrame.last = { name, width, height, at, label } for whoever wants the size).
+export async function grabFrame(what, { at = null, mp = 0 } = {}) {
+  let src = what, label = what?.label || '';
+  if (what?.kind && what.id != null && !('generation' in what) && !('media' in what)) {   // (a table frame)
+    const { frameClip } = await import('./frame-source.js');
+    const c = await frameClip(what);
+    if (!c) throw new Error(`${what.label || 'That frame'} has no clip yet`);
+    src = c.src || c; label = what.label || c.label || label;
+  }
+  let url = src.url || clipUrl(src);
+  if (!url && src.generation != null) {
+    const g = await api(`/api/generations/${src.generation}`, { busy: false });
+    S.history.set(g.id, g);
+    url = g.outputs?.[src.index || 0]?.url;
+  }
+  if (!url) throw new Error('That clip can\'t be played here');
+  const t = Math.max(0, at ?? src.trim?.start ?? 0);
+  const blob = await stillAt(url, t);
+  const r = await uploadImage(blob, { mp, source: 'grab', filename: 'frame.png', multiple: 1 });
+  grabFrame.last = { name: r.name, width: r.width, height: r.height, at: t, label };
+  return r.name;
+}
+// the picture of a video at t seconds, as a PNG Blob
+function stillAt(url, t) {
+  return new Promise((resolve, reject) => {
+    const v = document.createElement('video');
+    const end = (err, blob) => { clearTimeout(timer); v.removeAttribute('src'); v.load(); if (err) reject(err); else resolve(blob); };
+    const timer = setTimeout(() => end(new Error('The clip took too long to load')), 20000);
+    v.muted = true; v.playsInline = true; v.preload = 'auto'; v.crossOrigin = 'anonymous';
+    v.onerror = () => end(new Error('Couldn\'t load that clip'));
+    v.onloadedmetadata = () => { v.currentTime = Math.min(t, Math.max(0, (v.duration || t) - 0.04)); };
+    v.onseeked = () => {
+      const cv = document.createElement('canvas');
+      cv.width = v.videoWidth; cv.height = v.videoHeight;
+      if (!cv.width) return end(new Error('That clip has no picture'));
+      cv.getContext('2d').drawImage(v, 0, 0);
+      cv.toBlob((b) => (b ? end(null, b) : end(new Error('Couldn\'t grab that frame'))), 'image/png');
+    };
+    v.src = url;
+  });
+}
 export function clipLabel(v) {
   if (!v) return 'none';
   if (v.generation != null) { const g = S.history.get(v.generation); return g ? genLabel(g) : `#${v.generation} (not loaded)`; }

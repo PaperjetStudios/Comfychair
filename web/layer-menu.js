@@ -35,6 +35,13 @@ export function menuSpot(x, y, w, h, W, H, edge = 4) {
   return { left: Math.max(edge, Math.min(left, W - w - edge)), top: Math.max(edge, Math.min(top, H - h - edge)) };
 }
 
+// Where a w×h submenu goes beside its item (r: the item's { left, right, top }, screen pixels) in a W×H window: to the
+// right at the item's top, flipped to the left when it would pass the edge, moved up to stay on screen
+export function subSpot(r, w, h, W, H, edge = 4) {
+  const right = r.right + w + edge <= W, left = right ? r.right : r.left - w;
+  return { left: Math.max(edge, Math.min(left, W - w - edge)), top: Math.max(edge, Math.min(r.top, H - h - edge)), flipped: !right };
+}
+
 // The menu of a crop box: its shapes (aspects: [label, width/height or null for free]), with the one in use ticked
 export function cropShapeMenu(aspects, current) {
   return [aspects.map(([label, aspect]) => ({ id: label, label, aspect, on: aspect === (current ?? null) }))];

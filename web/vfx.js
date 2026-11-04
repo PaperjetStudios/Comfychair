@@ -325,7 +325,7 @@ async function findBoxes() {
 }
 
 async function runDelogo() {
-  if (!T.boxes?.length) return toast('Draw a box over the watermark first', true);
+  if (!T.boxes?.length) return failed('Draw a box over the watermark first');
   const quality = T.delogo !== 'fast';
   try {
     const g = await api('/api/video/delogo', { method: 'POST', timeout: quality ? 120000 : 3600000, busy: quality ? 'Queueing…' : 'Removing the watermark…',
@@ -337,7 +337,8 @@ async function runDelogo() {
     UI.draw = null;
     changed();
     if (quality) toast(`Queued Remove watermark as #${g.id}`);
-  } catch (err) { toast('Remove watermark failed: ' + err.message, true); }
+    return [g];
+  } catch (err) { return failed('Remove watermark failed: ' + err.message); }
 }
 
 function tracksFields() {
@@ -637,7 +638,8 @@ async function runMatte() {
     T.results.push(g.id); T.showing = g.id;
     told([g]);
     changed();
-  } catch (err) { toast('Clean up matte failed: ' + err.message, true); }
+    return [g];
+  } catch (err) { return failed('Clean up matte failed: ' + err.message); }
 }
 
 // ---- Extend frame: the canvas and the clip's place on it ----
@@ -811,35 +813,63 @@ async function buildRun(e, loose = false) {
 }
 
 // vfx:queued { gens, doc }: runs this effect made for the VFX document doc (a frame on a table lands them as clips)
-const told = (gens, doc = tabs?.active?.id || null) => dispatchEvent(new CustomEvent('vfx:queued', { detail: { gens, doc } }));
+// RUN.onQueued: a run started by runVfxOn takes its runs itself (aside: a run made on the way, a drive's pose) instead of the event
+const RUN = { onQueued: null, raise: false };
+const told = (gens, doc = tabs?.active?.id || null, aside = false) => {
+  if (RUN.onQueued) RUN.onQueued(gens, { doc, aside });
+  else dispatchEvent(new CustomEvent('vfx:queued', { detail: { gens, doc } }));
+};
+// a run's failure: a toast, or thrown for runVfxOn
+const failed = (msg) => { if (RUN.raise) throw new Error(msg); toast(msg, true); return null; };
 
 const parentOf = () => (T.source?.generation != null ? { generation: T.source.generation, index: T.source.index || 0, frame: null } : null);
 
+// Run: resolves with the runs queued first (a drive's posed run may follow later), or null when it couldn't run
 async function run() {
   const e = fx(T.op);
   const miss = missingInput(e);
-  if (miss) return toast(miss, true);
+  if (miss) return failed(miss);
   await tabs?.flush();
   if (e.job === 'key') return runKey(e);
   if (e.job === 'matte') return runMatte();
   if (e.job === 'delogo') return runDelogo();
   const b = await buildRun(e);
-  if (typeof b === 'string') return toast(b, true);
+  if (typeof b === 'string') return failed(b);
   const { t, values, rv } = b;
   const parent = parentOf();   // the source clip, also when the run gets a canvas made from it
-  const tab = T, face = { kind: 'vfx', state: tabState() }, doc = tabs?.active?.id || null;
+  const tab = T, face = { kind: 'vfx', state: tabState() }, doc = tabs?.active?.id || null, hook = RUN.onQueued;
   // queue template tt (null: this effect's own, with values) with values by role; how: added to the toast (null: no toast)
   const queue = async (tt, roles, how) => {
     const vals = roles ? valuesByRole(tt, roles) : values;
     const gens = await queueRun({ template: (tt || t).id, values: vals, parent, face });
     tab.results.push(...gens.map((g) => g.id));
     if (tab === T) changed(); else tabs?.changed();
-    told(gens, doc);
+    if (hook) hook(gens, { doc, aside: how === null }); else told(gens, doc);   // (a drive's later run still goes to whoever started it)
     if (how !== null) toast(`Queued ${e.label} as #${gens[0].id}${how ? `, ${how}` : ''}`);
+    if (how !== null) first ||= gens;
     return gens[0];
   };
-  if (e.posed && T.source && await drivePosed(e, rv, queue)) return;
-  try { await queue(null, null, ''); } catch (err) { toast(err.message, true); }
+  let first = null;
+  if (e.posed && T.source && await drivePosed(e, rv, queue)) return first || [];
+  try { await queue(null, null, ''); } catch (err) { return failed(err.message); }
+  return first;
+}
+
+// Run effect patch.op on the VFX document doc (a video frame's: frame-vfx.js ensureDoc), with patch over its settings,
+// from outside the VFX panel (the Edit pane). The document is opened in the VFX tabs (as the frame's VFX section does),
+// changed, saved and run. onQueued(gens, { doc, aside }) gets every run it makes (also a drive's posed run, queued
+// after its pose); without it they go out as vfx:queued as usual. Resolves with the first runs; throws why it can't run.
+export async function runVfxOn(doc, patch = {}, { onQueued = null } = {}) {
+  if (!tabs) throw new Error('the VFX engine is not ready');
+  if (!tabs.started) await tabs.start(); else if (tabs.starting) await tabs.starting;
+  for (let k = 0; k < 2 && tabs.active?.id !== doc; k++) await tabs.switchTo(doc);
+  if (tabs.active?.id !== doc) throw new Error('its VFX settings would not open');
+  Object.assign(T, JSON.parse(JSON.stringify(patch)));
+  UI.srcInfo = null; UI.draw = null;
+  changed();
+  const keep = { ...RUN };
+  Object.assign(RUN, { onQueued, raise: true });
+  try { return (await run()) || []; } finally { Object.assign(RUN, keep); }
 }
 
 // The effect's template with the values Run would send, in a new Generate tab: every field can be changed there.
@@ -873,7 +903,8 @@ async function runKey(e) {
     T.results.push(g.id); T.showing = g.id;
     told([g]);
     changed();
-  } catch (err) { toast('Keying failed: ' + err.message, true); }
+    return [g];
+  } catch (err) { return failed('Keying failed: ' + err.message); }
 }
 
 // area: at most that many pixels (0: as it is)

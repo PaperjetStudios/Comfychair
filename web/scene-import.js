@@ -688,15 +688,29 @@ function openCleanup(o) {
     actions(button('Cancel', closeSheet), button('Clean it up', () => { closeSheet(); runCleanup(o); }, { cls: 'primary' })));
 }
 
-async function runCleanup(o) {
-  const m = CLEAN_MODES[CLEAN.mode], bar = (await import('./ui.js')).busy('Blender is working on the model…');
+// pick: { mode, amount (in the mode's own unit), tex }; the sheet's choices when not given (the Edit pane passes its own)
+export async function runCleanup(o, pick = null) {
+  const mode = CLEAN_MODES[pick?.mode] ? pick.mode : CLEAN.mode, m = CLEAN_MODES[mode];
+  const amount = pick?.amount ?? CLEAN.amount[mode] ?? m.value, tex = pick?.tex || CLEAN.tex;
+  const bar = (await import('./ui.js')).busy('Blender is working on the model…');
   try {
     const { waitJob } = await import('./clipimport.js');
     const r = await waitJob(await api('/api/scene/cleanup', { method: 'POST', busy: false,
-      body: { url: o.url, mode: CLEAN.mode, amount: m.send(CLEAN.amount[CLEAN.mode] ?? m.value), tex: CLEAN.tex } }));
+      body: { url: o.url, mode, amount: m.send(amount), tex } }));
     const made = await addModel(r.url, `${o.name} (${m.label.toLowerCase()})`.slice(0, 60));
     toast(`${made.name}: ${r.faces ? `${r.faces.toLocaleString()} faces` : 'done'}`);
-  } catch (e) { toast(e.message, true); } finally { bar.done(); }
+    return made;
+  } catch (e) { if (pick) throw e; toast(e.message, true); } finally { bar.done(); }
+}
+// the clean-up choices, for a form of its own (the Edit pane): { id: { label, min, max, step, value, unit, help } }
+export const cleanModes = () => Object.fromEntries(Object.entries(CLEAN_MODES).map(([k, v]) => [k, { ...v, send: undefined }]));
+export { openCleanup };
+// What a scene op works on: the selected layer of that type, else the first ('model' | 'splat'); null when there is none.
+// A model must be a file in the project (cleaned up, rigged and opened in Blender from there).
+export function sceneObject(type = 'model') {
+  const sel = selItem();
+  if (sel?.type === type) return sel;
+  return SC.objects.find((o) => o.type === type) || null;
 }
 
 function itemSection(o) {
@@ -1107,6 +1121,15 @@ async function runSplat(name, ch, { lookThrough, camera, busyBar }, redo = null)
     lookThrough(o); fit();
     toast('Splat added: small camera moves look best (nothing is behind what the picture shows)');
   } catch (e) { toast(e.message, true); } finally { bar.done(); }
+}
+
+// A splat layer made again from its photo with the choices it was last made with (no sheet: the Edit pane's), waited for
+export async function remakeSplat(o, { preview = null, keepFull = null } = {}) {
+  if (!o?.image) throw new Error('This splat was not made from a photo here');
+  const { camera } = await import('./scene-view.js'), { busy } = await import('./ui.js');
+  const base = makeChoices(coarse());
+  const ch = { ...base, preview: preview || previewLevel(coarse()), keepFull: keepFull ?? base.keepFull, match: false };
+  await runSplat(o.image, ch, { lookThrough, camera, busyBar: busy }, o);
 }
 
 // Import: a file from this device (the tablet's own file chooser), or a model or splat this project already made

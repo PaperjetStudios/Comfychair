@@ -31,13 +31,28 @@ async function inputOf(src) {
 }
 const landed = (g, kind) => { const i = Math.max(0, g.outputs.findIndex((o) => o.kind === kind)); return { index: i, out: g.outputs[i] }; };
 
+// A map queued for a clip or a picture with no timeline (the Edit pane on a video frame): src is a clip source
+// ({generation, index} | {media}, optional trim {start, len}) or a picture ({input}); opts: op ('depth' | 'canny' | 'scribble'
+// | 'pose') and the map's settings (depthModel, edgeAmount, poser), this device's as they are when not given.
+// Resolves { gens, still (a picture's map: an image), label }.
+export async function queueMap(src, opts = {}) {
+  const set = { ...ST, ...opts }, o = OPS.find((x) => x.id === set.op) || OPS[0], still = !!src.input || (src.generation != null && src.kind === 'image');
+  const tid = o.id === 'pose' && set.poser === 'sdpose' ? (still ? MAPS.pose.stillSd : MAPS.pose.sd) : MAPS[o.id][still ? 'still' : 'video'];
+  const t = template(tid);
+  if (!t) throw new Error(`${tid} isn't installed yet`);
+  const len = Math.min(MAP_MAX_SECS, src.trim?.len || MAP_MAX_SECS);
+  const roles = { ...mapRoles(o.id, set), ...(still ? { first: await inputOf(src) }
+    : { source: { ...bareSource(src), ...(src.trim && { trim: { start: src.trim.start || 0, len } }) }, len }) };
+  const gens = await queueRun({ template: t.id, values: valuesByRole(t, roles) });
+  return { gens, still, label: o.label };
+}
+
 async function make(it, o, span, { render, land }) {
-  const still = it.kind === 'image', t = template(tplOf(o, still));
+  const still = it.kind === 'image';
   RUNS.set(it.id, o.label); render();
   try {
-    const roles = { ...mapRoles(o.id, ST), ...(still ? { first: await inputOf(it.src) }
-      : { source: { ...bareSource(it.src), trim: { start: span.start, len: span.len } }, len: span.len }) };
-    const [run] = await queueRun({ template: t.id, values: valuesByRole(t, roles) });
+    const src = still ? it.src : { ...it.src, trim: { start: span.start, len: span.len } };
+    const { gens: [run] } = await queueMap(still && !it.src.input && it.src.generation != null ? { ...it.src, kind: 'image' } : src, { op: o.id });
     toast(`${o.label} map queued: it lands over the clip`);
     const g = await waitGen(run.id), { index, out } = landed(g, still ? 'image' : 'video'), label = `${it.label} · ${o.label}`;
     if (still) {

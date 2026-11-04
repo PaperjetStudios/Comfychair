@@ -424,6 +424,13 @@ const fullNow = () => {
   const all = [...FULL];
   return (all.find(([tab]) => tab.classList.contains('active')) || all.find(([, m]) => m.stage.closest('.tab.active')))?.[1] || null;
 };
+// The full screen that belongs to el: its own, else the one of a stage moved into it (a live frame's mount: the engine's;
+// the table's live bar has the one button for it, table.js)
+export function fullScreenOf(el) {
+  if (!el) return null;
+  for (const tab of [...FULL.keys()]) if (!tab.isConnected) FULL.delete(tab);
+  return FULL.get(el) || [...FULL.values()].find((m) => el.contains(m.stage)) || null;
+}
 window.addEventListener('keydown', (e) => {   // (on window: it runs after every document listener, so it sees theirs)
   if (e.key !== 'f' || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.target.closest?.('input, textarea, select, [contenteditable], [role=dialog]')) return;

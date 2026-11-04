@@ -1,12 +1,17 @@
-// VFX on a video frame: the Make pane's VFX section. The VFX engine (vfx.js mountVfx) draws its panel into the pane and
+// VFX on a video frame: the Edit pane's video section ("Full VFX panel…", edit-panel.js hosts it). The VFX engine (vfx.js mountVfx) draws its panel into the pane and
 // edits the frame's own VFX document (frame.vfx, a vfx-tabs doc made on first use, trashed with its table: store.py
 // _owned_docs). While the frame is live its stage replaces the frame's viewer, so points, boxes and paths are placed on the
 // frame itself; otherwise the panel works without a viewer and Open the frame shows it. Results land as clips on the
 // frame's timeline (make-panel.js, vfx:queued) and stay in the document's Output as before.
 //
-//   showFrameVfx(host, frame)   the section for this frame into host (the Make pane calls it while VFX is chosen)
+//   showFrameVfx(host, frame)   the section for this frame into host (the Edit pane calls it while its VFX panel is open)
 //   hideFrameVfx()              the engine back on the page's VFX tab
 //   frameOfVfx(doc)             the frame a VFX document belongs to (where its results land)
+//   ensureDoc(frame) → id       the frame's VFX document, made on first use with its first clip as the source
+//   openDoc(id)                 that document open in the VFX engine (vfx.js vfxTabs), off screen or not
+//   clipsOf(frame) → [{ it, src }]   the clips on a video frame's timeline VFX can read, with their trims
+// Clip tools → VFX on a live frame (onSendToVfx) opens the Edit pane and asks for its VFX panel: `edit:show`
+// { kind: 'video', op: 'vfx', frame } (edit-panel.js answers by hosting showFrameVfx).
 import { h, api, toast, button, hint, openSheet, closeSheet, section, actions, uid } from './ui.js';
 import { S, previewUrl } from './core.js';
 import { isLive, liveFrame, liveRoot } from './live.js';
@@ -22,7 +27,7 @@ const docUrl = (kind, id) => `/api/store/${kind}/${id}${qs()}`;
 export const frameOfVfx = (doc) => (Table.tableFrames() || []).find((f) => f.vfx === doc) || X.docs.get(doc) || null;
 
 // the clips on a video document's timeline that VFX can read (a run's clip or an imported one), with their trims
-async function clipsOf(frame) {
+export async function clipsOf(frame) {
   if (!frame.doc) return [];
   const vid = await import('./video.js');
   const t = vid.videoTabs?.();
@@ -56,7 +61,7 @@ const thumbOfRun = (src) => { const o = S.history.get(src.generation)?.outputs?.
 
 // The frame's VFX document: made on first use with its first clip as the source. A duplicated frame still points at the
 // original's: it gets its own copy here, so the two don't edit one document.
-async function ensureDoc(frame) {
+export async function ensureDoc(frame) {
   const shared = frame.vfx && (Table.tableFrames() || []).some((f) => f !== frame && f.vfx === frame.vfx);
   if (frame.vfx && !shared) {
     const ok = await api(docUrl('vfx-tabs', frame.vfx), { busy: false }).then(() => true, (e) => (e.status === 404 ? false : Promise.reject(e)));
@@ -75,7 +80,7 @@ async function ensureDoc(frame) {
   return id;
 }
 
-async function openDoc(id) {
+export async function openDoc(id) {
   const tabs = vfxTabs();
   if (!tabs) throw new Error('the VFX engine is not ready');
   if (!tabs.started) await tabs.start(); else if (tabs.starting) await tabs.starting;
@@ -85,10 +90,11 @@ async function openDoc(id) {
 
 // where the frame shows: its live root's own stage (the video's hidden meanwhile), else nowhere (a detached stage)
 const liveHere = (frame) => isLive(frame.id) && !!liveRoot();
-const onMake = () => sidebar.current?.() === 'make';
+const PANE = 'edit';   // (the sidebar pane VFX lives in)
+const onPane = () => sidebar.current?.() === PANE;
 
 export async function showFrameVfx(host, frame) {
-  const live = liveHere(frame) && onMake();
+  const live = liveHere(frame) && onPane();
   const key = `${frame.id}:${live ? 'live' : 'flat'}`;
   if (X.key === key && X.frame === frame && X.host === host && host.contains(X.panel)) return;
   const my = ++X.seq;
@@ -147,10 +153,10 @@ export function hideFrameVfx() {
   vfxFlush().finally(() => { if (!X.frame) vfxHome(); });
 }
 
-// the Make pane hidden (another sidebar tab) while the frame is live: the video's viewer comes back; shown again: VFX's
+// the Edit pane hidden (another sidebar tab) while the frame is live: the video's viewer comes back; shown again: VFX's
 sidebar.onShow?.((name) => {
   if (!X.frame || !X.host) return;
-  if (name !== 'make' && !(X.wrap?.isConnected && X.wrap.parentElement === liveRoot())) return;
+  if (name !== PANE && !(X.wrap?.isConnected && X.wrap.parentElement === liveRoot())) return;
   X.key = null;
   showFrameVfx(X.host, X.frame);
 });
@@ -178,9 +184,8 @@ addEventListener('table:unlive', (e) => {
 onSendToVfx(async (src, { label, trim }) => {
   const f = isLive('video') ? liveFrame() : null;
   if (!f) return false;
-  const { useVfxMode } = await import('./make-panel.js');
-  useVfxMode(true);
-  sidebar.show('make');
+  sidebar.show(PANE);
+  dispatchEvent(new CustomEvent('edit:show', { detail: { kind: 'video', op: 'vfx', frame: f } }));   // (the Edit pane opens its VFX panel for f)
   await new Promise((r) => setTimeout(r, 50));
   if (X.frame?.id !== f.id) return false;
   await new Promise((r) => { const t0 = performance.now(); const k = () => (X.key || performance.now() - t0 > 4000 ? r() : setTimeout(k, 50)); k(); });

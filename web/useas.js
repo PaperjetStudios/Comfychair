@@ -76,9 +76,32 @@ export function openUseAs(g, index, { before = null } = {}) {
     closeSheet(); before?.();
     try { await fn(); } catch (e) { toast(e.message, true); }
   }, { cls: '', ...attrs });
+  const groups = placeGroups({ g, o, index, k, src, label, toInput, go });
+  openSheet(h('h3', {}, `Use ${label} as…`), hint(`${kindDef(o).name}${factsOf(o) ? ` · ${factsOf(o)}` : ''}`),
+    ...(groups.length ? groups.map(([tab, btns]) => section(tab, null, h('div', { class: 'row wrap use-as' }, btns)))
+      : [hint('Nothing takes this kind of file yet: Download has it.')]));
+}
+
+// The same places as menu groups (press-menu.js's shape), for something that isn't a run: a frame on the table
+// (frame-menu.js). kind: image | video | audio; src: what Generate's clip and sound fields take ({ generation, index } |
+// { input } | { media }); url: its file; toInput(frame, mp, multiple) -> { name, width, height }: a picture of it in
+// ComfyUI's input folder. g: its run when it is one (adds what needs the run). -> [{ title, items: [{ label, title, run }] }]
+export function useAsGroups({ kind, src, label, url = null, toInput, g = null, index = 0, before = null }) {
+  const o = g?.outputs?.[index] || { kind, url };
+  const go = (text, fn, attrs = {}) => ({ label: text, title: attrs.title || null, run: async () => {
+    before?.();
+    try { await fn(); } catch (e) { toast(e.message, true); }
+  } });
+  return placeGroups({ g, o, index, k: kind, src, label, toInput, go, data: true })
+    .map(([title, items]) => ({ title, items: items.filter((it) => it && it.run) })).filter((x) => x.items.length);
+}
+
+// Every place, grouped by tab: [[title, [button | item]]], only the non-empty ones. data: items, not buttons (no run: g null
+// leaves out what needs the run)
+function placeGroups({ g = null, o, index = 0, k, src, label, toInput, go, data = false }) {
   const run = () => import('./run.js');
-  const sheetClip = SHEETS.has(g.template) ? g.outputs.findIndex((x) => kindOf(x) === 'video') : -1;   // (the sheet picture too: its clip)
-  const markClip = markClipOf(g, index);
+  const sheetClip = g && SHEETS.has(g.template) ? g.outputs.findIndex((x) => kindOf(x) === 'video') : -1;   // (the sheet picture too: its clip)
+  const markClip = g ? markClipOf(g, index) : -1;
   const groups = [
     ['Sheet', [...(markClip >= 0 ? [go('Mark views…', async () => (await import('./markviews.js')).openMarkViews(g, markClip),
       { title: 'Scrub the clip and mark frames as angles; each becomes its own picture, with Upscale, De-light and Cut out as you choose' })] : []),
@@ -97,25 +120,23 @@ export function openUseAs(g, index, { before = null } = {}) {
       await (await import('./sound.js')).addToSound(src);
       toast(`${label} is on the Sound tab`);
     })] : k === 'video' ? [go('Its sound onto the timeline', async () =>
-      (await import('./media.js')).soundToSoundTab(src, { name: `${g.id}-${g.template}-sound` }), { title: 'Take the clip\'s sound out and put it on the Sound tab\'s timeline' })] : []],
-    ['Character', ['image', 'video', 'mesh', 'splat'].includes(k) ? [go('Give it to a character…', async () => (await import('./charsend.js')).sendToCharacter(g, index, o, toInput))] : []],
+      (await import('./media.js')).soundToSoundTab(src, { name: `${g ? `${g.id}-${g.template}` : 'frame'}-sound` }), { title: 'Take the clip\'s sound out and put it on the Sound tab\'s timeline' })] : []],
+    ['Character', g && ['image', 'video', 'mesh', 'splat'].includes(k) ? [go('Give it to a character…', async () => (await import('./charsend.js')).sendToCharacter(g, index, o, toInput))] : []],
     ['Image', k === 'image' ? [go('Open in the Image tab', async () => (await import('./editor.js')).addToEditor((await toInput()).name))]
       : k === 'video' ? [go('First frame in the Image tab', async () => (await import('./editor.js')).addToEditor((await toInput('first')).name)),
         go('Last frame in the Image tab', async () => (await import('./editor.js')).addToEditor((await toInput('last')).name))] : []],
-    ['3D', sceneTargets(g, o, src, label, toInput, go)],
-    ['Other templates that take it', otherTemplates(k, src, toInput, go)],
+    ['3D', sceneTargets(g, o, src, label, toInput, go, { k, index, data })],
+    ['Other templates that take it', otherTemplates(k, src, toInput, go, data)],
     ['More', [
-      ...imageUpscales(k, toInput),
-      ctrl3d(g) ? go('Control video for H3', async () => (await run()).useControlVideo(g, g.params.scene || g.params.__face?.scene || {}), { title: 'Into deck-h3-ctrl2v: its control video, size and length' }) : null,
-      k === 'video' ? go('Refine with H3', async () => (await run()).useRefineClip(g, index), { title: 'Into deck-h3-refine: H3 draws the clip again from part-way, sharper, with your references (a splat or 3D render)' }) : null,
-      k === 'video' && /^deck-h3-/.test(g.template) ? go('Upscale (H3)…', async () => (await run()).openH3Upscale(g, index), { title: 'Sample it again bigger, with this run\'s own prompt, LoRAs and references' }) : null,
-      k === 'image' || k === 'video' ? go(k === 'image' ? 'Open in PhotoCraft' : 'Open in EffectCraft',
+      ...imageUpscales(k, toInput, go, data),
+      g && ctrl3d(g) ? go('Control video for H3', async () => (await run()).useControlVideo(g, g.params.scene || g.params.__face?.scene || {}), { title: 'Into deck-h3-ctrl2v: its control video, size and length' }) : null,
+      g && k === 'video' ? go('Refine with H3', async () => (await run()).useRefineClip(g, index), { title: 'Into deck-h3-refine: H3 draws the clip again from part-way, sharper, with your references (a splat or 3D render)' }) : null,
+      g && k === 'video' && /^deck-h3-/.test(g.template) ? go('Upscale (H3)…', async () => (await run()).openH3Upscale(g, index), { title: 'Sample it again bigger, with this run\'s own prompt, LoRAs and references' }) : null,
+      g && (k === 'image' || k === 'video') ? go(k === 'image' ? 'Open in PhotoCraft' : 'Open in EffectCraft',
         async () => (await import('./craft.js')).sendToCraft('generation', src), { title: 'With what it was made from as a hidden layer underneath, to keep editing on the computer' }) : null,
     ].filter(Boolean)],
-  ].filter(([, btns]) => btns.length);
-  openSheet(h('h3', {}, `Use ${label} as…`), hint(`${kindDef(o).name}${factsOf(o) ? ` · ${factsOf(o)}` : ''}`),
-    ...(groups.length ? groups.map(([tab, btns]) => section(tab, null, h('div', { class: 'row wrap use-as' }, btns)))
-      : [hint('Nothing takes this kind of file yet: Download has it.')]));
+  ];
+  return groups.filter(([, btns]) => btns.length);
 }
 
 // a 3D tab render that can steer H3: a depth or pose render, or a depth from the picture (deck-depth-video, run from
@@ -130,35 +151,42 @@ const IMAGE_UPSCALES = [
   ['deck-upscale-image', 'Upscale (SeedVR2)…', 'SeedVR2 draws the picture again bigger with fine detail added. Slower, and it needs more memory than the fast one.'],
   ['deck-upscale-image-fast', 'Upscale (fast)', 'An upscale model makes the picture bigger in seconds. It sharpens what is there and does not add new detail.'],
 ];
-function imageUpscales(kind, toInput) {
+function imageUpscales(kind, toInput, go, data = false) {
   if (kind !== 'image') return [];
-  return IMAGE_UPSCALES.filter(([id]) => S.templates.some((t) => t.id === id && !t.error)).map(([id, text, tip]) =>
-    h('span', { class: 'row use-as-help' }, button(text, async () => {
+  return IMAGE_UPSCALES.filter(([id]) => S.templates.some((t) => t.id === id && !t.error)).map(([id, text, tip]) => {
+    const pick = async () => {
+      selectTemplate(id);
+      const f = S.tpl.fields.find((x) => x.kind === 'image');
+      setVal(f.key, (await toInput('first', S.imageMp[f.key] ?? 0, 16)).name);
+      renderFields(); switchTab('generate');
+      toast(`${S.tpl.name || id}: set ${f.group} · ${f.label}`);
+    };
+    if (data) return go(text, pick, { title: tip });
+    return h('span', { class: 'row use-as-help' }, button(text, async () => {
       closeSheet();
-      try {
-        selectTemplate(id);
-        const f = S.tpl.fields.find((x) => x.kind === 'image');
-        setVal(f.key, (await toInput('first', S.imageMp[f.key] ?? 0, 16)).name);
-        renderFields(); switchTab('generate');
-        toast(`${S.tpl.name || id}: set ${f.group} · ${f.label}`);
-      } catch (e) { toast(e.message, true); }
-    }, { cls: '' }), info(tip)));
+      try { await pick(); } catch (e) { toast(e.message, true); }
+    }, { cls: '' }), info(tip));
+  });
 }
 
 // The templates (other than Generate's) with a field of this kind: picking one opens it with the output in that field
-function otherTemplates(kind, src, toInput, go) {
+function otherTemplates(kind, src, toInput, go, data = false) {
   const want = kind === 'video' ? 'video' : kind === 'image' ? 'image' : kind === 'audio' ? 'audio' : null;
   if (!want) return [];
-  return S.templates.filter((t) => !t.error && t.id !== S.tpl?.id && t.fields.some((f) => f.kind === want)).map((t) => chip(t.name || t.id, async () => {
-    closeSheet();
-    try {
+  return S.templates.filter((t) => !t.error && t.id !== S.tpl?.id && t.fields.some((f) => f.kind === want)).map((t) => {
+    const pick = async () => {
       selectTemplate(t.id);
       const f = S.tpl.fields.find((x) => x.kind === want);
       setVal(f.key, want === 'image' ? (await toInput('first', S.imageMp[f.key] ?? 1, 16)).name : { ...src });
       renderFields(); switchTab('generate');
       toast(`${t.name || t.id}: set ${f.group} · ${f.label}`);
-    } catch (e) { toast(e.message, true); }
-  }));
+    };
+    if (data) return go(t.name || t.id, pick);
+    return chip(t.name || t.id, async () => {
+      closeSheet();
+      try { await pick(); } catch (e) { toast(e.message, true); }
+    });
+  });
 }
 
 // Generate's current template: the fields of the output's kind; a clip also gives its first / last frame to
@@ -200,9 +228,9 @@ function vfxTargets(kind, src, label, toInput, go) {
 
 // the 3D tab: a picture or clip as the reference over the view, a picture made into a mesh (MoGe, in ComfyUI),
 // a clip's camera move (Track motion), a motion onto a figure, a 3D model into the scene, a scene render opened again
-function sceneTargets(g, o, src, label, toInput, go) {
+function sceneTargets(g, o, src, label, toInput, go, { k = kindOf(o), index = 0, data = false } = {}) {
   const scene = async () => { switchTab('scene'); return (await import('./run.js')).sceneModule(); };
-  const k = kindOf(o);
+  const run = () => import('./run.js');
   if (k === 'image') {
     return [go('Reference picture', async () => {
       const { name } = await toInput();
@@ -220,13 +248,14 @@ function sceneTargets(g, o, src, label, toInput, go) {
     }, { title: 'Pixal3D: a textured model from this photo (or its other views), in the 3D scene' })];
   }
   if (k === 'video') {
-    return [go('Finish with H3', async () => (await run()).finishWithH3(g, index),
-        { title: 'Into deck-h3-refine with Regenerate on: the refiner LoRA draws it again at 1080P (LTX clips and scene renders too)' }),
-      g.template === '3d scene' ? go('Open its scene in 3D', async () => (await scene()).open(g.params.scene, g.id)) : null,
+    return [g ? go('Finish with H3', async () => (await run()).finishWithH3(g, index),
+        { title: 'Into deck-h3-refine with Regenerate on: the refiner LoRA draws it again at 1080P (LTX clips and scene renders too)' }) : null,
+      g?.template === '3d scene' ? go('Open its scene in 3D', async () => (await scene()).open(g.params.scene, g.id)) : null,
       go('Reference clip', async () => (await scene()).useAsRef({ kind: 'video', src, url: o.url, label })),
       go('Track motion (a 3D camera)', async () => (await import('./track.js')).openTrack({ src, url: o.url, label }),
         { title: 'Follow the picture\'s movement and make a 3D camera from it' })].filter(Boolean);
   }
+  if (!g || data && k !== 'motion') return [];   // (a model's places need its run; a menu doesn't offer Blender: it needs a button)
   if (k === 'motion') return [go('Put on a figure', async () => (await scene()).motionOnto(src, label), { title: 'Onto the selected person (or the first) in the 3D scene, from the playhead' })];
   if (k === 'mesh' && /\.glb$/i.test(o.filename)) {
     // a MoGe photo mesh keeps its camera and picture; any other GLB is a model layer

@@ -2125,12 +2125,12 @@ body > .undo-dock { position: fixed; z-index: 57; top: 8px; left: 50%; transform
 .frame-note .frame-body { background: var(--surface-2); }
 .frame-text { position: absolute; inset: 0; width: 100%; height: 100%; resize: none; border: 0; padding: 12px; background: transparent; color: var(--text); font: 16px/1.4 var(--font); }
 .frame-mount { position: absolute; inset: 0; z-index: 1; background: var(--stage-bg); }
-/* a live frame's mount (table.js): over the stage, outside the zoomed world, the stage less a margin (set inline);
-   the table behind is dimmed, its own frame hidden (the mount stands in for it), its full-screen button put away */
+/* a live frame's mount (table.js): over the stage, outside the zoomed world, filling it (the table behind is covered),
+   its own frame hidden (the mount stands in for it), the table's full-screen button put away */
 /* (no z-index on either: a stacking context here would hold a full-screen stage inside it under the top bar) */
 .live-layer { position: absolute; inset: 0; pointer-events: none; }
-.live-layer > .frame-mount { height: auto; z-index: auto; pointer-events: auto; border: 1px solid var(--line-2); border-radius: var(--r); overflow: hidden; box-shadow: var(--shadow); }
-.table-live .frame:not(.live) { opacity: .35; pointer-events: none; }
+.live-layer > .frame-mount { height: auto; z-index: auto; pointer-events: auto; overflow: hidden; }
+.table-live .frame:not(.live) { pointer-events: none; }
 .table-live .frame.live { visibility: hidden; }
 .table-stage.table-live > .max-btn { display: none; }
 /* full screen inside a live frame: the table's sidebar is the panel that pulls out (layout.js fullScreen pins a tab's own) */
@@ -2315,3 +2315,50 @@ body:has(.tab.view-max.panel-out) .actionbar { right: var(--ov-w); }   /* (only 
 /* the table full screen: .stage.maxed's one row would give the bar the room and squash the stage to nothing */
 .table-outer.stage.maxed { grid-template-rows: auto minmax(0, 1fr); }
 .table-outer.has-drawer.stage.maxed { grid-template-rows: auto minmax(0, 1fr) auto; }
+
+/* ---- round2 D ---- */
+.sb-pane[data-pane="edit"] .section select { width: 100%; margin-bottom: 8px; }
+.sb-pane[data-pane="edit"] option.edit-grey { color: var(--muted, #888); }
+.sb-pane[data-pane="edit"] .edit-fields:empty { display: none; }
+.sb-pane[data-pane="edit"] .edit-why { margin: 6px 0; }
+.sb-pane[data-pane="edit"] .edit-run { min-height: var(--touch-target, 44px); }
+.sb-pane[data-pane="edit"] .edit-status { display: grid; gap: 2px; margin-top: 6px; }
+.sb-pane[data-pane="edit"] .edit-status:empty { display: none; }
+.sb-pane[data-pane="edit"] .edit-status-row { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.sb-pane[data-pane="edit"] .edit-status-row.failed .hint { color: var(--danger, #e66); }
+.sb-pane[data-pane="edit"] .edit-vfx-wrap { margin-top: 8px; display: grid; gap: 6px; }
+.sb-pane[data-pane="edit"] .edit-vfx.hidden { display: none; }
+
+/* ---- round2 B ---- */
+/* a sound tile's still is the server's waveform of its first sound (table-frames.js showStill): stretched to the strip */
+.frame-waved .frame-still { object-fit: fill; background: var(--surface-2); }
+
+/* ---- round2 A ---- */
+/* a live frame: its bar on top (kind, name, the one ⛶, ✕), the engine's stage under it (table.js liveBar) */
+.live-layer > .frame-mount { grid-template-rows: auto minmax(0, 1fr); }
+.live-layer > .frame-mount > :not(.live-bar) { grid-row: 2; grid-column: 1; min-height: 0; }
+.live-bar { grid-row: 1; grid-column: 1; display: flex; align-items: center; gap: 6px; height: 36px; min-height: 36px; padding: 0 4px 0 10px;
+  border-bottom: 1px solid var(--line); background: var(--surface); color: var(--text); }
+.frame-mount > .live-bar.vfx-under { display: flex !important; }
+.live-bar-kind { display: grid; place-items: center; color: var(--muted); }
+.live-bar-kind .ico { width: 18px; height: 18px; }
+.live-bar-name { min-width: 0; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 6px; border: 1px solid transparent;
+  border-radius: var(--r-sm); background: none; color: inherit; font: inherit; font-weight: 600; cursor: text; }
+.live-bar-name:hover { border-color: var(--line); }
+.live-bar-rename { min-width: 0; width: min(320px, 50%); font: inherit; font-weight: 600; }
+.live-bar-gap { flex: 1; }
+.live-bar-btn { min-width: var(--touch-target, 36px); min-height: 32px; display: grid; place-items: center; font-size: 16px; }
+@media (pointer: coarse) { .live-bar { height: 44px; min-height: 44px; } .live-bar-btn { min-height: var(--touch-target, 44px); } }
+/* one full-screen button: the bar's; the engine's own shows only while full screen, to leave it */
+.frame-mount .stage:not(.maxed) .viewer > .max-btn:not(.basics-btn) { display: none; }
+/* a submenu beside its item (press-menu.js) */
+.press-item.has-sub.open { background: var(--surface-3); }
+.press-arrow { margin-left: auto; padding-left: 12px; color: var(--muted); }
+.press-sub { z-index: 91; }
+/* the Frame pane's list at scale: search, kinds, selected only; rows drawn only as they scroll into view */
+.frame-finder { display: grid; gap: 6px; margin-bottom: 6px; }
+.frame-find { width: 100%; min-height: max(32px, var(--touch-target, 32px)); box-sizing: border-box; }
+.frame-find-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.frame-find-chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.frame-list-host .layer-row { content-visibility: auto; contain-intrinsic-size: auto 44px; }
+.frame-scene-row .layer-name > span:first-child { font-weight: 600; }

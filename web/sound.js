@@ -756,6 +756,15 @@ export function soundStill() {
   paintStage(cv, W, H, 1);
   return new Promise((res) => cv.toBlob(res, 'image/png'));
 }
+// The open mix's export settings from outside (the Edit pane's Master level / Even out the loudness on a live sound
+// frame): patch is part of { gain, normalize, format, name }. Saved with the mix. Returns the settings as they are now.
+export function setOut(patch = {}) {
+  const ok = ['gain', 'normalize', 'format', 'name'];
+  for (const k of ok) if (patch[k] !== undefined) N.out[k] = patch[k];
+  if (A.master) A.master.gain.value = N.out.gain;
+  persist(); renderPanel();
+  return { ...N.out };
+}
 export const soundTabs = () => tabs;
 
 // for the headless UI checks (dev/): the live state

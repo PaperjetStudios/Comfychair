@@ -226,7 +226,8 @@ async function stillBlob(f) {
 // An edit opened in the editor off screen, drawn once its pictures load, and its still kept. Never while an image frame
 // is live: that would take the editor from under it; the edit is drawn once the live frame lets go (drawStale).
 const STALE = new Set();   // edits whose still is behind, to draw when no image frame is live
-async function drawOffscreen(doc) {
+// (exported: imagetools.js lands a result in a closed frame's edit this way, frame-source.js reads one at full size)
+export async function drawOffscreen(doc) {
   if (isLive('image')) { STALE.add(doc); return false; }
   const t = editTabs();
   await t.ready(); await t.switchTo(doc);
@@ -278,11 +279,15 @@ async function dropInto(onto, pics, sources = []) {
   toast(layers.length === 1 ? `Added a layer to "${onto.label}"` : `Added ${layers.length} layers to "${onto.label}"`);
 }
 
-// the layers appended to the saved edit (table-frames.js editDoc: at its rev, once more if another save moved it)
-function putLayers(onto, layers) {
+// The layers appended to the saved edit (table-frames.js editDoc: at its rev, once more if another save moved it).
+// onto: a frame, or { doc }. Each layer: { name, label, x, y } and any of a layer's own fields (scale, rotation, crop…),
+// as the editor's addImage takes them. out: the edit's export scale at least this (an upscale's result). Exported for
+// imagetools.js (a tool's result landing in a closed frame).
+export function putLayers(onto, layers, { out = 0 } = {}) {
   return editDoc('image', onto.doc, (p) => {
-    p.layers = [...(p.layers || []), ...layers.map((l) => ({ name: l.name, crop: { x: 0, y: 0, w: 1, h: 1 }, x: l.x, y: l.y, scale: 1, opacity: 1, hidden: false,
-      blend: 'normal', locked: false, label: l.label, key: Math.random().toString(36).slice(2, 10) }))];
+    p.layers = [...(p.layers || []), ...layers.map(({ name, label, x, y, ...rest }) => ({ crop: { x: 0, y: 0, w: 1, h: 1 }, scale: 1, opacity: 1, hidden: false,
+      blend: 'normal', locked: false, ...rest, name, x, y, label, key: Math.random().toString(36).slice(2, 10) }))];
+    if (out > (p.out || 1)) p.out = out;
   });
 }
 

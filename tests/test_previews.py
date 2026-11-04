@@ -103,3 +103,23 @@ class ModelShots(unittest.TestCase):
         self.addCleanup(pic.unlink, missing_ok=True)
         self.assertEqual(self.c.get("/api/preview/shot", params={"u": f"/files/media/{pic.name}"}).status_code, 400)
 
+
+class InputPictures(unittest.TestCase):
+    """A timeline item made from one of the project's pictures (src {input}) has an /api/input?name= URL: its tile's poster."""
+    def setUp(self):
+        import io
+        from PIL import Image
+        self.name = f"{config.COMFY_INPUT_SUBFOLDER}/prev_test_pic.png"
+        self.file = config.INPUT_DIR / "prev_test_pic.png"
+        buf = io.BytesIO(); Image.new("RGB", (200, 100), (200, 40, 40)).save(buf, "PNG")
+        self.file.write_bytes(buf.getvalue())
+        self.addCleanup(self.file.unlink, missing_ok=True)
+
+    def test_an_input_url_is_a_source(self):
+        from urllib.parse import quote
+        self.assertEqual(previews.source(f"/api/input?name={quote(self.name)}"), self.file.resolve())
+        self.assertEqual(previews.source(f"/files/input/{quote(self.name)}"), self.file.resolve())
+        for bad in ("/api/input?name=", "/api/input?name=elsewhere/prev_test_pic.png", f"/api/input?name={config.COMFY_INPUT_SUBFOLDER}/../deck.sqlite3",
+                    f"/api/input?name={config.COMFY_INPUT_SUBFOLDER}/missing.png"):
+            with self.assertRaises(Exception):
+                previews.source(bad)

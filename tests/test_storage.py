@@ -626,5 +626,21 @@ class Storage(unittest.TestCase):
             self.assertFalse(f.exists())
 
 
+class InputPreviews(unittest.TestCase):
+    """A table tile's poster of a clip made from a picture (app/previews.py, /api/input?name=) goes with the picture."""
+    def test_a_pictures_preview_goes_with_it(self):
+        from app import previews
+        name = f"{config.COMFY_INPUT_SUBFOLDER}/poster_test.png"
+        f = config.INPUT_DIR / "poster_test.png"
+        f.write_bytes(png_bytes())
+        self.addCleanup(f.unlink, missing_ok=True)
+        p = previews.source(f"/api/input?name={name}")
+        out = previews._key(p, 320, "still")
+        previews.make_still(p, out, 320)
+        self.assertTrue(out.is_file())
+        storage.delete_input(name)
+        self.assertFalse(out.is_file())
+        self.assertFalse(f.exists())
+
 if __name__ == "__main__":
     unittest.main()

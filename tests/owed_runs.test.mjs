@@ -45,3 +45,13 @@ test('the original is found by key, then by picture and crop; a mask or a change
   assert.equal(layerOf([mask, cut], was), null);
   assert.equal(layerOf([byName], null), null);
 });
+test('a run for a video or sound frame keeps where it lands and as what, and counts per document', async () => {
+  const { landingRecord, owedCounts } = await import('../web/owed-runs.js');
+  const rec = JSON.parse(JSON.stringify(landingRecord({ id: 9, prompt_id: 'q' }, { tab: 'v1', frame: 'f1', kind: 'video', op: 'restyle', label: 'LoRA restyle · Clip' }, 5)));
+  assert.deepEqual(rec, { id: 9, prompt: 'q', tab: 'v1', frame: 'f1', kind: 'video', op: 'restyle', as: 'clip', at: 5, label: 'LoRA restyle · Clip' });
+  assert.equal(sameRun(rec, { id: 9, prompt_id: 'q' }), true);
+  const list = withOwed(withOwed([], rec, 5), { ...rec, id: 10 }, 5);
+  assert.deepEqual(owedCounts(list), { v1: 2 });
+  assert.deepEqual(owedCounts(withoutOwed(list, 9)), { v1: 1 });
+  assert.deepEqual(owedCounts([]), {});
+});

@@ -63,3 +63,10 @@ test('a crop box offers its shapes in order, with the one in use ticked', () => 
   assert.deepEqual(on(undefined), ['Free']);
   assert.deepEqual(on(9 / 16), ['9:16']);
 });
+
+test('a submenu opens beside its item, flips left at the right edge and moves up to stay on screen', async () => {
+  const { subSpot } = await import('../web/layer-menu.js');
+  assert.deepEqual(subSpot({ left: 100, right: 300, top: 50 }, 200, 100, 1000, 800), { left: 300, top: 50, flipped: false });
+  assert.deepEqual(subSpot({ left: 800, right: 990, top: 750 }, 200, 100, 1000, 800), { left: 600, top: 696, flipped: true });
+  assert.deepEqual(subSpot({ left: 2, right: 150, top: 10 }, 300, 100, 320, 800), { left: 4, top: 10, flipped: true });
+});

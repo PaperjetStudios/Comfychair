@@ -6,8 +6,8 @@
 // middle button pans. A drag on empty space draws a box: over frames it selects them, over nothing it asks what kind
 // of frame to make there. A frame goes live (Enter, a double-click, Open): its mount root sits in .live-layer over the
 // stage (not in the zoomed .table-world, so it is at 1:1 and a fixed full screen inside it works), filling the stage
-// less a margin, with the table behind it dimmed and fitted to the frame; a frame-kind module mounts its engine in the
-// root (the `table:live` event) and fits its picture inside. Esc or a tap beside it brings the table back.
+// and covering the table; a thin bar on top has its name, the one ⛶ and ✕. A frame-kind module mounts its engine in the
+// root (the `table:live` event) and fits its picture inside. Esc or ✕ brings the table back.
 // Moves, resizes and deletes undo (Ctrl+Z, the top bar's ↶) while nothing is live.
 //
 // The frames are a layer stack, with the editor's rules (web/layer-stack.js): the list's order is the stacking order
@@ -42,7 +42,7 @@ import { currentTab } from './navigation.js';
 import { ownsKey } from './key-focus.js';
 import { openPressMenu, pressMenu, closePressMenu } from './press-menu.js';
 import { gzChip, snap as snapPrefs, snapBar } from './gizmo.js';
-import { exitMaxedIn, fullScreen } from './layout.js';
+import { exitMaxedIn, fullScreen, fullScreenOf } from './layout.js';
 import { registerUndo, syncUndo } from './undo-dock.js';
 import { onNavigate, switchTab as navigate } from './navigation.js';
 import { wireTableNav } from './table-nav.js';
@@ -51,6 +51,7 @@ import { isLive, liveFrame, liveRoot, setLive } from './live.js';
 import * as M from './table-model.js';
 import * as ST from './layer-stack.js';
 import { frameMenu as frameMenuGroups, frameArrangeMenu, pickedFor } from './layer-menu.js';
+import { filtering, foldedGroups, listRows } from './frame-list.js';
 import { KIND_ICON, copyDoc, createDoc, dropInput, editDoc, frameEl, frameFor, kindOfDoc, loadStills, owedCounts, renameDoc, restoreDoc, stillOf, syncFrame, trashDoc, pausePreviews, previewMode, setPreviewMode } from './table-frames.js';
 import { sidebar } from './sidebar.js';
 
@@ -62,7 +63,9 @@ const NEW_KINDS = ['image', 'video', 'scene', 'sound', 'note'];
 let T = M.blankTable();   // the open table
 const U = { sel: new Set(), els: new Map(), wired: false, lastTap: null, tabs: null, op: null, pts: new Map(), space: false, panelSig: '',
   before: null /* the view before a frame went live */, nudge: null /* arrows held: { ids, before, t } */,
-  loaded: null /* { id, pid } of the table loaded last */, leaving: Promise.resolve() /* the last live frame's saves (table:unlive wait) */ };
+  loaded: null /* { id, pid } of the table loaded last */, find: { q: '', kinds: new Set(), selOnly: false } /* the Frame pane's list filters */,
+  fold: new Map() /* a story scene's row folded or opened by hand, by scene id */, leaving: Promise.resolve() /* the last live frame's saves (table:unlive wait) */ };
+const PENDING = new Map();   // doc id -> results on their way to it (edit:pending { doc, n }, from any kind's edits)
 const H = { past: [], future: [] };   // undo: [{ undo(), redo() }] for this table's moves, resizes and deletes
 const D = {};             // its elements
 
@@ -167,12 +170,15 @@ export function dropStory(storyId) {
 // The frames' elements follow the list (its order is the stacking order); each is made once and kept
 function renderFrames() {
   const seen = new Set(), live = liveFrame(), owed = owedCounts();
+  // waiting results: the image frames' owed runs (table-frames.js), and what edit:pending says for any kind
+  const waiting = (f) => Math.max(f.kind === 'image' ? owed.get(f.doc) || 0 : 0, PENDING.get(f.doc) || 0);
+  if (U.liveBar && live && U.liveBar.name.isConnected) U.liveBar.name.textContent = live.label || M.KIND_LABEL[live.kind];
   T.frames.forEach((f, i) => {
     f.key = f.id;   // (what the stack rules know a frame by)
     let el = U.els.get(f.id);
     if (!el) { el = frameEl(f, { onText: (t) => { f.text = t; changed(); } }); U.els.set(f.id, el); }
     if (D.frames.children[i] !== el) D.frames.insertBefore(el, D.frames.children[i] || null);
-    syncFrame(el, f, { selected: U.sel.has(f.id), live: live?.id === f.id, owed: f.kind === 'image' ? owed.get(f.doc) || 0 : 0 });
+    syncFrame(el, f, { selected: U.sel.has(f.id), live: live?.id === f.id, owed: waiting(f) });
     el.classList.toggle('frame-hidden', !!f.hidden);
     seen.add(f.id);
   });
@@ -257,15 +263,57 @@ export function newFrameAt(kind, rect, { payload, extra = {} } = {}) {
 }
 export const tableGrid = () => ({ ...T.grid });
 
-// Live: the frame's mount root fills the stage less a margin, in .live-layer (unscaled: engines work at 1:1); the
-// table behind is fitted to the frame and dimmed; the frame's module mounts its engine in the root and fits it there.
-const livePad = () => { const { w, h: hh } = stageSize(); return Math.round(Math.max(8, Math.min(32, Math.min(w, hh) * 0.03))); };
-function placeLive({ animate = false } = {}) {
-  const f = liveFrame(), root = liveRoot();
-  if (!f || !root) return;
-  const { w, h: hh } = stageSize(), pad = livePad();
-  root.style.inset = `${pad}px`;
-  if (w && hh) setView(M.liveBackdrop(f, w, hh, pad, { min: ZMIN, max: ZMAX }), { animate, save: false });
+// Live: the frame's mount root fills the stage, in .live-layer (unscaled: engines work at 1:1), the table behind simply
+// covered. Its first child is the live bar: the kind's icon, the name (tap to rename), the one full-screen button and ✕.
+// The frame's module mounts its engine in the root under the bar; the engine's own full screen is what the bar's ⛶ and
+// F work (layout.js fullScreenOf), its own button showing only while it is full screen (to leave it).
+function placeLive() {
+  const root = liveRoot();
+  if (root) root.style.inset = '0px';
+}
+function liveBar(f, root) {
+  const name = h('button', { type: 'button', class: 'live-bar-name', title: 'Rename' }, f.label || M.KIND_LABEL[f.kind]);
+  name.addEventListener('click', () => renameLive(f, name));
+  const full = h('button', { type: 'button', class: 'icon-btn live-bar-btn live-full', 'aria-label': 'Full screen (F)', title: 'Full screen (F)' }, '⛶');
+  full.addEventListener('click', () => {
+    const max = fullScreenOf(root);
+    if (max) max.toggle(); else toast('Full screen comes once the frame has opened');
+  });
+  const close = h('button', { type: 'button', class: 'icon-btn live-bar-btn live-close', 'aria-label': 'Close (Esc)', title: 'Back to the table (Esc)' }, icon('close'));
+  close.addEventListener('click', () => unlive());
+  const bar = h('div', { class: 'live-bar', 'data-kind': f.kind },
+    h('span', { class: 'live-bar-kind', 'aria-hidden': 'true' }, icon(KIND_ICON[f.kind])), name, h('span', { class: 'live-bar-gap' }), full, close);
+  for (const ev of ['pointerdown', 'dblclick', 'wheel']) bar.addEventListener(ev, (e) => e.stopPropagation());
+  // a module that empties the root (frame-image, frame-scene: replaceChildren) gets the bar back on top
+  const keep = new MutationObserver(() => { if (root.firstChild !== bar) root.prepend(bar); });
+  keep.observe(root, { childList: true });
+  root.append(bar);
+  return { bar, name, stop: () => keep.disconnect() };
+}
+function renameLive(f, btn) {
+  const was = f.label || '', ok = here();
+  const input = h('input', { type: 'text', class: 'live-bar-rename', value: was, maxLength: 120, 'aria-label': 'Name' });
+  let done = false;
+  const finish = (keep) => {
+    if (done) return;
+    done = true;
+    const v = input.value.trim();
+    if (keep && v && v !== was && ok() && byId(f.id) === f) {
+      f.label = v; changed();
+      renameDoc(f, f.label).catch((e) => toast(`Couldn't rename its document: ${e.message}`, true));
+    }
+    btn.textContent = f.label || M.KIND_LABEL[f.kind];
+    input.replaceWith(btn);
+    U.panelSig = ''; renderFrames();
+  };
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+  btn.replaceWith(input);
+  input.focus(); input.select();
 }
 export function goLive(f) {
   if (!f) return;
@@ -276,11 +324,12 @@ export function goLive(f) {
   pausePreviews();   // (the tiles' clips stop: the live frame has the screen)
   U.sel = new Set([f.id]);
   U.before = { ...T.view };
-  const root = h('div', { class: 'frame-mount', 'data-frame': f.id });
+  const root = h('div', { class: 'frame-mount', 'data-frame': f.id, 'data-kind': f.kind });
   D.live.append(root);
   if (!setLive(f, root)) { root.remove(); U.before = null; return; }
+  U.liveBar = liveBar(f, root);
   D.stage.classList.add('table-live');
-  placeLive({ animate: true });
+  placeLive();
   renderFrames();
   dispatchEvent(new CustomEvent('table:live', { detail: { frame: f, root, table: T, handled: false } }));
 }
@@ -290,13 +339,14 @@ export function unlive() {
   if (!f) return U.leaving;
   const root = liveRoot();
   exitMaxedIn(root);   // (a full screen inside it goes first: its stage is about to move)
+  U.liveBar?.stop(); U.liveBar = null;
   const detail = { frame: f, root, wait: [] };
   dispatchEvent(new CustomEvent('table:unlive', { detail }));
   U.leaving = Promise.allSettled([U.leaving, ...detail.wait]).then(() => {});
   setLive(null);
   root?.remove();
   D.stage?.classList.remove('table-live');
-  if (U.before) { setView(U.before, { animate: true, save: false }); U.before = null; }
+  if (U.before) { setView(U.before, { save: false }); U.before = null; }
   renderFrames();
   refreshStills([f.kind]);   // (its still may have changed while it was open)
   return U.leaving;
@@ -567,14 +617,18 @@ function frameMenu(x, y, f = null) {
   };
   const groups = frameMenuGroups({ selected: list.length, openable: !!one && one.kind !== 'note' && !one.hidden, grouped: list.some((s) => s.group),
     hidden: list.every((s) => s.hidden), locked: list.every((s) => s.locked), extra: extra.filter((g) => g?.length) });
+  // Align ▸, Distribute ▸, Same size ▸: their part of Arrange as a submenu (press-menu.js `sub`)
   const parts = { align: ['align'], distribute: ['distribute', 'tidy'], size: ['size'] };
-  openPressMenu(x, y, groups.map((g) => g.map((it) => (it.run ? it : { ...it,
-    run: it.sub ? () => arrangeMenu(x, y, parts[it.sub]) : run[it.id] }))), 'Frame');
+  openPressMenu(x, y, groups.map((g) => g.map((it) => (it.run || typeof it.sub === 'function' || Array.isArray(it.sub) ? it
+    : typeof it.sub === 'string' ? { ...it, sub: arrangeGroups(parts[it.sub]) } : { ...it, run: run[it.id] }))), 'Frame');
+}
+function arrangeGroups(parts) {
+  const all = frameArrangeMenu(), n = selected().filter((f) => !f.hidden).length;
+  return parts.map((p) => all[p].map((it) => ({ ...it, disabled: n < 2, run: () => arrange(it.id) })));
 }
 // Arrange: what frameArrangeMenu offers, those parts of it (all of them from the bar's Arrange ▾)
 function arrangeMenu(x, y, parts = ['align', 'distribute', 'tidy', 'size']) {
-  const all = frameArrangeMenu(), n = selected().filter((f) => !f.hidden).length;
-  openPressMenu(x, y, parts.map((p) => all[p].map((it) => ({ ...it, disabled: n < 2, run: () => arrange(it.id) }))), 'Arrange');
+  openPressMenu(x, y, arrangeGroups(parts), 'Arrange');
 }
 // The selection (shown ones, in the order picked) aligned, spread, sized or tidied: one undo step, on the grid when it is on
 function arrange(id) {
@@ -940,12 +994,42 @@ function renderPanel() {
   U.panelSig = sig;
   D.panel.replaceChildren(
     section('Frames', null, help('Drag on empty table to make a frame there; double-tap empty table for the quick starts. Double-click a frame, or press Enter, to open it at full size; Esc comes back. Wheel zooms, Space + drag pans, Shift+F fits, F is full screen. The list is the frames as layers, the top one drawn on top: drag a row by its grip to restack it, or onto a group\'s row to put it in the group. Shift-click a row for a range, Ctrl-click to add or drop one. Double-click a name to rename it. Right click a row or a frame, or hold a finger on it, for the rest. Keys: Ctrl+G groups, Ctrl+Shift+G ungroups, Ctrl+J duplicates, Ctrl+] and Ctrl+[ step up and down, with Shift to the top and bottom, H hides, L locks. A hidden frame keeps its place but is left out of the table, the box, Fit and a story\'s rows. Arrange on the bar lines up two or more frames, on the grid when it is on.'),
-      T.frames.length ? frameList() : hint('No frames yet.')),
+      ...(T.frames.length ? frameListArea() : [hint('No frames yet.')])),
     section('Frame', null, one ? frameFields(one) : hint(s.length ? `${s.length} frames selected` : 'Select a frame.')));
 }
-// The frames as the editor lists layers (ui.js layerRowsEl; layer-stack.js rowsOf, moveRow): top first, groups as rows
+// The frames as the editor lists layers (ui.js layerRowsEl; layer-stack.js rowsOf, moveRow): top first, groups as rows.
+// Over it: a search, the kinds to show and Selected only (frame-list.js says which rows show); a long list starts with
+// its groups and a story's scenes folded.
+function frameFinder() {
+  const F = U.find;
+  const relist = () => { D.listHost?.replaceChildren(frameList()); };
+  const q = h('input', { type: 'search', class: 'frame-find', placeholder: 'Find frames', value: F.q, 'aria-label': 'Find frames by name or kind' });
+  q.addEventListener('input', () => { F.q = q.value; relist(); });
+  q.addEventListener('keydown', (e) => { if (e.key === 'Escape' && q.value) { e.preventDefault(); e.stopPropagation(); q.value = ''; F.q = ''; relist(); } });
+  const kinds = NEW_KINDS.filter((k) => T.frames.some((f) => f.kind === k));
+  const chip = (label, on, fn, title) => {
+    const b = h('button', { type: 'button', class: `chip frame-find-chip${on ? ' on' : ''}`, 'aria-pressed': String(!!on), title }, label);
+    b.addEventListener('click', () => { fn(); b.classList.toggle('on'); b.setAttribute('aria-pressed', String(b.classList.contains('on'))); relist(); });
+    return b;
+  };
+  return h('div', { class: 'frame-finder' }, q,
+    h('div', { class: 'frame-find-chips' },
+      kinds.length > 1 ? kinds.map((k) => chip(M.KIND_LABEL[k], F.kinds.has(k), () => { if (F.kinds.has(k)) F.kinds.delete(k); else F.kinds.add(k); }, `Only ${M.KIND_LABEL[k]} frames`)) : null,
+      chip('Selected only', F.selOnly, () => { F.selOnly = !F.selOnly; }, 'Only the selected frames')));
+}
+function frameListArea() {
+  D.listHost = h('div', { class: 'frame-list-host' }, frameList());
+  return [T.frames.length > 8 ? frameFinder() : null, D.listHost];
+}
 function frameList() {
-  const rows = ST.rowsOf(T.frames, T.groups);
+  const find = { ...U.find, sel: U.sel };
+  const sceneName = (id) => {
+    const f = T.frames.find((x) => x.story?.scene === id), at = f && U.story?.shotAt?.(f.story.shot);
+    return at ? at.sc.slug || `Scene ${at.si + 1}` : null;
+  };
+  const rows = listRows(T.frames, T.groups, { find, sceneName, folded: (id) => U.fold.get(id) });
+  const eff = foldedGroups(T.frames, T.groups);
+  if (!rows.length) return hint(filtering(find) ? 'No frames match.' : 'No frames yet.');
   const thumbOf = (f) => {
     const url = stillOf(f) || f.preview || null;
     return url ? h('img', { src: url, alt: '', draggable: false, loading: 'lazy' }) : h('span', { class: 'frame-row-kind' }, icon(KIND_ICON[f.kind]));
@@ -958,36 +1042,52 @@ function frameList() {
     const on = list.every((f) => f.locked);
     return iconBtn(on ? 'Unlock (L)' : 'Lock (L)', icon(on ? 'lock' : 'unlock'), () => setLocked(list, !on), { class: `icon-btn ico-btn${on ? ' on' : ''}` });
   };
-  const groupRow = (g) => {
-    const members = T.frames.filter((f) => f.group === g.id);
+  const groupRow = (g, members) => {
+    const folded = !!eff.find((x) => x.id === g.id)?.collapsed;
     return {
       cls: 'frame-group-row', sel: members.length > 0 && members.every((f) => U.sel.has(f.id)), off: members.every((f) => f.hidden),
       onclick: (ev) => rowTap(ev, { group: g, members }),
       thumb: h('span', { class: 'layer-group-mark' }, icon('copy')), name: g.name, hint: `${members.length} frames`,
-      buttons: [iconBtn(g.collapsed ? 'Open the group' : 'Fold the group', icon(g.collapsed ? 'right' : 'chevdown'), () => stackStep(() => { g.collapsed = !g.collapsed; })),
+      buttons: [iconBtn(folded ? 'Open the group' : 'Fold the group', icon(folded ? 'right' : 'chevdown'), () => stackStep(() => { g.collapsed = !folded; })),
         lock(members), eye(members), iconBtn('Ungroup (Ctrl+Shift+G)', icon('close'), () => ungroupSelected([g.id]))],
     };
   };
-  const list = layerRowsEl(rows.map(({ group: g, layer: f, in: inGroup }) => (g ? groupRow(g) : {
-    cls: `frame-row${inGroup ? ' in-group' : ''}`, sel: U.sel.has(f.id), off: !!f.hidden,
-    onclick: (ev) => rowTap(ev, { frame: f }),
-    thumb: thumbOf(f),
-    name: [icon(KIND_ICON[f.kind]), h('span', { class: 'frame-row-label' }, f.label)],
-    hint: `${f.w}×${f.h}${f.hidden ? ' · hidden' : ''}`,
-    buttons: [lock([f]), eye([f])],
-  })), { onReorder: (from, to) => stackStep(() => { T.frames = ST.moveRow(T.frames, T.groups, from, to); }) });
-  [...list.children].forEach((el, i) => { el.dataset.row = rows[i].group ? `g:${rows[i].group.id}` : rows[i].layer.id; });
+  const sceneRow = (sc, members) => ({
+    cls: 'frame-group-row frame-scene-row', sel: members.length > 0 && members.every((f) => U.sel.has(f.id)), off: members.every((f) => f.hidden),
+    onclick: (ev) => rowTap(ev, { members }),
+    thumb: h('span', { class: 'layer-group-mark' }, icon('film')), name: sc.name, hint: `${members.length} frame${members.length === 1 ? '' : 's'}`,
+    buttons: [iconBtn(sc.folded ? 'Open the scene' : 'Fold the scene', icon(sc.folded ? 'right' : 'chevdown'), () => { U.fold.set(sc.id, !sc.folded); D.listHost?.replaceChildren(frameList()); }),
+      lock(members), eye(members)],
+  });
+  const reorder = !filtering(find);
+  const list = layerRowsEl(rows.map((r) => (r.group ? groupRow(r.group, r.members) : r.scene ? sceneRow(r.scene, r.members) : {
+    cls: `frame-row${r.in ? ' in-group' : ''}`, sel: U.sel.has(r.layer.id), off: !!r.layer.hidden,
+    onclick: (ev) => rowTap(ev, { frame: r.layer }),
+    thumb: thumbOf(r.layer),
+    name: [icon(KIND_ICON[r.layer.kind]), h('span', { class: 'frame-row-label' }, r.layer.label)],
+    hint: `${r.layer.w}×${r.layer.h}${r.layer.hidden ? ' · hidden' : ''}`,
+    buttons: [lock([r.layer]), eye([r.layer])],
+  })), { onReorder: reorder ? (from, to) => {
+    const a = rows[from]?.real, b = rows[to]?.real;
+    if (a == null || b == null) return;
+    stackStep(() => { T.frames = ST.moveRow(T.frames, eff, a, b); });
+  } : null });
+  [...list.children].forEach((el, i) => { el.dataset.row = rows[i].group ? `g:${rows[i].group.id}` : rows[i].scene ? `s:${rows[i].scene.id}` : rows[i].layer.id; });
   pressMenu(list, (e) => {
     const it = rows[[...list.children].indexOf(e.target.closest('.layer-row'))];
-    if (it?.group) U.sel = new Set(T.frames.filter((f) => f.group === it.group.id).map((f) => f.id));
+    if (it?.group || it?.scene) U.sel = new Set(it.members.map((f) => f.id));
     frameMenu(e.clientX, e.clientY, it?.layer || null);
   }, { ok: (e) => !e.target.closest('button, .layer-grip, input') });
   return list;
 }
+// the selected frame's row in view (table:select; a row tapped in the list is in view already, so it stays put)
+function showSelectedRow() {
+  D.listHost?.querySelector('.layer-row.sel')?.scrollIntoView({ block: 'nearest' });
+}
 // A tap on a row: Shift picks the range from the last row tapped, Ctrl (or Alt) adds or drops it, else it alone (and
 // in view). The same row tapped again soon: on its name, rename it; elsewhere, open it. A group's row picks its members.
 function rowTap(ev, { frame: f = null, group: g = null, members = [] }) {
-  const id = f ? f.id : `g:${g.id}`, now = Date.now(), again = U.rowTap?.id === id && now - U.rowTap.t < DOUBLE_MS;
+  const id = f ? f.id : g ? `g:${g.id}` : `s:${members[0]?.story?.scene}`, now = Date.now(), again = U.rowTap?.id === id && now - U.rowTap.t < DOUBLE_MS;
   U.rowTap = again ? null : { id, t: now };
   if (again && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey) {
     if (ev.target.closest?.('.layer-name')) return renameRow(id);
@@ -1167,6 +1267,15 @@ function wire() {
   const owedSoon = () => { clearTimeout(owedT); owedT = setTimeout(renderFrames, 200); };
   onServer('deck_generation', owedSoon);
   addEventListener('storage', (e) => { if (e.key === 'deck.imagetools.owed') owedSoon(); });
+  addEventListener('edit:pending', (e) => {
+    const { doc, n } = e.detail || {};
+    if (doc == null) return;
+    if (n > 0) PENDING.set(doc, n); else PENDING.delete(doc);
+    owedSoon();
+  });
+  addEventListener('table:select', () => { if (!isLive()) requestAnimationFrame(showSelectedRow); });
+  import('./frame-menu.js').catch((e) => console.warn('frame menu', e));   // (Edit ▸, Use as ▸, Compare, Finish, Open in …: table:menu)
+  import('./story.js').then((m) => { U.story = m; }).catch(() => {});   // (a story table's scene names, for the list)
 }
 
 // Wire the table and load the project's tables (app.js calls it at start, so the top tabs are there on any screen)

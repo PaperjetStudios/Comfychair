@@ -141,18 +141,11 @@ function tileMenu(e, it, list) {
   ].filter((grp) => grp.length), 'Output');
 }
 
-// ---- the frame menu on the table (table.js table:menu): Compare with another frame or a Shelf tile; Finish a video
-// frame's clips (the runs on its timeline) as the Board's Finish does
-addEventListener('table:menu', (e) => {
-  const { frame: f, frames = [], groups } = e.detail || {};
-  if (!f || f.kind === 'note' || frames.length !== 1) return;
-  const still = stillOf(f);
-  groups.push([{ label: 'Compare with…', disabled: !still, run: () => compareSheet(f) }]);
-  if (f.kind === 'video' && f.doc) groups.push([{ label: 'Finish (H3 1080p)', run: () => finishFrame(f) }]);
-});
+// ---- for the frame menu on the table (frame-menu.js puts these in it): Compare with another frame or a Shelf tile;
+// Finish a video frame's clips (the runs on its timeline) as the Board's Finish does
 // a sheet of what the frame's still can be compared with: the table's other frames' stills, then the Shelf's pictures
 // and clips (the ones selected there first)
-function compareSheet(f) {
+export function compareSheet(f) {
   const me = { o: { url: stillOf(f), kind: 'image' }, label: f.label || 'Frame' };
   if (!me.o.url) return toast(`"${f.label}" has no picture yet: open it once`, true);
   const go = (other) => { closeSheet(); openCompare([me, other]); };
@@ -172,7 +165,7 @@ function compareSheet(f) {
     actions(button('Cancel', closeSheet, { cls: 'small ghost' })));
 }
 // a video frame's clips that are runs (its timeline's items), finished with H3 (board.js finishClips)
-async function finishFrame(f) {
+export async function finishFrame(f) {
   let d;
   try { d = await api(`/api/store/${DOC_KIND.video}/${f.doc}${S.project != null ? `?project_id=${S.project}` : ''}`, { busy: false }); }
   catch (err) { return toast(err.message, true); }

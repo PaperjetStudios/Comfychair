@@ -31,3 +31,17 @@ export function layerOf(layers, was) {
 export function besideX(rect, nth = 0, fixedCanvas = false) {
   return fixedCanvas ? rect.x : rect.x + nth * (rect.w + Math.round(rect.w * 0.02));
 }
+
+// ---- runs that land in a video or sound frame (web/edit-run.js: the Edit pane on a table) ----
+// What a run needs to land after a reload: to = { tab (the landing frame's document), frame (its id), kind (its kind),
+// op (the op's id), label (the clip's name), as ('clip' | 'sound': how its output goes in), project (where the document is) }.
+export function landingRecord(g, to, now = Date.now()) {
+  return { id: g.id, prompt: g.prompt_id, tab: to.tab, frame: to.frame ?? null, kind: to.kind, op: to.op, as: to.as || 'clip', at: now,
+    ...(to.label ? { label: to.label } : {}), ...(to.project != null ? { project: to.project } : {}) };
+}
+// how many runs each document is still owed: { [tab]: n }
+export function owedCounts(list) {
+  const n = {};
+  for (const r of list) n[r.tab] = (n[r.tab] || 0) + 1;
+  return n;
+}

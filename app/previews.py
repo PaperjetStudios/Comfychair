@@ -1,4 +1,5 @@
-"""Light previews of saved outputs for grids (the Board, pickers): GET /api/preview?u=<file url>&w=<px>&kind=still|clip.
+"""Light previews of saved outputs for grids (the Board, pickers, the table's tiles): GET /api/preview?u=<file url>&w=<px>&kind=still|clip.
+u: a /files/projects|media|generations|library URL, or a picture's /api/input?name= URL (a timeline item with src {input}).
 
   still  a JPEG at most w px wide: the picture itself, or a video's frame at 0.1 s
   clip   a video at most w px wide, 8 fps, no sound, quick to load: the Board plays these while a tile is on screen
@@ -14,7 +15,7 @@ import hashlib
 import re
 import subprocess
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
@@ -35,8 +36,26 @@ FPS = 8
 _busy = asyncio.Semaphore(2)
 
 
+def _input(name: str) -> Path:
+    """One of the project's pictures (an input's name, as /api/input?name= takes it): its local copy only. Its previews start
+    with that copy's tag, so deleting the picture deletes them (storage.delete_input drops the caches of its files)."""
+    from .main import local_input   # (main imports this module)
+    p = local_input(name)
+    if p is None or not p.is_file() or config.INPUT_DIR.resolve() not in p.resolve().parents:
+        raise HTTPException(404, "No such file")
+    return p.resolve()
+
+
 def source(url: str) -> Path:
-    """The file behind one of ComfyChair's /files/ URLs (never outside those folders)."""
+    """The file behind one of ComfyChair's /files/ URLs, or a picture's /api/input?name= URL (never outside those folders)."""
+    parts = urlsplit(url)
+    if parts.path == "/api/input":
+        name = (parse_qs(parts.query).get("name") or [""])[0]
+        if not name:
+            raise HTTPException(404, "No such file")
+        return _input(name)
+    if parts.path.startswith("/files/input/"):
+        return _input(unquote(parts.path[len("/files/input/"):]))
     path = unquote(url.split("?", 1)[0].split("#", 1)[0])
     for prefix, root in ROOTS.items():
         if path.startswith(prefix):

@@ -93,9 +93,12 @@ onServer('deck_projects', async (m) => {
 const tableOn = () => !!document.querySelector('#tab-table.active, #tab-table.live-host');
 let makeMod = null;
 import('./make-panel.js').then((m) => { makeMod = m; syncActionBar(); }).catch((e) => console.error('Make panel:', e));
+let editMod = null;
+import('./edit-panel.js').then((m) => { editMod = m; syncActionBar(); }).catch((e) => console.error('Edit panel:', e));
 function syncActionBar() {
   const b = $('#genBtn'), on = tableOn();
-  const st = on && makeMod ? makeMod.makeState() : { label: 'Generate', why: null };
+  let st = on && makeMod ? makeMod.makeState() : { label: 'Generate', why: null };
+  if (on && editMod?.editActive()) { const e = editMod.editState(); st = { label: e.label, why: e.can ? null : e.why }; }   // (the Edit pane on show: Run <op>)
   if (b.textContent !== st.label) b.textContent = st.label;
   if (st.why || b.dataset.why) b.disabled = !!st.why;   // (only what this set: generate() holds it off while it queues)
   if (st.why) b.dataset.why = st.why; else delete b.dataset.why;

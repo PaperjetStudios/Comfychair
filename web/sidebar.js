@@ -21,9 +21,9 @@ import { sectionTargets, sideNav } from './layout.js';
 import { liveFrame } from './live.js';
 
 const P = { panes: new Map(), order: [], cur: null, strip: null, body: null, root: null, ctx: { frames: [], live: null }, fns: new Set(), built: false };
-const DEFAULTS = { make: { title: 'Make', icon: 'sparkle' }, layers: { title: 'Layers', icon: 'rows' }, frame: { title: 'Frame', icon: 'fit' },
+const DEFAULTS = { make: { title: 'Make', icon: 'sparkle' }, edit: { title: 'Edit', icon: 'brush' }, layers: { title: 'Layers', icon: 'rows' }, frame: { title: 'Frame', icon: 'fit' },
   story: { title: 'Story', icon: 'story' }, shelf: { title: 'Shelf', icon: 'board' } };
-const ORDER = ['make', 'layers', 'frame', 'story', 'shelf'];
+const ORDER = ['make', 'edit', 'layers', 'frame', 'story', 'shelf'];
 // when the sidebar's own panes show, from its context (a `when` passed for these is ignored: several modules share them)
 const ENGINE_KINDS = ['image', 'video', 'sound', 'scene'];
 const WHEN = { layers: (c) => ENGINE_KINDS.includes(c.live?.kind) };

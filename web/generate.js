@@ -19,6 +19,7 @@ import { FULL, templateAspect } from './editor.js';
 import { MASK_DEFAULT, openMaskPainter } from './maskpaint.js';
 import { loraStack } from './lora-pick.js';
 import { icon } from './icons.js';
+import { sidebar } from './sidebar.js';
 import { kreaTag } from './cast.js';
 import { openDescribe, openImprove, tplTarget } from './prompthelp.js';
 
@@ -1104,7 +1105,10 @@ export function afterQueued(gens, batch = S.batch) {
 
 export async function generate() {
   // Generate (and Ctrl+Enter) on the table runs its Make panel for the selection (web/make-panel.js)
-  if (document.querySelector('#tab-table.active, #tab-table.live-host')) return (await import('./make-panel.js')).runMake();
+  if (document.querySelector('#tab-table.active, #tab-table.live-host')) {
+    if (sidebar.current() === 'edit') return (await import('./edit-panel.js')).runEdit();   // (the Edit pane on show: web/edit-panel.js)
+    return (await import('./make-panel.js')).runMake();
+  }
   if ($('#tab-generate').hasAttribute('aria-busy')) return;
   if (!S.tpl || S.tpl.error) return toast('Pick a working template first', true);
   const values = runValues();

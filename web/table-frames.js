@@ -3,12 +3,12 @@
 // those documents keep, and frames made from things dropped on the table (a picture, a clip, a sound, a file).
 // table.js places and drives the frames; table-model.js has their geometry.
 import { h, api, store, icon, uid, clone } from './ui.js';
-import { S, inputUrl, thumbUrl } from './core.js';
+import { S, inputUrl, previewUrl, thumbUrl } from './core.js';
 import { BLANK } from './editor-engine.js';
 import { itemUrl, uploadImage, uploadMedia } from './media.js';
 import { wavePeaks } from './timeline.js';
 import { dropKind } from './drop-files.js';
-import { DOC_KIND, KIND_LABEL, newFrame } from './table-model.js';
+import { DOC_KIND, KIND_LABEL, newFrame, overlaps } from './table-model.js';
 import { owedFor } from './owed-runs.js';
 import { emptyPayload } from './empty-docs.js';
 import { refused, refusal } from './tabs.js';
@@ -139,6 +139,37 @@ export async function putStill(kind, id, blob) {
   (await import('./table.js')).refreshStills([kind]).catch(() => {});   // (the table asked once as the frame let go, before this one was saved)
 }
 
+// ---- where an edit of a frame from the table lands: a new frame beside its source ----
+// The first free spot right of the source, on its row (a frame in the way: past it)
+export function besideSpot(frames, source, { w, h }, gap = 40) {
+  const spot = { x: source.x + source.w + gap, y: source.y };
+  for (let i = 0; i < 1000; i++) {
+    const hit = frames.find((f) => f !== source && overlaps(f, { ...spot, w, h }));
+    if (!hit) break;
+    spot.x = hit.x + hit.w + gap;
+  }
+  return spot;
+}
+// The frame a result made from `source` lands in (an Edit pane run, the frame menu, several selected): a new frame of
+// `kind` (default the source's) beside it, its document made at once, so an owed run keyed on that document lands there
+// (imagetools.js landMade / runToolOn, make-panel.js landClip). label: the new frame's whole label (default
+// "Result · <source label>"). An image frame fits its layers, so a result placed at the source's own canvas spot shows
+// whole; a video or sound frame starts empty. The selection is left as it was. Returns the frame (null if not made).
+export async function resultFrame(source, { kind = source.kind, label } = {}) {
+  const Table = await import('./table.js');
+  const frames = Table.tableFrames() || [];
+  const size = kind === 'sound' ? { ...SOUND_SIZE } : kind === source.kind ? { w: source.w, h: source.h } : { w: 1024, h: 1024 };
+  const at = besideSpot(frames, source, size);
+  const box = source.kind === 'image' && source.fit && source.fitBox ? { ...source.fitBox } : { x: 0, y: 0, w: size.w, h: size.h };
+  const extra = { label: String(label || `Result · ${source.label || KIND_LABEL[source.kind]}`).slice(0, 120),
+    ...(kind === 'image' && { fit: true, fitBox: box }) };   // (never the source's story place: a result for a shot sits beside its row, not as the shot)
+  const payload = kind === 'image' ? { ...BLANK(), size: null } : blankPayload(kind);
+  const was = (Table.selectedFrames() || []).map((f) => f.id);
+  const f = await Table.newFrameAt(kind, { ...at, ...size }, { payload, extra });
+  if (f && was.length) Table.selectFrames(was);   // (newFrameAt selects the new one: a run on several frames keeps them)
+  return f || null;
+}
+
 // ---- results waiting: runs imagetools.js still owes an edit (deck.imagetools.owed), counted per document id ----
 export function owedCounts() {
   const list = store.get('deck.imagetools.owed', []), out = new Map();
@@ -174,7 +205,17 @@ export function frameEl(f, { onText }) {
     ta.addEventListener('input', () => onText(ta.value));
     body.append(ta);
   } else {
-    body.append(h('img', { class: 'frame-still hidden', alt: '', draggable: false }),
+    const still = h('img', { class: 'frame-still hidden', alt: '', draggable: false });
+    still.addEventListener('error', () => {   // (a poster the server couldn't make: the icon, and a sound's waveform drawn here instead)
+      still.dataset.bad = '1'; still.classList.add('hidden');
+      el.querySelector('.frame-ph')?.classList.remove('hidden');
+      const url = el._pv?.url;
+      if (f.kind === 'sound' && url && still.getAttribute('src') === previewUrl(url, 640, 'wave')) {
+        NOWAVE.add(url); el.classList.remove('frame-waved');
+        if (el._pv?.lastF) applyPreview(el, el._pv.lastF);
+      }
+    });
+    body.append(still,
       h('div', { class: 'frame-ph' }, icon(KIND_ICON[f.kind], 40), h('span', {}, KIND_LABEL[f.kind])));
   }
   const badge = h('span', { class: 'frame-owed hidden', role: 'status' });   // (in the label bar, so a live frame's engine never covers it)
@@ -200,16 +241,30 @@ export function syncFrame(el, f, { selected = false, live = false, owed = 0 } = 
     badge.textContent = owed ? `${owed} waiting` : '';
     badge.title = owed ? `${owed} result${owed > 1 ? 's' : ''} waiting: open the frame to land ${owed > 1 ? 'them' : 'it'}` : '';
   }
-  const img = el.querySelector('.frame-still');
-  if (img) {
-    const url = stillOf(f) || f.preview || null;   // (preview: the picture a frame was made from, until its document has a still)
-    if (url && img.getAttribute('src') !== url) img.src = url;
-    img.classList.toggle('hidden', !url);
-    el.querySelector('.frame-ph').classList.toggle('hidden', !!url);
-  }
-  if (f.kind === 'video' || f.kind === 'sound') syncPreview(el, f);
+  if (f.kind === 'video' || f.kind === 'sound') syncPreview(el, f);   // (first: it reads the first clip, whose poster is the still's stand-in)
+  showStill(el, f);
   const ta = el.querySelector('.frame-text');
   if (ta && document.activeElement !== ta && ta.value !== (f.text || '')) ta.value = f.text || '';
+}
+
+// The tile's picture: its document's still, else the picture it was made from (f.preview), else (a video or sound frame)
+// its first clip's poster, the server's still or waveform of it (app/previews.py), there at once and after a reload
+function showStill(el, f) {
+  const img = el.querySelector('.frame-still');
+  if (!img) return;
+  const url = stillOf(f) || f.preview || posterOf(el, f) || null;
+  if (url && img.getAttribute('src') !== url) { img.dataset.bad = ''; img.src = url; }
+  const ok = !!url && !img.dataset.bad;
+  img.classList.toggle('hidden', !ok);
+  el.querySelector('.frame-ph').classList.toggle('hidden', ok);
+  el.classList.toggle('frame-waved', f.kind === 'sound' && ok && url === posterOf(el, f));   // (the server's waveform is stretched to the strip)
+}
+// a first clip's poster: a video's still, a sound's waveform. null until the frame's document has been read
+function posterOf(el, f) {
+  const st = el._pv, item = st?.key ? PREVS.get(st.key)?.item : null;
+  if (!item?.url) return null;
+  if (f.kind === 'sound') return NOWAVE.has(item.url) ? null : previewUrl(item.url, 640, 'wave');
+  return previewUrl(item.url, 320);
 }
 
 // ---- tile previews: a video frame's tile plays its first clip, a sound frame's tile draws its waveform ----
@@ -217,7 +272,8 @@ export function syncFrame(el, f, { selected = false, live = false, owed = 0 } = 
 // or audio item (sound), read when the tile first shows and again whenever the kind's stills reload (a `store` message).
 // A clip plays muted and looped from its `in` point to its `out`; which tiles play is decided in pump(), below.
 const PREVS = new Map();   // 'kind:id' -> { epoch, item: { url, in, out } | null }
-const WAVES = new Map();   // url -> { peaks, rate } | 'none'
+const WAVES = new Map();   // url -> { peaks, rate } | 'none' (drawn here only when the server's couldn't be made)
+const NOWAVE = new Set();   // sound urls whose server waveform (app/previews.py) failed
 const TILES = new Set();   // the video and sound tiles made (each el has el._pv)
 const MAX_PLAYING = 4;
 const PTR = { x: -1e9, y: -1e9 };
@@ -285,7 +341,7 @@ async function loadPrev(el, f) {
   st.loading = false;
   if (!ok) return;
   PREVS.set(key, { epoch, item });
-  if (el._pv && el.isConnected) applyPreview(el, f);
+  if (el._pv && el.isConnected) { applyPreview(el, f); showStill(el, f); }
 }
 
 // bring a tile's video or waveform up to its frame
@@ -293,6 +349,7 @@ function syncPreview(el, f) {
   const st = el._pv;
   if (!st) return;
   if (!st.seen && el.isConnected) st.seen = true;
+  st.lastF = f;
   if (!f.doc) { st.key = null; applyPreview(el, f); return; }
   const key = `${f.kind}:${f.doc}`, e = PREVS.get(key);
   if (!e || e.epoch !== (PREV_EPOCH.get(f.kind) || 0)) loadPrev(el, f);
@@ -300,7 +357,7 @@ function syncPreview(el, f) {
   applyPreview(el, f);
 }
 function applyPreview(el, f) {
-  const st = el._pv, body = el.querySelector('.frame-body'), img = el.querySelector('.frame-still');
+  const st = el._pv, body = el.querySelector('.frame-body');
   if (!st || !body) return;
   const item = st.key ? PREVS.get(st.key)?.item || null : null;
   if (f.kind === 'video') {
@@ -310,13 +367,11 @@ function applyPreview(el, f) {
       v = st.video = h('video', { class: 'frame-clip hidden', muted: true, loop: true, playsinline: true, preload: 'metadata', tabindex: -1, 'aria-hidden': 'true', draggable: false });
       v.muted = true; v.loop = true; v.playsInline = true;
       v.addEventListener('loadedmetadata', () => { if (st.cin > 0 && v.currentTime < st.cin) v.currentTime = st.cin; });
-      v.addEventListener('loadeddata', () => showClip(el));
+      for (const ev of ['playing', 'pause', 'emptied', 'ended']) v.addEventListener(ev, () => showClip(el));
       v.addEventListener('timeupdate', () => { if (st.cout && v.currentTime >= st.cout) v.currentTime = st.cin; });
       v.addEventListener('error', () => { st.bad = true; v.classList.add('hidden'); });
       body.insertBefore(v, el.querySelector('.frame-ph'));
     }
-    const poster = img?.getAttribute('src') || '';
-    if (poster) v.setAttribute('poster', poster); else v.removeAttribute('poster');
     if (st.url !== item.url || st.cin !== item.in || st.cout !== item.out) {
       const moved = st.url !== item.url;
       st.url = item.url; st.cin = item.in; st.cout = item.out; st.bad = false;
@@ -333,6 +388,7 @@ function applyPreview(el, f) {
     }
     if (!item) { st.url = null; st.canvas.classList.add('hidden'); return; }
     if (st.url !== item.url || st.cin !== item.in || st.cout !== item.out) { st.url = item.url; st.cin = item.in; st.cout = item.out; }
+    if (!NOWAVE.has(item.url)) { st.canvas.classList.add('hidden'); return; }   // (the server's waveform is the tile's still)
     const w = WAVES.get(item.url);
     if (!w) {
       WAVES.set(item.url, 'loading');
@@ -342,11 +398,11 @@ function applyPreview(el, f) {
     drawWave(el);
   }
 }
-// the clip is shown over the still once it has a picture of its own (or the still, as its poster); the icon goes
+// the clip is shown over the still only while it plays; paused, stopped or let go, the still (or poster) shows again
 function showClip(el) {
   const st = el._pv, v = st?.video;
   if (!v) return;
-  const shown = !st.bad && (!!v.getAttribute('poster') || v.readyState >= 2);
+  const shown = !st.bad && !v.paused && !v.ended && v.readyState >= 2 && !!v.getAttribute('src');
   v.classList.toggle('hidden', !shown);
   if (shown) el.querySelector('.frame-ph')?.classList.add('hidden');
 }

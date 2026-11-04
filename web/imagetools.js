@@ -28,7 +28,7 @@ import { SWAP_MODELS, SWAP_PARTS, biggestArea, changedAround, joined, onlyWithin
 const KEY = 'deck.imagetools';
 const GROUPS = ['Edit', 'Maps', 'Cut out and mask', 'Swap', 'Clean up', 'Colour', 'Upscale', 'Detail'];
 // The row of buttons over the list: the main things, each opening its tool (the first of its tools, unless one of them is open)
-const QUICK = [
+export const QUICK = [
   ['Edit', 'edit', ['edit']], ['Upscale', 'enlarge', ['up', 'upfast']], ['Clean up', 'sparkle', ['clean']], ['Restore', 'photo', ['restore']], ['Colourise', 'palette', ['colorise']],
   ['Remove', 'eraser', ['remove', 'unmark']], ['Cut out', 'cut', ['cutout', 'words', 'sheet']], ['Swap', 'swap', ['swap']], ['Skin', 'person', ['skin']], ['Detail', 'star', ['detail', 'delight']], ['Maps', 'grid', ['depth', 'canny', 'scribble', 'pose']],
 ];
@@ -119,7 +119,15 @@ const ST = { skinWhere: 'whole', skinParts: 'face', samSure: 0.2, samMost: 8, op
 ST.erefs = asRefs(ST.erefs);   // (saved as bare names by an older version)
 if (ST.lprompt === OLD_DELIGHT_PROMPT) ST.lprompt = DELIGHT_PROMPT;   // (the old default, saved in this browser; a prompt someone wrote stays)
 const save = () => store.set(KEY, ST);
-const FLIGHT = new Set();   // runs on their way back
+// Runs on their way back, each with the edit (tab: its document id) it lands in: key (a run id, or a token for a tool's
+// own steps) → tab. imagetools:flight { tab, n } says when a tab's count changed (the Edit pane's per-frame status).
+const FLIGHT = new Map();
+const fly = (key, tab) => { FLIGHT.set(key, tab ?? null); tellFlight(tab); };
+const unfly = (key) => { if (!FLIGHT.has(key)) return; const tab = FLIGHT.get(key); FLIGHT.delete(key); tellFlight(tab); };
+export const inFlight = (tab) => [...FLIGHT.values()].filter((t) => t === tab).length;
+function tellFlight(tab) {
+  if (typeof dispatchEvent === 'function') dispatchEvent(new CustomEvent('imagetools:flight', { detail: { tab: tab ?? null, n: inFlight(tab ?? null) } }));
+}
 const op = () => OPS.find((o) => o.id === ST.op) || OPS[0];
 // the models that can do the chosen part here: the template is installed, and its LoRA if it needs one
 const loraField = (t) => t?.fields.find((f) => f.kind === 'loras');
@@ -375,23 +383,65 @@ async function settle(eng, o, tab, src, done, nth, kept) {
   try { await land(eng, o, src, done, { nth }); } finally { releaseCopy(rec); }
 }
 
-// One queued run, from here until it lands. nth: which variation of its picture
+// One queued run, from here until it lands. nth: which variation of its picture. eng: the editor, or (null) the edit's
+// own: the editor's when it has `tab` open as the run finishes, else the saved edit (docEng). It is kept as owed either way,
+// so a reload before it lands still lands it when the edit next opens (landOwed).
 function follow(eng, o, tab, src, g, nth = 0) {
   const kept = rememberOwed(o, tab, src, g, nth);
   src.runs = (src.runs || 0) + 1;
-  FOLLOWING.add(g.id); FLIGHT.add(g.id); eng.render();
-  waitGen(g.id).then((done) => settle(eng, o, tab, src, done, nth, kept))
+  FOLLOWING.add(g.id); fly(g.id, tab); eng?.render();
+  if (!eng || eng.docOnly) import('./table.js').then((m) => m.refreshStills?.(['image'])).catch(() => {});   // (the frame's tile: a run on its way)
+  waitGen(g.id).then((done) => settle(eng || engFor(tab), o, tab, src, done, nth, kept))
     .catch((e) => { forgetOwed(g.id); toast(`${o.label} failed${src.layer ? ` on ${layerWord(src.layer)}` : ''}: ${e.message}`, true); })
     .finally(() => {
-      FOLLOWING.delete(g.id); FLIGHT.delete(g.id); eng.render();
+      FOLLOWING.delete(g.id); unfly(g.id); eng?.render();
       if (!--src.runs && src.copy) dropInput(src.name);   // (the last run from a copy sent only for these)
     });
+}
+
+// ---- a result for an edit that isn't open: it goes into the saved edit ----
+// The editor when it has `tab` open (live or off screen), else a stand-in with the editor's few landing calls: a layer it is
+// given goes into the saved edit (frame-image.js putLayers) once the landing code is done with it (its export scale set
+// after addImage is taken too), the edit is drawn off screen for its still, and the table's tiles follow.
+function engFor(tab, eng = CURRENT_EDIT.eng) {
+  if (eng?.E?.tab?.id === tab && !eng.docOnly) return eng;
+  return docEng(tab);
+}
+function docEng(tab) {
+  const E = { tab: { id: tab }, layers: [], size: null, out: 0, grow: null };
+  let due = [];
+  const flush = () => {
+    const layers = due; due = [];
+    if (!layers.length) return;
+    landLayerDoc(tab, layers, { out: E.out }).catch((e) => toast(`Couldn't put the result in its frame: ${e.message}`, true));
+  };
+  return { E, docOnly: true, render: () => {}, changed() {}, loading: () => false, ready: () => false, picked: () => [], paint: null,
+    addImage(name, opts = {}) {
+      const l = { name, ...opts };
+      if (!due.length) queueMicrotask(flush);
+      due.push(l);
+      return l;
+    } };
+}
+// layers into the saved edit `tab` (or the editor's, if it opened it meanwhile), then its still and the table's tiles
+async function landLayerDoc(tab, layers, { out = 0 } = {}) {
+  const real = CURRENT_EDIT.eng;
+  if (real?.E?.tab?.id === tab) {
+    for (const { name, ...opts } of layers) real.addImage(name, opts);
+    if (out) real.E.out = Math.max(real.E.out || 1, out);
+    real.changed(); real.render();
+    return;
+  }
+  const fi = await import('./frame-image.js');
+  await fi.putLayers({ doc: tab }, layers, { out });
+  try { await fi.drawOffscreen(tab); } catch (e) { console.warn(e); }
+  (await import('./table.js')).refreshStills(['image']).catch(() => {});
 }
 
 // a kept run, picked up again once the edit's pictures have loaded
 async function resumeOwed(eng, rec) {
   const o = rec.op === MAKE_OP.id ? { ...MAKE_OP, label: rec.label || MAKE_OP.label } : OPS.find((x) => x.id === rec.op), tab = rec.tab;
-  FOLLOWING.add(rec.id); FLIGHT.add(rec.id); eng.render();
+  FOLLOWING.add(rec.id); fly(rec.id, tab); eng.render();
   try {
     if (!o) return forgetOwed(rec.id);
     let g;
@@ -406,7 +456,7 @@ async function resumeOwed(eng, rec) {
     const layer = layerOf(eng.E.layers, rec.was);
     const src = { name: rec.name, px: rec.px, rect: rec.rect, was: rec.was, layer, mask: layer && eng.ready(layer) && KEEPS_FRAMING.has(o.kind) ? maskAsSent(eng, layer) : null };
     await settle(eng, o, tab, src, done, rec.nth, true);
-  } catch (e) { forgetOwed(rec.id); toast(`${o?.label || 'A tool'} failed: ${e.message}`, true); } finally { FOLLOWING.delete(rec.id); FLIGHT.delete(rec.id); eng.render(); }
+  } catch (e) { forgetOwed(rec.id); toast(`${o?.label || 'A tool'} failed: ${e.message}`, true); } finally { FOLLOWING.delete(rec.id); unfly(rec.id); eng.render(); }
 }
 
 // A run made from the table's Make panel (web/make-panel.js) for the image frame whose edit is `tab`: it lands there as a
@@ -415,10 +465,9 @@ async function resumeOwed(eng, rec) {
 // label: the new layer's name. nth: which of a batch it is (variations go side by side); pass the same src for each.
 const MAKE_OP = { id: 'make', kind: 'make', label: 'Made' };
 export function landMade(tab, src, g, { label = MAKE_OP.label, nth = 0 } = {}) {
-  const eng = CURRENT_EDIT.eng;
   const s = Object.assign(src, { layer: src.layer || null, was: src.was || null, mask: src.mask || null, label });   // (one object for a whole batch: its copy goes after the last)
-  if (eng) return follow(eng, { ...MAKE_OP, label }, tab, s, g, nth);
-  putOwed(owedRecord(tab, MAKE_OP.id, s, g, nth));   // (no editor in this page yet: it lands when one opens the edit)
+  const eng = CURRENT_EDIT.eng;
+  return follow(eng?.E?.tab?.id === tab ? eng : null, { ...MAKE_OP, label }, tab, s, g, nth);
 }
 export const owedTo = (tab) => owedFor(owedList(), tab);
 
@@ -429,22 +478,42 @@ export function landOwed(eng) {
   for (const rec of owedFor(owedList(), tab)) if (!FOLLOWING.has(rec.id)) resumeOwed(eng, rec);
 }
 
+// Why a tool can't run now with its settings (null: it can). With eng, the editor's state too (its pictures loading, a crop
+// being extended, no picture). Without one (a frame from the table), what needs the open editor: painted masks, marks, the
+// mask as a result, a sheet's cells.
+export function whyNot(o, t = template(tplId(o)), { eng = null } = {}) {
+  if (typeof o === 'string') o = OPS.find((x) => x.id === o);
+  if (!o) return 'No such tool';
+  if (o.kind === 'swap' && !ST.swapFrom) return 'Pick the picture to take it from first';
+  if (o.kind === 'swap' && !swapModels().length) return 'Tick an installed model first';
+  if (o.kind === 'swap' && !template('deck-mask-image')) return 'deck-mask-image isn\'t installed';
+  if (!t) return `${tplId(o)} isn't installed`;
+  if (eng) {
+    if (eng.loading()) return 'The images are still loading';
+    if (eng.E.grow) return 'Press Extend or Cancel on the crop first';
+  }
+  if (o.prompt && !ST.prompt.trim()) return 'Say what to find first';
+  if (o.model === 'skin' && !partsOf(ST.skinParts).length) return 'Say which body parts first';
+  if (eng && !eng.E.layers.some((l) => !l.mask && !l.draft)) return 'Add a picture first';
+  if (o.kind === 'remove' && ST.rfrom === 'words' && !termsOf(ST.rprompt).length) return 'Say what to remove first';
+  if (o.kind === 'remove' && !template('deck-mask-image')) return 'deck-mask-image isn\'t installed';
+  if (o.kind === 'edit' && !ST.eprompt.trim()) return 'Say what to change first';
+  if (o.kind === 'edit' && ST.ewhere === 'words' && !termsOf(ST.efind).length) return 'Say what to find first';
+  if (o.kind === 'edit' && ST.ewhere === 'words' && !template('deck-mask-image')) return 'deck-mask-image isn\'t installed';
+  if (!eng) {
+    if (o.kind === 'remove') return 'Remove marks what goes in red on the picture: open the frame';
+    if (o.kind === 'sheet') return 'A sheet\'s views land as layers where its cells were: open the frame';
+    if (o.kind === 'matte' && ST.result === 'mask') return 'A mask goes on the open picture: open the frame, or pick Cut-out layer';
+    if (o.kind === 'edit' && ST.ewhere === 'painted') return 'The red mask is painted on the open picture: open the frame';
+    if (o.kind === 'swap' && ST.swapWhere === 'painted') return 'The red mask is painted on the open picture: open the frame';
+  }
+  return null;
+}
+
 async function run(eng) {
   const o = op(), t = template(tplId(o));
-  if (o.kind === 'swap' && !ST.swapFrom) return toast('Pick the picture to take it from first', true);
-  if (o.kind === 'swap' && !swapModels().length) return toast('Tick an installed model first', true);
-  if (o.kind === 'swap' && !template('deck-mask-image')) return toast('deck-mask-image isn\'t installed', true);
-  if (!t) return toast(`${tplId(o)} isn't installed`, true);
-  if (eng.loading()) return toast('The images are still loading', true);
-  if (eng.E.grow) return toast('Press Extend or Cancel on the crop first', true);
-  if (o.prompt && !ST.prompt.trim()) return toast('Say what to find first', true);
-  if (o.model === 'skin' && !partsOf(ST.skinParts).length) return toast('Say which body parts first', true);
-  if (!eng.E.layers.some((l) => !l.mask && !l.draft)) return toast('Add a picture first', true);
-  if (o.kind === 'remove' && ST.rfrom === 'words' && !termsOf(ST.rprompt).length) return toast('Say what to remove first', true);
-  if (o.kind === 'remove' && !template('deck-mask-image')) return toast('deck-mask-image isn\'t installed', true);
-  if (o.kind === 'edit' && !ST.eprompt.trim()) return toast('Say what to change first', true);
-  if (o.kind === 'edit' && ST.ewhere === 'words' && !termsOf(ST.efind).length) return toast('Say what to find first', true);
-  if (o.kind === 'edit' && ST.ewhere === 'words' && !template('deck-mask-image')) return toast('deck-mask-image isn\'t installed', true);
+  const why = whyNot(o, t, { eng });
+  if (why) return toast(why, true);
   const tab = eng.E.tab?.id, b = busy('Sending the picture…');
   try {
     await eng.paint.savePaint();
@@ -471,7 +540,7 @@ async function runSheet(eng, o, t, tab, src) {
     const sc = set('scale_by', ST.sheetFast ? ST.scale / 4 : ST.scale);
     const values = { [imageField.key]: cell.name, ...valuesByRole(t, { seed: -1, prompt: ST.prompt.trim(), confidence: ST.samSure }), ...(sc && { [sc[0]]: sc[1] }) };
     const [g] = await queueRun({ template: t.id, values, batch: 1 });
-    FLIGHT.add(g.id); eng.render();
+    fly(g.id, tab); eng.render();
     waitGen(g.id).then(async (done) => {
       if (eng.E.tab?.id !== tab) return toast(`${o.label} #${done.id} finished on another edit: it is in History`);
       await land(eng, o, src, done, cell);
@@ -480,7 +549,7 @@ async function runSheet(eng, o, t, tab, src) {
       // SAM3's worker now and then fails a run ("Inference tensors do not track version counter") that works when sent again
       if (again) return start(cell, false).catch((e2) => toast(`${o.label} cell ${cell.r + 1}-${cell.c + 1} failed: ${e2.message}`, true));
       toast(`${o.label} cell ${cell.r + 1}-${cell.c + 1} failed: ${e.message}`, true);
-    }).finally(() => { FLIGHT.delete(g.id); eng.render(); });
+    }).finally(() => { unfly(g.id); eng.render(); });
   };
   for (const cell of cells) await start(cell, true);
 }
@@ -506,8 +575,8 @@ async function fillIn(eng, o, t, tab, src, maskCv) {
     c.drawImage(pic, box.x, box.y, box.w, box.h, 0, 0, cv.width, cv.height);
     return cv;
   };
-  const b = busy(`${o.label}…`);
-  FLIGHT.add(fillIn); eng.render();
+  const b = busy(`${o.label}…`), mk = {};
+  fly(mk, tab); eng.render();
   try {
     const boxes = boxesFor(separateAreas(red, W, H), W, H, 0.5);
     for (const [n, box] of boxes.entries()) {
@@ -532,12 +601,12 @@ async function fillIn(eng, o, t, tab, src, maskCv) {
     hideOriginal(eng, src, eng.addImage(r.name, { label: 'Removed', ...placed(src, src.rect.x, src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) }));
     eng.changed(); eng.render();
     toast(`${o.label}: done, a new layer on top`);
-  } finally { FLIGHT.delete(fillIn); b.done(); eng.render(); }
+  } finally { unfly(mk); b.done(); eng.render(); }
 }
 
 // SAM3 on a picture: how sure it must be and how many it takes, as set in the panel (the template's own fields)
 const samKnobs = (t) => valuesByRole(t, { confidence: ST.samSure, maxFound: ST.samMost });
-const samFields = (eng, most = true) => [
+const samFields = (_eng, most = true) => [
   rangeField('How sure', () => ST.samSure, (v) => { ST.samSure = v; save(); }, { min: 0.05, max: 0.95, step: 0.05,
     help: 'What SAM3 needs to be sure of before it takes something. Lower finds more, and may take the wrong things; higher finds less.' }),
   most ? rangeField('At most', () => ST.samMost, (v) => { ST.samMost = v; save(); }, { min: 1, max: 32, step: 1, fmt: (v) => String(v),
@@ -667,8 +736,8 @@ async function swapArea(eng, o, tab, src, { mask: red, keep }, b) {
   const before = wc.getImageData(0, 0, box.w, box.h).data;
   b.set('Finding the part to take…');
   const ref = await swapReference(part), closeUp = await uploadImage(await pngBlob(close), { mp: 0, source: 'editor', filename: 'swap-close.png', multiple: 1 });
-  const wanted = swapModels();
-  FLIGHT.add(swapArea); eng.render();
+  const wanted = swapModels(), mk = {};
+  fly(mk, tab); eng.render();
   try {
     for (const [n, key] of wanted.entries()) {
       const m = SWAP_MODELS[key], t = template(m.tpl);
@@ -686,7 +755,7 @@ async function swapArea(eng, o, tab, src, { mask: red, keep }, b) {
       } catch (e) { toast(`${m.label}: ${e.message}`, true); } finally { if (run) await dropRun(run.id); if (smaller) await dropInput(smaller); }
     }
   } finally {
-    FLIGHT.delete(swapArea);
+    unfly(mk);
     await dropInput(closeUp.name);
     if (ref.made) await dropInput(ref.name);
     eng.render();
@@ -854,13 +923,13 @@ async function landCanvas(eng, o, tab, src, cv, label, board, nth = 0) {
 }
 
 async function colourise(eng, o, t, tab, src) {
-  const b = busy('Adding colour…');
-  FLIGHT.add(colourise); eng.render();
+  const b = busy('Adding colour…'), mk = {};
+  fly(mk, tab); eng.render();
   try {
     const cv = canvasFrom(await loadImg(inputUrl(src.name)), src.px[0], src.px[1]);
     await addColour(cv, ST.cprompt.trim() || COLOUR_PROMPT);
     await landCanvas(eng, o, tab, src, cv, 'Colourised', 'Colourised');
-  } finally { FLIGHT.delete(colourise); b.done(); eng.render(); }
+  } finally { unfly(mk); b.done(); eng.render(); }
 }
 
 // LaMa on the marks of a mask (red, row by row), each fill going back through the marks only. Scattered marks would be a run each, so past a few it goes by tiles.
@@ -920,8 +989,8 @@ async function restorePhoto(eng, o, tab, src) {
   const needs = [ST.stepScratch && 'deck-remove-lama', ST.stepClean && 'deck-clean-image', ST.stepFaces && 'deck-face-restore', (ST.stepScratch || ST.stepFaces) && 'deck-mask-image'].filter(Boolean);
   const missing = needs.find((id) => !template(id));
   if (missing) return toast(`${missing} isn't installed`, true);
-  const b = busy('Restoring…');
-  FLIGHT.add(restorePhoto); eng.render();
+  const b = busy('Restoring…'), mk = {};
+  fly(mk, tab); eng.render();
   try {
     const [W, H] = src.px, cv = canvasFrom(await loadImg(inputUrl(src.name)), W, H), c = cv.getContext('2d', { willReadFrequently: true });
     b.set('Finding faces…');
@@ -944,7 +1013,7 @@ async function restorePhoto(eng, o, tab, src) {
     if (ST.stepFaces && !redrawn) toast('No face big enough was found: the other steps still ran');
     if (ST.stepColour) { b.set('Adding colour…'); await addColour(cv, ST.cprompt.trim() || COLOUR_PROMPT); }
     await landCanvas(eng, o, tab, src, cv, 'Restored', 'Restored');
-  } finally { FLIGHT.delete(restorePhoto); b.done(); eng.render(); }
+  } finally { unfly(mk); b.done(); eng.render(); }
 }
 
 // ---- Edit: a prompt, what else you can tell it, and the model's knobs, on each picture in turn ----
@@ -972,8 +1041,8 @@ async function editArea(eng, o, t, tab, src, red, b) {
   sc.imageSmoothingQuality = 'high';
   sc.fillStyle = NEUTRAL_GREY; sc.fillRect(0, 0, sw, sh);
   sc.drawImage(pic, box.x, box.y, box.w, box.h, 0, 0, sw, sh);
-  const edge = softEdge(red, W, H, ST.egrow, ST.esoft), name = await send(seen, 'edit-area.png');
-  FLIGHT.add(editArea); eng.render();
+  const edge = softEdge(red, W, H, ST.egrow, ST.esoft), name = await send(seen, 'edit-area.png'), mk = {};
+  fly(mk, tab); eng.render();
   try {
     b.set('Editing…');
     const gens = await queueRun({ template: t.id, values: await editValues(t, name, [sw, sh], src), batch: ST.ecount });
@@ -991,7 +1060,7 @@ async function editArea(eng, o, t, tab, src, red, b) {
         await landCanvas(eng, o, tab, src, out, 'Edited', 'Edited', nth);
       } catch (e) { toast(`${o.label} failed${src.layer ? ` on ${layerWord(src.layer)}` : ''}: ${e.message}`, true); } finally { if (run) await dropRun(run.id); }
     }));
-  } finally { FLIGHT.delete(editArea); await dropInput(name); eng.render(); }
+  } finally { unfly(mk); await dropInput(name); eng.render(); }
 }
 
 // ...the area as painted: on the whole picture, as a painted mask is
@@ -1037,7 +1106,7 @@ async function solidOf(src) {
 }
 
 // One picture of the batch. Everything: the runs go in the queue and land as they finish. Found by name: SAM3 first, then the area's edit.
-async function editOne(eng, o, t, tab, src) {
+async function editOne(eng, o, t, tab, src, batch = 1) {
   if (ST.ewhere === 'words') {
     const [W, H] = src.px, b = busy('Finding the area…');
     try {
@@ -1048,15 +1117,16 @@ async function editOne(eng, o, t, tab, src) {
   }
   const sent = await solidOf(src);
   let gens;
-  try { gens = await queueRun({ template: t.id, values: await editValues(t, sent.name, editSizeTo(src.px[0], src.px[1], 32, ST.emp * 1e6), sent), batch: ST.ecount }); }
+  try { gens = await queueRun({ template: t.id, values: await editValues(t, sent.name, editSizeTo(src.px[0], src.px[1], 32, ST.emp * 1e6), sent), batch: batch > 1 ? batch : ST.ecount }); }
   catch (e) { if (sent.copy) await dropInput(sent.name); throw e; }
   toast(`${o.label}: ${gens.length > 1 ? `${gens.length} runs` : `#${gens[0].id}`} queued; each lands as a new layer`);
   gens.forEach((g, nth) => follow(eng, o, tab, sent, g, nth));
+  return gens;
 }
 
 // the Edit tool's settings
-function editFields(eng, t, size) {
-  const redo = () => { save(); eng.render(); }, lf = loraField(t), installed = lf?.options || [];
+function editFields(t, size, { redraw = () => {}, eng = null } = {}) {
+  const redo = () => { save(); redraw(); }, lf = loraField(t), installed = lf?.options || [];
   const refFields = t?.fields.filter((f) => f.kind === 'image' && /reference/i.test(f.group)) || [], refsMost = refFields.length;
   const [sw, sh] = size ? editSizeTo(size[0], size[1], 32, ST.emp * 1e6) : [];
   const setRef = (i) => (name) => { ST.erefs[i] = { name }; redo(); };
@@ -1074,11 +1144,11 @@ function editFields(eng, t, size) {
     toggle('Keep the rest', ST.ekeep, (v) => { ST.ekeep = v; redo(); }, { help: 'Adds a sentence telling the model to change only what you asked and to keep the framing, pose, details and background. Turn it off for a change to the whole picture, like a new style.' }),
     ...ST.erefs.slice(0, refsMost).map((_, i) => ref(i)),
     ST.erefs.length < refsMost ? ref(ST.erefs.length) : null,
-    field('Change', seg([['all', 'Anywhere'], ['words', 'What I name'], ['painted', 'The red mask']], ST.ewhere, (v) => { ST.ewhere = v; redo(); }),
+    field('Change', seg([['all', 'Anywhere'], ['words', 'What I name'], ...(eng ? [['painted', 'The red mask']] : [])], ST.ewhere, (v) => { ST.ewhere = v; redo(); }),
       help('Anywhere lands what the model made, as it made it. What I name has SAM3 find the area in each picture. The red mask uses what you painted (Masks panel), cut to each selected layer; a layer it doesn\'t touch is left out. With an area only that area changes, and the rest stays pixel for pixel at full size. SAM3 misses some words: it found no "jacket" on a man in one, but found "man" and "person".')),
     ST.ewhere === 'words' ? field('Find', textArea(() => ST.efind, (v) => { ST.efind = v; save(); }, { rows: 2, label: 'What to find', placeholder: 'The jacket, the sky' })) : null,
-    ...(ST.ewhere === 'words' ? samFields(eng) : []),
-    ST.ewhere === 'painted' && !eng.paint.maskLayer(false) ? hint('Paint the area first (Masks panel)') : null,
+    ...(ST.ewhere === 'words' ? samFields() : []),
+    ST.ewhere === 'painted' && eng && !eng.paint.maskLayer(false) ? hint('Paint the area first (Masks panel)') : null,
     ST.ewhere !== 'all' ? toggle('Close-up', ST.eclose, (v) => { ST.eclose = v; redo(); }, { help: 'The model sees a box round the area at its full size: more detail in a small area. Off, it sees the whole picture: better when the change must match what is far from it.' }) : null,
     ST.ewhere !== 'all' ? rangeField('Grow the area', () => ST.egrow, (v) => { ST.egrow = v; save(); }, { min: 0, max: 64, step: 1, fmt: (v) => `${v} px` }) : null,
     ST.ewhere !== 'all' ? rangeField('Edge softness', () => ST.esoft, (v) => { ST.esoft = v; save(); }, { min: 0, max: 64, step: 1, fmt: (v) => `${v} px` }) : null,
@@ -1089,15 +1159,15 @@ function editFields(eng, t, size) {
     seedField('Seed', { get: () => ST.eseed, set: (v) => { ST.eseed = v; save(); }, mode: () => ST.eseedMode, setMode: (m) => { ST.eseedMode = m; redo(); } }),
     rangeField('Steps', () => ST.esteps, (v) => { ST.esteps = Math.round(v); save(); }, { min: 2, max: 20, step: 1, fmt: (v) => String(Math.round(v)),
       help: 'The turbo model is tuned for 8. 4 is quicker and still holds up; more than 8 gives little.' }),
-    rangeField('Guidance', () => ST.ecfg, (v) => { ST.ecfg = v; save(); }, { min: 1, max: 5, step: 0.1, fmt: (v) => v.toFixed(1), onChange: () => eng.render(),
+    rangeField('Guidance', () => ST.ecfg, (v) => { ST.ecfg = v; save(); }, { min: 1, max: 5, step: 0.1, fmt: (v) => v.toFixed(1), onChange: () => redraw(),
       help: 'How hard the model follows the prompt. At 1 it can stop short: asked for red leather, a denim jacket came back red denim, and at 2.5 it came back leather. Above 1 each run takes about twice as long, and the Avoid box is used.' }),
     ...(t?.fields || []).filter((f) => f.kind === 'choice').map((f) => choiceField(f.group, f.options, ST.echoice[f.key] ?? f.value, (v) => { ST.echoice[f.key] = v; save(); })),
     ST.ecfg > 1 ? field('Avoid', textArea(() => ST.eneg, (v) => { ST.eneg = v; save(); }, { rows: 2, label: 'What to avoid', placeholder: 'Blurry, extra fingers' })) : null,
     lf ? loraStack({ options: installed, get: () => ST.eloras, set: (rows) => { ST.eloras = rows; save(); },
       mode: () => ST.eloraFolder ?? 'auto', setMode: (k) => { ST.eloraFolder = k; save(); }, auto: (folders) => folders.find((d) => /^qwen$/i.test(d)) || null,
       tip: 'LoRAs change what an edit can do and how it looks. They run in the order listed, on every run. Auto shows your Qwen folder, and search finds the others, which are for other models and rarely work here. Some need a trigger word: put it in the prompt. Untick one to compare the same seed without it (Seed: Fixed).',
-      onWord: (w) => { if (!ST.eprompt.includes(w)) { ST.eprompt = ST.eprompt.trimEnd() ? `${ST.eprompt.trimEnd()}, ${w}` : w; save(); eng.render(); } },
-      onDownloaded: async () => (await import('./generate.js')).loadTemplates(true), onAdded: () => eng.render() }) : null,
+      onWord: (w) => { if (!ST.eprompt.includes(w)) { ST.eprompt = ST.eprompt.trimEnd() ? `${ST.eprompt.trimEnd()}, ${w}` : w; save(); redraw(); } },
+      onDownloaded: async () => (await import('./generate.js')).loadTemplates(true), onAdded: () => redraw() }) : null,
   ];
 }
 
@@ -1110,7 +1180,8 @@ function skinParts(eng, o, t, tab, src, values, imageField) {
   const who = src.layer ? ` on ${src.layer.label || src.layer.name.split('/').pop()}` : '', mark = {};
   const pass = (name, part) => sent({ template: t.id, values: { ...values, [imageField.key]: name, [what.key]: part, [pf.key]: partPrompt(values[pf.key], part), ...(size && { [size.key]: partSize(src.px) }) }, batch: 1 });
   toast(`${o.label}${who}: ${parts.join(', ')}. It lands as a new layer`);
-  FLIGHT.add(mark); eng.render();
+  fly(mark, tab); eng.render();
+  src.runs = (src.runs || 0) + 1;   // (its copy, if it is one, goes after the last pass)
   (async () => {
     let name = src.name;
     try {
@@ -1126,18 +1197,16 @@ function skinParts(eng, o, t, tab, src, values, imageField) {
       await land(eng, o, src, done);
     } catch (e) { toast(`${o.label} failed${who}: ${e.message}`, true); } finally {
       if (name !== src.name) await dropInput(name);
-      FLIGHT.delete(mark); eng.render();
+      unfly(mark); eng.render();
+      if (!--src.runs && src.copy) dropInput(src.name);
     }
   })();
 }
 
-async function runOne(eng, o, t, tab, src) {
-  if (o.kind === 'edit') return editOne(eng, o, t, tab, src);
-  if (o.kind === 'sheet') return runSheet(eng, o, t, tab, src);
-  if (o.kind === 'remove') return markFound(eng, o, src);
-  if (o.kind === 'swap') return swapOnSource(eng, o, tab, src);
-  if (o.kind === 'colorise') return colourise(eng, o, t, tab, src);
-  if (o.kind === 'restore') return restorePhoto(eng, o, tab, src);
+// What a queued tool's run is told for one picture (src: { name, px }), with the panel's settings. The Edit tool and the
+// in-browser pipelines (colourise, restore, swap, remove, sheet) make their own.
+export function valuesFor(o, t, src) {
+  if (typeof o === 'string') o = OPS.find((x) => x.id === o);
   const imageField = t.fields.find((f) => f.kind === 'image');
   const values = { [imageField.key]: src.name, ...valuesByRole(t, { seed: -1, ...(o.prompt && { prompt: ST.prompt.trim() }) }), ...samKnobs(t) };
   if (o.kind === 'delight') {   // the edit template's own picture and edit boxes (not its reference pictures)
@@ -1167,10 +1236,50 @@ async function runOne(eng, o, t, tab, src) {
       if (pf) values[pf.key] = (ST.dprompt[dmKey()] ?? m.prompt).trim() || m.prompt;
     }
   }
-  if (o.model === 'skin') return skinParts(eng, o, t, tab, src, values, imageField);
-  const [g] = await queueRun({ template: t.id, values, batch: 1 });
-  toast(`${o.label} (#${g.id}): it lands as a new layer`);
-  follow(eng, o, tab, src, g);
+  return values;
+}
+
+// One picture through the tool; the queued runs come back (none for a tool that does its steps here and lands itself).
+// batch: runs of it, side by side (the Edit tool: its own Variations unless more are asked for)
+async function runOne(eng, o, t, tab, src, batch = 1) {
+  if (o.kind === 'edit') return editOne(eng, o, t, tab, src, batch);
+  if (o.kind === 'sheet') return runSheet(eng, o, t, tab, src);
+  if (o.kind === 'remove') return markFound(eng, o, src);
+  if (o.kind === 'swap') return swapOnSource(eng, o, tab, src);
+  if (o.kind === 'colorise') return colourise(eng, o, t, tab, src);
+  if (o.kind === 'restore') return restorePhoto(eng, o, tab, src);
+  const values = valuesFor(o, t, src);
+  if (o.model === 'skin') return skinParts(eng, o, t, tab, src, values, t.fields.find((f) => f.kind === 'image'));
+  const gens = await queueRun({ template: t.id, values, batch: Math.max(1, batch | 0) });
+  toast(gens.length > 1 ? `${o.label}: ${gens.length} runs queued; each lands as a new layer` : `${o.label} (#${gens[0].id}): it lands as a new layer`);
+  gens.forEach((g, nth) => follow(eng, o, tab, src, g, nth));
+  return gens;
+}
+
+// A tool on a picture that isn't the open editor's (a frame on the table, through the Edit pane, the frame menu or several
+// frames at once). id: a tool's id (TOOLS). tab: the image frame's edit its result lands in (the source frame's own, or a
+// new frame's: table-frames.js resultFrame). src: frame-source.js frameSource(frame), or any { name, px, rect, copy }.
+// eng: the editor, when the caller knows it has `tab` open (else the open one is used if it has, else the saved edit).
+// Settings are the panel's (ST, shared with the Layers pane). Throws the reason it can't run (whyNot). Resolves once
+// queued (a queued tool) or done (a tool whose steps run here): { gens } (the queued runs; [] for the latter).
+// src's copy (src.copy) goes once nothing needs it.
+export async function runToolOn(id, { tab, src, eng = null, batch = 1 } = {}) {
+  const o = OPS.find((x) => x.id === id);
+  if (!o) throw new Error(`No image tool "${id}"`);
+  if (!tab) throw new Error('No edit for the result to land in');
+  if (!src?.name) throw new Error('No picture to run it on');
+  const t = template(tplId(o));
+  const why = whyNot(o, t);
+  if (why) throw new Error(why);
+  const e = engFor(tab, eng || CURRENT_EDIT.eng);
+  Object.assign(src, { layer: src.layer || null, was: src.was || null, mask: src.mask || null, rect: src.rect || { x: 0, y: 0, w: src.px[0], h: src.px[1] } });
+  let gens;
+  try { gens = await runOne(e, o, t, tab, src, batch); } catch (err) {
+    if (src.copy && !src.runs) await dropInput(src.name);   // (never queued: nothing will read the copy)
+    throw err;
+  }
+  if (src.copy && !src.runs) dropInput(src.name);   // (a tool whose steps ran here: done with it)
+  return { gens: Array.isArray(gens) ? gens : [] };
 }
 
 let edgeTurn = Promise.resolve();
@@ -1204,6 +1313,86 @@ export async function applyStep(step, name, { what = 'person' } = {}) {
   return (await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } })).name;
 }
 
+// A tool's own settings (not the editor's: Run on, Hide the original, the run buttons), as rows for a panel. o: a tool (or
+// its id); t: its template (default: the one it uses now); redraw(): the rows changed what is shown (draw them again);
+// size: [w, h] of what is sent, for the sizes shown; eng: the editor, when the rows are for the open picture (the red
+// mask's choices and hints show only then). The settings are this panel's own (ST): the Edit pane and the Layers pane share them.
+export function toolFields(o, t, { redraw = () => {}, size = null, eng = null } = {}) {
+  if (typeof o === 'string') o = OPS.find((x) => x.id === o);
+  if (!o) return [];
+  if (t === undefined) t = template(tplId(o));
+  const out = size && o.kind === 'up' ? `${Math.round(size[0] * ST.scale)}×${Math.round(size[1] * ST.scale)}` : null;
+  return [
+    ...(o.kind === 'edit' && t ? editFields(t, size, { redraw, eng }) : []),
+    o.prompt ? field('Find', textArea(() => ST.prompt, (v) => { ST.prompt = v; save(); }, { rows: 2, label: 'What to find', placeholder: 'The red car, people, the sky' })) : null,
+    o.depth ? field('Detail', seg([['large', 'Fine'], ['small', 'Fast']], ST.depthModel, (v) => { ST.depthModel = v; save(); redraw(); }),
+      help('Fine uses the Large model: the sharpest edges, steadiest depth. Fast uses Small: about five times quicker, softer.')) : null,
+    o.edges ? field('Amount', seg([['more', 'More lines'], ['normal', 'Normal'], ['less', 'Fewer']], ST.edgeAmount, (v) => { ST.edgeAmount = v; save(); redraw(); }),
+      help('How much detail the lines pick up. More lines also take in faint edges and texture; fewer keeps the main outlines.')) : null,
+    o.sd ? field('Pose from', seg([['dwpose', 'DWPose'], ['sdpose', 'SDPose']], ST.poser, (v) => { ST.poser = v; save(); redraw(); })) : null,
+    o.kind === 'sheet' ? field('Rows × columns', h('span', { class: 'row' },
+      ...['rows', 'cols'].map((k) => h('input', { type: 'number', min: 1, max: 8, value: ST[k], 'aria-label': k === 'rows' ? 'Rows' : 'Columns',
+        onchange: (e) => { ST[k] = Math.max(1, Math.min(8, Math.round(+e.target.value || 1))); e.target.value = ST[k]; save(); } }))),
+      help('How the sheet is laid out: equal cells, left to right, top to bottom. Spacing between cells is fine: the cut-out ignores it.')) : null,
+    o.kind === 'sheet' ? field('Enlarge with', seg([[false, 'SeedVR2'], [true, 'Fast']], ST.sheetFast, (v) => { ST.sheetFast = v; save(); redraw(); }),
+      help('SeedVR2 adds detail (slow, once per cell). Fast is 4x-UltraSharp: quick and clean.')) : null,
+    o.kind === 'sheet' ? field(['Enlarge', h('span', {}, `${ST.scale}×`)], seg([[1, '1×'], [2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); redraw(); })) : null,
+    o.kind === 'matte' ? field('Result', seg([['cutout', 'Cut-out layer'], ['black', 'On black'], ...(eng ? [['mask', 'Mask']] : [])], ST.result, (v) => { ST.result = v; save(); redraw(); }),
+      help('On black puts the cut-out on solid black: the picture a one-photo 3D model (Idol, a splat) wants.')) : null,
+    ...(o.id === 'words' || (o.kind === 'remove' && ST.rfrom === 'words') || (o.kind === 'swap' && ST.swapWhere === 'find') ? samFields() : []),
+    ...(o.kind === 'sheet' ? samFields(null, false) : []),
+    o.kind === 'matte' ? toggle('Fine edges', ST.fine, (v) => { ST.fine = v; save(); redraw(); },
+      { help: 'These models see any picture at about 1000 px, so a big picture\'s edge comes back as a staircase. On: each thing found gets a second look on a crop close to it (a run for each, on a big picture), then the pixels along its edge are decided by their colour: is it more common on the thing, or beside it. Off: quicker, and the edge is as the model gave it.' }) : null,
+    o.kind === 'remove' ? field('What goes', seg([['words', 'Find by name'], ...(eng ? [['painted', 'The red mask']] : [])], ST.rfrom, (v) => { ST.rfrom = v; save(); redraw(); })) : null,
+    o.kind === 'remove' && ST.rfrom === 'words' ? h('div', { class: 'chips' }, ...LOOK_FOR.map(([v, label]) => chip(label, () => { ST.rprompt = v; save(); redraw(); }, { on: ST.rprompt.trim().toLowerCase() === v }))) : null,
+    o.kind === 'remove' && ST.rfrom === 'words' ? field('Find', textArea(() => ST.rprompt, (v) => { ST.rprompt = v; save(); }, { rows: 2, label: 'What to remove', placeholder: 'Watermark, text, the red sign' })) : null,
+    o.kind === 'remove' && ST.rfrom === 'painted' && eng && !eng.paint.maskLayer(false) ? hint('Paint what to remove first (Masks panel), or find it by name') : null,
+    o.kind === 'swap' ? field('Swap', seg(Object.entries(SWAP_PARTS).map(([k, v]) => [k, v.label]), ST.swapPart, (v) => { ST.swapPart = v; save(); redraw(); }, { wrap: true }),
+      help(SWAP_PARTS[ST.swapPart].help)) : null,
+    o.kind === 'swap' ? pictureInput({ label: 'Take it from', title: 'The picture to take it from', name: ST.swapFrom, empty: false,
+      set: (name) => { ST.swapFrom = name; ST.swapCrop = null; save(); redraw(); },
+      crop: ST.swapCrop, setCrop: (c) => { ST.swapCrop = c; save(); redraw(); }, mp: () => ST.swapMp, setMp: (n) => { ST.swapMp = n; save(); } }) : null,
+    o.kind === 'swap' ? field(['Models', h('span', {}, `${swapModels().length} ticked`)], h('div', { class: 'chips' }, ...Object.entries(SWAP_MODELS).filter(([k]) => canSwap(k)).map(([k, v]) =>
+      chip(v.label, () => { ST.swapModels = ST.swapModels.includes(k) ? ST.swapModels.filter((x) => x !== k) : [...ST.swapModels, k]; save(); redraw(); }, { on: ST.swapModels.includes(k) }))),
+      help(Object.values(SWAP_MODELS).map((v) => `${v.label}: ${v.help}`).join(' '))) : null,
+    o.kind === 'swap' ? field('Where', seg([['find', 'Find it'], ...(eng ? [['painted', 'The red mask']] : [])], ST.swapWhere, (v) => { ST.swapWhere = v; save(); redraw(); }),
+      help('Find it uses SAM3 and takes the biggest one it finds. With several people, Mark it first, erase what shouldn\'t change in the Masks panel, and Swap from the red mask.')) : null,
+    o.kind === 'swap' && ST.swapWhere === 'painted' && eng && !eng.paint.maskLayer(false) ? hint('Paint the area first (Masks panel), or Mark it') : null,
+    o.kind === 'swap' ? field('Also say', textArea(() => ST.swapExtra, (v) => { ST.swapExtra = v; save(); }, { rows: 2, label: 'Words added to the prompt', placeholder: 'Keep the glasses' })) : null,
+    o.kind === 'clean' ? field('Take out', seg(Object.entries(CLEAN).map(([k, v]) => [k, v.label]), ST.cmodel, (v) => { ST.cmodel = v; save(); redraw(); }, { wrap: true }),
+      help((CLEAN[ST.cmodel] || CLEAN.noise).help)) : null,
+    o.kind === 'sheet' ? field('Result', seg([['cutout', 'Cut out'], ['black', 'On black']], ST.result === 'black' ? 'black' : 'cutout', (v) => { ST.result = v; save(); redraw(); })) : null,
+    o.kind === 'restore' ? toggle('Scratches and dust', ST.stepScratch, (v) => { ST.stepScratch = v; save(); redraw(); }) : null,
+    o.kind === 'restore' && ST.stepScratch ? field('Take', seg([['light', 'Only clear ones'], ['normal', 'Normal'], ['strong', 'Faint ones too']], ST.scratchAmount, (v) => { ST.scratchAmount = v; save(); redraw(); }),
+      help('How much a mark must stand out to count. Faint ones too also takes more of what is really in the picture: thin lines, wires, hair. Faces are left out of this step.')) : null,
+    o.kind === 'restore' ? toggle('Clean', ST.stepClean, (v) => { ST.stepClean = v; save(); redraw(); }) : null,
+    o.kind === 'restore' && ST.stepClean ? field('Take out', seg(Object.entries(CLEAN).map(([k, v]) => [k, v.label]), ST.cmodel, (v) => { ST.cmodel = v; save(); redraw(); }, { wrap: true }),
+      help((CLEAN[ST.cmodel] || CLEAN.noise).help)) : null,
+    o.kind === 'restore' ? toggle('Faces', ST.stepFaces, (v) => { ST.stepFaces = v; save(); redraw(); },
+      { help: 'GFPGAN redraws each face at 512 px, so it helps a small or damaged face most; on a face much bigger than that, lower Face strength to keep its sharpness. It can change a likeness: compare with the original. A strongly tilted face comes out worse. Licence: GFPGAN is Apache 2.0, but its licence file lists NVIDIA StyleGAN2 and DFDNet terms that limit parts of it to non-commercial use.' }) : null,
+    o.kind === 'restore' && ST.stepFaces ? rangeField('Face strength', () => ST.faceAmount, (v) => { ST.faceAmount = v; save(); }, { min: 0.1, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` }) : null,
+    o.kind === 'restore' ? toggle('Add colour', ST.stepColour, (v) => { ST.stepColour = v; save(); redraw(); }) : null,
+    o.kind === 'colorise' || (o.kind === 'restore' && ST.stepColour) ? field('Model', seg(Object.entries(DELIGHT).map(([k, v]) => [k, v.label]), ST.lmodel, (v) => { ST.lmodel = v; save(); redraw(); }, { wrap: true }),
+      help((DELIGHT[ST.lmodel] || DELIGHT.krea2).help)) : null,
+    o.kind === 'colorise' || (o.kind === 'restore' && ST.stepColour) ? field('Prompt', textArea(() => ST.cprompt, (v) => { ST.cprompt = v; save(); }, { rows: 4, label: 'What colours to use' })) : null,
+    o.kind === 'delight' ? field('Model', seg(Object.entries(DELIGHT).map(([k, v]) => [k, v.label]), ST.lmodel, (v) => { ST.lmodel = v; save(); redraw(); }, { wrap: true }),
+      help((DELIGHT[ST.lmodel] || DELIGHT.krea2).help)) : null,
+    o.kind === 'delight' ? field('Prompt', textArea(() => ST[o.promptKey || 'lprompt'], (v) => { ST[o.promptKey || 'lprompt'] = v; save(); }, { rows: 4, label: o.promptKey ? 'What to remove' : 'How to light it' })) : null,
+    o.kind === 'detail' && !o.model ? field('Model', seg(Object.entries(DETAIL).filter(([k]) => canDetail(k)).map(([k, v]) => [k, v.label]), ST.dmodel, (v) => { ST.dmodel = v; save(); redraw(); }, { wrap: true })) : null,
+    o.id === 'skin' ? field('Area', seg([['whole', 'Whole picture'], ['parts', 'Body parts']], ST.skinWhere, (v) => { ST.skinWhere = v; save(); redraw(); })) : null,
+    o.model === 'skin' ? field('Body parts', textArea(() => ST.skinParts, (v) => { ST.skinParts = v; save(); }, { rows: 2, label: 'Body parts, separated by commas' })) : null,
+    o.kind === 'detail' ? help(dm().help) : null,
+    o.kind === 'detail' && !dm().plain ? field('Strength', h('input', { type: 'range', min: 0.1, max: 0.7, step: 0.05, 'aria-label': 'Strength',
+      value: ST.dstrength[dmKey()] ?? dm().strength, oninput: (e) => { ST.dstrength[dmKey()] = +e.target.value; save(); e.target.nextSibling.textContent = e.target.value; } }),
+      h('span', {}, String(ST.dstrength[dmKey()] ?? dm().strength))) : null,
+    o.kind === 'detail' && !dm().plain ? field('Prompt', textArea(() => ST.dprompt[dmKey()] ?? dm().prompt, (v) => { ST.dprompt[dmKey()] = v; save(); }, { rows: 2, label: 'What to add' })) : null,
+    o.kind === 'up' ? field(['Enlarge', out ? h('span', {}, out) : null], seg([[2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); redraw(); })) : null,
+  ].filter(Boolean);
+}
+// The tools, for a list or menu of them: { id, group, label, kind, help, tpl (the template it uses now, with its settings) }
+export const TOOLS = OPS.map((o) => ({ id: o.id, group: o.group, label: o.label, kind: o.kind, help: o.help, get tpl() { return tplId(o); } }));
+export const TOOL_GROUPS = GROUPS;
+
 // Ctrl+Enter or Shift+Enter: the tool open in this panel, as its Run button
 export const runImageTool = (eng) => (eng.E.layers.some((l) => !l.mask && !l.draft) ? run(eng) : toast('Add a picture first', true));
 
@@ -1216,7 +1405,6 @@ export function imageToolsSection(eng) {
   const size = many === 1 ? (eng.ready(picked[0]) ? G.sentPixels(picked[0]) : null) : frame ? [frame.w, frame.h] : null;   // (what's sent: a layer's own pixels, whatever its scale; the whole picture's canvas size)
   const select = h('select', { 'aria-label': 'Image tool', onchange: (ev) => { ST.op = ev.target.value; save(); eng.render(); } },
     ...GROUPS.map((g) => h('optgroup', { label: g }, ...OPS.filter((x) => x.group === g).map((x) => h('option', { value: x.id, selected: x.id === o.id }, x.label)))));
-  const out = size && o.kind === 'up' ? `${Math.round(size[0] * ST.scale)}×${Math.round(size[1] * ST.scale)}` : null;
   const on = many > 1 ? `Runs on each of the ${many} selected layers, one after the other.`
     : many ? `Runs on the layer ${picked[0].label || picked[0].name.split('/').pop()}.` : ST.scope === 'whole' ? 'Runs on the whole picture.' : '';
   const quick = h('div', { class: 'tool-quick' }, ...QUICK.filter(([, , ids]) => ids.some((id) => OPS.some((x) => x.id === id))).map(([label, ic, ids]) => {
@@ -1230,74 +1418,11 @@ export function imageToolsSection(eng) {
     field('Run on', seg([['whole', 'Whole picture'], ['selected', 'Selected layers']], ST.scope, (v) => { ST.scope = v; save(); eng.render(); }),
       help('Whole picture sends every visible layer together. Selected layers runs on each selected layer alone, one run each, with the result over that layer. A cropped layer sends its kept part. A turned or mirrored layer is sent unturned, and its result takes the same turn. A masked layer is sent whole: an Upscale, Detail or De-light result gets a copy of its mask, and other tools\' results get none. Remove from the red mask cuts the mask to each selected layer, and leaves out a layer it doesn\'t touch.')),
     ST.scope === 'selected' && !many ? hint('Select a layer first') : null,
-    ...(o.kind === 'edit' && t ? editFields(eng, t, size) : []),
-    o.prompt ? field('Find', textArea(() => ST.prompt, (v) => { ST.prompt = v; save(); }, { rows: 2, label: 'What to find', placeholder: 'The red car, people, the sky' })) : null,
-    o.depth ? field('Detail', seg([['large', 'Fine'], ['small', 'Fast']], ST.depthModel, (v) => { ST.depthModel = v; save(); eng.render(); }),
-      help('Fine uses the Large model: the sharpest edges, steadiest depth. Fast uses Small: about five times quicker, softer.')) : null,
-    o.edges ? field('Amount', seg([['more', 'More lines'], ['normal', 'Normal'], ['less', 'Fewer']], ST.edgeAmount, (v) => { ST.edgeAmount = v; save(); eng.render(); }),
-      help('How much detail the lines pick up. More lines also take in faint edges and texture; fewer keeps the main outlines.')) : null,
-    o.sd ? field('Pose from', seg([['dwpose', 'DWPose'], ['sdpose', 'SDPose']], ST.poser, (v) => { ST.poser = v; save(); eng.render(); })) : null,
-    o.kind === 'sheet' ? field('Rows × columns', h('span', { class: 'row' },
-      ...['rows', 'cols'].map((k) => h('input', { type: 'number', min: 1, max: 8, value: ST[k], 'aria-label': k === 'rows' ? 'Rows' : 'Columns',
-        onchange: (e) => { ST[k] = Math.max(1, Math.min(8, Math.round(+e.target.value || 1))); e.target.value = ST[k]; save(); } }))),
-      help('How the sheet is laid out: equal cells, left to right, top to bottom. Spacing between cells is fine: the cut-out ignores it.')) : null,
-    o.kind === 'sheet' ? field('Enlarge with', seg([[false, 'SeedVR2'], [true, 'Fast']], ST.sheetFast, (v) => { ST.sheetFast = v; save(); eng.render(); }),
-      help('SeedVR2 adds detail (slow, once per cell). Fast is 4x-UltraSharp: quick and clean.')) : null,
-    o.kind === 'sheet' ? field(['Enlarge', h('span', {}, `${ST.scale}×`)], seg([[1, '1×'], [2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); eng.render(); })) : null,
-    o.kind === 'matte' ? field('Result', seg([['cutout', 'Cut-out layer'], ['black', 'On black'], ['mask', 'Mask']], ST.result, (v) => { ST.result = v; save(); eng.render(); }),
-      help('On black puts the cut-out on solid black: the picture a one-photo 3D model (Idol, a splat) wants.')) : null,
-    ...(o.id === 'words' || (o.kind === 'remove' && ST.rfrom === 'words') || (o.kind === 'swap' && ST.swapWhere === 'find') ? samFields(eng) : []),
-    ...(o.kind === 'sheet' ? samFields(eng, false) : []),
-    o.kind === 'matte' ? toggle('Fine edges', ST.fine, (v) => { ST.fine = v; save(); eng.render(); },
-      { help: 'These models see any picture at about 1000 px, so a big picture\'s edge comes back as a staircase. On: each thing found gets a second look on a crop close to it (a run for each, on a big picture), then the pixels along its edge are decided by their colour: is it more common on the thing, or beside it. Off: quicker, and the edge is as the model gave it.' }) : null,
-    o.kind === 'remove' ? field('What goes', seg([['words', 'Find by name'], ['painted', 'The red mask']], ST.rfrom, (v) => { ST.rfrom = v; save(); eng.render(); })) : null,
-    o.kind === 'remove' && ST.rfrom === 'words' ? h('div', { class: 'chips' }, ...LOOK_FOR.map(([v, label]) => chip(label, () => { ST.rprompt = v; save(); eng.render(); }, { on: ST.rprompt.trim().toLowerCase() === v }))) : null,
-    o.kind === 'remove' && ST.rfrom === 'words' ? field('Find', textArea(() => ST.rprompt, (v) => { ST.rprompt = v; save(); }, { rows: 2, label: 'What to remove', placeholder: 'Watermark, text, the red sign' })) : null,
-    o.kind === 'remove' && ST.rfrom === 'painted' && !eng.paint.maskLayer(false) ? hint('Paint what to remove first (Masks panel), or find it by name') : null,
-    o.kind === 'swap' ? field('Swap', seg(Object.entries(SWAP_PARTS).map(([k, v]) => [k, v.label]), ST.swapPart, (v) => { ST.swapPart = v; save(); eng.render(); }, { wrap: true }),
-      help(SWAP_PARTS[ST.swapPart].help)) : null,
-    o.kind === 'swap' ? pictureInput({ label: 'Take it from', title: 'The picture to take it from', name: ST.swapFrom, empty: false,
-      set: (name) => { ST.swapFrom = name; ST.swapCrop = null; save(); eng.render(); },
-      crop: ST.swapCrop, setCrop: (c) => { ST.swapCrop = c; save(); eng.render(); }, mp: () => ST.swapMp, setMp: (n) => { ST.swapMp = n; save(); } }) : null,
-    o.kind === 'swap' ? field(['Models', h('span', {}, `${swapModels().length} ticked`)], h('div', { class: 'chips' }, ...Object.entries(SWAP_MODELS).filter(([k]) => canSwap(k)).map(([k, v]) =>
-      chip(v.label, () => { ST.swapModels = ST.swapModels.includes(k) ? ST.swapModels.filter((x) => x !== k) : [...ST.swapModels, k]; save(); eng.render(); }, { on: ST.swapModels.includes(k) }))),
-      help(Object.values(SWAP_MODELS).map((v) => `${v.label}: ${v.help}`).join(' '))) : null,
-    o.kind === 'swap' ? field('Where', seg([['find', 'Find it'], ['painted', 'The red mask']], ST.swapWhere, (v) => { ST.swapWhere = v; save(); eng.render(); }),
-      help('Find it uses SAM3 and takes the biggest one it finds. With several people, Mark it first, erase what shouldn\'t change in the Masks panel, and Swap from the red mask.')) : null,
-    o.kind === 'swap' && ST.swapWhere === 'painted' && !eng.paint.maskLayer(false) ? hint('Paint the area first (Masks panel), or Mark it') : null,
-    o.kind === 'swap' ? field('Also say', textArea(() => ST.swapExtra, (v) => { ST.swapExtra = v; save(); }, { rows: 2, label: 'Words added to the prompt', placeholder: 'Keep the glasses' })) : null,
-    o.kind === 'clean' ? field('Take out', seg(Object.entries(CLEAN).map(([k, v]) => [k, v.label]), ST.cmodel, (v) => { ST.cmodel = v; save(); eng.render(); }, { wrap: true }),
-      help((CLEAN[ST.cmodel] || CLEAN.noise).help)) : null,
-    o.kind === 'sheet' ? field('Result', seg([['cutout', 'Cut out'], ['black', 'On black']], ST.result === 'black' ? 'black' : 'cutout', (v) => { ST.result = v; save(); eng.render(); })) : null,
-    o.kind === 'restore' ? toggle('Scratches and dust', ST.stepScratch, (v) => { ST.stepScratch = v; save(); eng.render(); }) : null,
-    o.kind === 'restore' && ST.stepScratch ? field('Take', seg([['light', 'Only clear ones'], ['normal', 'Normal'], ['strong', 'Faint ones too']], ST.scratchAmount, (v) => { ST.scratchAmount = v; save(); eng.render(); }),
-      help('How much a mark must stand out to count. Faint ones too also takes more of what is really in the picture: thin lines, wires, hair. Faces are left out of this step.')) : null,
-    o.kind === 'restore' ? toggle('Clean', ST.stepClean, (v) => { ST.stepClean = v; save(); eng.render(); }) : null,
-    o.kind === 'restore' && ST.stepClean ? field('Take out', seg(Object.entries(CLEAN).map(([k, v]) => [k, v.label]), ST.cmodel, (v) => { ST.cmodel = v; save(); eng.render(); }, { wrap: true }),
-      help((CLEAN[ST.cmodel] || CLEAN.noise).help)) : null,
-    o.kind === 'restore' ? toggle('Faces', ST.stepFaces, (v) => { ST.stepFaces = v; save(); eng.render(); },
-      { help: 'GFPGAN redraws each face at 512 px, so it helps a small or damaged face most; on a face much bigger than that, lower Face strength to keep its sharpness. It can change a likeness: compare with the original. A strongly tilted face comes out worse. Licence: GFPGAN is Apache 2.0, but its licence file lists NVIDIA StyleGAN2 and DFDNet terms that limit parts of it to non-commercial use.' }) : null,
-    o.kind === 'restore' && ST.stepFaces ? rangeField('Face strength', () => ST.faceAmount, (v) => { ST.faceAmount = v; save(); }, { min: 0.1, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` }) : null,
-    o.kind === 'restore' ? toggle('Add colour', ST.stepColour, (v) => { ST.stepColour = v; save(); eng.render(); }) : null,
-    o.kind === 'colorise' || (o.kind === 'restore' && ST.stepColour) ? field('Model', seg(Object.entries(DELIGHT).map(([k, v]) => [k, v.label]), ST.lmodel, (v) => { ST.lmodel = v; save(); eng.render(); }, { wrap: true }),
-      help((DELIGHT[ST.lmodel] || DELIGHT.krea2).help)) : null,
-    o.kind === 'colorise' || (o.kind === 'restore' && ST.stepColour) ? field('Prompt', textArea(() => ST.cprompt, (v) => { ST.cprompt = v; save(); }, { rows: 4, label: 'What colours to use' })) : null,
-    o.kind === 'delight' ? field('Model', seg(Object.entries(DELIGHT).map(([k, v]) => [k, v.label]), ST.lmodel, (v) => { ST.lmodel = v; save(); eng.render(); }, { wrap: true }),
-      help((DELIGHT[ST.lmodel] || DELIGHT.krea2).help)) : null,
-    o.kind === 'delight' ? field('Prompt', textArea(() => ST[o.promptKey || 'lprompt'], (v) => { ST[o.promptKey || 'lprompt'] = v; save(); }, { rows: 4, label: o.promptKey ? 'What to remove' : 'How to light it' })) : null,
-    o.kind === 'detail' && !o.model ? field('Model', seg(Object.entries(DETAIL).filter(([k]) => canDetail(k)).map(([k, v]) => [k, v.label]), ST.dmodel, (v) => { ST.dmodel = v; save(); eng.render(); }, { wrap: true })) : null,
-    o.id === 'skin' ? field('Area', seg([['whole', 'Whole picture'], ['parts', 'Body parts']], ST.skinWhere, (v) => { ST.skinWhere = v; save(); eng.render(); })) : null,
-    o.model === 'skin' ? field('Body parts', textArea(() => ST.skinParts, (v) => { ST.skinParts = v; save(); }, { rows: 2, label: 'Body parts, separated by commas' })) : null,
-    o.kind === 'detail' ? help(dm().help) : null,
-    o.kind === 'detail' && !dm().plain ? field('Strength', h('input', { type: 'range', min: 0.1, max: 0.7, step: 0.05, 'aria-label': 'Strength',
-      value: ST.dstrength[dmKey()] ?? dm().strength, oninput: (e) => { ST.dstrength[dmKey()] = +e.target.value; save(); e.target.nextSibling.textContent = e.target.value; } }),
-      h('span', {}, String(ST.dstrength[dmKey()] ?? dm().strength))) : null,
-    o.kind === 'detail' && !dm().plain ? field('Prompt', textArea(() => ST.dprompt[dmKey()] ?? dm().prompt, (v) => { ST.dprompt[dmKey()] = v; save(); }, { rows: 2, label: 'What to add' })) : null,
-    o.kind === 'up' ? field(['Enlarge', out ? h('span', {}, out) : null], seg([[2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); eng.render(); })) : null,
+    ...toolFields(o, t, { redraw: () => eng.render(), size, eng }),
     (KEEPS_FRAMING.has(o.kind) || o.kind === 'sheet' || (o.kind === 'matte' && ST.result !== 'mask')) && onLayers && !(o.kind === 'edit' && ST.ewhere === 'painted' && ST.scope !== 'selected')
       ? toggle('Hide the original', ST.hide, (v) => { ST.hide = v; save(); }) : null,
     runBar(o.kind === 'swap' ? button('Mark it', () => swapMark(eng), { disabled: !t }) : null,
       o.kind === 'swap' ? button('Send to Generate', () => swapSend(eng), { disabled: !t }) : null,
       o.kind === 'swap' ? help('Send to Generate opens a tab per ticked model with the close-up, the reference, the prompt, the size and the LoRA set, to change and run there. What it makes there stays as made: it isn\'t put back on the whole picture.') : null,
-      button(o.kind === 'swap' ? 'Swap' : o.kind === 'remove' ? (ST.rfrom === 'words' ? 'Find and mark' : 'Remove') : FLIGHT.size ? 'Run again' : 'Run', () => run(eng), { cls: 'primary', disabled: !t, title: 'Ctrl+Enter or Shift+Enter' })));
+      button(o.kind === 'swap' ? 'Swap' : o.kind === 'remove' ? (ST.rfrom === 'words' ? 'Find and mark' : 'Remove') : inFlight(E.tab?.id ?? null) ? 'Run again' : 'Run', () => run(eng), { cls: 'primary', disabled: !t, title: 'Ctrl+Enter or Shift+Enter' })));
 }

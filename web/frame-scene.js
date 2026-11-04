@@ -130,34 +130,47 @@ async function pictureOf(f) {
 }
 
 // Into the frame's scene through the engine: live, straight in (its still follows on leaving); else the scene is opened
-// off screen (the 3D tab's TabSet, so its saves keep their rev), changed, saved and drawn as the frame's still.
+// off screen (withSceneDoc), changed, saved and drawn as the frame's still.
 async function dropInto(onto, pics, how) {
+  let n = 0;
+  await withSceneDoc(onto, async (m, { live }) => {
+    for (const f of pics) {
+      try {
+        const name = await pictureOf(f);
+        if (how === 'photo') await m.makePhoto(name); else await m.addPicture(name);
+        n++;
+      } catch (err) { toast(err.message, true); }
+      if (!live && F.mounted) return false;   // (it went live meanwhile: the rest is the live frame's)
+    }
+    return n > 0;
+  });
+  if (n && how === 'picture') toast(n === 1 ? `Added a background picture to "${onto.label}"` : `Added ${n} background pictures to "${onto.label}"`);
+}
+
+// fn(m, { live }) runs with a 3D frame's scene open in the engine (m: scene.js): the live frame's as it is; else the
+// scene is opened off screen (the 3D tab's TabSet, so its saves keep their rev), and once fn is done it is saved and
+// drawn as the frame's still (not when fn returns false: nothing changed). Resolves with what fn returned. The Edit
+// pane's 3D ops and pictures dropped on a 3D frame come through here.
+export async function withSceneDoc(frame, fn) {
+  if (!frame?.doc) throw new Error('This frame has no scene');
   const m = F.m = await sceneModule(), t = m.sceneTabs();
-  const live = F.mounted === onto.id;
+  const live = F.mounted === frame.id;
   if (!live) {
+    if (F.mounted) throw new Error('Leave the open 3D frame first');
     await t.ready();
-    for (let k = 0; k < 2 && t.active?.id !== onto.doc; k++) await t.switchTo(onto.doc);
-    if (t.active?.id !== onto.doc) throw new Error('its scene would not open');
+    for (let k = 0; k < 2 && t.active?.id !== frame.doc; k++) await t.switchTo(frame.doc);
+    if (t.active?.id !== frame.doc) throw new Error('its scene would not open');
     if (F.mounted) throw new Error('another 3D frame opened meanwhile');
     m.show();   // (the engine is built and drawn in the hidden 3D tab)
   }
-  let n = 0;
-  for (const f of pics) {
-    try {
-      const name = await pictureOf(f);
-      if (how === 'photo') await m.makePhoto(name); else await m.addPicture(name);
-      n++;
-    } catch (err) { toast(err.message, true); }
-    if (!live && F.mounted) return;   // (it went live meanwhile: the rest is the live frame's)
-  }
-  if (!n) return;
-  if (!live && !F.mounted && t.active?.id === onto.doc) {
+  const out = await fn(m, { live });
+  if (!live && out !== false && !F.mounted && t.active?.id === frame.doc) {
     await new Promise((r) => setTimeout(r, 400));   // (the pictures' textures load)
-    if (!F.mounted && t.active?.id === onto.doc) {
+    if (!F.mounted && t.active?.id === frame.doc) {
       const still = m.sceneStill();
       if (!F.mounted) m.hide();
-      await saveStill(t, onto.doc, still);
+      await saveStill(t, frame.doc, still);
     }
   }
-  if (how === 'picture') toast(n === 1 ? `Added a background picture to "${onto.label}"` : `Added ${n} background pictures to "${onto.label}"`);
+  return out;
 }

@@ -7,7 +7,7 @@
 //   an image frame:      image templates; the frame's picture goes into the template's first picture, its size is the
 //                        output size, and results land as layers in it (live or not: imagetools.js landMade, owed runs)
 //   a video frame:       video templates; Pick a frame puts an image frame's picture in a slot; results land as clips.
-//                        Or VFX (frame-vfx.js): the VFX tab's effects on the frame's own VFX document; results land as clips
+//                        (VFX is the Edit pane's now: frame-vfx.js; its results still land here as clips, vfx:queued)
 //   a 3D frame:          its templates; results are in the Shelf (Use as… from the toast)
 //   a sound frame:       sound templates; the sounds made go into its mix (frame-sound.js, as a drop)
 //
@@ -16,12 +16,12 @@
 //   makeState()                { label, why } for the action bar's button: what Run makes for the selection, and why
 //                              it can't (null when it can); `make:state` says when it may have changed
 import { h, api, store, toast, button, iconBtn, seg, field, hint, help, note, openSheet, closeSheet, runBar, actions } from './ui.js';
-import { S, CURRENT_EDIT, inputUrl, setBatch, thumbUrl } from './core.js';
+import { S, CURRENT_EDIT, setBatch } from './core.js';
 import { afterQueued, persist, preparePictures, renderFields, runBuilder, runValues, selectTemplate, stop } from './generate.js';
 import { borrow, giveBack, lentOut } from './gentabs.js';
 import { refused } from './tabs.js';
 import { queueRun, waitGen } from './make.js';
-import { pngBlob, uploadImage } from './media.js';
+import { uploadImage } from './media.js';
 import { landMade, owedTo } from './imagetools.js';
 import { isLive } from './live.js';
 import { onNavigate } from './navigation.js';
@@ -30,8 +30,8 @@ import { DOC_KIND, nextBeside, toStage } from './table-model.js';
 import * as Table from './table.js';
 import { LANDS, canvasRect, familiesOf, frameImageField, frameSize, makeTarget, pickTemplate, sizePair, templatesFor, withClip } from './make-rules.js';
 import { icon } from './icons.js';
-import { frameOfVfx, hideFrameVfx, showFrameVfx } from './frame-vfx.js';
-import { runVfx } from './vfx.js';
+import { frameOfVfx } from './frame-vfx.js';
+import { framePicture, frameSource } from './frame-source.js';
 
 const P = { fresh: [], ready: Promise.resolve(), host: null, frames: [], table: null, lentFor: null, els: null, prog: null, batchIn: null };
 const KIND_WORD = { none: 'a new frame', image: 'this picture', video: 'this video', scene: 'this 3D frame', sound: 'this sound frame' };
@@ -66,12 +66,12 @@ function drawPanel() {
   if (!S.templates?.length) { host.replaceChildren(note('The templates are still loading.', 'warn')); P.lentFor = null; return; }
   const { kind, frame } = makeTarget(P.frames);
   const list = templatesFor(S.templates, kind);
-  if (!list.length) { hideFrameVfx(); host.replaceChildren(note(`No template here makes anything for ${KIND_WORD[kind]}.`, 'warn')); return; }
+  if (!list.length) { host.replaceChildren(note(`No template here makes anything for ${KIND_WORD[kind]}.`, 'warn')); return; }
   const key = `${kind}:${frame?.id || ''}`;
   if (P.lentFor !== key || !host.contains(P.els?.fields)) {
     P.els = { fields: h('div', { class: 'make-fields' }), notes: h('div', { class: 'make-notes' }), basics: h('div', { class: 'make-basics' }),
-      picker: h('div', { class: 'make-picker' }), head: h('div', { class: 'make-head' }), mode: h('div', { class: 'make-mode' }), vfx: h('div', { class: 'make-vfx hidden' }) };
-    host.replaceChildren(h('div', { class: 'make-panel' }, P.els.mode, P.els.head, P.els.picker, P.els.notes, P.els.basics, P.els.fields, P.els.vfx));
+      picker: h('div', { class: 'make-picker' }), head: h('div', { class: 'make-head' }) };
+    host.replaceChildren(h('div', { class: 'make-panel' }, P.els.head, P.els.picker, P.els.notes, P.els.basics, P.els.fields));
     P.lentFor = key;
     const settings = frame ? frame.make || null : store.get('deck.make.none', null);
     const fits = settings?.template && list.some((t) => t.id === settings.template);
@@ -79,43 +79,26 @@ function drawPanel() {
     P.ready = borrow(fits ? settings : null, { template: want, target: target(kind, frame), save: (p) => keep(kind, frame, p) })
       .then(() => { if (P.lentFor === key) { fitFrame(kind, frame); drawHead(kind, frame, list); } });
     drawHead(kind, frame, list);
-    syncMode(kind, frame);
     return;
   }
   drawHead(kind, frame, list);
-  syncMode(kind, frame);
 }
 
-// A video frame's Make pane: Templates (the borrowed fields) or VFX (frame-vfx.js), one at a time
-const vfxOn = (kind, frame) => kind === 'video' && !!frame?.doc && store.get('deck.make.mode.video', 'make') === 'vfx';
-export function useVfxMode(on) {
-  store.set('deck.make.mode.video', on ? 'vfx' : 'make');
-  if (P.host) draw();
-}
-function syncMode(kind, frame) {
-  const on = vfxOn(kind, frame);
-  P.els.mode.replaceChildren(...(kind === 'video' && frame?.doc   // (nothing else: replaceChildren(null) would show "null")
-    ? [seg([['make', 'Templates'], ['vfx', 'VFX']], on ? 'vfx' : 'make', (v) => useVfxMode(v === 'vfx'))] : []));
-  for (const k of ['head', 'picker', 'notes', 'basics', 'fields']) P.els[k].classList.toggle('hidden', on);
-  P.els.vfx.classList.toggle('hidden', !on);
-  if (on) showFrameVfx(P.els.vfx, frame); else hideFrameVfx();
-  tellState();
-}
+// (VFX moved to the Edit pane: Make is templates only. Kept for callers that still switch a video frame back to templates)
+export function useVfxMode() {}
 
 // What Run makes for the selection, as the action bar's button says it, and why it can't run (null when it can)
 const RUN_WORD = { none: 'Generate', image: 'Generate', video: 'Make video', scene: 'Make 3D', sound: 'Make sound' };
 export function makeState() {
   let frames = [];
   try { frames = selection() || []; } catch { /* the table isn't up yet */ }
-  const { kind, frame } = makeTarget(frames), vfx = vfxOn(kind, frame);
-  const label = vfx ? 'Run VFX' : RUN_WORD[kind] || 'Generate';
+  const { kind, frame } = makeTarget(frames);
+  const label = RUN_WORD[kind] || 'Generate';
   let why = null;
-  if (!vfx) {
-    if (!S.templates?.length) why = 'The templates are still loading';
-    else if (!templatesFor(S.templates, kind).length) why = `No template makes anything for ${KIND_WORD[kind]}`;
-    else if (frame && DOC_KIND[kind] && !frame.doc) why = `${frame.label || 'This frame'} has no document yet`;
-    else if (lentOut() && P.lentFor === `${kind}:${frame?.id || ''}` && S.tpl?.error) why = `${S.tpl.name} has an error: pick another template`;
-  }
+  if (!S.templates?.length) why = 'The templates are still loading';
+  else if (!templatesFor(S.templates, kind).length) why = `No template makes anything for ${KIND_WORD[kind]}`;
+  else if (frame && DOC_KIND[kind] && !frame.doc) why = `${frame.label || 'This frame'} has no document yet`;
+  else if (lentOut() && P.lentFor === `${kind}:${frame?.id || ''}` && S.tpl?.error) why = `${S.tpl.name} has an error: pick another template`;
   return { label, why };
 }
 export const makeLabel = () => makeState().label;
@@ -219,30 +202,12 @@ function pickFrame(f, set) {
 }
 
 // ---------------------------------------------------------------------------
-// a frame's picture: the live editor's composite, else its document's still
+// a frame's picture (frame-source.js): the live editor's composite, else its edit drawn off screen, else its still
 // ---------------------------------------------------------------------------
-const liveEngine = (frame) => {
-  const eng = CURRENT_EDIT.eng;
-  return isLive(frame.id) && eng?.E?.tab?.id === frame.doc ? eng : null;
-};
-async function framePicture(frame) {
-  const eng = liveEngine(frame);
-  if (eng) {
-    await eng.paint?.savePaint?.();
-    const cv = document.createElement('canvas');
-    if (!eng.compose(cv)) return null;
-    return pngBlob(cv);
-  }
-  let url = stillOf(frame);
-  if (!url) url = (await api(docUrl(frame.kind, frame.doc), { busy: false }).catch(() => null))?.still?.url;
-  if (!url) return null;
-  const r = await fetch(url);
-  return r.ok ? r.blob() : null;
-}
 async function frameUpload(frame, mp = 0) {
-  const blob = await framePicture(frame);
-  if (!blob) throw new Error(`${frame.label || 'That frame'} is empty`);
-  return uploadImage(blob, { source: 'frame', mp, filename: 'frame.png', multiple: 16 });
+  const got = await framePicture(frame);
+  if (!got) throw new Error(`${frame.label || 'That frame'} is empty`);
+  return uploadImage(got.blob, { source: 'frame', mp, filename: 'frame.png', multiple: 16 });
 }
 const dropInput = (name) => api(`/api/inputs?name=${encodeURIComponent(name)}`, { method: 'DELETE', busy: false }).catch(() => {});
 
@@ -255,7 +220,6 @@ export async function runMake() {
   const sel = selection();
   if (sel !== P.frames) P.frames = sel || [];
   const { kind, frame } = makeTarget(P.frames);
-  if (vfxOn(kind, frame)) return runVfx();
   if (!P.host || !lentOut() || P.lentFor !== `${kind}:${frame?.id || ''}`) draw();
   await P.ready;   // (a fresh borrow loads first)
   const t = S.tpl;
@@ -269,7 +233,7 @@ export async function runMake() {
   try {
     const imgF = kind === 'image' ? frameImageField(t) : null;
     if (imgF) {
-      sent = await frameUpload(frame, 0);
+      sent = await frameSource(frame, { multiple: 16 });
       values[imgF.key] = sent.name;
     }
     if (frame && (kind === 'image' || kind === 'video')) {   // (the frame's size, even if the fields were drawn for another)
@@ -300,14 +264,14 @@ function land(kind, frame, t, gens, sent, values) {
 
 // image frame: each run a new layer in it, now if it is open, else when it next opens (owed runs, by its document's id)
 async function landLayers(frame, t, gens, sent) {
-  const eng = liveEngine(frame);
-  let rect = eng?.frame?.();
-  if (!rect && frame.fit && frame.fitBox) rect = { ...frame.fitBox };   // (a frame sized by its layers: where they were last)
+  let rect = sent?.rect;
   if (!rect) {
-    const d = await api(docUrl('image', frame.doc), { busy: false }).catch(() => null);
-    rect = canvasRect(d?.payload, frame);
+    const eng = isLive(frame.id) && CURRENT_EDIT.eng?.E?.tab?.id === frame.doc ? CURRENT_EDIT.eng : null;
+    rect = eng?.frame?.();
+    if (!rect && frame.fit && frame.fitBox) rect = { ...frame.fitBox };   // (a frame sized by its layers: where they were last)
+    if (!rect) rect = canvasRect((await api(docUrl('image', frame.doc), { busy: false }).catch(() => null))?.payload, frame);
   }
-  const src = { name: sent?.name || null, px: sent ? [sent.width, sent.height] : [rect.w, rect.h], rect, copy: !!sent };
+  const src = { name: sent?.name || null, px: sent ? sent.px : [rect.w, rect.h], rect, copy: !!sent };
   gens.forEach((g, i) => {
     landMade(frame.doc, src, g, { label: t.name, nth: i });
     waitGen(g.id).catch(() => {}).finally(() => setTimeout(() => { if (P.host) draw(); }, 1500));   // (the count of runs on the way)
@@ -333,7 +297,7 @@ async function landFrames(done, values, t) {
 }
 
 // video frame: each output a clip at the end of its first video track, in the open timeline if this frame is live
-async function landClips(frame, done) {
+export async function landClips(frame, done) {
   const outs = (done.outputs || []).map((o, index) => ({ o, index })).filter(({ o }) => o.kind === 'video' || o.kind === 'image');
   let n = 0;
   for (const { o, index } of outs) {
@@ -391,7 +355,7 @@ function durationOf(url) {
 }
 
 // sound frame: each sound it made into its mix (frame-sound.js takes it as a drop: the open mix when it is live)
-function landSounds(frame, done) {
+export function landSounds(frame, done) {
   const outs = (done.outputs || []).map((o, index) => ({ o, index })).filter(({ o }) => o.kind === 'audio');
   if (!outs.length) return inShelf(done);
   const still = Table.frameById(frame.id);
@@ -427,7 +391,6 @@ addEventListener('table:live', (e) => { P.table = e.detail?.table || P.table; if
 addEventListener('table:unlive', () => { if (P.host) draw(); });
 onNavigate((name) => {
   if (name === 'table') { if (P.host) draw(); return; }
-  hideFrameVfx();   // (and the VFX tab its engine)
   if (lentOut()) giveBack();   // (another screen: the Generate tab's own fields come back)
   P.lentFor = null;
 });
