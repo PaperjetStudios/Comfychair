@@ -135,13 +135,14 @@ export function moveSet(d, ids, g, dt, { dTrack = 0, ...opts } = {}, o) {
 }
 
 // Trim one edge ('l' / 'r') of these clips by dt (dragClip's rules): a clip's start not before its source's start nor
-// 0, its end not past its source (a still has none), at least minLen long. Snaps by the first clip's moving edge.
+// 0, its end not past its source (a still has none), at least minLen long. Snaps by the moving edge of the clip first in
+// ids (the one grabbed), else the first of them on the timeline.
 // ripple: the clip keeps its start, and the clips after it on its track follow the change of its end.
 // Returns the applied dt.
 export function trim(d, ids, g, side, dt, { ripple = false, ...opts } = {}, o) {
   const its = editable(d, ids).filter((it) => g.has(it.id));
   if (!its.length) return 0;
-  const minLen = minOf(o), b0 = g.get(its[0].id);
+  const lead = its.find((it) => it.id === ids[0]) || its[0], minLen = minOf(o), b0 = g.get(lead.id);
   const edge = side === 'l' ? b0.at : b0.at + (b0.out - b0.in);
   let k = dt + snapShift([edge + dt], snapOf(opts, o));
   for (const it of its) {   // one delta that every clip can take

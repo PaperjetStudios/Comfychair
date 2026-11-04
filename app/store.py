@@ -10,7 +10,8 @@ it back; trashed copies older than 30 days are dropped on the next delete in tha
 
 A "tables" payload (the project's canvas of frames): {v:1, view:{x,y,z}, grid:{on,size},
 frames:[{id, kind:'image'|'video'|'scene'|'sound'|'note', doc:<store id of edit-tabs|video-tabs|scene-tabs|sound-tabs>,
-x,y,w,h,label,locked?,text?,story?:{scene,shot}}], story?:<story-tabs id>}. The table owns the docs its frames
+x,y,w,h,label,locked?,text?,story?:{scene,shot}}], wires?:[{id, from, to, kind, n, on, frame?}] (from/to are frame ids of
+the same table; wires hold no run ids or picture names), story?:<story-tabs id>}. The table owns the docs its frames
 point at: deleting the table trashes them too, restoring it brings them back.
 
 A "setups" payload (a parameter block's saved values, global so every project sees it): {v:1, key, values, note?}.
@@ -344,16 +345,27 @@ async def duplicate_table(did: str, project_id: int | None = None, scope: str | 
                 doc["still"] = {**st, "url": _still_url(od / f"{new}.png", 1), "rev": 1}
             _write(od / f"{new}.json", doc)
             made[(k, i)] = new
+    idmap = {}   # old frame id -> new frame id, so wires follow their frames
     if isinstance(payload.get("frames"), list):
         for f in payload["frames"]:
             if not isinstance(f, dict):
                 continue
+            old_id = f.get("id")
             f["id"] = uuid.uuid4().hex[:12]
+            if isinstance(old_id, str):
+                idmap[old_id] = f["id"]
             k = FRAME_DOC_KINDS.get(f.get("kind"))
             if (k, f.get("doc")) in made:
                 f["doc"] = made[(k, f["doc"])]
             if ("vfx-tabs", f.get("vfx")) in made:
                 f["vfx"] = made[("vfx-tabs", f["vfx"])]
+    if isinstance(payload.get("wires"), list):
+        wires = []
+        for w in payload["wires"]:
+            if not isinstance(w, dict) or idmap.get(w.get("from")) is None or idmap.get(w.get("to")) is None:
+                continue
+            wires.append({**w, "id": uuid.uuid4().hex[:12], "from": idmap[w["from"]], "to": idmap[w["to"]]})
+        payload["wires"] = wires
     new = uuid.uuid4().hex[:12]
     doc = {"id": new, "kind": "tables", "name": f"{src.get('name') or did} copy"[:120],
            "order": max((x.get("order", 0) for x in _docs(d)), default=-1) + 1, "rev": 1, "updated": now, "payload": payload}

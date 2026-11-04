@@ -9,7 +9,7 @@
 //                                                     frame's). kind: the kind shown first. centre: the frame's middle at x, y.
 import { h, store, toast, openSheet, closeSheet, button, chips, seg, field, help, hint, textArea, mpInput, icon } from './ui.js';
 import { S, ASPECT_PRESETS } from './core.js';
-import { openImagePicker, openSoundPicker, openVideoPicker } from './media.js';
+import { openSourcePicker } from './source-picker.js';
 import { sidebar } from './sidebar.js';
 import * as Table from './table.js';
 import { blankPayload } from './table-frames.js';
@@ -92,7 +92,7 @@ const PANES = {
     const [textC, textHost] = textCard(Q, 'From text', (prompt) => fromText(Q, 'video', 'video-text', size(), prompt));
     return [...rows,
       cards(card('film', 'Blank sequence', () => blank(Q, 'video', size(), { ...emptyVideo(), size: [size().w, size().h], fps: Q.c.fps })),
-        card('video', 'From a clip', () => { closeSheet(); openVideoPicker({ title: 'Start from a clip', onPick: (v) => fromSource(Q, { ...v, kind: 'video' }) }); }),
+        card('video', 'From a clip', () => { closeSheet(); openSourcePicker({ kinds: ['video'], want: 'clip', title: 'Start from a clip', onPick: (v) => fromSource(Q, { ...v, kind: 'video' }) }); }),
         textC,
         card('image', 'From a picture', () => pickPicture((name) => withPicture(Q, 'video', 'video-picture', size(), name), 'Picture to animate'))),
       textHost];
@@ -117,7 +117,7 @@ const PANES = {
     return [cards(card('sound', 'Empty mix', () => blank(Q, 'sound', SOUND_SIZE)),
       card('upload', 'From a file', () => {
         closeSheet();
-        openSoundPicker({ title: 'Start from a sound', onPick: async (src) => {
+        openSourcePicker({ kinds: ['audio', 'video'], want: 'sound', title: 'Start from a sound', onPick: async (src) => {
           const f = await Table.newFrameAt('sound', rectOf(Q, SOUND_SIZE), { payload: blankPayload('sound') });
           if (f && !Table.dropOntoFrame(f, [src])) toast('That sound couldn\'t go in the mix', true);
         } });
@@ -143,7 +143,7 @@ async function blank(Q, kind, size, payload) {
 
 function pickPicture(onPick, title = 'Start from a picture') {
   closeSheet();
-  openImagePicker({ title, onPick: (name, info) => Promise.resolve(onPick(name, info)).catch((e) => toast(e.message, true)) });
+  openSourcePicker({ kinds: ['image'], want: 'picture', title, onPick: (name, info) => Promise.resolve(onPick(name, info)).catch((e) => toast(e.message, true)) });
 }
 
 // a picture, clip or file as a frame of its own (the same as dropping it on the table there)

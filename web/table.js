@@ -35,6 +35,14 @@
 //                    module drops what only the frame itself owned. Undo brings the frames back, not that.
 //   table:menu       { frame, frames, groups }   the frame menu is about to open: a module adds its own groups of items
 //                    (press-menu.js's shape) to groups; they go before Delete
+//   table:wires      { frames: [id], table }     wires were plugged, unplugged or changed (by hand, Undo, a delete or a
+//                    duplicate); frames: the ids of the frames at either end of the wires that changed
+//
+// Wires (web/wire-rules.js, T.wires): a frame's output plugged into another frame's Make inputs. A frame with something to
+// put out has an out port beside its right edge (on hover, and while it is selected); a drag from it to another frame plugs
+// it in (a video frame asks: the clip, or a frame of it). The target shows one input port per wire down its left edge
+// ("Image 1", "Video 1", "Sound 1"). Tap a wire or an input port to select it, Delete unplugs it, right click or a long hold
+// has the rest. Every wire change is a table undo step. For the Make pane: tableWires, wiresInto, setTableWire.
 import { $, h, api, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, toggle, help, mpInput, layerRowsEl, iconBtn, uid } from './ui.js';
 import { S, onServer, onProject } from './core.js';
 import { TabSet } from './tabs.js';
@@ -50,6 +58,7 @@ import { droppedFiles, draggingPicture } from './drop-files.js';
 import { isLive, liveFrame, liveRoot, setLive } from './live.js';
 import * as M from './table-model.js';
 import * as ST from './layer-stack.js';
+import * as W from './wire-rules.js';
 import { frameMenu as frameMenuGroups, frameArrangeMenu, pickedFor } from './layer-menu.js';
 import { filtering, foldedGroups, listRows } from './frame-list.js';
 import { KIND_ICON, copyDoc, createDoc, dropInput, editDoc, frameEl, frameFor, kindOfDoc, loadStills, owedCounts, renameDoc, restoreDoc, stillOf, syncFrame, trashDoc, pausePreviews, previewMode, setPreviewMode } from './table-frames.js';
@@ -64,7 +73,9 @@ let T = M.blankTable();   // the open table
 const U = { sel: new Set(), els: new Map(), wired: false, lastTap: null, tabs: null, op: null, pts: new Map(), space: false, panelSig: '',
   before: null /* the view before a frame went live */, nudge: null /* arrows held: { ids, before, t } */,
   loaded: null /* { id, pid } of the table loaded last */, find: { q: '', kinds: new Set(), selOnly: false } /* the Frame pane's list filters */,
-  fold: new Map() /* a story scene's row folded or opened by hand, by scene id */, leaving: Promise.resolve() /* the last live frame's saves (table:unlive wait) */ };
+  fold: new Map() /* a story scene's row folded or opened by hand, by scene id */, leaving: Promise.resolve() /* the last live frame's saves (table:unlive wait) */,
+  wire: null /* the selected wire's id */, hover: null /* the frame the mouse is over (its out port shows) */,
+  wireEls: new Map() /* wire id -> its <g> */, outEls: new Map() /* frame id -> its out port */, inEls: new Map() /* wire id -> its input port */ };
 const PENDING = new Map();   // doc id -> results on their way to it (edit:pending { doc, n }, from any kind's edits)
 const H = { past: [], future: [] };   // undo: [{ undo(), redo() }] for this table's moves, resizes and deletes
 const D = {};             // its elements
@@ -84,7 +95,7 @@ const adapter = {
     U.loaded = key;
     if (same) return reloaded(next);
     unlive(); cancelOp();
-    T = next; U.sel.clear(); H.past = []; H.future = []; U.nudge = null;
+    T = next; U.sel.clear(); H.past = []; H.future = []; U.nudge = null; U.wire = null; U.hover = null;
     U.fitDue = T.view.x === 0 && T.view.y === 0 && T.view.z === 1; U.laid = false;   // (a table never viewed: fit its frames once)
     syncUndo(); D.syncBar?.(); renderAll(); refreshStills();
     fitAll();
@@ -106,9 +117,10 @@ function reloaded(next) {
   T = next;
   const ids = new Set(T.frames.map((f) => f.id));
   for (const id of [...U.sel]) if (!ids.has(id)) U.sel.delete(id);
+  if (U.wire && !T.wires.some((w) => w.id === U.wire)) U.wire = null;
   if (liveFrame() && !ids.has(liveFrame().id)) unlive();
   else if (liveFrame()) placeLive();
-  if (U.op && [...(U.op.ids || []), U.op.f?.id].some((id) => id && !ids.has(id))) cancelOp();
+  if (U.op && [...(U.op.ids || []), U.op.f?.id, U.op.src?.id].some((id) => id && !ids.has(id))) cancelOp();
   U.panelSig = '';
   D.syncBar?.(); renderAll(); refreshStills();
 }
@@ -143,6 +155,7 @@ function applyView() {
   D.stage.style.backgroundSize = `${s}px ${s}px`;
   D.stage.style.backgroundPosition = `${x}px ${y}px`;
   D.zoom.textContent = `${Math.round(z * 100)}%`;
+  if (U.wz !== z) { U.wz = z; renderPorts(); renderWires(); }   // (the ports and the input stack hold their size on screen)
 }
 function setView(v, { animate = false, save = true } = {}) {
   T.view = { x: Math.round(v.x * 100) / 100, y: Math.round(v.y * 100) / 100, z: v.z };
@@ -185,6 +198,7 @@ function renderFrames() {
   });
   for (const [id, el] of U.els) if (!seen.has(id)) { el.remove(); U.els.delete(id); }
   renderHandles();
+  renderWires(dragTouch());
   renderPanel();
   D.syncArrange?.();
   tellSelection();
@@ -201,6 +215,7 @@ function renderAll() { applyView(); renderFrames(); }
 // eight handles on the one selected frame (none while live or locked); their size holds against the zoom (app.css)
 const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 function renderHandles() {
+  renderPorts(dragTouch());
   D.handles.replaceChildren();
   const s = selected();
   if (s.length !== 1 || s[0].locked || s[0].hidden || isLive()) return;
@@ -213,6 +228,192 @@ function renderHandles() {
 function showGuides(guides = []) {
   D.guides.replaceChildren(...guides.map((g) => h('div', { class: `table-guide ${g.x != null ? 'gx' : 'gy'}`,
     style: g.x != null ? `left:${g.x}px` : `top:${g.y}px` })));
+}
+
+// ---------------------------------------------------------------------------
+// wires: drawn in an SVG under the frames (it rides the pan and zoom), the ports over them (with the handles)
+// ---------------------------------------------------------------------------
+const SVGNS = 'http://www.w3.org/2000/svg';
+function svgEl(tag, attrs = {}) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+// where the ports sit, in screen pixels (a finger gets more room, clear of the resize handles): the out port's gap beside
+// the right edge, the first input port's drop from the top and the step between them
+const portGeom = () => (matchMedia('(pointer: coarse)').matches ? { gap: 48, top: 60, step: 48 } : { gap: 20, top: 34, step: 26 });
+const outPt = (f, pg, z) => ({ x: f.x + f.w + pg.gap / z, y: f.y + f.h / 2 });
+const inPt = (f, i, pg, z) => ({ x: f.x, y: f.y + (pg.top + i * pg.step) / z });
+function curve(a, b, z) {
+  const dx = Math.max(Math.abs(b.x - a.x) / 2, 60 / z);
+  return `M${a.x} ${a.y}C${a.x + dx} ${a.y} ${b.x - dx} ${b.y} ${b.x} ${b.y}`;
+}
+// the frames being dragged (only their wires and ports are redrawn meanwhile), or null for all of them
+function dragTouch() {
+  const op = U.op;
+  if (!op?.moved) return null;
+  if (op.type === 'move') return op.ids;
+  if (op.type === 'resize') return new Set([op.f.id]);
+  return null;
+}
+const wireById = (id) => T.wires.find((w) => w.id === id) || null;
+const drawn = (w) => { const a = byId(w.from), b = byId(w.to); return a && b && !a.hidden && !b.hidden ? [a, b] : null; };
+// each wire's place in its target's input stack (image, video, sound, each by n)
+function inputSlots() {
+  const to = new Map(), at = new Map();
+  for (const w of T.wires) { if (!to.has(w.to)) to.set(w.to, []); to.get(w.to).push(w); }
+  for (const [id, list] of to) W.inputsFor(list, id).forEach((w, i) => at.set(w.id, i));
+  return at;
+}
+function renderWires(touch = null) {
+  if (!D.wires) return;
+  const z = T.view.z, pg = portGeom(), slot = inputSlots(), seen = new Set();
+  for (const w of T.wires) {
+    if (touch && !touch.has(w.from) && !touch.has(w.to)) { seen.add(w.id); continue; }
+    const ends = drawn(w);
+    if (!ends) continue;
+    let g = U.wireEls.get(w.id);
+    if (!g) {
+      g = svgEl('g', { class: 'wire', 'data-wire': w.id });
+      g.append(svgEl('path', { class: 'wire-hit' }), svgEl('path', { class: 'wire-line' }));
+      D.wires.append(g); U.wireEls.set(w.id, g);
+    }
+    const d = curve(outPt(ends[0], pg, z), inPt(ends[1], slot.get(w.id), pg, z), z);
+    g.firstChild.setAttribute('d', d);
+    g.lastChild.setAttribute('d', d);
+    g.lastChild.setAttribute('class', `wire-line k-${w.kind}${w.on === false ? ' off' : ''}`);
+    g.lastChild.style.strokeDasharray = w.on === false ? `${6 / z} ${5 / z}` : '';
+    g.classList.toggle('sel', U.wire === w.id);
+    seen.add(w.id);
+  }
+  if (!touch) for (const [id, g] of U.wireEls) if (!seen.has(id)) { g.remove(); U.wireEls.delete(id); }
+}
+// An out port beside every frame with something to put out (shown on hover, while selected or wiring from it), and an
+// input port per wire on its target. None while a frame is live.
+function renderPorts(touch = null) {
+  if (!D.ports) return;
+  if (isLive()) { D.ports.replaceChildren(); U.outEls.clear(); U.inEls.clear(); return; }
+  const z = T.view.z, pg = portGeom(), seenOut = new Set(), seenIn = new Set();
+  for (const f of T.frames) {
+    if (touch && !touch.has(f.id)) { seenOut.add(f.id); continue; }
+    const kinds = f.hidden ? [] : W.outKinds(f);
+    if (!kinds.length) continue;
+    let el = U.outEls.get(f.id);
+    if (!el) {
+      el = h('div', { class: 'frame-out', 'data-frame': f.id, title: 'Drag onto another frame to plug it in' });
+      D.ports.append(el); U.outEls.set(f.id, el);
+    }
+    const p = outPt(f, pg, z);
+    el.className = `frame-out k-${kinds[0]}${showOut(f.id) ? ' show' : ''}`;
+    el.style.left = `${p.x}px`; el.style.top = `${p.y}px`;
+    seenOut.add(f.id);
+  }
+  const slot = inputSlots();
+  for (const w of T.wires) {
+    if (touch && !touch.has(w.to)) { seenIn.add(w.id); continue; }
+    const ends = drawn(w);
+    if (!ends) continue;
+    let el = U.inEls.get(w.id);
+    if (!el) {
+      el = h('div', { class: 'frame-in', 'data-wire': w.id }, h('span', { class: 'frame-in-dot' }), h('span', { class: 'frame-in-label' }));
+      D.ports.append(el); U.inEls.set(w.id, el);
+    }
+    const p = inPt(ends[1], slot.get(w.id), pg, z), pick = W.isFrameWire(w) ? FRAME_PICK_LABEL[w.frame] || `${w.frame} s` : '';
+    el.className = `frame-in k-${w.kind}${w.on === false ? ' off' : ''}${U.wire === w.id ? ' sel' : ''}`;
+    el.style.left = `${p.x}px`; el.style.top = `${p.y}px`;
+    el.lastChild.textContent = W.wireLabel(w);
+    el.title = `From "${ends[0].label}"${pick ? ` · ${pick}` : ''}${w.on === false ? ' · off' : ''}`;
+    seenIn.add(w.id);
+  }
+  if (touch) return;
+  for (const [id, el] of U.outEls) if (!seenOut.has(id)) { el.remove(); U.outEls.delete(id); }
+  for (const [id, el] of U.inEls) if (!seenIn.has(id)) { el.remove(); U.inEls.delete(id); }
+}
+const FRAME_PICK_LABEL = { first: 'First frame', last: 'Last frame', playhead: 'Playhead' };
+const showOut = (id) => U.sel.has(id) || U.hover === id || U.op?.src?.id === id;
+// the mouse over a frame or its out port: that port shows
+function setHover(id) {
+  if (U.hover === id) return;
+  const was = U.hover;
+  U.hover = id;
+  for (const x of [was, id]) if (x) U.outEls.get(x)?.classList.toggle('show', showOut(x));
+}
+// the wire picked (null: none); picking one lets go of the frames
+function pickWire(id) {
+  if (U.wire === id) return;
+  U.wire = id;
+  if (id) U.sel.clear();
+  renderFrames();
+}
+// T.wires set (an undo step's list: wires naming a frame that's gone since are left out)
+function putWires(list, touched) {
+  T.wires = W.renumber(list.filter((w) => byId(w.from) && byId(w.to)));
+  if (U.wire && !wireById(U.wire)) U.wire = null;
+  renderFrames(); changed();
+  tellWires(touched);
+}
+function tellWires(ids) {
+  const frames = [...new Set(ids)];
+  if (frames.length) dispatchEvent(new CustomEvent('table:wires', { detail: { frames, table: T } }));
+}
+// the frames at either end of the wires that differ between two lists
+function wiresTouched(a, b) {
+  const key = (w) => JSON.stringify(w), ka = new Set(a.map(key)), kb = new Set(b.map(key)), out = new Set();
+  for (const w of a) if (!kb.has(key(w))) { out.add(w.from); out.add(w.to); }
+  for (const w of b) if (!ka.has(key(w))) { out.add(w.from); out.add(w.to); }
+  return [...out];
+}
+// A change to the wires as one undo step; false when nothing changed
+function wireStep(next) {
+  const before = T.wires, touched = wiresTouched(before, next);
+  if (!touched.length) return false;
+  record({ undo: () => putWires(before, touched), redo: () => putWires(next, touched) });
+  putWires(next, touched);
+  return true;
+}
+const WHY = {
+  missing: () => 'That frame is gone',
+  'no-output': (s) => `"${s.label}" has nothing to plug in yet`,
+  'wrong-kind': (s) => `"${s.label}" can't go in as that`,
+  cycle: (s, d) => `That would go round in a loop: "${d.label}" already feeds "${s.label}"`,
+  exists: (s, d) => `"${s.label}" is plugged into "${d.label}" already`,
+};
+// src's output into dst, as kind (a video frame: its clip, 'video', or a frame of it, 'image')
+function plug(src, dst, kind) {
+  if (byId(src.id) !== src || byId(dst.id) !== dst) return toast('That frame is gone');
+  const r = W.addWire(T.wires, { from: src.id, to: dst.id, kind }, T.frames);
+  if (r.why) return toast((WHY[r.why] || (() => 'That can\'t be plugged in there'))(src, dst));
+  wireStep(r.wires);
+}
+// let go over dst: a source with more than one thing to put out asks which
+function plugAt(src, dst, x, y) {
+  if (dst.kind === 'note') return toast('A note takes nothing in');
+  const kinds = W.outKinds(src);
+  if (kinds.length < 2) return plug(src, dst, kinds[0]);
+  openPressMenu(x, y, [kinds.map((k) => ({ label: k === 'image' && src.kind === 'video' ? 'Frame of it' : W.WIRE_LABEL[k], run: () => plug(src, dst, k) }))], 'Plug in as');
+}
+function removeWire(id) {
+  if (wireStep(W.removeWires(T.wires, [id])) && U.wire === id) { U.wire = null; renderFrames(); }
+}
+// a wire's menu (right click or a long hold on it or its input port)
+function wireMenu(x, y, id) {
+  const w = wireById(id);
+  if (!w) return;
+  pickWire(id);
+  const groups = [[{ label: w.on === false ? 'Turn on' : 'Turn off', run: () => setTableWire(id, { on: w.on === false }) }]];
+  if (W.isFrameWire(w)) groups.push(W.FRAME_PICKS.map((v) => ({ label: FRAME_PICK_LABEL[v], on: w.frame === v, run: () => setTableWire(id, { frame: v }) })));
+  groups.push([{ label: 'Remove', keys: 'Del', danger: true, run: () => removeWire(id) }]);
+  openPressMenu(x, y, groups, W.wireLabel(w));
+}
+// for the Make pane (wave 2): the open table's wires; a frame's inputs, each with its source frame (wire-rules inputsFor
+// order: image, video, sound, each by n); one wire changed ({ on, frame, n }: wire-rules setWire) as an undo step,
+// returning the wire as it is now (null: not there)
+export const tableWires = () => T.wires;
+export const wiresInto = (frameId) => W.inputsFor(T.wires, frameId).map((w) => ({ ...w, source: byId(w.from) }));
+export function setTableWire(id, patch) {
+  if (!wireById(id)) return null;
+  wireStep(W.setWire(T.wires, id, patch));
+  return wireById(id);
 }
 
 // the stills come from each document kind's list; a frame's document saving elsewhere sends a `store` message
@@ -385,11 +586,21 @@ async function deleteFrames(ids) {
   await U.leaving;   // (a live frame's last save lands before its document is trashed)
   if (!ok()) return;
   const at = new Map(gone.map((f) => [f.id, T.frames.indexOf(f)])), hadGroups = T.groups.map((g) => ({ ...g }));
-  // (a group they emptied comes back with them)
+  let hadWires = T.wires;   // (the wires as they were before the frames went, to put theirs back in their places)
+  const wiresBack = (list) => {
+    const back = new Set(list.map((f) => f.id)), have = new Set(T.wires.map((w) => w.id));
+    return hadWires.filter((w) => !have.has(w.id) && (back.has(w.from) || back.has(w.to)));
+  };
+  // (a group they emptied comes back with them, and their wires to frames still there)
   const putBack = (list) => {
     for (const f of [...list].sort((a, b) => at.get(a.id) - at.get(b.id))) if (!byId(f.id)) T.frames.splice(Math.min(at.get(f.id), T.frames.length), 0, f);
     for (const g of hadGroups) if (!T.groups.some((o) => o.id === g.id) && list.some((f) => f.group === g.id)) T.groups.push({ ...g });
     T.frames = ST.normalize(T.frames, T.groups);
+    const add = wiresBack(list).filter((w) => byId(w.from) && byId(w.to));
+    if (!add.length) return;
+    const order = new Map(hadWires.map((w, i) => [w.id, i]));
+    T.wires = W.renumber([...T.wires, ...add].sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity)));
+    tellWires(add.flatMap((w) => [w.from, w.to]));
   };
   let trashed = [];
   const take = async () => {
@@ -397,7 +608,11 @@ async function deleteFrames(ids) {
     const groupOf = new Map(gone.map((f) => [f.id, f.group]));
     T.frames = ST.normalize(T.frames.filter((f) => !drop.has(f.id)), T.groups);
     for (const f of gone) if (groupOf.get(f.id)) f.group = groupOf.get(f.id);   // (normalize left them be: they keep it for Undo)
+    hadWires = T.wires;
+    T.wires = W.dropFrames(T.wires, [...drop]);
+    if (U.wire && !wireById(U.wire)) U.wire = null;
     U.sel.clear(); renderFrames(); changed();
+    tellWires(wiresTouched(hadWires, T.wires));
     const res = await Promise.allSettled(gone.map(trashDoc));
     trashed = gone.filter((f, i) => res[i].status === 'fulfilled');
     for (const f of trashed) if (f.vfx) trashDoc(vfxOf(f)).catch((e) => console.warn('frame VFX', e));   // (a video frame's VFX document goes with it)
@@ -426,6 +641,9 @@ async function deleteFrames(ids) {
         p.frames ||= [];
         const have = new Set(p.frames.map((f) => f.id));
         for (const f of fine) if (!have.has(f.id)) p.frames.splice(Math.min(at.get(f.id), p.frames.length), 0, f);
+        // (their wires too: the table's migrate drops one whose other end has gone meanwhile)
+        const haveW = new Set((p.wires || []).map((w) => w.id)), ids = new Set(fine.map((f) => f.id));
+        p.wires = [...(p.wires || []), ...hadWires.filter((w) => !haveW.has(w.id) && (ids.has(w.from) || ids.has(w.to)))];
       });
       toast(fine.length === 1 ? `"${fine[0].label}" is back on its table` : `${fine.length} frames are back on their table`);
     } catch (e) { toast(`Couldn't put the frames back on their table: ${e.message}`, true); }
@@ -448,7 +666,11 @@ export async function removeFrames(ids) {
   if (gone.some((f) => f.id === liveFrame()?.id)) { unlive(); await U.leaving; }
   T.frames = ST.normalize(T.frames.filter((f) => !drop.has(f.id)), T.groups);
   for (const f of gone) U.sel.delete(f.id);
+  const hadWires = T.wires;
+  T.wires = W.dropFrames(T.wires, [...drop]);
+  if (U.wire && !wireById(U.wire)) U.wire = null;
   renderFrames(); changed();
+  tellWires(wiresTouched(hadWires, T.wires));
   await Promise.allSettled(gone.map((f) => trashDoc(f)));
   for (const f of gone) if (f.vfx) trashDoc(vfxOf(f)).catch(() => {});
   dispatchEvent(new CustomEvent('table:deleted', { detail: { frames: gone } }));
@@ -492,8 +714,9 @@ function tellMoved(frames) {
 // Duplicate: each copy beside its original, with a copy of its document (and its own op state, frame.ops). The Make panel's
 // pictures (make.inputs) stay the original's: the copy's settings still name them, but deleting the copy, or its slot
 // taking another picture, never deletes them.
+// A wire between two of the frames copied is copied onto their copies (wire-rules remap).
 async function duplicateFrames(ids) {
-  const made = [], ok = here();
+  const made = [], ok = here(), idMap = new Map();
   const gone = (g) => { trashDoc(g).catch(() => {}); };
   for (const f of T.frames.filter((x) => ids.has(x.id))) {
     const g = { ...structuredClone(f), id: M.newFrame(f.kind, f).id, label: `${f.label} copy`, locked: false };
@@ -502,13 +725,16 @@ async function duplicateFrames(ids) {
     Object.assign(g, M.nextBeside([...T.frames, ...made], f.kind, { w: f.w, h: f.h }));
     try { g.doc = f.doc ? await copyDoc(f, g.label) : null; } catch (e) { toast(`Couldn't copy "${f.label}": ${e.message}`, true); continue; }
     delete g.vfx;   // (an old VFX document stays the original's: moveVfxDocs reads it into that frame)
-    made.push(g);
+    made.push(g); idMap.set(f.id, g.id);
     if (!ok()) break;
   }
   if (!made.length) return;
   if (!ok()) { for (const g of made) gone(g); return; }   // (another table opened meanwhile: the copies go)
   T.frames = ST.normalize([...T.frames, ...made], T.groups);   // (a copy of a member joins its group, at its top)
-  U.sel = new Set(made.map((f) => f.id)); renderFrames(); changed();
+  const copied = W.remap(T.wires, idMap);
+  if (copied.length) T.wires = W.renumber([...T.wires, ...copied]);
+  U.sel = new Set(made.map((f) => f.id)); U.wire = null; renderFrames(); changed();
+  tellWires(copied.flatMap((w) => [w.from, w.to]));
 }
 
 // ---------------------------------------------------------------------------
@@ -684,6 +910,8 @@ function arrange(id) {
 function stageMenu(e) {
   cancelOp();
   if (isLive()) return;
+  const onWire = e.target.closest?.('[data-wire]');
+  if (onWire) return wireMenu(e.clientX, e.clientY, onWire.dataset.wire);
   const f = frameAt(e);
   if (f) return frameMenu(e.clientX, e.clientY, f);
   const r = D.stage.getBoundingClientRect(), p = M.toTable(T.view, e.clientX - r.left, e.clientY - r.top);
@@ -716,14 +944,47 @@ function onDown(e) {
   try { D.stage.setPointerCapture(e.pointerId); } catch { /* the pointer is gone */ }
   const base = { id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false };
   const handle = e.target.closest('.frame-handle'), f = frameAt(e);
-  if (isLive() || handle || f || e.button !== 0 || U.space) U.lastEmpty = null;   // (only tap, tap on empty table counts)
+  const port = e.target.closest('.frame-out'), onWire = e.target.closest('[data-wire]');
+  if (isLive() || handle || f || port || onWire || e.button !== 0 || U.space) U.lastEmpty = null;   // (only tap, tap on empty table counts)
+  if (!isLive() && !onWire && U.wire && e.button === 0) pickWire(null);   // (anything else pressed lets go of the wire)
   if (isLive()) U.op = { ...base, type: 'backdrop' };   // (the table behind a live frame: a tap beside it lets go of it)
   else if (e.button === 1 || (e.button === 0 && U.space)) U.op = { ...base, type: 'pan', v0: { ...T.view } };
+  else if (port) startWire(byId(port.dataset.frame), base);
+  else if (onWire) { pickWire(onWire.dataset.wire); U.op = { ...base, type: 'wiretap' }; }
   else if (handle) {
     const r = byId([...U.sel][0]);
     U.op = { ...base, type: 'resize', f: r, start: { ...r }, handle: handle.dataset.handle };
   } else if (f) startMove(e, f, base);
   else U.op = { ...base, type: 'marquee', p0: tablePt(e), base: e.shiftKey ? new Set(U.sel) : new Set(), shift: e.shiftKey };
+}
+// a drag from an out port: a wire follows the pointer; let go over another frame to plug it in there
+function startWire(src, base) {
+  if (!src) return;
+  U.op = { ...base, type: 'wire', src, over: null };
+  setHover(src.id);
+}
+function dragWire(e, op) {
+  const p = tablePt(e), z = T.view.z;
+  const under = M.hitFrame(M.shown(T.frames).filter((f) => f.id !== op.src.id), p);
+  if (under?.id !== op.over?.id) {
+    U.els.get(op.over?.id)?.classList.remove('wire-over');
+    op.over = under;
+    if (under && under.kind !== 'note') U.els.get(under.id)?.classList.add('wire-over');
+  }
+  D.wireDraft.setAttribute('d', curve(outPt(op.src, portGeom(), z), p, z));
+  D.wireDraft.setAttribute('class', `wire-draft k-${W.outKind(op.src) || 'image'}`);
+  D.wireDraft.style.display = '';
+}
+function endWireDraft(op) {
+  if (D.wireDraft) D.wireDraft.style.display = 'none';
+  U.els.get(op?.over?.id)?.classList.remove('wire-over');
+}
+function endWire(e, op) {
+  endWireDraft(op);
+  setHover(null);
+  if (!op.moved) { U.sel = new Set([op.src.id]); renderFrames(); return; }   // (a tap on the port picks its frame)
+  if (op.over) plugAt(op.src, op.over, e.clientX, e.clientY);
+  else renderPorts();
 }
 function startMove(e, f, base) {
   // a second tap on the same frame opens it (a dblclick would land on the stage, which holds the pointer)
@@ -739,6 +1000,7 @@ function startMove(e, f, base) {
 
 function onMove(e) {
   if (U.pts.has(e.pointerId)) U.pts.set(e.pointerId, local(e));
+  if (!U.op && e.pointerType !== 'touch' && !isLive()) setHover(e.target.closest?.('.frame-out')?.dataset.frame || frameAt(e)?.id || null);
   const op = U.op;
   if (op?.type === 'pinch') return pinch();
   if (!op || e.pointerId !== op.id) return;
@@ -748,6 +1010,7 @@ function onMove(e) {
   else if (op.type === 'move') dragMove(e, op);
   else if (op.type === 'resize') dragResize(e, op);
   else if (op.type === 'marquee') dragMarquee(e, op);
+  else if (op.type === 'wire') dragWire(e, op);
 }
 function dragMove(e, op) {
   const p = tablePt(e), dx = p.x - op.p0.x, dy = p.y - op.p0.y;
@@ -809,6 +1072,8 @@ function onUp(e) {
   if (op.type === 'backdrop') { if (!op.moved && isLive()) unlive(); return; }
   if (op.type === 'pan') { if (op.moved) changed(); return; }
   if (op.type === 'move') return endMove(e, op);
+  if (op.type === 'wire') return endWire(e, op);
+  if (op.type === 'wiretap') return;
   if (op.type === 'resize') {
     if (op.moved) { recordGeom([{ id: op.f.id, x: op.start.x, y: op.start.y, w: op.start.w, h: op.start.h }], geomOf(new Set([op.f.id]))); changed(); tellMoved([op.f]); }
     return;
@@ -863,6 +1128,7 @@ function cancelOp(op = U.op) {
   clearTimeout(op.dwellT);
   if (op.type === 'move') for (const [id, s] of op.start) Object.assign(byId(id) || {}, s);
   if (op.type === 'resize') Object.assign(op.f, op.start);
+  if (op.type === 'wire') { endWireDraft(op); U.hover = null; }
   renderFrames();
 }
 
@@ -895,7 +1161,8 @@ function onKey(e) {
   const arrows = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
   const low = k.toLowerCase(), any = U.sel.size > 0;
   let fn = null;
-  if (k === 'Delete' || k === 'Backspace') fn = () => deleteFrames(new Set(U.sel));
+  if ((k === 'Delete' || k === 'Backspace') && U.wire) fn = () => removeWire(U.wire);
+  else if (k === 'Delete' || k === 'Backspace') fn = () => deleteFrames(new Set(U.sel));
   else if (arrows[k] && any) fn = () => nudge(arrows[k]);
   else if (ctrl && (low === 'd' || low === 'j') && !e.shiftKey) fn = () => duplicateFrames(new Set(U.sel));
   else if (ctrl && low === 'a') fn = () => { U.sel = new Set(M.shown(T.frames).map((f) => f.id)); renderFrames(); };
@@ -933,6 +1200,7 @@ function flushNudge() {
 function onEsc(e) {
   if (e.key !== 'Escape' || e.defaultPrevented || !onTable() || ownsKey(e) || e.target.closest?.('input, textarea, select, [contenteditable]')) return;
   if (isLive()) { e.preventDefault(); unlive(); }
+  else if (U.wire) pickWire(null);
   else if (U.sel.size) { U.sel.clear(); renderFrames(); }
 }
 function zoomTo(z) {
@@ -1252,7 +1520,11 @@ function wire() {
   D.handles = h('div', { class: 'table-handles' });
   D.guides = h('div', { class: 'table-guides' });
   D.marquee = h('div', { class: 'table-marquee' });
-  D.world = h('div', { class: 'table-world' }, D.frames, D.guides, D.marquee, D.handles);
+  D.wires = svgEl('svg', { class: 'table-wires', 'aria-hidden': 'true' });   // (first: under the frames, riding the pan and zoom)
+  D.wireDraft = svgEl('path', { class: 'wire-draft', style: 'display:none' });
+  D.wires.append(D.wireDraft);
+  D.ports = h('div', { class: 'table-ports' });
+  D.world = h('div', { class: 'table-world' }, D.wires, D.frames, D.ports, D.guides, D.marquee, D.handles);
   D.live = h('div', { class: 'live-layer' });   // (a live frame's mount: over the stage, outside the zoomed world)
   D.stage.append(D.world, D.live);
   buildBar();
@@ -1262,11 +1534,12 @@ function wire() {
   D.stage.addEventListener('pointermove', onMove);
   D.stage.addEventListener('pointerup', onUp);
   D.stage.addEventListener('pointercancel', onUp);
+  D.stage.addEventListener('pointerleave', () => { if (!U.op) setHover(null); });
   D.stage.addEventListener('wheel', onWheel, { passive: false });
   D.stage.addEventListener('dragover', onDragOver);
   D.stage.addEventListener('dragleave', (e) => { if (!D.stage.contains(e.relatedTarget)) hoverDrop(null); });
   D.stage.addEventListener('drop', onDrop);
-  pressMenu(D.stage, stageMenu, { ok: (e) => !isLive() && !e.target.closest?.('.max-btn, .pull-tab') });
+  pressMenu(D.stage, stageMenu, { ok: (e) => !isLive() && !e.target.closest?.('.max-btn, .pull-tab, .frame-out') });
   document.addEventListener('keydown', onKey);
   document.addEventListener('keyup', (e) => { if (e.code === 'Space') { U.space = false; D.stage.classList.remove('panning'); } });
   addEventListener('keydown', onEsc);

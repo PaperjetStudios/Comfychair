@@ -3,7 +3,8 @@
 // drives it; tests/table_model.test.mjs checks it in node.
 //
 //   payload: { v: 1, view: { x, y, z }, grid: { on, size }, groups: [{ id, name, collapsed }],
-//              frames: [{ id, key, kind, doc, x, y, w, h, label, locked?, hidden?, group?, story?: { scene, shot }, text?, preview?, fit?, fitBox? }], story? }
+//              frames: [{ id, key, kind, doc, x, y, w, h, label, locked?, hidden?, group?, story?: { scene, shot }, text?, preview?, fit?, fitBox? }],
+//              wires: [{ id, from, to, kind, n, on, frame? }] (web/wire-rules.js: a frame's output plugged into another's inputs), story? }
 // The frames are a layer stack (web/layer-stack.js rules: groups, rows, moving rows): key is the frame's id, group the
 // id of its group in groups (members sit next to each other). A hidden frame isn't drawn, picked, boxed or fitted; it keeps its place.
 // (text: a note's words; preview: the picture an image frame was made from, shown until its document has a still;
@@ -13,6 +14,7 @@
 
 import { snapNearest, snapStep } from './snap-math.js';
 import { normalize } from './layer-stack.js';
+import { migrateWires } from './wire-rules.js';
 
 export const KINDS = ['image', 'video', 'scene', 'sound', 'note'];
 // the saved document kind each frame kind owns (a note has none: its text is on the frame)
@@ -28,7 +30,7 @@ const rid = () => Math.random().toString(36).slice(2, 10) + Math.random().toStri
 const num = (v, d) => (Number.isFinite(+v) ? +v : d);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
-export const blankTable = () => ({ v: 1, view: { x: 0, y: 0, z: 1 }, grid: { on: true, size: 64 }, groups: [], frames: [] });
+export const blankTable = () => ({ v: 1, view: { x: 0, y: 0, z: 1 }, grid: { on: true, size: 64 }, groups: [], frames: [], wires: [] });
 
 // A saved payload made whole (an older or partial one, or one from another device), so the surface can trust it
 export function migrateTable(p) {
@@ -41,6 +43,7 @@ export function migrateTable(p) {
       x: num(f.x, 0), y: num(f.y, 0), w: Math.max(MIN_SIDE, num(f.w, 512)), h: Math.max(MIN_SIDE, num(f.h, 512)) })) };
   for (const f of out.frames) { f.key = f.id; if (f.group != null) f.group = String(f.group); }
   out.frames = normalize(out.frames, out.groups);   // (members together; a group with no frames, or a frame's lost group, goes)
+  out.wires = migrateWires(p?.wires, out.frames);   // (a wire naming a frame that is gone goes)
   if (!out.story) delete out.story;
   return out;
 }

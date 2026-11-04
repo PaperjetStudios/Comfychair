@@ -12,7 +12,8 @@
 import { h, api, toast, button, field, seg, hint, help, note, info, rangeField, toggle, textArea, colorField, seedField, sizeSelect, openSheet, closeSheet,
   section, actions, icon } from './ui.js';
 import { S, inputUrl, previewUrl } from './core.js';
-import { bareSource, clipLabel, openVideoPicker, soundInput, uploadImage } from './media.js';
+import { bareSource, clipLabel, soundInput, uploadImage } from './media.js';
+import { openSourcePicker } from './source-picker.js';
 import { pictureInput } from './picture-input.js';
 import { keyRangeFields, loraChoice, restyleLora } from './clip-effects.js';
 import { roleField, template } from './make.js';
@@ -48,24 +49,9 @@ export async function clipsOf(frame) {
     return { it, src: { ...bareSource(it.src), ...(it.label && { label: it.label }), trim: { start: it.in || 0, ...(end ? { len: +(end - (it.in || 0)).toFixed(4) } : {}) } } };
   });
 }
-const thumbOfRun = (src) => { const o = S.history.get(src.generation)?.outputs?.[src.index || 0]; return o?.url ? previewUrl(o.url, 160) : ''; };
-// this frame's clips first, then the other video frames' on the table
-export async function pickClip(frame, set, title = 'Pick a clip') {
-  const Table = await import('./table.js');
-  const frames = [frame, ...(Table.tableFrames() || []).filter((f) => f.kind === 'video' && f.doc && f.id !== frame.id)];
-  const groups = [];
-  for (const f of frames) {
-    const list = await clipsOf(f).catch(() => []);
-    if (list.length) groups.push({ f, list });
-  }
-  if (!groups.length) return toast('No clips on the table\'s video frames yet', true);
-  const card = ({ it, src }) => h('button', { type: 'button', class: 'make-frame-card', onclick: () => { closeSheet(); set(src); } },
-    it.thumb ? h('img', { src: it.thumb, alt: '' }) : src.generation != null ? h('img', { src: thumbOfRun(src), alt: '' }) : h('span', { class: 'hint' }, 'Clip'),
-    h('span', {}, `${it.label || 'Clip'}${src.trim.len ? ` · ${src.trim.len.toFixed(1)}s` : ''}`));
-  openSheet(h('h3', {}, title),
-    ...groups.map(({ f, list }) => section(f === frame ? `${f.label || 'This frame'} (this frame)` : f.label || 'Video frame', null,
-      h('div', { class: 'make-frame-list' }, list.map(card)))),
-    actions(button('Cancel', closeSheet, { cls: 'small ghost' })));
+// a sheet to pick one clip: this frame's first, then the other video frames' on the table (source-picker.js, This table tab)
+export function pickClip(frame, set, title = 'Pick a clip') {
+  return openSourcePicker({ kinds: ['video'], want: 'clip', title, frame, onPick: set });
 }
 
 // a matte clip (white = keep), kept on the frame
@@ -74,7 +60,7 @@ function matteField(k, label, io, st, tip) {
   const set = (val) => io.setFrame(k, val ? { ...bareSource(val), ...(val.label && { label: val.label }), ...(val.trim && { trim: val.trim }) } : null);
   return field(label, h('div', { class: 'row wrap' },
     h('span', { class: 'grow' }, v ? clipLabel(v) : 'None yet'),
-    button('Pick…', () => openVideoPicker({ title: label, onPick: set }), { cls: 'small' }),
+    button('Pick…', () => openSourcePicker({ kinds: ['video'], want: 'clip', title: label, onPick: set }), { cls: 'small' }),
     io.frame ? button('From the table…', () => pickClip(io.frame, set, label), { cls: 'small', title: 'A clip on this frame\'s timeline, or on another video frame' }) : null,
     v ? button('Clear', () => set(null), { cls: 'small ghost' }) : null), tip ? help(tip) : null);
 }

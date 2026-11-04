@@ -258,6 +258,24 @@ class Tables(unittest.TestCase):
         self.assertNotIn("story", t1["payload"])
         self.assertEqual(self.ids("tables"), {"t1", t2["id"]})
 
+    def test_duplicate_rewrites_wires_to_the_copied_frames_and_drops_dangling_ones(self):
+        q = {"project_id": self.pid}
+        fr = [{"id": "fa", "kind": "note", "text": "a"}, {"id": "fb", "kind": "note", "text": "b"}]
+        wires = [{"id": "w1", "from": "fa", "to": "fb", "kind": "image", "n": 1, "on": True},
+                 {"id": "w2", "from": "fa", "to": "gone", "kind": "image", "n": 1, "on": True}, "junk",
+                 {"id": "w3", "from": "nope", "to": "fb", "kind": "image", "n": 1, "on": True}]
+        self.put("tables", "t1", {"v": 1, "frames": fr, "wires": wires})
+        t2 = self.c.post("/api/store/tables/t1/duplicate", params=q).json()["payload"]
+        a, b = (f["id"] for f in t2["frames"])
+        self.assertEqual(len(t2["wires"]), 1)
+        w = t2["wires"][0]
+        self.assertEqual((w["from"], w["to"], w["kind"], w["n"], w["on"]), (a, b, "image", 1, True))
+        self.assertNotIn(w["id"], ("w1", "w2", "w3"))
+        self.assertEqual(len(self.c.get("/api/store/tables/t1", params=q).json()["payload"]["wires"]), 4)
+        # no wires in, none invented
+        self.put("tables", "t2", {"v": 1, "frames": fr})
+        self.assertNotIn("wires", self.c.post("/api/store/tables/t2/duplicate", params=q).json()["payload"])
+
     def test_ownership_409_is_detail_without_doc_and_story_is_not_a_frame_doc(self):
         q = {"project_id": self.pid}
         self.put("tables", "t1", {"frames": [], "story": "s1"})

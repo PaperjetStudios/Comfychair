@@ -2,7 +2,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  fieldKind, wireLabel, outKind, renumber, migrateWires, cycle, addWire, removeWires, dropFrames, inputsFor, mapToFields, remap,
+  fieldKind, wireLabel, outKind, outKinds, renumber, migrateWires, cycle, addWire, setWire, removeWires, dropFrames, inputsFor, mapToFields, remap,
+  framePick, isFrameWire,
 } from '../web/wire-rules.js';
 
 const F = (id, kind, more = {}) => ({ id, kind, doc: `doc-${id}`, x: 0, y: 0, w: 512, h: 512, ...more });
@@ -104,4 +105,53 @@ test('remap copies wires onto copied frames with new ids', () => {
   assert.deepEqual(withIn.map((w) => [w.from, w.to]), [['I1', 'I2'], ['v1', 'I2']]);
   const all = remap(ws, { i1: 'X1', i2: 'X2', v1: 'XV', t: 'XT' });
   assert.deepEqual(all.map((w) => [w.from, w.to]), [['X1', 'X2'], ['XV', 'X2'], ['X2', 'XT']]);
+});
+
+test('a video frame puts out its clip and a frame of it; the rest one kind or none', () => {
+  assert.deepEqual(outKinds(frames.find((f) => f.id === 'v1')), ['video', 'image']);
+  assert.deepEqual(outKinds(frames.find((f) => f.id === 'i1')), ['image']);
+  assert.deepEqual(outKinds(frames.find((f) => f.id === 'c1')), ['image']);
+  assert.deepEqual(outKinds(frames.find((f) => f.id === 'n1')), []);
+  assert.deepEqual(outKinds(frames.find((f) => f.id === 'e1')), []);
+  assert.equal(outKind(frames.find((f) => f.id === 'v1')), 'video');
+  assert.deepEqual(['first', 'last', 'playhead', 2.5, -1, 'x', NaN, null].map(framePick), ['first', 'last', 'playhead', 2.5, 'first', 'first', 'first', 'first']);
+});
+
+test('add: a frame of a video carries which frame; first, then last; a kind the source lacks is refused', () => {
+  let r = addWire([], { from: 'v1', to: 't', kind: 'image' }, frames);
+  assert.deepEqual([r.wire.kind, r.wire.frame, r.wire.n], ['image', 'first', 1]);
+  assert.ok(isFrameWire(r.wire));
+  r = addWire(r.wires, { from: 'v1', to: 't', kind: 'image' }, frames);
+  assert.deepEqual([r.wire.frame, r.wire.n], ['last', 2]);
+  assert.equal(addWire(r.wires, { from: 'v1', to: 't', kind: 'image', frame: 'last' }, frames).why, 'exists');
+  assert.equal(addWire(r.wires, { from: 'v1', to: 't', kind: 'image', frame: 3 }, frames).wire.frame, 3);
+  r = addWire(r.wires, { from: 'v1', to: 't' }, frames);
+  assert.deepEqual([r.wire.kind, r.wire.frame, r.wire.n], ['video', undefined, 1]);
+  assert.equal(addWire([], { from: 'i1', to: 't', kind: 'video' }, frames).why, 'wrong-kind');
+  assert.equal(addWire([], { from: 's1', to: 't', kind: 'image' }, frames).why, 'wrong-kind');
+  assert.equal(addWire([], { from: 'i1', to: 't', frame: 'last' }, frames).wire.frame, undefined);   // (a picture frame has no frames)
+});
+
+test('migrate: a frame of a video says which; a frame field elsewhere goes; first and last both kept', () => {
+  const ws = migrateWires([W('a', 'v1', 't', 'image'), W('b', 'v1', 't', 'image', { frame: 'last' }), W('c', 'v1', 't', 'image', { frame: 'bogus' }),
+    W('d', 'i1', 't', 'image', { frame: 'last' }), W('e', 'v1', 'i2', 'video', { frame: 2 })], frames);
+  assert.deepEqual(ws.map((w) => [w.id, w.frame, w.n]), [['a', 'first', 1], ['b', 'last', 2], ['d', undefined, 3], ['e', undefined, 1]]);
+});
+
+test('setWire: on, frame, and n moves it among its kind', () => {
+  let ws = renumber([W('a', 'i1', 't', 'image'), W('v', 'v1', 't', 'video'), W('b', 'i2', 't', 'image'), W('c', 'c1', 't', 'image'),
+    W('f', 'v1', 't', 'image', { frame: 'first' })]);
+  assert.equal(setWire(ws, 'zz', { on: false }), ws);
+  let out = setWire(ws, 'a', { on: false });
+  assert.equal(out.find((w) => w.id === 'a').on, false);
+  assert.equal(ws[0].on, true);   // (the given list is left as it was)
+  out = setWire(ws, 'f', { frame: 'playhead' });
+  assert.equal(out.find((w) => w.id === 'f').frame, 'playhead');
+  assert.equal(setWire(ws, 'a', { frame: 'last' }).find((w) => w.id === 'a').frame, undefined);   // (not a frame of a video)
+  out = setWire(ws, 'c', { n: 1 });
+  assert.deepEqual(inputsFor(out, 't').map((w) => [w.id, w.n]), [['c', 1], ['a', 2], ['b', 3], ['f', 4], ['v', 1]]);
+  out = setWire(ws, 'a', { n: 99 });
+  assert.deepEqual(inputsFor(out, 't').filter((w) => w.kind === 'image').map((w) => w.id), ['b', 'c', 'f', 'a']);
+  out = setWire(ws, 'v', { n: 3 });
+  assert.equal(out.find((w) => w.id === 'v').n, 1);
 });

@@ -4,7 +4,8 @@ import {
 } from './ui.js';
 import { S, inputUrl, isMine, onServer, previewUrl, switchTab, thumbUrl } from './core.js';
 import { ROLES, queueRun, roleField, template, valuesByRole } from './make.js';
-import { clipUrl, openImagePicker, openVideoPicker, pickFrame, uploadImage } from './media.js';
+import { clipUrl, pickFrame, uploadImage } from './media.js';
+import { openSourcePicker } from './source-picker.js';
 import { renderFields, setVal } from './generate.js';
 import { TabSet } from './tabs.js';
 import { fullScreen, heightGrip } from './layout.js';
@@ -305,7 +306,7 @@ function addFrames(s, names) {
   changed();
 }
 function pickFrames(s) {
-  openImagePicker({ title: 'Add frames', multi: true, mp: () => 0, onPick: (name) => addFrames(s, [name]) });
+  openSourcePicker({ kinds: ['image'], want: 'picture', title: 'Add frames', multi: true, mp: () => 0, onPick: (name) => addFrames(s, [name]) });
 }
 async function uploadFrames(s, files) {
   const names = [];
@@ -519,11 +520,11 @@ function startBlank() {
   CV.eng.paint.setTool('brush');   // (an empty canvas gets a white layer to paint on)
 }
 function addPictures() {
-  openImagePicker({ title: 'Add pictures to the shot', multi: true, mp: () => 0, onPick: (name) => addPicture(name) });
+  openSourcePicker({ kinds: ['image'], want: 'picture', title: 'Add pictures to the shot', multi: true, mp: () => 0, onPick: (name) => addPicture(name) });
 }
 // any frame of any clip here (generated, imported or uploaded): scrub to it, it goes on the canvas
 function frameFromVideo() {
-  openVideoPicker({ title: 'Take a frame from a clip', onPick: async (v) => {
+  openSourcePicker({ kinds: ['video'], want: 'clip', title: 'Take a frame from a clip', onPick: async (v) => {
     const url = clipUrl(v);
     if (!url) return toast('That clip isn\'t loaded here yet', true);
     const blob = await pickFrame({ url, title: 'Pick the frame' });

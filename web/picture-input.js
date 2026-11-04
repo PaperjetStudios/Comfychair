@@ -3,7 +3,8 @@
 // The caller says what extra it needs (buttons, below); the rest comes with the slot.
 import { h, api, button, imageInput, mpInput } from './ui.js';
 import { inputUrl, thumbUrl } from './core.js';
-import { cropCopy, openImagePicker } from './media.js';
+import { cropCopy } from './media.js';
+import { openSourcePicker } from './source-picker.js';
 import { pictureSlot } from './picture-drop.js';
 
 const whole = (c) => c.w > 0.999 && c.h > 0.999;
@@ -33,7 +34,7 @@ export function pictureInput({ label, title = label, name, set, onClear = null, 
   const pick = () => {
     const fills = slots?.() || [set];
     let at = 0;
-    openImagePicker({ title, mp, multi: fills.length > 1, limit: fills.length, onPick: (n, info) => fills[at++]?.(n, info) });
+    openSourcePicker({ kinds: ['image'], want: 'picture', title, mp, multi: fills.length > 1, limit: fills.length, onPick: (n, info) => fills[at++]?.(n, info) });
   };
   const editor = () => import('./editor.js');   // (it reaches this file through the image tools)
   const cut = async () => {

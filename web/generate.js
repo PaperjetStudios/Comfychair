@@ -4,7 +4,8 @@ import {
   insertAtCursor, toggle, textArea, seedField as uiSeedField, choiceField, chips, chip,
 } from './ui.js';
 import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
-import { clipLabel, clipUrl, openImagePicker, openVideoPicker, soundInput } from './media.js';
+import { clipLabel, clipUrl, soundInput } from './media.js';
+import { openSourcePicker } from './source-picker.js';
 import { pictureForRun, pictureInput } from './picture-input.js';
 import { slotsFrom } from './pick-slots.js';
 import { RUN, fmtDur } from './run-state.js';
@@ -990,7 +991,7 @@ function videoField(f) {
   const v = FS.values[f.key];
   const set = (val) => { setF(f.key, val); renderFields(); };
   const el = clipInput({ label: f.label, value: v, url: clipUrl(v), name: clipLabel(v), onChange: set, onEdit: (val) => setF(f.key, val),
-    pick: () => openVideoPicker({ title: `${f.group} · ${f.label}`, onPick: set }),
+    pick: () => openSourcePicker({ kinds: ['video'], want: 'clip', title: `${f.group} · ${f.label}`, onPick: set }),
     loader: () => videoLoader(f), budget: () => videoBudget(f) });
   loaderKnown(FS.tpl.id)?.then(() => el.refresh());
   el.dataset.key = f.key;
@@ -1263,7 +1264,7 @@ function openBoxEditor(f) {
           b.ref ? h('img', { src: thumbUrl(b.ref, 160), alt: '' }) : null,
           button(b.ref ? 'Change reference' : '+ Reference image', (e) => {
             e.stopPropagation();
-            openImagePicker({ title: `Reference for box ${i + 1}`, onPick: (name) => { b.ref = name; draw(); } });
+            openSourcePicker({ kinds: ['image'], want: 'picture', title: `Reference for box ${i + 1}`, onPick: (name) => { b.ref = name; draw(); } });
           }),
           b.ref ? iconBtn('Remove reference', '✕', () => { delete b.ref; draw(); }) : null) : null);
     }) : [hint('Drag on the picture to draw a box. Background things first, foreground last.')]));

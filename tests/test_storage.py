@@ -356,6 +356,13 @@ class Storage(unittest.TestCase):
         self.assertEqual(got[a][0]["label"], "Table")
         self.assertEqual(got[a][0]["name"], "T2")
 
+    def test_table_wires_pin_no_run(self):
+        a, _, _, _ = self.gen(run="r1")
+        frames = [{"id": "f1", "kind": "note", "text": "a"}, {"id": "f2", "kind": "note", "text": "b"}]
+        self.doc("tables", {"v": 1, "frames": frames, "wires": [{"id": "w1", "from": "f1", "to": "f2", "kind": "image", "n": 1, "on": True}]},
+                 name="TW", did="tw")
+        self.assertNotIn(a, storage.attachments())
+
     def test_a_parent_or_a_trashed_owner_is_no_attachment(self):
         a, _, _, _ = self.gen(run="r1")
         self.doc("gen-tabs", {"parent": {"generation": a, "index": 0}}, did="t1")

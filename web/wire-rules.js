@@ -2,11 +2,14 @@
 // Wires between a table's frames, with no DOM (node tests them: tests/wire_rules.test.mjs). A wire carries a
 // frame's output (its picture, its whole edit, its mix) into another frame's Make inputs; it is not a graph of
 // operations. Saved on the table payload as
-//   wires: [{ id, from, to, kind: 'image' | 'video' | 'sound', n, on }]
+//   wires: [{ id, from, to, kind: 'image' | 'video' | 'sound', n, on, frame? }]
 // from / to are frame ids (no run ids, so storage.attachments needs nothing). n numbers a target's inputs per kind in
 // plug order ("Image 1", "Image 2", "Video 1"); it is renumbered after a removal, and a field re-pointed at a wire
 // follows the wire's id, not its number. on: false keeps the wire but the field uses its own picked value.
 // A template field of kind 'audio' takes a 'sound' wire: that mapping is made here only (fieldKind).
+// A video frame can also be plugged in as a picture: a wire of kind 'image' from a video frame carries one frame of it,
+// frame: 'first' | 'last' | 'playhead' | seconds (default 'first'); the same video may go in twice that way (its first
+// and its last frame), never twice as the same frame.
 // Every function returns new data; none changes what it is given.
 // ---------------------------------------------------------------------------
 
@@ -19,13 +22,26 @@ export const fieldKind = (f) => { const k = f?.kind === 'audio' ? 'sound' : f?.k
 // "Image 1"
 export const wireLabel = (w) => `${WIRE_LABEL[w.kind] || w.kind} ${w.n}`;
 
-// What a frame puts out, or null (no out port): a note never; a frame with nothing in it yet neither.
-// A 3D frame puts out its still (a picture).
-export function outKind(frame) {
-  if (!frame || frame.kind === 'note') return null;
-  if (!frame.doc && !frame.preview) return null;
-  return { image: 'image', video: 'video', sound: 'sound', scene: 'image' }[frame.kind] || null;
+// What a frame puts out, first the kind its port plugs by default ([]: no out port): a note nothing; a frame with
+// nothing in it yet neither. A 3D frame puts out its still (a picture); a video frame its clip, or one frame of it.
+const OUT = { image: ['image'], video: ['video', 'image'], sound: ['sound'], scene: ['image'] };
+export function outKinds(frame) {
+  if (!frame || frame.kind === 'note') return [];
+  if (!frame.doc && !frame.preview) return [];
+  return [...(OUT[frame.kind] || [])];
 }
+export const outKind = (frame) => outKinds(frame)[0] || null;
+
+// A frame-of-a-video choice made whole: 'first' | 'last' | 'playhead' | seconds (≥ 0); anything else is 'first'
+export const FRAME_PICKS = ['first', 'last', 'playhead'];
+export function framePick(v) {
+  if (FRAME_PICKS.includes(v)) return v;
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 'first';
+}
+// Whether a wire carries one frame of a video (a picture out of a video frame)
+export const isFrameWire = (w) => w?.kind === 'image' && w.frame != null;
+// (a wire's identity for repeats: from, to, kind, and which frame for a frame of a video)
+const sameWire = (w, from, to, kind, frame) => w.from === from && w.to === to && w.kind === kind && (w.frame ?? null) === (frame ?? null);
 
 // n per target and kind, in the order the wires were plugged (their order in the list)
 export function renumber(wires) {
@@ -38,15 +54,22 @@ export function renumber(wires) {
 }
 
 // A saved list made whole: well-formed wires only, none from a frame to itself, none naming a frame that is gone
-// (frames given), no repeat of the same from → to of a kind; on defaults to true.
+// (frames given), no repeat of the same from → to of a kind (and frame); on defaults to true. A picture wire from a video
+// frame (frames given) always says which frame; a frame field on any other wire goes.
 export function migrateWires(wires, frames = null) {
-  const ids = frames ? new Set(frames.map((f) => String(f.id))) : null, seen = new Set(), out = [];
+  const byId = frames ? new Map(frames.map((f) => [String(f.id), f])) : null, seen = new Set(), out = [];
   for (const w of Array.isArray(wires) ? wires : []) {
     if (!w || w.from == null || w.to == null || !WIRE_KINDS.includes(w.kind)) continue;
-    const from = String(w.from), to = String(w.to), k = `${from}\u0000${to}\u0000${w.kind}`;
-    if (from === to || seen.has(k) || (ids && (!ids.has(from) || !ids.has(to)))) continue;
+    const from = String(w.from), to = String(w.to);
+    if (from === to || (byId && (!byId.has(from) || !byId.has(to)))) continue;
+    const fromVideo = byId ? byId.get(from).kind === 'video' : w.frame != null;
+    const frame = w.kind === 'image' && fromVideo ? framePick(w.frame) : null;
+    const k = `${from}\u0000${to}\u0000${w.kind}\u0000${frame ?? ''}`;
+    if (seen.has(k)) continue;
     seen.add(k);
-    out.push({ ...w, id: String(w.id || rid()), from, to, on: w.on !== false });
+    const nw = { ...w, id: String(w.id || rid()), from, to, on: w.on !== false };
+    if (frame != null) nw.frame = frame; else delete nw.frame;
+    out.push(nw);
   }
   return renumber(out);
 }
@@ -67,18 +90,46 @@ export function cycle(wires, from, to) {
   return false;
 }
 
-// Plug from → to. kind: the source frame's outKind unless given. Refused (wire null, why) when a frame is missing,
-// the source puts nothing out, it would loop, or the same wire is there. Returns { wires, wire, why }.
-export function addWire(wires, { from, to, kind = null, id = null }, frames) {
+// Plug from → to. kind: the source frame's outKind unless given, and one of its outKinds. A picture out of a video
+// frame carries frame (given, else 'first', or 'last' when the first is plugged there already). Refused (wire null, why)
+// when a frame is missing, the source puts nothing out ('no-output'; a kind it doesn't put out: 'wrong-kind'), it would
+// loop, or the same wire is there. Returns { wires, wire, why }.
+export function addWire(wires, { from, to, kind = null, id = null, frame = null }, frames) {
   const src = frames.find((f) => f.id === from), dst = frames.find((f) => f.id === to);
   const no = (why) => ({ wires, wire: null, why });
   if (!src || !dst) return no('missing');
-  const k = kind || outKind(src);
-  if (!k || !WIRE_KINDS.includes(k)) return no('no-output');
+  const kinds = outKinds(src), k = kind || kinds[0];
+  if (!k || !kinds.length) return no('no-output');
+  if (!kinds.includes(k)) return no('wrong-kind');
   if (cycle(wires, from, to)) return no('cycle');
-  if (wires.some((w) => w.from === from && w.to === to && w.kind === k)) return no('exists');
-  const out = renumber([...wires, { id: id || rid(), from, to, kind: k, n: 0, on: true }]);
+  let pick = null;
+  if (k === 'image' && src.kind === 'video') {
+    pick = frame != null ? framePick(frame) : ['first', 'last'].find((p) => !wires.some((w) => sameWire(w, from, to, k, p))) || 'first';
+  }
+  if (wires.some((w) => sameWire(w, from, to, k, pick))) return no('exists');
+  const w = { id: id || rid(), from, to, kind: k, n: 0, on: true };
+  if (pick != null) w.frame = pick;
+  const out = renumber([...wires, w]);
   return { wires: out, wire: out[out.length - 1], why: null };
+}
+// One wire changed: on (true | false), frame (a picture out of a video only), n (its place among the target's inputs of
+// its kind, 1 first: the rest move up or down). An id not there: the same list back.
+export function setWire(wires, id, patch = {}) {
+  const at = wires.findIndex((w) => w.id === id);
+  if (at < 0) return wires;
+  const w = { ...wires[at] };
+  if ('on' in patch) w.on = patch.on !== false;
+  if ('frame' in patch && isFrameWire(w)) w.frame = framePick(patch.frame);
+  let out = wires.map((x, i) => (i === at ? w : x));
+  if (Number.isFinite(+patch.n) && patch.n != null) {
+    const peers = out.filter((x) => x.to === w.to && x.kind === w.kind && x.id !== w.id);
+    const n = Math.max(1, Math.min(peers.length + 1, Math.round(+patch.n)));
+    // (the list's order is the plug order: the wire goes just before the peer now at n, else after the last)
+    const rest = out.filter((x) => x.id !== w.id), before = peers[n - 1];
+    const i = before ? rest.indexOf(before) : rest.indexOf(peers[peers.length - 1]) + 1;
+    out = [...rest.slice(0, i), w, ...rest.slice(i)];
+  }
+  return renumber(out);
 }
 // Unplug these wires; the rest renumbered
 export const removeWires = (wires, ids) => renumber(wires.filter((w) => !ids.includes(w.id)));

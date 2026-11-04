@@ -5,7 +5,7 @@ import { snapAlong } from './gizmo-orient.js';
 import { snapNearest, snapStep } from './snap-math.js';
 
 // ---- snapping settings: one set for all gizmos, saved on this device ----
-const DEFAULTS = { grid: false, gridPct: 5, edges: true, rot: false, rotStep: 15, scale: false, scaleStep: 5 };
+const DEFAULTS = { grid: false, gridPct: 5, edges: true, rot: false, rotStep: 15, scale: false, scaleStep: 5, tl: true };   // tl: the Video / Sound timeline's clip drags
 export const snap = { ...DEFAULTS, ...store.get('deck.snap', {}) };
 const saveSnap = () => store.set('deck.snap', snap);
 // Alt (desktop) turns snapping off for the length of a drag; a tablet has no modifier, so it uses the toggles

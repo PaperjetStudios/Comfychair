@@ -10,7 +10,7 @@ import {
 const F = (id, x, y, w, h, more = {}) => ({ id, kind: 'image', doc: null, label: id, x, y, w, h, ...more });
 
 test('a blank table and a partial payload made whole', () => {
-  assert.deepEqual(blankTable(), { v: 1, view: { x: 0, y: 0, z: 1 }, grid: { on: true, size: 64 }, groups: [], frames: [] });
+  assert.deepEqual(blankTable(), { v: 1, view: { x: 0, y: 0, z: 1 }, grid: { on: true, size: 64 }, groups: [], frames: [], wires: [] });
   const t = migrateTable({ view: { z: 0 }, frames: [{ id: 'a', kind: 'video', x: '5' }, { kind: 'bogus' }, null] });
   assert.equal(t.view.z, 1);
   assert.equal(t.frames.length, 1);
@@ -143,4 +143,13 @@ test('a frame\'s blank document is the engine\'s own empty one', () => {
   assert.match(src('sound.js'), /empty: \(\) => emptySound\(/);
   assert.match(src('scene-data.js'), /import \{ defaultScene \} from '\.\/empty-docs\.js'/);
   assert.match(src('table-frames.js'), /return emptyPayload\(kind\)/);
+});
+
+test('wires: kept with the table, the ones naming a missing frame dropped, renumbered', () => {
+  const t = migrateTable({ frames: [{ id: 'a', kind: 'image' }, { id: 'v', kind: 'video' }, { id: 't', kind: 'image' }],
+    wires: [{ id: 'w1', from: 'gone', to: 't', kind: 'image', n: 1 }, { id: 'w2', from: 'a', to: 't', kind: 'image', n: 2, on: false },
+      { id: 'w3', from: 'v', to: 't', kind: 'image', n: 3 }, { id: 'w4', from: 'v', to: 't', kind: 'video', n: 1 }] });
+  assert.deepEqual(t.wires.map((w) => [w.id, w.n, w.on, w.frame]), [['w2', 1, false, undefined], ['w3', 2, true, 'first'], ['w4', 1, true, undefined]]);
+  assert.deepEqual(migrateTable({ frames: [] }).wires, []);
+  assert.deepEqual(migrateTable(JSON.parse(JSON.stringify(t))).wires, t.wires);   // (saved and loaded again: the same)
 });

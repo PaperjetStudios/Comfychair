@@ -259,3 +259,11 @@ test('markers: add in time order, no double, move, rename, remove', () => {
   assert.equal(removeMarker(d, 1), false);
   assert.deepEqual(d.markers, [{ t: 5, label: 'Intro' }]);
 });
+
+test('trim: a group snaps by the edge of the clip grabbed (first in ids), not the first on the timeline', () => {
+  const d = doc(), g = grab(d);
+  // a ends at 2, b at 5; grabbing b's end and dragging 0.95 puts it at 5.95, which snaps to c's start (6)
+  assert.equal(trim(d, ['b', 'a'], g, 'r', 0.95, { points: [6], tol: 0.1 }, o), 1);
+  assert.equal(at(d, 'a').out, 3);
+  assert.equal(at(d, 'b').out, 4);
+});

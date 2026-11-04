@@ -411,6 +411,9 @@ details.group:not([open]) > summary::after { transform: rotate(-90deg); }
 #sheet.picker-full > .pk-stage { flex: 1 1 0; min-height: 160px; background: #000; border-radius: var(--r-lg); }
 #sheet.picker-full > .pk-rows { flex: 0 1 auto; max-height: 30dvh; min-height: 110px; }   /* (a short window keeps one whole row) */
 .pk-actions { padding: 0; }
+.pk-audio { display: grid; place-items: center; align-content: center; gap: 10px; width: 100%; height: 100%; padding: 12px; }
+.pk-audio > :first-child:not(audio) { max-width: 360px; width: 100%; }
+.pk-icon { display: grid; place-items: center; width: 100%; height: 100%; }
 .pk-grip { flex: none; display: grid; place-items: center; height: 18px; margin: -4px 0; cursor: ns-resize; touch-action: none; }
 .pk-grip span { width: 56px; height: 5px; border-radius: 3px; background: var(--line-2); }
 .pk-grip:hover span, .pk-grip.dragging span, .pk-grip:focus-visible span { background: var(--accent); }
@@ -662,6 +665,17 @@ svg.ico.filled path { fill: currentColor; }
 .tl-clip.scene.gone { background: repeating-linear-gradient(45deg, #7a2f2f 0 8px, #5a2323 8px 16px); }
 .scene-thumb { display: grid; place-items: center; aspect-ratio: 16 / 9; font-weight: 600; background: #2f6a6a; color: #fff; }
 .tl-clip.sel { outline: 2px solid var(--accent); z-index: 1; }
+.tl-clip.sel.multi { outline: 2px dashed var(--accent); }   /* picked with others: the primary has the solid line */
+.tl-row.locked .tl-lane { background-image: repeating-linear-gradient(-45deg, #0000 0 8px, color-mix(in srgb, var(--muted) 12%, transparent) 8px 10px); }
+.tl-row.locked .tl-clip { cursor: not-allowed; }
+/* a box being drawn on the lanes picks the clips it touches */
+.tl-marquee { position: absolute; z-index: 4; pointer-events: none; border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 2px; }
+.tl-boxing .tl-lane { touch-action: none; }   /* (Box on: a finger draws a box instead of scrolling) */
+.tl-hand .tl-lane, .tl-hand .tl-clip { cursor: grab; touch-action: none; }
+.tl-panning, .tl-panning * { cursor: grabbing !important; }
+/* markers on the ruler */
+.tl-marker { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed var(--warn-text); pointer-events: none; z-index: 1; }
+.tl-marker::after { content: ""; position: absolute; bottom: 0; left: -5px; border: 5px solid transparent; border-bottom-color: var(--warn-text); }
 /* a clip whose effects are rendering: moving stripes over it and a spinner tag with the time so far */
 .tl-clip.fx-busy-clip::before { content: ''; position: absolute; inset: 0; z-index: 1; pointer-events: none; background: repeating-linear-gradient(-45deg, #0000 0 10px, color-mix(in srgb, var(--accent) 38%, transparent) 10px 20px); background-size: 28px 28px; animation: gen-indet 1s linear infinite; }
 .tl-fxtag { position: absolute; left: 4px; bottom: 2px; z-index: 2; display: flex; align-items: center; gap: 5px; max-width: calc(100% - 8px); font-size: 11px; line-height: 16px; padding: 0 5px; border-radius: var(--r-sm); background: #000c; color: #fff; pointer-events: none; white-space: nowrap; overflow: hidden; }
@@ -2171,6 +2185,38 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
 .table-guide.gx { top: -100000px; height: 200000px; width: calc(1px / var(--z)); }
 .table-guide.gy { left: -100000px; width: 200000px; height: calc(1px / var(--z)); }
 .table-marquee { position: absolute; display: none; border: calc(1px / var(--z)) dashed var(--accent); background: var(--accent-soft); pointer-events: none; }
+/* wires between frames (table.js, wire-rules.js): an SVG under the frames, its ports over them, sizes held against the zoom */
+.table-stage { --wire-image: var(--accent); --wire-video: var(--range); --wire-sound: var(--ok); }
+.table-wires { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
+.table-wires path { fill: none; }
+.wire-line, .wire-draft { stroke: var(--wire-image); stroke-width: calc(2px / var(--z)); stroke-linecap: round; }
+.wire-line.k-video, .wire-draft.k-video { stroke: var(--wire-video); }
+.wire-line.k-sound, .wire-draft.k-sound { stroke: var(--wire-sound); }
+.wire-line.off { opacity: .4; }
+.wire.sel .wire-line { stroke-width: calc(4px / var(--z)); }
+.wire-hit { stroke: transparent; stroke-width: calc(max(12px, var(--touch-target)) / var(--z)); pointer-events: stroke; cursor: pointer; }
+.wire-draft { pointer-events: none; opacity: .85; }
+.table-ports { position: absolute; left: 0; top: 0; }
+.frame-out {
+  position: absolute; width: calc(max(18px, var(--touch-target)) / var(--z)); height: calc(max(18px, var(--touch-target)) / var(--z));
+  transform: translate(-50%, -50%); display: grid; place-items: center; z-index: 1; cursor: crosshair; visibility: hidden; --wk: var(--wire-image);
+}
+.frame-out.show { visibility: visible; }
+.frame-out::after { content: ""; width: calc(12px / var(--z)); height: calc(12px / var(--z)); border-radius: 50%; background: var(--surface); border: calc(2px / var(--z)) solid var(--wk); }
+.frame-out:hover::after { background: var(--wk); }
+.frame-out.k-video, .frame-in.k-video { --wk: var(--wire-video); }
+.frame-out.k-sound, .frame-in.k-sound { --wk: var(--wire-sound); }
+.frame-in {
+  position: absolute; display: flex; align-items: center; gap: calc(4px / var(--z)); transform: translate(calc(-6px / var(--z)), -50%); z-index: 1;
+  min-height: calc(max(18px, var(--touch-target)) / var(--z)); font-size: calc(11px / var(--z)); line-height: 1; color: var(--text); white-space: nowrap; cursor: pointer; --wk: var(--wire-image);
+}
+.frame-in-dot { flex: none; width: calc(12px / var(--z)); height: calc(12px / var(--z)); border-radius: 50%; background: var(--wk); }
+.frame-in-label { padding: calc(2px / var(--z)) calc(5px / var(--z)); border-radius: calc(3px / var(--z)); background: var(--surface); border: calc(1px / var(--z)) solid var(--line-2); }
+.frame-in.off { opacity: .45; }
+.frame-in.off .frame-in-dot { background: transparent; border: calc(2px / var(--z)) dashed var(--wk); box-sizing: border-box; }
+.frame-in.sel .frame-in-label { border-color: var(--accent); color: var(--accent); }
+.frame.wire-over { outline: calc(3px / var(--z)) solid var(--accent); }
+.table-live .table-ports { display: none; }
 .table-rows { display: flex; flex-direction: column; gap: 2px; }
 .table-row { display: flex; align-items: center; gap: 8px; min-height: max(34px, var(--touch-target)); padding: 4px 8px; border: 1px solid transparent; border-radius: var(--r);
   background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
