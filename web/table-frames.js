@@ -1,0 +1,170 @@
+// What a frame on the table is made of, apart from where it sits: its element (a label bar over a still, a placeholder
+// or a note's text), the saved document it owns (made, copied, trashed and restored through app/store.py), the stills
+// those documents keep, and frames made from things dropped on the table (a picture, a clip, a sound, a file).
+// table.js places and drives the frames; table-model.js has their geometry.
+import { h, api, store, icon, uid, clone } from './ui.js';
+import { S, inputUrl, thumbUrl } from './core.js';
+import { BLANK } from './editor-engine.js';
+import { uploadImage, uploadMedia } from './media.js';
+import { dropKind } from './drop-files.js';
+import { DOC_KIND, KIND_LABEL, newFrame } from './table-model.js';
+
+export const KIND_ICON = { image: 'image', video: 'film', scene: 'cube', sound: 'sound', note: 'text' };
+const SOUND_SIZE = { w: 1024, h: 256 };   // a sound frame is a strip: its waveform, not a picture
+
+// ---- documents ----
+const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
+const docUrl = (kind, id = '', tail = '') => `/api/store/${DOC_KIND[kind]}${id ? `/${id}` : ''}${tail}${qs()}`;
+
+// A new document's payload for a frame kind: the same empty shape each screen's TabSet adapter makes. Only the image one
+// is exported (editor-engine.js BLANK); the others are copied from video.js editAdapter.empty, sound.js adapter.empty and
+// scene-data.js defaultScene (that module loads three.js, too heavy to pull in for an empty scene).
+export function blankPayload(kind) {
+  if (kind === 'image') return BLANK();
+  if (kind === 'video') return { tracks: [{ id: 'v1', kind: 'video' }, { id: 'v2', kind: 'video' }, { id: 'a1', kind: 'audio' }], items: [], size: null, fps: 0, range: null };
+  if (kind === 'sound') return { tracks: [{ id: 'a1' }, { id: 'a2' }, { id: 'a3' }], items: [], out: { name: '', format: store.get('deck.sound.format', 'm4a'), gain: 1, normalize: false }, gens: [] };
+  if (kind === 'scene') return { v: 1, width: 768, height: 448, seconds: 6, lenMode: 'match', blur: 2, room: null,
+    camera: { id: 'cam0', name: 'Camera', base: { px: 0, py: 1.6, pz: 5, tx: 0, ty: 1, tz: 0, fov: 45, roll: 0 }, chans: {}, ease: 'smooth' }, cams: [],
+    cuts: [], shotText: {}, tcStart: '01:00:00:00', renderShots: 'take', objects: [] };
+  return null;
+}
+
+// Make the frame's document (named after the frame) and return its id. The id is made the way tabs.js create1 makes one.
+export async function createDoc(frame, payload = blankPayload(frame.kind)) {
+  if (!DOC_KIND[frame.kind]) return null;
+  const id = uid() + uid();
+  await api(docUrl(frame.kind, id), { method: 'PUT', body: { rev: 0, name: String(frame.label || KIND_LABEL[frame.kind]).slice(0, 120), payload }, busy: false });
+  return id;
+}
+// a copy of a frame's document, for a duplicated frame (two frames never share one: deleting one would take the other's)
+export async function copyDoc(frame, label) {
+  if (!frame.doc) return null;
+  const d = await api(docUrl(frame.kind, frame.doc), { busy: false });
+  return createDoc({ ...frame, label }, clone(d.payload));
+}
+// deleting a frame trashes its document (kept 30 days on the server); Undo restores it
+export const trashDoc = (f) => (f.doc ? api(docUrl(f.kind, f.doc), { method: 'DELETE', busy: false }).catch((e) => { if (!/not found/i.test(e.message)) throw e; }) : Promise.resolve());
+export const restoreDoc = (f) => (f.doc ? api(docUrl(f.kind, f.doc, '/restore'), { method: 'POST', busy: false }) : Promise.resolve());
+
+// ---- stills: each document kind's list rows carry their still ({ url }) ----
+const STILLS = new Map();   // 'kind:id' -> url
+export const stillOf = (f) => (f.doc ? STILLS.get(`${f.kind}:${f.doc}`) || null : null);
+export async function loadStills(kinds) {
+  await Promise.all([...new Set(kinds)].filter((k) => DOC_KIND[k]).map(async (k) => {
+    let rows;
+    try { rows = await api(docUrl(k), { busy: false }); } catch { return; }
+    for (const key of [...STILLS.keys()]) if (key.startsWith(`${k}:`)) STILLS.delete(key);
+    for (const r of rows || []) if (r.still?.url) STILLS.set(`${k}:${r.id}`, r.still.url);
+  }));
+}
+export const kindOfDoc = (docKind) => Object.keys(DOC_KIND).find((k) => DOC_KIND[k] === docKind) || null;
+
+// ---- the element ----
+// A frame: a label bar above it (outside its w × h, which is the canvas), then its body. The body shows the still, else
+// the kind's icon; a note's body is its text. onText(text): a note was typed in.
+export function frameEl(f, { onText }) {
+  const name = h('span', { class: 'frame-name' }), size = h('span', { class: 'frame-size' });
+  const body = h('div', { class: 'frame-body' });
+  if (f.kind === 'note') {
+    const ta = h('textarea', { class: 'frame-text', spellcheck: true, 'aria-label': 'Note', placeholder: 'Write here' });
+    ta.value = f.text || '';
+    ta.addEventListener('input', () => onText(ta.value));
+    body.append(ta);
+  } else {
+    body.append(h('img', { class: 'frame-still hidden', alt: '', draggable: false }),
+      h('div', { class: 'frame-ph' }, icon(KIND_ICON[f.kind], 40), h('span', {}, KIND_LABEL[f.kind])));
+  }
+  return h('div', { class: `frame frame-${f.kind}`, 'data-id': f.id, role: 'group' },
+    h('div', { class: 'frame-label' }, icon(KIND_ICON[f.kind]), name, size), body);
+}
+
+// bring an element up to its frame: where it sits, its label, its still, and its state
+export function syncFrame(el, f, { selected = false, live = false } = {}) {
+  Object.assign(el.style, { left: `${f.x}px`, top: `${f.y}px`, width: `${f.w}px`, height: `${f.h}px` });
+  el.querySelector('.frame-name').textContent = f.label || KIND_LABEL[f.kind];
+  el.querySelector('.frame-size').textContent = `${f.w}×${f.h}`;
+  el.setAttribute('aria-label', `${KIND_LABEL[f.kind]} frame ${f.label || ''}`.trim());
+  el.classList.toggle('selected', selected);
+  el.classList.toggle('locked', !!f.locked);
+  el.classList.toggle('live', live);
+  const img = el.querySelector('.frame-still');
+  if (img) {
+    const url = stillOf(f) || f.preview || null;   // (preview: the picture a frame was made from, until its document has a still)
+    if (url && img.getAttribute('src') !== url) img.src = url;
+    img.classList.toggle('hidden', !url);
+    el.querySelector('.frame-ph').classList.toggle('hidden', !!url);
+  }
+  const ta = el.querySelector('.frame-text');
+  if (ta && document.activeElement !== ta && ta.value !== (f.text || '')) ta.value = f.text || '';
+}
+
+// ---- frames from dropped things ----
+// how big a picture, clip or sound is, and how long, from its own element
+function mediaInfo(url, kind) {
+  return new Promise((res) => {
+    const el = kind === 'image' ? new Image() : document.createElement(kind === 'audio' ? 'audio' : 'video');
+    const done = () => res({ w: el.naturalWidth || el.videoWidth || 0, h: el.naturalHeight || el.videoHeight || 0, dur: Number.isFinite(el.duration) ? el.duration : 0 });
+    el.onerror = () => res({ w: 0, h: 0, dur: 0 });
+    if (kind === 'image') el.onload = done; else { el.preload = 'metadata'; el.onloadedmetadata = done; }
+    el.src = url;
+  });
+}
+const sized = (w, h, d = { w: 1024, h: 1024 }) => (w && h ? { w: Math.round(w), h: Math.round(h) } : d);
+
+// An image frame whose edit holds one picture (an input's name) as its only layer, on a canvas the picture's size
+async function pictureFrame(name, at, w, h, label) {
+  if (!w || !h) ({ w, h } = await mediaInfo(inputUrl(name), 'image'));
+  const s = sized(w, h), frame = newFrame('image', { ...at, ...s }, { label: label || 'Picture', preview: thumbUrl(name, 1024) });
+  const layer = { name, crop: { x: 0, y: 0, w: 1, h: 1 }, x: 0, y: 0, scale: 1, opacity: 1, hidden: false, blend: 'normal', locked: false };
+  return { frame, payload: { ...BLANK(), size: { w: s.w, h: s.h }, layers: [layer] } };
+}
+// A video frame with one clip on V1, or a sound frame with one sound on A1 (the items' shapes are video.js and sound.js newItem's)
+async function clipFrame(kind, src, url, label, at) {
+  const info = await mediaInfo(url, kind === 'audio' ? 'audio' : 'video'), dur = info.dur || 0;
+  if (kind === 'audio') {
+    const frame = newFrame('sound', { ...at, ...SOUND_SIZE }, { label });
+    const it = { id: uid(), track: 'a1', kind: 'audio', src, url, label, dur, at: 0, in: 0, out: dur || null, volume: 1, pan: 0, fadeIn: 0, fadeOut: 0 };
+    return { frame, payload: { ...blankPayload('sound'), items: [it] } };
+  }
+  const frame = newFrame('video', { ...at, ...sized(info.w, info.h, { w: 1280, h: 720 }) }, { label });
+  const it = { id: uid(), track: 'v1', kind: 'video', src, url, label, thumb: null, dur, at: 0, in: 0, out: dur || null,
+    x: 0, y: 0, scale: 1, fit: 'fit', opacity: 1, volume: 1, fadeIn: 0, fadeOut: 0 };
+  return { frame, payload: { ...blankPayload('video'), items: [it] } };
+}
+
+// A dropped thing as { frame, payload } (the frame's document is made from payload by the caller), its top-left at `at`.
+// src: { generation, index } (a run's output), { input } (a picture in the project), { media, kind?, url?, label? } (the
+// media library) or a File. Returns null for something no frame can hold.
+export async function frameFor(src, at) {
+  if (src instanceof File) return fileFrame(src, at);
+  if (src.input) return pictureFrame(src.input, at, src.width, src.height, src.label);
+  if (src.generation != null) {
+    const index = src.index || 0, g = S.history?.get?.(src.generation) || await api(`/api/generations/${src.generation}`, { busy: false });
+    const o = g?.outputs?.[index];
+    if (!o) return null;
+    const label = `#${g.id}`;
+    if (o.kind === 'image') {
+      const r = await api(`/api/generations/${g.id}/to-input`, { method: 'POST', body: { index, frame: 'first', mp: 0, multiple: 1 } });
+      return pictureFrame(r.name, at, r.width, r.height, label);
+    }
+    if (o.kind === 'video' || o.kind === 'audio') return clipFrame(o.kind, { generation: g.id, index }, o.url, label, at);
+    return null;
+  }
+  if (src.media) {
+    const url = src.url || `/files/media/${encodeURIComponent(src.media)}`, label = src.label || src.media.split('_').slice(1).join('_') || src.media;
+    if (src.kind === 'image') return fileFrame(new File([await (await fetch(url)).blob()], src.media, { type: 'image/png' }), at);
+    return clipFrame(src.kind === 'audio' ? 'audio' : 'video', { media: src.media }, url, label, at);
+  }
+  return null;
+}
+// a file from the computer: a picture goes into the project's pictures, a clip or sound into the media library
+async function fileFrame(file, at) {
+  const kind = dropKind(file);
+  if (kind === 'image') {
+    const r = await uploadImage(file);
+    return pictureFrame(r.name, at, r.width, r.height, file.name.replace(/\.\w+$/, ''));
+  }
+  const m = await uploadMedia(file);
+  if (m.kind !== 'video' && m.kind !== 'audio') return null;
+  return clipFrame(m.kind, { media: m.name }, m.url, m.label, at);
+}

@@ -38,13 +38,17 @@ function newItem({ kind, src, url, label, dur = 0 }, track) {
   return { id: uid(), track, kind, src, url, label, dur, at: 0, in: 0, out: dur || null, volume: 1, pan: 0, fadeIn: 0, fadeOut: 0 };
 }
 
+// The elements this engine draws into: filled by mountSound(), so a host other than the Sound tab can carry it.
+const SD = { host: null, canvas: null, empty: null, max: null, transport: null, tools: null, timeline: null, panel: null, body: null,
+  active: () => SD.host?.classList.contains('active') };
+let delBtn = null;   // the transport's delete button
 let tabs = null;
 let stp = null;   // the transport bar (playback.js)
 const ensureTabs = () => tabs.ready();
 const persist = () => tabs?.changed();
 
-const TL = timeline(N, { el: '#sndTimeline', headW: HEAD_W, minLen: MIN_LEN, zoom: [2, 600], ppsKey: 'deck.sound.pps',
-  pause: () => sndPause(), seek: (t) => sndSeek(t), showTime: () => { stp?.update(); refreshKeyed($('#soundPanel')); },
+const TL = timeline(N, { el: () => SD.timeline, headW: HEAD_W, minLen: MIN_LEN, zoom: [2, 600], ppsKey: 'deck.sound.pps',
+  pause: () => sndPause(), seek: (t) => sndSeek(t), showTime: () => { stp?.update(); refreshKeyed(SD.panel); },
   changed: () => changed(), dragged: () => { renderTimeline(); syncMedia(); }, rendered: () => renderTimeline(),
   selected: () => { renderPanel(); drawStage(); }, deselected: () => { renderTimeline(); renderPanel(); }, tabs: () => tabs, area: () => WA });
 const { len: itLen, end: itEnd, seqEnd, selItem, xfades, fadeGain, updatePlayhead } = TL;
@@ -178,7 +182,7 @@ function paintWave(ctx, it, w, x0, W, H, pps, color) {
   }
 }
 function drawWaves() {
-  document.querySelectorAll('#sndTimeline canvas.wave').forEach((c) => {
+  SD.timeline?.querySelectorAll('canvas.wave').forEach((c) => {
     const it = N.items.find((i) => i.id === c.parentElement.dataset.id);
     const w = it && waveOf(it);
     if (!w) return;
@@ -193,11 +197,15 @@ function drawWaves() {
 // Its scale holds still while a clip is dragged on it (N.stageHold), so the clip doesn't run from the finger.
 const stageSpan = () => Math.max(seqEnd(), 1, N.stageHold || 0);
 function drawStage() {
-  const cv = $('#sndCanvas');
-  if (!cv || !$('#tab-sound').classList.contains('active')) return;
+  const cv = SD.canvas;
+  if (!cv || !SD.active()) return;
   const r = cv.getBoundingClientRect(), dpr = devicePixelRatio || 1;
   const W = Math.max(1, Math.round(r.width * dpr)), H = Math.max(1, Math.round(r.height * dpr));
   if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+  paintStage(cv, W, H, dpr);
+}
+// The stage onto any canvas of W x H pixels (dpr: how many per CSS pixel).
+function paintStage(cv, W, H, dpr) {
   const ctx = cv.getContext('2d');
   ctx.clearRect(0, 0, W, H);
   const meterW = Math.round(22 * dpr), plotW = W - meterW - 8 * dpr;
@@ -268,7 +276,7 @@ function renderTimeline() {
     rows: N.tracks.map((tr) => ({ track: tr, cls: 'audio snd-row' + (audible(tr) ? '' : ' off'), head: trackHead(tr) })),
     clipEl });
   drawWaves(); pruneEls(); updatePlayhead(); drawStage();
-  $('#sndEmpty').classList.toggle('hidden', N.items.length > 0);
+  SD.empty?.classList.toggle('hidden', N.items.length > 0);
 }
 
 function addTrack() { const id = `a${uid()}`; N.tracks.push({ id }); return id; }
@@ -280,7 +288,7 @@ export function renderSound() { renderTimeline(); renderPanel(); syncMedia(); en
 // The stage, as the timeline: a clip under the pointer and what a drag there does (null: empty space).
 // Near a clip's ends trims it; touch gets wider ends than a pen or mouse.
 function stageGeom() {
-  const r = $('#sndCanvas').getBoundingClientRect(), plotW = r.width - 30;
+  const r = SD.canvas.getBoundingClientRect(), plotW = r.width - 30;
   return { r, plotW, pps: plotW / stageSpan(), rowH: r.height / (N.tracks.length || 1) };
 }
 function stageHit(e) {
@@ -297,7 +305,7 @@ function stageHit(e) {
 
 function wireTimeline() {
   TL.wire();
-  const cv = $('#sndCanvas');
+  const cv = SD.canvas;
   const seekAt = (ev) => { const g = stageGeom(); sndSeek(clamp((ev.clientX - g.r.left) / g.plotW, 0, 1) * stageSpan()); };
   cv.addEventListener('pointerdown', (e) => {
     e.preventDefault();
@@ -425,7 +433,7 @@ const job = async (path, body, label) => {
   VX.busy = label; renderPanel();
   try {
     return await waitJob(await api(path, { method: 'POST', body, busy: false }), (p, l) => {
-      const el = $('#vxBusy'); if (el) el.textContent = `${l || label}… ${Math.round((p || 0) * 100)}%`;
+      const el = SD.body?.querySelector('#vxBusy'); if (el) el.textContent = `${l || label}… ${Math.round((p || 0) * 100)}%`;
     });
   } finally { VX.busy = ''; renderPanel(); }
 };
@@ -572,7 +580,7 @@ function voiceFromClip(it) {
   if (VX.status && !VX.status.installed) return toast('The AI voice tools aren\'t installed on the server yet (see README, Sound tab)', true);
   VX.nv = { src: srcOf(it), name: '', ref_text: '', language: 'Auto', consent: false, fromClip: it.label };
   renderPanel();
-  requestAnimationFrame(() => $('#vxNewVoice')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  requestAnimationFrame(() => SD.body?.querySelector('#vxNewVoice')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
 }
 
 async function speakScript() {
@@ -599,10 +607,10 @@ async function speakScript() {
 
 // ---- the side panel ----
 function renderPanel() {
-  const body = $('#sndBody');
+  const body = SD.body;
   if (!body) return;
   const it = selItem(), tr = it && trackOf(it);
-  $('#sndDel').disabled = !it;
+  if (delBtn) delBtn.disabled = !it;
   const live = { onInput: () => { syncMedia(); drawStage(); }, onChange: () => changed() };
   const num = (label, get, set, opts) => rangeField(label, get, set, { digits: 2, ...opts, ...live });
 
@@ -686,18 +694,15 @@ const adapter = {
   },
 };
 
-export function wireSound() {
-  $('#soundPanel').replaceChildren(h('div', { id: 'sndBody' }));
-  tabs = new TabSet({ kind: 'sound-tabs', host: $('#tab-sound'), scope: 'project', newName: (n) => `Mix ${n}`, adapter });
-  stp = transport({ playing: () => N.playing, play: sndPlay, pause: sndPause, seek: sndSeek, t: () => N.t, len: seqEnd },
-    { step: { by: 5, key: 0.1, back: '⏪', fwd: '⏩', label: '5 s', pause: false },
-      loop: { get: () => N.loop, set: (on) => { N.loop = on; store.set('deck.sound.loop', on); } }, area: WA,
-      keys: keyJumps(() => clipKeyTimes(TL, TL.selItem() ? [TL.selItem()] : N.items)),
-      extra: [h('button', { type: 'button', id: 'sndSplit', class: 'icon-btn', 'aria-label': 'Split at the playhead', title: 'Split at the playhead (S)', onclick: TL.split }, '✂'),
-        h('button', { type: 'button', id: 'sndDel', class: 'icon-btn', 'aria-label': 'Delete the selected clip', title: 'Delete the selected clip (Del)', onclick: TL.deleteSelected }, '🗑')] });
-  $('#sndTransport').replaceWith(stp.el);
-  const max = fullScreen($('#tab-sound'), { onChange: () => drawStage() });
-  $('#sndTools').replaceChildren(
+// Point the engine at its elements. Call again to move it to another host; wireSound() does the Sound tab's.
+export function mountSound(els) {
+  const { active, ...rest } = els;
+  Object.assign(SD, rest, { active: active || (() => SD.host?.classList.contains('active')) });
+  SD.panel.replaceChildren(SD.body = h('div', { id: 'sndBody' }));
+  if (stp.el !== SD.transport) SD.transport.replaceWith(stp.el);
+  SD.transport = stp.el;
+  SD.max = fullScreen(SD.host, { onChange: () => drawStage() });
+  SD.tools.replaceChildren(
     button('✂ Split', TL.split, { title: 'Split at playhead (S)' }),
     button('🗑 Delete', TL.deleteSelected, { title: 'Delete selected clip (Del)' }),
     h('span', { class: 'tl-tip' }, info('Drag clips to move · drag ends to trim · overlap to cross-fade · S solos a track')),
@@ -705,13 +710,42 @@ export function wireSound() {
     button('Fit', TL.fit),
     iconBtn('Zoom in', '+', () => TL.zoom(N.pps * 1.5)));
   wireTimeline();
-  onServer('deck_generation', ({ data }) => { if (N.gens.includes(data?.id) && $('#tab-sound').classList.contains('active')) setTimeout(renderPanel, 0); });
-  playKeys(() => $('#tab-sound').classList.contains('active'), () => stp, () => ({
-    s: TL.split, c: TL.split, d: TL.duplicate, f: max.toggle,
+}
+
+// What happens once: the tabs, the transport, the keys.
+function wireOnce() {
+  tabs = new TabSet({ kind: 'sound-tabs', host: SD.host, scope: 'project', newName: (n) => `Mix ${n}`, adapter });
+  delBtn = h('button', { type: 'button', id: 'sndDel', class: 'icon-btn', 'aria-label': 'Delete the selected clip', title: 'Delete the selected clip (Del)', onclick: TL.deleteSelected }, '🗑');
+  stp = transport({ playing: () => N.playing, play: sndPlay, pause: sndPause, seek: sndSeek, t: () => N.t, len: seqEnd },
+    { step: { by: 5, key: 0.1, back: '⏪', fwd: '⏩', label: '5 s', pause: false },
+      loop: { get: () => N.loop, set: (on) => { N.loop = on; store.set('deck.sound.loop', on); } }, area: WA,
+      keys: keyJumps(() => clipKeyTimes(TL, TL.selItem() ? [TL.selItem()] : N.items)),
+      extra: [h('button', { type: 'button', id: 'sndSplit', class: 'icon-btn', 'aria-label': 'Split at the playhead', title: 'Split at the playhead (S)', onclick: TL.split }, '✂'), delBtn] });
+  onServer('deck_generation', ({ data }) => { if (N.gens.includes(data?.id) && SD.active()) setTimeout(renderPanel, 0); });
+  playKeys(() => SD.active(), () => stp, () => ({
+    s: TL.split, c: TL.split, d: TL.duplicate, f: SD.max.toggle,
     Delete: TL.deleteSelected, Backspace: TL.deleteSelected,
     '=': () => TL.zoom(N.pps * 1.5), '+': () => TL.zoom(N.pps * 1.5), '-': () => TL.zoom(N.pps / 1.5),
   }));
 }
+
+export function wireSound() {
+  SD.host = $('#tab-sound');   // the TabSet needs it before the first mount
+  const transport = $('#sndTransport');
+  if (!stp) wireOnce();
+  mountSound({ host: $('#tab-sound'), canvas: $('#sndCanvas'), empty: $('#sndEmpty'), transport,
+    tools: $('#sndTools'), timeline: $('#sndTimeline'), panel: $('#soundPanel') });
+}
+
+// The stage as a PNG (null: nothing on it), for a frame's still. Drawn off-screen at the stage's size.
+export function soundStill() {
+  if (!SD.canvas || !N.items.length) return Promise.resolve(null);
+  const r = SD.canvas.getBoundingClientRect(), W = Math.max(1, Math.round(r.width)), H = Math.max(1, Math.round(r.height));
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  paintStage(cv, W, H, 1);
+  return new Promise((res) => cv.toBlob(res, 'image/png'));
+}
+export const soundTabs = () => tabs;
 
 // for the headless UI checks (dev/): the live state
 export const soundDebug = () => ({ N, A, tabs });

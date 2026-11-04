@@ -229,7 +229,7 @@ def media_used(name: str) -> str | None:
 _NOT_USE_KEYS = {"parent", "pending", "vpending"}   # where a run came from, and runs still on their way, aren't uses
 _NOT_USE_KINDS = {"view-marks", "prefs", "gen-presets"}
 _KIND_LABEL = {"characters": "Character", "story-tabs": "Story", "scene-tabs": "3D", "scenes": "3D scene", "video-tabs": "Video",
-               "sound-tabs": "Sound", "vfx-tabs": "VFX", "edit-tabs": "Image", "gen-tabs": "Generate", "objects": "3D object", "tracks": "Tracks"}
+               "sound-tabs": "Sound", "vfx-tabs": "VFX", "edit-tabs": "Image", "gen-tabs": "Generate", "objects": "3D object", "tracks": "Tracks", "tables": "Table"}
 
 
 def _run_refs(v, origins: dict, out: set):

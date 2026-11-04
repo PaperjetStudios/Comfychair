@@ -48,6 +48,12 @@ function newItem({ kind, src, url = null, label, thumb = null, dur = 0, nat = nu
 const defaultTracks = () => [{ id: 'v1', kind: 'video' }, { id: 'v2', kind: 'video' }, { id: 'a1', kind: 'audio' }];
 V.tracks = defaultTracks();
 
+// Where the engine shows (mountVideo): the page's Video tab today, any host element later (a frame on a table).
+// xform is the inspector's transform group and load the transport's loading note; both are made here, not looked up.
+const VD = { host: null, stage: null, viewer: null, canvas: null, xform: null, empty: null, load: null, body: null, panel: null,
+  transport: null, tlTools: null, timeline: null, active: () => !!VD.host?.classList.contains('active') };
+const inTimeline = (sel) => VD.timeline?.querySelectorAll(sel) || [];   // (in this mount's timeline strip only)
+
 // What this device kept before video edits became tabs (localStorage): moved into the first tab once
 function legacyTimeline() {
   if (store.get('deck.video.seeded', false)) return null;
@@ -80,7 +86,7 @@ function persistTimeline() { tabs?.changed(); }
 
 // the timeline itself (timeline.js, shared with the Sound tab): a sound clip only goes on an audio track, a picture on a video track
 const TL = timeline(V, { el: '#timeline', headW: HEAD_W, minLen: MIN_LEN, zoom: [4, 400], ppsKey: 'deck.video.pps',
-  pause: () => vidPause(), seek: (t) => vidSeek(t), showTime: () => { vtp?.update(); refreshKeyed($('#videoPanel')); },
+  pause: () => vidPause(), seek: (t) => vidSeek(t), showTime: () => { vtp?.update(); refreshKeyed(VD.panel); },
   changed: () => timelineChanged(), dragged: () => { renderTimeline(); syncMedia(); requestDraw(); }, rendered: () => renderTimeline(),
   selected: () => renderVideoPanel(), deselected: () => { renderTimeline(); renderVideoPanel(); },
   canDrop: (it, tr) => (tr.kind === 'audio') === (it.kind === 'audio'), tabs: () => tabs, area: () => WA });
@@ -160,7 +166,7 @@ function preloadMedia() {
 
 function showPreload() {
   const all = [...blobs.values()], done = all.filter((b) => b.state !== 'loading').length;
-  const el = $('#vidLoad');
+  const el = VD.load;
   if (el) el.textContent = done < all.length ? `Loading ${done}/${all.length}…` : '';
 }
 
@@ -282,7 +288,8 @@ function requestDraw() {
 }
 
 function drawFrame() {
-  const cv = $('#vidCanvas');
+  const cv = VD.canvas;
+  if (!cv) return;   // (not mounted yet)
   const [W, H] = seqSize();
   if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; renderVideoPanel(); }   // the panel shows the size
   const layers = tracksOf('video').filter((tr) => !tr.hidden).map((tr) =>
@@ -353,9 +360,9 @@ const VZ = { z: 1, tx: 0, ty: 0 };
 const vzoomed = () => VZ.z !== 1 || VZ.tx !== 0 || VZ.ty !== 0;
 function setView(z, tx, ty) {
   Object.assign(VZ, { z, tx, ty });
-  const cv = $('#vidCanvas');
-  cv.style.transformOrigin = '0 0';
-  cv.style.transform = vzoomed() ? `translate(${tx}px, ${ty}px) scale(${z})` : '';
+  const cv = VD.canvas;
+  if (cv) cv.style.transformOrigin = '0 0';
+  if (cv) cv.style.transform = vzoomed() ? `translate(${tx}px, ${ty}px) scale(${z})` : '';
   G.fit?.classList.toggle('hidden', !vzoomed());
   drawGizmo();
 }
@@ -514,7 +521,7 @@ function drawGizmo() {
 
 // keep the inspector's numbers in step with the handles (only the transform group is rebuilt)
 function syncInspector() {
-  const box = $('#vidXform'), it = selItem();
+  const box = VD.xform, it = selItem();
   if (box && it && isVisual(it)) box.replaceChildren(...xformFields(it));
 }
 
@@ -668,14 +675,13 @@ function gizmoUp(e) {
   G.hover = null;
 }
 
-function wireGizmo() {
-  const viewer = $('#vidCanvas').parentElement;
+// the handles' canvas and snap bar, made once; each mount puts them on its viewer (placeGizmo)
+function makeGizmo() {
   G.cv = h('canvas', { id: 'vidGizmo', class: 'gizmo' });
-  const bar = snapBar(['edges', 'grid', 'rot', 'scale'], () => requestDraw());
+  G.bar = snapBar(['edges', 'grid', 'rot', 'scale'], () => requestDraw());
   G.fit = gzChip('Fit', fitView, { title: 'Fit the frame in view' });
   G.fit.classList.add('hidden');
-  bar.append(G.fit);
-  viewer.append(G.cv, bar);
+  G.bar.append(G.fit);
   G.cv.addEventListener('wheel', (e) => {
     e.preventDefault();
     const r = G.cv.getBoundingClientRect();
@@ -686,7 +692,11 @@ function wireGizmo() {
   G.cv.addEventListener('pointerup', gizmoUp);
   G.cv.addEventListener('pointercancel', gizmoUp);
   G.cv.addEventListener('pointerleave', () => { if (!G.drag && G.hover) { G.hover = null; drawGizmo(); } });
-  new ResizeObserver(() => drawGizmo()).observe(viewer);
+  G.ro = new ResizeObserver(() => drawGizmo());
+}
+function placeGizmo(viewer) {
+  viewer.append(G.cv, G.bar);
+  G.ro.disconnect(); G.ro.observe(viewer);
 }
 
 function vidPlay() {
@@ -760,7 +770,7 @@ async function loadWave(url) {   // loudness peaks, 50 per second, for drawing a
 }
 
 function drawWaves() {
-  document.querySelectorAll('#timeline canvas.wave').forEach((c) => {
+  inTimeline('canvas.wave').forEach((c) => {
     const it = V.items.find((i) => i.id === c.parentElement.dataset.id);
     const w = it && V.waves.get(it.url);
     if (it && !w) { loadWave(it.url); return; }
@@ -820,7 +830,7 @@ function renderTimeline() {
       .map((tr) => ({ track: tr, cls: tr.kind + (tr.hidden || tr.muted && tr.kind === 'audio' ? ' off' : ''), head: trackHead(tr) })),
     clipEl });
   drawWaves(); pruneEls(); preloadMedia(); updatePlayhead();
-  $('#vidEmpty').classList.toggle('hidden', V.items.length > 0);
+  VD.empty?.classList.toggle('hidden', V.items.length > 0);
 }
 
 function timelineChanged() {
@@ -1022,6 +1032,7 @@ function xformFields(it) {
 }
 
 function renderVideoPanel() {
+  if (!VD.body) return;   // (not mounted yet)
   const it = selItem();
   const pct = pctFmt;
   const clip = it ? (() => {
@@ -1034,7 +1045,7 @@ function renderVideoPanel() {
     return section(it.label, null,
       hint(`${it.kind} on ${tr ? trackName(tr) : '?'} · ${fmtT(len)}${it.dur ? ` of ${fmtT(it.dur)}` : ''}`, 'section-sub'),
       h('div', { class: 'grid-2' }, fields),
-      isVisual(it) ? [h('div', { id: 'vidXform' }, xformFields(it)),
+      isVisual(it) ? [VD.xform = h('div', { class: 'vid-xform' }, xformFields(it)),
         clipKeyed(it, 'Opacity', 'opacity', { min: 0, max: 1, step: 0.01, fmt: pct })] : null,
       it.kind === 'scene' ? sceneFields(it) : null,
       it.kind === 'video' && canKey(it.fx?.orig || it) ? fxFields(it) : null,
@@ -1071,7 +1082,7 @@ function renderVideoPanel() {
     V.items = []; V.sel = null; vidSeek(0); timelineChanged();
   };
   // the panel order, app-wide: add (and Clear all), the selected thing, how it's made, then what it makes
-  $('#vidBody').replaceChildren(h('div', { class: 'panel-body' },
+  VD.body.replaceChildren(h('div', { class: 'panel-body' },
     h('div', { class: 'row wrap panel-top' },
       button('+ Clips', addFromHistory, { cls: 'small primary' }),
       button('+ Images', addImages),
@@ -1162,9 +1173,9 @@ function fxStatus(it, long = false) {
 function fxTick() {
   for (const it of V.items) {
     if (!it.fx?.busy) continue;
-    document.querySelectorAll(`#timeline .tl-clip[data-id="${it.id}"] .fx-text`).forEach((n) => { n.textContent = fxStatus(it); });
+    inTimeline(`.tl-clip[data-id="${it.id}"] .fx-text`).forEach((n) => { n.textContent = fxStatus(it); });
   }
-  document.querySelectorAll('#videoPanel .fx-busy .fx-text').forEach((n) => { n.textContent = fxStatus(null, true); });
+  (VD.panel?.querySelectorAll('.fx-busy .fx-text') || []).forEach((n) => { n.textContent = fxStatus(null, true); });
 }
 function fxStart() {
   if (!FXRUN.n++) { FXRUN.t0 = Date.now(); FXRUN.prog = ''; FXRUN.timer = setInterval(fxTick, 1000); }
@@ -1326,7 +1337,7 @@ async function craftVideo(btn) {
 }
 
 // Full screen for the preview and its controls: the shared full screen (layout.js fullScreen: the panel pulls out)
-const vidStage = () => $('#tab-video .stage');
+const vidStage = () => VD.stage;
 let vidMax = null;
 const vidFullscreen = () => !!vidMax?.on();
 const exitVideoFullscreen = () => vidMax?.exit();
@@ -1337,9 +1348,7 @@ async function snapshotFrame() {
   if (!V.items.length) return toast('Add something to the timeline first', true);
   vidPause();
   if (vidFullscreen()) exitVideoFullscreen();   // the popup lives outside the full-screen stage
-  const cv = $('#vidCanvas');
-  drawFrame();
-  const blob = await new Promise((res) => cv.toBlob(res, 'image/png'));
+  const cv = VD.canvas, blob = await videoStill();
   if (!blob) return toast('Could not grab the frame', true);
   if (snapshotFrame.url) URL.revokeObjectURL(snapshotFrame.url);   // the previous frame's
   const url = snapshotFrame.url = URL.createObjectURL(blob), name = `frame_${tc(V.t).replace(/:/g, '-')}.png`;
@@ -1355,6 +1364,13 @@ async function snapshotFrame() {
       }, { cls: 'small primary' }),
       linkBtn('Download', url, { download: name }),
       button('Close', closeSheet, { cls: 'small ghost' })));
+}
+
+// The frame under the playhead at the sequence size, as a PNG Blob (a frame's still on a table); null with no clips
+export async function videoStill() {
+  if (!V.items.length || !VD.canvas) return null;
+  drawFrame();
+  return new Promise((res) => VD.canvas.toBlob(res, 'image/png'));
 }
 
 // What a tab holds: the edit itself. (Zoom and Loop are this device's, not the edit's.)
@@ -1376,24 +1392,23 @@ const editAdapter = {
 // anywhere else on the tab it goes after the last clip, as + Clips does.
 const dropOnFiles = (e) => draggingPicture(e.dataTransfer);
 function dropSpot(e, kind) {
-  const lane = e.target.closest?.('#timeline .tl-lane');
-  const tr = lane && V.tracks.find((t) => t.id === lane.dataset.track);
+  const lane = e.target.closest?.('.tl-lane');
+  const tr = lane && VD.timeline?.contains(lane) && V.tracks.find((t) => t.id === lane.dataset.track);
   if (!tr || tr.kind !== (kind === 'audio' ? 'audio' : 'video')) return null;
   const raw = Math.max(0, (e.clientX - lane.getBoundingClientRect().left) / V.pps);
   const edges = [0, V.t, ...V.items.flatMap((it) => [it.at, it.at + itLen(it)])];
   const near = edges.find((x) => Math.abs(x - raw) * V.pps < 8);
   return { lane, track: tr.id, at: near ?? Math.round(raw * fpsNow()) / fpsNow() };
 }
-function wireDrop() {
-  const tab = $('#tab-video');
+function wireDrop(tab, signal) {   // (the listeners go when the mount's signal aborts)
   let mark = null, depth = 0;
   const clear = () => { depth = 0; tab.classList.remove('file-drop'); mark?.remove(); mark = null; };
   const kindOf = (e) => {   // what is being dragged (the browser only says Files until the drop: a lane takes any kind here)
     const it = [...(e.dataTransfer?.items || [])].find((i) => i.kind === 'file');
     return it?.type.startsWith('audio/') ? 'audio' : 'video';
   };
-  tab.addEventListener('dragenter', (e) => { if (dropOnFiles(e)) { depth++; tab.classList.add('file-drop'); } });
-  tab.addEventListener('dragleave', (e) => { if (dropOnFiles(e) && --depth <= 0) clear(); });
+  tab.addEventListener('dragenter', (e) => { if (dropOnFiles(e)) { depth++; tab.classList.add('file-drop'); } }, { signal });
+  tab.addEventListener('dragleave', (e) => { if (dropOnFiles(e) && --depth <= 0) clear(); }, { signal });
   tab.addEventListener('dragover', (e) => {
     if (!dropOnFiles(e)) return;
     e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
@@ -1402,7 +1417,7 @@ function wireDrop() {
     mark ||= h('div', { class: 'tl-dropmark' });
     if (mark.parentElement !== spot.lane) spot.lane.append(mark);
     mark.style.left = `${spot.at * V.pps}px`;
-  });
+  }, { signal });
   tab.addEventListener('drop', async (e) => {
     if (!dropOnFiles(e)) return;
     e.preventDefault();
@@ -1426,37 +1441,74 @@ function wireDrop() {
       } catch (err) { return toast(`Upload failed: ${err.message}`, true); }
     }
     if (files.some(([, k]) => k)) toast(files.length > 1 ? `Added ${files.length} files` : 'Added');
-  });
+  }, { signal });
 }
 
+// The page's Video tab: mounts the engine into its own section (app.js calls this once at start)
 export function wireVideoTransport() {
-  $('#videoPanel').replaceChildren(h('div', { id: 'vidBody' }));
+  mountVideo({ host: $('#tab-video'), canvas: $('#vidCanvas'), empty: $('#vidEmpty'), transport: $('#tab-video .stage > .transport'),
+    panel: $('#videoPanel'), body: h('div', { id: 'vidBody' }), tlTools: $('#tlTools'), timeline: $('#timeline') });
+}
+
+// Mount the engine into a host: { host, canvas, empty, transport (a slot the bar takes), panel, tlTools, timeline } and optionally stage
+// (host's .stage), viewer (the canvas's parent), body (the pane's content box) and active (is it on show). The tabs,
+// the transport and the keys are made on the first mount; mounting the same host again does nothing.
+let mounted = null;   // the current mount's AbortController: its listeners go when another host mounts
+const FULLS = new WeakMap();   // host -> its full screen (layout.js adds the pull tab to the stage once per host)
+export function mountVideo({ host, stage = host.querySelector('.stage'), canvas, viewer = canvas.parentElement, empty, transport: bar,
+  panel, tlTools, timeline: tl, body = h('div'), active = () => host.classList.contains('active') }) {
+  if (VD.host === host) return;
+  mounted?.abort();
+  mounted = new AbortController();
+  Object.assign(VD, { host, stage, viewer, canvas, empty, panel, body, tlTools, timeline: tl, xform: null, active });
+  panel.replaceChildren(body);
+  const again = !!tabs;
+  if (!again) wireOnce();
+  if (bar !== vtp.el) {
+    if (vtp.el.isConnected) vtp.el.replaceWith(h('div', { class: 'transport' }));   // (a slot for the bar, should that host mount again)
+    bar.replaceWith(vtp.el);
+  }
+  VD.transport = vtp.el;
+  placeGizmo(viewer);
+  if (vzoomed()) setView(VZ.z, VZ.tx, VZ.ty);   // (the zoom moves to the new canvas)
+  wireDrop(host, mounted.signal);
+  if (!FULLS.has(host)) FULLS.set(host, fullScreen(host, { onChange: () => requestDraw() }));
+  vidMax = FULLS.get(host);
+  tlTools.replaceChildren(...timelineTools());
+  if (again) renderVideo();   // (the first mount draws once the tab loads)
+}
+
+// What every mount shares, made once: the tabs (on the page's Video section for now: tabs.js keeps one per kind),
+// the transport bar, the handles, the timeline's own listeners and the keys
+function wireOnce() {
   tabs = new TabSet({ kind: 'video-tabs', host: $('#tab-video'), scope: 'project', newName: (n) => `Edit ${n}`, adapter: editAdapter, seed: legacyTimeline,
     onSwitch: () => store.set('deck.video.seeded', true) });
-  wireGizmo();
-  wireDrop();
-  COMP.wire({ ids: () => V.items.filter((i) => i.kind === 'scene').map((i) => i.src.scene), onChange: sceneChanged,
-    visible: () => $('#tab-video').classList.contains('active') });
+  makeGizmo();
+  COMP.wire({ ids: () => V.items.filter((i) => i.kind === 'scene').map((i) => i.src.scene), onChange: sceneChanged, visible: () => VD.active() });
+  VD.load = h('span', { class: 'hint' });
   vtp = transport({ playing: () => V.playing, play: vidPlay, pause: vidPause, seek: vidSeek, t: () => V.t, len: seqEnd },
     { step: { by: () => 1 / fpsNow(), label: 'one frame' }, fps: fpsNow, loop: { get: () => V.loop, set: (on) => { V.loop = on; store.set('deck.video.loop', on); } },
-      area: WA, keys: keyJumps(() => clipKeyTimes(TL, TL.selItem() ? [TL.selItem()] : V.items)), extra: [button('📷 Save frame', snapshotFrame, { title: 'Save this frame as an image' }), h('span', { id: 'vidLoad', class: 'hint' })] });
-  $('#vidTransport').replaceWith(vtp.el);
-  vidMax = fullScreen($('#tab-video'), { onChange: () => requestDraw() });
-  $('#tlTools').replaceChildren(
-    button('✂ Split', TL.split, { title: 'Split at playhead (S)' }),
-    button('🗑 Delete', TL.deleteSelected, { title: 'Delete selected clip (Del)' }),
-    h('span', { class: 'tl-tip' }, info('Drag clips to move · drag ends to trim · overlap to cross-fade')),
-    iconBtn('Zoom out', '−', () => TL.zoom(V.pps / 1.5)),
-    button('Fit', TL.fit),
-    iconBtn('Zoom in', '+', () => TL.zoom(V.pps * 1.5)));
+      area: WA, keys: keyJumps(() => clipKeyTimes(TL, TL.selItem() ? [TL.selItem()] : V.items)), extra: [button('📷 Save frame', snapshotFrame, { title: 'Save this frame as an image' }), VD.load] });
   TL.wire();
-  // Premiere-ish keys while the Video tab is open (playback.js: Space, arrows, Home / End)
-  playKeys(() => $('#tab-video').classList.contains('active'), () => vtp, () => ({
+  // Premiere-ish keys while the Video engine is on show (playback.js: Space, arrows, Home / End)
+  playKeys(() => VD.active(), () => vtp, () => ({
     s: TL.split, c: TL.split, f: toggleVideoFullscreen,
     Delete: TL.deleteSelected, Backspace: TL.deleteSelected,
     '=': () => TL.zoom(V.pps * 1.5), '+': () => TL.zoom(V.pps * 1.5), '-': () => TL.zoom(V.pps / 1.5),
   }));
 }
+
+// the strip above the timeline
+const timelineTools = () => [
+  button('✂ Split', TL.split, { title: 'Split at playhead (S)' }),
+  button('🗑 Delete', TL.deleteSelected, { title: 'Delete selected clip (Del)' }),
+  h('span', { class: 'tl-tip' }, info('Drag clips to move · drag ends to trim · overlap to cross-fade')),
+  iconBtn('Zoom out', '−', () => TL.zoom(V.pps / 1.5)),
+  button('Fit', TL.fit),
+  iconBtn('Zoom in', '+', () => TL.zoom(V.pps * 1.5))];
+
+// the open video edits (tabs.js), for a frame to switch to its own
+export const videoTabs = () => tabs;
 
 // Saved video edits as a source in every image picker (media.js registerPickerSource): a tab's video is its
 // newest finished render in History (params.edit_tab.id); one never exported has nothing to take a frame from yet.

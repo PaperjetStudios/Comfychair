@@ -243,7 +243,7 @@ async def duplicate(pid: int, name: str | None = None) -> dict:
         raise HTTPException(404, "No such project")
     if pid in _busy_ids():
         raise HTTPException(409, "That project is being copied already")
-    dst = db.create_project((name or "").strip()[:120] or _copy_name(src["name"]), after=pid)
+    dst = db.create_project((name or "").strip()[:120] or _copy_name(src["name"]), after=pid, version=src.get("version") or 1)
     job = {"id": uuid.uuid4().hex[:12], "src": pid, "dst": dst["id"], "name": dst["name"], "done": 0, "total": 0,
            "state": "copying", "error": None, "started": time.time()}
     JOBS[job["id"]] = job
@@ -398,14 +398,95 @@ async def order(body: dict = Body(...)):
 
 @router.patch("/{pid}")
 async def rename(pid: int, body: dict = Body(...)):
-    if not db.get_project(pid):
+    """{name?, version?}: a rename and/or version 2 (never back to 1)."""
+    p = db.get_project(pid)
+    if not p:
         raise HTTPException(404, "No such project")
+    if "version" in body:
+        v = body["version"]
+        if isinstance(v, bool) or v != 2:
+            raise HTTPException(400, "version can only be set to 2")
     name = (body.get("name") or "").strip()
-    if not name:
+    if not name and "version" not in body:
         raise HTTPException(400, "Name required")
-    db.rename_project(pid, name[:120])
-    await _tell(reason="renamed", id=pid)
+    if name:
+        db.rename_project(pid, name[:120])
+    if "version" in body:
+        db.set_project_version(pid, 2)
+    await _tell(reason="renamed" if name else "version", id=pid)
     return db.get_project(pid)
+
+
+FRAME_KINDS = (("edit-tabs", "image"), ("video-tabs", "video"), ("scene-tabs", "scene"), ("sound-tabs", "sound"))
+FRAME_DEFAULT, FRAME_GAP = 1024, 64
+
+
+def _frame_size(kind: str, payload: dict) -> tuple[int, int]:
+    def num(v):
+        return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None
+    w = h = None
+    if kind in ("edit-tabs", "video-tabs"):
+        sz = payload.get("size")
+        if isinstance(sz, dict):
+            w, h = num(sz.get("w")), num(sz.get("h"))
+    elif kind == "scene-tabs":
+        w, h = num(payload.get("width")), num(payload.get("height"))
+    return w or FRAME_DEFAULT, h or FRAME_DEFAULT
+
+
+def upgrade_project(pid: int, p: dict) -> dict:
+    """Version 1 to 2: one "Imported" table with a frame per tab doc (a row per kind), one empty table per story."""
+    base = store._dir("tables", pid, None)
+    now = time.time()
+
+    def put(kind, did, name, payload, d):
+        store._write(d / f"{did}.json", {"id": did, "kind": kind, "name": name, "order": 0, "rev": 1, "updated": now, "payload": payload})
+
+    frames, y = [], 0
+    for kind, fk in FRAME_KINDS:
+        row_h, x = 0, 0
+        for doc in store._docs(store._dir(kind, pid, None)):
+            w, h = _frame_size(kind, doc.get("payload") or {})
+            frames.append({"id": uuid.uuid4().hex[:12], "kind": fk, "doc": doc["id"], "x": x, "y": y, "w": w, "h": h,
+                           "label": doc.get("name") or ""})
+            x += w + FRAME_GAP
+            row_h = max(row_h, h)
+        if row_h:
+            y += row_h + FRAME_GAP
+    made = []
+    existing = store._docs(base)
+    order = max((x.get("order", 0) for x in existing), default=-1) + 1
+    if frames:
+        did = uuid.uuid4().hex[:12]
+        put("tables", did, "Imported", {"v": 1, "view": {"x": 0, "y": 0, "z": 1}, "grid": {"on": True, "size": 64}, "frames": frames}, base)
+        made.append(did)
+    for st in store._docs(store._dir("story-tabs", pid, None)):
+        did = uuid.uuid4().hex[:12]
+        put("tables", did, st.get("name") or "Story", {"v": 1, "view": {"x": 0, "y": 0, "z": 1}, "grid": {"on": True, "size": 64},
+                                                        "frames": [], "story": st["id"]}, base)
+        made.append(did)
+    for n, did in enumerate(made):   # keep them after any existing tables
+        path = base / f"{did}.json"
+        d = store._read(path)
+        d["order"] = order + n
+        store._write(path, d)
+    return {"tables": made}
+
+
+@router.post("/{pid}/upgrade")
+async def upgrade(pid: int):
+    """Version 1 to 2. Returns {"ok": true, "tables": [ids made], "project": row}, or {"already": true} for a version-2 project."""
+    p = db.get_project(pid)
+    if not p:
+        raise HTTPException(404, "No such project")
+    if pid in _busy_ids():
+        raise HTTPException(409, "That project is being copied: wait for the copy to finish")
+    if (p.get("version") or 1) >= 2:
+        return {"already": True}
+    out = await asyncio.to_thread(upgrade_project, pid, p)
+    db.set_project_version(pid, 2)
+    await _tell(reason="upgraded", id=pid)
+    return {"ok": True, **out, "project": db.get_project(pid)}
 
 
 @router.post("/{pid}/duplicate")

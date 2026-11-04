@@ -2,8 +2,8 @@ import { keyboardFocus } from './key-focus.js';
 import { initHistory } from './history.js';
 
 // Screen state and visits live here; app.js renders screens and world.js renders the space controls.
-let current = 'generate', render = null;
-const visits = ['generate'], listeners = new Set();
+let current = 'table', render = null;
+const visits = ['table'], listeners = new Set();
 export const currentTab = () => current;
 export function onNavigate(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 export function setSwitchTab(fn) {

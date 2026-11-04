@@ -51,6 +51,8 @@ def migrate(conn):
         conn.execute("ALTER TABLE projects ADD COLUMN folder TEXT")
     if "sort" not in cols:  # the project picker's order (Settings → Projects); starts as the order they were made in
         conn.execute("ALTER TABLE projects ADD COLUMN sort INTEGER")
+    if "version" not in cols:  # 1 = tabs as before; 2 = tables (new projects start at 2; POST /api/projects/{id}/upgrade moves 1 to 2)
+        conn.execute("ALTER TABLE projects ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
     if not conn.execute("SELECT 1 FROM projects LIMIT 1").fetchone():
         conn.execute("INSERT INTO projects(name, created) VALUES (?, ?)", ("Sandbox", time.time()))
     conn.execute("UPDATE projects SET sort=id WHERE sort IS NULL")
@@ -130,8 +132,8 @@ def project_folder(project_id) -> str:
     return name
 
 
-def create_project(name: str, after: int | None = None) -> dict:
-    """A new project, last in the order (or right after project `after`)."""
+def create_project(name: str, after: int | None = None, version: int = 2) -> dict:
+    """A new project, last in the order (or right after project `after`). New projects are version 2 (tables)."""
     with _lock:
         row = _conn.execute("SELECT sort FROM projects WHERE id=?", (after,)).fetchone() if after is not None else None
         if row:
@@ -139,7 +141,7 @@ def create_project(name: str, after: int | None = None) -> dict:
             _conn.execute("UPDATE projects SET sort=sort+1 WHERE sort>=?", (sort,))
         else:
             sort = (_conn.execute("SELECT MAX(sort) FROM projects").fetchone()[0] or 0) + 1
-        cur = _conn.execute("INSERT INTO projects(name, created, sort) VALUES (?, ?, ?)", (name, time.time(), sort))
+        cur = _conn.execute("INSERT INTO projects(name, created, sort, version) VALUES (?, ?, ?, ?)", (name, time.time(), sort, version))
         _conn.commit()
     project_folder(cur.lastrowid)  # freeze its folder now
     return get_project(cur.lastrowid)
@@ -148,6 +150,10 @@ def create_project(name: str, after: int | None = None) -> dict:
 def rename_project(project_id: int, name: str):
     """Only the name: the folder was frozen when the project was made, so its files and links stay put."""
     _q("UPDATE projects SET name=? WHERE id=?", (name, project_id))
+
+
+def set_project_version(project_id: int, version: int):
+    _q("UPDATE projects SET version=? WHERE id=?", (version, project_id))
 
 
 def order_projects(ids: list[int]):

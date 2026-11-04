@@ -97,7 +97,7 @@ const RULER_STEPS = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
 
 export function timeline(st, o) {
   const minLen = o.minLen ?? 0.1;
-  const box = () => $(o.el);
+  const box = typeof o.el === 'function' ? o.el : () => $(o.el);   // a selector, or a getter for the element
   const len = (it) => Math.max(minLen, (it.out ?? (it.dur || 3)) - it.in);
   const end = (it) => it.at + len(it);
   const seqEnd = () => st.items.reduce((m, it) => Math.max(m, end(it)), 0);
@@ -212,7 +212,12 @@ export function timeline(st, o) {
       o.dragged();
     }, (ev) => { if (moved) o.changed(); else onTap?.(ev); });
   }
-  const laneAt = (ev) => document.elementFromPoint(ev.clientX, ev.clientY)?.closest(`${o.el} .tl-lane`)?.dataset.track;
+  const laneAt = (ev) => {
+    const hit = document.elementFromPoint(ev.clientX, ev.clientY);
+    if (typeof o.el === 'string') return hit?.closest(`${o.el} .tl-lane`)?.dataset.track;
+    const lane = hit?.closest('.tl-lane');
+    return lane && box()?.contains(lane) ? lane.dataset.track : undefined;
+  };
   function startClipDrag(e, el) {
     const it = st.items.find((i) => i.id === el.dataset.id);
     if (!it) return;

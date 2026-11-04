@@ -3,7 +3,7 @@ import { switchTab, onNavigate, wireTabKeys } from './navigation.js';
 
 // ---------------------------------------------------------------------------
 // world: the app as a small world of three spaces you move around in.
-//   Make  (Story, Generate, VFX, 3D) where things get made: written down and sorted, then a process, its inputs, a big GO
+//   Make  (Table, Story, Generate, VFX, 3D) where things get made: written down and sorted, then a process, its inputs, a big GO
 //   Edit  (Editor, Video, Sound)    where made things are put together in space and time
 //   View  (Board, History)          where everything made is seen and sent on
 // The spaces' buttons and their tools' tabs move you (the tab slides on to the next, and a map shows where you
@@ -14,7 +14,7 @@ import { switchTab, onNavigate, wireTabKeys } from './navigation.js';
 // The tabs themselves stay their own modules: this only moves between them.
 // ---------------------------------------------------------------------------
 const SPACES = [
-  { id: 'make', name: 'Make', tabs: ['story', 'generate', 'vfx', 'scene'], icon: ['M12 3l1.8 4.6L18.5 9l-4.7 1.6L12 15l-1.8-4.4L5.5 9l4.7-1.4z', 'M5 21l4-4'] },
+  { id: 'make', name: 'Make', tabs: ['table', 'story', 'generate', 'vfx', 'scene'], icon: ['M12 3l1.8 4.6L18.5 9l-4.7 1.6L12 15l-1.8-4.4L5.5 9l4.7-1.4z', 'M5 21l4-4'] },
   { id: 'edit', name: 'Edit', tabs: ['editor', 'video', 'sound'], icon: ['M4 6h10M4 12h16M4 18h7', 'M17 4v4M14 16v4'] },
   { id: 'view', name: 'View', tabs: ['board', 'history'], icon: ['M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z', 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6'] },
 ];

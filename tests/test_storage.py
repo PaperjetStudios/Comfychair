@@ -337,6 +337,18 @@ class Storage(unittest.TestCase):
             self.assertEqual(got[gid][0]["label"], "Character")
         self.assertNotIn(d, got, "a run still on its way isn't a use")
 
+    def test_a_table_scans_cleanly_and_reports_an_explicit_run(self):
+        a, _, _, _ = self.gen(run="r1")
+        frames = [{"id": "f1", "kind": "image", "doc": "e1", "x": 0, "y": 0, "w": 1024, "h": 1024, "label": "A"},
+                  {"id": "f2", "kind": "note", "x": 0, "y": 0, "w": 10, "h": 10, "text": "hi"},
+                  {"id": "f3", "kind": "image", "doc": "s1", "x": 0, "y": 0, "w": 10, "h": 10, "story": {"scene": "sc", "shot": "sh"}}]
+        self.doc("tables", {"v": 1, "view": {"x": 0, "y": 0, "z": 1}, "grid": {"on": True, "size": 64}, "frames": frames, "story": "st1"}, name="T", did="t0")
+        self.assertNotIn(a, storage.attachments())
+        self.doc("tables", {"v": 1, "frames": frames, "extra": {"generation": a}}, name="T2", did="t1")
+        got = storage.attachments()
+        self.assertEqual(got[a][0]["label"], "Table")
+        self.assertEqual(got[a][0]["name"], "T2")
+
     def test_a_parent_or_a_trashed_owner_is_no_attachment(self):
         a, _, _, _ = self.gen(run="r1")
         self.doc("gen-tabs", {"parent": {"generation": a, "index": 0}}, did="t1")

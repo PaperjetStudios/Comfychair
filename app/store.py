@@ -6,7 +6,12 @@ Each file is {"id", "kind", "name", "order", "rev", "updated", "payload"}. The s
 every write; a client must send the rev it last saw (optimistic concurrency, 409 + current doc if stale).
 Reordering changes `order` only and leaves rev alone (order isn't content, so it never makes another
 device's save conflict). Deleting moves the file into a `.trash/` folder beside it, so Undo can bring
-it back; trashed copies older than 30 days are dropped on the next delete in that folder."""
+it back; trashed copies older than 30 days are dropped on the next delete in that folder.
+
+A "tables" payload (the project's canvas of frames): {v:1, view:{x,y,z}, grid:{on,size},
+frames:[{id, kind:'image'|'video'|'scene'|'sound'|'note', doc:<store id of edit-tabs|video-tabs|scene-tabs|sound-tabs>,
+x,y,w,h,label,locked?,text?,story?:{scene,shot}}], story?:<story-tabs id>}. The table owns the docs its frames
+point at: deleting the table trashes them too, restoring it brings them back."""
 import json
 import os
 import re
@@ -21,7 +26,7 @@ from fastapi.responses import JSONResponse
 from . import config, db, storage
 
 # The one place that says which kinds exist. Add a name here to start storing a new one.
-KINDS = ("gen-tabs", "gen-presets", "edit-tabs", "video-tabs", "sound-tabs", "scene-tabs", "vfx-tabs", "story-tabs", "characters", "objects", "scenes", "tracks", "prefs", "view-marks")
+KINDS = ("gen-tabs", "gen-presets", "edit-tabs", "video-tabs", "sound-tabs", "scene-tabs", "vfx-tabs", "story-tabs", "tables", "characters", "objects", "scenes", "tracks", "prefs", "view-marks")
 MAX_PAYLOAD = 5 * 1024 * 1024
 MAX_STILL = 12 * 1024 * 1024
 PNG_SIG = b"\x89PNG\r\n\x1a\n"
@@ -166,6 +171,55 @@ async def put_doc(kind: str, did: str, body: dict = Body(...), project_id: int |
     return doc
 
 
+FRAME_DOC_KINDS = {"image": "edit-tabs", "video": "video-tabs", "scene": "scene-tabs", "sound": "sound-tabs"}
+
+
+def _owned_docs(doc: dict) -> list[tuple[str, str]]:
+    """(kind, id) of the documents a table's frames own."""
+    out = []
+    for f in ((doc.get("payload") or {}).get("frames") or []):
+        if not isinstance(f, dict):
+            continue
+        k, i = FRAME_DOC_KINDS.get(f.get("kind")), f.get("doc")
+        if k and isinstance(i, str) and ID_RE.fullmatch(i) and (k, i) not in out:
+            out.append((k, i))
+    return out
+
+
+def _trash_file(d, kind, did, ts=None):
+    """Move one document (and its still) into d/.trash; False if there is none."""
+    path = d / f"{did}.json"
+    if not path.exists():
+        return False
+    (d / ".trash").mkdir(exist_ok=True)
+    ts = ts or time.time_ns()
+    os.replace(path, d / ".trash" / f"{did}.{ts}.json")
+    if (d / f"{did}.png").exists():
+        os.replace(d / f"{did}.png", d / ".trash" / f"{did}.{ts}.png")
+    return True
+
+
+def _restore_file(d, did):
+    """Bring the newest trashed copy of did back unless one exists; True if restored."""
+    path = d / f"{did}.json"
+    if path.exists() or not (d / ".trash").is_dir():
+        return False
+    copies = sorted(((int(p.name[len(did) + 1:-5]), p) for p in (d / ".trash").glob(f"{did}.*.json")
+                     if p.name[len(did) + 1:-5].isdigit()), key=lambda t: t[0])
+    if not copies:
+        return False
+    src = copies[-1][1]
+    still = src.with_suffix(".png")
+    if still.exists():
+        os.replace(still, d / f"{did}.png")
+    doc = _read(src)
+    doc["rev"] += 1
+    doc["updated"] = time.time()
+    _write(path, doc)
+    src.unlink()
+    return True
+
+
 @router.delete("/{kind}/{did}")
 async def delete_doc(kind: str, did: str, project_id: int | None = None, scope: str | None = None):
     d = _dir(kind, project_id, scope)
@@ -188,6 +242,12 @@ async def delete_doc(kind: str, did: str, project_id: int | None = None, scope: 
     if (d / f"{did}.png").exists():  # its still goes with it, same timestamp
         os.replace(d / f"{did}.png", d / ".trash" / f"{did}.{ts}.png")
     await _tell(kind, did, doc["rev"], project_id, scope, deleted=True)
+    if kind == "tables":   # the docs its frames own go with it (a missing one is fine)
+        for k, i in _owned_docs(doc):
+            od = _dir(k, project_id, scope)
+            gone = _read(od / f"{i}.json")
+            if gone and _trash_file(od, k, i):
+                await _tell(k, i, gone["rev"], project_id, scope, deleted=True)
     return doc
 
 
@@ -213,6 +273,11 @@ async def restore_doc(kind: str, did: str, project_id: int | None = None, scope:
     _write(path, doc)
     src.unlink()
     await _tell(kind, did, doc["rev"], project_id, scope)
+    if kind == "tables":
+        for k, i in _owned_docs(doc):
+            od = _dir(k, project_id, scope)
+            if _restore_file(od, i):
+                await _tell(k, i, (_read(od / f"{i}.json") or {}).get("rev", 0), project_id, scope)
     return doc
 
 

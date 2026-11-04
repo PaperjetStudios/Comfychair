@@ -149,10 +149,15 @@ export function templateAspect() {
 const SEEDED = 'deck.editor.seeded';   // set once a tab has loaded: the old single-editor state then lives in the tabs
 let tabs = null;
 registerUndo('editor', { undo: () => ED.paint?.undo(), redo: () => ED.paint?.redo() });   // (the painting's history: undo-dock.js)
+// The elements the editor lives in. createEditor reads cfg.canvas once (and cfg.panel at every render), so it can't be re-pointed:
+// mountEditor moves the page's own stage (viewer + canvas + size + anim bar) and panel into another host instead.
+const ED_EL = { host: $('#tab-editor'), canvas: $('#editorCanvas'), empty: $('#editorEmpty'), size: $('#editorSize'), anim: $('#editorAnim'), panel: $('#editorPanel'),
+  stage: $('#tab-editor .editor-stage'), active: null };
+const ED_HOME = ED_EL.host;
 const ED = createEditor({
-  canvas: $('#editorCanvas'), empty: $('#editorEmpty'), size: $('#editorSize'), anim: $('#editorAnim'), panel: $('#editorPanel'),
+  canvas: ED_EL.canvas, empty: ED_EL.empty, size: ED_EL.size, anim: ED_EL.anim, panel: ED_EL.panel,
   initial: store.get(SEEDED, false) ? {} : store.get('deck.editor', {}),
-  active: () => $('#tab-editor').classList.contains('active'),
+  active: () => (ED_EL.active ? ED_EL.active() : ED_EL.host.classList.contains('active')),
   onChange: () => { tabs.changed(); stillSoon(); },   // the tab saves itself shortly and its still follows
   name: () => tabs?.active?.name,
   beforeRender: () => { if (!tabs.started) tabs.start(); },
@@ -162,8 +167,21 @@ const ED = createEditor({
     ed.layerList(), ed.E.sel?.maskOf ? ed.layerProps() : null, ed.paintProps(), ed.masksProps(), ed.inpaintProps(), ed.toolsProps(), ed.E.sel?.maskOf ? null : ed.layerProps(), ed.animProps(), ed.canvasProps(), ed.exportProps()),
 });
 export const { E } = ED;
+// Mount the editor into `els.host` (stage first, panel after), and `els.active()` says when it takes keys. The TabSet keeps its host.
+export function mountEditor(els) {
+  ED_EL.host = els.host; ED_EL.active = els.active || null;
+  els.host.append(ED_EL.stage, ED_EL.panel);
+  ED.render();
+}
+// Back into the page's Image tab, as it was.
+export function unmountEditor() {
+  ED_EL.host = ED_HOME; ED_EL.active = null;
+  ED_HOME.prepend(ED_EL.stage); ED_HOME.append(ED_EL.panel);
+  ED.render();
+}
 export const persistEditor = () => ED.changed();
 export const renderEditor = () => ED.render();
+export const editTabs = () => tabs;
 
 tabs = new TabSet({ kind: 'edit-tabs', host: $('#tab-editor'), newName: (n) => `Edit ${n}`, seed: () => (store.get(SEEDED, false) ? null : ED.dump()),
   adapter: {
@@ -203,13 +221,8 @@ function stillSoon() {
   stillTimer = setTimeout(stillNow, STILL_DELAY);
 }
 document.addEventListener('visibilitychange', () => { if (document.hidden && stillDue) stillNow(); });
-// Draw now (synchronously, so the state can't change under it), then encode and upload. Never blocks editing.
-async function stillNow() {
-  clearTimeout(stillTimer);
-  const tab = E.tab;
-  if (!stillDue || !tab) return;
-  if (ED.loading()) { stillTimer = setTimeout(stillNow, 1000); return; }   // images still loading
-  stillDue = false;
+// The composite, shrunk to STILL_MAX: { has, cv }. (Synchronous, so the state can't change under it.)
+function stillCanvas() {
   let cv = document.createElement('canvas');
   const has = ED.compose(cv);
   if (has && Math.max(cv.width, cv.height) > STILL_MAX) {
@@ -218,6 +231,23 @@ async function stillNow() {
     const c2 = small.getContext('2d'); c2.imageSmoothingQuality = 'high'; c2.drawImage(cv, 0, 0, small.width, small.height);
     cv = small;
   }
+  return { has, cv };
+}
+// The composite as a PNG Blob without uploading (null when there is nothing to show).
+export function editorStillBlob() {
+  const { has, cv } = stillCanvas();
+  return has ? new Promise((res) => cv.toBlob(res, 'image/png')) : Promise.resolve(null);
+}
+// Draw now and upload, even if the timer hasn't fired.
+export async function editorStill() { stillDue = true; await stillNow(); }
+// Draw now (synchronously, so the state can't change under it), then encode and upload. Never blocks editing.
+async function stillNow() {
+  clearTimeout(stillTimer);
+  const tab = E.tab;
+  if (!stillDue || !tab) return;
+  if (ED.loading()) { stillTimer = setTimeout(stillNow, 1000); return; }   // images still loading
+  stillDue = false;
+  const { has, cv } = stillCanvas();
   const url = `/api/store/edit-tabs/${tab.id}/still${tab.qs}`;
   try {
     if (!has) { await fetch(url, { method: 'DELETE' }); return; }   // nothing to show any more

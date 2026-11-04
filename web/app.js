@@ -1,5 +1,5 @@
 // ComfyChair tablet UI. Plain ES modules, no build step. This is the entry point: projects, tab switching and
-// wiring. The panels live in generate.js (templates, prompt, saved settings, preview, zoom), run.js (websocket,
+// wiring. The table of frames is table.js (live.js says which frame is open); the panels live in generate.js (templates, prompt, saved settings, preview, zoom), run.js (websocket,
 // history, the queue), editor.js (+ sketch pad), video.js (timeline), vfx.js (VFX effects), story.js (storyboard), board.js (board + gallery); media.js has
 // the pickers and core.js the shared state. The 3D tab (scene.js) loads on demand.
 
@@ -17,6 +17,7 @@ import { renderVfx, vfxPause, wireVfx } from './vfx.js';
 import { renderSound, sndPause, wireSound } from './sound.js';
 import { renderStory, wireStory } from './story.js';
 import { B, closeGallery, pauseBoard, renderBoard } from './board.js';
+import { pauseTable, renderTable } from './table.js';
 import { fullScreen, sectionTargets, sideNav, wireSplitters } from './layout.js';
 import { loadPrefs, openPrefs } from './prefs.js';
 import { EDIT_PHRASES, IMAGE_PHRASES, VIDEO_PHRASES } from './phrases.js';
@@ -87,6 +88,7 @@ function switchTab(name) {
     if (b.dataset.tab === name) b.scrollIntoView({ inline: 'nearest', block: 'nearest' });
   });
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === `tab-${name}`));
+  if (name === 'table') renderTable(); else pauseTable();
   if (name === 'generate' && !RUN.pid) runChip(0, 0, $('#progText').textContent);   // lets go of a finished ✓ / !
   if (name === 'history') loadHistory();
   if (name === 'editor') renderEditor();
@@ -161,6 +163,7 @@ function wireLayout() {
   wireSplitters();
   for (const id of ['generate', 'editor']) fullScreen($(`#tab-${id}`));   // (f toggles it: layout.js fullScreen)
   sideNav($('#tab-generate .panel'), 'generate', sectionTargets($('#fields')));
+  sideNav($('#tablePanel'), 'table', sectionTargets($('#tablePanel')));
   sideNav($('#editorPanel'), 'editor', sectionTargets($('#editorPanel')));
   sideNav($('#videoPanel'), 'video', sectionTargets($('#videoPanel')));
   sideNav($('#vfxPanel'), 'vfx', sectionTargets($('#vfxPanel')));
@@ -460,11 +463,10 @@ function wireTextPopup() {
   await Promise.all([loadProjects(), loadPrefs()]);
   await loadTemplates();
   loadHistory();
-  // a refresh keeps the panel being worked in; opening the address fresh (a new browser tab) starts on Generate
-  try {
-    const last = sessionStorage.getItem('deck.lastTab');
-    if (last && last !== 'generate' && document.querySelector(`.tabs button[data-tab="${last}"]`)) navigate(last);
-  } catch { /* no session storage */ }
+  // a refresh keeps the panel being worked in; opening the address fresh (a new browser tab) starts on the Table
+  let last = null;
+  try { last = sessionStorage.getItem('deck.lastTab'); } catch { /* no session storage */ }
+  navigate(last && document.querySelector(`.tabs button[data-tab="${last}"]`) ? last : 'table');
   connectWS();   // its first open runs syncWithServer: picks up a run that's already going
   // The service worker (HTTPS only) keeps an offline page and lets Android show "done" notifications
   if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});

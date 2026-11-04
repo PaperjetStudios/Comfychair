@@ -125,6 +125,10 @@ const tabState = () => { const { results, showing, ...rest } = T; return JSON.pa
 const UI = { wipe: 0.5, draw: null, srcInfo: null, playing: false, neg: false, cmp: null, layout: 'wipe', rate: 1, pose: null, remake: false,
   loop: store.get('deck.vfx.loop', true) };
 let vtp = null;   // the transport bar (playback.js)
+// Where the engine shows (mountVfx): the page's VFX tab today, any host element later (a frame on a table).
+// transport is the bar on show (renderTransport swaps it for a new one); body is the pane's content box.
+const VF = { host: null, stage: null, transport: null, panel: null, body: null, max: null, active: () => !!VF.host?.classList.contains('active') };
+const inBody = (sel) => VF.body?.querySelector(sel) || null;
 
 // ---- inputs ----
 function changed(redraw = true) { tabs?.changed(); if (redraw) render(); }
@@ -170,7 +174,7 @@ function sourceField(role = 'source') {
     pick: () => openVideoPicker({ title, onPick: set }),
     onEdit: (val) => { T.source = val; changed(false); drawViewer(); poseLine(); },
     loader: () => ({ rate: 0, nth: 1, mapped: true }), budget: () => (fxDef.needs.includes('len') ? { secs: T.len } : null),
-    below: isSrc && fxDef.posed ? h('div', { id: 'vfxPose' }) : null,
+    below: isSrc && fxDef.posed ? h('div', { class: 'vfx-pose' }) : null,
     buttons: isSrc ? [] : [button('From results…', () => pickResult(set), { title: 'A cut-out (Alpha Gen) or mask result from this tab' })] });
   return tip ? withHelp(el, tip) : el;
 }
@@ -363,7 +367,7 @@ async function speakTalk() {
     const { waitJob } = await import('./clipimport.js');
     const r = await waitJob(await api('/api/voice/speak', { method: 'POST', busy: false, body: {
       lines: [{ voice: L.voice, text: L.text.trim(), delivery: L.delivery.trim() || null }], engine: L.engine || 'qwen', name: 'talk' } }),
-    (p, l) => { const el = document.getElementById('vfxSpeaking'); if (el) el.textContent = `${l || 'Speaking'}… ${Math.round((p || 0) * 100)}%`; });
+    (p, l) => { const el = inBody('.vfx-speaking'); if (el) el.textContent = `${l || 'Speaking'}… ${Math.round((p || 0) * 100)}%`; });
     const m = r.lines[0];
     tab.sound = { media: m.name };
     tab.talk.said = { key: talkKey(tab.talk), seconds: m.seconds };
@@ -393,7 +397,7 @@ function lineFields() {
     field('Engine', seg(TALK_ENGINES, L.engine || 'qwen', (v) => { L.engine = v; changed(false); }, { wrap: true })),
     h('div', { class: 'row wrap' },
       button([icon('mic'), T.sound && L.said ? 'Speak it again' : 'Speak the line'], speakTalk, { cls: T.sound ? '' : 'primary', disabled: !!UI.speaking })),
-    UI.speaking ? h('p', { id: 'vfxSpeaking', class: 'hint' }, 'Speaking…') : null,
+    UI.speaking ? h('p', { class: 'hint vfx-speaking' }, 'Speaking…') : null,
     stale ? note('The line changed since it was spoken: speak it again.') : null,
     soundInput(T.sound, (v) => { T.sound = v; L.said = null; changed(false); }, { title: 'Someone speaking the line', label: 'Spoken line' }),
   ];
@@ -401,7 +405,7 @@ function lineFields() {
 
 // ---- the panel ----
 function render() {
-  const body = $('#vfxBody');
+  const body = VF.body;
   if (!body) return;
   const e = fx(T.op), t = tplOf(e);
   const needs = new Set(e.needs.map((n) => n.replace('?', '')));
@@ -412,7 +416,7 @@ function render() {
     h('select', { 'aria-label': 'Effect', onchange: (ev) => {
       const focused = document.activeElement === ev.target;
       T.op = ev.target.value; UI.draw = null; changed();
-      if (focused) $('#vfxBody select[aria-label="Effect"]')?.focus({ preventScroll: true });
+      if (focused) inBody('select[aria-label="Effect"]')?.focus({ preventScroll: true });
     } },
       ...GROUPS.map((g) => h('optgroup', { label: g },
         ...EFFECTS.filter((x) => x.group === g).map((x) => h('option', { value: x.id, selected: x.id === e.id }, x.label))))),
@@ -488,7 +492,7 @@ const findPose = () => api('/api/pose/find', { method: 'POST', body: poseBody(),
 
 // the "Pose ready · #id" line under the source, looked up again when the clip, trim, crop, poser or Length change
 async function poseLine() {
-  const box = document.getElementById('vfxPose');
+  const box = inBody('.vfx-pose');
   if (!box || !T.source) return;
   const key = JSON.stringify(poseBody());
   if (UI.pose?.key !== key) {
@@ -496,7 +500,7 @@ async function poseLine() {
     try { look.r = await findPose(); } catch { look.r = null; }
     if (UI.pose !== look) return;   // changed again while looking
   }
-  const r = UI.pose.r, now = document.getElementById('vfxPose');
+  const r = UI.pose.r, now = inBody('.vfx-pose');
   if (r === undefined || !now) return;
   if (!r) { now.replaceChildren(); return; }
   now.replaceChildren(h('div', { class: 'row wrap' },
@@ -643,9 +647,9 @@ function canvasFields() {
 }
 // the viewer while setting up: the canvas (checkered) with the clip on it, draggable
 function layoutCanvas() {
-  const box = document.querySelector('#vfxStage .vfx-canvas');
+  const box = VF.stage?.querySelector('.vfx-canvas');
   if (!box) return;
-  const st = document.getElementById('vfxStage').getBoundingClientRect(), A = canvasAspect();
+  const st = VF.stage.getBoundingClientRect(), A = canvasAspect();
   const w = Math.min(st.width - 16, (st.height - 16) * A);   // as big as the stage allows, at the canvas's shape
   Object.assign(box.style, { width: `${Math.max(40, w)}px`, height: `${Math.max(40, w / A)}px` });
   const b = clipBox(), c = cropOf();
@@ -925,7 +929,7 @@ function seekTo(t) {
 function showTime() { vtp?.update(); }
 
 function drawViewer() {
-  const stage = $('#vfxStage');
+  const stage = VF.stage;
   if (!stage) return;
   const e = fx(T.op);
   const res = T.showing && S.history.get(T.showing);
@@ -1124,7 +1128,7 @@ const vfxPlayer = {
 };
 
 function renderTransport() {
-  const bar = $('#vfxTransport');
+  const bar = VF.transport;
   if (!bar) return;
   const vids = [V.a, V.b].filter(Boolean);
   for (const v of vids) { v.playbackRate = UI.rate; v.onseeked = v.onloadedmetadata = showTime; }
@@ -1136,8 +1140,8 @@ function renderTransport() {
       V.a && V.b ? seg([['wipe', 'Wipe'], ['side', 'Side by side']], UI.layout, (v) => { UI.layout = v; vfxPause(); drawViewer(); }) : null,
       V.a && V.b && UI.layout === 'wipe' ? h('span', { class: 'hint' }, 'Drag across the picture to wipe') : null,
       UI.draw ? h('span', { class: 'hint' }, { points: 'Tap to place points', tracks: 'Drag to draw a path', color: 'Tap the screen colour' }[UI.draw]) : null] });
-  vtp.el.id = 'vfxTransport';
   bar.replaceWith(vtp.el);
+  VF.transport = vtp.el;
 }
 
 // ---- tabs and wiring ----
@@ -1156,10 +1160,32 @@ export async function openVfxState(state, name) {
 export function renderVfx() { ensureTabs().catch(() => {}); render(); }
 export function vfxPause() { UI.playing = false; for (const v of [V.a, V.b]) v?.pause(); vtp?.update(); }
 
+// The page's VFX tab: mounts the engine into its own section (app.js calls this once at start)
 export function wireVfx() {
   const panel = $('#vfxPanel');
   if (!panel) return;
-  panel.replaceChildren(h('div', { id: 'vfxBody' }));
+  mountVfx({ host: $('#tab-vfx'), stage: $('#vfxStage'), transport: $('#tab-vfx .stage > .transport'), panel, body: h('div', { id: 'vfxBody' }) });
+}
+
+// Mount the engine into a host: { host, stage (where the videos go), transport (a placeholder the bar replaces), panel }
+// and optionally body (the pane's content box) and active (is it on show). The tabs, keys and listeners are made on
+// the first mount; mounting the same host again does nothing.
+const FULLS = new WeakMap();   // host -> its full screen (layout.js adds the pull tab to the stage once per host)
+export function mountVfx({ host, stage, transport: bar, panel, body = h('div'), active = () => host.classList.contains('active') }) {
+  if (VF.host === host) return;
+  const again = !!tabs;
+  Object.assign(VF, { host, stage, transport: bar, panel, body, active });
+  panel.replaceChildren(body);
+  delete stage.dataset.want; delete stage.dataset.trim;   // (drawViewer makes the videos again, in this stage)
+  if (!FULLS.has(host)) FULLS.set(host, fullScreen(host, { onChange: () => sizeOverlay() }));
+  VF.max = FULLS.get(host);
+  if (!again) wireOnce();
+  else render();
+}
+
+// What every mount shares, made once: the tabs (on the page's VFX section for now: tabs.js keeps one per kind),
+// the window's resize, the keys and the server's results
+function wireOnce() {
   tabs = new TabSet({ kind: 'vfx-tabs', host: $('#tab-vfx'), scope: 'project', newName: (n) => `Effect ${n}`,
     adapter: {
       empty: BLANK,
@@ -1167,9 +1193,27 @@ export function wireVfx() {
       dump: () => ({ ...T }),
       load(payload) { T = { ...BLANK(), ...payload }; UI.srcInfo = null; UI.draw = null; UI.cmp = null; render(); },
     } });
-  const max = fullScreen($('#tab-vfx'), { onChange: () => sizeOverlay() });
-  addEventListener('resize', () => { if ($('#tab-vfx').classList.contains('active')) { sizeOverlay(); layoutCanvas(); } });
-  playKeys(() => $('#tab-vfx').classList.contains('active'), () => vtp, () => ({ f: max.toggle }));
+  addEventListener('resize', () => { if (VF.active()) { sizeOverlay(); layoutCanvas(); } });
+  playKeys(() => VF.active(), () => vtp, () => ({ f: () => VF.max?.toggle() }));
   // a result finishing (or failing) redraws its card
   onServer('deck_generation', (m) => { const id = m.data?.id; if (T.results.includes(id)) { setTimeout(render, 0); } });
 }
+
+// the open VFX tabs (tabs.js), for a frame to switch to its own
+export const vfxTabs = () => tabs;
+
+// The frame the result (or else the source) shows, as a PNG Blob (a frame's still on a table): the first frame
+// until it is played or scrubbed. Null with no video, or one that does not load within 5 s.
+export async function vfxStill() {
+  const v = V.b || V.a;
+  if (!v) return null;
+  if (v.readyState < 2 && !(await loaded(v, 5000))) return null;
+  const c = document.createElement('canvas');
+  c.width = v.videoWidth; c.height = v.videoHeight;
+  c.getContext('2d').drawImage(v, 0, 0);
+  return new Promise((res) => c.toBlob(res, 'image/png'));
+}
+const loaded = (v, ms) => new Promise((res) => {
+  const t = setTimeout(() => res(false), ms);
+  v.addEventListener('loadeddata', () => { clearTimeout(t); res(true); }, { once: true });
+});
