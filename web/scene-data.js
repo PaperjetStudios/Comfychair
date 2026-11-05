@@ -241,11 +241,13 @@ export function sameTab() {
   return () => hooks.tab() === t || (toast('Switch back to that tab to undo', true), false);
 }
 
-// undo / redo: the scene as JSON after each saved change (one list per tab: a switch resets it)
+// undo / redo: the scene as JSON after each saved change (one list per tab: a switch to another resets it)
 export const HIST = { undo: [], redo: [], cur: null };
 // (the mode is the tab's own, not an edit: it stays out of the list)
 const snap = () => JSON.stringify({ ...SC, mode: undefined });
 export function resetHistory() { TEMP.clear(); HIST.undo = []; HIST.redo = []; HIST.cur = snap(); hooks.history(); }
+// the same scene loaded again (a frame opened again): its steps stay, from the scene as it is now (they are whole scenes)
+export function rebaseHistory() { TEMP.clear(); HIST.cur = snap(); hooks.history(); }
 function remember() {
   const s = snap();
   if (s === HIST.cur) return;

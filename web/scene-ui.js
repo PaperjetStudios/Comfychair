@@ -36,6 +36,7 @@ import { keysPast, stretchAll } from './keys.js';
 import { offsetField } from './scene-offset.js';
 import { refOn as scaleRefOn, scaleProps, setRef as setScaleRef, startStand } from './scene-scale.js';
 import { registerUndo, syncUndo } from './undo-dock.js';
+import { ownsKey } from './key-focus.js';
 
 // ---- UI ----------------------------------------------------------------------
 let statusText = '';
@@ -675,7 +676,7 @@ export function buildToolbar() {
   viewer.append(h('button', { type: 'button', class: 'max-btn hud-btn', id: 'sceneHud', onclick: () => setHud(!hudOff()) }));
   setHud(hudOff());
   // Undo / Redo: the app's dock (undo-dock.js), in the top bar and over the full-screen view
-  registerUndo('scene', { undo: () => undo(), redo: () => undo(false), can: () => [HIST.undo.length > 0, HIST.redo.length > 0] });
+  registerUndo('scene', { undo: () => undo(), redo: () => undo(false), can: () => [HIST.undo.length > 0, HIST.redo.length > 0], sig: () => HIST.cur });
   viewer.append(maxBar(), h('div', { id: 'sceneModeBar', class: 'layer-toolbar scene-modebar', role: 'toolbar', 'aria-label': 'Mode' }));
 }
 
@@ -741,13 +742,14 @@ export function wireKeys() {
   const up = () => setTimeout(() => letGo('panel'));
   addEventListener('pointerup', up, true); addEventListener('pointercancel', up, true);
   document.addEventListener('keydown', (e) => {
-    if (!SCN.active() || sheetOpen()
-      || e.target.closest('input, textarea, select')) return;
-    if (e.ctrlKey || e.metaKey) {
-      const k = e.key.toLowerCase();
-      if (k === 'z' || k === 'y') { e.preventDefault(); undo(k === 'z' && !e.shiftKey); }
+    if (!SCN.active() || sheetOpen()) return;
+    // (Undo: unless the control with the focus uses the key itself, key-focus.js: a slider just dragged doesn't)
+    if ((e.ctrlKey || e.metaKey) && ['z', 'y'].includes(e.key.toLowerCase()) && !e.altKey && !ownsKey(e)) {
+      e.preventDefault(); undo(e.key.toLowerCase() === 'z' && !e.shiftKey);
       return;
     }
+    if (e.target.closest('input, textarea, select')) return;
+    if (e.ctrlKey || e.metaKey) return;
     const command = commandFor(e);
     if (command) { e.preventDefault(); COMMAND[command](); return; }
     const m = MODES.find(([, , k]) => k === e.key.toLowerCase());

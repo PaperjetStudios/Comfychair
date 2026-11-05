@@ -56,7 +56,8 @@ import { openPressMenu, pressMenu, closePressMenu } from './press-menu.js';
 import { gzChip, snap as snapPrefs, snapBar } from './gizmo.js';
 import { onPreviewWindow, onSamplerPreview, previewWindow, samplerPreview, setPreviewWindow, setSamplerPreview } from './run-strip.js';
 import { exitMaxedIn, fullScreen, fullScreenOf } from './layout.js';
-import { registerUndo, syncUndo } from './undo-dock.js';
+import { liveUndoEntry, registerUndo, setLiveSteps, syncUndo } from './undo-dock.js';
+import { undoOrder } from './undo-order.js';
 import { onNavigate, switchTab as navigate } from './navigation.js';
 import { wireTableNav } from './table-nav.js';
 import { droppedFiles, draggingPicture } from './drop-files.js';
@@ -88,6 +89,7 @@ const U = { sel: new Set(), els: new Map(), wired: false, lastTap: null, tabs: n
   wireEls: new Map() /* wire id -> its <g> */, outEls: new Map() /* frame id -> its out port */, inEls: new Map() /* wire id -> its input port */, runEls: new Map() /* frame id -> its run button */, chain: null /* chain:state */ };
 const PENDING = new Map();   // doc id -> results on their way to it (edit:pending { doc, n }, from any kind's edits)
 const H = { past: [], future: [] };   // undo: [{ undo(), redo() }] for this table's moves, resizes and deletes
+const ORDER = undoOrder();   // the table steps made while a frame is live, in their place among its engine's (liveStep)
 const D = {};             // its elements
 
 // ---------------------------------------------------------------------------
@@ -106,7 +108,7 @@ const adapter = {
     U.loaded = key;
     if (same) return reloaded(next);
     unlive(); cancelOp();
-    T = next; U.sel.clear(); H.past = []; H.future = []; U.nudge = null; U.wire = null; U.hover = null; U.mends = 0;
+    T = next; U.sel.clear(); H.past = []; H.future = []; ORDER.clear(); U.nudge = null; U.wire = null; U.hover = null; U.mends = 0;
     U.fitDue = T.view.x === 0 && T.view.y === 0 && T.view.z === 1; U.laid = false;   // (a table never viewed: fit its frames once)
     syncUndo(); D.syncBar?.(); renderAll(); refreshStills();
     fitAll();
@@ -157,7 +159,7 @@ async function dropForeign(r, tab) {
   const hadWires = T.wires;
   T.wires = W.dropFrames(T.wires, ids);
   if (U.wire && !wireById(U.wire)) U.wire = null;
-  H.past = []; H.future = []; syncUndo();   // (an undo step could put them back)
+  H.past = []; H.future = []; ORDER.clear(); syncUndo();   // (an undo step could put them back)
   renderFrames();
   tellWires(wiresTouched(hadWires, T.wires));
   const names = gone.map((f) => `"${f.label || M.KIND_LABEL[f.kind]}"`).join(', ');
@@ -232,7 +234,7 @@ function renderFrames() {
   T.frames.forEach((f, i) => {
     f.key = f.id;   // (what the stack rules know a frame by)
     let el = U.els.get(f.id);
-    if (!el) { el = frameEl(f, { onText: (t) => { f.text = t; changed(); } }); U.els.set(f.id, el); }
+    if (!el) { el = frameEl(f, { onText: (t) => { f.text = t; changed(); }, onTextDone: (was, now) => textStep(f.id, was, now) }); U.els.set(f.id, el); }
     if (D.frames.children[i] !== el) D.frames.insertBefore(el, D.frames.children[i] || null);
     syncFrame(el, f, { selected: U.sel.has(f.id), live: live?.id === f.id, owed: waiting(f), stale: stale.get(f.id) || null });
     el.classList.toggle('frame-hidden', !!f.hidden);
@@ -593,6 +595,7 @@ async function makeFrame(kind, rect, { payload, frame, fresh = null, ok = here()
   T.frames.push(f);
   if (select) U.sel = new Set([f.id]);
   renderFrames(); changed();
+  recordAdd([f]);
   return f;
 }
 // a frame of 1 MP, square, in the middle of the view (a sound frame is a strip)
@@ -713,7 +716,7 @@ export function unlive() {
   const detail = { frame: f, root, wait: [] };
   dispatchEvent(new CustomEvent('table:unlive', { detail }));
   U.leaving = Promise.allSettled([U.leaving, ...detail.wait]).then(() => {});
-  setLive(null);
+  setLive(null); ORDER.clear();   // (the table's steps made meanwhile stay on its list, in their order)
   root?.remove();
   D.stage?.classList.remove('table-live');
   if (U.before) { setView(U.before, { save: false }); U.before = null; }
@@ -747,12 +750,26 @@ async function moveVfxDocs() {
 // whose document couldn't be trashed comes back; Undo brings back the ones whose document could be restored, into their
 // own table (the one open, or saved to it on the server when another is open by then).
 async function deleteFrames(ids) {
+  const d = await takeOff(T.frames.filter((f) => ids.has(f.id) && !f.locked));
+  if (!d) return;
+  const { trashed, back, take, tid } = d;
+  if (!trashed().length) return;
+  const entry = { undo: back, redo: take };
+  record(entry);
+  undoToast(trashed().length === 1 ? `Deleted "${trashed()[0].label}"` : `Deleted ${trashed().length} frames`, () => {
+    if (H.past.at(-1) === entry && U.tabs?.active?.id === tid) return undo();   // (the same step as Ctrl+Z: it can be redone)
+    if (!byId(trashed()[0].id)) back();
+  });
+}
+// The frames off the table as Delete takes them (their documents to the trash, their wires gone, a group they emptied
+// kept for coming back): { take, back, trashed(), tid } once taken, null when nothing was. back() brings back the ones
+// whose document could be restored, into their own table (the one open, or saved to it on the server when another is open by then).
+async function takeOff(gone) {
   const ok = here(), tid = U.tabs?.active?.id;
-  const gone = T.frames.filter((f) => ids.has(f.id) && !f.locked);
-  if (!gone.length) return;
+  if (!gone.length) return null;
   if (gone.some((f) => f.id === liveFrame()?.id)) unlive();
   await U.leaving;   // (a live frame's last save lands before its document is trashed)
-  if (!ok()) return;
+  if (!ok()) return null;
   const at = new Map(gone.map((f) => [f.id, T.frames.indexOf(f)])), hadGroups = T.groups.map((g) => ({ ...g }));
   let hadWires = T.wires;   // (the wires as they were before the frames went, to put theirs back in their places)
   const wiresBack = (list) => {
@@ -817,13 +834,33 @@ async function deleteFrames(ids) {
     } catch (e) { toast(`Couldn't put the frames back on their table: ${e.message}`, true); }
   };
   await take();
-  if (!trashed.length) return;
-  const entry = { undo: back, redo: take };
-  record(entry);
-  undoToast(trashed.length === 1 ? `Deleted "${trashed[0].label}"` : `Deleted ${trashed.length} frames`, () => {
-    if (H.past.at(-1) === entry && U.tabs?.active?.id === tid) return undo();   // (the same step as Ctrl+Z: it can be redone)
-    if (!byId(trashed[0].id)) back();
+  return { take, back, trashed: () => trashed, tid };
+}
+// A frame just made (New frame, Quick start, a drop, Send to table, a result frame, Duplicate) as one undo step: Undo takes
+// it off as Delete does (its document to the trash, where it still holds the runs it uses: storage.py), Redo brings it back.
+// A frame still waiting for a result stays, with a toast: the run on its way lands in its document.
+function recordAdd(made) {
+  if (!made.length) return;
+  const ids = made.map((f) => f.id);
+  let d = null;
+  record({
+    adds: new Set(ids),
+    async undo() {
+      const list = ids.map(byId).filter(Boolean);
+      if (!list.length) return;
+      const owed = owedCounts(), busy = list.find((f) => (f.kind === 'image' && owed.get(f.doc)) || PENDING.get(f.doc));
+      if (busy) { toast(`"${busy.label}" is still waiting for a result: undo once it has landed`, true); return false; }
+      d = await takeOff(list);
+    },
+    async redo() { if (d) await d.back(); d = null; },
   });
+}
+// frames gone without a step (removeFrames): the steps that made them go too
+function forgetAdds(ids) {
+  const keep = (e) => !e.adds || ![...e.adds].some((id) => ids.has(id));
+  for (const e of [...H.past, ...H.future]) if (!keep(e)) ORDER.drop(e);
+  H.past = H.past.filter(keep); H.future = H.future.filter(keep);
+  syncUndo();
 }
 // Frames made for a result that never came (an Edit run that failed before anything was queued): off the table, their
 // documents to the trash, no undo step and no toast
@@ -831,6 +868,7 @@ export async function removeFrames(ids) {
   const drop = new Set(ids);
   const gone = T.frames.filter((f) => drop.has(f.id));
   if (!gone.length) return;
+  forgetAdds(drop);   // (the step that made them has nothing to undo now)
   if (gone.some((f) => f.id === liveFrame()?.id)) { unlive(); await U.leaving; }
   T.frames = ST.normalize(T.frames.filter((f) => !drop.has(f.id)), T.groups);
   for (const f of gone) U.sel.delete(f.id);
@@ -849,8 +887,9 @@ export async function removeFrames(ids) {
 // ---------------------------------------------------------------------------
 function record(entry) {
   H.past.push(entry);
-  if (H.past.length > 200) H.past.shift();
+  if (H.past.length > 200) ORDER.drop(H.past.shift());
   H.future = [];
+  if (isLive()) queueMicrotask(() => { if (H.past.includes(entry)) ORDER.made(entry, liveSig()); syncUndo(); });   // (after the step's own effects: wireStep records first)
   syncUndo();
 }
 // where frames sit and how big they are, to go back to (only the frames still on the table)
@@ -873,8 +912,45 @@ function recordGeom(before, after) {
   if (sameGeom(before, after)) return;
   record({ undo: () => applyGeom(before), redo: () => applyGeom(after) });
 }
-async function undo() { const e = H.past.pop(); if (!e) return; H.future.push(e); syncUndo(); await e.undo(); syncUndo(); }
-async function redo() { const e = H.future.pop(); if (!e) return; H.past.push(e); syncUndo(); await e.redo(); syncUndo(); }
+// (a step whose undo says false refused: it stays where it was)
+async function undo() {
+  const e = H.past.pop(); if (!e) return null; H.future.push(e); syncUndo();
+  const ok = (await e.undo()) !== false;
+  if (!ok && H.future.at(-1) === e) { H.future.pop(); H.past.push(e); }
+  syncUndo(); return ok;
+}
+async function redo() {
+  const e = H.future.pop(); if (!e) return null; H.past.push(e); syncUndo();
+  const ok = (await e.redo()) !== false;
+  if (!ok && H.past.at(-1) === e) { H.past.pop(); H.future.push(e); }
+  syncUndo(); return ok;
+}
+// While a frame is live, Ctrl+Z and the undo pair reach its engine's history; a table step made meanwhile (the Output tab, the
+// Make pane's pin, wires and fields, a result frame) goes in its place among the engine's steps (undo-order.js): it goes
+// first when the engine is where it was just after it. True when a table step went.
+const liveSig = () => { try { return liveUndoEntry()?.sig?.() ?? null; } catch { return null; } };
+function liveStep(dir) {
+  if (!isLive()) return false;
+  const undoing = dir === 'undo', mine = undoing ? ORDER.top() : ORDER.next();
+  if (!mine) return false;
+  if (mine !== (undoing ? H.past : H.future).at(-1)) { ORDER.drop(mine); return liveStep(dir); }   // (no longer the table's next: forgotten)
+  const eng = liveUndoEntry(), [cu, cr] = eng?.can?.() ?? [true, true], sig = liveSig();
+  if ((undoing ? ORDER.undoBy(sig, cu) : ORDER.redoBy(sig, cr)) !== 'table') return false;
+  const m = undoing ? ORDER.undone() : ORDER.redone();
+  (undoing ? undo() : redo()).then((ok) => {
+    if (ok === false) { if (undoing) ORDER.redone(); else ORDER.undone(); } else m.sig = liveSig();
+    syncUndo();
+  });
+  return true;
+}
+// (on window, before the engines' own keys: paint.js and the 3D view take Ctrl+Z on document)
+function onLiveUndoKey(e) {
+  if (!isLive() || !onTable() || e.defaultPrevented || e.altKey || !(e.ctrlKey || e.metaKey) || ownsKey(e)) return;
+  const k = e.key.toLowerCase();
+  if (k !== 'z' && k !== 'y') return;
+  if (!liveStep(k === 'y' || e.shiftKey ? 'redo' : 'undo')) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+}
 // table:move, for the story table (its shot order follows where the frames are)
 function tellMoved(frames) {
   if (frames.length) dispatchEvent(new CustomEvent('table:move', { detail: { frames, table: T } }));
@@ -905,6 +981,7 @@ async function duplicateFrames(ids) {
   for (const g of made) if (g.make?.wired) g.make.wired = W.remapWired(g.make.wired, wireIds);   // (its re-pointed fields follow the copied wires)
   U.sel = new Set(made.map((f) => f.id)); U.wire = null; renderFrames(); changed();
   tellWires(copied.flatMap((w) => [w.from, w.to]));
+  recordAdd(made);
 }
 
 // ---------------------------------------------------------------------------
@@ -1614,9 +1691,29 @@ function rowTap(ev, { frame: f = null, group: g = null, members = [] }) {
 }
 // A row's name typed over (a frame's renames its document too; a group's is the group's own)
 // A frame's name changed: its document's follows
+// (one undo step: Undo puts the old name back on both)
 function setName(f, v) {
-  f.label = v; changed();
-  renameDoc(f, v).catch((e) => toast(`Couldn't rename its document: ${e.message}`, true));
+  const id = f.id, was = f.label;
+  const put = (label) => {
+    const g = byId(id);
+    if (!g) return;
+    g.label = label; U.panelSig = ''; renderFrames(); changed();
+    renameDoc(g, label).catch((e) => toast(`Couldn't rename its document: ${e.message}`, true));
+  };
+  put(v);
+  if (was !== v) record({ undo: () => put(was), redo: () => put(v) });
+}
+// A note's text typed from its focus to its blur, as one undo step (while it is typed in, the box's own undo works)
+function textStep(id, was, now) {
+  if (was === now) return;
+  const put = (t) => {
+    const f = byId(id);
+    if (!f) return;
+    f.text = t; changed();
+    const ta = U.els.get(id)?.querySelector('textarea.frame-text');
+    if (ta && ta.value !== t) ta.value = t;
+  };
+  record({ undo: () => put(was), redo: () => put(now) });
 }
 // Name a frame: typed over its label on the table, or in the Frame pane's list when its tile can't be seen
 export function nameFrame(f) {
@@ -1715,9 +1812,7 @@ export function setFramesField(ids, patch) {
 function renameFrame(was, v) {
   const f = byId(was.id);
   if (!f) return;
-  f.label = String(v).trim() || M.KIND_LABEL[f.kind];
-  U.panelSig = ''; renderFrames(); changed();
-  renameDoc(f, f.label).catch((e) => toast(`Couldn't rename its document: ${e.message}`, true));   // (the document bar and pickers show the frame's name)
+  setName(f, String(v).trim() || M.KIND_LABEL[f.kind]);   // (its document's name follows: the document bar and pickers show the frame's name)
 }
 // what the frame's document is made at: an image's canvas (and its megapixels), a video's sequence size and frame rate,
 // a sound's length (read from its saved document)
@@ -1826,6 +1921,8 @@ function wire() {
   D.stage.addEventListener('drop', onDrop);
   pressMenu(D.stage, stageMenu, { ok: (e) => !isLive() && !e.target.closest?.('.max-btn, .pull-tab, .wire-out, .frame-run') });
   document.addEventListener('keydown', onKey);
+  addEventListener('keydown', onLiveUndoKey, true);
+  setLiveSteps({ undo: () => liveStep('undo'), redo: () => liveStep('redo'), can: () => ORDER.can() });
   document.addEventListener('keyup', (e) => { if (e.code === 'Space') { U.space = false; D.stage.classList.remove('panning'); } });
   addEventListener('keydown', onEsc);
   new ResizeObserver(() => placeLive()).observe(D.stage);
