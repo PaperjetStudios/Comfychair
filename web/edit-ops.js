@@ -30,6 +30,8 @@ import { CLIP_FX, loraChoice, restyleLoras, runClipStep } from './clip-effects.j
 import { isLive } from './live.js';
 import { DOC_KIND } from './table-model.js';
 import { OPS, opById, resultLabel } from './edit-rules.js';
+import * as W from './wire-rules.js';
+import { exportGrade } from './adjust.js';
 import { ALPHA, BLANK, CANVAS, FRAME_KEYS, KEY as KEY_SET, NOT_SETUP, REFINE, SAM, boxesFromFind, buildRun, delogoBody, delogoRunBody, effectById, keyBody, matteBody,
   missingInput, needsOf, poseBody } from './vfx-rules.js';
 import { imageNat, imageSize, vfxFields } from './vfx-fields.js';
@@ -539,26 +541,39 @@ const remember = (frame, id, gens) => setFrameOps([frame], id, { results: [...(f
 async function stateOn(o, frame, opts, ctx = {}) {
   const cross = frame.kind !== 'video';   // (a cross-kind op: its picture and sound are the selected frames')
   const e = effectById(o.vfx), st = vfxState('video', o.id, opts, cross ? null : frame);
-  if (cross) await fromSelection(e, st, ctx.frames || [frame]);
+  if (cross) await fromSelection(e, st, ctx.frames || [frame], { target: frame, fresh: ctx.fresh });
   const clip = !cross && needsOf(e).has('source') ? await needClip(frame, ['video']) : null;
   st.source = clip ? { ...bareSource(clip), ...(clip.trim && { trim: clip.trim }), ...(clip.label && { label: clip.label }) } : null;
   if (st.len == null) st.len = Math.min(e.maxLen || 10, Math.max(1, Math.round(clip?.trim?.len || 5)));
   return { e, st };
 }
 
-// a cross-kind op's inputs from the selection: the first image frame's picture (the start image), the first sound frame's
-// first sound (the sound, or the voice for a talking shot)
-async function fromSelection(e, st, frames) {
+// a cross-kind op's inputs: a plugged input of the wanted kind first (the target's wires, on ones, in n order), else the
+// first image frame's picture (the start image), the first sound frame's first sound (the sound, or the voice for a talking
+// shot) from the selection. fresh (an array) collects the uploads this makes: the caller drops them once the run has read
+// them (or failed).
+async function fromSelection(e, st, frames, { target = null, fresh = [] } = {}) {
   const need = needsOf(e);
-  const pic = frames.find((f) => f.kind === 'image' && f.doc);
-  if (pic && [...need].some((n) => n.startsWith('first'))) {
-    const { frameSource } = await import('./frame-source.js');
-    st.first = (await frameSource(pic, { multiple: 1 }))?.name || st.first;
+  const T = await import('./table.js').catch(() => null);
+  const plugged = target && T?.wiresInto ? T.wiresInto(target.id).filter((w) => w.on !== false && w.source) : [];
+  const src = await import('./frame-source.js');
+  if ([...need].some((n) => n.startsWith('first'))) {
+    const w = plugged.find((x) => x.kind === 'image');
+    const pic = w ? w.source : frames.find((f) => f.kind === 'image' && f.doc);
+    if (w && W.isFrameWire(w)) { const name = await src.frameStill(w.source, w.frame); fresh.push(name); st.first = name; }
+    else if (pic) {
+      const got = await src.frameImage(pic, { multiple: 1 });
+      if (got.fresh) fresh.push(got.name);
+      st.first = got.name || st.first;
+    }
   }
-  const snd = frames.find((f) => f.kind === 'sound' && f.doc);
-  if (snd && (need.has('sound') || need.has('line'))) {
-    const c = await needClip(snd, ['audio', 'video']);
-    st.sound = { ...bareSource(c), ...(c.trim && { trim: c.trim }), ...(c.label && { label: c.label }) };
+  if (need.has('sound') || need.has('line')) {
+    const w = plugged.find((x) => x.kind === 'sound') || plugged.find((x) => x.kind === 'video');
+    const snd = w ? w.source : frames.find((f) => f.kind === 'sound' && f.doc);
+    if (snd) {
+      const c = w ? await src.frameAudio(snd) : await needClip(snd, ['audio', 'video']);
+      st.sound = { ...bareSource(c), ...(c.trim && { trim: c.trim }), ...(c.label && { label: c.label }) };
+    }
   }
 }
 
@@ -573,7 +588,20 @@ export async function findBoxes(frame, opts) {
   return boxes;
 }
 
+const dropUploads = (names) => Promise.all(names.map((n) => api(`/api/inputs?name=${encodeURIComponent(n)}`, { method: 'DELETE', busy: false }).catch(() => {})));
+// The pictures a run copied in for itself (fromSelection) go once the run has read them, or at once if it failed to start
 async function runVfx(o, frame, opts, ctx, label) {
+  const fresh = [];
+  let r;
+  try { r = await runVfxWith(o, frame, opts, { ...ctx, fresh }, label); } catch (e) { await dropUploads(fresh); throw e; }
+  if (fresh.length) {
+    const gens = r?.gens || [];
+    if (gens.length) Promise.allSettled(gens.map((g) => waitGen(g.id))).then(() => dropUploads(fresh));
+    else dropUploads(fresh);
+  }
+  return r;
+}
+async function runVfxWith(o, frame, opts, ctx, label) {
   const { e, st } = await stateOn(o, frame, opts, ctx);
   const into = ctx.into, n = Math.max(1, ctx.batch || 1);
   const job = async (url, body, timeout = 900000) => {
@@ -614,20 +642,26 @@ async function runVfx(o, frame, opts, ctx, label) {
 
 // Render: the frame's whole timeline as one clip (the open frame's as it is now: video.js renderLive draws its 3D clips;
 // else its saved document, which can't hold a 3D clip until it is opened), into a new video frame
+// What /api/video/render takes for a saved video document (video.js timelineBody is the open edit's, with its work area and
+// 3D clips drawn). Throws when nothing is on the timeline, or a 3D clip is (it is drawn on the open frame). Pure, so the
+// Make pane's wires can key a cached render on it (make-rules.js renderKey).
+export function renderBody(frame, d) {
+  const p = d?.payload || {}, items = (p.items || []).filter((it) => it.src || it.kind === 'scene');
+  if (!items.length) throw new Error(`${frame.label || 'This frame'} has nothing on its timeline`);
+  if (items.some((it) => it.kind === 'scene')) throw new Error('Its 3D clips are drawn on the open frame: open it, then Render');
+  return { project_id: S.project, tab: { id: frame.doc, name: d.name || frame.label },
+    width: p.size?.[0], height: p.size?.[1], fps: p.fps || null,
+    tracks: (p.tracks || []).map(({ id, kind, hidden, muted }) => ({ id, kind, hidden, muted })),
+    items: items.map((it) => ({ track: it.track, at: it.at, name: it.label, src: it.src, in: it.in, out: it.out ?? it.dur, x: it.x, y: it.y, scale: it.scale,
+      fit: it.fit, rotation: it.rotation || 0, anchor_x: it.anchor?.x, anchor_y: it.anchor?.y, opacity: it.opacity, volume: it.volume, chans: it.chans || null,
+      grade: exportGrade(it.adjust), fade_in: it.fadeIn, fade_out: it.fadeOut })) };
+}
 async function render(frame, ctx, label) {
   let g;
   if (isLive(frame.id) && VID?.videoTabs?.()?.active?.id === frame.doc && VID.renderLive) g = await VID.renderLive();
   else {
     const d = await api(docUrl('video', frame.doc), { busy: false });
-    const p = d?.payload || {}, items = (p.items || []).filter((it) => it.src || it.kind === 'scene');
-    if (!items.length) throw new Error(`${frame.label || 'This frame'} has nothing on its timeline`);
-    if (items.some((it) => it.kind === 'scene')) throw new Error('Its 3D clips are drawn on the open frame: open it, then Render');
-    g = await api('/api/video/render', { method: 'POST', busy: false, body: { project_id: S.project, tab: { id: frame.doc, name: d.name || frame.label },
-      width: p.size?.[0], height: p.size?.[1], fps: p.fps || null,
-      tracks: (p.tracks || []).map(({ id, kind, hidden, muted }) => ({ id, kind, hidden, muted })),
-      items: items.map((it) => ({ track: it.track, at: it.at, name: it.label, src: it.src, in: it.in, out: it.out ?? it.dur, x: it.x, y: it.y, scale: it.scale,
-        fit: it.fit, rotation: it.rotation || 0, anchor_x: it.anchor?.x, anchor_y: it.anchor?.y, opacity: it.opacity, volume: it.volume, chans: it.chans || null,
-        fade_in: it.fadeIn, fade_out: it.fadeOut })) } });
+    g = await api('/api/video/render', { method: 'POST', busy: false, body: renderBody(frame, d) });
   }
   S.history.set(g.id, g);
   return { gens: [g], job: follow([g], ctx.into, ctx, label) };

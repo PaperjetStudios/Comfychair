@@ -8,6 +8,12 @@
 //       the frame is open; else its edit drawn off screen at full size (frame-image.js drawOffscreen) when no image frame
 //       is live; else its saved still (at most 1024 px). Throws when the frame is empty.
 //   framePicture(frame)                   → the same picture as a Blob (null when empty), with its rect: { blob, rect }
+//   frameImage(frame, { multiple })       → { name, fresh }: a wire's picture. A source picture (one plain layer, whole) passes
+//       through as its own input at full size (fresh: false: not a copy, the caller never drops it); else frameSource's copy
+//   frameStill(frame, pick)               → a video frame's picture at 'first' | 'last' | 'playhead' | seconds, as a new input
+//   frameVideo(frame)                     → a video frame as a clip source { generation, index } | { media } (+ trim): one plain
+//       clip passes through with its trim; any other edit is rendered (POST /api/video/render) and kept as frame.render
+//   frameAudio(frame)                     → a sound (or video) frame's sound as a source + trim; a mix is rendered and kept
 //   frameClip(frame)                      → a video (or sound) frame's first clip, by its place on the timeline:
 //       { kind, src, url, label, dur, item, trim: { start, len? } }, or null when it has none
 import { api } from './ui.js';
@@ -16,7 +22,7 @@ import { clipUrl, pngBlob, uploadImage } from './media.js';
 import { isLive } from './live.js';
 import { stillOf } from './table-frames.js';
 import { DOC_KIND } from './table-model.js';
-import { canvasRect } from './make-rules.js';
+import { canvasRect, itemSource, plainPicture, plainSound, plainVideo, renderKey } from './make-rules.js';
 
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
 const docUrl = (kind, id) => `/api/store/${DOC_KIND[kind]}/${id}${qs()}`;
@@ -89,4 +95,127 @@ export async function frameClip(frame) {
   const end = it.out ?? it.dur, start = it.in || 0;
   return { kind: want, src, url: clipUrl(it.src) || it.url || null, label: it.label || null, dur: it.dur || 0, item: it,
     trim: { start, ...(end ? { len: +(end - start).toFixed(4) } : {}) } };
+}
+
+// ---------------------------------------------------------------------------
+// what a wire carries (make-panel.js resolves its wires with these at Run)
+// ---------------------------------------------------------------------------
+const savedDoc = (frame) => api(docUrl(frame.kind, frame.doc), { busy: false }).catch(() => null);
+// the open edit's latest, when this frame is open on the table
+async function flushed(frame) {
+  if (!isLive(frame.id)) return;
+  const mod = frame.kind === 'sound' ? await import('./sound.js') : frame.kind === 'video' ? await import('./video.js') : null;
+  const t = frame.kind === 'sound' ? mod?.soundTabs?.() : mod?.videoTabs?.();
+  if (t?.active?.id === frame.doc) await t.flush?.();
+}
+
+// A picture for a wire. fresh: true is a new input the caller owns (drops after the run, or on a failed run).
+export async function frameImage(frame, { multiple = 16 } = {}) {
+  if (frame?.kind === 'image') {
+    if (frame.doc && !isLive(frame.id)) {
+      const name = plainPicture((await savedDoc(frame))?.payload);
+      if (name) return { name, fresh: false };
+    }
+    return { name: (await frameSource(frame, { multiple })).name, fresh: true };
+  }
+  const url = frame ? stillOf(frame) || frame.preview : null;   // (a 3D frame: the still it shows)
+  if (!url) throw new Error(`${frame?.label || 'That frame'} has no picture yet`);
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${frame.label || 'That frame'}'s picture can't be read`);
+  return { name: (await uploadImage(await r.blob(), { source: 'frame', mp: 0, filename: 'frame.png', multiple })).name, fresh: true };
+}
+
+// ---- the cached render of a whole edit, on the source frame: frame.render = { generation | media, key } ----
+const keepRender = async (frame, render) => {
+  const T = await import('./table.js').catch(() => null);
+  const live = T?.frameById?.(frame.id) || frame;
+  live.render = render;
+  if (live !== frame) frame.render = render;
+  T?.frameChanged?.();
+};
+const generationThere = async (id) => {
+  if (S.history.has(id)) return true;
+  const g = await api(`/api/generations/${id}`, { busy: false }).catch(() => null);
+  if (!g) return false;
+  S.history.set(g.id, g);
+  return true;
+};
+const mediaThere = async (name) => (await api('/api/media', { busy: false }).catch(() => []))?.some?.((m) => m.name === name);
+
+async function renderedEdit(frame, d) {
+  const { renderBody } = await import('./edit-ops.js');
+  const body = renderBody(frame, d), key = renderKey(body), have = frame.render;
+  if (have?.key === key && have.generation != null && await generationThere(have.generation)) return { generation: have.generation, index: 0 };
+  let g = await api('/api/video/render', { method: 'POST', busy: false, timeout: 900000, body });
+  S.history.set(g.id, g);
+  if (g.status !== 'done') {
+    const { waitGen } = await import('./make.js');
+    g = await waitGen(g.id);
+    S.history.set(g.id, g);
+  }
+  await keepRender(frame, { generation: g.id, key });
+  return { generation: g.id, index: 0 };
+}
+
+export async function frameVideo(frame) {
+  if (frame?.kind !== 'video' || !frame.doc) throw new Error(`${frame?.label || 'That frame'} has no clip yet`);
+  await flushed(frame);
+  const d = await savedDoc(frame);
+  if (!d?.payload) throw new Error(`${frame.label || 'That frame'} can't be read`);
+  const it = plainVideo(d.payload);
+  if (it) return { ...itemSource(it), ...(it.label && { label: it.label }) };
+  if (!(d.payload.items || []).some((x) => x.src || x.kind === 'scene')) throw new Error(`${frame.label || 'That frame'} has nothing on its timeline`);
+  return { ...(await renderedEdit(frame, d)), label: frame.label || null };
+}
+
+export async function frameAudio(frame) {
+  if (frame?.kind === 'video') return frameVideo(frame);   // (the server takes a video file as a sound source)
+  if (frame?.kind !== 'sound' || !frame.doc) throw new Error(`${frame?.label || 'That frame'} has no sound yet`);
+  await flushed(frame);
+  const d = await savedDoc(frame);
+  const p = d?.payload;
+  if (!p) throw new Error(`${frame.label || 'That frame'} can't be read`);
+  const it = plainSound(p);
+  if (it) return { ...itemSource(it), ...(it.label && { label: it.label }) };
+  const items = (p.items || []).filter((x) => x.src);
+  if (!items.length) throw new Error(`${frame.label || 'That frame'} has nothing in its mix`);
+  const key = renderKey({ tracks: p.tracks, out: p.out, items }), have = frame.render;
+  if (have?.key === key && have.media && await mediaThere(have.media)) return { media: have.media };
+  const { renderMix } = await import('./sound.js');
+  const m = await renderMix({ tracks: p.tracks, out: p.out }, { name: frame.label || 'mix', items });
+  await keepRender(frame, { media: m.name, key });
+  return { media: m.name };
+}
+
+// A video frame's picture at 'first' | 'last' | 'playhead' | seconds (wire-rules framePick), as a new input. The clip is the
+// frame's plain clip or its rendered edit; the picture comes from media.js grabFrame (a <video> seeked to the time, drawn
+// to a canvas, uploaded), so it works with the frame closed.
+export async function frameStill(frame, pick = 'first') {
+  const src = await frameVideo(frame);
+  const start = src.trim?.start || 0;
+  let url = clipUrl(src);
+  if (!url && src.generation != null) { await generationThere(src.generation); url = clipUrl(src); }
+  let len = src.trim?.len;
+  if (len == null && (pick === 'last' || typeof pick === 'number')) len = Math.max(0, (await durationOf(url)) - start);
+  let t = 0;
+  if (pick === 'last') t = Math.max(0, len - 0.05);
+  else if (pick === 'playhead') {
+    const vid = isLive(frame.id) ? await import('./video.js') : null;
+    t = vid?.videoTabs?.()?.active?.id === frame.doc ? vid.videoTime() : 0;
+  } else if (typeof pick === 'number') t = pick;
+  if (len != null) t = Math.min(t, Math.max(0, len - 0.05));
+  const { grabFrame } = await import('./media.js');
+  return grabFrame({ ...src, url }, { at: start + Math.max(0, t) });
+}
+function durationOf(url) {
+  return new Promise((done) => {
+    if (!url) return done(0);
+    const v = document.createElement('video');
+    const end = (n) => { clearTimeout(timer); v.removeAttribute('src'); v.load(); done(n); };
+    const timer = setTimeout(() => end(0), 8000);
+    v.preload = 'metadata';
+    v.onloadedmetadata = () => end(Number.isFinite(v.duration) ? v.duration : 0);
+    v.onerror = () => end(0);
+    v.src = url;
+  });
 }

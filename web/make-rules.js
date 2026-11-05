@@ -2,6 +2,7 @@
 // and where a result lands, and the panel's own settings (one per frame, frame.make). Pure, so node --test
 // tests/make_panel.test.mjs can check it.
 import { OPS } from './edit-rules.js';
+import { fieldKind, mapToFields } from './wire-rules.js';
 
 // What the panel makes for: nothing (or a note) selected, or the first frame of the selection that isn't a note
 export function makeTarget(frames = []) {
@@ -99,14 +100,15 @@ export function settingsFor(t, p = null) {
   const values = {};
   for (const f of t.fields || []) values[f.key] = clone(validFor(f, ov[f.key]) ? ov[f.key] : f.value);
   const b = same && p.builder ? clone(p.builder) : null;
-  return { tpl: t, values, seedMode: clone(same && p.seedMode) || {}, imageMp: clone(same && p.imageMp) || {}, imageCrop: clone(same && p.imageCrop) || {},
+  const wired = same && p.wired && typeof p.wired === 'object' ? clone(p.wired) : {};
+  return { tpl: t, values, wired, seedMode: clone(same && p.seedMode) || {}, imageMp: clone(same && p.imageMp) || {}, imageCrop: clone(same && p.imageCrop) || {},
     sizeMode: clone(same && p.sizeMode) || {}, loraFolder: clone(same && p.loraFolder) || {},
     pb: b ? { on: false, parts: {}, ...b, subjects: b.subjects?.length ? b.subjects : [{ text: '', pic: null }] } : null };
 }
 export function settingsPayload(st, extra = {}) {
   const t = st.tpl, overrides = {};
   for (const f of t.fields || []) if (f.key in st.values && !eq(st.values[f.key], f.value)) overrides[f.key] = clone(st.values[f.key]);
-  return { ...extra, v: 1, template: t.id, presetId: null, overrides, seedMode: clone(st.seedMode), imageMp: clone(st.imageMp), imageCrop: clone(st.imageCrop),
+  return { ...extra, v: 1, template: t.id, presetId: null, overrides, wired: clone(st.wired || {}), seedMode: clone(st.seedMode), imageMp: clone(st.imageMp), imageCrop: clone(st.imageCrop),
     sizeMode: clone(st.sizeMode), loraFolder: clone(st.loraFolder), builder: st.pb ? clone(st.pb) : null };
 }
 // A template change keeps the words: the prompt and negative prompt carry over to the new template's
@@ -121,3 +123,91 @@ export function carryWords(from, to) {
 
 // Where an image frame's results go on its canvas: the canvas when it has a size, else the frame's own rectangle
 export const canvasRect = (payload, frame) => (payload?.size ? { x: 0, y: 0, w: payload.size.w, h: payload.size.h } : { x: 0, y: 0, w: frame.w, h: frame.h });
+
+// ---- wires into the panel (wire-rules.js): which template field each plugged input fills ----
+// frame.make.wired is { fieldKey: wireId | false } (re-pointed fields; false: the field keeps its own picked value).
+// An image frame's own "this frame" field is never filled by a wire. Returns wire-rules mapToFields' { map, use, spare }.
+export function wireFields(t, kind, inputs, wired = {}) {
+  const own = kind === 'image' ? frameImageField(t) : null;
+  return mapToFields(t?.fields || [], inputs || [], { skip: own ? [own.key] : [], overrides: wired || {} });
+}
+// the fields a wire left to their own value on purpose (wired false), where a plugged input of their kind is waiting
+export function selfPicked(t, kind, inputs, wired = {}) {
+  const own = kind === 'image' ? frameImageField(t) : null;
+  return (t?.fields || []).filter((f) => f.key !== own?.key && wired?.[f.key] === false && (inputs || []).some((w) => w.kind === fieldKind(f)));
+}
+// the inputs a field could be re-pointed to: its kind, not already filling another field
+export function repointable(f, inputs, map) {
+  const k = fieldKind(f), taken = new Set(Object.entries(map || {}).filter(([key]) => key !== f.key).map(([, w]) => w.id));
+  return (inputs || []).filter((w) => w.kind === k && !taken.has(w.id));
+}
+
+// ---- what a wire carries: when a document is one plain source that can pass straight through ----
+const near = (v, to, eps = 1e-6) => v == null || Math.abs(v - to) < eps;
+const noMove = (it) => near(it.x, 0) && near(it.y, 0) && near(it.scale, 1) && near(it.rotation, 0) && near(it.opacity, 1)
+  && !it.flipX && !it.flipY && !(it.anchor && (it.anchor.x || it.anchor.y)) && (it.fit == null || it.fit === 'fit');
+const noFx = (it) => !it.adjust && !it.chans && !it.fill && !it.mask && !it.scene;
+// An image document that is one plain picture: one layer, whole (no crop), unmoved, no mask, adjust or fill, nothing else
+// on the canvas. Returns that layer's input name, else null.
+export function plainPicture(payload) {
+  const ls = payload?.layers;
+  if (!Array.isArray(ls) || ls.length !== 1) return null;
+  const l = ls[0];
+  const c = l.crop || { x: 0, y: 0, w: 1, h: 1 };
+  if (!l.name || l.hidden || l.mask || l.draft || l.maskOf || l.clip || l.canvas || l.fill || l.adjust || l.chans || l.group) return null;
+  if (!(near(c.x, 0) && near(c.y, 0) && near(c.w, 1) && near(c.h, 1))) return null;
+  if (!near(l.scale, 1) || !near(l.rotation, 0) || !near(l.opacity, 1) || l.flipX || l.flipY || (l.blend && l.blend !== 'normal')) return null;
+  if (payload.items?.length || payload.anim) return null;
+  return l.name;
+}
+const cleanTracks = (p, ids) => !(p.tracks || []).some((t) => ids.has(t.id) && (t.hidden || t.muted || t.solo));
+const unity = (v) => v == null || near(v, 1);
+const noFade = (it) => !(it.fadeIn > 0) && !(it.fadeOut > 0);
+// A video document that is one plain clip: a single video item, at 0, default transform, no effects, fades or work area.
+// Returns the item, else null.
+export function plainVideo(payload) {
+  const its = (payload?.items || []).filter((it) => it && (it.src || it.kind === 'scene'));
+  if (its.length !== 1 || payload.range) return null;
+  const it = its[0];
+  if (it.kind !== 'video' || !it.src || !near(it.at, 0) || !noMove(it) || !noFx(it) || !noFade(it) || !unity(it.volume)) return null;
+  return cleanTracks(payload, new Set([it.track])) ? it : null;
+}
+// A sound document that is one plain sound: a single audio item, at 0, level 1, centred, no fades or effects. Returns the item, else null.
+export function plainSound(payload) {
+  const its = (payload?.items || []).filter((it) => it && it.src);
+  if (its.length !== 1 || payload.range) return null;
+  const it = its[0];
+  if (it.kind !== 'audio' || !near(it.at, 0) || !unity(it.volume) || !near(it.pan, 0) || it.chans || !noFade(it)) return null;
+  const out = payload.out || {};
+  if (out.normalize || !unity(out.gain)) return null;
+  return cleanTracks(payload, new Set([it.track])) ? it : null;
+}
+// The source and cut of a plain item, as a run takes it: { generation, index } | { media }, and trim { start, len? }
+export function itemSource(it) {
+  const s = it.src || {};
+  const src = s.generation != null ? { generation: s.generation, index: s.index || 0 } : s.media ? { media: s.media } : { ...s };
+  const end = it.out ?? it.dur, start = it.in || 0;
+  return { ...src, ...((start > 0 || end) && { trim: { start, ...(end ? { len: +(end - start).toFixed(4) } : {}) } }) };
+}
+
+// ---- the cached render of a whole edit: a key from the render body, so an unchanged edit is not rendered twice ----
+// Stable text for a value: object keys in order, undefined left out (so the same body always gives the same text)
+export function stableJson(v) {
+  if (v === undefined) return 'null';
+  if (v === null || typeof v !== 'object') return JSON.stringify(v);
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(',')}]`;
+  return `{${Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${stableJson(v[k])}`).join(',')}}`;
+}
+// A 53-bit hash (cyrb53) of a body as 14 hex digits; project_id and the tab's name don't change what is drawn
+export function renderKey(body) {
+  const { project_id, tab, name, ...rest } = body || {};
+  const s = stableJson(rest);
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761); h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, '0');
+}

@@ -1,16 +1,22 @@
 import {
-  $, h, store, uid, api, busy, toast, undoToast, clamp, openSheet, closeSheet, button, runBar, iconBtn, linkBtn, actions, fileButton, seg,
-  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, toggle, textArea, pctFmt, colorField, sizeSelect, canvasFont, icon,
+  $, h, store, uid, api, busy, toast, clamp, openSheet, closeSheet, nameSheet, button, runBar, iconBtn, linkBtn, actions, seg,
+  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, toggle, textArea, pctFmt, colorField, sizeSelect, icon,
 } from './ui.js';
 import { S, fmtT, inputUrl, onServer, thumbUrl } from './core.js';
-import { cardMedia, genLabel, openImagePicker, pickerSheet, projectOutputs, registerPickerSource, soundFrameFrom, soundToSoundTab, uploadImage, uploadMedia, withMediaDelete } from './media.js';
+import { cardMedia, genLabel, pickerSheet, projectOutputs, registerPickerSource, soundFrameFrom, soundToSoundTab, uploadImage, uploadMedia } from './media.js';
+import { openSourcePicker } from './source-picker.js';
+import { itemOf } from './source-rules.js';
 import { draggingPicture, dropKind, droppedFiles } from './drop-files.js';
 import { openGeneration } from './run.js';
 import { TabSet } from './tabs.js';
 import { clipKeyTimes, clipKeys, clipSoundFields, durationOf, keyJumps, timeline, wavePeaks } from './timeline.js';
 import { fmtTime, playKeys, transport } from './playback.js';
 import { workArea } from './workarea.js';
-import { cutItems, playFrom, playSeek, tickT } from './workarea-math.js';
+import { cutItems, playFrom, playSeek, setIn, setOut, snapT, tickT } from './workarea-math.js';
+import { exportTracks, renameMarker } from './timeline-rules.js';
+import { keysHelp as timelineKeys } from './timeline-keys.js';
+import { history } from './undo-history.js';
+import { registerUndo, syncUndo } from './undo-dock.js';
 import { refreshKeyed } from './keyed.js';
 import * as COMP from './scene-comp.js';
 import { fullScreen } from './layout.js';
@@ -38,7 +44,7 @@ const LANE_H = 52;
 const MIN_LEN = 0.1;
 const V = {
   tracks: [], items: [], size: null, fps: 0, range: null, pps: store.get('deck.video.pps', 40),   // pps: timeline zoom, pixels per second (this device only)
-  t: 0, playing: false, clock: 0, loop: store.get('deck.video.loop', false), sel: null,
+  t: 0, playing: false, clock: 0, loop: store.get('deck.video.loop', false), sel: null, multi: [], markers: [],   // sel: the primary pick, multi: the others (timeline.js)
   els: new Map(), posters: new Map(), waves: new Map(),
 };
 
@@ -79,20 +85,51 @@ function legacyTimeline() {
 
 // ---- tabs: each video edit is a document in the project folder ----
 const migrateEdit = (p) => ({ tracks: p.tracks?.length ? p.tracks : defaultTracks(), items: p.items || [], size: p.size || null, fps: p.fps || 0,
-  range: p.range || null });   // range: the work area (workarea.js), seconds
+  range: p.range || null, markers: p.markers || [] });   // range: the work area (workarea.js), seconds; markers [{ t, label }]
 let tabs = null;
 let vtp = null;   // the transport bar (playback.js)
 const ensureTabs = () => tabs.ready();
 
-// the timeline changed: save it (the tab flushes ~1 s later, or at once on Export / leaving)
-function persistTimeline() { tabs?.changed(); }
+// the timeline changed: save it (the tab flushes ~1 s later, or at once on Export / leaving) and make it an undo step
+function persistTimeline() { tabs?.changed(); HIST.mark(); syncUndo(); }
+
+// ---- undo / redo: snapshots of the edit (undo-history.js), marked at persistTimeline. A step put back writes onto the
+// clips that are still there (the handles, effects and inspector hold them), then redraws and saves without a new step.
+// System writes (a clip's measured length, a 3D scene that changed, an effect render's progress) go through HIST.hold.
+const HIST = history({
+  snap: () => ({ tracks: V.tracks, items: V.items, markers: V.markers, size: V.size, fps: V.fps, range: V.range }),
+  apply: applySnap });
+let histDoc;   // the edit HIST is about (a reload of the same edit keeps its steps)
+function applySnap(s) {
+  const old = new Map(V.items.map((it) => [it.id, it]));
+  V.items = (s.items || []).map((ni) => {
+    const it = old.get(ni.id);
+    if (!it) { if (ni.fx?.busy && !FXRUN.n) ni.fx.busy = null; return ni; }
+    const busy = it.fx?.busy || null;   // (a render going on stays shown, whatever the step had)
+    for (const k of Object.keys(it)) if (!(k in ni)) delete it[k];
+    Object.assign(it, ni);
+    if (it.fx) it.fx.busy = busy;
+    return it;
+  });
+  Object.assign(V, { tracks: s.tracks, markers: s.markers || [], size: s.size || null, fps: s.fps || 0, range: s.range || null });
+  const has = (id) => V.items.some((i) => i.id === id);
+  if (!has(V.sel)) V.sel = null;
+  V.multi = (V.multi || []).filter(has);
+  WA.sync(); tabs?.changed();
+  renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw();
+}
+function undoEdit() { G.settling?.w.finish(); if (HIST.undo()) syncUndo(); }
+function redoEdit() { G.settling?.w.finish(); if (HIST.redo()) syncUndo(); }
 
 // the timeline itself (timeline.js, shared with the Sound tab): a sound clip only goes on an audio track, a picture on a video track
 const TL = timeline(V, { el: () => VD.timeline, headW: HEAD_W, minLen: MIN_LEN, zoom: [4, 400], ppsKey: 'deck.video.pps',
   pause: () => vidPause(), seek: (t) => vidSeek(t), showTime: () => { vtp?.update(); refreshKeyed(VD.panel); },
   changed: () => timelineChanged(), dragged: () => { renderTimeline(); syncMedia(); requestDraw(); }, rendered: () => renderTimeline(),
-  selected: () => renderVideoPanel(), deselected: () => { renderTimeline(); renderVideoPanel(); },
-  canDrop: (it, tr) => (tr.kind === 'audio') === (it.kind === 'audio'), tabs: () => tabs, area: () => WA });
+  placed: () => { syncMedia(); requestDraw(); },   // (a drag frame: timeline.js restyled the dragged clips itself)
+  selected: () => { renderVideoPanel(); requestDraw(); }, deselected: () => { renderTimeline(); renderVideoPanel(); requestDraw(); },
+  canDrop: (it, tr) => (tr.kind === 'audio') === (it.kind === 'audio'), tabs: () => tabs, area: () => WA,
+  fps: () => fpsNow(), tc: (t) => tc(t), undo: () => undoEdit(), redo: () => redoEdit(),
+  toolChanged: (t) => VD.timeline?.setAttribute('data-tool', t), menuAction: (id, ctx) => menuAction(id, ctx) });
 const { len: itLen, end: itEnd, seqEnd, selItem, xfades, updatePlayhead } = TL;
 const fadeGain = (it, t, audio) => TL.fadeGain(it, t, audio);   // pictures only fade in over an overlap (videoedit._overlaps)
 const trackOf = (it) => V.tracks.find((t) => t.id === it.track);
@@ -139,8 +176,8 @@ function rangeClip() {
 
 // ---- animated properties (timeline.js clipKeys): a clip's keys are in its own source time, on the sequence's frames ----
 const PROPS = { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, volume: 1 };   // what an unset property is
-const K = clipKeys(TL, V, { fps: fpsNow, base: PROPS, pause: () => vidPause(), seek: (t) => vidSeek(t), onKeys: () => timelineChanged(),
-  live: { onInput: () => { renderTimeline(); syncMedia(); requestDraw(); }, onChange: () => persistTimeline() } });
+const K = clipKeys(TL, V, { fps: fpsNow, base: PROPS, pause: () => vidPause(), seek: (t) => vidSeek(t), onKeys: () => panelChanged(),
+  live: { onInput: () => panelInput(), onChange: () => panelChange() } });   // (its sliders are the inspector's: they edit every picked clip)
 const { prop, setProp } = K;
 
 // ---- playback: one media element per clip, kept in step with the timeline clock ----
@@ -213,7 +250,7 @@ function gotDuration(it, d) {
   if (!isFinite(d) || !d || Math.abs(it.dur - d) < 0.01) return;
   it.dur = d;
   if (it.out == null || it.out > d) it.out = d;
-  persistTimeline(); renderTimeline();
+  HIST.hold(() => persistTimeline()); renderTimeline();   // (measured, not an edit: no undo step)
 }
 
 function pruneEls() {
@@ -392,8 +429,10 @@ function dropDrag() {
   const d = G.drag;
   if (!d) return;
   d.w.cancel();
-  for (const k of Object.keys(d.it)) delete d.it[k];
-  Object.assign(d.it, d.before);
+  for (const x of [d, ...(d.others || [])]) {
+    for (const k of Object.keys(x.it)) delete x.it[k];
+    Object.assign(x.it, x.before);
+  }
   G.drag = null; G.guides = [];
   syncInspector(); persistTimeline(); requestDraw();
 }
@@ -503,12 +542,15 @@ function drawGizmo() {
   }
   for (const gd of G.guides) line(...(gd.axis === 'x' ? [scr(v, [gd.v, 0]), scr(v, [gd.v, v.H])] : [scr(v, [0, gd.v]), scr(v, [v.W, gd.v])]), '#ff4dd2', 1.5);
   const it = selItem();
-  if (!it || !isVisual(it) || V.playing) return;
-  if (!inRange(it)) {
-    ctx.fillStyle = '#000a'; ctx.fillRect(v.ox, v.oy + v.H * v.k - 26, 260, 22);
-    ctx.fillStyle = '#fff'; ctx.font = canvasFont(12); ctx.fillText('Move the playhead over the clip for handles', v.ox + 6, v.oy + v.H * v.k - 11);
-    return;
+  if (!it || V.playing) return;
+  for (const o of TL.picked()) {   // the other picks: a dashed outline (a drag on any of them moves them all)
+    const og = o !== it && isVisual(o) && inRange(o) && geom(o);
+    if (!og) continue;
+    const cs = CORNERS.map(([cx, cy]) => scr(v, cornerAt(og, cx, cy)));
+    ctx.beginPath(); cs.forEach((p, i) => (i ? ctx.lineTo(...p) : ctx.moveTo(...p))); ctx.closePath();
+    ctx.setLineDash([6, 4]); ctx.strokeStyle = COL; ctx.lineWidth = 1.5; ctx.stroke(); ctx.setLineDash([]);
   }
+  if (!isVisual(it) || !inRange(it)) return;   // (the handles show while the playhead is over the clip)
   const g = geom(it);
   if (!g) return;
   const q = handlePts(g, v), act = G.drag?.hit || G.settling?.hit, on = (k) => (act || G.hover) === k;
@@ -533,6 +575,7 @@ function drawGizmo() {
 function syncInspector() {
   const box = VD.xform, it = selItem();
   if (box && it && isVisual(it)) box.replaceChildren(...xformFields(it));
+  fanSync();   // (the handles moved it, and the others with it: nothing for the inspector to copy)
 }
 
 // move the anchor to frame point `to` (or by sliders) without the picture moving: the anchor's spot
@@ -592,8 +635,12 @@ function gizmoDown(e) {
       if (e.pointerType !== 'touch' && e.button === 0) panStart(e);
       return;
     }
-    V.sel = it.id; hit = 'move';
-    renderTimeline(); renderVideoPanel();
+    // as on the timeline (timeline.js pick): alone, Shift a range, Ctrl / Meta in or out; a picked clip drags the set
+    if (e.shiftKey || e.ctrlKey || e.metaKey) TL.pick(it, e);
+    else if (!TL.isSel(it)) TL.pick(it);
+    requestDraw();
+    if (!TL.isSel(it)) return;
+    hit = 'move';
   }
   e.preventDefault();
   try { G.cv.setPointerCapture(e.pointerId); } catch { /* pointer gone */ }
@@ -606,12 +653,18 @@ function gizmoStart(it, hit, e, sx, sy) {
   const kind = hit === 'move' ? 'move' : hit === 'rotate' ? 'rotate' : hit === 'anchor' ? 'anchor' : 'scale';
   const o = { scale: prop(it, 'scale') || 1, rot: prop(it, 'rotation') };
   const P = scr(v, [g.px, g.py]), d = { id: e.pointerId, it, before: structuredClone(it), hit, kind, g, o, sx, sy, P, d0: Math.max(Math.hypot(sx - P[0], sy - P[1]), 14), acc: 0, last: Math.atan2(sy - P[1], sx - P[0]) };
+  // a move takes the other picked pictures along by the same amount
+  d.others = kind === 'move' ? TL.picked().filter((x) => x !== it && isVisual(x)).map((x) => ({ it: x, before: structuredClone(x), x0: prop(x, 'x'), y0: prop(x, 'y') })) : [];
   const chans = {
     move: { px: [g.px, WEIGHT.move], py: [g.py, WEIGHT.move] }, anchor: { px: [g.px, WEIGHT.anchor], py: [g.py, WEIGHT.anchor] },
     scale: { r: [1, WEIGHT.scale] }, rotate: { a: [o.rot, WEIGHT.rotate] },
   }[kind];
   d.w = new Weight(chans, (val) => {   // each frame: the springs' values into the clip
-    if (kind === 'move') { setProp(it, 'x', +((val.px - g.W / 2) / g.W).toFixed(5)); setProp(it, 'y', +((val.py - g.H / 2) / g.H).toFixed(5)); }
+    if (kind === 'move') {
+      setProp(it, 'x', +((val.px - g.W / 2) / g.W).toFixed(5)); setProp(it, 'y', +((val.py - g.H / 2) / g.H).toFixed(5));
+      const dx = (val.px - g.px) / g.W, dy = (val.py - g.py) / g.H;
+      for (const x of d.others) { setProp(x.it, 'x', +(x.x0 + dx).toFixed(5)); setProp(x.it, 'y', +(x.y0 + dy).toFixed(5)); }
+    }
     else if (kind === 'anchor') pinAnchor(it, g, val.px, val.py);
     else if (kind === 'scale') setProp(it, 'scale', +clamp(o.scale * val.r, 0.02, 20).toFixed(4));
     else setProp(it, 'rotation', +normDeg(val.a).toFixed(2));   // (a key holds every value; the plain one is just a number)
@@ -801,7 +854,7 @@ function clipEl(it) {
   const fi = Math.max(it.fadeIn || 0, xin);
   const bg = it.kind === 'video' ? posterFor(it) : it.kind === 'image' ? it.thumb || it.url : null;
   const gone = it.kind === 'scene' && COMP.sceneOf(it.src.scene)?.state === 'missing';
-  return h('div', { class: `tl-clip ${it.kind}` + (V.sel === it.id ? ' sel' : '') + (gone ? ' gone' : '') + (it.fx?.busy ? ' fx-busy-clip' : ''), 'data-id': it.id,
+  return h('div', { class: `tl-clip ${it.kind}` + (TL.isSel(it) ? ' sel' : '') + (gone ? ' gone' : '') + (it.fx?.busy ? ' fx-busy-clip' : ''), 'data-id': it.id,
     title: gone ? 'This 3D scene was deleted' : null,
     style: `left:${it.at * V.pps}px;width:${Math.max(6, itLen(it) * V.pps)}px` + (bg ? `;background-image:url("${bg}")` : '') },
     it.kind === 'audio' ? h('canvas', { class: 'wave' }) : null,
@@ -815,15 +868,15 @@ function clipEl(it) {
 
 function trackHead(tr) {
   const removable = tracksOf(tr.kind).length > 1 && !V.items.some((i) => i.track === tr.id);
-  const tog = (key, on, off, title) => h('button', { type: 'button', class: 'tl-tog' + (tr[key] ? ' off' : ''), title,
-    onclick: () => { tr[key] = !tr[key]; timelineChanged(); } }, tr[key] ? off : on);
+  const tog = (key, on, off, title) => h('button', { type: 'button', class: 'tl-tog' + (tr[key] ? ' off' : ''), title, 'aria-label': title,
+    'aria-pressed': String(!!tr[key]), onclick: () => { tr[key] = !tr[key]; timelineChanged(); } }, icon(tr[key] ? off : on));
   return h('div', { class: 'tl-head' },
     h('b', {}, trackName(tr)),
     h('div', { class: 'tl-head-btns' },
-      tr.kind === 'video' ? tog('hidden', '👁', '◌', 'Show / hide this track') : null,
-      tog('muted', '🔊', '🔇', 'Mute / unmute this track'),
-      removable ? h('button', { type: 'button', class: 'tl-tog', title: 'Remove this empty track',
-        onclick: () => { V.tracks = V.tracks.filter((t) => t !== tr); timelineChanged(); } }, '✕') : null));
+      tr.kind === 'video' ? tog('hidden', 'eye', 'eyeoff', 'Show / hide this track') : null,
+      tog('muted', 'sound', 'mute', 'Mute / unmute this track'),
+      removable ? h('button', { type: 'button', class: 'tl-tog', title: 'Remove this empty track', 'aria-label': 'Remove this empty track',
+        onclick: () => { V.tracks = V.tracks.filter((t) => t !== tr); timelineChanged(); } }, icon('close')) : null));
 }
 
 function addTrack(kind) {
@@ -866,40 +919,64 @@ export async function addToTimeline(media, place = null) {
   const lane = place?.track && V.tracks.find((t) => t.id === place.track && t.kind === want);
   const it = newItem(media, lane ? lane.id : targetTrack(media.kind));
   if (media.kind === 'image' && media.len > 0) it.out = Math.max(MIN_LEN, media.len);   // (a storyboard shot's length)
+  if (media.trim && media.kind !== 'image') {   // (a table frame's clip: the part its timeline used)
+    it.in = Math.max(0, media.trim.start || 0);
+    if (media.trim.len > 0) it.out = it.dur ? Math.min(it.dur, it.in + media.trim.len) : it.in + media.trim.len;
+  }
   it.at = lane && place.at != null ? Math.max(0, place.at) : TL.trackEnd(it.track);
-  V.items.push(it); V.sel = it.id;
+  V.items.push(it); V.sel = it.id; V.multi = [];
   timelineChanged();
   return it;
 }
 // several clips, in order, on the timeline (Story's Shots to video, and the 3D tab's Each shot)
-export async function layOnTimeline(list) {
+export async function layOnTimeline(list, { land = addToTimeline } = {}) {
   const made = [];
-  for (const media of list) made.push(await addToTimeline(media));
+  for (const media of list) made.push(await land(media));
   return made;
 }
 
-// A card that adds its clip to the timeline on every tap (the sheet stays open)
-const addCard = (o, label, media) => mediaCard(cardMedia(o), label, async (c) => {
-  c.classList.add('picked');
-  await addToTimeline(media);
-  toast('Added');
-}, { badge: o.kind === 'video' ? '▶' : null });
-
-// a piece of a link (YouTube, Reddit…) or a big file, cut into the media library (clipimport.js), straight onto the timeline
-const importLink = () => import('./clipimport.js').then((m) => m.openClipImport({ onSaved: async (e) => {
-  await addToTimeline({ kind: e.kind, src: { media: e.name }, url: e.url, label: e.label });
-  toast('Added');
-} }));
-function addFromHistory() {
-  pickerSheet('Add from this project', [
-    help('Tap to add in order. Videos and images go on the selected video track, sound on the audio track.', 'grow'),
-    button('From a link or big file…', importLink),
-    button('Done', closeSheet)], async () => {
-    const items = await projectOutputs(['video', 'image', 'audio']);
-    return items.length ? items.map(({ g, o, i }) => addCard(o, genLabel(g),
-      { kind: o.kind, src: { generation: g.id, index: i }, url: o.url, label: genLabel(g), dur: o.duration || 0 }))
-      : placeholder('Nothing generated in this project yet.');
-  });
+// A source (source-picker.js item src, or a Shelf drag's payload) as the media addToTimeline takes: { input } | { generation,
+// index } | { media } | { frame } (a table image frame: its picture is made an input first, `fresh`, deleted if it doesn't land).
+// kind / label / trim: what the picker knows of it. null: nothing a timeline can hold.
+async function mediaOfSource(src, { kind = null, label = null, trim = null } = {}) {
+  let m = null;
+  if (!src || typeof src !== 'object') return null;
+  if (src.frame != null) {
+    const f = ((await import('./table.js')).tableFrames() || []).find((x) => x.id === src.frame);
+    if (!f) throw new Error('That frame is no longer on the table');
+    const s = await (await import('./frame-source.js')).frameSource(f);
+    m = { kind: 'image', src: { input: s.name }, url: inputUrl(s.name), thumb: thumbUrl(s.name, 160), label: label || f.label || s.name.split('/').pop(), fresh: s.name };
+  } else if (src.input) {
+    m = { kind: 'image', src: { input: src.input }, url: inputUrl(src.input), thumb: thumbUrl(src.input, 160), label: label || src.input.split('/').pop() };
+  } else if (src.generation != null) {
+    const index = src.index || 0, g = S.history.get(src.generation) || await api(`/api/generations/${src.generation}`, { busy: false });
+    const o = g?.outputs?.[index];
+    if (!o) throw new Error(`Run #${src.generation} has nothing to add`);
+    const k = o.kind === 'audio' || o.kind === 'video' ? o.kind : 'image';
+    m = { kind: k, src: { generation: g.id, index }, url: o.url, label: label || genLabel(g), dur: o.duration || 0, thumb: k === 'image' ? o.url : null };
+  } else if (src.media) {
+    const k = kind || src.kind || itemOf({ media: src.media })?.kind || 'video', url = src.url || `/files/media/${encodeURIComponent(src.media)}`;
+    m = { kind: k === 'audio' || k === 'image' ? k : 'video', src: { media: src.media }, url, thumb: k === 'image' ? url : null,
+      label: label || src.label || src.media.split('_').slice(1).join('_') || src.media };
+  }
+  if (m && trim && m.kind !== 'image') m.trim = trim;
+  return m;
+}
+// media on the timeline (place: addToTimeline's); a picture made for it goes again when it can't land
+async function landSource(m, place = null) {
+  try { return await addToTimeline(m, place); } catch (e) {
+    if (m.fresh) (await import('./table-frames.js')).dropInput(m.fresh);
+    throw e;
+  }
+}
+// + Add: pictures, clips and sounds from anywhere (source-picker.js), ticked in order, each on the track it goes on
+function addSources() {
+  openSourcePicker({ kinds: ['video', 'image', 'audio'], want: 'any', multi: true, title: 'Add to the timeline', mpKey: 'video-add',
+    onPick: async (item) => {
+      const m = await mediaOfSource(item.src, { kind: item.kind, label: item.label, trim: item.trim });
+      if (!m) throw new Error('That can\'t go on a timeline');
+      await layOnTimeline([m], { land: landSource });
+    } });
 }
 
 // a 3D tab as a clip: live-linked (scene-comp.js), not baked; its length is the scene's
@@ -936,43 +1013,48 @@ function sceneChanged(id) {
     if (d.name && d.name !== it.label) { it.label = d.name; saved = true; }
     if (!it.nat || it.nat[0] !== d.nat[0] || it.nat[1] !== d.nat[1]) { it.nat = d.nat; saved = true; }
   }
-  if (saved) persistTimeline();
+  if (saved) HIST.hold(() => persistTimeline());   // (the scene's own change: no undo step here)
   renderTimeline(); if (saved) renderVideoPanel();
   requestDraw();
 }
 
-function addImages() {
-  openImagePicker({ title: 'Add images', multi: true, mp: () => 0, onPick: (name) => addToTimeline({
-    kind: 'image', src: { input: name }, url: inputUrl(name),
-    thumb: thumbUrl(name, 160), label: name.split('/').pop() }) });
-}
-
-function addMediaFiles() {
-  const media = (m) => ({ kind: m.kind, src: { media: m.name }, url: m.url, label: m.label, thumb: m.kind === 'image' ? m.url : null });
-  const reload = pickerSheet('Sound and files', [
-    fileButton('Upload…', async (files) => {
-      for (const f of files) {
-        toast(`Uploading ${f.name}…`);
-        try { await addToTimeline(media(await uploadMedia(f))); }
-        catch (e) { toast('Upload failed: ' + e.message, true); return; }
-      }
-      toast(files.length > 1 ? `Added ${files.length} files` : 'Added');
-      reload();
-    }, { accept: 'audio/*,video/*,image/*', multiple: true, cls: 'small primary' }),
-    button('From a link or big file…', importLink),
-    help('Music, voice-overs, or videos and images from elsewhere.', 'grow'),
-    button('Done', closeSheet)], async () => {
-    const list = await api('/api/media');
-    return list.length ? list.map((m) => withMediaDelete(addCard(m, m.label, media(m)), m)) : placeholder('No files yet. Upload music, a voice-over or a video.');
-  });
-}
-
 // ---- inspector panel ----
+// It shows the primary pick (V.sel); an edit made in it goes to every picked clip it suits. Its fields change the primary,
+// then fanOut copies what changed (a property, as its value at the playhead) onto the others. Fields that edit each clip
+// themselves (times, anchor, Reset) call fanSync after, so nothing is copied twice.
+const FAN_KEYS = ['fit', 'adjust', 'fadeIn', 'fadeOut', 'pan'];
+const VISUAL_KEYS = new Set([...Object.keys(PROPS).filter((k) => k !== 'volume'), 'fit', 'adjust']);
+const suits = (o, k) => (VISUAL_KEYS.has(k) ? isVisual(o) : k === 'volume' ? o.kind !== 'image' && o.kind !== 'scene' : true);
+const fanState = (it) => Object.fromEntries([...FAN_KEYS.map((k) => [k, JSON.stringify(it[k] ?? null)]),
+  ...Object.keys(PROPS).map((ch) => [`#${ch}`, JSON.stringify([it[ch] ?? null, it.chans?.[ch] ?? null])])]);
+let fanBase = null;   // { id, s }: the primary as the inspector last saw it
+function fanSync() { const it = selItem(); fanBase = it ? { id: it.id, s: fanState(it) } : null; }
+function fanOut() {
+  const it = selItem(), others = it ? TL.picked().filter((o) => o && o !== it) : [];
+  if (!it || !others.length || fanBase?.id !== it.id) return fanSync();
+  const now = fanState(it);
+  for (const k of Object.keys(now)) {
+    if (now[k] === fanBase.s[k]) continue;
+    const ch = k[0] === '#' ? k.slice(1) : null;
+    for (const o of others) {
+      if (!suits(o, ch || k)) continue;
+      if (ch) setProp(o, ch, prop(it, ch));
+      else if (it[k] === undefined) delete o[k]; else o[k] = structuredClone(it[k]);
+    }
+  }
+  fanBase = { id: it.id, s: now };
+}
+function panelInput() { fanOut(); renderTimeline(); syncMedia(); requestDraw(); }   // (while a slider is dragged)
+function panelChange() { fanOut(); persistTimeline(); }   // (let go: saved, one undo step)
+function panelChanged() { fanOut(); timelineChanged(); }   // (a change that redraws the panel too)
+// the picked clips that suit `ok` (the primary first)
+const pickedWhere = (ok = () => true) => TL.picked().filter((o) => o && ok(o));
+
 // a clip's time as a number box (an open range: no bar); dragged like a slider it shows on the timeline as it goes
 const timeBox = (label, get, set, { step = 0.04, min = 0, max = 600 } = {}) =>
-  propNum(label, Number(get()).toFixed(2), set, timelineChanged, { step, min, max, live: () => { renderTimeline(); syncMedia(); requestDraw(); } });
+  propNum(label, Number(get()).toFixed(2), (v) => { set(v); fanSync(); }, timelineChanged, { step, min, max, live: () => { renderTimeline(); syncMedia(); requestDraw(); } });
 
-const clipLive = { onInput: () => { renderTimeline(); syncMedia(); requestDraw(); }, onChange: persistTimeline };
+const clipLive = { onInput: () => panelInput(), onChange: () => panelChange() };
 const clipRange = (label, get, set, opts) => rangeField(label, get, set, { ...opts, ...clipLive });
 // an animatable clip property: ◀ ◆ ▶ beside its slider; the playhead moves to a key in the clip's time
 const clipKeyed = (it, label, ch, opts) => K.field(it, label, ch, opts);
@@ -1008,7 +1090,7 @@ function colourSection(it) {
   };
   colourOf = { id: it.id, ...adjustPanel({
     get: () => it.adjust || null, set: (a) => { if (a) it.adjust = a; else delete it.adjust; },
-    onInput: requestDraw, onChange: () => { requestDraw(); persistTimeline(); }, hist: () => clipHist(it),
+    onInput: () => { fanOut(); requestDraw(); }, onChange: () => { requestDraw(); panelChange(); }, hist: () => clipHist(it),
     others: () => rest().map((o) => [o.id, `${o.label} (${fmtT(o.at)})`]),
     otherHist: (id) => clipLook(V.items.find((o) => o.id === id)),
     extra: (strength) => (it.kind !== 'scene' && rest().length > 1 ? button('Match every clip to this one', matchAll(strength), { cls: 'small', title: 'This clip stays as it is; each other video and picture gets curves to look like it' }) : null) }) };
@@ -1019,7 +1101,10 @@ function colourSection(it) {
 function sceneFields(it) {
   const d = COMP.sceneOf(it.src.scene);
   return [
-    field('Look', seg(COMP_LOOKS, it.src.look || 'color', (k) => { it.src = { ...it.src, look: k }; timelineChanged(); })),
+    field('Look', seg(COMP_LOOKS, it.src.look || 'color', (k) => {
+      for (const o of pickedWhere((x) => x.kind === 'scene')) o.src = { ...o.src, look: k };
+      timelineChanged();
+    })),
     d?.state === 'missing' ? note('This 3D scene was deleted. The clip stays; pick another scene or delete it.', 'err')
       : help(`Live from the 3D scene “${d?.name || it.label}”: changes there show here and in every video edit using it. Exports render it at the export size.`),
   ];
@@ -1027,33 +1112,37 @@ function sceneFields(it) {
 
 // framing: the same numbers the handles on the preview change (and that follow them while dragging)
 function xformFields(it) {
-  const pct = pctFmt, g = geom(it);
+  const pct = pctFmt;
   const anchorEnd = () => { syncInspector(); persistTimeline(); };   // moving the anchor re-pins position, so show that too
+  // the anchor of each picked picture (its own picture stays put); then nothing is left for fanOut to copy
+  const anchorAll = (ax, ay) => { for (const o of pickedWhere(isVisual)) setAnchor(o, ax ?? o.anchor?.x ?? 0.5, ay ?? o.anchor?.y ?? 0.5); fanSync(); };
   return [
-    field('Framing', seg([['fit', 'Fit'], ['fill', 'Fill']], it.fit || 'fit', (k) => { it.fit = k; timelineChanged(); })),
+    field('Framing', seg([['fit', 'Fit'], ['fill', 'Fill']], it.fit || 'fit', (k) => { it.fit = k; panelChanged(); })),
     clipKeyed(it, 'Scale', 'scale', { min: 0.1, max: 3, step: 0.01, fmt: pct }),
     clipKeyed(it, 'Rotation', 'rotation', { min: -180, max: 180, step: 1, fmt: (v) => `${Math.round(v)}°` }),
     clipKeyed(it, 'Position X', 'x', { min: -1, max: 1, step: 0.005, fmt: pct }),
     clipKeyed(it, 'Position Y', 'y', { min: -1, max: 1, step: 0.005, fmt: pct }),
-    clipRange('Anchor X', () => it.anchor?.x ?? 0.5, (v) => setAnchor(it, v, it.anchor?.y ?? 0.5), { min: -0.5, max: 1.5, step: 0.01, fmt: pct, onChange: anchorEnd }),
-    clipRange('Anchor Y', () => it.anchor?.y ?? 0.5, (v) => setAnchor(it, it.anchor?.x ?? 0.5, v), { min: -0.5, max: 1.5, step: 0.01, fmt: pct, onChange: anchorEnd }),
-    g ? null : hint('Handles appear once the clip has loaded.'),
+    clipRange('Anchor X', () => it.anchor?.x ?? 0.5, (v) => anchorAll(v, null), { min: -0.5, max: 1.5, step: 0.01, fmt: pct, onChange: anchorEnd }),
+    clipRange('Anchor Y', () => it.anchor?.y ?? 0.5, (v) => anchorAll(null, v), { min: -0.5, max: 1.5, step: 0.01, fmt: pct, onChange: anchorEnd }),
   ];
 }
 
 function renderVideoPanel() {
   if (!VD.body) return;   // (not mounted yet)
-  const it = selItem();
+  const it = selItem(), n = TL.picked().length;
   const pct = pctFmt;
+  fanSync();
   const clip = it ? (() => {
     const len = itLen(it), tr = trackOf(it);
-    const fields = [timeBox('Starts at (s)', () => it.at, (v) => { it.at = Math.max(0, v); })];
-    if (it.kind === 'image') fields.push(timeBox('Duration (s)', () => len, (v) => { it.out = Math.max(MIN_LEN, v); }, { min: MIN_LEN, max: 60 }));
+    // several picked: Starts at moves them all by the same amount; a length, In or Out goes to each that has one
+    const fields = [timeBox('Starts at (s)', () => it.at, (v) => { const d = Math.max(0, v) - it.at; for (const o of pickedWhere()) o.at = Math.max(0, o.at + d); })];
+    const still = (o) => o.kind === 'image', moving = (o) => !still(o);
+    if (it.kind === 'image') fields.push(timeBox('Duration (s)', () => len, (v) => { for (const o of pickedWhere(still)) o.out = Math.max(MIN_LEN, v); }, { min: MIN_LEN, max: 60 }));
     else fields.push(
-      timeBox('In (s)', () => it.in, (v) => { it.in = Math.max(0, Math.min(v, (it.out ?? it.dur) - MIN_LEN)); }, { max: it.dur || undefined }),
-      timeBox('Out (s)', () => it.out ?? it.dur, (v) => { it.out = Math.max(it.in + MIN_LEN, it.dur ? Math.min(v, it.dur) : v); }, { max: it.dur || undefined }));
-    return section(it.label, null,
-      hint(`${it.kind} on ${tr ? trackName(tr) : '?'} · ${fmtT(len)}${it.dur ? ` of ${fmtT(it.dur)}` : ''}`, 'section-sub'),
+      timeBox('In (s)', () => it.in, (v) => { for (const o of pickedWhere(moving)) o.in = Math.max(0, Math.min(v, (o.out ?? o.dur) - MIN_LEN)); }, { max: it.dur || undefined }),
+      timeBox('Out (s)', () => it.out ?? it.dur, (v) => { for (const o of pickedWhere(moving)) o.out = Math.max(o.in + MIN_LEN, o.dur ? Math.min(v, o.dur) : v); }, { max: it.dur || undefined }));
+    return section(n > 1 ? `${n} clips` : it.label, null,
+      hint(`${n > 1 ? `${it.label}: ` : ''}${it.kind} on ${tr ? trackName(tr) : '?'} · ${fmtT(len)}${it.dur ? ` of ${fmtT(it.dur)}` : ''}`, 'section-sub'),
       h('div', { class: 'grid-2' }, fields),
       isVisual(it) ? [VD.xform = h('div', { class: 'vid-xform' }, xformFields(it)),
         clipKeyed(it, 'Opacity', 'opacity', { min: 0, max: 1, step: 0.01, fmt: pct })] : null,
@@ -1067,7 +1156,6 @@ function renderVideoPanel() {
     const tool = (label, ic, onclick, title = label) => h('button', { type: 'button', class: 'icon-btn tool-quick-btn', title, onclick }, icon(ic), h('span', {}, label));
     const can = it.kind === 'video' && canKey(it);
     return section('Clip tools', null, h('div', { class: 'tool-quick' },
-      tool('Split', 'cut', TL.split, 'Split at the playhead (S)'),
       tool('Cross-fade', 'wave', () => TL.crossfadePrev(it), 'Cross-fade with the previous clip'),
       can && !onTable() ? tool('VFX', 'sparkle', async () => (await import('./vfx.js')).sendToVfx(it.src, { label: it.label, trim: { start: it.in, len: (it.out ?? it.dur) - it.in } }), 'Open this clip in the VFX tab') : null,
       it.kind === 'video' ? tool('Sound', 'sound', () => (onTable()
@@ -1076,8 +1164,13 @@ function renderVideoPanel() {
       onTable() ? 'This clip\'s sound (the part on the timeline) as a new sound frame' : 'This clip\'s sound (the part on the timeline) on the Sound tab\'s timeline') : null,
       can ? tool('Key', 'contrast', () => openKey(it), 'Colour key: cut out a green screen, or use a matte, so lower tracks show through') : null,
       it.kind === 'video' && canTrack(it.src) ? tool('Track', 'target', () => trackClip(it), 'Follow the picture\'s movement and make a 3D camera from it. With a range set, only the part of this clip inside it') : null,
-      isVisual(it) ? tool('Reset', 'reset', () => { Object.assign(it, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); delete it.rotation; delete it.anchor; for (const ch of ['x', 'y', 'scale', 'rotation', 'opacity']) delete it.chans?.[ch]; timelineChanged(); }, 'Reset the framing') : null,
-      tool('Delete', 'trash', TL.deleteSelected, 'Delete this clip (Del)')));
+      isVisual(it) ? tool('Reset', 'reset', () => {
+        for (const o of pickedWhere(isVisual)) {
+          Object.assign(o, { x: 0, y: 0, scale: 1, opacity: 1, fit: 'fit' }); delete o.rotation; delete o.anchor;
+          for (const ch of ['x', 'y', 'scale', 'rotation', 'opacity']) delete o.chans?.[ch];
+        }
+        timelineChanged();
+      }, n > 1 ? 'Reset the framing of every picked picture' : 'Reset the framing') : null));
   })() : null;
   const maps = it && (it.kind === 'video' ? canKey(it) : it.kind === 'image' && (it.src?.input || it.src?.generation != null))
     ? mapsSection(it, { lengthOf: itLen, range: () => WA.stored(), render: renderVideoPanel, land: landMap }) : null;
@@ -1093,19 +1186,17 @@ function renderVideoPanel() {
 
   const clearAll = () => {
     if (!confirm('Remove every clip from the timeline?')) return;
-    V.items = []; V.sel = null; vidSeek(0); timelineChanged();
+    V.items = []; V.sel = null; V.multi = []; vidSeek(0); timelineChanged();
   };
   // the panel order, app-wide: add (and Clear all), the selected thing, how it's made, then what it makes
   VD.body.replaceChildren(h('div', { class: 'panel-body' },
     h('div', { class: 'row wrap panel-top' },
-      button('+ Clips', addFromHistory, { cls: 'small primary' }),
-      button('+ Images', addImages),
-      button('+ Sound / files', addMediaFiles),
+      button('+ Add', addSources, { cls: 'small primary', title: 'Pictures, clips and sounds: from this table, the project or anywhere; tick several to lay them in order' }),
       button('+ 3D scene…', addScene, { title: 'A 3D scene as a live clip' }),
       V.items.length ? button('Clear all', clearAll, { cls: 'small ghost' }) : null),
     clipTools, maps, clip, colour, !clip && (V.items.length
-      ? help('Tap a clip to edit it. Drag clips to move them (also onto other tracks), drag their ends to trim, and overlap two clips on a track to cross-fade. Higher video tracks draw on top.')
-      : hint('Add generated clips, images or sound. They line up on V1 / A1; drag them onto V2 to layer them over V1.')),
+      ? help('Tap a clip to edit it; Shift or Ctrl picks several, and an edit here goes to all of them. Drag clips to move them (also onto other tracks), drag their ends to trim, and overlap two clips on a track to cross-fade. Higher video tracks draw on top. The handles show on the preview while the playhead is over the clip.')
+      : help('Add pictures, clips or sound. They line up on V1 / A1; drag them onto V2 to layer them over V1.')),
     section('Sequence', null,
       hint(`${seqSize().join('×')} · ${V.fps || 'auto'} fps · ${fmtT(seqEnd())}`, 'section-sub'),
       h('div', { class: 'grid-2' }, field('Frame size', sizeSel), field('Frame rate', fpsSel))),
@@ -1170,11 +1261,10 @@ const clipBase = (it) => it.fx?.orig || { src: it.src, url: it.url, label: it.la
 function unbakeFx(it) {
   const o = it.fx.orig;
   if (!o) return;
-  const was = { src: it.src, url: it.url, label: it.label, in: it.in, out: it.out, dur: it.dur };
   Object.assign(it, { src: o.src, url: o.url, label: o.label, in: o.in, out: o.out, dur: o.dur });
   it.fx.orig = null;
   timelineChanged();
-  undoToast('Back to the original clip', () => { Object.assign(it, was); it.fx.orig = o; timelineChanged(); });
+  toast('Back to the original clip');
 }
 
 // What an effect render shows while it runs: the step, the time so far and ComfyUI's step count (all clips share one: a run is one at a time)
@@ -1205,11 +1295,12 @@ async function bakeFx(id) {
   const base = clipBase(it), steps = it.fx.steps.map((st) => ({ ...st }));
   let source = { ...base.src, trim: { start: base.in, len: base.out - base.in } }, secs = base.out - base.in, r = null;
   it.fx.error = null;
+  HIST.hold(() => HIST.mark());
   fxStart();
   toast(`Rendering ${steps.map((st) => FX_LABEL[st.op]).join(' + ')}: the clip shows a spinner until it is done`);
   try {
     for (const [i, st] of steps.entries()) {
-      it.fx.busy = `${i + 1}/${steps.length} ${FX_LABEL[st.op]}`; FXRUN.prog = ''; renderVideoPanel(); renderTimeline();
+      it.fx.busy = `${i + 1}/${steps.length} ${FX_LABEL[st.op]}`; FXRUN.prog = ''; HIST.hold(() => HIST.mark()); renderVideoPanel(); renderTimeline();
       r = await runClipStep(st, source, secs);
       source = { generation: r.generation, index: r.index };
       secs = r.dur || secs;
@@ -1218,7 +1309,7 @@ async function bakeFx(id) {
   } catch (e) {
     const at = it.fx.busy;
     fxStop(); it.fx.busy = null; it.fx.error = `${at || ''} ${e.message}`.trim();
-    renderVideoPanel(); renderTimeline();
+    HIST.hold(() => persistTimeline()); renderVideoPanel(); renderTimeline();
     return toast(`Effects stopped: ${e.message}`, true);
   }
   fxStop(); it.fx.busy = null;
@@ -1282,10 +1373,10 @@ function openKey(it) {
     try {
       const g = await api('/api/video/key', { method: 'POST', busy: 'Keying…', body: { source: it.src, mode: k.mode, matte: k.matte, color: k.color,
         similarity: k.similarity, blend: k.blend, spill: k.spill, invert: k.invert, project_id: S.project }, timeout: 900000 });
-      const o = g.outputs[0], was = { src: it.src, url: it.url, label: it.label };
+      const o = g.outputs[0];
       Object.assign(it, { src: { generation: g.id, index: 0 }, url: o.url, label: `${it.label} (keyed)` });
       closeSheet(); timelineChanged();
-      undoToast('Keyed: lower tracks show through', () => { Object.assign(it, was); timelineChanged(); });
+      toast('Keyed: lower tracks show through');
     } catch (e) { toast('Keying failed: ' + e.message, true); go.disabled = false; }
   }, { cls: 'primary' });
   const sheet = () => [h('h3', {}, 'Key ' + it.label),
@@ -1315,7 +1406,7 @@ async function timelineBody(btn) {
   return {
     project_id: S.project, tab: tabs?.active && { id: tabs.active.id, name: tabs.active.name },
     width: scenes.length ? W : V.size && V.size[0], height: scenes.length ? H : V.size && V.size[1], fps: V.fps || null,
-    tracks: V.tracks.map(({ id, kind, hidden, muted }) => ({ id, kind, hidden, muted })),
+    tracks: exportTracks(V.tracks).map(({ id, kind, hidden, muted }) => ({ id, kind, hidden, muted })),   // (solo as hidden / muted)
     items: items.map((it) => ({ track: it.track, at: it.at, name: it.label, ...(made.has(it)   // (a scene's clip is already cut to what's used)
       ? { src: { clip: made.get(it).clip }, scene: made.get(it).scene, in: 0, out: itLen(it) } : { src: it.src, in: it.in, out: it.out ?? it.dur }),
       x: it.x, y: it.y, scale: it.scale, fit: it.fit, rotation: it.rotation || 0, anchor_x: it.anchor?.x, anchor_y: it.anchor?.y,
@@ -1434,42 +1525,55 @@ export async function videoStill() {
 
 // What a tab holds: the edit itself. (Zoom and Loop are this device's, not the edit's.)
 const editAdapter = {
-  empty: emptyVideo,
+  empty: emptyVideo,   // (markers: none until one is added; migrate and load give [])
   migrate: migrateEdit,
-  dump: () => ({ tracks: V.tracks, items: V.items, size: V.size, fps: V.fps, ...(V.range && { range: V.range }) }),
-  load(p) {
-    vidPause();
-    for (const it of p.items || []) if (it.fx?.busy && !FXRUN.n) it.fx.busy = null;   // (a render the page was closed on)
-    Object.assign(V, { tracks: p.tracks, items: p.items, size: p.size, fps: p.fps, range: p.range || null, sel: null, t: 0, master: null, holdSince: 0 });
-    WA.only = true; WA.sync();
-    renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw(); COMP.refresh();
+  dump: () => ({ tracks: V.tracks, items: V.items, size: V.size, fps: V.fps, ...(V.range && { range: V.range }), ...(V.markers?.length && { markers: V.markers }) }),
+  load(p, doc) {
+    HIST.hold(() => {   // (what loading writes is no edit)
+      vidPause();
+      for (const it of p.items || []) if (it.fx?.busy && !FXRUN.n) it.fx.busy = null;   // (a render the page was closed on)
+      Object.assign(V, { tracks: p.tracks, items: p.items, size: p.size, fps: p.fps, range: p.range || null, markers: p.markers || [],
+        sel: null, multi: [], t: 0, master: null, holdSince: 0 });
+      WA.only = true; WA.sync();
+      renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw(); COMP.refresh();
+    });
+    // another edit: its own history; the same one saved elsewhere: the steps stay (they find clips by id)
+    const id = doc?.id ?? null;
+    if (id !== histDoc) { histDoc = id; HIST.clear(); } else HIST.hold(() => HIST.mark());
+    syncUndo();
   },
 };
 
-// ---- drag and drop (desktop): pictures, videos and sound dragged from a file window onto the Video tab ----
+// ---- drag and drop (desktop): pictures, videos and sound dragged from a file window onto the Video tab, and things
+// dragged from the Shelf (SOURCE_TYPE, shelf.js) ----
 // Over a lane the clip goes where it is dropped (snapped to the frame and to the clips' and the playhead's edges);
-// anywhere else on the tab it goes after the last clip, as + Clips does.
+// anywhere else on the tab it goes after the last clip, as + Add does.
+const SOURCE_TYPE = 'application/x-deck-source';   // (shelf.js's and table.js's payload: { generation, index } | { input } | { media })
 const dropOnFiles = (e) => draggingPicture(e.dataTransfer);
-function dropSpot(e, kind) {
-  const lane = e.target.closest?.('.tl-lane');
+const dragSource = (e) => [...(e.dataTransfer?.types || [])].includes(SOURCE_TYPE);
+// kind null: any lane (a Shelf drag doesn't say what it is until it lands). lane: the one under the drop (read before the mark goes)
+function dropSpot(e, kind, lane = e.target.closest?.('.tl-lane')) {
   const tr = lane && VD.timeline?.contains(lane) && V.tracks.find((t) => t.id === lane.dataset.track);
-  if (!tr || tr.kind !== (kind === 'audio' ? 'audio' : 'video')) return null;
+  if (!tr || (kind && tr.kind !== (kind === 'audio' ? 'audio' : 'video'))) return null;
   const raw = Math.max(0, (e.clientX - lane.getBoundingClientRect().left) / V.pps);
   const edges = [0, V.t, ...V.items.flatMap((it) => [it.at, it.at + itLen(it)])];
   const near = edges.find((x) => Math.abs(x - raw) * V.pps < 8);
   return { lane, track: tr.id, at: near ?? Math.round(raw * fpsNow()) / fpsNow() };
 }
-function wireDrop(tab, signal) {   // (the listeners go when the mount's signal aborts)
+// sources: take Shelf drags here too (not on a table frame's own mount: the table hands those to frame-video.js)
+function wireDrop(tab, signal, { sources = true } = {}) {   // (the listeners go when the mount's signal aborts)
   let mark = null, depth = 0;
+  const wants = (e) => dropOnFiles(e) || (sources && dragSource(e));
   const clear = () => { depth = 0; tab.classList.remove('file-drop'); mark?.remove(); mark = null; };
   const kindOf = (e) => {   // what is being dragged (the browser only says Files until the drop: a lane takes any kind here)
+    if (dragSource(e)) return null;
     const it = [...(e.dataTransfer?.items || [])].find((i) => i.kind === 'file');
     return it?.type.startsWith('audio/') ? 'audio' : 'video';
   };
-  tab.addEventListener('dragenter', (e) => { if (dropOnFiles(e)) { depth++; tab.classList.add('file-drop'); } }, { signal });
-  tab.addEventListener('dragleave', (e) => { if (dropOnFiles(e) && --depth <= 0) clear(); }, { signal });
+  tab.addEventListener('dragenter', (e) => { if (wants(e)) { depth++; tab.classList.add('file-drop'); } }, { signal });
+  tab.addEventListener('dragleave', (e) => { if (wants(e) && --depth <= 0) clear(); }, { signal });
   tab.addEventListener('dragover', (e) => {
-    if (!dropOnFiles(e)) return;
+    if (!wants(e)) return;
     e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
     const spot = dropSpot(e, kindOf(e));
     if (!spot) { mark?.remove(); mark = null; return; }
@@ -1478,8 +1582,27 @@ function wireDrop(tab, signal) {   // (the listeners go when the mount's signal 
     mark.style.left = `${spot.at * V.pps}px`;
   }, { signal });
   tab.addEventListener('drop', async (e) => {
-    if (!dropOnFiles(e)) return;
+    if (!wants(e)) return;
     e.preventDefault();
+    if (dragSource(e)) {   // from the Shelf: each thing at the spot, one after another
+      const lane = e.target.closest?.('.tl-lane');
+      let list;
+      try { list = [JSON.parse(e.dataTransfer.getData(SOURCE_TYPE))].flat(); } catch { clear(); return; }
+      clear();
+      let at = null, n = 0;
+      for (const src of list) {
+        try {
+          const m = await mediaOfSource(src, { kind: src?.kind, label: src?.label, trim: src?.trim });
+          if (!m) { toast('That can\'t go on a timeline', true); continue; }
+          const spot = dropSpot(e, m.kind, lane);
+          const it = await landSource(m, spot && { track: spot.track, at: at ?? spot.at });
+          if (spot && it.track === spot.track) at = it.at + itLen(it);
+          n++;
+        } catch (err) { toast(`Couldn't add it: ${err.message}`, true); }
+      }
+      if (n) toast(n > 1 ? `Added ${n} things` : 'Added');
+      return;
+    }
     const got = droppedFiles(e.dataTransfer);
     let dropped;
     try { dropped = await got; } catch (err) { clear(); return toast(err.message, true); }
@@ -1531,7 +1654,8 @@ export function mountVideo({ host, stage = host.querySelector('.stage'), canvas,
   VD.transport = vtp.el;
   placeGizmo(viewer);
   if (vzoomed()) setView(VZ.z, VZ.tx, VZ.ty);   // (the zoom moves to the new canvas)
-  wireDrop(host, mounted.signal);
+  wireDrop(host, mounted.signal, { sources: host.contains(tl) });
+  if (!host.contains(tl)) wireDrop(tl, mounted.signal);   // (a table frame's timeline is in the drawer under the table)
   if (fullscreen && !FULLS.has(host)) FULLS.set(host, fullScreen(host, { onChange: () => requestDraw() }));
   vidMax = FULLS.get(host) || null;
   tlTools.replaceChildren(...timelineTools());
@@ -1550,22 +1674,52 @@ function wireOnce() {
   vtp = transport({ playing: () => V.playing, play: vidPlay, pause: vidPause, seek: vidSeek, t: () => V.t, len: seqEnd },
     { step: { by: () => 1 / fpsNow(), label: 'one frame' }, fps: fpsNow, loop: { get: () => V.loop, set: (on) => { V.loop = on; store.set('deck.video.loop', on); } },
       area: WA, keys: keyJumps(() => clipKeyTimes(TL, TL.selItem() ? [TL.selItem()] : V.items)), extra: [button('📷 Save frame', snapshotFrame, { title: 'Save this frame as an image' }), VD.load] });
-  // Premiere-ish keys while the Video engine is on show (playback.js: Space, arrows, Home / End)
-  playKeys(() => VD.active(), () => vtp, () => ({
-    s: TL.split, c: TL.split, f: toggleVideoFullscreen,
-    Delete: TL.deleteSelected, Backspace: TL.deleteSelected,
-    '=': () => TL.zoom(V.pps * 1.5), '+': () => TL.zoom(V.pps * 1.5), '-': () => TL.zoom(V.pps / 1.5),
-  }));
+  // Premiere-ish keys while the Video engine is on show (playback.js: Space, arrows, Home / End; the timeline's own:
+  // timeline-keys.js through TL.keys, Ctrl+Z / Ctrl+Shift+Z among them)
+  const tk = TL.keys();
+  playKeys(() => VD.active(), () => vtp, (e) => ({ f: toggleVideoFullscreen, ...tk.more(e) }), (e) => tk.combos(e));
+  registerUndo('video', { undo: undoEdit, redo: redoEdit, can: () => HIST.can() });
 }
 
-// the strip above the timeline
+// Track and ruler menu items the timeline leaves to the tab (timeline.js menuAction). Rename track, lock and solo are not
+// handled here yet.
+function menuAction(id, ctx = {}) {
+  const step = 1 / fpsNow();
+  if (id === 'addVideo' || id === 'addAudio') { addTrack(id === 'addVideo' ? 'video' : 'audio'); return timelineChanged(); }
+  if (id === 'remove' && ctx.track) {
+    const tr = ctx.track;
+    if (V.items.some((i) => i.track === tr.id) || tracksOf(tr.kind).length < 2) return toast('Only an empty track can go, and one of each kind stays', true);
+    V.tracks = V.tracks.filter((t) => t !== tr);
+    return timelineChanged();
+  }
+  if (id === 'areaStart' || id === 'areaEnd') {
+    const len = seqEnd();
+    if (!(len > 0)) return toast('Add something to the timeline first', true);
+    const t = snapT(Math.min(len, Math.max(0, ctx.t || 0)), { step });
+    return WA.set((id === 'areaStart' ? setIn : setOut)(V.range, t, len, step));
+  }
+  if (id === 'areaClear') return WA.set(null);
+  if (id === 'renameMarker' && ctx.marker != null) {
+    const i = ctx.marker, was = V.markers[i]?.label || '';
+    nameSheet({ title: 'Rename marker', placeholder: was || `Marker ${i + 1}`, save: (name) => { renameMarker(V, i, name || was); timelineChanged(); } });
+  }
+}
+
+// the one bar over the timeline: edits on the picked clips, snapping, zoom, and the keys behind ⓘ
+const TL_HELP = ['Drag clips to move them (onto other tracks too), drag their ends to trim, overlap two on a track to cross-fade.',
+  'Shift or Ctrl / Alt picks several, a drag on an empty lane picks with a box, Alt-drag copies. Right-click or hold for more.',
+  'Keys: ' + timelineKeys().map((k) => `${k.keys} ${k.label}`).join(' · ')].join(' ');
 const timelineTools = () => [
-  button('✂ Split', TL.split, { title: 'Split at playhead (S)' }),
-  button('🗑 Delete', TL.deleteSelected, { title: 'Delete selected clip (Del)' }),
-  h('span', { class: 'tl-tip' }, info('Drag clips to move · drag ends to trim · overlap to cross-fade')),
-  iconBtn('Zoom out', '−', () => TL.zoom(V.pps / 1.5)),
-  button('Fit', TL.fit),
-  iconBtn('Zoom in', '+', () => TL.zoom(V.pps * 1.5))];
+  iconBtn('Split at the playhead (S)', icon('cut'), () => TL.splitAtPlayhead()),
+  iconBtn('Duplicate (Ctrl+J)', icon('copy'), () => TL.duplicatePicked()),
+  iconBtn('Delete (Del)', icon('trash'), () => TL.removePicked()),
+  iconBtn('Ripple delete: delete and close the gap (Shift+Del)', icon('left'), () => TL.rippleDelete()),
+  TL.snapChip(),
+  h('span', { class: 'grow' }),
+  iconBtn('Zoom out', '−', () => TL.zoomBy(1 / 1.5)),
+  button('Fit', TL.fit, { cls: 'small' }),
+  iconBtn('Zoom in', '+', () => TL.zoomBy(1.5)),
+  info(TL_HELP, 'Timeline keys')];
 
 // The sequence size, as the Sequence section sets it (a frame on the table brings its own width and height)
 export function setSequenceSize(w, h) {

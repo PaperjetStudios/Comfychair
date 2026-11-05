@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { OP_TEMPLATES, canvasRect, carryWords, familiesOf, frameImageField, frameSize, makeFrames, makeTarget, noteText, pickTemplate, settingsFor, settingsPayload,
-  sizePair, templatesFor, withClip } from '../web/make-rules.js';
+  sizePair, templatesFor, withClip, itemSource, plainPicture, plainSound, plainVideo, renderKey, repointable, selfPicked, stableJson, wireFields } from '../web/make-rules.js';
 import { owedFor, owedRecord } from '../web/owed-runs.js';
 
 const T = (id, media, family = 'X', fields = []) => ({ id, media, family, fields });
@@ -102,4 +102,90 @@ test('a copy sent for owed runs is kept in the record so it can go after the las
   const base = { px: [1, 1], rect: {}, name: 'frame_1.png' };
   assert.equal(owedRecord('d', 'make', { ...base, copy: true }, { id: 1 }).copy, 'frame_1.png');
   assert.equal('copy' in owedRecord('d', 'make', base, { id: 1 }), false);
+});
+
+// ---- wires into the panel ----
+const aud = { key: '5.audio', kind: 'audio', node: '5', input: 'audio' }, vid = { key: '6.video', kind: 'video', node: '6', input: 'video' };
+const tpl = { id: 'x', media: 'video', fields: [img, { key: '3.image', kind: 'image', node: '3', input: 'image' }, vid, aud] };
+const wire = (id, kind, n, extra = {}) => ({ id, kind, n, on: true, from: 'f' + id, to: 'me', ...extra });
+
+test('settings carry wired through settingsFor and settingsPayload', () => {
+  const st = settingsFor(tpl);
+  assert.deepEqual(st.wired, {});
+  st.wired['3.image'] = false; st.wired['6.video'] = 'w9';
+  const p = settingsPayload(st);
+  assert.deepEqual(p.wired, { '3.image': false, '6.video': 'w9' });
+  assert.deepEqual(settingsFor(tpl, p).wired, { '3.image': false, '6.video': 'w9' });
+  assert.deepEqual(settingsFor({ ...tpl, id: 'other' }, p).wired, {});   // (another template starts clean)
+  p.wired.x = 1;
+  assert.equal(st.wired.x, undefined);   // (a copy)
+});
+test('an image frame\'s own picture field is skipped when mapping its wires', () => {
+  const ins = [wire('a', 'image', 1), wire('b', 'sound', 1)];
+  assert.deepEqual(Object.keys(wireFields(tpl, 'image', ins).map), ['3.image', '5.audio']);
+  assert.deepEqual(Object.keys(wireFields(tpl, 'video', ins).map), ['1.image', '5.audio']);
+  assert.deepEqual(wireFields(tpl, 'video', [wire('c', 'video', 1), wire('d', 'video', 2)]).spare.map((w) => w.id), ['d']);
+  assert.deepEqual(Object.keys(wireFields(tpl, 'video', ins, { '1.image': false }).map), ['3.image', '5.audio']);
+});
+test('a field left to itself, and what it could be re-pointed to', () => {
+  const ins = [wire('a', 'image', 1), wire('b', 'image', 2)];
+  const { map } = wireFields(tpl, 'video', ins);
+  assert.deepEqual(repointable(tpl.fields[0], ins, map).map((w) => w.id), ['a']);
+  assert.deepEqual(repointable(tpl.fields[1], ins, { '1.image': ins[0] }).map((w) => w.id), ['b']);
+  assert.deepEqual(selfPicked(tpl, 'video', ins, { '1.image': false }).map((f) => f.key), ['1.image']);
+  assert.deepEqual(selfPicked(tpl, 'video', [], { '1.image': false }), []);
+});
+
+const layer = (o = {}) => ({ name: 'a.png', crop: { x: 0, y: 0, w: 1, h: 1 }, x: 0, y: 0, scale: 1, opacity: 1, hidden: false, ...o });
+test('a plain picture: one whole layer, nothing done to it', () => {
+  assert.equal(plainPicture({ layers: [layer()] }), 'a.png');
+  assert.equal(plainPicture({ layers: [{ name: 'b.png' }] }), 'b.png');
+  for (const bad of [{ crop: { x: 0.1, y: 0, w: 0.9, h: 1 } }, { scale: 2 }, { rotation: 10 }, { flipX: true }, { hidden: true }, { opacity: 0.5 }, { blend: 'multiply' },
+    { adjust: { on: true } }, { mask: true }, { fill: '#fff' }, { group: 'g' }]) assert.equal(plainPicture({ layers: [layer(bad)] }), null, JSON.stringify(bad));
+  assert.equal(plainPicture({ layers: [layer(), layer({ name: 'c.png' })] }), null);
+  assert.equal(plainPicture({ layers: [layer()], items: [{ x: 1 }] }), null);
+  assert.equal(plainPicture({ layers: [] }), null);
+  assert.equal(plainPicture(null), null);
+});
+const vclip = (o = {}) => ({ id: 'i', track: 'v1', kind: 'video', src: { generation: 5, index: 0 }, at: 0, in: 1, out: 4, dur: 6, x: 0, y: 0, scale: 1, fit: 'fit', opacity: 1, volume: 1, fadeIn: 0, fadeOut: 0, ...o });
+const tracks = [{ id: 'v1', kind: 'video' }, { id: 'a1', kind: 'audio' }];
+test('a plain video: one clip at 0, default transform, no effects; its source and trim', () => {
+  const p = { tracks, items: [vclip()] };
+  assert.equal(plainVideo(p).id, 'i');
+  assert.deepEqual(itemSource(plainVideo(p)), { generation: 5, index: 0, trim: { start: 1, len: 3 } });
+  assert.deepEqual(itemSource(vclip({ src: { media: 'm.mp4' }, in: 0, out: undefined, dur: 0 })), { media: 'm.mp4' });
+  for (const bad of [{ at: 2 }, { scale: 1.2 }, { x: 10 }, { rotation: 5 }, { opacity: 0.5 }, { fadeIn: 1 }, { adjust: { on: true } }, { volume: 0.5 }, { kind: 'image' }])
+    assert.equal(plainVideo({ tracks, items: [vclip(bad)] }), null, JSON.stringify(bad));
+  assert.equal(plainVideo({ tracks, items: [vclip(), vclip({ id: 'j', track: 'v2' })] }), null);
+  assert.equal(plainVideo({ tracks, items: [vclip()], range: [0, 1] }), null);
+  assert.equal(plainVideo({ tracks: [{ id: 'v1', kind: 'video', hidden: true }], items: [vclip()] }), null);
+  assert.equal(plainVideo({ tracks: [{ id: 'v1', kind: 'video', muted: true }], items: [vclip()] }), null);
+  assert.equal(plainVideo({ tracks, items: [] }), null);
+});
+const sclip = (o = {}) => ({ id: 's', track: 'a1', kind: 'audio', src: { media: 'v.wav' }, at: 0, in: 0, out: 2, dur: 2, volume: 1, pan: 0, ...o });
+test('a plain sound: one clip at 0, level 1, centred, no fades; a mix is not plain', () => {
+  const p = { tracks, items: [sclip()], out: { gain: 1 } };
+  assert.equal(plainSound(p).id, 's');
+  assert.deepEqual(itemSource(plainSound(p)), { media: 'v.wav', trim: { start: 0, len: 2 } });
+  for (const bad of [{ at: 1 }, { volume: 0.5 }, { pan: 0.3 }, { fadeOut: 0.5 }, { chans: { v: [] } }, { kind: 'video' }]) assert.equal(plainSound({ tracks, items: [sclip(bad)] }), null, JSON.stringify(bad));
+  assert.equal(plainSound({ tracks, items: [sclip(), sclip({ id: 't' })] }), null);
+  assert.equal(plainSound({ tracks, items: [sclip()], out: { normalize: true } }), null);
+  assert.equal(plainSound({ tracks, items: [sclip()], out: { gain: 2 } }), null);
+});
+
+test('the render key is stable, ignores project and tab, and changes with an edit', () => {
+  const body = () => ({ project_id: 3, tab: { id: 'd', name: 'A' }, width: 1280, height: 720, fps: 24, tracks, items: [{ track: 'v1', at: 0, src: { generation: 5, index: 0 }, in: 0, out: 3, scale: 1, grade: null }] });
+  const k = renderKey(body());
+  assert.match(k, /^[0-9a-f]{14}$/);
+  assert.equal(renderKey(body()), k);
+  assert.equal(renderKey({ ...body(), project_id: 9, tab: { id: 'd', name: 'B' } }), k);
+  const reordered = body(); reordered.items[0] = Object.fromEntries(Object.entries(reordered.items[0]).reverse());
+  assert.equal(renderKey(reordered), k);   // (key order is not part of it)
+  const trimmed = body(); trimmed.items[0].out = 2.5;
+  assert.notEqual(renderKey(trimmed), k);
+  const graded = body(); graded.items[0].grade = { r: [0, 1] };
+  assert.notEqual(renderKey(graded), k);
+  const longer = body(); longer.items.push({ ...longer.items[0], at: 3 });
+  assert.notEqual(renderKey(longer), k);
+  assert.equal(stableJson({ b: 1, a: [undefined, { d: 1, c: undefined }] }), '{"a":[null,{"d":1}],"b":1}');
 });

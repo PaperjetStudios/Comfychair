@@ -2297,6 +2297,10 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
 .make-basics:empty { display: none; }
 .make-frame-pic { display: flex; align-items: center; justify-content: center; min-height: 64px; background: var(--surface-2); border-radius: var(--r-sm); overflow: hidden; }
 .make-frame-pic img { max-width: 100%; max-height: 160px; object-fit: contain; }
+.make-wire { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.make-wire-chip { padding: 3px 8px; border-radius: 999px; background: var(--surface-2); font-size: 13px; }
+.make-wires:empty { display: none; }
+.make-wire-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; padding: 2px 0; }
 .make-frame-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
 .make-frame-card { display: flex; flex-direction: column; gap: 4px; align-items: center; padding: 6px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-2); color: inherit; }
 .make-frame-card img { width: 100%; aspect-ratio: 1; object-fit: contain; }
