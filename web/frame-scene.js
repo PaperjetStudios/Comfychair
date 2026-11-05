@@ -13,7 +13,7 @@
 //
 // table.js's events (detail.handled = true when taken here): table:live, table:unlive, table:frame-field, table:drop-frame.
 import { setOutputs } from './table.js';
-import { api, field, h, help, hint, rangeField, section, toast, toggle } from './ui.js';
+import { api, field, h, help, hint, rangeField, section, store, toast, toggle } from './ui.js';
 import { isLive } from './live.js';
 import { uploadImage } from './media.js';
 import { sceneModule } from './run.js';
@@ -369,12 +369,14 @@ async function fillSceneSection(f, body) {
   const [D, ui] = await Promise.all([import('./scene-data.js'), import('./scene-ui.js')]);
   const live = () => F.mounted === f.id;
   const p = live() ? { seconds: D.SC.seconds } : (await api(`/api/store/scene-tabs/${f.doc}${S.project != null ? `?project_id=${S.project}` : ''}`, { busy: false }))?.payload || {};
-  let secs = Number(p.seconds) || 5;
+  let secs = Number(p.seconds) || 5, stretch = store.get('deck.scene.stretchLen', false) === true;
   const kinds = new Set(ui.renderKinds());
   body.replaceChildren(
     rangeField('Length', () => secs, (v) => { secs = v; }, { min: ui.LENGTHS[0], max: ui.LENGTHS[1], step: 0.5,
       fmt: (v) => `${+Number(v).toFixed(2)} s · ${D.framesFor(v)} frames`,
-      onChange: () => withSceneDoc(f, async () => { ui.newLength(secs); }).catch((e) => toast(e.message, true)) }),
+      onChange: () => withSceneDoc(f, async () => { if (stretch) ui.stretchTo(secs); else ui.newLength(secs); }).catch((e) => toast(e.message, true)) }),
+    toggle('Stretch the keys with it', stretch, (on) => { stretch = on; store.set('deck.scene.stretchLen', on); },
+      { help: 'On, a new length stretches or squeezes the whole animation to fit. Off, keys keep their times: a shorter length asks before cutting the ones past the end.' }),
     hint(`${D.FPS} fps (a 3D scene's frame rate is fixed)`),
     field('Render makes', h('div', { class: 'row wrap' }, ...ui.RENDER_KINDS.map(([id, label]) => toggle(label, kinds.has(id), (on) => {
       if (on) kinds.add(id); else kinds.delete(id);

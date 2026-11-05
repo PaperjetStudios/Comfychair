@@ -1,5 +1,4 @@
 import { layerListPart, layersFloating } from './float-layers.js';
-import { sizePicker } from './size-picker.js';
 import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import {
@@ -16,7 +15,7 @@ import { rigProps } from './scene-rig.js';
 import { boneProps } from './scene-skin.js';
 import {
   HAND, addObject, aimCameraAt, axesToView, camGizmo, cameraFromView, canPivot, canTurnAxes, faceCamera, lookAtLayer, originMode, turnAxesBy, changed, draw, fit, handMode, jointMode, lookThrough, makePhoto, makeSplatHere, newCameraPose, orientLabel,
-  originEditing, originTo, boxHost, setBoxEdit, pivotMoved, pivotToView, pose, putOrigin, rebuildRoom, recentre, refresh, removeLayer, removeSelected, resetPivot, select, selectJoint, setFree, setMode, setOrient, setOriginEdit, syncMeshes, viewer, SCN
+  originEditing, originTo, boxHost, setBoxEdit, pivotMoved, pivotToView, pose, putOrigin, rebuildRoom, recentre, refresh, removeLayer, removeSelected, resetPivot, select, selectJoint, setAimEdit, setFree, setMode, setOrient, setOriginEdit, syncMeshes, viewer, SCN
 } from './scene-view.js';
 import { ORIENTS, nextOrient } from './gizmo-orient.js';
 import { drawnScale } from './origin-math.js';
@@ -324,16 +323,18 @@ function addCamera() { const c = newCamera(); c.base = { ...c.base, ...newCamera
 // Y (up) green, Z blue; typed, or held and pulled sideways at a steady rate (perPx: a metre per 100 px, a degree a px…;
 // Shift on a mouse is finer); a double-tap puts one back (reset). ◀ ◆ ▶ key the row; lock: a chain that keeps the three
 // in proportion (a change to one scales the others with it).
-//   vecRow(label, item, names, [[ch, letter, axis 'x'|'y'|'z', title?]], { min, max, step, digits, perPx, reset (a number, or one per channel), lock })
-//   lock: { get(), set(on) }
-function vecRow(label, item, names, ks, { min = -50, max = 50, step = 0.01, digits = 2, perPx = 0.01, reset = 0, lock = null } = {}) {
+// ↺ beside the label puts the whole row back (reset).
+//   vecRow(label, item, names, [[ch, letter, axis 'x'|'y'|'z', title?]], { min, max, step, digits, perPx, reset (a number, or one per channel), lock, carry })
+//   lock: { get(), set(on) }; carry(patch) → the patch written (the camera's aim point going along with its position while aim is off)
+function vecRow(label, item, names, ks, { min = -50, max = 50, step = 0.01, digits = 2, perPx = 0.01, reset = 0, lock = null, carry = (p) => p } = {}) {
   const cur = () => current(item, names);
+  const put = (p) => write(item, names, carry(p));
   const setOne = (k, v) => {
     if (lock?.get()) {   // in proportion: every box by the same factor
       const c = cur(), f = c[k] ? v / c[k] : 1;
-      if (Number.isFinite(f) && f > 0) return write(item, names, Object.fromEntries(ks.map(([ch]) => [ch, Math.max(min, Math.min(max, c[ch] * f))])));
+      if (Number.isFinite(f) && f > 0) return put(Object.fromEntries(ks.map(([ch]) => [ch, Math.max(min, Math.min(max, c[ch] * f))])));
     }
-    write(item, names, { [k]: v });
+    put({ [k]: v });
   };
   const box = ([k, letter, axis, title]) => {
     const r = numSlider({ min, max, step, digits, value: cur()[k], label: `${label} ${title || letter}` });
@@ -341,10 +342,12 @@ function vecRow(label, item, names, ks, { min = -50, max = 50, step = 0.01, digi
     r.addEventListener('input', () => { if (r.dataset.scrubbing) { setOne(k, parseFloat(r.value)); syncMeshes(); pose(R.f); draw(); } });
     r.addEventListener('change', () => { setOne(k, parseFloat(r.value)); changed(); });
     const back = typeof reset === 'object' ? reset[k] : reset;
-    r.addEventListener('dblclick', () => { r.blur(); write(item, names, { [k]: back }); changed(); });
+    r.addEventListener('dblclick', () => { r.blur(); put({ [k]: back }); changed(); });
     return h('label', { class: `vbox ax-${axis}`, title: `${title || letter} · double-tap: back to ${back}` }, h('b', {}, letter), r);
   };
   const el = field(label, h('div', { class: 'vec' }, ...ks.map(box)));
+  const backs = ks.map(([k]) => (typeof reset === 'object' ? reset[k] : reset));
+  withReset(el, `${label.replace(/ \(.*\)$/, '')} back to ${[...new Set(backs)].join(' ')}`, () => put(Object.fromEntries(ks.map(([k], i) => [k, backs[i]]))));
   if (lock) {
     const on = lock.get();
     const b = iconBtn(on ? 'Unlock proportions' : 'Lock proportions', '', () => { lock.set(!on); renderPanel(); });
@@ -353,26 +356,62 @@ function vecRow(label, item, names, ks, { min = -50, max = 50, step = 0.01, digi
   }
   return withKeys(el, label, item, names, ks.map(([k]) => k));
 }
-const camXYZ = (cam, label, ks) => vecRow(label, cam, CAM, ks, { min: -50, max: 50 });
+// a ↺ button beside a field's label: fn puts it back, then the scene saves and draws
+function withReset(el, title, fn) {
+  const b = iconBtn(title, '↺', () => { fn(); changed(); renderPanel(); }, { class: 'icon-btn reset-btn' });
+  el.querySelector('.lbl > span')?.after(b);
+  return el;
+}
+const camXYZ = (cam, label, ks, opts = {}) => vecRow(label, cam, CAM, ks, { min: -50, max: 50, ...opts });
+
+// A camera with its aim off (cam.aim === false) has no point it looks at: moving it keeps the way it faces (the aim point goes along,
+// unseen), and Pan and Tilt turn it. Pan 0 looks along -Z, positive turns left; Tilt positive looks up. The aim point stays the
+// same distance ahead, so turning the aim back on picks up where it is.
+const D2R = Math.PI / 180;
+function panTilt(c) {
+  const dx = c.tx - c.px, dy = c.ty - c.py, dz = c.tz - c.pz;
+  return { pan: Math.atan2(-dx, -dz) / D2R, tilt: Math.atan2(dy, Math.hypot(dx, dz)) / D2R, d: Math.max(0.5, Math.hypot(dx, dy, dz)) };
+}
+function aimFrom(c, pan, tilt, d) {
+  const a = pan * D2R, b = Math.max(-89.5, Math.min(89.5, tilt)) * D2R;
+  return { tx: c.px - Math.sin(a) * Math.cos(b) * d, ty: c.py + Math.sin(b) * d, tz: c.pz - Math.cos(a) * Math.cos(b) * d };
+}
+function carryAim(cam) {
+  return (p) => {
+    if (cam.aim !== false) return p;
+    const c = current(cam, CAM), out = { ...p };
+    for (const [pk, tk] of [['px', 'tx'], ['py', 'ty'], ['pz', 'tz']]) if (pk in p) out[tk] = c[tk] + (p[pk] - c[pk]);
+    return out;
+  };
+}
 
 function cameraProps() {
-  const cam = SC.camera;
+  const cam = SC.camera, aim = cam.aim !== false;
   const mm = (fov) => 12 / Math.tan(THREE.MathUtils.degToRad(fov) / 2);  // full-frame equivalent, from the vertical angle
-  // (an open 3D frame's output size follows: frame-scene.js)
-  const sizeSel = sizePicker({ label: 'Output size', w: SC.width, h: SC.height, lim: (n) => Math.min(4096, Math.max(64, n)), onChange: (w, hh) => {
-    SC.width = w; SC.height = hh; save(); fit();
-    dispatchEvent(new CustomEvent('scene:size', { detail: { w, h: hh } }));
-  } });
+  const fov0 = defaultScene().camera.base.fov;
+  const turn = (k) => (v) => { const c = current(cam, CAM), t = panTilt(c); write(cam, CAM, aimFrom(c, k === 'pan' ? v : t.pan, k === 'tilt' ? v : t.tilt, t.d)); };
+  // (the output size and the length are the frame's: the Output tab and the Frame pane's 3D section)
   return section('Camera', null,
     camerasField(),
-    sizeSel, lengthProps(),
-    slider('Lens', () => current(cam, CAM).fov, (v) => write(cam, CAM, { fov: v }),
-      { min: 12, max: 90, step: 0.5, fmt: (v) => `${Math.round(mm(v))} mm`, keys: [cam, CAM, ['fov']] }),
-    camXYZ(cam, 'Position (m)', [['px', 'X', 'x'], ['py', 'Y', 'y', 'Y (up)'], ['pz', 'Z', 'z']]),
-    camXYZ(cam, 'Aims at (m)', [['tx', 'X', 'x'], ['ty', 'Y', 'y', 'Y (up)'], ['tz', 'Z', 'z']]),
-    slider('Roll', () => current(cam, CAM).roll, (v) => write(cam, CAM, { roll: v }),
+    withReset(slider('Lens', () => current(cam, CAM).fov, (v) => write(cam, CAM, { fov: v }),
+      { min: 12, max: 90, step: 0.5, fmt: (v) => `${Math.round(mm(v))} mm`, keys: [cam, CAM, ['fov']] }), `Lens back to ${Math.round(mm(fov0))} mm`, () => write(cam, CAM, { fov: fov0 })),
+    camXYZ(cam, 'Position (m)', [['px', 'X', 'x'], ['py', 'Y', 'y', 'Y (up)'], ['pz', 'Z', 'z']], { carry: carryAim(cam) }),
+    toggle('Aim at a point', aim, (on) => { if (on) delete cam.aim; else { cam.aim = false; setAimEdit(false); } changed(); renderPanel(); },
+      { help: 'On, the camera always looks at its aim point: moving it turns it to keep looking there. Off, it keeps facing the way it does when it moves, and Pan and Tilt turn it.' }),
+    aim ? [
+      camXYZ(cam, 'Aims at (m)', [['tx', 'X', 'x'], ['ty', 'Y', 'y', 'Y (up)'], ['tz', 'Z', 'z']]),
+      button(R.aimEdit ? '✓ Done moving the aim point' : 'Move the aim point', () => { setAimEdit(!R.aimEdit); renderPanel(); },
+        { cls: `small${R.aimEdit ? ' on' : ''}`, title: 'The gizmo holds the point the camera looks at: drag it to set what the shot is on. Selecting a layer ends it.' }),
+    ] : [
+      withReset(slider('Pan', () => panTilt(current(cam, CAM)).pan, turn('pan'), { min: -180, max: 180, step: 0.5, fmt: (v) => `${v.toFixed(1)}°`, keys: [cam, CAM, ['tx', 'ty', 'tz']] }),
+        'Pan back to 0°', () => turn('pan')(0)),
+      withReset(slider('Tilt', () => panTilt(current(cam, CAM)).tilt, turn('tilt'), { min: -89.5, max: 89.5, step: 0.5, fmt: (v) => `${v.toFixed(1)}°`, keys: [cam, CAM, ['tx', 'ty', 'tz']] }),
+        'Tilt back to 0° (level)', () => turn('tilt')(0)),
+    ],
+    withReset(slider('Roll', () => current(cam, CAM).roll, (v) => write(cam, CAM, { roll: v }),
       { min: -180, max: 180, step: 0.5, fmt: (v) => `${v.toFixed(1)}°`, keys: [cam, CAM, ['roll']],
         help: 'Tilts the camera around the way it looks. Positive banks it clockwise, so the picture turns anticlockwise. Key it to roll the view; motion tracking sets it from footage that turns.' }),
+      'Roll back to 0°', () => write(cam, CAM, { roll: 0 })),
     easeSeg(cam),
     h('div', { class: 'row wrap' },
       clearKeys(cam, CAM),
@@ -404,8 +443,8 @@ export function newLength(v) {
       button('✂ Cut them', () => { closeSheet(); setLength(s); lengthChanged(); }, { cls: 'small danger' }),
       button('⇔ Stretch to fit', () => { closeSheet(); stretchTo(s); }, { cls: 'small primary' })));
 }
-// the whole animation stretched (or squeezed) to a new length, from frame 0: one undo step
-function stretchTo(v) {
+// the whole animation stretched (or squeezed) to a new length, from frame 0: one undo step (the Frame pane's 3D section: stretchLength)
+export function stretchTo(v) {
   const s = clampLen(v), before = clone(SC), ok = sameTab(), was = SC.seconds, from = frames();
   SC.seconds = s;
   stretchAll(animated(), from, frames());
@@ -417,22 +456,6 @@ function stretchTo(v) {
     setSC(before); R.f = Math.min(R.f, frames() - 1); TEMP.clear(); lengthChanged();
   });
 }
-function openStretch() {
-  let want = SC.seconds;
-  openSheet(h('h3', {}, 'Stretch keys to…'),
-    rangeField('New length', () => want, (v) => { want = v; }, { min: LEN[0], max: LEN[1], step: 0.5, fmt: (v) => `${fmtSecs(v)} s · ${framesFor(v)} frames` }),
-    help('Every key of every layer moves in time with the new length, from the start: longer slows the whole animation down, shorter speeds it up. Keys that land on the same frame merge.'),
-    actions(button('Cancel', closeSheet),
-      button('⇔ Stretch', () => { closeSheet(); if (Math.abs(want - SC.seconds) >= 0.005) stretchTo(want); }, { cls: 'small primary' })));
-}
-function lengthProps() {
-  const label = `Length · ${fmtSecs(SC.seconds)} s · ${frames()} frames`;
-  const stretch = h('div', { class: 'row wrap' }, button('⇔ Stretch keys to…', openStretch, { title: 'A new length with the whole animation stretched or squeezed to fit' }));
-  let want = SC.seconds;
-  return [rangeField(label, () => want, (v) => { want = v; }, { min: LEN[0], max: LEN[1], step: 0.5, fmt: (v) => `${fmtSecs(v)} s · ${framesFor(v)} frames`,
-    onChange: () => { if (Math.abs(want - SC.seconds) < 0.005) return; newLength(want); } }), stretch];
-}
-
 // which videos the Render popup makes, one after another
 const KINDS = [['depth', 'Depth video', renderDepthVideo], ['pose', 'Pose video', renderPoseVideo], ['colour', 'Colour video', renderColorVideo]];
 const kindsOn = () => { const k = store.get('deck.scene.renderkinds', ['depth']); return Array.isArray(k) && k.length ? k : ['depth']; };

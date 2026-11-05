@@ -2080,6 +2080,9 @@ body > .undo-dock { position: fixed; z-index: 57; top: 8px; left: 50%; transform
 .lock-btn { min-width: 30px; min-height: 26px; margin: -6px 0 -6px 4px; padding: 0; background: transparent; border-color: transparent; color: var(--muted); }
 .icon-btn.lock-btn.on, .icon-btn.lock-btn.on:hover { color: var(--accent); background: transparent; border-color: transparent; }
 .lock-btn .ico { width: 16px; height: 16px; }
+.reset-btn { min-width: 28px; min-height: 26px; margin: -6px 0 -6px 4px; padding: 0; background: transparent; border-color: transparent; color: var(--muted); }
+.reset-btn .ico { width: 15px; height: 15px; }
+.reset-btn:hover { color: var(--accent); }
 /* a phone: the key bar is one row that scrolls sideways (wrapped, it would squeeze the view away) */
 @media (max-width: 700px) {
   .scene-keybar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }

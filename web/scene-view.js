@@ -78,6 +78,14 @@ originDot.renderOrder = 12; originDot.visible = false; originDot.raycast = () =>
 const boxMark = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)), new THREE.LineBasicMaterial({ color: 0xffc94d, depthTest: false, transparent: true }));
 boxMark.add(new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2).translate(0, -0.5, 0), new THREE.MeshBasicMaterial({ color: 0xffc94d, opacity: 0.22, depthTest: false, depthWrite: false, transparent: true, side: THREE.DoubleSide })));
 boxMark.renderOrder = 12; boxMark.children[0].renderOrder = 11; boxMark.visible = false;
+// the active camera's aim point while Move the aim point is on (R.aimEdit): the gizmo holds it, the camera turns to follow (never in a render)
+const aimMark = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff4c8a, depthTest: false, transparent: true, opacity: 0.9 }));
+aimMark.renderOrder = 12; aimMark.visible = false; aimMark.raycast = () => {};
+const aimOn = () => SC.camera?.aim !== false;
+const placeAim = () => { const c = current(SC.camera, CAM); aimMark.position.set(c.tx, c.ty, c.tz); aimMark.quaternion.identity(); aimMark.updateMatrixWorld(); };
+function aimChanged() { write(SC.camera, CAM, { tx: aimMark.position.x, ty: aimMark.position.y, tz: aimMark.position.z }); putCamera(current(SC.camera, CAM)); }
+// Move the aim point: on, the gizmo holds the active camera's aim point (with no layer selected)
+export function setAimEdit(on) { R.aimEdit = !!on && aimOn(); refresh(); }
 boxMark.raycast = () => {}; boxMark.children[0].raycast = () => {};
 const axesMark = new THREE.AxesHelper(1);
 axesMark.material.depthTest = false; axesMark.material.transparent = true;
@@ -138,7 +146,7 @@ export function setup() {
   scene.add(grid);
   camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.05, 500);
   camera.layers.enable(1);  // layer 1: a figure's joint dots (picked on their own, never rendered out)
-  scene.add(ikTarget, pivot, camProxy, originDot, axesMark, boxMark);
+  scene.add(ikTarget, pivot, camProxy, originDot, axesMark, boxMark, aimMark);
   R.orient = orientOf(store.get('deck.scene.orient', 'world'));   // the gizmo's axes (this device's choice)
   R.viewCut = store.get('deck.scene.viewcut', true) !== false;   // the picture follows the cuts, unless you are editing a camera
   R.shotFmt = store.get('deck.scene.shotfmt', 'h3') === 'ltx' ? 'ltx' : 'h3';
@@ -295,6 +303,7 @@ function fixTarget(o, start) {
 function applyChange() {
   if (gizmo.object === camProxy) return camChanged();
   if (gizmo.object === boxMark) return boxChanged();
+  if (gizmo.object === aimMark) return aimChanged();
   const o = selItem(), m = o && R.meshes.get(o.id);
   if (!o || !m) return;
   if (R.joint) return jointChanged(o);
@@ -744,6 +753,7 @@ function placeHandle() {
   else if (gizmo.object === ikTarget) placeIkTarget();
   else if (gizmo.object === camProxy) placeCamProxy();
   else if (gizmo.object === boxMark) placeBox();
+  else if (gizmo.object === aimMark) placeAim();
 }
 
 // ---- the gizmo's axes (World / Local / View, remembered on this device) and its stand-in pivot
@@ -820,13 +830,14 @@ export function syncMeshes() {
   const m = o && !o.hidden && onStage() ? R.meshes.get(o.id) : null;
   if (R.joint && !m?.userData.rig) R.joint = null;
   const box = !!m && !HAND.on && boxEditing();
-  const target = box ? boxMark : HAND.on ? null : !m ? (R.free && wantFrustum() ? camProxy : null) : !R.joint ? pivot : jointMode() === 'translate' ? ikTarget : m.userData.rig.bones[R.joint];
+  if (R.aimEdit && (!aimOn() || o || R.real)) R.aimEdit = false;
+  const target = box ? boxMark : HAND.on ? null : !m ? (R.aimEdit ? aimMark : R.free && wantFrustum() ? camProxy : null) : !R.joint ? pivot : jointMode() === 'translate' ? ikTarget : m.userData.rig.bones[R.joint];
   if (target) {
     const was = gizmo.object;
-    gizmo.setMode(R.joint ? jointMode() : !box && originEditing() ? originMode() : target === camProxy && R.mode === 'scale' ? 'translate' : R.mode);
+    gizmo.setMode(R.joint ? jointMode() : !box && originEditing() ? originMode() : (target === camProxy && R.mode === 'scale') || target === aimMark ? 'translate' : R.mode);
     // (a joint turns on its own axes; everything else as picked: World, Local or View)
     gizmo.setSpace(R.joint && jointMode() === 'rotate' ? 'local' : spaceOf(R.orient));
-    if (was !== target) { gizmo.attach(target); if (target === camProxy) placeCamProxy(); if (target === boxMark) placeBox(); }
+    if (was !== target) { gizmo.attach(target); if (target === camProxy) placeCamProxy(); if (target === boxMark) placeBox(); if (target === aimMark) placeAim(); }
   } else gizmo.detach();
 }
 
@@ -874,6 +885,7 @@ export function pose(f) {
   if (gizmo.object === pivot) placePivot();
   if (gizmo.object === camProxy) placeCamProxy();
   if (gizmo.object === boxMark) placeBox();
+  if (gizmo.object === aimMark) placeAim();
 }
 // editing a camera: Camera mode, or the camera layer selected (not while it plays, and not the Shots row)
 function editingCamera() {
@@ -913,6 +925,8 @@ export function draw(forRender = false) {
   snapGrid.visible = !forRender && !depth && snap3.grid && (live || WP.grid);
   for (const f of passHooks) f(depth || forRender === 'range' ? 'depth' : 'color', forRender);
   boxMark.visible = !forRender && !depth && gizmo.object === boxMark;
+  aimMark.visible = !forRender && !depth && gizmo.object === aimMark;
+  if (aimMark.visible) aimMark.scale.setScalar(Math.max(0.01, aimMark.position.distanceTo((R.free ? viewCam : camera).position) * 0.012));
   frustum.visible = wantFrustum() && !forRender && !depth && (live || WP.frustum);
   for (const x of OTHERS.values()) x.group.visible = frustum.visible;
   stage.visible = !onStage() && !forRender;
@@ -937,7 +951,7 @@ export function draw(forRender = false) {
 function drawPip() {
   const size = renderer.getSize(new THREE.Vector2()), b = pipRect(size.x, size.y);
   if (!b) return;
-  const tools = [grid, snapGrid, stage, frustum, originDot, axesMark, boxMark, gizmo.getHelper(), ...[...OTHERS.values()].map((x) => x.group)];
+  const tools = [grid, snapGrid, stage, frustum, originDot, axesMark, boxMark, aimMark, gizmo.getHelper(), ...[...OTHERS.values()].map((x) => x.group)];
   for (const m of R.meshes.values()) tools.push(...(m.userData.rig?.dots || []), ...(m.userData.tips || []), ...(m.userData.dots || []));
   const on = tools.filter((x) => x.visible);
   for (const x of on) x.visible = false;
