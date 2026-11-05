@@ -452,10 +452,23 @@ async function run3d(o, frame, ctx, label) {
     })();
     return { job };
   }
-  // a 3D object: its sheet picks the views and the model; the run, once queued, lands in a new 3D frame beside this one
+  // a 3D object: its sheet picks the views and the model; the run, once queued, lands in a new 3D frame beside this one.
+  // The frame's set: its picture as the Front, then the pictures wired into it (on wires, in plug order) in the other views.
   await (await import('./run.js')).sceneModule();
   const si = await import('./scene-import.js');
-  si.openObjectSheet(src.name, frame.label || '', { Front: src.name }, { character: { queued: (g) => { runBeside(frame, g, 'scene', label, ctx).catch(() => {}); } } });
+  const { VIEWS } = await import('./object-rules.js');
+  const names = [src.name];
+  try {
+    const fs = await import('./frame-source.js'), T = await import('./table.js');
+    for (const w of (T.wiresInto?.(frame.id) || []).filter((x) => x.on !== false && x.kind === 'image' && x.source)) {
+      if (names.length >= VIEWS.length) break;
+      const got = W.isFrameWire(w) ? { name: await fs.frameStill(w.source, w.frame) } : await fs.frameImage(w.source, { multiple: 1 }).catch(() => null);
+      if (got?.name && !names.includes(got.name)) names.push(got.name);
+    }
+  } catch (e) { toast(`The wired pictures didn't come in: ${e.message}`, true); }
+  const picks = Object.fromEntries(names.map((n, i) => [VIEWS[i], n]));
+  si.openObjectSheet(src.name, frame.label || '', picks, { setName: frame.label || 'This frame',
+    character: { queued: (g) => { runBeside(frame, g, 'scene', label, ctx).catch(() => {}); } } });
   return { landed: true };
 }
 

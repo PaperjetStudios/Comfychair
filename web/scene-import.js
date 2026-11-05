@@ -598,11 +598,26 @@ async function checkViews(picks, go, back) {
 // of them together, the others one. A tap on a picture selects it: for Pixal3D in or out of the run, for the others the one it reads; the rest
 // stay attached, greyed, and the slot's pencil changes the picture. The pictures and the selection are kept on this device per project until cleared, and
 // only their names: it writes no file of its own. A run goes on the Queue and the panel stays usable.
-const PANEL = { panel: null, picks: {}, sel: {}, label: '', who: null, runs: [] };
+// Two sets of pictures, switched at the top of the panel: Custom (the ones kept on this device, above) and, when the panel was opened with
+// views of its own (a frame on the table: its picture and the pictures wired into it; a character's; marked views), that set: PANEL.given
+// { name, picks, sel }, kept in memory only, so it never overwrites Custom. PANEL.mode: 'custom' | 'given'.
+const PANEL = { panel: null, picks: {}, sel: {}, label: '', who: null, runs: [], mode: 'custom', given: null };
 const draftKey = attachedKey;
-const keepDraft = () => { store.set(draftKey(), PANEL.picks); store.set(`${draftKey()}.sel`, PANEL.sel); };
+const isCustom = () => PANEL.mode === 'custom' || !PANEL.given;
+const keepDraft = () => {
+  if (isCustom()) { store.set(draftKey(), PANEL.picks); store.set(`${draftKey()}.sel`, PANEL.sel); }
+  else Object.assign(PANEL.given, { picks: PANEL.picks, sel: PANEL.sel });
+};
 const readDraft = attachedViews;
-export const attachedPictures = () => Object.keys(PANEL.panel?.shown() ? PANEL.picks : readDraft()).length;
+const loadCustom = () => { PANEL.picks = readDraft(); PANEL.sel = store.get(`${draftKey()}.sel`, {}) || {}; };
+function switchSet(mode) {
+  if (mode === PANEL.mode || (mode === 'given' && !PANEL.given)) return;
+  keepDraft();
+  PANEL.mode = mode;
+  if (mode === 'custom') loadCustom(); else { PANEL.picks = { ...PANEL.given.picks }; PANEL.sel = { ...PANEL.given.sel }; }
+  drawObjectPanel();
+}
+export const attachedPictures = () => Object.keys(PANEL.panel?.shown() && isCustom() ? PANEL.picks : readDraft()).length;
 const setPicks = (picks) => { PANEL.picks = picks; keepDraft(); drawObjectPanel(); };
 const setSel = (sel) => { PANEL.sel = sel; keepDraft(); drawObjectPanel(); };
 // names joining what is attached: the new ones are in the run; one that couldn't go in is said
@@ -616,7 +631,7 @@ function joinPicks(names) {
   PANEL.picks = r.picks;
   PANEL.sel = selectAdded(PANEL.sel, [...again, ...added]);
 }
-addEventListener('attached:change', () => { if (PANEL.panel) { PANEL.picks = readDraft(); drawObjectPanel(); } });   // (× on the picker's Attached strip)
+addEventListener('attached:change', () => { if (PANEL.panel && isCustom()) { PANEL.picks = readDraft(); drawObjectPanel(); } });   // (× on the picker's Attached strip)
 
 // where a run started now lands: the panel's own target, the open 3D frame, the one 3D frame selected on the table, a new 3D frame there, else the open scene
 async function objectTarget() {
@@ -677,6 +692,8 @@ function drawObjectPanel() {
   panel.body.replaceChildren(
     label ? hint(`For ${label}`) : '',
     section('Attached images', null,
+      PANEL.given ? seg([['custom', 'Custom', 'The pictures kept here until you clear them'],
+        ['given', PANEL.given.name.length > 28 ? `${PANEL.given.name.slice(0, 27)}…` : PANEL.given.name, PANEL.given.name]], PANEL.mode, switchSet) : null,
       h('div', { class: 'obj-views' }, VIEW_ROLES.map(slot)),
       h('div', { class: 'row wrap' },
         button('Add images…', addMany, { cls: 'small', disabled: !free }),
@@ -699,19 +716,27 @@ function drawObjectPanel() {
     ...PANEL.runs.map((r) => hint(`#${r.id} ${r.what}: ${stateWord[r.state]}`)));
 }
 
-// Opens the panel. name alone: that picture joins the ones attached. picks: these views instead (a character's, marked views). Neither: what was
-// attached last. opts: { character: { queued(run, slot, template, settings) } gets the run and the model goes there; settings: start from these }
+// Opens the panel. name alone: that picture joins the Custom ones. picks: these views as a set of their own (a frame's, a character's, marked
+// views), shown first, with Custom one switch away. Neither: Custom. opts: { character: { queued(run, slot, template, settings) } gets the run
+// and the model goes there; settings: start from these; setName: what the switch calls the picks (else label) }
 export function openObjectSheet(name = null, label = '', picks = null, opts = {}) {
   if (!PANEL.panel) {
     const close = h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Close (the pictures stay attached)', title: 'Close: the pictures stay attached', onclick: () => PANEL.panel.hide() }, icon('close'));
     PANEL.panel = floatPanel({ key: 'deck.scene.objectPanel', title: 'Make a 3D object', cls: 'float-object', buttons: [close], inside: true });
   }
   if (opts.settings) Object.assign(OBJ, opts.settings);
-  if (!PANEL.panel.shown()) { PANEL.picks = readDraft(); PANEL.sel = store.get(`${draftKey()}.sel`, {}) || {}; }
+  if (PANEL.panel.shown()) keepDraft();
   PANEL.who = opts.character || null;
   PANEL.label = label || '';
-  if (picks) { PANEL.picks = { ...picks }; PANEL.sel = {}; }
-  else if (name) joinPicks([name]);
+  if (picks) {
+    PANEL.given = { name: opts.setName || label || 'These views', picks: { ...picks }, sel: {} };
+    PANEL.mode = 'given';
+    PANEL.picks = { ...picks }; PANEL.sel = {};
+  } else {
+    PANEL.given = null; PANEL.mode = 'custom';
+    loadCustom();
+    if (name) joinPicks([name]);
+  }
   keepDraft();
   drawObjectPanel();
   PANEL.panel.show();
