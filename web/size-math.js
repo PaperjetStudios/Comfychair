@@ -20,3 +20,9 @@ export function snapSide(n, step = 16, min = step, max = Infinity) {
   if (!Number.isFinite(n)) return min;
   return Math.min(max, Math.max(min, Math.round(n / step) * step));
 }
+
+// What a picture of w × h comes in at under mp megapixels (0: its own size), sides snapped down to a multiple: as app/imageprep.py prep cuts it
+export function capSize(w, h, mp = 0, multiple = 16) {
+  if (mp && w * h > mp * 1e6) { const k = Math.sqrt((mp * 1e6) / (w * h)); w = Math.max(1, Math.floor(w * k)); h = Math.max(1, Math.floor(h * k)); }
+  return { w: Math.max(multiple, Math.floor(w / multiple) * multiple), h: Math.max(multiple, Math.floor(h / multiple) * multiple) };
+}

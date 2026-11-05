@@ -48,7 +48,7 @@ export function makeCanvas(w, hh) {
   Object.defineProperties(cv, { naturalWidth: { get() { return this.width; } }, naturalHeight: { get() { return this.height; } } });
   return cv;
 }
-export const isCanvas = (l) => l.img instanceof HTMLCanvasElement;
+export const isCanvas = (l) => l.img instanceof HTMLCanvasElement && !l.runPreview;   // (the sampler's preview layer is no painted canvas: it's never saved)
 
 // A blank canvas's background: see-through (null), White, Neutral grey or any colour. get(): its colour now; set(colour or null).
 export function fillField(label, get, set, ...kids) {

@@ -22,12 +22,13 @@ import { sectionTargets, sideNav } from './layout.js';
 import { liveFrame } from './live.js';
 
 const P = { panes: new Map(), order: [], cur: null, strip: null, body: null, root: null, ctx: { frames: [], live: null }, fns: new Set(), built: false };
-const DEFAULTS = { make: { title: 'Make', icon: 'sparkle' }, edit: { title: 'Edit', icon: 'brush' }, props: { title: 'Properties', icon: 'settings' }, layers: { title: 'Layers', icon: 'rows' }, frame: { title: 'Frame', icon: 'fit' },
+const DEFAULTS = { make: { title: 'Make', icon: 'sparkle' }, output: { title: 'Output', icon: 'enlarge' }, edit: { title: 'Edit', icon: 'brush' }, props: { title: 'Properties', icon: 'settings' }, layers: { title: 'Layers', icon: 'rows' }, frame: { title: 'Frame', icon: 'fit' },
   story: { title: 'Story', icon: 'story' }, shelf: { title: 'Shelf', icon: 'board' } };
-const ORDER = ['make', 'edit', 'props', 'layers', 'frame', 'story', 'shelf'];
+const ORDER = ['make', 'edit', 'output', 'props', 'layers', 'frame', 'story', 'shelf'];
 // when the sidebar's own panes show, from its context (a `when` passed for these is ignored: several modules share them)
 const ENGINE_KINDS = ['image', 'video', 'sound', 'scene'];
-const WHEN = { layers: (c) => ENGINE_KINDS.includes(c.live?.kind) };
+const WHEN = { layers: (c) => ENGINE_KINDS.includes(c.live?.kind),
+  output: (c) => (c.live ? [c.live] : c.frames || []).some((f) => ['image', 'video', 'scene'].includes(f.kind)) };
 
 function build() {
   if (P.built) return true;
@@ -35,6 +36,16 @@ function build() {
   if (!root) return false;
   P.built = true; P.root = root;
   P.strip = h('div', { class: 'sb-tabs', role: 'tablist', 'aria-label': 'Sidebar' });
+  // words on the tabs, or icons only (each tab still names itself when pointed at); kept on this device
+  const iconsOnly = (on) => {
+    P.strip.classList.toggle('icons-only', on);
+    P.labels.setAttribute('aria-pressed', String(on));
+    P.labels.title = on ? 'Show the words on these tabs' : 'Show only icons on these tabs';
+    P.labels.setAttribute('aria-label', P.labels.title);
+  };
+  P.labels = h('button', { type: 'button', class: 'sb-labels', onclick: () => { const on = !P.strip.classList.contains('icons-only'); store.set('deck.sidebar.iconsOnly', on); iconsOnly(on); } }, icon('text'));
+  P.strip.append(P.labels);
+  iconsOnly(store.get('deck.sidebar.iconsOnly', false));
   P.body = h('div', { class: 'sb-panes' });
   root.classList.add('sidebar');
   root.replaceChildren(P.strip, P.body);
@@ -72,7 +83,7 @@ function pane(name, { title, icon: ic, when, host } = {}) {
     const rank = (n) => { const i = ORDER.indexOf(n); return i < 0 ? 99 : i; };
     P.order.push(name); P.order.sort((a, b) => rank(a) - rank(b));
     const i = P.order.indexOf(name), next = P.panes.get(P.order[i + 1]);
-    P.strip?.insertBefore(tab, next?.tab || null);
+    P.strip?.insertBefore(tab, next?.tab || P.labels);
     P.body?.append(el);
   }
   if (title || !p.title) { p.title = title || d.title; p.tab.title = p.title; p.tab.setAttribute('aria-label', p.title); p.el.setAttribute('aria-label', p.title); }
@@ -146,5 +157,5 @@ addEventListener('table:live', (e) => { P.ctx = { frames: [e.detail.frame], live
 addEventListener('table:unlive', (e) => { P.ctx = { frames: e.detail?.frame ? [e.detail.frame] : [], live: null }; queueMicrotask(follow); });
 
 // the panes everyone uses are there from the start, in their order
-for (const n of ['make', 'frame']) pane(n);
+for (const n of ['make', 'frame', 'output']) pane(n);
 pane('layers', { host: true });

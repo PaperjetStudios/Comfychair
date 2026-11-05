@@ -94,6 +94,7 @@ const tableOn = () => !!document.querySelector('#tab-table.active, #tab-table.li
 let makeMod = null;
 import('./make-panel.js').then((m) => { makeMod = m; syncActionBar(); }).catch((e) => console.error('Make panel:', e));
 let editMod = null;
+import('./output-panel.js').catch((e) => console.error('Output panel:', e));
 import('./edit-panel.js').then((m) => { editMod = m; syncActionBar(); }).catch((e) => console.error('Edit panel:', e));
 function syncActionBar() {
   const b = $('#genBtn'), on = tableOn();
@@ -157,7 +158,11 @@ wireTemplateFilter();
 $('#reloadTpl').addEventListener('click', async () => { await loadTemplates(true); toast('Templates and model lists reloaded'); });
 document.addEventListener('deck-comfy-back', () => loadTemplates(true).catch(() => {}));
 $('#genBtn').addEventListener('click', () => generate());
-$('#stopBtn').addEventListener('click', () => stop());
+$('#stopBtn').addEventListener('click', () => {   // (on the table it stops what the big button started: the Edit pane's runs, a chain, or a run)
+  if (tableOn() && editMod?.editActive()) { editMod.stopEdit(); return; }
+  if (tableOn() && makeMod) { makeMod.stopMake(); return; }
+  stop();
+});
 $('#jobsBtn').addEventListener('click', openJobs);
 wireDownloads($('#dlBtn'));
 $('#dlBtn').addEventListener('click', openDownloads);

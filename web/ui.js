@@ -497,13 +497,6 @@ export function seedField(label, { get, set, mode, setMode, last = () => null, i
 }
 
 // A size picked from a list of [label, [w, h] | null]; one that isn't on the list shows as its own option
-export function sizeSelect(list, cur, onPick) {
-  const same = (s) => JSON.stringify(s ?? null) === JSON.stringify(cur ?? null);
-  const sel = h('select', {}, list.map(([l, s], i) => h('option', { value: i, selected: same(s) }, l)));
-  if (cur && !list.some(([, s]) => same(s))) sel.append(h('option', { value: 'custom', selected: true }, cur.join('×')));
-  sel.addEventListener('change', () => { if (sel.value !== 'custom') onPick(list[sel.value][1]); });
-  return sel;
-}
 
 // A colour well; set(hex) while it's being picked (live) and once it's chosen
 export function colorField(label, get, set, ...kids) {
@@ -686,7 +679,7 @@ export function layerRowsEl(rows, { onReorder = null, dragOut = null } = {}) {
     h('div', { class: 'layer-row' + (onReorder ? ' reorder' : '') + (r.sel ? ' sel' : '') + (r.off ? ' off' : '') + (r.cls ? ` ${r.cls}` : ''), onclick: r.onclick },
       onReorder ? grip(i) : null,
       h('span', { class: 'thumb' }, r.thumb),
-      h('div', { class: 'layer-name' }, h('span', {}, r.name), h('span', { class: 'hint' }, r.hint || '')),
+      h('div', { class: 'layer-name' }, h('span', { title: typeof r.name === 'string' ? r.name : null }, r.name), h('span', { class: 'hint' }, r.hint || '')),
       h('div', { class: 'layer-btns' }, r.buttons || []))));
   return list;
 }
@@ -695,11 +688,3 @@ export function layerRowsEl(rows, { onReorder = null, dragOut = null } = {}) {
 export const panelTop = (main, clear = null) => h('div', { class: 'row panel-top' }, main,
   clear ? button('Clear all', clear, { cls: 'ghost' }) : null);
 
-export function mpInput(get, set) {
-  const input = h('input', { type: 'number', inputMode: 'decimal', min: 0, max: 16, step: 0.05, value: get() });
-  input.addEventListener('change', () => {
-    const n = clamp(parseFloat(input.value) || 0, 0, 16);
-    input.value = n; set(n);
-  });
-  return h('label', { class: 'mp' }, h('span', {}, 'Max MP'), input, info('0 = keep size'));
-}

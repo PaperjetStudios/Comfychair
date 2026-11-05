@@ -32,6 +32,10 @@
 - Every new panel or area uses `layout.js`: `wireSplitters()` for resizable areas, `maximizable()` for a full-screen
   toggle and `sideNav()` for a side panel's icon tabs.
 - Every transform gets a grid and snapping (`gizmo.js` `snap`/`snapBar`, `snap3`/`snapBar3`).
+- Choosing an output size always uses `size-picker.js`, with the size it comes out at on show: `sizePicker` (proportions and megapixels, Custom to
+  type) for any size, `sizeChoices` when the shape or sizes are fixed by the source or the model, `sizeOrMatch` when it can follow its source.
+- A frame's output size is `frame.out` (`table-model.js` `outputOf`); its `w` and `h` on the table are only its preview, so resizing it there
+  never changes the output. Anything a frame makes reads `outputOf`.
 - A layer stack's rules (groups, masks, undo states) live in `web/layer-stack.js`; a character's in `web/char-model.js`.
 
 ## The card takes one thing at a time

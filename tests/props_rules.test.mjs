@@ -6,11 +6,12 @@ import { MIXED, rowsFor, shared, applyAll, snapNum, lockedSize, mixLength } from
 test('rowsFor: frames on the table', () => {
   assert.deepEqual(rowsFor({ kind: 'frames', picked: [] }), []);
   assert.deepEqual(rowsFor({ kind: 'frames', picked: [{ kind: 'image' }] }),
-    ['x', 'y', 'w', 'h', 'opacity', 'resolution', 'name', 'lock', 'hide']);
+    ['x', 'y', 'opacity', 'name', 'lock', 'hide']);
   // several: no name (it would name them alike); a resolution only when they are all image frames
   assert.deepEqual(rowsFor({ kind: 'frames', picked: [{ kind: 'image' }, { kind: 'video' }] }),
-    ['x', 'y', 'w', 'h', 'opacity', 'lock', 'hide']);
-  assert.ok(rowsFor({ kind: 'frames', picked: [{ kind: 'image' }, { kind: 'image' }] }).includes('resolution'));
+    ['x', 'y', 'opacity', 'lock', 'hide']);
+  assert.ok(!rowsFor({ kind: 'frames', picked: [{ kind: 'image' }, { kind: 'image' }] }).includes('resolution'));
+  assert.ok(rowsFor({ kind: 'frames', picked: [{ kind: 'sound' }] }).includes('resolution'));
   // a note has nothing to measure
   assert.ok(!rowsFor({ kind: 'frames', picked: [{ kind: 'note' }] }).includes('resolution'));
   // frame rotation is not a row

@@ -97,9 +97,13 @@ export const STEPS = { 3: '1.0, 0.8571428571428571, 0.6, 0.0',
   5: '1.0, 0.9230769230769231, 0.8181818181818182, 0.6666666666666666, 0.42857142857142855, 0.0',
   7: '1.0, 0.9473684210526315, 0.8823529411764706, 0.8, 0.6923076923076923, 0.5454545454545454, 0.3333333333333333, 0.0' };
 export const RES = [[544, '544p'], [704, '704p'], [1088, '1088p']];
-export const resOf = (e, st) => { const r = e.res || RES; return r.some(([v]) => v === st.res) ? st.res : r[1][0]; };
-export const SIZES = [['Match source', null], ['1280×704', [1280, 704]], ['704×1280', [704, 1280]], ['960×544', [960, 544]],
-  ['544×960', [544, 960]], ['1024×1024', [1024, 1024]], ['1920×1088', [1920, 1088]]];
+export const resOf = (e, st) => { const r = e.res || RES; return r.some(([v]) => v === st.res) || (st.resFree && st.res > 0) ? st.res : r[1][0]; };   // (resFree: typed under Custom)
+// what a source of nat [w, h] comes out at with its short side at res, both sides multiples of the effect's (null: its size isn't known yet)
+export function shortSideSize(nat, res, mult = 32) {
+  if (!nat) return null;
+  const k = res / Math.min(nat[0], nat[1]);
+  return { w: Math.round((nat[0] * k) / mult) * mult, h: Math.round((nat[1] * k) / mult) * mult };
+}
 export const FACE = { grow: 1.05, feather: 0.25, chin: 0.82 };   // Face only's blend outline (Deck Face Uncrop)
 // Clean up matte (POST /api/video/matte): combine two mattes, then grow/shrink, fill holes, steady, edge, feather
 export const REFINE = { combine: 'union', grow: 0, close: 0, smooth: 0, feather: 0, low: 0, high: 1, invert: false };

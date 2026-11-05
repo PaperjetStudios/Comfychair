@@ -11,14 +11,15 @@
 // The Frame pane gets a 3D section for one selected 3D frame: its size (the scene's picture), length, frame rate and which
 // videos Render makes (scene-ui.js / scene-data.js setters; off screen through withSceneDoc or its saved document).
 //
-// table.js's events (detail.handled = true when taken here): table:live, table:unlive, table:resize, table:drop-frame.
-import { api, field, h, help, hint, rangeField, section, toast, toggle, chips } from './ui.js';
+// table.js's events (detail.handled = true when taken here): table:live, table:unlive, table:frame-field, table:drop-frame.
+import { setOutputs } from './table.js';
+import { api, field, h, help, hint, rangeField, section, toast, toggle } from './ui.js';
 import { isLive } from './live.js';
 import { uploadImage } from './media.js';
 import { sceneModule } from './run.js';
 import { sidebar } from './sidebar.js';
 import { besideSpot, editDoc, putStill, sourcePicture, stillOf } from './table-frames.js';
-import { nextBeside } from './table-model.js';
+import { nextBeside, outputOf } from './table-model.js';
 import { dropKind } from './drop-files.js';
 import { kindOf } from './kinds.js';
 import { S } from './core.js';
@@ -64,18 +65,23 @@ async function live(frame, root) {
     ui.OUT.rendered = (gens) => tell(frame, { gens });
     ui.OUT.saved = (picture, kind) => tell(frame, { picture, kind });
   }
-  m.setSceneSize(frame.w, frame.h);   // (the frame's size is the scene's picture)
+  { const o = outputOf(frame); m.setSceneSize(o.w, o.h); }   // (its output size is the scene's picture)
   F.size = m.sceneSize();
   m.show();
   sidebar.refresh(); sidebar.show('layers');
 }
 
-addEventListener('table:resize', (e) => {
-  const { frame } = e.detail;
-  if (frame.kind !== 'scene' || F.mounted !== frame.id) return;
-  e.detail.handled = true;
-  F.m.setSceneSize(frame.w, frame.h);
-  F.size = F.m.sceneSize();
+// the open scene's own panel chose a size: that is the frame's output size
+addEventListener('scene:size', (e) => { if (F.mounted != null) setOutputs([F.mounted], e.detail); });
+// its output size changed: the scene's picture goes with it (the open one at once, else its saved document)
+addEventListener('table:frame-field', async (e) => {
+  const { frame, keys } = e.detail || {};
+  if (frame?.kind !== 'scene' || !keys?.includes('out')) return;
+  const { w, h: hh } = outputOf(frame);
+  try {
+    if (F.mounted === frame.id) { F.m.setSceneSize(w, hh); F.size = F.m.sceneSize(); }
+    else if (frame.doc) await editDoc('scene', frame.doc, (p) => { if (p.width === w && p.height === hh) return false; p.width = w; p.height = hh; });
+  } catch (err) { toast(err.message, true); }
 });
 
 addEventListener('table:unlive', (e) => {
@@ -364,11 +370,8 @@ async function fillSceneSection(f, body) {
   const live = () => F.mounted === f.id;
   const p = live() ? { seconds: D.SC.seconds } : (await api(`/api/store/scene-tabs/${f.doc}${S.project != null ? `?project_id=${S.project}` : ''}`, { busy: false }))?.payload || {};
   let secs = Number(p.seconds) || 5;
-  const sizeKey = `${f.w}x${f.h}`;
   const kinds = new Set(ui.renderKinds());
   body.replaceChildren(
-    field('Size', chips(D.SIZES.map((s) => [s.join('x'), s.join('×')]), sizeKey, (v) => setSceneFrameSize(f, ...v.split('x').map(Number))),
-      help('The frame\'s size is the scene\'s picture: renders are this size. Any other size: Size and MP… above.')),
     rangeField('Length', () => secs, (v) => { secs = v; }, { min: ui.LENGTHS[0], max: ui.LENGTHS[1], step: 0.5,
       fmt: (v) => `${+Number(v).toFixed(2)} s · ${D.framesFor(v)} frames`,
       onChange: () => withSceneDoc(f, async () => { ui.newLength(secs); }).catch((e) => toast(e.message, true)) }),
@@ -379,12 +382,3 @@ async function fillSceneSection(f, body) {
     }))), help('The videos Render… makes of the scene, one after another: depth, pose (the posable people) and colour.')));
 }
 
-// a 3D frame's size: the frame on the table, and its scene's picture (the open one at once, else its saved document)
-async function setSceneFrameSize(f, w, hh) {
-  if (!w || !hh) return;
-  f.w = w; f.h = hh; frameChanged();
-  try {
-    if (F.mounted === f.id) { F.m.setSceneSize(w, hh); F.size = F.m.sceneSize(); }
-    else await editDoc('scene', f.doc, (p) => { if (p.width === w && p.height === hh) return false; p.width = w; p.height = hh; });
-  } catch (e) { toast(e.message, true); }
-}

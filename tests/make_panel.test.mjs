@@ -1,7 +1,7 @@
 // node --test tests/make_panel.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { OP_TEMPLATES, canvasRect, carryWords, familiesOf, frameImageField, frameSize, makeFrames, makeTarget, noteText, pickTemplate, settingsFor, settingsPayload,
+import { slotMode, OP_TEMPLATES, canvasRect, carryWords, familiesOf, frameImageField, frameOutput, frameSize, makeFrames, makeTarget, noteText, pickTemplate, settingsFor, settingsPayload,
   sizePair, templatesFor, withClip, itemSource, addHeld, settleHeld, plainFills, plainPicture, plainSound, plainVideo, renderKey, repointable, isOwnSlot, selfPicked, stableJson, wireFields } from '../web/make-rules.js';
 import { owedFor, owedRecord } from '../web/owed-runs.js';
 
@@ -82,6 +82,10 @@ test('the frame picture goes in the first picture; the frame size is the output 
   assert.deepEqual(sizePair(t), [W, H]);
   assert.deepEqual(frameSize(sizePair(t), { w: 1000, h: 3000 }), { w: 1008, h: 2048 });
   assert.equal(frameSize(null, { w: 10, h: 10 }), null);
+  assert.deepEqual(frameSize(sizePair(t), { w: 1920, h: 1080, out: { w: 768, h: 448 } }), { w: 768, h: 448 });
+  assert.deepEqual(frameOutput({ w: 1920, h: 1080 }), { w: 1920, h: 1080 });
+  assert.deepEqual(frameOutput({ w: 1920, h: 1080, out: { w: 768, h: 448 } }), { w: 768, h: 448 });
+  assert.equal(frameOutput({}), null);
 });
 test('a layer that lands later: owed to the frame\'s document, with its name', () => {
   const rec = owedRecord('doc1', 'make', { name: null, px: [512, 512], rect: { x: 0, y: 0, w: 512, h: 512 }, label: 'Krea 2' }, { id: 7, prompt_id: 'p' }, 1, 1000);
@@ -246,4 +250,25 @@ test('held wire pictures: added per run, settled by the runs\' status only', () 
   assert.deepEqual(settleHeld(held, () => 'gone').drop, ['a.png'], 'a run that no longer exists lets it go');
   assert.deepEqual(settleHeld(held, () => 'interrupted').drop, ['a.png'], 'a stopped run lets it go');
   assert.deepEqual(settleHeld(undefined, () => 'done'), { held: [], drop: [] });
+});
+
+test('slotMode: every picture or clip slot can come from layers, a plugged input or by hand', () => {
+  const a = { key: 'a', kind: 'image' }, b = { key: 'b', kind: 'image' }, v = { key: 'v', kind: 'video' }, t = { fields: [a, b, v] };
+  const img = { id: 'w1', kind: 'image', n: 1, on: true }, vid = { id: 'w2', kind: 'video', n: 1, on: true };
+  // nothing chosen: the first picture is the frame's layers, a plugged input takes the next slot of its kind
+  assert.equal(slotMode(t, 'image', a, {}, [img, vid]), 'layers');
+  assert.equal(slotMode(t, 'image', b, {}, [img, vid]), 'wire');
+  assert.equal(slotMode(t, 'image', v, {}, [img, vid]), 'wire');
+  assert.equal(slotMode(t, 'image', b, {}, []), 'manual');
+  // the first picture can be set by hand or plugged (the control picture of a control template)
+  assert.equal(slotMode(t, 'image', a, { from: { a: 'manual' }, wired: { a: false } }, [img]), 'manual');
+  assert.equal(slotMode(t, 'image', a, { wired: { a: 'w1' } }, [img]), 'wire');
+  // any picture slot can come from layers; a clip slot and other kinds of frame can't
+  assert.equal(slotMode(t, 'image', b, { from: { b: 'layers' }, wired: { b: false } }, [img]), 'layers');
+  assert.equal(slotMode(t, 'image', v, { from: { v: 'layers' }, wired: { v: false } }, []), 'manual');
+  assert.equal(slotMode(t, 'video', a, {}, []), 'manual');
+  // an input switched off leaves the slot to itself; the choice is kept with the frame
+  assert.equal(slotMode(t, 'image', b, {}, [{ ...img, on: false }]), 'manual');
+  const st = settingsFor(t, settingsPayload({ tpl: t, values: {}, seedMode: {}, imageMp: {}, imageCrop: {}, sizeMode: {}, loraFolder: {}, from: { a: 'manual' }, layerSrc: { b: { layer: 'k', mp: 2 } } }));
+  assert.deepEqual([st.from, st.layerSrc], [{ a: 'manual' }, { b: { layer: 'k', mp: 2 } }]);
 });

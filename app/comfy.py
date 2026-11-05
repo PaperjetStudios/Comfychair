@@ -34,6 +34,38 @@ def is_video(workflow: dict) -> bool:
                for n in workflow.values())
 
 
+def previews_on() -> bool:
+    """Whether ComfyUI makes live sampler previews for the runs queued from now on. Off is a flag file in the data folder (one
+    switch for every device and every route that queues), as global as comfy_client_id: it has no owner to go with."""
+    return not (config.DATA_DIR / "no_sampler_previews").exists()
+
+
+def set_previews(on: bool) -> bool:
+    flag = config.DATA_DIR / "no_sampler_previews"
+    if on:
+        flag.unlink(missing_ok=True)
+    else:
+        flag.touch()
+    return previews_on()
+
+
+def preview_extra(workflow: dict, preview: str | None = None) -> dict:
+    """The extra_data that asks for a run's live previews. ComfyUI sends none unless asked. Images use "taesd" (the tiny
+    decoders in models/vae_approx, else latent2rgb). Video uses latent2rgb with VHS's animated preview switch, read from the
+    workflow extras where the desktop UI puts it: the video TAE decoders don't work inside VHS's animated wrapper and cost more
+    time than the sampling. The switch (previews_on) beats a template's own Live preview choice: off saves the decode each step."""
+    if not previews_on():
+        return {"preview_method": "none"}
+    if is_video(workflow) and preview and preview.startswith("sharp"):
+        return {"preview_method": "taesd"}  # one sharp frame per step from the video TAE
+    if is_video(workflow) and preview == "off":
+        return {"preview_method": "none"}
+    if is_video(workflow):
+        return {"preview_method": config.VIDEO_PREVIEW_METHOD,
+                "extra_pnginfo": {"workflow": {"extra": {"VHS_latentpreview": True}}}}
+    return {"preview_method": config.PREVIEW_METHOD}
+
+
 def once(workflow: dict) -> dict:
     """Make this run's saved files its own: every filename_prefix gets a run-<token>/ folder and an auto-rigger's
     fbx_name the token. ComfyChair deletes ComfyUI's copies once it has its own (storage.py), so a repeated prompt
@@ -203,19 +235,7 @@ class Comfy:
         """Send a run to ComfyUI, or hold it in the card's line (app/gpu.py) while an outside job is ahead of it: the prompt
         id is chosen here, so it's good either way. A held run's refusal comes later, as a failed run instead of ComfyError."""
         once(workflow)
-        # Live sampler previews: ComfyUI sends none unless asked. Images use "taesd" (the tiny
-        # decoders in models/vae_approx, else latent2rgb). Video uses latent2rgb with VHS's animated
-        # preview switch, read from the workflow extras where the desktop UI puts it: the video TAE
-        # decoders don't work inside VHS's animated wrapper and cost more time than the sampling.
-        if is_video(workflow) and preview and preview.startswith("sharp"):
-            extra = {"preview_method": "taesd"}  # one sharp frame per step from the video TAE
-        elif is_video(workflow) and preview == "off":
-            extra = {"preview_method": "none"}
-        elif is_video(workflow):
-            extra = {"preview_method": config.VIDEO_PREVIEW_METHOD,
-                     "extra_pnginfo": {"workflow": {"extra": {"VHS_latentpreview": True}}}}
-        else:
-            extra = {"preview_method": config.PREVIEW_METHOD}
+        extra = preview_extra(workflow, preview)
         pid = str(uuid.uuid4())
         body = {"prompt": workflow, "prompt_id": pid, "client_id": self.client_id, "extra_data": extra}
         if gpu.hold(pid, lambda: self._send(workflow, body), self._held_failed):

@@ -23,6 +23,7 @@
 //   canRun(op, {live, opts})    true when it can
 //   quickOf(kind)               [{ label, icon, ids }] the icon row over the list
 //   groupsOf(kind)              [{ group, ops }] in order, for a select's optgroups
+//   menuOf(kind)                [{ label, icon, button, all: [op ids] }] the categories: every op once, under its quick button or its group's name
 //   planRuns(frames, op, batch) { runs: [{ frame, batch }], skipped: [{ frame, why }] }
 //   menuGroupsFor(frames, {live})  [{ kind, title, groups: [[{ id, kind, label, icon, disabled, why }]] }]
 //   targetsOf(op)               the landing choices ['frame', 'layer'] (or ['self'] for an op on the document itself)
@@ -54,6 +55,7 @@ const IMAGE = [
   { id: 'skin', group: 'Detail', label: 'Skin detail', icon: 'person', quick: 'Skin', help: 'Real skin texture on faces and bodies.',
     live: (o) => (o?.skinWhere === 'parts' ? 'Body parts are found and placed on the open frame' : null) },
   { id: 'detail', group: 'Detail', label: 'Detail pass', icon: 'star', quick: 'Detail', help: 'The picture drawn again with finer detail, its layout kept.' },
+  { id: 'blend', group: 'Detail', label: 'Blend', icon: 'star', help: 'Blends pictures cut out and placed on another into one.' },
   { id: 'delight', group: 'Detail', label: 'De-light', icon: 'star', help: 'Evens out dark or shadowed pictures.' },
   { id: 'depth', group: 'Maps', label: 'Depth map', icon: 'grid', quick: 'Maps', help: 'A grey depth map, near is white.' },
   { id: 'canny', group: 'Maps', label: 'Canny edges', icon: 'grid', help: 'White edges on black.' },
@@ -166,12 +168,32 @@ export function quickOf(kind) {
   for (const o of OPS[kind] || []) {
     if (o.quick && !rows.has(o.quick)) rows.set(o.quick, { label: o.quick, icon: o.icon, ids: [] });
   }
-  // every op of a quick button's group goes with it (the first that is not greyed is opened)
-  for (const r of rows.values()) {
-    const first = OPS[kind].find((o) => o.quick === r.label);
-    r.ids = OPS[kind].filter((o) => o === first || (o.group === first.group && !o.quick && o.needs !== 'live')).map((o) => o.id);
-  }
+  // an op with no button of its own goes with the nearest button before it in its group, or else the group's first: one button each, so only
+  // that button lights up for it (the first that is not greyed is opened)
+  for (const r of rows.values()) r.ids = OPS[kind].filter((o) => o.quick === r.label && o === OPS[kind].find((x) => x.quick === r.label)).map((o) => o.id);
+  const list = OPS[kind] || [];
+  list.forEach((o, i) => {
+    if (o.quick || o.needs === 'live') return;
+    const before = list.slice(0, i).reverse().find((x) => x.group === o.group && x.quick), owner = before || list.find((x) => x.group === o.group && x.quick);
+    if (owner) rows.get(owner.quick).ids.push(o.id);
+  });
   return [...rows.values()];
+}
+
+export function menuOf(kind) {
+  const list = OPS[kind] || [], rows = quickOf(kind).map((q) => ({ label: q.label, icon: q.icon, button: true, all: [...q.ids] }));
+  const owned = new Set(rows.flatMap((r) => r.all));
+  list.forEach((o, i) => {
+    if (owned.has(o.id)) return;
+    // (one that needs the frame open: with the button before it in its group, or the group's first; a group with no button is a category of its own)
+    const near = list.slice(0, i).reverse().find((x) => x.group === o.group && x.quick) || list.find((x) => x.group === o.group && x.quick);
+    let row = near ? rows.find((r) => r.label === near.quick) : rows.find((r) => r.label === o.group && !r.button);
+    if (!row) { row = { label: o.group, icon: o.icon, button: false, all: [] }; rows.push(row); }
+    row.all.push(o.id);
+  });
+  const at = new Map(list.map((o, i) => [o.id, i]));
+  for (const r of rows) r.all.sort((a, b) => at.get(a) - at.get(b));
+  return rows.sort((a, b) => at.get(a.all[0]) - at.get(b.all[0]));
 }
 
 export function groupsOf(kind) {

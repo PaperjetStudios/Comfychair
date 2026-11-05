@@ -1,11 +1,13 @@
+import { layerListPart, layersFloating } from './float-layers.js';
+import { sizePicker } from './size-picker.js';
 import * as THREE from './vendor/three.module.min.js';
 import * as FIGURE from './figure.js';
 import {
   $, actions, button, clamp, clone, closeSheet, field, h, hint, iconBtn, layerRowsEl, numField, openSheet, panelTop, rangeField,
-  section, seg, sheetOpen, store, uid, undoToast, help, withHelp, toggle, sizeSelect, chip, info, toast, icon, iconize, numSlider, popover, closePopover,
+  section, seg, sheetOpen, store, uid, undoToast, help, withHelp, toggle, chip, info, toast, icon, iconize, numSlider, popover, closePopover,
 } from './ui.js';
 import {
-  applyToLayer, canBake, C, CAM, EVEN, FPS, HIST, camsOf, cutTo, dropCuts, newCamera, setActiveCam, shots, stretchCuts, trimCuts, MODES, R, ROOM, SC, SIZES, TEMP, TYPES, current, defaultScene, dropHolds, dropKeys, holdStart, frames, framesFor, hasKeys, hooks, keyCount, addKey, bakeBase, sampleChan,
+  applyToLayer, canBake, C, CAM, EVEN, FPS, HIST, camsOf, cutTo, dropCuts, newCamera, setActiveCam, shots, stretchCuts, trimCuts, MODES, R, ROOM, SC, TEMP, TYPES, current, defaultScene, dropHolds, dropKeys, holdStart, frames, framesFor, hasKeys, hooks, keyCount, addKey, bakeBase, sampleChan,
   namesFor, pivotOf, pivotsFor, sameTab, save, selItem, setSC, write, isPosable, isBoneKeyed
 } from './scene-data.js';
 import { FIG_TABS, adjustTab, faceTab, handsTab, jointsTab, movesTab, partsTab, posesTab, promptProps } from './scene-pose.js';
@@ -355,10 +357,14 @@ const camXYZ = (cam, label, ks) => vecRow(label, cam, CAM, ks, { min: -50, max: 
 function cameraProps() {
   const cam = SC.camera;
   const mm = (fov) => 12 / Math.tan(THREE.MathUtils.degToRad(fov) / 2);  // full-frame equivalent, from the vertical angle
-  const sizeSel = sizeSelect(SIZES.map((s) => [s.join('×'), s]), [SC.width, SC.height], ([w, hh]) => { SC.width = w; SC.height = hh; save(); fit(); renderPanel(); });
+  // (an open 3D frame's output size follows: frame-scene.js)
+  const sizeSel = sizePicker({ label: 'Output size', w: SC.width, h: SC.height, lim: (n) => Math.min(4096, Math.max(64, n)), onChange: (w, hh) => {
+    SC.width = w; SC.height = hh; save(); fit();
+    dispatchEvent(new CustomEvent('scene:size', { detail: { w, h: hh } }));
+  } });
   return section('Camera', null,
     camerasField(),
-    field('Size', sizeSel), lengthProps(),
+    sizeSel, lengthProps(),
     slider('Lens', () => current(cam, CAM).fov, (v) => write(cam, CAM, { fov: v }),
       { min: 12, max: 90, step: 0.5, fmt: (v) => `${Math.round(mm(v))} mm`, keys: [cam, CAM, ['fov']] }),
     camXYZ(cam, 'Position (m)', [['px', 'X', 'x'], ['py', 'Y', 'y', 'Y (up)'], ['pz', 'Z', 'z']]),
@@ -523,6 +529,8 @@ export function renderProps() {
     h('p', { id: 'sceneStatus', class: 'hint' }, statusText));
 }
 
+// a double-click on a blank scene: what can be added
+addEventListener('dblclick', (e) => { if (e.target.id === 'sceneCanvas' && !SC.objects.length && !SC.room) openAdd(); });
 async function openAdd() {
   const { importButton } = await import('./scene-import.js');   // (scene-view imports this panel: no top-level import)
   openSheet(h('h3', {}, 'Add to the scene'),
@@ -589,10 +597,12 @@ function renderModes() {
 }
 
 // the panel: the mode's own contents, then whatever has been plugged into that mode (addModeSection)
+if (typeof addEventListener === 'function') addEventListener('layers:float', () => { if (SC) renderPanel(); });
 export function renderPanel() {
   const body = SCN.body;
   if (!body || !SC) return;
   const def = modeOf();
+  if (layersFloating()) layerListPart('scene', layerList());   // (in its floating panel, in every mode)
   body.replaceChildren(h('div', { class: 'panel-body' }, def.panel(), modeSections(def.key).map((build) => build()), def.out?.()));
 }
 
@@ -603,7 +613,7 @@ export function editPanel() {
       SC.objects = []; SC.room = null; R.sel = null; rebuildRoom(); changed(); renderToolbar();
       undoToast('Scene cleared (the camera stays)', () => { if (ok()) { setSC(before); rebuildRoom(); changed(); } });
     } : null),
-    layerList(),
+    layerListPart('scene', layerList()),
     selItem() ? objectProps(selItem()) : R.sel === ROOM && SC.room ? roomProps() : cameraProps()];
 }
 // what the scene makes, last in the panel (after the reference and imports)

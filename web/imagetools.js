@@ -1,3 +1,5 @@
+import { runName } from './run-name.js';
+import { sizeChoices } from './size-picker.js';
 import { h, api, store, toast, busy, button, runBar, chip, choiceField, section, field, rangeField, seedField, seg, hint, help, toggle, textArea } from './ui.js';
 import { CURRENT_EDIT, S, inputUrl, switchTab } from './core.js';
 import { pngBlob, uploadImage } from './media.js';
@@ -32,7 +34,7 @@ const GROUPS = ['Edit', 'Maps', 'Cut out and mask', 'Swap', 'Clean up', 'Colour'
 // The row of buttons over the list: the main things, each opening its tool (the first of its tools, unless one of them is open)
 export const QUICK = [
   ['Edit', 'edit', ['edit']], ['Upscale', 'enlarge', ['up', 'upfast']], ['Clean up', 'sparkle', ['clean']], ['Restore', 'photo', ['restore']], ['Colourise', 'palette', ['colorise']],
-  ['Remove', 'eraser', ['remove', 'unmark']], ['Cut out', 'cut', ['cutout', 'words', 'sheet']], ['Swap', 'swap', ['swap']], ['Skin', 'person', ['skin']], ['Detail', 'star', ['detail', 'delight']], ['Maps', 'grid', ['depth', 'canny', 'scribble', 'pose']],
+  ['Remove', 'eraser', ['remove', 'unmark']], ['Cut out', 'cut', ['cutout', 'words', 'sheet']], ['Swap', 'swap', ['swap']], ['Skin', 'person', ['skin']], ['Detail', 'star', ['detail', 'blend', 'delight']], ['Maps', 'grid', ['depth', 'canny', 'scribble', 'pose']],
 ];
 // The restoration models of Clean up: each works at the picture's own size, and changes nothing else
 const CLEAN = {
@@ -69,6 +71,17 @@ const DELIGHT = {
   klein9b: { label: 'Klein 9B', tpl: 'deck-klein9b-edit', help: 'A good all-rounder; quick.' },
   qwen21: { label: 'Qwen 2.1', tpl: 'deck-qwen21-edit', help: 'Good with objects, graphics and clean surfaces.' },
 };
+// Blend: pictures cut out and placed on another, blended into one by an edit model with a LoRA trained for it. These words are what it was trained on.
+const BLEND = {
+  klein9b: { label: 'Klein 9B', tpl: 'deck-klein9b-edit', lora: 'fusion2250.safetensors', help: 'Quick.' },
+  qwen21: { label: 'Qwen 2.1', tpl: 'deck-qwen21-edit', lora: 'Fusion_2000.safetensors', help: 'Slower, with more memory.' },
+};
+const BLEND_PROMPT = 'Blend the object into the image seamlessly';
+const blendLora = (k) => {
+  const m = BLEND[k], t = m && template(m.tpl);
+  return (loraField(t)?.options || []).find((o) => o.split(/[\\/]/).pop() === m.lora) || null;
+};
+const blendKey = () => (blendLora(ST.bmodel) ? ST.bmodel : Object.keys(BLEND).find(blendLora) || 'klein9b');
 const UNMARK_PROMPT = 'Remove every watermark, stamp, logo and overlaid text from this picture, including faint see-through ones repeated across it. Fill in what is underneath them. Keep everything else exactly as it is: the same people, objects, colours, light, sharpness and framing.';
 // (it doesn't open with "Remove" and says to keep everything whole: on a frame of someone on a bicycle, the old wording, kept below, took most of the bicycle away)
 const DELIGHT_PROMPT = 'Relight this picture evenly and softly from every side, like an overcast day or a light tent, so dark areas are brightened and nothing is in shadow. Show the true colours and surface of the materials. Keep every person and object whole, with everything they ride, hold, wear or stand on, and keep the shape, pose, details, background and framing exactly the same.';
@@ -106,6 +119,8 @@ const OPS = [
     help: 'Runs the steps you tick, one after another, and lands the result as one new layer. Scratches and dust are found from how thin and how different they are (no model), and LaMa fills them in. Clean is a restoration model at the picture\'s own size. Faces: SAM3 finds each face and GFPGAN redraws it. Colour is as Colourise. Compare with the original: a thin line in the picture itself can be taken for a scratch.' },
   { id: 'colorise', group: 'Colour', label: 'Colourise a black and white picture', kind: 'colorise',
     help: 'An edit model adds colour, and only its colour is kept: the picture\'s own brightness goes back on it, so every detail stays at full size and faces can\'t change shape. The model works at about 2 MP. Its colours are a guess: the prompt can say what they should be (a red car, a blue dress). Try another model if they come out flat.' },
+  { id: 'blend', group: 'Detail', label: 'Blend', kind: 'blend',
+    help: 'For pictures cut out and placed on another: the model blends them into one, matching light, colour and edges. It works on the picture as it looks now. The result is a new layer.' },
   { id: 'delight', group: 'Detail', label: 'De-light (even out dark or shadowed pictures)', kind: 'delight',
     help: 'An edit model takes the lighting out: dark pictures are brightened and hard shadows softened, with the shape and colours kept. Run it on a view before it goes to image or 3D generation. The result is a new layer; the prompt can be changed.' },
   { id: 'up', group: 'Upscale', label: 'Upscale (quality)', tpl: 'deck-upscale-image', kind: 'up',
@@ -135,13 +150,14 @@ const op = () => OPS.find((o) => o.id === ST.op) || OPS[0];
 // the models that can do the chosen part here: the template is installed, and its LoRA if it needs one
 const loraField = (t) => t?.fields.find((f) => f.kind === 'loras');
 // a detail model that needs a LoRA shows only if it is installed
-const canDetail = (k) => { const m = DETAIL[k]; return !!m && (!m.own || op().model === k) && (!m.lora || (loraField(template(m.tpl))?.options || []).includes(m.lora)); };
+// (o: the tool being drawn or run, which from the Edit pane isn't the Layers pane's own current one)
+const canDetail = (k, o = op()) => { const m = DETAIL[k]; return !!m && (!m.own || o.model === k) && (!m.lora || (loraField(template(m.tpl))?.options || []).includes(m.lora)); };
 // (the Skin tool is the detail pass with its own model fixed)
-const dmKey = () => (op().model && canDetail(op().model) ? op().model : canDetail(ST.dmodel) ? ST.dmodel : 'klein9b');
-const dm = () => DETAIL[dmKey()];
+const dmKey = (o = op()) => (o.model && canDetail(o.model, o) ? o.model : canDetail(ST.dmodel, o) ? ST.dmodel : 'klein9b');
+const dm = (o = op()) => DETAIL[dmKey(o)];
 const canSwap = (k) => { const t = template(SWAP_MODELS[k]?.tpl); return !!t && swapLora(k, ST.swapPart, loraField(t)?.options || []) !== false; };
 const swapModels = () => ST.swapModels.filter(canSwap);
-const tplId = (o) => (o.kind === 'swap' ? (SWAP_MODELS[swapModels()[0]] || SWAP_MODELS.klein9b).tpl : o.kind === 'delight' || o.kind === 'colorise' ? (DELIGHT[ST.lmodel] || DELIGHT.krea2).tpl : o.kind === 'sheet' ? (ST.sheetFast ? 'deck-sheet-cell-fast' : 'deck-sheet-cell') : o.kind === 'detail' ? (o.model && !canDetail(o.model) ? `${DETAIL[o.model].tpl} with its LoRA` : dm().tpl) : o.sd && ST.poser === 'sdpose' ? o.sd : o.tpl);
+const tplId = (o) => (o.kind === 'blend' ? BLEND[blendKey()].tpl : o.kind === 'swap' ? (SWAP_MODELS[swapModels()[0]] || SWAP_MODELS.klein9b).tpl : o.kind === 'delight' || o.kind === 'colorise' ? (DELIGHT[ST.lmodel] || DELIGHT.krea2).tpl : o.kind === 'sheet' ? (ST.sheetFast ? 'deck-sheet-cell-fast' : 'deck-sheet-cell') : o.kind === 'detail' ? (o.model && !canDetail(o.model, o) ? `${DETAIL[o.model].tpl} with its LoRA` : dm(o).tpl) : o.sd && ST.poser === 'sdpose' ? o.sd : o.tpl);
 
 // (a run's file is asked for afresh: runs deleted along the way free their ids, so the next run's file can have the same name, and the browser would show the old one)
 const loadImg = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Could not load a picture')); i.src = src.startsWith('/files/') ? `${src}${src.includes('?') ? '&' : '?'}at=${Date.now()}${Math.random()}` : src; });
@@ -320,6 +336,7 @@ function hideOriginal(eng, src, made) {
   Stack.handOver(eng.E, src, made);
 }
 
+const named = (process, g) => runName(process, g, S.templates);
 async function land(eng, o, src, done, cell) {
   const { rect, layer } = src;
   const x = besideX(rect, cell?.nth, !!eng.E.size);   // (a variation goes beside the one before it)
@@ -332,17 +349,17 @@ async function land(eng, o, src, done, cell) {
     }
     const cut = await cutOut(src.name, matte);
     const up = ST.result === 'black' ? await onBlack(cut) : await uploadImage(await pngBlob(cut), { mp: 0, source: 'editor', filename: 'cutout.png', multiple: 1, board: 'Cut out' });
-    hideOriginal(eng, src, eng.addImage(up.name, { label: ST.result === 'black' ? 'Cut out on black' : 'Cut out', ...placed(src, rect.x, rect.y, rect.w, up) }));
+    hideOriginal(eng, src, eng.addImage(up.name, { label: named(ST.result === 'black' ? 'Cut out on black' : 'Cut out', done), ...placed(src, rect.x, rect.y, rect.w, up) }));
   } else if (o.kind === 'sheet') {
     let r = await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } });
     if (ST.result === 'black') r = await onBlack(await loadImg(inputUrl(r.name)));
     const cw = rect.w / ST.cols, ch = rect.h / ST.rows;
-    const view = eng.addImage(r.name, { label: `${ST.result === 'black' ? 'View on black' : 'View'} ${cell.r + 1}-${cell.c + 1}`, ...placed(src, rect.x + cell.c * cw, rect.y + cell.r * ch, cw, r) });
+    const view = eng.addImage(r.name, { label: named(`${ST.result === 'black' ? 'View on black' : 'View'} ${cell.r + 1}-${cell.c + 1}`, done), ...placed(src, rect.x + cell.c * cw, rect.y + cell.r * ch, cw, r) });
     if (layer && ST.hide) Stack.handOver(eng.E, src, view);   // (it hides when the last view is in)
     return eng.changed(), eng.render();
   } else {
     const r = await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } });
-    const made = eng.addImage(r.name, { label: o.kind === 'up' ? `Upscaled ${r.width}×${r.height}` : o.kind === 'edit' ? 'Edited' : o.kind === 'delight' ? (o.done || 'De-lit') : o.kind === 'detail' ? `Detail (${dm().label})` : o.kind === 'clean' ? `Cleaned (${(CLEAN[ST.cmodel] || CLEAN.noise).label})` : o.label, ...placed(src, x, rect.y, rect.w, r), ...(await maskForResult(src, r)) });
+    const made = eng.addImage(r.name, { label: named(o.kind === 'up' ? `Upscaled ${r.width}×${r.height}` : o.kind === 'edit' ? 'Edited' : o.kind === 'blend' ? 'Blended' : o.kind === 'delight' ? (o.done || 'De-lit') : o.kind === 'detail' ? (o.model ? o.label : 'Detail') : o.kind === 'clean' ? `Cleaned (${(CLEAN[ST.cmodel] || CLEAN.noise).label})` : o.label, done), ...placed(src, x, rect.y, rect.w, r), ...(await maskForResult(src, r)) });
     if (KEEPS_FRAMING.has(o.kind)) hideOriginal(eng, src, made);
     if (o.kind === 'up') eng.E.out = Math.max(eng.E.out || 1, ST.scale);   // (the layer keeps its size on the canvas; exporting at this size shows the new detail)
   }
@@ -493,6 +510,7 @@ export function whyNot(o, t = template(tplId(o)), { eng = null } = {}) {
   if (o.kind === 'swap' && !swapModels().length) return 'Tick an installed model first';
   if (o.kind === 'swap' && !template('deck-mask-image')) return 'deck-mask-image isn\'t installed';
   if (!t) return `${tplId(o)} isn't installed`;
+  if (o.kind === 'blend' && !blendLora(blendKey())) return 'The Fusion LoRA isn\'t installed';
   if (eng) {
     if (eng.loading()) return 'The images are still loading';
     if (eng.E.grow) return 'Press Extend or Cancel on the crop first';
@@ -603,7 +621,7 @@ async function fillIn(eng, o, t, tab, src, maskCv) {
     }
     if (eng.E.tab?.id !== tab) return toast(`${o.label} finished on another edit`);
     const r = await uploadImage(await pngBlob(result), { mp: 0, source: 'editor', filename: 'removed.png', multiple: 1, board: 'Removed' });
-    hideOriginal(eng, src, eng.addImage(r.name, { label: 'Removed', ...placed(src, src.rect.x, src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) }));
+    hideOriginal(eng, src, eng.addImage(r.name, { label: runName('Removed', { template: t.id }), ...placed(src, src.rect.x, src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) }));
     eng.changed(); eng.render();
     toast(`${o.label}: done, a new layer on top`);
   } finally { unfly(mk); b.done(); eng.render(); }
@@ -755,7 +773,7 @@ async function swapArea(eng, o, tab, src, { mask: red, keep }, b) {
         const made = await loadImg(run.outputs.find((x) => x.kind === 'image').url);
         if (eng.E.tab?.id !== tab) { toast(`${o.label} finished on another edit`); continue; }
         const r = await uploadImage(await pngBlob(pasted(pic, W, H, made, box, before, area0, keep0, side, p)), { mp: 0, source: 'editor', filename: 'swapped.png', multiple: 1, board: `${p.label} swap (${m.label})` });
-        hideOriginal(eng, src, eng.addImage(r.name, { label: `${p.label} swap (${m.label})`, ...placed(src, src.rect.x, src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) }));
+        hideOriginal(eng, src, eng.addImage(r.name, { label: named(`${p.label} swap`, run), ...placed(src, src.rect.x, src.rect.y, src.rect.w, r), ...(await maskForResult(src, r)) }));
         eng.changed(); eng.render();
       } catch (e) { toast(`${m.label}: ${e.message}`, true); } finally { if (run) await dropRun(run.id); if (smaller) await dropInput(smaller); }
     }
@@ -935,7 +953,7 @@ async function colourise(eng, o, t, tab, src) {
   try {
     const cv = canvasFrom(await loadImg(inputUrl(src.name)), src.px[0], src.px[1]);
     await addColour(cv, ST.cprompt.trim() || COLOUR_PROMPT);
-    await landCanvas(eng, o, tab, src, cv, 'Colourised', 'Colourised');
+    await landCanvas(eng, o, tab, src, cv, runName('Colourised', { template: (DELIGHT[ST.lmodel] || DELIGHT.krea2).tpl }), 'Colourised');
   } finally { unfly(mk); b.done(); eng.render(); }
 }
 
@@ -1019,7 +1037,9 @@ async function restorePhoto(eng, o, tab, src) {
     if (ST.stepFaces && areas.length) redrawn = await redrawFaces(cv, areas, b);
     if (ST.stepFaces && !redrawn) toast('No face big enough was found: the other steps still ran');
     if (ST.stepColour) { b.set('Adding colour…'); await addColour(cv, ST.cprompt.trim() || COLOUR_PROMPT); }
-    await landCanvas(eng, o, tab, src, cv, 'Restored', 'Restored');
+    // (what it went through, each step's model where it has its own)
+    const did = [ST.stepScratch && 'scratches (LaMa)', ST.stepClean && `clean (${(CLEAN[ST.cmodel] || CLEAN.noise).label})`, ST.stepFaces && 'faces', ST.stepColour && `colour (${(DELIGHT[ST.lmodel] || DELIGHT.krea2).label})`].filter(Boolean);
+    await landCanvas(eng, o, tab, src, cv, `Restored · ${did.join(', ')}`, 'Restored');
   } finally { unfly(mk); b.done(); eng.render(); }
 }
 
@@ -1064,7 +1084,7 @@ async function editArea(eng, o, t, tab, src, red, b) {
         for (let i = 0; i < edge.length; i++) px.data[i * 4 + 3] = Math.min(px.data[i * 4 + 3], edge[i]);
         pc.putImageData(px, 0, 0);
         out.getContext('2d').drawImage(piece, 0, 0);
-        await landCanvas(eng, o, tab, src, out, 'Edited', 'Edited', nth);
+        await landCanvas(eng, o, tab, src, out, named('Edited', run), 'Edited', nth);
       } catch (e) { toast(`${o.label} failed${src.layer ? ` on ${layerWord(src.layer)}` : ''}: ${e.message}`, true); } finally { if (run) await dropRun(run.id); }
     }));
   } finally { unfly(mk); await dropInput(name); eng.render(); }
@@ -1159,8 +1179,15 @@ function editFields(t, size, { redraw = () => {}, eng = null } = {}) {
     ST.ewhere !== 'all' ? toggle('Close-up', ST.eclose, (v) => { ST.eclose = v; redo(); }, { help: 'The model sees a box round the area at its full size: more detail in a small area. Off, it sees the whole picture: better when the change must match what is far from it.' }) : null,
     ST.ewhere !== 'all' ? rangeField('Grow the area', () => ST.egrow, (v) => { ST.egrow = v; save(); }, { min: 0, max: 64, step: 1, fmt: (v) => `${v} px` }) : null,
     ST.ewhere !== 'all' ? rangeField('Edge softness', () => ST.esoft, (v) => { ST.esoft = v; save(); }, { min: 0, max: 64, step: 1, fmt: (v) => `${v} px` }) : null,
-    field(['Size', sw ? h('span', {}, `${sw}×${sh}`) : null], seg([[1, '1 MP'], [1.5, '1.5 MP'], [2, '2 MP'], [3, '3 MP']], ST.emp, (v) => { ST.emp = v; redo(); }),
-      help('What the model works at, whatever the picture\'s size: a smaller picture is scaled up to it, a bigger one down. More keeps more detail, takes longer and needs more memory.')),
+    lf ? loraStack({ options: installed, get: () => ST.eloras, set: (rows) => { ST.eloras = rows; save(); },
+      mode: () => ST.eloraFolder ?? 'auto', setMode: (k) => { ST.eloraFolder = k; save(); }, auto: (folders) => folders.find((d) => /^qwen$/i.test(d)) || null,
+      tip: 'LoRAs change what an edit can do and how it looks. They run in the order listed, on every run. Auto shows your Qwen folder, and search finds the others, which are for other models and rarely work here. Some need a trigger word: put it in the prompt. Untick one to compare the same seed without it (Seed: Fixed).',
+      onWord: (w) => { if (!ST.eprompt.includes(w)) { ST.eprompt = ST.eprompt.trimEnd() ? `${ST.eprompt.trimEnd()}, ${w}` : w; save(); redraw(); } },
+      onDownloaded: async () => (await import('./generate.js')).loadTemplates(true), onAdded: () => redraw() }) : null,
+    sizeChoices({ label: 'Output size', choices: [[1, '1 MP'], [1.5, '1.5 MP'], [2, '2 MP'], [3, '3 MP']], value: ST.emp, onPick: (v) => { ST.emp = v; redo(); },
+      sizeOf: (v) => { if (!size) return null; const [w, hh] = editSizeTo(size[0], size[1], 32, v * 1e6); return { w, h: hh }; },
+      custom: { label: 'Megapixels', min: 0.25, max: 8, step: 0.25 },
+      tip: help('What the model works at, whatever the picture\'s size: a smaller picture is scaled up to it, a bigger one down. More keeps more detail, takes longer and needs more memory.') }),
     field('Variations', seg([[1, '1'], [2, '2'], [3, '3'], [4, '4']], ST.ecount, (v) => { ST.ecount = v; redo(); }),
       help('How many results for each picture, each with its own seed and its own layer. They land side by side, the first in the original\'s place. On a canvas of a fixed size they land on top of each other, as the rest would be cut off.')),
     seedField('Seed', { get: () => ST.eseed, set: (v) => { ST.eseed = v; save(); }, mode: () => ST.eseedMode, setMode: (m) => { ST.eseedMode = m; redo(); } }),
@@ -1170,11 +1197,6 @@ function editFields(t, size, { redraw = () => {}, eng = null } = {}) {
       help: 'How hard the model follows the prompt. At 1 it can stop short: asked for red leather, a denim jacket came back red denim, and at 2.5 it came back leather. Above 1 each run takes about twice as long, and the Avoid box is used.' }),
     ...(t?.fields || []).filter((f) => f.kind === 'choice').map((f) => choiceField(f.group, f.options, ST.echoice[f.key] ?? f.value, (v) => { ST.echoice[f.key] = v; save(); })),
     ST.ecfg > 1 ? field('Avoid', textArea(() => ST.eneg, (v) => { ST.eneg = v; save(); }, { rows: 2, label: 'What to avoid', placeholder: 'Blurry, extra fingers' })) : null,
-    lf ? loraStack({ options: installed, get: () => ST.eloras, set: (rows) => { ST.eloras = rows; save(); },
-      mode: () => ST.eloraFolder ?? 'auto', setMode: (k) => { ST.eloraFolder = k; save(); }, auto: (folders) => folders.find((d) => /^qwen$/i.test(d)) || null,
-      tip: 'LoRAs change what an edit can do and how it looks. They run in the order listed, on every run. Auto shows your Qwen folder, and search finds the others, which are for other models and rarely work here. Some need a trigger word: put it in the prompt. Untick one to compare the same seed without it (Seed: Fixed).',
-      onWord: (w) => { if (!ST.eprompt.includes(w)) { ST.eprompt = ST.eprompt.trimEnd() ? `${ST.eprompt.trimEnd()}, ${w}` : w; save(); redraw(); } },
-      onDownloaded: async () => (await import('./generate.js')).loadTemplates(true), onAdded: () => redraw() }) : null,
   ];
 }
 
@@ -1223,6 +1245,14 @@ export function valuesFor(o, t, src) {
     if (box) values[box.key] = (ST[o.promptKey || 'lprompt'] || '').trim() || o.fallback || DELIGHT_PROMPT;
     Object.assign(values, wholePicture(t, src.px));
   }
+  if (o.kind === 'blend') {   // (as De-light: the edit template's own picture and edit boxes, with the blend LoRA)
+    const pic = t.fields.find((f) => f.kind === 'image' && /image to edit/i.test(f.group)), box = t.fields.find((f) => f.kind === 'text' && /^edit$/i.test(f.group) && !/negative/i.test(f.input));
+    if (pic) { delete values[imageField.key]; values[pic.key] = src.name; }
+    if (box) values[box.key] = (ST.bprompt || '').trim() || BLEND_PROMPT;
+    Object.assign(values, wholePicture(t, src.px));
+    const lf = loraField(t), name = blendLora(blendKey());
+    if (lf && name) values[lf.key] = [{ name, strength: ST.bstrength ?? 1 }];
+  }
   if (o.kind === 'clean') {
     const f = t.fields.find((x) => x.input === 'model_name');
     if (f) values[f.key] = (CLEAN[ST.cmodel] || CLEAN.noise).model;
@@ -1233,14 +1263,14 @@ export function valuesFor(o, t, src) {
   }
   if (o.depth || o.edges) Object.assign(values, valuesByRole(t, mapRoles(o.id, ST)));
   if (o.kind === 'detail') {   // the picture's own size (about 2 MP at most, sides a multiple of 16), the chosen strength and prompt
-    const m = dm(), set = (input, v) => { const f = t.fields.find((x) => x.input === input); if (f) values[f.key] = v; };
+    const m = dm(o), set = (input, v) => { const f = t.fields.find((x) => x.input === input); if (f) values[f.key] = v; };
     if (m.plain) set('scale_by', 1);
     else {
       let [w, hh] = src.px; const k = Math.min(1, Math.sqrt(2.1e6 / (w * hh)));
       set('width', Math.max(256, Math.round((w * k) / 16) * 16)); set('height', Math.max(256, Math.round((hh * k) / 16) * 16));
-      set('denoise', ST.dstrength[dmKey()] ?? m.strength);
+      set('denoise', ST.dstrength[dmKey(o)] ?? m.strength);
       const pf = t.fields.find((x) => x.kind === 'text' && /prompt/i.test(x.group) && !/negative/i.test(x.group));
-      if (pf) values[pf.key] = (ST.dprompt[dmKey()] ?? m.prompt).trim() || m.prompt;
+      if (pf) values[pf.key] = (ST.dprompt[dmKey(o)] ?? m.prompt).trim() || m.prompt;
     }
   }
   return values;
@@ -1278,16 +1308,33 @@ export async function runToolOn(id, { tab, src, eng = null, batch = 1 } = {}) {
   const why = whyNot(o, t);
   if (why) throw new Error(why);
   const e = engFor(tab, eng || CURRENT_EDIT.eng);
-  if (!src && e === eng) src = { ...await sourceOf(e, null, o), copy: true };   // (no picture given: the open frame's, every layer together)
-  if (!src?.name) throw new Error('No picture to run it on');
-  Object.assign(src, { layer: src.layer || null, was: src.was || null, mask: src.mask || null, rect: src.rect || { x: 0, y: 0, w: src.px[0], h: src.px[1] } });
-  let gens;
-  try { gens = await runOne(e, o, t, tab, src, batch); } catch (err) {
-    if (src.copy && !src.runs) await dropInput(src.name);   // (never queued: nothing will read the copy)
-    throw err;
-  }
-  if (src.copy && !src.runs) dropInput(src.name);   // (a tool whose steps ran here: done with it)
-  return { gens: Array.isArray(gens) ? gens : [] };
+  const one = async (from) => {
+    if (!from?.name) throw new Error('No picture to run it on');
+    Object.assign(from, { layer: from.layer || null, was: from.was || null, mask: from.mask || null, rect: from.rect || { x: 0, y: 0, w: from.px[0], h: from.px[1] } });
+    let gens;
+    try { gens = await runOne(e, o, t, tab, from, batch); } catch (err) {
+      if (from.copy && !from.runs) await dropInput(from.name);   // (never queued: nothing will read the copy)
+      throw err;
+    }
+    if (from.copy && !from.runs) dropInput(from.name);   // (a tool whose steps ran here: done with it)
+    return Array.isArray(gens) ? gens : [];
+  };
+  if (src || e !== eng) return { gens: await one(src) };
+  // the open picture, as the Layers pane's Run works it: a painted area where the tool uses one; else as one picture, or each selected layer on its own
+  if (o.kind === 'remove' && ST.rfrom === 'painted') { await removePainted(e, o, t, tab); return { gens: [] }; }
+  if (o.kind === 'swap' && ST.swapWhere === 'painted') { await swapPainted(e, o, tab); return { gens: [] }; }
+  if (o.kind === 'edit' && ST.ewhere === 'painted') { await editPainted(e, o, t, tab); return { gens: [] }; }
+  await e.paint?.savePaint?.();
+  const list = ST.scope === 'selected' ? targets(e) : [null];
+  if (!list.length) throw new Error('Select a layer first');
+  const gens = [];
+  const { failed } = await eachOne(list, async (l) => {
+    const from = await sourceOf(e, l, o);
+    gens.push(...await one(l ? from : { ...from, copy: true }));
+  });
+  if (failed.length === list.length) throw new Error(failed[0].error);
+  if (failed.length) toast(failureText(o.label, failed, (l) => l?.label || l?.name?.split('/').pop() || 'the picture'), true);
+  return { gens };
 }
 
 let edgeTurn = Promise.resolve();
@@ -1329,7 +1376,6 @@ export function toolFields(o, t, { redraw = () => {}, size = null, eng = null } 
   if (typeof o === 'string') o = OPS.find((x) => x.id === o);
   if (!o) return [];
   if (t === undefined) t = template(tplId(o));
-  const out = size && o.kind === 'up' ? `${Math.round(size[0] * ST.scale)}×${Math.round(size[1] * ST.scale)}` : null;
   return [
     ...(o.kind === 'edit' && t ? editFields(t, size, { redraw, eng }) : []),
     o.prompt ? field('Find', textArea(() => ST.prompt, (v) => { ST.prompt = v; save(); }, { rows: 2, label: 'What to find', placeholder: 'The red car, people, the sky' })) : null,
@@ -1344,7 +1390,8 @@ export function toolFields(o, t, { redraw = () => {}, size = null, eng = null } 
       help('How the sheet is laid out: equal cells, left to right, top to bottom. Spacing between cells is fine: the cut-out ignores it.')) : null,
     o.kind === 'sheet' ? field('Enlarge with', seg([[false, 'SeedVR2'], [true, 'Fast']], ST.sheetFast, (v) => { ST.sheetFast = v; save(); redraw(); }),
       help('SeedVR2 adds detail (slow, once per cell). Fast is 4x-UltraSharp: quick and clean.')) : null,
-    o.kind === 'sheet' ? field(['Enlarge', h('span', {}, `${ST.scale}×`)], seg([[1, '1×'], [2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); redraw(); })) : null,
+    o.kind === 'sheet' ? sizeChoices({ label: 'Output size', choices: [[1, '1×'], [2, '2×'], [3, '3×'], [4, '4×']], value: ST.scale, onPick: (v) => { ST.scale = v; save(); redraw(); },
+      words: (v) => `${v}× each picture`, custom: { label: 'Times', min: 1, max: 4, step: 0.25 } }) : null,
     o.kind === 'matte' ? field('Result', seg([['cutout', 'Cut-out layer'], ['black', 'On black'], ...(eng ? [['mask', 'Mask']] : [])], ST.result, (v) => { ST.result = v; save(); redraw(); }),
       help('On black puts the cut-out on solid black: the picture a one-photo 3D model (Idol, a splat) wants.')) : null,
     ...(o.id === 'words' || (o.kind === 'remove' && ST.rfrom === 'words') || (o.kind === 'swap' && ST.swapWhere === 'find') ? samFields() : []),
@@ -1383,18 +1430,22 @@ export function toolFields(o, t, { redraw = () => {}, size = null, eng = null } 
     o.kind === 'colorise' || (o.kind === 'restore' && ST.stepColour) ? field('Model', seg(Object.entries(DELIGHT).map(([k, v]) => [k, v.label]), ST.lmodel, (v) => { ST.lmodel = v; save(); redraw(); }, { wrap: true }),
       help((DELIGHT[ST.lmodel] || DELIGHT.krea2).help)) : null,
     o.kind === 'colorise' || (o.kind === 'restore' && ST.stepColour) ? field('Prompt', textArea(() => ST.cprompt, (v) => { ST.cprompt = v; save(); }, { rows: 4, label: 'What colours to use' })) : null,
+    o.kind === 'blend' ? field('Model', seg(Object.keys(BLEND).filter(blendLora).map((k) => [k, BLEND[k].label]), blendKey(), (v) => { ST.bmodel = v; save(); redraw(); }, { wrap: true }), help(BLEND[blendKey()].help)) : null,
+    o.kind === 'blend' ? rangeField('Strength', () => ST.bstrength ?? 1, (v) => { ST.bstrength = v; save(); }, { min: 0.2, max: 1.5, step: 0.05, fmt: (v) => v.toFixed(2) }) : null,
+    o.kind === 'blend' ? field('Prompt', textArea(() => ST.bprompt ?? BLEND_PROMPT, (v) => { ST.bprompt = v; save(); }, { rows: 2, label: 'What to blend' }), help('These are the words the LoRA was trained on. Say what you placed if it helps.')) : null,
     o.kind === 'delight' ? field('Model', seg(Object.entries(DELIGHT).map(([k, v]) => [k, v.label]), ST.lmodel, (v) => { ST.lmodel = v; save(); redraw(); }, { wrap: true }),
       help((DELIGHT[ST.lmodel] || DELIGHT.krea2).help)) : null,
     o.kind === 'delight' ? field('Prompt', textArea(() => ST[o.promptKey || 'lprompt'], (v) => { ST[o.promptKey || 'lprompt'] = v; save(); }, { rows: 4, label: o.promptKey ? 'What to remove' : 'How to light it' })) : null,
-    o.kind === 'detail' && !o.model ? field('Model', seg(Object.entries(DETAIL).filter(([k]) => canDetail(k)).map(([k, v]) => [k, v.label]), ST.dmodel, (v) => { ST.dmodel = v; save(); redraw(); }, { wrap: true })) : null,
+    o.kind === 'detail' && !o.model ? field('Model', seg(Object.entries(DETAIL).filter(([k]) => canDetail(k, o)).map(([k, v]) => [k, v.label]), ST.dmodel, (v) => { ST.dmodel = v; save(); redraw(); }, { wrap: true })) : null,
     o.id === 'skin' ? field('Area', seg([['whole', 'Whole picture'], ['parts', 'Body parts']], ST.skinWhere, (v) => { ST.skinWhere = v; save(); redraw(); })) : null,
     o.model === 'skin' ? field('Body parts', textArea(() => ST.skinParts, (v) => { ST.skinParts = v; save(); }, { rows: 2, label: 'Body parts, separated by commas' })) : null,
-    o.kind === 'detail' ? help(dm().help) : null,
-    o.kind === 'detail' && !dm().plain ? field('Strength', h('input', { type: 'range', min: 0.1, max: 0.7, step: 0.05, 'aria-label': 'Strength',
-      value: ST.dstrength[dmKey()] ?? dm().strength, oninput: (e) => { ST.dstrength[dmKey()] = +e.target.value; save(); e.target.nextSibling.textContent = e.target.value; } }),
-      h('span', {}, String(ST.dstrength[dmKey()] ?? dm().strength))) : null,
-    o.kind === 'detail' && !dm().plain ? field('Prompt', textArea(() => ST.dprompt[dmKey()] ?? dm().prompt, (v) => { ST.dprompt[dmKey()] = v; save(); }, { rows: 2, label: 'What to add' })) : null,
-    o.kind === 'up' ? field(['Enlarge', out ? h('span', {}, out) : null], seg([[2, '2×'], [3, '3×'], [4, '4×']], ST.scale, (v) => { ST.scale = v; save(); redraw(); })) : null,
+    o.kind === 'detail' ? help(dm(o).help) : null,
+    o.kind === 'detail' && !dm(o).plain ? field('Strength', h('input', { type: 'range', min: 0.1, max: 0.7, step: 0.05, 'aria-label': 'Strength',
+      value: ST.dstrength[dmKey(o)] ?? dm(o).strength, oninput: (e) => { ST.dstrength[dmKey(o)] = +e.target.value; save(); e.target.nextSibling.textContent = e.target.value; } }),
+      h('span', {}, String(ST.dstrength[dmKey(o)] ?? dm(o).strength))) : null,
+    o.kind === 'detail' && !dm(o).plain ? field('Prompt', textArea(() => ST.dprompt[dmKey(o)] ?? dm(o).prompt, (v) => { ST.dprompt[dmKey(o)] = v; save(); }, { rows: 2, label: 'What to add' })) : null,
+    o.kind === 'up' ? sizeChoices({ label: 'Output size', choices: [[2, '2×'], [3, '3×'], [4, '4×']], value: ST.scale, onPick: (v) => { ST.scale = v; save(); redraw(); },
+      sizeOf: (v) => (size ? { w: Math.round(size[0] * v), h: Math.round(size[1] * v) } : null), custom: { label: 'Times', min: 1, max: 4, step: 0.25 } }) : null,
   ].filter(Boolean);
 }
 // What belongs to one tool (a setup of it, setups.js tool:<id>): the settings toolFields draws for it, whatever mode they are in.
@@ -1416,6 +1467,7 @@ export function toolKeys(id) {
   if (o.edges) keys.push('edgeAmount');
   if (o.sd) keys.push('poser');
   if (o.kind === 'delight') keys.push(o.promptKey || 'lprompt');
+  if (o.kind === 'blend') keys.push('bmodel', 'bprompt', 'bstrength');
   if (o.id === 'skin') keys.push('skinWhere', 'skinParts');
   return [...new Set(keys)].filter((k) => !(o.model && k === 'dmodel'));   // (Skin detail has its own model)
 }

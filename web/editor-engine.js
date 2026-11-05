@@ -1,8 +1,10 @@
+import { sizeChoices, sizePicker } from './size-picker.js';
+import { MP_STEPS } from './mp-cap.js';
 import { ASPECTS, FULL, aspectCrop, cropSpan } from './crop-geometry.js';
 export { ASPECTS, FULL, aspectCrop, cropSpan } from './crop-geometry.js';
 import { store,
   h, api, clamp01, busy, toast, undoToast, sheetOpen, openSheet, closeSheet, loadingSheet, sheetStillOpen, button, iconBtn, actions,
-  seg, field, section, hint, toggle, propNum, layerRowsEl, panelTop, help, colorField, rangeField, pctFmt, clamp, mpInput, uid,
+  seg, field, section, hint, toggle, propNum, layerRowsEl, panelTop, help, colorField, rangeField, pctFmt, clamp, uid,
 } from './ui.js';
 import { ASPECT_PRESETS, S, inputUrl, switchTab, thumbUrl } from './core.js';
 import { openImagePicker, uploadImage } from './media.js';
@@ -1280,7 +1282,13 @@ export function createEditor(cfg) {
     });
   }
 
-  const editorChanged = () => { persistEditor(); renderEditor(); };
+  // (a change of the canvas's size is told, so an open frame's output size follows: frame-image.js)
+  let toldSize = null;
+  const editorChanged = () => {
+    persistEditor(); renderEditor();
+    const sig = JSON.stringify(E.size || null);
+    if (sig !== toldSize) { toldSize = sig; dispatchEvent(new CustomEvent('editor:size')); }
+  };
   const editorNum = (label, value, set, opts) => propNum(label, value, set, editorChanged, opts);
 
   const layerName = (l) => l.label || l.name?.split('/').pop() || 'Canvas';
@@ -1452,7 +1460,7 @@ export function createEditor(cfg) {
   function openLayerMenu(x, y) {
     const on = picked();
     const groups = layerMenu({ layers: E.layers.filter((l) => !l.mask && !l.draft && !l.maskOf).length, selected: on.length, pictures: selectedPictures().length,
-      hidden: ST.hiddenOnes(E.layers).count, clip: !!store.get(LAYER_CLIP, null), pickMode: E.pickMode, newEdit: !!cfg.newEdit,
+      hidden: ST.hiddenOnes(E.layers).count, clip: !!store.get(LAYER_CLIP, null), pickMode: E.pickMode, newEdit: !!cfg.newEdit, table: !!onTable(),
       mergeDown: on.length === 1 && !!ST.mergeBelow(E.layers, on[0]), mergeSet: on.length > 1 && ST.mergeSet(E.layers, on).length >= 2,
       main: cfg.main?.() && on.length === 1 && pinnable(on[0]) ? { on: !!on[0].key && on[0].key === mainKey() } : null });
     openPressMenu(x, y, groups.map((g) => g.map((it) => ({ ...it, run: LAYER_ACTIONS[it.id] }))), 'Layers');
@@ -1834,9 +1842,9 @@ export function createEditor(cfg) {
     drawGrid();
     const clip = toggle('Hide what hangs over it', !!l.clip, (on) => { l.clip = on; editorChanged(); },
       { help: 'Like overflow: hidden. Layers above this canvas whose middle is over it are shown only where the canvas is; drag one out past the middle and it is free again.' });
-    return field('Canvas size', clip, h('div', { class: 'row wrap' },
-      propNum('Width', cw, (v) => { d.w = Math.round(v); }, () => {}, { min: 1, max: 8192, step: 1 }),
-      propNum('Height', ch, (v) => { d.h = Math.round(v); }, () => {}, { min: 1, max: 8192, step: 1 }),
+    return field('Canvas size', clip,
+      sizePicker({ label: 'Size', w: cw, h: ch, step: 1, lim: (n) => Math.min(8192, Math.max(1, n)), onChange: (nw, nh) => { d.w = nw; d.h = nh; } }),
+      h('div', { class: 'row wrap' },
       grid,
       button('Resize', () => { paint.resizeCanvasLayer(l, d.w, d.h, d.ax, d.ay); }, { cls: 'small primary', title: 'Change the canvas\'s size; the pixels stay where the anchor holds them, new parts are see-through' })));
   }
@@ -1894,28 +1902,12 @@ export function createEditor(cfg) {
         { cls: 'small', title: 'Back to a still: the layers stay as they are at the playhead (their keys are kept for next time)' }));
   }
 
-  // a fixed canvas: a shape and megapixels tapped (sides a multiple of 8); Custom types the sides
-  const CANVAS_MP = [0.25, 0.5, 1, 1.5, 2, 4, 8];
+  // a fixed canvas: the resolution selector (sides a multiple of 8)
   function fixedSizeFields() {
-    const { w, h: hh } = E.size, mp = Math.round((w * hh) / 1e4) / 100;
-    const near = ASPECT_PRESETS.find(([, a]) => Math.abs(w / hh / a - 1) < 0.03);
-    const shape = E.sizeShape || (near ? near[0] : 'custom');
-    const apply = (k, m) => {
-      E.sizeShape = k;
-      const a = (ASPECT_PRESETS.find(([x]) => x === k) || [])[1];
-      if (a) E.size = { w: Math.round(Math.sqrt(m * 1e6 * a) / 8) * 8, h: Math.round(Math.sqrt((m * 1e6) / a) / 8) * 8 };
-      editorChanged();
-    };
-    return [
-      field(['Shape', h('span', {}, `${w}×${hh} · ${mp} MP`)],
-        seg([...ASPECT_PRESETS.map(([k]) => [k, k]), ['custom', 'Custom']], shape, (k) => apply(k, mp), { wrap: true })),
-      shape === 'custom'
-        ? h('div', { class: 'row' },
-          editorNum('Width', w, (v) => { E.size.w = v; }, { min: 64, max: 8192, step: 8 }),
-          editorNum('Height', hh, (v) => { E.size.h = v; }, { min: 64, max: 8192, step: 8 }))
-        : field('Megapixels', seg(CANVAS_MP.map((v) => [v, `${v}`]), CANVAS_MP.find((v) => Math.abs(v - mp) < 0.03) ?? null,
-          (m) => apply(shape, m), { wrap: true })),
-    ];
+    const { w, h: hh } = E.size;
+    return sizePicker({ label: 'Output size', w, h: hh, step: 8, lim: (n) => Math.min(8192, Math.max(64, n)),
+      mode: E.sizeMode && E.sizeMode.key === `${w}x${hh}` ? E.sizeMode.mode : null,
+      onChange: (nw, nh, mode) => { E.size = { w: nw, h: nh }; E.sizeShape = null; E.sizeMode = { mode, key: `${nw}x${nh}` }; editorChanged(); } });
   }
 
   function canvasProps() {
@@ -1949,9 +1941,10 @@ export function createEditor(cfg) {
     return section('Export', null,
       E.anim ? h('div', { class: 'row wrap' }, button('Export clip', (ev) => exportEditorClip(ev.currentTarget), { cls: 'primary', title: table ? 'The animation as a clip, in a new video frame beside this one' : 'The animation as a video in History' }),
         WA.onlyToggle()) : null,
-      field(['Export size', h('span', {}, (() => { const f = editorFrame(); return f ? `${Math.round(f.w * (E.out || 1))}×${Math.round(f.h * (E.out || 1))}` : ''; })())],
-        seg([[1, '1×'], [2, '2×'], [3, '3×'], [4, '4×']], E.out || 1, (v) => { E.out = v; persistEditor(); renderEditor(); })),
-      mpInput(() => E.mp, (n) => { E.mp = n; persistEditor(); }),
+      sizeChoices({ label: 'Export size', choices: [[1, '1×'], [2, '2×'], [3, '3×'], [4, '4×']], value: E.out || 1, onPick: (v) => { E.out = v; persistEditor(); renderEditor(); },
+        sizeOf: (v) => { const f = editorFrame(); return f ? { w: Math.round(f.w * v), h: Math.round(f.h * v) } : null; }, custom: { label: 'Times', min: 0.25, max: 4, step: 0.25 } }),
+      sizeChoices({ label: 'Largest size', choices: MP_STEPS.map(([v, l]) => [v, l]), value: E.mp || 0, onPick: (v) => { E.mp = v; persistEditor(); },
+        words: (v) => (v ? `${v} MP at most` : 'its own size'), custom: { label: 'Megapixels', min: 0.05, max: 16, step: 0.05 } }),
       h('div', { class: 'row wrap' },
         table ? button(E.anim ? 'Flatten this frame' : 'Flatten', saveEditor, { cls: E.anim ? 'small' : 'small primary', title: 'Every layer as one picture, in a new image frame beside this one' })
           : button(E.anim ? 'Save this frame as input' : 'Save as input', saveEditor, { cls: E.anim ? 'small' : 'small primary' }),
@@ -2083,11 +2076,45 @@ export function createEditor(cfg) {
     return l;
   }
 
+  // The sampler's picture as a layer on top of the stack while a run goes: drawn like any layer, so it rides the view and everything else carries
+  // on under it. A draft with no file, so it's never saved, sent or merged; locked, so a tap goes to what's below. src null takes it away.
+  // size: the area to fill while the canvas has nothing else to measure. The run's result lands as its own new layer.
+  function runPreview(src, { opacity = 1, size = null } = {}) {
+    let l = E.layers.find((x) => x.runPreview);
+    if (!src) {
+      if (!l) return;
+      E.layers.splice(E.layers.indexOf(l), 1);
+      if (E.sel === l) E.sel = null;
+      E.multi = (E.multi || []).filter((x) => x !== l);
+      renderEditor();
+      return;
+    }
+    const fresh = !l;
+    if (fresh) {
+      l = { key: `run-${uid()}`, runPreview: true, draft: true, locked: true, label: 'Sampling…', img: document.createElement('canvas'), crop: { ...FULL }, scale: 1, x: 0, y: 0, opacity: 1, hidden: false, blend: 'normal' };
+      E.layers.push(l);
+    } else if (E.layers[E.layers.length - 1] !== l) { E.layers.splice(E.layers.indexOf(l), 1); E.layers.push(l); }
+    const W = src.width, H = src.height, im = l.img;
+    if (im.width !== W || im.height !== H) { im.width = W; im.height = H; }
+    im.naturalWidth = W; im.naturalHeight = H;
+    im.getContext('2d').drawImage(src, 0, 0);
+    const under = E.layers.filter((x) => x !== l && ready(x) && !x.hidden && !x.mask && !x.maskOf);
+    const b = under.length ? unionRect(under.map(bounds)) : null;
+    const f = E.size ? { x: 0, y: 0, ...E.size } : b || (size ? { x: 0, y: 0, ...size } : { x: 0, y: 0, w: W, h: H });
+    l.scale = Math.min(f.w / W, f.h / H);
+    l.x = f.x + (f.w - W * l.scale) / 2; l.y = f.y + (f.h - H * l.scale) / 2;
+    l.opacity = opacity;
+    drawEditorCanvas();
+    if (fresh) renderEditor();
+  }
+
   function addEditorImages() {
     openImagePicker({ title: 'Add images', multi: true, mp: () => 0, onPick: (name) => {
       E.layers.push({ name, crop: { ...FULL }, scale: 1, opacity: 1, hidden: false }); editorChanged();
     } });
   }
+  // a double-click on a blank canvas: the picker
+  cfg.empty?.parentElement?.addEventListener('dblclick', () => { if (!E.layers.length) addEditorImages(); });
 
   function editorBlob(clear = false, k = 1) {
     const cv = document.createElement('canvas');
@@ -2161,7 +2188,7 @@ export function createEditor(cfg) {
     poseAt(0);
   }
   const eng = {
-    E, render: renderEditor, draw: drawEditorCanvas, changed: persistEditor, load, dump: dumpEditor, compose: composeEditor, composeLayer,
+    E, render: renderEditor, draw: drawEditorCanvas, changed: persistEditor, runPreview, load, dump: dumpEditor, compose: composeEditor, composeLayer,
     blob: editorBlob, frame: editorFrame, toFixed: toFixedSize, composeMask, drawLayer, layerPicture, bounds, layerRect, ready, loading: () => E.layers.some((l) => !l.broken && !ready(l)), addImage, pause: editorPause,
     zoom: viewZoom, get paint() { return paint; },
     // the panel's parts, for the host to lay out

@@ -1,3 +1,4 @@
+import { layerListPart } from './float-layers.js';
 import { $, h, store, api, toast, openOverlay, button, iconBtn, seg, numSlider } from './ui.js';
 import { ASPECT_PRESETS, CURRENT_EDIT, S, inputUrl, switchTab } from './core.js';
 import { registerPickerSource, uploadImage } from './media.js';
@@ -171,9 +172,10 @@ const ED = createEditor({
   beforeRender: () => { if (!tabs.started) tabs.start(); if (isLive('image')) propsChanged('image'); },   // (the Properties pane follows the picked layers)
   newEdit: (payload) => (isLive('image') ? newFrameFrom(payload) : tabs.createFrom(payload, 'layers')),
   panelParts: (ed) => h('div', { class: 'panel-body' }, ed.topRow(),
-    // (a mask being painted: its section first, with what to see and do; otherwise the panel order, app-wide)
-    ed.layerList(), ed.E.sel?.maskOf ? ed.layerProps() : null, ed.paintProps(), ed.masksProps(), ed.inpaintProps(), ed.E.sel?.maskOf ? null : ed.layerProps(), ed.animProps(), ed.canvasProps(), ed.exportProps()),
+    // (a mask being painted: its section first, with what to see and do; otherwise the panel order, app-wide. The list may be in its floating panel.)
+    layerListPart('image', ed.layerList()), ed.E.sel?.maskOf ? ed.layerProps() : null, ed.paintProps(), ed.masksProps(), ed.inpaintProps(), ed.E.sel?.maskOf ? null : ed.layerProps(), ed.animProps(), ed.canvasProps(), ed.exportProps()),
 });
+addEventListener('layers:float', () => { if (ED_EL.host !== ED_HOME) ED.render(); });
 export const { E } = ED;
 // On the table, the picked layers' X, Y, Scale, Rotation and Opacity are the sidebar's Properties pane's (web/props-panel.js)
 registerProps('image', {

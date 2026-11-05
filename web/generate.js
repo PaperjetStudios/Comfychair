@@ -3,7 +3,7 @@ import {
   button, iconBtn, actions, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider, withHelp,
   insertAtCursor, toggle, textArea, seedField as uiSeedField, choiceField, chips, chip,
 } from './ui.js';
-import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, saveSnippet, savedEntries, thumbUrl } from './core.js';
+import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, previewUrl, saveSnippet, savedEntries, thumbUrl } from './core.js';
 import { clipLabel, clipUrl, soundInput } from './media.js';
 import { openSourcePicker } from './source-picker.js';
 import { pictureForRun, pictureInput } from './picture-input.js';
@@ -426,14 +426,15 @@ function groupFieldEls(fs) {
   for (const f of fs) {
     if (f.kind === 'int' && f.input === 'width') {
       const fh = fs.find((x) => x.node === f.node && x.input === 'height' && x.kind === 'int');
-      if (fh) { const el = sizeField(f, fh); el.dataset.key = f.key; out.push(el); continue; }
+      if (fh) { const el = FT?.sizeEl?.(f, fh) || sizeField(f, fh); el.dataset.key = f.key; out.push(el); continue; }
     }
     if (f.kind === 'int' && f.input === 'height' && fs.some((x) => x.node === f.node && x.input === 'width' && x.kind === 'int')) continue;
     if (f.kind === 'mask') continue;   // drawn inside its picture's field
     const instead = FT?.replace?.(f);
-    if (instead) { instead.dataset.key ||= f.key; out.push(instead); continue; }
-    if (f.when && FS.values[f.when.key] === f.when.not) continue;   // only while another setting is on (a sheet's Strength)
-    out.push(fieldEl(f));
+    if (!instead && f.when && FS.values[f.when.key] === f.when.not) continue;   // only while another setting is on (a sheet's Strength)
+    const el = instead || fieldEl(f);
+    el.dataset.key ||= f.key;
+    out.push(FT?.wrap?.(f, el) || el);
   }
   return out;
 }
@@ -1158,11 +1159,11 @@ export async function stop(pid = RUN.pid, { ask = true } = {}) {
 // ---------------------------------------------------------------------------
 function boxesField(f) {
   const boxes = FS.values[f.key] || [];
-  const preview = h('div', { class: 'boxes-preview', style: `aspect-ratio:${boxBackdrop().aspect}` },
+  const back = boxBackdrop(f.key);
+  const preview = h('div', { class: 'boxes-preview', style: `aspect-ratio:${back.aspect}` },
     boxes.map((b, i) => h('span', { class: 'bx' + (b.type === 'text' ? ' text' : ''),
       style: `left:${b.x * 100}%;top:${b.y * 100}%;width:${b.w * 100}%;height:${b.h * 100}%` }, String(i + 1))));
-  const bg = boxBackdrop().image;
-  if (bg) preview.style.backgroundImage = `url("${thumbUrl(bg, 320)}")`;
+  if (back.item) preview.style.backgroundImage = `url("${back.item.url}")`;
   const edit = () => openBoxEditor(f);
   return field([f.label, h('span', {}, boxes.length ? `${boxes.length} box${boxes.length > 1 ? 'es' : ''}` : 'none')],
     h('button', { type: 'button', class: 'boxes-btn', onclick: edit }, preview),
@@ -1174,16 +1175,43 @@ function boxesField(f) {
           : 'Optional. Mark where things go and describe each box.'));
 }
 
-// The canvas the boxes are drawn on: the image being edited if there is one, else the output size.
-function boxBackdrop() {
-  const img = (FS.tpl?.fields || []).find((f) => f.kind === 'image' && FS.values[f.key]);
-  return { image: img ? FS.values[img.key] : null, aspect: img ? (S.imgAspect?.[FS.values[img.key]] || 1) : templateAspect() };
+// What the boxes can be drawn over: every picture and clip slot that has something in it, wherever it comes from (a panel says through
+// slotPicture(field): a url, null for nothing there, or undefined for the slot's own value). The canvas keeps the output's shape when the
+// template has a size; else it takes the shape of what's on show. The one on show is remembered per boxes field.
+const BOX_BACK = new Map();
+function boxBackdrops() {
+  const out = [];
+  for (const f of FS.tpl?.fields || []) {
+    if (f.kind !== 'image' && f.kind !== 'video') continue;
+    let url = FT?.slotPicture?.(f);
+    if (url === undefined) {
+      const v = FS.values[f.key], clip = f.kind === 'video' && v ? clipUrl(v) : null;
+      url = f.kind === 'image' ? (v ? inputUrl(v) : null) : (clip ? previewUrl(clip, 1024) : null);
+    }
+    if (url) out.push({ key: f.key, url, label: f.group && f.group !== f.label ? `${f.group} · ${f.label}` : f.label });
+  }
+  return out;
+}
+// (the shape of the size in the fields on show: templateAspect reads the Generate tab's own)
+function outputRatio() {
+  const fs = FS.tpl?.fields || [], w = fs.find((f) => f.kind === 'int' && f.input === 'width');
+  const hh = w && fs.find((f) => f.node === w.node && f.kind === 'int' && f.input === 'height');
+  const r = hh ? Number(FS.values[w.key]) / Number(FS.values[hh.key]) : 0;
+  return r > 0 && Number.isFinite(r) ? r : 0;
+}
+const hasOutputSize = () => outputRatio() > 0;
+const BOX_ASPECT = new Map();   // url -> width / height
+function boxBackdrop(boxKey) {
+  const list = boxBackdrops(), want = BOX_BACK.get(boxKey);
+  const item = want === '' ? null : list.find((x) => x.key === want) || list[0] || null;
+  return { list, item, aspect: outputRatio() || (item ? BOX_ASPECT.get(item.url) || 1 : templateAspect()) };
 }
 
 function openBoxEditor(f) {
   let boxes = (FS.values[f.key] || []).map((b) => ({ ...b }));
   let sel = boxes.length ? 0 : -1;
-  let { image, aspect } = boxBackdrop();
+  const back = boxBackdrop(f.key), choices = [...back.list, { key: '', url: null, label: 'Blank' }];
+  let { aspect } = back, at = Math.max(0, choices.findIndex((c) => c.key === (back.item?.key ?? '')));
   const canvas = h('div', { class: 'box-canvas' });
   const stage = h('div', { class: 'sketch-stage' }, canvas);
   const list = h('div', { class: 'box-list' });
@@ -1194,12 +1222,23 @@ function openBoxEditor(f) {
     const k = Math.min((r.width - 20) / aspect, r.height - 20);
     canvas.style.width = `${Math.floor(k * aspect)}px`; canvas.style.height = `${Math.floor(k)}px`;
   };
-  if (image) {
-    canvas.style.backgroundImage = `url("${inputUrl(image)}")`;
+  // the picture behind the boxes, stepped through in the bar
+  const backName = h('span', { class: 'box-back-name' });
+  const showBack = () => {
+    const c = choices[at];
+    backName.textContent = c.label;
+    BOX_BACK.set(f.key, c.key);
+    canvas.style.backgroundImage = c.url ? `url("${c.url}")` : '';
+    if (!c.url || hasOutputSize()) { fit(); return; }   // (Blank keeps the shape on show)
     const probe = new Image();
-    probe.onload = () => { aspect = probe.naturalWidth / probe.naturalHeight; (S.imgAspect ||= {})[image] = aspect; fit(); };
-    probe.src = inputUrl(image);
-  }
+    probe.onload = () => {
+      BOX_ASPECT.set(c.url, probe.naturalWidth / probe.naturalHeight);
+      if (choices[at] === c) { aspect = BOX_ASPECT.get(c.url); fit(); }
+    };
+    probe.src = c.url;
+  };
+  const stepBack = (d) => { at = (at + d + choices.length) % choices.length; showBack(); };
+  showBack();
 
   const draw = () => {
     canvas.replaceChildren(...boxes.map((b, i) => h('div', {
@@ -1272,6 +1311,7 @@ function openBoxEditor(f) {
     h('div', { class: 'sketch-bar' }, h('b', {}, f.label),
       info(f.refs ? 'Object boxes: describe what goes there, optionally with a reference image. Text boxes: the words, then how they look.'
         : 'Object boxes: describe what goes there. Text boxes: the words, then how they look.'),
+      choices.length > 1 ? h('div', { class: 'box-back' }, iconBtn('Previous background', '◀', () => stepBack(-1)), backName, iconBtn('Next background', '▶', () => stepBack(1))) : null,
       h('div', { class: 'spacer' }),
       button('Cancel', () => close(), { cls: 'small ghost' }),
       button('Done', () => {

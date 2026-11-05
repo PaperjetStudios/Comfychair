@@ -1,3 +1,4 @@
+import { sizeChoices } from './size-picker.js';
 import { loraPicker } from './lora-pick.js';
 import { fetchHistory as loadHistory } from './generation-data.js';
 import { RUN, runTime, fmtDur, stepClock, runEstimate, fmtPerStep } from './run-state.js';
@@ -761,7 +762,8 @@ export async function openH3Upscale(g, idx, { onRun = null } = {}) {
         hint('Light keeps faces and poses closest to the clip and sharpens least (2 steps). Strong sharpens most but can change faces and hands (3 steps from 0.90).'),
         hint('Regenerate (when its refiner LoRA is installed) sharpens more in 2 steps and holds faces better than Strong.'),
       ] : [
-        seg([['1.5', '1.5×'], ['1080p', '1080P']], target, (v) => { target = v; draw(); }),
+        sizeChoices({ label: 'Output size', choices: [['1.5', '1.5×'], ['1080p', '1080P']], value: target, onPick: (v) => { target = v; draw(); },
+          sizeOf: (v) => { const d = v === '1080p' ? fit1080() : scaled(1.5); return d ? { w: d[0], h: d[1] } : null; } }),
         hint(`${say(dims)}. 1080P is as big as this box should draw; 2K needs a card over 24 GB.`),
         h('div', { class: 'lbl' }, 'Strength'),
         seg([['standard', 'Standard (2 steps)'], ['enhanced', 'Enhanced (3)']], regenStrength, (v) => { regenStrength = v; draw(); }),

@@ -2,6 +2,7 @@
 // and where a result lands, and the panel's own settings (one per frame, frame.make). Pure, so node --test
 // tests/make_panel.test.mjs can check it.
 import { OPS } from './edit-rules.js';
+import { outputOf } from './table-model.js';
 import { fieldKind, mapToFields } from './wire-rules.js';
 
 // What the panel makes for: nothing (or a note) selected, or the first frame of the selection that isn't a note
@@ -65,11 +66,13 @@ export function sizePair(t) {
   const w = fs.find((f) => f.kind === 'int' && f.input === 'width' && fs.some((x) => x.node === f.node && x.kind === 'int' && x.input === 'height'));
   return w ? [w, fs.find((x) => x.node === w.node && x.kind === 'int' && x.input === 'height')] : null;
 }
-// A frame's size for a template: its sides at 1:1, to a multiple of 16, inside the template's limits
+export const frameOutput = outputOf;
+// A frame's size for a template: its output's sides at 1:1, to a multiple of 16, inside the template's limits
 export function frameSize(pair, frame) {
-  if (!pair || !frame?.w || !frame?.h) return null;
+  const o = frameOutput(frame);
+  if (!pair || !o) return null;
   const side = (n, f) => Math.min(f.max ?? 4096, Math.max(f.min ?? 64, Math.round(n / 16) * 16));
-  return { w: side(frame.w, pair[0]), h: side(frame.h, pair[1]) };
+  return { w: side(o.w, pair[0]), h: side(o.h, pair[1]) };
 }
 
 // Where a result lands, by what was selected
@@ -101,14 +104,14 @@ export function settingsFor(t, p = null) {
   for (const f of t.fields || []) values[f.key] = clone(validFor(f, ov[f.key]) ? ov[f.key] : f.value);
   const b = same && p.builder ? clone(p.builder) : null;
   const wired = same && p.wired && typeof p.wired === 'object' ? clone(p.wired) : {};
-  return { tpl: t, values, wired, seedMode: clone(same && p.seedMode) || {}, imageMp: clone(same && p.imageMp) || {}, imageCrop: clone(same && p.imageCrop) || {},
+  return { tpl: t, values, wired, from: clone(same && p.from) || {}, layerSrc: clone(same && p.layerSrc) || {}, seedMode: clone(same && p.seedMode) || {}, imageMp: clone(same && p.imageMp) || {}, imageCrop: clone(same && p.imageCrop) || {},
     sizeMode: clone(same && p.sizeMode) || {}, loraFolder: clone(same && p.loraFolder) || {},
     pb: b ? { on: false, parts: {}, ...b, subjects: b.subjects?.length ? b.subjects : [{ text: '', pic: null }] } : null };
 }
 export function settingsPayload(st, extra = {}) {
   const t = st.tpl, overrides = {};
   for (const f of t.fields || []) if (f.key in st.values && !eq(st.values[f.key], f.value)) overrides[f.key] = clone(st.values[f.key]);
-  return { ...extra, v: 1, template: t.id, presetId: null, overrides, wired: clone(st.wired || {}), seedMode: clone(st.seedMode), imageMp: clone(st.imageMp), imageCrop: clone(st.imageCrop),
+  return { ...extra, v: 1, template: t.id, presetId: null, overrides, wired: clone(st.wired || {}), from: clone(st.from || {}), layerSrc: clone(st.layerSrc || {}), seedMode: clone(st.seedMode), imageMp: clone(st.imageMp), imageCrop: clone(st.imageCrop),
     sizeMode: clone(st.sizeMode), loraFolder: clone(st.loraFolder), builder: st.pb ? clone(st.pb) : null };
 }
 // The values a run of these settings sends, as the Generate tab's runValues sends the shown ones: a random seed as -1, a
@@ -144,7 +147,7 @@ export function carryWords(from, to) {
 }
 
 // Where an image frame's results go on its canvas: the canvas when it has a size, else the frame's own rectangle
-export const canvasRect = (payload, frame) => (payload?.size ? { x: 0, y: 0, w: payload.size.w, h: payload.size.h } : { x: 0, y: 0, w: frame.w, h: frame.h });
+export const canvasRect = (payload, frame) => (payload?.size ? { x: 0, y: 0, w: payload.size.w, h: payload.size.h } : { x: 0, y: 0, ...outputOf(frame) });
 
 // ---- wires into the panel (wire-rules.js): which template field each plugged input fills ----
 // frame.make.wired is { fieldKey: wireId | false } (re-pointed fields; false: the field keeps its own picked value).
@@ -158,6 +161,16 @@ const ownSlot = (t, kind, wired, ownPicture) => {
 export function wireFields(t, kind, inputs, wired = {}, { ownPicture = true } = {}) {
   const own = ownSlot(t, kind, wired, ownPicture);
   return mapToFields(t?.fields || [], inputs || [], { skip: own ? [own.key] : [], overrides: wired || {} });
+}
+// Where a picture or clip slot gets its value: 'layers' (an image frame's own layers, all or one), 'wire' (a plugged input) or 'manual' (picked in
+// the slot). st.from[key] holds a choice made ('layers' | 'manual'; a wire chosen is st.wired[key]). Unchosen: a plugged input if one maps to it,
+// else an image frame's first picture slot is its layers, else manual. A video slot can't come from layers.
+export function slotMode(t, kind, f, st, inputs, { ownPicture = true } = {}) {
+  const canLayer = kind === 'image' && fieldKind(f) === 'image', pick = st?.from?.[f.key];
+  if (pick === 'manual') return 'manual';
+  if (pick === 'layers' && canLayer) return 'layers';
+  if (wireFields(t, kind, inputs, st?.wired, { ownPicture }).use[f.key]) return 'wire';
+  return canLayer && frameImageField(t)?.key === f.key ? 'layers' : 'manual';
 }
 // the fields a wire left to their own value on purpose (wired false), where a plugged input of their kind is waiting;
 // and the frame's own picture slot, when the frame has one and an input is waiting that could take it instead

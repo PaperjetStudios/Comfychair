@@ -1,6 +1,7 @@
+import { sizeChoices, sizeOrMatch } from './size-picker.js';
 import { loraName, loraChoice, keyRangeFields, restyleLora } from './clip-effects.js';
 export { CLIP_FX, loraChoice, keyRangeFields, restyleLoras, runClipStep } from './clip-effects.js';
-import { $, h, api, toast, clamp, button, runBar, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle, textArea, pctFmt, colorField, seedField, sizeSelect, store, info, icon, withHelp } from './ui.js';
+import { $, h, api, toast, clamp, button, runBar, iconBtn, seg, field, section, hint, help, note, placeholder, rangeField, mediaCard, toggle, textArea, pctFmt, colorField, seedField, store, info, icon, withHelp } from './ui.js';
 import { S, inputUrl, onServer, switchTab } from './core.js';
 import { bareSource, cardMedia, outputCard, clipLabel, clipUrl, genLabel, openVideoPicker, pickFrame, projectOutputs, soundInput, uploadImage } from './media.js';
 import { pictureInput } from './picture-input.js';
@@ -20,7 +21,7 @@ import { characterById, characters, loadCharacters, mainPicture } from './charac
 import { TALK_ENGINES, talkKey } from './talk.js';
 import { setupsRow } from './setups.js';
 import { omit, vfxKey } from './setups-rules.js';
-import { ALPHA, ASPECTS, BLANK, CANVAS, EFFECTS, FACE, FPS, GROUPS, NOT_SETUP, REFINE, RES, SAM, SIZES, boxesFromFind, buildRun as buildRunOf,
+import { ALPHA, ASPECTS, BLANK, CANVAS, EFFECTS, FACE, FPS, GROUPS, NOT_SETUP, REFINE, RES, SAM, boxesFromFind, buildRun as buildRunOf,
   canvasAspect as canvasAspectOf, clipBox as clipBoxOf, cropOf as cropOfSt, delogoBody as delogoBodyOf, delogoRunBody, fx, keyBody, lenFrames, matteBody,
   missingInput as missingOf, poseBody as poseBodyOf, resOf as resOfSt, talkPromptOf as talkPromptFor, tplIdOf } from './vfx-rules.js';
 
@@ -407,16 +408,16 @@ function render() {
     needs.has('len') ? rangeField('Length', () => T.len, (v) => { T.len = v; }, { min: 1, max: e.maxLen || 10, step: 1 / 3,
       fmt: (v) => (e.maxLen ? `${v.toFixed(1)}s` : `${v.toFixed(1)}s · ${lenFrames(v)} frames`), onChange: () => changed(),
       help: e.lenHelp || (e.maxLen ? 'Longer clips run as overlapping 5 s windows: time grows with length, memory doesn\'t.' : 'LTX makes 8n+1 frames at 24 fps; long clips need a lot of memory.') }) : null,
-    needs.has('res') ? field('Resolution', seg(e.res || RES, resOf(e), (v) => { T.res = Number(v); changed(false); }),
-      help(e.res ? 'The short side, in pixels. Higher is sharper and slower.' : 'The short side, in pixels. 704p takes about 1.5 minutes for 5 s on this card; 1088p about 3.')) : null,
+    needs.has('res') ? sizeChoices({ label: 'Output size', choices: e.res || RES, value: resOf(e), onPick: (v, typed) => { T.resFree = typed; T.res = Number(v); changed(false); },
+      words: (v) => `${v}p`, custom: { label: 'Short side', min: 256, max: 2160, step: e.mult || 32 },
+      tip: help(e.res ? 'The short side, in pixels. Higher is sharper and slower.' : 'The short side, in pixels. 704p takes about 1.5 minutes for 5 s on this card; 1088p about 3.') }) : null,
     needs.has('steps') ? field('Steps', seg([[3, 'Fast'], [5, 'Balanced'], [7, 'Quality']], T.steps || 3, (v) => { T.steps = Number(v); changed(false); }),
       help('Fast is the upstream default (3 steps). Quality can over-sharpen.')) : null,
     needs.has('blend') ? field('Blend', seg([['face', 'Face'], ['oval', 'Head']], T.blend || 'face', (v) => { T.blend = v; changed(); }),
       help('Face keeps the original hair, neck and collar. Head pastes the whole tracked square (hair included), with a soft edge.')) : null,
     ...(needs.has('blend') ? faceFields() : []),
-    needs.has('outsize') ? field('Output size', seg([['FullHD', 'Full HD'], ['4K', '4K']], T.outsize || 'FullHD', (v) => { T.outsize = v; changed(false); }),
-      help('4K is tiled: much slower, same memory.')) : null,
-    needs.has('size') ? field('Size', sizeSelect(SIZES, T.size, (s) => { T.size = s; changed(false); })) : null,
+    needs.has('outsize') ? sizeChoices({ label: 'Output size', choices: [['FullHD', 'Full HD'], ['4K', '4K']], value: T.outsize || 'FullHD', onPick: (v) => { T.outsize = v; changed(false); }, sizeOf: (v) => (v === '4K' ? { w: 3840, h: 2160 } : { w: 1920, h: 1080 }), tip: help('4K is tiled: much slower, same memory.') }) : null,
+    needs.has('size') ? sizeOrMatch({ matchLabel: 'Same size as the source', size: T.size, onChange: (s) => { T.size = s; changed(false); }, first: [1280, 704], step: e.mult || 32 }) : null,
     needs.has('seed') ? seedField('Seed', { get: () => T.seed, set: (v) => { T.seed = v; changed(false); }, increment: false,
       mode: () => (T.seed < 0 ? 'random' : 'fixed'), setMode: (m) => { if (m === 'random') T.seed = -1; else if (T.seed < 0) T.seed = lastSeed(e) ?? 0; changed(false); },
       last: () => lastSeed(e) }) : null);

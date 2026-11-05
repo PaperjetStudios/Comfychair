@@ -15,8 +15,8 @@
 //   editState()                { label, can, why } for the action bar: "Run <op>", whether it can, and why not (null)
 //   editActive()               the pane is the one on show
 // `make:state` is sent when editState may have changed (the action bar listens).
-import { h, store, toast, button, iconBtn, seg, field, hint, help, note, section, runBar } from './ui.js';
-import { S, setBatch } from './core.js';
+import { h, store, toast, button, seg, field, hint, help, note, section } from './ui.js';
+import { S } from './core.js';
 import { sidebar } from './sidebar.js';
 import { icon } from './icons.js';
 import * as Table from './table.js';
@@ -26,7 +26,7 @@ import { toolState } from './imagetools.js';
 
 const KINDS = ['image', 'video', 'sound', 'scene'];
 const WORD = { image: 'Image', video: 'Video', sound: 'Sound', scene: '3D' };
-const P = { el: null, frames: [], mods: {}, loaded: false, loading: null, focus: null, status: new Map(), pending: new Map(), into: new Map(), batchIns: new Set(), opts: new Map(), ov: null };
+const P = { el: null, frames: [], mods: {}, loaded: false, loading: null, focus: null, status: new Map(), pending: new Map(), into: new Map(), opts: new Map(), ov: null };
 
 // ---------------------------------------------------------------------------
 // the modules we lean on, loaded on demand (a failure leaves a note instead of a pane)
@@ -100,7 +100,6 @@ P.cross = new Map();
 export function draw() {
   const el = P.el;
   if (!el) return;
-  P.batchIns.clear();
   if (!P.loaded) { el.replaceChildren(note('The Edit tools are loading.', 'warn')); load(); return; }
   if (!rules() || !ops() || !runner()) { el.replaceChildren(note(`The Edit tools aren't available (${(P.errs || []).join('; ')}).`, 'warn')); return; }
   plan();
@@ -117,21 +116,32 @@ function sectionFor(kind) {
   const frames = ofKind(kind), op = currentOp(kind), cross = isCross(kind);
   const why = whyNot(op, kind);
   const kids = [];
-  // quick icons (the Image tools' pattern): each opens the first of its ops that can run here
   const have = new Set((P.ops.get(kind) || []).map((o) => o.id));
-  const quick = cross ? [] : rules().quickOf(kind).filter((q) => q.ids.some((id) => have.has(id)));
-  if (quick.length) kids.push(h('div', { class: 'tool-quick' }, ...quick.map((q) => {
-    const here = q.ids.includes(op?.id);
-    return h('button', { type: 'button', class: `icon-btn tool-quick-btn${here ? ' on' : ''}`, title: q.label, 'aria-pressed': String(here),
-      onclick: () => pick(kind, q.ids.find((id) => !whyNot(rules().opById(kind, id), kind)) || q.ids[0]) }, icon(q.icon || 'sparkle'), h('span', {}, q.label));
-  })));
-  // the op list: one optgroup per group, ops that need the frame open say so
-  kids.push(h('select', { 'aria-label': `${WORD[kind]} edit`, class: 'edit-op', onchange: (e) => pick(kind, e.target.value) },
-    ...rules().groupsOf(kind).map(({ group, ops: list }) => ({ group, ops: list.filter((o) => have.has(o.id)) })).filter((g) => g.ops.length)
-      .map(({ group, ops: list }) => h('optgroup', { label: group }, ...list.map((o) => {
-      const w = whyNot(o, kind);
-      return h('option', { value: o.id, selected: o.id === op?.id, class: w ? 'edit-grey' : '', title: w || '' }, o.label + (w ? ' (open the frame)' : ''));
-    })))));
+  const optionOf = (o) => {
+    const w = whyNot(o, kind);
+    return h('option', { value: o.id, selected: o.id === op?.id, class: w ? 'edit-grey' : '', title: w || '' }, o.label + (w ? ' (open the frame)' : ''));
+  };
+  if (cross) {   // (ops from another kind of frame: one list, by group)
+    kids.push(h('select', { 'aria-label': `${WORD[kind]} edit`, class: 'edit-op', onchange: (e) => pick(kind, e.target.value) },
+      ...rules().groupsOf(kind).map(({ group, ops: list }) => ({ group, ops: list.filter((o) => have.has(o.id)) })).filter((g) => g.ops.length)
+        .map(({ group, ops: list }) => h('optgroup', { label: group }, ...list.map(optionOf)))));
+  } else {
+    // the category (a list and its icons, the same choices), then what's in that category when there's more than one
+    const rows = rules().menuOf(kind).map((r) => ({ ...r, all: r.all.filter((id) => have.has(id)) })).filter((r) => r.all.length);
+    const cur = rows.find((r) => r.all.includes(op?.id)) || rows[0];
+    const opOf = (id) => rules().opById(kind, id);
+    const open = (r) => pick(kind, r.all.find((id) => !whyNot(opOf(id), kind)) || r.all[0]);
+    const cat = h('select', { 'aria-label': `${WORD[kind]} category`, class: 'edit-op edit-cat', onchange: (e) => open(rows[+e.target.value]) },
+      ...rows.map((r, i) => h('option', { value: i, selected: r === cur }, r.label)));
+    kids.push(cat);
+    const buttons = rows.filter((r) => r.button);
+    if (buttons.length) kids.push(h('div', { class: 'tool-quick' }, ...buttons.map((r) => {
+      const here = r === cur;
+      return h('button', { type: 'button', class: `icon-btn tool-quick-btn${here ? ' on' : ''}`, title: r.label, 'aria-pressed': String(here), onclick: () => open(r) },
+        icon(r.icon || 'sparkle'), h('span', {}, r.label));
+    })));
+    if (cur?.all.length > 1) kids.push(h('select', { 'aria-label': `${cur.label} tools`, class: 'edit-op edit-sub', onchange: (e) => pick(kind, e.target.value) }, ...cur.all.map((id) => optionOf(opOf(id)))));
+  }
   if (op) {
     if (op.help) kids.push(help(op.help));
     kids.push(setupsRow({ key: editKey(kind, op.id), get: () => ops().opValues(kind, op.id, optsFor(kind, op.id), frames),
@@ -165,7 +175,6 @@ function sectionFor(kind) {
         ST.scope = v; store.set('deck.imagetools', ST); draw();
       }), help('Whole picture: the open picture as it looks. Selected layers: each selected layer on its own, its result a layer over it.')));
     }
-    kids.push(runRow(kind, op, frames, why));
     kids.push(statusList(kind, frames));
   }
   if (kind === 'video' && !cross) syncOverlay(kind, op, frames);
@@ -192,19 +201,6 @@ function notesSection() {
 }
 
 // Run, ×batch and Stop: as the Make panel's
-function runRow(kind, op, frames, why) {
-  const batchIn = h('input', { type: 'number', min: 1, max: 32, value: S.batch, inputMode: 'numeric', 'aria-label': 'How many', disabled: !!op.once,
-    onchange: () => { batchIn.value = setBatch(batchIn.value); } });
-  P.batchIns.add(batchIn);
-  const n = frames.length;
-  return runBar(
-    button([icon('sparkle'), `Run on ${n} ${n === 1 ? 'frame' : 'frames'}`], () => { P.focus = kind; runEdit(); },
-      { cls: 'primary edit-run', title: why || 'Run (Ctrl+Enter)', disabled: !!why }),
-    h('label', { class: 'make-batch' }, '×', batchIn),
-    iconBtn('Stop this device\'s run', icon('close'), () => runner().stopEdits()));
-}
-addEventListener('deck:batch', () => { for (const b of P.batchIns) if (document.activeElement !== b) b.value = S.batch; });
-
 // one line per frame that has a run going, failed, or results on their way (to it, or to the frame made beside it)
 function statusList(kind, frames) {
   const el = h('div', { class: 'edit-status', 'data-kind': kind });
@@ -268,6 +264,8 @@ export function editState() {
   return { label: `Run ${op.label}`, can: !why, why: why || null };
 }
 
+// the action bar's Stop while the pane is on show
+export const stopEdit = () => runner()?.stopEdits();
 export async function runEdit() {
   if (!P.loaded) await load();
   const st = editState();

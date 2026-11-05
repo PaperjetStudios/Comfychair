@@ -32,9 +32,9 @@ export function lastChoice(store, aspects = [['1:1', 1]]) {
   if (KINDS.includes(got.kind)) out.kind = got.kind;
   if (aspects.some(([k]) => k === got.aspect)) out.aspect = got.aspect;
   if (Number.isFinite(+got.mp) && +got.mp > 0 && +got.mp <= 16) out.mp = +got.mp;
-  const pick = (list, v) => list.find((s) => Array.isArray(v) && s[0] === v[0] && s[1] === v[1]);
-  out.video = pick(VIDEO_SIZES, got.video) || DEFAULTS.video;
-  out.scene = pick(SCENE_SIZES, got.scene) || DEFAULTS.scene;
+  const pair = (v) => (Array.isArray(v) && v.length === 2 && v.every((n) => Number.isInteger(n) && n >= 16 && n <= 8192) ? v : null);   // (any size the selector can give)
+  out.video = pair(got.video) || DEFAULTS.video;
+  out.scene = pair(got.scene) || DEFAULTS.scene;
   if (FPS.includes(+got.fps)) out.fps = +got.fps;
   return out;
 }

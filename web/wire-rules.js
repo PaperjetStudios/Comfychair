@@ -120,6 +120,13 @@ export function setWire(wires, id, patch = {}) {
   const w = { ...wires[at] };
   if ('on' in patch) w.on = patch.on !== false;
   if ('frame' in patch && isFrameWire(w)) w.frame = framePick(patch.frame);
+  if ('mp' in patch) {   // (the megapixels an image wire's picture goes in at; 0: its own size)
+    if (patch.mp != null && w.kind === 'image') w.mp = patch.mp; else delete w.mp;
+  }
+  if ('crop' in patch) {   // (what an image wire's picture is cut to at Run: fractions of it)
+    if (patch.crop && w.kind === 'image') w.crop = { x: patch.crop.x, y: patch.crop.y, w: patch.crop.w, h: patch.crop.h };
+    else delete w.crop;
+  }
   let out = wires.map((x, i) => (i === at ? w : x));
   if (Number.isFinite(+patch.n) && patch.n != null) {
     const peers = out.filter((x) => x.to === w.to && x.kind === w.kind && x.id !== w.id);

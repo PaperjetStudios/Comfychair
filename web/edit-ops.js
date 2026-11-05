@@ -22,6 +22,9 @@
 //                                       new frame of kind beside source once it is done (a 3D frame through frame-scene.js)
 //   compareFor(frame, id)               a function that wipes the frame's clip against its newest result of the op on the open
 //                                       frame (frame-overlay.js compare), or null when there's none
+import { runName } from './run-name.js';
+import { sizeChoices } from './size-picker.js';
+import { frameOutput } from './make-rules.js';
 import { api, field, h, help, hint, rangeField, seg, store, textArea, toast, toggle } from './ui.js';
 import { CURRENT_EDIT, S } from './core.js';
 import { bareSource, clipUrl, grabFrame, soundSource } from './media.js';
@@ -89,6 +92,20 @@ export function cachedClip(frame, then = null) {
     clipOf(frame).then((clip) => { const was = JSON.stringify(rec.clip); rec.clip = clip; if (JSON.stringify(clip) !== was) then?.(); }, () => {});
   }
   return CLIPS.get(frame.id).clip;
+}
+// the frame's first clip's picture size [w, h] (null until read; then() once it is)
+const NATS = new Map();
+function cachedNat(frame, then = null) {
+  const clip = cachedClip(frame, then);
+  if (!clip) return null;
+  const key = JSON.stringify(bareSource(clip));
+  let rec = NATS.get(key);
+  if (!rec) {
+    rec = { nat: null };
+    NATS.set(key, rec);
+    probe(clip).then((i) => { if (i?.width) { rec.nat = [i.width, i.height]; then?.(); } });
+  }
+  return rec.nat;
 }
 let VID = null;
 const vidReady = import('./video.js').then((m) => { VID = m; }).catch(() => null);
@@ -174,6 +191,7 @@ export function opFields(kind, id, opts, ctx = {}) {
       tool: ctx.tool || null, setTool: ctx.setTool || (() => {}), neg: !!ctx.neg, setNeg: ctx.setNeg || (() => {}),
       compare: ctx.live && frame ? (() => { const go = compareFor(frame, id); return go && (() => go().catch((e) => toast(e.message, true))); })() : null,
       clipLen: cachedClip(frame, () => ctx.redraw?.())?.trim?.len ?? null,
+      nat: cachedNat(frame, () => ctx.redraw?.()),
       find: () => findBoxes(frame, opts).then(() => ctx.redraw?.(), (e) => toast(e.message, true)) });
   }
   switch (`${kind}:${id}`) {
@@ -189,9 +207,11 @@ export function opFields(kind, id, opts, ctx = {}) {
       return [...loraChoice(restyleLoras(), opts.lora, (v) => { opts.lora = v; redraw(); }, { get: () => opts.strength ?? 1, set: (v) => { opts.strength = v; } }, { onStrength: keep }),
         prompt('Prompt', 'prompt', 'Describe the result: with an empty prompt the change is faint')].filter(Boolean);
     case 'video:upscale':
-      return [field('Size', seg([['FullHD', 'Full HD'], ['4K', '4K']], opts.outsize, (v) => { opts.outsize = v; redraw(); })), prompt('Look', 'prompt', 'Light, film, sharpness: not the things in it')];
+      return [sizeChoices({ label: 'Output size', choices: [['FullHD', 'Full HD'], ['4K', '4K']], value: opts.outsize, onPick: (v) => { opts.outsize = v; redraw(); }, sizeOf: (v) => (v === '4K' ? { w: 3840, h: 2160 } : { w: 1920, h: 1080 }) }), prompt('Look', 'prompt', 'Light, film, sharpness: not the things in it')];
     case 'video:upvideo': case 'video:upvideofast':
-      return [field('Upscale', seg([[2, '×2'], [4, '×4']], opts.scale, (v) => { opts.scale = v; redraw(); }))];
+      return [sizeChoices({ label: 'Output size', choices: [[2, '×2'], [4, '×4']], value: opts.scale, onPick: (v) => { opts.scale = v; redraw(); },
+        sizeOf: (v) => { const n = cachedNat(frame, () => ctx.redraw?.()); return n ? { w: Math.round(n[0] * v), h: Math.round(n[1] * v) } : null; },
+        words: (v) => `×${v}`, custom: { label: 'Times', min: 1, max: 4, step: 0.25 } })];
     case 'video:cleanplate': return [prompt('Remove', 'prompt', 'What to take out, e.g. the people')];
     case 'video:replace': return [prompt('Find', 'target', 'What to replace, e.g. the red car'), prompt('Paint', 'prompt', 'The whole shot with the new thing in it')];
     case 'video:foley': case 'sound:foley':
@@ -261,7 +281,7 @@ export async function landOutput(into, g, { label = '' } = {}) {
     const { landClip } = await import('./make-panel.js');
     let n = 0;
     for (const { o, index } of outs.filter(({ o }) => o.kind === 'video' || o.kind === 'image' || o.kind === 'audio')) {
-      if (await landClip(into, { kind: o.kind, src: { generation: g.id, index }, url: o.url, label: label || `#${g.id}`, dur: o.duration || 0 }, false)) n++;
+      if (await landClip(into, { kind: o.kind, src: { generation: g.id, index }, url: o.url, label: runName(label || `#${g.id}`, g, S.templates), dur: o.duration || 0 }, false)) n++;
     }
     if (!n) throw new Error(`#${g.id} is done but couldn't go on ${into.label || 'the video'}'s timeline: it is in the Shelf`);
     return n;
@@ -657,7 +677,7 @@ export function renderBody(frame, d) {
   if (!items.length) throw new Error(`${frame.label || 'This frame'} has nothing on its timeline`);
   if (items.some((it) => it.kind === 'scene')) throw new Error('Its 3D clips are drawn on the open frame: open it, then Render');
   return { project_id: S.project, tab: { id: frame.doc, name: d.name || frame.label },
-    width: p.size?.[0], height: p.size?.[1], fps: p.fps || null,
+    width: frameOutput(frame)?.w ?? p.size?.[0], height: frameOutput(frame)?.h ?? p.size?.[1], fps: p.fps || null,
     tracks: renderTracks(p.tracks),   // (solo folded into hidden / muted, as the preview and the export have it)
     items: items.map((it) => ({ track: it.track, at: it.at, name: it.label, src: it.src, in: it.in, out: it.out ?? it.dur, x: it.x, y: it.y, scale: it.scale,
       fit: it.fit, rotation: it.rotation || 0, anchor_x: it.anchor?.x, anchor_y: it.anchor?.y, opacity: it.opacity, volume: it.volume, chans: it.chans || null,

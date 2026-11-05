@@ -1,3 +1,5 @@
+import { liveFrame } from './live.js';
+import { floatClips } from './clip-list.js';
 import {
   $, h, store, uid, api, toast, clamp, button, runBar, iconBtn, linkBtn, seg, field, section, hint, help, info, note,
   placeholder, fileButton, rangeField, propNum, insertAtCursor, panFmt, pctFmt, toggle, textArea, chip, icon,
@@ -96,7 +98,8 @@ const HIST = history({ snap: snapDoc, limit: 200, apply(sn) {
 } });
 let histDoc;   // the document id the history belongs to
 
-const TL = timeline(N, { el: () => SD.timeline, headW: HEAD_W, minLen: MIN_LEN, zoom: [2, 600], ppsKey: 'deck.sound.pps',
+if (typeof addEventListener === 'function') addEventListener('layers:float', () => { if (liveFrame()?.kind === 'sound') renderTimeline(); });
+const TL = timeline(N, { blankPick: () => addSounds(), el: () => SD.timeline, headW: HEAD_W, minLen: MIN_LEN, zoom: [2, 600], ppsKey: 'deck.sound.pps',
   pause: () => sndPause(), seek: (t) => sndSeek(t), showTime: () => { stp?.update(); refreshKeyed(SD.panel); refreshKeyed(propsRoot()); },
   changed: () => changed(), dragged: () => { renderTimeline(); syncMedia(); }, rendered: () => renderTimeline(),
   placed: (ids) => { drawWaves(ids); syncMedia(); drawStage(); },   // a drag frame: only those clips moved, no full redraw
@@ -339,6 +342,7 @@ function trackHead(tr) {
 }
 
 function renderTimeline() {
+  floatClips('sound', N, TL, { seek: sndSeek });
   TL.render({
     corner: [h('button', { type: 'button', class: 'tl-tog', title: 'Add a track', onclick: () => { addTrack(); changed(); } }, '+ Track')],
     rows: N.tracks.map((tr) => ({ track: tr, cls: 'audio snd-row' + (audible(tr) ? '' : ' off'), head: trackHead(tr) })),
@@ -801,6 +805,7 @@ registerProps('sound', {
 
 // ---- the side panel ----
 function renderPanel() {
+  floatClips('sound', N, TL, { seek: sndSeek });
   const body = SD.body;
   if (!body) return;
   const it = selItem(), tr = it && trackOf(it), pk = TL.picked().filter(Boolean);
@@ -812,8 +817,7 @@ function renderPanel() {
 
   const add = section('Add sound', null,
     h('div', { class: 'row wrap' },
-      button('+ Sounds and clips', () => openSourcePicker({ kinds: ['audio', 'video'], want: 'sound', multi: true, title: 'Add to the mix',
-        onPick: async (v) => { for (const src of [v].flat()) await addSource(src); } }), { cls: 'primary' }),
+      button('+ Sounds and clips', addSounds, { cls: 'primary' }),
       fileButton('Upload…', async ([fl]) => {
         try { const m = await uploadMedia(fl); await addSource({ media: m.name }); } catch (e) { toast('Upload failed: ' + e.message, true); }
       }, { accept: 'audio/*,video/*' }),
@@ -918,9 +922,21 @@ const adapter = {
 const FULLS = new WeakMap();   // host -> its full screen (layout.js adds the pull tab to the stage once per host)
 const WIRED = new WeakSet();   // canvases that have their pointer listeners
 // Point the engine at its elements. Call again to move it to another host; wireSound() does the Sound tab's.
+function addSounds() {
+  openSourcePicker({ kinds: ['audio', 'video'], want: 'sound', multi: true, title: 'Add to the mix',
+    onPick: async (v) => { for (const src of [v].flat()) await addSource(src); } });
+}
+// a double-click on a blank mix: the picker
+const BLANK_PICK = new WeakSet();
+function blankPick(viewer) {
+  if (!viewer || BLANK_PICK.has(viewer)) return;
+  BLANK_PICK.add(viewer);
+  viewer.addEventListener('dblclick', () => { if (!N.items.length) addSounds(); });
+}
 export function mountSound(els) {
   const { active, fullscreen = true, ...rest } = els;
   Object.assign(SD, rest, { active: active || (() => SD.host?.classList.contains('active')) });
+  blankPick(SD.empty?.parentElement);
   SD.panel.replaceChildren(SD.body = h('div', { id: 'sndBody' }));
   if (stp.el !== SD.transport) {
     if (stp.el.isConnected) stp.el.replaceWith(h('div', { class: 'transport', id: 'sndTransport' }));   // (a slot for the bar, should the Sound tab mount again)

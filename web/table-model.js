@@ -42,6 +42,21 @@ export const KIND_LABEL = { image: 'Image', video: 'Video', scene: '3D', sound: 
 export const ENGINE_KINDS = new Set(['edit-tabs', 'video-tabs', 'sound-tabs', 'scene-tabs', 'vfx-tabs', 'gen-tabs']);
 export const sitsEmpty = (kind, project) => ENGINE_KINDS.has(kind) && (project?.version || 1) >= 2;
 export const MIN_SIDE = 16;
+// A frame's output: what its runs, renders and exports come out at (frame.out { w, h }). Its w and h on the table are only its preview's
+// size, so moving or resizing it there never changes this. Sound and notes have no picture, so no output size.
+export const HAS_OUTPUT = new Set(['image', 'video', 'scene']);
+export const outputOf = (f) => (f?.out?.w > 0 && f.out.h > 0 ? { w: f.out.w, h: f.out.h } : f?.w && f?.h ? { w: f.w, h: f.h } : null);
+// the preview's size for a new output: the same longest side, the output's shape (the same size when the shape hasn't changed)
+export function tileShape(f, out) {
+  if (Math.abs(f.w / f.h - out.w / out.h) < 0.01) return { w: f.w, h: f.h };
+  const k = Math.max(f.w, f.h) / Math.max(out.w, out.h);
+  return { w: Math.max(MIN_SIDE, Math.round(out.w * k)), h: Math.max(MIN_SIDE, Math.round(out.h * k)) };
+}
+// a frame just drawn on the table: small on the table isn't small out: under 1 MP comes out at 1 MP, the same shape
+export function drawnOutput(r) {
+  if (r.w * r.h < 1e6) return sizeForMp(r.w, r.h, 1);
+  return { w: Math.max(16, Math.round(r.w / 16) * 16), h: Math.max(16, Math.round(r.h / 16) * 16) };
+}
 
 const rid = () => Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
 const num = (v, d) => (Number.isFinite(+v) ? +v : d);
@@ -59,6 +74,7 @@ export function migrateTable(p) {
       id: String(f.id || rid()), doc: f.doc ?? null, label: f.label ?? KIND_LABEL[f.kind],
       x: num(f.x, 0), y: num(f.y, 0), w: Math.max(MIN_SIDE, num(f.w, 512)), h: Math.max(MIN_SIDE, num(f.h, 512)) })) };
   for (const f of out.frames) { f.key = f.id; if (f.group != null) f.group = String(f.group); }
+  for (const f of out.frames) if (HAS_OUTPUT.has(f.kind) && !(f.out?.w > 0 && f.out.h > 0)) f.out = { w: f.w, h: f.h };   // (from when the table size was the output)
   for (const f of out.frames) {   // (the frame's main source, main-rules.js: a layer key or an item id in its document)
     if (f.main == null || f.main === '' || typeof f.main === 'object') delete f.main; else f.main = String(f.main);
   }
@@ -70,8 +86,9 @@ export function migrateTable(p) {
 
 // A new frame over rect (table units), sides at least MIN_SIDE. extra: doc, label, text, story…
 export function newFrame(kind, rect, extra = {}) {
-  const f = { id: rid(), kind, doc: null, label: KIND_LABEL[kind] || kind,
-    x: Math.round(rect.x), y: Math.round(rect.y), w: Math.max(MIN_SIDE, Math.round(rect.w)), h: Math.max(MIN_SIDE, Math.round(rect.h)), ...extra };
+  const w = Math.max(MIN_SIDE, Math.round(rect.w)), h = Math.max(MIN_SIDE, Math.round(rect.h));
+  const f = { id: rid(), kind, doc: null, label: KIND_LABEL[kind] || kind, x: Math.round(rect.x), y: Math.round(rect.y), w, h,
+    ...(HAS_OUTPUT.has(kind) && { out: { w, h } }), ...extra };
   f.key = f.id;
   return f;
 }

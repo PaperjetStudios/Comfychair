@@ -3,6 +3,7 @@
 // What doesn't apply now isn't listed; a merge that can't happen is, greyed.
 
 // s: { layers, selected, pictures (selected ones with a picture), hidden, clip, pickMode, newEdit, mergeDown, mergeSet,
+//      table (an open frame on the table: a new edit is a frame beside it, so "send to the table"),
 //      main: null (no pin here: off the table, or not one layer that can be pinned) | { on: the layer is the frame's main source } }
 export function layerMenu(s) {
   const n = s.selected, p = s.pictures;
@@ -19,8 +20,10 @@ export function layerMenu(s) {
     [s.main ? { id: 'main', label: s.main.on ? 'Not the main source' : 'Main source', on: !!s.main.on } : null,
       p ? { id: 'saveEach', label: p > 1 ? 'Save each as input' : 'Save layer as input' } : null,
       p > 1 ? { id: 'saveTogether', label: 'Save as one input' } : null,
-      p && s.newEdit ? { id: 'openNew', label: 'Open in a new edit' } : null,
-      n && s.newEdit ? { id: 'moveNew', label: 'Move to new edit' } : null],
+      n && s.newEdit && s.table ? { id: 'moveNew', label: 'Send to the table' } : null,
+      p && s.newEdit && s.table ? { id: 'openNew', label: 'Send a copy to the table' } : null,
+      p && s.newEdit && !s.table ? { id: 'openNew', label: 'Open in a new edit' } : null,
+      n && s.newEdit && !s.table ? { id: 'moveNew', label: 'Move to new edit' } : null],
     [n ? { id: 'delete', label: n > 1 ? `Delete ${n} selected` : 'Delete layer', keys: 'Delete', danger: true } : null,
       s.hidden ? { id: 'deleteHidden', label: `Delete ${s.hidden} hidden`, danger: true } : null,
       s.layers ? { id: 'clear', label: 'Clear all', danger: true } : null],
@@ -96,6 +99,8 @@ export function clipMenu(s) {
       n ? { id: 'copy', label: 'Copy', keys: 'Ctrl+C' } : null,
       s.canPaste ? { id: 'paste', label: 'Paste', keys: 'Ctrl+V', disabled: !!s.locked } : null,
       n ? { id: 'duplicate', label: 'Duplicate', keys: 'Ctrl+J', disabled: !!s.locked } : null],
+    [n && s.table ? { id: 'toTable', label: 'Send to the table', disabled: !!s.locked || !s.sendable } : null,
+      n && s.table ? { id: 'copyToTable', label: 'Send a copy to the table', disabled: !s.sendable } : null],
     [n ? { id: 'split', label: 'Split at playhead', keys: 'S', disabled: !s.canSplit || !!s.locked } : null,
       n === 1 && s.kind !== 'audio' ? { id: 'crossfade', label: 'Cross-fade with the one before', disabled: !!s.locked } : null],
     [n ? { id: 'rippleDelete', label: 'Ripple delete', keys: 'Shift+Delete', disabled: !!s.locked } : null,

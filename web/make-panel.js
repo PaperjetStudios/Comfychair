@@ -25,10 +25,13 @@
 //                              Run from here does (chain-run.js); without it, results are added as Run adds them.
 // Each run records what it read on its frame (frame.make.ran: the stamps of its plugged sources, chain-rules.js), so the
 // table can say which frames need a rerun. The wires row has Run from here / Rerun what uses this (chain-run.js).
-import { h, api, store, toast, button, iconBtn, seg, field, hint, help, info, note, runBar, clone } from './ui.js';
-import { S, CURRENT_EDIT, setBatch, thumbUrl } from './core.js';
+import { runName, templateProcess } from './run-name.js';
+import { h, api, store, toast, uid, button, iconBtn, imageInput, seg, field, hint, help, info, note, clone } from './ui.js';
+import { ASPECT_PRESETS, S, CURRENT_EDIT, inputUrl, previewUrl, thumbUrl } from './core.js';
+import { modeOf } from './size-math.js';
 import { afterQueued, fieldState, fieldTarget, fieldsBorrowed, mainPromptKey, preparePictures, renderFields, runBuilder, runValues, stop } from './generate.js';
-import { pictureForRun } from './picture-input.js';
+import { cropPreview, openPictureCrop, pictureForRun, pictureSize } from './picture-input.js';
+import { outputOf } from './table-model.js';
 import { normalize } from './layer-stack.js';
 import { setupsRow } from './setups.js';
 import { tplKey } from './setups-rules.js';
@@ -41,16 +44,16 @@ import { currentTab, onNavigate } from './navigation.js';
 import { editDoc, flushDoc, frameStamp, freshStamps, stillOf } from './table-frames.js';
 import { DOC_KIND, nextBeside, toStage } from './table-model.js';
 import * as Table from './table.js';
-import { LANDS, canvasRect, carryWords, familiesOf, frameImageField, frameSize, makeFrames, makeTarget, noteText, pickTemplate, isOwnSlot, repointable, runValuesOf, seedsAfter,
+import { LANDS, canvasRect, carryWords, familiesOf, frameImageField, frameSize, slotMode, makeFrames, makeTarget, noteText, pickTemplate, isOwnSlot, repointable, runValuesOf, seedsAfter,
   addHeld, selfPicked, settingsFor, settingsPayload, settleHeld, sizePair, templatesFor, wireFields, withClip } from './make-rules.js';
 import { downstream, fieldKind, isFrameWire, wireLabel } from './wire-rules.js';
 import { freshLayers, layerMarks, placeResults, sourceStamps, withSoundItem, withoutLayers } from './chain-rules.js';
 import { icon } from './icons.js';
 import { mountRunStrip } from './run-strip.js';
 import { frameAudio, frameImage, frameSource, frameStill, frameVideo } from './frame-source.js';
-import { keepMain, mainName, mainOf } from './main-rules.js';
+import { keepMain } from './main-rules.js';
 
-const P = { fresh: [], host: null, frames: [], table: null, key: null, st: null, els: null, batchIn: null };
+const P = { fresh: [], host: null, frames: [], table: null, key: null, st: null, els: null };
 const KIND_WORD = { none: 'a new frame', image: 'this picture', video: 'this video', scene: 'this 3D frame', sound: 'this sound frame' };
 const SHOT_KINDS = new Set(['image', 'video', 'boxes', 'seed', 'mask']);   // a run's own content, not a setting (gentabs.js)
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
@@ -133,16 +136,37 @@ function tellState() {
   stateDue = true;
   queueMicrotask(() => { stateDue = false; dispatchEvent(new CustomEvent('make:state')); });
 }
-addEventListener('deck:batch', () => { if (P.batchIn && document.activeElement !== P.batchIn) P.batchIn.value = S.batch; });
 
 // where the fields draw, on this panel's own settings, and what they show differently here
 function target(kind, frame) {
   return { host: P.els.fields, notes: P.els.notes, basics: P.els.basics, scope: P.host, state: P.st,
-    // (an image frame's own picture slot: the plugged input's chip when a wire fills it, as when the frame is empty; else the frame)
-    replace: (f) => (kind === 'image' && frame && f === frameImageField(P.st.tpl) ? wiredEl(kind, frame, f) || framePictureEl(frame)
-      : f.key === mainPromptKey(P.st.tpl) ? notePromptEl() : wiredEl(kind, frame, f)),
+    // (a picture or clip slot says where it comes from: wrap draws the choice over it, here its body unless it's picked by hand)
+    replace: (f) => {
+      if (f.key === mainPromptKey(P.st.tpl)) return notePromptEl();
+      if (!frame || !isSlot(f)) return wiredEl(kind, frame, f);
+      const mode = modeIn(kind, frame, f, P.st);
+      return mode === 'layers' ? layersEl(kind, frame, f) : mode === 'wire' ? wiredEl(kind, frame, f) : null;
+    },
+    wrap: frame ? (f, el) => (isSlot(f) ? slotFromEl(kind, frame, f, el) : null) : null,
+    // (what a slot shows, for the picture behind Draw boxes; undefined: picked by hand, the slot's own value)
+    slotPicture: frame ? (f) => {
+      if (!isSlot(f)) return undefined;
+      const mode = modeIn(kind, frame, f, P.st), cur = Table.frameById(frame.id) || frame;
+      if (mode === 'manual') return undefined;
+      if (mode === 'layers') return P.layerUrl?.[f.key] || stillOf(cur) || cur.preview || null;
+      const w = wireState(kind, frame).use[f.key], src = w && (Table.frameById(w.from) || w.source);
+      return src ? stillOf(src) || (src.preview ? (src.kind === 'video' ? previewUrl(src.preview, 1024) : src.preview) : null) : null;
+    } : null,
+    // (a frame's size is one setting, its Output tab's: here it only says what the run comes out at)
+    sizeEl: (kind === 'video' || kind === 'image') && frame ? (fw, fh) => field(['Output size', h('span', {}, `${P.st.values[fw.key]}×${P.st.values[fh.key]} · ${((P.st.values[fw.key] * P.st.values[fh.key]) / 1e6).toFixed(2)} MP`)],
+      button('Change…', () => sidebar.show('output'), { cls: 'small' })) : null,
     imageButtons: (f, set) => (kind === 'video' ? [button([icon('image'), 'Pick a frame'], () => pickFrame(f, set))] : []) };
 }
+
+// a slot that can choose where its value comes from: a picture or a clip
+const isSlot = (f) => fieldKind(f) === 'image' || fieldKind(f) === 'video';
+const inputsOf = (frame) => { try { return Table.wiresInto(frame.id) || []; } catch { return []; } };
+const modeIn = (kind, frame, f, st) => slotMode(st.tpl, kind, f, st, inputsOf(frame), { ownPicture: hasPicture(kind, frame) });
 
 // the settings of this frame (or of nothing selected) changed: keep them
 function keep(kind, frame) {
@@ -173,10 +197,13 @@ function settleInputs(frame, st) {
 function fitFrame(kind, frame) {
   const st = P.st;
   if (!frame || !st || (kind !== 'image' && kind !== 'video')) return;
-  const pair = sizePair(st.tpl), s = frameSize(pair, frame);
-  if (!s || (st.values[pair[0].key] === s.w && st.values[pair[1].key] === s.h)) return;
+  const pair = sizePair(st.tpl), s = frameSize(pair, Table.frameById(frame.id) || frame);
+  if (!s) return;
+  const named = modeOf(s.w, s.h, ASPECT_PRESETS);   // (a frame saved in Custom shows chips again when they describe its size)
+  const same = st.values[pair[0].key] === s.w && st.values[pair[1].key] === s.h;
+  if (same && !(st.sizeMode[pair[0].key]?.aspect === 'custom' && named.aspect !== 'custom')) return;
   st.values[pair[0].key] = s.w; st.values[pair[1].key] = s.h;
-  st.sizeMode[pair[0].key] = { aspect: 'custom', mp: Math.round((s.w * s.h) / 1e4) / 100 };
+  st.sizeMode[pair[0].key] = named;
   renderFields(); keep(kind, frame);
 }
 
@@ -206,15 +233,9 @@ function drawHead(kind, frame, list) {
   const famSeg = seg(fams.map((f) => [f, f]), fam, (f) => { const first = list.find((x) => (x.family || 'Other') === f); if (first) choose(kind, first.id); }, { wrap: true });
   P.els.picker.replaceChildren(fams.length > 1 ? famSeg : null, sel,
     t ? setupsRow({ key: tplKey(t.id), get: setupValues, set: (v) => applySetup(kind, frame, v) }) : null);
-  // (the batch is the action bar's: the stepper there and this box set the same S.batch)
-  const batchIn = P.batchIn = h('input', { type: 'number', min: 1, max: 32, value: S.batch, inputMode: 'numeric', 'aria-label': 'How many',
-    onchange: () => { batchIn.value = setBatch(batchIn.value); } });
   const owed = kind === 'image' && frame?.doc ? owedTo(frame.doc).length : 0;
   const n = makeFrames(P.frames).length;
   P.els.head.replaceChildren(
-    runBar(button([icon('sparkle'), n > 1 ? `Run on ${n} frames` : 'Run'], () => runMake(), { cls: 'primary make-run', title: 'Run (Ctrl+Enter)' }),
-      h('label', { class: 'make-batch' }, '×', batchIn),
-      iconBtn('Stop this device\'s run', icon('close'), () => (CHAIN.running ? stopChainNow() : stop()))),
     hint(n > 1 ? `For ${n} frames, one run each · ${landsWord(kind)}` : frame ? `For ${frame.label || 'the frame'} · ${landsWord(kind)}${owed ? ` · ${owed} on the way` : ''}` : `Lands as ${landsWord(kind)}`, 'make-for'));
   tellState();
 }
@@ -234,33 +255,6 @@ function choose(kind, id) {
 }
 
 // the frame's own picture, in place of the template's first picture slot; with a main source pinned (frame.main), that layer
-function framePictureEl(frame) {
-  const still = stillOf(frame);
-  frame = Table.frameById(frame.id) || frame;   // (as the table has it now)
-  if (frame.main) {
-    const img = h('img', { src: still || '', alt: '' }), name = h('span', { class: 'grow' }, 'Main: …');
-    const el = field(['Picture', h('span', {}, 'the main source')],
-      h('div', {}, h('div', { class: 'make-frame-pic' }, img),
-        h('div', { class: 'make-main-row' }, icon('pin'), name,
-          iconBtn('Unpin: take the whole frame again', icon('close'), () => Table.setFrameField(frame.id, { main: null })))),
-      help('One layer of this frame is pinned as its main source: Run sends that layer alone, not the whole picture. Pin another from the layer menu, or unpin to send the frame as it looks.'));
-    fillMain(frame, img, name);
-    return el;
-  }
-  return field(['Picture', h('span', {}, 'this frame')],
-    h('div', { class: 'make-frame-pic' }, still ? h('img', { src: still, alt: '' }) : h('span', { class: 'hint' }, 'Empty frame')),
-    help('The frame as it looks when Run is pressed.'));
-}
-// the pinned layer's name and picture, read from the open editor or the saved edit
-async function fillMain(frame, img, name) {
-  const eng = liveEng(frame);
-  const p = eng ? { layers: eng.E.layers } : (await api(docUrl('image', frame.doc), { busy: false }).catch(() => null))?.payload;
-  const l = mainOf(frame, p);
-  if (!l) { name.textContent = 'Main: its layer is gone, so the whole frame is sent'; return; }
-  name.textContent = `Main: ${mainName(frame, p)}`;
-  name.title = name.textContent;
-  if (l.name) img.src = thumbUrl(l.name, 320);
-}
 // a selected note's words, in place of the prompt: they are what is sent
 function notePromptEl() {
   const got = noteText(P.frames);
@@ -290,6 +284,69 @@ const setWired = (kind, frame, key, v) => {
   renderFields(); drawWires(kind, frame);
 };
 
+// Where a slot's value comes from: layers, a plugged input or picked by hand
+function setFrom(kind, frame, f, mode) {
+  P.st.from ||= {};
+  if (mode === 'wire') {
+    const { inputs, map } = wireState(kind, frame);
+    const w = repointable(f, inputs, map).find((x) => x.on !== false) || inputs.find((x) => x.kind === fieldKind(f) && x.on !== false);
+    if (!w) return;
+    delete P.st.from[f.key];
+    setWired(kind, frame, f.key, w.id);
+    return;
+  }
+  P.st.from[f.key] = mode;
+  setWired(kind, frame, f.key, false);
+}
+function slotFromEl(kind, frame, f, body) {
+  const mode = modeIn(kind, frame, f, P.st);
+  const plugged = inputsOf(frame).some((w) => w.kind === fieldKind(f) && w.on !== false);
+  const options = [...(kind === 'image' && fieldKind(f) === 'image' ? [['layers', 'Layers']] : []), ...(plugged || mode === 'wire' ? [['wire', 'Plugged in']] : []), ['manual', 'Set here']];
+  if (options.length < 2) return null;
+  const el = h('div', { class: 'slot-from' }, seg(options, mode, (m) => setFrom(kind, frame, f, m)), body);
+  el.dataset.key = f.key;
+  return el;
+}
+// a picture slot filled from this frame's layers: all of them as the frame looks, or one (a pinned main source starts as that one)
+function layersEl(kind, frame, f) {
+  frame = Table.frameById(frame.id) || frame;
+  const own = frameImageField(P.st.tpl)?.key === f.key, src = (P.st.layerSrc ||= {})[f.key] || {};
+  const save = (patch) => { P.st.layerSrc[f.key] = { ...P.st.layerSrc[f.key], ...patch }; keep(kind, frame); };
+  const chosen = () => (src.layer !== undefined ? src.layer : frame.main || '');
+  const still = stillOf(frame) || frame.preview || null;
+  const img = h('img', { src: still || '', alt: '' }), thumb = h('div', { class: 'thumb' }, still ? img : h('span', { class: 'hint' }, 'Empty frame'));
+  let nat = () => { const o = outputOf(frame); return o ? [o.w, o.h] : null; };
+  const sizeEl = pictureSize({ nat: () => nat(), mp: src.mp ?? (own ? 0 : f.mp ?? 1), onPick: (mp) => save({ mp }) });
+  const menu = h('select', { 'aria-label': `Which layers ${f.label} comes from`, onchange: () => { save({ layer: menu.value }); renderFields(); } }, h('option', { value: '' }, 'All layers, as the frame looks'));
+  menu.value = '';
+  // (a saved edit whose layers were never opened has no keys yet: they get theirs here, so one can be chosen)
+  const pickable = (l) => l && !l.maskOf && !l.mask && !l.draft;
+  const keyed = async () => {
+    const list = await layersOf(frame);
+    if (liveEng(frame) || !list.some((l) => pickable(l) && l.key == null)) return list;
+    await editDoc('image', frame.doc, (p) => { for (const l of p.layers || []) if (pickable(l) && l.key == null) l.key = uid(); });
+    return layersOf(frame);
+  };
+  keyed().then((list) => {
+    const usable = list.filter((l) => pickable(l) && l.key != null);
+    menu.append(...usable.map((l) => h('option', { value: l.key }, l.label || String(l.name || '').split('/').pop() || 'Painted layer')));
+    menu.value = usable.some((l) => l.key === chosen()) ? chosen() : '';
+    const l = usable.find((x) => x.key === menu.value);
+    (P.layerUrl ||= {})[f.key] = l?.name ? inputUrl(l.name) : null;
+    if (l?.name) {
+      if (!thumb.contains(img)) thumb.replaceChildren(img);
+      img.src = thumbUrl(l.name, 256);
+      const probe = new Image();
+      probe.onload = () => { nat = () => [probe.naturalWidth, probe.naturalHeight]; sizeEl.refresh(); };
+      probe.src = inputUrl(l.name);
+    }
+  }).catch(() => {});
+  const crop = !own && still ? button('Crop…', () => openPictureCrop(img.src, src.crop || null, (c) => { save({ crop: c }); renderFields(); })) : null;
+  return field([f.label, h('span', {}, src.crop ? 'from this frame · cropped' : 'from this frame')],
+    help('Run sends this frame\'s layers here: all of them as the frame looks, or the one you choose.'),
+    h('div', { class: 'imgfield' }, thumb, h('div', { class: 'actions' }, menu, crop, sizeEl)));
+}
+
 // the field's slot, when an input is plugged into it and on: a chip in place of the picker, with an off switch and a menu to
 // point the slot at another plugged input or to pick for itself (an off wire leaves the slot to its own picker; the row above lists it)
 function wiredEl(kind, frame, f) {
@@ -297,14 +354,40 @@ function wiredEl(kind, frame, f) {
   const { inputs, map, use } = wireState(kind, frame), w = use[f.key];
   if (!w) return null;
   const others = repointable(f, inputs, map).filter((x) => x.id !== w.id);
-  const menu = h('select', { 'aria-label': `Where ${f.label} comes from`, onchange: () => setWired(kind, frame, f.key, menu.value ? menu.value : false) },
+  const menu = h('select', { 'aria-label': `Where ${f.label} comes from`, onchange: () => { if (menu.value) setWired(kind, frame, f.key, menu.value); else setFrom(kind, frame, f, 'manual'); } },
     h('option', { value: w.id }, wireWords(w)), ...others.map((x) => h('option', { value: x.id }, wireWords(x))), h('option', { value: '' }, 'Pick myself'));
   menu.value = w.id;
+  if (fieldKind(f) === 'image' || fieldKind(f) === 'video') return wiredPictureEl(kind, frame, f, w, menu);
   return field([f.label, h('span', {}, f.group || '')],
     h('div', { class: 'make-wire' }, h('span', { class: 'make-wire-chip' }, wireWords(w)),
       button('On', () => Table.setTableWire(w.id, { on: false }), { cls: 'small make-wire-on', title: 'Turn this input off: the slot uses its own picked value' }),
       menu),
     info(`Run fills this slot from the frame plugged in as ${wireLabel(w)}. Turn it off or pick myself to choose a value here instead.${kind === 'image' && fieldKind(f) === 'image' ? ' A frame with several layers comes from its saved still while another image frame is open (up to 1024 px).' : ''}`));
+}
+
+// a picture or clip slot a wire fills: the same slot as any other, showing the plugged frame. A picture's crop and the size it goes in at are
+// kept on the wire, so the frame's next look is cut the same way at Run. Change gives the slot its own picker instead of the wire.
+function wiredPictureEl(kind, frame, f, w, menu) {
+  const isImage = fieldKind(f) === 'image', own = () => setFrom(kind, frame, f, 'manual');
+  const src = Table.frameById(w.from) || w.source;
+  const url = !src ? null : stillOf(src) || (src.preview ? (src.kind === 'video' ? previewUrl(src.preview, 256) : src.preview) : null);
+  const words = wireWords(w);
+  const pick = !isImage ? own : () => openSourcePicker({ kinds: ['image'], want: 'picture', title: f.label, onPick: (name) => {
+    P.st.values[f.key] = name;
+    own();
+  } });
+  const cut = () => openPictureCrop(url, w.crop || null, (crop) => Table.setTableWire(w.id, { crop }));
+  const nat = () => {
+    const o = outputOf(src), c = w.crop || { w: 1, h: 1 };
+    return o ? [o.w * c.w, o.h * c.h] : null;
+  };
+  return imageInput({ label: f.label, name: `${words}${w.crop ? ' · cropped' : ''}`,
+    thumb: !url ? h('span', { class: 'hint' }, 'No picture yet') : w.crop ? cropPreview(url, w.crop) : h('img', { src: url, alt: words }),
+    pick, onClear: own,
+    tip: `Run fills this slot from the frame plugged in as ${wireLabel(w)}. Change or clear it, or choose Pick myself, to use something else here instead.${kind === 'image' && isImage ? ' A frame with several layers comes from its saved still while another image frame is open (up to 1024 px).' : ''}`,
+    buttons: [isImage && url ? button('Crop…', cut) : null,
+      button('On', () => Table.setTableWire(w.id, { on: false }), { cls: 'small make-wire-on', title: 'Turn this input off: the slot uses its own picked value' })],
+    below: [isImage ? pictureSize({ nat, mp: w.mp ?? f.mp ?? 1, onPick: (mp) => Table.setTableWire(w.id, { mp }) }) : null, menu] });
 }
 
 // above the fields: wires that are off, slots left to themselves where an input is waiting, and inputs no slot takes
@@ -322,6 +405,7 @@ function drawWires(kind, frame) {
     }
     const opts = { ownPicture: hasPicture(kind, frame) }, offered = new Set();
     for (const f of selfPicked(t, kind, inputs, P.st.wired, opts)) {
+      if (isSlot(f)) continue;   // (a picture or clip slot has its own choice)
       const w = repointable(f, inputs, map)[0], mine = isOwnSlot(t, kind, f, P.st.wired, opts);
       if (w) offered.add(w.id);
       if (w) rows.push(h('div', { class: 'make-wire-row' }, h('span', {}, mine ? `${f.label} is this frame's picture` : `${f.label} is picked here`),
@@ -385,6 +469,13 @@ addEventListener('chain:state', (e) => {
   if (frame && P.key === keyOf(kind, frame)) drawWires(kind, frame);
 });
 // the frame's main source pinned or unpinned (table.js setFrameField): its picture field says so
+// the frame's output size changed elsewhere (the Output tab, undo, an image fitting its layers): the Size field follows
+const outputMoved = (e) => {
+  const f = e.detail?.frame;
+  if ((e.type === 'table:output' || e.detail?.keys?.includes('out')) && P.frames?.length === 1 && P.frames[0].id === f?.id) fitFrame(f.kind, f);
+};
+addEventListener('table:frame-field', outputMoved);
+addEventListener('table:output', outputMoved);
 addEventListener('table:frame-field', (e) => {
   if (!e.detail?.keys?.includes('main') || !P.host || !P.st || !onTable()) return;
   const { kind, frame } = makeTarget(P.frames);
@@ -416,8 +507,12 @@ async function resolveWires(kind, frame, t, st, values, made) {
     if (!src) throw new Error(`${wireLabel(w)} has no frame to come from`);
     const k = fieldKind(f);
     if (k === 'image') {
-      if (isFrameWire(w)) { const name = await frameStill(src, w.frame); made.push(name); values[f.key] = name; }
-      else { const got = await frameImage(src, { multiple: 16 }); if (got.fresh) made.push(got.name); values[f.key] = got.name; }
+      const got = isFrameWire(w) ? { name: await frameStill(src, w.frame), fresh: true } : await frameImage(src, { multiple: 16 });
+      if (got.fresh) made.push(got.name);
+      // (the crop and size asked for. A copy of a picture made for this run goes with it; one of a kept picture stays with that picture, as any slot's does)
+      const cut = await pictureForRun(got.name, w.crop || null, w.mp ?? f.mp ?? 1);
+      if (got.fresh && cut !== got.name) made.push(cut);
+      values[f.key] = cut;
       done.add(f.key);
     } else {
       const { label, ...clip } = await (k === 'video' ? frameVideo(src) : frameAudio(src));
@@ -506,6 +601,8 @@ const dropInput = (name) => {
 // Run: one run per selected frame of the kind (nothing selected: one run, new frames)
 // ---------------------------------------------------------------------------
 let running = false;
+// the action bar's Stop on the table: the chain going, else this device's run
+export const stopMake = () => (CHAIN.running ? stopChainNow() : stop());
 export async function runMake() {
   if (running) return;
   const sel = selection();
@@ -554,20 +651,27 @@ async function queueOne({ kind, f, t, st, base, builder, batch, prepare, afterQ,
   const made = [];   // (inputs made for the wires into this frame)
   try {
     const values = clone(base);
-    const imgF = kind === 'image' ? frameImageField(t) : null;
-    // (the frame's own picture: its main source when one is pinned; else without what its last chain run made, so a rerun
-    // never reads its own last result: main-rules.js withoutMade)
     if (f && (kind === 'image' || kind === 'video')) {   // (each frame's own size)
-      const pair = sizePair(t), s = frameSize(pair, f);
+      const pair = sizePair(t), s = frameSize(pair, Table.frameById(f.id) || f);
       if (s) { values[pair[0].key] = s.w; values[pair[1].key] = s.h; }
     }
     const stamps = f ? await readStamps(f) : null;
     const wired = await resolveWires(kind, f, t, st, values, made);
-    if (imgF && !wired.has(imgF.key)) {   // (the frame's own picture, unless a wire fills that slot)
-      try { sent = await frameSource(f, { multiple: 16, without: (Table.frameById(f.id) || f).make?.ran?.made || null }); }
-      catch (e) { throw /is empty$/.test(e.message) ? new Error(`${imgF.label} needs a picture: ${f.label || 'this frame'} is empty and no input is plugged into it`) : e; }
-      values[imgF.key] = sent.name;
-      wired.add(imgF.key);
+    // (slots set to this frame's layers: all of them, or one. All of them leaves out what its last chain run made, so a rerun never reads its
+    // own last result: main-rules.js withoutMade. The frame's own first slot keeps what it sent for placing the result.)
+    if (f && kind === 'image') for (const fld of t.fields) {
+      if (fieldKind(fld) !== 'image' || modeIn(kind, f, fld, st) !== 'layers') continue;
+      const own = frameImageField(t)?.key === fld.key, src = st.layerSrc?.[fld.key] || {}, cur = Table.frameById(f.id) || f;
+      const whole = src.layer === '' || (src.layer === undefined && !cur.main);
+      const from = src.layer ? { ...cur, main: src.layer } : src.layer === '' ? { ...cur, main: null } : cur;
+      let got;
+      try { got = await frameSource(from, { multiple: 16, without: whole ? cur.make?.ran?.made || null : null }); }
+      catch (e) { throw /is empty$/.test(e.message) ? new Error(`${fld.label} needs a picture: ${f.label || 'this frame'} is empty. Set it here or plug an input in`) : e; }
+      if (own) sent = got; else made.push(got.name);
+      const cut = await pictureForRun(got.name, own ? null : src.crop || null, src.mp ?? (own ? 0 : fld.mp ?? 1));
+      if (cut !== got.name) made.push(cut);
+      values[fld.key] = cut;
+      wired.add(fld.key);
     }
     await prepare(values, wired);
     const before = layersBefore && kind === 'image' && f ? layerMarks(await layersOf(f)) : null;   // (keys and names: chain-rules freshLayers)
@@ -674,7 +778,7 @@ async function landNow(kind, f, t, r, replace) {
   if (kind === 'image') {
     await landLayers(f, t, r.gens, r.sent);
     const done = await doneRuns(r.gens);
-    const names = await waitLayers(f, r.before || new Set(), t.name, done.length);
+    const names = await waitLayers(f, r.before || new Set(), templateProcess(t.name), done.length);
     if (!names.length) throw new Error(`the result isn't in "${f.label || 'the frame'}" yet (it lands when the frame next opens; the run is in History)`);
     if (replace) await removeLayers(f, keepMain(old, Table.frameById(f.id) || f, { layers: await layersOf(f) }).filter((n) => !names.includes(n)));   // (never the main source)
     await flushDoc(f);
@@ -742,7 +846,7 @@ async function landInPlace(kind, f, done, old) {
       const ok = kind === 'video' ? o.kind === 'video' || o.kind === 'image' : o.kind === 'audio';
       if (!ok) continue;
       const dur = o.kind === 'image' ? 0 : o.duration || await durationOf(o.url);
-      medias.push({ kind: o.kind, src: { generation: d.id, index }, url: o.url, label: `#${d.id}`, dur });
+      medias.push({ kind: o.kind, src: { generation: d.id, index }, url: o.url, label: runName(templateProcess(t.name), d, S.templates), dur });
     }
   }
   if (!medias.length) { done.forEach(inShelf); return old; }
@@ -778,7 +882,7 @@ async function landLayers(frame, t, gens, sent) {
   }
   const src = { name: sent?.name || null, px: sent ? sent.px : [rect.w, rect.h], rect, copy: !!sent };
   gens.forEach((g, i) => {
-    landMade(frame.doc, src, g, { label: t.name, nth: i });
+    landMade(frame.doc, src, g, { label: templateProcess(t.name), nth: i });
     waitGen(g.id).catch(() => {}).finally(() => setTimeout(() => { if (P.host) draw(); }, 1500));   // (the count of runs on the way)
   });
 }
@@ -812,7 +916,7 @@ export async function landClips(frame, done) {
   const outs = (done.outputs || []).map((o, index) => ({ o, index })).filter(({ o }) => o.kind === 'video' || o.kind === 'image');
   let n = 0;
   for (const { o, index } of outs) {
-    if (await landClip(frame, { kind: o.kind, src: { generation: done.id, index }, url: o.url, label: `#${done.id}`, dur: o.duration || 0 }, false)) n++;
+    if (await landClip(frame, { kind: o.kind, src: { generation: done.id, index }, url: o.url, label: runName(templateProcess(t.name), done, S.templates), dur: o.duration || 0 }, false)) n++;
     else toast(`#${done.id} is done but couldn't go on ${frame.label}'s timeline: it is in the Shelf`, true);
   }
   if (n) toast(`#${done.id}: on ${frame.label || 'the video'}'s timeline`);

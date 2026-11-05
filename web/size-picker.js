@@ -9,7 +9,7 @@
 //     kept in step), read() → { w, h } the size shown now (default: the last one chosen), note(mode) → words instead of
 //     the readout, onMode(mode) when the proportions or megapixels change
 //   el.apply()   the proportions and megapixels applied again (an "extra" proportion became known); el.redraw()
-import { h, field, seg } from './ui.js';
+import { h, field, seg, toggle } from './ui.js';
 import { ASPECT_PRESETS } from './core.js';
 import { MP_STEPS, modeOf, presetSize, snapSide } from './size-math.js';
 
@@ -69,5 +69,49 @@ export function sizePicker({ w, h: hh, onChange, label = 'Size', step = 16, lim 
   const el = field([label, readout], aspectSeg, aspectBtn, mpRow, sides);
   el.classList.add('size-field');
   el.apply = apply; el.redraw = draw; el.mode = m;
+  return el;
+}
+
+// The same selector where a tool can't take any proportions: its result keeps its source's shape, or a model takes only certain sizes.
+// Chips, the size it comes out at beside the label, and Custom to type a value when the tool can take any.
+//   choices [[value, label], …]; value the one in use; onPick(value)
+//   sizeOf(value) → { w, h } it comes out at (null while unknown; words(value) or the chip's label is shown instead)
+//   custom { label, min, max, step }: typing the same kind of value as the chips; left out when the model takes only these
+//   tip: a help() for the label
+export function sizeChoices({ label, choices, value, onPick, sizeOf = null, words = null, custom = null, tip = null }) {
+  let cur = value;
+  const readout = h('span', {});
+  const listed = (v) => choices.find(([x]) => String(x) === String(v));
+  const show = () => {
+    const s = sizeOf?.(cur);
+    readout.textContent = s ? `${s.w}×${s.h} · ${((s.w * s.h) / 1e6).toFixed(2)} MP` : words?.(cur) ?? listed(cur)?.[1] ?? String(cur);
+  };
+  const box = custom ? h('input', { type: 'number', inputMode: 'decimal', min: custom.min, max: custom.max, step: custom.step, value: cur, 'aria-label': custom.label }) : null;
+  const boxField = custom ? field(custom.label, box) : null;
+  const pick = (v, typed = false) => { cur = v; show(); onPick(v, typed); };
+  box?.addEventListener('change', () => {
+    const n = Math.min(custom.max, Math.max(custom.min, Number(box.value) || custom.min));
+    box.value = n;
+    pick(n, true);
+  });
+  const chips = seg([...choices, ...(custom ? [['custom', 'Custom']] : [])], listed(cur) ? cur : 'custom', (id) => {
+    boxField?.classList.toggle('hidden', id !== 'custom');
+    if (id !== 'custom') pick(listed(id)[0]);
+  }, { wrap: true });
+  boxField?.classList.toggle('hidden', !!listed(cur));
+  show();
+  const el = field([label, readout], tip, chips, boxField);
+  el.classList.add('size-field');
+  el.refresh = show;
+  return el;
+}
+
+// A size that can follow its source: on, nothing is chosen; off, the resolution selector. size [w, h] or null; onChange([w, h] or null).
+export function sizeOrMatch({ label = 'Output size', matchLabel, size, onChange, first = [1280, 720], step = 16 }) {
+  const el = h('div', { class: 'size-or-match' });
+  let cur = size;
+  const draw = () => el.replaceChildren(toggle(matchLabel, !cur, (on) => { cur = on ? null : [...first]; onChange(cur); draw(); }),
+    cur ? sizePicker({ label, w: cur[0], h: cur[1], step, lim: (n) => Math.min(8192, Math.max(step, n)), onChange: (w, hh) => { cur = [w, hh]; onChange(cur); } }) : '');
+  draw();
   return el;
 }

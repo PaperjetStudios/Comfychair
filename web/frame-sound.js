@@ -31,7 +31,7 @@ async function goLiveSound(frame, root) {
   for (let k = 0; k < 2 && tabs.active?.id !== frame.doc; k++) { await tabs.openQuiet(frame.doc); if (my.dead) return; }
   if (tabs.active?.id !== frame.doc) throw new Error('the mix would not open');
   const canvas = h('canvas', { class: 'snd-canvas', 'aria-label': 'The whole mix: tap to move the playhead, drag a clip to move or trim it' });
-  const empty = h('div', { class: 'placeholder' }, 'Add sounds, or the sound of clips, to the tracks below');
+  const empty = h('div', { class: 'placeholder' }, 'Add sounds');
   const bar = h('div', { class: 'transport' });
   root.append(h('div', { class: 'stage editor-stage' }, h('div', { class: 'viewer snd-viewer' }, canvas, empty), bar));
   const dr = drawer(), pane = my.pane = sidebar.pane('layers', { title: 'Tracks', icon: 'sound', host: false });

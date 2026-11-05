@@ -122,3 +122,16 @@ test('the main source: offered for one pinnable layer or one clip on a table fra
   assert.equal(clip({ main: { on: true } }).label, 'Not the main source');
   assert.equal(clip({ n: 2, main: { on: false } }), undefined, 'one clip at a time');
 });
+
+test('on the table, a layer or a clip can go to the table as itself or as a copy', () => {
+  const lay = layerMenu({ layers: 2, selected: 1, pictures: 1, newEdit: true, table: true }).flat();
+  assert.equal(lay.find((i) => i.id === 'moveNew').label, 'Send to the table');
+  assert.equal(lay.find((i) => i.id === 'openNew').label, 'Send a copy to the table');
+  assert.equal(layerMenu({ layers: 2, selected: 1, pictures: 1, newEdit: true }).flat().find((i) => i.id === 'moveNew').label, 'Move to new edit');
+  const clip = clipMenu({ n: 1, kind: 'video', table: true, sendable: true }).flat();
+  assert.ok(clip.some((i) => i.id === 'toTable') && clip.some((i) => i.id === 'copyToTable'));
+  assert.ok(!clipMenu({ n: 1, kind: 'video' }).flat().some((i) => i.id === 'toTable'));
+  const locked = clipMenu({ n: 1, kind: 'video', table: true, sendable: true, locked: true }).flat();
+  assert.equal(locked.find((i) => i.id === 'toTable').disabled, true);
+  assert.equal(locked.find((i) => i.id === 'copyToTable').disabled, false);
+});

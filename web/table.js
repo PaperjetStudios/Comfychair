@@ -27,7 +27,7 @@
 //                    sourceClip turn one into a picture or a clip). Either list may be empty. Not handled: the sources
 //                    become frames of their own beside it.
 //   table:select     { frames: [frame], table }  the selection changed (sidebar.js follows it)
-//   table:resize     { frame, table }            a frame's size was set while it is live (its module applies it)
+//   table:frame-field { frame, keys, table }     a frame's own fields changed; keys has 'out' when its output size did (its module applies it)
 //   table:move       { frames: [frame], table }  frames were moved by a drag, the arrows (once they stop) or Undo
 //   table:open       { table, doc }              a table document was loaded or made (its frames are drawn); doc is the
 //                    TabSet's doc ({ id, name, … }). Not fired for the open table saved elsewhere (it is the same table).
@@ -45,13 +45,14 @@
 // it in (a video frame asks: the clip, or a frame of it). The target shows one input port per wire down its left edge
 // ("Image 1", "Video 1", "Sound 1"). Tap a wire or an input port to select it, Delete unplugs it, right click or a long hold
 // has the rest. Every wire change is a table undo step. For the Make pane: tableWires, wiresInto, setTableWire.
-import { $, h, api, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, toggle, help, layerRowsEl, iconBtn, uid } from './ui.js';
+import { $, h, api, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, info, toggle, help, layerRowsEl, iconBtn, uid } from './ui.js';
 import { S, onServer, onProject } from './core.js';
 import { TabSet } from './tabs.js';
 import { currentTab } from './navigation.js';
 import { ownsKey } from './key-focus.js';
 import { openPressMenu, pressMenu, closePressMenu } from './press-menu.js';
 import { gzChip, snap as snapPrefs, snapBar } from './gizmo.js';
+import { onSamplerPreview, samplerPreview, setSamplerPreview } from './run-strip.js';
 import { exitMaxedIn, fullScreen, fullScreenOf } from './layout.js';
 import { registerUndo, syncUndo } from './undo-dock.js';
 import { onNavigate, switchTab as navigate } from './navigation.js';
@@ -66,9 +67,9 @@ import { filtering, foldedGroups, listRows } from './frame-list.js';
 import { KIND_ICON, copyDoc, createDoc, dropInput, editDoc, frameEl, frameFor, frameStamp, kindOfDoc, loadStills, noteRev, owedCounts, renameDoc, restoreDoc, stillOf, syncFrame, trashDoc, pausePreviews, previewMode, setPreviewMode } from './table-frames.js';
 import { staleInfo, staleText } from './chain-rules.js';
 import { sidebar } from './sidebar.js';
-import { sizePicker } from './size-picker.js';
-import { registerProps, propsChanged, numRow } from './props-panel.js';
-import { shared, snapNum, lockedSize, mixLength } from './props-rules.js';
+import { FLOAT_KINDS, floatLayers, layersFloating } from './float-layers.js';
+import { registerProps, propsChanged } from './props-panel.js';
+import { shared, snapNum, mixLength } from './props-rules.js';
 
 const ZMIN = 0.02, ZMAX = 8, DRAG_PX = 4, SNAP_PX = 8, DWELL_MS = 600, NUDGE = 1;
 const DOUBLE_MS = 380, DOUBLE_PX = 24;   // a double tap: the second within this long and this near (screen pixels)
@@ -237,11 +238,35 @@ function renderFrames() {
     seen.add(f.id);
   });
   for (const [id, el] of U.els) if (!seen.has(id)) { el.remove(); U.els.delete(id); }
+  tellNewFrames();
   renderHandles();
   renderWires(dragTouch());
   renderPanel();
   D.syncArrange?.();
   tellSelection();
+}
+// A frame that appears on the table while another one is open (a tool's result, a send to the table, a copy, another device): a toast that goes to it.
+// Several at once are one toast, going to the newest. A table being opened tells nothing: what's on it isn't new.
+function tellNewFrames() {
+  const table = activeTableId(), ids = T.frames.map((f) => f.id);
+  if (U.knownIn !== table || !U.known) { U.knownIn = table; U.known = new Set(ids); U.freshIds = []; return; }
+  const fresh = ids.filter((id) => !U.known.has(id));
+  U.known = new Set(ids);
+  if (!fresh.length || !liveFrame()) return;
+  U.freshIds = [...(U.freshIds || []), ...fresh];
+  clearTimeout(U.freshT);
+  U.freshT = setTimeout(() => {
+    const list = (U.freshIds || []).map(byId).filter(Boolean), last = list[list.length - 1];
+    U.freshIds = [];
+    if (!last || !liveFrame()) return;
+    toast(list.length > 1 ? `${list.length} new frames on the table` : `New on the table: ${last.label || M.KIND_LABEL[last.kind]}`, false, { label: 'Go to it', fn: () => goToFrame(last.id) });
+  }, 400);
+}
+function goToFrame(id) {
+  const f = byId(id);
+  if (!f) return toast('That frame has gone', true);
+  if (f.kind !== 'note') return goLive(f);
+  Promise.resolve(unlive()).then(() => { selectFrames([id], { scroll: true }); goLive(byId(id)); });
 }
 // table:select, each time the selected frames are other ones than last time
 function tellSelection() {
@@ -506,7 +531,7 @@ const nextLabel = (kind) => `${M.KIND_LABEL[kind]} ${T.frames.filter((f) => f.ki
 // ok: here() taken before whatever the caller awaited (default: now). fresh: a picture uploaded for the frame's document
 // (frameFor), deleted when the frame isn't made: nothing else owns it
 async function makeFrame(kind, rect, { payload, frame, fresh = null, ok = here(), select = true } = {}) {
-  const f = frame || M.newFrame(kind, rect, { label: nextLabel(kind) });
+  const f = frame || M.newFrame(kind, rect, { label: nextLabel(kind), ...(M.HAS_OUTPUT.has(kind) && { out: M.drawnOutput(rect) }) });
   if (kind !== 'note') {
     try { f.doc = await createDoc(f, payload); } catch (e) { toast(`Couldn't make the frame: ${e.message}`, true); dropInput(fresh); return null; }
     if (!ok()) { trashDoc(f).catch(() => {}); return null; }   // (another table opened meanwhile: the document goes too, and its picture with it)
@@ -556,10 +581,15 @@ function liveBar(f, root) {
     const max = fullScreenOf(root);
     if (max) max.toggle(); else toast('Full screen comes once the frame has opened');
   });
+  // (its layer list in a floating panel)
+  const layersBtn = !FLOAT_KINDS.includes(f.kind) ? null : h('button', { type: 'button', class: `icon-btn live-bar-btn live-layers${layersFloating() ? ' on' : ''}`, 'aria-label': 'Layers in a floating panel', title: 'Layers in a floating panel' }, icon('rows'));
+  layersBtn?.addEventListener('click', () => floatLayers(!layersFloating()));
+  const unfloat = (e) => { if (!layersBtn?.isConnected) { removeEventListener('layers:float', unfloat); return; } layersBtn.classList.toggle('on', e.detail.on); };
+  addEventListener('layers:float', unfloat);
   const close = h('button', { type: 'button', class: 'icon-btn live-bar-btn live-close', 'aria-label': 'Close (Esc)', title: 'Back to the table (Esc)' }, icon('close'));
   close.addEventListener('click', () => unlive());
   const bar = h('div', { class: 'live-bar', 'data-kind': f.kind },
-    h('span', { class: 'live-bar-kind', 'aria-hidden': 'true' }, icon(KIND_ICON[f.kind])), name, h('span', { class: 'live-bar-gap' }), full, close);
+    h('span', { class: 'live-bar-kind', 'aria-hidden': 'true' }, icon(KIND_ICON[f.kind])), name, h('span', { class: 'live-bar-gap' }), layersBtn, full, close);
   for (const ev of ['pointerdown', 'dblclick', 'wheel']) bar.addEventListener(ev, (e) => e.stopPropagation());
   // a module that empties the root (frame-image, frame-scene: replaceChildren) gets the bar back on top
   const keep = new MutationObserver(() => { if (root.firstChild !== bar) root.prepend(bar); });
@@ -770,7 +800,7 @@ function applyGeom(list) {
     if (!f) continue;
     const resized = f.w !== g.w || f.h !== g.h;
     Object.assign(f, g); moved.push(f);
-    if (resized && liveFrame()?.id === f.id) { placeLive(); dispatchEvent(new CustomEvent('table:resize', { detail: { frame: f, table: T } })); }
+    if (resized && liveFrame()?.id === f.id) placeLive();
   }
   U.sel = new Set(moved.map((f) => f.id));
   renderFrames(); changed();
@@ -894,32 +924,17 @@ function reveal(f) {
 }
 
 // ---------------------------------------------------------------------------
-// Size and MP: a frame's canvas size, typed, or from megapixels at the same shape
+// the output size (the Output tab, Make's Size field): frames with a picture take this size, not a locked one, one undo step. The preview on
+// the table takes the new shape. Resizing the frame on the table never comes here.
 // ---------------------------------------------------------------------------
-function sizeSheet(f) {
-  const ok = here(), id = f.id;
-  let w = f.w, hh = f.h;
-  openSheet(h('h3', {}, `Size · ${f.label}`),
-    help('The frame\'s size is its canvas size. The image, video or 3D document takes it the next time the frame is opened. Pick the proportions and the megapixels, or Custom to type the sides; each side snaps to 16.'),
-    framePicker(f, (nw, nh) => { w = nw; hh = nh; }, 'Size'),
-    actions(button('Apply', () => {   // (on the table it was opened on, and the frame still there)
-      closeSheet();
-      const g = ok() && byId(id);
-      if (g) setSize(g, { w, h: hh }); else toast('That frame is on another table now', true);
-    }, { cls: 'small primary' }),
-      button('Cancel', closeSheet, { cls: 'small ghost' })));
-}
-
-// a frame's size set from the sheet or the panel; a live frame's module takes it at once (table:resize), others on opening
-function setSize(f, s) {
-  const before = geomOf(new Set([f.id]));
-  Object.assign(f, s);
-  recordGeom(before, geomOf(new Set([f.id])));
-  if (liveFrame()?.id === f.id) {
-    placeLive();
-    dispatchEvent(new CustomEvent('table:resize', { detail: { frame: f, table: T } }));
-  }
-  renderFrames(); changed();
+export function setOutputs(ids, { w, h: hh }) {
+  const list = [...ids].map(byId).filter((f) => f && !f.locked && M.HAS_OUTPUT.has(f.kind));
+  const steps = list.filter((f) => { const o = M.outputOf(f); return o.w !== w || o.h !== hh; })
+    .map((f) => ({ id: f.id, was: { out: M.outputOf(f), w: f.w, h: f.h }, now: { out: { w, h: hh }, ...M.tileShape(f, { w, h: hh }) } }));
+  if (!steps.length) return;
+  for (const s of steps) setFrameField(s.id, s.now, { record: false });
+  record({ undo: () => { for (const s of steps) setFrameField(s.id, s.was, { record: false }); },
+    redo: () => { for (const s of steps) setFrameField(s.id, s.now, { record: false }); } });
 }
 
 // ---------------------------------------------------------------------------
@@ -938,7 +953,7 @@ function frameMenu(x, y, f = null) {
     open: () => goLive(one), rename: () => renameRow(one.id), duplicate: () => duplicateFrames(new Set(U.sel)),
     group: groupSelected, ungroup: () => ungroupSelected(), hide: () => toggleHidden(list), lock: () => toggleLocked(list),
     front: () => restack(M.toFront), forward: () => stepBy(1), backward: () => stepBy(-1), back: () => restack(M.toBack),
-    size: () => sizeSheet(one), delete: () => deleteFrames(new Set(U.sel)),
+    size: () => sidebar.show('output'), delete: () => deleteFrames(new Set(U.sel)),
   };
   const groups = frameMenuGroups({ selected: list.length, openable: !!one && one.kind !== 'note' && !one.hidden, grouped: list.some((s) => s.group),
     hidden: list.every((s) => s.hidden), locked: list.every((s) => s.locked), extra: extra.filter((g) => g?.length) });
@@ -971,7 +986,7 @@ function arrange(id) {
   for (const g of out) {
     const f = byId(g.id), resized = f.w !== g.w || f.h !== g.h;
     Object.assign(f, { x: g.x, y: g.y, w: g.w, h: g.h });
-    if (resized && liveFrame()?.id === f.id) { placeLive(); dispatchEvent(new CustomEvent('table:resize', { detail: { frame: f, table: T } })); }
+    if (resized && liveFrame()?.id === f.id) placeLive();
   }
   recordGeom(before, geomOf(ids));
   renderFrames(); changed(); tellMoved(list);
@@ -1513,11 +1528,9 @@ function renameRow(id) {
   input.focus(); input.select();
 }
 // The one selected frame's actions. Its name, place, size, opacity, resolution, lock and hide are the Properties pane's
-// (framesProps below); the canvas button stays here, where the frame modules add their own size parts after it
-// (frame-image.js Picture size finds it by .table-size).
+// (framesProps below); what it comes out at is the Output tab's (output-panel.js).
 function frameFields(f) {
   return [
-    field('Canvas', h('div', { class: 'row wrap table-size' }, button('Size and MP…', () => sizeSheet(f)))),
     h('div', { class: 'row wrap' }, f.kind !== 'note' ? button('Open', () => goLive(f), { cls: 'small primary' }) : null,
       button('Duplicate', () => duplicateFrames(new Set([f.id]))),
       button('Delete', () => deleteFrames(new Set([f.id])), { cls: 'small ghost danger', disabled: !!f.locked }))];
@@ -1538,7 +1551,6 @@ function setGeomAll(list, fn) {
     Object.assign(f, fn(f)); moved.push(f);
     if (liveFrame()?.id === f.id) {
       placeLive();
-      if (was[0] !== f.w || was[1] !== f.h) dispatchEvent(new CustomEvent('table:resize', { detail: { frame: f, table: T } }));
     }
   }
   recordGeom(before, geomOf(ids));
@@ -1563,15 +1575,7 @@ function renameFrame(was, v) {
 }
 // what the frame's document is made at: an image's canvas (and its megapixels), a video's sequence size and frame rate,
 // a sound's length (read from its saved document)
-// The size picker (size-picker.js) a frame's picture size is chosen with, for the Properties pane and the Size and MP sheet.
-// The proportions and megapixels picked are kept per frame while they still describe its size (so the chip stays lit).
-const PICKED_MODE = new Map();   // frame id -> { mode, w, h }
-function framePicker(f, onChange, label = 'Resolution') {
-  const was = PICKED_MODE.get(f.id), mode = was && was.w === f.w && was.h === f.h ? was.mode : null;
-  return sizePicker({ label, w: f.w, h: f.h, mode, lim: (n) => Math.min(8192, Math.max(16, n)),
-    onChange: (w, hh, m) => { PICKED_MODE.set(f.id, { mode: m, w, h: hh }); onChange(w, hh); } });
-}
-// list: the selected frames; a size picked goes to each image frame among them (not a locked one), one undo step
+// a sound frame's length (a picture's size is the Output tab's)
 function resolutionRow(f, list = [f]) {
   const ok = here(), text = h('span', { class: 'props-res' }, `${f.w}×${f.h}`);
   const later = (fill) => fill().then((s) => { if (ok()) text.textContent = s; }).catch(() => {});
@@ -1581,12 +1585,7 @@ function resolutionRow(f, list = [f]) {
     if (f.doc) later(async () => `${mixLength((await docOf())?.payload?.items).toFixed(2)} s`);
     return field('Length', text);
   }
-  if (f.kind === 'image') {
-    return framePicker(f, (w, hh) => { if (ok()) setGeomAll(list.filter((g) => g.kind === 'image'), () => ({ w, h: hh })); });
-  }
-  const kids = [text];
-  if (f.kind === 'video' && f.doc) later(async () => `${f.w}×${f.h} · ${(await docOf())?.payload?.fps || 'auto'} fps`);
-  return field('Resolution', h('div', { class: 'row wrap' }, kids));
+  return null;
 }
 function framesRows(ctx, ids) {
   const list = framesPicked(ctx), one = list.length === 1 ? list[0] : null;
@@ -1595,16 +1594,8 @@ function framesRows(ctx, ids) {
   const free = list.filter((f) => !f.locked), still = !free.length;
   const pos = (k, label) => ({ id: k, label, group: 'Place', get: () => all(k), step: T.grid.on ? T.grid.size : 1, disabled: still,
     set: (v) => setGeomAll(list, () => ({ [k]: snapNum(v, T.grid) })) });
-  const size = () => {
-    const box = (axis, label) => numRow({ label, get: () => all(axis), step: T.grid.on ? T.grid.size : 1, disabled: still,
-      set: (v) => setGeomAll(list, (f) => lockedSize(f, axis, Math.max(16, snapNum(v, T.grid)), !!U.ratio)) });
-    const lock = iconBtn(U.ratio ? 'Keep the shape: on' : 'Keep the shape: off', icon(U.ratio ? 'link' : 'unlink'), () => { U.ratio = !U.ratio; propsChanged('frames'); },
-      { class: `icon-btn ico-btn props-ratio${U.ratio ? ' on' : ''}`, 'aria-pressed': String(!!U.ratio) });
-    return h('div', { class: 'props-size' }, box('w', 'Width'), box('h', 'Height'), lock);
-  };
   return [
     pos('x', 'X'), pos('y', 'Y'),
-    ids.includes('w') ? { id: 'w', label: 'Size', group: 'Place', el: size() } : null,
     { id: 'opacity', label: 'Opacity', group: 'Look', get: () => all('opacity', 1), min: 0, max: 1, step: 0.01, digits: 2,
       set: (v) => setFramesField(list.map((f) => f.id), { opacity: v >= 1 ? null : v }) },
     ids.includes('resolution') ? { id: 'resolution', label: 'Resolution', group: 'Look', el: resolutionRow(list[0], list) } : null,
@@ -1644,11 +1635,15 @@ function buildBar() {
     const r = previewBtn.getBoundingClientRect(), now = previewMode();
     openPressMenu(r.left, r.bottom + 4, [PREVIEW.map(([m, label]) => ({ label, on: m === now, run: () => setPreviewMode(m) }))], 'Previews');
   }, { title: 'When video and sound frames play their preview on the table' });
+  const samplingChip = gzChip('Sampling preview', () => setSamplerPreview(!samplerPreview()), { on: samplerPreview(), title: 'Show a run as it samples, in its frame' });
+  onSamplerPreview((on) => samplingChip.classList.toggle('on', on));
   D.zoom = h('button', { type: 'button', class: 'btn small ghost table-zoom', title: 'Zoom: tap for 100%', onclick: () => zoomTo(1) }, '100%');
   D.bar = h('div', { class: 'table-bar' },
     button('Fit', fitSel, { title: 'Fit all, or the selected frames (Shift+F)' }),
     button('100%', () => zoomTo(1), { title: 'Zoom to 100% (0)' }),
-    gridChip, gridSize, snapBar(['edges'], () => {}), newBtn, arrangeBtn, previewBtn, h('span', { class: 'table-bar-gap' }), D.zoom);
+    gridChip, gridSize, snapBar(['edges'], () => {}), newBtn, arrangeBtn, previewBtn, samplingChip,
+    info('A run shows as it samples inside its frame: a moving clip for video, a still for images. Off, ComfyUI makes no previews at all, which saves a little on every step. A run already going keeps what it started with.'),
+    h('span', { class: 'table-bar-gap' }), D.zoom);
 }
 
 // ---------------------------------------------------------------------------

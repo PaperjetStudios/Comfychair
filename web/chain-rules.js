@@ -73,7 +73,7 @@ export function sourceStamps(wires, frameId, frames, stampOf) {
 // there if either is in it), with the label a run's results land with. A new layer with no key yet is not counted.
 export function freshLayers(before, layers, label = null) {
   return (layers || []).filter((l) => l && !l.maskOf && l.key && !before.has(l.key) && !before.has(l.name)
-    && (label == null || l.label === label)).map((l) => l.key);
+    && (label == null || l.label === label || String(l.label || '').startsWith(`${label} · `))).map((l) => l.key);
 }
 // What `before` holds for these layers: each one's key and name
 export const layerMarks = (layers) => new Set((layers || []).flatMap((l) => [l?.key, l?.name]).filter(Boolean));

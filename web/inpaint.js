@@ -1,3 +1,4 @@
+import { runName } from './run-name.js';
 import { h, api, store, toast, busy, button, runBar, section, field, seg, hint, help, toggle, textArea, rangeField, propNum, openSheet, closeSheet, actions } from './ui.js';
 import { ASPECT_PRESETS, S } from './core.js';
 import { pngBlob, uploadImage, openImagePicker } from './media.js';
@@ -158,7 +159,7 @@ async function queueFill(eng, t, tab, { pic, m, denoise, items, f, place }) {
   waitGen(g.id).then(async (done) => {
     const r = await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } });
     if (eng.E.tab?.id !== tab) return toast(`Inpaint #${done.id} finished on another edit: it is in History`);
-    eng.addImage(r.name, { label: `Inpaint #${done.id}`, draft: true, ...(await place(r)) });
+    eng.addImage(r.name, { label: runName('Inpaint', done, S.templates), draft: true, ...(await place(r)) });
     eng.render();
     toast('Inpaint done: a draft on top, not sent with the next Fill. Keep it to make it a layer');
   }).catch((e) => toast(`Inpaint failed: ${e.message}`, true)).finally(() => { FLIGHT.delete(g.id); eng.render(); });
@@ -349,7 +350,7 @@ export function inpaintSection(eng) {
   const E = eng.E, ts = inpaintTemplates();
   if (!E.layers.length) return null;
   const t = ts.find((x) => x.id === ST.tpl) || ts[0];
-  const drafts = E.layers.filter((l) => l.draft);
+  const drafts = E.layers.filter((l) => l.draft && !l.runPreview);
   const cover = eng.paint.maskLayer(false) ? eng.composeMask() : null;
   return section('Inpaint and extend', null,
     h('div', { class: 'row wrap' },

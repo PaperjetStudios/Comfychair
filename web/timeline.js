@@ -5,6 +5,7 @@ import * as R from './timeline-rules.js';
 import { commandFor } from './timeline-keys.js';
 import { clipMenu, trackMenu, rulerMenu, pickedFor } from './layer-menu.js';
 import { pressMenu, openPressMenu } from './press-menu.js';
+import { liveFrame } from './live.js';
 import { snap, snapOn, gzChip } from './gizmo.js';
 
 // ---------------------------------------------------------------------------
@@ -688,7 +689,8 @@ export function timeline(st, o) {
       st.sel = null; st.multi = []; showSel();
       o.pause(); o.seek(Math.max(0, timeAt(e))); o.deselected?.();
     });
-    tl.addEventListener('dblclick', (e) => {   // a double-click on a marker renames it
+    tl.addEventListener('dblclick', (e) => {   // a double-click on a marker renames it; on the empty part of a track, the picker
+      if (e.target.classList.contains('tl-lane') && e.target.dataset.track) { o.blankPick?.(); return; }
       if (!e.target.closest('.tl-ruler') || e.target.closest('input')) return;
       const mi = markerAt(e);
       if (mi >= 0) renameMarker(mi);
@@ -805,8 +807,11 @@ export function timeline(st, o) {
       const pin = o.main?.() || null;   // (a table frame's main source: { id } | null)
       const groups = clipMenu({ n: p.length, canPaste: !!clipboard?.items?.length, kind: p[0]?.kind, hasKeys: false,
         canSplit: p.some((i) => st.t > i.at + 0.02 && st.t < end(i) - 0.02), locked: p.length > 0 && p.every(lockedTr),
-        main: pin && o.menuAction && p.length === 1 ? { on: p[0].id === pin.id } : null });
-      const run = { cut, copy, paste, duplicate: duplicatePicked, split: splitAtPlayhead, rippleDelete, delete: () => removePicked(),
+        main: pin && o.menuAction && p.length === 1 ? { on: p[0].id === pin.id } : null,
+        table: ['video', 'sound'].includes(liveFrame()?.kind), sendable: p.length > 0 && p.every((i) => i.src) });
+      const sendClips = async () => (await import('./send-to-table.js')).sendClips(p);
+      const run = { toTable: async () => { const ids = p.map((i) => i.id); if (await sendClips()) { setPicked(ids); removePicked(); } }, copyToTable: () => { sendClips(); },
+        cut, copy, paste, duplicate: duplicatePicked, split: splitAtPlayhead, rippleDelete, delete: () => removePicked(),
         main: () => o.menuAction('main', { item: p[0], on: p[0]?.id === pin?.id }),
         crossfade: () => { const s = selItem(); if (s) crossfadePrev(s); },
         selectTrack: () => setPicked(st.items.filter((i) => i.track === track).map((i) => i.id)), selectAfter: () => selectFrom(st.t) };

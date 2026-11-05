@@ -1,6 +1,8 @@
+import { floatClips } from './clip-list.js';
+import { sizeChoices, sizeOrMatch } from './size-picker.js';
 import {
   $, h, store, uid, api, busy, toast, clamp, openSheet, closeSheet, button, runBar, iconBtn, linkBtn, actions, seg,
-  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, toggle, textArea, pctFmt, colorField, sizeSelect, icon,
+  field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, toggle, textArea, pctFmt, colorField, icon,
 } from './ui.js';
 import { S, fmtT, inputUrl, onServer, thumbUrl } from './core.js';
 import { cardMedia, genLabel, pickerSheet, projectOutputs, registerPickerSource, soundFrameFrom, soundToSoundTab, uploadImage, uploadMedia } from './media.js';
@@ -128,7 +130,8 @@ function undoEdit() { G.settling?.w.finish(); if (HIST.undo()) syncUndo(); }
 function redoEdit() { G.settling?.w.finish(); if (HIST.redo()) syncUndo(); }
 
 // the timeline itself (timeline.js, shared with the Sound tab): a sound clip only goes on an audio track, a picture on a video track
-const TL = timeline(V, { el: () => VD.timeline, headW: HEAD_W, minLen: MIN_LEN, zoom: [4, 400], ppsKey: 'deck.video.pps',
+if (typeof addEventListener === 'function') addEventListener('layers:float', () => { if (isLive('video')) renderTimeline(); });
+const TL = timeline(V, { blankPick: () => addSources(), el: () => VD.timeline, headW: HEAD_W, minLen: MIN_LEN, zoom: [4, 400], ppsKey: 'deck.video.pps',
   pause: () => vidPause(), seek: (t) => vidSeek(t), showTime: () => { vtp?.update(); refreshKeyed(VD.panel); refreshKeyed(propsRoot()); },
   changed: () => timelineChanged(), dragged: () => { renderTimeline(); syncMedia(); requestDraw(); }, rendered: () => renderTimeline(),
   placed: () => { syncMedia(); requestDraw(); },   // (a drag frame: timeline.js restyled the dragged clips itself)
@@ -899,6 +902,7 @@ function addTrack(kind) {
 }
 
 function renderTimeline() {
+  floatClips('video', V, TL, { seek: vidSeek });
   const plays = playTracks();
   TL.render({
     corner: [h('button', { type: 'button', class: 'tl-tog', title: 'Add a video track', onclick: () => { addTrack('video'); timelineChanged(); } }, '+V'),
@@ -1073,9 +1077,6 @@ const clipRange = (label, get, set, opts) => rangeField(label, get, set, { ...op
 // an animatable clip property: ◀ ◆ ▶ beside its slider; the playhead moves to a key in the clip's time
 const clipKeyed = (it, label, ch, opts) => K.field(it, label, ch, opts);
 
-const SIZES = [['Match first clip', null], ['1280×720', [1280, 720]], ['1920×1080', [1920, 1080]], ['720×1280', [720, 1280]],
-  ['1080×1920', [1080, 1920]], ['1024×1024', [1024, 1024]], ['832×480', [832, 480]], ['480×832', [480, 832]]];
-
 // ---- a clip's Colour section: the same curves and sliders as an Image layer; Match works from its frames, sampled by the server ----
 const CLIP_HIST = new Map();   // (a clip's part, sampled once)
 async function clipHist(it) {
@@ -1180,6 +1181,7 @@ registerProps('video', {
 });
 
 function renderVideoPanel() {
+  floatClips('video', V, TL, { seek: vidSeek });
   if (!VD.body) return;   // (not mounted yet)
   const it = selItem(), n = TL.picked().length;
   const table = onTable();   // (on the table its times, framing, opacity and sound are in Properties)
@@ -1220,7 +1222,6 @@ function renderVideoPanel() {
     ? mapsSection(it, { lengthOf: itLen, range: () => WA.stored(), render: renderVideoPanel, land: landMap }) : null;
   const colour = it && isVisual(it) ? colourSection(it) : null;
 
-  const sizeSel = sizeSelect(SIZES, V.size, (s) => { V.size = s; timelineChanged(); });
   const fpsSel = h('select', {}, [[0, 'Match first clip'], [16, '16'], [24, '24'], [25, '25'], [30, '30'], [60, '60']].map(([v, label]) =>
     h('option', { value: v, selected: V.fps === v }, label)));
   fpsSel.addEventListener('change', () => { V.fps = Number(fpsSel.value); timelineChanged(); });
@@ -1243,7 +1244,8 @@ function renderVideoPanel() {
       : help('Add pictures, clips or sound. They line up on V1 / A1; drag them onto V2 to layer them over V1.')),
     section('Sequence', null,
       hint(`${seqSize().join('×')} · ${V.fps || 'auto'} fps · ${fmtT(seqEnd())}`, 'section-sub'),
-      h('div', { class: 'grid-2' }, field('Frame size', sizeSel), field('Frame rate', fpsSel))),
+      onTable() ? null : sizeOrMatch({ matchLabel: 'Same size as the first clip', size: V.size, onChange: (s) => { V.size = s; timelineChanged(); } }),
+      field('Frame rate', fpsSel)),
     V.items.length ? section('Export', null, help(onTable() ? 'Render makes the timeline one clip, in a new video frame beside this one.' : 'The export lands in History.'),
       h('div', { class: 'row wrap' }, exportBtn, WA.onlyToggle(),
         button('Open in EffectCraft', (ev) => craftVideo(ev.currentTarget), { cls: 'small', title: 'Each clip as a layer in a comp, to keep editing on the computer' }),
@@ -1274,8 +1276,9 @@ function fxStepFields(it, st, i) {
     st.op === 'colorkey' ? [colorField('Key colour', () => st.color || '#00ff00', (c) => { st.color = c; save(); }),
       ...keyRangeFields(Object.assign(st, { ...KEY_DEFAULT, ...st }), save),   // (a step saved before these keeps the defaults)
       toggle('Invert (keep what\'s black)', !!st.invert, (on) => { st.invert = on; save(); })] : null,
-    st.op === 'upscale' ? field('Size', seg([['FullHD', 'Full HD'], ['4K', '4K']], st.outsize || 'FullHD', (v) => { st.outsize = v; save(); })) : null,
-    LTX_OPS.has(st.op) ? field('Resolution', seg([[544, '544p'], [704, '704p'], [1088, '1088p']], st.res || 704, (v) => { st.res = Number(v); save(); })) : null);
+    st.op === 'upscale' ? sizeChoices({ label: 'Output size', choices: [['FullHD', 'Full HD'], ['4K', '4K']], value: st.outsize || 'FullHD', onPick: (v) => { st.outsize = v; save(); }, sizeOf: (v) => (v === '4K' ? { w: 3840, h: 2160 } : { w: 1920, h: 1080 }) }) : null,
+    LTX_OPS.has(st.op) ? sizeChoices({ label: 'Output size', choices: [[544, '544p'], [704, '704p'], [1088, '1088p']], value: st.res || 704, onPick: (v) => { st.res = Number(v); save(); },
+      words: (v) => `${v}p`, custom: { label: 'Short side', min: 256, max: 2160, step: 32 } }) : null);
 }
 
 function fxFields(it) {
@@ -1689,6 +1692,7 @@ export function mountVideo({ host, stage = host.querySelector('.stage'), canvas,
   mounted?.abort();
   mounted = new AbortController();
   Object.assign(VD, { host, stage, viewer, canvas, empty, panel, body, tlTools, timeline: tl, xform: null, active });
+  viewer.addEventListener('dblclick', () => { if (!V.items.length) addSources(); }, { signal: mounted.signal });   // (a blank sequence: the picker)
   panel.replaceChildren(body);
   const again = !!tabs;
   if (!again) wireOnce();

@@ -138,6 +138,21 @@ test('migrate: a frame of a video says which; a frame field elsewhere goes; firs
   assert.deepEqual(ws.map((w) => [w.id, w.frame, w.n]), [['a', 'first', 1], ['b', 'last', 2], ['d', undefined, 3], ['e', undefined, 1]]);
 });
 
+test('setWire: an image wire keeps a crop until it is taken off; other kinds never do', () => {
+  const ws = migrateWires([{ id: 'a', from: 'x', to: 'y', kind: 'image' }, { id: 'b', from: 'x', to: 'y', kind: 'sound' }]);
+  const c = { x: 0.1, y: 0.2, w: 0.5, h: 0.5 };
+  assert.deepEqual(setWire(ws, 'a', { crop: c }).find((w) => w.id === 'a').crop, c);
+  assert.equal('crop' in setWire(setWire(ws, 'a', { crop: c }), 'a', { crop: null }).find((w) => w.id === 'a'), false);
+  assert.equal('crop' in setWire(ws, 'b', { crop: c }).find((w) => w.id === 'b'), false);
+});
+
+test('setWire: an image wire keeps its megapixels, 0 included', () => {
+  const ws = migrateWires([{ id: 'a', from: 'x', to: 'y', kind: 'image' }, { id: 'b', from: 'x', to: 'y', kind: 'sound' }]);
+  assert.equal(setWire(ws, 'a', { mp: 0 }).find((w) => w.id === 'a').mp, 0);
+  assert.equal('mp' in setWire(setWire(ws, 'a', { mp: 2 }), 'a', { mp: null }).find((w) => w.id === 'a'), false);
+  assert.equal('mp' in setWire(ws, 'b', { mp: 1 }).find((w) => w.id === 'b'), false);
+});
+
 test('setWire: on, frame, and n moves it among its kind', () => {
   let ws = renumber([W('a', 'i1', 't', 'image'), W('v', 'v1', 't', 'video'), W('b', 'i2', 't', 'image'), W('c', 'c1', 't', 'image'),
     W('f', 'v1', 't', 'image', { frame: 'first' })]);

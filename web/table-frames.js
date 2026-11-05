@@ -3,6 +3,7 @@
 // those documents keep, and frames made from things dropped on the table (a picture, a clip, a sound, a 3D model, a splat,
 // a motion, a file).
 // table.js places and drives the frames; table-model.js has their geometry.
+import { runName } from './run-name.js';
 import { h, api, store, icon, uid, clone, toast } from './ui.js';
 import { kindOf } from './kinds.js';
 import { S, inputUrl, previewUrl, thumbUrl } from './core.js';
@@ -10,7 +11,7 @@ import { BLANK } from './editor-engine.js';
 import { itemUrl, uploadImage, uploadMedia } from './media.js';
 import { wavePeaks } from './timeline.js';
 import { dropKind } from './drop-files.js';
-import { DOC_KIND, KIND_LABEL, newFrame, overlaps } from './table-model.js';
+import { DOC_KIND, KIND_LABEL, newFrame, overlaps, HAS_OUTPUT, outputOf } from './table-model.js';
 import { owedFor } from './owed-runs.js';
 import { emptyPayload } from './empty-docs.js';
 import { refused, refusal } from './tabs.js';
@@ -163,9 +164,10 @@ export async function resultFrame(source, { kind = source.kind, label } = {}) {
   const frames = Table.tableFrames() || [];
   const size = kind === 'sound' ? { ...SOUND_SIZE } : kind === source.kind ? { w: source.w, h: source.h } : { w: 1024, h: 1024 };
   const at = besideSpot(frames, source, size);
-  const box = source.kind === 'image' && source.fit && source.fitBox ? { ...source.fitBox } : { x: 0, y: 0, w: size.w, h: size.h };
+  const out = kind === source.kind ? outputOf(source) : { ...size };
+  const box = source.kind === 'image' && source.fit && source.fitBox ? { ...source.fitBox } : { x: 0, y: 0, w: out.w, h: out.h };
   const extra = { label: String(label || `Result · ${source.label || KIND_LABEL[source.kind]}`).slice(0, 120),
-    ...(kind === 'image' && { fit: true, fitBox: box }) };   // (never the source's story place: a result for a shot sits beside its row, not as the shot)
+    ...(HAS_OUTPUT.has(kind) && { out }), ...(kind === 'image' && { fit: true, fitBox: box }) };   // (never the source's story place: a result for a shot sits beside its row, not as the shot)
   const payload = kind === 'image' ? { ...BLANK(), size: null } : blankPayload(kind);
   const f = await Table.newFrameAt(kind, { ...at, ...size }, { payload, extra, select: false });   // (a run on several frames keeps them selected)
   return f || null;
@@ -259,7 +261,8 @@ export function frameEl(f, { onText }) {
 export function syncFrame(el, f, { selected = false, live = false, owed = 0, stale = null } = {}) {
   Object.assign(el.style, { left: `${f.x}px`, top: `${f.y}px`, width: `${f.w}px`, height: `${f.h}px` });
   el.querySelector('.frame-name').textContent = f.label || KIND_LABEL[f.kind];
-  el.querySelector('.frame-size').textContent = `${f.w}×${f.h}`;
+  const out = outputOf(f);   // (the size it comes out at; the frame on the table is only its preview)
+  el.querySelector('.frame-size').textContent = HAS_OUTPUT.has(f.kind) && out ? `${out.w}×${out.h} · ${(out.w * out.h / 1e6).toFixed(1)} MP` : '';
   el.setAttribute('aria-label', `${KIND_LABEL[f.kind]} frame ${f.label || ''}`.trim());
   el.classList.toggle('selected', selected);
   el.classList.toggle('locked', !!f.locked);
@@ -546,7 +549,7 @@ export async function frameFor(src, at) {
     const index = src.index || 0, g = S.history?.get?.(src.generation) || await api(`/api/generations/${src.generation}`, { busy: false });
     const o = g?.outputs?.[index];
     if (!o) return null;
-    const label = `#${g.id}`;
+    const label = runName(`#${g.id}`, g, S.templates);
     if (o.kind === 'image') {
       const r = await api(`/api/generations/${g.id}/to-input`, { method: 'POST', body: { index, frame: 'first', mp: 0, multiple: 1 } });
       return { ...(await pictureFrame(r.name, at, r.width, r.height, label)), fresh: r.name };
@@ -595,7 +598,7 @@ export async function sourcePicture(src) {
     const index = src.index || 0, g = await genOf(src.generation);
     if (g?.outputs?.[index]?.kind !== 'image') return null;
     const r = await api(`/api/generations/${g.id}/to-input`, { method: 'POST', body: { index, frame: 'first', mp: 0, multiple: 1 } });
-    return { name: r.name, width: r.width, height: r.height, label: `#${g.id}`, fresh: true };
+    return { name: r.name, width: r.width, height: r.height, label: runName(`#${g.id}`, g, S.templates), fresh: true };
   }
   if (src.media && src.kind === 'image') {
     const url = src.url || `/files/media/${encodeURIComponent(src.media)}`;
@@ -612,7 +615,7 @@ export async function sourceClip(src) {
     if (u.kind === 'video' || u.kind === 'audio') m = { kind: u.kind, src: { media: u.name }, url: u.url, label: u.label };
   } else if (src.generation != null) {
     const index = src.index || 0, g = await genOf(src.generation), o = g?.outputs?.[index];
-    if (o?.kind === 'video' || o?.kind === 'audio') m = { kind: o.kind, src: { generation: g.id, index }, url: o.url, label: `#${g.id}` };
+    if (o?.kind === 'video' || o?.kind === 'audio') m = { kind: o.kind, src: { generation: g.id, index }, url: o.url, label: runName(`#${g.id}`, g, S.templates) };
   } else if (src.media && src.kind !== 'image') {
     const label = src.label || src.media.split('_').slice(1).join('_') || src.media;
     m = { kind: src.kind === 'audio' ? 'audio' : 'video', src: { media: src.media }, url: src.url || `/files/media/${encodeURIComponent(src.media)}`, label };

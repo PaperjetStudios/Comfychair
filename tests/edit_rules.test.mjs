@@ -1,7 +1,7 @@
 // node --test tests/edit_rules.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { OPS, canRun, crossOps, defaultTarget, groupsOf, menuGroupsFor, opById, opsFor, planRuns, quickOf, resultKind, resultLabel, targetsOf, whyNot } from '../web/edit-rules.js';
+import { OPS, canRun, crossOps, defaultTarget, groupsOf, menuOf, menuGroupsFor, opById, opsFor, planRuns, quickOf, resultKind, resultLabel, targetsOf, whyNot } from '../web/edit-rules.js';
 
 const F = (id, kind, extra = {}) => ({ id, kind, label: id.toUpperCase(), doc: `d-${id}`, ...extra });
 
@@ -124,4 +124,28 @@ test('cross-kind ops: pictures and a sound make a video frame; one run, from the
   assert.equal(p.runs[0].frame.kind, 'sound');
   assert.deepEqual(planRuns([v, s], a2v).runs.map((r) => r.frame), [v], 'on a video frame it is an ordinary op');
   assert.deepEqual(planRuns([F('e', 'image', { doc: null })], opById('video', 'ingredients')).skipped.length, 1);
+});
+
+test('quickOf: an op lights one button only', () => {
+  for (const kind of ['image', 'video', 'sound', 'scene']) {
+    const seen = quickOf(kind).flatMap((q) => q.ids);
+    assert.equal(new Set(seen).size, seen.length, `${kind}: an op is under two buttons`);
+  }
+  const owner = (id) => quickOf('image').filter((q) => q.ids.includes(id)).map((q) => q.label);
+  assert.deepEqual(owner('blend'), ['Detail']);
+  assert.deepEqual(owner('delight'), ['Detail']);
+  assert.deepEqual(owner('skin'), ['Skin']);
+});
+
+test('menuOf: every op once, under its button or its group', () => {
+  for (const kind of ['image', 'video', 'sound', 'scene']) {
+    const all = menuOf(kind).flatMap((r) => r.all);
+    assert.equal(new Set(all).size, all.length, `${kind}: an op is listed twice`);
+    assert.deepEqual([...all].sort(), OPS[kind].map((o) => o.id).sort(), `${kind}: every op is listed`);
+    assert.ok(menuOf(kind).every((r) => r.all.length), `${kind}: no empty category`);
+  }
+  const of = (id) => menuOf('image').find((r) => r.all.includes(id));
+  assert.equal(of('blend').label, 'Detail');
+  assert.ok(of('remove').all.includes('unmark') || of('remove'), 'a live-only op has a place');
+  assert.deepEqual(of('up').all, ['up', 'upfast']);
 });

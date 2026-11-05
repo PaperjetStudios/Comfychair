@@ -7,14 +7,16 @@
 //
 //   openQuickStart({ x, y, rect?, kind?, centre? })   x, y: a table point. rect: a box drawn there (its size is the
 //                                                     frame's). kind: the kind shown first. centre: the frame's middle at x, y.
-import { h, store, toast, openSheet, closeSheet, button, chips, seg, field, help, hint, textArea, mpInput, icon } from './ui.js';
+import { sizePicker } from './size-picker.js';
+import { drawnOutput } from './table-model.js';
+import { h, store, toast, openSheet, closeSheet, button, chips, seg, field, help, hint, textArea, icon } from './ui.js';
 import { S, ASPECT_PRESETS } from './core.js';
 import { openSourcePicker } from './source-picker.js';
 import { sidebar } from './sidebar.js';
 import * as Table from './table.js';
 import { blankPayload } from './table-frames.js';
 import { emptyVideo, emptyScene } from './empty-docs.js';
-import { FPS, NOTE_SIZE, SCENE_SIZES, SOUND_SIZE, VIDEO_SIZES, lastChoice, makePayload, placeAt, rememberChoice, sizeFor, startTemplate } from './quick-start-rules.js';
+import { FPS, NOTE_SIZE, SOUND_SIZE, lastChoice, makePayload, placeAt, rememberChoice, sizeFor, startTemplate } from './quick-start-rules.js';
 
 const KIND_TABS = [['image', 'Image', 'image'], ['video', 'Video', 'film'], ['scene', '3D', 'cube'], ['sound', 'Sound', 'sound'], ['note', 'Note', 'text']];
 const ratioOf = (k) => (ASPECT_PRESETS.find(([a]) => a === k) || ASPECT_PRESETS[0])[1];
@@ -28,7 +30,7 @@ export function openQuickStart({ x = 0, y = 0, rect = null, kind = null, centre 
   });
   tabs.classList.add('qs-kinds');
   const draw = () => body.replaceChildren(...PANES[Q.c.kind](Q));
-  openSheet(h('h3', {}, rect ? `New frame · ${rect.w}×${rect.h}` : 'New frame'),
+  openSheet(h('h3', {}, 'New frame'),
     help('Each card makes a frame here in one tap. From text, and a video or 3D object from a picture, make the frame and run the Make panel on it, so the result lands in the frame. Double-tap empty table to open this again.'),
     h('div', { class: 'quick-start' }, tabs, body));
   draw();
@@ -46,6 +48,30 @@ const rectOf = (Q, size) => (Q.rect ? { ...Q.rect } : placeAt(Q.at, size, Table.
 // the top-left for a frame sized by what it holds (a picture, a clip)
 const cornerOf = (Q) => { const r = rectOf(Q, { w: 0, h: 0 }); return { x: r.x, y: r.y }; };
 
+// A frame on the table over its rect (the box drawn is only its preview), coming out at size
+const newOut = (kind, Q, size, opts = {}) => Table.newFrameAt(kind, rectOf(Q, size), { ...opts, extra: { ...opts.extra, out: { w: size.w, h: size.h } } });
+// The size a kind comes out at, and its selector: remembered for the next new frame unless a box was drawn (that box's shape starts it)
+function outputChoice(Q, kind) {
+  Q.sizes ||= {};
+  const first = () => {
+    if (Q.rect) return drawnOutput(Q.rect);
+    if (kind === 'image') return sizeFor(ratioOf(Q.c.aspect), Q.c.mp);
+    const s = Q.c[kind];
+    return { w: s[0], h: s[1] };
+  };
+  const size = () => (Q.sizes[kind] ||= first());
+  const s = size();
+  const picker = sizePicker({ label: 'Output size', w: s.w, h: s.h, mode: kind === 'image' && !Q.rect ? { aspect: Q.c.aspect, mp: Q.c.mp } : null,
+    lim: (n) => Math.min(8192, Math.max(16, n)),
+    onChange: (w, hh, m) => {
+      Q.sizes[kind] = { w, h: hh };
+      if (Q.rect) return;
+      if (kind !== 'image') rememberChoice(store, { [kind]: [w, hh] });
+      else if (m.aspect !== 'custom') { Object.assign(Q.c, { aspect: m.aspect, mp: m.mp }); rememberChoice(store, { aspect: m.aspect, mp: m.mp }); }
+    } });
+  return { size, picker };
+}
+
 // a box to type a prompt in and Make (Ctrl+Enter); it opens under the cards when From text is tapped
 function promptBox(Q, host, make) {
   const ta = textArea(() => Q.prompt, (v) => { Q.prompt = v; }, { rows: 3, placeholder: 'Describe it', label: 'Prompt' });
@@ -62,32 +88,19 @@ const textCard = (Q, title, make) => {
 
 const PANES = {
   image(Q) {
-    const size = () => (Q.rect ? { w: Q.rect.w, h: Q.rect.h } : sizeFor(ratioOf(Q.c.aspect), Q.c.mp));
-    const shown = hint('', 'qs-size');
-    const show = () => { const s = size(); shown.textContent = `${s.w}×${s.h}`; };
-    let sizeRow = null;
-    if (!Q.rect) {
-      const mp = mpInput(() => Q.c.mp, (n) => { Q.c.mp = n > 0 ? n : 1; rememberChoice(store, { mp: Q.c.mp }); show(); });
-      mp.querySelector('span').textContent = 'MP';
-      mp.querySelector('.info-i')?.remove();
-      sizeRow = h('div', { class: 'qs-size-row' },
-        chips(ASPECT_PRESETS.map(([k]) => [k, k]), Q.c.aspect, (k) => { Q.c.aspect = k; rememberChoice(store, { aspect: k }); show(); }), mp, shown);
-    } else sizeRow = shown;
-    show();
+    const { size, picker } = outputChoice(Q, 'image');
     const [textC, textHost] = textCard(Q, 'From text', (prompt) => fromText(Q, 'image', 'image-text', size(), prompt));
     const paste = card('paste', 'Paste', () => pasteImage(Q, paste._blob), { cls: 'hidden' });
     clipboardImage().then((b) => { if (b) { paste._blob = b; paste.classList.remove('hidden'); } });
-    return [field('Size', sizeRow),
+    return [picker,
       cards(card('canvas', 'Blank canvas', () => blank(Q, 'image', size())),
         card('image', 'From a picture', () => pickPicture((name, info) => fromSource(Q, { input: name, width: info?.width, height: info?.height }))),
         textC, paste),
       textHost];
   },
   video(Q) {
-    const size = () => (Q.rect ? { w: Q.rect.w, h: Q.rect.h } : { w: Q.c.video[0], h: Q.c.video[1] });
-    const rows = [];
-    if (!Q.rect) rows.push(field('Size', chips(VIDEO_SIZES.map((s) => [s.join('x'), s.join('×')]), Q.c.video.join('x'),
-      (v) => { Q.c.video = v.split('x').map(Number); rememberChoice(store, { video: Q.c.video }); })));
+    const { size, picker } = outputChoice(Q, 'video');
+    const rows = [picker];
     rows.push(field('Frame rate', chips(FPS.map((f) => [f, `${f} fps`]), Q.c.fps, (v) => { Q.c.fps = +v; rememberChoice(store, { fps: +v }); })));
     const [textC, textHost] = textCard(Q, 'From text', (prompt) => fromText(Q, 'video', 'video-text', size(), prompt));
     return [...rows,
@@ -98,15 +111,14 @@ const PANES = {
       textHost];
   },
   scene(Q) {
-    const size = () => (Q.rect ? { w: Q.rect.w, h: Q.rect.h } : { w: Q.c.scene[0], h: Q.c.scene[1] });
+    const { size, picker } = outputChoice(Q, 'scene');
     const payload = () => ({ ...emptyScene(), width: size().w, height: size().h });
     const intoScene = (how) => pickPicture(async (name) => {
-      const f = await Table.newFrameAt('scene', rectOf(Q, size()), { payload: payload() });
+      const f = await newOut('scene', Q, size(), { payload: payload() });
       if (!f) return;
       try { await (await import('./frame-scene.js')).addToScene(f, [{ input: name }], how); } catch (e) { toast(`Couldn't add to the scene: ${e.message}`, true); }
     }, how === 'photo' ? 'Picture for a 3D photo' : 'Background picture');
-    return [Q.rect ? null : field('Size', chips(SCENE_SIZES.map((s) => [s.join('x'), s.join('×')]), Q.c.scene.join('x'),
-      (v) => { Q.c.scene = v.split('x').map(Number); rememberChoice(store, { scene: Q.c.scene }); })),
+    return [picker,
     cards(card('cube', 'Empty scene', () => blank(Q, 'scene', size(), payload())),
       card('photo', '3D photo from a picture', () => intoScene('photo')),
       card('image', 'Background picture', () => intoScene('picture')),
@@ -138,7 +150,7 @@ const PANES = {
 // ---------------------------------------------------------------------------
 async function blank(Q, kind, size, payload) {
   closeSheet();
-  await Table.newFrameAt(kind, rectOf(Q, size), payload ? { payload } : {});
+  await newOut(kind, Q, size, payload ? { payload } : {});
 }
 
 function pickPicture(onPick, title = 'Start from a picture') {
@@ -168,7 +180,7 @@ async function fromText(Q, kind, start, size, prompt) {
   const t = templateFor(start, kind);
   if (!t) return;
   closeSheet();
-  const f = await Table.newFrameAt(kind, rectOf(Q, size), { payload: kind === 'video' ? { ...emptyVideo(), size: [size.w, size.h], fps: Q.c.fps } : undefined,
+  const f = await newOut(kind, Q, size, { payload: kind === 'video' ? { ...emptyVideo(), size: [size.w, size.h], fps: Q.c.fps } : undefined,
     extra: { make: makePayload(t, { prompt }, baseFor(t)) } });
   if (!f) return;
   const mp = await import('./make-panel.js');
@@ -180,7 +192,7 @@ async function fromText(Q, kind, start, size, prompt) {
 async function withPicture(Q, kind, start, size, name, payload) {
   const t = templateFor(start, kind);
   if (!t) return;
-  const f = await Table.newFrameAt(kind, rectOf(Q, size), { payload: payload || (kind === 'video' ? { ...emptyVideo(), size: [size.w, size.h], fps: Q.c.fps } : undefined),
+  const f = await newOut(kind, Q, size, { payload: payload || (kind === 'video' ? { ...emptyVideo(), size: [size.w, size.h], fps: Q.c.fps } : undefined),
     extra: { make: makePayload(t, { picture: name }, baseFor(t)) } });
   if (!f) return;
   const mp = await import('./make-panel.js');

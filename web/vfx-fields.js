@@ -9,7 +9,8 @@
 //           compare() (or null: no result to compare yet), clipLen (seconds of the frame's clip, or null) }
 //   clipsOf(frame), pickClip(frame, set, title)   a video frame's clips (with their trims), and a sheet to pick one
 //   imageSize(name, area), imageNat(name)         a picture's size (for a run's Width / Height and paths)
-import { h, api, toast, button, field, seg, hint, help, note, info, rangeField, toggle, textArea, colorField, seedField, sizeSelect, openSheet, closeSheet,
+import { sizeChoices, sizeOrMatch } from './size-picker.js';
+import { h, api, toast, button, field, seg, hint, help, note, info, rangeField, toggle, textArea, colorField, seedField, openSheet, closeSheet,
   section, actions, icon } from './ui.js';
 import { S, inputUrl, previewUrl } from './core.js';
 import { bareSource, clipLabel, soundInput, uploadImage } from './media.js';
@@ -17,7 +18,7 @@ import { openSourcePicker } from './source-picker.js';
 import { pictureInput } from './picture-input.js';
 import { keyRangeFields, loraChoice, restyleLora } from './clip-effects.js';
 import { roleField, template } from './make.js';
-import { ALPHA, ASPECTS, CANVAS, FACE, KEY, REFINE, RES, SAM, SIZES, lenFrames, needsOf, resOf, tplIdOf } from './vfx-rules.js';
+import { ALPHA, ASPECTS, CANVAS, FACE, KEY, REFINE, RES, SAM, lenFrames, needsOf, resOf, shortSideSize, tplIdOf } from './vfx-rules.js';
 import { TALK_ENGINES, talkKey } from './talk.js';
 import { characterById, characters, loadCharacters, mainPicture } from './characters.js';
 import { DOC_KIND } from './table-model.js';
@@ -300,20 +301,21 @@ export function vfxFields(op, e, st, io) {
         help: e.lenHelp || (e.maxLen ? 'Longer clips run as overlapping 5 s windows: time grows with length, memory doesn\'t.' : 'LTX makes 8n+1 frames at 24 fps; long clips need a lot of memory.') }),
     whole ? null : button('Whole clip', () => io.set('len', null, true), { cls: 'small ghost', title: 'As long as the frame\'s clip (up to the most it takes)' }));
   }
-  if (need.has('res')) out.push(field('Resolution', seg(e.res || RES, resOf(e, st), (v) => io.set('res', Number(v))),
-    help(e.res ? 'The short side, in pixels. Higher is sharper and slower.' : 'The short side, in pixels. 704p takes about 1.5 minutes for 5 s on this card; 1088p about 3.')));
+  if (need.has('res')) out.push(sizeChoices({ label: 'Output size', choices: e.res || RES, value: resOf(e, st), onPick: (v, typed) => { io.set('resFree', typed); io.set('res', Number(v)); },
+    sizeOf: (v) => shortSideSize(io.nat, v, e.mult), words: (v) => `${v}p`, custom: { label: 'Short side', min: 256, max: 2160, step: e.mult || 32 },
+    tip: help(e.res ? 'The short side, in pixels. Higher is sharper and slower.' : 'The short side, in pixels. 704p takes about 1.5 minutes for 5 s on this card; 1088p about 3.') }));
   if (need.has('steps')) out.push(field('Steps', seg([[3, 'Fast'], [5, 'Balanced'], [7, 'Quality']], st.steps || 3, (v) => io.set('steps', Number(v))),
     help('Fast is the upstream default (3 steps). Quality can over-sharpen.')));
   if (need.has('blend')) {
     out.push(field('Blend', seg([['face', 'Face'], ['oval', 'Head']], st.blend || 'face', (v) => io.set('blend', v, true)),
       help('Face keeps the original hair, neck and collar. Head pastes the whole tracked square (hair included), with a soft edge.')), ...faceFields(st, io));
   }
-  if (need.has('outsize')) out.push(field('Output size', seg([['FullHD', 'Full HD'], ['4K', '4K']], st.outsize || 'FullHD', set('outsize')), help('4K is tiled: much slower, same memory.')));
-  if (need.has('size')) out.push(field('Size', sizeSelect(SIZES, st.size, set('size'))));
+  if (need.has('outsize')) out.push(sizeChoices({ label: 'Output size', choices: [['FullHD', 'Full HD'], ['4K', '4K']], value: st.outsize || 'FullHD', onPick: set('outsize'), sizeOf: (v) => (v === '4K' ? { w: 3840, h: 2160 } : { w: 1920, h: 1080 }), tip: help('4K is tiled: much slower, same memory.') }));
+  if (need.has('size')) out.push(sizeOrMatch({ matchLabel: 'Same size as the source', size: st.size, onChange: set('size'), first: [1280, 704], step: e.mult || 32 }));
   if (need.has('seed')) {
     out.push(seedField('Seed', { get: () => st.seed ?? -1, set: (v) => io.set('seed', v), increment: false,
       mode: () => ((st.seed ?? -1) < 0 ? 'random' : 'fixed'), setMode: (m) => io.set('seed', m === 'random' ? -1 : Math.max(0, st.seed ?? 0), true) }));
   }
   if (io.compare) out.push(h('div', { class: 'row wrap' }, button([icon('swap'), 'Compare with the result'], io.compare, { cls: 'small', title: 'This frame\'s clip and its newest result, wiped across on the frame' })));
-  return out.filter(Boolean);
+  return out.flat(Infinity).filter(Boolean);   // (a field may come as a list)
 }

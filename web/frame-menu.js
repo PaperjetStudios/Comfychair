@@ -13,7 +13,7 @@ import { api, toast } from './ui.js';
 import { S } from './core.js';
 import { isLive } from './live.js';
 import { stillOf } from './table-frames.js';
-import { DOC_KIND } from './table-model.js';
+import { DOC_KIND, outputOf } from './table-model.js';
 import { downstream } from './wire-rules.js';
 
 const R = { rules: null, source: null };
@@ -54,7 +54,7 @@ async function craftVideo(f) {
   const p = d?.payload || {};
   const items = (p.items || []).filter((it) => it.src && it.kind !== 'scene');
   if (!items.length) return toast(`"${f.label}" has no clips to send`, true);
-  await (await import('./craft.js')).sendToCraft('video', { title: f.label || 'Video edit', width: f.w, height: f.h, fps: p.fps || null,
+  await (await import('./craft.js')).sendToCraft('video', { title: f.label || 'Video edit', width: outputOf(f).w, height: outputOf(f).h, fps: p.fps || null,
     tracks: (p.tracks || []).map(({ id, kind, hidden, muted }) => ({ id, kind, hidden, muted })),
     items: items.map((it) => ({ track: it.track, at: it.at, name: it.label, src: it.src, in: it.in, out: it.out ?? it.dur, x: it.x, y: it.y, scale: it.scale,
       fit: it.fit, rotation: it.rotation || 0, opacity: it.opacity, volume: it.volume, fade_in: it.fadeIn, fade_out: it.fadeOut })) }, null, { frame: f });

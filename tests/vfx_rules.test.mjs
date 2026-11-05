@@ -139,3 +139,11 @@ test('a box snaps to the grid and to edges, and stays on the frame', () => {
   assert.ok(off.x + off.w <= 1 && off.y + off.h <= 1);
   assert.deepEqual(snapBox('new', { x: 0.2, y: 0.2, w: 0.1, h: 0.1 }, opts), { x: 0.2, y: 0.2, w: 0.1, h: 0.1 }, 'snapping off: as drawn');
 });
+
+test('resOf: a size typed under Custom is kept; shortSideSize says what it comes out at', async () => {
+  const { resOf, shortSideSize } = await import('../web/vfx-rules.js');
+  assert.equal(resOf({ res: [[384, '384p'], [480, '480p']] }, { res: 512, resFree: true }), 512);
+  assert.equal(resOf({ res: [[384, '384p'], [480, '480p']] }, { res: 512 }), 480);
+  assert.deepEqual(shortSideSize([1920, 1080], 704, 32), { w: 1248, h: 704 });
+  assert.equal(shortSideSize(null, 704), null);
+});

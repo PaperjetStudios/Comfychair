@@ -4,6 +4,7 @@
 // long videos. Links and PC files are cut by the server (app/clipimport.py). Device files are cut here
 // with ffmpeg.wasm as a stream copy (no re-encode, only the needed bytes are read from the file) and only
 // that piece is uploaded; the server then re-encodes it from the exact start.
+import { sizeChoices } from './size-picker.js';
 import { api, button, closeSheet, field, fileButton, h, help, hint, note, openSheet, placeholder, seg, store, toast, toggle } from './ui.js';
 import { videoEditor } from './vfield.js';
 import { S } from './core.js';
@@ -102,8 +103,8 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
     { title: 'Also put it on this project\'s Board and in History, like a generation' });
   openSheet(h('h3', {}, title), h('div', { class: 'row wrap' }, tabs, keep, projectBox), body);
 
-  const sizeField = () => field('Size', seg(SIZES.map(([v, l]) => [v, l]), size, (v) => { size = Number(v); store.set('deck.clipImport.size', size); }),
-    help('Largest height kept. Original keeps the full picture.'));
+  const sizeField = () => sizeChoices({ label: 'Output size', choices: SIZES, value: size, onPick: (v) => { size = Number(v); store.set('deck.clipImport.size', size); },
+    words: (v) => (Number(v) ? `up to ${v}p` : 'the full picture'), tip: help('Largest height kept. Original keeps the full picture.') });
   const nameInput = (v) => h('input', { type: 'text', value: v || '', placeholder: 'Name', 'aria-label': 'Clip name' });
   const bar = h('div', { class: 'clip-progress hidden' }, h('div', { class: 'clip-progress-fill' }), h('span', { class: 'hint' }));
   const progress = (p, label) => {

@@ -13,7 +13,7 @@ import { snapStep } from './snap-math.js';
 
 export const MIXED = Symbol('mixed');
 
-const FRAME_ROWS = ['x', 'y', 'w', 'h', 'opacity', 'resolution', 'name', 'lock', 'hide'];
+const FRAME_ROWS = ['x', 'y', 'opacity', 'resolution', 'name', 'lock', 'hide'];
 const VISUAL = new Set(['video', 'image', 'scene']);
 
 export function rowsFor({ kind, live = false, picked = [] } = {}) {
@@ -21,9 +21,9 @@ export function rowsFor({ kind, live = false, picked = [] } = {}) {
   if (!list.length) return [];
   const p = list[0], one = list.length === 1;
   if (kind === 'frames' && !live) {
-    // (a name typed once for several frames would name them all alike; a note has no picture to measure)
-    // (resolution: one frame that has a picture, or several image frames, which take one size together)
-    return FRAME_ROWS.filter((id) => (id === 'name' ? one : id === 'resolution' ? (one ? p.kind !== 'note' : list.every((f) => f.kind === 'image')) : true));
+    // (a name typed once for several frames would name them all alike)
+    // (resolution: a sound's length only; a picture's size is the Output tab's, and a preview's size its handles)
+    return FRAME_ROWS.filter((id) => (id === 'name' ? one : id === 'resolution' ? one && p.kind === 'sound' : true));
   }
   if (kind === 'image') {
     const turns = list.some((l) => !l.flat);   // (a painted canvas is resized, not turned)

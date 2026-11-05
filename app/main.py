@@ -28,7 +28,7 @@ from . import projects, storage, store, network
 from . import playable
 from . import fetchpicture, keyexpr, looks, maskcomp, promptaid, sceneasset
 from . import templates as tpl
-from .comfy import Comfy, ComfyError
+from .comfy import Comfy, ComfyError, previews_on as comfy_previews_on, set_previews as comfy_set_previews
 from .routes import audio, effects, library, scene, video, web
 from .routes.context import RouteServices
 from .routes.web import ui_version
@@ -752,6 +752,17 @@ async def interrupt(body: dict = Body(default={})):
 @app.get("/api/queue")
 async def queue_state():
     return {**await comfy.queue_state(), "line": gpu.count()}   # line: the card's own, ComfyUI's queue doesn't show it
+
+
+@app.get("/api/sampler-preview")
+async def sampler_preview():
+    return {"on": comfy_previews_on()}
+
+
+@app.put("/api/sampler-preview")
+async def set_sampler_preview(body: dict = Body(...)):
+    """Whether runs queued from now on make live previews. A run already going keeps what it started with."""
+    return {"on": comfy_set_previews(body.get("on") is not False)}
 
 
 @app.post("/api/queue/free")

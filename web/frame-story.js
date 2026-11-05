@@ -318,7 +318,7 @@ async function landShotClips(list, ratio) {
       if (have?.doc) {
         await editDoc('video', have.doc, (pay) => { let q = pay; for (const it of p.items) q = withClip(q, it, it.id); Object.assign(pay, q); });
       } else {
-        const f = M.newFrame('video', { x: shotF.x + shotF.w + 40, y: shotF.y, w: shotF.w, h: shotF.h }, { label: `${shotLabel(at)} · video`, story: { scene: at.sc.id, shot: s.id, clip: true } });
+        const f = M.newFrame('video', { x: shotF.x + shotF.w + 40, y: shotF.y, w: shotF.w, h: shotF.h }, { out: M.outputOf(shotF), label: `${shotLabel(at)} · video`, story: { scene: at.sc.id, shot: s.id, clip: true } });
         f.doc = await createDoc(f, p);
         if (!still()) { trashDoc(f).catch(() => {}); return false; }
         list.push(f);

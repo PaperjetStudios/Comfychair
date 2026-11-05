@@ -103,3 +103,9 @@ test('placeResults: the first output in place of the last run\'s item, its other
   assert.deepEqual(r4.made, ['n3'], 'the last run\'s item was deleted by hand: added instead');
   assert.equal(r4.payload.items.length, 4);
 });
+
+test('freshLayers: a run\'s layers are found under their full name too', async () => {
+  const { freshLayers: f } = await import('../web/chain-rules.js');
+  const layers = [{ key: 'a', label: 'control · Klein 3 · lora' }, { key: 'b', label: 'control' }, { key: 'c', label: 'controlled' }];
+  assert.deepEqual(f(new Set(), layers, 'control'), ['a', 'b']);
+});
