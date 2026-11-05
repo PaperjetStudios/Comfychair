@@ -452,8 +452,8 @@ details.desc summary { cursor: pointer; color: var(--muted); }
 details.desc[open] summary { margin-bottom: 6px; }
 
 .toast {
-  position: fixed; z-index: 50; left: 50%; transform: translateX(-50%); bottom: 90px;
-  display: flex; align-items: center; gap: 12px;
+  position: fixed; z-index: 200; left: 50%; transform: translateX(-50%); bottom: 90px;   /* (over everything, and a tap sends it away) */
+  display: flex; align-items: center; gap: 12px; cursor: pointer; max-height: 50dvh; overflow-y: auto;
   background: var(--surface-2); border: 1px solid var(--line); padding: 10px 16px; border-radius: var(--r-lg);
   max-width: min(600px, 92vw); white-space: pre-wrap; box-shadow: var(--shadow);
   animation: rise .18s ease-out;
@@ -836,7 +836,6 @@ svg.ico.filled path { fill: currentColor; }
 /* a sheet opened from the writing box (the prompt helper, its picture picker) and toasts show over it */
 body:has(.text-pop:not(.hidden)) .backdrop { z-index: 61; }
 body:has(.text-pop:not(.hidden)) .sheet { z-index: 62; }
-body:has(.text-pop:not(.hidden)) .toast { z-index: 63; }
 .text-pop-aid { display: flex; gap: 4px; }
 
 /* ---- prompt helper (prompthelp.js) ---- */
@@ -1639,7 +1638,6 @@ body:has(#tab-generate.view-max.active.panel-out) .actionbar { right: var(--ov-w
 /* a viewer pinned over the page: sheets, pickers and toasts still come up over it */
 body:has(.stage.maxed) .backdrop { z-index: 58; }
 body:has(.stage.maxed) .sheet { z-index: 59; }
-body:has(.stage.maxed) .toast { z-index: 60; }
 
 /* ---- animated properties (keyed.js): ◀ ◆ ▶ beside a slider, diamonds on the clip ---- */
 .keyed .lbl { align-items: center; }
@@ -2167,7 +2165,11 @@ body > .undo-dock { position: fixed; z-index: 57; top: 8px; left: 50%; transform
   --z: 1; position: relative; overflow: hidden; min-height: 0; touch-action: none; user-select: none;
   background-color: var(--stage-bg); border: 1px solid var(--line); border-radius: var(--r-lg); cursor: default;
 }
-.table-stage.grid-on { background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); }
+.table-stage.grid-on {   /* (sizes: table.js applyView, main lines first) */
+  --grid-fine: color-mix(in srgb, var(--line) 35%, transparent);
+  background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px),
+    linear-gradient(var(--grid-fine) 1px, transparent 1px), linear-gradient(90deg, var(--grid-fine) 1px, transparent 1px);
+}
 .table-stage.panning { cursor: grab; }
 .table-world { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; }
 .table-world.table-anim { transition: transform .25s ease; }
@@ -2183,6 +2185,9 @@ body > .undo-dock { position: fixed; z-index: 57; top: 8px; left: 50%; transform
 .frame-label .ico { width: 1.1em; height: 1.1em; flex: none; }
 .frame.selected .frame-label { color: var(--accent); }
 .frame-name { overflow: hidden; text-overflow: ellipsis; }
+/* its name typed over on the table: as wide as it needs, whatever the tile's width */
+.frame-label:has(.frame-rename) { overflow: visible; max-width: none; z-index: 3; }
+.frame-label input.frame-rename[type] { width: calc(180px / var(--z)); height: calc(20px / var(--z)); min-height: 0; flex: none; box-sizing: border-box; padding: 0 calc(4px / var(--z)); font-size: calc(12px / var(--z)); line-height: 1; border-width: calc(1px / var(--z)); border-radius: calc(3px / var(--z)); cursor: text; }
 .frame-size { opacity: .7; font-variant-numeric: tabular-nums; }
 .frame-body { position: absolute; inset: 0; overflow: hidden; background: var(--checker); }
 .frame-still { width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none; }
@@ -2269,6 +2274,10 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
 }
 .frame-in-dot { flex: none; width: calc(12px / var(--z)); height: calc(12px / var(--z)); border-radius: 50%; background: var(--wk); }
 .frame-in-label { padding: calc(2px / var(--z)) calc(5px / var(--z)); border-radius: calc(3px / var(--z)); background: var(--surface); border: calc(1px / var(--z)) solid var(--line-2); }
+.frame-in.next { pointer-events: none; opacity: .75; }
+.frame-in.next .frame-in-dot { background: transparent; border: calc(2px / var(--z)) dashed var(--wk); box-sizing: border-box; }
+.frame-in.wire-swap .frame-in-label { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+.frame-in.wire-swap .frame-in-dot { box-shadow: 0 0 0 calc(3px / var(--z)) color-mix(in srgb, var(--wk) 45%, transparent); }
 .frame-in.off { opacity: .45; }
 .frame-in.off .frame-in-dot { background: transparent; border: calc(2px / var(--z)) dashed var(--wk); box-sizing: border-box; }
 .frame-in.sel .frame-in-label { border-color: var(--accent); color: var(--accent); }
@@ -2541,3 +2550,8 @@ body:has(.tab.view-max.panel-out) .actionbar { right: var(--ov-w); }   /* (only 
 .fp-scrub { flex: 1 1 160px; min-width: 0; }
 .fp-marks { display: flex; flex-wrap: wrap; gap: 6px; }
 .fp-marks:empty { display: none; }
+
+/* The tool windows float over the work, but a sheet or a full-screen editor is over them (modal.js sets has-modal) */
+body:has(.stage.maxed) .float-panel { z-index: 57; }
+body.has-modal .float-panel, body.has-modal .run-strip, body.has-modal .undo-dock, body.has-modal .world-map { z-index: 29 !important; }
+body.has-modal .float-hints { z-index: 62 !important; }   /* (it types into the box that has the cursor, which may be in the sheet) */

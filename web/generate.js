@@ -192,9 +192,10 @@ export function renderFields(target = null) {
   const openState = store.get('deck.groupsOpen', {});
   const groups = [];
   const order = sortedGroups(t.groups);
-  const basics = t.fields.filter((f) => isBasic(f, t.fields));
+  const shown = t.fields.filter((f) => !FT?.hide?.(f));   // (what the panel leaves to somewhere else)
+  const basics = shown.filter((f) => isBasic(f, t.fields));
   for (const g of order) {
-    const fs = t.fields.filter((f) => f.group === g.label);
+    const fs = shown.filter((f) => f.group === g.label);
     const rest = fs.filter((f) => !basics.includes(f));
     if (!rest.length) continue;   // (all of it in the pane)
     const key = `${t.id}:${g.label}`;

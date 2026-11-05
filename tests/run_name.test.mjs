@@ -29,6 +29,9 @@ test('modelOf and templateProcess', () => {
   assert.equal(templateProcess('deck krea2 depth control'), 'depth control');
   assert.equal(templateProcess('deck h3 ctrl2v hold'), 'ctrl2v hold');
   assert.equal(templateProcess('deck klein3'), 'deck klein3');
+  assert.equal(templateProcess('Klein 9B Edit'), 'Edit');
+  assert.equal(templateProcess('Qwen 2.1 Edit'), 'Edit');
+  assert.equal(templateProcess('H3 Ctrl2V Hold'), 'Ctrl2V Hold');
   assert.equal(templateProcess('My own'), 'My own');
 });
 

@@ -174,3 +174,13 @@ test('docsOwnedElsewhere: the other tables\' frame documents, not this one\'s, n
   assert.deepEqual(foreignFrames([{ id: 'x', kind: 'image', doc: 'e1' }, { id: 'y', kind: 'image', doc: 'm1' }], docsOwnedElsewhere(tables, 'main')), ['x']);
   assert.deepEqual(docsOwnedElsewhere(undefined, 'main'), []);
 });
+
+test('the grid: a main line every fourth; too fine to see is drawn coarser, and a main line stays a main line', async () => {
+  const { gridSteps } = await import('../web/table-model.js');
+  assert.deepEqual(gridSteps(64, 1), { fine: 64, main: 256 });
+  assert.deepEqual(gridSteps(64, 0.5), { fine: 32, main: 128 });
+  assert.deepEqual(gridSteps(16, 0.25), { fine: 16, main: 64 });
+  const far = gridSteps(16, 0.1);   // (1.6 px apart: drawn every 16th step)
+  assert.ok(Math.abs(far.fine - 25.6) < 1e-9);
+  assert.ok(Math.abs(far.main - 102.4) < 1e-9);
+});

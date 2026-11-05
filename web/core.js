@@ -22,6 +22,9 @@ export async function deleteSnippet(sn, msg, after) {
 // A run made only as a frame's cached render for a wire (params.cache): reachable by id, never listed in History, the Board,
 // the Shelf or a picker (app/routes/video.py; frame-source.js renderedEdit)
 export const listedRun = (g) => !g?.params?.cache;
+// A workflow's name for a run's template id (a run that came from no workflow, an import, keeps what it has)
+export const templateName = (id) => S.templates?.find?.((t) => t.id === id)?.name || id;
+
 export const S = {
   templates: [], tpl: null,
   values: {}, seedMode: {}, imageMp: {}, imageCrop: {}, sizeMode: {}, loraFolder: {}, builder: {}, lastSeed: {},

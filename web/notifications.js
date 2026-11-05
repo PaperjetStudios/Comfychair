@@ -1,4 +1,5 @@
 import { h, store } from './ui.js';
+import { templateName } from './core.js';
 import { runTime, fmtDur } from './run-state.js';
 
 let audioCtx = null;
@@ -29,7 +30,7 @@ export function notifyDone(g) {
     document.title = `${ok ? '✓ Done' : '✕ Failed'} · ${BASE_TITLE}`;
     if (window.Notification && Notification.permission === 'granted') {
       const title = ok ? `#${g.id} is done` : `#${g.id} failed`;
-      const opts = { body: ok ? `${g.template}${took ? ` · ${fmtDur(took)}` : ''}` : (g.error || ''), tag: 'comfydeck', icon: 'icon-192.png' };
+      const opts = { body: ok ? `${templateName(g.template)}${took ? ` · ${fmtDur(took)}` : ''}` : (g.error || ''), tag: 'comfydeck', icon: 'icon-192.png' };
       // Android only shows notifications through the service worker
       (navigator.serviceWorker?.controller ? navigator.serviceWorker.ready.then((r) => r.showNotification(title, opts))
         : Promise.resolve().then(() => new Notification(title, opts))).catch(() => { /* not allowed here */ });

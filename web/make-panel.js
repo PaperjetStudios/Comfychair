@@ -45,7 +45,7 @@ import { editDoc, flushDoc, frameStamp, freshStamps, stillOf } from './table-fra
 import { DOC_KIND, nextBeside, toStage } from './table-model.js';
 import * as Table from './table.js';
 import { LANDS, canvasRect, carryWords, familiesOf, frameImageField, frameSize, slotMode, makeFrames, makeTarget, noteText, pickTemplate, isOwnSlot, repointable, runValuesOf, seedsAfter,
-  addHeld, selfPicked, settingsFor, settingsPayload, settleHeld, sizePair, templatesFor, templatesForFrame, wireFields, withClip } from './make-rules.js';
+  addHeld, frameLength, lengthField, lengthValue, outputOwns, selfPicked, settingsFor, settingsPayload, settleHeld, sizePair, templatesFor, templatesForFrame, wireFields, withClip } from './make-rules.js';
 import { downstream, fieldKind, isFrameWire, wireLabel } from './wire-rules.js';
 import { freshLayers, layerMarks, placeResults, sourceStamps, withSoundItem, withoutLayers } from './chain-rules.js';
 import { icon } from './icons.js';
@@ -157,9 +157,8 @@ function target(kind, frame) {
       const w = wireState(kind, frame).use[f.key], src = w && (Table.frameById(w.from) || w.source);
       return src ? stillOf(src) || (src.preview ? (src.kind === 'video' ? previewUrl(src.preview, 1024) : src.preview) : null) : null;
     } : null,
-    // (a frame's size is one setting, its Output tab's: here it only says what the run comes out at)
-    sizeEl: (kind === 'video' || kind === 'image') && frame ? (fw, fh) => field(['Output size', h('span', {}, `${P.st.values[fw.key]}×${P.st.values[fh.key]} · ${((P.st.values[fw.key] * P.st.values[fh.key]) / 1e6).toFixed(2)} MP`)],
-      button('Change…', () => import('./sidebar.js').then(({ sidebar }) => sidebar.show('output')), { cls: 'small' })) : null,
+    // (a frame's size and length are its Output tab's)
+    hide: frame ? (f) => outputOwns(P.st.tpl, kind, f) : null,
     imageButtons: (f, set) => (kind === 'video' ? [button([icon('image'), 'Pick a frame'], () => pickFrame(f, set))] : []) };
 }
 
@@ -655,6 +654,10 @@ async function queueOne({ kind, f, t, st, base, builder, batch, prepare, afterQ,
     if (f && (kind === 'image' || kind === 'video')) {   // (each frame's own size)
       const pair = sizePair(t), s = frameSize(pair, Table.frameById(f.id) || f);
       if (s) { values[pair[0].key] = s.w; values[pair[1].key] = s.h; }
+    }
+    if (f && (kind === 'video' || kind === 'sound')) {   // (each frame's own length)
+      const lf = lengthField(t), secs = frameLength(Table.frameById(f.id) || f, t);
+      if (lf && secs > 0) values[lf.key] = lengthValue(lf, secs);
     }
     const stamps = f ? await readStamps(f) : null;
     const wired = await resolveWires(kind, f, t, st, values, made);

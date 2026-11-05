@@ -9,7 +9,7 @@ import {
   $, h, store, api, toast, SHEET, sheetOpen, openSheet, closeSheet, button, linkBtn, actions, hint, placeholder, note,
   mediaCard, seg, setIcon, field, withHelp,
 } from './ui.js';
-import { S, listedRun, fmtT, isMine, loadProjects, switchTab, emitServer, onServer } from './core.js';
+import { S, templateName, listedRun, fmtT, isMine, loadProjects, switchTab, emitServer, onServer } from './core.js';
 import { genLabel, mediaEl, openImagePicker, outputCard, uploadImage } from './media.js';
 import { factsOf, isMedia, kindDef, kindTile, kindOf, madeBy } from './kinds.js';
 import { runBar } from './run-bar.js';
@@ -688,7 +688,7 @@ export async function openJobs() {
     let d;
     try { d = await api('/api/jobs'); } catch (e) { box.replaceChildren(note(e.message, 'err')); return; }
     const row = (j, right, btn) => h('div', { class: `job ${j.status}`, onclick: () => j.id && openGeneration(j.id) },
-      h('div', { class: 'job-main' }, h('b', {}, j.id ? `#${j.id} ` : ''), j.template,
+      h('div', { class: 'job-main' }, h('b', {}, j.id ? `#${j.id} ` : ''), templateName(j.template),
         h('div', { class: 'hint' }, right)), btn);
     const cancelJob = (j, word) => button(word, async (e) => {
       e.stopPropagation();

@@ -6,6 +6,7 @@ import { pngBlob, uploadImage } from './media.js';
 import { pictureForRun, pictureInput } from './picture-input.js';
 import { queueRun, template, valuesByRole, waitGen } from './make.js';
 import { MAPS, mapRoles } from './maps.js';
+import { chosen, toggled } from './tool-models.js';
 import { editSizeFor, editSizeTo } from './edit-size.js';
 import * as G from './layer-geom.js';
 import * as Stack from './layer-stack.js';
@@ -81,7 +82,7 @@ const blendLora = (k) => {
   const m = BLEND[k], t = m && template(m.tpl);
   return (loraField(t)?.options || []).find((o) => o.split(/[\\/]/).pop() === m.lora) || null;
 };
-const blendKey = () => (blendLora(ST.bmodel) ? ST.bmodel : Object.keys(BLEND).find(blendLora) || 'klein9b');
+const blendKey = (o = null) => (o?.pick && blendLora(o.pick) ? o.pick : blendLora(ST.bmodel) ? ST.bmodel : Object.keys(BLEND).find(blendLora) || 'klein9b');
 const UNMARK_PROMPT = 'Remove every watermark, stamp, logo and overlaid text from this picture, including faint see-through ones repeated across it. Fill in what is underneath them. Keep everything else exactly as it is: the same people, objects, colours, light, sharpness and framing.';
 // (it doesn't open with "Remove" and says to keep everything whole: on a frame of someone on a bicycle, the old wording, kept below, took most of the bicycle away)
 const DELIGHT_PROMPT = 'Relight this picture evenly and softly from every side, like an overcast day or a light tent, so dark areas are brightened and nothing is in shadow. Show the true colours and surface of the materials. Keep every person and object whole, with everything they ride, hold, wear or stand on, and keep the shape, pose, details, background and framing exactly the same.';
@@ -155,11 +156,19 @@ const loraField = (t) => t?.fields.find((f) => f.kind === 'loras');
 // (o: the tool being drawn or run, which from the Edit pane isn't the Layers pane's own current one)
 const canDetail = (k, o = op()) => { const m = DETAIL[k]; return !!m && (!m.own || o.model === k) && (!m.lora || (loraField(template(m.tpl))?.options || []).includes(m.lora)); };
 // (the Skin tool is the detail pass with its own model fixed)
-const dmKey = (o = op()) => (o.model && canDetail(o.model, o) ? o.model : canDetail(ST.dmodel, o) ? ST.dmodel : 'klein9b');
+const dmKey = (o = op()) => (o.pick && canDetail(o.pick, o) ? o.pick : o.model && canDetail(o.model, o) ? o.model : canDetail(ST.dmodel, o) ? ST.dmodel : 'klein9b');
 const dm = (o = op()) => DETAIL[dmKey(o)];
 const canSwap = (k) => { const t = template(SWAP_MODELS[k]?.tpl); return !!t && swapLora(k, ST.swapPart, loraField(t)?.options || []) !== false; };
 const swapModels = () => ST.swapModels.filter(canSwap);
-const tplId = (o) => (o.kind === 'blend' ? BLEND[blendKey()].tpl : o.kind === 'swap' ? (SWAP_MODELS[swapModels()[0]] || SWAP_MODELS.klein9b).tpl : o.kind === 'delight' || o.kind === 'colorise' ? (DELIGHT[ST.lmodel] || DELIGHT.krea2).tpl : o.kind === 'sheet' ? (ST.sheetFast ? 'deck-sheet-cell-fast' : 'deck-sheet-cell') : o.kind === 'detail' ? (o.model && !canDetail(o.model, o) ? `${DETAIL[o.model].tpl} with its LoRA` : dm(o).tpl) : o.sd && ST.poser === 'sdpose' ? o.sd : o.tpl);
+// Tools that run on each ticked model (o.pick: the one a run is on; the settings are per device, the runs one each)
+const lmodelOk = (k) => !!template(DELIGHT[k]?.tpl);
+const MULTI = { delight: ['lmodels', 'lmodel', lmodelOk], colorise: ['lmodels', 'lmodel', lmodelOk], blend: ['bmodels', 'bmodel', (k) => !!blendLora(k)],
+  detail: ['dmodels', 'dmodel', canDetail], clean: ['cmodels', 'cmodel', (k) => !!CLEAN[k]] };
+const multiOf = (o) => (o.model ? null : MULTI[o.kind] || null);
+const picks = (o) => { const m = multiOf(o); return m ? chosen(ST[m[0]], ST[m[1]], (k) => m[2](k, o)) : []; };
+const lightModel = (o = null) => DELIGHT[o?.pick || ST.lmodel] || DELIGHT.krea2;
+const tplId = (x) => { const o = x.pick ? x : { ...x, pick: picks(x)[0] }; return plainTplId(o); };
+const plainTplId = (o) => (o.kind === 'blend' ? BLEND[blendKey(o)].tpl : o.kind === 'swap' ? (SWAP_MODELS[swapModels()[0]] || SWAP_MODELS.klein9b).tpl : o.kind === 'delight' || o.kind === 'colorise' ? lightModel(o).tpl : o.kind === 'sheet' ? (ST.sheetFast ? 'deck-sheet-cell-fast' : 'deck-sheet-cell') : o.kind === 'detail' ? (o.model && !canDetail(o.model, o) ? `${DETAIL[o.model].tpl} with its LoRA` : dm(o).tpl) : o.sd && ST.poser === 'sdpose' ? o.sd : o.tpl);
 
 // (a run's file is asked for afresh: runs deleted along the way free their ids, so the next run's file can have the same name, and the browser would show the old one)
 const loadImg = (src) => new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Could not load a picture')); i.src = src.startsWith('/files/') ? `${src}${src.includes('?') ? '&' : '?'}at=${Date.now()}${Math.random()}` : src; });
@@ -361,7 +370,7 @@ async function land(eng, o, src, done, cell) {
     return eng.changed(), eng.render();
   } else {
     const r = await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } });
-    const made = eng.addImage(r.name, { label: named(o.kind === 'up' ? `Upscaled ${r.width}×${r.height}` : o.kind === 'edit' ? 'Edited' : o.kind === 'blend' ? 'Blended' : o.kind === 'delight' ? (o.done || 'De-lit') : o.kind === 'detail' ? (o.model ? o.label : 'Detail') : o.kind === 'clean' ? `Cleaned (${(CLEAN[ST.cmodel] || CLEAN.noise).label})` : o.label, done), ...placed(src, x, rect.y, rect.w, r), ...(await maskForResult(src, r)) });
+    const made = eng.addImage(r.name, { label: named(o.kind === 'up' ? `Upscaled ${r.width}×${r.height}` : o.kind === 'edit' ? 'Edited' : o.kind === 'blend' ? 'Blended' : o.kind === 'delight' ? (o.done || 'De-lit') : o.kind === 'detail' ? (o.model ? o.label : 'Detail') : o.kind === 'clean' ? `Cleaned (${(CLEAN[o.pick || ST.cmodel] || CLEAN.noise).label})` : o.label, done), ...placed(src, x, rect.y, rect.w, r), ...(await maskForResult(src, r)) });
     if (KEEPS_FRAMING.has(o.kind)) hideOriginal(eng, src, made);
     if (o.kind === 'up') eng.E.out = Math.max(eng.E.out || 1, ST.scale);   // (the layer keeps its size on the canvas; exporting at this size shows the new detail)
   }
@@ -512,7 +521,8 @@ export function whyNot(o, t = template(tplId(o)), { eng = null } = {}) {
   if (o.kind === 'swap' && !swapModels().length) return 'Tick an installed model first';
   if (o.kind === 'swap' && !template('deck-mask-image')) return 'deck-mask-image isn\'t installed';
   if (!t) return `${tplId(o)} isn't installed`;
-  if (o.kind === 'blend' && !blendLora(blendKey())) return 'The Fusion LoRA isn\'t installed';
+  if (o.kind === 'blend' && !Object.keys(BLEND).some(blendLora)) return 'The Fusion LoRA isn\'t installed';
+  if (multiOf(o) && !picks(o).length) return 'Tick a model first';
   if (eng) {
     if (eng.loading()) return 'The images are still loading';
     if (eng.E.grow) return 'Press Extend or Cancel on the crop first';
@@ -926,8 +936,8 @@ async function throughModel(t, values, name) {
 }
 
 // the canvas's colour from the edit model, on its own brightness
-async function addColour(cv, prompt) {
-  const t = template((DELIGHT[ST.lmodel] || DELIGHT.krea2).tpl);
+async function addColour(cv, prompt, o = null) {
+  const t = template(lightModel(o).tpl);
   if (!t) throw new Error('The colour model isn\'t installed');
   const pic = t.fields.find((f) => f.kind === 'image' && /image to edit/i.test(f.group)) || t.fields.find((f) => f.kind === 'image');
   const box = t.fields.find((f) => f.kind === 'text' && /^edit$/i.test(f.group) && !/negative/i.test(f.input));
@@ -953,8 +963,8 @@ async function colourise(eng, o, t, tab, src) {
   fly(mk, tab); eng.render();
   try {
     const cv = canvasFrom(await loadImg(inputUrl(src.name)), src.px[0], src.px[1]);
-    await addColour(cv, ST.cprompt.trim() || COLOUR_PROMPT);
-    await landCanvas(eng, o, tab, src, cv, runName('Colourised', { template: (DELIGHT[ST.lmodel] || DELIGHT.krea2).tpl }), 'Colourised');
+    await addColour(cv, ST.cprompt.trim() || COLOUR_PROMPT, o);
+    await landCanvas(eng, o, tab, src, cv, runName('Colourised', { template: lightModel(o).tpl }), 'Colourised', o.base || 0);
   } finally { unfly(mk); b.done(); eng.render(); }
 }
 
@@ -1251,12 +1261,12 @@ export function valuesFor(o, t, src) {
     if (pic) { delete values[imageField.key]; values[pic.key] = src.name; }
     if (box) values[box.key] = (ST.bprompt || '').trim() || BLEND_PROMPT;
     Object.assign(values, wholePicture(t, src.px));
-    const lf = loraField(t), name = blendLora(blendKey());
+    const lf = loraField(t), name = blendLora(blendKey(o));
     if (lf && name) values[lf.key] = [{ name, strength: ST.bstrength ?? 1 }];
   }
   if (o.kind === 'clean') {
     const f = t.fields.find((x) => x.input === 'model_name');
-    if (f) values[f.key] = (CLEAN[ST.cmodel] || CLEAN.noise).model;
+    if (f) values[f.key] = (CLEAN[o.pick || ST.cmodel] || CLEAN.noise).model;
   }
   if (o.kind === 'up') {
     const f = t.fields.find((x) => x.input === 'scale_by');
@@ -1279,7 +1289,28 @@ export function valuesFor(o, t, src) {
 
 // One picture through the tool; the queued runs come back (none for a tool that does its steps here and lands itself).
 // batch: runs of it, side by side (the Edit tool: its own Variations unless more are asked for)
+// Several models ticked: one run per model, each landing beside the last. They all go in the queue now, whatever one of them does.
 async function runOne(eng, o, t, tab, src, batch = 1) {
+  const models = picks(o);
+  if (models.length < 2) return runModel(eng, models[0] ? { ...o, pick: models[0] } : o, models[0] ? template(tplId({ ...o, pick: models[0] })) : t, tab, src, batch);
+  const n = Math.max(1, batch | 0), runAs = (m) => {
+    const on = { ...o, pick: m, base: models.indexOf(m) * n };
+    return runModel(eng, on, template(tplId(on)), tab, src, batch);
+  };
+  src.runs = (src.runs || 0) + 1;   // (its copy waits until every model has been sent)
+  try {
+    const gens = [];
+    // (colour is worked out here from each model's result, so they wait together; the rest are queued as they are sent)
+    const { failed } = o.kind === 'colorise'
+      ? { failed: (await Promise.allSettled(models.map(runAs))).flatMap((r, i) => (r.status === 'rejected' ? [{ item: models[i], error: r.reason?.message || String(r.reason) }] : [])) }
+      : await eachOne(models, async (m) => { gens.push(...((await runAs(m)) || [])); });
+    if (failed.length === models.length) throw new Error(failed[0].error);
+    if (failed.length) toast(failureText(o.label, failed, (m) => m), true);
+    else if (o.kind !== 'colorise') toast(`${o.label}: ${gens.length} runs queued, one per model; each lands as a new layer`);
+    return gens;
+  } finally { src.runs--; }
+}
+async function runModel(eng, o, t, tab, src, batch = 1) {
   if (o.kind === 'edit') return editOne(eng, o, t, tab, src, batch);
   if (o.kind === 'sheet') return runSheet(eng, o, t, tab, src);
   if (o.kind === 'remove') return markFound(eng, o, src);
@@ -1290,7 +1321,7 @@ async function runOne(eng, o, t, tab, src, batch = 1) {
   if (o.model === 'skin') return skinParts(eng, o, t, tab, src, values, t.fields.find((f) => f.kind === 'image'));
   const gens = await queueRun({ template: t.id, values, batch: Math.max(1, batch | 0) });
   toast(gens.length > 1 ? `${o.label}: ${gens.length} runs queued; each lands as a new layer` : `${o.label} (#${gens[0].id}): it lands as a new layer`);
-  gens.forEach((g, nth) => follow(eng, o, tab, src, g, nth));
+  gens.forEach((g, nth) => follow(eng, o, tab, src, g, nth + (o.base || 0)));
   return gens;
 }
 
@@ -1414,8 +1445,7 @@ export function toolFields(o, t, { redraw = () => {}, size = null, eng = null } 
       help('Find it uses SAM3 and takes the biggest one it finds. With several people, Mark it first, erase what shouldn\'t change in the Masks panel, and Swap from the red mask.')) : null,
     o.kind === 'swap' && ST.swapWhere === 'painted' && eng && !eng.paint.maskLayer(false) ? hint('Paint the area first (Masks panel), or Mark it') : null,
     o.kind === 'swap' ? field('Also say', textArea(() => ST.swapExtra, (v) => { ST.swapExtra = v; save(); }, { rows: 2, label: 'Words added to the prompt', placeholder: 'Keep the glasses' })) : null,
-    o.kind === 'clean' ? field('Take out', seg(Object.entries(CLEAN).map(([k, v]) => [k, v.label]), ST.cmodel, (v) => { ST.cmodel = v; save(); redraw(); }, { wrap: true }),
-      help((CLEAN[ST.cmodel] || CLEAN.noise).help)) : null,
+    o.kind === 'clean' ? modelChips(o, 'Take out', CLEAN, redraw) : null,
     o.kind === 'sheet' ? field('Result', seg([['cutout', 'Cut out'], ['black', 'On black']], ST.result === 'black' ? 'black' : 'cutout', (v) => { ST.result = v; save(); redraw(); })) : null,
     o.kind === 'restore' ? toggle('Scratches and dust', ST.stepScratch, (v) => { ST.stepScratch = v; save(); redraw(); }) : null,
     o.kind === 'restore' && ST.stepScratch ? field('Take', seg([['light', 'Only clear ones'], ['normal', 'Normal'], ['strong', 'Faint ones too']], ST.scratchAmount, (v) => { ST.scratchAmount = v; save(); redraw(); }),
@@ -1427,23 +1457,19 @@ export function toolFields(o, t, { redraw = () => {}, size = null, eng = null } 
       { help: 'GFPGAN redraws each face at 512 px, so it helps a small or damaged face most; on a face much bigger than that, lower Face strength to keep its sharpness. It can change a likeness: compare with the original. A strongly tilted face comes out worse. Licence: GFPGAN is Apache 2.0, but its licence file lists NVIDIA StyleGAN2 and DFDNet terms that limit parts of it to non-commercial use.' }) : null,
     o.kind === 'restore' && ST.stepFaces ? rangeField('Face strength', () => ST.faceAmount, (v) => { ST.faceAmount = v; save(); }, { min: 0.1, max: 1, step: 0.05, fmt: (v) => `${Math.round(v * 100)}%` }) : null,
     o.kind === 'restore' ? toggle('Add colour', ST.stepColour, (v) => { ST.stepColour = v; save(); redraw(); }) : null,
-    o.kind === 'colorise' || (o.kind === 'restore' && ST.stepColour) ? field('Model', seg(Object.entries(DELIGHT).map(([k, v]) => [k, v.label]), ST.lmodel, (v) => { ST.lmodel = v; save(); redraw(); }, { wrap: true }),
+    o.kind === 'colorise' ? modelChips(o, 'Models', DELIGHT, redraw) : null,
+    o.kind === 'restore' && ST.stepColour ? field('Model', seg(Object.entries(DELIGHT).map(([k, v]) => [k, v.label]), ST.lmodel, (v) => { ST.lmodel = v; save(); redraw(); }, { wrap: true }),
       help((DELIGHT[ST.lmodel] || DELIGHT.krea2).help)) : null,
     o.kind === 'colorise' || (o.kind === 'restore' && ST.stepColour) ? field('Prompt', textArea(() => ST.cprompt, (v) => { ST.cprompt = v; save(); }, { rows: 4, label: 'What colours to use' })) : null,
-    o.kind === 'blend' ? field('Model', seg(Object.keys(BLEND).filter(blendLora).map((k) => [k, BLEND[k].label]), blendKey(), (v) => { ST.bmodel = v; save(); redraw(); }, { wrap: true }), help(BLEND[blendKey()].help)) : null,
+    o.kind === 'blend' ? modelChips(o, 'Models', BLEND, redraw) : null,
     o.kind === 'blend' ? rangeField('Strength', () => ST.bstrength ?? 1, (v) => { ST.bstrength = v; save(); }, { min: 0.2, max: 1.5, step: 0.05, fmt: (v) => v.toFixed(2) }) : null,
     o.kind === 'blend' ? field('Prompt', textArea(() => ST.bprompt ?? BLEND_PROMPT, (v) => { ST.bprompt = v; save(); }, { rows: 2, label: 'What to blend' }), help('These are the words the LoRA was trained on. Say what you placed if it helps.')) : null,
-    o.kind === 'delight' ? field('Model', seg(Object.entries(DELIGHT).map(([k, v]) => [k, v.label]), ST.lmodel, (v) => { ST.lmodel = v; save(); redraw(); }, { wrap: true }),
-      help((DELIGHT[ST.lmodel] || DELIGHT.krea2).help)) : null,
+    o.kind === 'delight' ? modelChips(o, 'Models', DELIGHT, redraw) : null,
     o.kind === 'delight' ? field('Prompt', textArea(() => ST[o.promptKey || 'lprompt'], (v) => { ST[o.promptKey || 'lprompt'] = v; save(); }, { rows: 4, label: o.promptKey ? 'What to remove' : 'How to light it' })) : null,
-    o.kind === 'detail' && !o.model ? field('Model', seg(Object.entries(DETAIL).filter(([k]) => canDetail(k, o)).map(([k, v]) => [k, v.label]), ST.dmodel, (v) => { ST.dmodel = v; save(); redraw(); }, { wrap: true })) : null,
+    o.kind === 'detail' && !o.model ? modelChips(o, 'Models', DETAIL, redraw) : null,
     o.id === 'skin' ? field('Area', seg([['whole', 'Whole picture'], ['parts', 'Body parts']], ST.skinWhere, (v) => { ST.skinWhere = v; save(); redraw(); })) : null,
     o.model === 'skin' ? field('Body parts', textArea(() => ST.skinParts, (v) => { ST.skinParts = v; save(); }, { rows: 2, label: 'Body parts, separated by commas' })) : null,
-    o.kind === 'detail' ? help(dm(o).help) : null,
-    o.kind === 'detail' && !dm(o).plain ? field('Strength', h('input', { type: 'range', min: 0.1, max: 0.7, step: 0.05, 'aria-label': 'Strength',
-      value: ST.dstrength[dmKey(o)] ?? dm(o).strength, oninput: (e) => { ST.dstrength[dmKey(o)] = +e.target.value; save(); e.target.nextSibling.textContent = e.target.value; } }),
-      h('span', {}, String(ST.dstrength[dmKey(o)] ?? dm(o).strength))) : null,
-    o.kind === 'detail' && !dm(o).plain ? field('Prompt', textArea(() => ST.dprompt[dmKey(o)] ?? dm(o).prompt, (v) => { ST.dprompt[dmKey(o)] = v; save(); }, { rows: 2, label: 'What to add' })) : null,
+    ...(o.kind === 'detail' ? detailFields(o) : []),
     o.kind === 'up' ? sizeChoices({ label: 'Output size', choices: [[2, '2×'], [3, '3×'], [4, '4×']], value: ST.scale, onPick: (v) => { ST.scale = v; save(); redraw(); },
       sizeOf: (v) => (size ? { w: Math.round(size[0] * v), h: Math.round(size[1] * v) } : null), custom: { label: 'Times', min: 1, max: 4, step: 0.25 } }) : null,
   ].filter(Boolean);
@@ -1451,12 +1477,32 @@ export function toolFields(o, t, { redraw = () => {}, size = null, eng = null } 
 // What belongs to one tool (a setup of it, setups.js tool:<id>): the settings toolFields draws for it, whatever mode they are in.
 // Where it runs (scope) and Hide the original stay with the panel.
 const SAM = ['samSure', 'samMost'];
+// Models for a tool, as chips: each ticked one is a run. The tool's single-model setting follows the first, for what reads one (Restore, Mark views).
+function modelChips(o, label, table, redraw) {
+  const m = multiOf(o), on = picks(o);
+  const offered = Object.entries(table).filter(([k]) => m[2](k, o));
+  const tap = (k) => { ST[m[0]] = toggled(on, k); if (ST[m[0]].length) ST[m[1]] = ST[m[0]][0]; save(); redraw(); };
+  return field([label, h('span', {}, `${on.length} ticked`)], h('div', { class: 'chips' }, ...offered.map(([k, v]) => chip(v.label, () => tap(k), { on: on.includes(k) }))),
+    help(offered.map(([, v]) => `${v.label}: ${v.help}`).join(' ')));
+}
+// A detail pass's strength and prompt: each ticked model has its own
+function detailFields(o) {
+  const list = o.model ? [o] : picks(o).map((pick) => ({ ...o, pick }));
+  return list.flatMap((x) => {
+    const m = dm(x), k = dmKey(x), name = list.length > 1 ? ` · ${m.label}` : '';
+    return [o.model ? help(m.help) : null,
+      !m.plain ? field(`Strength${name}`, h('input', { type: 'range', min: 0.1, max: 0.7, step: 0.05, 'aria-label': `Strength${name}`,
+        value: ST.dstrength[k] ?? m.strength, oninput: (e) => { ST.dstrength[k] = +e.target.value; save(); e.target.nextSibling.textContent = e.target.value; } }),
+      h('span', {}, String(ST.dstrength[k] ?? m.strength))) : null,
+      !m.plain ? field(`Prompt${name}`, textArea(() => ST.dprompt[k] ?? m.prompt, (v) => { ST.dprompt[k] = v; save(); }, { rows: 2, label: 'What to add' })) : null];
+  });
+}
 const EDIT_KEYS = ['eprompt', 'econtext', 'ekeep', 'erefs', 'erefMp', 'ewhere', 'efind', ...SAM, 'eclose', 'egrow', 'esoft', 'emp', 'ecount',
   'eseed', 'eseedMode', 'esteps', 'ecfg', 'echoice', 'eneg', 'eloras', 'eloraFolder'];
 const KIND_KEYS = { edit: EDIT_KEYS, matte: ['result', 'fine'], sheet: ['prompt', 'rows', 'cols', 'sheetFast', 'scale', 'result', 'samSure'],
   swap: ['swapPart', 'swapFrom', 'swapCrop', 'swapMp', 'swapModels', 'swapWhere', 'swapExtra', ...SAM], remove: ['rfrom', 'rprompt', ...SAM],
-  clean: ['cmodel'], restore: ['stepScratch', 'scratchAmount', 'stepClean', 'cmodel', 'stepFaces', 'faceAmount', 'stepColour', 'lmodel', 'cprompt'],
-  colorise: ['lmodel', 'cprompt'], delight: ['lmodel'], detail: ['dmodel', 'dstrength', 'dprompt'], up: ['scale'] };
+  clean: ['cmodel', 'cmodels'], restore: ['stepScratch', 'scratchAmount', 'stepClean', 'cmodel', 'stepFaces', 'faceAmount', 'stepColour', 'lmodel', 'cprompt'],
+  colorise: ['lmodel', 'lmodels', 'cprompt'], delight: ['lmodel', 'lmodels'], detail: ['dmodel', 'dmodels', 'dstrength', 'dprompt'], up: ['scale'] };
 export function toolKeys(id) {
   const o = OPS.find((x) => x.id === id);
   if (!o) return [];
@@ -1467,13 +1513,15 @@ export function toolKeys(id) {
   if (o.edges) keys.push('edgeAmount');
   if (o.sd) keys.push('poser');
   if (o.kind === 'delight') keys.push(o.promptKey || 'lprompt');
-  if (o.kind === 'blend') keys.push('bmodel', 'bprompt', 'bstrength');
+  if (o.kind === 'blend') keys.push('bmodel', 'bmodels', 'bprompt', 'bstrength');
   if (o.id === 'skin') keys.push('skinWhere', 'skinParts');
-  return [...new Set(keys)].filter((k) => !(o.model && k === 'dmodel'));   // (Skin detail has its own model)
+  return [...new Set(keys)].filter((k) => !(o.model && (k === 'dmodel' || k === 'dmodels')));   // (Skin detail has its own model)
 }
 export const toolValues = (id) => pickKeys(ST, toolKeys(id));
 export function setToolValues(id, v) {
   for (const k of toolKeys(id)) if (v && v[k] !== undefined) ST[k] = JSON.parse(JSON.stringify(v[k]));
+  // (a setup kept before there were lists: its one model)
+  for (const [list, single] of Object.values(MULTI)) if (v && v[single] !== undefined && v[list] === undefined && toolKeys(id).includes(list)) ST[list] = [v[single]];
   ST.erefs = asRefs(ST.erefs);
   save();
 }

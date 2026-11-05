@@ -42,7 +42,8 @@
 //
 // Wires (web/wire-rules.js, T.wires): a frame's output plugged into another frame's Make inputs. A frame with something to
 // put out has an out port beside its right edge, always there; a drag from it to another frame plugs it in (a video frame
-// asks: the clip, or frames of it, chosen on a scrubber); let go on empty table, it opens the quick panel (wire-panel.js).
+// asks: the clip, or frames of it, chosen on a scrubber), as its next input; let go on an input port, it takes that port's place;
+// let go on empty table, it opens the quick panel (wire-panel.js).
 // A frame with a workflow and something plugged in has a little run button at its top right (chain-run.js runNode). The target shows one input port per wire down its left edge
 // ("Image 1", "Video 1", "Sound 1"). Tap a wire or an input port to select it, Delete unplugs it, right click or a long hold
 // has the rest. Every wire change is a table undo step. For the Make pane: tableWires, wiresInto, setTableWire.
@@ -187,11 +188,10 @@ function applyView() {
   const { x, y, z } = T.view;
   D.world.style.transform = `translate(${x}px, ${y}px) scale(${z})`;
   D.stage.style.setProperty('--z', z);
-  // the grid is the stage's background, so it never runs out; a step too fine to see is drawn coarser
-  let s = T.grid.size * z;
-  while (s < 10) s *= 4;
+  // the grid is the stage's background, so it never runs out: fine lines, and a main line every fourth
+  const { fine, main } = M.gridSteps(T.grid.size, z);
   D.stage.classList.toggle('grid-on', !!T.grid.on);
-  D.stage.style.backgroundSize = `${s}px ${s}px`;
+  D.stage.style.backgroundSize = `${main}px ${main}px, ${main}px ${main}px, ${fine}px ${fine}px, ${fine}px ${fine}px`;
   D.stage.style.backgroundPosition = `${x}px ${y}px`;
   D.zoom.textContent = `${Math.round(z * 100)}%`;
   if (U.wz !== z) { U.wz = z; renderPorts(); renderWires(); }   // (the ports and the input stack hold their size on screen)
@@ -473,6 +473,7 @@ const WHY = {
   'wrong-kind': (s) => `"${s.label}" can't go in as that`,
   cycle: (s, d) => `That would go round in a loop: "${d.label}" already feeds "${s.label}"`,
   exists: (s, d) => `"${s.label}" is plugged into "${d.label}" already`,
+  same: () => null,
 };
 // src's output into dst, as kind (a video frame: its clip, 'video', or a frame of it, 'image')
 function plug(src, dst, kind) {
@@ -489,6 +490,22 @@ function plugAt(src, dst, x, y) {
   const framesOf = () => import('./frame-pick.js').then((m) => m.openFramePick(src, { title: `Frames of "${src.label}" for "${dst.label}"`,
     onPick: (times) => times.forEach((t) => plugWire(src, dst, { kind: 'image', frame: t })) }));
   openPressMenu(x, y, [kinds.map((k) => (k === 'image' && src.kind === 'video' ? { label: 'Frames of it…', run: framesOf } : { label: W.WIRE_LABEL[k], run: () => plug(src, dst, k) }))], 'Plug in as');
+}
+// src in the place of an input (a wire let go on its port), as one undo step: the same number, and the field it fills. A video going in as a
+// picture asks which frame.
+function replaceAt(src, id) {
+  const w = wireById(id), dst = w && byId(w.to);
+  if (!w || !dst) return toast('That input is gone');
+  const put = (frame) => {
+    const r = W.replaceWire(T.wires, id, { from: src.id, frame }, T.frames);
+    if (r.why === 'wrong-kind') return toast(`${W.wireLabel(w)} takes ${w.kind === 'image' ? 'a picture' : w.kind === 'video' ? 'a clip' : 'a sound'}: "${src.label}" can't go there`, true);
+    if (r.why) { const say = (WHY[r.why] || (() => 'That can\'t be plugged in there'))(src, dst); if (say) toast(say); return null; }
+    return wireStep(r.wires);
+  };
+  if (w.kind === 'image' && src.kind === 'video') {
+    return import('./frame-pick.js').then((m) => m.openFramePick(src, { title: `Frame of "${src.label}" for ${W.wireLabel(w)}`, multi: false, onPick: ([t]) => put(t) }));
+  }
+  return put(null);
 }
 // src plugged into dst as one undo step, and the wire. id: the wire's id, given where dst's make names it already. frame: a time or
 // pick, for a picture out of a video. mp: the size its picture goes in at (0: its own size). Refused: a toast, and null.
@@ -641,10 +658,7 @@ function renameLive(f, btn) {
     if (done) return;
     done = true;
     const v = input.value.trim();
-    if (keep && v && v !== was && ok() && byId(f.id) === f) {
-      f.label = v; changed();
-      renameDoc(f, f.label).catch((e) => toast(`Couldn't rename its document: ${e.message}`, true));
-    }
+    if (keep && v && v !== was && ok() && byId(f.id) === f) setName(f, v);
     btn.textContent = f.label || M.KIND_LABEL[f.kind];
     input.replaceWith(btn);
     U.panelSig = ''; renderFrames();
@@ -981,6 +995,15 @@ export function setOutputs(ids, { w, h: hh }) {
     redo: () => { for (const s of steps) setFrameField(s.id, s.now, { record: false }); } });
 }
 
+// How long these frames' runs come out (the Output tab), one undo step
+export function setLengths(ids, secs) {
+  const steps = [...ids].map(byId).filter((f) => f && !f.locked && f.len !== secs).map((f) => ({ id: f.id, was: f.len ?? null }));
+  if (!steps.length) return;
+  for (const s of steps) setFrameField(s.id, { len: secs }, { record: false });
+  record({ undo: () => { for (const s of steps) setFrameField(s.id, { len: s.was }, { record: false }); },
+    redo: () => { for (const s of steps) setFrameField(s.id, { len: secs }, { record: false }); } });
+}
+
 // ---------------------------------------------------------------------------
 // the frame menu (right click, long hold)
 // ---------------------------------------------------------------------------
@@ -994,7 +1017,7 @@ function frameMenu(x, y, f = null) {
   const extra = [];   // (other modules' items: table:menu)
   dispatchEvent(new CustomEvent('table:menu', { detail: { frame: f || one || list[0], frames: list, groups: extra, table: T } }));
   const run = {
-    open: () => goLive(one), rename: () => renameRow(one.id), duplicate: () => duplicateFrames(new Set(U.sel)),
+    open: () => goLive(one), rename: () => nameFrame(one), duplicate: () => duplicateFrames(new Set(U.sel)),
     group: groupSelected, ungroup: () => ungroupSelected(), hide: () => toggleHidden(list), lock: () => toggleLocked(list),
     front: () => restack(M.toFront), forward: () => stepBy(1), backward: () => stepBy(-1), back: () => restack(M.toBack),
     size: () => sidebar.show('output'), delete: () => deleteFrames(new Set(U.sel)),
@@ -1061,6 +1084,8 @@ const othersOf = (ids) => M.shown(T.frames).filter((f) => !ids.has(f.id));
 const snapThr = () => SNAP_PX / T.view.z;
 
 function onDown(e) {
+  if (e.target.closest?.('.frame-rename')) return;
+  if (document.activeElement?.matches?.('.frame-rename')) document.activeElement.blur();
   if (inLive(e) || e.target.closest('.max-btn, .pull-tab, textarea')) return;
   if (e.pointerType === 'touch') {
     U.pts.set(e.pointerId, local(e));
@@ -1089,29 +1114,51 @@ function onDown(e) {
 // a drag from an out port: a wire follows the pointer; let go over another frame to plug it in there
 function startWire(src, base) {
   if (!src) return;
-  U.op = { ...base, type: 'wire', src, over: null };
+  U.op = { ...base, type: 'wire', src, over: null, pin: null };
   setHover(src.id);
 }
 function dragWire(e, op) {
   const p = tablePt(e), z = T.view.z;
-  const under = M.hitFrame(M.shown(T.frames).filter((f) => f.id !== op.src.id), p);
+  // (an input port under the pointer: it would take that port's place. The stage holds the pointer, so its target can't say)
+  const pinEl = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.frame-in');
+  const pin = pinEl && wireById(pinEl.dataset.wire)?.to !== op.src.id ? pinEl : null;
+  const under = pin ? null : M.hitFrame(M.shown(T.frames).filter((f) => f.id !== op.src.id), p);
+  if (pin !== op.pin) {
+    op.pin?.classList.remove('wire-swap');
+    pin?.classList.add('wire-swap');
+    op.pin = pin;
+  }
   if (under?.id !== op.over?.id) {
     U.els.get(op.over?.id)?.classList.remove('wire-over');
     op.over = under;
     if (under && under.kind !== 'note') U.els.get(under.id)?.classList.add('wire-over');
+    showNextInput(op.src, under);
   }
   D.wireDraft.setAttribute('d', curve(outPt(op.src, portGeom(), z), p, z));
   D.wireDraft.setAttribute('class', `wire-draft k-${W.outKind(op.src) || 'image'}`);
   D.wireDraft.style.display = '';
 }
+// While a wire is held over a frame: where it would go in, under the inputs it has
+function showNextInput(src, dst) {
+  U.nextIn?.remove(); U.nextIn = null;
+  if (!dst || dst.kind === 'note') return;
+  const kinds = W.outKinds(src), have = T.wires.filter((w) => w.to === dst.id), pg = portGeom(), z = T.view.z, p = inPt(dst, have.length, pg, z);
+  const word = kinds.length > 1 ? 'Add' : `${W.WIRE_LABEL[kinds[0]]} ${have.filter((w) => w.kind === kinds[0]).length + 1}`;
+  U.nextIn = h('div', { class: `frame-in next k-${kinds[0]}` }, h('span', { class: 'frame-in-dot' }), h('span', { class: 'frame-in-label' }, word));
+  U.nextIn.style.left = `${p.x}px`; U.nextIn.style.top = `${p.y}px`;
+  D.ports.append(U.nextIn);
+}
 function endWireDraft(op) {
   if (D.wireDraft) D.wireDraft.style.display = 'none';
   U.els.get(op?.over?.id)?.classList.remove('wire-over');
+  op?.pin?.classList.remove('wire-swap');
+  U.nextIn?.remove(); U.nextIn = null;
 }
 function endWire(e, op) {
   endWireDraft(op);
   setHover(null);
   if (!op.moved) { U.sel = new Set([op.src.id]); renderFrames(); return; }   // (a tap on the port picks its frame)
+  if (op.pin) return replaceAt(op.src, op.pin.dataset.wire);
   if (op.over) return plugAt(op.src, op.over, e.clientX, e.clientY);
   renderPorts();
   // (let go on empty table: what to start from it. Let go back on its own frame: nothing)
@@ -1121,8 +1168,12 @@ function endWire(e, op) {
 // (Shift or Ctrl adds to what is selected)
 const adds = (e) => !!(e.shiftKey || e.ctrlKey || e.metaKey);
 function startMove(e, f, base) {
-  // a second tap on the same frame opens it (a dblclick would land on the stage, which holds the pointer)
-  if (!adds(e) && U.lastTap?.id === f.id && Date.now() - U.lastTap.t < DOUBLE_MS) { U.lastTap = null; U.op = null; openOrStart(f); return; }
+  // a second tap on the same frame opens it, or on its label names it (a dblclick would land on the stage, which holds the pointer)
+  if (!adds(e) && U.lastTap?.id === f.id && Date.now() - U.lastTap.t < DOUBLE_MS) {
+    U.lastTap = null; U.op = null;
+    if (e.target.closest('.frame-label')) nameFrame(f); else openOrStart(f);
+    return;
+  }
   if (adds(e)) {
     if (U.sel.has(f.id)) { U.sel.delete(f.id); renderFrames(); return; }
     U.sel.add(f.id);
@@ -1314,6 +1365,7 @@ function onKey(e) {
   else if (!ctrl && k === 'F' && e.shiftKey) fn = fitSel;
   else if (!ctrl && k === '0') fn = () => zoomTo(1);
   else if (!ctrl && k === 'Enter' && U.sel.size === 1) fn = () => goLive(selected()[0]);
+  else if (!ctrl && k === 'F2' && U.sel.size === 1) fn = () => nameFrame(selected()[0]);
   if (!fn) return;
   e.preventDefault(); fn();
 }
@@ -1439,7 +1491,7 @@ function renderPanel() {
   if (sig === U.panelSig || D.panel.contains(document.activeElement) && document.activeElement.matches('input')) return;
   U.panelSig = sig;
   D.panel.replaceChildren(
-    section('Frames', null, help('Drag on empty table to make a frame there; double-tap empty table for the quick starts. Double-click a frame, or press Enter, to open it; double-clicking one with nothing in it offers what to start it with at full size; Esc comes back. Wheel zooms, Space + drag pans, Shift+F fits, F is full screen. The list is the frames as layers, the top one drawn on top: drag a row by its grip to restack it, or onto a group\'s row to put it in the group. Shift-click a row for a range, Ctrl-click to add or drop one. Double-click a name to rename it. Right click a row or a frame, or hold a finger on it, for the rest. Keys: Ctrl+G groups, Ctrl+Shift+G ungroups, Ctrl+J duplicates, Ctrl+] and Ctrl+[ step up and down, with Shift to the top and bottom, H hides, L locks. A hidden frame keeps its place but is left out of the table, the box, Fit and a story\'s rows. Arrange on the bar lines up two or more frames, on the grid when it is on.'),
+    section('Frames', null, help('Drag on empty table to make a frame there; double-tap empty table for the quick starts. Let a wire go on a frame to add an input, or on an input to replace it. Double-click the name above a frame, or press F2, to name it. Double-click a frame, or press Enter, to open it at full size (with nothing in it: what to start it with); Esc comes back. Wheel zooms, Space + drag pans, Shift+F fits, F is full screen. The list is the frames as layers, the top one drawn on top: drag a row by its grip to restack it, or onto a group\'s row to put it in the group. Shift-click a row for a range, Ctrl-click to add or drop one. Double-click a name to rename it. Right click a row or a frame, or hold a finger on it, for the rest. Keys: Ctrl+G groups, Ctrl+Shift+G ungroups, Ctrl+J duplicates, Ctrl+] and Ctrl+[ step up and down, with Shift to the top and bottom, H hides, L locks. A hidden frame keeps its place but is left out of the table, the box, Fit and a story\'s rows. Arrange on the bar lines up two or more frames, on the grid when it is on.'),
       ...(T.frames.length ? frameListArea() : [hint('No frames yet.')])),
     section('Frame', null, one ? frameFields(one) : hint(s.length ? `${s.length} frames selected` : 'Select a frame.')));
 }
@@ -1556,6 +1608,37 @@ function rowTap(ev, { frame: f = null, group: g = null, members = [] }) {
   renderFrames();
 }
 // A row's name typed over (a frame's renames its document too; a group's is the group's own)
+// A frame's name changed: its document's follows
+function setName(f, v) {
+  f.label = v; changed();
+  renameDoc(f, v).catch((e) => toast(`Couldn't rename its document: ${e.message}`, true));
+}
+// Name a frame: typed over its label on the table, or in the Frame pane's list when its tile can't be seen
+export function nameFrame(f) {
+  const el = U.els.get(f?.id), name = el?.querySelector('.frame-name');
+  const r = name?.getBoundingClientRect(), box = D.stage.getBoundingClientRect();
+  if (isLive() || f.hidden || !r || r.right < box.left || r.left > box.right || r.bottom < box.top || r.top > box.bottom) return renameRow(f.id);
+  el.querySelector('.frame-rename')?.remove();
+  const was = f.label || '', ok = here();
+  const input = h('input', { type: 'text', class: 'frame-rename', value: was, maxLength: 120, 'aria-label': 'Name' });
+  let done = false;
+  const finish = (keep) => {
+    if (done) return;
+    done = true;
+    const v = input.value.trim();
+    input.remove(); name.classList.remove('hidden');
+    if (keep && v && v !== was && ok() && byId(f.id) === f) setName(f, v);
+    U.panelSig = ''; renderFrames();
+  };
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+  name.classList.add('hidden'); name.after(input);
+  setTimeout(() => { if (!done) { input.focus(); input.select(); } }, 0);   // (after the press that asked for it has finished)
+}
 function renameRow(id) {
   if (sidebar.current() !== 'frame') sidebar.show('frame');
   const row = D.panel.querySelector(`.layer-row[data-row="${CSS.escape(id)}"] .layer-name`);
@@ -1570,10 +1653,7 @@ function renameRow(id) {
     const v = input.value.trim();
     if (keep && v && v !== was && ok()) {
       if (g) stackStep(() => { g.name = v; });
-      else if (byId(f.id) === f) {
-        f.label = v; changed();
-        renameDoc(f, f.label).catch((e) => toast(`Couldn't rename its document: ${e.message}`, true));
-      }
+      else if (byId(f.id) === f) setName(f, v);
     }
     input.blur();
     U.panelSig = ''; renderFrames();

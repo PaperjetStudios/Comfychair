@@ -7,6 +7,7 @@
 // remember: a store key that keeps the family picked here, for boxes with no template of their own, as in Story).
 
 import { h, api, toast, openSheet, closeSheet, button, chip, help, store, seg, note } from './ui.js';
+import { rootOf, setFor, setsFor, withSet } from './prompt-results.js';
 import { S, thumbUrl } from './core.js';
 import { openImagePicker } from './media.js';
 
@@ -44,6 +45,11 @@ const HELP = {
     + 'reuse its look on something else. Use replaces your prompt; Add puts it at the end. Undo puts yours back.',
 };
 
+// What it wrote is kept on this device, so opening it again shows that; ↻ Again writes more. A writing still going when the sheet was closed lands too.
+const KEPT = 'deck.promptResults';
+const keptSets = () => store.get(KEPT, []);
+const WRITING = new Map();
+
 // io + a choice -> the helper sheet. kind: improve | describe (image: the picked input's name)
 function helperSheet(kind, io, { image = null } = {}) {
   const target = io.target || { media: 'image' };
@@ -51,6 +57,9 @@ function helperSheet(kind, io, { image = null } = {}) {
   let mode = kind === 'improve' ? ((io.get() || '').trim().split(/\s+/).length <= 6 ? 'expand' : 'improve') : 'full';
   let device = store.get('deck.promptDevice', 'auto');
   let run = 0;
+  const root = rootOf(keptSets(), kind, image || io.get());
+  const lastHere = setsFor(keptSets(), kind, root).find((x) => x.fam === fam);   // (as you left it, not what the prompt's length suggests)
+  if (lastHere) mode = lastHere.mode;
   const results = h('div', { class: 'pa-results' });
   const modes = kind === 'improve'
     ? [['improve', 'Improve'], ['expand', 'Expand idea']]
@@ -66,7 +75,7 @@ function helperSheet(kind, io, { image = null } = {}) {
     }, { on: v === fam });
     return c;
   }));
-  const devSeg = seg(DEVICES, device, (v) => { device = v; store.set('deck.promptDevice', v); go(); });
+  const devSeg = seg(DEVICES, device, (v) => { device = v; store.set('deck.promptDevice', v); });   // (for the next writing)
 
   const use = (text, add = false) => {
     const before = io.snapshot ? io.snapshot() : io.get();
@@ -81,30 +90,43 @@ function helperSheet(kind, io, { image = null } = {}) {
     h('div', { class: 'pa-acts' }, button('Use', () => use(v.text), { cls: 'small primary' }),
       kind === 'describe' ? button('Add to the end', () => use(v.text, true)) : null));
 
-  async function go() {
+  const wordFor = (list, v) => list.find(([k]) => k === v)?.[1] || v;
+  const kept = () => setsFor(keptSets(), kind, root).flatMap((x) => [
+    h('p', { class: 'hint' }, `${wordFor(modes, x.mode)} · ${wordFor(FAMILIES, x.fam)} · ${x.variants.length} version${x.variants.length > 1 ? 's' : ''} · ${x.seconds} s ${x.device === 'cpu' ? 'on the processor' : 'on the graphics card'}`),
+    ...x.variants.map(card)]);
+
+  // what was written for these choices, or (again: more whatever there is) a new writing, above the ones before it
+  async function go(again = false) {
     const me = ++run, t0 = performance.now();
+    if (!again && setFor(keptSets(), kind, root, mode, fam)) { results.replaceChildren(...kept()); return; }
     const wait = h('div', { class: 'placeholder pa-wait' }, 'Writing…');
     const tick = setInterval(() => { wait.textContent = `Writing… ${Math.round((performance.now() - t0) / 1000)} s`; }, 1000);
-    results.replaceChildren(wait);
+    results.replaceChildren(wait, ...kept());
+    const key = JSON.stringify([kind, root, mode, fam]), asked = { mode, fam, src: image || (io.get() || '').trim() };
     const body = { family: fam, tag_style: fam === 'h3' ? 'h3' : target.tag_style, media: ['ltx', 'h3', 'video'].includes(fam) ? 'video' : 'image', device };
-    try {
-      const r = kind === 'improve'
-        ? await api('/api/prompt/improve', { method: 'POST', timeout: 480000, busy: false,
+    let job = WRITING.get(key);
+    if (!job) {
+      job = (kind === 'improve'
+        ? api('/api/prompt/improve', { method: 'POST', timeout: 480000, busy: false,
           body: { ...body, text: io.get(), mode, edit: !!target.edit, i2v: !!target.i2v, n: 3 } })
-        : await api('/api/prompt/describe', { method: 'POST', timeout: 480000, busy: false, body: { ...body, image, what: mode } });
-      if (me !== run) return;
-      const where = r.device === 'cpu' ? 'on the processor' : 'on the graphics card';
-      results.replaceChildren(h('p', { class: 'hint' }, `${r.variants.length} version${r.variants.length > 1 ? 's' : ''} · ${r.seconds} s ${where}`),
-        ...r.variants.map(card));
+        : api('/api/prompt/describe', { method: 'POST', timeout: 480000, busy: false, body: { ...body, image, what: mode } }))
+        .then((r) => {
+          store.set(KEPT, withSet(keptSets(), { kind, root, ...asked, variants: r.variants.map((v) => ({ text: v.text, ...(v.missing?.length && { missing: v.missing }) })), seconds: r.seconds, device: r.device, at: Date.now() }));
+        }).finally(() => WRITING.delete(key));
+      WRITING.set(key, job);
+    }
+    try {
+      await job;
+      if (me === run) results.replaceChildren(...kept());
     } catch (e) {
-      if (me === run) results.replaceChildren(note(e.message));
+      if (me === run) results.replaceChildren(note(e.message), ...kept());
     } finally { clearInterval(tick); }
   }
 
   openSheet(h('h3', {}, kind === 'improve' ? 'Prompt helper' : 'Describe a picture'), help(HELP[kind]),
     image ? h('img', { class: 'pa-pic', src: thumbUrl(image, 240), alt: '' }) : null,
     modeRow, famRow, devSeg, results,
-    h('div', { class: 'actions' }, button('↻ Again', () => go())));
+    h('div', { class: 'actions' }, button('↻ Again', () => go(true))));
   go();
 }
 

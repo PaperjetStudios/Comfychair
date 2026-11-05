@@ -224,6 +224,7 @@ export function toast(msg, err = false, action = null) {
   action = acts[0] || null;
   t.replaceChildren(h('span', {}, msg), ...acts.map((a) => button(a.label, () => { t.classList.add('hidden'); a.fn(); }, { cls: 'small toast-act' })));
   t.className = 'toast' + (err ? ' err' : '');
+  t.onclick = (e) => { if (!e.target.closest('button')) { clearTimeout(toastTimer); t.classList.add('hidden'); } };   // (a tap sends it away)
   clearTimeout(toastTimer);
   if (!action?.stay) toastTimer = setTimeout(() => t.classList.add('hidden'), err ? 7000 : action ? 6000 : 2500);
 }
