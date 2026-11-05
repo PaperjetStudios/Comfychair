@@ -1203,14 +1203,16 @@ function frameAt(e) {
   const el = e.target.closest?.('.frame');
   return el ? byId(el.dataset.id) : null;
 }
-const inLive = (e) => !!e.target.closest?.('.live-layer .frame-mount');
+// (by the press's own path, fixed when it was sent: a panel that redraws on the press, as the timeline does, takes the target out of the
+// page before the stage hears of it, and the target alone would then look like the table behind the frame)
+const inLive = (e) => (e.composedPath?.() || [e.target]).some((el) => el.classList?.contains('frame-mount') && el.parentElement === D.live);
 const othersOf = (ids) => M.shown(T.frames).filter((f) => !ids.has(f.id));
 const snapThr = () => SNAP_PX / T.view.z;
 
 function onDown(e) {
   if (e.target.closest?.('.frame-rename')) return;
   if (document.activeElement?.matches?.('.frame-rename')) document.activeElement.blur();
-  if (inLive(e) || e.target.closest('.max-btn, .pull-tab, textarea')) return;
+  if (inLive(e) || !e.target.isConnected || e.target.closest('.max-btn, .pull-tab, textarea')) return;   // (a target already gone: never the table)
   if (e.pointerType === 'touch') {
     U.pts.set(e.pointerId, local(e));
     if (U.pts.size === 2) { U.lastEmpty = null; cancelOp(); U.op = isLive() ? null : { type: 'pinch', last: [...U.pts.values()] }; return; }
