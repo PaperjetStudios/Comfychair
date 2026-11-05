@@ -27,6 +27,23 @@ const dragWindow = (move, up) => {
 const easeLabel = (e) => (EASES.find(([n]) => n === e) || [e, e || 'Layer default'])[1];
 const once = (fns) => { for (const f of new Set(fns)) f?.(); };
 
+// Keys while the last press was on a key lane and keys are picked: Delete / Backspace, Ctrl+C, Ctrl+V (at the key last
+// pressed). Caught on the window before anything else (the timeline's own Delete / copy / paste would take the clip), so it
+// works after a redraw has taken the focus off the diamond. A press anywhere else hands the keys back.
+let last = null;   // { id, ch, f }: the lane (and key) pressed last; null: the last press was elsewhere
+addEventListener('pointerdown', (e) => { if (!e.target.closest?.('.tl-keylane, .press-menu')) last = null; }, true);
+addEventListener('keydown', (e) => {
+  if (!last || e.defaultPrevented || e.target.closest?.('input, textarea, select, [contenteditable]')) return;
+  const mod = e.ctrlKey || e.metaKey, key = e.key.toLowerCase(), r = rows.get(`${last.id}|${last.ch}`);
+  const del = !mod && (e.key === 'Delete' || e.key === 'Backspace');
+  if (!(del || (mod && !e.shiftKey && !e.altKey && (key === 'c' || key === 'v')))) return;
+  if (key === 'v' ? !(clip && r?.lane.isConnected) : !live().some((x) => picked(x).length)) return;
+  e.preventDefault(); e.stopPropagation();
+  if (del) removeSelected();
+  else if (key === 'c') copySelected(live().find((x) => picked(x).length));
+  else pasteInto(r, last.f ?? picked(r)[0]?.f ?? r.it.in);
+}, true);
+
 function removeSelected() {
   const fns = [];
   for (const r of live()) {
@@ -122,6 +139,7 @@ export function keyLaneRows(it, o) {
       const dot = h('button', { type: 'button', class: 'tl-keydot' + (isSel(sel, it.id, ch, k.f) ? ' on' : ''),
         style: `left:${keyX(it, k.f, o.pps)}px`, title: keyTitle(label, k, keyTime(it, k.f), o.tc) });
       dot.addEventListener('pointerdown', (e) => {
+        last = { id: it.id, ch, f: k.f };
         if (e.button) return;
         e.stopPropagation();
         const toggle = e.shiftKey || e.ctrlKey || e.metaKey, was = isSel(sel, it.id, ch, k.f);
@@ -131,19 +149,13 @@ export function keyLaneRows(it, o) {
         dragKeys(e, r, { k, toggle });
       });
       dot.addEventListener('dblclick', (e) => { e.stopPropagation(); o.seek?.(keyTime(it, k.f)); });
-      dot.addEventListener('keydown', (e) => {
-        const mod = e.ctrlKey || e.metaKey, key = e.key.toLowerCase();
-        if (e.key === 'Delete' || e.key === 'Backspace') removeSelected();
-        else if (mod && key === 'c') copySelected(r);
-        else if (mod && key === 'v') pasteInto(r, k.f);
-        else return;
-        e.preventDefault(); e.stopPropagation();
-      });
       pressMenu(dot, menuAt(k));
+      dot.addEventListener('contextmenu', (e) => e.stopPropagation());   // (the key's menu, never the clip's under it)
       r.dots.set(k, dot);
       lane.append(dot);
     }
-    lane.addEventListener('pointerdown', (e) => { if (e.target === lane && !e.button) { e.stopPropagation(); boxSelect(e, r); } });
+    lane.addEventListener('pointerdown', (e) => { last = { id: it.id, ch, f: null }; if (e.target === lane && !e.button) { e.stopPropagation(); boxSelect(e, r); } });
+    lane.addEventListener('contextmenu', (e) => { if (e.target === lane) { e.preventDefault(); e.stopPropagation(); } });
     return h('div', { class: 'tl-keylane' }, h('div', { class: 'tl-head tl-keyhead' }, label), lane);
   });
 }

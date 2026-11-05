@@ -283,8 +283,9 @@ export function copy(d, ids) {
 // A track a pasted clip may go on: there, not locked, and one o.canDrop takes
 const takes = (tr, it, o) => tr && !tr.locked && (!o?.canDrop || o.canDrop(it, tr));
 // Paste the clipboard at t: each clip on its own track if it may go there, else the first track that takes it
-// (none: left out). New ids, own keys. insert: where a pasted clip would overlap a clip already on its track, the clips
-// at and after t on that track move right by the pasted length (to the pasted clips' end) instead of cross-fading.
+// (none: left out; a locked track never takes one). New ids, own keys. insert: where a pasted clip would overlap a clip
+// already on its track, a clip under t there is split at t (as splitAt does), and the clips at and after t on that track
+// (its right half among them) move right by the pasted length (to the pasted clips' end) instead of cross-fading.
 // Returns the new ids.
 export function paste(d, clip, t, o, { insert = true } = {}) {
   const made = [], t0 = Math.max(0, t);
@@ -298,8 +299,10 @@ export function paste(d, clip, t, o, { insert = true } = {}) {
       const mine = made.filter((x) => x.track === track), old = d.items.filter((x) => x.track === track);
       const hits = mine.some((p) => old.some((x) => x.at < endOf(p, o) - EPS && endOf(x, o) > p.at + EPS));
       if (!hits) continue;
+      const cut = old.find((x) => x.at < t0 - EPS && endOf(x, o) > t0 + EPS);
+      if (cut) splitAt(d, [cut.id], t0, o);
       const room = Math.max(...mine.map((p) => endOf(p, o))) - t0;
-      for (const x of old) if (x.at >= t0 - EPS) x.at = r6(x.at + room);
+      for (const x of d.items) if (x.track === track && x.at >= t0 - EPS) x.at = r6(x.at + room);
     }
   }
   d.items.push(...made);

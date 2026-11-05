@@ -356,6 +356,65 @@ class Storage(unittest.TestCase):
         self.assertEqual(got[a][0]["label"], "Table")
         self.assertEqual(got[a][0]["name"], "T2")
 
+    def test_a_frames_cached_render_pins_its_run_and_goes_with_the_frame(self):
+        a, _, _, _ = self.gen(run="r1")
+        b, _, _, _ = self.gen(run="r2")
+        c = TestClient(main.app)
+        q = {"project_id": self.pid}
+        vdoc = lambda render=None: {"v": 1, "frames": [{"id": "f1", "kind": "video", "doc": "v1", **({"render": render} if render else {})}]}
+        def put(payload):
+            r = c.put("/api/store/tables/tt", params=q, json={"name": "T", "payload": payload, **({"rev": self.rev} if self.rev else {})})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.rev = r.json()["rev"]
+        self.rev = 0
+        self.doc("video-tabs", {"items": []}, name="V", did="v1")
+        put(vdoc({"generation": a, "key": "k1"}))
+        self.assertEqual(storage.attachments()[a][0]["label"], "Table", "the frame's render is a use")
+        self.assertEqual(c.delete(f"/api/generations/{a}").status_code, 409)
+        put(vdoc({"generation": b, "key": "k2"}))   # replaced: the old run goes
+        self.assertIsNone(db.get_generation(a))
+        self.assertIsNotNone(db.get_generation(b))
+        # the frame leaves the table; its document is trashed: the render waits (Undo must find it)
+        put({"v": 1, "frames": []})
+        self.assertIsNotNone(db.get_generation(b))
+        self.assertEqual(c.delete("/api/store/video-tabs/v1", params=q).status_code, 200)
+        self.assertEqual(c.post("/api/store/video-tabs/v1/restore", params=q).status_code, 200)   # Undo
+        self.assertIsNotNone(db.get_generation(b))
+        put(vdoc({"generation": b, "key": "k2"}))   # the frame is back, render and all
+        put({"v": 1, "frames": []})   # and gone again
+        c.delete("/api/store/video-tabs/v1", params=q)
+        self.assertIsNotNone(db.get_generation(b))
+        # purged for good (older than the trash days): the next delete in that folder drops it
+        d = config.PROJECTS_DIR / self.folder / ".deck" / "video-tabs"
+        for f in (d / ".trash").glob("v1.*.json"):
+            if not f.name.endswith(".render.json"):
+                f.rename(d / ".trash" / f"v1.{1}.json")
+        self.doc("video-tabs", {"items": []}, name="W", did="v2")
+        self.assertEqual(c.delete("/api/store/video-tabs/v2", params=q).status_code, 200)
+        self.assertIsNone(db.get_generation(b))
+
+    def test_a_replaced_render_stays_when_another_document_uses_the_run(self):
+        a, _, _, _ = self.gen(run="r1")
+        b, _, _, _ = self.gen(run="r2")
+        c = TestClient(main.app)
+        q = {"project_id": self.pid}
+        frames = lambda r: {"v": 1, "frames": [{"id": "f1", "kind": "video", "doc": "v1", "render": r}]}
+        r1 = c.put("/api/store/tables/t9", params=q, json={"name": "T", "payload": frames({"generation": a, "key": "k1"})})
+        self.doc("video-tabs", {"items": [{"src": {"generation": a}}]}, name="V", did="v1")
+        c.put("/api/store/tables/t9", params=q, json={"name": "T", "rev": r1.json()["rev"], "payload": frames({"generation": b, "key": "k2"})})
+        self.assertIsNotNone(db.get_generation(a), "a clip uses the old run: kept")
+
+    def test_a_replaced_sound_mix_goes_unless_used(self):
+        gone, kept = config.MEDIA_DIR / "mix-old.wav", config.MEDIA_DIR / "mix-kept.wav"
+        for p in (gone, kept):
+            touch(p)
+        self.doc("sound-tabs", {"items": [{"src": {"media": "mix-kept.wav"}}]}, name="S", did="s9")
+        self.assertTrue(storage.render_media_drop({"media": "mix-old.wav"}))
+        self.assertFalse(storage.render_media_drop({"media": "mix-kept.wav"}))
+        self.assertFalse(gone.exists())
+        self.assertTrue(kept.exists())
+        kept.unlink()
+
     def test_table_wires_pin_no_run(self):
         a, _, _, _ = self.gen(run="r1")
         frames = [{"id": "f1", "kind": "note", "text": "a"}, {"id": "f2", "kind": "note", "text": "b"}]

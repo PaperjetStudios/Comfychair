@@ -494,6 +494,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="ComfyChair", lifespan=lifespan)
+store.drop_run = lambda gid: _drop_run(gid)   # a frame's cached render, when it is replaced or abandoned (store.py)
 store.notify = broadcast  # the JSON document store (tabs, presets, objects...) tells every device when it saves
 projects.notify = broadcast  # project list changes (made, renamed, reordered, copied, deleted)
 projects.comfy_copy = comfy_copy
@@ -815,6 +816,11 @@ async def delete_generation(gid: int):
         raise HTTPException(409, {"message": f"In use: {storage.used_by_text(owners)}", "used_by": owners})
     await remove_generation(g)
     return {"ok": True}
+
+
+async def _drop_run(gid: int):
+    if g := db.get_generation(gid):
+        await remove_generation(g)
 
 
 @app.post("/api/generations/delete")

@@ -6,7 +6,6 @@ import { commandFor } from './timeline-keys.js';
 import { clipMenu, trackMenu, rulerMenu, pickedFor } from './layer-menu.js';
 import { pressMenu, openPressMenu } from './press-menu.js';
 import { snap, snapOn, gzChip } from './gizmo.js';
-import { heightGrip } from './layout.js';
 
 // ---------------------------------------------------------------------------
 // The timeline the Video and Sound tabs share: clips on tracks, moved (also to another track) and
@@ -154,7 +153,7 @@ const TOOL_BTNS = [['select', 'select', 'Select (V)'], ['razor', 'cut', 'Razor (
 export const TOOLS_HELP = 'Tools: Select (V); Razor (C): click a clip to cut it at the line, Shift+click cuts every unlocked track there; '
   + 'Ripple (B): trimming or moving a clip pushes the later clips on its track along; Slip (Y): drag a clip to show another part of its '
   + 'source, its place and length stay; Hand (H): drag to pan. Esc goes back to Select.';
-const MIN_H = 24, MAX_H = 240;   // a track's height (px)
+const MIN_H = 40, MAX_H = 240;   // a track's height (px)
 let clipboard = null;   // copy / cut / paste: one for every timeline, so clips go from one tab's timeline to another's
 
 export function timeline(st, o) {
@@ -558,20 +557,31 @@ export function timeline(st, o) {
     const name = h('b', { class: 'tl-name' }, label);
     name.addEventListener('dblclick', (ev) => { ev.stopPropagation(); renameTrack(tr); });
     const grip = h('div', { class: 'tl-hgrip', role: 'separator', 'aria-orientation': 'horizontal', 'aria-label': 'Track height' });
-    let h0 = 0, resized = false;
+    // the grip: a drag sets the height 1:1 (down: taller), a double-click puts it back, arrow keys step it; one undo step each
+    // (its own drag rather than layout.js heightGrip, which grows a pane above it and shuts it near the bottom)
+    grip.tabIndex = 0;
     const rowOf = () => grip.closest('.tl-row');
-    heightGrip(grip, {   // (it grows a pane above it; this grip is under its track, so the drag is turned round)
-      size: () => (h0 = tr.h || rowOf()?.offsetHeight || 52),
-      set: (px) => {
-        if (px == null) { if (tr.h != null) { delete tr.h; o.changed(); } return; }
-        R.trackHeight(st, tr.id, px === 0 ? MAX_H : 2 * h0 - px, { min: MIN_H, max: MAX_H });
-        const r = rowOf();
-        if (r) r.style.height = `${tr.h}px`;
-        resized = true;
-      },
-      max: () => 1e6 });
-    grip.addEventListener('pointerup', () => { if (resized) { resized = false; o.changed(); } });
-    grip.addEventListener('keyup', () => { if (resized) { resized = false; o.changed(); } });
+    const setH = (px) => { R.trackHeight(st, tr.id, px, { min: MIN_H, max: MAX_H }); const r = rowOf(); if (r) r.style.height = `${tr.h}px`; };
+    grip.addEventListener('pointerdown', (e) => {
+      if (e.button > 0) return;
+      e.preventDefault(); e.stopPropagation();
+      const y0 = e.clientY, h0 = tr.h || rowOf()?.offsetHeight || 52, was = tr.h;
+      let moved = false;
+      grip.classList.add('dragging');
+      dragWindow((ev) => {
+        if (!moved && Math.abs(ev.clientY - y0) < 2) return;
+        moved = true;
+        setH(h0 + ev.clientY - y0);
+      }, () => { grip.classList.remove('dragging'); if (moved && tr.h !== was) o.changed(); });
+    });
+    grip.addEventListener('dblclick', (e) => { e.stopPropagation(); if (tr.h != null) { delete tr.h; o.changed(); } });
+    grip.addEventListener('keydown', (e) => {
+      const d = { ArrowDown: 8, ArrowUp: -8 }[e.key];
+      if (!d) return;
+      e.preventDefault(); e.stopPropagation();
+      setH((tr.h || rowOf()?.offsetHeight || 52) + d); o.changed();
+      requestAnimationFrame(() => box()?.querySelector(`.tl-head[data-track="${CSS.escape(String(tr.id))}"] .tl-hgrip`)?.focus());
+    });
     return h('div', { class: `tl-head${tr.locked ? ' locked' : ''}`, 'data-track': tr.id },
       name,
       h('div', { class: 'tl-head-btns' },
@@ -690,7 +700,7 @@ export function timeline(st, o) {
       e.preventDefault();
       zoom(st.pps * (e.deltaY < 0 ? 1.15 : 1 / 1.15), timeAt(e), e.clientX);
     }, { passive: false });
-    pressMenu(tl, openMenu, { ok: (e) => !e.target.closest?.('.tl-corner') && !!e.target.closest?.('.tl-clip, .tl-lane, .tl-head, .tl-ruler') });
+    pressMenu(tl, openMenu, { ok: (e) => !e.target.closest?.('.tl-corner, .tl-keylane, .tl-hgrip') && !!e.target.closest?.('.tl-clip, .tl-lane, .tl-head, .tl-ruler') });
     new ResizeObserver(() => o.rendered()).observe(tl);
   }
   function zoom(pps, aroundT = st.t, clientX = null) {

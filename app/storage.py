@@ -270,6 +270,83 @@ def attachments() -> dict[int, list[dict]]:
     return found
 
 
+# ---- a frame's cached render: frame.render = {generation, key} (a run) or {media, key} (a sound mix in the media library) ----
+def frame_renders(payload) -> dict[str, dict]:
+    """{frame id: its cached render {generation|media, key}} for the frames of a table payload that have one."""
+    out = {}
+    for f in (payload or {}).get("frames") or []:
+        r = f.get("render") if isinstance(f, dict) else None
+        if isinstance(r, dict) and f.get("id") is not None and (isinstance(r.get("media"), str) or (
+                isinstance(r.get("generation"), int) and not isinstance(r.get("generation"), bool))):
+            out[str(f["id"])] = {k: r[k] for k in ("generation", "media", "key") if k in r}
+    return out
+
+
+def _same_render(a: dict, b: dict) -> bool:
+    return a.get("generation") == b.get("generation") and a.get("media") == b.get("media")
+
+
+def render_changes(before, after) -> tuple[list[dict], list[tuple[str, dict]]]:
+    """A table saved: ([renders to drop now], [(frame doc id, render) of frames that left the table]). A frame whose render was
+    replaced or cleared drops the old one; a frame that is gone keeps its render until its document leaves the trash for good."""
+    old, new = frame_renders(before), frame_renders(after)
+    kept = list(new.values())
+    now_ids = {str(f.get("id")) for f in (after or {}).get("frames") or [] if isinstance(f, dict)}
+    docs = {str(f.get("id")): f.get("doc") for f in (before or {}).get("frames") or [] if isinstance(f, dict)}
+    drop, stash = [], []
+    for fid, r in old.items():
+        if fid in new and _same_render(r, new[fid]):
+            continue
+        if any(_same_render(r, k) for k in kept):
+            continue
+        if fid in now_ids:
+            drop.append(r)
+        elif isinstance(docs.get(fid), str):
+            stash.append((docs[fid], r))
+    return drop, stash
+
+
+def render_media_drop(render: dict) -> bool:
+    """A cached sound mix, for good, unless a tab or run uses it. (A cached run goes through the server's delete: main.py.)"""
+    name = render.get("media")
+    path = config.MEDIA_DIR / Path(name).name if isinstance(name, str) else None
+    if not path or not path.is_file() or media_used(path.name):
+        return False
+    path.unlink()
+    drop_caches(path.name, path.resolve())
+    return True
+
+
+def render_run_free(render: dict) -> int | None:
+    """The run id of a cached render if no saved document uses it any more (else None)."""
+    gid = render.get("generation")
+    if not isinstance(gid, int) or isinstance(gid, bool) or gid in attachments():
+        return None
+    return gid
+
+
+def stash_render(d: Path, doc_id: str, render: dict):
+    """A frame left its table but its document is in the trash (Undo): its render waits beside it until the document is purged."""
+    (d / ".trash").mkdir(parents=True, exist_ok=True)
+    (d / ".trash" / f"{doc_id}.render.json").write_text(json.dumps(render))
+
+
+def stashed_renders(d: Path) -> list[tuple[str, dict, Path]]:
+    """[(doc id, render, file)] of the waiting renders in a document folder's trash whose document is gone for good (no live
+    copy, no trashed copy)."""
+    out = []
+    tr = d / ".trash"
+    for f in tr.glob("*.render.json") if tr.is_dir() else []:
+        did = f.name[:-len(".render.json")]
+        if (d / f"{did}.json").exists() or any(p.name[len(did) + 1:-5].isdigit() for p in tr.glob(f"{did}.*.json")):
+            continue
+        try:
+            out.append((did, json.loads(f.read_text()), f))
+        except (OSError, ValueError):
+            f.unlink(missing_ok=True)
+    return out
+
+
 def used_by_text(owners: list[dict]) -> str:
     """A run's owners for a sentence: Character Mara, Video Cut 2."""
     return ", ".join(f"{o['label']} {o['name']}".strip() for o in owners)

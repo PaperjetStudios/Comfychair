@@ -9,6 +9,7 @@ import { putStill } from './table-frames.js';
 import { registerUndo } from './undo-dock.js';
 import { isLive, liveFrame } from './live.js';
 import { dropGoneMain, liveMain, setMain } from './frame-main.js';
+import { registerProps, propsChanged } from './props-panel.js';
 
 export { ASPECTS, FULL, aspectCrop, cropSpan, openCrop } from './editor-engine.js';
 
@@ -167,13 +168,20 @@ const ED = createEditor({
   main: () => liveMain('image', edTab()),
   setMain: (key) => { const m = liveMain('image', edTab()); if (m) setMain(m.frame.id, key).catch((e) => toast(e.message, true)); },
   name: () => tabs?.active?.name,
-  beforeRender: () => { if (!tabs.started) tabs.start(); },
+  beforeRender: () => { if (!tabs.started) tabs.start(); if (isLive('image')) propsChanged('image'); },   // (the Properties pane follows the picked layers)
   newEdit: (payload) => (isLive('image') ? newFrameFrom(payload) : tabs.createFrom(payload, 'layers')),
   panelParts: (ed) => h('div', { class: 'panel-body' }, ed.topRow(),
     // (a mask being painted: its section first, with what to see and do; otherwise the panel order, app-wide)
     ed.layerList(), ed.E.sel?.maskOf ? ed.layerProps() : null, ed.paintProps(), ed.masksProps(), ed.inpaintProps(), ed.E.sel?.maskOf ? null : ed.layerProps(), ed.animProps(), ed.canvasProps(), ed.exportProps()),
 });
 export const { E } = ED;
+// On the table, the picked layers' X, Y, Scale, Rotation and Opacity are the sidebar's Properties pane's (web/props-panel.js)
+registerProps('image', {
+  when: () => !!ED.onTable(),
+  picked: () => ED.picked().filter((l) => !l.maskOf && ED.ready(l)).map((l) => ({ flat: ED.plain(l), layer: l })),
+  title: (ctx, list) => (list.length > 1 ? `${list.length} layers` : list[0].layer.label || list[0].layer.name?.split('/').pop() || 'Canvas'),
+  rows: () => ED.propRows(),
+});
 // a pin set or cleared elsewhere (the Make pane's unpin, the table's undo): the layer rows show it
 addEventListener('table:frame-field', (e) => { if (e.detail?.keys?.includes('main') && e.detail.frame?.doc === E.tab?.id) ED.render(); });
 // Mount the editor into `els.host` (stage first, panel after), and `els.active()` says when it takes keys. The TabSet keeps its host.

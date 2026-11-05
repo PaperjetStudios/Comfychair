@@ -31,6 +31,8 @@ import { solidBounds } from './matte-edge.js';
 import { inpaintSection, masksSection, runFill } from './inpaint.js';
 import { editorRunKey, editorRunKeys, keepTyping } from './key-focus.js';
 import { imageToolsSection, runImageTool } from './imagetools.js';
+import { shared as sharedOf } from './props-rules.js';
+import { propsRoot } from './props-panel.js';
 
 // ---------------------------------------------------------------------------
 // editor: a simple Photoshop-style layer stack for cropping images and putting them together
@@ -144,7 +146,7 @@ export function createEditor(cfg) {
     if (!E.anim) return;
     E.t = WA.clamp(clamp(EA.playing ? t : atFrame(t), 0, E.anim.len));
     poseAt(E.t);
-    drawEditorCanvas(); EA.tp?.update(); paintAnimKeys(); refreshKeyed(cfg.panel);
+    drawEditorCanvas(); EA.tp?.update(); paintAnimKeys(); refreshKeyed(cfg.panel); refreshKeyed(propsRoot());
   }
   function editorPlay() {
     if (!E.anim || EA.playing) return;
@@ -221,7 +223,7 @@ export function createEditor(cfg) {
       if (!moved && Math.abs(ev.clientX - x0) < 4) return;
       moved = true;
       apply(at(ev));
-      poseAt(E.t); drawEditorCanvas(); paintAnimKeys(); refreshKeyed(cfg.panel);
+      poseAt(E.t); drawEditorCanvas(); paintAnimKeys(); refreshKeyed(cfg.panel); refreshKeyed(propsRoot());
     };
     const up = (ev) => {
       window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
@@ -1688,8 +1690,8 @@ export function createEditor(cfg) {
     const allOn = (k) => ls.every((l) => l[k]);
     return section(`${ls.length} layers`, done,
       hint(ls.map(layerName).join(', '), 'layer-title'),
-      rangeField('Opacity', () => same((l) => l.opacity ?? 1, 1), (v) => { for (const l of ls) l.opacity = clamp(v, 0, 1); },
-        { min: 0, max: 1, step: 0.01, fmt: pctFmt, def: 1, onInput: drawEditorCanvas, onChange: editorChanged }),
+      onTable() ? null : rangeField('Opacity', () => same((l) => l.opacity ?? 1, 1), (v) => { for (const l of ls) l.opacity = clamp(v, 0, 1); },
+        { min: 0, max: 1, step: 0.01, fmt: pctFmt, def: 1, onInput: drawEditorCanvas, onChange: editorChanged }),   // (on the table: the Properties pane's)
       field('Blend', seg(BLENDS, mixed((l) => l.blend || 'normal') ? null : (ls[0].blend || 'normal'), (v) => each((l) => { l.blend = v; }), { wrap: true })),
       field('Size', h('div', { class: 'row wrap' }, button('Bigger ×1.1', () => scaleBy(1.1), { cls: 'small' }), button('Smaller ×0.9', () => scaleBy(0.9), { cls: 'small' }),
         button('100%', () => each((l) => { const r = layerRect(l), cx = r.x + r.w / 2, cy = r.y + r.h / 2; l.scale = 1; const n = layerRect(l); l.x = Math.round(cx - n.w / 2); l.y = Math.round(cy - n.h / 2); }), { cls: 'small' }),
@@ -1718,8 +1720,59 @@ export function createEditor(cfg) {
       help('Drag any selected layer on the canvas to move them all, or Alt+drag to copy them. Opacity, Blend and the buttons change every selected layer; the Image tools panel, set to Selected layers, runs on each one in turn. Select one layer to edit it alone.'));
   }
 
+  // a layer's turn, about its centre (pulled to 15° steps, layer-geom.js snapAngle)
+  const layerTurn = (l) => (v) => { const c0 = G.centre(l); l.rotation = G.snapAngle(v); const c1 = G.centre(l); l.x += c0.x - c1.x; l.y += c0.y - c1.y; };
+  // One layer's X, Y, Scale, Rotation (not a painted canvas: it is resized) and Opacity: sliders, with ◀ ◆ ▶ to key them while
+  // animating (keyed.js; the layer keys its own pose). The Layer section's, or on the table the Properties pane's.
+  function layerXform(l) {
+    l.rotation ??= 0;
+    const setRotation = layerTurn(l);
+    // scale around the layer's centre (where it is now: X may have moved it since this was built)
+    const setScale = (s) => {
+      const r = layerRect(l), cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+      l.scale = s;
+      const n = layerRect(l);
+      l.x = Math.round(cx - n.w / 2); l.y = Math.round(cy - n.h / 2);
+    };
+    const fr = editorFrame() || layerRect(l);   // X / Y drag over the canvas and as much again either side (E.size is null when it fits the layers)
+    const prop = (label, ch, set, opts) => (E.anim
+      ? keyedRange(label, { item: l, ch, direct: true, t: () => E.t, base: () => l[ch], setBase: set, seek: editorSeek,
+        onKeys: () => { poseAt(E.t); editorChanged(); }, onInput: drawEditorCanvas, onChange: editorChanged, ...opts })
+      : rangeField(label, () => l[ch], set, { onInput: drawEditorCanvas, onChange: editorChanged, ...opts }));
+    const px = { step: 1, digits: 0, fmt: (v) => String(Math.round(v)) };
+    return {
+      x: prop('X', 'x', (v) => { l.x = Math.round(v); }, { ...px, min: Math.floor(fr.x - fr.w), max: Math.ceil(fr.x + fr.w * 2) }),
+      y: prop('Y', 'y', (v) => { l.y = Math.round(v); }, { ...px, min: Math.floor(fr.y - fr.h), max: Math.ceil(fr.y + fr.h * 2) }),
+      scale: prop('Scale', 'scale', (v) => setScale(Math.max(0.01, v)), { min: 0.01, max: 4, step: 0.01, fmt: pctFmt, def: 1 }),
+      rotation: plain(l) ? null : prop('Rotation', 'rotation', (v) => setRotation(v), { min: -180, max: 180, step: 1, fmt: (v) => `${Math.round(v)}°`, def: 0 }),
+      opacity: prop('Opacity', 'opacity', (v) => { l.opacity = clamp(v, 0, 1); }, { min: 0, max: 1, step: 0.01, fmt: pctFmt, def: 1 }),
+    };
+  }
+  // The Properties pane's rows for the picked layers (web/props-panel.js). One layer: its own sliders (above). Several: one
+  // value for them all, "mixed" where they differ; an edit goes to each (moved, scaled and turned about its own centre),
+  // through editorChanged (saved, the stack noted for undo).
+  function propRows() {
+    const ls = picked().filter((l) => !l.maskOf && ready(l));
+    if (!ls.length) return [];
+    if (ls.length === 1) {
+      const xf = layerXform(ls[0]);
+      return ['x', 'y', 'scale', 'rotation', 'opacity'].filter((k) => xf[k]).map((k) => ({ id: k, el: xf[k], group: k === 'opacity' ? 'Look' : 'Transform' }));
+    }
+    const each = (fn) => (v) => { for (const l of ls) if (!l.locked) fn(l, v); editorChanged(); };
+    const scaleTo = (l, s) => { const r = layerRect(l), cx = r.x + r.w / 2, cy = r.y + r.h / 2; l.scale = Math.max(0.01, s); const n = layerRect(l); l.x = Math.round(cx - n.w / 2); l.y = Math.round(cy - n.h / 2); };
+    const all = (get) => sharedOf(ls.map(get));
+    return [
+      { id: 'x', label: 'X', group: 'Transform', get: () => all((l) => Math.round(l.x)), set: each((l, v) => { l.x = Math.round(v); }) },
+      { id: 'y', label: 'Y', group: 'Transform', get: () => all((l) => Math.round(l.y)), set: each((l, v) => { l.y = Math.round(v); }) },
+      { id: 'scale', label: 'Scale', group: 'Transform', get: () => all((l) => l.scale ?? 1), min: 0.01, max: 4, step: 0.01, digits: 2, set: each(scaleTo) },
+      { id: 'rotation', label: 'Rotation', unit: '°', group: 'Transform', get: () => all((l) => l.rotation || 0), min: -180, max: 180, step: 1, digits: 0,
+        set: each((l, v) => { if (!plain(l)) layerTurn(l)(v); }) },
+      { id: 'opacity', label: 'Opacity', group: 'Look', get: () => all((l) => l.opacity ?? 1), min: 0, max: 1, step: 0.01, digits: 2, set: (v) => { for (const l of ls) l.opacity = clamp(v, 0, 1); editorChanged(); } },
+    ];
+  }
+
   function layerProps(l) {
-    const done = () => { if (E.cropping) E.cropping = false; else E.sel = null; renderEditor(); };
+    const done =() => { if (E.cropping) E.cropping = false; else E.sel = null; renderEditor(); };
     const del = button('Delete layer', () => { removeLayer(l); renderEditor(); }, { cls: 'small danger' });
     if (!ready(l)) return section('Layer', done, del);
     const W = l.img.naturalWidth, H = l.img.naturalHeight, c = l.crop;
@@ -1736,38 +1789,21 @@ export function createEditor(cfg) {
           button('Reset crop', () => { E.aspect = null; setLayerCrop(l, { ...FULL }); editorChanged(); })));
     }
     const r = layerRect(l), cropped = c.w < 0.999 || c.h < 0.999;
-    l.rotation ??= 0;
-    // a turn keeps the centre where it is
-    const setRotation = (v) => { const c0 = G.centre(l); l.rotation = G.snapAngle(v); const c1 = G.centre(l); l.x += c0.x - c1.x; l.y += c0.y - c1.y; };
+    const setRotation = layerTurn(l);
     const quarter = (d) => { setRotation((l.rotation || 0) + d); editorChanged(); };
     const flip = (k) => { l[k] = !l[k]; editorChanged(); };
-    // scale around the layer's centre
-    const setScale = (s) => {
-      const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
-      l.scale = s;
-      const n = layerRect(l);
-      l.x = Math.round(cx - n.w / 2); l.y = Math.round(cy - n.h / 2);
-    };
     const flat = plain(l);
-    const fr = editorFrame() || r;   // X / Y drag over the canvas and as much again either side (E.size is null when it fits the layers)
-    // X, Y, Scale and Opacity: sliders, with ◀ ◆ ▶ to key them while animating (keyed.js; the layer keys its own pose)
-    const prop = (label, ch, set, opts) => (E.anim
-      ? keyedRange(label, { item: l, ch, direct: true, t: () => E.t, base: () => l[ch], setBase: set, seek: editorSeek,
-        onKeys: () => { poseAt(E.t); editorChanged(); }, onInput: drawEditorCanvas, onChange: editorChanged, ...opts })
-      : rangeField(label, () => l[ch], set, { onInput: drawEditorCanvas, onChange: editorChanged, ...opts }));
-    const px = { step: 1, digits: 0, fmt: (v) => String(Math.round(v)) };
+    // (on the table, X, Y, Scale, Rotation and Opacity are the sidebar's Properties pane's: eng.propRows)
+    const xf = onTable() ? {} : layerXform(l);
     return section('Layer', done,
       hint(layerName(l), 'layer-title'),
-      prop('X', 'x', (v) => { l.x = Math.round(v); }, { ...px, min: Math.floor(fr.x - fr.w), max: Math.ceil(fr.x + fr.w * 2) }),
-      prop('Y', 'y', (v) => { l.y = Math.round(v); }, { ...px, min: Math.floor(fr.y - fr.h), max: Math.ceil(fr.y + fr.h * 2) }),
-      prop('Scale', 'scale', (v) => setScale(Math.max(0.01, v)), { min: 0.01, max: 4, step: 0.01, fmt: pctFmt, def: 1 }),
-      flat ? null : prop('Rotation', 'rotation', (v) => setRotation(v), { min: -180, max: 180, step: 1, fmt: (v) => `${Math.round(v)}°`, def: 0 }),
+      xf.x, xf.y, xf.scale, xf.rotation,
       h('div', { class: 'row wrap ed-turns' },
         flat ? null : iconBtn('Turn a quarter left', icon('rotl'), () => quarter(-90)), flat ? null : iconBtn('Turn a quarter right', icon('rotr'), () => quarter(90)),
         h('button', { type: 'button', class: `icon-btn${l.flipX ? ' on' : ''}`, 'aria-label': 'Mirror left to right', title: 'Mirror left to right', 'aria-pressed': String(!!l.flipX), onclick: () => flip('flipX') }, icon('fliph')),
         h('button', { type: 'button', class: `icon-btn${l.flipY ? ' on' : ''}`, 'aria-label': 'Mirror top to bottom', title: 'Mirror top to bottom', 'aria-pressed': String(!!l.flipY), onclick: () => flip('flipY') }, icon('flipv')),
         !E.anim && l.rotation ? iconBtn('No turn', icon('reset'), () => { setRotation(0); editorChanged(); }) : null),
-      prop('Opacity', 'opacity', (v) => { l.opacity = clamp(v, 0, 1); }, { min: 0, max: 1, step: 0.01, fmt: pctFmt, def: 1 }),
+      xf.opacity,
       field('Blend', seg(BLENDS, l.blend || 'normal', (v) => { l.blend = v; editorChanged(); }, { wrap: true })),
       h('div', { class: 'row wrap' },
         h('button', { type: 'button', class: `btn small${l.locked ? ' on' : ''}`, title: 'No painting, moving or resizing it on the canvas',
@@ -2129,7 +2165,7 @@ export function createEditor(cfg) {
     blob: editorBlob, frame: editorFrame, toFixed: toFixedSize, composeMask, drawLayer, layerPicture, bounds, layerRect, ready, loading: () => E.layers.some((l) => !l.broken && !ready(l)), addImage, pause: editorPause,
     zoom: viewZoom, get paint() { return paint; },
     // the panel's parts, for the host to lay out
-    topRow, layerList, layerProps: () => (picked().length > 1 ? groupProps(picked()) : E.sel?.maskOf ? maskProps(E.sel) : E.sel ? [layerProps(E.sel), E.cropping ? null : adjustProps(E.sel)] : null), picked, animProps, canvasProps, exportProps,
+    topRow, layerList, layerProps: () => (picked().length > 1 ? groupProps(picked()) : E.sel?.maskOf ? maskProps(E.sel) : E.sel ? [layerProps(E.sel), E.cropping ? null : adjustProps(E.sel)] : null), picked, propRows, onTable, plain, animProps, canvasProps, exportProps,
     paintProps: () => paint.paintProps(),
     masksProps: () => masksSection(eng),
     inpaintProps: () => inpaintSection(eng),

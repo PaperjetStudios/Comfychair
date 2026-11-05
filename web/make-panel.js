@@ -41,16 +41,17 @@ import { currentTab, onNavigate } from './navigation.js';
 import { editDoc, flushDoc, frameStamp, freshStamps, stillOf } from './table-frames.js';
 import { DOC_KIND, nextBeside, toStage } from './table-model.js';
 import * as Table from './table.js';
-import { LANDS, canvasRect, carryWords, familiesOf, frameImageField, frameSize, makeFrames, makeTarget, noteText, pickTemplate, repointable, runValuesOf, seedsAfter,
+import { LANDS, canvasRect, carryWords, familiesOf, frameImageField, frameSize, makeFrames, makeTarget, noteText, pickTemplate, isOwnSlot, repointable, runValuesOf, seedsAfter,
   selfPicked, settingsFor, settingsPayload, sizePair, templatesFor, wireFields, withClip } from './make-rules.js';
 import { downstream, fieldKind, isFrameWire, wireLabel } from './wire-rules.js';
 import { freshLayers, placeResults, sourceStamps, withSoundItem, withoutLayers } from './chain-rules.js';
 import { icon } from './icons.js';
+import { mountRunStrip } from './run-strip.js';
 import { frameAudio, frameImage, frameSource, frameStill, frameVideo } from './frame-source.js';
 import { keepMain, mainName, mainOf } from './main-rules.js';
 
 const HELD = new Set();   // wire pictures a queued run has yet to read: settleInputs leaves them be
-const P = { fresh: [], host: null, frames: [], table: null, key: null, st: null, els: null, prog: null, batchIn: null };
+const P = { fresh: [], host: null, frames: [], table: null, key: null, st: null, els: null, batchIn: null };
 const KIND_WORD = { none: 'a new frame', image: 'this picture', video: 'this video', scene: 'this 3D frame', sound: 'this sound frame' };
 const SHOT_KINDS = new Set(['image', 'video', 'boxes', 'seed', 'mask']);   // a run's own content, not a setting (gentabs.js)
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
@@ -208,14 +209,11 @@ function drawHead(kind, frame, list) {
     onchange: () => { batchIn.value = setBatch(batchIn.value); } });
   const owed = kind === 'image' && frame?.doc ? owedTo(frame.doc).length : 0;
   const n = makeFrames(P.frames).length;
-  P.prog ||= { bar: h('div', { class: 'make-prog-bar' }), text: h('span', { class: 'make-prog-text' }) };
   P.els.head.replaceChildren(
     runBar(button([icon('sparkle'), n > 1 ? `Run on ${n} frames` : 'Run'], () => runMake(), { cls: 'primary make-run', title: 'Run (Ctrl+Enter)' }),
       h('label', { class: 'make-batch' }, '×', batchIn),
       iconBtn('Stop this device\'s run', icon('close'), () => (CHAIN.running ? stopChainNow() : stop()))),
-    h('div', { class: 'make-prog' }, P.prog.bar, P.prog.text),
     hint(n > 1 ? `For ${n} frames, one run each · ${landsWord(kind)}` : frame ? `For ${frame.label || 'the frame'} · ${landsWord(kind)}${owed ? ` · ${owed} on the way` : ''}` : `Lands as ${landsWord(kind)}`, 'make-for'));
-  mirrorProgress();
   tellState();
 }
 const landsWord = (kind) => ({ frame: 'a new frame beside the last', layer: 'new layers in it', clip: 'clips on its timeline', mix: 'sounds in its mix', scene: 'in its scene' })[LANDS[kind]];
@@ -277,8 +275,10 @@ function notePromptEl() {
 function wireState(kind, frame) {
   let inputs = [];
   try { if (frame && P.st?.tpl) inputs = Table.wiresInto(frame.id) || []; } catch { /* the table isn't up yet */ }
-  return { inputs, ...wireFields(P.st?.tpl, kind, inputs, P.st?.wired) };
+  return { inputs, ...wireFields(P.st?.tpl, kind, inputs, P.st?.wired, { ownPicture: hasPicture(kind, frame) }) };
 }
+// an image frame's own picture, as far as the panel can tell without opening it (its still, or its preview)
+const hasPicture = (kind, frame) => kind !== 'image' || !frame || !!(stillOf(frame) || frame.preview);
 const sourceName = (w) => w.source?.label || 'a frame';
 const wireWords = (w) => `${wireLabel(w)}${isFrameWire(w) ? ` (${w.frame} frame)` : ''} from ${sourceName(w)}`;
 const setWired = (kind, frame, key, v) => {
@@ -318,9 +318,11 @@ function drawWires(kind, frame) {
       rows.push(h('div', { class: 'make-wire-row' }, h('span', {}, `${wireWords(w)} is off for ${f?.label || key}`),
         button('Turn on', () => Table.setTableWire(w.id, { on: true }), { cls: 'small' })));
     }
-    for (const f of selfPicked(t, kind, inputs, P.st.wired)) {
-      const w = repointable(f, inputs, map)[0];
-      if (w) rows.push(h('div', { class: 'make-wire-row' }, h('span', {}, `${f.label} is picked here`), button(`Use ${wireLabel(w)}`, () => setWired(kind, frame, f.key, w.id), { cls: 'small' })));
+    const opts = { ownPicture: hasPicture(kind, frame) };
+    for (const f of selfPicked(t, kind, inputs, P.st.wired, opts)) {
+      const w = repointable(f, inputs, map)[0], mine = isOwnSlot(t, kind, f, P.st.wired, opts);
+      if (w) rows.push(h('div', { class: 'make-wire-row' }, h('span', {}, mine ? `${f.label} is this frame's picture` : `${f.label} is picked here`),
+        button(mine ? `Use ${wireLabel(w)} here` : `Use ${wireLabel(w)}`, () => setWired(kind, frame, f.key, w.id), { cls: 'small' })));
     }
     if (spare.length) {
       rows.push(h('div', { class: 'make-wire-row' }, h('span', {}, `Not used: ${spare.map(wireWords).join(', ')}`),
@@ -402,7 +404,7 @@ async function resolveWires(kind, frame, t, st, values, made) {
   if (!frame) return done;
   const inputs = Table.wiresInto(frame.id);
   if (!inputs.length) return done;
-  const { use } = wireFields(t, kind, inputs, st.wired);
+  const { use } = wireFields(t, kind, inputs, st.wired, { ownPicture: hasPicture(kind, frame) });
   for (const f of t.fields) {
     const w = use[f.key];
     if (!w) continue;
@@ -434,13 +436,13 @@ function holdInputs(frame, names, gens) {
 }
 
 // Pick a frame: a picture from the table (or anywhere the picker lists) into a video template's slot. A table frame's picture is
-// uploaded by the picker only when picked and the picker doesn't track it: that copy (info is just its name and size) is ours to
+// uploaded by the picker only when picked and the picker doesn't track it: that copy (info.copied) is ours to
 // drop with the slot (settleInputs). Anything else the picker hands back is the user's own picture and is never dropped here.
 function pickFrame(f, set) {
   const { frame } = makeTarget(P.frames);
   openSourcePicker({ kinds: ['image'], want: 'picture', title: `${f.label}: pick a frame`, frame, mp: () => P.st?.imageMp[f.key] ?? 1,
     onPick: (name, info) => {
-      if (info && Object.keys(info).sort().join() === 'height,name,width') P.fresh.push(name);
+      if (info?.copied) P.fresh.push(name);
       set(name);
     } });
 }
@@ -505,14 +507,18 @@ async function queueOne({ kind, f, t, st, base, builder, batch, prepare, afterQ,
     const imgF = kind === 'image' ? frameImageField(t) : null;
     // (the frame's own picture: its main source when one is pinned; else without what its last chain run made, so a rerun
     // never reads its own last result: main-rules.js withoutMade)
-    if (imgF) { sent = await frameSource(f, { multiple: 16, without: (Table.frameById(f.id) || f).make?.ran?.made || null }); values[imgF.key] = sent.name; }
     if (f && (kind === 'image' || kind === 'video')) {   // (each frame's own size)
       const pair = sizePair(t), s = frameSize(pair, f);
       if (s) { values[pair[0].key] = s.w; values[pair[1].key] = s.h; }
     }
     const stamps = f ? await readStamps(f) : null;
     const wired = await resolveWires(kind, f, t, st, values, made);
-    if (imgF) wired.add(imgF.key);
+    if (imgF && !wired.has(imgF.key)) {   // (the frame's own picture, unless a wire fills that slot)
+      try { sent = await frameSource(f, { multiple: 16, without: (Table.frameById(f.id) || f).make?.ran?.made || null }); }
+      catch (e) { throw /is empty$/.test(e.message) ? new Error(`${imgF.label} needs a picture: ${f.label || 'this frame'} is empty and no input is plugged into it`) : e; }
+      values[imgF.key] = sent.name;
+      wired.add(imgF.key);
+    }
     await prepare(values, wired);
     const before = layersBefore && kind === 'image' && f ? new Set((await layersOf(f)).map((l) => l.name)) : null;
     const gens = await queueRun({ template: t.id, values, batch, builder, timeout: 120000 });
@@ -813,21 +819,8 @@ function inShelf(done) {
   toast(`#${done.id} is done: it is in the Shelf`, false, { label: 'On the table…', fn: async () => (await import('./useas.js')).openUseAs(done, 0) });
 }
 
-// ---------------------------------------------------------------------------
-// progress: the run line of the Generate tab (run.js setProgress), mirrored here
-// ---------------------------------------------------------------------------
-let mirrored = false;
-function mirrorProgress() {
-  const bar = document.getElementById('progBar'), text = document.getElementById('progText');
-  if (!P.prog || !bar || !text) return;
-  const copy = () => { P.prog.bar.style.width = bar.style.width || '0'; P.prog.text.textContent = text.textContent || ''; };
-  copy();
-  if (mirrored) return;
-  mirrored = true;
-  const mo = new MutationObserver(copy);
-  mo.observe(bar, { attributes: true, attributeFilter: ['style'] });
-  mo.observe(text, { childList: true, characterData: true, subtree: true });
-}
+// (the run line and the sampling preview are run-strip.js's: one strip for every pane and every kind of frame)
+mountRunStrip();
 
 // ---------------------------------------------------------------------------
 // wiring: the selection on the table, a frame going live, leaving the table

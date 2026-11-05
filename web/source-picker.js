@@ -153,7 +153,7 @@ export function openSourcePicker(opts) {
   const capped = async (name, info2) => {
     if (!opts.maxMp) return { name, info: info2 };
     const r = await resizeInput(name, opts.maxMp);
-    return r.name === name ? { name, info: info2 } : { name: r.name, info: r };
+    return r.name === name ? { name, info: info2 } : { name: r.name, info: info2?.copied ? { ...r, copied: true } : r };
   };
   const multi = !!opts.multi && limit > 1;
   const sel = multi ? (opts.sel ||= new Map()) : null;   // key -> item, in the order ticked
@@ -343,7 +343,7 @@ export function openSourcePicker(opts) {
         const make = async () => {
           const { frameSource } = await import('./frame-source.js');
           const s = await frameSource(f, { multiple: 16 });
-          return { name: s.name, info: { name: s.name, width: s.px?.[0], height: s.px?.[1] } };
+          return { name: s.name, info: { name: s.name, width: s.px?.[0], height: s.px?.[1], copied: true } };   // (copied: a fresh upload the caller owns)
         };
         const e = { key: item.key, title: label, thumb: still, full: still, cropSrc: isPic ? still : null, kind: 'image', item, tag: 'frame' };
         e.get = isPic ? make : async () => payload(item, { label });

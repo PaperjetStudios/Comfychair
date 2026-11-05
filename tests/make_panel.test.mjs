@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { OP_TEMPLATES, canvasRect, carryWords, familiesOf, frameImageField, frameSize, makeFrames, makeTarget, noteText, pickTemplate, settingsFor, settingsPayload,
-  sizePair, templatesFor, withClip, itemSource, plainPicture, plainSound, plainVideo, renderKey, repointable, selfPicked, stableJson, wireFields } from '../web/make-rules.js';
+  sizePair, templatesFor, withClip, itemSource, plainPicture, plainSound, plainVideo, renderKey, repointable, isOwnSlot, selfPicked, stableJson, wireFields } from '../web/make-rules.js';
 import { owedFor, owedRecord } from '../web/owed-runs.js';
 
 const T = (id, media, family = 'X', fields = []) => ({ id, media, family, fields });
@@ -204,4 +204,17 @@ test('runValuesOf / seedsAfter: seeds as Generate sends them, increment moves on
   assert.deepEqual(used, { s: 8, u: 456 });
   assert.equal(st.values.s, 9);
   assert.equal(st.values.u, 9, 'random stays');
+});
+
+test('an empty image frame lets a plugged picture take the main slot; one with a picture keeps it and offers Use here', () => {
+  const t = { fields: [{ key: '1.image', kind: 'image', input: 'image' }] };
+  const ins = [{ id: 'a', kind: 'image', n: 1 }];
+  assert.deepEqual(Object.keys(wireFields(t, 'image', ins).map), [], 'with a picture of its own: the slot is the frame\'s');
+  assert.equal(wireFields(t, 'image', ins).spare.length, 1);
+  assert.deepEqual(Object.keys(wireFields(t, 'image', ins, {}, { ownPicture: false }).map), ['1.image']);
+  assert.deepEqual(Object.keys(wireFields(t, 'image', ins, { '1.image': 'a' }).map), ['1.image'], 're-pointed to the wire');
+  assert.deepEqual(selfPicked(t, 'image', ins).map((f) => f.key), ['1.image']);
+  assert.equal(isOwnSlot(t, 'image', t.fields[0]), true);
+  assert.deepEqual(selfPicked(t, 'image', ins, {}, { ownPicture: false }), []);
+  assert.deepEqual(selfPicked(t, 'image', ins, { '1.image': 'a' }), []);
 });

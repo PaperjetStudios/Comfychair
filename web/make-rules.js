@@ -148,16 +148,25 @@ export const canvasRect = (payload, frame) => (payload?.size ? { x: 0, y: 0, w: 
 
 // ---- wires into the panel (wire-rules.js): which template field each plugged input fills ----
 // frame.make.wired is { fieldKey: wireId | false } (re-pointed fields; false: the field keeps its own picked value).
-// An image frame's own "this frame" field is never filled by a wire. Returns wire-rules mapToFields' { map, use, spare }.
-export function wireFields(t, kind, inputs, wired = {}) {
+// An image frame's own "this frame" field (the template's first picture) holds the frame's own picture, so a wire skips it,
+// unless the frame has no picture of its own (ownPicture false: the plugged Image 1 takes the slot) or the slot was
+// re-pointed to a wire on purpose. Returns wire-rules mapToFields' { map, use, spare }.
+const ownSlot = (t, kind, wired, ownPicture) => {
   const own = kind === 'image' ? frameImageField(t) : null;
+  return own && ownPicture !== false && !wired?.[own.key] ? own : null;   // (the slot kept for the frame's picture)
+};
+export function wireFields(t, kind, inputs, wired = {}, { ownPicture = true } = {}) {
+  const own = ownSlot(t, kind, wired, ownPicture);
   return mapToFields(t?.fields || [], inputs || [], { skip: own ? [own.key] : [], overrides: wired || {} });
 }
-// the fields a wire left to their own value on purpose (wired false), where a plugged input of their kind is waiting
-export function selfPicked(t, kind, inputs, wired = {}) {
-  const own = kind === 'image' ? frameImageField(t) : null;
-  return (t?.fields || []).filter((f) => f.key !== own?.key && wired?.[f.key] === false && (inputs || []).some((w) => w.kind === fieldKind(f)));
+// the fields a wire left to their own value on purpose (wired false), where a plugged input of their kind is waiting;
+// and the frame's own picture slot, when the frame has one and an input is waiting that could take it instead
+export function selfPicked(t, kind, inputs, wired = {}, { ownPicture = true } = {}) {
+  const own = ownSlot(t, kind, wired, ownPicture);
+  return (t?.fields || []).filter((f) => (f.key === own?.key || wired?.[f.key] === false) && (inputs || []).some((w) => w.kind === fieldKind(f)));
 }
+// whether a field from selfPicked is the frame's own picture slot (its row says "Use Image 1 here")
+export const isOwnSlot = (t, kind, f, wired = {}, opts = {}) => !!f && ownSlot(t, kind, wired, opts.ownPicture)?.key === f.key;
 // the inputs a field could be re-pointed to: its kind, not already filling another field
 export function repointable(f, inputs, map) {
   const k = fieldKind(f), taken = new Set(Object.entries(map || {}).filter(([key]) => key !== f.key).map(([, w]) => w.id));

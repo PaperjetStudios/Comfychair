@@ -7,10 +7,26 @@ const SLIDER_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 
 
 let tabbed = false;   // the focus was last moved with Tab, not with a pointer
 if (typeof document !== 'undefined') {
-  document.addEventListener('pointerdown', () => { tabbed = false; }, true);
+  document.addEventListener('pointerdown', (e) => {
+    tabbed = false;
+    const a = document.activeElement;
+    if (takesKeyboard(e.target, a)) a.blur();
+  }, true);
   document.addEventListener('keydown', (e) => { if (e.key === 'Tab') tabbed = true; }, true);
 }
 export const keyboardFocus = () => tabbed;
+
+// A press on something that can be picked takes the keyboard away from a prompt box being typed in, so Delete, the arrows and
+// the shortcuts reach what was picked. t: the pressed element (anything with closest()); active: the focused element.
+// A press inside a text field, a dialog, a label, or a control that acts on the text leaves the focus alone.
+const PICK_SURFACE = '.stage, .table-outer, .editor-stage, .editor-canvas, .canvas-stage, .layer-row, .layer-grip, .tl-clip, .tl-lane, .frame, .table-stage, .scene-view, .viewport3d, canvas';
+const KEEPS_TYPING = '.prompt-body, .prompt-part, .prompt-chip, textarea, input, select, label, [contenteditable], [role=dialog], dialog, .sheet, .prompt-helper, .info-pop';
+export function takesKeyboard(t, active) {
+  if (!t?.closest || !active?.matches?.('textarea, input:not([type=range], [type=checkbox], [type=radio]), [contenteditable]')) return false;
+  if (t.closest(KEEPS_TYPING)) return false;
+  if (t.closest('button, a, [role=tab], [role=button]') && !t.closest('.layer-row, .tl-clip, .tl-lane, canvas')) return false;   // (a button in a frame acts on its own)
+  return !!t.closest(PICK_SURFACE);
+}
 
 // e: the keydown. True when the focused control uses this key itself, so the shortcut must leave it alone.
 // dialog: false for a player that itself sits in a dialog (a dialog's keys are otherwise its own).

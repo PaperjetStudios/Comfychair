@@ -642,12 +642,12 @@ svg.ico.filled path { fill: currentColor; }
   border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); display: grid; align-content: center; gap: 2px; padding: 2px 6px;
 }
 .tl-head b { font-size: var(--fs-sm); }
-.tl-head-btns { display: flex; flex-wrap: wrap; gap: 2px; }
+.tl-head-btns { display: flex; flex-wrap: nowrap; gap: 2px; min-width: 0; }   /* (one row: up to five buttons share the head's width) */
 /* a track's head (timeline.js trackHead): drag it up or down to reorder, its bottom edge sets the track's height */
 .tl-head:not(.tl-corner):not(.tl-keyhead) { cursor: grab; touch-action: pan-x; overflow: hidden; }
 .tl-head .tl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: text; }
-.tl-head-btns .tl-tog { min-width: 22px; height: 22px; padding: 0; display: inline-grid; place-items: center; }
-.tl-head-btns .tl-tog svg.ico { width: 14px; height: 14px; }
+.tl-head-btns .tl-tog { flex: 0 1 20px; min-width: 0; width: 20px; height: 20px; padding: 0; display: inline-grid; place-items: center; }
+.tl-head-btns .tl-tog svg.ico { width: 13px; height: 13px; }
 .tl-tog.lockd { background: var(--surface-2); color: var(--warn-text); border-color: var(--warn-text); }
 .tl-hgrip { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; cursor: row-resize; touch-action: none; }
 .tl-hgrip:hover, .tl-hgrip.dragging, .tl-hgrip:focus-visible { background: color-mix(in srgb, var(--accent) 45%, transparent); outline: none; }
@@ -659,7 +659,7 @@ svg.ico.filled path { fill: currentColor; }
 .tl-toolstrip button { width: 32px; height: 30px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--muted); cursor: pointer; }
 @media (hover: hover) { .tl-toolstrip button:hover:not(.on) { color: var(--text); background: var(--surface-2); } }
 .tl-toolstrip button.on { background: var(--accent); color: var(--accent-ink); }
-@media (pointer: coarse) { .tl-toolstrip button { width: 42px; height: 42px; } .tl-head-btns .tl-tog { min-width: 30px; height: 28px; } }
+@media (pointer: coarse) { .tl-toolstrip button { width: 42px; height: 42px; } .tl-head-btns .tl-tog { flex-basis: 28px; width: 28px; height: 28px; } }
 [data-tool="razor"] .tl-clip { cursor: crosshair; }
 [data-tool="slip"] .tl-clip { cursor: col-resize; }
 [data-tool="razor"] .tl-trim { cursor: inherit; }
@@ -705,7 +705,8 @@ svg.ico.filled path { fill: currentColor; }
 /* markers on the ruler */
 .tl-marker { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px dashed var(--warn-text); pointer-events: none; z-index: 1; }
 .tl-marker::after { content: ""; position: absolute; bottom: 0; left: -5px; border: 5px solid transparent; border-bottom-color: var(--warn-text); }
-.tl-marker-label { position: absolute; left: 4px; bottom: 1px; font-size: 10px; font-weight: 400; line-height: 12px; color: var(--warn-text); white-space: nowrap; }
+.tl-marker-label { position: absolute; left: 3px; top: 0; z-index: 2; max-width: 120px; overflow: hidden; text-overflow: ellipsis; font-size: 10px; font-weight: 400;
+  line-height: 10px; padding: 0 3px; border-radius: 0 0 var(--r-sm) var(--r-sm); background: var(--surface-2); color: var(--warn-text); white-space: nowrap; }   /* (its own strip along the top: the timecodes sit below it) */
 .tl-marker .tl-marker-rename { position: absolute; left: 4px; bottom: 1px; width: 120px; z-index: 5; }
 .tl-keylane { display: flex; height: 22px; }
 .tl-keylane .tl-head { padding: 0 6px; font-size: var(--fs-xs); color: var(--muted); align-content: center; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -2315,6 +2316,15 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
 /* a pane that holds a whole panel of its own (the editor's #editorPanel): the panel scrolls, not the pane */
 .sb-pane.sb-host { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
 .sb-pane.sb-host > .panel { flex: 1; min-height: 0; }
+/* the Properties pane (props-panel.js): a frame's size as Width | Height | keep-the-shape, numbers that line up */
+.props-pane .section { display: flex; flex-direction: column; gap: 8px; }
+.props-pane .props-title { margin: 0; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.props-pane input[type=number] { font-variant-numeric: tabular-nums; }
+.props-pane input::placeholder { font-style: italic; }
+.props-size { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+.props-ratio.on { color: var(--accent); border-color: var(--accent); }
+.props-res, .props-unit { color: var(--muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.props-pane .vid-xform { display: flex; flex-direction: column; gap: 8px; }
 /* a live image frame: the editor's stage fills the frame (viewer, then its size line / animation bar) */
 .frame-mount { display: grid; grid-template-rows: minmax(0, 1fr); }
 .frame-mount > .editor-stage { display: grid; grid-template-rows: minmax(0, 1fr) auto; height: 100%; min-height: 0; padding: 0; gap: 0; }
@@ -2331,10 +2341,14 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
 .make-head .make-run { flex: 1; }
 .make-batch { display: flex; align-items: center; gap: 4px; color: var(--muted); }
 .make-batch input { width: 4em; }
-.make-prog { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
-.make-prog-bar { height: 3px; width: 0; border-radius: 2px; background: var(--accent); transition: width .2s; }
-.make-prog-text { font-size: var(--fs-sm); color: var(--muted); }
-.make-prog-text:empty { display: none; }
+/* the run strip (run-strip.js): the sampler preview and the step line, on the table whichever pane is open */
+.run-strip { position: fixed; left: 12px; bottom: 12px; z-index: 40; width: min(300px, calc(100vw - 24px)); display: none; flex-direction: column; gap: 4px; padding: 6px 8px;
+  background: var(--panel, #1b1b1f); border: 1px solid var(--line, #333); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.35); pointer-events: none; }
+body:has(#tab-table.active) .run-strip:not(.hidden) { display: flex; }
+.run-strip-view { width: 100%; max-height: 160px; object-fit: contain; border-radius: 4px; background: #000; }
+.run-strip-view.hidden { display: none; }
+.run-strip-bar { height: 3px; width: 0; border-radius: 2px; background: var(--accent); transition: width .2s; }
+.run-strip-text { font-size: var(--fs-sm); color: var(--muted); }
 .make-picker { display: flex; flex-direction: column; gap: 6px; }
 .make-picker select { width: 100%; }
 .make-basics:empty { display: none; }

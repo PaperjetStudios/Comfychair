@@ -197,6 +197,19 @@ test('paste inserts: an overlap on its track moves the clips at and after the pl
   const e = doc();
   paste(e, clip, 1, o);   // a starts before the playhead: it stays (and cross-fades); b and c make room
   assert.deepEqual(['a', 'b', 'c'].map((x) => at(e, x).at), [0, 4, 8]);
+  const s = doc();
+  at(s, 'b').chans = { x: [{ f: 0.5, v: 1 }, { f: 2, v: 2 }] };
+  at(s, 'b').fadeOut = 0.5;
+  const [pid] = paste(s, clip, 3, o);   // the playhead inside b: b is split there, its right half goes right with c
+  const right = s.items.find((x) => x.track === 'v1' && ![pid, 'a', 'b', 'c'].includes(x.id));
+  assert.deepEqual([at(s, 'b').at, at(s, 'b').out, at(s, 'b').fadeOut], [2, 1, 0]);
+  assert.deepEqual([right.at, right.in, right.out, right.fadeIn, right.fadeOut], [5, 1, 3, 0, 0.5]);
+  assert.notEqual(right.chans, at(s, 'b').chans);
+  assert.deepEqual([at(s, pid).at, at(s, 'c').at], [3, 8]);
+  const lk = doc();
+  trackLock(lk, 'v1', true);
+  const [lid] = paste(lk, clip, 3, o);   // v1 locked: it goes to v2, where d (1-3) is not under the playhead
+  assert.deepEqual([at(lk, lid).track, at(lk, 'b').at, at(lk, 'b').out], ['v2', 2, 3]);
   const f = doc();
   paste(f, clip, 10, o);   // no overlap: nothing moves
   assert.deepEqual(['a', 'b', 'c'].map((x) => at(f, x).at), [0, 2, 6]);

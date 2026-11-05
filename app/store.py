@@ -17,7 +17,9 @@ point at: deleting the table trashes them too, restoring it brings them back.
 A "setups" payload (a parameter block's saved values, global so every project sees it): {v:1, key, values, note?}.
 `key` names the block (tpl:<template>, edit:<kind>.<op> (old vfx:<op> keys move there), tool:<id>, sound:maker.<id>, sound:voice,
 scene:out); `values` is that block's own value map. A setup holds no runs and no files."""
+import asyncio
 import json
+import logging
 import os
 import re
 import shutil
@@ -31,6 +33,8 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from . import config, db, storage
+
+log = logging.getLogger(__name__)
 
 # The one place that says which kinds exist. Add a name here to start storing a new one.
 KINDS = ("gen-tabs", "gen-presets", "edit-tabs", "video-tabs", "sound-tabs", "scene-tabs", "vfx-tabs", "story-tabs", "tables", "characters", "objects", "scenes", "tracks", "prefs", "view-marks", "setups")
@@ -186,7 +190,30 @@ async def put_doc(kind: str, did: str, body: dict = Body(...), project_id: int |
             doc["payload"] = payload
     _write(path, doc)
     await _tell(kind, did, doc["rev"], project_id, scope)
+    if kind == "tables" and scope != "global" and cur is not None and payload is not None:   # a replaced render goes
+        drop, stash = storage.render_changes(cur.get("payload"), payload)
+        for fdoc, r in stash:   # (a frame that left: its render waits for its document to be purged)
+            fk = next((FRAME_DOC_KINDS[f["kind"]] for f in (cur.get("payload") or {}).get("frames") or []
+                       if isinstance(f, dict) and f.get("doc") == fdoc and f.get("kind") in FRAME_DOC_KINDS), None)
+            if fk:
+                storage.stash_render(_dir(fk, project_id, scope), fdoc, r)
+        await _drop_renders(drop)
     return doc
+
+
+drop_run = None   # main.py sets it: async (run id) -> the run, for good (a frame's replaced or abandoned cached render)
+
+
+async def _drop_renders(renders):
+    """Cached renders nothing uses any more go (storage.py: a run a saved document uses, a media file a tab uses, stay)."""
+    for r in renders:
+        try:
+            if r.get("media") is not None:
+                await asyncio.to_thread(storage.render_media_drop, r)
+            elif (gid := await asyncio.to_thread(storage.render_run_free, r)) is not None and drop_run:
+                await drop_run(gid)
+        except Exception:
+            log.warning("Couldn't drop a cached render %s", r, exc_info=True)
 
 
 FRAME_DOC_KINDS = {"image": "edit-tabs", "video": "video-tabs", "scene": "scene-tabs", "sound": "sound-tabs"}
@@ -264,8 +291,14 @@ async def delete_doc(kind: str, did: str, project_id: int | None = None, scope: 
         if ts.isdigit() and int(ts) < cutoff:
             if kind == "characters":   # gone for good: its pictures go too (storage.py), unless something else uses them
                 storage.drop_character_pictures((_read(old) or {}).get("payload") or {})
+            if kind == "tables" and scope != "global":   # its frames' cached renders go too
+                await _drop_renders(storage.frame_renders((_read(old) or {}).get("payload")).values())
             old.unlink(missing_ok=True)
             old.with_suffix(".png").unlink(missing_ok=True)
+    if kind in FRAME_DOC_KINDS.values():   # a frame's render waited for its document to leave the trash
+        for _did, r, f in storage.stashed_renders(d):
+            await _drop_renders([r])
+            f.unlink(missing_ok=True)
     ts = time.time_ns()
     unlink = kind == "story-tabs" and scope != "global"
     owned = _owned_docs(doc) if kind == "tables" and scope != "global" else []   # (global tables own nothing)
@@ -308,6 +341,7 @@ async def restore_doc(kind: str, did: str, project_id: int | None = None, scope:
     doc["updated"] = time.time()
     _write(path, doc)
     src.unlink()
+    (d / ".trash" / f"{did}.render.json").unlink(missing_ok=True)   # (its frame's cached render is wanted again)
     await _tell(kind, did, doc["rev"], project_id, scope)
     if kind == "tables" and scope != "global":   # only the docs trashed together with this table
         for k, i in _owned_docs(doc):

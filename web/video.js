@@ -33,6 +33,7 @@ import { mapsSection } from './video-maps.js';
 import { emptyVideo, videoTracks } from './empty-docs.js';
 import { isLive, liveFrame } from './live.js';
 import { dropGoneMain, liveMain, setMain } from './frame-main.js';
+import { registerProps, propsChanged, propsRoot } from './props-panel.js';
 export { emptyVideo };
 
 // ---------------------------------------------------------------------------
@@ -128,7 +129,7 @@ function redoEdit() { G.settling?.w.finish(); if (HIST.redo()) syncUndo(); }
 
 // the timeline itself (timeline.js, shared with the Sound tab): a sound clip only goes on an audio track, a picture on a video track
 const TL = timeline(V, { el: () => VD.timeline, headW: HEAD_W, minLen: MIN_LEN, zoom: [4, 400], ppsKey: 'deck.video.pps',
-  pause: () => vidPause(), seek: (t) => vidSeek(t), showTime: () => { vtp?.update(); refreshKeyed(VD.panel); },
+  pause: () => vidPause(), seek: (t) => vidSeek(t), showTime: () => { vtp?.update(); refreshKeyed(VD.panel); refreshKeyed(propsRoot()); },
   changed: () => timelineChanged(), dragged: () => { renderTimeline(); syncMedia(); requestDraw(); }, rendered: () => renderTimeline(),
   placed: () => { syncMedia(); requestDraw(); },   // (a drag frame: timeline.js restyled the dragged clips itself)
   selected: () => { renderVideoPanel(); requestDraw(); }, deselected: () => { renderTimeline(); renderVideoPanel(); requestDraw(); },
@@ -1140,29 +1141,59 @@ function xformFields(it) {
   ];
 }
 
+// a clip's times: { at, duration } for a picture, { at, in, out } for the rest. Several picked: Starts at moves them all by
+// the same amount; a length, In or Out goes to each that has one
+function clipTimes(it) {
+  const len = itLen(it), still = (o) => o.kind === 'image', moving = (o) => !still(o);
+  const out = { at: timeBox('Starts at (s)', () => it.at, (v) => { const d = Math.max(0, v) - it.at; for (const o of pickedWhere()) o.at = Math.max(0, o.at + d); }) };
+  if (it.kind === 'image') out.duration = timeBox('Duration (s)', () => len, (v) => { for (const o of pickedWhere(still)) o.out = Math.max(MIN_LEN, v); }, { min: MIN_LEN, max: 60 });
+  else {
+    out.in = timeBox('In (s)', () => it.in, (v) => { for (const o of pickedWhere(moving)) o.in = Math.max(0, Math.min(v, (o.out ?? o.dur) - MIN_LEN)); }, { max: it.dur || undefined });
+    out.out = timeBox('Out (s)', () => it.out ?? it.dur, (v) => { for (const o of pickedWhere(moving)) o.out = Math.max(o.in + MIN_LEN, o.dur ? Math.min(v, o.dur) : v); }, { max: it.dur || undefined });
+  }
+  return out;
+}
+// a clip's level (not a picture's or a 3D scene's) and fades: [level | null, pan (null: not in Video), fade in, fade out]
+const clipSound = (it) => clipSoundFields(it, itLen(it), { level: it.kind !== 'image' && it.kind !== 'scene', levelNote: (v) => (v > 1 ? ' (preview plays at 100%)' : ''),
+  keyed: (label, ch, o) => clipKeyed(it, label, ch, o), ...clipLive });
+const clipOpacity = (it) => clipKeyed(it, 'Opacity', 'opacity', { min: 0, max: 1, step: 0.01, fmt: pctFmt });
+
+// On the table, a clip's times, framing, opacity, level and fades are the sidebar's Properties pane's (web/props-panel.js),
+// the same fields and the same edits (panelInput / panelChange / fanOut reach every picked clip, one undo step)
+registerProps('video', {
+  when: () => onTable(),
+  picked: () => { const it = selItem(); return it ? [it, ...TL.picked().filter((o) => o && o !== it)] : []; },
+  title: (ctx, list) => (list.length > 1 ? `${list.length} clips · ${list[0].label}` : list[0].label),
+  rows: () => {
+    const it = selItem();
+    if (!it) return [];
+    fanSync();
+    const t = clipTimes(it), [level, , fadeIn, fadeOut] = clipSound(it);
+    return [
+      ...Object.entries(t).map(([id, el]) => ({ id, el, group: 'Time' })),
+      isVisual(it) ? { id: 'framing', group: 'Transform', el: VD.xform = h('div', { class: 'vid-xform' }, xformFields(it)) } : null,
+      isVisual(it) ? { id: 'opacity', group: 'Transform', el: clipOpacity(it) } : null,
+      level ? { id: 'level', group: 'Sound', el: level } : null,
+      { id: 'fadeIn', group: 'Sound', el: fadeIn }, { id: 'fadeOut', group: 'Sound', el: fadeOut },
+    ].filter(Boolean);
+  },
+});
+
 function renderVideoPanel() {
   if (!VD.body) return;   // (not mounted yet)
   const it = selItem(), n = TL.picked().length;
-  const pct = pctFmt;
+  const table = onTable();   // (on the table its times, framing, opacity and sound are in Properties)
   fanSync();
+  if (table) propsChanged('video');
   const clip = it ? (() => {
     const len = itLen(it), tr = trackOf(it);
-    // several picked: Starts at moves them all by the same amount; a length, In or Out goes to each that has one
-    const fields = [timeBox('Starts at (s)', () => it.at, (v) => { const d = Math.max(0, v) - it.at; for (const o of pickedWhere()) o.at = Math.max(0, o.at + d); })];
-    const still = (o) => o.kind === 'image', moving = (o) => !still(o);
-    if (it.kind === 'image') fields.push(timeBox('Duration (s)', () => len, (v) => { for (const o of pickedWhere(still)) o.out = Math.max(MIN_LEN, v); }, { min: MIN_LEN, max: 60 }));
-    else fields.push(
-      timeBox('In (s)', () => it.in, (v) => { for (const o of pickedWhere(moving)) o.in = Math.max(0, Math.min(v, (o.out ?? o.dur) - MIN_LEN)); }, { max: it.dur || undefined }),
-      timeBox('Out (s)', () => it.out ?? it.dur, (v) => { for (const o of pickedWhere(moving)) o.out = Math.max(o.in + MIN_LEN, o.dur ? Math.min(v, o.dur) : v); }, { max: it.dur || undefined }));
     return section(n > 1 ? `${n} clips` : it.label, null,
       hint(`${n > 1 ? `${it.label}: ` : ''}${it.kind} on ${tr ? trackName(tr) : '?'} · ${fmtT(len)}${it.dur ? ` of ${fmtT(it.dur)}` : ''}`, 'section-sub'),
-      h('div', { class: 'grid-2' }, fields),
-      isVisual(it) ? [VD.xform = h('div', { class: 'vid-xform' }, xformFields(it)),
-        clipKeyed(it, 'Opacity', 'opacity', { min: 0, max: 1, step: 0.01, fmt: pct })] : null,
+      table ? null : h('div', { class: 'grid-2' }, Object.values(clipTimes(it))),
+      !table && isVisual(it) ? [VD.xform = h('div', { class: 'vid-xform' }, xformFields(it)), clipOpacity(it)] : null,
       it.kind === 'scene' ? sceneFields(it) : null,
       it.kind === 'video' && canKey(it.fx?.orig || it) ? fxFields(it) : null,
-      clipSoundFields(it, len, { level: it.kind !== 'image' && it.kind !== 'scene', levelNote: (v) => (v > 1 ? ' (preview plays at 100%)' : ''),
-        keyed: (label, ch, o) => clipKeyed(it, label, ch, o), ...clipLive }));
+      table ? null : clipSound(it));
   })() : null;
   // the clip's actions, as the Image tab's icon row
   const clipTools = it ? (() => {

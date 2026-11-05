@@ -1,6 +1,6 @@
 import {
   $, h, store, uid, api, toast, clamp, button, runBar, iconBtn, linkBtn, seg, field, section, hint, help, info, note,
-  placeholder, fileButton, rangeField, insertAtCursor, panFmt, pctFmt, toggle, textArea, chip, icon,
+  placeholder, fileButton, rangeField, propNum, insertAtCursor, panFmt, pctFmt, toggle, textArea, chip, icon,
 } from './ui.js';
 import { DELIVERY, INLINE_TAGS, parseScript, withDelivery, withName } from './dialogue.js';
 import { S, onServer } from './core.js';
@@ -26,6 +26,7 @@ import { emptySound, soundTracks } from './empty-docs.js';
 import { setupsRow } from './setups.js';
 import { dropGoneMain, liveMain, setMain } from './frame-main.js';
 import { SOUND_VOICE, pick as pickKeys, soundMakerKey } from './setups-rules.js';
+import { registerProps, propsChanged, propsRoot } from './props-panel.js';
 export { emptySound };
 
 // ---------------------------------------------------------------------------
@@ -96,7 +97,7 @@ const HIST = history({ snap: snapDoc, limit: 200, apply(sn) {
 let histDoc;   // the document id the history belongs to
 
 const TL = timeline(N, { el: () => SD.timeline, headW: HEAD_W, minLen: MIN_LEN, zoom: [2, 600], ppsKey: 'deck.sound.pps',
-  pause: () => sndPause(), seek: (t) => sndSeek(t), showTime: () => { stp?.update(); refreshKeyed(SD.panel); },
+  pause: () => sndPause(), seek: (t) => sndSeek(t), showTime: () => { stp?.update(); refreshKeyed(SD.panel); refreshKeyed(propsRoot()); },
   changed: () => changed(), dragged: () => { renderTimeline(); syncMedia(); }, rendered: () => renderTimeline(),
   placed: (ids) => { drawWaves(ids); syncMedia(); drawStage(); },   // a drag frame: only those clips moved, no full redraw
   selected: () => { renderPanel(); drawStage(); }, deselected: () => { renderTimeline(); renderPanel(); }, tabs: () => tabs, area: () => WA,
@@ -767,13 +768,46 @@ async function speakScript() {
   } catch (e) { toast(e.message, true); }
 }
 
+// ---- a clip's level, pan and fades (and, in Properties, its times) ----
+const clipLive = { onInput: () => { syncMedia(); drawStage(); }, onChange: () => changed() };
+const clipSoundOf = (it) => clipSoundFields(it, itLen(it), { pan: true, ...clipLive, keyed: (label, ch, o) => K.field(it, label, ch, o) });
+// a clip's time as a number box, dragged like a slider it shows on the timeline as it goes. Several picked: Starts at moves
+// them all by the same amount; In and Out go to each
+const sndTime = (label, get, set, { max = 3600 } = {}) => propNum(label, Number(get()).toFixed(2), set, () => changed(),
+  { step: 0.01, min: 0, max, live: () => { renderTimeline(); syncMedia(); drawStage(); } });
+function clipTimes(it) {
+  const pk = () => TL.picked().filter(Boolean);
+  return {
+    at: sndTime('Starts at (s)', () => it.at, (v) => { const d = Math.max(0, v) - it.at; for (const o of pk()) o.at = Math.max(0, o.at + d); }),
+    in: sndTime('In (s)', () => it.in || 0, (v) => { for (const o of pk()) o.in = Math.max(0, Math.min(v, (o.out ?? (o.dur || 3)) - MIN_LEN)); }, { max: it.dur || 3600 }),
+    out: sndTime('Out (s)', () => it.out ?? (it.dur || 3), (v) => { for (const o of pk()) o.out = Math.max((o.in || 0) + MIN_LEN, o.dur ? Math.min(v, o.dur) : v); }, { max: it.dur || 3600 }),
+  };
+}
+// On the table, a clip's times, level, pan and fades are the sidebar's Properties pane's (web/props-panel.js), the same
+// fields with the same edits (keyed level / pan reach every picked clip; changed() saves, one undo step)
+registerProps('sound', {
+  when: () => inFrame(),
+  picked: () => { const it = selItem(); return it ? [it, ...TL.picked().filter((o) => o && o !== it)] : []; },
+  title: (ctx, list) => (list.length > 1 ? `${list.length} clips · ${list[0].label}` : list[0].label),
+  rows: () => {
+    const it = selItem();
+    if (!it) return [];
+    const [level, pan, fadeIn, fadeOut] = clipSoundOf(it);
+    return [...Object.entries(clipTimes(it)).map(([id, el]) => ({ id, el, group: 'Time' })),
+      { id: 'level', el: level, group: 'Sound' }, { id: 'pan', el: pan, group: 'Sound' },
+      { id: 'fadeIn', el: fadeIn, group: 'Sound' }, { id: 'fadeOut', el: fadeOut, group: 'Sound' }];
+  },
+});
+
 // ---- the side panel ----
 function renderPanel() {
   const body = SD.body;
   if (!body) return;
   const it = selItem(), tr = it && trackOf(it), pk = TL.picked().filter(Boolean);
   syncBar();
-  const live = { onInput: () => { syncMedia(); drawStage(); }, onChange: () => changed() };
+  const table = inFrame();   // (on the table its level, pan and fades are in Properties)
+  if (table) propsChanged('sound');
+  const live = clipLive;
   const num = (label, get, set, opts) => rangeField(label, get, set, { digits: 2, ...opts, ...live });
 
   const add = section('Add sound', null,
@@ -788,7 +822,7 @@ function renderPanel() {
     help('A clip\'s sound plays straight from the clip. To keep it as a file of its own, select it and Save its sound.'));
 
   const clip = it ? section(pk.length > 1 ? `${pk.length} clips · ${it.label}` : `Clip · ${it.label}`, () => TL.clearPick(),
-    clipSoundFields(it, itLen(it), { pan: true, ...live, keyed: (label, ch, o) => K.field(it, label, ch, o) }),
+    table ? null : clipSoundOf(it),
     pk.length > 1 ? null : h('p', { class: 'hint' }, `At ${tc(it.at)} · ${itLen(it).toFixed(2)} s, from ${tc(it.in)} of the source`),
     pk.length > 1 ? null : h('div', { class: 'row wrap' },
       button([icon('close'), 'Cross-fade with previous'], () => TL.crossfadePrev(it), { title: 'Overlap with the clip before it on its track' })),

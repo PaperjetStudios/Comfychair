@@ -66,6 +66,8 @@ import { filtering, foldedGroups, listRows } from './frame-list.js';
 import { KIND_ICON, copyDoc, createDoc, dropInput, editDoc, frameEl, frameFor, frameStamp, kindOfDoc, loadStills, noteRev, owedCounts, renameDoc, restoreDoc, stillOf, syncFrame, trashDoc, pausePreviews, previewMode, setPreviewMode } from './table-frames.js';
 import { staleInfo, staleText } from './chain-rules.js';
 import { sidebar } from './sidebar.js';
+import { registerProps, propsChanged, numRow } from './props-panel.js';
+import { shared, snapNum, lockedSize, mixLength } from './props-rules.js';
 
 const ZMIN = 0.02, ZMAX = 8, DRAG_PX = 4, SNAP_PX = 8, DWELL_MS = 600, NUDGE = 1;
 const DOUBLE_MS = 380, DOUBLE_PX = 24;   // a double tap: the second within this long and this near (screen pixels)
@@ -198,6 +200,7 @@ function renderFrames() {
     if (D.frames.children[i] !== el) D.frames.insertBefore(el, D.frames.children[i] || null);
     syncFrame(el, f, { selected: U.sel.has(f.id), live: live?.id === f.id, owed: waiting(f), stale: stale.get(f.id) || null });
     el.classList.toggle('frame-hidden', !!f.hidden);
+    el.style.opacity = f.opacity != null && f.opacity < 1 ? String(f.opacity) : '';   // (the Properties pane's Opacity: the tile on the table only)
     seen.add(f.id);
   });
   for (const [id, el] of U.els) if (!seen.has(id)) { el.remove(); U.els.delete(id); }
@@ -1330,7 +1333,8 @@ export async function sourceFrameAt(src, at, ok = here()) {
 function renderPanel() {
   const s = selected(), one = s.length === 1 ? s[0] : null;
   const sig = JSON.stringify([[...U.sel], T.groups, T.frames.map((f) => [f.id, f.label, f.w, f.h, f.locked, f.hidden, f.group, stillOf(f) || f.preview || '',
-    ...(U.sel.has(f.id) ? [f.x, f.y] : [])])]);
+    ...(U.sel.has(f.id) ? [f.x, f.y, f.opacity] : [])])]);
+  if (sig !== U.propsSig) { U.propsSig = sig; propsChanged('frames'); }   // (the Properties pane shows the selected frames' place and size)
   if (sig === U.panelSig || D.panel.contains(document.activeElement) && document.activeElement.matches('input')) return;
   U.panelSig = sig;
   D.panel.replaceChildren(
@@ -1483,42 +1487,108 @@ function renameRow(id) {
   row.replaceChildren(input);
   input.focus(); input.select();
 }
+// The one selected frame's actions. Its name, place, size, opacity, resolution, lock and hide are the Properties pane's
+// (framesProps below); the canvas button stays here, where the frame modules add their own size parts after it
+// (frame-image.js Picture size finds it by .table-size).
 function frameFields(f) {
-  // (a box typed in keeps the panel from redrawing: it may still be on show after another table opened, or the frame went)
-  const ok = here(), mine = () => (ok() ? byId(f.id) === f : false);
-  const name = h('input', { type: 'text', value: f.label, maxLength: 120, 'aria-label': 'Label' });
-  name.addEventListener('input', () => { if (!mine()) return; f.label = name.value; syncFrame(U.els.get(f.id), f, { selected: true, live: liveFrame()?.id === f.id }); });
-  name.addEventListener('change', () => {
-    if (!mine()) { U.panelSig = ''; renderPanel(); return; }
-    f.label = name.value.trim() || M.KIND_LABEL[f.kind]; U.panelSig = ''; renderFrames(); changed();
-    renameDoc(f, f.label).catch((e) => toast(`Couldn't rename its document: ${e.message}`, true));   // (the document bar and pickers show the frame's name)
-  });
-  // where it sits: typed table pixels (a locked frame stays put)
-  const num = (k) => {
-    const el = h('input', { type: 'number', inputMode: 'numeric', step: 1, value: Math.round(f[k]), 'aria-label': k.toUpperCase(), disabled: !!f.locked });
-    el.addEventListener('change', () => {
-      if (!mine()) { U.panelSig = ''; renderPanel(); return; }
-      if (f.locked || !Number.isFinite(+el.value)) return;
-      const before = geomOf(new Set([f.id]));
-      f[k] = Math.round(+el.value);
-      recordGeom(before, geomOf(new Set([f.id])));
-      if (liveFrame()?.id === f.id) placeLive();
-      renderFrames(); changed(); tellMoved([f]);
-    });
-    return el;
-  };
-  const mp = mpInput(() => M.mpOf(f.w, f.h).toFixed(2), (n) => { if (n > 0 && mine()) setSize(f, M.sizeForMp(f.w, f.h, n)); });
-  mp.querySelector('span').textContent = 'MP';
-  return [field('Label', name),
-    field('Size', h('div', { class: 'row wrap' }, h('span', { class: 'table-size' }, `${f.w}×${f.h} · ${M.mpOf(f.w, f.h).toFixed(2)} MP`),
-      button('Size and MP…', () => sizeSheet(f)))),
-    f.kind !== 'note' ? mp : null,
-    h('div', { class: 'grid-2' }, field('X', num('x')), field('Y', num('y'))),
-    toggle('Locked', !!f.locked, (on) => setLocked([f], on)),
+  return [
+    field('Canvas', h('div', { class: 'row wrap table-size' }, button('Size and MP…', () => sizeSheet(f)))),
     h('div', { class: 'row wrap' }, f.kind !== 'note' ? button('Open', () => goLive(f), { cls: 'small primary' }) : null,
       button('Duplicate', () => duplicateFrames(new Set([f.id]))),
       button('Delete', () => deleteFrames(new Set([f.id])), { cls: 'small ghost danger', disabled: !!f.locked }))];
 }
+
+// ---------------------------------------------------------------------------
+// the Properties pane's rows for frames on the table (web/props-panel.js; props-rules.js says which show). Several frames:
+// one edit goes to all of them, as one undo step; a locked frame keeps its place and size.
+// ---------------------------------------------------------------------------
+// frames placed or sized by fn(frame) → { x?, y?, w?, h? }: one undo step; a live frame's module takes a new size at once
+function setGeomAll(list, fn) {
+  const ids = new Set(list.map((f) => byId(f.id)).filter((f) => f && !f.locked).map((f) => f.id));   // (by id: a move may have made new objects)
+  if (!ids.size) return;
+  const before = geomOf(ids), moved = [];
+  for (const f of T.frames) {
+    if (!ids.has(f.id)) continue;
+    const was = [f.w, f.h];
+    Object.assign(f, fn(f)); moved.push(f);
+    if (liveFrame()?.id === f.id) {
+      placeLive();
+      if (was[0] !== f.w || was[1] !== f.h) dispatchEvent(new CustomEvent('table:resize', { detail: { frame: f, table: T } }));
+    }
+  }
+  recordGeom(before, geomOf(ids));
+  renderFrames(); changed(); tellMoved(moved);
+}
+// a frame field set on several frames (setFrameField each), one undo step for them all
+export function setFramesField(ids, patch) {
+  const list = [...ids].map(byId).filter(Boolean);
+  if (list.length === 1) return setFrameField(list[0].id, patch);
+  const keys = Object.keys(patch), before = new Map(list.map((f) => [f.id, Object.fromEntries(keys.map((k) => [k, f[k] ?? null]))]));
+  for (const f of list) setFrameField(f.id, patch, { record: false });
+  record({ undo: () => { for (const [id, p] of before) setFrameField(id, p, { record: false }); },
+    redo: () => { for (const f of list) setFrameField(f.id, patch, { record: false }); } });
+  return list;
+}
+function renameFrame(was, v) {
+  const f = byId(was.id);
+  if (!f) return;
+  f.label = String(v).trim() || M.KIND_LABEL[f.kind];
+  U.panelSig = ''; renderFrames(); changed();
+  renameDoc(f, f.label).catch((e) => toast(`Couldn't rename its document: ${e.message}`, true));   // (the document bar and pickers show the frame's name)
+}
+// what the frame's document is made at: an image's canvas (and its megapixels), a video's sequence size and frame rate,
+// a sound's length (read from its saved document)
+function resolutionRow(f) {
+  const ok = here(), text = h('span', { class: 'props-res' }, `${f.w}×${f.h}`);
+  const later = (fill) => fill().then((s) => { if (ok()) text.textContent = s; }).catch(() => {});
+  const docOf = () => api(`/api/store/${M.DOC_KIND[f.kind]}/${f.doc}${S.project != null ? `?project_id=${S.project}` : ''}`, { busy: false });
+  if (f.kind === 'sound') {
+    text.textContent = '…';
+    if (f.doc) later(async () => `${mixLength((await docOf())?.payload?.items).toFixed(2)} s`);
+    return field('Length', text);
+  }
+  const kids = [text];
+  if (f.kind === 'image') {
+    text.textContent += ` · ${M.mpOf(f.w, f.h).toFixed(2)} MP`;
+    const mp = mpInput(() => M.mpOf(f.w, f.h).toFixed(2), (n) => { const g = ok() && byId(f.id); if (n > 0 && g && !g.locked) setSize(g, M.sizeForMp(g.w, g.h, n)); });
+    mp.querySelector('span').textContent = 'MP';
+    kids.push(mp);
+  }
+  if (f.kind === 'video' && f.doc) later(async () => `${f.w}×${f.h} · ${(await docOf())?.payload?.fps || 'auto'} fps`);
+  return field('Resolution', h('div', { class: 'row wrap' }, kids));
+}
+function framesRows(ctx, ids) {
+  const list = framesPicked(ctx), one = list.length === 1 ? list[0] : null;
+  const all = (k, d = null) => shared(list.map((f) => f[k] ?? d));
+  const fresh = () => list.map((f) => byId(f.id)).filter(Boolean);   // (the frames as they are now, when an edit lands)
+  const free = list.filter((f) => !f.locked), still = !free.length;
+  const pos = (k, label) => ({ id: k, label, group: 'Place', get: () => all(k), step: T.grid.on ? T.grid.size : 1, disabled: still,
+    set: (v) => setGeomAll(list, () => ({ [k]: snapNum(v, T.grid) })) });
+  const size = () => {
+    const box = (axis, label) => numRow({ label, get: () => all(axis), step: T.grid.on ? T.grid.size : 1, disabled: still,
+      set: (v) => setGeomAll(list, (f) => lockedSize(f, axis, Math.max(16, snapNum(v, T.grid)), !!U.ratio)) });
+    const lock = iconBtn(U.ratio ? 'Keep the shape: on' : 'Keep the shape: off', icon(U.ratio ? 'link' : 'unlink'), () => { U.ratio = !U.ratio; propsChanged('frames'); },
+      { class: `icon-btn ico-btn props-ratio${U.ratio ? ' on' : ''}`, 'aria-pressed': String(!!U.ratio) });
+    return h('div', { class: 'props-size' }, box('w', 'Width'), box('h', 'Height'), lock);
+  };
+  return [
+    pos('x', 'X'), pos('y', 'Y'),
+    ids.includes('w') ? { id: 'w', label: 'Size', group: 'Place', el: size() } : null,
+    { id: 'opacity', label: 'Opacity', group: 'Look', get: () => all('opacity', 1), min: 0, max: 1, step: 0.01, digits: 2,
+      set: (v) => setFramesField(list.map((f) => f.id), { opacity: v >= 1 ? null : v }) },
+    one && ids.includes('resolution') ? { id: 'resolution', label: 'Resolution', group: 'Look', el: resolutionRow(one) } : null,
+    one ? { id: 'name', label: 'Name', type: 'text', group: 'Frame', get: () => one.label, set: (v) => renameFrame(one, v) } : null,
+    { id: 'lock', label: 'Locked', type: 'toggle', group: 'Frame', get: () => shared(list.map((f) => !!f.locked)), set: (on) => setLocked(fresh(), on) },
+    { id: 'hide', label: 'Hidden', type: 'toggle', group: 'Frame', get: () => shared(list.map((f) => !!f.hidden)), set: (on) => setHidden(fresh(), on) },
+  ].filter(Boolean);
+}
+// the selected frames; a live frame with nothing picked in it is the one selected
+const framesPicked = () => { const s = selected(); return s.length ? s : liveFrame() && byId(liveFrame().id) ? [byId(liveFrame().id)] : []; };
+registerProps('frames', {
+  picked: framesPicked,
+  title: (ctx, list) => (list.length === 1 ? list[0].label || M.KIND_LABEL[list[0].kind] : `${list.length} frames`),
+  rows: framesRows,
+});
 
 // ---------------------------------------------------------------------------
 // the bar over the table: fit, 100%, the grid and snapping, a new frame, the zoom

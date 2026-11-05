@@ -1,7 +1,7 @@
 // node --test tests/key_focus.test.mjs: who gets a key while a control has the focus (web/key-focus.js).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { editorRunKey, editorRunKeys, ownsKey } from '../web/key-focus.js';
+import { editorRunKey, editorRunKeys, ownsKey, takesKeyboard } from '../web/key-focus.js';
 
 // a fake element: tag + attributes, inside the parents given (selectors are matched on the simple forms key-focus uses)
 function el(tag, { type, cls, role, parent = null } = {}) {
@@ -120,4 +120,20 @@ test('only Ctrl+Enter or Shift+Enter are run keys', () => {
   assert.equal(keys({ ctrlKey: true, shiftKey: true }), false);
   assert.equal(keys({ ctrlKey: true, altKey: true }), false);
   assert.equal(editorRunKeys({ key: 'a', ctrlKey: true }), false);
+});
+
+test('a press on a pick surface takes the keyboard from a prompt box; a press in text, a label or the helper does not', () => {
+  const node = (cls, parent = null, tag = 'div') => {
+    const me = { cls, parent, matches: (sel) => sel.split(',').map((x) => x.trim()).some((x) => x === tag || x === `.${cls}`), closest(sel) { for (let n = me; n; n = n.parent) if (n.matches(sel)) return n; return null; } };
+    return me;
+  };
+  const box = { matches: (sel) => sel.includes('textarea') };
+  const notBox = { matches: () => false };
+  assert.equal(takesKeyboard(node('layer-row'), box), true);
+  assert.equal(takesKeyboard(node('x', node('tl-clip')), box), true);
+  assert.equal(takesKeyboard(node('frame'), notBox), false);
+  assert.equal(takesKeyboard(node('x', node('frame'), 'textarea'), box), false);
+  assert.equal(takesKeyboard(node('prompt-helper', node('frame')), box), false);
+  assert.equal(takesKeyboard(node('x', node('sheet', node('frame'))), box), false);
+  assert.equal(takesKeyboard(node('panel'), box), false);
 });
