@@ -15,7 +15,8 @@
 //   editState()                { label, can, why } for the action bar: "Run <op>", whether it can, and why not (null)
 //   editActive()               the pane is the one on show
 // `make:state` is sent when editState may have changed (the action bar listens).
-import { h, store, toast, button, seg, field, hint, help, note, section } from './ui.js';
+import { openPressMenu } from './press-menu.js';
+import { h, store, toast, button, hint, help, note, section } from './ui.js';
 import { S } from './core.js';
 import { sidebar } from './sidebar.js';
 import { icon } from './icons.js';
@@ -60,10 +61,13 @@ function currentOp(kind) {
   const want = store.get(`deck.edit.op.${kind}`, null);
   return list.find((o) => o.id === want) || list.find((o) => !whyNot(o, kind)) || list[0] || null;
 }
+// Where results land: one setting for every edit (the action bar's button, openRunOptions). A result in the frame it came from unless set otherwise; an op
+// that can only land one way lands that way.
+const targetSetting = () => (store.get('deck.edit.target', 'layer') === 'frame' ? 'frame' : 'layer');
 function targetOf(op, kind) {
   if (isCross(kind)) return 'frame';   // (a cross-kind op's result is always a new frame)
-  const can = rules().targetsOf(op), kept = store.get(`deck.edit.target.${kind}`, null);
-  return can.includes(kept) ? kept : rules().defaultTarget(op, liveIn(kind, ofKind(kind)));
+  const can = rules().targetsOf(op), want = targetSetting();
+  return can.includes(want) ? want : can[0];
 }
 
 // ---------------------------------------------------------------------------
@@ -163,18 +167,6 @@ function sectionFor(kind) {
     } 
     catch (e) { console.error(e); host.append(note(`${op.label}: ${e.message}`, 'warn')); }
     if (host.childNodes.length) kids.push(host);
-    const targets = rules().targetsOf(op);
-    if (!why && !cross && !op.selfLands && targets.length > 1) {
-      kids.push(field('Result', seg([['frame', 'New frame'], ['layer', kind === 'image' ? 'Layer in this frame' : 'In this frame']], targetOf(op, kind), (x) => {
-        store.set(`deck.edit.target.${kind}`, x); draw();
-      }), help('New frame puts each result in a new frame beside the one it came from. In this frame adds it to that frame itself: a layer, a clip or a track.')));
-    }
-    if (!why && kind === 'image' && liveIn(kind, frames.slice(0, 1)) && targetOf(op, kind) === 'layer') {
-      const ST = toolState();
-      kids.push(field('Run on', seg([['whole', 'Whole picture'], ['selected', 'Selected layers']], ST.scope === 'selected' ? 'selected' : 'whole', (v) => {
-        ST.scope = v; store.set('deck.imagetools', ST); draw();
-      }), help('Whole picture: the open picture as it looks. Selected layers: each selected layer on its own, its result a layer over it.')));
-    }
     kids.push(statusList(kind, frames));
   }
   if (kind === 'video' && !cross) syncOverlay(kind, op, frames);
@@ -249,6 +241,19 @@ export function showOp(kind, id, frames) {
 }
 
 export const editActive = () => sidebar.current() === 'edit';
+const scopeWords = () => (toolState().scope === 'selected' ? 'Selected layers' : 'Whole picture');
+const targetWords = () => (targetSetting() === 'frame' ? 'New frame' : 'Layer in this frame');
+// what the button beside the big one says it's set to
+export const runOptionsWords = () => `${targetWords()} · ${scopeWords()}`;
+// The menu for every edit: where the result lands, and what it runs on (the open picture as it looks, or each selected layer on its own; with none selected, the picture)
+export function openRunOptions(x, y) {
+  const ST = toolState(), scope = (v) => () => { ST.scope = v; store.set('deck.imagetools', ST); tellState(); };
+  const target = (v) => () => { store.set('deck.edit.target', v); tellState(); draw(); };
+  openPressMenu(x, y, [
+    [{ label: 'New frame', on: targetSetting() === 'frame', run: target('frame') }, { label: 'Layer in this frame', on: targetSetting() === 'layer', run: target('layer') }],
+    [{ label: 'Whole picture', on: ST.scope !== 'selected', run: scope('whole') }, { label: 'Selected layers', on: ST.scope === 'selected', run: scope('selected') }],
+  ], 'Results');
+}
 
 function focusKind() {
   const ok = (k) => k && ofKind(k).length && (P.ops.get(k) || []).length;

@@ -3,11 +3,13 @@
 // history, the queue), editor.js (+ sketch pad), video.js (timeline), vfx.js (VFX effects), story.js (storyboard), board.js (board + gallery); media.js has
 // the pickers and core.js the shared state. The 3D tab (scene.js) loads on demand.
 
+import { icon } from './icons.js';
+import { floatPanel } from './float-panel.js';
 import {
   $, h, store, api, toast, overlayOpened, overlayClosed, openSheet, closeSheet, button, iconBtn, help, chip as uiChip, setIcon,
 } from './ui.js';
 import { S, loadProjects, setBatch, setSwitchTab, setOpenProject, emitProject, onServer } from './core.js';
-import { generate, loadTemplates, selectTemplate, stop, wireTemplateFilter, wireZoom } from './generate.js';
+import { generate, loadTemplates, selectTemplate, stop, wireTemplateFilter, wireZoom, fieldState } from './generate.js';
 import './gentabs.js';   // Generate tabs + presets: plugs into generate.js through its hooks
 import { openDownloads, wireDownloads } from './downloads.js';
 import { RUN, checkUiVersion, connectWS, loadHistory, onResume, openJobs, runChip, sceneMod, sceneModule, setConn } from './run.js';
@@ -103,6 +105,9 @@ function syncActionBar() {
   if (b.textContent !== st.label) b.textContent = st.label;
   if (st.why || b.dataset.why) b.disabled = !!st.why;   // (only what this set: generate() holds it off while it queues)
   if (st.why) b.dataset.why = st.why; else delete b.dataset.why;
+  const opts = $('#runOpts'), editing = on && !!editMod?.editActive();
+  opts.classList.toggle('hidden', !editing);
+  if (editing) opts.title = `Where results go: ${editMod.runOptionsWords()}`;
   b.title = st.why || (on ? `${st.label} for what is selected on the table (Ctrl+Enter)` : 'Generate with the Generate screen\'s template (Ctrl+Enter)');
 }
 
@@ -158,6 +163,8 @@ wireTemplateFilter();
 $('#reloadTpl').addEventListener('click', async () => { await loadTemplates(true); toast('Templates and model lists reloaded'); });
 document.addEventListener('deck-comfy-back', () => loadTemplates(true).catch(() => {}));
 $('#genBtn').addEventListener('click', () => generate());
+$('#runOpts').append(icon('settings'));
+$('#runOpts').addEventListener('click', (e) => { const r = e.currentTarget.getBoundingClientRect(); editMod?.openRunOptions(r.left, r.top - 4); });
 $('#stopBtn').addEventListener('click', () => {   // (on the table it stops what the big button started: the Edit pane's runs, a chain, or a run)
   if (tableOn() && editMod?.editActive()) { editMod.stopEdit(); return; }
   if (tableOn() && makeMod) { makeMod.stopMake(); return; }
@@ -298,7 +305,7 @@ const H3_PHRASES = [
 // the phrase groups for the open template's prompt (phrases.js): H3 has its own; a template that changes a picture
 // gets the edit phrases; video ones the camera moves; stills the lot
 function promptPhrases() {
-  const t = S.tpl;
+  const t = fieldState()?.tpl || S.tpl;   // (the fields on show: on the table, the Make panel's template)
   if (!t) return [];
   if (t.tag_style === 'h3') return H3_PHRASES;
   if (t.media === 'video') return VIDEO_PHRASES;
@@ -362,6 +369,62 @@ function promptTarget(t) {
   if (!kind) return null;
   return kind === 'video' ? { media: 'video', family: 'ltx', i2v: true, remember: 'deck.storyVideoFamily' }
     : { media: 'image', family: 'krea', remember: 'deck.storyImageFamily' };
+}
+
+// What a text box offers: its own groups, or the phrases for a prompt (Make's, or the Edit pane's for its prompts); the prompt's tag chips
+const phrasesFor = (t) => (t._chipGroups ? t._chipGroups().filter(([, items]) => items.length)
+  : t.closest('.prompt-field') ? promptPhrases()
+    : t.closest('.sb-pane[data-pane="edit"]') && /^Prompt/.test(t.closest('.field')?.querySelector('.lbl')?.textContent || '') ? EDIT_PHRASES : []);
+const tagsFor = (t) => [...(t.closest('.prompt-field')?.querySelectorAll('.tag-chips .chip') || [])].map((c) => c.textContent);
+// the groups as folding rows: tap a heading to open or close it (remembered). mkChip(label, text) makes a chip.
+function phraseRows(phrases, mkChip, keepFocus) {
+  const open = store.get('deck.phraseGroups', { Structure: true });
+  return phrases.flatMap(([name, items, dflt = false]) => {
+    open[name] ??= dflt;
+    const body = h('div', { class: 'text-pop-group' + (open[name] ? '' : ' hidden') }, items.map(([l, x]) => mkChip(l, x)));
+    const head = h('button', { type: 'button', class: 'text-pop-head', onmousedown: keepFocus, onclick: () => {
+      open[name] = !open[name]; store.set('deck.phraseGroups', open);
+      body.classList.toggle('hidden', !open[name]); head.classList.toggle('open', !!open[name]);
+    } }, name);
+    head.classList.toggle('open', !!open[name]);
+    return [head, body];
+  });
+}
+
+// With a mouse: the hints in a floating panel while a prompt has the cursor, the chips typing into it. It folds to its title bar and stays so.
+function wireHintPanel() {
+  if (matchMedia('(pointer: coarse)').matches) return;
+  const keepFocus = (ev) => ev.preventDefault();
+  let panel = null, src = null, hideT = 0, inside = false;
+  const FOLD = 'deck.hints.folded';
+  const setFold = (on) => { store.set(FOLD, on); panel.el.classList.toggle('folded', on); foldBtn.textContent = on ? '▸' : '▾'; foldBtn.title = on ? 'Show the hints' : 'Fold the hints'; foldBtn.setAttribute('aria-label', foldBtn.title); };
+  const foldBtn = h('button', { type: 'button', class: 'icon-btn', onmousedown: keepFocus, onclick: () => setFold(!panel.el.classList.contains('folded')) });
+  const build = () => {
+    panel = floatPanel({ key: 'deck.hints', title: 'Prompt hints', cls: 'float-hints', buttons: [foldBtn] });
+    panel.body.classList.add('text-pop-tags', 'wide');
+    setFold(store.get(FOLD, false));
+    panel.el.addEventListener('pointerdown', () => { inside = true; }, true);
+    addEventListener('pointerup', () => { if (inside) { inside = false; if (src?.isConnected) src.focus({ preventScroll: true }); } }, true);
+  };
+  document.addEventListener('focusin', (e) => {
+    const t = e.target;
+    if (t.tagName !== 'TEXTAREA' || t.readOnly) return;
+    clearTimeout(hideT);
+    const phrases = phrasesFor(t), tags = tagsFor(t);
+    if (!phrases.length && !tags.length) { src = null; panel?.hide(); return; }
+    if (t === src && panel?.shown()) return;
+    src = t;
+    if (!panel) build();
+    const mkChip = (label, text = label) => uiChip(label, () => { if (text?.run) text.run(t); else insertPhrase(t, text); },
+      { title: typeof text === 'string' ? text.replace(/[§¶↵]/g, '') : label, keepFocus: true });
+    panel.body.replaceChildren(...tags.map((x) => mkChip(x)), ...phraseRows(phrases, mkChip, keepFocus));
+    panel.show();
+  });
+  document.addEventListener('focusout', (e) => {
+    if (e.target !== src) return;
+    clearTimeout(hideT);
+    hideT = setTimeout(() => { if (!inside && document.activeElement !== src) { src = null; panel?.hide(); } }, 200);
+  });
 }
 
 // Touch screens: tapping a text box in a settings panel opens it in a popup at the top, sized to
@@ -458,26 +521,12 @@ function wireTextPopup() {
     aid.classList.toggle('hidden', !target);
     undo = []; lastTyped = -Infinity; undoBtn.disabled = true; prev = { v: ta.value, a: ta.value.length, b: ta.value.length };
     // the prompt's tag chips (<Picture 1>, <Subject 1>…) move in here; on touch screens the panel hides them
-    const list = [...(t.closest('.prompt-field')?.querySelectorAll('.tag-chips .chip') || [])].map((c) => c.textContent);
+    const list = tagsFor(t);
     // a chip's text is a phrase for insertPhrase, or { run(ta) } that edits the text itself (the Sound tab's script)
     const chip = (label, text = label) => uiChip(label, () => { snap(); lastTyped = -Infinity; if (text?.run) text.run(ta); else insertPhrase(ta, text); },
       { title: typeof text === 'string' ? text.replace(/[§¶↵]/g, '') : label, keepFocus: true });
-    // a box can bring its own chip groups: t._chipGroups() → [[name, [[label, text]], open by default]]
-    const phrases = t._chipGroups ? t._chipGroups().filter(([, items]) => items.length)
-      : t.closest('.prompt-field') ? promptPhrases() : [];
-    // phrase groups fold: tap a heading to open or close it (remembered)
-    const open = store.get('deck.phraseGroups', { Structure: true });
-    const group = ([name, items, dflt = false]) => {
-      open[name] ??= dflt;
-      const body = h('div', { class: 'text-pop-group' + (open[name] ? '' : ' hidden') }, items.map(([l, x]) => chip(l, x)));
-      const head = h('button', { type: 'button', class: 'text-pop-head', onmousedown: keepFocus, onclick: () => {
-        open[name] = !open[name]; store.set('deck.phraseGroups', open);
-        body.classList.toggle('hidden', !open[name]); head.classList.toggle('open', !!open[name]);
-      } }, name);
-      head.classList.toggle('open', !!open[name]);
-      return [head, body];
-    };
-    tags.replaceChildren(...list.map((x) => chip(x)), ...phrases.flatMap(group));
+    const phrases = phrasesFor(t);
+    tags.replaceChildren(...list.map((x) => chip(x)), ...phraseRows(phrases, chip, keepFocus));
     tags.classList.toggle('hidden', !list.length && !phrases.length);
     tags.classList.toggle('wide', phrases.length > 0);
     t.blur();
@@ -492,6 +541,7 @@ function wireTextPopup() {
 (async function init() {
   wireLayout();
   wireTextPopup();
+  wireHintPanel();
   wireUndoDock();
   wireVideoTransport();
   wireVfx();

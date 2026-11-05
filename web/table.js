@@ -1039,7 +1039,7 @@ function onDown(e) {
     const r = byId([...U.sel][0]);
     U.op = { ...base, type: 'resize', f: r, start: { ...r }, handle: handle.dataset.handle };
   } else if (f) startMove(e, f, base);
-  else U.op = { ...base, type: 'marquee', p0: tablePt(e), base: e.shiftKey ? new Set(U.sel) : new Set(), shift: e.shiftKey };
+  else U.op = { ...base, type: 'marquee', p0: tablePt(e), base: adds(e) ? new Set(U.sel) : new Set(), shift: adds(e) };
 }
 // a drag from an out port: a wire follows the pointer; let go over another frame to plug it in there
 function startWire(src, base) {
@@ -1070,10 +1070,12 @@ function endWire(e, op) {
   if (op.over) plugAt(op.src, op.over, e.clientX, e.clientY);
   else renderPorts();
 }
+// (Shift or Ctrl adds to what is selected)
+const adds = (e) => !!(e.shiftKey || e.ctrlKey || e.metaKey);
 function startMove(e, f, base) {
   // a second tap on the same frame opens it (a dblclick would land on the stage, which holds the pointer)
-  if (!e.shiftKey && U.lastTap?.id === f.id && Date.now() - U.lastTap.t < DOUBLE_MS) { U.lastTap = null; U.op = null; goLive(f); return; }
-  if (e.shiftKey) {
+  if (!adds(e) && U.lastTap?.id === f.id && Date.now() - U.lastTap.t < DOUBLE_MS) { U.lastTap = null; U.op = null; goLive(f); return; }
+  if (adds(e)) {
     if (U.sel.has(f.id)) { U.sel.delete(f.id); renderFrames(); return; }
     U.sel.add(f.id);
   } else if (!U.sel.has(f.id)) U.sel = new Set([f.id]);
@@ -1183,7 +1185,7 @@ function endMove(e, op) {
     return;
   }
   U.lastTap = { id: op.tap.id, t: Date.now() };
-  if (!e.shiftKey && U.sel.size > 1) { U.sel = new Set([op.tap.id]); renderFrames(); }   // a tap in a selection picks that one
+  if (!adds(e) && U.sel.size > 1) { U.sel = new Set([op.tap.id]); renderFrames(); }   // a tap in a selection picks that one
 }
 function endMarquee(e, op) {
   if (!op.moved) {
@@ -1338,6 +1340,13 @@ export function dropOntoFrame(frame, list) {
   if (!frame || frame.kind === 'note' || !frame.doc) return false;
   const detail = { from: [], sources: [list].flat(), onto: frame, table: T, handled: false };
   dispatchEvent(new CustomEvent('table:drop-frame', { detail }));
+  return detail.handled;
+}
+// The same, resolving once they are in
+export async function addToFrame(frame, list) {
+  const detail = { from: [], sources: [list].flat(), onto: frame, table: T, handled: false };
+  dispatchEvent(new CustomEvent('table:drop-frame', { detail }));
+  await detail.job;
   return detail.handled;
 }
 // Things dropped at a screen point: over a frame, into it (an image frame takes pictures as layers, a video frame clips,

@@ -94,7 +94,7 @@ const PANES = {
     clipboardImage().then((b) => { if (b) { paste._blob = b; paste.classList.remove('hidden'); } });
     return [picker,
       cards(card('canvas', 'Blank canvas', () => blank(Q, 'image', size())),
-        card('image', 'From a picture', () => pickPicture((name, info) => fromSource(Q, { input: name, width: info?.width, height: info?.height }))),
+        card('image', 'From pictures', () => pickPictures(Q)),
         textC, paste),
       textHost];
   },
@@ -156,6 +156,31 @@ async function blank(Q, kind, size, payload) {
 function pickPicture(onPick, title = 'Start from a picture') {
   closeSheet();
   openSourcePicker({ kinds: ['image'], want: 'picture', title, onPick: (name, info) => Promise.resolve(onPick(name, info)).catch((e) => toast(e.message, true)) });
+}
+
+// Pictures ticked for a new image frame: the first makes it (at that picture's size), the rest go in as layers over it, in the order ticked.
+// They arrive one at a time, some after an upload, so they queue here.
+function pickPictures(Q) {
+  closeSheet();
+  const waiting = [];
+  let frame = null, running = false, failed = false;
+  const work = async () => {
+    if (running) return;
+    running = true;
+    try {
+      while (waiting.length && !failed) {
+        const list = waiting.splice(0);
+        if (!frame) {
+          frame = await Table.sourceFrameAt(list.shift(), cornerOf(Q));
+          if (!frame) { failed = true; break; }
+          Table.selectFrames([frame.id]);
+        }
+        if (list.length) await Table.addToFrame(frame, list);
+      }
+    } catch (e) { toast(e.message, true); } finally { running = false; }
+  };
+  openSourcePicker({ kinds: ['image'], want: 'picture', title: 'Start from pictures', multi: true,
+    onPick: (name, info) => { waiting.push({ input: name, width: info?.width, height: info?.height }); work(); } });
 }
 
 // a picture, clip or file as a frame of its own (the same as dropping it on the table there)

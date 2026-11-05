@@ -135,6 +135,8 @@ const OPS = [
 const ST = { skinWhere: 'whole', skinParts: 'face', samSure: 0.2, samMost: 8, op: 'cutout', scope: 'whole', result: 'cutout', hide: true, fine: true, rfrom: 'words', rprompt: 'watermark', cmodel: 'noise', uprompt: UNMARK_PROMPT, prompt: 'person', rows: 1, cols: 4, sheetFast: false, swapPart: 'face', swapFrom: '', swapCrop: null, swapMp: 0, swapModels: ['klein9b'], swapWhere: 'find', swapExtra: '', scale: 2, poser: 'dwpose', depthModel: 'large', edgeAmount: 'normal', stepScratch: true, stepClean: true, stepFaces: true, stepColour: false, scratchAmount: 'normal', faceAmount: 0.8, cprompt: COLOUR_PROMPT, dmodel: 'klein9b', lmodel: 'krea2', lprompt: DELIGHT_PROMPT, dprompt: {}, dstrength: {}, eprompt: '', econtext: '', ekeep: true, erefs: [], erefMp: {}, echoice: {}, ewhere: 'all', efind: '', eclose: true, egrow: 8, esoft: 16, emp: 2, ecount: 1, eseed: 0, eseedMode: 'random', esteps: 8, ecfg: 1, eneg: '', eloras: [], ...store.get(KEY, {}) };
 export const toolState = () => ST;   // (the settings the Layers pane and the Edit pane share)
 ST.erefs = asRefs(ST.erefs);   // (saved as bare names by an older version)
+// (Selected layers became the default: once, for what a browser had kept)
+if (!store.get('deck.imagetools.scopeSet', false)) { ST.scope = 'selected'; store.set('deck.imagetools.scopeSet', true); }
 if (ST.lprompt === OLD_DELIGHT_PROMPT) ST.lprompt = DELIGHT_PROMPT;   // (the old default, saved in this browser; a prompt someone wrote stays)
 const save = () => store.set(KEY, ST);
 // Runs on their way back, each with the edit (tab: its document id) it lands in: key (a run id, or a token for a tool's
@@ -543,8 +545,7 @@ async function run(eng) {
     if (o.kind === 'remove' && ST.rfrom === 'painted') return await removePainted(eng, o, t, tab);
     if (o.kind === 'swap' && ST.swapWhere === 'painted') return await swapPainted(eng, o, tab);
     if (o.kind === 'edit' && ST.ewhere === 'painted') return await editPainted(eng, o, t, tab);
-    const list = ST.scope === 'selected' ? targets(eng) : [null];
-    if (!list.length) return toast('Select a layer first', true);
+    const some = ST.scope === 'selected' ? targets(eng) : [], list = some.length ? some : [null];   // (nothing selected: the whole picture)
     // (each selected layer is its own run, queued one after another; one failing to send doesn't stop the rest)
     const { failed } = await eachOne(list, async (l) => {
       const src = await sourceOf(eng, l, o);
@@ -1325,8 +1326,7 @@ export async function runToolOn(id, { tab, src, eng = null, batch = 1 } = {}) {
   if (o.kind === 'swap' && ST.swapWhere === 'painted') { await swapPainted(e, o, tab); return { gens: [] }; }
   if (o.kind === 'edit' && ST.ewhere === 'painted') { await editPainted(e, o, t, tab); return { gens: [] }; }
   await e.paint?.savePaint?.();
-  const list = ST.scope === 'selected' ? targets(e) : [null];
-  if (!list.length) throw new Error('Select a layer first');
+  const some = ST.scope === 'selected' ? targets(e) : [], list = some.length ? some : [null];   // (nothing selected: the whole picture)
   const gens = [];
   const { failed } = await eachOne(list, async (l) => {
     const from = await sourceOf(e, l, o);
@@ -1508,7 +1508,7 @@ export function imageToolsSection(eng) {
     !t ? hint(`${tplId(o)} isn't installed yet`) : null,
     field('Run on', seg([['whole', 'Whole picture'], ['selected', 'Selected layers']], ST.scope, (v) => { ST.scope = v; save(); eng.render(); }),
       help('Whole picture sends every visible layer together. Selected layers runs on each selected layer alone, one run each, with the result over that layer. A cropped layer sends its kept part. A turned or mirrored layer is sent unturned, and its result takes the same turn. A masked layer is sent whole: an Upscale, Detail or De-light result gets a copy of its mask, and other tools\' results get none. Remove from the red mask cuts the mask to each selected layer, and leaves out a layer it doesn\'t touch.')),
-    ST.scope === 'selected' && !many ? hint('Select a layer first') : null,
+    ST.scope === 'selected' && !many ? hint('Nothing selected: it runs on the whole picture') : null,
     ...toolFields(o, t, { redraw: () => eng.render(), size, eng }),
     (KEEPS_FRAMING.has(o.kind) || o.kind === 'sheet' || (o.kind === 'matte' && ST.result !== 'mask')) && onLayers && !(o.kind === 'edit' && ST.ewhere === 'painted' && ST.scope !== 'selected')
       ? toggle('Hide the original', ST.hide, (v) => { ST.hide = v; save(); }) : null,

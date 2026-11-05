@@ -6,47 +6,25 @@
 import { h, store } from './ui.js';
 import { icon } from './icons.js';
 import { liveFrame } from './live.js';
+import { floatPanel } from './float-panel.js';
 
 export const FLOAT_KINDS = ['image', 'scene', 'video', 'sound'];
 const TITLES = { image: 'Layers', scene: 'Layers', video: 'Clips', sound: 'Sounds' };
 const KEY = 'deck.layers.float';
-const F = { on: store.get(KEY, false) === true, el: null, body: null };
+const F = { on: store.get(KEY, false) === true, panel: null };
 
 const floatsNow = () => F.on && FLOAT_KINDS.includes(liveFrame()?.kind);
 export const floatsFor = (kind) => floatsNow() && liveFrame()?.kind === kind;
-function keepOnScreen() {
-  const r = F.el.getBoundingClientRect();
-  F.el.style.left = `${Math.max(0, Math.min(r.left, innerWidth - 80))}px`;
-  F.el.style.top = `${Math.max(0, Math.min(r.top, innerHeight - 40))}px`;
-}
 function build() {
-  if (F.el) return;
+  if (F.panel) return;
   const close = h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Back in the sidebar', title: 'Back in the sidebar', onclick: () => floatLayers(false) }, icon('close'));
-  const head = h('div', { class: 'float-head' }, (F.title = h('span', { class: 'float-title' }, 'Layers')), close);
-  F.body = h('div', { class: 'float-body' });
-  F.el = h('div', { class: 'float-panel hidden', role: 'dialog', 'aria-label': 'Layers' }, head, F.body);
-  document.body.append(F.el);
-  const saveAt = () => { const r = F.el.getBoundingClientRect(); store.set(`${KEY}.at`, { x: r.left, y: r.top, w: r.width, h: r.height }); };
-  head.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('button')) return;
-    const r = F.el.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top;
-    head.setPointerCapture(e.pointerId);
-    const move = (ev) => { F.el.style.left = `${ev.clientX - dx}px`; F.el.style.top = `${ev.clientY - dy}px`; keepOnScreen(); };
-    const up = () => { head.removeEventListener('pointermove', move); head.removeEventListener('pointerup', up); head.removeEventListener('pointercancel', up); saveAt(); };
-    head.addEventListener('pointermove', move); head.addEventListener('pointerup', up); head.addEventListener('pointercancel', up);
-  });
-  new ResizeObserver(() => { if (!F.el.classList.contains('hidden')) saveAt(); }).observe(F.el);
-  addEventListener('resize', () => { if (!F.el.classList.contains('hidden')) keepOnScreen(); });
-  const at = store.get(`${KEY}.at`, null);
-  if (at) Object.assign(F.el.style, { left: `${at.x}px`, top: `${at.y}px`, width: `${at.w}px`, height: `${at.h}px` });
+  F.panel = floatPanel({ key: KEY, title: 'Layers', cls: 'float-layers', buttons: [close] });
 }
 function sync() {
-  if (!F.on && !F.el) return;
+  if (!F.on && !F.panel) return;
   build();
-  const open = floatsNow();
-  F.el.classList.toggle('hidden', !open);
-  if (open) { keepOnScreen(); F.title.textContent = TITLES[liveFrame().kind]; }
-  else F.body.replaceChildren();
+  if (floatsNow()) { F.panel.show(); F.panel.title(TITLES[liveFrame().kind]); }
+  else { F.panel.hide(); F.panel.body.replaceChildren(); }
 }
 export const layersFloating = () => F.on;
 export function floatLayers(on) {
@@ -60,7 +38,7 @@ export function layerListPart(kind, list) {
   if (!floatsFor(kind)) return list;
   build();
   const rows = list?.matches?.('.layers') ? list : list?.querySelector?.('.layers') || null;
-  F.body.replaceChildren(rows || h('span', { class: 'hint' }, 'Nothing here yet'));
+  F.panel.body.replaceChildren(rows || h('span', { class: 'hint' }, 'Nothing here yet'));
   sync();
   return rows === list ? null : list;
 }
