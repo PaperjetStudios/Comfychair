@@ -8,6 +8,7 @@
 //   live:   for an op that is headless with some options and not with others: (opts) -> why it needs the open frame, or null
 //   lands:  what kind of frame a result is ('image' for a frame grabbed from a video); the frame's own kind when not given
 //   once:   no batch (a setting changed, not a run made)
+//   inPlace: it works on the open frame itself (Inpaint, Extend): its result lands there, never in a frame of its own
 //   newFrame: its result is always a frame of its own (Render, a 3D result, Its sound, Mark views): no layer target
 //   selfLands: it places its result itself (a grabbed frame: a frame of the picture's own size, or a layer in the selected
 //           image frame): no result frame is made for it first
@@ -61,7 +62,10 @@ const IMAGE = [
   { id: 'canny', group: 'Maps', label: 'Canny edges', icon: 'grid', help: 'White edges on black.' },
   { id: 'scribble', group: 'Maps', label: 'Scribble', icon: 'grid', help: 'A loose line drawing.' },
   { id: 'pose', group: 'Maps', label: 'Pose', icon: 'figure', help: 'Body, hands and face as a stick figure.' },
-  { id: 'inpaint', group: 'Edit', label: 'Inpaint', icon: 'brush', needs: 'live', why: LIVE_PAINT, help: 'Paints something new where you paint.' },
+  { id: 'inpaint', group: 'Edit', label: 'Inpaint', icon: 'brush', needs: 'live', why: LIVE_PAINT, inPlace: true,
+    help: 'Redraws the area marked with the red mask (the Mask panel) from a prompt, or adds something new in a box. Each result is a draft on top, to keep or drop.' },
+  { id: 'extend', group: 'Edit', label: 'Extend', icon: 'maximize', needs: 'live', why: 'The canvas is grown on the open frame', inPlace: true,
+    help: 'Grows the canvas on any side and draws the new part to match, in one go.' },
   { id: 'photo3d', group: '3D', label: 'Photo in 3D', icon: 'cube', lands: 'scene', once: true, newFrame: true, help: 'MoGe turns the picture into a mesh with its camera: a new 3D frame.' },
   { id: 'object3d', group: '3D', label: 'Make a 3D object', icon: 'cube', lands: 'scene', once: true, newFrame: true, selfLands: true,
     help: 'Pixal3D or Trellis: a textured model from the picture (or its other views), in a new 3D frame.' },
@@ -250,7 +254,7 @@ export function menuGroupsFor(frames = [], { live = () => false, opts = () => ({
 export const resultKind = (op) => op?.lands || op?.kind || null;
 export function targetsOf(op) {
   if (!op) return [];
-  if (op.kind === 'scene' || op.needs === 'doc') return ['self'];
+  if (op.kind === 'scene' || op.needs === 'doc' || op.inPlace) return ['self'];
   if (op.newFrame) return ['frame'];
   return ['frame', 'layer'];
 }

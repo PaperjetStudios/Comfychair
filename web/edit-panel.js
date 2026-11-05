@@ -24,6 +24,7 @@ import * as Table from './table.js';
 import { setupsRow } from './setups.js';
 import { editKey } from './setups-rules.js';
 import { toolState } from './imagetools.js';
+import { keepTyping } from './key-focus.js';
 
 const KINDS = ['image', 'video', 'sound', 'scene'];
 const WORD = { image: 'Image', video: 'Video', sound: 'Sound', scene: '3D' };
@@ -111,7 +112,9 @@ export function draw() {
   const notes = notesSection();
   if (!kinds.length) { syncOverlay(null, null, []); el.replaceChildren(notes || note(P.frames.length ? 'Nothing to edit on these frames yet.' : 'Select a frame to edit it.', 'info')); tellState(); return; }
   if (!kinds.includes(P.focus)) P.focus = kinds[0];
+  const typing = keepTyping(el);   // (drawn again as the open frame changes: a box being typed in keeps the focus)
   el.replaceChildren(...kinds.map(sectionFor), notes || '');
+  typing();
   if (!kinds.includes('video') || isCross('video')) syncOverlay(null, null, []);
   tellState();
 }
@@ -154,7 +157,7 @@ function sectionFor(kind) {
       kids.push(hint(why, 'edit-why'),
         button([icon('fit'), 'Open the frame'], () => {
           if (kind === 'image') optsFor(kind, op.id).op = op.id;   // (the Layers pane's tool: the Image tools' settings are shared)
-          Table.goLive(frames[0]); if (kind === 'image') sidebar.show('layers');
+          Table.goLive(frames[0]); if (kind === 'image' && !op.inPlace) sidebar.show('layers');   // (Inpaint and Extend stay here: their rows are this pane's)
         }, { cls: 'small edit-open' }));
     }
     // the options (shown greyed or not: an option can be what makes it need the open frame)
@@ -320,6 +323,14 @@ import('./vfx.js').then(({ onSendToVfx }) => onSendToVfx(async () => {
   toast('Pick an effect: it runs on this frame\'s clip');
   return true;
 })).catch(() => {});
+// the open image frame drew again (a mask painted, a Fill landed, an item box drawn): the image tools that show its state follow
+const FOLLOWS_ENGINE = new Set(['inpaint', 'extend', 'edit', 'swap', 'remove']);
+function followEngine() {
+  if (!editActive() || !P.loaded || !(P.ops.get('image') || []).length) return;
+  if (FOLLOWS_ENGINE.has(currentOp('image')?.id)) redrawLater();
+}
+addEventListener('editor:render', followEngine);
+addEventListener('mask:painted', () => { clearTimeout(followEngine.t); followEngine.t = setTimeout(followEngine, 200); });
 for (const ev of ['table:select', 'table:live', 'table:unlive']) addEventListener(ev, () => { setTimeout(() => { if (editActive()) draw(); else tellState(); }, 0); });
 sidebar.onShow((name) => { if (name === 'edit') draw(); else syncOverlay(null, null, []); tellState(); });
 

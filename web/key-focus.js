@@ -43,14 +43,22 @@ export function ownsKey(e, { dialog = true, keyboard = tabbed } = {}) {
 }
 
 // What Ctrl+Enter or Shift+Enter runs on the Editor tab, from where the focus is: 'tool' (the Image tool that's open),
-// 'fill' (Inpaint's Fill) or null. A box being typed in that belongs to another panel runs neither, and Shift+Enter in
-// Inpaint's own boxes stays a new line. Not for any other combination of keys: see editorRunKeys.
-export function editorRunKey(e) {
+// 'fill' (Inpaint's Fill, or Extend: inpaint.js runFill) or null. A box being typed in that belongs to another panel runs
+// neither, and Shift+Enter in Inpaint's own boxes stays a new line. The Edit pane's Inpaint and Extend rows carry
+// data-run-key; with them on show (shown(): the rows on show, if any), a key from no box runs Fill too. Not for any other
+// combination of keys: see editorRunKeys.
+const runKeyShown = () => {
+  if (typeof document === 'undefined') return false;
+  const el = document.querySelector('[data-run-key]');
+  return !!el?.offsetParent;
+};
+export function editorRunKey(e, shown = runKeyShown) {
   const t = e.target, title = t.closest?.('section')?.querySelector('.section-title span')?.textContent;
   const typing = !!t.closest?.('textarea, [contenteditable]') || !['range', 'checkbox', 'radio', undefined].includes(t.closest?.('input')?.type);
   if (title === 'Image tools') return 'tool';
-  if (title === 'Inpaint and extend' && (e.ctrlKey || e.metaKey)) return 'fill';
-  return typing ? null : 'tool';
+  if ((title === 'Inpaint and extend' || t.closest?.('[data-run-key]')) && (e.ctrlKey || e.metaKey)) return 'fill';
+  if (typing) return null;
+  return shown() ? 'fill' : 'tool';
 }
 // Ctrl+Enter or Shift+Enter, and not both: Ctrl+Shift+Enter is still Generate's, as it always was.
 export const editorRunKeys = (e) => e.key === 'Enter' && !e.altKey && (e.ctrlKey || e.metaKey) !== e.shiftKey;

@@ -90,6 +90,12 @@ test('where results land: a new frame from the table, a layer in an open frame, 
   assert.deepEqual(targetsOf(opById('scene', 'cleanup')), ['self']);
   assert.equal(defaultTarget(opById('scene', 'cleanup'), false), 'self');
   assert.deepEqual(targetsOf(null), []);
+  for (const id of ['inpaint', 'extend']) {   // (on the open frame itself: its drafts land there)
+    const o = opById('image', id);
+    assert.deepEqual(targetsOf(o), ['self'], id);
+    assert.ok(whyNot(o, { live: false }), `${id} needs the open frame`);
+    assert.equal(whyNot(o, { live: true }), '', `${id} runs on the open frame`);
+  }
   assert.equal(resultKind(opById('video', 'grab')), 'image');
   assert.equal(resultKind(opById('video', 'foley')), 'sound');
   assert.equal(resultKind(opById('video', 'restyle')), 'video');

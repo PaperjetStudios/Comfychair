@@ -27,7 +27,7 @@ too: the tool strip on the left of its canvas has pressure and tilt brushes (pen
 line / rectangle / ellipse, bucket fill, a colour picker and rectangle / lasso selections, on any layer or on a
 **Blank canvas**. Layers get blend modes and a lock, and turn and mirror: the round handle above the selected layer
 turns it about its centre, pulling to 15 degree steps (Shift steps by 15, Alt turns freely), and the layer panel has a
-Rotation slider, quarter turns and mirrors. **Image tools** and **Inpaint and extend** are described below.
+Rotation slider, quarter turns and mirrors. **Image tools**, the **Mask** panel and **Inpaint** / **Extend** are described below.
 
 **Video** trims generated clips, orders them and exports one video (ffmpeg); the result lands in History.
 **⤓ Import clip** (also "From a link or big file…" in every video picker) cuts a piece out of a YouTube/Reddit/X/Vimeo
@@ -667,7 +667,7 @@ hiding, blend and groups. The chips over the list add a grid, turn steps and siz
 
 **Cropping past the edges:** hold **Ctrl** while dragging a crop (or turn on **Past the edges**) and the box can go past the picture. The new part is neutral grey. Letting go makes a new layer of that box over the original, which hides; its mask, if it has one, shows the new part. **Edit from a prompt** can then fill the grey in.
 
-**Keys for a run:** on this tab, **Ctrl+Enter** or **Shift+Enter** runs the Image tool that's open, not Generate. Ctrl+Enter in the Inpaint panel runs **Fill**. In another panel's text box, Ctrl+Enter does nothing. Ctrl+Shift+Enter still runs Generate.
+**Keys for a run:** on this tab, **Ctrl+Enter** or **Shift+Enter** runs the Image tool that's open, not Generate. Ctrl+Enter in Inpaint runs **Fill** (in the Extend tool, **Extend**). In another panel's text box, Ctrl+Enter does nothing. Ctrl+Shift+Enter still runs Generate.
 
 **Selecting layers:** Shift-click in the list selects from the selected layer through the one clicked; a hidden layer between them is left out. Alt-click adds or drops one. The **Select layers** arrow (Q, under Move) drags a box: it selects every showing, unlocked layer it touches. Shift adds, Alt takes away. Press V to move what's selected. When a tool hides the original, its result takes the original's place in the selection, so the next run works on the results. **Move to new edit** takes the selected layers and their masks out of this edit into a new tab. **Delete N selected** (or the Delete key) removes them all, with Undo; a locked one stays. **Shift+Enter** runs the Image tool that's open, also from its text boxes.
 
@@ -838,16 +838,22 @@ desktop ComfyUI. It's the exact graph that ran, with LoRAs expanded.
 
 ### Masked edits
 
-The Image tab does the same on the canvas. In the **Masks** panel, mark the area to redraw with **Paint mask**
+The Image tab does the same on the canvas. On an open image frame on the table the red mask has its own floating
+**Mask** panel: the brush button on the frame's bar opens it, and so does **Mask…** in every tool that uses the red mask
+(Inpaint, Edit from a prompt with The red mask, Swap, Remove), which starts painting when nothing is marked yet. While the
+mask is painted it holds the brush too (brush or eraser, size, hardness); closing it puts the Move tool back. (The Image
+tab keeps it as the **Masks** section of its panel.) There, mark the area to redraw with **Paint mask**
 (a red brush on its own layer), **Add selection** (a rectangle or lasso selection joins the mask), **Add layer shape**
 (the solid part of each selected layer joins it: what its see-through and its own mask leave showing), **Cut out layer**
 (a new layer of what the mask covers on each selected layer, in the same place and at full size; the layer stays, hidden, and
 the mask is used up; **Invert** first to keep what is outside it), **Invert**, **Clear**
 or **Mask outside** (everything of the canvas outside the selected layer). **Dilate / erode** grows or shrinks the mask, and the
-canvas follows the slider. In the **Inpaint and extend** panel, **Add item** draws a box for something new:
-describe it, and optionally give a picture to match (Flux 3 Klein places each box). **Extend…** grows the canvas and
-marks the new part. Then describe what should be there, pick the Model (default `deck-klein3-inpaint`, then
-`deck-klein9b-inpaint`, `deck-krea2-inpaint`, `deck-qwen21-inpaint`), set Denoise, Crop to mask and Edge softness, and tap **Fill**. The rest of the picture comes back untouched.
+canvas follows the slider. **Inpaint** and **Extend** are tools of the Edit pane on the open frame (on the Image tab, its
+**Inpaint and extend** section). In Inpaint, **Add item** draws a box for something new:
+describe it, and optionally give a picture to match (Flux 3 Klein places each box). Then describe what should be there, pick the Model (default `deck-klein3-inpaint`, then
+`deck-klein9b-inpaint`, `deck-krea2-inpaint`, `deck-qwen21-inpaint`), set Denoise, Crop to mask and Edge softness, and **Run** (Fill). The rest of the picture comes back untouched.
+**Extend** takes how much to grow (each side, Both sides, or To a shape), a prompt for the whole scene and a model: Run
+grows the canvas, marks the new part and fills it in one go, at Denoise 1.0.
 
 On an image template (the `-edit` and `-i2i` ones), the first picture has **Mask…**: a full-screen painter
 over the picture as cropped. Paint what the edit may change; it shows as a red tint. The pen paints (press
@@ -1255,7 +1261,9 @@ web/dialogue.js      dialogue scripts for the voice tools
 web/editor-engine.js the Image tab's layer stack; web/editor.js the sketch pad (Draw); web/layer-geom.js its layer geometry
 web/paint.js         the Image tab's painting (brushes, shapes, fill, selections, undo); web/icons.js line icons
 web/imagetools.js    Image tools; web/maps.js the control-map templates shared with the VFX tab
-web/inpaint.js       Inpaint and extend
+web/inpaint.js       Inpaint and extend, the mask's rows
+web/extend-math.js   Extend's sizes and new parts
+web/float-mask.js    the floating Mask panel
 web/view-boxes.js    mark the views on one picture (a character sheet)
 web/video.js         the Video tab; web/clip-effects.js clip effects shared with VFX; web/clipimport.js Import clip
 web/timeline.js      the timeline the Video and Sound tabs share

@@ -712,6 +712,7 @@ export function createPaint(ctx) {
     S = null; s.l.live = null;
     if (bb) change(s.l, bb, (c) => laydown(c, SCR.buf.cv, intBox(bb, s.l.img), s));
     X.redraw();
+    if (bb && s.l.mask) dispatchEvent(new CustomEvent('mask:painted'));   // (what shows how much is marked follows: the Mask panel, the Edit pane)
   }
   function cancelStroke() {
     if (!S) return;
@@ -1061,7 +1062,7 @@ export function createPaint(ctx) {
         c.globalCompositeOperation = kind === 'tomask' ? 'source-over' : 'destination-out';
         c.setTransform(...invert(layerMatrix(m))); c.drawImage(red, s.ox, s.oy);   // (through the mask layer's own place and scale)
       });
-      if (kind === 'tomask') toast('Added to the mask (Masks panel)');
+      if (kind === 'tomask') toast('Added to the mask (Mask panel)');
     } else if (kind === 'invert') {
       s.m = invertCanvas(s.m); settleSel(s);
     } else if (kind === 'grow' || kind === 'shrink' || kind === 'feather') {
@@ -1521,7 +1522,7 @@ export function createPaint(ctx) {
     return m;
   }
   return {
-    P, els: buildStrip(), painting, boxing: () => P.tool === 'arrow', paintProps, paintOverlay, sync: syncStrip, savePaint, unsavedPaint, setTool, setColor,
+    P, els: buildStrip(), painting, boxing: () => P.tool === 'arrow', paintProps, brushOf: (k) => bset(k), setBrush, paintOverlay, sync: syncStrip, savePaint, unsavedPaint, setTool, setColor,
     blankSheet, addBlank, dropSel, undo, redo, pushStack, selectionMask, maskLayer, paintMask, spreadValue, spreadLive, spreadDone, layerMaskOp, hasSel: () => !!P.sel, selAction, selectLayer, resizeCanvasLayer, cutByMask, maskOp, growMask, maskOutside, maskFromMatte,
     reset() { cancelStroke(); dropSel(); P.last = null; U.undo = []; U.redo = []; U.bytes = 0; syncStrip(); },   // another document: its undo goes
   };
