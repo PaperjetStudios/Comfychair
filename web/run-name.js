@@ -1,6 +1,7 @@
 // What a run's result is called, so a layer or clip says how it was made: the process, the model, then any LoRAs. "Blended · Klein 9B · fusion2250".
 //   runName(process, g, templates?)  g: a run ({ template, params }), or just { template }. templates: the template list, so a model file picked other than
 //     the template's own is named too. A word the process already says isn't said twice.
+//   resultName(g, templates)         runName for a finished run, its process read from the run's own template
 //   templateProcess(name)            a template's name as a process: without "deck" and its model ("deck klein3 control" → "control")
 const MODELS = [[/klein9b/, 'Klein 9B'], [/klein3/, 'Klein 3'], [/krea2/, 'Krea 2'], [/qwen21/, 'Qwen 2.1'], [/-h3-/, 'MiniMax H3'], [/-ltx-/, 'LTX-2.5'], [/-moss-/, 'MOSS'],
   [/ace-music/, 'ACE-Step'], [/mmaudio/, 'MMAudio'], [/lama/, 'LaMa'], [/sam3|deck-mask/, 'SAM3'], [/sdpose/, 'SDPose'], [/deck-upscale-(image|video)$/, 'SeedVR2']];
@@ -31,4 +32,8 @@ export function runName(process, g, templates = null) {
 export function templateProcess(name) {
   const out = String(name || '').replace(/^deck\s+/i, '').replace(/\b(klein\s?(9b|3)|krea\s?2|qwen\s?2\.?1|qwen21|h3|ltx|moss)\b/gi, '').replace(/\s+/g, ' ').trim();
   return out || String(name || '');
+}
+export function resultName(g, templates = null) {
+  const name = templates?.find?.((x) => x.id === g?.template)?.name || g?.template;
+  return name ? runName(templateProcess(name), g, templates) : `#${g?.id ?? ''}`;
 }

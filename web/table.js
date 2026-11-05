@@ -41,8 +41,9 @@
 //                    last run: chain-rules.js staleInfo); the tiles show it, the Make pane says why
 //
 // Wires (web/wire-rules.js, T.wires): a frame's output plugged into another frame's Make inputs. A frame with something to
-// put out has an out port beside its right edge (on hover, and while it is selected); a drag from it to another frame plugs
-// it in (a video frame asks: the clip, or a frame of it). The target shows one input port per wire down its left edge
+// put out has an out port beside its right edge, always there; a drag from it to another frame plugs it in (a video frame
+// asks: the clip, or frames of it, chosen on a scrubber); let go on empty table, it opens the quick panel (wire-panel.js).
+// A frame with a workflow and something plugged in has a little run button at its top right (chain-run.js runNode). The target shows one input port per wire down its left edge
 // ("Image 1", "Video 1", "Sound 1"). Tap a wire or an input port to select it, Delete unplugs it, right click or a long hold
 // has the rest. Every wire change is a table undo step. For the Make pane: tableWires, wiresInto, setTableWire.
 import { $, h, api, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, info, toggle, help, layerRowsEl, iconBtn, uid } from './ui.js';
@@ -82,7 +83,7 @@ const U = { sel: new Set(), els: new Map(), wired: false, lastTap: null, tabs: n
   loaded: null /* { id, pid } of the table loaded last */, find: { q: '', kinds: new Set(), selOnly: false } /* the Frame pane's list filters */,
   fold: new Map() /* a story scene's row folded or opened by hand, by scene id */, leaving: Promise.resolve() /* the last live frame's saves (table:unlive wait) */,
   wire: null /* the selected wire's id */, hover: null /* the frame the mouse is over (its out port shows) */,
-  wireEls: new Map() /* wire id -> its <g> */, outEls: new Map() /* frame id -> its out port */, inEls: new Map() /* wire id -> its input port */ };
+  wireEls: new Map() /* wire id -> its <g> */, outEls: new Map() /* frame id -> its out port */, inEls: new Map() /* wire id -> its input port */, runEls: new Map() /* frame id -> its run button */, chain: null /* chain:state */ };
 const PENDING = new Map();   // doc id -> results on their way to it (edit:pending { doc, n }, from any kind's edits)
 const H = { past: [], future: [] };   // undo: [{ undo(), redo() }] for this table's moves, resizes and deletes
 const D = {};             // its elements
@@ -370,10 +371,11 @@ function renderWires(touch = null) {
 // input port per wire on its target. None while a frame is live.
 function renderPorts(touch = null) {
   if (!D.ports) return;
-  if (isLive()) { D.ports.replaceChildren(); U.outEls.clear(); U.inEls.clear(); return; }
-  const z = T.view.z, pg = portGeom(), seenOut = new Set(), seenIn = new Set();
+  if (isLive()) { D.ports.replaceChildren(); U.outEls.clear(); U.inEls.clear(); U.runEls.clear(); return; }
+  const z = T.view.z, pg = portGeom(), seenOut = new Set(), seenIn = new Set(), seenRun = new Set(), fed = new Set(T.wires.filter((w) => w.on !== false).map((w) => w.to));
   for (const f of T.frames) {
-    if (touch && !touch.has(f.id)) { seenOut.add(f.id); continue; }
+    if (touch && !touch.has(f.id)) { seenOut.add(f.id); seenRun.add(f.id); continue; }
+    if (!f.hidden && f.make?.template && fed.has(f.id)) { renderRun(f); seenRun.add(f.id); }   // (a frame keeps a template just from being selected: only something fed by a wire is a node)
     const kinds = f.hidden ? [] : W.outKinds(f);
     if (!kinds.length) continue;
     let el = U.outEls.get(f.id);
@@ -396,17 +398,32 @@ function renderPorts(touch = null) {
       el = h('div', { class: 'frame-in', 'data-wire': w.id }, h('span', { class: 'frame-in-dot' }), h('span', { class: 'frame-in-label' }));
       D.ports.append(el); U.inEls.set(w.id, el);
     }
-    const p = inPt(ends[1], slot.get(w.id), pg, z), pick = W.isFrameWire(w) ? FRAME_PICK_LABEL[w.frame] || `${w.frame} s` : '';
+    const p = inPt(ends[1], slot.get(w.id), pg, z), pick = W.isFrameWire(w) ? FRAME_PICK_LABEL[w.frame] || `${(+w.frame).toFixed(2)} s` : '';
     el.className = `frame-in k-${w.kind}${w.on === false ? ' off' : ''}${U.wire === w.id ? ' sel' : ''}`;
     el.style.left = `${p.x}px`; el.style.top = `${p.y}px`;
-    el.lastChild.textContent = W.wireLabel(w);
+    el.lastChild.textContent = pick ? `${W.wireLabel(w)} · ${pick}` : W.wireLabel(w);
     el.title = `From "${ends[0].label}"${pick ? ` · ${pick}` : ''}${w.on === false ? ' · off' : ''}`;
     seenIn.add(w.id);
   }
   if (touch) return;
   for (const [id, el] of U.outEls) if (!seenOut.has(id)) { el.remove(); U.outEls.delete(id); }
   for (const [id, el] of U.inEls) if (!seenIn.has(id)) { el.remove(); U.inEls.delete(id); }
+  for (const [id, el] of U.runEls) if (!seenRun.has(id)) { el.remove(); U.runEls.delete(id); }
 }
+// A frame's little run button: at the right end of its label bar. Running: it stops. Waiting in the chain: dimmed.
+function renderRun(f) {
+  let el = U.runEls.get(f.id);
+  if (!el) {
+    el = h('button', { type: 'button', class: 'frame-run', 'data-frame': f.id, 'aria-label': 'Run this frame' }, icon('play'));
+    D.ports.append(el); U.runEls.set(f.id, el);
+  }
+  const now = U.chain?.running && U.chain.frame === f.id, wait = !now && U.chain?.running && U.chain.list?.includes(f.id);
+  el.classList.toggle('now', !!now); el.classList.toggle('wait', !!wait);
+  if (el.dataset.now !== String(!!now)) { el.dataset.now = String(!!now); el.replaceChildren(icon(now ? 'close' : 'play')); }
+  el.title = now ? 'Stop this run' : wait ? 'Waiting to run' : 'Run this frame';
+  el.style.left = `${f.x + f.w}px`; el.style.top = `${f.y}px`;
+}
+addEventListener('chain:state', (e) => { U.chain = e.detail; renderPorts(); });
 const FRAME_PICK_LABEL = { first: 'First frame', last: 'Last frame', playhead: 'Playhead' };
 const showOut = (id) => U.sel.has(id) || U.hover === id || U.op?.src?.id === id;
 // the mouse over a frame or its out port: that port shows
@@ -468,7 +485,24 @@ function plugAt(src, dst, x, y) {
   if (dst.kind === 'note') return toast('A note takes nothing in');
   const kinds = W.outKinds(src);
   if (kinds.length < 2) return plug(src, dst, kinds[0]);
-  openPressMenu(x, y, [kinds.map((k) => ({ label: k === 'image' && src.kind === 'video' ? 'Frame of it' : W.WIRE_LABEL[k], run: () => plug(src, dst, k) }))], 'Plug in as');
+  const framesOf = () => import('./frame-pick.js').then((m) => m.openFramePick(src, { title: `Frames of "${src.label}" for "${dst.label}"`,
+    onPick: (times) => times.forEach((t) => plugWire(src, dst, { kind: 'image', frame: t })) }));
+  openPressMenu(x, y, [kinds.map((k) => (k === 'image' && src.kind === 'video' ? { label: 'Frames of it…', run: framesOf } : { label: W.WIRE_LABEL[k], run: () => plug(src, dst, k) }))], 'Plug in as');
+}
+// src plugged into dst as one undo step, and the wire. id: the wire's id, given where dst's make names it already. frame: a time or
+// pick, for a picture out of a video. mp: the size its picture goes in at (0: its own size). Refused: a toast, and null.
+export function plugWire(src, dst, { id = null, kind = null, frame = null, mp = null } = {}) {
+  const r = W.addWire(T.wires, { from: src.id, to: dst.id, kind, id, frame }, T.frames);
+  if (r.why) { toast((WHY[r.why] || (() => 'That can\'t be plugged in there'))(src, dst)); return null; }
+  wireStep(mp == null ? r.wires : W.setWire(r.wires, r.wire.id, { mp }));
+  return wireById(r.wire.id);
+}
+// the scrubber for a picture wire out of a video: which frame goes in
+export function chooseWireFrame(id) {
+  const w = wireById(id), src = w && byId(w.from);
+  if (!src || !W.isFrameWire(w)) return;
+  import('./frame-pick.js').then((m) => m.openFramePick(src, { title: `Frame of "${src.label}" for ${W.wireLabel(w)}`, multi: false, at: typeof w.frame === 'number' ? w.frame : 0,
+    onPick: ([t]) => setTableWire(id, { frame: t }) }));
 }
 function removeWire(id) {
   if (wireStep(W.removeWires(T.wires, [id])) && U.wire === id) { U.wire = null; renderFrames(); }
@@ -479,7 +513,8 @@ function wireMenu(x, y, id) {
   if (!w) return;
   pickWire(id);
   const groups = [[{ label: w.on === false ? 'Turn on' : 'Turn off', run: () => setTableWire(id, { on: w.on === false }) }]];
-  if (W.isFrameWire(w)) groups.push(W.FRAME_PICKS.map((v) => ({ label: FRAME_PICK_LABEL[v], on: w.frame === v, run: () => setTableWire(id, { frame: v }) })));
+  if (W.isFrameWire(w)) groups.push([...W.FRAME_PICKS.map((v) => ({ label: FRAME_PICK_LABEL[v], on: w.frame === v, run: () => setTableWire(id, { frame: v }) })),
+    { label: 'Choose a frame…', on: typeof w.frame === 'number', run: () => chooseWireFrame(id) }]);
   groups.push([{ label: 'Remove', keys: 'Del', danger: true, run: () => removeWire(id) }]);
   openPressMenu(x, y, groups, W.wireLabel(w));
 }
@@ -1028,11 +1063,12 @@ function onDown(e) {
   try { D.stage.setPointerCapture(e.pointerId); } catch { /* the pointer is gone */ }
   const base = { id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false };
   const handle = e.target.closest('.frame-handle'), f = frameAt(e);
-  const port = e.target.closest('.wire-out'), onWire = e.target.closest('[data-wire]');
-  if (isLive() || handle || f || port || onWire || e.button !== 0 || U.space) U.lastEmpty = null;   // (only tap, tap on empty table counts)
+  const port = e.target.closest('.wire-out'), onWire = e.target.closest('[data-wire]'), runBtn = e.target.closest('.frame-run');
+  if (isLive() || handle || f || port || onWire || runBtn || e.button !== 0 || U.space) U.lastEmpty = null;   // (only tap, tap on empty table counts)
   if (!isLive() && !onWire && U.wire && e.button === 0) pickWire(null);   // (anything else pressed lets go of the wire)
   if (isLive()) U.op = { ...base, type: 'backdrop' };   // (the table behind a live frame: a tap beside it lets go of it)
   else if (e.button === 1 || (e.button === 0 && U.space)) U.op = { ...base, type: 'pan', v0: { ...T.view } };
+  else if (runBtn) U.op = { ...base, type: 'runtap', frame: runBtn.dataset.frame };
   else if (port) startWire(byId(port.dataset.frame), base);
   else if (onWire) { pickWire(onWire.dataset.wire); U.op = { ...base, type: 'wiretap' }; }
   else if (handle) {
@@ -1067,8 +1103,11 @@ function endWire(e, op) {
   endWireDraft(op);
   setHover(null);
   if (!op.moved) { U.sel = new Set([op.src.id]); renderFrames(); return; }   // (a tap on the port picks its frame)
-  if (op.over) plugAt(op.src, op.over, e.clientX, e.clientY);
-  else renderPorts();
+  if (op.over) return plugAt(op.src, op.over, e.clientX, e.clientY);
+  renderPorts();
+  // (let go on empty table: what to start from it. Let go back on its own frame: nothing)
+  const p = tablePt(e);
+  if (!M.hitFrame(M.shown(T.frames), p)) import('./wire-panel.js').then((m) => m.openWirePanel(op.src, p)).catch((err) => toast(`Couldn't open the panel: ${err.message}`, true));
 }
 // (Shift or Ctrl adds to what is selected)
 const adds = (e) => !!(e.shiftKey || e.ctrlKey || e.metaKey);
@@ -1160,6 +1199,10 @@ function onUp(e) {
   if (op.type === 'move') return endMove(e, op);
   if (op.type === 'wire') return endWire(e, op);
   if (op.type === 'wiretap') return;
+  if (op.type === 'runtap') {
+    if (!op.moved) import('./chain-run.js').then((m) => m.runNode(byId(op.frame))).catch((err) => toast(err.message, true));
+    return;
+  }
   if (op.type === 'resize') {
     if (op.moved) { recordGeom([{ id: op.f.id, x: op.start.x, y: op.start.y, w: op.start.w, h: op.start.h }], geomOf(new Set([op.f.id]))); changed(); tellMoved([op.f]); }
     return;
@@ -1685,7 +1728,7 @@ function wire() {
   D.stage.addEventListener('dragover', onDragOver);
   D.stage.addEventListener('dragleave', (e) => { if (!D.stage.contains(e.relatedTarget)) hoverDrop(null); });
   D.stage.addEventListener('drop', onDrop);
-  pressMenu(D.stage, stageMenu, { ok: (e) => !isLive() && !e.target.closest?.('.max-btn, .pull-tab, .wire-out') });
+  pressMenu(D.stage, stageMenu, { ok: (e) => !isLive() && !e.target.closest?.('.max-btn, .pull-tab, .wire-out, .frame-run') });
   document.addEventListener('keydown', onKey);
   document.addEventListener('keyup', (e) => { if (e.code === 'Space') { U.space = false; D.stage.classList.remove('panning'); } });
   addEventListener('keydown', onEsc);

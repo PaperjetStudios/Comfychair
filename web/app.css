@@ -2248,13 +2248,21 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
 .table-ports { position: absolute; left: 0; top: 0; }
 .wire-out {
   position: absolute; width: calc(max(18px, var(--touch-target)) / var(--z)); height: calc(max(18px, var(--touch-target)) / var(--z));
-  transform: translate(-50%, -50%); display: grid; place-items: center; z-index: 1; cursor: crosshair; visibility: hidden; --wk: var(--wire-image);
+  transform: translate(-50%, -50%); display: grid; place-items: center; z-index: 1; cursor: crosshair; opacity: .6; --wk: var(--wire-image);
 }
-.wire-out.show { visibility: visible; }
+.wire-out.show, .wire-out:hover { opacity: 1; }
 .wire-out::after { content: ""; width: calc(12px / var(--z)); height: calc(12px / var(--z)); border-radius: 50%; background: var(--surface); border: calc(2px / var(--z)) solid var(--wk); }
 .wire-out:hover::after { background: var(--wk); }
 .wire-out.k-video, .frame-in.k-video { --wk: var(--wire-video); }
 .wire-out.k-sound, .frame-in.k-sound { --wk: var(--wire-sound); }
+.frame-run {
+  position: absolute; width: calc(max(22px, var(--touch-target)) / var(--z)); height: calc(max(22px, var(--touch-target)) / var(--z)); padding: 0; z-index: 1;
+  transform: translate(-100%, -100%); display: grid; place-items: center; cursor: pointer; border: 0; border-radius: calc(4px / var(--z)); background: var(--accent); color: var(--accent-ink);
+}
+.frame-run .ico { width: calc(14px / var(--z)); height: calc(14px / var(--z)); }
+.frame-run:hover { filter: brightness(1.15); }
+.frame-run.wait { opacity: .45; }
+.frame-run.now { background: var(--warn-bg); color: var(--warn-text); }
 .frame-in {
   position: absolute; display: flex; align-items: center; gap: calc(4px / var(--z)); transform: translate(calc(-6px / var(--z)), -50%); z-index: 1;
   min-height: calc(max(18px, var(--touch-target)) / var(--z)); font-size: calc(11px / var(--z)); line-height: 1; color: var(--text); white-space: nowrap; cursor: pointer; --wk: var(--wire-image);
@@ -2523,3 +2531,13 @@ body:has(.tab.view-max.panel-out) .actionbar { right: var(--ov-w); }   /* (only 
 .make-note-text, .edit-note-text { white-space: pre-wrap; max-height: 160px; overflow: auto; padding: 6px 8px; background: var(--surface-2); border-radius: var(--r-sm); font-size: 13px; }
 .frame-out-body, .frame-seq-body { display: flex; flex-direction: column; gap: 8px; }
 .frame-out-body > .btn { align-self: flex-start; }
+
+/* the quick panel a wire opens on empty table (wire-panel.js), and choosing frames of a video (frame-pick.js) */
+.wp-head { margin: 4px 0 -2px; font-size: .85em; font-weight: 600; color: var(--muted); }
+.wp-find { width: 100%; }
+.frame-pick { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.fp-video { width: 100%; max-height: 40dvh; background: #000; border-radius: var(--r); object-fit: contain; }
+.fp-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.fp-scrub { flex: 1 1 160px; min-width: 0; }
+.fp-marks { display: flex; flex-wrap: wrap; gap: 6px; }
+.fp-marks:empty { display: none; }

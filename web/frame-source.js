@@ -312,6 +312,14 @@ export async function frameStill(frame, pick = 'first') {
   const { grabFrame } = await import('./media.js');
   return grabFrame({ ...src, url }, { at: start + Math.max(0, t) });
 }
+// A frame's clip as frameStill reads it: { url, start, len }, times in the frame's own output counting from 0 at start
+export async function frameClipInfo(frame) {
+  const src = await frameVideo(frame);
+  const start = src.trim?.start || 0;
+  let url = clipUrl(src);
+  if (!url && src.generation != null) { await generationThere(src.generation); url = clipUrl(src); }
+  return { url, start, len: src.trim?.len ?? Math.max(0, (await durationOf(url)) - start) };
+}
 function durationOf(url) {
   return new Promise((done) => {
     if (!url) return done(0);

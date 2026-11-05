@@ -49,6 +49,13 @@ export function fitsKind(t, kind) {
   }
 }
 export const templatesFor = (templates, kind) => (templates || []).filter((t) => fitsKind(t, kind));
+// The templates a frame can be on: the kind's, and the one already on it (a node's tool template, hidden from the picker otherwise)
+const MEDIA = { image: 'image', video: 'video', sound: 'audio' };
+export function templatesForFrame(templates, kind, frame) {
+  const list = templatesFor(templates, kind), id = frame?.make?.template;
+  const own = id && !list.some((t) => t.id === id) ? (templates || []).find((t) => t.id === id && (!MEDIA[kind] || t.media === MEDIA[kind])) : null;
+  return own ? [...list, own] : list;
+}
 export const familiesOf = (list) => [...new Set(list.map((t) => t.family || 'Other'))].sort();
 
 // The template to show: the one kept for this frame (or kind) if it still fits, else the first that does

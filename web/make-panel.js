@@ -25,7 +25,7 @@
 //                              Run from here does (chain-run.js); without it, results are added as Run adds them.
 // Each run records what it read on its frame (frame.make.ran: the stamps of its plugged sources, chain-rules.js), so the
 // table can say which frames need a rerun. The wires row has Run from here / Rerun what uses this (chain-run.js).
-import { runName, templateProcess } from './run-name.js';
+import { resultName, templateProcess } from './run-name.js';
 import { h, api, store, toast, uid, button, iconBtn, imageInput, seg, field, hint, help, info, note, clone } from './ui.js';
 import { ASPECT_PRESETS, S, CURRENT_EDIT, inputUrl, previewUrl, thumbUrl } from './core.js';
 import { modeOf } from './size-math.js';
@@ -45,7 +45,7 @@ import { editDoc, flushDoc, frameStamp, freshStamps, stillOf } from './table-fra
 import { DOC_KIND, nextBeside, toStage } from './table-model.js';
 import * as Table from './table.js';
 import { LANDS, canvasRect, carryWords, familiesOf, frameImageField, frameSize, slotMode, makeFrames, makeTarget, noteText, pickTemplate, isOwnSlot, repointable, runValuesOf, seedsAfter,
-  addHeld, selfPicked, settingsFor, settingsPayload, settleHeld, sizePair, templatesFor, wireFields, withClip } from './make-rules.js';
+  addHeld, selfPicked, settingsFor, settingsPayload, settleHeld, sizePair, templatesFor, templatesForFrame, wireFields, withClip } from './make-rules.js';
 import { downstream, fieldKind, isFrameWire, wireLabel } from './wire-rules.js';
 import { freshLayers, layerMarks, placeResults, sourceStamps, withSoundItem, withoutLayers } from './chain-rules.js';
 import { icon } from './icons.js';
@@ -88,7 +88,7 @@ function drawPanel() {
   if (!host) return;
   if (!S.templates?.length) { host.replaceChildren(note('The templates are still loading.', 'warn')); P.key = null; return; }
   const { kind, frame } = makeTarget(P.frames);
-  const list = templatesFor(S.templates, kind);
+  const list = templatesForFrame(S.templates, kind, frame);
   if (!list.length) { host.replaceChildren(note(`No template here makes anything for ${KIND_WORD[kind]}.`, 'warn')); P.key = null; return; }
   if (!onTable()) return;   // (the fields are drawn once the table is on screen: the Generate tab keeps its own meanwhile)
   const key = keyOf(kind, frame);
@@ -385,7 +385,8 @@ function wiredPictureEl(kind, frame, f, w, menu) {
     thumb: !url ? h('span', { class: 'hint' }, 'No picture yet') : w.crop ? cropPreview(url, w.crop) : h('img', { src: url, alt: words }),
     pick, onClear: own,
     tip: `Run fills this slot from the frame plugged in as ${wireLabel(w)}. Change or clear it, or choose Pick myself, to use something else here instead.${kind === 'image' && isImage ? ' A frame with several layers comes from its saved still while another image frame is open (up to 1024 px).' : ''}`,
-    buttons: [isImage && url ? button('Crop…', cut) : null,
+    buttons: [isFrameWire(w) && src ? button('Frame…', () => Table.chooseWireFrame(w.id), { title: 'Choose which frame of the video goes in' }) : null,
+      isImage && url ? button('Crop…', cut) : null,
       button('On', () => Table.setTableWire(w.id, { on: false }), { cls: 'small make-wire-on', title: 'Turn this input off: the slot uses its own picked value' })],
     below: [isImage ? pictureSize({ nat, mp: w.mp ?? f.mp ?? 1, onPick: (mp) => Table.setTableWire(w.id, { mp }) }) : null, menu] });
 }
@@ -611,7 +612,7 @@ export async function runMake() {
   if (!P.host || P.key !== keyOf(kind, frame) || fieldState() !== P.st) draw();
   const st = P.st, t = st?.tpl;
   if (!t || t.error || P.key !== keyOf(kind, frame)) return toast('Pick a working template first', true);
-  if (!templatesFor([t], kind).length) return toast(`${t.name} doesn't make anything for ${KIND_WORD[kind]}`, true);
+  if (!templatesForFrame([t], kind, frame).length) return toast(`${t.name} doesn't make anything for ${KIND_WORD[kind]}`, true);
   const targets = kind === 'none' ? [null] : makeFrames(P.frames);
   const noDoc = targets.find((f) => f && DOC_KIND[kind] && !f.doc);
   if (noDoc) return toast(`${noDoc.label || 'A frame'} has no document yet`, true);
@@ -638,7 +639,7 @@ export async function runMake() {
       }
     }
     if (queued) toast(`${queued > 1 ? `Queued ${queued}` : 'Queued'}${targets.length > 1 ? ` on ${targets.length} frames` : ''}: ${landsWord(kind)}`);
-    if (P.els) drawHead(kind, frame, templatesFor(S.templates, kind));
+    if (P.els) drawHead(kind, frame, templatesForFrame(S.templates, kind, frame));
   } finally { running = false; }
 }
 
@@ -719,7 +720,7 @@ function ranWhenDone(f, gens, stamps) {
 // the settings a frame runs with: the pane's own when it shows this frame, else its saved ones (frame.make); null: none
 function settingsOf(f) {
   if (P.st?.tpl && P.key === keyOf(f.kind, f)) return P.st;
-  const t = templatesFor(S.templates, f.kind).find((x) => x.id === f.make?.template);
+  const t = templatesForFrame(S.templates, f.kind, f).find((x) => x.id === f.make?.template);
   if (!t) return null;
   const st = settingsFor(t, f.make);
   st.save = () => { const cur = Table.frameById(f.id) || f; cur.make = settingsPayload(st, { ...(cur.make?.inputs ? { inputs: cur.make.inputs } : {}), ...ranOf(cur), ...heldOf(cur) }); frameSaved(); };
@@ -846,7 +847,7 @@ async function landInPlace(kind, f, done, old) {
       const ok = kind === 'video' ? o.kind === 'video' || o.kind === 'image' : o.kind === 'audio';
       if (!ok) continue;
       const dur = o.kind === 'image' ? 0 : o.duration || await durationOf(o.url);
-      medias.push({ kind: o.kind, src: { generation: d.id, index }, url: o.url, label: runName(templateProcess(t.name), d, S.templates), dur });
+      medias.push({ kind: o.kind, src: { generation: d.id, index }, url: o.url, label: resultName(d, S.templates), dur });
     }
   }
   if (!medias.length) { done.forEach(inShelf); return old; }
@@ -916,7 +917,7 @@ export async function landClips(frame, done) {
   const outs = (done.outputs || []).map((o, index) => ({ o, index })).filter(({ o }) => o.kind === 'video' || o.kind === 'image');
   let n = 0;
   for (const { o, index } of outs) {
-    if (await landClip(frame, { kind: o.kind, src: { generation: done.id, index }, url: o.url, label: runName(templateProcess(t.name), done, S.templates), dur: o.duration || 0 }, false)) n++;
+    if (await landClip(frame, { kind: o.kind, src: { generation: done.id, index }, url: o.url, label: resultName(done, S.templates), dur: o.duration || 0 }, false)) n++;
     else toast(`#${done.id} is done but couldn't go on ${frame.label}'s timeline: it is in the Shelf`, true);
   }
   if (n) toast(`#${done.id}: on ${frame.label || 'the video'}'s timeline`);
