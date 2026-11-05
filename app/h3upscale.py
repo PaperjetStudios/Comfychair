@@ -24,7 +24,8 @@ STRENGTHS = {"light": 0.6316, "medium": 0.8, "strong": 0.9035}
 # 0.8 on the refiner's shift-6 grid (rdh9616 ComfyUI-Open-H3-Regenerate shifted_grid(0.8, 3), the h3-studio test).
 # The refiner LoRA is trained for exactly this pass, so it needs far fewer steps than the plain upscaler.
 REGEN_SIGMAS = {"standard": (0.7, 0.494118, 0.0), "enhanced": (0.8, 0.685714, 0.48, 0.0)}
-TURBO_RE = re.compile(r"turbo|lightx2v|distill|\d+[-_ ]?steps?", re.I)
+# Pika H3 Flex is a six-step adapter: under a Regenerate LoRA with Turbo inside it comes out like any turbo LoRA
+TURBO_RE = re.compile(r"turbo|lightx2v|distill|\d+[-_ ]?steps?|pika_h3_flex", re.I)
 SAMPLER = "euler"
 SIZE_FREE = {"MiniMaxH3ReferenceToVideo"}   # conditioning that doesn't depend on the frame size
 OUTPUTS = {"VHS_VideoCombine", "SaveVideo", "SaveImage", "PreviewImage", "SaveAnimatedWEBP", "SaveWEBM", "CreateVideo",

@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from . import accel, audioedit, civitai, clipimport, craft, delogo, downloads, gpu, h3upscale, posefind, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import projects, storage, store, network
 from . import playable
-from . import fetchpicture, keyexpr, looks, maskcomp, promptaid, sceneasset
+from . import fetchpicture, keyexpr, looks, maskcomp, ph3image, promptaid, sceneasset
 from . import templates as tpl
 from .comfy import Comfy, ComfyError, previews_on as comfy_previews_on, set_previews as comfy_set_previews
 from .routes import audio, effects, library, scene, video, web
@@ -702,6 +702,7 @@ async def generate(body: dict = Body(...)):
             raise HTTPException(400, why)
         run = maskcomp.prefill(run, flist, t.workflow)   # a mask input of the template's own takes the painted mask
         wf = editsize.inject(accel.inject(tpl.apply(t.workflow, run), run), run, flist)
+        wf = ph3image.inject(wf, run)   # P-H3-Image: its prompt upsampler, for the pictures this run has
         wf = maskcomp.inject(wf, run, flist, await _mask_dims(run, flist))
         wf = h3upscale.apply_pose(h3upscale.drop_turbo_under_regen(wf), run)
         folder = db.project_folder(project_id)

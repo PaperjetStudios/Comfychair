@@ -83,6 +83,38 @@ def krea_control(kind):
     return wf
 
 
+# RefControl (thedeoxen/refcontrol-FLUX.2-klein-9B-reference-pose-lora): a LoRA that reads picture 1 as a pose map
+# and picture 2 as the character. The sentence is its trigger, as the model card and its workflow have it.
+POSE_LORA = "klein/refcontrol_v2_poses.safetensors"
+POSE_PROMPT = "apply pose from image 1 with reference from image 2"
+
+
+def klein_pose():
+    """deck-klein9b-control with the RefControl pose LoRA after its LoRAs: a pose map and one character picture.
+
+    The card trains and recommends it on Klein 9B Base (about 50 steps, guidance 4) and says the 4-step distilled
+    model works with slightly lower likeness and pose accuracy. This uses the distilled model the other Klein 9B
+    templates do, at their 4 steps; Base is a gated download. The LoRA strength is the workflow's 1.0 (the card says
+    0.8 to 1.0). Make the pose map as for the control templates (Image tools, the VFX tab's Quick effects, or the 3D
+    tab's Save pose frame): a DWPose skeleton on black is what the card says works well. Tested on 2026-11-05 (RTX 4070 Super, one pose and
+    character): the raised arm and the coat and face came through in about 40 s once loaded, but the framing came out
+    closer than the full-body map.
+    """
+    wf = control("klein9b")
+    last = wf.pop("22")   # the LoRA is trained on two pictures: the pose, then the character
+    assert last["class_type"] == "LoadImage"
+    del wf["10"]["inputs"]["images.image2"]
+    wf["20"]["_meta"]["title"] = "@2 Pose picture (a skeleton on black)"
+    wf["21"]["_meta"]["title"] = "@3 Character"
+    wf["8"]["inputs"]["text"] = POSE_PROMPT
+    wf["30"] = {"class_type": "LoraLoaderModelOnly",
+                "inputs": {"model": ["4", 0], "lora_name": POSE_LORA, "strength_model": 1.0},
+                "_meta": {"title": "RefControl pose LoRA"}}
+    wf["24"]["inputs"]["model"] = ["30", 0]
+    wf["13"]["inputs"]["filename_prefix"] = "klein9b_pose"
+    return wf
+
+
 if __name__ == "__main__":
     for m in MODELS:
         (OUT / f"deck-{m}-control.json").write_text(json.dumps(control(m), indent=1) + "\n")
@@ -90,3 +122,5 @@ if __name__ == "__main__":
     for kind in KREA:
         (OUT / f"deck-krea2-{kind}-control.json").write_text(json.dumps(krea_control(kind), indent=1) + "\n")
         print("wrote", f"deck-krea2-{kind}-control")
+    (OUT / "deck-klein9b-pose.json").write_text(json.dumps(klein_pose(), indent=1) + "\n")
+    print("wrote", "deck-klein9b-pose")

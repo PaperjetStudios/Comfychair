@@ -10,6 +10,7 @@ from .accel import _is_link
 WIDTH, HEIGHT = "__deck.width", "__deck.height"
 # upscalers size their output from the input on purpose: no picker, no crop
 UPSCALE_CLASSES = {"SeedVR2Preprocess", "ImageUpscaleWithModel", "ImageUpscaleWithModelBatched", "MinimaxH3LatentUpscaler3D"}
+STEP_32 = {"TextEncodeQwenImage21", "PH3ImageConditioning"}
 
 
 def fields(workflow: dict, template_fields: list[dict]) -> list[dict]:
@@ -27,8 +28,9 @@ def fields(workflow: dict, template_fields: list[dict]) -> list[dict]:
     # a map or a matte of the picture comes out at the picture's own size: a Size would crop it to a square
     if (workflow.get(str(first["node"])) or {}).get("_meta", {}).get("deck_keep_size"):
         return []
-    # Qwen Image 2.1 keeps the reference at its own size rounded to 32; the others take 16
-    step = 32 if any(n.get("class_type") == "TextEncodeQwenImage21" for n in workflow.values()) else 16
+    # Qwen Image 2.1 keeps the reference at its own size rounded to 32, and P-H3-Image's sides are multiples of 32;
+    # the others take 16
+    step = 32 if any(n.get("class_type") in STEP_32 for n in workflow.values()) else 16
     common = {"node": "__deck", "kind": "int", "min": 256, "max": 4096, "step": step,
               "group": first["group"], "image_node": first["node"]}
     return [{**common, "key": WIDTH, "input": "width", "label": "Width", "value": 1024, "match_image": True},

@@ -73,6 +73,7 @@ def _is_api_format(data) -> bool:
 # Only the name changes: the id (the file name) is what saved work, runs and code go by.
 _NAME_WORDS = {
     "h3": "H3", "ltx": "LTX", "klein3": "Klein 3", "klein9b": "Klein 9B", "krea2": "Krea 2", "qwen21": "Qwen 2.1", "moss": "MOSS",
+    "ph3": "P-H3", "pika": "Pika",
     "sam3": "SAM3", "sd": "SD", "sdpose": "SDPose", "mmaudio": "MMAudio", "lama": "LaMa", "lora": "LoRA", "ace": "ACE", "3d": "3D",
     "t2i": "T2I", "i2i": "I2I", "t2v": "T2V", "i2v": "I2V", "v2v": "V2V", "t2a": "T2A", "a2v": "A2V", "ref2v": "Ref2V", "ctrl2v": "Ctrl2V",
     "flf2v": "FLF2V", "txt2img": "Txt2Img", "bust4": "Bust 4", "cleanplate": "Clean Plate", "objectsheet": "Object Sheet",
