@@ -28,6 +28,7 @@ import { icon } from './icons.js';
 import { cropShapeMenu, layerMenu, pickedFor } from './layer-menu.js';
 import { openPressMenu, pressMenu } from './press-menu.js';
 import * as G from './layer-geom.js';
+import * as B from './group-box.js';
 import { densePlan, gridItem, gridPlan, fitToCell } from './layer-grid.js';
 import { solidBounds } from './matte-edge.js';
 import { inpaintSection, masksSection, runFill } from './inpaint.js';
@@ -286,6 +287,19 @@ export function createEditor(cfg) {
   // a painted canvas (or the inpaint mask) is resized, never turned or cropped; layers and other objects keep those
   const plain = (l) => !!(l && (l.canvas || l.mask || (l.label && /^Canvas \d+$/.test(l.label) && isCanvas(l))));   // (a canvas made before the flag has its numbered name)
   const visibleLayers = () => E.layers.filter((l) => ready(l) && !l.hidden && !l.mask && !l.maskOf);
+  // Several layers selected: one transform box round the ones it can move (showing, unlocked; a mask follows its own layer).
+  // null with fewer than two, and everything works on E.sel alone as before
+  const groupMode = () => {
+    if (!E.sel || !E.multi.length || paint?.painting()) return null;
+    const g = picked().filter((l) => ready(l) && !l.hidden && !l.locked && !l.mask && !l.maskOf);
+    return g.length > 1 ? g : null;
+  };
+  // of those, what a group crop takes: picture layers turned only by quarter turns (fit); the rest turned otherwise (left)
+  const cropSet = (g) => { const c = g.filter((l) => !plain(l)); return { fit: c.filter(B.cropsExactly), left: c.filter((l) => !B.cropsExactly(l)) }; };
+  // whether Crop applies: the one layer is a picture, or the group has a picture it can crop exactly
+  const canCrop = () => { const g = groupMode(); return g ? cropSet(g).fit.length > 0 : !!E.sel && !plain(E.sel); };
+  // the group's box on the canvas: round every layer, or while cropping round what the crop keeps (E.gbox mid-drag)
+  const groupRect = (g) => E.gbox || B.groupBounds(E.cropping ? cropSet(g).fit : g);
   // the Select layers tool: what its box takes (as a tap on the canvas: a locked layer is picked from the list), and the box on show
   const boxLayers = () => visibleLayers().filter((l) => !l.locked && !l.draft);
   const dragBox = (a, b) => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) });
@@ -582,14 +596,14 @@ export function createEditor(cfg) {
   // What a layer lines up with: the canvas (when it fits the layers, the other layers' bounds),
   // or nothing when it's the only layer
   function alignFrame(l) {
-    const others = visibleLayers().filter((o) => o !== l).map(bounds);
+    const out = [].concat(l), others = visibleLayers().filter((o) => !out.includes(o)).map(bounds);
     return E.size ? editorFrame() : others.length ? unionRect(others) : null;
   }
 
   // Snap targets: the edges and centres of the align frame and of every other visible layer
   const SNAP = 8;   // screen px
-  function snapTargets(l) {
-    const rs = visibleLayers().filter((o) => o !== l).map(bounds), f = alignFrame(l);
+  function snapTargets(l) {   // (l: a layer, or the layers of a group: what moves doesn't snap to itself)
+    const out = [].concat(l), rs = visibleLayers().filter((o) => !out.includes(o)).map(bounds), f = alignFrame(l);
     if (f) rs.push(f);
     return { xs: rs.flatMap((r) => [r.x, r.x + r.w / 2, r.x + r.w]), ys: rs.flatMap((r) => [r.y, r.y + r.h / 2, r.y + r.h]) };
   }
@@ -681,7 +695,7 @@ export function createEditor(cfg) {
     if (!(EVheld && EVfit)) {
       const f = editorFrame(), rs = f ? [f] : [];
       if (E.size) rs.push(...visibleLayers().map(bounds));   // show layers hanging off a fixed canvas too
-      if (E.cropping && E.sel && ready(E.sel)) rs.push(imageBounds(E.sel));
+      if (E.cropping && E.sel && ready(E.sel)) { const g = groupMode(); rs.push(...(g ? cropSet(g).fit : [E.sel]).map(imageBounds)); }
       if (!rs.length) { EV = EVfit = null; return; }
       const strip = $cv.parentElement.querySelector('.paint-strip');
       const b = unionRect(rs), pad = 28, left = (strip?.offsetWidth || 36) + 16, top = 72;   // room left for the paint tools, above for the layer toolbar
@@ -711,8 +725,14 @@ export function createEditor(cfg) {
     const W = l.img.naturalWidth, H = l.img.naturalHeight, c = l.crop;
     return [[c.x, c.y], [c.x + c.w, c.y], [c.x + c.w, c.y + c.h], [c.x, c.y + c.h]].map(([x, y]) => G.imageToCanvas(l, { x: x * W, y: y * H }));
   };
+  // a group's box: square to the canvas, the same corners and rotate handle as one layer's
+  function rectPoints(r) {
+    const pts = [[r.x, r.y], [r.x + r.w, r.y], [r.x + r.w, r.y + r.h], [r.x, r.y + r.h]].map(([x, y]) => ({ x: EV.ox + x * EV.s, y: EV.oy + y * EV.s }));
+    const top = { x: (pts[0].x + pts[1].x) / 2, y: pts[0].y };
+    return { pts, top, rot: { x: top.x, y: top.y - ROT_OFF } };
+  }
   function drawBox(ctx, l, accent, { rotate = false, crop = false } = {}) {
-    const { pts, top, rot } = boxPoints(l, crop);
+    const { pts, top, rot } = l.pts ? l : boxPoints(l, crop);   // (l: a layer, or rectPoints of a group's box)
     ctx.strokeStyle = accent; ctx.lineWidth = 2;
     ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.closePath(); ctx.stroke();
     ctx.fillStyle = accent; ctx.strokeStyle = '#000';
@@ -772,8 +792,9 @@ export function createEditor(cfg) {
     }
     const sel = E.sel && ready(E.sel) ? E.sel : null;
     if (!sel) return;
-    for (const m of E.multi) {   // the others selected with it: an outline
-      if (!ready(m)) continue;
+    const grp = groupMode();
+    for (const m of grp ? picked() : E.multi) {   // the others selected with it (all of them, round a group's box): an outline
+      if (!ready(m) || m.hidden) continue;
       const { pts } = boxPoints(m);
       ctx.strokeStyle = accent; ctx.globalAlpha = 0.8; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]);
       ctx.beginPath(); pts.forEach((q, i) => (i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.closePath(); ctx.stroke();
@@ -788,7 +809,16 @@ export function createEditor(cfg) {
       paint.paintOverlay(ctx);
       return;
     }
-    if (E.cropping) {   // the whole image dimmed, the kept part on top of it
+    if (E.cropping && grp) {   // a group crop: every image it crops dimmed, the kept parts on top
+      ctx.fillStyle = '#000a'; ctx.fillRect(0, 0, w, hh);
+      const { fit } = cropSet(grp);
+      for (const l of fit) {
+        ctx.save(); ctx.translate(ox, oy); ctx.scale(s, s); ctx.transform(...G.layerMatrix(l));
+        ctx.globalAlpha = 0.35; ctx.drawImage(l.img, 0, 0); ctx.globalAlpha = 1;
+        ctx.restore();
+      }
+      ctx.save(); ctx.translate(ox, oy); ctx.scale(s, s); for (const l of fit) drawLayer(ctx, l); ctx.restore();
+    } else if (E.cropping) {   // the whole image dimmed, the kept part on top of it
       ctx.fillStyle = '#000a'; ctx.fillRect(0, 0, w, hh);
       ctx.save(); ctx.translate(ox, oy); ctx.scale(s, s); ctx.transform(...G.layerMatrix(sel));
       ctx.globalAlpha = 0.35; ctx.drawImage(sel.img, 0, 0); ctx.globalAlpha = 1;
@@ -808,7 +838,9 @@ export function createEditor(cfg) {
       for (let y = fr.y; y <= fr.y + fr.h + 0.5; y += step) { ctx.moveTo(fr.x, Math.round(y) + 0.5); ctx.lineTo(fr.x + fr.w, Math.round(y) + 0.5); }
       ctx.stroke();
     }
-    drawBox(ctx, sel, accent, { rotate: !E.cropping && !sel.locked && !plain(sel), crop: E.cropping });
+    const gr = grp && groupRect(grp);
+    if (gr) drawBox(ctx, rectPoints(gr), accent, { rotate: !E.cropping && grp.every((l) => !plain(l)) });
+    else drawBox(ctx, sel, accent, { rotate: !E.cropping && !sel.locked && !plain(sel), crop: E.cropping });
     ctx.strokeStyle = '#ff3df2'; ctx.lineWidth = 1;
     for (const g of E.guides) {
       ctx.beginPath();
@@ -816,9 +848,10 @@ export function createEditor(cfg) {
       else { const y = Math.round(oy + g.y * s) + 0.5; ctx.moveTo(0, y); ctx.lineTo(w, y); }
       ctx.stroke();
     }
-    const tb = screenBox(E.cropping ? imageBounds(sel) : bounds(sel));
-    if (E.grow) { const o = screenBox(bounds(sel)), x1 = Math.max(tb.x + tb.w, o.x + o.w), y1 = Math.max(tb.y + tb.h, o.y + o.h); tb.x = Math.min(tb.x, o.x); tb.y = Math.min(tb.y, o.y); tb.w = x1 - tb.x; tb.h = y1 - tb.y; }   // (clear of the box past the picture)
-    if (!E.cropping && !sel.locked && !plain(sel)) { const { rot } = boxPoints(sel); tb.y = Math.min(tb.y, rot.y - 12); tb.h += screenBox(bounds(sel)).y - tb.y; }   // (clear of the rotate handle)
+    const tb = screenBox(gr ? (E.cropping ? unionRect([gr, ...cropSet(grp).fit.map(imageBounds)]) : gr) : E.cropping ? imageBounds(sel) : bounds(sel));   // (cropping: clear of the whole pictures)
+    if (gr) { if (!E.cropping) { tb.y -= ROT_OFF + 12; tb.h += ROT_OFF + 12; } }
+    else if (E.grow) { const o = screenBox(bounds(sel)), x1 = Math.max(tb.x + tb.w, o.x + o.w), y1 = Math.max(tb.y + tb.h, o.y + o.h); tb.x = Math.min(tb.x, o.x); tb.y = Math.min(tb.y, o.y); tb.w = x1 - tb.x; tb.h = y1 - tb.y; }   // (clear of the box past the picture)
+    if (!gr && !E.cropping && !sel.locked && !plain(sel)) { const { rot } = boxPoints(sel); tb.y = Math.min(tb.y, rot.y - 12); tb.h += screenBox(bounds(sel)).y - tb.y; }   // (clear of the rotate handle)
     placeEditorToolbar(tb, w, hh);
   }
 
@@ -828,7 +861,7 @@ export function createEditor(cfg) {
     bar.classList.remove('hidden');
     for (const b of bar.querySelectorAll('[data-mode]')) b.classList.toggle('on', (b.dataset.mode === 'crop') === E.cropping);
     bar.querySelector('[data-snap]').classList.toggle('on', E.snap);
-    bar.querySelector('[data-mode=crop]').classList.toggle('hidden', plain(E.sel));
+    bar.querySelector('[data-mode=crop]').classList.toggle('hidden', !canCrop());
     for (const b of bar.querySelectorAll('[data-grow]')) b.classList.toggle('hidden', !E.grow);
     const bw = bar.offsetWidth, bh = bar.offsetHeight, m = 6, clear = 18;   // clear the corner handles
     let top = r.y - bh - clear;
@@ -838,7 +871,7 @@ export function createEditor(cfg) {
   }
 
   function setEditorMode(crop) {
-    if (!E.sel || E.cropping === crop || (crop && plain(E.sel))) return;
+    if (!E.sel || E.cropping === crop || (crop && !canCrop())) return;
     E.cropping = crop;
     if (crop) E.aspect = null;
     renderEditor();
@@ -899,7 +932,7 @@ export function createEditor(cfg) {
       for (const [l, x, y, scale, crop, rotation] of held) Object.assign(l, { x, y, scale, crop, rotation });
       drag.out?.end();
       dropCopies();
-      drag = null; EVheld = false; E.guides = [];
+      drag = null; EVheld = false; E.guides = []; E.gbox = null;
       lastTap = { t: 0, l: null };   // (a pinch's first finger isn't half a double-tap)
       drawEditorCanvas();
     };
@@ -972,6 +1005,35 @@ export function createEditor(cfg) {
         drag = { item: it, p0: q };
         return;
       }
+      const grp = groupMode();
+      if (grp && groupRect(grp) && e.button === 0) {   // several layers: one box round them all (group-box.js); each sum starts from the layers as they were (l0s)
+        const l0s = (ls) => ls.map((l) => [l, { ...l, crop: { ...l.crop } }]);
+        const r = groupRect(grp), q = scrOf(p), { pts, rot } = rectPoints(r);
+        const i = pts.findIndex((c) => Math.hypot(c.x - q.x, c.y - q.y) < HANDLE), k = i < 0 ? null : ['nw', 'ne', 'se', 'sw'][i];
+        const inBox = p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+        if (E.cropping) {   // the box crops every picture in it to what lies inside it
+          const { fit, left } = cropSet(grp);
+          if (k) drag = { gcrop: true, fit: l0s(fit), left, f: { x: k.includes('w') ? r.x + r.w : r.x, y: k.includes('n') ? r.y + r.h : r.y } };
+          else if (inBox) drag = { gcrop: true, move: true, fit: l0s(fit), left, r0: r, p0: p };
+          else { EVheld = false; E.cropping = false; renderEditor(); }   // tapping outside the box finishes the crop
+          return;
+        }
+        if (grp.every((l) => !plain(l)) && Math.hypot(rot.x - q.x, rot.y - q.y) < HANDLE) {   // turn them all about the box's centre
+          const c = { x: r.x + r.w / 2, y: r.y + r.h / 2 };
+          drag = { grotate: true, c, a0: Math.atan2(p.y - c.y, p.x - c.x), ls: l0s(grp) };
+          return;
+        }
+        if (k) {   // scale them all about the opposite corner
+          drag = { gscale: true, ls: l0s(grp), ax: k.includes('w') ? r.x + r.w : r.x, ay: k.includes('n') ? r.y + r.h : r.y, w0: r.w, h0: r.h };
+          return;
+        }
+        // inside the box but on no layer (between them): move them all. (On a selected layer the move below does it, and Alt+drag copies.)
+        if (inBox && !e.shiftKey && !e.ctrlKey && !e.metaKey && !E.pickMode && !visibleLayers().some((l) => !l.locked && G.insideLayer(l, p))) {
+          const lead = grp[0];
+          drag = { l: lead, p0: p, x0: lead.x, y0: lead.y, was: { sel: E.sel, multi: E.multi }, group: grp.slice(1).map((m) => [m, m.x, m.y]) };
+          return;
+        }
+      }
       if (sel && E.cropping) {   // (in the image's own fractions, so a turned layer crops the same)
         const c = sel.crop, k = corner(p, sel, true), raw = frac(sel, p), was = { crop: { ...c }, x: sel.x, y: sel.y };
         const q = { x: clamp01(raw.x), y: clamp01(raw.y) };
@@ -1020,7 +1082,7 @@ export function createEditor(cfg) {
       lastTap = { t: now, l: hit };
       const group = picked();
       drag = { l: hit, p0: p, x0: hit.x, y0: hit.y, was: { sel: E.sel, multi: E.multi }, alt: e.altKey, out: !e.altKey && canGive(hit) ? pictureDrag(cv, () => layerThumb(hit)) : null };
-      if (group.length > 1 && group.includes(hit)) drag.group = group.filter((m) => m !== hit && !m.locked).map((m) => [m, m.x, m.y]);   // (the selection moves together)
+      if (group.length > 1 && group.includes(hit)) drag.group = group.filter((m) => m !== hit && !m.locked && !m.hidden).map((m) => [m, m.x, m.y]);   // (the selection moves together)
       else if (E.sel !== hit || E.multi.length) { pickOnly(hit); renderEditor(); }
     });
     cv.addEventListener('pointermove', (e) => {
@@ -1041,6 +1103,52 @@ export function createEditor(cfg) {
         const q = snapPoint(p, e), it = drag.item;
         it.x = Math.round(Math.min(drag.p0.x, q.x)); it.y = Math.round(Math.min(drag.p0.y, q.y));
         it.w = Math.round(Math.abs(q.x - drag.p0.x)); it.h = Math.round(Math.abs(q.y - drag.p0.y));
+      } else if (drag.gcrop) {
+        const ms = drag.fit.map(([l]) => l), t = E.snap && !e.altKey ? snapTargets(ms) : null, thr = SNAP / EV.s;
+        E.guides = [];
+        let rect;
+        if (drag.move) {   // the box slides over the images; its edges and middle snap
+          const r0 = drag.r0;
+          rect = { ...r0, x: r0.x + p.x - drag.p0.x, y: r0.y + p.y - drag.p0.y };
+          if (t) {
+            const sx = snapNearest([rect.x, rect.x + rect.w / 2, rect.x + rect.w], t.xs, thr), sy = snapNearest([rect.y, rect.y + rect.h / 2, rect.y + rect.h], t.ys, thr);
+            if (sx) { rect.x += sx.d; E.guides.push({ x: sx.at }); }
+            if (sy) { rect.y += sy.d; E.guides.push({ y: sy.at }); }
+          }
+        } else {   // the corner dragged; it snaps to the canvas and the other layers
+          let pp = p;
+          if (t) {
+            const sx = snapNearest([p.x], t.xs, thr), sy = snapNearest([p.y], t.ys, thr);
+            pp = { x: sx ? sx.at : p.x, y: sy ? sy.at : p.y };
+            if (sx) E.guides.push({ x: sx.at });
+            if (sy) E.guides.push({ y: sy.at });
+          }
+          rect = B.spanRect(drag.f, pp, E.aspect);
+        }
+        drag.outside = 0;
+        for (const [l, l0] of drag.fit) {   // (one the box misses entirely keeps what it had)
+          const c = B.cropToRect(l0, rect);
+          if (c) Object.assign(l, c); else { Object.assign(l, { x: l0.x, y: l0.y, crop: { ...l0.crop } }); drag.outside++; }
+        }
+        E.gbox = rect;
+      } else if (drag.gscale) {
+        const left = p.x < drag.ax, up = p.y < drag.ay;
+        let k = stepScale(Math.max(0.01, Math.abs(p.x - drag.ax) / drag.w0, Math.abs(p.y - drag.ay) / drag.h0), e);
+        E.guides = [];
+        if (E.snap && !e.altKey) {   // the dragged corner snaps on whichever axis is closer
+          const t = snapTargets(drag.ls.map(([l]) => l)), thr = SNAP / EV.s;
+          const ex = drag.ax + (left ? -1 : 1) * drag.w0 * k, ey = drag.ay + (up ? -1 : 1) * drag.h0 * k;
+          const sx = snapNearest([ex], t.xs, thr), sy = snapNearest([ey], t.ys, thr);
+          const g = sx && (!sy || Math.abs(sx.d) <= Math.abs(sy.d)) ? { x: sx.at } : sy ? { y: sy.at } : null;
+          if (g) { k = Math.max(0.01, g.x != null ? Math.abs(g.x - drag.ax) / drag.w0 : Math.abs(g.y - drag.ay) / drag.h0); E.guides.push(g); }
+        }
+        for (const [l, l0] of drag.ls) Object.assign(l, B.scaleAbout(l0, k, { x: drag.ax, y: drag.ay }));
+      } else if (drag.grotate) {
+        // as one layer turns: pulls to 15° steps nearby; Shift always steps by 15°; Alt is free
+        const deg = ((Math.atan2(p.y - drag.c.y, p.x - drag.c.x) - drag.a0) * 180) / Math.PI;
+        const d = snapOn('rot', e) ? snapStep(deg, gridSnap.rotStep) : G.snapAngle(deg, e.altKey ? {} : e.shiftKey ? { step: 15 } : E.snap ? { pull: 4 } : {});
+        for (const [l, l0] of drag.ls) Object.assign(l, B.turnAbout(l0, d, drag.c));
+        E.guides = [];
       } else if (drag.crop) {
         const l = E.sel, W = l.img.naturalWidth, H = l.img.naturalHeight;
         // (with Snap on, the crop's edges pull to the canvas and the other layers, like a layer's own edges do)
@@ -1099,23 +1207,25 @@ export function createEditor(cfg) {
         l.y = Math.round(up ? drag.ay - drag.ch * l.scale : drag.ay);
       } else {
         if (drag.alt && !startCopy(p)) return;
-        const l = drag.l;
+        const l = drag.l, ms = [l, ...(drag.group || []).map(([m]) => m)];
+        const follow = () => { for (const [m, mx, my] of drag.group || []) { m.x = mx + (l.x - drag.x0); m.y = my + (l.y - drag.y0); } };
+        const box = () => { follow(); return ms.length > 1 ? B.groupBounds(ms) : bounds(l); };   // (a group snaps by its whole box)
         l.x = Math.round(drag.x0 + p.x - drag.p0.x);
         l.y = Math.round(drag.y0 + p.y - drag.p0.y);
         E.guides = [];
         if (E.snap && (!e.altKey || drag.copied)) {   // edges and centre snap to the canvas and the other layers (Alt skips it, unless it's making the copy)
-          const t = snapTargets(l), thr = SNAP / EV.s, r = bounds(l);
+          const t = snapTargets(ms), thr = SNAP / EV.s, r = box();
           const sx = snapNearest([r.x, r.x + r.w / 2, r.x + r.w], t.xs, thr);
           const sy = snapNearest([r.y, r.y + r.h / 2, r.y + r.h], t.ys, thr);
           if (sx) { l.x = Math.round(l.x + sx.d); E.guides.push({ x: sx.at }); }
           if (sy) { l.y = Math.round(l.y + sy.d); E.guides.push({ y: sy.at }); }
         }
         if (snapOn('grid', drag.copied ? null : e) && editorFrame()) {   // the grid wins over the edges
-          const f = editorFrame(), step = ST.gridStep(f.w, gridSnap.gridPct), r = bounds(l);
+          const f = editorFrame(), step = ST.gridStep(f.w, gridSnap.gridPct), r = box();
           l.x = Math.round(l.x + ST.onGrid(r.x, f.x, step) - r.x); l.y = Math.round(l.y + ST.onGrid(r.y, f.y, step) - r.y);
           E.guides = [];
         }
-        for (const [m, mx, my] of drag.group || []) { m.x = mx + (l.x - drag.x0); m.y = my + (l.y - drag.y0); }
+        follow();
       }
       drag.moved = true;
       drag.out?.move(e.clientX, e.clientY);
@@ -1145,7 +1255,13 @@ export function createEditor(cfg) {
         const it = drag.item;
         if (it.w < 8 || it.h < 8) { E.items.splice(E.items.indexOf(it), 1); E.itemSel = -1; } else E.itemDraw = false;
       }
-      drag = null; EVheld = false; E.guides = [];
+      if (drag?.gcrop && moved) {   // what a group crop couldn't take, said once the drag ends
+        const n = drag.left.length, why = [];
+        if (n) why.push(`${n} turned layer${n > 1 ? 's' : ''} left out (crop ${n > 1 ? 'each' : 'it'} alone)`);
+        if (drag.outside) why.push(`${drag.outside} outside the box kept as ${drag.outside > 1 ? 'they were' : 'it was'}`);
+        if (why.length) toast(`Cropped the rest: ${why.join('; ')}`);
+      }
+      drag = null; EVheld = false; E.guides = []; E.gbox = null;
       if (moved) { lastTap = { t: 0, l: null }; lastCorner = { t: 0, k: null }; persistEditor(); }
       renderEditor();
     };
@@ -1220,10 +1336,10 @@ export function createEditor(cfg) {
       if (!cfg.active() || sheetOpen()
         || e.target.closest('input, textarea, select') || e.ctrlKey || e.metaKey || !E.sel) return;
       const l = E.sel, n = e.shiftKey ? 10 : 1;
-      const nudge = (dx, dy) => { if (E.cropping || !ready(l)) return; l.x += dx; l.y += dy; persistEditor(); };
+      const nudge = (dx, dy) => { if (E.cropping || !ready(l)) return; for (const m of groupMode() || [l]) { m.x += dx; m.y += dy; } persistEditor(); };
       const keys = {
         Escape: () => { if (E.grow) cancelGrow(); else if (E.cropping) E.cropping = false; else if (E.multi.length) E.multi = []; else E.sel = null; },
-        v: () => { E.cropping = false; }, c: () => { if (!plain(l)) { E.cropping = true; E.aspect = null; } },
+        v: () => { E.cropping = false; }, c: () => { if (canCrop()) { E.cropping = true; E.aspect = null; } },
         Enter: () => { if (E.grow) applyGrow(); else E.cropping = false; },
         Delete: () => (E.multi.length ? deleteSelected() : removeLayer(l)), Backspace: () => (E.multi.length ? deleteSelected() : removeLayer(l)),
         ArrowLeft: () => nudge(-n, 0), ArrowRight: () => nudge(n, 0), ArrowUp: () => nudge(0, -n), ArrowDown: () => nudge(0, n),
@@ -1258,7 +1374,7 @@ export function createEditor(cfg) {
     E.multi = E.multi.filter((l) => E.layers.includes(l) && l !== E.sel);
     if (!E.sel) { E.multi = []; E.pickMode = false; }
     settleGrow();
-    if (!E.sel || !ready(E.sel)) E.cropping = false;
+    if (!E.sel || !ready(E.sel) || (E.cropping && !canCrop())) E.cropping = false;
     if (cfg.renderPanel) cfg.renderPanel(eng);
     else if (cfg.panel) {
       const top = cfg.panel.scrollTop, typing = keepTyping(cfg.panel);   // (the panel built again stays where it was scrolled)
@@ -1701,6 +1817,7 @@ export function createEditor(cfg) {
     const allOn = (k) => ls.every((l) => l[k]);
     return section(`${ls.length} layers`, done,
       hint(ls.map(layerName).join(', '), 'layer-title'),
+      E.cropping ? h('div', { class: 'row wrap' }, button('Finish crop', () => { E.cropping = false; renderEditor(); }, { cls: 'small primary' })) : null,
       onTable() ? null : rangeField('Opacity', () => same((l) => l.opacity ?? 1, 1), (v) => { for (const l of ls) l.opacity = clamp(v, 0, 1); },
         { min: 0, max: 1, step: 0.01, fmt: pctFmt, def: 1, onInput: drawEditorCanvas, onChange: editorChanged }),   // (on the table: the Properties pane's)
       field('Blend', seg(BLENDS, mixed((l) => l.blend || 'normal') ? null : (ls[0].blend || 'normal'), (v) => each((l) => { l.blend = v; }), { wrap: true })),
@@ -1728,7 +1845,7 @@ export function createEditor(cfg) {
             E.layers = before; persistEditor(); renderEditor();
           });
         }, { cls: 'small danger' })),
-      help('Drag any selected layer on the canvas to move them all, or Alt+drag to copy them. Opacity, Blend and the buttons change every selected layer; the Image tools panel, set to Selected layers, runs on each one in turn. Select one layer to edit it alone.'));
+      help('One box goes round the selected layers on the canvas: drag inside it to move them all (Alt+drag a layer to copy them), a corner to scale them all from the opposite corner, the round handle to turn them all about its middle. In Crop (C) the box crops every picture to what lies inside it; a layer turned by other than a quarter turn is left out of that. Opacity, Blend and the buttons change every selected layer; the Image tools panel, set to Selected layers, runs on each one in turn. Select one layer to edit it alone.'));
   }
 
   // a layer's turn, about its centre (pulled to 15° steps, layer-geom.js snapAngle)
