@@ -16,6 +16,10 @@ import { fmtTime, playKeys, transport } from './playback.js';
 import { workArea } from './workarea.js';
 import { cutItems, playFrom, playSeek, setIn, setOut, snapT, tickT } from './workarea-math.js';
 import { exportTracks } from './timeline-rules.js';
+import * as CR from './continue-rules.js';
+import { continueRunner } from './continue-run.js';
+import { queueRun, template, valuesByRole, waitGen } from './make.js';
+import { stop as stopRun } from './generate.js';
 import { keyLaneRows } from './key-lanes.js';
 import { keysHelp as timelineKeys } from './timeline-keys.js';
 import { history } from './undo-history.js';
@@ -48,7 +52,7 @@ const HEAD_W = 124;   // track header column (px; app.css .tl-head)
 const LANE_H = 52;
 const MIN_LEN = 0.1;
 const V = {
-  tracks: [], items: [], size: null, fps: 0, range: null, pps: store.get('deck.video.pps', 40),   // pps: timeline zoom, pixels per second (this device only)
+  tracks: [], items: [], size: null, fps: 0, range: null, grain: 0, pps: store.get('deck.video.pps', 40),   // pps: timeline zoom, pixels per second (this device only)
   t: 0, playing: false, clock: 0, loop: store.get('deck.video.loop', false), sel: null, multi: [], markers: [],   // sel: the primary pick, multi: the others (timeline.js)
   els: new Map(), posters: new Map(), waves: new Map(),
 };
@@ -90,7 +94,7 @@ function legacyTimeline() {
 
 // ---- tabs: each video edit is a document in the project folder ----
 const migrateEdit = (p) => ({ tracks: p.tracks?.length ? p.tracks : defaultTracks(), items: p.items || [], size: p.size || null, fps: p.fps || 0,
-  range: p.range || null, markers: p.markers || [] });   // range: the work area (workarea.js), seconds; markers [{ t, label }]
+  range: p.range || null, markers: p.markers || [], grain: p.grain || 0 });   // range: the work area (workarea.js), seconds; markers [{ t, label }]; grain 0..100 over the whole picture
 let tabs = null;
 let vtp = null;   // the transport bar (playback.js)
 const ensureTabs = () => tabs.ready();
@@ -105,7 +109,7 @@ addEventListener('table:frame-field', (e) => { if (e.detail?.keys?.includes('mai
 // clips that are still there (the handles, effects and inspector hold them), then redraws and saves without a new step.
 // System writes (a clip's measured length, a 3D scene that changed, an effect render's progress) go through HIST.hold.
 const HIST = history({
-  snap: () => ({ tracks: V.tracks, items: V.items, markers: V.markers, size: V.size, fps: V.fps, range: V.range }),
+  snap: () => ({ tracks: V.tracks, items: V.items, markers: V.markers, size: V.size, fps: V.fps, range: V.range, grain: V.grain }),
   apply: applySnap });
 let histDoc;   // the edit HIST is about (a reload of the same edit keeps its steps)
 function applySnap(s) {
@@ -119,7 +123,7 @@ function applySnap(s) {
     if (it.fx) it.fx.busy = busy;
     return it;
   });
-  Object.assign(V, { tracks: s.tracks, markers: s.markers || [], size: s.size || null, fps: s.fps || 0, range: s.range || null });
+  Object.assign(V, { tracks: s.tracks, markers: s.markers || [], size: s.size || null, fps: s.fps || 0, range: s.range || null, grain: s.grain || 0 });
   const has = (id) => V.items.some((i) => i.id === id);
   if (!has(V.sel)) V.sel = null;
   V.multi = (V.multi || []).filter(has);
@@ -139,7 +143,7 @@ const TL = timeline(V, { blankPick: () => addSources(), el: () => VD.timeline, h
   canDrop: (it, tr) => (tr.kind === 'audio') === (it.kind === 'audio'), tabs: () => tabs, area: () => WA,
   fps: () => fpsNow(), tc: (t) => tc(t), undo: () => undoEdit(), redo: () => redoEdit(),
   toolChanged: (t) => VD.timeline?.setAttribute('data-tool', t), menuAction: (id, ctx) => menuAction(id, ctx),
-  main: () => pinNow(), lanes: (it, g) => clipLanes(it, g) });
+  main: () => pinNow(), shot: (it) => SHOT.state(it), lanes: (it, g) => clipLanes(it, g) });
 const { len: itLen, end: itEnd, seqEnd, selItem, xfades, updatePlayhead } = TL;
 const fadeGain = (it, t, audio) => TL.fadeGain(it, t, audio);   // pictures only fade in over an overlap (videoedit._overlaps)
 const trackOf = (it) => V.tracks.find((t) => t.id === it.track);
@@ -389,6 +393,26 @@ function drawFrame() {
     }
   }
   ctx.globalAlpha = 1;
+  drawGrain(ctx, W, H);
+}
+
+// The export's grain, roughly, on the preview: one noise tile laid at a new offset each frame (the server's is
+// ffmpeg's noise filter, videoedit.grain_filters; this only shows how strong it is)
+let grainTile = null;
+function drawGrain(ctx, W, H) {
+  if (!(V.grain > 0)) return;
+  if (!grainTile) {
+    grainTile = document.createElement('canvas'); grainTile.width = grainTile.height = 256;
+    const g = grainTile.getContext('2d'), im = g.createImageData(256, 256);
+    for (let i = 0; i < im.data.length; i += 4) { const v = Math.random() * 255; im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 255; }
+    g.putImageData(im, 0, 0);
+  }
+  const ox = Math.floor(Math.random() * 256), oy = Math.floor(Math.random() * 256);
+  ctx.save();
+  ctx.globalCompositeOperation = 'overlay'; ctx.globalAlpha = clamp(V.grain / 100, 0, 1) * 0.6;
+  ctx.fillStyle = ctx.createPattern(grainTile, 'repeat');
+  ctx.translate(-ox, -oy); ctx.fillRect(0, 0, W + 256, H + 256);
+  ctx.restore();
 }
 
 // ---- 2D gizmo: After Effects-style handles on the preview for the selected clip ----
@@ -876,11 +900,13 @@ function clipEl(it) {
   const fi = Math.max(it.fadeIn || 0, xin);
   const bg = it.kind === 'video' ? posterFor(it) : it.kind === 'image' ? it.thumb || it.url : null;
   const gone = it.kind === 'scene' && COMP.sceneOf(it.src.scene)?.state === 'missing';
-  return h('div', { class: `tl-clip ${it.kind}` + (TL.isSel(it) ? ' sel' : '') + (gone ? ' gone' : '') + (it.fx?.busy ? ' fx-busy-clip' : ''), 'data-id': it.id,
+  return h('div', { class: `tl-clip ${it.kind}` + (TL.isSel(it) ? ' sel' : '') + (gone ? ' gone' : '') + (it.fx?.busy || SHOT.busy(it.id) ? ' fx-busy-clip' : ''), 'data-id': it.id,
     title: gone ? 'This 3D scene was deleted' : null,
     style: `left:${it.at * V.pps}px;width:${Math.max(6, itLen(it) * V.pps)}px` + (bg ? `;background-image:url("${bg}")` : '') },
     it.kind === 'audio' ? h('canvas', { class: 'wave' }) : null,
-    h('span', { class: 'tl-label' }, gone ? icon('warn') : null, pinNow()?.id === it.id ? h('span', { class: 'tl-pin', title: 'The main source' }, icon('pin')) : null, it.label),
+    h('span', { class: 'tl-label' }, gone ? icon('warn') : null, pinNow()?.id === it.id ? h('span', { class: 'tl-pin', title: 'The main source' }, icon('pin')) : null,
+      SHOT.stale(it) ? h('span', { class: 'tl-stale', title: 'Out of date: the clip it continues changed. Rerun from here makes it again' }, icon('warn')) : null, it.label),
+    SHOT.busy(it.id) ? h('span', { class: 'tl-fxtag' }, h('span', { class: 'spinner' }), h('span', {}, SHOT.busy(it.id))) : null,
     it.fx?.busy ? h('span', { class: 'tl-fxtag' }, h('span', { class: 'spinner' }), h('span', { class: 'fx-text' }, fxStatus(it))) : null,
     fi ? h('span', { class: 'tl-fade in', style: `width:${fi * V.pps}px` }) : null,
     it.fadeOut ? h('span', { class: 'tl-fade out', style: `width:${it.fadeOut * V.pps}px` }) : null,
@@ -1079,14 +1105,31 @@ const clipKeyed = (it, label, ch, opts) => K.field(it, label, ch, opts);
 
 // ---- a clip's Colour section: the same curves and sliders as an Image layer; Match works from its frames, sampled by the server ----
 const CLIP_HIST = new Map();   // (a clip's part, sampled once)
-async function clipHist(it) {
+// a part of a clip's file (start and len in its own seconds; a picture has no times)
+async function partHist(it, start, len) {
   if (it.kind === 'scene') return histOfPicture(mediaFor(it));   // (live from the 3D tab: there's no file; what shows now)
-  const body = { source: it.src, start: it.kind === 'video' ? it.in || 0 : 0, len: it.kind === 'video' ? itLen(it) : 0 }, key = JSON.stringify(body);
+  const body = { source: it.src, start: it.kind === 'video' ? start || 0 : 0, len: it.kind === 'video' ? len : 0 }, key = JSON.stringify(body);
   if (!CLIP_HIST.has(key)) CLIP_HIST.set(key, api('/api/video/histogram', { method: 'POST', body }).catch((e) => { CLIP_HIST.delete(key); throw e; }));
   return CLIP_HIST.get(key);
 }
+const clipHist = (it) => partHist(it, it.in || 0, itLen(it));
+// Match at the seam: curves that give clip b, just after where it takes over from a, the look a ends on (a's own
+// colour work included, so a chain of matched clips carries the first one's look along). continue-rules.js seamWindows
+async function seamCurves(a, b, strength = 1) {
+  const w = CR.seamWindows(a, b);
+  const want = A.histThrough(await partHist(a, w.ref.start, w.ref.len), a.adjust);
+  return A.matchCurves(A.histThrough(await partHist(b, w.src.start, w.src.len), { ...b.adjust, curves: null }), want, { strength });
+}
+async function matchSeam(b, strength = 1) {
+  const a = CR.prevOnTrack(V.items, b);
+  if (!a || !matchable(a) || !matchable(b) || !a.src || !b.src) return false;
+  const curves = await seamCurves(a, b, strength);
+  if (!curves) return false;
+  b.adjust = A.clean({ ...b.adjust, curves });
+  return true;
+}
 const clipLook = async (it) => A.histThrough(await clipHist(it), it.adjust);
-const matchable = (it) => it.kind === 'video' || it.kind === 'image';
+function matchable(it) { return it.kind === 'video' || it.kind === 'image'; }
 let colourOf = null;
 function colourSection(it) {
   if (colourOf?.id === it.id) { colourOf.sync(); return colourOf.el; }
@@ -1103,12 +1146,33 @@ function colourSection(it) {
       toast(`${list.length} ${list.length === 1 ? 'clip' : 'clips'} matched to ${it.label}`);
     } catch (e) { toast(`Match failed: ${e.message}`, true); } finally { b.done(); }
   };
+  const seamPrev = () => (matchable(it) && it.src ? CR.prevOnTrack(V.items, it) : null);
+  const seamOne = (strength) => async () => {
+    const b = busy('Matching at the seam…');
+    try {
+      if (!await matchSeam(it, strength())) return toast('Nothing to match at that join', true);
+      timelineChanged();
+      toast(`${it.label} matched to the end of ${seamPrev()?.label || 'the clip before'}`);
+    } catch (e) { toast(`Match failed: ${e.message}`, true); } finally { b.done(); }
+  };
+  const seamAll = (strength) => async () => {
+    const row = V.items.filter((o) => o.track === it.track && matchable(o) && o.src).sort((x, y) => x.at - y.at), b = busy('Matching every seam…');
+    let n = 0;
+    try {
+      for (const o of row.slice(1)) if (await matchSeam(o, strength())) n++;   // (in order: each sees the one before it already matched)
+      timelineChanged();
+      toast(`${n} ${n === 1 ? 'seam' : 'seams'} matched`);
+    } catch (e) { toast(`Match failed: ${e.message}`, true); } finally { b.done(); }
+  };
   colourOf = { id: it.id, ...adjustPanel({
     get: () => it.adjust || null, set: (a) => { if (a) it.adjust = a; else delete it.adjust; },
     onInput: () => { fanOut(); requestDraw(); }, onChange: () => { requestDraw(); panelChange(); }, hist: () => clipHist(it),
     others: () => rest().map((o) => [o.id, `${o.label} (${fmtT(o.at)})`]),
     otherHist: (id) => clipLook(V.items.find((o) => o.id === id)),
-    extra: (strength) => (it.kind !== 'scene' && rest().length > 1 ? button('Match every clip to this one', matchAll(strength), { cls: 'small', title: 'This clip stays as it is; each other video and picture gets curves to look like it' }) : null) }) };
+    extra: (strength) => [
+      it.kind !== 'scene' && rest().length > 1 ? button('Match every clip to this one', matchAll(strength), { cls: 'small', title: 'This clip stays as it is; each other video and picture gets curves to look like it' }) : null,
+      seamPrev() ? button('Match at seam', seamOne(strength), { cls: 'small', title: 'Curves from only the half second each side of the join with the clip before, so the two read as one shot' }) : null,
+      seamPrev() ? button('Match every seam', seamAll(strength), { cls: 'small', title: 'From the first clip on this track to the last, each clip is matched to the one before it at their join' }) : null] }) };
   return colourOf.el;
 }
 
@@ -1221,6 +1285,7 @@ function renderVideoPanel() {
   const maps = it && (it.kind === 'video' ? canKey(it) : it.kind === 'image' && (it.src?.input || it.src?.generation != null))
     ? mapsSection(it, { lengthOf: itLen, range: () => WA.stored(), render: renderVideoPanel, land: landMap }) : null;
   const colour = it && isVisual(it) ? colourSection(it) : null;
+  const shot = it && n === 1 ? SHOT.fields(it) : null;   // Continue, Run again (continue-run.js)
 
   const fpsSel = h('select', {}, [[0, 'Match first clip'], [16, '16'], [24, '24'], [25, '25'], [30, '30'], [60, '60']].map(([v, label]) =>
     h('option', { value: v, selected: V.fps === v }, label)));
@@ -1239,7 +1304,7 @@ function renderVideoPanel() {
       button('+ Add', addSources, { cls: 'small primary', title: 'Pictures, clips and sounds: from this table, the project or anywhere; tick several to lay them in order' }),
       button('+ 3D scene…', addScene, { title: 'A 3D scene as a live clip' }),
       V.items.length ? button('Clear all', clearAll, { cls: 'small ghost' }) : null),
-    clipTools, maps, clip, colour, !clip && (V.items.length
+    clipTools, maps, clip, shot, colour, !clip && (V.items.length
       ? help('Tap a clip to edit it; Shift or Ctrl picks several, and an edit here goes to all of them. Drag clips to move them (also onto other tracks), drag their ends to trim, and overlap two clips on a track to cross-fade. Higher video tracks draw on top. The handles show on the preview while the playhead is over the clip.')
       : help('Add pictures, clips or sound. They line up on V1 / A1; drag them onto V2 to layer them over V1.')),
     section('Sequence', null,
@@ -1247,9 +1312,13 @@ function renderVideoPanel() {
       onTable() ? null : sizeOrMatch({ matchLabel: 'Same size as the first clip', size: V.size, onChange: (s) => { V.size = s; timelineChanged(); } }),
       field('Frame rate', fpsSel)),
     V.items.length ? section('Export', null, help(onTable() ? 'Render makes the timeline one clip, in a new video frame beside this one.' : 'The export lands in History.'),
+      rangeField('Grain', () => V.grain || 0, (v) => { V.grain = v; requestDraw(); }, { min: 0, max: 100, step: 1, fmt: (v) => (v ? String(Math.round(v)) : 'Off'),
+        onChange: () => persistTimeline(),
+        help: 'One film grain over the whole picture, added last. Clips made in separate runs each have their own noise; a shared grain on top hides the difference. The preview shows roughly how strong it is.' }),
       h('div', { class: 'row wrap' }, exportBtn, WA.onlyToggle(),
         button('Open in EffectCraft', (ev) => craftVideo(ev.currentTarget), { cls: 'small', title: 'Each clip as a layer in a comp, to keep editing on the computer' }),
-        button('Craft documents…', () => openCraftSheet(), { cls: 'small' }))) : null));
+        button('Craft documents…', () => openCraftSheet(), { cls: 'small' })),
+      onTable() ? null : finishField()) : null));
 }
 
 // ---- effects: a stack of LTX / keying steps run on the clip's range and baked into a new clip ----
@@ -1303,6 +1372,11 @@ function fxFields(it) {
       fx.orig ? button('Remove effects', () => unbakeFx(it)) : null,
       len > 10 ? hint('Only the first 10 s get the effects.') : null));
 }
+
+// ---- one shot from several clips: Continue, Run again, Rerun from here (continue-run.js) ----
+const SHOT = continueRunner({ items: () => V.items, newItem, changed: () => timelineChanged(), persist: () => persistTimeline(),
+  redraw: () => { renderTimeline(); renderVideoPanel(); }, matchSeam: (it) => matchSeam(it), docKey: () => tabs?.active?.id || null,
+  start: () => fxStart(), stop: () => fxStop(), status: (long) => fxStatus(null, long) });
 
 const clipBase = (it) => it.fx?.orig || { src: it.src, url: it.url, label: it.label, in: it.in, out: it.out ?? it.dur, dur: it.dur };
 function unbakeFx(it) {
@@ -1438,7 +1512,7 @@ function openKey(it) {
 
 // The timeline as /api/video/render (and /api/craft/video) take it. 3D scene clips are drawn here first, at the
 // export size and rate, and go to the server as ordinary clips.
-async function timelineBody(btn) {
+async function timelineBody(btn, { grain = V.grain || 0 } = {}) {
   G.settling?.w.finish();
   await tabs?.flush();   // the saved edit is what this render came from
   const range = WA.exportRange();   // Range only: the clips cut to the work area, starting at 0
@@ -1452,7 +1526,7 @@ async function timelineBody(btn) {
   }
   return {
     project_id: S.project, tab: tabs?.active && { id: tabs.active.id, name: tabs.active.name },
-    width: scenes.length ? W : V.size && V.size[0], height: scenes.length ? H : V.size && V.size[1], fps: V.fps || null,
+    width: scenes.length ? W : V.size && V.size[0], height: scenes.length ? H : V.size && V.size[1], fps: V.fps || null, grain,
     tracks: exportTracks(V.tracks).map(({ id, kind, hidden, muted }) => ({ id, kind, hidden, muted })),   // (solo as hidden / muted)
     items: items.map((it) => ({ track: it.track, at: it.at, name: it.label, ...(made.has(it)   // (a scene's clip is already cut to what's used)
       ? { src: { clip: made.get(it).clip }, scene: made.get(it).scene, in: 0, out: itLen(it) } : { src: it.src, in: it.in, out: it.out ?? it.dur }),
@@ -1473,6 +1547,60 @@ async function exportVideo(btn) {
     openGeneration(g.id);
   } catch (e) { toast('Export failed: ' + e.message, true); }
   finally { btn.disabled = false; btn.textContent = label; }
+}
+
+// Finish shot: the timeline rendered as one clip without its grain, upscaled once (the chunked SeedVR2 templates take any
+// length), then the grain laid on top. One pass over the whole shot gives every join the same texture, which upscaling clip
+// by clip never does. Each step is a run in History; the last one opens.
+const FINISH = { busy: null, stop: false, pid: null };
+async function finishShot() {
+  if (FINISH.busy) return;
+  vidPause();
+  const sharp = store.get('deck.video.finish', 'fast') === 'sharp', scale = store.get('deck.video.finishScale', 2);
+  const t = template(sharp ? 'deck-upscale-video' : 'deck-upscale-video-fast');
+  if (!t) return toast(`${sharp ? 'deck-upscale-video' : 'deck-upscale-video-fast'} isn't installed`, true);
+  const say = (text) => { FINISH.busy = text; renderVideoPanel(); };
+  const render = (body) => api('/api/video/render', { method: 'POST', body, busy: false }).then((g) => { S.history.set(g.id, g); return g; });
+  const halt = () => { if (FINISH.stop) throw new Error('stopped'); };
+  FINISH.stop = false;
+  try {
+    say('1/3 Rendering the shot');
+    const flat = await render(await timelineBody({ textContent: '' }, { grain: 0 }));
+    halt(); say('2/3 Upscaling: the long step');
+    const values = valuesByRole(t, { source: { generation: flat.id, index: 0 } });
+    const sf = t.fields.find((f) => f.input === 'scale_by');
+    if (sf) values[sf.key] = scale;
+    const [queued] = await queueRun({ template: t.id, values });
+    FINISH.pid = queued.prompt_id;
+    let last = await waitGen(queued.id);
+    FINISH.pid = null;
+    if (V.grain > 0) {
+      halt(); say('3/3 Adding the grain');
+      const i = Math.max(0, last.outputs.findIndex((o) => o.kind === 'video'));
+      last = await render({ project_id: S.project, tab: tabs?.active && { id: tabs.active.id, name: tabs.active.name }, grain: V.grain,
+        tracks: [{ id: 'v1', kind: 'video' }],
+        items: [{ track: 'v1', at: 0, src: { generation: last.id, index: i }, in: 0, out: last.outputs[i].duration || null,
+          x: 0, y: 0, scale: 1, fit: 'fit', opacity: 1, volume: 1 }] });
+    }
+    openGeneration(last.id);
+    toast('The shot is finished: its steps are in History');
+  } catch (e) { toast(FINISH.stop ? 'Finish shot stopped' : `Finish shot failed: ${e.message}`, true); }
+  finally { FINISH.busy = null; FINISH.pid = null; renderVideoPanel(); }
+}
+function stopFinish() {
+  FINISH.stop = true;
+  if (FINISH.pid) stopRun(FINISH.pid);
+  else toast('Stopping after this step…');
+}
+function finishField() {
+  const pick = (key, opts, cur) => h('select', { 'aria-label': key, onchange: (e) => store.set(key === 'Model' ? 'deck.video.finish' : 'deck.video.finishScale', key === 'Model' ? e.target.value : Number(e.target.value)) },
+    opts.map(([v, label]) => h('option', { value: v, selected: v === cur }, label)));
+  return field('Finish shot', help('For several clips that should read as one shot. It renders the timeline (or the work area) as one clip, upscales that clip once, and then adds the Grain. One pass over the whole shot gives every join the same detail and noise; upscaling clip by clip gives each its own. The upscale works through the clip in pieces, so a long shot takes longer but not more memory. Fast is the smaller model; Sharp is slower and finer. Each step lands in History.'),
+    h('div', { class: 'row wrap' },
+      pick('Model', [['fast', 'Fast'], ['sharp', 'Sharp']], store.get('deck.video.finish', 'fast')),
+      pick('Scale', [[1.5, '×1.5'], [2, '×2'], [3, '×3']], store.get('deck.video.finishScale', 2)),
+      button(FINISH.busy || 'Finish shot', finishShot, { cls: 'small' + (FINISH.busy ? ' working' : ''), disabled: !!FINISH.busy }),
+      FINISH.busy ? button('Stop', stopFinish, { cls: 'small' }) : null));
 }
 
 // On the table: Render is the frame's Render op (edit-run.js: a new video frame beside it); renderLive is its run
@@ -1574,12 +1702,12 @@ export async function videoStill() {
 const editAdapter = {
   empty: emptyVideo,   // (markers: none until one is added; migrate and load give [])
   migrate: migrateEdit,
-  dump: () => ({ tracks: V.tracks, items: V.items, size: V.size, fps: V.fps, ...(V.range && { range: V.range }), ...(V.markers?.length && { markers: V.markers }) }),
+  dump: () => ({ tracks: V.tracks, items: V.items, size: V.size, fps: V.fps, ...(V.range && { range: V.range }), ...(V.markers?.length && { markers: V.markers }), ...(V.grain && { grain: V.grain }) }),
   load(p, doc, { remote = false } = {}) {
     HIST.hold(() => {   // (what loading writes is no edit)
       vidPause();
       for (const it of p.items || []) if (it.fx?.busy && !FXRUN.n) it.fx.busy = null;   // (a render the page was closed on)
-      Object.assign(V, { tracks: p.tracks, items: p.items, size: p.size, fps: p.fps, range: p.range || null, markers: p.markers || [],
+      Object.assign(V, { tracks: p.tracks, items: p.items, size: p.size, fps: p.fps, range: p.range || null, markers: p.markers || [], grain: p.grain || 0,
         sel: null, multi: [], t: 0, master: null, holdSince: 0 });
       WA.only = true; WA.sync();
       renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw(); COMP.refresh();
@@ -1733,6 +1861,9 @@ function wireOnce() {
 // Track and ruler menu items the timeline leaves to the tab (timeline.js menuAction); rename, lock, solo and markers are its own.
 function menuAction(id, ctx = {}) {
   const step = 1 / fpsNow();
+  if (id === 'continue' && ctx.item) return SHOT.continueFrom(ctx.item.id);   // (with the clip's Shot settings as they stand)
+  if (id === 'runAgain' && ctx.item) return SHOT.runAgain(ctx.item.id);
+  if (id === 'rerunFrom' && ctx.item) return SHOT.rerunFrom(ctx.item.id);
   if (id === 'main') {   // (pin this clip as the frame's main source, or unpin it)
     const m = pinNow();
     if (m && ctx.item) setMain(m.frame.id, ctx.on ? null : ctx.item.id).catch((e) => toast(e.message, true));

@@ -150,10 +150,13 @@ def loader_trim(info: dict, trim, loader: dict):
     if not isinstance(own_skip, (int, float)) or not isinstance(own_cap, (int, float)):
         return None
     start, length = trim
-    skip = int(own_skip) + int(round(start * rate))
-    out = {"skip_first_frames": skip}
+    first = int(round(round(start * rate, 4)))
+    out = {"skip_first_frames": int(own_skip) + first}
     if length is not None:
-        cap = max(1, int(math.ceil(round(length * rate, 4) / nth)))
+        # frames between the trim's two ends, each rounded to its nearest frame: norm_trim keeps 3 decimals, so
+        # length * rate alone can come out a hair over (a 22-frame tail at 24 fps is 0.917 s = 22.008 frames)
+        frames = int(round(round((start + length) * rate, 4))) - first
+        cap = max(1, int(math.ceil(frames / nth)))
         out["frame_load_cap"] = min(cap, int(own_cap)) if own_cap else cap
     return out
 

@@ -268,9 +268,20 @@ def histogram(path: Path, kind: str, start: float = 0, length: float = 0) -> dic
     return {ch: np.bincount(px[:, i], minlength=256).tolist() for i, ch in enumerate("rgb")}
 
 
+def grain_filters(amount) -> list[str]:
+    """One film grain over the finished picture: amount 0..100 (0 = none). It goes on after every clip is laid, so clips made in
+    separate runs share one noise instead of each keeping its own."""
+    try:
+        a = max(0.0, min(100.0, float(amount or 0)))
+    except (TypeError, ValueError):
+        a = 0.0
+    n = round(a * 0.4)   # ffmpeg's strength: 40 is already heavy
+    return [f"noise=alls={n}:allf=t+u"] if n > 0 else []
+
+
 def render(items: list[dict], out: Path, width: int | None = None, height: int | None = None,
-           fps: float | None = None):
-    """items: [{"path", "kind": video|image|audio, "track", "z" (video tracks: 0 = bottom),
+           fps: float | None = None, grain: float = 0):
+    """grain: grain_filters' amount, over the whole picture. items: [{"path", "kind": video|image|audio, "track", "z" (video tracks: 0 = bottom),
     "hidden", "muted", "at", "in", "out", "x", "y", "scale", "fit", "rotation" (degrees, clockwise), "anchor_x", "anchor_y" (0..1 of the
     clip, default 0.5), "opacity", "volume", "fade_in", "fade_out", "grade" (grade_filters)}] with times in seconds. Frame size and rate default to the first visual
     clip's; gaps are black, clip audio and audio-track clips are mixed."""
@@ -334,12 +345,12 @@ def render(items: list[dict], out: Path, width: int | None = None, height: int |
         filters.append(f"[{j}:v]{','.join(chain)}[o{n}]")
         filters.append(f"[b{n}][o{n}]overlay=x={x}:y={y}:eof_action=pass:format=auto[b{n + 1}]")
         n += 1
-    filters.append(f"[b{n}]format=yuv420p[v]")
+    filters.append(f"[b{n}]{','.join(['format=yuv420p', *grain_filters(grain)])}[v]")
 
     mix = mix_filters(items, inputs, total)
 
     args += ["-filter_complex", ";".join(filters + mix), "-map", "[v]", "-map", "[a]", "-t", f"{total:.3f}",
-             *h264(18), "-pix_fmt", "yuv420p",
+             *h264(15 if grain_filters(grain) else 18), "-pix_fmt", "yuv420p",   # (grain is the first thing an encoder smooths away)
              "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)]
     r = run_ffmpeg(args, timeout=3600)
     check(r)

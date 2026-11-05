@@ -56,6 +56,21 @@ class Params(unittest.TestCase):
         self.assertIsNone(vp.loader_trim(INFO, (1.0, 2.0), {"force_rate": 24}))                 # inputs not there
         self.assertIsNone(vp.loader_trim(INFO, (1.0, 2.0), {**base, "force_rate": ["3", 0]}))   # wired from another node
 
+    def test_tail_trim_loads_its_frames(self):
+        """Continue: the last g frames of a 24 fps clip, as {start, len} in seconds, load exactly g frames."""
+        base = {"force_rate": 24, "frame_load_cap": 0, "skip_first_frames": 0, "select_every_nth": 1}
+        for dur, total in ((4.0, 96), (10.0, 240)):
+            info = {**INFO, "fps": 24.0, "duration": dur}
+            for g in (5, 9, 17, 22, 24, 25, 39):
+                trim = {"start": (total - g) / 24, "len": g / 24}
+                with mock.patch.object(videoedit, "probe", return_value=info):
+                    p = vp.plan(Path("clip.mp4"), trim, None, base)
+                self.assertEqual(p["inputs"], {"skip_first_frames": total - g, "frame_load_cap": g}, (dur, g))
+        # a tail in the middle of a longer clip (the timeline's own cut of it) is just as exact
+        info = {**INFO, "fps": 24.0, "duration": 10.0}
+        self.assertEqual(vp.loader_trim(info, vp.norm_trim({"start": 128 / 24, "len": 22 / 24}, 10.0), base),
+                         {"skip_first_frames": 128, "frame_load_cap": 22})
+
 
 @unittest.skipUnless(HAVE_FFMPEG, "needs ffmpeg")
 class Real(unittest.TestCase):

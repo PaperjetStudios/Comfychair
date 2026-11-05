@@ -98,7 +98,7 @@ async def video_histogram(body: dict = Body(...)):
 
 @router.post("/api/video/render")
 async def video_render(body: dict = Body(...)):
-    """Render the Video tab's timeline ({tracks, items, width, height, fps}) into a new video in History. cache: true makes it a
+    """Render the Video tab's timeline ({tracks, items, width, height, fps, grain}) into a new video in History. cache: true makes it a
     table frame's cached render for a wire, left out of the History listing (params.cache)."""
     if not imageprep.ffmpeg_available():
         raise HTTPException(400, "ffmpeg isn't installed (sudo apt install ffmpeg)")
@@ -128,6 +128,9 @@ async def video_render(body: dict = Body(...)):
         size = f"{body['width']}×{body['height']}" if body.get("width") else "first clip's size"
         params = {"timeline": f"{len(items)} clips on {len(tracks)} tracks", "frame": size,
                   "fps": body.get("fps") or "first clip's", "clips": sources}
+        grain = videoedit.grain_filters(body.get("grain")) and float(body["grain"]) or 0
+        if grain:  # one grain over the whole picture (videoedit.grain_filters)
+            params["grain"] = grain
         if scenes:  # 3D compositions in it (live-linked scenes, rendered at export)
             params["scenes"] = scenes
         if body.get("cache") is True:  # a table frame's cached render for a wire (frame.render): reachable by id, never listed (db.py)
@@ -140,7 +143,7 @@ async def video_render(body: dict = Body(...)):
         await services.push_gen(gid)
         out, rel = services.new_output(db.get_generation(gid), "edit.mp4")
         try:
-            info = await asyncio.to_thread(videoedit.render, items, out, body.get("width"), body.get("height"), body.get("fps"))
+            info = await asyncio.to_thread(videoedit.render, items, out, body.get("width"), body.get("height"), body.get("fps"), grain)
         except Exception as e:
             out.unlink(missing_ok=True)
             db.update_generation(gid, status="error", error=str(e), finished=time.time())

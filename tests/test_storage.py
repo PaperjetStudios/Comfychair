@@ -477,6 +477,19 @@ class Storage(unittest.TestCase):
                  name="TW", did="tw")
         self.assertNotIn(a, storage.attachments())
 
+    def test_a_continued_clip_pins_its_own_run_not_the_one_it_was_made_from(self):
+        """A clip continued from another (web/continue-rules.js) names what it was made from as "<run>:<index>", a string: the
+        old take of the clip before it can still be deleted. Its own source is a use like any clip's."""
+        old, _, _, _ = self.gen(run="r1")
+        new, _, _, _ = self.gen(run="r2")
+        self.doc("video-tabs", {"tracks": [{"id": "v1", "kind": "video"}], "items": [
+            {"id": "b", "track": "v1", "kind": "video", "src": {"generation": new, "index": 0},
+             "cont": {"of": "a", "from": f"{old}:0", "end": 5.0, "lap": 0.92}, "shot": {"prompt": "she turns", "next": {"secs": 5, "lap": 22}}}]},
+                 name="Shot", did="shot1")
+        got = storage.attachments()
+        self.assertIn(new, got)
+        self.assertNotIn(old, got)
+
     def test_a_parent_or_a_trashed_owner_is_no_attachment(self):
         a, _, _, _ = self.gen(run="r1")
         self.doc("gen-tabs", {"parent": {"generation": a, "index": 0}}, did="t1")

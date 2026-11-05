@@ -19,7 +19,7 @@ OLD_GRAPH = (  # what the renderer built before rotation and anchor existed (two
 
 
 class Graph(unittest.TestCase):
-    def graph(self, items):
+    def graph(self, items, grain=0):
         cap = {}
         info = {"width": 640, "height": 360, "duration": 4.0, "fps": 25.0, "video": True, "audio": False}
 
@@ -28,7 +28,7 @@ class Graph(unittest.TestCase):
             return mock.Mock(returncode=0)
 
         with mock.patch.object(videoedit, "probe", return_value=info), mock.patch("subprocess.run", run):
-            videoedit.render(items, Path("/tmp/x.mp4"), 1280, 720, 25)
+            videoedit.render(items, Path("/tmp/x.mp4"), 1280, 720, 25, grain)
         return cap["a"][cap["a"].index("-filter_complex") + 1]
 
     def clips(self, **extra):
@@ -43,6 +43,16 @@ class Graph(unittest.TestCase):
     def test_defaults_spelled_out_change_nothing(self):
         self.assertEqual(self.graph(self.clips(rotation=0, anchor_x=0.5, anchor_y=0.5)), OLD_GRAPH)
         self.assertEqual(self.graph(self.clips(rotation=None, anchor_x=None, anchor_y=None)), OLD_GRAPH)
+
+    def test_grain_goes_on_last_over_everything(self):
+        g = self.graph(self.clips(), grain=25)
+        self.assertIn("[b2]format=yuv420p,noise=alls=10:allf=t+u[v]", g)
+        self.assertEqual(g.count("noise="), 1)
+
+    def test_no_grain_leaves_the_graph_alone(self):
+        for amount in (0, None, "", "x", -5, 1):   # 1 rounds to nothing
+            self.assertEqual(self.graph(self.clips(), grain=amount), OLD_GRAPH)
+        self.assertEqual(videoedit.grain_filters(500), ["noise=alls=40:allf=t+u"])
 
     def test_rotation_adds_filters(self):
         g = self.graph(self.clips(rotation=30))

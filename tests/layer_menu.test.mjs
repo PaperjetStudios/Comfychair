@@ -135,3 +135,14 @@ test('on the table, a layer or a clip can go to the table as itself or as a copy
   assert.equal(locked.find((i) => i.id === 'toTable').disabled, true);
   assert.equal(locked.find((i) => i.id === 'copyToTable').disabled, false);
 });
+
+test('a clip that can be continued gets Continue, Run again and Rerun from here', () => {
+  const ids = (s) => clipMenu(s).flat().map((i) => i.id);
+  assert.ok(!ids({ n: 1, kind: 'video' }).includes('continue'));
+  assert.deepEqual(ids({ n: 1, kind: 'video', shot: { cont: true, rerun: true, from: true } }).slice(0, 3), ['continue', 'runAgain', 'rerunFrom']);
+  const only = ids({ n: 1, kind: 'video', shot: { cont: true, rerun: false, from: false } });   // (an imported clip: nothing to run again)
+  assert.ok(only.includes('continue') && !only.includes('runAgain') && !only.includes('rerunFrom'));
+  assert.ok(!ids({ n: 2, kind: 'video', shot: { cont: true, rerun: true, from: true } }).includes('continue'));
+  const busy = clipMenu({ n: 1, kind: 'video', shot: { cont: true, rerun: true, from: true, busy: true } }).flat();
+  assert.ok(busy.filter((i) => ['continue', 'runAgain', 'rerunFrom'].includes(i.id)).every((i) => i.disabled));
+});

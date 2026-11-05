@@ -808,12 +808,15 @@ export function timeline(st, o) {
       const groups = clipMenu({ n: p.length, canPaste: !!clipboard?.items?.length, kind: p[0]?.kind, hasKeys: false,
         canSplit: p.some((i) => st.t > i.at + 0.02 && st.t < end(i) - 0.02), locked: p.length > 0 && p.every(lockedTr),
         main: pin && o.menuAction && p.length === 1 ? { on: p[0].id === pin.id } : null,
-        table: ['video', 'sound'].includes(liveFrame()?.kind), sendable: p.length > 0 && p.every((i) => i.src) });
+        table: ['video', 'sound'].includes(liveFrame()?.kind), sendable: p.length > 0 && p.every((i) => i.src),
+        shot: p.length === 1 && o.shot && o.menuAction ? o.shot(p[0]) : null });
       const sendClips = async () => (await import('./send-to-table.js')).sendClips(p);
       const run = { toTable: async () => { const ids = p.map((i) => i.id); if (await sendClips()) { setPicked(ids); removePicked(); } }, copyToTable: () => { sendClips(); },
         cut, copy, paste, duplicate: duplicatePicked, split: splitAtPlayhead, rippleDelete, delete: () => removePicked(),
         main: () => o.menuAction('main', { item: p[0], on: p[0]?.id === pin?.id }),
         crossfade: () => { const s = selItem(); if (s) crossfadePrev(s); },
+        continue: () => o.menuAction('continue', { item: p[0] }), runAgain: () => o.menuAction('runAgain', { item: p[0] }),
+        rerunFrom: () => o.menuAction('rerunFrom', { item: p[0] }),
         selectTrack: () => setPicked(st.items.filter((i) => i.track === track).map((i) => i.id)), selectAfter: () => selectFrom(st.t) };
       return openPressMenu(x, y, groups.map((gr) => gr.map((i) => ({ ...i, run: run[i.id] }))), it ? 'Clip' : 'Lane');
     }

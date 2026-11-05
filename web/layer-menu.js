@@ -90,11 +90,15 @@ export function frameMenu(s) {
 
 // ---- the timeline's menus (Video and Sound; tests/layer_menu.test.mjs). Same shape; what doesn't apply isn't listed. ----
 // s: { n (clips picked), canPaste, canSplit (the playhead is inside a picked clip), locked, hasKeys, kind,
-//      main: null (no pin here) | { on: the one picked clip is the frame's main source } }
+//      main: null (no pin here) | { on: the one picked clip is the frame's main source },
+//      shot: null | { cont (it can be continued), rerun (it can run again), from (clips continue from it, or it continues one), busy } }
 export function clipMenu(s) {
   const n = s.n || 0;
   const groups = [
     [n === 1 && s.main ? { id: 'main', label: s.main.on ? 'Not the main source' : 'Main source', on: !!s.main.on } : null],
+    [n === 1 && s.shot?.cont ? { id: 'continue', label: 'Continue this clip', disabled: !!s.locked || !!s.shot.busy } : null,
+      n === 1 && s.shot?.rerun ? { id: 'runAgain', label: 'Run again', disabled: !!s.locked || !!s.shot.busy } : null,
+      n === 1 && s.shot?.from ? { id: 'rerunFrom', label: 'Rerun from here', disabled: !!s.locked || !!s.shot.busy } : null],
     [n ? { id: 'cut', label: 'Cut', keys: 'Ctrl+X', disabled: !!s.locked } : null,
       n ? { id: 'copy', label: 'Copy', keys: 'Ctrl+C' } : null,
       s.canPaste ? { id: 'paste', label: 'Paste', keys: 'Ctrl+V', disabled: !!s.locked } : null,
