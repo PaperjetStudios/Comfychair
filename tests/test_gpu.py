@@ -367,5 +367,51 @@ class Listing(Base):
             first.done.wait(5); waiting.done.wait(5)
 
 
+class Batches(Base):
+    def _batch(self, grp, *pids):
+        return [db.create_generation(None, "my template", {}, WF, pid, None, grp, "Face skin") for pid in pids]
+
+    def test_cancel_takes_the_waiting_ones_and_stops_the_running_one(self):
+        c = TestClient(main.app)
+        a, b, d = self._batch("grp-1", "p-run", "p-wait-1", "p-wait-2")
+        other = db.create_generation(None, "my template", {}, WF, "p-other", None)
+        state = {"queue_running": [[0, "p-run"]], "queue_pending": [[1, "p-wait-1"], [2, "p-wait-2"], [3, "p-other"]]}
+        calls = []
+        with mock.patch.object(main.comfy, "queue_state", return_value=state), \
+                mock.patch.object(main.comfy, "delete_queued", side_effect=lambda ids: calls.append(("delete", ids))), \
+                mock.patch.object(main.comfy, "interrupt", side_effect=lambda: calls.append(("interrupt",))):
+            r = c.post("/api/queue/cancel-group", json={"group": "grp-1"}).json()
+        self.assertEqual((r["cancelled"], r["stopped"]), (2, True))
+        self.assertEqual(calls, [("delete", ["p-wait-1", "p-wait-2"]), ("interrupt",)])   # (the next must not start)
+        self.assertEqual([db.get_generation(g)["status"] for g in (b, d)], ["interrupted", "interrupted"])
+        self.assertEqual(db.get_generation(other)["status"], "queued")   # (not in the batch)
+        self.assertEqual(db.get_generation(a)["status"], "queued")   # (its end comes from ComfyUI)
+        for g in (a, other):
+            db.update_generation(g, status="done")
+
+    def test_a_batch_with_nothing_running_interrupts_nothing(self):
+        c = TestClient(main.app)
+        [g] = self._batch("grp-2", "p-only")
+        with mock.patch.object(main.comfy, "queue_state", return_value={"queue_pending": [[1, "p-only"]]}), \
+                mock.patch.object(main.comfy, "delete_queued") as gone, mock.patch.object(main.comfy, "interrupt") as stop:
+            c.post("/api/queue/cancel-group", json={"group": "grp-2"})
+        gone.assert_called_once_with(["p-only"])
+        stop.assert_not_called()
+        self.assertEqual(db.get_generation(g)["status"], "interrupted")
+
+    def test_the_rest_of_a_cancelled_batch_is_refused(self):
+        c = TestClient(main.app)
+        main.CANCELLED_GROUPS.append("grp-3")
+        t = mock.Mock(error=None, id="t")
+        with mock.patch.object(main.tpl, "get", return_value=t), mock.patch.object(main.tpl, "describe", return_value={"fields": []}), \
+                mock.patch.object(main, "object_info_or_none", new=mock.AsyncMock(return_value={})):
+            r = c.post("/api/generate", json={"template": "t", "group": {"id": "grp-3", "label": "x"}})
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.json()["detail"], main.BATCH_CANCELLED)
+
+    def test_a_batch_needs_saying_which(self):
+        self.assertEqual(TestClient(main.app).post("/api/queue/cancel-group", json={}).status_code, 400)
+
+
 if __name__ == "__main__":
     unittest.main()

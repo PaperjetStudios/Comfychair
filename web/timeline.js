@@ -844,7 +844,7 @@ export function timeline(st, o) {
   function keys() {
     const run = {
       undo: o.undo ? () => o.undo() : null, redo: o.redo ? () => o.redo() : null,
-      copy, cut, paste, duplicate: duplicatePicked, selectAll, delete: () => removePicked(), rippleDelete,
+      copy, cut, paste, duplicate: duplicatePicked, selectAll, selectNone: clearPick, delete: () => removePicked(), rippleDelete,
       nudgeLeft: (e) => nudge(e.shiftKey ? -10 : -1), nudgeRight: (e) => nudge(e.shiftKey ? 10 : 1),
       split: splitAtPlayhead, marker: () => addMarkerHere(),
       deselect: () => (tool !== 'select' ? setTool('select') : pickedIds().length > 1 ? applySel({ sel: st.sel, multi: [] }) : clearPick()),

@@ -44,6 +44,9 @@ def migrate(conn):
     cols = [r[1] for r in conn.execute("PRAGMA table_info(generations)")]
     if "pinned" not in cols:
         conn.execute("ALTER TABLE generations ADD COLUMN pinned INTEGER DEFAULT 0")
+    if "grp" not in cols:  # the batch it was sent in (one press on several layers, clips or frames): the Queue cancels them together
+        conn.execute("ALTER TABLE generations ADD COLUMN grp TEXT")
+        conn.execute("ALTER TABLE generations ADD COLUMN grp_label TEXT")
     if "started" not in cols:  # when ComfyUI began running it; finished - started = run time
         conn.execute("ALTER TABLE generations ADD COLUMN started REAL")
     cols = [r[1] for r in conn.execute("PRAGMA table_info(projects)")]
@@ -230,14 +233,19 @@ def copy_generation(gid: int, dst_project: int, fix) -> int:
 
 
 # ---- generations ------------------------------------------------------------
-def create_generation(project_id, template, params, workflow, prompt_id, parent=None) -> int:
+def create_generation(project_id, template, params, workflow, prompt_id, parent=None, grp=None, grp_label=None) -> int:
     cur = _q(
-        "INSERT INTO generations(project_id, template, params, workflow, prompt_id, status, outputs, parent, created)"
-        " VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO generations(project_id, template, params, workflow, prompt_id, status, outputs, parent, created, grp, grp_label)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (project_id, template, json.dumps(params), json.dumps(workflow), prompt_id, "queued", "[]",
-         json.dumps(parent) if parent else None, time.time()),
+         json.dumps(parent) if parent else None, time.time(), grp, grp_label),
     )
     return cur.lastrowid
+
+
+def active_in_group(grp: str) -> list:
+    """A batch's runs that aren't over yet."""
+    return [_gen(r) for r in _q("SELECT * FROM generations WHERE grp=? AND status IN ('queued','running')", (grp,)).fetchall()]
 
 
 def get_generation(gid: int):

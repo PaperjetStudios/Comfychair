@@ -17,6 +17,12 @@ test('several layers get the words and the actions for several', () => {
   assert.equal(all.find((i) => i.id === 'saveEach').label, 'Save each as input');
   assert.equal(all.find((i) => i.id === 'delete').label, 'Delete 3 selected');
 });
+test('Trim is there for pictures that can be cropped, with the words for several', () => {
+  const trim = (s) => layerMenu({ ...base, selected: 2, pictures: 2, ...s }).flat().find((i) => i.id === 'trim');
+  assert.equal(trim({ trim: 0 }), undefined);
+  assert.equal(trim({ trim: 1 }).label, 'Trim to the cut-out');
+  assert.equal(trim({ trim: 2 }).label, 'Trim 2 to their cut-outs');
+});
 test('with nothing selected, only what needs no selection is there, and no group is left empty', () => {
   assert.deepEqual(ids(layerMenu({ ...base, clip: true })), [['all', 'several'], ['paste'], ['clear']]);
 });

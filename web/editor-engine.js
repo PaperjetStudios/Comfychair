@@ -36,6 +36,7 @@ import { editorRunKey, editorRunKeys, keepTyping } from './key-focus.js';
 import { imageToolsSection, runImageTool } from './imagetools.js';
 import { shared as sharedOf } from './props-rules.js';
 import { propsRoot } from './props-panel.js';
+import { distributeFrames } from './table-model.js';
 
 // ---------------------------------------------------------------------------
 // editor: a simple Photoshop-style layer stack for cropping images and putting them together
@@ -686,8 +687,8 @@ export function createEditor(cfg) {
       toast('Grey added: a new layer over the original. Edit from a prompt can fill it in');
     } catch (e) { toast(e.message, true); } finally { b.done(); }
   }
-  // the crop trimmed to what is solid inside it (what the layer's see-through and its own mask leave), in place
-  function trimCrop(l) {
+  // the crop that is tight round what is solid inside l's crop (what its see-through and its own mask leave); null: nothing solid; the same crop: already tight
+  function solidCrop(l) {
     const W = l.img.naturalWidth || l.img.width, H = l.img.naturalHeight || l.img.height, c = l.crop;
     const x = Math.round(c.x * W), y = Math.round(c.y * H), w = Math.max(1, Math.round(c.w * W)), hh = Math.max(1, Math.round(c.h * H));
     const cv = document.createElement('canvas');
@@ -697,11 +698,32 @@ export function createEditor(cfg) {
     const m = l.maskFor === 'adjust' ? null : maskOfLayer(l);
     if (m) { ctx.globalCompositeOperation = 'destination-in'; ctx.drawImage(m.img, -x, -y, W, H); }
     const b = solidBounds(ctx.getImageData(0, 0, w, hh).data, w, hh);
-    if (!b) return toast('Nothing solid in the crop to trim to', true);
-    if (b.w === w && b.h === hh) return toast('The crop is already tight: nothing see-through round the edge');
+    if (!b) return null;
+    return b.w === w && b.h === hh ? c : { x: (x + b.x) / W, y: (y + b.y) / H, w: b.w / W, h: b.h / H };
+  }
+  // the crop trimmed to what is solid inside it, in place
+  function trimCrop(l) {
+    const c = solidCrop(l);
+    if (!c) return toast('Nothing solid in the crop to trim to', true);
+    if (c === l.crop) return toast('The crop is already tight: nothing see-through round the edge');
     E.aspect = null;
-    setLayerCrop(l, { x: (x + b.x) / W, y: (y + b.y) / H, w: b.w / W, h: b.h / H });
+    setLayerCrop(l, c);
     editorChanged();
+  }
+  // the layers the menu's Trim takes: pictures that can be cropped (a painted canvas is resized instead)
+  const trimmable = () => selectedPictures().filter((l) => !plain(l));
+  // Trim on the menu: each selected cut-out's empty edges cropped away, where it shows, as one undo step. Nothing is deleted: Reset crop brings them back.
+  function trimLayers() {
+    let done = 0, empty = 0;
+    settleGrow();
+    for (const l of trimmable()) {
+      const c = solidCrop(l);
+      if (!c) empty++;
+      else if (c !== l.crop) { setLayerCrop(l, c); done++; }
+    }
+    if (done) { E.aspect = null; editorChanged(); }
+    const some = (n) => (n === 1 ? '1 layer' : `${n} layers`);
+    toast([done ? `Trimmed ${some(done)}` : 'Already tight: nothing see-through round the edge', empty ? `${some(empty)} with nothing solid left as it was` : ''].filter(Boolean).join('; '), !done && !!empty);
   }
 
   // view: canvas px → screen px in the viewer (s = zoom, ox/oy = offset). It's refitted on every
@@ -1296,6 +1318,7 @@ export function createEditor(cfg) {
     paint = createPaint({
       E, canvas: () => cv, viewer: () => cv.parentElement, view: () => EV, zoom: viewZoom, frame: editorFrame,
       toCanvas: (e) => point(e), cancelDrag, redraw: drawEditorCanvas, render: renderEditor, changed: persistEditor, restoreStack, docId: () => cfg.docId?.() ?? E.tab?.id,
+      pickAll: () => LAYER_ACTIONS.all(), pickNone: () => LAYER_ACTIONS.none(),
       hit: (p) => [...visibleLayers()].reverse().find((l) => G.insideLayer(l, p)) || null,
       maskFromSelection: () => {
         const l = E.sel?.maskOf ? E.layers.find((o) => o.key === E.sel.maskOf) : E.sel, m = l && E.layers.find((o) => l.key && o.maskOf === l.key);
@@ -1481,7 +1504,7 @@ export function createEditor(cfg) {
         title: 'Taps on the list and the canvas add or drop layers from the selection. Also: Shift on the canvas, Alt in the list. Shift in the list selects a range',
         onclick: () => { E.pickMode = !E.pickMode; renderEditor(); } }, 'Select several'),
       iconBtn('Layer actions', icon('more'), (ev) => { const r = ev.currentTarget.getBoundingClientRect(); openLayerMenu(r.left, r.bottom + 4); }),
-      help('Right click a layer or the canvas, or hold a finger on it, for what you can do with the selected layers. Pressing a layer that isn\'t selected selects it alone first. Merge draws the layers into one new picture: crops, turns, opacity and masks are drawn in. It keeps the lowest layer\'s blend, for the whole picture, so layers with a blend other than Normal can look different. A hidden layer isn\'t merged. Locked or animated layers can\'t be merged. Undo brings them back. Save each as input makes every layer its own input in this project, at its file\'s full pixels, with its crop, turn and opacity and a see-through background. Save as one input makes them one input the size of their shared box, on the Background colour, at Export size and Max MP. Open in a new edit puts them in a new tab, where they stay in place and can be changed without touching this edit. A hidden layer that is selected is included.'),
+      help('Right click a layer or the canvas, or hold a finger on it, for what you can do with the selected layers. Pressing a layer that isn\'t selected selects it alone first. Merge draws the layers into one new picture: crops, turns, opacity and masks are drawn in. It keeps the lowest layer\'s blend, for the whole picture, so layers with a blend other than Normal can look different. A hidden layer isn\'t merged. Trim crops away the see-through edges of each selected cut-out, where it shows; Reset crop brings them back. Locked or animated layers can\'t be merged. Undo brings them back. Save each as input makes every layer its own input in this project, at its file\'s full pixels, with its crop, turn and opacity and a see-through background. Save as one input makes them one input the size of their shared box, on the Background colour, at Export size and Max MP. Open in a new edit puts them in a new tab, where they stay in place and can be changed without touching this edit. A hidden layer that is selected is included.'),
       several.length > 1 ? hint(`${several.length} selected`) : null,
       snapBar(['grid', 'rot', 'scale'], () => drawEditorCanvas()));
     const groupRow = (g) => {
@@ -1581,13 +1604,13 @@ export function createEditor(cfg) {
     several: () => { E.pickMode = !E.pickMode; renderEditor(); },
     copy: () => copySelected(), paste: () => pasteLayers(), duplicate: () => duplicateSelected(),
     group: () => { E.layers = ST.makeGroup(E.layers, E.groups, picked(), uid()); E.multi = []; editorChanged(); },
-    mergeDown: () => mergeDown(picked()[0]), mergeSelected: () => mergeSelected(),
+    mergeDown: () => mergeDown(picked()[0]), mergeSelected: () => mergeSelected(), trim: () => trimLayers(),
     saveEach: () => saveEach(), saveTogether: () => saveTogether(), openNew: () => openSelected(), moveNew: () => moveToNewEdit(),
     delete: () => deleteSelected(), deleteHidden: () => deleteHidden(), clear: () => clearLayers(),
   };
   function openLayerMenu(x, y) {
     const on = picked();
-    const groups = layerMenu({ layers: E.layers.filter((l) => !l.mask && !l.draft && !l.maskOf).length, selected: on.length, pictures: selectedPictures().length,
+    const groups = layerMenu({ layers: E.layers.filter((l) => !l.mask && !l.draft && !l.maskOf).length, selected: on.length, pictures: selectedPictures().length, trim: trimmable().length,
       hidden: ST.hiddenOnes(E.layers).count, clip: !!store.get(LAYER_CLIP, null), pickMode: E.pickMode, newEdit: !!cfg.newEdit, table: !!onTable(),
       mergeDown: on.length === 1 && !!ST.mergeBelow(E.layers, on[0]), mergeSet: on.length > 1 && ST.mergeSet(E.layers, on).length >= 2,
       main: cfg.main?.() && on.length === 1 && pinnable(on[0]) ? { on: !!on[0].key && on[0].key === mainKey() } : null });
@@ -1783,6 +1806,60 @@ export function createEditor(cfg) {
       seg([[0, 'Auto'], ...Array.from({ length: most }, (_, i) => [i + 1, String(i + 1)])], o.cols > most ? 0 : o.cols, (v) => save({ cols: v }), { wrap: true }),
       rangeField('Gap', () => o.gap, (v) => { o.gap = v; store.set(GRID_PREFS, { ...o }); }, { min: 0, max: 100, step: 1, fmt: (v) => `${Math.round(v)} px` }),
       h('div', { class: 'row wrap' }, toggle('Crop to fill', o.crop, (on) => save({ crop: on })), button('Make grid', () => makeGrid(ls), { cls: 'small primary', title: 'Lay them out with these settings' })));
+  }
+
+  // ---- the table bar's Arrange ▾ while this edit is an open frame: the selected layers aligned, spread, sized or put in a grid ----
+  // Two or more align and spread among themselves (one alone aligns to a fixed canvas); Same size goes by the first picked; Grid is
+  // makeGrid with the panel's settings, which the submenu sets too. One undo step each (editorChanged).
+  const arrangeable = () => picked().filter((l) => ready(l) && !l.maskOf && !l.mask && !l.draft);
+  function arrangeLayersBy(id) {
+    const ls = arrangeable().filter((l) => !l.locked), [what, how] = id.split(':');
+    if (what === 'grid') return makeGrid(ls);
+    const rects = ls.map((l) => ({ l, ...bounds(l) }));
+    if (what === 'align') {
+      const x = ['left', 'hcenter', 'right'].includes(how), k = { left: 0, top: 0, hcenter: 0.5, vcenter: 0.5, right: 1, bottom: 1 }[how];
+      const to = rects.length > 1 ? unionRect(rects) : editorFrame();
+      if (!to) return;
+      for (const r of rects) { if (x) r.l.x += Math.round(to.x + (to.w - r.w) * k - r.x); else r.l.y += Math.round(to.y + (to.h - r.h) * k - r.y); }
+    } else if (what === 'spread' || what === 'centres') {
+      if (rects.length < 3) return toast('Spreading needs three or more layers', true);
+      const p = how === 'y' ? 'y' : 'x';
+      for (const n of distributeFrames(rects, how, { centres: what === 'centres' })) n.l[p] += Math.round(n[p] - rects.find((r) => r.l === n.l)[p]);
+    } else if (what === 'size') {
+      const ref = how === 'largest' ? rects.reduce((a, r) => (r.w * r.h > a.w * a.h ? r : a)) : rects[0];
+      for (const r of rects) {
+        if (r === ref) continue;
+        const m = how === 'h' ? ref.h / r.h : ref.w / r.w, cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+        r.l.scale = Math.max(0.01, r.l.scale * m);
+        const n = bounds(r.l); r.l.x += Math.round(cx - (n.x + n.w / 2)); r.l.y += Math.round(cy - (n.y + n.h / 2));
+      }
+    } else return;
+    editorChanged();
+  }
+  function arrangeGroups() {
+    const n = arrangeable().length, few = n < 2, canvas = n === 1 && !!E.size;
+    const setGrid = (patch) => store.set(GRID_PREFS, { ...store.get(GRID_PREFS, GRID_DEFAULTS), ...patch });
+    const go = (id) => () => arrangeLayersBy(id);
+    const item = (id, label, off = few) => ({ label, disabled: off, run: go(id) });
+    return [[
+      { label: canvas ? 'Align to the canvas ▸' : 'Align ▸', disabled: few && !canvas, sub: [[item('align:left', 'Left edges', few && !canvas), item('align:hcenter', 'Centres across', few && !canvas), item('align:right', 'Right edges', few && !canvas)],
+        [item('align:top', 'Top edges', few && !canvas), item('align:vcenter', 'Centres down', few && !canvas), item('align:bottom', 'Bottom edges', few && !canvas)]] },
+      { label: 'Distribute ▸', disabled: n < 3, sub: [[item('spread:x', 'Even gaps across', n < 3), item('spread:y', 'Even gaps down', n < 3), item('centres:x', 'Even centres across', n < 3), item('centres:y', 'Even centres down', n < 3)]] },
+      { label: 'Same size ▸', disabled: few, sub: [[item('size:w', 'Same width as the first'), item('size:h', 'Same height as the first'), item('size:largest', 'Same width as the largest')]] },
+    ], [
+      { label: 'Grid ▸', disabled: few, sub: () => {
+        const now = store.get(GRID_PREFS, GRID_DEFAULTS), most = Math.min(8, Math.max(2, n));
+        return [
+          [{ label: 'Make grid', disabled: few, run: go('grid') }],
+          [{ label: 'Dense (edge to edge, own shapes)', on: (now.pack || 'dense') === 'dense', run: () => { setGrid({ pack: 'dense' }); arrangeLayersBy('grid'); } },
+            { label: 'Equal cells', on: now.pack === 'cells', run: () => { setGrid({ pack: 'cells' }); arrangeLayersBy('grid'); } },
+            { label: 'Crop to fill', on: !!now.crop, run: () => { setGrid({ crop: !now.crop }); arrangeLayersBy('grid'); } }],
+          // (a submenu holds no submenu of its own: columns and gaps are rows of it)
+          [0, ...Array.from({ length: most }, (_, i) => i + 1)].map((c) => ({ label: c ? `${c} in a row` : 'Columns: auto', on: (now.cols || 0) === c, run: () => { setGrid({ cols: c }); arrangeLayersBy('grid'); } })),
+          [0, 4, 8, 16, 32, 64].map((g) => ({ label: g ? `Gap ${g} px` : 'No gap', on: (now.gap || 0) === g, run: () => { setGrid({ gap: g }); arrangeLayersBy('grid'); } })),
+        ];
+      } },
+    ]].map((g) => g.filter(Boolean));
   }
 
   // The panel for two or more selected layers: each change goes to every one of them
@@ -2330,6 +2407,7 @@ export function createEditor(cfg) {
     blob: editorBlob, frame: editorFrame, toFixed: toFixedSize, composeMask, drawLayer, layerPicture, bounds, layerRect, ready, loading: () => E.layers.some((l) => !l.broken && !ready(l)), addImage, pause: editorPause,
     zoom: viewZoom, get paint() { return paint; },
     // the panel's parts, for the host to lay out
+    arrangeGroups, arrangeable: () => arrangeable().length,
     topRow, layerList, layerProps: () => (picked().length > 1 ? groupProps(picked()) : E.sel?.maskOf ? maskProps(E.sel) : E.sel ? [layerProps(E.sel), E.cropping ? null : adjustProps(E.sel)] : null), picked, propRows, onTable, plain, animProps, canvasProps, exportProps,
     paintProps: () => paint.paintProps(),
     masksProps: () => masksSection(eng),

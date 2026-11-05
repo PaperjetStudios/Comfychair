@@ -40,10 +40,12 @@ test('commandFor reads the keys the brief names', () => {
   assert.equal(commandFor(ev('=')), 'zoomIn');
   assert.equal(commandFor(ev('-')), 'zoomOut');
   assert.equal(commandFor(ev('Escape')), 'deselect');
+  assert.equal(commandFor(ev('a', { ctrlKey: true })), 'selectAll');
+  assert.equal(commandFor(ev('d', { ctrlKey: true })), 'selectNone');
   assert.equal(commandFor(ev('s', { repeat: true })), null);
 });
 test('comboKeys and plainKeys split the table; every plain tool key is there', () => {
-  assert.deepEqual(comboKeys().sort(), ['a', 'c', 'j', 'v', 'x', 'y', 'z', 'z'].sort());
+  assert.deepEqual(comboKeys().sort(), ['a', 'c', 'd', 'j', 'v', 'x', 'y', 'z', 'z'].sort());
   for (const k of ['v', 'c', 'b', 'y', 'h', 's', 'm', 'escape', 'delete', '=', '+', '-']) assert.ok(plainKeys().includes(k), k);
   assert.equal(comboKeys().length + plainKeys().length, COMMANDS.length);
 });

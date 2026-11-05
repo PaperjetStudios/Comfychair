@@ -40,7 +40,7 @@ import { normalize } from './layer-stack.js';
 import { setupsRow } from './setups.js';
 import { tplKey } from './setups-rules.js';
 import { refused } from './tabs.js';
-import { queueRun, waitGen } from './make.js';
+import { batchCancelled, closeGroup, openGroup, queueRun, waitGen } from './make.js';
 import { openSourcePicker } from './source-picker.js';
 import { landMade, owedTo } from './imagetools.js';
 import { isLive } from './live.js';
@@ -643,6 +643,7 @@ export async function runMake() {
     target: 'layer', batch: S.batch };   // (taken before the runs: an increasing seed moves on as they queue)
   running = true;
   let queued = 0;
+  const group = openGroup(t.name);
   try {
     for (const f of targets) {
       let r = null;
@@ -654,13 +655,14 @@ export async function runMake() {
         queued += r.gens.length;
       } catch (e) {
         if (r?.sent) dropInput(r.sent.name);
+        if (batchCancelled(e)) { toast('Batch cancelled: the rest wasn\'t sent'); break; }
         toast(targets.length > 1 ? `${f?.label || 'A frame'}: ${e.message}` : e.message, true);
       }
     }
     if (queued) toast(`${queued > 1 ? `Queued ${queued}` : 'Queued'}${targets.length > 1 ? ` on ${targets.length} frames` : ''}: ${landsWord(kind)}`);
     if (queued && ran) dispatchEvent(new CustomEvent('make:ran', { detail: ran }));
     if (P.els) drawHead(kind, frame, templatesForFrame(S.templates, kind, frame));
-  } finally { running = false; }
+  } finally { running = false; closeGroup(group); }
 }
 
 // One frame's run queued (null: nothing selected, new frames): its own picture and size, the wires into it resolved, the

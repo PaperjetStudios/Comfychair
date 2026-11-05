@@ -62,3 +62,12 @@ test('a tap selects: a one-picture model reads the tapped one, Pixal3D takes it 
   assert.equal(planRun(picks, 'pixal', sel).kind, null);   // (none selected: no run)
   assert.deepEqual(tapView(tapView({}, 'pixal', 'Left'), 'pixal', 'Left').off, []);
 });
+
+test('a picture that can\'t go in is said, and newly filled views go in the run', async () => {
+  const { leftWords, selectAdded } = await import('../web/object-rules.js');
+  assert.equal(leftWords({ Front: 'a' }, []), '');
+  assert.equal(leftWords({ Front: 'a' }, ['a']), 'That picture is already attached');
+  assert.equal(leftWords({ Front: 'a' }, ['b']), 'No room for one more: clear a slot first');
+  assert.deepEqual(selectAdded({ off: ['Left', 'Back'], one: 'Front' }, ['Left', 'Right']), { off: ['Back'], one: 'Right' });
+  assert.deepEqual(selectAdded({ off: ['Left'], one: 'Front' }, []), { off: ['Left'], one: 'Front' });
+});

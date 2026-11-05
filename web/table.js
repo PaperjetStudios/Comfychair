@@ -48,7 +48,7 @@
 // ("Image 1", "Video 1", "Sound 1"). Tap a wire or an input port to select it, Delete unplugs it, right click or a long hold
 // has the rest. Every wire change is a table undo step. For the Make pane: tableWires, wiresInto, setTableWire.
 import { $, h, api, store, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, info, toggle, help, layerRowsEl, iconBtn, uid } from './ui.js';
-import { S, onServer, onProject } from './core.js';
+import { CURRENT_EDIT, S, onServer, onProject } from './core.js';
 import { TabSet } from './tabs.js';
 import { currentTab } from './navigation.js';
 import { ownsKey } from './key-focus.js';
@@ -585,7 +585,7 @@ const nextLabel = (kind) => `${M.KIND_LABEL[kind]} ${T.frames.filter((f) => f.ki
 // A frame of a kind over rect, with its document made first (from payload, else the kind's empty one)
 // ok: here() taken before whatever the caller awaited (default: now). fresh: a picture uploaded for the frame's document
 // (frameFor), deleted when the frame isn't made: nothing else owns it
-async function makeFrame(kind, rect, { payload, frame, fresh = null, ok = here(), select = true } = {}) {
+async function makeFrame(kind, rect, { payload, frame, fresh = null, ok = here(), select = true, step = true } = {}) {
   const f = frame || M.newFrame(kind, rect, { label: nextLabel(kind), ...(M.HAS_OUTPUT.has(kind) && { out: M.drawnOutput(rect) }) });
   if (kind !== 'note') {
     try { f.doc = await createDoc(f, payload); } catch (e) { toast(`Couldn't make the frame: ${e.message}`, true); dropInput(fresh); return null; }
@@ -595,7 +595,7 @@ async function makeFrame(kind, rect, { payload, frame, fresh = null, ok = here()
   T.frames.push(f);
   if (select) U.sel = new Set([f.id]);
   renderFrames(); changed();
-  recordAdd([f]);
+  if (step) recordAdd([f]);
   return f;
 }
 // a frame of 1 MP, square, in the middle of the view (a sound frame is a strip)
@@ -855,6 +855,40 @@ function recordAdd(made) {
     async redo() { if (d) await d.back(); d = null; },
   });
 }
+// ---- Combine (frame-combine.js): one new frame in place of the frames it was made from, as one undo step ----
+export const frameHere = () => here();
+export const framesBusy = (list) => { const owed = owedCounts(); return list.find((f) => (f.kind === 'image' && owed.get(f.doc)) || PENDING.get(f.doc)) || null; };
+// (a live frame's last save lands, so its document can be read)
+export async function leaveFrames(list) { if (list.some((f) => f.id === liveFrame()?.id)) unlive(); await U.leaving; }
+// A new frame over rect from payload (out: its output size); olds off the table as Delete takes them. Undo takes the new one off and brings them back.
+export async function replaceFrames(olds, kind, rect, { payload, out = null, ok = here() } = {}) {
+  const made = M.newFrame(kind, rect, { label: nextLabel(kind), ...(out && { out: { ...out } }) });
+  if (!await makeFrame(kind, made, { payload, frame: made, ok, step: false })) return null;
+  const d = await takeOff(olds);
+  U.sel = new Set([made.id]); renderFrames();
+  let mine = null;
+  const entry = {
+    adds: new Set([made.id]),
+    async undo() {
+      const f = byId(made.id);
+      if (f && framesBusy([f])) { toast(`"${f.label}" is still waiting for a result: undo once it has landed`, true); return false; }
+      mine = f ? await takeOff([f]) : null;
+      await d?.back();
+    },
+    async redo() {
+      await d?.take();
+      await mine?.back();
+      mine = null;
+    },
+  };
+  record(entry);
+  const tid = U.tabs?.active?.id;
+  undoToast(`Combined ${olds.length} frames into "${made.label}"`, () => { if (H.past.at(-1) === entry && U.tabs?.active?.id === tid) return undo(); });
+  return made;
+}
+// Ctrl+E and the menu: the selection combined
+const combineSelected = (opts) => import('./frame-combine.js').then((m) => m.combineFrames(selected(), opts)).catch((e) => toast(`Couldn't combine: ${e.message}`, true));
+
 // frames gone without a step (removeFrames): the steps that made them go too
 function forgetAdds(ids) {
   const keep = (e) => !e.adds || ![...e.adds].some((id) => ids.has(id));
@@ -1119,8 +1153,12 @@ function arrangeGroups(parts) {
   const all = frameArrangeMenu(), n = selected().filter((f) => !f.hidden).length;
   return parts.map((p) => all[p].map((it) => ({ ...it, disabled: n < 2, run: () => arrange(it.id) })));
 }
+// The open image frame's editor, when Arrange is for its layers (editor-engine.js arrangeGroups)
+const layerArranger = () => { const f = liveFrame(), eng = CURRENT_EDIT.eng; return f?.kind === 'image' && eng?.arrangeGroups && eng.E?.tab?.id === f.doc ? eng : null; };
 // Arrange: what frameArrangeMenu offers, those parts of it (all of them from the bar's Arrange ▾)
 function arrangeMenu(x, y, parts = ['align', 'distribute', 'tidy', 'size']) {
+  const eng = layerArranger();
+  if (eng) return openPressMenu(x, y, eng.arrangeGroups(), 'Arrange layers');   // (an open image frame: its selected layers)
   openPressMenu(x, y, arrangeGroups(parts), 'Arrange');
 }
 // The selection (shown ones, in the order picked) aligned, spread, sized or tidied: one undo step, on the grid when it is on
@@ -1439,9 +1477,11 @@ function onKey(e) {
   if ((k === 'Delete' || k === 'Backspace') && U.wire) fn = () => removeWire(U.wire);
   else if (k === 'Delete' || k === 'Backspace') fn = () => deleteFrames(new Set(U.sel));
   else if (arrows[k] && any) fn = () => nudge(arrows[k]);
-  else if (ctrl && (low === 'd' || low === 'j') && !e.shiftKey) fn = () => duplicateFrames(new Set(U.sel));
+  else if (ctrl && low === 'j' && !e.shiftKey) fn = () => duplicateFrames(new Set(U.sel));
+  else if (ctrl && low === 'd' && !e.shiftKey) fn = () => { U.sel = new Set(); U.wire = null; renderFrames(); };
   else if (ctrl && low === 'a') fn = () => { U.sel = new Set(M.shown(T.frames).map((f) => f.id)); renderFrames(); };
   else if (ctrl && low === 'g') fn = () => (e.shiftKey ? ungroupSelected() : groupSelected());
+  else if (ctrl && low === 'e' && !e.shiftKey && U.sel.size > 1) fn = () => combineSelected();
   else if (ctrl && (e.code === 'BracketRight' || e.code === 'BracketLeft') && any) {   // (by code: Shift turns ] into })
     const up = e.code === 'BracketRight';
     fn = () => (e.shiftKey ? restack(up ? M.toFront : M.toBack) : stepBy(up ? 1 : -1));
@@ -1516,6 +1556,37 @@ async function onDrop(e) {
   try { list = raw ? [JSON.parse(raw)].flat() : await got; } catch (err) { return toast(err.message, true); }
   await dropOnTable(list, e.clientX, e.clientY);
 }
+// ---- Ctrl+V of a picture (copied from a website, a screenshot, a file): with the pointer last over the table, it goes where a drop
+// there would: into the open image frame as a layer, into the frame under the pointer, else a new image frame at the pointer. A picture
+// slot elsewhere (the pointer over the sidebar) keeps its own paste (ui.js fileButton).
+const PASTE_AT = { x: 0, y: 0, over: false };
+function notePointer(e) {
+  const outer = D.tab?.querySelector('.stage');
+  PASTE_AT.over = !!outer?.contains(e.target);
+  if (PASTE_AT.over) { PASTE_AT.x = e.clientX; PASTE_AT.y = e.clientY; }
+}
+const pictureFile = (b, i = 0) => (b.name && b.name !== 'image.png' ? b : new File([b], `Pasted${i ? ` ${i + 1}` : ''}.${(b.type.split('/')[1] || 'png').replace('jpeg', 'jpg')}`, { type: b.type }));
+async function onPaste(e) {
+  if (!onTable() || !PASTE_AT.over || e.defaultPrevented || /^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName) || e.target?.isContentEditable) return;
+  const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
+  // (a picture copied as part of a page comes as html only: its address, read from here if the site lets it be)
+  const html = files.length ? '' : e.clipboardData?.getData('text/html') || '';
+  const src = html && /<img[^>]+src="([^"]+)"/i.exec(html)?.[1];
+  if (!files.length && !src) return;
+  e.preventDefault(); e.stopPropagation();
+  let list = files.map(pictureFile);
+  if (!list.length) {
+    try {
+      const r = await fetch(src.replace(/&amp;/g, '&'));
+      const b = r.ok ? await r.blob() : null;
+      if (!b?.type.startsWith('image/')) throw new Error('not a picture');
+      list = [pictureFile(b)];
+    } catch { return toast('That site doesn\'t let its picture be read this way: right-click the picture and Copy image, then paste', true); }
+  }
+  const { x, y } = PASTE_AT.x || PASTE_AT.y ? PASTE_AT : (() => { const r = D.stage.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })();
+  await dropOnTable(list, x, y);
+}
+
 // the frame under a screen point: the live one when the point is on its mount (and no other while one is live)
 function frameAtPoint(clientX, clientY) {
   if (isLive()) {
@@ -1577,7 +1648,7 @@ function renderPanel() {
   if (sig === U.panelSig || D.panel.contains(document.activeElement) && document.activeElement.matches('input')) return;
   U.panelSig = sig;
   D.panel.replaceChildren(
-    section('Frames', null, help('Drag on empty table to make a frame there; double-tap empty table for the quick starts. Let a wire go on a frame to add an input, or on an input to replace it. Double-click the name above a frame, or press F2, to name it. Double-click a frame, or press Enter, to open it at full size (with nothing in it: what to start it with); Esc comes back. Wheel zooms, Space + drag pans, Shift+F fits, F is full screen. The list is the frames as layers, the top one drawn on top: drag a row by its grip to restack it, or onto a group\'s row to put it in the group. Shift-click a row for a range, Ctrl-click to add or drop one. Double-click a name to rename it. Right click a row or a frame, or hold a finger on it, for the rest. Keys: Ctrl+G groups, Ctrl+Shift+G ungroups, Ctrl+J duplicates, Ctrl+] and Ctrl+[ step up and down, with Shift to the top and bottom, H hides, L locks. A hidden frame keeps its place but is left out of the table, the box, Fit and a story\'s rows. Arrange on the bar lines up two or more frames, on the grid when it is on.'),
+    section('Frames', null, help('Drag on empty table to make a frame there; double-tap empty table for the quick starts. Let a wire go on a frame to add an input, or on an input to replace it. Double-click the name above a frame, or press F2, to name it. Double-click a frame, or press Enter, to open it at full size (with nothing in it: what to start it with); Esc comes back. Wheel zooms, Space + drag pans, Shift+F fits, F is full screen. The list is the frames as layers, the top one drawn on top: drag a row by its grip to restack it, or onto a group\'s row to put it in the group. Shift-click a row for a range, Ctrl-click to add or drop one. Double-click a name to rename it. Right click a row or a frame, or hold a finger on it, for the rest. Ctrl+V pastes a copied picture where the pointer is: into the open image frame or the frame under it as a layer, else as a new image frame. Keys: Ctrl+A selects every frame, Ctrl+D selects none, Ctrl+G groups, Ctrl+Shift+G ungroups, Ctrl+E combines the selected frames into one new frame in their place (pictures as layers, clips one after another on a timeline, 3D scenes as one scene; Undo brings them back), Ctrl+J duplicates, Ctrl+] and Ctrl+[ step up and down, with Shift to the top and bottom, H hides, L locks. A hidden frame keeps its place but is left out of the table, the box, Fit and a story\'s rows. Arrange on the bar lines up two or more frames, on the grid when it is on.'),
       ...(T.frames.length ? frameListArea() : [hint('No frames yet.')])),
     section('Frame', null, one ? frameFields(one) : hint(s.length ? `${s.length} frames selected` : 'Select a frame.')));
 }
@@ -1874,7 +1945,13 @@ function buildBar() {
     const r = arrangeBtn.getBoundingClientRect();
     arrangeMenu(r.left, r.bottom + 4);
   }, { title: 'Align, spread, size or tidy the selected frames (two or more)' });
-  D.syncArrange = () => { arrangeBtn.disabled = selected().filter((f) => !f.hidden).length < 2 || isLive(); };
+  D.syncArrange = () => {
+    const eng = layerArranger();
+    arrangeBtn.disabled = eng ? eng.arrangeable() < 1 : selected().filter((f) => !f.hidden).length < 2 || isLive();
+    arrangeBtn.title = eng ? 'Align, spread, size or grid the selected layers' : 'Align, spread, size or tidy the selected frames (two or more)';
+  };
+  addEventListener('editor:render', () => D.syncArrange?.());   // (the open image frame's layer selection changed)
+  addEventListener('table:unlive', () => queueMicrotask(() => D.syncArrange?.()));
   const PREVIEW = [['hover', 'On hover'], ['always', 'Always'], ['off', 'Off']];
   const previewBtn = button('Previews ▾', () => {
     const r = previewBtn.getBoundingClientRect(), now = previewMode();
@@ -1925,6 +2002,9 @@ function wire() {
   D.stage.addEventListener('drop', onDrop);
   pressMenu(D.stage, stageMenu, { ok: (e) => !isLive() && !e.target.closest?.('.max-btn, .pull-tab, .wire-out, .frame-run') });
   document.addEventListener('keydown', onKey);
+  document.addEventListener('pointermove', notePointer, { passive: true });
+  document.addEventListener('pointerdown', notePointer, { passive: true });
+  document.addEventListener('paste', onPaste);
   addEventListener('keydown', onLiveUndoKey, true);
   setLiveSteps({ undo: () => liveStep('undo'), redo: () => liveStep('redo'), can: () => ORDER.can() });
   document.addEventListener('keyup', (e) => { if (e.code === 'Space') { U.space = false; D.stage.classList.remove('panning'); } });

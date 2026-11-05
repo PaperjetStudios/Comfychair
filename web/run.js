@@ -711,11 +711,28 @@ export async function openJobs() {
             e.stopPropagation();
             try { await api('/api/queue/cancel', { method: 'POST', body: { prompt_id: j.prompt_id } }); refresh(); } catch (err) { toast(err.message, true); }
           })));
+    // a batch of two or more left: together, with one Cancel for all of them
+    const cancelBatch = (grp, list) => button('Cancel all', async (e) => {
+      e.stopPropagation();
+      const going = list.some((j) => j.status === 'running');
+      if (going && !confirm(`Cancel all ${list.length}? The one running stops too.`)) return;
+      try { await api('/api/queue/cancel-group', { method: 'POST', body: { group: grp } }); refresh(); } catch (err) { toast(err.message, true); }
+    }, { cls: 'small' });
+    const shown = [];
+    d.active.forEach((j, i) => {
+      if (!j.grp) { shown.push(active[i]); return; }
+      const same = d.active.filter((x) => x.grp === j.grp);
+      if (same.length < 2) { shown.push(active[i]); return; }
+      if (same[0] !== j) return;
+      shown.push(h('div', { class: 'job-batch' },
+        h('div', { class: 'job-batch-head' }, h('b', {}, j.grp_label || 'Batch'), h('span', { class: 'hint' }, `${same.length} runs`), cancelBatch(j.grp, same)),
+        ...d.active.map((x, n) => (x.grp === j.grp ? active[n] : null)).filter(Boolean)));
+    });
     const recent = d.recent.map((g) => row(g,
       `${g.status === 'done' ? `took ${fmtDur(g.duration)}` : g.status} · finished ${new Date(g.finished * 1000).toLocaleTimeString()}`, null));
     box.replaceChildren(
       h('div', { class: 'lbl jobs-head' }, d.active.length ? `Running and waiting (${d.active.length})` : 'Nothing running'),
-      ...active,
+      ...shown,
       h('div', { class: 'lbl jobs-head' }, 'Recent runs'),
       ...(recent.length ? recent : [hint('None yet')]));
   };

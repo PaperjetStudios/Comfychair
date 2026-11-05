@@ -22,6 +22,7 @@ import { heightGrip, maximizable, zoomPan } from './layout.js';
 import { tick, tickRange } from './pick-slots.js';
 import { draggingPicture, dropKind, droppedFiles } from './drop-files.js';
 import { accepts, convertPlan, itemOf } from './source-rules.js';
+import { attachedNames, detach } from './attached.js';
 import { DOC_KIND } from './table-model.js';
 import {
   MP_INFO, mpKeyOf, bareSource, cardMedia, clipUrl, cropCopy, genLabel, grabFrame, pickFrames, projectOutputs,
@@ -122,6 +123,23 @@ function recentStrip(pick, shown) {
   };
   draw();
   $('#sheet .picker-bar').after(strip);
+  return strip;
+}
+
+// The pictures attached to the 3D object panel (attached.js), over Recent: a tap picks one, × lets it go
+function attachedStrip(pick, shown) {
+  const strip = h('div', { class: 'recent-strip attached-strip', role: 'group', 'aria-label': 'Attached images' });
+  const draw = () => {
+    const l = attachedNames().filter((n) => shown(itemOf(n)));
+    strip.classList.toggle('hidden', !l.length);
+    strip.replaceChildren(h('span', { class: 'recent-lbl' }, 'Attached'), ...l.map((n) => {
+      const label = n.split('/').pop();
+      return h('span', { class: 'attached-item' },
+        h('button', { type: 'button', class: 'recent-item', title: label, 'aria-label': label, onclick: () => pick({ item: itemOf(n), label, thumb: thumbUrl(n) }) }, h('img', { src: thumbUrl(n, 160), alt: '', loading: 'lazy' })),
+        h('button', { type: 'button', class: 'attached-off', title: 'Not attached any more', 'aria-label': `Detach ${label}`, onclick: () => { detach(n); draw(); } }, icon('close')));
+    }));
+  };
+  draw();
   return strip;
 }
 
@@ -322,12 +340,12 @@ export function openSourcePicker(opts) {
     const every = items.sort((x, y) => y.t - x.t).map((x) => x.it), tags = tagsIn(every);
     if (opts.tag && !tags.includes(opts.tag)) opts.tag = null;   // (the last one with that tag was deleted)
     drawTags(tags);
-    return byTag(every, opts.tag).slice(0, 300);   // (filtered first, so an old upload isn't lost behind 300 newer runs)
+    return byTag(every, opts.tag);   // (filtered first; the rows show them a page at a time: draw)
   };
   const allItems = () => {
-    const out = listed({ kind: 'image', src: { input: '' } }) ? inputs.all.filter((n) => !q || n.toLowerCase().includes(q)).slice(0, 400).map((n) => inputItem(n)) : [];
+    const out = listed({ kind: 'image', src: { input: '' } }) ? inputs.all.filter((n) => !q || n.toLowerCase().includes(q)).map((n) => inputItem(n)) : [];
     for (const m of media || []) if (!q || (m.label || m.name).toLowerCase().includes(q)) { const it = mediaItem(m); if (it) out.push(it); }
-    return out.slice(0, 400);
+    return out;
   };
 
   // the table's frames (this.frame first): an image frame's picture, a video frame's clips, a sound frame's sounds
@@ -574,7 +592,7 @@ export function openSourcePicker(opts) {
   };
   heightGrip(grip, { size: () => rows.offsetHeight, set: setRows });
   setRows(store.get(ROWS, null));
-  const go = (d) => { if (items.length) select(Math.max(0, Math.min(items.length - 1, cur + d))); };
+  const go = (d) => { if (!items.length) return; if (cur + d > items.length - 1) more(); select(Math.max(0, Math.min(items.length - 1, cur + d))); };
   const bigOf = (it) => {
     if (it.audio) return h('div', { class: 'pk-audio' }, it.thumbEl?.() || null, h('audio', { src: it.full, controls: true, preload: 'metadata' }));
     if (it.video && it.full) return h('video', { src: it.full, controls: true, muted: true, loop: true, playsInline: true, autoplay: true });
@@ -585,8 +603,8 @@ export function openSourcePicker(opts) {
     zoom.reset();
     main.replaceChildren(...(!it ? [] : [bigOf(it)]));
     shownWH = null; showMp();
-    prev.disabled = n <= 0; next.disabled = n >= items.length - 1;
-    name.textContent = it ? `${it.title}${it.badge ? ` · ${it.badge}` : ''}  (${n + 1} / ${items.length})` : '';
+    prev.disabled = n <= 0; next.disabled = n >= Math.max(items.length, pool.length) - 1;
+    name.textContent = it ? `${it.title}${it.badge ? ` · ${it.badge}` : ''}  (${n + 1} / ${Math.max(items.length, pool.length)})` : '';
     if (!multi) useBtn.firstChild.textContent = isPic && it?.video ? 'Choose a frame…' : `Use this ${noun}`;
     useBtn.disabled = !it; delBtn.classList.toggle('hidden', !it); cropBtn.classList.toggle('hidden', !it?.cropSrc);
     showRun(it);
@@ -598,6 +616,7 @@ export function openSourcePicker(opts) {
     search.classList.toggle('hidden', tab !== 'all');
     tagRow.classList.toggle('hidden', tab !== 'project');
     rows.replaceChildren(placeholder('Loading…'));
+    pool = [];
     try {
       if (tab === 'table') items = await tableItems();
       else if (isPic && SOURCES.has(tab)) items = await sourceItems(SOURCES.get(tab));
@@ -609,13 +628,28 @@ export function openSourcePicker(opts) {
       }
     } catch (e) { items = []; rows.replaceChildren(note(e.message, 'err')); select(0); return; }
     if (!items.length) { rows.replaceChildren(placeholder(EMPTY[tab] || `Nothing in ${SOURCES.get(tab).label.toLowerCase()} for this project yet.`)); select(0); return; }
-    rows.replaceChildren(...items.map((it, n) => {
+    pool = items; items = pool.slice(0, Math.max(PAGE, items.findIndex((x) => x.key === curKey) + 1));
+    rows.replaceChildren(...items.map(thumbOf));
+    select(Math.max(0, items.findIndex((x) => x.key === curKey)));
+  };
+  // A page at a time: the next ones are added as the rows are scrolled near their end (or ‹ › reach the last one shown)
+  const PAGE = 300, MORE = 100;
+  let pool = [];
+  const more = () => {
+    if (items.length >= pool.length) return false;
+    const from = items.length;
+    items = pool.slice(0, from + MORE);
+    rows.append(...items.slice(from).map((it, k) => thumbOf(it, from + k)));
+    if (name.textContent) name.textContent = name.textContent.replace(/\(\d+ \/ \d+\)$/, `(${cur + 1} / ${pool.length})`);
+    paintTicks();
+    return true;
+  };
+  rows.addEventListener('scroll', () => { if (rows.scrollTop + rows.clientHeight > rows.scrollHeight - 240) more(); }, { passive: true });
+  const thumbOf = (it, n) => {
       const t = h('button', { type: 'button', class: 'pk-thumb', role: 'option', title: it.title, 'aria-label': it.title, onclick: (e) => { select(n); if (multi) tapTick(n, e); },
         ondblclick: () => { if (!multi) return it.use(); if (!it.get) return it.use(); if (tick(sel, it, true, limit)) addTicked(); else full(); } },
         it.thumb ? h('img', { src: it.thumb, alt: '', loading: 'lazy' }) : it.thumbEl ? it.thumbEl() : placeholder('…'), it.badge ? h('span', { class: 'play' }, it.badge) : null);
       return t;
-    }));
-    select(Math.max(0, items.findIndex((x) => x.key === curKey)));
   };
   const accept = [...new Set(kinds.map((k) => (k === 'audio' ? 'audio/*' : k === 'video' ? 'video/*' : 'image/*')))].join(',');
   const linkClip = () => import('./clipimport.js').then((m) => m.openClipImport({ title: want === 'sound' ? 'Import a sound' : 'Import a clip', sound: want === 'sound',
@@ -637,6 +671,7 @@ export function openSourcePicker(opts) {
   search.addEventListener('input', () => { q = search.value.toLowerCase(); curKey = null; draw(); });
   if (wantsImage) dropPictures(seq, onFiles);
   const strip = recentStrip(fromRecent, listed);
+  if (isPic) strip.before(attachedStrip(fromRecent, listed));
   strip.after(search);
   search.classList.toggle('hidden', tab !== 'all');
 }

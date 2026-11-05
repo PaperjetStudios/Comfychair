@@ -24,7 +24,7 @@
 import { api, store, toast } from './ui.js';
 import { S } from './core.js';
 import { isLive } from './live.js';
-import { waitGen } from './make.js';
+import { batchCancelled, closeGroup, openGroup, waitGen } from './make.js';
 import { eachOne, failureText } from './tool-batch.js';
 import { defaultTarget, planRuns, resultKind, resultLabel } from './edit-rules.js';
 import { landOutput, opValues, optsOf, runOp } from './edit-ops.js';
@@ -69,6 +69,8 @@ export async function runOnFrames(op, frames, opts = optsOf(op.kind, op.id), { b
     return { done: [], failed: [], skipped, results: [] };
   }
   R.running = true; R.stop = false;
+  const group = openGroup(op.label);
+  let cancelled = false;
   const results = [], ran = replay ? null : opValues(op.kind, op.id, opts, runs.map((x) => x.frame));   // (as they were sent: a seed moves on as it runs)
   for (const { frame } of runs) setState(frame, 'queueing');
   try {
@@ -78,15 +80,21 @@ export async function runOnFrames(op, frames, opts = optsOf(op.kind, op.id), { b
         const r = await runFrame(op, frame, opts, { batch: n, target, selection, layers });
         results.push(r);
         setState(frame, 'queued');
-      } catch (e) { setState(frame, 'failed', e?.message || String(e)); throw e; }
+      } catch (e) {
+        if (batchCancelled(e)) { cancelled = true; R.stop = true; }
+        setState(frame, 'failed', e?.message || String(e)); throw e;
+      }
     });
-    const msg = failureText(op.label, out.failed, (x) => x.frame?.label || 'a frame');
+    const msg = failureText(op.label, cancelled ? out.failed.filter((f) => !batchCancelled(f.error) && f.error?.message !== 'stopped') : out.failed, (x) => x.frame?.label || 'a frame');
+    if (cancelled) toast(`${op.label}: batch cancelled, the rest wasn't sent`);
     if (msg) toast(msg, true);
     else if (out.done.length) toast(out.done.length > 1 ? `${op.label}: sent for ${out.done.length} frames` : `${op.label}: sent`);
     if (out.done.length && ran) fire('edit:ran', { step: { kind: op.kind, op: op.id, label: op.label, values: ran, target: target || defaultTarget(op, false), batch }, frames: out.done.map((x) => x.frame) });
     return { done: out.done.map((x) => x.frame), failed: out.failed.map((f) => ({ item: f.item.frame, error: f.error })), skipped, results };
   } finally {
     R.running = false;
+    // (a tool that goes on queueing its steps in the background stays in the batch until it's done)
+    Promise.allSettled(results.map((r) => r.job).filter(Boolean)).finally(() => closeGroup(group));
     setTimeout(() => { for (const { frame } of runs) if (R.states.get(frame.id)?.state === 'queued') setState(frame, null); }, 4000);
   }
 }
@@ -111,11 +119,16 @@ async function runFrame(op, frame, opts, { batch, target, selection, layers = nu
   const gens = res?.gens || [];
   if (res?.into) into = res.into;
   if (made && into !== made && !gens.length && !res?.job) unmake();   // (it put its result elsewhere itself)
-  if (gens.length) for (const g of gens) counted(into.doc, waitGen(g.id));
+  if (gens.length) {
+    const waits = gens.map((g) => waitGen(g.id));
+    for (const w of waits) counted(into.doc, w);
+    // (all of them cancelled: the empty frame made for the result goes. A run lost to a restart may still be adopted)
+    if (made && into === made) Promise.allSettled(waits).then((rs) => { if (rs.every((r) => r.status === 'rejected' && r.reason?.status === 'interrupted' && !/^Lost/.test(r.reason?.message || ''))) unmake(); });
+  }
   else if (res?.job) counted(into.doc, res.job);
   if (res?.job) {
     res.job.then(() => { if (into !== frame) fire('edit:landed', { frame, into, op: op.id }); })
-      .catch((e) => { toast(`${op.label} failed on ${frame.label || 'a frame'}: ${e.message}`, true); if (!gens.length && into === made) unmake(); })
+      .catch((e) => { if (!batchCancelled(e)) toast(`${op.label} failed on ${frame.label || 'a frame'}: ${e.message}`, true); if (!gens.length && into === made) unmake(); })
       .finally(() => { for (const g of gens) { dropOwed(g.id); R.mine.delete(g.id); } });
   }
   fire('edit:queued', { frame, kind: op.kind, op: op.id, gens, into, target: t });

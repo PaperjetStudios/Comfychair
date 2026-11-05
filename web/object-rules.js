@@ -5,6 +5,7 @@
 //                            one-picture model reads }. A one-picture model with none chosen, or a gone one: the first filled.
 //   tapView(sel, model, view) → sel after a filled picture is tapped: a one-picture model reads that one; else it goes in or out of the run
 //   addPictures(picks, names) → { picks, left }: names into the empty views in order; left: those with no room, or already attached
+//   leftWords(picks, left)  why they didn't go in; selectAdded(sel, views)  the selection with newly filled views in the run
 //   planRun(picks, model, sel) → { kind: 'multi' | 'single' | 'splat' | null, views }: which run the attached pictures make
 //   addGroups(types, { room, attached })  the Add list: [{ title, items: [{ id, label, icon, tip?, body? }] }]
 //   filterGroups(groups, q)  those matching what was typed; a group's name matches all of it
@@ -34,6 +35,17 @@ export function addPictures(picks, names) {
     out[free] = name;
   }
   return { picks: out, left };
+}
+// Why a picture didn't go in (addPictures' left), for a toast; '' when they all did
+export function leftWords(picks, left) {
+  if (!left?.length) return '';
+  const had = left.filter((n) => Object.values(picks || {}).includes(n)).length, full = left.length - had;
+  return [had ? (had === 1 ? 'That picture is already attached' : `${had} of those are already attached`) : '',
+    full ? (full === 1 ? 'No room for one more: clear a slot first' : `No room for ${full} more: clear a slot first`) : ''].filter(Boolean).join('. ');
+}
+// The selection once these views have just been filled: they go in the run. A model that reads one picture reads the last of them.
+export function selectAdded({ off = [], one = null } = {}, views) {
+  return views?.length ? { off: off.filter((v) => !views.includes(v)), one: views.at(-1) } : { off, one };
 }
 
 export function planRun(picks, model, sel) {

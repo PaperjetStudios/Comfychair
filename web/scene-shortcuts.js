@@ -34,9 +34,9 @@ const keyName = (key, shift) => (key === '?' ? '?' : `${shift ? 'Shift+' : ''}${
 // the keys the tab had before this list, by what they're for
 const OTHERS = [
   ['View', ['V director view / through the camera', 'H hide the tools', 'N the panel, in full screen', 'Right mouse + W A S D Q E walk the camera']],
-  ['Objects', ['W / E / R move, rotate, scale', 'Q gizmo axes', 'Delete remove the selected object', 'Esc leave Edit origin, else deselect (the camera)', 'Ctrl+Z undo', 'Ctrl+Y redo']],
+  ['Objects', ['W / E / R move, rotate, scale', 'Q gizmo axes', 'Delete remove the selected object', 'Esc leave Edit origin, else deselect (the camera)', 'Ctrl+D deselect', 'Ctrl+Z undo', 'Ctrl+Y redo']],
   ['Time', ['Space play / pause', 'P play from the start of the range', '← → or , . a frame', 'Shift+← → the start / end', '↑ ↓ next / previous key', 'Home / End the start / end', 'I / O set the range\'s in / out', 'Shift+I / Shift+O go to them', 'Alt+X clear the range', 'K auto key']],
-  ['Key sheet, after a click on it', ['A select all', 'Alt+A select none', 'S stretch in time', 'X or Delete delete keys', 'Ctrl+C / Ctrl+V / Ctrl+D copy, paste, duplicate']],
+  ['Key sheet, after a click on it', ['A or Ctrl+A select all', 'Alt+A or Ctrl+D select none', 'S stretch in time', 'X or Delete delete keys', 'Ctrl+C / Ctrl+V / Ctrl+J copy, paste, duplicate']],
 ];
 export const keysList = () => [
   ['Commands', COMMANDS.map(([, key, shift, what]) => `${keyName(key, shift)} ${what}`)],

@@ -1,5 +1,6 @@
 """ComfyChair server: a touch-first front end that drives ComfyUI through its API."""
 import asyncio
+import collections
 import hashlib
 import io
 import json
@@ -26,7 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from . import accel, audioedit, civitai, clipimport, craft, delogo, downloads, gpu, h3upscale, posefind, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import projects, storage, store, network
 from . import playable
-from . import fetchpicture, keyexpr, looks, maskcomp, ph3image, promptaid, sceneasset
+from . import fetchpicture, keyexpr, looks, maskcomp, ph3image, promptaid, sceneasset, sizelimits
 from . import templates as tpl
 from .comfy import Comfy, ComfyError, previews_on as comfy_previews_on, set_previews as comfy_set_previews
 from .routes import audio, effects, library, scene, video, web
@@ -637,6 +638,11 @@ async def _mask_dims(run: dict, flist: list[dict]) -> tuple[int, int] | None:
         return None   # (then it runs on the whole picture)
 
 
+# batches the Queue cancelled: the page may still be sending the rest of one, so those are refused
+CANCELLED_GROUPS: collections.deque = collections.deque(maxlen=200)
+BATCH_CANCELLED = "That batch was cancelled"
+
+
 @app.post("/api/generate")
 async def generate(body: dict = Body(...)):
     t = tpl.get(config.TEMPLATES_DIR, body.get("template", ""))
@@ -648,6 +654,12 @@ async def generate(body: dict = Body(...)):
     batch = max(1, min(int(body.get("batch", 1)), 32))
     project_id = body.get("project_id")
     parent = body.get("parent")
+    # the batch these belong to: the page's (one press on several layers or frames), or this request's when it asks for several
+    group = body.get("group") or {}
+    grp = str(group.get("id"))[:40] if group.get("id") else (uuid.uuid4().hex[:12] if batch > 1 else None)
+    grp_label = str(group.get("label") or t.name or t.id)[:120] if grp else None
+    if grp in CANCELLED_GROUPS:
+        raise HTTPException(409, BATCH_CANCELLED)
 
     created = []
     for i in range(batch):
@@ -666,6 +678,10 @@ async def generate(body: dict = Body(...)):
                 except (TypeError, ValueError):
                     raise HTTPException(400, f"{f['group']} · {f['label']}: {v!r} isn't a number")
             resolved[key] = v
+        if i == 0:   # bigger than anything of its kind that has fitted on the card: ask first, refuse what can't fit
+            too = sizelimits.check(t.id, t.name or t.id, resolved, list(fields.values()), t.workflow)
+            if too and (too["hard"] or not body.get("force")):
+                raise HTTPException(400 if too["hard"] else 409, {"message": too["message"], "tooBig": True, **too})
         run = dict(resolved)
         for key, f in fields.items():  # a picked video: params keep the source, ComfyUI gets the path
             if f["kind"] == "video" and resolved.get(key) and not isinstance(resolved[key], dict):
@@ -722,7 +738,7 @@ async def generate(body: dict = Body(...)):
             resolved["__face"] = body["face"]
         if raw:  # the prompts as written, so Edit restores the wildcards (Run again keeps this run's picks)
             resolved["__wildcards"] = raw
-        gid = db.create_generation(project_id, t.id, resolved, wf, res["prompt_id"], parent)
+        gid = db.create_generation(project_id, t.id, resolved, wf, res["prompt_id"], parent, grp, grp_label)
         created.append(db.get_generation(gid))
         await push_gen(gid)
     return created
@@ -784,6 +800,29 @@ async def cancel_queued(body: dict = Body(...)):
         db.update_generation(g["id"], status="interrupted", error="Cancelled", finished=time.time())
         await push_gen(g["id"])
     return {"ok": True}
+
+
+@app.post("/api/queue/cancel-group")
+async def cancel_group(body: dict = Body(...)):
+    """Every run of a batch: the waiting ones out of the queue first, so the next doesn't start when the running one stops.
+    What the page hasn't sent yet is refused (BATCH_CANCELLED)."""
+    grp = body.get("group")
+    if not grp:
+        raise HTTPException(400, "No batch given")
+    CANCELLED_GROUPS.append(grp)
+    runs = db.active_in_group(grp)
+    q = await comfy.queue_state()
+    running = {it[1] for it in q.get("queue_running", [])}
+    waiting = [g for g in runs if g["prompt_id"] not in running]
+    if waiting:
+        await comfy.delete_queued([g["prompt_id"] for g in waiting])
+    for g in waiting:
+        db.update_generation(g["id"], status="interrupted", error="Cancelled", finished=time.time())
+        await push_gen(g["id"])
+    stopped = any(g["prompt_id"] in running for g in runs)
+    if stopped:
+        await comfy.interrupt()
+    return {"ok": True, "cancelled": len(waiting), "stopped": stopped}
 
 
 # ---- history (projects: app/projects.py) ------------------------------------

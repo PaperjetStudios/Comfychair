@@ -852,7 +852,10 @@ body:has(.text-pop:not(.hidden)) .sheet { z-index: 62; }
 .pa-pic { max-height: 120px; max-width: 200px; border-radius: var(--r); object-fit: contain; align-self: flex-start; }
 .pa-wait { padding: 24px 8px; }
 /* touch screens get the tag chips in the text popup instead */
-@media (pointer: coarse) { .prompt-field .tag-chips { display: none; } }
+/* the prompt's tags (<Picture 1>, <Subject 1>…) are kept for the Prompt hints panel and the writing box (app.js tagsFor), never shown under the prompt */
+.prompt-field .tag-chips { display: none; }
+/* a usable height to start from: autoGrow makes it taller with the text */
+.prompt-body > textarea { min-height: calc(5 * 1.45em + 14px); }
 
 /* ---- board ---- */
 #boardBar { position: sticky; top: calc(-1 * var(--gap)); z-index: 3; margin: calc(-1 * var(--gap)) calc(-1 * var(--gap)) var(--gap); padding: var(--gap); background: var(--bg); border-bottom: 1px solid var(--line); }
@@ -1435,6 +1438,9 @@ button.sheet-caret { width: 22px; }
 .recent-strip { display: flex; gap: 6px; align-items: center; overflow-x: auto; padding: 2px 0 4px; scrollbar-width: thin; }
 .recent-lbl { flex: none; font-size: .75rem; color: var(--muted); padding-right: 2px; }
 .recent-item { flex: none; width: 56px; height: 56px; padding: 0; overflow: hidden; border: 1px solid var(--line-2); border-radius: var(--r); background: var(--surface-2); cursor: pointer; }
+.attached-item { position: relative; flex: none; display: block; }
+.attached-off { position: absolute; top: 1px; right: 1px; width: 22px; height: 22px; padding: 3px; display: grid; place-items: center; border: 0; border-radius: var(--r); background: var(--surface-2); color: var(--text); cursor: pointer; }
+.attached-off svg { width: 14px; height: 14px; }
 .recent-item img, .recent-item video { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
 @media (hover: hover) { .recent-item:hover { border-color: var(--accent); } }
 @media (pointer: coarse) { .recent-item { width: 62px; height: 62px; } }
@@ -2587,3 +2593,6 @@ body.has-modal .float-hints { z-index: 62 !important; }   /* (it types into the 
 .actions-step { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: var(--fs-xs); padding: 2px 0; min-width: 0; }
 .actions-step > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .actions-step.now > span { color: var(--accent); }
+.job-batch { display: flex; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid var(--line-2); border-radius: var(--r); }
+.job-batch-head { display: flex; align-items: center; gap: 8px; padding: 2px 4px; }
+.job-batch-head .hint { flex: 1; margin: 0; }

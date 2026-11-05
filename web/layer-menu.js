@@ -17,6 +17,7 @@ export function layerMenu(s) {
     [n > 1 ? { id: 'group', label: 'Group' } : null,
       n === 1 ? { id: 'mergeDown', label: 'Merge down', keys: 'Ctrl+E', disabled: !s.mergeDown } : null,
       n > 1 ? { id: 'mergeSelected', label: 'Merge selected', keys: 'Ctrl+E', disabled: !s.mergeSet } : null],
+    [s.trim ? { id: 'trim', label: s.trim > 1 ? `Trim ${s.trim} to their cut-outs` : 'Trim to the cut-out' } : null],
     [s.main ? { id: 'main', label: s.main.on ? 'Not the main source' : 'Main source', on: !!s.main.on } : null,
       p ? { id: 'saveEach', label: p > 1 ? 'Save each as input' : 'Save layer as input' } : null,
       p > 1 ? { id: 'saveTogether', label: 'Save as one input' } : null,

@@ -16,7 +16,8 @@ import { icon } from './icons.js';
 import { floatPanel } from './float-panel.js';
 import { pictureSlot } from './picture-drop.js';
 import { liveFrame } from './live.js';
-import { OBJECT_MODELS, VIEWS as VIEW_ROLES, addPictures, planRun, tapView } from './object-rules.js';
+import { OBJECT_MODELS, VIEWS as VIEW_ROLES, addPictures, leftWords, planRun, selectAdded, tapView } from './object-rules.js';
+import { attachedKey, attachedViews } from './attached.js';
 import { C, OBJ as OBJ_CH, R, SC, current, frames, matchSceneTo, newObject, namesFor, sampleChan, save, selItem, setKey, write } from './scene-data.js';
 import { heightOf as figureHeight } from './figure.js';
 import { addModeSection } from './scene-modes.js';
@@ -591,12 +592,24 @@ async function checkViews(picks, go, back) {
 // stay attached, greyed, and the slot's pencil changes the picture. The pictures and the selection are kept on this device per project until cleared, and
 // only their names: it writes no file of its own. A run goes on the Queue and the panel stays usable.
 const PANEL = { panel: null, picks: {}, sel: {}, label: '', who: null, runs: [] };
-const draftKey = () => `deck.scene.object.${APP.project ?? 'none'}`;
+const draftKey = attachedKey;
 const keepDraft = () => { store.set(draftKey(), PANEL.picks); store.set(`${draftKey()}.sel`, PANEL.sel); };
-const readDraft = () => { const d = store.get(draftKey(), {}); return d && typeof d === 'object' ? d : {}; };
+const readDraft = attachedViews;
 export const attachedPictures = () => Object.keys(PANEL.panel?.shown() ? PANEL.picks : readDraft()).length;
 const setPicks = (picks) => { PANEL.picks = picks; keepDraft(); drawObjectPanel(); };
 const setSel = (sel) => { PANEL.sel = sel; keepDraft(); drawObjectPanel(); };
+// names joining what is attached: the new ones are in the run; one that couldn't go in is said
+function joinPicks(names) {
+  const was = PANEL.picks, r = addPictures(was, names);
+  const words = leftWords(was, r.left);
+  if (words) toast(words, true);
+  const added = VIEW_ROLES.filter((v) => r.picks[v] && !was[v]);
+  // (one already attached is selected again: that's what was asked for)
+  const again = VIEW_ROLES.filter((v) => was[v] && names.includes(was[v]));
+  PANEL.picks = r.picks;
+  PANEL.sel = selectAdded(PANEL.sel, [...again, ...added]);
+}
+addEventListener('attached:change', () => { if (PANEL.panel) { PANEL.picks = readDraft(); drawObjectPanel(); } });   // (× on the picker's Attached strip)
 
 // where a run started now lands: the panel's own target, the open 3D frame, the one 3D frame selected on the table, a new 3D frame there, else the open scene
 async function objectTarget() {
@@ -621,7 +634,7 @@ function drawObjectPanel() {
   const pick = (role) => picker({ title: `The ${role.toLowerCase()} view`, onPick: (n) => { inRun(role); setPicks({ ...PANEL.picks, [role]: n }); } });
   const free = VIEW_ROLES.filter((v) => !picks[v]).length;
   const addMany = () => picker({ title: 'Pictures of the object', multi: free > 1, limit: free,
-    onPick: (n) => setPicks(addPictures(PANEL.picks, [n]).picks) });
+    onPick: (n) => { joinPicks([n]); keepDraft(); drawObjectPanel(); } });
   // one picture holding several views (a character sheet): a box round each, cut out into its slot
   const split = () => picker({ title: 'A picture with several views', onPick: (src) => import('./view-boxes.js').then((m) => m.openViewBoxes({ image: src, boxes: {},
     onDone: async (boxes) => {
@@ -636,7 +649,7 @@ function drawObjectPanel() {
   const slot = (role) => pictureSlot(h('div', { class: `obj-slot${picks[role] ? ' filled' : ''}${picks[role] && !used.has(role) ? ' unused' : ''}${used.has(role) ? ' picked' : ''}` },
     h('button', { type: 'button', class: 'obj-slot-pic', 'aria-label': picks[role] ? `${role}: select` : `${role}: pick a picture`, 'aria-pressed': picks[role] ? String(used.has(role)) : null,
       title: picks[role] ? (used.has(role) ? 'Selected: this run uses it' : 'Tap to use this one') : null, onclick: () => (picks[role] ? setSel(tapView(PANEL.sel, model, role)) : pick(role)) },
-      picks[role] ? h('img', { src: thumbUrl(picks[role], 320), alt: '', onerror: () => clear(role) })   // (the picture was deleted)
+      picks[role] ? h('img', { src: thumbUrl(picks[role], 320), alt: '', onerror: () => { const n = picks[role]; fetch(thumbUrl(n, 320)).then((r) => { if (r.status === 404 && PANEL.picks[role] === n) clear(role); }).catch(() => {}); } })   // (the picture was deleted; a thumbnail that failed for another reason keeps it attached)
         : h('span', { class: 'obj-slot-plus' }, '+')),
     h('div', { class: 'obj-slot-bar' }, h('span', {}, role),
       picks[role] ? h('div', { class: 'obj-slot-tools' },
@@ -688,7 +701,7 @@ export function openObjectSheet(name = null, label = '', picks = null, opts = {}
   PANEL.who = opts.character || null;
   PANEL.label = label || '';
   if (picks) { PANEL.picks = { ...picks }; PANEL.sel = {}; }
-  else if (name) PANEL.picks = addPictures(PANEL.picks, [name]).picks;
+  else if (name) joinPicks([name]);
   keepDraft();
   drawObjectPanel();
   PANEL.panel.show();

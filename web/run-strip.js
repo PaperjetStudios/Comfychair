@@ -11,6 +11,7 @@
 // up with the run's first picture and goes when the run ends (run-preview-rules.js windowUp); a line with no picture (another device's run,
 // previews off, a run still queued) stays on the strip. On by choice on this device: the table bar's chip, the window's Close, and a button
 // on the strip, which is there while a run goes even when a full-screen frame covers the bar. Off, the above.
+// A double click on the window's picture or the strip's goes to the run's frame on the table (goToRunFrame).
 //   previewWindow() → on or off;  setPreviewWindow(on);  onPreviewWindow(fn) → fn(on) after each change; returns an unsubscribe
 import { h, api, store, toast } from './ui.js';
 import { icon } from './icons.js';
@@ -57,6 +58,19 @@ addEventListener('make:queued', (e) => {
   store.set(RUNS, rememberRun(store.get(RUNS, {}), gens, String(id)));
 });
 
+// A double click on the preview (its window or the strip): the frame the run belongs to, selected and brought into view on the table.
+// An open frame is left first; a run no frame made, or one whose frame is on another table, says so.
+async function goToRunFrame() {
+  const pid = RUN.pid || S.activePid, id = pid ? store.get(RUNS, {})[pid] : null;
+  if (!id) return toast('This run isn\'t from a frame', true);
+  const T = await import('./table.js');
+  if (!T.frameById(id)) return toast('This run\'s frame is on another table', true);
+  (await import('./navigation.js')).switchTab('table');
+  if (liveFrame() && String(liveFrame().id) === String(id)) return;   // (it's the frame open now)
+  if (liveFrame()) await Promise.resolve(T.unlive());
+  T.selectFrames([id], { scroll: true });
+}
+
 // the element to draw in, or null for the strip. A tile off the screen or hidden is no use: that goes to the strip too.
 function homeEl() {
   const live = liveFrame()?.id ?? null;
@@ -81,6 +95,8 @@ export function mountRunStrip(host = document.body) {
     onclick: () => setPreviewWindow(true) }, icon('enlarge'));
   strip = h('div', { class: 'run-strip hidden', role: 'status' }, view, h('div', { class: 'run-strip-line' }, bar, h('div', { class: 'run-strip-row' }, text, toWindow)));
   host.append(strip);
+  view.title = 'Double-click to go to its frame';
+  view.addEventListener('dblclick', goToRunFrame);
   // the window, made when first wanted
   const win = { panel: null, view: null, up: false, bar: h('div', { class: 'run-strip-bar' }), text: h('span', { class: 'run-strip-text' }) };
   const winPanel = () => {
@@ -91,6 +107,8 @@ export function mountRunStrip(host = document.body) {
     win.view = h('canvas', { class: 'float-preview-view', 'aria-label': 'Sampling preview' });
     win.panel.body.append(win.view, h('div', { class: 'run-strip-line' }, win.bar, win.text));
     win.panel.dragBy(win.view);   // (the picture is most of the window: it moves by that too)
+    win.view.title = 'Double-click to go to its frame';
+    win.view.addEventListener('dblclick', goToRunFrame);
     return win.panel;
   };
   api('/api/sampler-preview', { busy: false }).then((r) => tell(r.on !== false), () => {});   // (a server from before the switch: on)

@@ -352,6 +352,18 @@ export const runBar = (...kids) => h('div', { class: 'row wrap run-bar' }, kids)
 
 // the image file buttons that take a paste: one listener, and only the newest one on screen gets it
 let PASTES = [], pasteOn = false;
+// Linux pastes the selected text on a middle click (and a picture, from a copied page). Here a middle click only pans: that paste is
+// stopped before anything sees it, in a text box too. A paste from the keys (Ctrl+V, Shift+Insert) or the menu is left alone.
+let middleAt = -1e9;
+const middleUp = (e) => { if (e.button === 1) { middleAt = performance.now(); e.preventDefault(); } };
+addEventListener('mousedown', (e) => { if (e.button === 1) middleAt = performance.now(); }, true);
+addEventListener('mouseup', middleUp, true);
+addEventListener('auxclick', (e) => { if (e.button === 1) e.preventDefault(); }, true);
+addEventListener('paste', (e) => {
+  if (performance.now() - middleAt > 600) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+}, true);
+
 function onPaste(e) {
   PASTES = PASTES.filter((p) => p.ref.deref()?.isConnected);   // (as before: off the page at a paste, it's done)
   if (/^(INPUT|TEXTAREA)$/.test(e.target?.tagName) || e.target?.isContentEditable) return;
@@ -566,9 +578,12 @@ export function textArea(get, set, { rows = 3, placeholder = '', grow = true, ma
 
 // A text box that grows with its text (up to max px); dispatch 'grow' on it after setting .value from code.
 export function autoGrow(ta, max = 420) {
-  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight + 2, max) + 'px'; };
+  // (measured only while it is on show: a box built in a hidden pane measures 0 and would stay a sliver; it grows once it shows)
+  const grow = () => { if (!ta.offsetWidth) return; ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight + 2, max) + 'px'; };
   ta.addEventListener('input', grow);
   ta.addEventListener('grow', grow);
+  let w = 0;
+  if (typeof ResizeObserver === 'function') new ResizeObserver(() => { if (ta.offsetWidth !== w) { w = ta.offsetWidth; grow(); } }).observe(ta);
   requestAnimationFrame(grow);
 }
 

@@ -11,6 +11,7 @@ export const COMMANDS = [
   ['paste', 'v', true, false, false, 'paste at the playhead'],
   ['duplicate', 'j', true, false, false, 'duplicate the picked clips'],
   ['selectAll', 'a', true, false, false, 'pick every clip'],
+  ['selectNone', 'd', true, false, false, 'pick no clips'],
   ['delete', 'delete', false, false, false, 'delete the picked clips'],
   ['delete', 'backspace', false, false, false, 'delete the picked clips'],
   ['rippleDelete', 'delete', false, true, false, 'delete and close the gap'],

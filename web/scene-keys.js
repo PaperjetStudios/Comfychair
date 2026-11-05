@@ -709,7 +709,7 @@ function openMenu(anchor) {
   if (menuEl) { closeMenu(); return; }
   const item = (label, fn, keep = false) => h('button', { type: 'button', class: 'btn small ghost', onclick: () => { fn(); if (!keep) closeMenu(); } }, label);
   menuEl = h('div', { class: 'key-menu', role: 'menu' },
-    item('Select all (A)', selectAll), item('Select none', selectNone), item('Invert selection', selectInvert), item('Duplicate (Ctrl+D)', duplicateKeys),
+    item('Select all (A, Ctrl+A)', selectAll), item('Select none (Ctrl+D)', selectNone), item('Invert selection', selectInvert), item('Duplicate (Ctrl+J)', duplicateKeys),
     ...(TOUCH() ? [] : [
       item(`${UI.box ? '✓ ' : ''}Box select`, () => { setUI('box', !UI.box); syncTools(); }),
       item(`${UI.add ? '✓ ' : ''}Add to selection`, () => { setUI('add', !UI.add); syncTools(); })]),
@@ -1043,7 +1043,7 @@ export function wireSheetKeys() {
     if (range) { eat(); if (e.shiftKey) stopPlay(); range(); return; }
     if (!focus) return;
     if (e.ctrlKey || e.metaKey) {
-      if (k === 'c') { eat(); copyKeys(); } else if (k === 'v') { eat(); pasteKeys(); } else if (k === 'd') { eat(); duplicateKeys(); } else if (k === 'a') { eat(); selectAll(); }
+      if (k === 'c') { eat(); copyKeys(); } else if (k === 'v') { eat(); pasteKeys(); } else if (k === 'j') { eat(); duplicateKeys(); } else if (k === 'a') { eat(); selectAll(); } else if (k === 'd' && !e.shiftKey) { eat(); selectNone(); }
     } else if ((k === 'delete' || k === 'backspace' || k === 'x') && SEL.size) { eat(); deleteKeys(); }
     else if (k === 'a' && !e.shiftKey) { eat(); if (e.altKey) selectNone(); else selectAll(); }   // (Shift+A is Add)
     else if (k === 's' && !e.shiftKey) { eat(); setUI('tool', UI.tool === 'scale' ? 'move' : 'scale'); syncTools(); toast(UI.tool === 'scale' ? 'Stretch in time: drag on the sheet' : 'Stretch in time off'); }

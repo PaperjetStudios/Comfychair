@@ -1471,9 +1471,14 @@ export function createPaint(ctx) {
       if (k === 'y' || e.shiftKey) redo(); else undo();
       return;
     }
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && (k === 'd' || (k === 'i' && e.shiftKey))) {   // Ctrl+D deselects, Ctrl+Shift+I inverts, Ctrl+Shift+D selects again
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (k === 'd' || (k === 'i' && e.shiftKey))) {   // Ctrl+D deselects (the marked pixels, else the layers), Ctrl+Shift+I inverts, Ctrl+Shift+D selects again
       e.preventDefault(); e.stopImmediatePropagation();
-      if (k === 'i') selAction('invert'); else if (e.shiftKey) reselect(); else { dropSel(); X.render(); }
+      if (k === 'i') selAction('invert'); else if (e.shiftKey) reselect(); else if (P.sel) { dropSel(); X.render(); } else X.pickNone?.();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && k === 'a' && (P.tool === 'select' || P.tool === 'lasso' || X.pickAll)) {   // Ctrl+A: with a selection tool out, the whole canvas; else every layer
+      e.preventDefault(); e.stopImmediatePropagation();
+      if (P.tool === 'select' || P.tool === 'lasso') selAction('all'); else X.pickAll();
       return;
     }
     if (e.ctrlKey || e.metaKey || e.altKey) return;

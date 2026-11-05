@@ -2,7 +2,8 @@
 // size, opacity, resolution, name, lock, hide), or inside a live frame the picked layers, clips or sound items (their
 // transform, opacity, times and level). web/props-rules.js says which rows a selection gets; the engines build them.
 //
-//   registerProps(kind, { picked(ctx) → [what is picked, the primary first], rows(ctx, ids) → rows, title?(ctx), when?(ctx) })
+//   registerProps(kind, { picked(ctx) → [what is picked, the primary first], rows(ctx, ids) → rows, title?(ctx), when?(ctx), extra?(ctx) → element })
+//     extra: a live frame's own section under the rows, whatever is picked (an image frame's Canvas).
 //     kind: 'frames' (the table's frames) or a live frame's kind ('image', 'video', 'sound'). ctx: sidebar.context().
 //     A row: { id, label, el, group? } (the engine's own field, edits going through its own code), or
 //     { id, label, get, set, min?, max?, step?, digits?, unit?, type?: 'num' | 'text' | 'toggle', disabled?, group? }:
@@ -89,8 +90,10 @@ function draw(force) {
   if (!force && typing()) { P.dirty = true; return; }
   P.dirty = false;
   const ctx = sidebar.context(), got = choose(ctx);
+  let extra = null;
+  try { extra = ctx.live ? P.prov.get(ctx.live.kind)?.extra?.(ctx) || null : null; } catch (e) { console.error(e); }
   if (!got) {
-    P.el.replaceChildren(section('Properties', null, hint(ctx.live ? 'Pick a layer, clip or sound to see its properties.' : 'Select a frame.')));
+    P.el.replaceChildren(section('Properties', null, hint(ctx.live ? 'Pick a layer, clip or sound to see its properties.' : 'Select a frame.')), ...(extra ? [extra] : []));
     return;
   }
   const ids = rowsFor({ kind: got.kind, live: got.kind !== 'frames', picked: got.picked });
@@ -110,7 +113,7 @@ function draw(force) {
   const top = P.el.scrollTop;
   // (what is shown, named over the first group)
   P.el.replaceChildren(...(groups.length ? groups.map((g, i) => section(g.name, null, i === 0 && g.name !== title ? hint(title, 'props-title') : null, g.els))
-    : [section(title, null, hint('Nothing to set here.'))]));
+    : [section(title, null, hint('Nothing to set here.'))]), ...(extra ? [extra] : []));
   P.el.scrollTop = top;
   sidebar.refresh();
 }

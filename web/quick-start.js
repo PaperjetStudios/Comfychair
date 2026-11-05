@@ -19,6 +19,7 @@ import { blankPayload } from './table-frames.js';
 import { emptyVideo, emptyScene } from './empty-docs.js';
 import { FPS, NOTE_SIZE, SOUND_SIZE, lastChoice, makePayload, placeAt, rememberChoice, sizeFor, startTemplate } from './quick-start-rules.js';
 
+const LINK_ICON = 'link';   // (a clip fetched from a link: clipimport.js)
 const KIND_TABS = [['image', 'Image', 'image'], ['video', 'Video', 'film'], ['scene', '3D', 'cube'], ['sound', 'Sound', 'sound'], ['note', 'Note', 'text']];
 const ratioOf = (k) => (ASPECT_PRESETS.find(([a]) => a === k) || ASPECT_PRESETS[0])[1];
 
@@ -116,6 +117,8 @@ const PANES = {
     return [...rows,
       cards(card('film', 'Blank sequence', () => blank(Q, 'video', size(), { ...emptyVideo(), size: [size().w, size().h], fps: Q.c.fps })),
         card('video', 'From a clip', () => { closeSheet(); openSourcePicker({ kinds: ['video'], want: 'clip', title: 'Start from a clip', onPick: (v) => fromSource(Q, { ...v, kind: 'video' }) }); }),
+        card(LINK_ICON, 'From a video link', () => { closeSheet(); import('./clipimport.js').then((m) => m.openClipImport({ title: 'A video from a link',
+          onSaved: (e) => fromSource(Q, { media: e.name, kind: e.kind || 'video', label: e.label }) })).catch((err) => toast(err.message, true)); }),
         textC,
         card('image', 'From a picture', () => pickPicture((name) => withPicture(Q, 'video', 'video-picture', size(), name), 'Picture to animate'))),
       textHost];

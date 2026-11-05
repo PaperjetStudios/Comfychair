@@ -271,7 +271,12 @@ export async function drawOffscreen(doc) {
   await t.ready(); await t.openQuiet(doc);
   if (t.active?.id !== doc || isLive('image')) return false;
   await settledStill();
-  return t.active?.id === doc;   // (the Image screen shown meanwhile takes its own tab back: tabs.js reclaim)
+  if (t.active?.id !== doc) return false;   // (the Image screen shown meanwhile takes its own tab back: tabs.js reclaim)
+  // a frame fitted to its layers takes the area they cover now: layers put in while it was closed (Send to the table, a drop, Combine)
+  // would otherwise leave its output and fitBox where they were, and Fixed size (or any set size) would cut the canvas there
+  const f = tableFrames().find((x) => x.kind === 'image' && x.doc === doc);
+  if (f?.fit === true && !E.size && !isLive('image') && takeSize(f)) frameChanged();
+  return true;
 }
 async function drawStale() {
   for (const doc of [...STALE]) {
@@ -355,7 +360,7 @@ async function settledStill() {
 // A deleted frame's Make-panel pictures (frame.make.inputs: copies the panel made in the project's pictures) go with it.
 // Undo brings the frame back but not these (they are copies, not the user's own pictures; the frame's Make settings
 // then show them missing, and its inputs list is emptied so nothing tries to drop them twice). A picture another frame
-// on this table still lists stays (Ctrl+D copies a frame's make settings). Pictures a character uses are refused by the
+// on this table still lists stays (Ctrl+J copies a frame's make settings). Pictures a character uses are refused by the
 // server and stay too.
 addEventListener('table:deleted', (e) => {
   const left = new Set(tableFrames().flatMap((f) => f.make?.inputs || []));

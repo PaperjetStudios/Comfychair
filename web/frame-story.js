@@ -6,7 +6,7 @@
 //     that are gone go (their edits to the trash), and the rows are laid again
 //   - frames moved on the table (table:move): the rows say the scenes' and shots' order, the story follows, the rows
 //     are laid again; a shot's frame deleted on the table deletes the shot (Undo on the table brings both back);
-//     a shot's frame duplicated (Ctrl+D) is a copy of the shot
+//     a shot's frame duplicated (Ctrl+J) is a copy of the shot
 //   - a run queued for a shot's frame from the Make panel (make:queued) waits on the shot as story.js's own runs do,
 //     so its pictures and clips land in the shot's frames and clips too (story.js settle / catchUp)
 // The table's sidebar gets a Story pane: the story's outline, script and characters, the selected shot's fields, its

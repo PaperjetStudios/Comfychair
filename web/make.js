@@ -1,4 +1,4 @@
-import { api } from './ui.js';
+import { api, SHEET, actions, button, closeSheet, h, openSheet } from './ui.js';
 import { S, addMine, onServer, emitServer } from './core.js';
 import { RUN } from './run-state.js';
 
@@ -85,17 +85,49 @@ export function adoptGenerations(gens) {
 
 // Queue a template: values by field key (missing ones take the template's), parent only to override the
 // server's lineage rule. Resolves with the queued generations, already followed.
+// A batch: one press that sends several runs (several layers, clips, frames or models). Runs queued while one is open carry it, and the Queue
+// panel cancels them together. A press that starts its own takes over from one still sending in the background.
+let GROUP = null;
+export function openGroup(label) {
+  GROUP = { id: Math.random().toString(36).slice(2, 14), label: String(label || '').slice(0, 120) };
+  return GROUP;
+}
+export function closeGroup(g) { if (GROUP === g) GROUP = null; }
+// the server refused a run of a batch the Queue has cancelled: the loop sending them stops
+export const batchCancelled = (e) => /That batch was cancelled/.test(e?.message || '');
+
 export async function queueRun({ template: id, values = {}, batch = 1, parent = null, builder = null, face = null, project = S.project, timeout } = {}) {
   let gens;
+  const send = (force) => api('/api/generate', { method: 'POST', ...(timeout && { timeout }),
+    body: { template: id, values, batch, project_id: project, ...(parent && { parent }), ...(builder && { builder }), ...(face && { face }), ...(GROUP && { group: GROUP }),
+      ...(force && { force: true }) } });
   try {
-    gens = await api('/api/generate', { method: 'POST', ...(timeout && { timeout }),
-      body: { template: id, values, batch, project_id: project, ...(parent && { parent }), ...(builder && { builder }), ...(face && { face }) } });
+    try {
+      gens = await send(false);
+    } catch (e) {  // bigger than anything of its kind that has fitted on the card (app/sizelimits.py): ask, then send it anyway or not at all
+      if (!(e.status === 409 && e.data?.tooBig)) throw e;
+      if (!(await askTooBig(e.data.message))) throw Object.assign(new Error('Not run: too big for the card'), { tooBig: true });
+      gens = await send(true);
+    }
   } catch (e) {  // part of a batch may already be queued: follow those, then report the failure
     for (const g of e.data?.created || []) { addMine(g.prompt_id); S.history.set(g.id, g); }
     throw e;
   }
   adoptGenerations(gens);
   return gens;
+}
+
+// Run anyway or Cancel: true only for Run anyway. Closing the sheet any other way counts as Cancel.
+function askTooBig(message) {
+  return new Promise((resolve) => {
+    let seq = 0, timer = 0;
+    const end = (yes) => { clearInterval(timer); if (SHEET.seq === seq) closeSheet(); resolve(yes); };
+    seq = openSheet(h('h3', {}, 'Bigger than the card has managed'), h('p', {}, message),
+      actions(button('Cancel', () => end(false)), button('Run anyway', () => end(true), { cls: 'primary' })));
+    timer = setInterval(() => {
+      if (SHEET.seq !== seq || document.getElementById('sheetBackdrop')?.classList.contains('hidden')) { clearInterval(timer); resolve(false); }
+    }, 300);
+  });
 }
 
 // A run's end: resolves with the generation when it's done, rejects when it fails or is stopped
@@ -105,7 +137,7 @@ export function waitGen(id) {
     const finish = (g) => {
       if (done || !g || (g.status !== 'done' && g.status !== 'error' && g.status !== 'interrupted')) return;
       done = true; off(); clearInterval(timer);
-      if (g.status === 'done') resolve(g); else reject(new Error(g.error || `#${g.id} ${g.status}`));
+      if (g.status === 'done') resolve(g); else reject(Object.assign(new Error(g.error || `#${g.id} ${g.status}`), { status: g.status }));
     };
     const off = onServer('deck_generation', ({ data }) => { if (data?.id === id) finish(data); });
     const timer = setInterval(() => api(`/api/generations/${id}`, { busy: false }).then(finish, () => {}), 5000);

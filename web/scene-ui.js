@@ -751,6 +751,11 @@ export function wireKeys() {
       return;
     }
     if (e.target.closest('input, textarea, select')) return;
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'd') {   // (the key sheet with the keys has taken it first: wireSheetKeys)
+      e.preventDefault();
+      if (R.joint) selectJoint(null); else select(null);
+      return;
+    }
     if (e.ctrlKey || e.metaKey) return;
     const command = commandFor(e);
     if (command) { e.preventDefault(); COMMAND[command](); return; }
