@@ -4,6 +4,7 @@
 
 // s: { layers, selected, pictures (selected ones with a picture), hidden, clip, pickMode, newEdit, mergeDown, mergeSet,
 //      table (an open frame on the table: a new edit is a frame beside it, so "send to the table"),
+//      red: the red mask is painted and there are layers for it (the selected pictures, or the one under it),
 //      main: null (no pin here: off the table, or not one layer that can be pinned) | { on: the layer is the frame's main source } }
 export function layerMenu(s) {
   const n = s.selected, p = s.pictures;
@@ -17,6 +18,8 @@ export function layerMenu(s) {
     [n > 1 ? { id: 'group', label: 'Group' } : null,
       n === 1 ? { id: 'mergeDown', label: 'Merge down', keys: 'Ctrl+E', disabled: !s.mergeDown } : null,
       n > 1 ? { id: 'mergeSelected', label: 'Merge selected', keys: 'Ctrl+E', disabled: !s.mergeSet } : null],
+    [s.red ? { id: 'redMask', label: 'Mask with the red ▸', sub: [[{ id: 'redKeep', label: 'Keep the red' }, { id: 'redHide', label: 'Hide the red' }]] } : null,
+      s.red ? { id: 'redCut', label: 'Cut out to a new layer' } : null],
     [s.trim ? { id: 'trim', label: s.trim > 1 ? `Trim ${s.trim} to their cut-outs` : 'Trim to the cut-out' } : null],
     [s.main ? { id: 'main', label: s.main.on ? 'Not the main source' : 'Main source', on: !!s.main.on } : null,
       p ? { id: 'saveEach', label: p > 1 ? 'Save each as input' : 'Save layer as input' } : null,
@@ -91,6 +94,7 @@ export function frameMenu(s) {
 
 // ---- the timeline's menus (Video and Sound; tests/layer_menu.test.mjs). Same shape; what doesn't apply isn't listed. ----
 // s: { n (clips picked), canPaste, canSplit (the playhead is inside a picked clip), locked, hasKeys, kind,
+//      red: the red mask is painted and there are layers for it (the selected pictures, or the one under it),
 //      main: null (no pin here) | { on: the one picked clip is the frame's main source },
 //      shot: null | { cont (it can be continued), rerun (it can run again), from (clips continue from it, or it continues one), busy } }
 export function clipMenu(s) {

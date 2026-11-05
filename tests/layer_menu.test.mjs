@@ -152,3 +152,10 @@ test('a clip that can be continued gets Continue, Run again and Rerun from here'
   const busy = clipMenu({ n: 1, kind: 'video', shot: { cont: true, rerun: true, from: true, busy: true } }).flat();
   assert.ok(busy.filter((i) => ['continue', 'runAgain', 'rerunFrom'].includes(i.id)).every((i) => i.disabled));
 });
+test('a painted red mask with layers for it: Mask with the red (keep or hide) and Cut out, before Trim', () => {
+  const m = layerMenu({ ...base, selected: 2, pictures: 1, red: true, trim: 1 });
+  assert.deepEqual(ids(m)[3], ['redMask', 'redCut']);
+  assert.deepEqual(ids(m.flat().find((i) => i.id === 'redMask').sub), [['redKeep', 'redHide']]);
+  assert.equal(ids(m)[4][0], 'trim');
+  assert.equal(layerMenu({ ...base, selected: 1, pictures: 1 }).flat().some((i) => i.id.startsWith('red')), false);
+});

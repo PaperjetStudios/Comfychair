@@ -1608,14 +1608,17 @@ export function createEditor(cfg) {
     mergeDown: () => mergeDown(picked()[0]), mergeSelected: () => mergeSelected(), trim: () => trimLayers(),
     saveEach: () => saveEach(), saveTogether: () => saveTogether(), openNew: () => openSelected(), moveNew: () => moveToNewEdit(),
     delete: () => deleteSelected(), deleteHidden: () => deleteHidden(), clear: () => clearLayers(),
+    redKeep: () => maskWithRed(true), redHide: () => maskWithRed(false), redCut: () => cutWithRed(),
   };
   function openLayerMenu(x, y) {
     const on = picked();
     const groups = layerMenu({ layers: E.layers.filter((l) => !l.mask && !l.draft && !l.maskOf).length, selected: on.length, pictures: selectedPictures().length, trim: trimmable().length,
       hidden: ST.hiddenOnes(E.layers).count, clip: !!store.get(LAYER_CLIP, null), pickMode: E.pickMode, newEdit: !!cfg.newEdit, table: !!onTable(),
       mergeDown: on.length === 1 && !!ST.mergeBelow(E.layers, on[0]), mergeSet: on.length > 1 && ST.mergeSet(E.layers, on).length >= 2,
-      main: cfg.main?.() && on.length === 1 && pinnable(on[0]) ? { on: !!on[0].key && on[0].key === mainKey() } : null });
-    openPressMenu(x, y, groups.map((g) => g.map((it) => ({ ...it, run: LAYER_ACTIONS[it.id] }))), 'Layers');
+      main: cfg.main?.() && on.length === 1 && pinnable(on[0]) ? { on: !!on[0].key && on[0].key === mainKey() } : null,
+      red: !!composeMask() && redTargets().length > 0 });
+    const runs = (it) => ({ ...it, run: LAYER_ACTIONS[it.id], ...(it.sub ? { sub: it.sub.map((g) => g.map(runs)) } : {}) });
+    openPressMenu(x, y, groups.map((g) => g.map(runs)), 'Layers');
   }
 
   // A mask for this layer: a painted layer of its own, as big as the picture (the brush shows, the eraser hides); all showing to start with, or just the selection if there is one
@@ -1632,6 +1635,55 @@ export function createEditor(cfg) {
     if (fromSel) paint.layerMaskOp(m, 'selection');
     if (!paint.painting()) paint.setTool('eraser');
     editorChanged();
+  }
+  // The red mask (paint.maskLayer) put on picture layers as their own layer masks: keep shows only the red part, hide hides it.
+  // Each layer's mask goes on (or into the mask it has), so it can still be repainted, inverted or switched off; the red is used up.
+  // The layers: the selected pictures, or with only the red mask selected, the top picture under it.
+  function redTargets() {
+    const on = selectedPictures();
+    if (on.length) return on;
+    const red = paint.maskLayer(false);
+    if (!red || !picked().includes(red)) return [];
+    const under = E.layers.slice(0, E.layers.indexOf(red)).reverse().find((l) => ready(l) && !l.hidden && !l.mask && !l.maskOf && !l.draft);
+    return under ? [under] : [];
+  }
+  function maskWithRed(keep) {
+    const red = composeMask(), f = editorFrame(), list = redTargets();
+    if (!red || !f) return toast('Paint the red mask first', true);
+    if (!list.length) return toast('Select the layer to mask too', true);
+    const a = makeCanvas(red.canvas.width, red.canvas.height), ac = a.getContext('2d'), d = red.canvas.getContext('2d').getImageData(0, 0, a.width, a.height);
+    for (let i = 0; i < d.data.length; i += 4) d.data[i + 3] = d.data[i];   // (white = marked: as solid as it is red)
+    ac.putImageData(d, 0, 0);
+    let last = null;
+    for (const l of list) {
+      const W = l.img.naturalWidth || l.img.width, H = l.img.naturalHeight || l.img.height, cv = makeCanvas(W, H), c = cv.getContext('2d');
+      l.key ||= uid();
+      const old = E.layers.find((m) => m.maskOf === l.key);
+      if (old?.img) c.drawImage(old.img, 0, 0, W, H); else { c.fillStyle = '#ffffff'; c.fillRect(0, 0, W, H); }
+      c.globalCompositeOperation = keep ? 'destination-in' : 'destination-out';
+      c.setTransform(...G.invert(G.layerMatrix(l)));   // (canvas place to the layer's pixels)
+      c.drawImage(a, f.x, f.y);
+      const m = old || { name: null, label: `${layerName(l)} mask`, canvas: true, maskOf: l.key, crop: { x: 0, y: 0, w: 1, h: 1 }, opacity: 1, hidden: false, blend: 'normal' };
+      m.img = cv;
+      ST.syncMask(m, l);
+      if (!old) E.layers.push(m);
+      delete l.maskOff;
+      paint.markDirty(m);
+      last = l;
+    }
+    const used = paint.maskLayer(false);
+    if (used) { used.img = makeCanvas(used.img.width, used.img.height); paint.markDirty(used); }
+    E.layers = ST.normalize(E.layers, E.groups);
+    pickOnly(last);
+    editorChanged();
+    toast(`${keep ? 'Kept' : 'Hid'} the red part of ${list.length > 1 ? `${list.length} layers` : layerName(last)}: its mask can still be painted`);
+  }
+  function cutWithRed() {
+    const red = composeMask(), f = editorFrame(), list = redTargets();
+    if (!red || !f) return toast('Paint the red mask first', true);
+    if (!list.length) return toast('Select the layer to cut out too', true);
+    const n = paint.cutByMask(list, { canvas: red.canvas, f });
+    toast(n ? `Cut out: a new layer over ${n > 1 ? `each of ${n} layers` : 'the layer'}, which is hidden now` : 'The red mask doesn\'t cover that layer', !n);
   }
   function maskProps(m) {
     const o = E.layers.find((x) => x.key === m.maskOf);
