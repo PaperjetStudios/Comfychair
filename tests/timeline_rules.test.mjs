@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   lenOf, endOf, editable, pickedIds, setPicked, pick, pickOrder, boxItems, boxPick, selectFrom, snapPoints, grab, moveSet, trim, slip,
   splitAt, removeItems, rippleDelete, closeGap, duplicate, copy, paste, nudge,
-  trackLock, trackSolo, trackRename, trackReorder, trackHeight, exportTracks, addMarker, moveMarker, removeMarker, renameMarker,
+  trackLock, trackSolo, trackRename, trackReorder, trackHeight, exportTracks, renderTracks, soundTakes, addMarker, moveMarker, removeMarker, renameMarker,
 } from '../web/timeline-rules.js';
 
 let n = 0;
@@ -296,4 +296,32 @@ test('trim: a group snaps by the edge of the clip grabbed (first in ids), not th
   assert.equal(trim(d, ['b', 'a'], g, 'r', 0.95, { points: [6], tol: 0.1 }, o), 1);
   assert.equal(at(d, 'a').out, 3);
   assert.equal(at(d, 'b').out, 4);
+});
+
+test('ripple trim of several clips on one track: a later picked clip follows the earlier one, and the rest follow both', () => {
+  const d = doc(), g = grab(d);
+  trim(d, ['a', 'b'], g, 'r', 1, { ripple: true, snap: false }, o);   // a 0-3, b moves to 3 and ends at 7, c follows both changes
+  assert.deepEqual(['a', 'b', 'c', 'd'].map((x) => [at(d, x).at, at(d, x).out]), [[0, 3], [3, 4], [8, 1], [1, 2]]);
+  const e = doc(), ge = grab(e);
+  trim(e, ['a', 'b'], ge, 'l', 0.5, { ripple: true, snap: false }, o);   // each start trimmed by 0.5, starts kept, then closed up
+  assert.deepEqual(['a', 'b', 'c'].map((x) => at(e, x).at), [0, 1.5, 5]);
+});
+
+test('paste insert: a clip whose start is too near the playhead to split moves whole instead of being overlapped', () => {
+  const d = doc(), clip = copy(d, ['a']);
+  paste(d, clip, 2.01, o);   // b starts at 2, 0.01 s before the playhead: not split, it goes after the pasted clip
+  assert.equal(d.items.filter((x) => x.track === 'v1').length, 4);
+  assert.deepEqual(['b', 'c'].map((x) => at(d, x).at), [4.01, 8]);
+  assert.deepEqual([at(d, 'd').out, at(d, 's').out], [2, 4]);   // other tracks' clips under the playhead are never split
+  assert.equal(d.items.length, 6);
+});
+
+test('renderTracks folds solo in as the export does; a sound mix takes no still', () => {
+  const tr = [{ id: 'v1', kind: 'video', solo: true, name: 'A' }, { id: 'v2', kind: 'video' }, { id: 'a1', kind: 'audio', locked: true }];
+  assert.deepEqual(renderTracks(tr), [{ id: 'v1', kind: 'video', hidden: undefined, muted: undefined },
+    { id: 'v2', kind: 'video', hidden: true, muted: true }, { id: 'a1', kind: 'audio', hidden: undefined, muted: true }]);
+  assert.equal(soundTakes({ kind: 'image' }), false);
+  assert.equal(soundTakes({ kind: 'video' }), true);
+  const d = { tracks: [{ id: 'a1', kind: 'audio' }], items: [] };
+  assert.deepEqual(paste(d, { items: [C('p', 'v1', 0, 1, { kind: 'image' })] }, 0, { ...o, canDrop: (it) => soundTakes(it) }), []);
 });

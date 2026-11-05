@@ -6,7 +6,7 @@ import {
 import { fmtTime } from './playback.js';
 import { runBar } from './run-bar.js';
 import { bareSource, extractSound, genLabel, soundFrameFrom, soundInput, soundToSoundTab } from './media.js';
-import { S, switchTab, onServer } from './core.js';
+import { S, listedRun, switchTab, onServer } from './core.js';
 import { finishWithH3, openGeneration } from './run.js';
 import { openUseAs, pickCompare } from './useas.js';
 import { isSheetRun } from './markview-math.js';
@@ -125,7 +125,7 @@ export async function renderBoard() {
 export const FILTER_KINDS = { image: ['image'], video: ['video'], audio: ['audio'], motion: ['motion'], '3d': ['mesh', 'splat'] };
 function boardItems() {
   const items = [];
-  const gens = [...S.history.values()].filter((g) => g.project_id === S.project && g.status === 'done').sort((a, b) => b.id - a.id);
+  const gens = [...S.history.values()].filter((g) => g.project_id === S.project && g.status === 'done' && listedRun(g)).sort((a, b) => b.id - a.id);
   for (const g of gens) {
     if (B.filter === 'pinned' && !g.pinned) continue;
     if (B.filter === 'marked' && !B.marked.has(g.id)) continue;

@@ -1,23 +1,20 @@
 import {
-  $, h, store, api, toast, openSheet, closeSheet, sheetStillOpen, button, chip, iconBtn, actions, fileButton, seg, placeholder, note, mediaCard, field, pickButtons, info,
+  h, store, api, toast, openSheet, closeSheet, button, chip, iconBtn, actions, seg, placeholder, note, mediaCard, field, pickButtons, info,
 } from './ui.js';
 import { fmtTime } from './playback.js';
 import { MP_STEPS, capLabel } from './mp-cap.js';
-import { runBar } from './run-bar.js';
 import { cardPicture, kindTile, madeBy } from './kinds.js';
-import { S, CURRENT_EDIT as CURRENT, PICKER_SOURCES as SOURCES, inputUrl, previewUrl, switchTab, thumbUrl } from './core.js';
-import { heightGrip, maximizable, zoomPan } from './layout.js';
+import { S, listedRun, PICKER_SOURCES as SOURCES, inputUrl, previewUrl, switchTab } from './core.js';
 import { fmtDur, runTime } from './run-state.js';
 import { fetchHistory as loadHistory } from './generation-data.js';
-import { tick, tickRange, addFrame, frameIndex, byTag, tagsIn } from './pick-slots.js';
-import { draggingPicture, dropKind, droppedFiles } from './drop-files.js';
+import { tick, addFrame, frameIndex } from './pick-slots.js';
 
 // This project's finished outputs of the given kinds, newest first: [{ g, o, i, t }]
 export async function projectOutputs(kinds) {
   if (!S.history.size) await loadHistory();
   const items = [];
   for (const g of S.history.values()) {
-    if (g.project_id !== S.project || g.status !== 'done') continue;
+    if (g.project_id !== S.project || g.status !== 'done' || !listedRun(g)) continue;
     g.outputs.forEach((o, i) => { if (kinds.includes(o.kind)) items.push({ g, o, i, t: g.finished || g.created }); });
   }
   return items.sort((x, y) => y.t - x.t);
@@ -53,20 +50,6 @@ export function pickerSheet(title, bar, load) {
   return draw;
 }
 
-// A media-library card with a 🗑 on it: asks, deletes the file for good (the server refuses one a project uses), drops the card
-export function withMediaDelete(card, m) {
-  const del = iconBtn('Delete this file', '🗑', async (e) => {
-    e.stopPropagation();
-    if (!confirm(`Delete ${m.label || m.name} for good? Its copies and thumbnails go too.`)) return;
-    try {
-      await api(`/api/media?name=${encodeURIComponent(m.name)}`, { method: 'DELETE' });
-      card.remove(); toast('Deleted');
-    } catch (err) { toast(err.message, true); }
-  });
-  del.classList.add('card-del');
-  card.querySelector('.media')?.append(del);
-  return card;
-}
 export const uploadMedia = (file) => { const form = new FormData(); form.append('file', file); return api('/api/media', { method: 'POST', form }); };
 
 // The pickers are source-picker.js openSourcePicker; these keep their old signatures (it is loaded when one opens: it imports this file).

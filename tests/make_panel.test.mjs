@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { OP_TEMPLATES, canvasRect, carryWords, familiesOf, frameImageField, frameSize, makeFrames, makeTarget, noteText, pickTemplate, settingsFor, settingsPayload,
-  sizePair, templatesFor, withClip, itemSource, plainPicture, plainSound, plainVideo, renderKey, repointable, isOwnSlot, selfPicked, stableJson, wireFields } from '../web/make-rules.js';
+  sizePair, templatesFor, withClip, itemSource, addHeld, settleHeld, plainFills, plainPicture, plainSound, plainVideo, renderKey, repointable, isOwnSlot, selfPicked, stableJson, wireFields } from '../web/make-rules.js';
 import { owedFor, owedRecord } from '../web/owed-runs.js';
 
 const T = (id, media, family = 'X', fields = []) => ({ id, media, family, fields });
@@ -217,4 +217,33 @@ test('an empty image frame lets a plugged picture take the main slot; one with a
   assert.equal(isOwnSlot(t, 'image', t.fields[0]), true);
   assert.deepEqual(selfPicked(t, 'image', ins, {}, { ownPicture: false }), []);
   assert.deepEqual(selfPicked(t, 'image', ins, { '1.image': 'a' }), []);
+});
+
+test('plainFills: the one plain layer fills the canvas exactly, else it is not what the frame shows', () => {
+  const p = (l, size = { w: 100, h: 50 }) => ({ size, layers: [{ name: 'a.png', x: 0, y: 0, scale: 1, ...l }] });
+  assert.equal(plainFills(p({}), [100, 50]), true);
+  assert.equal(plainFills(p({}), [200, 50]), false, 'the canvas cuts the picture');
+  assert.equal(plainFills(p({ x: 10 }), [100, 50]), false, 'moved: a margin, and a cut');
+  assert.equal(plainFills(p({}, null), [100, 50]), false, 'no canvas size known');
+  assert.equal(plainFills(p({}), null), false, 'no picture size known');
+  assert.equal(plainFills(p({ x: 0.3 }), [100.4, 50]), true, 'within a pixel');
+});
+
+test('held wire pictures: added per run, settled by the runs\' status only', () => {
+  let held = addHeld([], ['w1.png', 'w2.png'], [{ id: 7 }, { id: 8 }]);
+  assert.equal(held.length, 4);
+  assert.deepEqual(addHeld(held, ['w1.png'], [{ id: 7 }]), held, 'no repeats');
+  const st = { 7: 'done', 8: 'running' };
+  let r = settleHeld(held, (g) => st[g]);
+  assert.deepEqual(r.drop, [], 'run 8 still reads both');
+  assert.equal(r.held.length, 2);
+  st[8] = 'error';
+  r = settleHeld(held, (g) => st[g]);
+  assert.deepEqual(r.drop, ['w1.png', 'w2.png']);
+  assert.deepEqual(r.held, []);
+  held = addHeld([], ['a.png'], [{ id: 1 }]);
+  assert.deepEqual(settleHeld(held, () => null).drop, [], 'a status not known yet (after a reload) keeps it');
+  assert.deepEqual(settleHeld(held, () => 'gone').drop, ['a.png'], 'a run that no longer exists lets it go');
+  assert.deepEqual(settleHeld(held, () => 'interrupted').drop, ['a.png'], 'a stopped run lets it go');
+  assert.deepEqual(settleHeld(undefined, () => 'done'), { held: [], drop: [] });
 });

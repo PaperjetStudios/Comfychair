@@ -8,7 +8,7 @@ import {
   $, h, store, api, toast, SHEET, sheetOpen, openSheet, closeSheet, button, linkBtn, actions, hint, placeholder, note,
   mediaCard, seg, setIcon, field, withHelp,
 } from './ui.js';
-import { S, fmtT, isMine, loadProjects, switchTab, emitServer, onServer } from './core.js';
+import { S, listedRun, fmtT, isMine, loadProjects, switchTab, emitServer, onServer } from './core.js';
 import { genLabel, mediaEl, openImagePicker, outputCard, uploadImage } from './media.js';
 import { factsOf, isMedia, kindDef, kindTile, kindOf, madeBy } from './kinds.js';
 import { runBar } from './run-bar.js';
@@ -472,7 +472,7 @@ export { fetchHistory as loadHistory } from './generation-data.js';
 onServer('history_loaded', renderHistory);
 
 function renderHistory() {
-  const items = [...S.history.values()].filter((g) => g.project_id === S.project).sort((a, b) => b.id - a.id);
+  const items = [...S.history.values()].filter((g) => g.project_id === S.project && listedRun(g)).sort((a, b) => b.id - a.id);
   $('#historyGrid').replaceChildren(...(items.length ? items.map(cardEl) : [placeholder('Nothing generated in this project yet.')]));
   $('#moreHistory').classList.toggle('hidden', S.historyDone || !items.length);
 }

@@ -254,7 +254,7 @@ def get_workflow(gid: int):
 
 
 def list_generations(project_id=None, limit=100, before=None, edit_tab=None, status=None):
-    sql, args = "SELECT * FROM generations WHERE 1=1", []
+    sql, args = "SELECT * FROM generations WHERE (CASE WHEN json_valid(params) THEN json_extract(params, '$.cache') END) IS NULL", []   # (a frame's cached render: by id only)
     if edit_tab is not None:  # renders of one saved video edit (params.edit_tab.id)
         sql += " AND json_extract(params, '$.edit_tab.id')=?"
         args.append(edit_tab)

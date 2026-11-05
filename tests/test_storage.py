@@ -393,6 +393,61 @@ class Storage(unittest.TestCase):
         self.assertEqual(c.delete("/api/store/video-tabs/v2", params=q).status_code, 200)
         self.assertIsNone(db.get_generation(b))
 
+    def test_a_stashed_render_waits_through_a_restore_and_goes_with_the_documents_purge(self):
+        b, _, _, _ = self.gen(run="r2")
+        c = TestClient(main.app)
+        q = {"project_id": self.pid}
+        d = config.PROJECTS_DIR / self.folder / ".deck" / "video-tabs"
+        self.doc("video-tabs", {"items": []}, name="V", did="v5")
+        r = c.put("/api/store/tables/t5", params=q, json={"name": "T", "payload": {"v": 1, "frames": [
+            {"id": "f1", "kind": "video", "doc": "v5", "render": {"generation": b, "key": "k"}}]}})
+        r = c.put("/api/store/tables/t5", params=q, json={"name": "T", "rev": r.json()["rev"], "payload": {"v": 1, "frames": []}})
+        stash = d / ".trash" / "v5.render.json"
+        self.assertTrue(stash.exists())
+        c.delete("/api/store/video-tabs/v5", params=q)
+        self.assertEqual(c.post("/api/store/video-tabs/v5/restore", params=q).status_code, 200)   # from Settings: no frame points at it
+        self.assertTrue(stash.exists(), "the render still waits: no frame took the document back")
+        c.delete("/api/store/video-tabs/v5", params=q)
+        for f in (d / ".trash").glob("v5.*.json"):
+            if not f.name.endswith(".render.json"):
+                f.rename(d / ".trash" / "v5.1.json")
+        self.doc("video-tabs", {"items": []}, name="W", did="v6")
+        c.delete("/api/store/video-tabs/v6", params=q)
+        self.assertIsNone(db.get_generation(b), "it went with the document's purge")
+        self.assertFalse(stash.exists())
+
+    def test_a_frame_back_on_its_table_takes_its_stashed_render_back(self):
+        b, _, _, _ = self.gen(run="r2")
+        c = TestClient(main.app)
+        q = {"project_id": self.pid}
+        d = config.PROJECTS_DIR / self.folder / ".deck" / "video-tabs"
+        self.doc("video-tabs", {"items": []}, name="V", did="v7")
+        fr = {"v": 1, "frames": [{"id": "f1", "kind": "video", "doc": "v7", "render": {"generation": b, "key": "k"}}]}
+        r = c.put("/api/store/tables/t7", params=q, json={"name": "T", "payload": fr})
+        r = c.put("/api/store/tables/t7", params=q, json={"name": "T", "rev": r.json()["rev"], "payload": {"v": 1, "frames": []}})
+        self.assertTrue((d / ".trash" / "v7.render.json").exists())
+        c.put("/api/store/tables/t7", params=q, json={"name": "T", "rev": r.json()["rev"], "payload": fr})
+        self.assertFalse((d / ".trash" / "v7.render.json").exists())
+
+    def test_a_cache_render_is_not_listed_but_is_reachable_and_pinned_by_its_frame(self):
+        c = TestClient(main.app)
+        q = {"project_id": self.pid}
+        a, _, _, _ = self.gen(run="r1")
+        b = db.create_generation(self.pid, "video edit", {"timeline": "1 clip", "cache": True}, {}, f"edit-{time.time_ns()}")
+        db.update_generation(b, status="done")
+        listed = {g["id"] for g in c.get("/api/generations", params={**q, "limit": 200}).json()}
+        self.assertIn(a, listed)
+        self.assertNotIn(b, listed, "a frame's cached render is left out of History")
+        self.assertEqual(c.get(f"/api/generations/{b}").json()["id"], b)
+        c.put("/api/store/tables/t8", params=q, json={"name": "T", "payload": {"v": 1, "frames": [
+            {"id": "f1", "kind": "video", "doc": "v8", "render": {"generation": b, "key": "k"}}]}})
+        self.assertEqual(storage.attachments()[b][0]["label"], "Table")
+        self.assertEqual(c.delete(f"/api/generations/{b}").status_code, 409)
+        names = {m["name"] for m in c.get("/api/media").json()}
+        touch(config.MEDIA_DIR / "cache-0a0b0c0d_mix.wav")
+        self.assertNotIn("cache-0a0b0c0d_mix.wav", {m["name"] for m in c.get("/api/media").json()} - names)
+        (config.MEDIA_DIR / "cache-0a0b0c0d_mix.wav").unlink()
+
     def test_a_replaced_render_stays_when_another_document_uses_the_run(self):
         a, _, _, _ = self.gen(run="r1")
         b, _, _, _ = self.gen(run="r2")

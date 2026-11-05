@@ -1162,7 +1162,8 @@ def _media_entry(p: Path) -> dict:
 @app.get("/api/media")
 async def list_media():
     """Files uploaded for the Video tab (music, voice-overs, outside clips), newest first."""
-    files = [p for p in config.MEDIA_DIR.iterdir() if p.is_file() and p.suffix.lower() in MEDIA_KINDS]
+    files = [p for p in config.MEDIA_DIR.iterdir() if p.is_file() and p.suffix.lower() in MEDIA_KINDS
+             and not p.name.startswith("cache-")]   # (a table frame's cached mix for a wire: routes/audio.py CACHE_PREFIX)
     return [_media_entry(p) for p in sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)]
 
 

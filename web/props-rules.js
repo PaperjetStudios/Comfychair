@@ -22,7 +22,8 @@ export function rowsFor({ kind, live = false, picked = [] } = {}) {
   const p = list[0], one = list.length === 1;
   if (kind === 'frames' && !live) {
     // (a name typed once for several frames would name them all alike; a note has no picture to measure)
-    return FRAME_ROWS.filter((id) => (id === 'name' ? one : id === 'resolution' ? one && p.kind !== 'note' : true));
+    // (resolution: one frame that has a picture, or several image frames, which take one size together)
+    return FRAME_ROWS.filter((id) => (id === 'name' ? one : id === 'resolution' ? (one ? p.kind !== 'note' : list.every((f) => f.kind === 'image')) : true));
   }
   if (kind === 'image') {
     const turns = list.some((l) => !l.flat);   // (a painted canvas is resized, not turned)

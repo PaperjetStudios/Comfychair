@@ -45,7 +45,7 @@
 // it in (a video frame asks: the clip, or a frame of it). The target shows one input port per wire down its left edge
 // ("Image 1", "Video 1", "Sound 1"). Tap a wire or an input port to select it, Delete unplugs it, right click or a long hold
 // has the rest. Every wire change is a table undo step. For the Make pane: tableWires, wiresInto, setTableWire.
-import { $, h, api, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, toggle, help, mpInput, layerRowsEl, iconBtn, uid } from './ui.js';
+import { $, h, api, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, toggle, help, layerRowsEl, iconBtn, uid } from './ui.js';
 import { S, onServer, onProject } from './core.js';
 import { TabSet } from './tabs.js';
 import { currentTab } from './navigation.js';
@@ -66,6 +66,7 @@ import { filtering, foldedGroups, listRows } from './frame-list.js';
 import { KIND_ICON, copyDoc, createDoc, dropInput, editDoc, frameEl, frameFor, frameStamp, kindOfDoc, loadStills, noteRev, owedCounts, renameDoc, restoreDoc, stillOf, syncFrame, trashDoc, pausePreviews, previewMode, setPreviewMode } from './table-frames.js';
 import { staleInfo, staleText } from './chain-rules.js';
 import { sidebar } from './sidebar.js';
+import { sizePicker } from './size-picker.js';
 import { registerProps, propsChanged, numRow } from './props-panel.js';
 import { shared, snapNum, lockedSize, mixLength } from './props-rules.js';
 
@@ -796,7 +797,7 @@ async function duplicateFrames(ids) {
   for (const f of T.frames.filter((x) => ids.has(x.id))) {
     const g = { ...structuredClone(f), id: M.newFrame(f.kind, f).id, label: `${f.label} copy`, locked: false };
     g.key = g.id;
-    if (g.make) { g.make = { ...g.make, inputs: [] }; delete g.make.ran; }   // (a copy has made nothing yet: a chain run never takes the original's results)
+    if (g.make) { g.make = { ...g.make, inputs: [] }; delete g.make.ran; delete g.make.held; }   // (a copy has made nothing yet: a chain run never takes the original's results; the original's runs hold their own pictures)
     Object.assign(g, M.nextBeside([...T.frames, ...made], f.kind, { w: f.w, h: f.h }));
     try { g.doc = f.doc ? await copyDoc(f, g.label) : null; } catch (e) { toast(`Couldn't copy "${f.label}": ${e.message}`, true); continue; }
     delete g.vfx;   // (an old VFX document stays the original's: moveVfxDocs reads it into that frame)
@@ -897,18 +898,10 @@ function reveal(f) {
 // ---------------------------------------------------------------------------
 function sizeSheet(f) {
   const ok = here(), id = f.id;
-  let w = f.w, hh = f.h, keep = true;
-  const ar = () => f.w / f.h;
-  const num = (v, step, label) => h('input', { type: 'number', inputMode: 'decimal', min: step === 16 ? 16 : 0.01, step, value: v, 'aria-label': label });
-  const wIn = num(w, 16, 'Width'), hIn = num(hh, 16, 'Height'), mpIn = num(M.mpOf(w, hh).toFixed(2), 0.05, 'Megapixels');
-  const show = () => { wIn.value = w; hIn.value = hh; mpIn.value = M.mpOf(w, hh).toFixed(2); };
-  wIn.addEventListener('change', () => { w = Math.max(16, Math.round(+wIn.value || w)); if (keep) hh = Math.max(16, Math.round(w / ar())); show(); });
-  hIn.addEventListener('change', () => { hh = Math.max(16, Math.round(+hIn.value || hh)); if (keep) w = Math.max(16, Math.round(hh * ar())); show(); });
-  mpIn.addEventListener('change', () => { ({ w, h: hh } = M.sizeForMp(w, hh, Math.max(0.01, +mpIn.value || 1))); show(); });
+  let w = f.w, hh = f.h;
   openSheet(h('h3', {}, `Size · ${f.label}`),
-    help('The frame\'s size is its canvas size. The image, video or 3D document takes it the next time the frame is opened. Megapixels keep the shape and round each side to 16.'),
-    h('div', { class: 'grid-2' }, field('Width', wIn), field('Height', hIn)), field('Megapixels', mpIn),
-    toggle('Keep the shape', keep, (on) => { keep = on; }),
+    help('The frame\'s size is its canvas size. The image, video or 3D document takes it the next time the frame is opened. Pick the proportions and the megapixels, or Custom to type the sides; each side snaps to 16.'),
+    framePicker(f, (nw, nh) => { w = nw; hh = nh; }, 'Size'),
     actions(button('Apply', () => {   // (on the table it was opened on, and the frame still there)
       closeSheet();
       const g = ok() && byId(id);
@@ -1570,7 +1563,16 @@ function renameFrame(was, v) {
 }
 // what the frame's document is made at: an image's canvas (and its megapixels), a video's sequence size and frame rate,
 // a sound's length (read from its saved document)
-function resolutionRow(f) {
+// The size picker (size-picker.js) a frame's picture size is chosen with, for the Properties pane and the Size and MP sheet.
+// The proportions and megapixels picked are kept per frame while they still describe its size (so the chip stays lit).
+const PICKED_MODE = new Map();   // frame id -> { mode, w, h }
+function framePicker(f, onChange, label = 'Resolution') {
+  const was = PICKED_MODE.get(f.id), mode = was && was.w === f.w && was.h === f.h ? was.mode : null;
+  return sizePicker({ label, w: f.w, h: f.h, mode, lim: (n) => Math.min(8192, Math.max(16, n)),
+    onChange: (w, hh, m) => { PICKED_MODE.set(f.id, { mode: m, w, h: hh }); onChange(w, hh); } });
+}
+// list: the selected frames; a size picked goes to each image frame among them (not a locked one), one undo step
+function resolutionRow(f, list = [f]) {
   const ok = here(), text = h('span', { class: 'props-res' }, `${f.w}×${f.h}`);
   const later = (fill) => fill().then((s) => { if (ok()) text.textContent = s; }).catch(() => {});
   const docOf = () => api(`/api/store/${M.DOC_KIND[f.kind]}/${f.doc}${S.project != null ? `?project_id=${S.project}` : ''}`, { busy: false });
@@ -1579,13 +1581,10 @@ function resolutionRow(f) {
     if (f.doc) later(async () => `${mixLength((await docOf())?.payload?.items).toFixed(2)} s`);
     return field('Length', text);
   }
-  const kids = [text];
   if (f.kind === 'image') {
-    text.textContent += ` · ${M.mpOf(f.w, f.h).toFixed(2)} MP`;
-    const mp = mpInput(() => M.mpOf(f.w, f.h).toFixed(2), (n) => { const g = ok() && byId(f.id); if (n > 0 && g && !g.locked) setSize(g, M.sizeForMp(g.w, g.h, n)); });
-    mp.querySelector('span').textContent = 'MP';
-    kids.push(mp);
+    return framePicker(f, (w, hh) => { if (ok()) setGeomAll(list.filter((g) => g.kind === 'image'), () => ({ w, h: hh })); });
   }
+  const kids = [text];
   if (f.kind === 'video' && f.doc) later(async () => `${f.w}×${f.h} · ${(await docOf())?.payload?.fps || 'auto'} fps`);
   return field('Resolution', h('div', { class: 'row wrap' }, kids));
 }
@@ -1608,7 +1607,7 @@ function framesRows(ctx, ids) {
     ids.includes('w') ? { id: 'w', label: 'Size', group: 'Place', el: size() } : null,
     { id: 'opacity', label: 'Opacity', group: 'Look', get: () => all('opacity', 1), min: 0, max: 1, step: 0.01, digits: 2,
       set: (v) => setFramesField(list.map((f) => f.id), { opacity: v >= 1 ? null : v }) },
-    one && ids.includes('resolution') ? { id: 'resolution', label: 'Resolution', group: 'Look', el: resolutionRow(one) } : null,
+    ids.includes('resolution') ? { id: 'resolution', label: 'Resolution', group: 'Look', el: resolutionRow(list[0], list) } : null,
     one ? { id: 'name', label: 'Name', type: 'text', group: 'Frame', get: () => one.label, set: (v) => renameFrame(one, v) } : null,
     { id: 'lock', label: 'Locked', type: 'toggle', group: 'Frame', get: () => shared(list.map((f) => !!f.locked)), set: (on) => setLocked(fresh(), on) },
     { id: 'hide', label: 'Hidden', type: 'toggle', group: 'Frame', get: () => shared(list.map((f) => !!f.hidden)), set: (on) => setHidden(fresh(), on) },

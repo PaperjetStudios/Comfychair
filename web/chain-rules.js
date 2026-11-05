@@ -3,7 +3,7 @@
 //
 // A frame's last run is kept on it as frame.make.ran = { at, sources: { wireId: stamp }, made: [id] }: the content stamp
 // (table-frames.js frameStamp) of each source frame plugged in by an ON wire as the run read it, and what a chain run
-// landed (an image frame: its layers' names; a video or sound frame: its items' ids). Only a chain run fills made, and a
+// landed (an image frame: its layers' keys; a video or sound frame: its items' ids). Only a chain run fills made, and a
 // chain run only ever takes out what made names.
 import { downstream } from './wire-rules.js';
 
@@ -66,15 +66,22 @@ export function sourceStamps(wires, frameId, frames, stampOf) {
 }
 
 // ---- an image frame: the layers a chain run landed, and taking out the last run's ----
-// The layers that are new since `before` (a Set of layer names): a run's results, by the label they land with
+// Layers are known by their key (l.key): a layer's name is its picture's file name, which a duplicated or pasted copy
+// shares, so a name never says which layer a run made. A `made` entry from before keys were recorded (a file name) matches
+// no key, so it takes nothing out.
+// The keys of the layers that are new since `before` (a Set of the keys and names there were then: a layer counts as
+// there if either is in it), with the label a run's results land with. A new layer with no key yet is not counted.
 export function freshLayers(before, layers, label = null) {
-  return (layers || []).filter((l) => l && !l.maskOf && !before.has(l.name) && (label == null || l.label === label)).map((l) => l.name);
+  return (layers || []).filter((l) => l && !l.maskOf && l.key && !before.has(l.key) && !before.has(l.name)
+    && (label == null || l.label === label)).map((l) => l.key);
 }
-// The layers less those named (and the masks on them). Returns { layers, removed: how many went }
-export function withoutLayers(layers, names) {
-  const gone = new Set(names || []), list = layers || [];
-  const keys = new Set(list.filter((l) => !l.maskOf && gone.has(l.name)).map((l) => l.key).filter(Boolean));
-  const kept = list.filter((l) => !(!l.maskOf && gone.has(l.name)) && !(l.maskOf && keys.has(l.maskOf)));
+// What `before` holds for these layers: each one's key and name
+export const layerMarks = (layers) => new Set((layers || []).flatMap((l) => [l?.key, l?.name]).filter(Boolean));
+// The layers less those with these keys (and the masks on them). Returns { layers, removed: how many went }
+export function withoutLayers(layers, keys) {
+  const gone = new Set((keys || []).filter(Boolean)), list = layers || [];
+  const out = (l) => !l.maskOf && l.key && gone.has(l.key);
+  const kept = list.filter((l) => !out(l) && !(l.maskOf && gone.has(l.maskOf)));
   return { layers: kept, removed: list.length - kept.length };
 }
 

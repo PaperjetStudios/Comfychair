@@ -2103,9 +2103,6 @@ body > .undo-dock { position: fixed; z-index: 57; top: 8px; left: 50%; transform
 .obj-slot-plus { font-size: 32px; color: var(--muted); }
 .obj-slot-bar { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 4px; padding-top: 4px; font-size: var(--fs-sm); }
 
-/* a media-library card's 🗑 (media.js withMediaDelete) */
-.card-del { position: absolute; top: 4px; right: 4px; padding: 2px 6px; opacity: .85; }
-
 /* Mark views */
 .mv-marks { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; }
 .mv-mark { position: relative; aspect-ratio: 2 / 3; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: #000; }
@@ -2325,6 +2322,8 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
 .props-ratio.on { color: var(--accent); border-color: var(--accent); }
 .props-res, .props-unit { color: var(--muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
 .props-pane .vid-xform { display: flex; flex-direction: column; gap: 8px; }
+/* the size picker's own typed sides (size-picker.js, a frame's Resolution): Width | Height */
+.size-custom.size-sides { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 /* a live image frame: the editor's stage fills the frame (viewer, then its size line / animation bar) */
 .frame-mount { display: grid; grid-template-rows: minmax(0, 1fr); }
 .frame-mount > .editor-stage { display: grid; grid-template-rows: minmax(0, 1fr) auto; height: 100%; min-height: 0; padding: 0; gap: 0; }
@@ -2342,9 +2341,9 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
 .make-batch { display: flex; align-items: center; gap: 4px; color: var(--muted); }
 .make-batch input { width: 4em; }
 /* the run strip (run-strip.js): the sampler preview and the step line, on the table whichever pane is open */
-.run-strip { position: fixed; left: 12px; bottom: 12px; z-index: 40; width: min(300px, calc(100vw - 24px)); display: none; flex-direction: column; gap: 4px; padding: 6px 8px;
+.run-strip { position: fixed; left: 12px; bottom: 92px; z-index: 40; width: min(300px, calc(100vw - 24px)); display: none; flex-direction: column; gap: 4px; padding: 6px 8px;
   background: var(--panel, #1b1b1f); border: 1px solid var(--line, #333); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.35); pointer-events: none; }
-body:has(#tab-table.active) .run-strip:not(.hidden) { display: flex; }
+body:has(#tab-table.active, #tab-table.live-host) .run-strip:not(.hidden) { display: flex; }   /* (a live frame takes .active from the table tab) */
 .run-strip-view { width: 100%; max-height: 160px; object-fit: contain; border-radius: 4px; background: #000; }
 .run-strip-view.hidden { display: none; }
 .run-strip-bar { height: 3px; width: 0; border-radius: 2px; background: var(--accent); transition: width .2s; }

@@ -276,6 +276,22 @@ class Tables(unittest.TestCase):
         self.put("tables", "t2", {"v": 1, "frames": fr})
         self.assertNotIn("wires", self.c.post("/api/store/tables/t2/duplicate", params=q).json()["payload"])
 
+    def test_duplicate_gives_copies_no_inputs_no_ran_and_wired_on_the_copied_wires(self):
+        q = {"project_id": self.pid}
+        make = {"template": "t", "inputs": ["in/pick.png"], "held": [{"name": "in/w.png", "gen": 4}],
+                "ran": {"at": 1, "sources": {"w1": "s"}, "made": ["k1"]}, "wired": {"img": "w1", "img2": "w9", "keep": False}}
+        fr = [{"id": "fa", "kind": "note", "text": "a"}, {"id": "fb", "kind": "note", "text": "b", "make": make}]
+        self.put("tables", "t1", {"v": 1, "frames": fr, "wires": [{"id": "w1", "from": "fa", "to": "fb", "kind": "image", "n": 1, "on": True}]})
+        t2 = self.c.post("/api/store/tables/t1/duplicate", params=q).json()["payload"]
+        m = t2["frames"][1]["make"]
+        self.assertEqual(m["inputs"], [])
+        self.assertNotIn("ran", m)
+        self.assertNotIn("held", m)
+        self.assertEqual(m["wired"], {"img": t2["wires"][0]["id"], "keep": False})   # w9 was never a wire: its field is freed
+        self.assertEqual(m["template"], "t")
+        orig = self.c.get("/api/store/tables/t1", params=q).json()["payload"]["frames"][1]["make"]
+        self.assertEqual(orig, make)   # the original keeps all of it
+
     def test_ownership_409_is_detail_without_doc_and_story_is_not_a_frame_doc(self):
         q = {"project_id": self.pid}
         self.put("tables", "t1", {"frames": [], "story": "s1"})

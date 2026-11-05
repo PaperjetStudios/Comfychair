@@ -98,7 +98,8 @@ async def video_histogram(body: dict = Body(...)):
 
 @router.post("/api/video/render")
 async def video_render(body: dict = Body(...)):
-    """Render the Video tab's timeline ({tracks, items, width, height, fps}) into a new video in History."""
+    """Render the Video tab's timeline ({tracks, items, width, height, fps}) into a new video in History. cache: true makes it a
+    table frame's cached render for a wire, left out of the History listing (params.cache)."""
     if not imageprep.ffmpeg_available():
         raise HTTPException(400, "ffmpeg isn't installed (sudo apt install ffmpeg)")
     tracks = {t["id"]: t for t in body.get("tracks") or []}
@@ -129,6 +130,8 @@ async def video_render(body: dict = Body(...)):
                   "fps": body.get("fps") or "first clip's", "clips": sources}
         if scenes:  # 3D compositions in it (live-linked scenes, rendered at export)
             params["scenes"] = scenes
+        if body.get("cache") is True:  # a table frame's cached render for a wire (frame.render): reachable by id, never listed (db.py)
+            params["cache"] = True
         if isinstance(body.get("tab"), dict):  # which saved video edit (a video-tabs document) this came from
             params["edit_tab"] = {"id": str(body["tab"].get("id") or "")[:64], "name": str(body["tab"].get("name") or "")[:120]}
         parent = {"generation": sources[0]["generation"], "index": sources[0]["index"], "frame": None} if sources else None

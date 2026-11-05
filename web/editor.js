@@ -8,7 +8,7 @@ import { landOwed } from './imagetools.js';
 import { putStill } from './table-frames.js';
 import { registerUndo } from './undo-dock.js';
 import { isLive, liveFrame } from './live.js';
-import { dropGoneMain, liveMain, setMain } from './frame-main.js';
+import { liveMain, setMain } from './frame-main.js';
 import { registerProps, propsChanged } from './props-panel.js';
 
 export { ASPECTS, FULL, aspectCrop, cropSpan, openCrop } from './editor-engine.js';
@@ -163,7 +163,7 @@ const ED = createEditor({
   canvas: ED_EL.canvas, empty: ED_EL.empty, size: ED_EL.size, anim: ED_EL.anim, panel: ED_EL.panel,
   initial: store.get(SEEDED, false) ? {} : store.get('deck.editor', {}),
   active: () => (ED_EL.active ? ED_EL.active() : ED_EL.host.classList.contains('active')),
-  onChange: () => { tabs.changed(); stillSoon(); dropGoneMain('image', ED.E.tab?.id, ED.E.layers.filter((l) => !l.maskOf).map((l) => l.key)); },   // the tab saves itself shortly and its still follows (a deleted main source unpins)
+  onChange: () => { tabs.changed(); stillSoon(); },   // the tab saves itself shortly and its still follows (a deleted main source stays pinned: mainOf finds nothing until Undo brings it back)
   // the live table frame's main source (frame-main.js): { id: the pinned layer's key } | null off the table
   main: () => liveMain('image', edTab()),
   setMain: (key) => { const m = liveMain('image', edTab()); if (m) setMain(m.frame.id, key).catch((e) => toast(e.message, true)); },

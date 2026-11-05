@@ -1,5 +1,5 @@
 import { h, api, toast, openSheet, closeSheet, button, section, linkBtn, chip, hint, info, setIcon } from './ui.js';
-import { S, inputUrl, previewUrl, switchTab, thumbUrl } from './core.js';
+import { S, listedRun, inputUrl, previewUrl, switchTab, thumbUrl } from './core.js';
 import { askMaxMp, genLabel } from './media.js';
 import { blenderFile, onlyWhereBlender, openInBlender } from './blender.js';
 import { renderFields, selectTemplate, setVal } from './generate.js';
@@ -50,7 +50,7 @@ export function pickCompare(g, i) {
   const t = S.templates.find((x) => x.id === g.template);
   const made = (t?.fields || []).filter((f) => f.kind === 'image' && typeof g.params[f.key] === 'string' && g.params[f.key])
     .map((f) => ({ thumb: thumbUrl(g.params[f.key], 240), side: { o: { url: inputUrl(g.params[f.key]), kind: 'image' }, label: f.label || 'Input picture' }, name: f.label || 'Input' }));
-  const takes = [...S.history.values()].filter((x) => x.id !== g.id && x.status === 'done' && x.project_id === g.project_id)
+  const takes = [...S.history.values()].filter((x) => x.id !== g.id && x.status === 'done' && x.project_id === g.project_id && listedRun(x))
     .sort((a, b) => b.id - a.id)
     .flatMap((x) => x.outputs.filter((y) => kindOf(y) === k).slice(0, 1).map((y) => ({ thumb: previewUrl(y.url, 240), side: { o: y, label: genLabel(x) }, name: genLabel(x) })))
     .slice(0, 24);

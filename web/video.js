@@ -32,7 +32,7 @@ import { laneAbove } from './maps.js';
 import { mapsSection } from './video-maps.js';
 import { emptyVideo, videoTracks } from './empty-docs.js';
 import { isLive, liveFrame } from './live.js';
-import { dropGoneMain, liveMain, setMain } from './frame-main.js';
+import { liveMain, setMain } from './frame-main.js';
 import { registerProps, propsChanged, propsRoot } from './props-panel.js';
 export { emptyVideo };
 
@@ -94,7 +94,7 @@ let vtp = null;   // the transport bar (playback.js)
 const ensureTabs = () => tabs.ready();
 
 // the timeline changed: save it (the tab flushes ~1 s later, or at once on Export / leaving) and make it an undo step
-function persistTimeline() { tabs?.changed(); HIST.mark(); syncUndo(); dropGoneMain('video', tabs?.active?.id, V.items.map((i) => i.id)); }   // (a deleted main source unpins)
+function persistTimeline() { tabs?.changed(); HIST.mark(); syncUndo(); }   // (a deleted main source stays pinned: mainOf finds nothing until Undo brings it back)
 // the table frame's main source clip (frame-main.js): { frame, id } | null off the table
 const pinNow = () => liveMain('video', tabs?.active?.id);
 addEventListener('table:frame-field', (e) => { if (e.detail?.keys?.includes('main') && e.detail.frame?.doc && e.detail.frame.doc === tabs?.active?.id) renderTimeline(); });
@@ -1572,7 +1572,7 @@ const editAdapter = {
   empty: emptyVideo,   // (markers: none until one is added; migrate and load give [])
   migrate: migrateEdit,
   dump: () => ({ tracks: V.tracks, items: V.items, size: V.size, fps: V.fps, ...(V.range && { range: V.range }), ...(V.markers?.length && { markers: V.markers }) }),
-  load(p, doc) {
+  load(p, doc, { remote = false } = {}) {
     HIST.hold(() => {   // (what loading writes is no edit)
       vidPause();
       for (const it of p.items || []) if (it.fx?.busy && !FXRUN.n) it.fx.busy = null;   // (a render the page was closed on)
@@ -1581,9 +1581,10 @@ const editAdapter = {
       WA.only = true; WA.sync();
       renderTimeline(); renderVideoPanel(); syncMedia(); requestDraw(); COMP.refresh();
     });
-    // another edit: its own history; the same one saved elsewhere: the steps stay (they find clips by id)
+    // another edit, or this one as saved elsewhere (remote: a step put back would undo that save): a fresh history; this
+    // edit opened again by this page: the steps stay (they find clips by id)
     const id = doc?.id ?? null;
-    if (id !== histDoc) { histDoc = id; HIST.clear(); } else HIST.hold(() => HIST.mark());
+    if (id !== histDoc || remote) { histDoc = id; HIST.clear(); } else HIST.hold(() => HIST.mark());
     syncUndo();
   },
 };
@@ -1717,7 +1718,7 @@ function wireOnce() {
   VD.load = h('span', { class: 'hint' });
   vtp = transport({ playing: () => V.playing, play: vidPlay, pause: vidPause, seek: vidSeek, t: () => V.t, len: seqEnd },
     { step: { by: () => 1 / fpsNow(), label: 'one frame' }, fps: fpsNow, loop: { get: () => V.loop, set: (on) => { V.loop = on; store.set('deck.video.loop', on); } },
-      area: WA, keys: keyJumps(() => [...clipKeyTimes(TL, TL.selItem() ? [TL.selItem()] : V.items), ...V.markers.map((m) => m.t)]), extra: [button('📷 Save frame', snapshotFrame, { title: 'Save this frame as an image' }), VD.load] });
+      area: WA, keys: keyJumps(() => [...clipKeyTimes(TL, TL.selItem() ? [TL.selItem()] : V.items), ...V.markers.map((m) => m.t)]), extra: [button([icon('camera'), 'Save frame'], snapshotFrame, { title: 'Save this frame as an image' }), VD.load] });
   // Premiere-ish keys while the Video engine is on show (playback.js: Space, arrows, Home / End; the timeline's own:
   // timeline-keys.js through TL.keys, Ctrl+Z / Ctrl+Shift+Z among them)
   const tk = TL.keys();

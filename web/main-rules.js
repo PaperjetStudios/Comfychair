@@ -8,8 +8,8 @@
 //   mainOf(frame, doc)          the pinned layer / item in doc (a payload, or { payload }), or null
 //   mainName(frame, doc)        the words for it ("Main: <name>"), or null
 //   plainLayer(l, layers)       a layer that passes straight through as its own file (input name), else null
-//   keepMain(made, frame, doc)  made (what a chain run landed: layer names / item ids) less the pinned one: never removed
-//   withoutMade(doc, made)      the payload less what made names (an image: those layers and their masks; else the items)
+//   keepMain(made, frame, doc)  made (what a chain run landed: layer keys / item ids) less the pinned one: never removed
+//   withoutMade(doc, made)      the payload less what made names (an image: the layers with those keys and their masks; else the items)
 //   pinStamp(frame)             what frame.main adds to the frame's content stamp ('' when unpinned)
 import { withoutLayers } from './chain-rules.js';
 
@@ -49,7 +49,7 @@ export function keepMain(made, frame, doc) {
   const m = mainOf(frame, doc);
   if (!m) return list;
   const isLayer = frame.kind === 'image' || (frame.kind == null && Array.isArray(payloadOf(doc)?.layers));
-  const id = isLayer ? m.name : m.id;
+  const id = isLayer ? m.key : m.id;
   return list.filter((x) => x !== id);
 }
 

@@ -199,6 +199,9 @@ async def put_doc(kind: str, did: str, body: dict = Body(...), project_id: int |
                        if isinstance(f, dict) and f.get("doc") == fdoc and f.get("kind") in FRAME_DOC_KINDS), None)
             if fk:
                 storage.stash_render(_dir(fk, project_id, scope), fdoc, r)
+        for f in payload.get("frames") or []:   # (a frame back on a table with its render: that render is wanted again)
+            if isinstance(f, dict) and isinstance(f.get("doc"), str) and f.get("kind") in FRAME_DOC_KINDS and f.get("render"):
+                storage.unstash_render(_dir(FRAME_DOC_KINDS[f["kind"]], project_id, scope), f["doc"])
         await _drop_renders(drop)
     return doc
 
@@ -343,7 +346,7 @@ async def restore_doc(kind: str, did: str, project_id: int | None = None, scope:
     doc["updated"] = time.time()
     _write(path, doc)
     src.unlink()
-    (d / ".trash" / f"{did}.render.json").unlink(missing_ok=True)   # (its frame's cached render is wanted again)
+    # (a render stashed for this document stays until a table frame points at it again: put_doc; else it goes with the purge)
     await _tell(kind, did, doc["rev"], project_id, scope)
     if kind == "tables" and scope != "global":   # only the docs trashed together with this table
         for k, i in _owned_docs(doc):
@@ -395,13 +398,20 @@ async def duplicate_table(did: str, project_id: int | None = None, scope: str | 
                 f["doc"] = made[(k, f["doc"])]
             if ("vfx-tabs", f.get("vfx")) in made:
                 f["vfx"] = made[("vfx-tabs", f["vfx"])]
+    wire_ids = {}   # old wire id -> new wire id, so a frame's re-pointed fields (frame.make.wired) follow their wires
     if isinstance(payload.get("wires"), list):
         wires = []
         for w in payload["wires"]:
             if not isinstance(w, dict) or idmap.get(w.get("from")) is None or idmap.get(w.get("to")) is None:
                 continue
-            wires.append({**w, "id": uuid.uuid4().hex[:12], "from": idmap[w["from"]], "to": idmap[w["to"]]})
+            nw = {**w, "id": uuid.uuid4().hex[:12], "from": idmap[w["from"]], "to": idmap[w["to"]]}
+            if isinstance(w.get("id"), str):
+                wire_ids[w["id"]] = nw["id"]
+            wires.append(nw)
         payload["wires"] = wires
+    for f in payload.get("frames") or []:
+        if isinstance(f, dict) and isinstance(f.get("make"), dict):
+            f["make"] = _copied_make(f["make"], wire_ids)
     new = uuid.uuid4().hex[:12]
     doc = {"id": new, "kind": "tables", "name": f"{src.get('name') or did} copy"[:120],
            "order": max((x.get("order", 0) for x in _docs(d)), default=-1) + 1, "rev": 1, "updated": now, "payload": payload}
@@ -410,6 +420,19 @@ async def duplicate_table(did: str, project_id: int | None = None, scope: str | 
         await _tell(k, i, 1, project_id, scope)
     await _tell("tables", new, 1, project_id, scope)
     return doc
+
+
+def _copied_make(make: dict, wire_ids: dict) -> dict:
+    """A copied frame's Make settings: the pictures its slots copied in (inputs) and the wire pictures its runs hold (held)
+    stay the original's, so the copy lists none (its settings may still name them; it never deletes them); it has run
+    nothing yet (no ran: a chain run never takes the original's results); its re-pointed fields follow the copied wires
+    (a wire not copied frees its field)."""
+    m = {k: v for k, v in make.items() if k not in ("ran", "held")}
+    m["inputs"] = []
+    if isinstance(make.get("wired"), dict):
+        m["wired"] = {k: (False if v is False else wire_ids[v]) for k, v in make["wired"].items()
+                      if v is False or (isinstance(v, str) and v in wire_ids)}
+    return m
 
 
 @router.post("/{kind}/reorder")

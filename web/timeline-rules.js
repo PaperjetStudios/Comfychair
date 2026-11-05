@@ -162,19 +162,22 @@ export function trim(d, ids, g, side, dt, { ripple = false, ...opts } = {}, o) {
       if (!isStill(it, o) && it.dur) k = Math.min(k, it.dur - b.out);
     }
   }
+  const ends = [];   // (ripple: each trimmed clip's old end and track; what starts at or after it follows the change)
   for (const it of its) {
-    const b = g.get(it.id), oldEnd = b.at + (b.out - b.in);
+    const b = g.get(it.id);
+    ends.push({ id: it.id, track: b.track, end: b.at + (b.out - b.in) });
     if (side === 'l') {
       if (ripple) { if (isStill(it, o)) it.out = r6(b.out - k); else it.in = r6(b.in + k); it.at = b.at; }
       else { it.at = r6(b.at + k); if (isStill(it, o)) it.out = r6(b.out - k); else it.in = r6(b.in + k); }
     } else it.out = r6(b.out + k);
-    if (ripple) {
-      const shift = side === 'l' ? -k : k;
-      for (const x of d.items) {
-        const bx = g.get(x.id);
-        if (x === it || its.includes(x) || !bx || bx.track !== b.track || bx.at < oldEnd - EPS) continue;
-        x.at = r6(Math.max(0, bx.at + shift));
-      }
+  }
+  if (ripple) {   // every clip on a trimmed track moves by the change of each trimmed clip that ended before it (picked ones too)
+    const per = side === 'l' ? -k : k;
+    for (const x of d.items) {
+      const bx = g.get(x.id);
+      if (!bx) continue;
+      const n = ends.filter((e) => e.id !== x.id && e.track === bx.track && bx.at >= e.end - EPS).length;
+      if (n) x.at = r6(Math.max(0, bx.at + n * per));
     }
   }
   return r6(k);
@@ -299,8 +302,11 @@ export function paste(d, clip, t, o, { insert = true } = {}) {
       const mine = made.filter((x) => x.track === track), old = d.items.filter((x) => x.track === track);
       const hits = mine.some((p) => old.some((x) => x.at < endOf(p, o) - EPS && endOf(x, o) > p.at + EPS));
       if (!hits) continue;
+      // (a clip under t0 is split there; one whose edge is too near t0 to split moves whole, so nothing overlaps)
       const cut = old.find((x) => x.at < t0 - EPS && endOf(x, o) > t0 + EPS);
-      if (cut) splitAt(d, [cut.id], t0, o);
+      // (splitAt with no clip of its ids under t splits every clip there, so only a clip it can split is handed to it)
+      if (cut && t0 > cut.at + 0.02 && t0 < endOf(cut, o) - 0.02) splitAt(d, [cut.id], t0, o);
+      else if (cut) cut.at = r6(t0);
       const room = Math.max(...mine.map((p) => endOf(p, o))) - t0;
       for (const x of d.items) if (x.track === track && x.at >= t0 - EPS) x.at = r6(x.at + room);
     }
@@ -352,6 +358,11 @@ export function exportTracks(tracks) {
     return out;
   });
 }
+
+// The tracks as /api/video/render takes them: exportTracks (solo folded in) cut to id, kind, hidden, muted
+export const renderTracks = (tracks) => exportTracks(tracks || []).map(({ id, kind, hidden, muted }) => ({ id, kind, hidden, muted }));
+// What a sound mix takes from a pasted or dropped clip: a sound or a clip's sound, never a still
+export const soundTakes = (it) => it?.kind !== 'image';
 
 // ---- markers: d.markers [{ t, label }] kept in time order; addressed by index ----
 const sortMarkers = (d) => d.markers.sort((a, b) => a.t - b.t);

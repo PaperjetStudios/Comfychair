@@ -42,15 +42,14 @@ import { editDoc, flushDoc, frameStamp, freshStamps, stillOf } from './table-fra
 import { DOC_KIND, nextBeside, toStage } from './table-model.js';
 import * as Table from './table.js';
 import { LANDS, canvasRect, carryWords, familiesOf, frameImageField, frameSize, makeFrames, makeTarget, noteText, pickTemplate, isOwnSlot, repointable, runValuesOf, seedsAfter,
-  selfPicked, settingsFor, settingsPayload, sizePair, templatesFor, wireFields, withClip } from './make-rules.js';
+  addHeld, selfPicked, settingsFor, settingsPayload, settleHeld, sizePair, templatesFor, wireFields, withClip } from './make-rules.js';
 import { downstream, fieldKind, isFrameWire, wireLabel } from './wire-rules.js';
-import { freshLayers, placeResults, sourceStamps, withSoundItem, withoutLayers } from './chain-rules.js';
+import { freshLayers, layerMarks, placeResults, sourceStamps, withSoundItem, withoutLayers } from './chain-rules.js';
 import { icon } from './icons.js';
 import { mountRunStrip } from './run-strip.js';
 import { frameAudio, frameImage, frameSource, frameStill, frameVideo } from './frame-source.js';
 import { keepMain, mainName, mainOf } from './main-rules.js';
 
-const HELD = new Set();   // wire pictures a queued run has yet to read: settleInputs leaves them be
 const P = { fresh: [], host: null, frames: [], table: null, key: null, st: null, els: null, batchIn: null };
 const KIND_WORD = { none: 'a new frame', image: 'this picture', video: 'this video', scene: 'this 3D frame', sound: 'this sound frame' };
 const SHOT_KINDS = new Set(['image', 'video', 'boxes', 'seed', 'mask']);   // a run's own content, not a setting (gentabs.js)
@@ -139,7 +138,8 @@ addEventListener('deck:batch', () => { if (P.batchIn && document.activeElement !
 // where the fields draw, on this panel's own settings, and what they show differently here
 function target(kind, frame) {
   return { host: P.els.fields, notes: P.els.notes, basics: P.els.basics, scope: P.host, state: P.st,
-    replace: (f) => (kind === 'image' && frame && f === frameImageField(P.st.tpl) ? framePictureEl(frame)
+    // (an image frame's own picture slot: the plugged input's chip when a wire fills it, as when the frame is empty; else the frame)
+    replace: (f) => (kind === 'image' && frame && f === frameImageField(P.st.tpl) ? wiredEl(kind, frame, f) || framePictureEl(frame)
       : f.key === mainPromptKey(P.st.tpl) ? notePromptEl() : wiredEl(kind, frame, f)),
     imageButtons: (f, set) => (kind === 'video' ? [button([icon('image'), 'Pick a frame'], () => pickFrame(f, set))] : []) };
 }
@@ -150,11 +150,13 @@ function keep(kind, frame) {
   if (!st?.tpl) return;
   store.set(`deck.make.tpl.${kind}`, st.tpl.id);
   if (!frame) { store.set('deck.make.none', settingsPayload(st)); return; }
-  frame.make = settingsPayload(st, { ...settleInputs(frame, st), ...ranOf(frame) });
+  frame.make = settingsPayload(st, { ...settleInputs(frame, st), ...ranOf(frame), ...heldOf(frame) });
   frameSaved();
 }
 // what the frame's last run read and made (frame.make.ran): kept through a change of its settings
 const ranOf = (frame) => (frame?.make?.ran ? { ran: frame.make.ran } : {});
+// the wire pictures its queued runs have yet to read (frame.make.held, make-rules settleHeld): kept through a change of its settings
+const heldOf = (frame) => (frame?.make?.held?.length ? { held: frame.make.held } : {});
 
 // The pictures Pick a frame copied in for this frame (frame.make.inputs, saved with it): one stays while a slot still uses it, and goes when
 // the slot takes another picture or is cleared. What is left when the frame itself is deleted goes with Settings → Projects → Clean up leftovers
@@ -162,7 +164,7 @@ const ranOf = (frame) => (frame?.make?.ran ? { ran: frame.make.ran } : {});
 function settleInputs(frame, st) {
   const used = JSON.stringify(st.values || {});
   const all = [...new Set([...(frame.make?.inputs || []), ...P.fresh.splice(0)])];
-  const kept = (n) => used.includes(JSON.stringify(n)) || HELD.has(n);
+  const kept = (n) => used.includes(JSON.stringify(n));
   for (const n of all) if (!kept(n)) dropInput(n);
   return { inputs: all.filter(kept) };
 }
@@ -318,15 +320,17 @@ function drawWires(kind, frame) {
       rows.push(h('div', { class: 'make-wire-row' }, h('span', {}, `${wireWords(w)} is off for ${f?.label || key}`),
         button('Turn on', () => Table.setTableWire(w.id, { on: true }), { cls: 'small' })));
     }
-    const opts = { ownPicture: hasPicture(kind, frame) };
+    const opts = { ownPicture: hasPicture(kind, frame) }, offered = new Set();
     for (const f of selfPicked(t, kind, inputs, P.st.wired, opts)) {
       const w = repointable(f, inputs, map)[0], mine = isOwnSlot(t, kind, f, P.st.wired, opts);
+      if (w) offered.add(w.id);
       if (w) rows.push(h('div', { class: 'make-wire-row' }, h('span', {}, mine ? `${f.label} is this frame's picture` : `${f.label} is picked here`),
         button(mine ? `Use ${wireLabel(w)} here` : `Use ${wireLabel(w)}`, () => setWired(kind, frame, f.key, w.id), { cls: 'small' })));
     }
-    if (spare.length) {
-      rows.push(h('div', { class: 'make-wire-row' }, h('span', {}, `Not used: ${spare.map(wireWords).join(', ')}`),
-        info(`This template has no slot of that kind (${[...new Set(spare.map((w) => wireLabel(w).replace(/ \d+$/, '').toLowerCase()))].join(', ')}), or its slots are taken by the other inputs. Pick another template, or unplug it.`)));
+    const unused = spare.filter((w) => !offered.has(w.id));   // (one offered by a "Use … here" button above is not listed again)
+    if (unused.length) {
+      rows.push(h('div', { class: 'make-wire-row' }, h('span', {}, `Not used: ${unused.map(wireWords).join(', ')}`),
+        info(`This template has no slot of that kind (${[...new Set(unused.map((w) => wireLabel(w).replace(/ \d+$/, '').toLowerCase()))].join(', ')}), or its slots are taken by the other inputs. Pick another template, or unplug it.`)));
     }
   }
   if (frame) rows.push(...chainRows(frame));
@@ -422,21 +426,53 @@ async function resolveWires(kind, frame, t, st, values, made) {
   }
   return done;
 }
-// the pictures made for a queued run: tracked on the frame (frame.make.inputs, so settleInputs removes them later) and dropped as
-// soon as every run has finished with them
-// (each name has one owner from here: this hold drops it, settleInputs leaves a HELD one be, and once let go it is off the
-// frame's list, so nothing drops it twice. A frame no longer on the open table, its table switched meanwhile, is not written:
-// a change to a frame object the open table doesn't hold would only save the open table for nothing)
+// the pictures made for a queued run: saved on the frame (frame.make.held: [{ name, gen }], make-rules addHeld / settleHeld) and
+// dropped once every run that reads them has finished (done, failed, stopped or gone), never by what a slot shows. Settled
+// here when the runs end, and again whenever the frame's table shows it (settleHeldOf), so a reload mid-run loses nothing.
+// A frame no longer on the open table, its table switched meanwhile, is not written here: its table settles it when it opens.
 function holdInputs(frame, names, gens) {
   if (!names.length) return;
-  names.forEach((n) => HELD.add(n));
   const cur = ofOpenTable(frame);
-  if (cur) { cur.make = { ...(cur.make || {}), inputs: [...new Set([...(cur.make?.inputs || []), ...names])] }; frameSaved(); }
+  if (cur) { cur.make = { ...(cur.make || {}), held: addHeld(cur.make?.held, names, gens) }; frameSaved(); }
+  else names.forEach((n) => HOLDING.add(n));   // (not saved anywhere: this page lets it go when its runs end)
   Promise.allSettled(gens.map((g) => waitGen(g.id))).then(() => {
-    names.forEach((n) => { if (HELD.delete(n)) dropInput(n); });
     const now = ofOpenTable(frame);
-    if (now?.make?.inputs?.some((n) => names.includes(n))) { now.make = { ...now.make, inputs: now.make.inputs.filter((n) => !names.includes(n)) }; frameSaved(); }
+    if (now) return settleHeldOf(now);
+    names.forEach((n) => { if (HOLDING.delete(n)) dropInput(n); });
   });
+}
+const HOLDING = new Set();   // wire pictures of a run whose frame wasn't on the open table when it was queued
+// A frame's held pictures settled by their runs' status: what no waiting run reads goes. Returns once done.
+const SETTLING = new Set();
+async function settleHeldOf(frame) {
+  const held = frame?.make?.held;
+  if (!held?.length || SETTLING.has(frame.id)) return;
+  SETTLING.add(frame.id);
+  try {
+    const status = new Map();
+    for (const gen of new Set(held.map((x) => x.gen))) {
+      const g = S.history.get(gen);
+      if (g?.status && g.status !== 'queued' && g.status !== 'running') { status.set(gen, g.status); continue; }
+      try { status.set(gen, (await api(`/api/generations/${gen}`, { busy: false }))?.status || null); }
+      catch (e) { status.set(gen, e?.status === 404 || /not found/i.test(e?.message || '') ? 'gone' : null); }
+    }
+    const r = settleHeld(held, (gen) => status.get(gen) ?? null);
+    if (!r.drop.length) return;
+    r.drop.forEach(dropInput);
+    const now = ofOpenTable(frame);
+    if (now?.make) {
+      const left = settleHeld(now.make.held, (gen) => status.get(gen) ?? null).held;   // (what was added meanwhile stays)
+      now.make = { ...now.make, held: left };
+      if (!left.length) delete now.make.held;
+      frameSaved();
+    }
+  } finally { SETTLING.delete(frame.id); }
+}
+// every frame of the open table with held pictures (a reload mid-run: their runs may have ended while the page was away)
+function settleTable() {
+  let frames = [];
+  try { frames = Table.tableFrames() || []; } catch { return; }
+  for (const f of frames) if (f?.make?.held?.length) settleHeldOf(f).catch(() => {});
 }
 // The frame as the open table holds it now, or null when its table isn't the open one any more (a run settling after a
 // switch must never change the open table: its result reaches its own frame through that frame's document)
@@ -512,7 +548,7 @@ export async function runMake() {
 // One frame's run queued (null: nothing selected, new frames): its own picture and size, the wires into it resolved, the
 // pictures prepared (prepare(values, skip)), afterQ(gens, batch) once queued. What a failed step made is dropped here; the
 // picture sent is the caller's to drop if landing fails. Returns { gens, sent, values, stamps (what the wires read), before
-// (an image frame's layer names before the run, when asked: chain landing) }.
+// (an image frame's layer keys and names before the run, when asked: chain landing) }.
 async function queueOne({ kind, f, t, st, base, builder, batch, prepare, afterQ, layersBefore = false }) {
   let sent = null;
   const made = [];   // (inputs made for the wires into this frame)
@@ -534,7 +570,7 @@ async function queueOne({ kind, f, t, st, base, builder, batch, prepare, afterQ,
       wired.add(imgF.key);
     }
     await prepare(values, wired);
-    const before = layersBefore && kind === 'image' && f ? new Set((await layersOf(f)).map((l) => l.name)) : null;
+    const before = layersBefore && kind === 'image' && f ? layerMarks(await layersOf(f)) : null;   // (keys and names: chain-rules freshLayers)
     const gens = await queueRun({ template: t.id, values, batch, builder, timeout: 120000 });
     afterQ(gens, batch);
     holdInputs(f, made.splice(0), gens);
@@ -582,7 +618,7 @@ function settingsOf(f) {
   const t = templatesFor(S.templates, f.kind).find((x) => x.id === f.make?.template);
   if (!t) return null;
   const st = settingsFor(t, f.make);
-  st.save = () => { const cur = Table.frameById(f.id) || f; cur.make = settingsPayload(st, { ...(cur.make?.inputs ? { inputs: cur.make.inputs } : {}), ...ranOf(cur) }); frameSaved(); };
+  st.save = () => { const cur = Table.frameById(f.id) || f; cur.make = settingsPayload(st, { ...(cur.make?.inputs ? { inputs: cur.make.inputs } : {}), ...ranOf(cur), ...heldOf(cur) }); frameSaved(); };
   return st;
 }
 // pictures as their cropped copies, masks with the picture they were painted on (generate.js preparePictures, for these settings)
@@ -632,7 +668,7 @@ async function doneRuns(gens) {
   return ok;
 }
 // A run's results into its frame, resolving once they are there; replace: in place of what the last chain run made
-// (frame.make.ran.made, and nothing else). Returns what landed (layer names, item ids) where that can be told, else null.
+// (frame.make.ran.made, and nothing else). Returns what landed (layer keys, item ids) where that can be told, else null.
 async function landNow(kind, f, t, r, replace) {
   const old = replace ? f.make?.ran?.made || [] : [];
   if (kind === 'image') {
@@ -675,7 +711,7 @@ async function waitLayers(f, before, label, want) {
   }
   return names;
 }
-// the last chain run's layers out of the frame (and only those): from the open editor, else from the saved edit
+// the last chain run's layers (by key) out of the frame, and only those: from the open editor, else from the saved edit
 async function removeLayers(f, names) {
   if (!names.length) return;
   const eng = liveEng(f);
@@ -848,9 +884,10 @@ mountRunStrip();
 // ---------------------------------------------------------------------------
 // wiring: the selection on the table, a frame going live, leaving the table
 // ---------------------------------------------------------------------------
-addEventListener('table:select', (e) => { P.table = e.detail?.table || P.table; renderMake(P.host, e.detail?.frames || []); });
+addEventListener('table:select', (e) => { P.table = e.detail?.table || P.table; renderMake(P.host, e.detail?.frames || []); settleTable(); });
 addEventListener('table:live', (e) => { P.table = e.detail?.table || P.table; if (e.detail?.frame) renderMake(P.host, [e.detail.frame]); });
 addEventListener('table:unlive', () => { if (P.host) draw(); });
+addEventListener('table:open', () => setTimeout(settleTable, 0));   // (a table opened: its frames' held wire pictures settled)
 onNavigate((name) => {
   if (name === 'table') { if (P.host) draw(); return; }
   if (fieldsBorrowed()) { fieldTarget(null); if (S.tpl) renderFields(); }   // (another screen: the fields draw the Generate tab's own again)

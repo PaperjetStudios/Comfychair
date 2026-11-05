@@ -153,7 +153,10 @@ export function openSourcePicker(opts) {
   const capped = async (name, info2) => {
     if (!opts.maxMp) return { name, info: info2 };
     const r = await resizeInput(name, opts.maxMp);
-    return r.name === name ? { name, info: info2 } : { name: r.name, info: info2?.copied ? { ...r, copied: true } : r };
+    if (r.name === name) return { name, info: info2 };
+    // (a copy made for this pick, now resized: the full-size copy is nobody's, so it goes; the smaller one is the caller's)
+    if (info2?.copied) api(`/api/inputs?name=${encodeURIComponent(name)}`, { method: 'DELETE', busy: false }).catch(() => {});
+    return { name: r.name, info: info2?.copied ? { ...r, copied: true } : r };
   };
   const multi = !!opts.multi && limit > 1;
   const sel = multi ? (opts.sel ||= new Map()) : null;   // key -> item, in the order ticked
@@ -263,7 +266,7 @@ export function openSourcePicker(opts) {
     return framesFrom({ url, label, key: itemOf({ ...src, kind: 'video' }).key, make: async (_fr, f) => {
       const name = await grabFrame(src, { at: f.t, mp: mp() });
       const g = grabFrame.last;
-      return { name, info: { name, width: g?.width, height: g?.height } };
+      return { name, info: { name, width: g?.width, height: g?.height, copied: true } };   // (a fresh grab the caller owns)
     } });
   };
 
@@ -460,7 +463,7 @@ export function openSourcePicker(opts) {
     } catch (e) { toast(`Couldn't export the edit: ${e.message}`, true); }
   };
   const reopen = () => openSourcePicker(opts);
-  const webcam = button('📷 Camera', () => takePhoto({ back: reopen, onFile: async (f) => { await onFiles([f], 'camera'); if (multi) reopen(); } }),
+  const webcam = button([icon('camera'), 'Camera'], () => takePhoto({ back: reopen, onFile: async (f) => { await onFiles([f], 'camera'); if (multi) reopen(); } }),
     { cls: 'small hidden', title: 'Take a picture with the webcam' });
   if (isPic && desktop()) hasWebcam().then((y) => webcam.classList.toggle('hidden', !y));
   // a tap on Recent: what that item is now becomes what is wanted
@@ -620,7 +623,7 @@ export function openSourcePicker(opts) {
   const seq = openSheet(h('h3', {}, title), h('div', { class: 'picker-bar' }, [tabs, kindRow, h('span', { class: 'picker-break' }),
     isPic && currentEditReady() ? button('Current edit', useCurrentEdit, { cls: 'small primary', title: 'Export the picture open in the Image tab right now and use it' }) : null,
     fileButton('Upload…', onFiles, { accept, multiple: multi, cls: 'small primary' }),
-    isPic ? (desktop() ? webcam : fileButton('📷 Camera', (fs) => onFiles(fs, 'camera'), { accept: 'image/*', capture: 'environment' })) : null,
+    isPic ? (desktop() ? webcam : fileButton([icon('camera'), 'Camera'], (fs) => onFiles(fs, 'camera'), { accept: 'image/*', capture: 'environment' })) : null,
     isPic ? button('From a video link…', () => import('./clipimport.js').then((m) => m.openLinkStill({ back: reopen,
       onFrame: async (blob) => { await onFiles([new File([blob], 'link.png', { type: 'image/png' })], 'link'); if (multi) reopen(); } })),
     { cls: 'small', title: 'A frame from a YouTube (or other) video' }) : null,

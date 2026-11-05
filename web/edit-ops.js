@@ -31,6 +31,7 @@ import { isLive } from './live.js';
 import { DOC_KIND } from './table-model.js';
 import { OPS, opById, resultLabel } from './edit-rules.js';
 import * as W from './wire-rules.js';
+import { renderTracks } from './timeline-rules.js';
 import { exportGrade } from './adjust.js';
 import { ALPHA, BLANK, CANVAS, FRAME_KEYS, KEY as KEY_SET, NOT_SETUP, REFINE, SAM, boxesFromFind, buildRun, delogoBody, delogoRunBody, effectById, keyBody, matteBody,
   missingInput, needsOf, poseBody } from './vfx-rules.js';
@@ -640,6 +641,7 @@ async function runVfxWith(o, frame, opts, ctx, label) {
   }
   const parent = st.source?.generation != null ? { generation: st.source.generation, index: st.source.index || 0, frame: null } : null;
   const { results, ...kept } = st;
+  if (ctx.fresh?.includes(kept.first)) delete kept.first;   // (a copy made for this run goes once it is read: History never names it)
   const gens = await queueRun({ template: t.id, values, batch: n, parent, face: { kind: 'vfx', state: { ...kept, op: e.id } } });
   remember(frame, o.id, gens);
   return { gens, job: follow(gens, into, ctx, label) };
@@ -656,7 +658,7 @@ export function renderBody(frame, d) {
   if (items.some((it) => it.kind === 'scene')) throw new Error('Its 3D clips are drawn on the open frame: open it, then Render');
   return { project_id: S.project, tab: { id: frame.doc, name: d.name || frame.label },
     width: p.size?.[0], height: p.size?.[1], fps: p.fps || null,
-    tracks: (p.tracks || []).map(({ id, kind, hidden, muted }) => ({ id, kind, hidden, muted })),
+    tracks: renderTracks(p.tracks),   // (solo folded into hidden / muted, as the preview and the export have it)
     items: items.map((it) => ({ track: it.track, at: it.at, name: it.label, src: it.src, in: it.in, out: it.out ?? it.dur, x: it.x, y: it.y, scale: it.scale,
       fit: it.fit, rotation: it.rotation || 0, anchor_x: it.anchor?.x, anchor_y: it.anchor?.y, opacity: it.opacity, volume: it.volume, chans: it.chans || null,
       grade: exportGrade(it.adjust), fade_in: it.fadeIn, fade_out: it.fadeOut })) };

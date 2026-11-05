@@ -41,14 +41,14 @@ test('plainLayer: whole, unturned, opaque, no mask passes straight through; move
 });
 
 test('keepMain: a chain run never takes out the pinned layer or item', () => {
-  assert.deepEqual(keepMain(['in/b.png', 'in/z.png'], { kind: 'image', main: 'k2' }, img), ['in/z.png']);
-  assert.deepEqual(keepMain(['in/b.png'], { kind: 'image' }, img), ['in/b.png'], 'no pin: as it was');
+  assert.deepEqual(keepMain(['k2', 'kz'], { kind: 'image', main: 'k2' }, img), ['kz']);
+  assert.deepEqual(keepMain(['k2'], { kind: 'image' }, img), ['k2'], 'no pin: as it was');
   assert.deepEqual(keepMain(['c1', 'c2'], { kind: 'video', main: 'c1' }, vid), ['c2']);
   assert.deepEqual(keepMain(undefined, { kind: 'video', main: 'c1' }, vid), []);
 });
 
 test('withoutMade: the last chain run\'s results left out of what the frame shows (and their masks)', () => {
-  const p = withoutMade(img, ['in/b.png']);
+  const p = withoutMade(img, ['k2']);
   assert.deepEqual(p.layers.map((l) => l.key), ['k1'], 'the layer and its mask');
   assert.equal(img.layers.length, 3, 'the document itself is untouched');
   assert.deepEqual(withoutMade({ payload: vid }, ['c1']).items.map((i) => i.id), ['c2']);

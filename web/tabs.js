@@ -4,7 +4,7 @@
 // devices, and conflict handling. It never touches the panel's UI: it only calls adapter.load/dump.
 //
 //   const tabs = new TabSet({ kind: 'gen-tabs', host: $('#tab-generate'), scope: 'project', newName: (n) => `Tab ${n}`,
-//     adapter: { empty(), load(payload, doc), dump(), migrate?(payload), beforeLeave?(), refused?(r, tab) }, seed?(), onSwitch?(doc) });
+//     adapter: { empty(), load(payload, doc, { remote }), dump(), migrate?(payload), beforeLeave?(), refused?(r, tab) }, seed?(), onSwitch?(doc) });
 //     (refused: a save the server refused with a reason; the panel may mend its copy and return true, and it is saved again)
 //   (beforeLeave: awaited before the tab is saved and left, for writes the payload must name first)
 //   await tabs.start();   // when the panel first needs its tabs (it also reloads itself on project change)
@@ -188,9 +188,11 @@ export class TabSet {
     this.render();
     this.onSwitch?.(doc);
   }
-  apply(payload, doc) {
+  // remote: the document as saved somewhere else (another device, or a write that went round the open tab): the panel's
+  // load(payload, doc, { remote }) drops its undo steps, which were about the copy it had
+  apply(payload, doc, { remote = false } = {}) {
     this.loading = true;   // the panel's load() may fire its own change events; they aren't edits
-    try { this.adapter.load(payload, doc); } catch (e) { console.error(e); toast(`Couldn't show this tab: ${e.message}`, true); }
+    try { this.adapter.load(payload, doc, { remote }); } catch (e) { console.error(e); toast(`Couldn't show this tab: ${e.message}`, true); }
     finally { this.loading = false; }
   }
   upsert(m) {
@@ -330,7 +332,7 @@ export class TabSet {
         closeSheet();
         this.conflict = null; this.pendingName = null;
         Object.assign(tab, { rev: doc.rev, name: doc.name, order: doc.order }); this.upsert(doc);
-        this.apply(this.migrate(doc.payload), doc);
+        this.apply(this.migrate(doc.payload), doc, { remote: true });
         this.setDirty(false); this.render(); this.onSwitch?.(doc);
       }), button('Keep mine', () => {
         closeSheet();
@@ -364,7 +366,7 @@ export class TabSet {
             const doc = await api(this.url(a.id), { busy: false });
             if (ep === this.epoch && this.active === a && !this.dirty && !this.inflight && doc.rev > a.rev) {
               Object.assign(a, { rev: doc.rev, name: doc.name, order: doc.order });
-              this.apply(this.migrate(doc.payload), doc); this.onSwitch?.(doc);
+              this.apply(this.migrate(doc.payload), doc, { remote: true }); this.onSwitch?.(doc);
             }
           } catch { /* next update will do */ }
         }

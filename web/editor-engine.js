@@ -456,10 +456,10 @@ export function createEditor(cfg) {
   }
 
   // k: the size of the result as a multiple of the canvas (an export at 2× draws every layer twice as big: an upscaled layer's extra detail shows)
-  // skip: layer names left out (a chain rerun leaves out what its last run made: main-rules.js withoutMade)
+  // skip: layer keys left out (a chain rerun leaves out what its last run made: main-rules.js withoutMade)
   function composeEditor(target, clear = false, k = 1, { skip = null } = {}) {
     const gone = skip ? new Set(skip) : null;
-    const f = editorFrame(), vis = visibleLayers().filter((l) => !l.draft && !(gone && gone.has(l.name)));   // (an inpaint draft is not part of the picture until kept)
+    const f = editorFrame(), vis = visibleLayers().filter((l) => !l.draft && !(gone && l.key && gone.has(l.key)));   // (an inpaint draft is not part of the picture until kept)
     if (!f || !vis.length) return false;
     target.width = Math.round(f.w * k); target.height = Math.round(f.h * k);
     const ctx2 = target.getContext('2d');

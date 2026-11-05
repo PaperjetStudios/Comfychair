@@ -23,10 +23,16 @@ export function mountRunStrip(host = document.body) {
     view.classList.remove('hidden');
     raf = requestAnimationFrame(paintView);
   };
+  // a run's end line ("Finished in 4s", "Stopped after…", "Failed after…") stays a few seconds, as run.js keeps it, then the
+  // strip goes by itself (run.js clears its own line only on the next queue status, which may not come); no text: gone at once
+  let endT = 0;
+  const ENDED = /^(Finished|Stopped|Failed) /, END_MS = 6000;
   const copy = () => {
+    clearTimeout(endT); endT = 0;
     bar.style.width = srcBar.style.width || '0';
     text.textContent = srcText.textContent || '';
     strip.classList.toggle('hidden', !text.textContent);
+    if (ENDED.test(text.textContent)) endT = setTimeout(() => { if (ENDED.test(text.textContent)) strip.classList.add('hidden'); }, END_MS);
     if (!raf && text.textContent) raf = requestAnimationFrame(paintView);
   };
   copy();

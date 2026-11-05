@@ -24,7 +24,7 @@ import { resultActions } from './useas.js';
 import { fullScreen } from './layout.js';
 import { emptySound, soundTracks } from './empty-docs.js';
 import { setupsRow } from './setups.js';
-import { dropGoneMain, liveMain, setMain } from './frame-main.js';
+import { liveMain, setMain } from './frame-main.js';
 import { SOUND_VOICE, pick as pickKeys, soundMakerKey } from './setups-rules.js';
 import { registerProps, propsChanged, propsRoot } from './props-panel.js';
 export { emptySound };
@@ -64,7 +64,7 @@ let stp = null;   // the transport bar (playback.js)
 const ensureTabs = () => tabs.ready();
 // one choke point: every edit saves through persist(), which also marks an undo step (undo-history.js). System writes
 // (a measured length, a reload of the same document) go inside HIST.hold so they make none.
-const persist = () => { HIST.mark(); tabs?.changed(); dropGoneMain('sound', tabs?.active?.id, N.items.map((i) => i.id)); };   // (a deleted main source unpins)
+const persist = () => { HIST.mark(); tabs?.changed(); };   // (a deleted main source stays pinned: mainOf finds nothing until Undo brings it back)
 // the table frame's main source item (frame-main.js): { frame, id } | null off the table
 const pinNow = () => liveMain('sound', tabs?.active?.id);
 addEventListener('table:frame-field', (e) => { if (e.detail?.keys?.includes('main') && e.detail.frame?.doc && e.detail.frame.doc === tabs?.active?.id) renderTimeline(); });
@@ -101,7 +101,7 @@ const TL = timeline(N, { el: () => SD.timeline, headW: HEAD_W, minLen: MIN_LEN, 
   changed: () => changed(), dragged: () => { renderTimeline(); syncMedia(); }, rendered: () => renderTimeline(),
   placed: (ids) => { drawWaves(ids); syncMedia(); drawStage(); },   // a drag frame: only those clips moved, no full redraw
   selected: () => { renderPanel(); drawStage(); }, deselected: () => { renderTimeline(); renderPanel(); }, tabs: () => tabs, area: () => WA,
-  trackKinds: ['audio'], fps: () => 30, tc: (t) => tc(t),
+  trackKinds: ['audio'], canDrop: (it) => R.soundTakes(it), fps: () => 30, tc: (t) => tc(t),
   undo: () => { HIST.undo(); syncUndo(); }, redo: () => { HIST.redo(); syncUndo(); },
   toolChanged: (t) => { if (SD.timeline) SD.timeline.dataset.tool = t; },
   menuAction: (id, ctx) => menuAction(id, ctx), main: () => pinNow(), lanes: (it, g) => clipLanes(it, g) });
@@ -868,10 +868,11 @@ async function toSoundFrame(m, label) {
 }
 
 // One mix (a sound document's payload: tracks, items, out) as a sound file: app/audioedit.render, into the media library
-export async function renderMix(p, { name = 'mix', items = p.items } = {}) {
+// cache: a table frame's cached mix for a wire (frame-source.js frameAudio), kept out of the media library's list
+export async function renderMix(p, { name = 'mix', items = p.items, cache = false } = {}) {
   const out = { ...N.out, ...(p.out || {}) };
   return api('/api/sound/render', { method: 'POST', timeout: 900000, busy: 'Mixing the sound…', body: {
-    tracks: R.exportTracks(p.tracks), name: out.name || name, format: out.format, gain: out.gain, normalize: out.normalize,   // (solo folded into muted, as the preview plays it)
+    tracks: R.exportTracks(p.tracks), name: out.name || name, format: out.format, gain: out.gain, normalize: out.normalize, ...(cache && { cache: true }),   // (solo folded into muted, as the preview plays it)
     items: items.map((it) => ({ track: it.track, src: it.src, at: it.at, in: it.in, out: it.out ?? it.dur ?? null,
       volume: it.volume ?? 1, pan: it.pan || 0, chans: it.chans || null, fade_in: it.fadeIn || 0, fade_out: it.fadeOut || 0 })) } });
 }
@@ -901,10 +902,10 @@ const adapter = {
   empty: () => emptySound(N.out.format),
   migrate,
   dump: () => ({ tracks: N.tracks, items: N.items, out: N.out, gens: N.gens.slice(-30), ...(N.range && { range: N.range }), ...(N.markers.length && { markers: N.markers }) }),
-  load(p, doc) {
+  load(p, doc, { remote = false } = {}) {
     sndPause();
     p = migrate(p);
-    const same = histDoc !== undefined && doc?.id != null && doc.id === histDoc;
+    const same = !remote && histDoc !== undefined && doc?.id != null && doc.id === histDoc;   // (saved elsewhere: a fresh history)
     Object.assign(N, { tracks: p.tracks, items: p.items, out: p.out, gens: p.gens, range: p.range, markers: p.markers, sel: null, multi: [], t: 0, exports: [] });
     histDoc = doc?.id ?? null;
     if (same) HIST.hold(() => HIST.mark()); else HIST.clear();   // (the same document again: its steps stay; another one: a fresh history)

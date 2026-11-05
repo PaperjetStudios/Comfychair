@@ -19,6 +19,9 @@ def configure(runtime: RouteServices):
     services = runtime
 
 
+CACHE_PREFIX = "cache-"   # a cached mix's file name starts with it (a made or uploaded file starts with 8 hex digits)
+
+
 def _media_path(name: str, ext: str) -> Path:
     """A fresh media-library file for a made sound: <8 hex>_<name><ext>."""
     safe = re.sub(r"[^\w.-]+", "_", Path(name or "sound").stem)[:60] or "sound"
@@ -76,6 +79,8 @@ async def sound_render(body: dict = Body(...)):
     if not items:
         raise HTTPException(400, "Add some sound first")
     out = _media_path(body.get("name") or "mix", "." + _sound_format(body))
+    if body.get("cache") is True:   # a table frame's cached mix for a wire: kept out of the media library's list (main.py list_media)
+        out = out.with_name(CACHE_PREFIX + out.name)
     try:
         info = await asyncio.to_thread(audioedit.render, items, out, float(body.get("gain") or 1), bool(body.get("normalize")))
     except Exception as e:

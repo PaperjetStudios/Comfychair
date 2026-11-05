@@ -12,6 +12,8 @@ import { RUN, fmtDur } from './run-state.js';
 import { notifyPrepare, keepAwake } from './notifications.js';
 export { keepAwake } from './notifications.js';
 import { queueRun } from './make.js';
+import { sizePicker } from './size-picker.js';
+import { modeOf } from './size-math.js';
 import { basicsPane, zoomPan } from './layout.js';
 
 import { clipInput } from './vfield.js';
@@ -447,72 +449,33 @@ function inputDims(name, onLoad) {
   return null;
 }
 
-const MP_STEPS = [0.25, 0.4, 0.5, 0.75, 1, 1.5, 2, 3, 4];
+// Size: the app's size picker (size-picker.js) on the template's width and height fields. "Match image" is one more
+// proportion: the template's first image (as cropped); the typed sides are the template's own number fields.
 function sizeField(fw, fh) {
   const step = Math.max(fw.step || 8, fh.step || 8, 16);  // 16 suits every latent; resize nodes allow 1
   const lim = (n, f) => Math.min(f.max ?? Infinity, Math.max(f.min ?? step, n));
-  // "Match image": the shape of the template's first image (as cropped), at the chosen megapixels
   const imgField = (FS.tpl?.fields || []).find((x) => x.kind === 'image' && (!fw.image_node || x.node === fw.image_node));
+  let picker = null;
   const imageAspect = () => {
     const name = imgField && FS.values[imgField.key];
-    const d = name && inputDims(name, () => { if (m.aspect === 'image') { applyPreset(); draw(); } });
+    const d = name && inputDims(name, () => { if (m.aspect === 'image') { picker?.apply(); picker?.redraw(); } });
     if (!d) return null;
     const c = FS.imageCrop[imgField.key]?.src === name ? FS.imageCrop[imgField.key].crop : FULL;
     return (d[0] * c.w) / (d[1] * c.h);
   };
   let m = FS.sizeMode[fw.key];
   if (!m && fw.match_image && imgField) m = FS.sizeMode[fw.key] = { aspect: 'image', mp: 1 };
-  if (!m) {  // derive from the current numbers: nearest preset (within 3%), else custom
-    const w = Number(FS.values[fw.key]), hh = Number(FS.values[fh.key]);
-    const near = ASPECT_PRESETS.find(([, a]) => Math.abs(w / hh / a - 1) < 0.03);
-    m = { aspect: near ? near[0] : 'custom', mp: Math.round((w * hh) / 1e4) / 100 };
-    FS.sizeMode[fw.key] = m;
-  }
-  const readout = h('span', {});
+  if (!m) m = FS.sizeMode[fw.key] = modeOf(Number(FS.values[fw.key]), Number(FS.values[fh.key]), ASPECT_PRESETS);  // nearest preset (within 3%), else custom
   const custom = h('div', { class: 'size-custom' }, numberField(fw, false), numberField(fh, false));
-  const showReadout = () => {
-    const w = FS.values[fw.key], hh = FS.values[fh.key];
-    readout.textContent = m.aspect === 'image' && !imageAspect() ? 'matches the image once one is set'
-      : `${w}×${hh} · ${((w * hh) / 1e6).toFixed(2)} MP`;
-  };
-  const applyPreset = () => {
-    const a = m.aspect === 'image' ? imageAspect() : (ASPECT_PRESETS.find(([k]) => k === m.aspect) || [])[1];
-    if (!a) return;
-    const px = m.mp * 1e6;
-    const w = lim(Math.round(Math.sqrt(px * a) / step) * step, fw);
-    const hh = lim(Math.round(Math.sqrt(px / a) / step) * step, fh);
-    FS.values[fw.key] = w; FS.values[fh.key] = hh;
-    custom.querySelectorAll('input[type=number]').forEach((inp, i) => { inp.value = i ? hh : w; });
-    saveF(); showReadout();
-  };
-  const aspects = [...(imgField ? [['image', 'Match image']] : []), ...ASPECT_PRESETS.map(([k]) => [k, k]), ['custom', 'Custom']];
-  let pick = false;   // Match image and Custom fold the proportions into one button; it unfolds them
-  const aspectSeg = seg(aspects, m.aspect, (id) => { m.aspect = id; pick = false; applyPreset(); saveF(); draw(); }, { wrap: true });
-  const aspectBtn = h('button', { type: 'button', class: 'icon-btn aspect-btn', onclick: () => { pick = true; draw(); } }, '⊞');
-  const draw = () => {
-    aspectSeg.set(m.aspect);
-    const folded = (m.aspect === 'image' || m.aspect === 'custom') && !pick;
-    aspectSeg.classList.toggle('hidden', folded);
-    aspectBtn.classList.toggle('hidden', !folded);
-    const what = m.aspect === 'image' ? 'Match image' : 'Custom';
-    aspectBtn.title = `Proportions: ${what} (tap to pick another)`; aspectBtn.setAttribute('aria-label', aspectBtn.title);
-    const isCustom = m.aspect === 'custom';
-    custom.classList.toggle('hidden', !isCustom);
-    mpRow.classList.toggle('hidden', isCustom);
-    showReadout();
-  };
-  // megapixels: tapped, not typed (Custom types the sides themselves)
-  const setMp = (n) => { m.mp = Math.min(16, Math.max(0.05, Math.round(n * 100) / 100)); applyPreset(); };
-  const mpRow = field(['Megapixels', h('span', {}, `sides snap to ${step}`)],
-    seg(MP_STEPS.map((v) => [v, `${v}`]), m.mp, setMp, { wrap: true }));
-  // custom width/height edits go through numberField's own setVal; keep the readout in step
-  custom.addEventListener('change', () => setTimeout(showReadout));
-  custom.addEventListener('click', () => setTimeout(showReadout));
-  if (m.aspect === 'image') applyPreset();   // the image (or its crop) may have changed since
-  draw();
-  const el = field(['Size', readout], aspectSeg, aspectBtn, mpRow, custom);
-  el.classList.add('size-field');
-  return el;
+  picker = sizePicker({ w: Number(FS.values[fw.key]), h: Number(FS.values[fh.key]), step, mode: m, custom,
+    lim: (n, axis) => lim(n, axis === 'w' ? fw : fh),
+    extra: imgField ? [['image', 'Match image']] : [], aspectOf: (id) => (id === 'image' ? imageAspect() : null),
+    read: () => ({ w: FS.values[fw.key], h: FS.values[fh.key] }),
+    note: (mm) => (mm.aspect === 'image' && !imageAspect() ? 'matches the image once one is set' : null),
+    onChange: (w, hh) => { FS.values[fw.key] = w; FS.values[fh.key] = hh; saveF(); },
+    onMode: () => saveF() });
+  if (m.aspect === 'image') picker.apply();   // the image (or its crop) may have changed since
+  return picker;
 }
 
 // − [box] +; bump(±1) steps the value

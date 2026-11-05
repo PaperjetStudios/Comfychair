@@ -331,6 +331,12 @@ def stash_render(d: Path, doc_id: str, render: dict):
     (d / ".trash" / f"{doc_id}.render.json").write_text(json.dumps(render))
 
 
+def unstash_render(d: Path, doc_id: str):
+    """A frame points at this document again with its render: the render no longer waits for the document's purge."""
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", doc_id or ""):
+        (d / ".trash" / f"{doc_id}.render.json").unlink(missing_ok=True)
+
+
 def stashed_renders(d: Path) -> list[tuple[str, dict, Path]]:
     """[(doc id, render, file)] of the waiting renders in a document folder's trash whose document is gone for good (no live
     copy, no trashed copy)."""

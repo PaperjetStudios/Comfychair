@@ -1,5 +1,5 @@
 import { $, h, api, store, icon, seg, placeholder, toast, button, openSheet, closeSheet, section, hint, actions } from './ui.js';
-import { S, onServer, onProject, thumbUrl } from './core.js';
+import { S, listedRun, onServer, onProject, thumbUrl } from './core.js';
 import { B, FILTER_KINDS, genTime, dayKey, dayName, usedBadge, loadAttached, loadAllProjectGenerations, openGallery, togglePin } from './board.js';
 import { dropOnTable, selectedFrames, tableFrames } from './table.js';
 import { stillOf } from './table-frames.js';
@@ -81,7 +81,7 @@ function draggable(tile, src) {
 const FILTERS = [['all', 'All'], ['image', 'Images'], ['video', 'Videos'], ['audio', 'Sounds'], ['3d', '3D'], ['pinned', '★'], ['free', 'Free']];
 function outputItems() {
   const items = [];
-  const gens = [...S.history.values()].filter((g) => g.project_id === S.project && g.status === 'done').sort((a, b) => b.id - a.id);
+  const gens = [...S.history.values()].filter((g) => g.project_id === S.project && g.status === 'done' && listedRun(g)).sort((a, b) => b.id - a.id);
   for (const g of gens) {
     if (SH.filter === 'pinned' && !g.pinned) continue;
     if (SH.filter === 'free' && B.attached.has(g.id)) continue;
@@ -201,7 +201,7 @@ async function drawOutputs(body) {
 
 // ---- history: every run with its state; a finished one drags by its first output
 function drawHistory(body) {
-  const runs = [...S.history.values()].filter((g) => g.project_id === S.project).sort((a, b) => b.id - a.id);
+  const runs = [...S.history.values()].filter((g) => g.project_id === S.project && listedRun(g)).sort((a, b) => b.id - a.id);
   const card = (g) => {
     const c = outputCard(g, { onPick: () => {} });
     c.classList.add('shelf-run');

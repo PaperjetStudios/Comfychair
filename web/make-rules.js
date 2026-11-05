@@ -191,6 +191,15 @@ export function plainPicture(payload) {
   if (payload.items?.length || payload.anim) return null;
   return l.name;
 }
+// Whether plainPicture's one layer fills the canvas exactly (wh: its picture's natural [w, h]): at the canvas corner, its size
+// the canvas size (to a pixel). Else the frame shows a cut of the file or the file sits in a margin, and the file alone
+// isn't what the frame shows. No canvas size or no picture size: false (the frame's picture goes as a copy of what it shows).
+export function plainFills(payload, wh) {
+  const s = payload?.size, l = payload?.layers?.[0];
+  if (!s?.w || !s?.h || !l || !Array.isArray(wh) || !(wh[0] > 0) || !(wh[1] > 0)) return false;
+  const k = l.scale ?? 1;
+  return Math.abs(l.x || 0) <= 0.5 && Math.abs(l.y || 0) <= 0.5 && Math.abs(wh[0] * k - s.w) <= 1 && Math.abs(wh[1] * k - s.h) <= 1;
+}
 const cleanTracks = (p, ids) => !(p.tracks || []).some((t) => ids.has(t.id) && (t.hidden || t.muted || t.solo));
 const unity = (v) => v == null || near(v, 1);
 const noFade = (it) => !(it.fadeIn > 0) && !(it.fadeOut > 0);
@@ -242,3 +251,27 @@ export function renderKey(body) {
   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, '0');
 }
+
+// ---- the wire pictures a frame's queued runs have yet to read (frame.make.held: [{ name, gen }], saved with the table) ----
+// A wire's picture made for a run (a copy of a frame's picture, a grab of a video) is the frame's until every run that reads
+// it has finished; it is settled by the runs' status, never by what the slots show, so a page reload mid-run neither drops
+// it early nor forgets it. Pure: the caller asks the runs' status and deletes the pictures.
+const STILL_GOING = new Set(['queued', 'running', 'pending']);
+// held plus each name for each of these runs (no repeats)
+export function addHeld(held, names, gens) {
+  const out = Array.isArray(held) ? held.filter((x) => x && typeof x.name === 'string') : [];
+  for (const name of names || []) for (const g of gens || []) {
+    const gen = g?.id ?? g;
+    if (gen != null && !out.some((x) => x.name === name && x.gen === gen)) out.push({ name, gen });
+  }
+  return out;
+}
+// statusOf(gen): the run's status ('queued' | 'running' | 'done' | 'error' | 'interrupted' | 'gone' when it no longer exists),
+// or null when it isn't known yet. Returns { held: the entries still waiting, drop: the names no waiting run reads any more }.
+export function settleHeld(held, statusOf) {
+  const list = Array.isArray(held) ? held.filter((x) => x && typeof x.name === 'string') : [];
+  const waiting = list.filter((x) => { const s = statusOf(x.gen); return s == null || STILL_GOING.has(s); });
+  const still = new Set(waiting.map((x) => x.name));
+  return { held: waiting, drop: [...new Set(list.map((x) => x.name))].filter((n) => !still.has(n)) };
+}
+

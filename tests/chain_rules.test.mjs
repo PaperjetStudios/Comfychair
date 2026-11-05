@@ -1,7 +1,7 @@
 // node --test tests/chain_rules.test.mjs: rerunning a chain of wired frames (web/chain-rules.js)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { staleInfo, staleFrames, staleText, sourceStamps, freshLayers, withoutLayers, replaceItem, withSoundItem, placeResults } from '../web/chain-rules.js';
+import { staleInfo, staleFrames, staleText, sourceStamps, freshLayers, layerMarks, withoutLayers, replaceItem, withSoundItem, placeResults } from '../web/chain-rules.js';
 
 const W = (id, from, to, kind = 'image', more = {}) => ({ id, from, to, kind, n: 1, on: true, ...more });
 const F = (id, more = {}) => ({ id, kind: 'image', doc: `d-${id}`, ...more });
@@ -46,16 +46,23 @@ test('staleText and sourceStamps', () => {
   assert.deepEqual(sourceStamps([W('1', 'a', 'c')], 'c', frames, () => null), {});
 });
 
-test('layers: what a run landed, and taking out only the last run\'s (and their masks)', () => {
+test('layers: what a run landed, by key, and taking out only the last run\'s (and their masks)', () => {
   const layers = [{ name: 'old', key: 'k1', label: 'Made' }, { name: 'mine', key: 'k2', label: 'Made' }, { name: 'm1', key: 'k3', maskOf: 'k1' },
     { name: 'new', key: 'k4', label: 'Krea' }, { name: 'other', key: 'k5', label: 'Other' }];
-  assert.deepEqual(freshLayers(new Set(['old', 'mine', 'm1']), layers, 'Krea'), ['new']);
-  assert.deepEqual(freshLayers(new Set(['old', 'mine', 'm1']), layers), ['new', 'other']);
-  const r = withoutLayers(layers, ['old']);
+  const before = layerMarks(layers.slice(0, 3));
+  assert.deepEqual(freshLayers(before, layers, 'Krea'), ['k4']);
+  assert.deepEqual(freshLayers(before, layers), ['k4', 'k5']);
+  assert.deepEqual(freshLayers(new Set(['old']), [{ name: 'old', key: 'k9', label: 'Made' }]), [], 'a key given since the count: there by its name');
+  assert.deepEqual(freshLayers(new Set(), [{ name: 'n', label: 'Krea' }], 'Krea'), [], 'no key yet: not counted');
+  const r = withoutLayers(layers, ['k1']);
   assert.equal(r.removed, 2);
   assert.deepEqual(r.layers.map((l) => l.name), ['mine', 'new', 'other']);
   assert.equal(withoutLayers(layers, ['gone']).removed, 0);
   assert.equal(withoutLayers(layers, []).layers.length, 5);
+  // a duplicated or pasted copy shares the picture's name but has its own key: a rerun never takes it
+  const dup = [{ name: 'res.png', key: 'r1', label: 'Krea' }, { name: 'res.png', key: 'r2', label: 'Krea copy' }];
+  assert.deepEqual(withoutLayers(dup, ['r1']).layers.map((l) => l.key), ['r2']);
+  assert.equal(withoutLayers(dup, ['res.png']).removed, 0, 'an old made entry (a name) matches nothing');
 });
 
 test('replaceItem keeps the place, trim start and transform; takes the new source and length', () => {

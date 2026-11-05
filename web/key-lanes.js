@@ -13,10 +13,12 @@ import {
   compatible, pastePlan, mergeKeys, keyTitle,
 } from './key-lane-rules.js';
 
-let sel = new Set();          // selected keys of every open row (selKey strings)
+let sel = new Set();          // selected keys of the timeline pressed last (selKey strings); a press anywhere else clears them
 let clip = null;              // { ch, keys } copied
 const rows = new Map();       // `${id}|${ch}` -> the row built last (rows of a dropped render are skipped by isConnected)
-const live = () => [...rows.values()].filter((r) => r.lane.isConnected);
+let scope = null;             // the timeline (.tl-inner) the last key-lane press was in: only its rows are acted on
+const live = () => [...rows.values()].filter((r) => r.lane.isConnected && (!scope || scope.contains(r.lane)));
+const pressedIn = (lane) => { scope = lane.closest('.tl-inner') || null; };
 const shown = (r) => shownKeys(r.it.chans?.[r.ch], r.it.in, r.len);
 const picked = (r) => shown(r).filter((k) => isSel(sel, r.it.id, r.ch, k.f));
 const paint = () => { for (const r of live()) for (const [k, d] of r.dots) d.classList.toggle('on', isSel(sel, r.it.id, r.ch, k.f)); };
@@ -31,7 +33,12 @@ const once = (fns) => { for (const f of new Set(fns)) f?.(); };
 // pressed). Caught on the window before anything else (the timeline's own Delete / copy / paste would take the clip), so it
 // works after a redraw has taken the focus off the diamond. A press anywhere else hands the keys back.
 let last = null;   // { id, ch, f }: the lane (and key) pressed last; null: the last press was elsewhere
-addEventListener('pointerdown', (e) => { if (!e.target.closest?.('.tl-keylane, .press-menu')) last = null; }, true);
+addEventListener('pointerdown', (e) => {
+  if (e.target.closest?.('.tl-keylane, .press-menu')) return;
+  last = null;
+  scope = null;
+  if (sel.size) { sel = new Set(); paint(); }   // (keys picked in a timeline left behind are never acted on from another)
+}, true);
 addEventListener('keydown', (e) => {
   if (!last || e.defaultPrevented || e.target.closest?.('input, textarea, select, [contenteditable]')) return;
   const mod = e.ctrlKey || e.metaKey, key = e.key.toLowerCase(), r = rows.get(`${last.id}|${last.ch}`);
@@ -140,8 +147,12 @@ export function keyLaneRows(it, o) {
         style: `left:${keyX(it, k.f, o.pps)}px`, title: keyTitle(label, k, keyTime(it, k.f), o.tc) });
       dot.addEventListener('pointerdown', (e) => {
         last = { id: it.id, ch, f: k.f };
-        if (e.button) return;
-        e.stopPropagation();
+        pressedIn(lane);
+        e.stopPropagation();   // (the timeline under it never sees a press on a key, nor its right click)
+        if (e.button) {   // a right click on a key not picked picks it alone, so its menu is about it (layer-menu pickedFor)
+          if (!isSel(sel, it.id, ch, k.f)) { sel = new Set([selKey(it.id, ch, k.f)]); paint(); }
+          return;
+        }
         const toggle = e.shiftKey || e.ctrlKey || e.metaKey, was = isSel(sel, it.id, ch, k.f);
         if (toggle) { sel = pickKey(sel, it.id, ch, k.f, true); paint(); if (was) return; }
         else if (!was) { sel = pickKey(sel, it.id, ch, k.f, false); paint(); }
@@ -149,12 +160,18 @@ export function keyLaneRows(it, o) {
         dragKeys(e, r, { k, toggle });
       });
       dot.addEventListener('dblclick', (e) => { e.stopPropagation(); o.seek?.(keyTime(it, k.f)); });
-      pressMenu(dot, menuAt(k));
-      dot.addEventListener('contextmenu', (e) => e.stopPropagation());   // (the key's menu, never the clip's under it)
+      let heldAt = 0;
+      dot.addEventListener('contextmenu', (e) => {   // the key's menu, never the clip's or the lane's under it
+        e.preventDefault(); e.stopPropagation();
+        if (Date.now() - heldAt < 1000) return;   // (Android sends this after a long hold, which opened it already)
+        last = { id: it.id, ch, f: k.f }; pressedIn(lane);
+        menuAt(k)(e);
+      });
+      pressMenu(dot, (e) => { if (e.type !== 'contextmenu') { heldAt = Date.now(); menuAt(k)(e); } });   // (a long hold on a tablet; the right click is above)
       r.dots.set(k, dot);
       lane.append(dot);
     }
-    lane.addEventListener('pointerdown', (e) => { last = { id: it.id, ch, f: null }; if (e.target === lane && !e.button) { e.stopPropagation(); boxSelect(e, r); } });
+    lane.addEventListener('pointerdown', (e) => { last = { id: it.id, ch, f: null }; pressedIn(lane); if (e.target === lane && !e.button) { e.stopPropagation(); boxSelect(e, r); } });
     lane.addEventListener('contextmenu', (e) => { if (e.target === lane) { e.preventDefault(); e.stopPropagation(); } });
     return h('div', { class: 'tl-keylane' }, h('div', { class: 'tl-head tl-keyhead' }, label), lane);
   });
