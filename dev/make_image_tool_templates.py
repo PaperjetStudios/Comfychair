@@ -58,7 +58,14 @@ write("deck-remove-lama", {
 write("deck-face-restore", {
     "img": {**node("LoadImage", image=""), "_meta": {"title": "@1 Picture [image]", "deck_keep_size": True}},
     "um": node("UpscaleModelLoader", "@2 Model [model_name]", model_name="GFPGANv1.4.safetensors"),
-    "up": node("DeckFaceRestore", upscale_model=["um", 0], image=["img", 0]),
+    # any other picture than Restore's 512x512 crops: the faces are found by their DWPose face points, at the picture's own size
+    "pose": node("DWPreprocessor", image=["img", 0], detect_hand="disable", detect_body="disable", detect_face="enable", resolution=512,
+                 bbox_detector="yolox_l.onnx", pose_estimator="dw-ll_ucoco_384.onnx", scale_stick_for_xinsr_cn="disable"),
+    "size": node("GetImageSize", image=["img", 0]),
+    "rs": node("ImageResizeKJv2", image=["pose", 0], width=["size", 0], height=["size", 1], upscale_method="nearest-exact", keep_proportion="stretch",
+               pad_color="0, 0, 0", crop_position="center", divisible_by=1, device="cpu"),
+    "faces": node("ImageToMask", image=["rs", 0], channel="red"),
+    "up": node("DeckFaceRestore", upscale_model=["um", 0], image=["img", 0], mask=["faces", 0]),
     "save": node("SaveImage", images=["up", 0], filename_prefix="deck/faces"),
 })
 

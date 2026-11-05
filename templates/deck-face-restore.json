@@ -18,6 +18,64 @@
    "title": "@2 Model [model_name]"
   }
  },
+ "pose": {
+  "class_type": "DWPreprocessor",
+  "inputs": {
+   "image": [
+    "img",
+    0
+   ],
+   "detect_hand": "disable",
+   "detect_body": "disable",
+   "detect_face": "enable",
+   "resolution": 512,
+   "bbox_detector": "yolox_l.onnx",
+   "pose_estimator": "dw-ll_ucoco_384.onnx",
+   "scale_stick_for_xinsr_cn": "disable"
+  }
+ },
+ "size": {
+  "class_type": "GetImageSize",
+  "inputs": {
+   "image": [
+    "img",
+    0
+   ]
+  }
+ },
+ "rs": {
+  "class_type": "ImageResizeKJv2",
+  "inputs": {
+   "image": [
+    "pose",
+    0
+   ],
+   "width": [
+    "size",
+    0
+   ],
+   "height": [
+    "size",
+    1
+   ],
+   "upscale_method": "nearest-exact",
+   "keep_proportion": "stretch",
+   "pad_color": "0, 0, 0",
+   "crop_position": "center",
+   "divisible_by": 1,
+   "device": "cpu"
+  }
+ },
+ "faces": {
+  "class_type": "ImageToMask",
+  "inputs": {
+   "image": [
+    "rs",
+    0
+   ],
+   "channel": "red"
+  }
+ },
  "up": {
   "class_type": "DeckFaceRestore",
   "inputs": {
@@ -27,6 +85,10 @@
    ],
    "image": [
     "img",
+    0
+   ],
+   "mask": [
+    "faces",
     0
    ]
   }

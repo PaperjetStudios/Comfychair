@@ -551,3 +551,9 @@ The tabs that did the same job twice now share it:
 - **Group presets** (`generate.js`, `setups-rules.js` `presetFields`): text is kept and loaded, so H3's Shot preset carries the prompt; Template default
   leaves typed text alone. Presets saved before this have no prompt in them and leave it as it is.
 
+### Face restore on any picture; ComfyUI allocator (2026-11-05)
+- **`deck-face-restore`** failed on anything but GFPGAN's 512x512 (`mat1 and mat2 shapes`). `DeckFaceRestore` now has an optional lazy `mask` of DWPose face
+  points: a 512x512 picture (Restore's crops) goes straight in and skips the detector; any other is restored face by face through a soft oval. No face: a clear error.
+- **`--disable-cuda-malloc`** is in `~/Programs/ComfyUI/start-comfyui.sh` (not in this repo). Two logs ended right after `Error running sage attention ... out of memory`,
+  one with `CUDA error: invalid argument` from `cuMemFreeAsync` in `CUDAMallocAsyncAllocator`. Pika I2V warm was 51 s with it, 54 s before. Whether it ends the crash is unproven: it couldn't be provoked.
+
