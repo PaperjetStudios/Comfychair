@@ -27,7 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from . import accel, audioedit, civitai, clipimport, craft, delogo, downloads, gpu, h3upscale, posefind, previews, voice, config, db, editsize, imageprep, motion, stages, tracking, videoedit, videoprep, wildcards
 from . import projects, storage, store, network
 from . import playable
-from . import fetchpicture, keyexpr, looks, maskcomp, ph3image, promptaid, sceneasset, sizelimits
+from . import fetchpicture, keyexpr, looks, maskcomp, meters, ph3image, promptaid, sceneasset, sizelimits
 from . import templates as tpl
 from .comfy import Comfy, ComfyError, previews_on as comfy_previews_on, set_previews as comfy_set_previews
 from .routes import audio, effects, library, scene, video, web
@@ -764,6 +764,12 @@ async def interrupt(body: dict = Body(default={})):
             await push_gen(g["id"])
         return {"ok": True, "stopped": "queued"}
     return {"ok": True, "stopped": None}
+
+
+@app.get("/api/meters")
+async def meters_reading():
+    """CPU, RAM, GPU, VRAM and GPU temperature as 0-100, for the top bar's meter (app/meters.py)."""
+    return await asyncio.to_thread(meters.reading)
 
 
 @app.get("/api/queue")

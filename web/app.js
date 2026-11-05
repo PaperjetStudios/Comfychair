@@ -34,6 +34,8 @@ import { openDescribe, openImprove, tplTarget } from './prompthelp.js';
 import { wireUndoDock } from './undo-dock.js';
 import { currentTab, switchTab as navigate, wireTabKeys } from './navigation.js';
 import './world.js';   // Alt + arrows and a swipe along the top bar move between tables
+import { wireMeters } from './meters.js';
+wireMeters();   // CPU, RAM, GPU, VRAM and temperature beside the project picker
 
 // ---------------------------------------------------------------------------
 // full screen (hides the browser bars on the tablet)

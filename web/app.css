@@ -244,6 +244,10 @@ body:has(#tool-generate.active) #runChip { display: none; }   /* (on Classic ▾
 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); flex: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 20%, transparent); }
 .dot.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent); }
 #projectSel { max-width: 180px; }
+/* the PC's load (web/meters.js): five lines, a fifth of the square's height each, as long as each is full */
+.pc-meter { flex: none; width: 30px; height: 30px; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 4px;
+  background: var(--surface-2); overflow: hidden; }
+.pc-meter-bar { display: block; height: 20%; width: 0; transition: width .6s; }
 
 /* ---- layout: a stage (preview) and a settings panel, with a splitter between ---- */
 main { grid-row: 3; min-height: 0; position: relative; }
