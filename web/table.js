@@ -54,7 +54,7 @@ import { currentTab } from './navigation.js';
 import { ownsKey } from './key-focus.js';
 import { openPressMenu, pressMenu, closePressMenu } from './press-menu.js';
 import { gzChip, snap as snapPrefs, snapBar } from './gizmo.js';
-import { onSamplerPreview, samplerPreview, setSamplerPreview } from './run-strip.js';
+import { onPreviewWindow, onSamplerPreview, previewWindow, samplerPreview, setPreviewWindow, setSamplerPreview } from './run-strip.js';
 import { exitMaxedIn, fullScreen, fullScreenOf } from './layout.js';
 import { registerUndo, syncUndo } from './undo-dock.js';
 import { onNavigate, switchTab as navigate } from './navigation.js';
@@ -1776,14 +1776,16 @@ function buildBar() {
     const r = previewBtn.getBoundingClientRect(), now = previewMode();
     openPressMenu(r.left, r.bottom + 4, [PREVIEW.map(([m, label]) => ({ label, on: m === now, run: () => setPreviewMode(m) }))], 'Previews');
   }, { title: 'When video and sound frames play their preview on the table' });
-  const samplingChip = gzChip('Sampling preview', () => setSamplerPreview(!samplerPreview()), { on: samplerPreview(), title: 'Show a run as it samples, in its frame' });
+  const samplingChip = gzChip('Sampling preview', () => setSamplerPreview(!samplerPreview()), { on: samplerPreview(), title: 'Show a run as it samples' });
   onSamplerPreview((on) => samplingChip.classList.toggle('on', on));
+  const windowChip = gzChip('Preview window', () => setPreviewWindow(!previewWindow()), { on: previewWindow(), title: 'Show the sampling preview in a floating window, not in its frame' });
+  onPreviewWindow((on) => windowChip.classList.toggle('on', on));
   D.zoom = h('button', { type: 'button', class: 'btn small ghost table-zoom', title: 'Zoom: tap for 100%', onclick: () => zoomTo(1) }, '100%');
   D.bar = h('div', { class: 'table-bar' },
     button('Fit', fitSel, { title: 'Fit all, or the selected frames (Shift+F)' }),
     button('100%', () => zoomTo(1), { title: 'Zoom to 100% (0)' }),
-    gridChip, gridSize, snapBar(['edges'], () => {}), newBtn, arrangeBtn, previewBtn, samplingChip,
-    info('A run shows as it samples inside its frame: a moving clip for video, a still for images. Off, ComfyUI makes no previews at all, which saves a little on every step. A run already going keeps what it started with.'),
+    gridChip, gridSize, snapBar(['edges'], () => {}), newBtn, arrangeBtn, previewBtn, samplingChip, windowChip,
+    info('Sampling preview shows a run as it samples: a moving clip for video, a still for images. Off, ComfyUI makes no previews at all, which saves a little on every step. A run already going keeps what it started with. Preview window puts it in a floating window you can drag by its title and resize; it comes up with a run and goes when the run ends. Off, the preview shows inside the run\'s own frame.'),
     h('span', { class: 'table-bar-gap' }), D.zoom);
 }
 

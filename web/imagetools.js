@@ -539,8 +539,8 @@ export function whyNot(o, t = template(tplId(o)), { eng = null } = {}) {
     if (o.kind === 'remove') return 'Remove marks what goes in red on the picture: open the frame';
     if (o.kind === 'sheet') return 'A sheet\'s views land as layers where its cells were: open the frame';
     if (o.kind === 'matte' && ST.result === 'mask') return 'A mask goes on the open picture: open the frame, or pick Cut-out layer';
-    if (o.kind === 'edit' && ST.ewhere === 'painted') return 'The red mask is painted on the open picture: open the frame';
-    if (o.kind === 'swap' && ST.swapWhere === 'painted') return 'The red mask is painted on the open picture: open the frame';
+    if (o.kind === 'edit' && ST.ewhere === 'painted') return 'The red mask is painted on the open picture: open the frame and land the result as a layer in it';
+    if (o.kind === 'swap' && ST.swapWhere === 'painted') return 'The red mask is painted on the open picture: open the frame and land the result as a layer in it';
   }
   return null;
 }
@@ -1182,7 +1182,7 @@ function editFields(t, size, { redraw = () => {}, eng = null } = {}) {
     toggle('Keep the rest', ST.ekeep, (v) => { ST.ekeep = v; redo(); }, { help: 'Adds a sentence telling the model to change only what you asked and to keep the framing, pose, details and background. Turn it off for a change to the whole picture, like a new style.' }),
     ...ST.erefs.slice(0, refsMost).map((_, i) => ref(i)),
     ST.erefs.length < refsMost ? ref(ST.erefs.length) : null,
-    field('Change', seg([['all', 'Anywhere'], ['words', 'What I name'], ...(eng ? [['painted', 'The red mask']] : [])], ST.ewhere, (v) => { ST.ewhere = v; redo(); }),
+    field('Change', seg([['all', 'Anywhere'], ['words', 'What I name'], ...(eng || ST.ewhere === 'painted' ? [['painted', 'The red mask']] : [])], ST.ewhere, (v) => { ST.ewhere = v; redo(); }),
       help('Anywhere lands what the model made, as it made it. What I name has SAM3 find the area in each picture. The red mask uses what you painted (Masks panel), cut to each selected layer; a layer it doesn\'t touch is left out. With an area only that area changes, and the rest stays pixel for pixel at full size. SAM3 misses some words: it found no "jacket" on a man in one, but found "man" and "person".')),
     ST.ewhere === 'words' ? field('Find', textArea(() => ST.efind, (v) => { ST.efind = v; save(); }, { rows: 2, label: 'What to find', placeholder: 'The jacket, the sky' })) : null,
     ...(ST.ewhere === 'words' ? samFields() : []),
@@ -1337,9 +1337,9 @@ export async function runToolOn(id, { tab, src, eng = null, batch = 1 } = {}) {
   if (!o) throw new Error(`No image tool "${id}"`);
   if (!tab) throw new Error('No edit for the result to land in');
   const t = template(tplId(o));
-  const why = whyNot(o, t);
-  if (why) throw new Error(why);
   const e = engFor(tab, eng || CURRENT_EDIT.eng);
+  const why = whyNot(o, t, { eng: !src && e === eng ? e : null });   // (the open picture, worked as it is: its red mask can be used)
+  if (why) throw new Error(why);
   const one = async (from) => {
     if (!from?.name) throw new Error('No picture to run it on');
     Object.assign(from, { layer: from.layer || null, was: from.was || null, mask: from.mask || null, rect: from.rect || { x: 0, y: 0, w: from.px[0], h: from.px[1] } });
@@ -1402,7 +1402,7 @@ export async function applyStep(step, name, { what = 'person' } = {}) {
 // A tool's own settings (not the editor's: Run on, Hide the original, the run buttons), as rows for a panel. o: a tool (or
 // its id); t: its template (default: the one it uses now); redraw(): the rows changed what is shown (draw them again);
 // size: [w, h] of what is sent, for the sizes shown; eng: the editor, when the rows are for the open picture (the red
-// mask's choices and hints show only then). The settings are this panel's own (ST): the Edit pane and the Layers pane share them.
+// mask's choices and hints show only then, or while one is the choice made, so it can be seen and changed). The settings are this panel's own (ST): the Edit pane and the Layers pane share them.
 export function toolFields(o, t, { redraw = () => {}, size = null, eng = null } = {}) {
   if (typeof o === 'string') o = OPS.find((x) => x.id === o);
   if (!o) return [];
@@ -1429,7 +1429,7 @@ export function toolFields(o, t, { redraw = () => {}, size = null, eng = null } 
     ...(o.kind === 'sheet' ? samFields(null, false) : []),
     o.kind === 'matte' ? toggle('Fine edges', ST.fine, (v) => { ST.fine = v; save(); redraw(); },
       { help: 'These models see any picture at about 1000 px, so a big picture\'s edge comes back as a staircase. On: each thing found gets a second look on a crop close to it (a run for each, on a big picture), then the pixels along its edge are decided by their colour: is it more common on the thing, or beside it. Off: quicker, and the edge is as the model gave it.' }) : null,
-    o.kind === 'remove' ? field('What goes', seg([['words', 'Find by name'], ...(eng ? [['painted', 'The red mask']] : [])], ST.rfrom, (v) => { ST.rfrom = v; save(); redraw(); })) : null,
+    o.kind === 'remove' ? field('What goes', seg([['words', 'Find by name'], ...(eng || ST.rfrom === 'painted' ? [['painted', 'The red mask']] : [])], ST.rfrom, (v) => { ST.rfrom = v; save(); redraw(); })) : null,
     o.kind === 'remove' && ST.rfrom === 'words' ? h('div', { class: 'chips' }, ...LOOK_FOR.map(([v, label]) => chip(label, () => { ST.rprompt = v; save(); redraw(); }, { on: ST.rprompt.trim().toLowerCase() === v }))) : null,
     o.kind === 'remove' && ST.rfrom === 'words' ? field('Find', textArea(() => ST.rprompt, (v) => { ST.rprompt = v; save(); }, { rows: 2, label: 'What to remove', placeholder: 'Watermark, text, the red sign' })) : null,
     o.kind === 'remove' && ST.rfrom === 'painted' && eng && !eng.paint.maskLayer(false) ? hint('Paint what to remove first (Masks panel), or find it by name') : null,
@@ -1441,7 +1441,7 @@ export function toolFields(o, t, { redraw = () => {}, size = null, eng = null } 
     o.kind === 'swap' ? field(['Models', h('span', {}, `${swapModels().length} ticked`)], h('div', { class: 'chips' }, ...Object.entries(SWAP_MODELS).filter(([k]) => canSwap(k)).map(([k, v]) =>
       chip(v.label, () => { ST.swapModels = ST.swapModels.includes(k) ? ST.swapModels.filter((x) => x !== k) : [...ST.swapModels, k]; save(); redraw(); }, { on: ST.swapModels.includes(k) }))),
       help(Object.values(SWAP_MODELS).map((v) => `${v.label}: ${v.help}`).join(' '))) : null,
-    o.kind === 'swap' ? field('Where', seg([['find', 'Find it'], ...(eng ? [['painted', 'The red mask']] : [])], ST.swapWhere, (v) => { ST.swapWhere = v; save(); redraw(); }),
+    o.kind === 'swap' ? field('Where', seg([['find', 'Find it'], ...(eng || ST.swapWhere === 'painted' ? [['painted', 'The red mask']] : [])], ST.swapWhere, (v) => { ST.swapWhere = v; save(); redraw(); }),
       help('Find it uses SAM3 and takes the biggest one it finds. With several people, Mark it first, erase what shouldn\'t change in the Masks panel, and Swap from the red mask.')) : null,
     o.kind === 'swap' && ST.swapWhere === 'painted' && eng && !eng.paint.maskLayer(false) ? hint('Paint the area first (Masks panel), or Mark it') : null,
     o.kind === 'swap' ? field('Also say', textArea(() => ST.swapExtra, (v) => { ST.swapExtra = v; save(); }, { rows: 2, label: 'Words added to the prompt', placeholder: 'Keep the glasses' })) : null,

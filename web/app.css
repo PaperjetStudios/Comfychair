@@ -2398,6 +2398,12 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
 body:has(#tab-table.active, #tab-table.live-host) .run-strip:not(.hidden) { display: flex; }   /* (a live frame takes .active from the table tab) */
 .run-strip-view { width: 100%; max-height: 160px; object-fit: contain; border-radius: 4px; background: #000; }
 .run-strip-view.hidden { display: none; }
+/* the preview window (run-strip.js): the same picture and step line in a floating panel, on the table only */
+.float-preview { left: 12px; top: auto; bottom: 92px; width: 340px; height: 300px; }
+.float-preview .float-body { display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+.float-preview-view { flex: 1; min-height: 0; width: 100%; object-fit: contain; border-radius: 4px; background: #000; }
+.float-preview-view.hidden { visibility: hidden; }
+body:not(:has(#tab-table.active, #tab-table.live-host)) .float-preview { display: none; }
 .run-strip-bar { height: 3px; width: 0; border-radius: 2px; background: var(--accent); transition: width .2s; }
 .run-strip-text { font-size: var(--fs-sm); color: var(--muted); }
 .make-picker { display: flex; flex-direction: column; gap: 6px; }

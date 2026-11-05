@@ -179,7 +179,8 @@ export function opFields(kind, id, opts, ctx = {}) {
   if (kind === 'image' && o.group === '3D') return [];   // (a 3D object's views and model are picked on its sheet)
   if (kind === 'image') {
     if (!IT) { itReady.then(() => ctx.redraw?.()); return [hint('Loading the image tools…')]; }
-    return IT.toolFields(id, undefined, { redraw: () => ctx.redraw?.(), size: ctx.size || null, eng: null }) || [];
+    // (the open frame's editor: the red mask's choices show there, as in the Layers pane)
+    return IT.toolFields(id, undefined, { redraw: () => ctx.redraw?.(), size: ctx.size || null, eng: ctx.live && ctx.frames?.[0] ? liveEngine(ctx.frames[0]) : null }) || [];
   }
   if (o.vfx) {   // a VFX effect: its fields on the op's options and the first frame's own state (every selected frame gets changes)
     const frames = (ctx.frames || []).filter((f) => f.kind === kind), frame = frames[0] || null;

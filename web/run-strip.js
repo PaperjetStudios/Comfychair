@@ -6,7 +6,12 @@
 //   mountRunStrip(host) → the strip's element (called once; a second call returns the first)
 //   samplerPreview() → on or off;  setSamplerPreview(on) → saved on the server (app/comfy.py previews_on): off, ComfyUI makes none
 //   onSamplerPreview(fn) → fn(on) after each change; returns an unsubscribe
+// The preview window: a floating panel (float-panel.js: dragged by its head, resized, its place kept on this device) that takes every run's
+// picture and step line instead, so nothing is drawn over a frame, its tile or its layers. On by choice on this device; off, the above.
+//   previewWindow() → on or off;  setPreviewWindow(on);  onPreviewWindow(fn) → fn(on) after each change; returns an unsubscribe
 import { h, api, store, toast } from './ui.js';
+import { icon } from './icons.js';
+import { floatPanel } from './float-panel.js';
 import { CURRENT_EDIT, S } from './core.js';
 import { outputOf } from './table-model.js';
 import { RUN } from './run-state.js';
@@ -15,6 +20,18 @@ import { previewHome, rememberRun } from './run-preview-rules.js';
 
 const RUNS = 'deck.run.frames';   // prompt id → frame id, so a reload mid-run still knows the frame
 const PV = { on: true, listeners: new Set(), kick: null };
+const WINDOW = 'deck.run.window';
+const WIN = { on: store.get(WINDOW, true) !== false, listeners: new Set() };
+
+export const previewWindow = () => WIN.on;
+export function onPreviewWindow(fn) { WIN.listeners.add(fn); return () => WIN.listeners.delete(fn); }
+export function setPreviewWindow(on) {
+  if (WIN.on === !!on) return;
+  WIN.on = !!on;
+  store.set(WINDOW, WIN.on);
+  for (const fn of [...WIN.listeners]) fn(WIN.on);
+  PV.kick?.();
+}
 
 export const samplerPreview = () => PV.on;
 export function onSamplerPreview(fn) { PV.listeners.add(fn); return () => PV.listeners.delete(fn); }
@@ -59,6 +76,17 @@ export function mountRunStrip(host = document.body) {
   const inFrame = h('canvas', { class: 'run-preview', 'aria-label': 'Sampling preview' });
   strip = h('div', { class: 'run-strip hidden', role: 'status' }, view, h('div', { class: 'run-strip-line' }, bar, text));
   host.append(strip);
+  // the window, made when first wanted
+  const win = { panel: null, view: null, bar: h('div', { class: 'run-strip-bar' }), text: h('span', { class: 'run-strip-text' }) };
+  const winPanel = () => {
+    if (win.panel) return win.panel;
+    const close = h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Close the preview window', title: 'Close: the preview shows in its frame again',
+      onclick: () => setPreviewWindow(false) }, icon('close'));
+    win.panel = floatPanel({ key: WINDOW, title: 'Preview', cls: 'float-preview', buttons: [close] });
+    win.view = h('canvas', { class: 'float-preview-view', 'aria-label': 'Sampling preview' });
+    win.panel.body.append(win.view, h('div', { class: 'run-strip-line' }, win.bar, win.text));
+    return win.panel;
+  };
   api('/api/sampler-preview', { busy: false }).then((r) => tell(r.on !== false), () => {});   // (a server from before the switch: on)
   const srcBar = document.getElementById('progBar'), srcText = document.getElementById('progText'), srcView = document.getElementById('previewCanvas');
   if (!srcBar || !srcText) return strip;
@@ -110,12 +138,12 @@ export function mountRunStrip(host = document.body) {
   const paintView = (t = performance.now()) => {
     raf = 0;
     if (!live()) {
-      view.classList.add('hidden'); inFrame.remove();
+      view.classList.add('hidden'); inFrame.remove(); win.view?.classList.add('hidden');
       dropLayer(PV.on && !ENDED.test(srcText.textContent || '') ? true : false);
       return;
     }
     raf = requestAnimationFrame(paintView);
-    const home = homeEl(), eng = home?.classList.contains('viewer') ? openEditor() : null;
+    const home = WIN.on ? null : homeEl(), eng = home?.classList.contains('viewer') ? openEditor() : null;
     if (t - lastPaint < (eng ? 200 : 66)) return;   // (it must not slow down editing beside it: a layer redraws the whole stack)
     lastPaint = t;
     if (layerEng && layerEng !== eng) dropLayer();
@@ -128,6 +156,11 @@ export function mountRunStrip(host = document.body) {
       place(home);
       draw(inFrame);
       view.classList.add('hidden');
+    } else if (WIN.on) {   // (the window: nothing over a frame or among its layers)
+      inFrame.remove();
+      view.classList.add('hidden');
+      winPanel(); draw(win.view);
+      win.view.classList.remove('hidden');
     } else {
       inFrame.remove();
       draw(view);
@@ -151,8 +184,14 @@ export function mountRunStrip(host = document.body) {
     clearTimeout(endT); endT = 0;
     bar.style.width = srcBar.style.width || '0';
     text.textContent = srcText.textContent || '';
-    strip.classList.toggle('hidden', !text.textContent);
-    if (ENDED.test(text.textContent)) endT = setTimeout(() => { if (ENDED.test(text.textContent)) strip.classList.add('hidden'); }, END_MS);
+    const going = !!text.textContent;
+    strip.classList.toggle('hidden', !going || WIN.on);
+    if (WIN.on && going) {   // (the window comes up with a run and goes with it, where it was left)
+      const p = winPanel();
+      win.bar.style.width = bar.style.width; win.text.textContent = text.textContent;
+      if (!p.shown()) p.show();
+    } else win.panel?.hide();
+    if (ENDED.test(text.textContent)) endT = setTimeout(() => { if (ENDED.test(text.textContent)) { strip.classList.add('hidden'); win.panel?.hide(); } }, END_MS);
     if (!raf && text.textContent) raf = requestAnimationFrame(paintView);
   };
   PV.kick = copy;
