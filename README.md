@@ -507,6 +507,12 @@ To track only part of a clip, set a **Range** on the Video tab's ruler (I / O, o
 
 **Holding references** (`deck-h3-ref2v-hold`, `deck-h3-ctrl2v-hold`, from `dev/make_h3_hold_templates.py`): the same graphs as `deck-h3-ref2v` and `deck-h3-ctrl2v` with **Shift** 6 / 3 instead of the default 12 / 3, and `ref_image_size` `max` instead of `match`. `max` keeps up to 2048 px on a reference's short edge, so it is much slower and takes more of the card; use the picture slot's Max MP to cap it. Not yet tested on a GPU.
 
+**Pika H3 Flex** (`deck-h3-pika-ref2v`, `deck-h3-pika-i2v`, `deck-h3-pika-flf2v`, from `dev/make_pika_templates.py`):
+the same graphs with Pika's LoRA (`loras/h3/pika_h3_flex_ref2va_v1_bf16.safetensors` or `…fl2va…`, 1.96 GB each) in
+place of the turbo LoRA. It finishes in six steps on Pika's own schedule, so there is no Steps or Turbo LoRA setting:
+don't add a turbo LoRA to the LoRA list either. The references template takes up to 9 pictures and 3 sounds. On the
+RTX 4070 Super a 5 s clip at 768x448 took about a minute.
+
 **Character sheets** (`deck-h3-charsheet`): give it a picture of a character as Reference 1 and it
 makes a 12 s portrait clip: a 6 s orbit on a grey studio backdrop, then cuts at 6, 7.5, 9 and 10.5 s to
 close-ups (face front, three-quarter, profile, waist up). It saves the clip plus a sheet: frames
@@ -550,14 +556,14 @@ you are editing, which is also what a drag orbits). A render follows the cuts ei
 words as the Story tab (wide, close, low angle, the camera pushes in). Tap a chip to leave that shot out, hold it to
 edit the line. **To Story** adds one Story shot per cut, with a clay frame.
 
-**Objects from a photo.** **Use as → Make a 3D object** (or **+ Add → Object from photos…**) turns a picture into a
-textured model with Pixal3D. The sheet is a board of four slots (Front, Left, Back, Right): tap a slot to pick a photo for it
+**Objects from a photo.** **Use as → Make a 3D object** (or **+ Add → 3D object from pictures…**) opens a floating panel whose **Attached images** stay until you clear them, even if you close it or reload. Pixal3D reads all you attach; TRELLIS.2 and Idol read the first. It turns a picture into a
+textured model with Pixal3D. It has four slots (Front, Left, Back, Right), and **Add images…** fills several at once: tap a slot to pick a photo for it
 (the picker can crop it first), or **Split one picture…** to draw a box round each view of a character sheet. One filled slot
 makes the model from that photo alone (**Make its other views first** renders an orbit sheet and takes the four sides);
 two or more are used together for a rounder model. The mesh comes in as a model layer, fitted and standing on the floor in the middle of the
 scene. Its fields are **Cut out** (BiRefNet, on), **Detail** (sampling steps), **Texture** (off leaves the plain shape),
-**Seed** and **Texture resolution**. When `deck-3d-object-trellis` is installed, **Model (one photo)** switches between
-Pixal3D and TRELLIS.2, to compare. Two or more views run `deck-3d-object-multi`, which always uses Pixal3D.
+**Seed** and **Texture resolution**. When `deck-3d-object-trellis` is installed, **Model** switches between
+Pixal3D, TRELLIS.2 and Idol, to compare. Two or more views run `deck-3d-object-multi`, which always uses Pixal3D.
 With one photo, **Make a splat (Idol)** (`deck-3d-object-splat`) makes a Gaussian splat of the object instead, with the
 sides the photo doesn't show; turn on **The picture is a photograph** for a camera photo, off for a render. It
 lands as a splat layer. **Photo as a splat (SHARP)…** (in + Add, `POST /api/scene/splat`) turns a picture into a splat
@@ -935,6 +941,24 @@ LoRAs on Krea 2 Turbo, so the prompt describes the picture and the map only stee
 near); Anything takes a silhouette, pose or rough layout and follows it loosely. **Strength** sets how closely it follows;
 **End percent** lets go of the map partway through, for freer detail. The output takes the map's shape at 1 MP. Style
 LoRAs go in as usual, ahead of the Control LoRA. Don't add a Control LoRA to the ordinary LoRA list.
+
+**Pose from a character** (`deck-klein9b-pose`, from the same script) is Klein 9B with the RefControl pose LoRA
+(`loras/klein/refcontrol_v2_poses.safetensors`, 166 MB, Apache-2.0): the first picture is a pose map (a skeleton on
+black, made the same way as the other maps), the second is the character, and the result is that character in that
+pose, at the map's shape. The prompt starts as the LoRA's own sentence, `apply pose from image 1 with reference from
+image 2`; add the background, light or mood after it. The LoRA was trained on Klein 9B Base and its card says the
+4-step model used here keeps the face and pose slightly less well. Poses close to the character's own framing work
+best.
+
+**P-H3-Image** (`deck-ph3-t2i`, `deck-ph3-edit`, from `dev/make_ph3_templates.py`) is PrunaAI's picture model made
+from MiniMax-H3: 8 steps, no CFG and no negative prompt. It needs ComfyUI v0.44.0 or later. The templates load the
+w4a8 files (the smallest set, about 27 GB with the upsampler). The model card's figures are for 8 MP on 21 GB of VRAM
+and up; on the RTX 4070 Super (12 GB) 1, 2 and 4 MP all ran, 4 MP in about 13 s once loaded and about 2 minutes 20 from
+cold. 8 MP was not tried. The edit template takes the picture to edit and up to 7 references, named
+`<Picture 1>`, `<Picture 2>`… in the prompt, and comes out at the Size picked for the first picture.
+**Prompt upsampler** (on by default) has the model's own small language model rewrite the request into the long brief
+the picture model was trained on, looking at the pictures for an edit; the card says results are weak without it. It
+took about 30 s from cold here, with its own model load. Licence: MiniMax H3 Community License, the same as H3.
 
 Masks are greyscale PNGs (white = change), saved by `POST /api/inputs/mask` under `data/inputs/mask/` and in
 ComfyUI's `input/comfydeck/mask/`; they stay out of the input pickers. The run's settings hold the mask as

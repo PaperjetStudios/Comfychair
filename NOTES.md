@@ -516,3 +516,38 @@ The tabs that did the same job twice now share it:
 - **7.5, other models' drafts.** `run.js finishWithH3(g, index)` opens `deck-h3-refine` through `useRefineClip` and then
   sets the template's `rgon.value` to true and `rglora.__loras` to the installed refiner, so any clip (an LTX take, a
   scene render) can be finished the same way; Use as offers it for every video, H3's own or not.
+
+### Pika H3 Flex, P-H3-Image, RefControl pose (2026-11-05)
+- **ComfyUI v0.44.0** (from v0.43.1; rollback `git checkout -B master v0.43.1` and its three pinned packages). It adds
+  `PH3ImageConditioning`, which P-H3-Image needs.
+- **Pika** (`dev/make_pika_templates.py`): the base H3 templates with node 30 holding the Pika LoRA (untagged, so it is
+  not a setting), `lcm`, and `ManualSigmas` `1.0, 0.972973, 0.923077, 0.8, 0.571429, 0.333333, 0.0` (the manifest's
+  knots at shift 12). `h3upscale.TURBO_RE` counts `pika_h3_flex` as a turbo LoRA, so a Regenerate LoRA with Turbo
+  inside takes it out of the second pass. `templates.TURBO_RE` does not, so it never shows in a Turbo LoRA group.
+- **P-H3-Image** (`dev/make_ph3_templates.py`, `app/ph3image.py`): the templates carry the upsampler (`TextGenerate`
+  on its own `CLIPLoader`) unconnected, with a `PrimitiveBoolean` marked `_meta.deck_ph3_upsampler`. `ph3image.inject`
+  runs in `main.generate` after `editsize.inject`: off, it removes the upsampler and its loader; on, it writes the
+  upsampler's input for the pictures the run has (Pruna's strings: `Aspect ratio: …\nRequest: …`, or the chat
+  template with one `<Picture N>` per picture, the first at 1 MP and the others padded to its size) and points the
+  conditioning's prompt at it. For an edit it also copies the Size onto the node, so references are shrunk to the
+  result's area instead of 8.5 MP each. `editsize` steps the Size by 32 for this node.
+- **RefControl** (`dev/make_control_templates.py` `klein_pose`): `deck-klein9b-control` with the LoRA fixed after the
+  LoRA stack, two pictures (pose, then character) and the trigger sentence.
+- **Tests:** `tests/test_ph3image.py`. On the card: Pika Ref2V and I2V, P-H3 T2I and Edit, RefControl (see each generator's
+  docstring). Not run: Pika FLF2V, P-H3 at 8 MP or with references.
+
+### 3D object panel, Add list, and small table fixes (2026-11-05)
+- **Object panel** (`scene-import.js` `openObjectSheet`, rules in `web/object-rules.js`): the sheet is now a `floatPanel`, so a picker, Esc or
+  closing it loses nothing. The attached pictures are input names kept per project in `deck.scene.object.<project>`; it writes no file. A name
+  alone joins the attached pictures; `picks` (a character, marked views, a frame's Edit op) replaces them. A picture that no longer loads leaves
+  its slot. The result's place is settled when Make is pressed (`objectTarget`): the caller's, else the open 3D frame (`withSceneDoc`), else a
+  new 3D frame on the table, else the open scene. A run's clip is not kept for a reload: it stays in the Shelf.
+- **Add list** (`scene-ui.js` `openAdd`, `object-rules.js` `addGroups`, `filterGroups`): groups plus Find; a new type shows under Other.
+- **Preview window** (`run-strip.js`, `run-preview-rules.js` `windowUp`, `lineOver`): up with a run's first picture only; another device's line and
+  previews-off stay on the strip, which has a button back to the window for a full-screen frame; `floatPanel({ inside })` keeps it whole on screen.
+- **Frames from a video wire** (`wire-panel.js`, `wire-rules.js` `holdsStill`): a plain image frame grabs the picked frame when made.
+- **Make runs for a video or sound frame** are kept for a reload (`edit-run.js` `keepRun`, landed by its `replay`). They used to land only while the page
+  stayed open.
+- **Group presets** (`generate.js`, `setups-rules.js` `presetFields`): text is kept and loaded, so H3's Shot preset carries the prompt; Template default
+  leaves typed text alone. Presets saved before this have no prompt in them and leave it as it is.
+

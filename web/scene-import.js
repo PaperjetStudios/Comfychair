@@ -11,7 +11,12 @@ import { maxMpRow, resizeInput } from './media.js';
 import { blenderButton, blenderSplatButton } from './blender.js';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { store, actions, api, button, clone, closeSheet, fileButton, h, hint, nameSheet, openSheet, section, toast, uid, undoToast , help, toggle, chip, field, seg, info, rangeField, mediaCard, placeholder, iconBtn } from './ui.js';
-import { inputUrl, thumbUrl } from './core.js';
+import { S as APP, inputUrl, thumbUrl } from './core.js';
+import { icon } from './icons.js';
+import { floatPanel } from './float-panel.js';
+import { pictureSlot } from './picture-drop.js';
+import { liveFrame } from './live.js';
+import { OBJECT_MODELS, VIEWS as VIEW_ROLES, addPictures, planRun, usedViews } from './object-rules.js';
 import { C, OBJ as OBJ_CH, R, SC, current, frames, matchSceneTo, newObject, namesFor, sampleChan, save, selItem, setKey, write } from './scene-data.js';
 import { heightOf as figureHeight } from './figure.js';
 import { addModeSection } from './scene-modes.js';
@@ -387,54 +392,63 @@ async function objectValues(templateId, groups) {
   return { t, values };
 }
 
-async function objectRun(templateId, values, what) {
+// who: where this run's result goes, settled when Make is pressed (objectTarget), so opening the panel for something else meanwhile can't move it
+async function objectRun(templateId, values, what, who = null) {
   const { queueRun, waitGen } = await import('./make.js');
   const [g] = await queueRun({ template: templateId, values });
   toast(`${what}: queued as #${g.id}. It takes a while on the GPU.`);
-  if (forCharacter && what === 'The 3D object') forCharacter.queued(g, 'model', templateId, { ...OBJ });   // (recorded now: the run is found again after a reload)
-  if (forCharacter && what === 'The splat') forCharacter.queued(g, 'splat', templateId, { ...OBJ });
-  const done = await waitGen(g.id);
-  return done?.outputs ? done : api(`/api/generations/${g.id}`, { busy: false });
+  if (who?.queued && what === 'The 3D object') who.queued(g, 'model', templateId, { ...OBJ });   // (recorded now: the run is found again after a reload)
+  if (who?.queued && what === 'The splat') who.queued(g, 'splat', templateId, { ...OBJ });
+  const row = { id: g.id, what, state: 'running' };
+  PANEL.runs = [row, ...PANEL.runs].slice(0, 5);
+  drawObjectPanel();
+  try {
+    const done = await waitGen(g.id);
+    row.state = 'done';
+    return done?.outputs ? done : await api(`/api/generations/${g.id}`, { busy: false });
+  } catch (e) { row.state = 'failed'; throw e; } finally { drawObjectPanel(); }
 }
 
 const glbOf = (g) => (g?.outputs || []).find((o) => /\.glb$/i.test(o.filename));
 
-// a model being made for a character goes back to them (their To review), not into the open scene
-let forCharacter = null;
-async function land(g, label) {
+// a run's result into its place: who.queued took it already (a character's To review, a new 3D frame); who.scene is the 3D frame that
+// was open when it was asked for, even if another is open now; else the open scene
+async function intoScene(who, add) {
+  if (who?.queued) return;
+  if (who?.scene) return (await import('./frame-scene.js')).withSceneDoc(who.scene, add);
+  return add();
+}
+async function land(g, label, who) {
   const out = glbOf(g);
   if (!out) throw new Error('That run made no 3D model (a GLB)');
-  if (forCharacter) return;
-  await addModel(out.url, label, { gen: g.id, index: g.outputs.indexOf(out) });
+  await intoScene(who, () => addModel(out.url, label, { gen: g.id, index: g.outputs.indexOf(out) }));
 }
 
 // one picture of an object as a splat (Idol): the splat file lands as a splat layer
-async function makeIdolSplat(name, label) {
+async function makeIdolSplat(name, label, who) {
   try {
     const { t, values } = await objectValues(SPLAT_TPL, { 'Object picture': name });
     const set = (group, v) => { const f = t.fields.find((x) => x.group === group && x.kind !== 'image'); if (f) values[f.key] = v; };
     set('It is a photograph', OBJ.photo);
     set('Seed', OBJ.seed === '' ? Math.floor(Math.random() * 2 ** 31) : Number(OBJ.seed));
-    const g = await objectRun(SPLAT_TPL, values, 'The splat');
+    const g = await objectRun(SPLAT_TPL, values, 'The splat', who);
     const i = (g.outputs || []).findIndex((o) => o.kind === 'splat' || /\.(ply|spz|ksplat|splat)$/i.test(o.filename));
     if (i < 0) throw new Error('That run made no splat file');
-    if (!forCharacter) await addSplat(g.outputs[i].url, label, { gen: g.id, index: i });
-    closeSheet();
+    await intoScene(who, () => addSplat(g.outputs[i].url, label, { gen: g.id, index: i }));
   } catch (e) { toast(e.message, true); }
 }
 
 // one photo: the front view
-async function makeFromPhoto(name, label) {
+async function makeFromPhoto(name, label, who) {
   try {
     const tpl = photoTpl();
     const { values } = await objectValues(tpl, { Front: name });
-    await land(await objectRun(tpl, values, 'The 3D object'), label);
-    closeSheet();
+    await land(await objectRun(tpl, values, 'The 3D object', who), label, who);
   } catch (e) { toast(e.message, true); }
 }
 
 // the object sheet first (an orbit: front, side, back, other side), then the four views
-async function makeFromViews(name, label) {
+async function makeFromViews(name, label, who) {
   try {
     const { t, values } = await objectValues(SHEET_TPL, {});
     const ref = t.fields.find((f) => f.kind === 'image' && f.group === 'References');
@@ -449,17 +463,15 @@ async function makeFromViews(name, label) {
     }
     // (the sheet turns to the character's left first: side = left, other side = right)
     const { values: mv } = await objectValues(OBJECT_MULTI, { Front: views[0], Left: views[1], Back: views[2], Right: views[3] });
-    await land(await objectRun(OBJECT_MULTI, mv, 'The 3D object'), label);
-    closeSheet();
+    await land(await objectRun(OBJECT_MULTI, mv, 'The 3D object', who), label, who);
   } catch (e) { toast(e.message, true); }
 }
 
 // the other views picked from the inputs
-async function makeFromPicked(picks, label) {
+async function makeFromPicked(picks, label, who) {
   try {
     const { values } = await objectValues(OBJECT_MULTI, picks);
-    await land(await objectRun(OBJECT_MULTI, values, 'The 3D object'), label);
-    closeSheet();
+    await land(await objectRun(OBJECT_MULTI, values, 'The 3D object', who), label, who);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -569,61 +581,107 @@ async function checkViews(picks, go, back) {
     actions(button('Make it anyway', () => { closeSheet(); go(); }, { cls: 'primary' }), button('Back', back)));
 }
 
-// the sheet: a board of the four views (Front, Left, Back, Right). A slot takes any photo (the picker crops too), one
-// picture can be split across the slots, and what is filled decides the run: one photo alone, or the views together.
-const VIEW_ROLES = ['Front', 'Left', 'Back', 'Right'];
-// { character }: { queued(run, slot, template, settings) } gets the final run and the model goes to them; { settings }: start from these
-export function openObjectSheet(name, label = '', picks = { Front: name }, opts = {}) {
-  forCharacter = opts.character || null;
-  if (opts.settings) Object.assign(OBJ, opts.settings);
-  const again = () => openObjectSheet(name, label, picks, { character: opts.character });   // (the views picked so far stay)
+// The object panel: floating, so nothing is lost by working elsewhere, picking a picture or closing it. Its first section is the attached
+// pictures, one slot for each view (Front, Left, Back, Right). A slot takes any picture (the picker crops too), several can be added at once,
+// one picture can be split across the slots, and a layer or a file can be dropped on a slot. The model says which of them it reads: Pixal3D all
+// of them together, the others the first; the rest stay attached, greyed. The pictures are kept on this device per project until cleared, and
+// only their names: it writes no file of its own. A run goes on the Queue and the panel stays usable.
+const PANEL = { panel: null, picks: {}, label: '', who: null, runs: [] };
+const draftKey = () => `deck.scene.object.${APP.project ?? 'none'}`;
+const keepDraft = () => store.set(draftKey(), PANEL.picks);
+const readDraft = () => { const d = store.get(draftKey(), {}); return d && typeof d === 'object' ? d : {}; };
+export const attachedPictures = () => Object.keys(PANEL.panel?.shown() ? PANEL.picks : readDraft()).length;
+const setPicks = (picks) => { PANEL.picks = picks; keepDraft(); drawObjectPanel(); };
+
+// where a run started now lands: the panel's own target, the open 3D frame, a new 3D frame on the table, else the open scene
+async function objectTarget() {
+  if (PANEL.who) return PANEL.who;
+  const live = liveFrame();
+  if (live?.kind === 'scene') return { scene: live };
+  if (!document.querySelector('#tab-table.active, #tab-table.live-host')) return null;
+  const T = await import('./table.js'), near = T.selectedFrames?.()?.[0];
+  return { queued: async (g) => { (await import('./edit-ops.js')).runBeside(near || { x: 0, y: 0, w: 0, h: 0, label: `#${g.id}` }, g, 'scene', '3D object').catch((e) => toast(e.message, true)); } };
+}
+
+function drawObjectPanel() {
+  const { panel, picks, label } = PANEL;
+  if (!panel) return;
+  const model = OBJECT_MODELS[OBJ.model] && (OBJ.model !== 'trellis' || hasTrellis()) ? OBJ.model : 'pixal';
+  const plan = planRun(picks, model), used = new Set(plan.views), first = picks[plan.views[0]], name = label || (plan.kind === 'splat' ? 'Splat' : '3D object');
   const num = (key, min, max) => h('input', { type: 'number', min, max, value: OBJ[key], placeholder: key === 'seed' ? 'random' : null,
     onchange: (e) => { OBJ[key] = e.target.value === '' && key === 'seed' ? '' : Math.max(min, Math.min(max, Math.round(+e.target.value || min))); } });
-  const pick = (role) => {
-    closeSheet();
-    C.openImagePicker({ title: `The ${role.toLowerCase()} view`, mpKey: '3d', onPick: (n) => { picks[role] = n; again(); } });
-  };
+  const picker = async (o) => (await import('./source-picker.js')).openSourcePicker({ kinds: ['image'], want: 'picture', mpKey: '3d', ...o });
+  const pick = (role) => picker({ title: `The ${role.toLowerCase()} view`, onPick: (n) => setPicks({ ...PANEL.picks, [role]: n }) });
+  const free = VIEW_ROLES.filter((v) => !picks[v]).length;
+  const addMany = () => picker({ title: 'Pictures of the object', multi: free > 1, limit: free,
+    onPick: (n) => setPicks(addPictures(PANEL.picks, [n]).picks) });
   // one picture holding several views (a character sheet): a box round each, cut out into its slot
-  const split = () => {
-    closeSheet();
-    C.openImagePicker({ title: 'A picture with several views', mpKey: '3d', onPick: (src) => import('./view-boxes.js').then((m) => m.openViewBoxes({ image: src, boxes: {},
-      onDone: async (boxes) => {
-        try {
-          for (const [view, box] of Object.entries(boxes)) picks[view] = (await api('/api/inputs/crop', { method: 'POST', body: { name: src, multiple: 1, crop: box } })).name;
-        } catch (e) { toast(e.message, true); }
-        again();
-      },
-      onCancel: again })) });
-  };
-  const filled = VIEW_ROLES.filter((r) => picks[r]), n = filled.length, only = picks[filled[0]];
-  const slot = (role) => h('div', { class: `obj-slot${picks[role] ? ' filled' : ''}` },
-    h('button', { type: 'button', class: 'obj-slot-pic', 'aria-label': `${role}: ${picks[role] ? 'change' : 'pick'} the picture`, onclick: () => pick(role) },
-      picks[role] ? h('img', { src: thumbUrl(picks[role], 320), alt: '' }) : h('span', { class: 'obj-slot-plus' }, '+')),
+  const split = () => picker({ title: 'A picture with several views', onPick: (src) => import('./view-boxes.js').then((m) => m.openViewBoxes({ image: src, boxes: {},
+    onDone: async (boxes) => {
+      const out = { ...PANEL.picks };
+      try {
+        for (const [view, box] of Object.entries(boxes)) out[view] = (await api('/api/inputs/crop', { method: 'POST', body: { name: src, multiple: 1, crop: box } })).name;
+      } catch (e) { toast(e.message, true); }
+      setPicks(out);
+    },
+    onCancel: () => {} })) });
+  const clear = (role) => { const out = { ...PANEL.picks }; delete out[role]; setPicks(out); };
+  const slot = (role) => pictureSlot(h('div', { class: `obj-slot${picks[role] ? ' filled' : ''}${picks[role] && !used.has(role) ? ' unused' : ''}` },
+    h('button', { type: 'button', class: 'obj-slot-pic', 'aria-label': `${role}: ${picks[role] ? 'change' : 'pick'} the picture`, title: picks[role] && !used.has(role) ? `${OBJECT_MODELS[model].label} doesn't read this one` : null, onclick: () => pick(role) },
+      picks[role] ? h('img', { src: thumbUrl(picks[role], 320), alt: '', onerror: () => clear(role) })   // (the picture was deleted)
+        : h('span', { class: 'obj-slot-plus' }, '+')),
     h('div', { class: 'obj-slot-bar' }, h('span', {}, role),
-      picks[role] ? iconBtn(`Clear ${role}`, '✕', () => { delete picks[role]; again(); }) : null));
-  openSheet(h('h3', {}, 'Make a 3D object'),
-    hint(label ? `From ${label}` : 'Pick the views you have'),
-    section('Its views', null,
+      picks[role] ? h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Clear ${role}`, title: `Clear ${role}`, onclick: () => clear(role) }, icon('close')) : null)),
+  { give: (n) => setPicks({ ...PANEL.picks, [role]: n }) });
+  const go = async (fn) => {
+    const views = Object.fromEntries(plan.views.map((v) => [v, picks[v]]));
+    const who = await objectTarget();
+    checkViews(views, () => fn(views, who), () => closeSheet());
+  };
+  const make = plan.kind === 'splat' ? button('Make the splat', () => go((v, who) => makeIdolSplat(first, name, who)), { cls: 'primary' })
+    : plan.kind === 'multi' ? button(`Make it from ${plan.views.length} views`, () => go((v, who) => makeFromPicked(v, name, who)), { cls: 'primary' })
+    : button(plan.kind ? 'Make it from this picture' : 'Attach a picture first', () => go((v, who) => makeFromPhoto(first, name, who)), { cls: 'primary', disabled: !plan.kind });
+  const splat = plan.kind === 'splat';
+  const stateWord = { running: 'on the way', done: 'done', failed: 'failed' };
+  panel.body.replaceChildren(
+    label ? hint(`For ${label}`) : '',
+    section('Attached images', null,
       h('div', { class: 'obj-views' }, VIEW_ROLES.map(slot)),
-      h('div', { class: 'row wrap' }, button('Split one picture…', split, { cls: 'small', title: 'Draw a box round each view in one picture' }),
-        n === 1 ? button('Make a splat (Idol)', () => checkViews(picks, () => makeIdolSplat(only, label || only), again),
-          { cls: 'small', title: 'Idol: a Gaussian splat of the object from this one photo, with the sides the photo doesn\'t show. Quick, and shown in the 3D tab as a splat' }) : null,
-        n === 1 ? button('Make its other views first', () => checkViews(picks, () => makeFromViews(only, label || only), again),
-          { cls: 'small', title: 'An orbit sheet of the object (front, side, back, other side), then a model from those four views' }) : null),
-      n >= 2 ? button(`Make it from ${n} views`, () => checkViews(picks, () => makeFromPicked(picks, label || picks[filled[0]]), again), { cls: 'primary' })
-        : button(n ? 'Make it from this photo' : 'Pick a photo first', () => checkViews(picks, () => makeFromPhoto(only, label || only), again), { cls: 'primary', disabled: !n,
-          title: `${OBJ.model === 'trellis' && hasTrellis() ? 'TRELLIS.2' : 'Pixal3D'} makes a model from the one photo (quickest)` }),
-      help('Tap a slot to pick a photo for that side (the picker can crop it first). One photo makes a model by itself; two or more are used together, for a rounder one. Four views 90° apart, the object the same size in each, on a plain background, work best. Split one picture cuts a character sheet into the slots. Left is the character\'s left.')),
-    section('Settings', null,
-      hasTrellis() ? field('Model (one photo)', seg([['pixal', 'Pixal3D'], ['trellis', 'TRELLIS.2']], OBJ.model, (v) => { OBJ.model = v; again(); }),
-        help('Which model makes it from one photo. Two or more views always use Pixal3D.')) : null,
-      field('Detail (steps)', num('steps', 4, 60)),
+      h('div', { class: 'row wrap' },
+        button('Add images…', addMany, { cls: 'small', disabled: !free }),
+        button('Split one picture…', split, { cls: 'small', title: 'Draw a box round each view in one picture' }),
+        Object.keys(picks).length ? button('Clear all', () => setPicks({}), { cls: 'small' }) : null),
+      help('Pictures stay here until you clear them, whatever you do elsewhere. Each slot is a side of the object. Pixal3D uses all you attach: four views 90° apart, the object the same size in each, on a plain background, make the roundest model. TRELLIS.2 and Idol use one picture, the first; the others stay, greyed, for when you change model.')),
+    section('Model', null,
+      seg(Object.entries(OBJECT_MODELS).filter(([id]) => id !== 'trellis' || hasTrellis()).map(([id, m]) => [id, m.label]), model, (v) => { OBJ.model = v; drawObjectPanel(); }),
+      splat ? null : field('Detail (steps)', num('steps', 4, 60)),
       field('Seed', num('seed', 0, 2 ** 31 - 1)),
-      field('Texture resolution', seg([[1024, '1K'], [2048, '2K'], [4096, '4K']], OBJ.res, (v) => { OBJ.res = v; })),
-      toggle('Texture', OBJ.tex, (v) => { OBJ.tex = v; }, { help: 'Off makes the shape alone, much quicker' }),
-      toggle('The picture is a photograph (splat)', OBJ.photo, (v) => { OBJ.photo = v; }, { help: 'For Make a splat (Idol): on for a camera photo, off for a render or a generated picture. The object should be one thing, whole in the frame.' }),
-      toggle('Cut out the object (one photo)', OBJ.cut, (v) => { OBJ.cut = v; }, { help: 'Removes the background before making the model from one photo. Turn off when the photo is already cut out.' })),
-    actions(button('Cancel', closeSheet)));
+      splat ? null : field('Texture resolution', seg([[1024, '1K'], [2048, '2K'], [4096, '4K']], OBJ.res, (v) => { OBJ.res = v; })),
+      splat ? null : toggle('Texture', OBJ.tex, (v) => { OBJ.tex = v; }, { help: 'Off makes the shape alone, much quicker' }),
+      splat ? toggle('The picture is a photograph', OBJ.photo, (v) => { OBJ.photo = v; }, { help: 'On for a camera photo, off for a render or a generated picture. The object should be one thing, whole in the frame.' }) : null,
+      plan.kind === 'single' ? toggle('Cut out the object', OBJ.cut, (v) => { OBJ.cut = v; }, { help: 'Removes the background before making the model from one picture. Turn off when it is already cut out.' }) : null),
+    h('div', { class: 'row wrap' }, make,
+      plan.kind === 'single' && model === 'pixal' ? button('Make its other views first', () => go((v, who) => makeFromViews(first, name, who)),
+        { cls: 'small', title: 'An orbit sheet of the object (front, side, back, other side), then a model from those four views' }) : null),
+    ...PANEL.runs.map((r) => hint(`#${r.id} ${r.what}: ${stateWord[r.state]}`)));
+}
+
+// Opens the panel. name alone: that picture joins the ones attached. picks: these views instead (a character's, marked views). Neither: what was
+// attached last. opts: { character: { queued(run, slot, template, settings) } gets the run and the model goes there; settings: start from these }
+export function openObjectSheet(name = null, label = '', picks = null, opts = {}) {
+  if (!PANEL.panel) {
+    const close = h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Close (the pictures stay attached)', title: 'Close: the pictures stay attached', onclick: () => PANEL.panel.hide() }, icon('close'));
+    PANEL.panel = floatPanel({ key: 'deck.scene.objectPanel', title: 'Make a 3D object', cls: 'float-object', buttons: [close], inside: true });
+  }
+  if (opts.settings) Object.assign(OBJ, opts.settings);
+  if (!PANEL.panel.shown()) PANEL.picks = readDraft();
+  PANEL.who = opts.character || null;
+  PANEL.label = label || '';
+  if (picks) PANEL.picks = { ...picks };
+  else if (name) PANEL.picks = addPictures(PANEL.picks, [name]).picks;
+  keepDraft();
+  drawObjectPanel();
+  PANEL.panel.show();
 }
 
 // ---- scene templates ----------------------------------------------------------------------

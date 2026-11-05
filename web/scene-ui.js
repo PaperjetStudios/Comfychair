@@ -533,28 +533,30 @@ export function renderProps() {
 // a double-click on a blank scene: what can be added
 addEventListener('dblclick', (e) => { if (e.target.id === 'sceneCanvas' && !SC.objects.length && !SC.room) openAdd(); });
 async function openAdd() {
-  const { importButton } = await import('./scene-import.js');   // (scene-view imports this panel: no top-level import)
-  openSheet(h('h3', {}, 'Add to the scene'),
-    h('div', { class: 'row wrap' }, importButton(),
-      hint('glb, gltf, fbx, obj (with its .mtl and textures) or a splat: ply, splat, ksplat, spz. You can also drop the files on the 3D view.')),
-    h('div', { class: 'chips' }, ...Object.entries(TYPES).filter(([t, d]) => !['photo', 'model', 'splat'].includes(t) && !d.hide).flatMap(([t, d]) => (t === 'figure'
-      ? FIGURE.BODIES.map(([b, l]) => chip(`${d.icon} ${d.label} (${l.toLowerCase()})`, () => addObject(t, { body: b })))
-      : [chip(`${d.icon} ${d.label}`, () => addObject(t))])),
-      SC.room ? null : chip('⌂ Room', () => addObject(ROOM)),
-      chip('🖼 Picture as background…', () => {
-        closeSheet(); C.openImagePicker({ title: 'Background picture', onPick: (name) => addPicture(name) });
-      }, 'A flat plane with the picture\'s own shape, behind everything, filling the shot camera\'s frame'),
-      chip('🖼 Photo in 3D…', () => {
-        closeSheet(); C.openImagePicker({ title: 'Picture to turn into 3D', mpKey: '3d', onPick: (name) => makePhoto(name) });
-      }, 'Turn a picture into a 3D mesh (MoGe in ComfyUI) for camera moves'),
-      chip('Photo as a splat (SHARP)…', () => {
-        closeSheet(); C.openImagePicker({ title: 'Picture to turn into a splat', mpKey: '3d', onPick: (name) => makeSplatHere(name) });
-      }, 'Turn a picture into Gaussian splats (Apple SHARP): softer and more lifelike than the mesh, for small camera moves'),
-      chip('🧊 Object from photos…', async () => {
-        closeSheet();
-        const { openObjectSheet } = await import('./scene-import.js');   // (scene-view imports this panel: no top-level import)
-        C.openImagePicker({ title: 'Picture of the object', onPick: (name) => openObjectSheet(name, name) });
-      }, 'Pixal3D: a textured model from one photo, or four of its views')));
+  const { attachedPictures, importButton, openObjectSheet } = await import('./scene-import.js');   // (scene-view imports this panel: no top-level import)
+  const { addGroups, filterGroups } = await import('./object-rules.js');
+  const picture = (title, mpKey, run) => { closeSheet(); C.openImagePicker({ title, ...(mpKey && { mpKey }), onPick: run }); };
+  const run = {
+    object: () => { closeSheet(); openObjectSheet(); },
+    photo3d: () => picture('Picture to turn into 3D', '3d', makePhoto),
+    sharp: () => picture('Picture to turn into a splat', '3d', makeSplatHere),
+    background: () => picture('Background picture', null, addPicture),
+    room: () => addObject(ROOM),
+  };
+  const groups = addGroups(TYPES, { room: !!SC.room, attached: attachedPictures(), bodies: FIGURE.BODIES });
+  const list = h('div', { class: 'add-groups' });
+  const draw = (q) => {
+    const found = filterGroups(groups, q);
+    list.replaceChildren(...(found.length ? found.map((g) => h('section', {}, h('h4', { class: 'wp-head' }, g.title),
+      h('div', { class: 'chips' }, g.items.map((i) => chip(`${i.icon} ${i.label}`, () => (run[i.id] ? run[i.id]() : addObject(i.id, i.body ? { body: i.body } : undefined)), i.tip)))))
+      : [hint('Nothing by that name')]));
+  };
+  const find = h('input', { type: 'search', class: 'wp-find', placeholder: 'Find', 'aria-label': 'Find something to add', oninput: (e) => draw(e.target.value) });
+  draw('');
+  openSheet(h('h3', {}, 'Add to the scene'), find,
+    h('div', { class: 'row wrap' }, importButton(), help('Import takes glb, gltf, fbx, obj (with its .mtl and textures) or a splat: ply, splat, ksplat, spz. You can also drop the files on the 3D view.')),
+    list);
+  if (!matchMedia('(pointer: coarse)').matches) setTimeout(() => find.focus(), 30);
 }
 
 // ---- history, modes -----------------------------------------------------------------------
