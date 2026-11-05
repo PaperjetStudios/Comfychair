@@ -7,19 +7,52 @@
 //   A mask with maskFor 'adjust' hides nothing: it says where the layer's Colour adjustments (web/adjust.js) apply.
 //   Merge: the layers drawn as one new picture, at the place of the topmost, in their group if they share one. Undo brings them back.
 //   Undo: stackState() is what a change to the stack changes (no pixels); applyState() puts it back on the same layer objects.
+//   A step also holds what it changed of the canvas (CANVAS: its size, shape, background, export size, items, animation), so one
+//   Undo puts the layers and the canvas back together, and each layer's picture (pixels(l): { img, id, name }: a picture replaced whole,
+//   as a mask by Find to mask, Mask outside or Extend, goes back with its step, its file name too; pixels painted in place are paint.js's
+//   patches. id: what the picture is, the same for an image and the canvas it was turned into for its first stroke).
 // ---------------------------------------------------------------------------
-const FIELDS = ['crop', 'x', 'y', 'scale', 'opacity', 'hidden', 'blend', 'locked', 'label', 'rotation', 'flipX', 'flipY', 'group', 'maskOf', 'maskOff', 'clip', 'adjust', 'maskFor', 'fill'];
-const copy = (v) => (v && typeof v === 'object' ? { ...v } : v);
+const FIELDS = ['crop', 'x', 'y', 'scale', 'opacity', 'hidden', 'blend', 'locked', 'label', 'rotation', 'flipX', 'flipY', 'group', 'maskOf', 'maskOff', 'clip', 'adjust', 'maskFor', 'fill', 'chans'];
+const DEEP = new Set(['adjust', 'chans']);   // (an animated layer's keys: putKey writes into the lists)
+const copy = (v, k) => (v && typeof v === 'object' ? (DEEP.has(k) ? structuredClone(v) : { ...v }) : v);
+export const CANVAS = ['size', 'sizeShape', 'sizeMode', 'bg', 'clear', 'out', 'mp', 'anim', 'items'];
+const deep = (v) => (v === undefined ? undefined : structuredClone(v));
 
-export function stackState(layers, groups = []) {
-  return { groups: groups.map((g) => ({ ...g })), layers: layers.map((l) => ({ l, f: Object.fromEntries(FIELDS.map((k) => [k, copy(l[k])])) })) };
+// canvas: the editor's state (E) to take CANVAS from, or none (a stack with no canvas of its own). pixels(l): { img, id, name } to keep, or undefined
+export function stackState(layers, groups = [], { canvas = null, pixels = null } = {}) {
+  return { groups: groups.map((g) => ({ ...g })),
+    layers: layers.map((l) => ({ l, f: Object.fromEntries(FIELDS.map((k) => [k, copy(l[k], k)])), px: pixels?.(l) })),
+    ...(canvas ? { canvas: Object.fromEntries(CANVAS.map((k) => [k, deep(canvas[k])])) } : {}) };
 }
-export const sameState = (a, b) => a.layers.length === b.layers.length && a.layers.every((x, i) => x.l === b.layers[i].l && JSON.stringify(x.f) === JSON.stringify(b.layers[i].f))
-  && JSON.stringify(a.groups) === JSON.stringify(b.groups);
+// (a layer's picture counts as changed only when both sides hold one, and by its id: an image turned into a canvas for its first stroke is the same picture)
+const samePx = (a, b) => a === undefined || b === undefined || a.id === b.id;
+export const sameState = (a, b) => a.layers.length === b.layers.length && a.layers.every((x, i) => x.l === b.layers[i].l && samePx(x.px, b.layers[i].px) && JSON.stringify(x.f) === JSON.stringify(b.layers[i].f))
+  && JSON.stringify(a.groups) === JSON.stringify(b.groups) && JSON.stringify(a.canvas ?? null) === JSON.stringify(b.canvas ?? null);
+// Puts st back on E. Returns the layers whose picture it put back (a painted one's file must be saved again).
 export function applyState(E, st) {
   E.groups = st.groups.map((g) => ({ ...g }));
-  E.layers = st.layers.map(({ l, f }) => { for (const k of FIELDS) { const v = copy(f[k]); if (v === undefined) delete l[k]; else l[k] = v; } return l; });
+  const swapped = [];
+  E.layers = st.layers.map(({ l, f, px }) => {
+    for (const k of FIELDS) { const v = copy(f[k], k); if (v === undefined) delete l[k]; else l[k] = v; }
+    if (px !== undefined && l.img !== px.img) { l.img = px.img; l.name = px.name; swapped.push(l); }
+    return l;
+  });
+  if (st.canvas) for (const k of CANVAS) E[k] = deep(st.canvas[k]);
+  return swapped;
 }
+// Whether a change goes into the step before it (stack steps under ms apart: a slider's run). last: { beforeStack, afterStack }; now: the
+// state after the change. Never when either adds, removes or reorders layers, swaps a picture or changes the canvas's size, shape,
+// export size or items: a result landing, a delete, a crop of the canvas is a step of its own, so one Undo never takes it with the user's change.
+const sameLayers = (a, b) => a.layers.length === b.layers.length && a.layers.every((x, i) => x.l === b.layers[i].l && samePx(x.px, b.layers[i].px));
+const frameOf = (st) => JSON.stringify(st.canvas ? [st.canvas.size, st.canvas.sizeShape, st.canvas.out, st.canvas.mp, !!st.canvas.anim, st.canvas.items?.length] : null);
+export function mergesWith(last, now, dt, ms = 500) {
+  if (!last?.beforeStack || !last.afterStack || !(dt < ms)) return false;
+  const a = last.beforeStack, b = last.afterStack;
+  return sameLayers(a, b) && sameLayers(b, now) && frameOf(a) === frameOf(b) && frameOf(b) === frameOf(now);
+}
+// Opening a document: its undo steps stay only when it's the one this history is about (id), opened again as it was left (same: what it
+// holds matches what's on show), and not as saved somewhere else (remote: a step put back would undo that save). Otherwise a fresh history.
+export const keepsHistory = ({ was, id, remote = false, same = false }) => id != null && id === was && !remote && same;
 
 // Masks with their owner, members together, nothing pointing at what's gone. Returns a new list of the same layers.
 export function normalize(layers, groups = []) {

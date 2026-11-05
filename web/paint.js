@@ -4,6 +4,7 @@ import { icon } from './icons.js';
 import { NEUTRAL_GREY } from './edit-image.js';
 import { ASPECT_PRESETS } from './core.js';
 import { snapNearest } from './gizmo.js';
+import { ownsKey } from './key-focus.js';
 import { apply, bounds, canvasToImage, corners, imageToCanvas, invert, layerMatrix, mul } from './layer-geom.js';
 
 // ---------------------------------------------------------------------------
@@ -71,6 +72,7 @@ function layerCanvas(l) {
   const cv = makeCanvas(l.img.naturalWidth, l.img.naturalHeight);
   cv.getContext('2d').drawImage(l.img, 0, 0);
   l.label ??= l.name.split('/').pop();   // it keeps the picture's name once it names its paint file
+  cv.deckFrom = l.img.deckFrom || l.img;   // (the same picture to undo: layer-stack.js stackState)
   l.img = cv;
   return cv;
 }
@@ -284,6 +286,7 @@ export function createPaint(ctx) {
     });
     X.render();
   }
+  // (these three replace the mask's canvas whole: the stack's undo step keeps the canvas it had, layer-stack.js stackState)
   // the canvas grew: the mask layer takes the new frame f (canvas px), its old paint kept in place (the caller moved it with
   // the other layers), and the rects (canvas px) are marked
   function growMask(f, rects) {
@@ -354,7 +357,11 @@ export function createPaint(ctx) {
       dirty(n, 200);
       last = n; cut++;
     }
-    if (last) { E().sel = last; E().multi = []; maskOp('clear'); X.changed(); X.render(); }
+    if (last) {   // (the mask used up as a new empty canvas, so the cut and the mask going are one undo step: the stack's)
+      const m = maskLayer(false);
+      if (m) { m.img = makeCanvas(m.img.width, m.img.height); dirty(m, 200); }
+      E().sel = last; E().multi = []; X.changed(); X.render();
+    }
     return cut;
   }
 
@@ -389,7 +396,7 @@ export function createPaint(ctx) {
     cv.getContext('2d').drawImage(l.img, dx, dy);
     l.img = cv;
     l.x -= dx * l.scale; l.y -= dy * l.scale;
-    U.undo = U.undo.filter((e) => e.l !== l); U.redo = U.redo.filter((e) => e.l !== l);   // (their patches were cut for the old size)
+    // (its old patches stay: the stack's undo step puts the old canvas back before they are reached)
     dirty(l, 200);
     X.changed(); X.render();
   }
@@ -1456,7 +1463,7 @@ export function createPaint(ctx) {
 
   // ---- keys: tool letters, [ ] for the size, Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y ----
   function onKey(e) {
-    if (!X.active() || e.target.closest('input, textarea, select')) return;
+    if (!X.active() || ownsKey(e)) return;   // (a slider just dragged keeps only its arrow keys: Ctrl+Z still undoes)
     const k = e.key.toLowerCase();
     if ((e.ctrlKey || e.metaKey) && (k === 'z' || k === 'y')) {
       if (!U.undo.length && !U.redo.length) return;
@@ -1523,7 +1530,7 @@ export function createPaint(ctx) {
   }
   return {
     P, els: buildStrip(), painting, boxing: () => P.tool === 'arrow', paintProps, brushOf: (k) => bset(k), setBrush, paintOverlay, sync: syncStrip, savePaint, unsavedPaint, setTool, setColor,
-    blankSheet, addBlank, dropSel, undo, redo, pushStack, selectionMask, maskLayer, paintMask, spreadValue, spreadLive, spreadDone, layerMaskOp, hasSel: () => !!P.sel, selAction, selectLayer, resizeCanvasLayer, cutByMask, maskOp, growMask, maskOutside, maskFromMatte,
+    blankSheet, addBlank, dropSel, undo, redo, pushStack, lastStep: () => U.undo[U.undo.length - 1] || null, markDirty: (l) => dirty(l, 200), selectionMask, maskLayer, paintMask, spreadValue, spreadLive, spreadDone, layerMaskOp, hasSel: () => !!P.sel, selAction, selectLayer, resizeCanvasLayer, cutByMask, maskOp, growMask, maskOutside, maskFromMatte,
     reset() { cancelStroke(); dropSel(); P.last = null; U.undo = []; U.redo = []; U.bytes = 0; syncStrip(); },   // another document: its undo goes
   };
 }
