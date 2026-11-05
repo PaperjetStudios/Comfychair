@@ -13,6 +13,7 @@ export const VIEWS = ['Front', 'Left', 'Back', 'Right'];
 export const OBJECT_MODELS = {
   pixal: { label: 'Pixal3D', many: true },
   trellis: { label: 'TRELLIS.2', many: false },
+  hunyuan: { label: 'Hunyuan 2.1 (shape)', many: false },
   idol: { label: 'Idol (splat)', many: false },
 };
 

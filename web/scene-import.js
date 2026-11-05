@@ -329,15 +329,23 @@ export async function whenLoaded(ms = 20000) {
 const OBJECT_TPL = 'deck-3d-object';
 const OBJECT_TRELLIS = 'deck-3d-object-trellis';   // TRELLIS.2 from one photo: the same fields as Pixal3D's
 const OBJECT_MULTI = 'deck-3d-object-multi';
+const OBJECT_HUNYUAN = 'deck-3d-object-hunyuan21';   // Hunyuan 3D 2.1 from one photo: the shape alone, no texture
 const SHEET_TPL = 'deck-h3-objectsheet';
 const SPLAT_TPL = 'deck-3d-object-splat';   // Idol: a gaussian splat of one object from one picture, unseen sides included
 // what the sheet sets on the template's own fields (by their group name); a blank seed is a fresh one each run
-const OBJ = { steps: 20, seed: '', tex: true, res: 4096, cut: true, photo: false, model: 'pixal' };
+const OBJ = { steps: 20, seed: '', tex: true, res: 4096, cut: true, photo: false, model: 'pixal', n: 1 };
 const OBJ_FIELDS = { steps: 'Detail (steps)', seed: 'Seed', tex: 'Texture', res: 'Texture resolution', cut: 'Cut out' };
-const SHEET_FRAMES = [4, 54, 96, 120];   // the sheet's orbit: front, side, back, other side
-const hasTrellis = () => C.S.templates.some((t) => t.id === OBJECT_TRELLIS && !t.error);
-// the one-photo model: TRELLIS.2 when picked (and installed), else Pixal3D
-const photoTpl = () => (OBJ.model === 'trellis' && hasTrellis() ? OBJECT_TRELLIS : OBJECT_TPL);
+// the sheet's orbit: front, side, back, other side. It doesn't turn at one speed: 86 is the back (96 is three-quarters round;
+// seen on one object sheet, 2026-11-05)
+const SHEET_FRAMES = [4, 54, 86, 120];
+const installed = (id) => C.S.templates.some((t) => t.id === id && !t.error);
+const MODEL_TPL = { trellis: OBJECT_TRELLIS, hunyuan: OBJECT_HUNYUAN };
+// a model whose template isn't installed isn't offered
+const modelReady = (id) => !MODEL_TPL[id] || installed(MODEL_TPL[id]);
+// the one-photo model: the one picked when it's installed, else Pixal3D
+const photoTpl = () => (MODEL_TPL[OBJ.model] && modelReady(OBJ.model) ? MODEL_TPL[OBJ.model] : OBJECT_TPL);
+// a run's seed: the one typed (stepping by one for each version), else a fresh one
+const seedFor = (i = 0) => (OBJ.seed === '' ? Math.floor(Math.random() * 2 ** 31) : Number(OBJ.seed) + i);
 
 // a model file already on the server (a run's GLB) as a model layer, fitted and standing on the floor
 // at the middle of the scene, the way an import lands
@@ -372,7 +380,7 @@ export async function addSplat(url, name = 'Splat', { gen = null, index = 0 } = 
 }
 
 // the picture field a group holds (Front, Back…), for the template's field keys
-async function objectValues(templateId, groups) {
+async function objectValues(templateId, groups, seed = seedFor()) {
   const { template } = await import('./make.js');
   const t = template(templateId);
   if (!t) throw new Error(`Template ${templateId} isn't installed`);
@@ -383,8 +391,7 @@ async function objectValues(templateId, groups) {
     const f = t.fields.find((x) => x.kind === 'image' && x.group === group);
     if (f) values[f.key] = name;
   }
-  if (templateId === OBJECT_TPL || templateId === OBJECT_TRELLIS || templateId === OBJECT_MULTI) {
-    const seed = OBJ.seed === '' ? Math.floor(Math.random() * 2 ** 31) : Number(OBJ.seed);
+  if ([OBJECT_TPL, OBJECT_TRELLIS, OBJECT_MULTI, OBJECT_HUNYUAN].includes(templateId)) {
     for (const [k, group] of Object.entries(OBJ_FIELDS)) {
       const f = t.fields.find((x) => x.group === group && x.kind !== 'image');
       if (f) values[f.key] = k === 'seed' ? seed : OBJ[k];
@@ -429,12 +436,12 @@ async function land(g, label, who) {
 }
 
 // one picture of an object as a splat (Idol): the splat file lands as a splat layer
-async function makeIdolSplat(name, label, who) {
+async function makeIdolSplat(name, label, who, seed = seedFor()) {
   try {
     const { t, values } = await objectValues(SPLAT_TPL, { 'Object picture': name });
     const set = (group, v) => { const f = t.fields.find((x) => x.group === group && x.kind !== 'image'); if (f) values[f.key] = v; };
     set('It is a photograph', OBJ.photo);
-    set('Seed', OBJ.seed === '' ? Math.floor(Math.random() * 2 ** 31) : Number(OBJ.seed));
+    set('Seed', seed);
     const g = await objectRun(SPLAT_TPL, values, 'The splat', who);
     const i = (g.outputs || []).findIndex((o) => o.kind === 'splat' || /\.(ply|spz|ksplat|splat)$/i.test(o.filename));
     if (i < 0) throw new Error('That run made no splat file');
@@ -443,10 +450,10 @@ async function makeIdolSplat(name, label, who) {
 }
 
 // one photo: the front view
-async function makeFromPhoto(name, label, who) {
+async function makeFromPhoto(name, label, who, seed = seedFor()) {
   try {
     const tpl = photoTpl();
-    const { values } = await objectValues(tpl, { Front: name });
+    const { values } = await objectValues(tpl, { Front: name }, seed);
     await land(await objectRun(tpl, values, 'The 3D object', who), label, who);
   } catch (e) { toast(e.message, true); }
 }
@@ -472,9 +479,9 @@ async function makeFromViews(name, label, who) {
 }
 
 // the other views picked from the inputs
-async function makeFromPicked(picks, label, who) {
+async function makeFromPicked(picks, label, who, seed = seedFor()) {
   try {
-    const { values } = await objectValues(OBJECT_MULTI, picks);
+    const { values } = await objectValues(OBJECT_MULTI, picks, seed);
     await land(await objectRun(OBJECT_MULTI, values, 'The 3D object', who), label, who);
   } catch (e) { toast(e.message, true); }
 }
@@ -625,7 +632,7 @@ async function objectTarget() {
 function drawObjectPanel() {
   const { panel, picks, label } = PANEL;
   if (!panel) return;
-  const model = OBJECT_MODELS[OBJ.model] && (OBJ.model !== 'trellis' || hasTrellis()) ? OBJ.model : 'pixal';
+  const model = OBJECT_MODELS[OBJ.model] && modelReady(OBJ.model) ? OBJ.model : 'pixal';
   const plan = planRun(picks, model, PANEL.sel), used = new Set(plan.views), first = picks[plan.views[0]], name = label || (plan.kind === 'splat' ? 'Splat' : '3D object');
   const num = (key, min, max) => h('input', { type: 'number', min, max, value: OBJ[key], placeholder: key === 'seed' ? 'random' : null,
     onchange: (e) => { OBJ[key] = e.target.value === '' && key === 'seed' ? '' : Math.max(min, Math.min(max, Math.round(+e.target.value || min))); } });
@@ -656,15 +663,16 @@ function drawObjectPanel() {
         h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Change ${role}`, title: `Change ${role}`, onclick: () => pick(role) }, icon('edit')),
         h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Clear ${role}`, title: `Clear ${role}`, onclick: () => clear(role) }, icon('close'))) : null)),
   { give: (n) => { inRun(role); setPicks({ ...PANEL.picks, [role]: n }); } });
-  const go = async (fn) => {
+  // versions: that many runs at once, each its own seed, each landing as its own model; n: 1 for the sheet route
+  const go = async (fn, n = OBJ.n || 1) => {
     const views = Object.fromEntries(plan.views.map((v) => [v, picks[v]]));
     const who = await objectTarget();
-    checkViews(views, () => fn(views, who), () => closeSheet());
+    checkViews(views, () => { for (let i = 0; i < n; i++) fn(views, who, seedFor(i), n > 1 ? ` ${i + 1}` : ''); }, () => closeSheet());
   };
-  const make = plan.kind === 'splat' ? button('Make the splat', () => go((v, who) => makeIdolSplat(first, name, who)), { cls: 'primary' })
-    : plan.kind === 'multi' ? button(`Make it from ${plan.views.length} views`, () => go((v, who) => makeFromPicked(v, name, who)), { cls: 'primary' })
-    : button(plan.kind ? 'Make it from this picture' : Object.keys(picks).length ? 'Select a picture first' : 'Attach a picture first', () => go((v, who) => makeFromPhoto(first, name, who)), { cls: 'primary', disabled: !plan.kind });
-  const splat = plan.kind === 'splat';
+  const make = plan.kind === 'splat' ? button('Make the splat', () => go((v, who, seed, k) => makeIdolSplat(first, name + k, who, seed)), { cls: 'primary' })
+    : plan.kind === 'multi' ? button(`Make it from ${plan.views.length} views`, () => go((v, who, seed, k) => makeFromPicked(v, name + k, who, seed)), { cls: 'primary' })
+    : button(plan.kind ? 'Make it from this picture' : Object.keys(picks).length ? 'Select a picture first' : 'Attach a picture first', () => go((v, who, seed, k) => makeFromPhoto(first, name + k, who, seed)), { cls: 'primary', disabled: !plan.kind });
+  const splat = plan.kind === 'splat', shapeOnly = model === 'hunyuan';
   const stateWord = { running: 'on the way', done: 'done', failed: 'failed' };
   panel.body.replaceChildren(
     label ? hint(`For ${label}`) : '',
@@ -674,17 +682,19 @@ function drawObjectPanel() {
         button('Add images…', addMany, { cls: 'small', disabled: !free }),
         button('Split one picture…', split, { cls: 'small', title: 'Draw a box round each view in one picture' }),
         Object.keys(picks).length ? button('Clear all', () => setPicks({}), { cls: 'small' }) : null),
-      help('Pictures stay here until you clear them, whatever you do elsewhere. Each slot is a side of the object. Tap a picture to select it; the outlined ones go in the run. Pixal3D uses all you select: four views 90° apart, the object the same size in each, on a plain background, make the roundest model. TRELLIS.2 and Idol use the one you select. The pencil changes a picture.')),
+      help('Pictures stay here until you clear them, whatever you do elsewhere. Each slot is a side of the object. Tap a picture to select it; the outlined ones go in the run. Pixal3D uses all you select: four views 90° apart, the object the same size in each, on a plain background, make the roundest model. TRELLIS.2, Hunyuan 2.1 and Idol use the one you select. Hunyuan 2.1 makes the shape alone, with no texture: often the best thin parts from one picture. The pencil changes a picture.')),
     section('Model', null,
-      seg(Object.entries(OBJECT_MODELS).filter(([id]) => id !== 'trellis' || hasTrellis()).map(([id, m]) => [id, m.label]), model, (v) => { OBJ.model = v; drawObjectPanel(); }),
+      seg(Object.entries(OBJECT_MODELS).filter(([id]) => modelReady(id)).map(([id, m]) => [id, m.label]), model, (v) => { OBJ.model = v; drawObjectPanel(); }),
       splat ? null : field('Detail (steps)', num('steps', 4, 60)),
       field('Seed', num('seed', 0, 2 ** 31 - 1)),
-      splat ? null : field('Texture resolution', seg([[1024, '1K'], [2048, '2K'], [4096, '4K']], OBJ.res, (v) => { OBJ.res = v; })),
-      splat ? null : toggle('Texture', OBJ.tex, (v) => { OBJ.tex = v; }, { help: 'Off makes the shape alone, much quicker' }),
+      field('Versions', seg([[1, '1'], [2, '2'], [3, '3'], [4, '4']], OBJ.n || 1, (v) => { OBJ.n = v; }),
+        info('That many runs at once, each with its own seed (a typed seed steps by one), each landing as its own model: the seed changes a model more than the steps do, so pick the best.', 'About versions')),
+      splat || shapeOnly ? null : field('Texture resolution', seg([[1024, '1K'], [2048, '2K'], [4096, '4K']], OBJ.res, (v) => { OBJ.res = v; })),
+      splat || shapeOnly ? null : toggle('Texture', OBJ.tex, (v) => { OBJ.tex = v; }, { help: 'Off makes the shape alone, much quicker' }),
       splat ? toggle('The picture is a photograph', OBJ.photo, (v) => { OBJ.photo = v; }, { help: 'On for a camera photo, off for a render or a generated picture. The object should be one thing, whole in the frame.' }) : null,
       plan.kind === 'single' ? toggle('Cut out the object', OBJ.cut, (v) => { OBJ.cut = v; }, { help: 'Removes the background before making the model from one picture. Turn off when it is already cut out.' }) : null),
     h('div', { class: 'row wrap' }, make,
-      plan.kind === 'single' && model === 'pixal' ? button('Make its other views first', () => go((v, who) => makeFromViews(first, name, who)),
+      plan.kind === 'single' && model === 'pixal' ? button('Make its other views first', () => go((v, who) => makeFromViews(first, name, who), 1),
         { cls: 'small', title: 'An orbit sheet of the object (front, side, back, other side), then a model from those four views' }) : null),
     ...PANEL.runs.map((r) => hint(`#${r.id} ${r.what}: ${stateWord[r.state]}`)));
 }

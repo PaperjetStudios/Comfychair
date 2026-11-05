@@ -3,6 +3,7 @@ const MADE_BY = {
   'deck-3d-object': 'Pixal3D',
   'deck-3d-object-multi': 'Pixal3D multi-view',
   'deck-3d-object-trellis': 'TRELLIS.2',
+  'deck-3d-object-hunyuan21': 'Hunyuan 3D 2.1',
   'deck-3d-object-splat': 'Idol',
   '3d photo': 'MoGe',
   'deck-autorig-human': 'Make It Animatable',

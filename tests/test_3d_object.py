@@ -29,7 +29,7 @@ def links(wf):
 
 
 def test_templates_are_valid_api_workflows():
-    for tid in ("deck-3d-object", "deck-3d-object-multi", "deck-3d-object-trellis"):
+    for tid in ("deck-3d-object", "deck-3d-object-multi", "deck-3d-object-trellis", "deck-3d-object-hunyuan21"):
         t = load(tid)
         wf = t.workflow
         for nid, name, src, slot in links(wf):
@@ -118,3 +118,21 @@ def test_rig_mesh_path_skips_the_startup_list():
         assert isinstance(src, list) and t.workflow[src[0]]["class_type"] == "LazySwitchKJ", tid
         model = [f for f in _describe(t) if f["group"] == "Model"]
         assert [f["kind"] for f in model] == ["text"], tid
+
+
+def test_the_upsample_fits_the_card():
+    # 1536 ran out of memory on a detailed object on the 12 GB card, even with it emptied first; 1024 fitted (2026-11-05)
+    for tid in ("deck-3d-object", "deck-3d-object-multi", "deck-3d-object-trellis"):
+        ups = [n for n in load(tid).workflow.values() if n["class_type"] == "Trellis2UpsampleStage"]
+        assert ups and all(n["inputs"]["target_resolution"] == 1024 for n in ups), tid
+
+
+def test_hunyuan21_is_shape_only_and_decimated():
+    t = load("deck-3d-object-hunyuan21")
+    wf = t.workflow
+    assert _upstream(wf, "186")[:3] == ["DecimateMesh", "VoxelToMesh", "VAEDecodeHunyuan3D"]
+    assert wf["dec"]["inputs"]["octree_resolution"] == 384   # (256 left stair-step rings on curved surfaces)
+    assert wf["186"]["inputs"]["placement_mode"] == "qem"   # (midpoint pitted the surface)
+    groups = {f["group"] for f in _describe(t)}
+    assert {"Front", "Cut out", "Detail (steps)", "Seed"} <= groups
+    assert not groups & {"Texture", "Texture resolution", "Width"}   # no texture, and the picture keeps its own size

@@ -21,6 +21,8 @@ test('what is attached decides the run', () => {
   assert.equal(planRun({ Front: 'a', Back: 'b' }, 'pixal').kind, 'multi');
   assert.equal(planRun({ Front: 'a', Back: 'b' }, 'trellis').kind, 'single');
   assert.equal(planRun({ Front: 'a', Back: 'b' }, 'idol').kind, 'splat');
+  assert.equal(planRun({ Front: 'a', Back: 'b' }, 'hunyuan').kind, 'single');   // (Hunyuan 2.1 reads one picture)
+  assert.deepEqual(usedViews({ Left: 'a', Back: 'b' }, 'hunyuan', { one: 'Back' }), ['Back']);
 });
 
 const TYPES = { person: { label: 'Person', icon: 'p' }, box: { label: 'Box', icon: 'b' }, figure: { label: 'Posable person', icon: 'f' }, photo: { label: 'Photo' },

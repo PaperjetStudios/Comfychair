@@ -1,0 +1,226 @@
+{
+ "122": {
+  "_meta": {
+   "deck_keep_size": true,
+   "title": "@1 Front [image]"
+  },
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": ""
+  }
+ },
+ "186": {
+  "class_type": "DecimateMesh",
+  "inputs": {
+   "mesh": [
+    "mesh",
+    0
+   ],
+   "placement_mode": "qem",
+   "placement_mode.clamp_v_to_edge": true,
+   "placement_mode.feature_edge_min_dihedral_deg": 30.0,
+   "placement_mode.feature_edge_quadric_weight": 0.0,
+   "placement_mode.line_quadric_weight": 0.0,
+   "target_face_count": 400000
+  }
+ },
+ "192": {
+  "class_type": "RemoveBackground",
+  "inputs": {
+   "bg_removal_model": [
+    "193",
+    0
+   ],
+   "image": [
+    "122",
+    0
+   ]
+  }
+ },
+ "193": {
+  "class_type": "LoadBackgroundRemovalModel",
+  "inputs": {
+   "bg_removal_name": "birefnet.safetensors"
+  }
+ },
+ "248": {
+  "_meta": {
+   "title": "@2 Cut out [switch]"
+  },
+  "class_type": "ComfySwitchNode",
+  "inputs": {
+   "on_false": [
+    "122",
+    1
+   ],
+   "on_true": [
+    "192",
+    0
+   ],
+   "switch": true
+  }
+ },
+ "312": {
+  "class_type": "ImageCropToMask",
+  "inputs": {
+   "background": "#FFFFFF",
+   "grow_mask": 0,
+   "height": 1024,
+   "images": [
+    "122",
+    0
+   ],
+   "masks": [
+    "248",
+    0
+   ],
+   "pad_factor": 1.1,
+   "width": 1024
+  }
+ },
+ "322": {
+  "class_type": "Save3DAdvanced",
+  "inputs": {
+   "filename_prefix": "deck/object3d",
+   "height": 1024,
+   "model_3d": [
+    "file",
+    0
+   ],
+   "viewport_state": "",
+   "width": 1024
+  }
+ },
+ "ckpt": {
+  "class_type": "ImageOnlyCheckpointLoader",
+  "inputs": {
+   "ckpt_name": "hunyuan_3d_v2.1.safetensors"
+  }
+ },
+ "cond": {
+  "class_type": "Hunyuan3Dv2Conditioning",
+  "inputs": {
+   "clip_vision_output": [
+    "cv",
+    0
+   ]
+  }
+ },
+ "cv": {
+  "class_type": "CLIPVisionEncode",
+  "inputs": {
+   "clip_vision": [
+    "ckpt",
+    1
+   ],
+   "crop": "center",
+   "image": [
+    "312",
+    0
+   ]
+  }
+ },
+ "dec": {
+  "class_type": "VAEDecodeHunyuan3D",
+  "inputs": {
+   "num_chunks": 8000,
+   "octree_resolution": 384,
+   "samples": [
+    "ks",
+    0
+   ],
+   "vae": [
+    "ckpt",
+    2
+   ]
+  }
+ },
+ "file": {
+  "class_type": "MeshToFile3D",
+  "inputs": {
+   "mesh": [
+    "186",
+    0
+   ]
+  }
+ },
+ "ks": {
+  "class_type": "KSampler",
+  "inputs": {
+   "cfg": 5.0,
+   "denoise": 1.0,
+   "latent_image": [
+    "lat",
+    0
+   ],
+   "model": [
+    "ms",
+    0
+   ],
+   "negative": [
+    "cond",
+    1
+   ],
+   "positive": [
+    "cond",
+    0
+   ],
+   "sampler_name": "euler",
+   "scheduler": "normal",
+   "seed": [
+    "seed",
+    0
+   ],
+   "steps": [
+    "steps",
+    0
+   ]
+  }
+ },
+ "lat": {
+  "class_type": "EmptyLatentHunyuan3Dv2",
+  "inputs": {
+   "batch_size": 1,
+   "resolution": 4096
+  }
+ },
+ "mesh": {
+  "class_type": "VoxelToMesh",
+  "inputs": {
+   "algorithm": "surface net",
+   "threshold": 0.6,
+   "voxel": [
+    "dec",
+    0
+   ]
+  }
+ },
+ "ms": {
+  "class_type": "ModelSamplingAuraFlow",
+  "inputs": {
+   "model": [
+    "ckpt",
+    0
+   ],
+   "shift": 1.0
+  }
+ },
+ "seed": {
+  "_meta": {
+   "title": "@6 Seed [value]"
+  },
+  "class_type": "PrimitiveInt",
+  "inputs": {
+   "value": 43
+  }
+ },
+ "steps": {
+  "_meta": {
+   "title": "@3 Detail (steps) [value]"
+  },
+  "class_type": "PrimitiveInt",
+  "inputs": {
+   "value": 30
+  }
+ }
+}
