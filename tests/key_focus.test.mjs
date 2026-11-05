@@ -147,3 +147,10 @@ test('the Edit pane\'s Inpaint and Extend rows: Ctrl+Enter is Fill from their bo
   assert.equal(editorRunKey({ target: body, key: 'Enter', ctrlKey: true }, () => true), 'fill');
   assert.equal(editorRunKey({ target: body, key: 'Enter', ctrlKey: true }, () => false), 'tool');
 });
+
+test('the table sidebar\'s prompt boxes: Ctrl+Enter is left to Generate, which runs the Edit or Make pane', () => {
+  const pane = {}, section = { closest: () => null, querySelector: () => ({ textContent: 'Image · 1 frame' }) };
+  const box = { closest: (sel) => (sel === '#tablePanel' ? pane : sel === 'section' ? section : sel.includes('textarea') ? box : null) };
+  assert.equal(editorRunKey({ target: box, key: 'Enter', ctrlKey: true }, () => false), 'pane');
+  assert.equal(editorRunKey({ target: box, key: 'Enter', shiftKey: true }, () => false), 'pane');
+});

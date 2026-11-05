@@ -46,7 +46,8 @@ export function ownsKey(e, { dialog = true, keyboard = tabbed } = {}) {
 // 'fill' (Inpaint's Fill, or Extend: inpaint.js runFill) or null. A box being typed in that belongs to another panel runs
 // neither, and Shift+Enter in Inpaint's own boxes stays a new line. The Edit pane's Inpaint and Extend rows carry
 // data-run-key; with them on show (shown(): the rows on show, if any), a key from no box runs Fill too. Not for any other
-// combination of keys: see editorRunKeys.
+// combination of keys: see editorRunKeys. 'pane': the key came from the table's sidebar (#tablePanel), whose Edit and Make panes
+// run from Generate's Ctrl+Enter (app.js, generate.js): the engine leaves it alone, so typing a prompt there and pressing Ctrl+Enter runs it.
 const runKeyShown = () => {
   if (typeof document === 'undefined') return false;
   const el = document.querySelector('[data-run-key]');
@@ -57,6 +58,7 @@ export function editorRunKey(e, shown = runKeyShown) {
   const typing = !!t.closest?.('textarea, [contenteditable]') || !['range', 'checkbox', 'radio', undefined].includes(t.closest?.('input')?.type);
   if (title === 'Image tools') return 'tool';
   if ((title === 'Inpaint and extend' || t.closest?.('[data-run-key]')) && (e.ctrlKey || e.metaKey)) return 'fill';
+  if (t.closest?.('#tablePanel')) return 'pane';
   if (typing) return null;
   return shown() ? 'fill' : 'tool';
 }

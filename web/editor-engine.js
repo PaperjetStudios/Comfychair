@@ -1356,6 +1356,7 @@ export function createEditor(cfg) {
     window.addEventListener('keydown', (e) => {
       if (!editorRunKeys(e) || !cfg.active() || sheetOpen() || !E.layers.some((l) => !l.mask && !l.draft)) return;
       const go = editorRunKey(e);
+      if (go === 'pane') return;   // (the sidebar's Edit or Make pane: Generate's Ctrl+Enter runs it)
       if (!go && e.shiftKey) return;   // (a new line in another panel's box)
       e.preventDefault(); e.stopPropagation();
       if (!go || e.repeat) return;   // (a key held down starts one run)
