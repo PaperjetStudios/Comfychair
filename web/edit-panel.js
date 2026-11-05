@@ -6,7 +6,8 @@
 // op.tools) puts them over the open frame's picture (frame-overlay.js) while the pane is on show; they are kept on the
 // frame (frame.ops[op]). Clip tools → VFX on an open video frame opens this pane on it. On the open image frame, with
 // the result as a layer, Run on picks the whole picture or the selected layers (imagetools.js toolState().scope). A
-// selected note gets a Make from this note button: its words are the Make pane's prompt (make-panel.js). What the
+// selected note gets a Make from this note button: its words are the Make pane's prompt (make-panel.js). The row at the
+// top records runs and plays them again on other frames or layers (actions.js). What the
 // selection can make of a kind none of it is (edit-rules.js crossOps: pictures and sounds into a video) is a section of
 // its own ("Make video · from 2 frames"), its result always a new frame.
 //
@@ -25,6 +26,7 @@ import { setupsRow } from './setups.js';
 import { editKey } from './setups-rules.js';
 import { toolState } from './imagetools.js';
 import { keepTyping } from './key-focus.js';
+import { actionsRow, actionsPlaying } from './actions.js';
 
 const KINDS = ['image', 'video', 'sound', 'scene'];
 const WORD = { image: 'Image', video: 'Video', sound: 'Sound', scene: '3D' };
@@ -110,10 +112,10 @@ export function draw() {
   plan();
   const kinds = KINDS.filter((k) => ofKind(k).length && (P.ops.get(k) || []).length).sort((a, b) => isCross(a) - isCross(b));   // (Make video last)
   const notes = notesSection();
-  if (!kinds.length) { syncOverlay(null, null, []); el.replaceChildren(notes || note(P.frames.length ? 'Nothing to edit on these frames yet.' : 'Select a frame to edit it.', 'info')); tellState(); return; }
+  if (!kinds.length) { syncOverlay(null, null, []); el.replaceChildren(actionsRow(), notes || note(P.frames.length ? 'Nothing to edit on these frames yet.' : 'Select a frame to edit it.', 'info')); tellState(); return; }
   if (!kinds.includes(P.focus)) P.focus = kinds[0];
   const typing = keepTyping(el);   // (drawn again as the open frame changes: a box being typed in keeps the focus)
-  el.replaceChildren(...kinds.map(sectionFor), notes || '');
+  el.replaceChildren(actionsRow(), ...kinds.map(sectionFor), notes || '');   // (recorded actions: actions.js)
   typing();
   if (!kinds.includes('video') || isCross('video')) syncOverlay(null, null, []);
   tellState();
@@ -268,7 +270,7 @@ export function editState() {
   plan();
   const kind = focusKind();
   if (!kind) return { label: 'Edit', can: false, why: P.frames.length ? 'Nothing to edit on these frames' : 'Select a frame to edit' };
-  const op = currentOp(kind), why = whyNot(op, kind) || (runner().editRunning() ? 'An edit is still being sent' : '');
+  const op = currentOp(kind), why = whyNot(op, kind) || (actionsPlaying() ? 'A recorded set is playing' : runner().editRunning() ? 'An edit is still being sent' : '');
   return { label: `Run ${op.label}`, can: !why, why: why || null };
 }
 

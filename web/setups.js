@@ -3,6 +3,7 @@
 //
 //   setupsRow({ key, get, set, label })   -> element. key: the block's key (or a function giving it, read on each draw);
 //                                            get(): the values shown now; set(values): show these (the block redraws).
+//   pickedSetup(key), setupsReady()       the setup picked for a key here (null until loaded), and a promise of the load.
 //
 // The row: a list of the block's setups (newest first, "— none —" first), Save… (a name), Update (the picked one gets the
 // values shown now; only when they differ), Rename and Delete (with Undo). Picking one shows its values, with Undo.
@@ -81,6 +82,9 @@ export function setupsRow({ key, get, set, label = 'Setup' }) {
   return r.el;
 }
 export const redrawSetups = (el) => { if (el?._setups) draw(el._setups); };
+// the setup picked for a key on this device ({ id, name, values }, or null), once the setups have loaded (setupsReady())
+export const pickedSetup = (k) => listFor(k).find((s) => s.id === store.get(pickKey(k), null)) || null;
+export const setupsReady = () => load();
 
 function draw(r) {
   const k = r.keyOf();

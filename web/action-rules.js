@@ -150,6 +150,7 @@ export function canPlay(steps, mode, kind) {
     if (mode === 'layers' && kind !== 'image') return 'Layers are pictures: this set starts on ' + word(inKind(first));
     if (mode === 'clips' && kind !== 'video' && kind !== 'sound') return 'Clips are in a video or sound frame: this set starts on ' + word(inKind(first));
     for (const [i, s] of steps.entries()) {
+      if (s.kind === 'make') return `Step ${i + 1} "${s.label}" makes from the whole frame: select the frames on the table to play it`;
       if (inKind(s) !== need) return `Step ${i + 1} "${s.label}" works on ${word(inKind(s))}, and these are ${mode === 'layers' ? 'layers' : 'clips'} of ${word(need)}`;
       if (s.target === 'frame') return `Step ${i + 1} "${s.label}" makes a new frame; on ${mode === 'layers' ? 'layers' : 'clips'} it has to land in the same frame`;
     }

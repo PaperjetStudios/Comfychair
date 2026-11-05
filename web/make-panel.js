@@ -23,6 +23,10 @@
 //                              selected or the pane open; resolves once the result has LANDED in the frame. replace: the
 //                              result takes the place of what the frame's last chain run made (frame.make.ran.made), as
 //                              Run from here does (chain-run.js); without it, results are added as Run adds them.
+//   runWith(frame, { template, values, batch })   a recorded Make step played on a frame (actions.js): the template with
+//                              these values over the frame's own settings (its slots, wires), never saved to the frame;
+//                              resolves once the result has landed, as runFrame. `make:ran` { template, label, on, values,
+//                              seeds, fields, batch } is sent after a Run from the pane queued on frames (what actions.js records).
 // Each run records what it read on its frame (frame.make.ran: the stamps of its plugged sources, chain-rules.js), so the
 // table can say which frames need a rerun. The wires row has Run from here / Rerun what uses this (chain-run.js).
 import { resultName, templateProcess } from './run-name.js';
@@ -55,7 +59,7 @@ import { keepMain } from './main-rules.js';
 
 const P = { fresh: [], host: null, frames: [], table: null, key: null, st: null, els: null };
 const KIND_WORD = { none: 'a new frame', image: 'this picture', video: 'this video', scene: 'this 3D frame', sound: 'this sound frame' };
-const SHOT_KINDS = new Set(['image', 'video', 'boxes', 'seed', 'mask']);   // a run's own content, not a setting (gentabs.js)
+export const SHOT_KINDS = new Set(['image', 'video', 'boxes', 'seed', 'mask']);   // a run's own content, not a setting (gentabs.js)
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
 const docUrl = (kind, id) => `/api/store/${DOC_KIND[kind]}/${id}${qs()}`;
 const lastTpl = (kind) => store.get(`deck.make.tpl.${kind}`, null);
@@ -632,6 +636,9 @@ export async function runMake() {
   if (words && pk) base[pk] = words.text;
   const builder = words ? null : runBuilder();
   const tableId = Table.activeTableId();   // (new frames for its results go on this table, or to the Shelf if it isn't open then)
+  const ran = kind === 'none' ? null : { template: t.id, label: t.name, on: kind, lands: kind, values: setupValues(), fields: t.fields.map((f) => ({ key: f.key, kind: f.kind })),
+    seeds: Object.fromEntries(t.fields.filter((f) => f.kind === 'seed').map((f) => [f.key, { mode: st.seedMode?.[f.key] || 'random', value: Number(st.values[f.key]) || 0 }])),
+    target: 'layer', batch: S.batch };   // (taken before the runs: an increasing seed moves on as they queue)
   running = true;
   let queued = 0;
   try {
@@ -649,6 +656,7 @@ export async function runMake() {
       }
     }
     if (queued) toast(`${queued > 1 ? `Queued ${queued}` : 'Queued'}${targets.length > 1 ? ` on ${targets.length} frames` : ''}: ${landsWord(kind)}`);
+    if (queued && ran) dispatchEvent(new CustomEvent('make:ran', { detail: ran }));
     if (P.els) drawHead(kind, frame, templatesForFrame(S.templates, kind, frame));
   } finally { running = false; }
 }
@@ -775,6 +783,29 @@ export async function runFrame(frame, { batch = 1, replace = false } = {}) {
   let made;
   try { made = await landNow(kind, f, t, r, replace); } catch (e) { if (r.sent && kind !== 'image') dropInput(r.sent.name); throw e; }
   recordRan(f, r.stamps, replace ? made || [] : undefined);
+  if (P.host && onTable()) draw();
+  return { gens: r.gens, made };
+}
+
+export async function runWith(frame, { template, values = {}, batch = 1 } = {}) {
+  const f = ofOpenTable(frame), kind = f?.kind, name = f?.label || frame?.label || 'This frame';
+  if (!f) throw new Error(`${name} isn't on the open table`);
+  if (!S.templates?.length) throw new Error('The templates are still loading');
+  const t = templatesForFrame(S.templates, kind, f).find((x) => x.id === template);
+  if (!t) throw new Error(`${template} doesn't make anything for ${KIND_WORD[kind] || 'this frame'}`);
+  if (t.error) throw new Error(`${t.name} has an error`);
+  if (DOC_KIND[kind] && !f.doc) throw new Error(`${name} has no document yet`);
+  const st = settingsFor(t, f.make?.template === t.id ? f.make : null);   // (its own slots and wires; the recorded values over them)
+  for (const fld of t.fields) {
+    if (values[fld.key] === undefined) continue;
+    st.values[fld.key] = clone(values[fld.key]);
+    if (fld.kind === 'seed') st.seedMode[fld.key] = 'fixed';   // (the seed is the replay's own: -1 a fresh one)
+  }
+  const r = await queueOne({ kind, f, t, st, base: runValuesOf(st), builder: null, batch, prepare: (v, skip) => preparePicturesOf(st, v, skip),
+    afterQ: (gens, n) => { Object.assign(S.lastSeed, seedsAfter(st, gens, n)); }, layersBefore: true });
+  dispatchEvent(new CustomEvent('make:queued', { detail: { frame: f, kind, gens: r.gens } }));
+  let made;
+  try { made = await landNow(kind, f, t, r, false); } catch (e) { if (r.sent && kind !== 'image') dropInput(r.sent.name); throw e; }
   if (P.host && onTable()) draw();
   return { gens: r.gens, made };
 }

@@ -8,7 +8,8 @@
 //   opFields(kind, id, opts, ctx)       DOM[]: the op's options (ctx: { redraw(), frames }); opts is changed in place and kept
 //   runOp(kind, id, frame, opts, ctx)   one run on one frame. ctx: { target ('frame' | 'layer' | 'self'), into (the frame its
 //                                       result goes in: a new one beside, or this one), tab (into's document), batch, live,
-//                                       frames (the selection), onRun(gens, to) (a run queued that lands later) }.
+//                                       frames (the selection), onRun(gens, to) (a run queued that lands later), layers? (an image
+//                                       op on the open frame: these layers in place of the picked ones, [] the whole picture) }.
 //                                       Resolves { gens? (queued runs), job? (a promise of the landed result), landed? }
 //   OP_DEFAULTS                         the starting options per 'kind:id'
 //   frameOps(frame, id), setFrameOps(frames, id, patch)   what a frame keeps for an op (frame.ops[id], saved with the table:
@@ -148,7 +149,7 @@ export function saveOpts(kind, id, opts) {
 // What a setup of an op keeps (setups.js): its options, less the clip or picture it was pointed at. An image op is its
 // Image tool's settings (imagetools.js toolValues).
 // A VFX op's setup also keeps the frame's key, matte clean-up and canvas (the first selected frame's; shown on all of them).
-const PER_SHOT = [...new Set(['matte', 'first', ...NOT_SETUP])];
+export const PER_SHOT = [...new Set(['matte', 'first', ...NOT_SETUP])];   // (also what a recorded step leaves out: actions.js)
 const FRAME_SETTINGS = ['key', 'refine', 'canvas'];
 export function opValues(kind, id, opts, frames = []) {
   if (kind === 'image') return IT?.toolValues?.(id) || {};
@@ -351,7 +352,7 @@ async function runImage(o, frame, ctx) {
     src = await frameSource(frame, { multiple: 1 });
     if (!src) throw new Error(`${frame.label || 'That frame'} is empty`);
   }
-  const r = await it.runToolOn(o.id, { tab: ctx.tab || frame.doc, src, eng, batch: ctx.batch || 1 });
+  const r = await it.runToolOn(o.id, { tab: ctx.tab || frame.doc, src, eng, batch: ctx.batch || 1, layers: eng ? ctx.layers || null : null });   // (ctx.layers: a replay's own layers, actions.js)
   return Array.isArray(r) ? { gens: r } : r || {};
 }
 
