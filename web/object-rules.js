@@ -1,9 +1,11 @@
 // The rules of making a 3D object and of the Add list, with no DOM, so tests/object_rules.test.mjs can load them. scene-import.js draws
 // the object panel, scene-ui.js the Add sheet.
 //   OBJECT_MODELS            model id → { label, many }: many takes up to the four views together, the others one picture
-//   usedViews(picks, model)  the views this model reads, in order (a one-picture model: the first filled)
+//   usedViews(picks, model, sel)  the views this model reads, in order. sel: what is selected, { off: [views left out], one: the view a
+//                            one-picture model reads }. A one-picture model with none chosen, or a gone one: the first filled.
+//   tapView(sel, model, view) → sel after a filled picture is tapped: a one-picture model reads that one; else it goes in or out of the run
 //   addPictures(picks, names) → { picks, left }: names into the empty views in order; left: those with no room, or already attached
-//   planRun(picks, model)    → { kind: 'multi' | 'single' | 'splat' | null, views }: which run the attached pictures make
+//   planRun(picks, model, sel) → { kind: 'multi' | 'single' | 'splat' | null, views }: which run the attached pictures make
 //   addGroups(types, { room, attached })  the Add list: [{ title, items: [{ id, label, icon, tip?, body? }] }]
 //   filterGroups(groups, q)  those matching what was typed; a group's name matches all of it
 export const VIEWS = ['Front', 'Left', 'Back', 'Right'];
@@ -13,9 +15,15 @@ export const OBJECT_MODELS = {
   idol: { label: 'Idol (splat)', many: false },
 };
 
-export function usedViews(picks, model) {
+export function usedViews(picks, model, { off = [], one = null } = {}) {
   const filled = VIEWS.filter((v) => picks?.[v]);
-  return OBJECT_MODELS[model]?.many ? filled : filled.slice(0, 1);
+  if (OBJECT_MODELS[model]?.many) return filled.filter((v) => !off.includes(v));
+  return one && filled.includes(one) ? [one] : filled.slice(0, 1);
+}
+
+export function tapView({ off = [], one = null } = {}, model, view) {
+  if (!OBJECT_MODELS[model]?.many) return { off, one: view };
+  return { off: off.includes(view) ? off.filter((v) => v !== view) : [...off, view], one };
 }
 
 export function addPictures(picks, names) {
@@ -28,8 +36,8 @@ export function addPictures(picks, names) {
   return { picks: out, left };
 }
 
-export function planRun(picks, model) {
-  const views = usedViews(picks, model);
+export function planRun(picks, model, sel) {
+  const views = usedViews(picks, model, sel);
   if (!views.length) return { kind: null, views };
   if (model === 'idol') return { kind: 'splat', views };
   return { kind: views.length > 1 ? 'multi' : 'single', views };

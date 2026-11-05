@@ -557,3 +557,7 @@ The tabs that did the same job twice now share it:
 - **`--disable-cuda-malloc`** is in `~/Programs/ComfyUI/start-comfyui.sh` (not in this repo). Two logs ended right after `Error running sage attention ... out of memory`,
   one with `CUDA error: invalid argument` from `cuMemFreeAsync` in `CUDAMallocAsyncAllocator`. Pika I2V warm was 51 s with it, 54 s before. Whether it ends the crash is unproven: it couldn't be provoked.
 
+### 3D object panel: selecting, and landing by itself (2026-11-05)
+- A tap on an attached picture selects it (`object-rules.js` `tapView`; `PANEL.sel`, kept beside the draft): for Pixal3D in or out of the run, for one-picture models the one it reads. The pencil changes a picture.
+- `objectTarget` lands in the one selected 3D frame even when closed. `fitOf` asks "About how tall is it?" only for imported files (`o.gen == null`): a run's result no longer waits on it.
+

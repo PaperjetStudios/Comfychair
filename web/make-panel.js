@@ -1028,7 +1028,10 @@ async function landScene(frame, done) {
   const fs = await import('./frame-scene.js').catch(() => null);
   if (!fs?.landInScene) return inShelf(done);
   const outs = (done.outputs || []).map((o, index) => ({ ...o, generation: done.id, index }));
-  try { await fs.landInScene(Table.frameById(frame.id) || frame, outs); } catch (e) { toast(e.message, true); inShelf(done); }
+  try {
+    const n = await fs.landInScene(Table.frameById(frame.id) || frame, outs);
+    if (n) toast(`#${done.id}: in ${frame.label || 'the 3D frame'}`); else inShelf(done);   // (nothing it could take: say where it is)
+  } catch (e) { toast(e.message, true); inShelf(done); }
 }
 
 // anything with nowhere to go: the result is in the Shelf (History) already

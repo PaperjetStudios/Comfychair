@@ -2108,8 +2108,10 @@ body > .undo-dock { position: fixed; z-index: 57; top: 8px; left: 50%; transform
 .float-object .obj-views { grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); }
 .float-object .obj-slot { position: relative; min-width: 0; }
 .float-object .obj-slot-bar { min-height: 0; }
-.float-object .obj-slot-bar .icon-btn { position: absolute; top: 2px; right: 2px; min-width: 0; width: 28px; height: 28px; padding: 0; background: var(--surface); }
-@media (pointer: coarse) { .float-object .obj-slot-bar .icon-btn { width: 40px; height: 40px; } }
+.float-object .obj-slot.picked .obj-slot-pic { outline: 3px solid var(--accent); outline-offset: -1px; }
+.float-object .obj-slot-tools { position: absolute; top: 2px; right: 2px; display: flex; gap: 2px; }
+.float-object .obj-slot-tools .icon-btn { min-width: 0; width: 28px; height: 28px; padding: 0; background: var(--surface); }
+@media (pointer: coarse) { .float-object .obj-slot-tools .icon-btn { width: 40px; height: 40px; } }
 .add-groups { display: flex; flex-direction: column; gap: 10px; }
 @media (max-width: 560px) { .obj-views { grid-template-columns: repeat(2, 1fr); } }
 .obj-slot-pic { width: 100%; aspect-ratio: 1; padding: 0; border: 1px dashed var(--line-2); border-radius: var(--r); overflow: hidden; background: var(--surface-2); cursor: pointer; display: grid; place-items: center; }

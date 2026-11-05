@@ -1,7 +1,7 @@
 // node --test tests/object_rules.test.mjs: the 3D object panel's attached pictures and the Add list (web/object-rules.js)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { addGroups, addPictures, filterGroups, planRun, usedViews } from '../web/object-rules.js';
+import { addGroups, addPictures, filterGroups, planRun, tapView, usedViews } from '../web/object-rules.js';
 
 test('pictures go into the empty views in order; a repeat or one too many is left out', () => {
   const r = addPictures({ Left: 'a' }, ['b', 'a', 'c', 'd', 'e']);
@@ -45,4 +45,20 @@ test('typing narrows the list; a group\'s name keeps all of it', () => {
   assert.equal(filterGroups(g, 'people').flatMap((x) => x.items).length, 3);
   assert.deepEqual(filterGroups(g, 'zzz'), []);
   assert.equal(filterGroups(g, '  '), g);
+});
+
+test('a tap selects: a one-picture model reads the tapped one, Pixal3D takes it in or out', () => {
+  const picks = { Front: 'a', Left: 'b', Back: 'c' };
+  let sel = tapView({}, 'idol', 'Back');
+  assert.deepEqual(usedViews(picks, 'idol', sel), ['Back']);
+  assert.deepEqual(planRun(picks, 'idol', sel).views, ['Back']);
+  assert.deepEqual(usedViews({ Front: 'a' }, 'idol', sel), ['Front']);   // (the chosen one was cleared)
+  sel = tapView({}, 'pixal', 'Left');
+  assert.deepEqual(usedViews(picks, 'pixal', sel), ['Front', 'Back']);
+  assert.equal(planRun(picks, 'pixal', sel).kind, 'multi');
+  sel = tapView(sel, 'pixal', 'Back');
+  assert.equal(planRun(picks, 'pixal', sel).kind, 'single');
+  sel = tapView(sel, 'pixal', 'Front');
+  assert.equal(planRun(picks, 'pixal', sel).kind, null);   // (none selected: no run)
+  assert.deepEqual(tapView(tapView({}, 'pixal', 'Left'), 'pixal', 'Left').off, []);
 });
