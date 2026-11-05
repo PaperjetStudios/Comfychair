@@ -424,16 +424,23 @@ async function resolveWires(kind, frame, t, st, values, made) {
 }
 // the pictures made for a queued run: tracked on the frame (frame.make.inputs, so settleInputs removes them later) and dropped as
 // soon as every run has finished with them
+// (each name has one owner from here: this hold drops it, settleInputs leaves a HELD one be, and once let go it is off the
+// frame's list, so nothing drops it twice. A frame no longer on the open table, its table switched meanwhile, is not written:
+// a change to a frame object the open table doesn't hold would only save the open table for nothing)
 function holdInputs(frame, names, gens) {
   if (!names.length) return;
   names.forEach((n) => HELD.add(n));
-  frame.make = { ...(frame.make || {}), inputs: [...new Set([...(frame.make?.inputs || []), ...names])] };
-  frameSaved();
+  const cur = ofOpenTable(frame);
+  if (cur) { cur.make = { ...(cur.make || {}), inputs: [...new Set([...(cur.make?.inputs || []), ...names])] }; frameSaved(); }
   Promise.allSettled(gens.map((g) => waitGen(g.id))).then(() => {
-    names.forEach((n) => { HELD.delete(n); dropInput(n); });
-    if (frame.make?.inputs) { frame.make = { ...frame.make, inputs: frame.make.inputs.filter((n) => !names.includes(n)) }; frameSaved(); }
+    names.forEach((n) => { if (HELD.delete(n)) dropInput(n); });
+    const now = ofOpenTable(frame);
+    if (now?.make?.inputs?.some((n) => names.includes(n))) { now.make = { ...now.make, inputs: now.make.inputs.filter((n) => !names.includes(n)) }; frameSaved(); }
   });
 }
+// The frame as the open table holds it now, or null when its table isn't the open one any more (a run settling after a
+// switch must never change the open table: its result reaches its own frame through that frame's document)
+const ofOpenTable = (frame) => (frame?.id ? Table.frameById(frame.id) : null);
 
 // Pick a frame: a picture from the table (or anywhere the picker lists) into a video template's slot. A table frame's picture is
 // uploaded by the picker only when picked and the picker doesn't track it: that copy (info.copied) is ours to
@@ -451,7 +458,13 @@ function pickFrame(f, set) {
 // a frame's picture (frame-source.js): the live editor's composite, else its edit drawn off screen, else its still;
 // the wires into a frame (wire-rules.js, table.js wiresInto) fill the template's fields that take a picture, clip or sound
 // ---------------------------------------------------------------------------
-const dropInput = (name) => api(`/api/inputs?name=${encodeURIComponent(name)}`, { method: 'DELETE', busy: false }).catch(() => {});
+// (once per name in this page: a name let go by one path is never deleted again by another)
+const DROPPED = new Set();
+const dropInput = (name) => {
+  if (!name || DROPPED.has(name)) return Promise.resolve();
+  DROPPED.add(name);
+  return api(`/api/inputs?name=${encodeURIComponent(name)}`, { method: 'DELETE', busy: false }).catch(() => {});
+};
 
 // ---------------------------------------------------------------------------
 // Run: one run per selected frame of the kind (nothing selected: one run, new frames)
@@ -474,6 +487,7 @@ export async function runMake() {
   const words = noteText(P.frames), pk = mainPromptKey(t);
   if (words && pk) base[pk] = words.text;
   const builder = words ? null : runBuilder();
+  const tableId = Table.activeTableId();   // (new frames for its results go on this table, or to the Shelf if it isn't open then)
   running = true;
   let queued = 0;
   try {
@@ -481,7 +495,7 @@ export async function runMake() {
       let r = null;
       try {
         r = await queueOne({ kind, f, t, st, base, builder, batch: S.batch, prepare: preparePictures, afterQ: afterQueued });
-        await land(kind, f, t, r.gens, r.sent, r.values);
+        await land(kind, f, t, r.gens, r.sent, r.values, tableId);
         if (f) ranWhenDone(f, r.gens, r.stamps);
         dispatchEvent(new CustomEvent('make:queued', { detail: { frame: f, kind, gens: r.gens } }));
         queued += r.gens.length;
@@ -547,7 +561,9 @@ async function readStamps(f) {
 }
 // frame.make.ran set (made: what a chain run landed; undefined keeps the last chain run's), saved with the table
 function recordRan(f, sources, made = undefined) {
-  const cur = Table.frameById(f.id) || f, was = cur.make?.ran;
+  const cur = ofOpenTable(f);
+  if (!cur) return;   // (its table isn't open now: not recorded)
+  const was = cur.make?.ran;
   const keepMade = made !== undefined ? made : was?.made;
   cur.make = { ...(cur.make || {}), ran: { at: Date.now(), sources: sources || {}, ...(keepMade ? { made: keepMade } : {}) } };
   frameSaved();
@@ -584,8 +600,9 @@ async function preparePicturesOf(st, values, skip = new Set()) {
 }
 
 export async function runFrame(frame, { batch = 1, replace = false } = {}) {
-  const f = Table.frameById(frame?.id) || frame, kind = f?.kind, name = f?.label || 'This frame';
-  if (!f || kind === 'note') throw new Error('A note has no workflow');
+  const f = ofOpenTable(frame), kind = f?.kind, name = f?.label || frame?.label || 'This frame';
+  if (!f) throw new Error(`${name} isn't on the open table`);
+  if (kind === 'note') throw new Error('A note has no workflow');
   if (!S.templates?.length) throw new Error('The templates are still loading');
   const st = settingsOf(f), t = st?.tpl;
   if (!t) throw new Error(`${name} has no workflow: pick a template in its Make pane`);
@@ -705,10 +722,10 @@ async function landInPlace(kind, f, done, old) {
   return made;
 }
 
-function land(kind, frame, t, gens, sent, values) {
+function land(kind, frame, t, gens, sent, values, tableId = Table.activeTableId()) {
   if (kind === 'image') return landLayers(frame, t, gens, sent);
   for (const g of gens) {
-    waitGen(g.id).then((done) => (kind === 'none' ? landFrames(done, values, t) : kind === 'video' ? landClips(frame, done)
+    waitGen(g.id).then((done) => (kind === 'none' ? landFrames(done, values, t, tableId) : kind === 'video' ? landClips(frame, done)
       : kind === 'sound' && frame?.doc ? landSounds(frame, done) : kind === 'scene' && frame ? landScene(frame, done) : inShelf(done)))
       .catch((e) => toast(`${t.name} failed: ${e.message}`, true));
   }
@@ -731,11 +748,17 @@ async function landLayers(frame, t, gens, sent) {
 }
 
 // nothing selected: each output a new frame beside the last one
-async function landFrames(done, values, t) {
+async function landFrames(done, values, t, tableId = Table.activeTableId()) {
+  if (Table.activeTableId() !== tableId) {   // (another table is open now: the result never lands on that one)
+    const name = Table.tableName(tableId);
+    return toast(`#${done.id} is done; it was made on ${name ? `"${name}"` : 'another table'}, so it is in the Shelf`, false,
+      { label: 'On the table…', fn: async () => (await import('./useas.js')).openUseAs(done, 0) });
+  }
   const pair = sizePair(t), size = pair ? { w: Number(values[pair[0].key]) || 1024, h: Number(values[pair[1].key]) || 1024 } : { w: 1024, h: 1024 };
   const outs = (done.outputs || []).map((o, index) => ({ o, index })).filter(({ o }) => o.kind === 'image' || o.kind === 'video');
   if (!outs.length) return inShelf(done);
   for (const { o, index } of outs) {
+    if (Table.activeTableId() !== tableId) return inShelf(done);
     const T = tableNow(), stage = document.querySelector('#tab-table .table-stage');
     const r = stage?.getBoundingClientRect() || { left: 0, top: 0, width: 0, height: 0 };
     let at;

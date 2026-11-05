@@ -354,6 +354,11 @@ function runScene(o, frame, opts) {
 // ---------------------------------------------------------------------------
 export async function frameBeside(source, src, { label = '' } = {}) {
   const Table = await import('./table.js'), { besideSpot } = await import('./table-frames.js');
+  // (a source frame no longer on the open table, another table opened meanwhile: nothing goes on this one)
+  if (source?.id && !Table.frameById(source.id)) {
+    toast(`That was for "${source.label || 'a frame'}" on another table: open that table and try again${src?.generation != null ? ', or take it from the Shelf' : ''}`, true);
+    return null;
+  }
   const frames = Table.tableFrames() || [];
   const near = source || Table.selectedFrames?.()?.[0] || frames.reduce((a, f) => (!a || f.x + f.w > a.x + a.w ? f : a), null);
   const size = { w: src.width || near?.w || 1024, h: src.height || near?.h || 1024 };

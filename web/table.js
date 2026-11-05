@@ -94,13 +94,14 @@ const adapter = {
   dump: () => T,
   // (a live frame lets go first: its last changes, such as a canvas size its module writes back, are saved on this table)
   beforeLeave: () => unlive(),
+  refused: (r, tab) => dropForeign(r, tab),
   load(p, doc) {
     const next = M.migrateTable(p), key = { id: doc?.id ?? null, pid: S.project };
     const same = U.loaded && U.loaded.id === key.id && U.loaded.pid === key.pid;
     U.loaded = key;
     if (same) return reloaded(next);
     unlive(); cancelOp();
-    T = next; U.sel.clear(); H.past = []; H.future = []; U.nudge = null; U.wire = null; U.hover = null;
+    T = next; U.sel.clear(); H.past = []; H.future = []; U.nudge = null; U.wire = null; U.hover = null; U.mends = 0;
     U.fitDue = T.view.x === 0 && T.view.y === 0 && T.view.z === 1; U.laid = false;   // (a table never viewed: fit its frames once)
     syncUndo(); D.syncBar?.(); renderAll(); refreshStills();
     fitAll();
@@ -128,6 +129,35 @@ function reloaded(next) {
   if (U.op && [...(U.op.ids || []), U.op.f?.id, U.op.src?.id].some((id) => id && !ids.has(id))) cancelOp();
   U.panelSig = '';
   D.syncBar?.(); renderAll(); refreshStills();
+}
+// A save refused because frames here carry documents another table owns (app/store.py names them: { docs }): exactly those
+// frames come off this table's copy, their documents left alone (they are the other table's), one toast says so, and the
+// table saves again (tabs.js). Nothing named here, or the third time on one table: false, and the refusal stands. A server
+// that doesn't name them yet: the other tables are read (?full=true) and their frames' documents are the ones.
+async function dropForeign(r, tab) {
+  if (tab?.id !== activeTableId() || (U.mends || 0) >= 3 || !/another table/i.test(r?.data?.detail || '')) return false;
+  let docs = r?.data?.docs;
+  if (!Array.isArray(docs)) {   // (a server from before it named them: the other tables' frames, read here)
+    const ok = here();
+    try { docs = M.docsOwnedElsewhere(await api(`/api/store/tables?full=true${S.project != null ? `&project_id=${S.project}` : ''}`, { busy: false }), tab.id); } catch { return false; }
+    if (!ok()) return false;
+  }
+  const ids = M.foreignFrames(T.frames, docs);
+  if (!ids.length) return false;
+  U.mends = (U.mends || 0) + 1;
+  const drop = new Set(ids), gone = T.frames.filter((f) => drop.has(f.id));
+  if (gone.some((f) => f.id === liveFrame()?.id)) unlive();
+  T.frames = ST.normalize(T.frames.filter((f) => !drop.has(f.id)), T.groups);
+  for (const id of ids) U.sel.delete(id);
+  const hadWires = T.wires;
+  T.wires = W.dropFrames(T.wires, ids);
+  if (U.wire && !wireById(U.wire)) U.wire = null;
+  H.past = []; H.future = []; syncUndo();   // (an undo step could put them back)
+  renderFrames();
+  tellWires(wiresTouched(hadWires, T.wires));
+  const names = gone.map((f) => `"${f.label || M.KIND_LABEL[f.kind]}"`).join(', ');
+  toast(`Took ${gone.length === 1 ? `the frame ${names}` : `${gone.length} frames (${names})`} off this table: ${gone.length === 1 ? 'its document belongs' : 'their documents belong'} to another table, so this table couldn't be saved. Nothing was deleted.`, true);
+  return true;
 }
 function startStore() {
   if (!U.tabs) {
@@ -178,6 +208,8 @@ export const tableFrames = () => T.frames;
 export const selectedFrames = () => selected();
 export const frameById = (id) => byId(id);
 export const activeTableId = () => U.tabs?.active?.id ?? null;
+// a table's name, by id (the project's tables the TabSet lists), else null
+export const tableName = (id) => U.tabs?.docs?.find((d) => d.id === id)?.name ?? null;
 export function frameChanged() { U.panelSig = ''; renderFrames(); changed(); }
 // The open table's story is gone (deleted on the Classic screen): the table stops being a story's (its frames stay)
 export function dropStory(storyId) {

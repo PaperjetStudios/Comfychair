@@ -4,7 +4,8 @@
 // devices, and conflict handling. It never touches the panel's UI: it only calls adapter.load/dump.
 //
 //   const tabs = new TabSet({ kind: 'gen-tabs', host: $('#tab-generate'), scope: 'project', newName: (n) => `Tab ${n}`,
-//     adapter: { empty(), load(payload, doc), dump(), migrate?(payload), beforeLeave?() }, seed?(), onSwitch?(doc) });
+//     adapter: { empty(), load(payload, doc), dump(), migrate?(payload), beforeLeave?(), refused?(r, tab) }, seed?(), onSwitch?(doc) });
+//     (refused: a save the server refused with a reason; the panel may mend its copy and return true, and it is saved again)
 //   (beforeLeave: awaited before the tab is saved and left, for writes the payload must name first)
 //   await tabs.start();   // when the panel first needs its tabs (it also reloads itself on project change)
 //   tabs.changed();       // after every edit: marks dirty, saves ~1 s later
@@ -289,7 +290,16 @@ export class TabSet {
       this.setOffline(true);
       return false;
     }
-    if (refused(r)) { toast(refusal(r), true); return false; }   // (a refusal with a reason, not a changed document: no conflict sheet)
+    if (refused(r)) {   // (a refusal with a reason, not a changed document: no conflict sheet)
+      // the panel may mend its copy for this refusal (adapter.refused(r): true when it changed something), then it saves again
+      if (this.adapter.refused) {
+        let mended = false;
+        try { mended = !!(await this.adapter.refused(r, tab)); } catch (e) { console.warn(e); }
+        if (mended && ep === this.epoch && this.active === tab) { this.setDirty(true); return true; }   // (flush's loop saves the mended copy)
+      }
+      toast(refusal(r), true);
+      return false;
+    }
     if (r.status === 409) { this.showConflict(r.data?.doc ?? null); return false; }
     this.setOffline(false);
     tab.rev = r.data.rev; tab.name = r.data.name;

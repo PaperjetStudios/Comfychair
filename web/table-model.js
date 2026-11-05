@@ -19,6 +19,23 @@ import { migrateWires } from './wire-rules.js';
 export const KINDS = ['image', 'video', 'scene', 'sound', 'note'];
 // the saved document kind each frame kind owns (a note has none: its text is on the frame)
 export const DOC_KIND = { image: 'edit-tabs', video: 'video-tabs', scene: 'scene-tabs', sound: 'sound-tabs' };
+// The frames whose documents the server says another table owns (a refused save's 409 names them: { docs: [[kind, id]] },
+// kind a store kind). Their ids: the open table drops exactly these from its copy (never their documents) and saves again.
+export function foreignFrames(frames, docs) {
+  const bad = new Set((Array.isArray(docs) ? docs : []).filter((d) => Array.isArray(d) && d.length === 2).map(([k, i]) => `${k}\u0000${i}`));
+  if (!bad.size) return [];
+  return (frames || []).filter((f) => f && f.doc && DOC_KIND[f.kind] && bad.has(`${DOC_KIND[f.kind]}\u0000${f.doc}`)).map((f) => f.id);
+}
+// The frame documents the other tables own ([[store kind, id]]), from the tables' list read in full (?full=true): what a
+// refusal names when the server is older and doesn't say (app/store.py _owned_docs, frames only)
+export function docsOwnedElsewhere(tables, exceptId) {
+  const out = [];
+  for (const t of Array.isArray(tables) ? tables : []) {
+    if (!t || t.id === exceptId) continue;
+    for (const f of t.payload?.frames || []) if (f && DOC_KIND[f.kind] && typeof f.doc === 'string' && f.doc) out.push([DOC_KIND[f.kind], f.doc]);
+  }
+  return out;
+}
 export const KIND_LABEL = { image: 'Image', video: 'Video', scene: '3D', sound: 'Sound', note: 'Note' };
 // On a version-2 project the work lives on tables and these engines' documents belong to a frame: their TabSets (tabs.js) make no blank
 // "Edit 1" / "Mix 1" / "main" of their own and may sit with no open document. Version 1 keeps the old behaviour.

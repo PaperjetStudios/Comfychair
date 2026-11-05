@@ -225,7 +225,7 @@ class Tables(unittest.TestCase):
         # a plain PUT naming another table's docs is refused
         self.c.post("/api/store/tables/t1/restore", params=q)
         r = self.c.put("/api/store/tables/t3", params=q, json={"name": "x", "payload": {"frames": [{"id": "z", "kind": "image", "doc": "e1"}]}})
-        self.assertEqual((r.status_code, r.json()), (409, {"detail": "Those documents belong to another table"}))
+        self.assertEqual((r.status_code, r.json()), (409, {"detail": "Those documents belong to another table", "docs": [["edit-tabs", "e1"]]}))
         self.assertEqual(self.c.post("/api/store/tables/nope/duplicate", params=q).status_code, 404)
 
     def test_upgrade_skips_docs_and_stories_tables_already_have(self):
@@ -282,8 +282,27 @@ class Tables(unittest.TestCase):
         self.put("tables", "t2", {"frames": [], "story": "s1"})   # same story is not an ownership clash
         self.put("edit-tabs", "e1", {}); self.put("tables", "t3", {"frames": [{"id": "a", "kind": "image", "doc": "e1"}]})
         r = self.c.put("/api/store/tables/t4", params=q, json={"payload": {"frames": [{"id": "a", "kind": "image", "doc": "e1"}]}})
-        self.assertEqual((r.status_code, r.json()), (409, {"detail": "Those documents belong to another table"}))
+        self.assertEqual((r.status_code, r.json()), (409, {"detail": "Those documents belong to another table", "docs": [["edit-tabs", "e1"]]}))
         self.assertNotIn("doc", r.json())
+        self.assertFalse(self.ids("tables") & {"t4"})
+
+    def test_ownership_409_names_exactly_the_other_tables_docs(self):
+        # the page drops exactly the frames named (table.js) and saves again: its own docs are never in the list
+        q = {"project_id": self.pid}
+        for k, i in (("edit-tabs", "e1"), ("edit-tabs", "e2"), ("video-tabs", "v1"), ("edit-tabs", "mine")):
+            self.put(k, i, {})
+        self.put("tables", "other", {"frames": [{"id": "a", "kind": "image", "doc": "e1"}, {"id": "b", "kind": "video", "doc": "v1"},
+                                                {"id": "c", "kind": "image", "doc": "e2"}]})
+        self.put("tables", "main", {"frames": [{"id": "m", "kind": "image", "doc": "mine"}]})
+        rev = self.c.get("/api/store/tables/main", params=q).json()["rev"]
+        bad = [{"id": "m", "kind": "image", "doc": "mine"}, {"id": "x", "kind": "video", "doc": "v1"}, {"id": "y", "kind": "image", "doc": "e1"},
+               {"id": "n", "kind": "note", "text": "hi"}]
+        r = self.c.put("/api/store/tables/main", params=q, json={"rev": rev, "payload": {"frames": bad}})
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.json()["docs"], [["edit-tabs", "e1"], ["video-tabs", "v1"]])
+        self.assertEqual(self.c.get("/api/store/tables/main", params=q).json()["rev"], rev)   # (nothing saved)
+        good = [f for f in bad if f["id"] not in ("x", "y")]
+        self.assertEqual(self.c.put("/api/store/tables/main", params=q, json={"rev": rev, "payload": {"frames": good}}).status_code, 200)
 
     def test_patch_name_and_version_while_busy_does_not_rename(self):
         db.set_project_version(self.pid, 1)

@@ -166,7 +166,9 @@ async def put_doc(kind: str, did: str, body: dict = Body(...), project_id: int |
                 if other.get("id") != did:
                     taken.update(_owned_docs(other, story=False))
             if mine & taken:   # (no `doc` key: the client tells this from a stale rev by that)
-                raise HTTPException(409, detail="Those documents belong to another table")
+                # `docs` names them, so the page can drop exactly those frames from its copy and save again (table.js)
+                return JSONResponse({"detail": "Those documents belong to another table",
+                                     "docs": [list(x) for x in sorted(mine & taken)]}, status_code=409)
     if cur is not None and name is None and payload is None and order is not None:
         doc = {**cur, "order": order, "updated": time.time()}  # order-only: no rev check, no rev bump
         _write(path, doc)

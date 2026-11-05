@@ -44,12 +44,14 @@ export async function runChain(frameIds, { onStep = null } = {}) {
   const n = frameIds.map((id) => Table.frameById(id)).filter(hasFlow).length;
   if (!n) { toast('Nothing in this chain has a workflow yet: pick a template in a frame\'s Make pane first', true); return none; }
   R.running = true; R.stop = false;
+  const tableId = Table.activeTableId();   // (a chain is one table's: another table opened meanwhile stops it)
   const done = [], skipped = [];
   let failed = null, i = 0, stopped = false;
   const step = (frame, state) => { try { onStep?.({ frame, state, i, n }); } catch (e) { console.warn(e); } };
   try {
     for (const id of frameIds) {
       if (R.stop) break;
+      if (Table.activeTableId() !== tableId) { failed = { frame: null, error: new Error('another table opened') }; toast('The chain stopped: another table was opened', true); break; }
       const f = Table.frameById(id);
       if (!f) continue;   // (deleted meanwhile)
       if (!hasFlow(f)) { skipped.push(f); step(f, 'skipped'); continue; }

@@ -153,3 +153,24 @@ test('wires: kept with the table, the ones naming a missing frame dropped, renum
   assert.deepEqual(migrateTable({ frames: [] }).wires, []);
   assert.deepEqual(migrateTable(JSON.parse(JSON.stringify(t))).wires, t.wires);   // (saved and loaded again: the same)
 });
+
+// a save refused because frames carry another table's documents: exactly those frames (table.js dropForeign)
+import { foreignFrames } from '../web/table-model.js';
+test('foreignFrames: the frames whose documents the 409 names, by kind and id', () => {
+  const frames = [{ id: 'a', kind: 'image', doc: 'e1' }, { id: 'b', kind: 'video', doc: 'e1' }, { id: 'c', kind: 'video', doc: 'v1' },
+    { id: 'n', kind: 'note', doc: null }, { id: 'd', kind: 'image', doc: 'mine' }];
+  assert.deepEqual(foreignFrames(frames, [['edit-tabs', 'e1'], ['video-tabs', 'v1']]), ['a', 'c']);
+  assert.deepEqual(foreignFrames(frames, [['video-tabs', 'e1']]), ['b'], 'the kind counts, not just the id');
+  assert.deepEqual(foreignFrames(frames, []), []);
+  assert.deepEqual(foreignFrames(frames, undefined), [], 'an older server names none: nothing is dropped');
+  assert.deepEqual(foreignFrames(frames, [['edit-tabs'], 'junk', ['edit-tabs', 'nope']]), []);
+});
+import { docsOwnedElsewhere } from '../web/table-model.js';
+test('docsOwnedElsewhere: the other tables\' frame documents, not this one\'s, not notes', () => {
+  const tables = [{ id: 'main', payload: { frames: [{ kind: 'image', doc: 'm1' }] } },
+    { id: 'o', payload: { frames: [{ kind: 'image', doc: 'e1' }, { kind: 'note', doc: null }, { kind: 'sound', doc: 's1' }, { kind: 'video' }] } },
+    { id: 'p' }, null];
+  assert.deepEqual(docsOwnedElsewhere(tables, 'main'), [['edit-tabs', 'e1'], ['sound-tabs', 's1']]);
+  assert.deepEqual(foreignFrames([{ id: 'x', kind: 'image', doc: 'e1' }, { id: 'y', kind: 'image', doc: 'm1' }], docsOwnedElsewhere(tables, 'main')), ['x']);
+  assert.deepEqual(docsOwnedElsewhere(undefined, 'main'), []);
+});

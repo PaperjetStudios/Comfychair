@@ -398,7 +398,9 @@ function follow(eng, o, tab, src, g, nth = 0) {
     .catch((e) => { forgetOwed(g.id); toast(`${o.label} failed${src.layer ? ` on ${layerWord(src.layer)}` : ''}: ${e.message}`, true); })
     .finally(() => {
       FOLLOWING.delete(g.id); unfly(g.id); eng?.render();
-      if (!--src.runs && src.copy) dropInput(src.name);   // (the last run from a copy sent only for these)
+      // (the last run from a copy sent only for these. A kept run's copy is the owed list's to drop, releaseCopy, once no
+      // record needs it: one owner, so it is never deleted twice)
+      if (!--src.runs && src.copy && !kept && !owedList().some((r) => r.copy === src.name)) dropInput(src.name);
     });
 }
 

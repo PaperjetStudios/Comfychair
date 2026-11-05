@@ -66,15 +66,20 @@ function reset() {
 }
 async function detect(table = null, docId = null) {
   if (S.project !== FS.pid) { FS.pid = S.project; FS.storyOf.clear(); reset(); }
-  const tid = docId || store.get(`deck.tab.tables.${S.project ?? 'none'}`, null);
+  // (the table open now is the tables TabSet's active one: it is set before the table's frames are drawn. The remembered
+  // tab, deck.tab.tables.<project>, is written only after them, so while a table is loading it still names the one before:
+  // it is read only before any table has opened, at start-up)
+  const active = () => Table.activeTableId() ?? store.get(`deck.tab.tables.${S.project ?? 'none'}`, null);
+  const tid = docId || active();
   if (!tid) return setTable(null, null);
   // (the event's table, when it is the open one and says its story: at start-up an event can carry the blank table
-  // the open one is loaded into, so only a story it names is taken; anything else is asked of the server once)
-  if (table?.story && table.frames === frames()) FS.storyOf.set(tid, table.story);
+  // the open one is loaded into, so only a story it names is taken, and only under the id of the table open now;
+  // anything else is asked of the server once)
+  if (table?.story && table.frames === frames() && tid === Table.activeTableId()) FS.storyOf.set(tid, table.story);
   if (!FS.storyOf.has(tid)) {
     let d = null;
     try { d = await api(`/api/store/tables/${tid}${qs()}`, { busy: false }); } catch { /* not saved yet, or gone */ }
-    if ((docId ? Table.activeTableId() : store.get(`deck.tab.tables.${S.project ?? 'none'}`, null)) !== tid) return;   // (another table meanwhile)
+    if (active() !== tid) return;   // (another table meanwhile)
     FS.storyOf.set(tid, d?.payload?.story || null);
   }
   setTable(tid, FS.storyOf.get(tid));
@@ -138,9 +143,11 @@ async function reconcile() {
   FS.rows = false;
   if (!FS.storyId || !tid) return;
   if (!(await openStory()) || FS.tableId !== tid) { drawPane(); return; }
+  const onIt = () => Table.activeTableId() === tid;   // (the open table is the story's: never lay a story out on another one)
+  if (!onIt()) { detect(); return; }
   const P = St.storyDoc(), list = frames();
   let story = false, table = false;
-  const still = () => FS.tableId === tid && storyOpen() && frames() === list;   // (nothing switched under an await)
+  const still = () => FS.tableId === tid && onIt() && storyOpen() && frames() === list;   // (nothing switched under an await)
 
   // frames moved: the rows say the order
   if (rows) {

@@ -871,7 +871,7 @@ async function toSoundFrame(m, label) {
 export async function renderMix(p, { name = 'mix', items = p.items } = {}) {
   const out = { ...N.out, ...(p.out || {}) };
   return api('/api/sound/render', { method: 'POST', timeout: 900000, busy: 'Mixing the sound…', body: {
-    tracks: R.exportTracks(p.tracks), name: out.name || name,   // (solo folded into muted, as the preview plays it) format: out.format, gain: out.gain, normalize: out.normalize,
+    tracks: R.exportTracks(p.tracks), name: out.name || name, format: out.format, gain: out.gain, normalize: out.normalize,   // (solo folded into muted, as the preview plays it)
     items: items.map((it) => ({ track: it.track, src: it.src, at: it.at, in: it.in, out: it.out ?? it.dur ?? null,
       volume: it.volume ?? 1, pan: it.pan || 0, chans: it.chans || null, fade_in: it.fadeIn || 0, fade_out: it.fadeOut || 0 })) } });
 }
