@@ -84,3 +84,12 @@ export function makePayload(t, { prompt = null, picture = null } = {}, base = nu
   if (picture && imf) overrides[imf.key] = picture;
   return { ...kept, v: 1, template: t.id, presetId: same ? base.presetId ?? null : null, overrides };
 }
+
+// Whether a frame's saved document holds nothing yet: a double-click on such a frame offers what to put in it, not an empty editor
+export function docEmpty(kind, payload) {
+  if (!payload) return false;
+  if (kind === 'image') return !payload.layers?.length;
+  if (kind === 'video' || kind === 'sound') return !payload.items?.length;
+  if (kind === 'scene') return !payload.objects?.length && !payload.room;
+  return false;
+}

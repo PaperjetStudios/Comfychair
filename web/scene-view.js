@@ -11,7 +11,7 @@ import { $, api, busy as busyBar, canvasFont, clone, closeSheet, h, store, toast
 import { gzChip, smoothGizmo, snap3, snapMenu3 } from './gizmo.js';
 import { ORIENTS, centrePoint, faceQuat, follow, frameQuat, orientOf, qMul, relQuat, spaceOf } from './gizmo-orient.js';
 import {
-  C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, WP, current, frames, holdStart, hooks, liveCam, pathSig, makers, namesFor, newObject, newRoom, originShift, bakeOn, pivotOf, sample, setOrigin,
+  C, CAM, EVEN, applyRoll, FIG, MODES, OBJ, R, ROOM, SC, TYPES, WP, current, frames, holdEnd, holdStart, hooks, liveCam, pathSig, makers, namesFor, newObject, newRoom, originShift, bakeOn, pivotOf, sample, setOrigin,
   canBake, hasKeys, isPosable, sameTab, save, selItem, setActiveCam, setAxes, setSC, write
 } from './scene-data.js';
 import { letGo } from './scene-export.js';

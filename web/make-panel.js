@@ -159,7 +159,7 @@ function target(kind, frame) {
     } : null,
     // (a frame's size is one setting, its Output tab's: here it only says what the run comes out at)
     sizeEl: (kind === 'video' || kind === 'image') && frame ? (fw, fh) => field(['Output size', h('span', {}, `${P.st.values[fw.key]}×${P.st.values[fh.key]} · ${((P.st.values[fw.key] * P.st.values[fh.key]) / 1e6).toFixed(2)} MP`)],
-      button('Change…', () => sidebar.show('output'), { cls: 'small' })) : null,
+      button('Change…', () => import('./sidebar.js').then(({ sidebar }) => sidebar.show('output')), { cls: 'small' })) : null,
     imageButtons: (f, set) => (kind === 'video' ? [button([icon('image'), 'Pick a frame'], () => pickFrame(f, set))] : []) };
 }
 

@@ -19,7 +19,7 @@ function chime(ok = true) {
     o.start(t + i * 0.16); o.stop(t + i * 0.16 + 0.32);
   });
 }
-const BASE_TITLE = document.title;
+export const BASE_TITLE = document.title;
 export function notifyDone(g) {
   const ok = g.status === 'done';
   const took = runTime(g);

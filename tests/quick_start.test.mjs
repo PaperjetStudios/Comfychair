@@ -80,3 +80,14 @@ test('a frame\'s Make settings: the prompt and the picture in their fields, a ke
   assert.deepEqual(R.makePayload(R.startTemplate(ALL, 'sound-music'), { prompt: 'calm piano' }).overrides, { 'enc.tags': 'calm piano' }, 'music: the words go in its tags');
   assert.deepEqual(R.makePayload(ALL[2], { prompt: 'x' }, base), { v: 1, template: 'example_txt2img', presetId: null, overrides: { '3.text': 'x' } });
 });
+
+test('a frame is empty until its document holds something', () => {
+  assert.equal(R.docEmpty('image', { layers: [] }), true);
+  assert.equal(R.docEmpty('image', { layers: [{}] }), false);
+  assert.equal(R.docEmpty('video', { items: [] }), true);
+  assert.equal(R.docEmpty('sound', { items: [{}] }), false);
+  assert.equal(R.docEmpty('scene', { objects: [], room: null }), true);
+  assert.equal(R.docEmpty('scene', { objects: [], room: {} }), false);
+  assert.equal(R.docEmpty('video', null), false);   // (not read: it opens as usual)
+  assert.equal(R.docEmpty('note', {}), false);
+});

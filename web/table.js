@@ -67,6 +67,7 @@ import { frameMenu as frameMenuGroups, frameArrangeMenu, pickedFor } from './lay
 import { filtering, foldedGroups, listRows } from './frame-list.js';
 import { KIND_ICON, copyDoc, createDoc, dropInput, editDoc, frameEl, frameFor, frameStamp, kindOfDoc, loadStills, noteRev, owedCounts, renameDoc, restoreDoc, stillOf, syncFrame, trashDoc, pausePreviews, previewMode, setPreviewMode } from './table-frames.js';
 import { staleInfo, staleText } from './chain-rules.js';
+import { docEmpty } from './quick-start-rules.js';
 import { sidebar } from './sidebar.js';
 import { FLOAT_KINDS, floatLayers, layersFloating } from './float-layers.js';
 import { registerProps, propsChanged } from './props-panel.js';
@@ -657,6 +658,14 @@ function renameLive(f, btn) {
   btn.replaceWith(input);
   input.focus(); input.select();
 }
+// A double-click on a frame: it opens, or if nothing is in it and nothing is plugged into it, what to start it with (quick-start.js)
+async function openOrStart(f) {
+  if (f.kind === 'note' || T.wires.some((w) => w.to === f.id)) return goLive(f);
+  const doc = f.doc ? await api(`/api/store/${M.DOC_KIND[f.kind]}/${f.doc}${S.project != null ? `?project_id=${S.project}` : ''}`, { busy: false }).catch(() => null) : null;
+  if (byId(f.id) !== f) return null;
+  if (!docEmpty(f.kind, doc?.payload)) return goLive(f);
+  return quickStart({ into: f });
+}
 export function goLive(f) {
   if (!f) return;
   if (f.kind === 'note') { U.els.get(f.id)?.querySelector('textarea')?.focus(); return; }
@@ -1113,7 +1122,7 @@ function endWire(e, op) {
 const adds = (e) => !!(e.shiftKey || e.ctrlKey || e.metaKey);
 function startMove(e, f, base) {
   // a second tap on the same frame opens it (a dblclick would land on the stage, which holds the pointer)
-  if (!adds(e) && U.lastTap?.id === f.id && Date.now() - U.lastTap.t < DOUBLE_MS) { U.lastTap = null; U.op = null; goLive(f); return; }
+  if (!adds(e) && U.lastTap?.id === f.id && Date.now() - U.lastTap.t < DOUBLE_MS) { U.lastTap = null; U.op = null; openOrStart(f); return; }
   if (adds(e)) {
     if (U.sel.has(f.id)) { U.sel.delete(f.id); renderFrames(); return; }
     U.sel.add(f.id);
@@ -1430,7 +1439,7 @@ function renderPanel() {
   if (sig === U.panelSig || D.panel.contains(document.activeElement) && document.activeElement.matches('input')) return;
   U.panelSig = sig;
   D.panel.replaceChildren(
-    section('Frames', null, help('Drag on empty table to make a frame there; double-tap empty table for the quick starts. Double-click a frame, or press Enter, to open it at full size; Esc comes back. Wheel zooms, Space + drag pans, Shift+F fits, F is full screen. The list is the frames as layers, the top one drawn on top: drag a row by its grip to restack it, or onto a group\'s row to put it in the group. Shift-click a row for a range, Ctrl-click to add or drop one. Double-click a name to rename it. Right click a row or a frame, or hold a finger on it, for the rest. Keys: Ctrl+G groups, Ctrl+Shift+G ungroups, Ctrl+J duplicates, Ctrl+] and Ctrl+[ step up and down, with Shift to the top and bottom, H hides, L locks. A hidden frame keeps its place but is left out of the table, the box, Fit and a story\'s rows. Arrange on the bar lines up two or more frames, on the grid when it is on.'),
+    section('Frames', null, help('Drag on empty table to make a frame there; double-tap empty table for the quick starts. Double-click a frame, or press Enter, to open it; double-clicking one with nothing in it offers what to start it with at full size; Esc comes back. Wheel zooms, Space + drag pans, Shift+F fits, F is full screen. The list is the frames as layers, the top one drawn on top: drag a row by its grip to restack it, or onto a group\'s row to put it in the group. Shift-click a row for a range, Ctrl-click to add or drop one. Double-click a name to rename it. Right click a row or a frame, or hold a finger on it, for the rest. Keys: Ctrl+G groups, Ctrl+Shift+G ungroups, Ctrl+J duplicates, Ctrl+] and Ctrl+[ step up and down, with Shift to the top and bottom, H hides, L locks. A hidden frame keeps its place but is left out of the table, the box, Fit and a story\'s rows. Arrange on the bar lines up two or more frames, on the grid when it is on.'),
       ...(T.frames.length ? frameListArea() : [hint('No frames yet.')])),
     section('Frame', null, one ? frameFields(one) : hint(s.length ? `${s.length} frames selected` : 'Select a frame.')));
 }

@@ -1823,7 +1823,13 @@ export function createEditor(cfg) {
       h('div', { class: 'row wrap' },
         flat ? null : button('Crop', () => { paint.setTool('move'); E.cropping = true; E.aspect = null; renderEditor(); }),
         cropped && !flat ? button('Reset crop', () => { setLayerCrop(l, { ...FULL }); editorChanged(); }) : null,
-        button('100%', () => { setScale(1); editorChanged(); })),
+        button('100%', () => {
+          const r = layerRect(l), cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+          l.scale = 1;
+          const n = layerRect(l);
+          l.x = Math.round(cx - n.w / 2); l.y = Math.round(cy - n.h / 2);
+          editorChanged();
+        })),
       flat && isCanvas(l) ? canvasSizeFields(l) : null,
       flat && !l.mask ? fillField('Background', () => l.fill || null, (c) => {
         if (c) l.fill = c; else delete l.fill;

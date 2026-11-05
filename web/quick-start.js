@@ -5,10 +5,11 @@
 // own paths (table.js newFrameAt / sourceFrameAt / dropOntoFrame, frame-scene.js addToScene); nothing new is saved
 // apart from the choices remembered on this device (quick-start-rules.js).
 //
-//   openQuickStart({ x, y, rect?, kind?, centre? })   x, y: a table point. rect: a box drawn there (its size is the
+//   openQuickStart({ x, y, rect?, kind?, centre?, into? })   x, y: a table point. rect: a box drawn there (its size is the
 //                                                     frame's). kind: the kind shown first. centre: the frame's middle at x, y.
+//                                                     into: an empty frame (a double-click on it): its kind's starts, filling it; no new frame.
 import { sizePicker } from './size-picker.js';
-import { drawnOutput } from './table-model.js';
+import { drawnOutput, outputOf } from './table-model.js';
 import { h, store, toast, openSheet, closeSheet, button, chips, seg, field, help, hint, textArea, icon } from './ui.js';
 import { S, ASPECT_PRESETS } from './core.js';
 import { openSourcePicker } from './source-picker.js';
@@ -21,18 +22,19 @@ import { FPS, NOTE_SIZE, SOUND_SIZE, lastChoice, makePayload, placeAt, rememberC
 const KIND_TABS = [['image', 'Image', 'image'], ['video', 'Video', 'film'], ['scene', '3D', 'cube'], ['sound', 'Sound', 'sound'], ['note', 'Note', 'text']];
 const ratioOf = (k) => (ASPECT_PRESETS.find(([a]) => a === k) || ASPECT_PRESETS[0])[1];
 
-export function openQuickStart({ x = 0, y = 0, rect = null, kind = null, centre = false } = {}) {
-  const Q = { at: { x, y }, rect, centre, c: lastChoice(store, ASPECT_PRESETS), prompt: '' };
-  if (kind) Q.c.kind = kind;
+export function openQuickStart({ x = 0, y = 0, rect = null, kind = null, centre = false, into = null } = {}) {
+  const Q = { at: { x, y }, rect, centre, into, c: lastChoice(store, ASPECT_PRESETS), prompt: '' };
+  if (into) Q.c.kind = into.kind;
+  else if (kind) Q.c.kind = kind;
   const body = h('div', { class: 'qs-body' });
   const tabs = seg(KIND_TABS.map(([k, label, ic]) => [k, [icon(ic), h('span', {}, label)]]), Q.c.kind, (k) => {
     Q.c.kind = k; rememberChoice(store, { kind: k }); draw();
   });
   tabs.classList.add('qs-kinds');
-  const draw = () => body.replaceChildren(...PANES[Q.c.kind](Q));
-  openSheet(h('h3', {}, 'New frame'),
+  const draw = () => body.replaceChildren(...PANES[Q.c.kind](Q).filter(Boolean));
+  openSheet(h('h3', {}, into ? `Start "${into.label || 'this frame'}"` : 'New frame'),
     help('Each card makes a frame here in one tap. From text, and a video or 3D object from a picture, make the frame and run the Make panel on it, so the result lands in the frame. Double-tap empty table to open this again.'),
-    h('div', { class: 'quick-start' }, tabs, body));
+    h('div', { class: 'quick-start' }, into ? null : tabs, body));
   draw();
 }
 
@@ -49,9 +51,17 @@ const rectOf = (Q, size) => (Q.rect ? { ...Q.rect } : placeAt(Q.at, size, Table.
 const cornerOf = (Q) => { const r = rectOf(Q, { w: 0, h: 0 }); return { x: r.x, y: r.y }; };
 
 // A frame on the table over its rect (the box drawn is only its preview), coming out at size
-const newOut = (kind, Q, size, opts = {}) => Table.newFrameAt(kind, rectOf(Q, size), { ...opts, extra: { ...opts.extra, out: { w: size.w, h: size.h } } });
+// (filling a frame: it keeps its own document and size, and takes the settings. Let go of it first: the Make pane reads them when it is selected again)
+const newOut = (kind, Q, size, opts = {}) => (Q.into ? fillFrame(Q.into, opts) : Table.newFrameAt(kind, rectOf(Q, size), { ...opts, extra: { ...opts.extra, out: { w: size.w, h: size.h } } }));
+function fillFrame(f, opts) {
+  Table.selectFrames([]);
+  if (opts.extra?.make) { f.make = opts.extra.make; Table.frameChanged(); }
+  Table.selectFrames([f.id]);
+  return f;
+}
 // The size a kind comes out at, and its selector: remembered for the next new frame unless a box was drawn (that box's shape starts it)
 function outputChoice(Q, kind) {
+  if (Q.into) return { size: () => outputOf(Q.into), picker: null };
   Q.sizes ||= {};
   const first = () => {
     if (Q.rect) return drawnOutput(Q.rect);
@@ -101,7 +111,7 @@ const PANES = {
   video(Q) {
     const { size, picker } = outputChoice(Q, 'video');
     const rows = [picker];
-    rows.push(field('Frame rate', chips(FPS.map((f) => [f, `${f} fps`]), Q.c.fps, (v) => { Q.c.fps = +v; rememberChoice(store, { fps: +v }); })));
+    if (!Q.into) rows.push(field('Frame rate', chips(FPS.map((f) => [f, `${f} fps`]), Q.c.fps, (v) => { Q.c.fps = +v; rememberChoice(store, { fps: +v }); })));
     const [textC, textHost] = textCard(Q, 'From text', (prompt) => fromText(Q, 'video', 'video-text', size(), prompt));
     return [...rows,
       cards(card('film', 'Blank sequence', () => blank(Q, 'video', size(), { ...emptyVideo(), size: [size().w, size().h], fps: Q.c.fps })),
@@ -130,7 +140,7 @@ const PANES = {
       card('upload', 'From a file', () => {
         closeSheet();
         openSourcePicker({ kinds: ['audio', 'video'], want: 'sound', title: 'Start from a sound', onPick: async (src) => {
-          const f = await Table.newFrameAt('sound', rectOf(Q, SOUND_SIZE), { payload: blankPayload('sound') });
+          const f = Q.into || await Table.newFrameAt('sound', rectOf(Q, SOUND_SIZE), { payload: blankPayload('sound') });
           if (f && !Table.dropOntoFrame(f, [src])) toast('That sound couldn\'t go in the mix', true);
         } });
       }),
@@ -150,6 +160,7 @@ const PANES = {
 // ---------------------------------------------------------------------------
 async function blank(Q, kind, size, payload) {
   closeSheet();
+  if (Q.into) return Table.goLive(Q.into);
   await newOut(kind, Q, size, payload ? { payload } : {});
 }
 
@@ -163,7 +174,7 @@ function pickPicture(onPick, title = 'Start from a picture') {
 function pickPictures(Q) {
   closeSheet();
   const waiting = [];
-  let frame = null, running = false, failed = false;
+  let frame = Q.into, running = false, failed = false;
   const work = async () => {
     if (running) return;
     running = true;
@@ -185,6 +196,7 @@ function pickPictures(Q) {
 
 // a picture, clip or file as a frame of its own (the same as dropping it on the table there)
 async function fromSource(Q, src) {
+  if (Q.into) { await Table.addToFrame(Q.into, [src]); return; }
   const f = await Table.sourceFrameAt(src, cornerOf(Q));
   if (f) Table.selectFrames([f.id]);
 }

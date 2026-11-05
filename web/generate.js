@@ -3,7 +3,7 @@ import {
   button, iconBtn, actions, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider, withHelp,
   insertAtCursor, toggle, textArea, seedField as uiSeedField, choiceField, chips, chip,
 } from './ui.js';
-import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, previewUrl, saveSnippet, savedEntries, thumbUrl } from './core.js';
+import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, previewUrl, saveSnippet, savedEntries, thumbUrl, switchTab } from './core.js';
 import { clipLabel, clipUrl, soundInput } from './media.js';
 import { openSourcePicker } from './source-picker.js';
 import { pictureForRun, pictureInput } from './picture-input.js';

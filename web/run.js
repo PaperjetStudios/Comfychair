@@ -3,7 +3,7 @@ import { loraPicker } from './lora-pick.js';
 import { fetchHistory as loadHistory } from './generation-data.js';
 import { RUN, runTime, fmtDur, stepClock, runEstimate, fmtPerStep } from './run-state.js';
 export { RUN, runTime, fmtDur } from './run-state.js';
-import { notifyPrepare, notifyDone, keepAwake } from './notifications.js';
+import { BASE_TITLE, notifyPrepare, notifyDone, keepAwake } from './notifications.js';
 export { notifyPrepare } from './notifications.js';
 import {
   $, h, store, api, toast, SHEET, sheetOpen, openSheet, closeSheet, button, linkBtn, actions, hint, placeholder, note,
