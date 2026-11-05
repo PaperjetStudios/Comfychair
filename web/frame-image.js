@@ -20,6 +20,7 @@ import { isLive } from './live.js';
 import { sidebar } from './sidebar.js';
 import { frameChanged, refreshStills, selectedFrames, tableFrames, frameById } from './table.js';
 import { dropInput, editDoc, sourcePicture } from './table-frames.js';
+import { extendUndo } from './undo-dock.js';
 
 const F = { seq: 0, mounted: null };   // mounted: the id of the frame the editor is in
 const eng = () => CURRENT_EDIT.eng;
@@ -75,6 +76,17 @@ function wireDrop(root, frame) {
     renderEditor();
   });
 }
+
+// What the undo pair needs from the painting's history (editor.js registers it without them): whether it has steps, as its own
+// strip's Undo and Redo say (paint.js syncStrip keeps them in step with its list), and the edit's state, so a table step made
+// while the frame is live undoes in its place among the editor's (undo-order.js)
+const paintStrip = () => [...document.querySelectorAll('.paint-strip')].find((s) => !s.closest('.st-cv-viewer'));   // (the story canvas has its own)
+const stripCan = (strip, act) => { const b = strip?.querySelector(`[data-act=${act}]`); return b ? !b.disabled : true; };
+const plainOnly = (k, v) => (v && typeof v === 'object' && !Array.isArray(v) && Object.getPrototypeOf(v) !== Object.prototype ? undefined : v);
+extendUndo('editor', {
+  can: () => { const s = paintStrip(); return [stripCan(s, 'undo'), stripCan(s, 'redo')]; },
+  sig: () => { try { return JSON.stringify({ size: E.size, layers: E.layers }, plainOnly); } catch { return String(Math.random()); } },
+});
 
 // The frame's output size is the edit's canvas. (Its size on the table is only its preview.)
 // A fitted frame leaves the editor fitting its layers (an animation keeps a fixed canvas: the frame turns fixed).

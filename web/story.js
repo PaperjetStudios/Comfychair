@@ -550,7 +550,8 @@ function makeCanvas() {
   CV.canvas = h('canvas', { class: 'hidden', 'aria-label': 'The shot\'s canvas' });
   CV.empty = h('div', { class: 'placeholder st-cv-empty' });
   CV.viewer = h('div', { class: 'viewer st-cv-viewer' }, CV.canvas, CV.empty);
-  registerUndo('story', { undo: () => CV.eng?.paint?.undo(), redo: () => CV.eng?.paint?.redo() });   // (the shot canvas's painting)
+  const stripCan = (act) => { const b = CV.eng?.paint?.els?.flat?.().map((e) => e.querySelector?.(`[data-act=${act}]`)).find(Boolean); return b ? !b.disabled : true; };   // (its strip's buttons follow its list: paint.js syncStrip)
+  registerUndo('story', { undo: () => CV.eng?.paint?.undo(), redo: () => CV.eng?.paint?.redo(), can: () => [stripCan('undo'), stripCan('redo')] });   // (the shot canvas's painting)
   CV.eng = createEditor({
     canvas: CV.canvas, empty: CV.empty, panel: $('#storyBody'),
     active: () => shown() && U.view === 'canvas' && !!CV.shot && CV.shot === U.sel,

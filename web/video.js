@@ -1855,7 +1855,7 @@ function wireOnce() {
   // timeline-keys.js through TL.keys, Ctrl+Z / Ctrl+Shift+Z among them)
   const tk = TL.keys();
   playKeys(() => VD.active(), () => vtp, (e) => ({ f: toggleVideoFullscreen, ...tk.more(e) }), (e) => tk.combos(e));
-  registerUndo('video', { undo: undoEdit, redo: redoEdit, can: () => HIST.can() });
+  registerUndo('video', { undo: undoEdit, redo: redoEdit, can: () => HIST.can(), sig: () => HIST.sig() });
 }
 
 // Track and ruler menu items the timeline leaves to the tab (timeline.js menuAction); rename, lock, solo and markers are its own.

@@ -967,7 +967,7 @@ function wireOnce() {
     { step: { by: 5, key: 0.1, back: '⏪', fwd: '⏩', label: '5 s', pause: false },
       loop: { get: () => N.loop, set: (on) => { N.loop = on; store.set('deck.sound.loop', on); } }, area: WA,
       keys: keyJumps(() => [...clipKeyTimes(TL, TL.selItem() ? [TL.selItem()] : N.items), ...N.markers.map((m) => m.t)]) });
-  registerUndo('sound', { undo: () => HIST.undo(), redo: () => HIST.redo(), can: () => HIST.can() });
+  registerUndo('sound', { undo: () => HIST.undo(), redo: () => HIST.redo(), can: () => HIST.can(), sig: () => HIST.sig() });
   onServer('deck_generation', ({ data }) => { if (N.gens.includes(data?.id) && SD.active()) setTimeout(renderPanel, 0); });
   playKeys(() => SD.active(), () => stp, (e) => ({ d: TL.duplicatePicked, f: () => SD.max?.toggle(), ...KEYS.more(e) }), (e) => KEYS.combos(e));
 }

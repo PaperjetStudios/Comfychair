@@ -2,7 +2,7 @@
 //   snap() gives a plain, serialisable picture of the state; apply(snapshot) puts one back (onto the same objects, by id).
 //   mark(tag) after a change records it: an identical snapshot makes no step; marks with the same tag within mergeMs
 //   merge into one step (a slider drag). hold(fn) runs fn so its marks re-base the current state and make no step
-//   (system writes: a clip's measured length, a scene that changed under it).
+//   (system writes: a clip's measured length, a scene that changed under it). sig() is the state as last marked, as a string.
 export function history({ snap, apply, limit = 100, mergeMs = 500, now = Date.now }) {
   const text = () => JSON.stringify(snap());
   let cur = text(), undos = [], redos = [], tag = null, at = 0, held = 0;
@@ -28,6 +28,7 @@ export function history({ snap, apply, limit = 100, mergeMs = 500, now = Date.no
       return true;
     },
     can: () => [undos.length > 0, redos.length > 0],
+    sig: () => cur,   // (the state as last marked: undo-order.js tells by it whether anything happened since)
     clear() { cur = text(); undos = []; redos = []; tag = null; },
     hold(fn) { held++; try { return fn(); } finally { held--; } },
   };

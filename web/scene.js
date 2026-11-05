@@ -10,7 +10,7 @@
 import { TabSet } from './tabs.js';
 import { $, clone, h, store, toast } from './ui.js';
 import {
-  C, R, SC, defaultScene, dropHolds, frames, hooks, resetHistory, save, setC, setSC, upgrade
+  C, R, SC, defaultScene, dropHolds, frames, hooks, rebaseHistory, resetHistory, save, setC, setSC, upgrade
 } from './scene-data.js';
 import { buildToolbar, renderKeys, renderPanel, renderToolbar, showAll, syncHud, syncMode, wireKeys } from './scene-ui.js';
 import { loadPlaySettings, syncMaxBar } from './scene-keys.js';
@@ -60,16 +60,21 @@ function legacyScene() {
   return sc && sc.v === 1 ? upgrade(sc) : null;
 }
 
-// What a tab holds: the scene itself (and its mode). The undo list is not kept: a switch starts it afresh.
+// What a tab holds: the scene itself (and its mode). The undo list is not kept: a switch to another starts it afresh;
+// the same scene opened again by this page (a frame let go and opened again) keeps its steps, as video and sound do.
+let histDoc;   // the scene the undo list is about
 const sceneAdapter = {
   empty: defaultScene,
   migrate: (p) => (p.v === 1 && Array.isArray(p.objects) ? upgrade(p) : defaultScene()),
   dump: () => SC,
-  load(p) {
+  load(p, doc, { remote = false } = {}) {
     stopPlay(); dropHolds();
     setSC(p); R.sel = null; R.joint = null; R.f = Math.min(R.f, frames() - 1);
     R.lastRender = null; R.renders = {};
-    resetHistory(); syncMode();
+    const id = doc?.id ?? null, same = !remote && histDoc !== undefined && id != null && id === histDoc;   // (saved elsewhere: a fresh list)
+    histDoc = id;
+    if (same) rebaseHistory(); else resetHistory();
+    syncMode();
     if (ready) showAll();
   },
 };

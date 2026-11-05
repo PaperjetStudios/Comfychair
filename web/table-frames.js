@@ -224,14 +224,18 @@ export const kindOfDoc = (docKind) => Object.keys(DOC_KIND).find((k) => DOC_KIND
 
 // ---- the element ----
 // A frame: a label bar above it (outside its w × h, which is the canvas), then its body. The body shows the still, else
-// the kind's icon; a note's body is its text. onText(text): a note was typed in.
-export function frameEl(f, { onText }) {
+// the kind's icon; a note's body is its text. onText(text): a note was typed in. onTextDone(was, now): its box let go of the
+// focus, with the text from when it took it (one undo step for the table)
+export function frameEl(f, { onText, onTextDone = null }) {
   const name = h('span', { class: 'frame-name' }), size = h('span', { class: 'frame-size' });
   const body = h('div', { class: 'frame-body' });
   if (f.kind === 'note') {
     const ta = h('textarea', { class: 'frame-text', spellcheck: true, 'aria-label': 'Note', placeholder: 'Write here' });
     ta.value = f.text || '';
     ta.addEventListener('input', () => onText(ta.value));
+    let was = null;
+    ta.addEventListener('focus', () => { was = ta.value; });
+    ta.addEventListener('blur', () => { if (was != null && was !== ta.value) onTextDone?.(was, ta.value); was = null; });
     body.append(ta);
   } else {
     const still = h('img', { class: 'frame-still hidden', alt: '', draggable: false });
