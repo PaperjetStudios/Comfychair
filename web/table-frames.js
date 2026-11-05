@@ -15,6 +15,7 @@ import { owedFor } from './owed-runs.js';
 import { emptyPayload } from './empty-docs.js';
 import { refused, refusal } from './tabs.js';
 import { isLive } from './live.js';
+import { pinStamp } from './main-rules.js';
 
 export const KIND_ICON = { image: 'image', video: 'film', scene: 'cube', sound: 'sound', note: 'text' };
 const SOUND_SIZE = { w: 1024, h: 256 };   // a sound frame is a strip: its waveform, not a picture
@@ -186,12 +187,13 @@ export const stillOf = (f) => (f.doc ? STILLS.get(`${f.kind}:${f.doc}`) || null 
 // A frame's content stamp: what changes when what it puts out changes, cheap and there without opening it (its document's
 // rev, from the list loadStills reads; else its still). null: not known yet. A wire's target keeps the stamps its last run
 // read (frame.make.ran.sources): chain-rules.js staleInfo compares them.
+// A pinned main source (frame.main, main-rules.js) is part of it: pinning or unpinning changes what the frame puts out.
 export function frameStamp(f) {
   if (!f?.doc) return f?.preview ? `p:${f.preview}` : null;
   const rev = REVS.get(`${f.kind}:${f.doc}`);
-  if (rev != null) return `r${rev}`;
+  if (rev != null) return `r${rev}${pinStamp(f)}`;
   const still = stillOf(f);
-  return still ? `s:${still}` : null;
+  return still ? `s:${still}${pinStamp(f)}` : null;
 }
 // a store message said a document's rev: its stamp follows at once (the list is read again a moment later)
 export function noteRev(kind, id, rev) { if (kind && id && rev != null && REVS.has(`${kind}:${id}`)) REVS.set(`${kind}:${id}`, rev); }

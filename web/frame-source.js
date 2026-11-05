@@ -16,13 +16,24 @@
 //   frameAudio(frame)                     → a sound (or video) frame's sound as a source + trim; a mix is rendered and kept
 //   frameClip(frame)                      → a video (or sound) frame's first clip, by its place on the timeline:
 //       { kind, src, url, label, dur, item, trim: { start, len? } }, or null when it has none
+//
+// A frame's main source (frame.main, main-rules.js): while one layer / clip / item is pinned, all of the above give it alone.
+// An image frame's pinned layer that is its own file as it shows (main-rules plainLayer) goes as that file at full size
+// (frameImage passes it straight through; frameSource and framePicture copy it); any other layer is drawn alone (the
+// editor's composeLayer: live, else off screen; with another image frame live, its file as it is). Its rect is the layer's
+// box on the canvas, so a result placed there sits over it. A video or sound frame's pinned clip goes with its trim (never
+// the rendered whole edit). A pin whose layer or clip is gone counts as none.
+// without (framePicture / frameSource, no pin set): layer names left out of the picture (make-panel.js leaves out what the
+// frame's last chain run made, frame.make.ran.made, so a rerun doesn't read its own last result).
 import { api } from './ui.js';
-import { CURRENT_EDIT, S } from './core.js';
+import { CURRENT_EDIT, S, inputUrl } from './core.js';
 import { clipUrl, pngBlob, uploadImage } from './media.js';
 import { isLive } from './live.js';
 import { stillOf } from './table-frames.js';
 import { DOC_KIND } from './table-model.js';
 import { canvasRect, itemSource, plainPicture, plainSound, plainVideo, renderKey } from './make-rules.js';
+import { mainOf, plainLayer, withoutMade } from './main-rules.js';
+import { bounds as layerBounds } from './layer-geom.js';
 
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
 const docUrl = (kind, id) => `/api/store/${DOC_KIND[kind]}/${id}${qs()}`;
@@ -32,9 +43,10 @@ const liveEngine = (frame) => {
   const eng = CURRENT_EDIT.eng;
   return isLive(frame.id) && eng?.E?.tab?.id === frame.doc ? eng : null;
 };
-const composed = (eng) => {
+// skip: layer names left out (when that leaves nothing, the whole picture)
+const composed = (eng, skip = null) => {
   const cv = document.createElement('canvas');
-  return eng.compose(cv) ? pngBlob(cv) : null;
+  return (skip?.length && eng.compose(cv, false, 1, { skip })) || eng.compose(cv) ? pngBlob(cv) : null;
 };
 // where the composite sits on the canvas: the editor's frame, a fitted frame's last layer box, else the canvas
 const rectOf = async (frame, eng, payload) => {
@@ -45,23 +57,85 @@ const rectOf = async (frame, eng, payload) => {
   return canvasRect(payload, frame);
 };
 
-export async function framePicture(frame) {
+// ---- an image frame's pinned layer (frame.main) ----
+// { l, layers, eng? }: from the open editor when the frame is live, else from its saved edit; null: no pin, or its layer is gone
+async function pinnedLayer(frame) {
+  if (!frame?.main || frame.kind !== 'image' || !frame.doc) return null;
+  const eng = liveEngine(frame);
+  if (eng) { const l = mainOf(frame, { layers: eng.E.layers }); return l ? { l, layers: eng.E.layers, eng } : null; }
+  const p = (await api(docUrl('image', frame.doc), { busy: false }).catch(() => null))?.payload;
+  const l = mainOf(frame, p);
+  return l ? { l, layers: p.layers } : null;
+}
+const sizeOf = (url) => new Promise((done) => {
+  const im = new Image();
+  im.onload = () => done([im.naturalWidth, im.naturalHeight]);
+  im.onerror = () => done(null);
+  im.src = url;
+});
+const drawnAlone = async (eng, l) => {
+  const cv = document.createElement('canvas'), rect = eng.composeLayer?.(cv, l);
+  return rect ? { blob: await pngBlob(cv), rect } : null;
+};
+// The pinned layer as a picture: { blob, rect, plain (its input name when it went as its own file) }, or null
+async function pinnedPicture(frame, pin) {
+  const plain = plainLayer(pin.l, pin.layers);
+  if (!plain) {
+    if (pin.eng) {
+      await pin.eng.paint?.savePaint?.();
+      const got = await drawnAlone(pin.eng, pin.l);
+      if (got) return got;
+    } else if (!isLive('image')) {   // (drawn off screen, as framePicture draws the whole edit)
+      try {
+        const { drawOffscreen } = await import('./frame-image.js');
+        if (await drawOffscreen(frame.doc)) {
+          const eng = CURRENT_EDIT.eng, l = eng?.E?.tab?.id === frame.doc ? mainOf(frame, { layers: eng.E.layers }) : null;
+          const got = l && eng.ready?.(l) ? await drawnAlone(eng, l) : null;
+          if (got) return got;
+        }
+      } catch (e) { console.warn('drawn off screen:', e); }
+    }
+  }
+  const name = pin.l.name;   // (its own file: plain, or the known limit while another image frame is live)
+  if (!name) return null;
+  const r = await fetch(inputUrl(name));
+  if (!r.ok) return null;
+  const blob = await r.blob();
+  let rect = null;
+  if (pin.eng?.ready?.(pin.l)) rect = layerBounds(pin.l);
+  else { const wh = await sizeOf(inputUrl(name)); if (wh) rect = layerBounds({ ...pin.l, img: null, w: wh[0], h: wh[1] }); }
+  if (rect) rect = { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+  return { blob, rect: rect || await rectOf(frame, pin.eng || null), plain };
+}
+
+export async function framePicture(frame, { without = null } = {}) {
   if (frame?.kind !== 'image' || !frame.doc) return null;
+  const pin = await pinnedLayer(frame);
+  if (pin) {
+    const got = await pinnedPicture(frame, pin);
+    if (got) return { blob: got.blob, rect: got.rect };
+  }
+  const skip = !pin && without?.length ? without : null;
   let eng = liveEngine(frame);
   if (eng) {
     await eng.paint?.savePaint?.();
-    const blob = await composed(eng);
+    const blob = await composed(eng, skip);
     return blob ? { blob, rect: await rectOf(frame, eng) } : null;
   }
   const d = await api(docUrl('image', frame.doc), { busy: false }).catch(() => null);
   if (!d?.payload?.layers?.length) return null;
+  const left = skip ? plainPicture(withoutMade(d.payload, skip)) : null;   // (what is left once the last run's results are out: one plain picture)
+  if (left) {
+    const r = await fetch(inputUrl(left));
+    if (r.ok) return { blob: await r.blob(), rect: await rectOf(frame, null, d.payload) };
+  }
   if (!isLive('image')) {   // (full size: the edit opened in the editor off screen, as a drop on a closed frame does)
     try {
       const { drawOffscreen } = await import('./frame-image.js');
       if (await drawOffscreen(frame.doc)) {
         eng = CURRENT_EDIT.eng;
         if (eng?.E?.tab?.id === frame.doc) {
-          const blob = await composed(eng);
+          const blob = await composed(eng, skip);
           if (blob) return { blob, rect: await rectOf(frame, eng) };
         }
       }
@@ -73,8 +147,8 @@ export async function framePicture(frame) {
   return r.ok ? { blob: await r.blob(), rect: await rectOf(frame, null, d.payload) } : null;
 }
 
-export async function frameSource(frame, { multiple = 1 } = {}) {
-  const got = await framePicture(frame);
+export async function frameSource(frame, { multiple = 1, without = null } = {}) {
+  const got = await framePicture(frame, { without });
   if (!got) throw new Error(`${frame?.label || 'That frame'} is empty`);
   const up = await uploadImage(got.blob, { source: 'frame', mp: 0, filename: 'frame.png', multiple });
   return { name: up.name, px: [up.width, up.height], rect: got.rect, copy: true, layer: null, was: null, mask: null };
@@ -89,7 +163,8 @@ export async function frameClip(frame) {
   const d = await api(docUrl(frame.kind, frame.doc), { busy: false }).catch(() => null);
   const want = frame.kind === 'video' ? 'video' : 'audio';
   const its = (d?.payload?.items || []).filter((it) => it.kind === want && it.src).sort((a, b) => (a.at || 0) - (b.at || 0));
-  const it = its[0];
+  const pin = mainOf(frame, d?.payload);   // (the frame's main source, when it is a clip of that kind)
+  const it = pin && pin.kind === want && pin.src ? pin : its[0];
   if (!it) return null;
   const src = it.src.generation != null ? { generation: it.src.generation, index: it.src.index || 0 } : it.src.media ? { media: it.src.media } : { ...it.src };
   const end = it.out ?? it.dur, start = it.in || 0;
@@ -112,7 +187,11 @@ async function flushed(frame) {
 // A picture for a wire. fresh: true is a new input the caller owns (drops after the run, or on a failed run).
 export async function frameImage(frame, { multiple = 16 } = {}) {
   if (frame?.kind === 'image') {
-    if (frame.doc && !isLive(frame.id)) {
+    const pin = frame.main ? await pinnedLayer(frame) : null;
+    if (pin) {   // (the main source: its own file straight through, else drawn alone, below)
+      const name = plainLayer(pin.l, pin.layers);
+      if (name) return { name, fresh: false };
+    } else if (frame.doc && !isLive(frame.id)) {
       const name = plainPicture((await savedDoc(frame))?.payload);
       if (name) return { name, fresh: false };
     }
@@ -162,6 +241,8 @@ export async function frameVideo(frame) {
   await flushed(frame);
   const d = await savedDoc(frame);
   if (!d?.payload) throw new Error(`${frame.label || 'That frame'} can't be read`);
+  const pin = mainOf(frame, d.payload);   // (the main source clip, with its trim: never the whole edit)
+  if (pin?.src && pin.kind === 'video') return { ...itemSource(pin), ...(pin.label && { label: pin.label }) };
   const it = plainVideo(d.payload);
   if (it) return { ...itemSource(it), ...(it.label && { label: it.label }) };
   if (!(d.payload.items || []).some((x) => x.src || x.kind === 'scene')) throw new Error(`${frame.label || 'That frame'} has nothing on its timeline`);
@@ -169,12 +250,21 @@ export async function frameVideo(frame) {
 }
 
 export async function frameAudio(frame) {
-  if (frame?.kind === 'video') return frameVideo(frame);   // (the server takes a video file as a sound source)
+  if (frame?.kind === 'video') {   // (the server takes a video file as a sound source)
+    if (frame.main && frame.doc) {   // (a pinned sound clip on the edit's audio track goes as it is)
+      await flushed(frame);
+      const pin = mainOf(frame, (await savedDoc(frame))?.payload);
+      if (pin?.src && pin.kind === 'audio') return { ...itemSource(pin), ...(pin.label && { label: pin.label }) };
+    }
+    return frameVideo(frame);
+  }
   if (frame?.kind !== 'sound' || !frame.doc) throw new Error(`${frame?.label || 'That frame'} has no sound yet`);
   await flushed(frame);
   const d = await savedDoc(frame);
   const p = d?.payload;
   if (!p) throw new Error(`${frame.label || 'That frame'} can't be read`);
+  const pin = mainOf(frame, p);   // (the main source item, with its trim: never the whole mix)
+  if (pin?.src) return { ...itemSource(pin), ...(pin.label && { label: pin.label }) };
   const it = plainSound(p);
   if (it) return { ...itemSource(it), ...(it.label && { label: it.label }) };
   const items = (p.items || []).filter((x) => x.src);
@@ -191,6 +281,14 @@ export async function frameAudio(frame) {
 // frame's plain clip or its rendered edit; the picture comes from media.js grabFrame (a <video> seeked to the time, drawn
 // to a canvas, uploaded), so it works with the frame closed.
 export async function frameStill(frame, pick = 'first') {
+  if (frame?.main && frame.kind === 'video' && frame.doc) {   // (a pinned picture on the edit: that picture, as a new input)
+    await flushed(frame);
+    const pin = mainOf(frame, (await savedDoc(frame))?.payload);
+    if (pin?.kind === 'image' && pin.src?.input) {
+      const r = await fetch(inputUrl(pin.src.input));
+      if (r.ok) return (await uploadImage(await r.blob(), { source: 'frame', mp: 0, filename: 'frame.png', multiple: 16 })).name;
+    }
+  }
   const src = await frameVideo(frame);
   const start = src.trim?.start || 0;
   let url = clipUrl(src);

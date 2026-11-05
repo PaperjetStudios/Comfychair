@@ -8,6 +8,7 @@ import { landOwed } from './imagetools.js';
 import { putStill } from './table-frames.js';
 import { registerUndo } from './undo-dock.js';
 import { isLive, liveFrame } from './live.js';
+import { dropGoneMain, liveMain, setMain } from './frame-main.js';
 
 export { ASPECTS, FULL, aspectCrop, cropSpan, openCrop } from './editor-engine.js';
 
@@ -156,11 +157,15 @@ registerUndo('editor', { undo: () => ED.paint?.undo(), redo: () => ED.paint?.red
 const ED_EL = { host: $('#tab-editor'), canvas: $('#editorCanvas'), empty: $('#editorEmpty'), size: $('#editorSize'), anim: $('#editorAnim'), panel: $('#editorPanel'),
   stage: $('#tab-editor .editor-stage'), active: null };
 const ED_HOME = ED_EL.host;
+const edTab = () => { try { return ED.E.tab?.id ?? null; } catch { return null; } };   // (null while createEditor is still running)
 const ED = createEditor({
   canvas: ED_EL.canvas, empty: ED_EL.empty, size: ED_EL.size, anim: ED_EL.anim, panel: ED_EL.panel,
   initial: store.get(SEEDED, false) ? {} : store.get('deck.editor', {}),
   active: () => (ED_EL.active ? ED_EL.active() : ED_EL.host.classList.contains('active')),
-  onChange: () => { tabs.changed(); stillSoon(); },   // the tab saves itself shortly and its still follows
+  onChange: () => { tabs.changed(); stillSoon(); dropGoneMain('image', ED.E.tab?.id, ED.E.layers.filter((l) => !l.maskOf).map((l) => l.key)); },   // the tab saves itself shortly and its still follows (a deleted main source unpins)
+  // the live table frame's main source (frame-main.js): { id: the pinned layer's key } | null off the table
+  main: () => liveMain('image', edTab()),
+  setMain: (key) => { const m = liveMain('image', edTab()); if (m) setMain(m.frame.id, key).catch((e) => toast(e.message, true)); },
   name: () => tabs?.active?.name,
   beforeRender: () => { if (!tabs.started) tabs.start(); },
   newEdit: (payload) => (isLive('image') ? newFrameFrom(payload) : tabs.createFrom(payload, 'layers')),
@@ -169,6 +174,8 @@ const ED = createEditor({
     ed.layerList(), ed.E.sel?.maskOf ? ed.layerProps() : null, ed.paintProps(), ed.masksProps(), ed.inpaintProps(), ed.E.sel?.maskOf ? null : ed.layerProps(), ed.animProps(), ed.canvasProps(), ed.exportProps()),
 });
 export const { E } = ED;
+// a pin set or cleared elsewhere (the Make pane's unpin, the table's undo): the layer rows show it
+addEventListener('table:frame-field', (e) => { if (e.detail?.keys?.includes('main') && e.detail.frame?.doc === E.tab?.id) ED.render(); });
 // Mount the editor into `els.host` (stage first, panel after), and `els.active()` says when it takes keys. The TabSet keeps its host.
 export function mountEditor(els) {
   ED_EL.host = els.host; ED_EL.active = els.active || null;

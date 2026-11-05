@@ -28,7 +28,8 @@ import { heightGrip } from './layout.js';
 // Optional, beside the above: fps (number or getter: nudges and the frame grid), placed(ids) (a drag frame: light redraw
 // instead of dragged()), undo(), redo(), zoomBy(f), tc(seconds) (ruler labels), toolChanged(tool), trackKinds (the kinds
 // of track Add offers, default ['video', 'audio']), menuAction(id, ctx) (track and ruler menu items the timeline can't do
-// itself: ctx { track } or { t, marker }).
+// itself: ctx { track } or { t, marker }; and 'main' with ctx { item, on }), main() (on a table frame: { id } of its pinned
+// main source clip, or { id: null }; null or absent: no pin here, so the clip menu doesn't offer it).
 // Tools (TL.tool, TL.toolStrip(), keys V C B Y H, Esc back to Select): Select; Razor (a click cuts the clip under it at the
 // line it shows, Shift+click every unlocked clip there); Ripple (a trim or a move pushes the later clips on that track);
 // Slip (a drag shows another part of a clip's source, keeping its place and length); Hand (a drag pans).
@@ -791,9 +792,12 @@ export function timeline(st, o) {
       const it = clipEl ? st.items.find((i) => i.id === clipEl.dataset.id) : null;
       if (it) { const now = picked(); if (pickedFor(now, it) !== now) applySel({ sel: it.id, multi: [] }); }
       const track = it?.track ?? lane?.dataset.track, p = picked(), lockedTr = (i) => !!st.tracks.find((t) => t.id === i.track)?.locked;
+      const pin = o.main?.() || null;   // (a table frame's main source: { id } | null)
       const groups = clipMenu({ n: p.length, canPaste: !!clipboard?.items?.length, kind: p[0]?.kind, hasKeys: false,
-        canSplit: p.some((i) => st.t > i.at + 0.02 && st.t < end(i) - 0.02), locked: p.length > 0 && p.every(lockedTr) });
+        canSplit: p.some((i) => st.t > i.at + 0.02 && st.t < end(i) - 0.02), locked: p.length > 0 && p.every(lockedTr),
+        main: pin && o.menuAction && p.length === 1 ? { on: p[0].id === pin.id } : null });
       const run = { cut, copy, paste, duplicate: duplicatePicked, split: splitAtPlayhead, rippleDelete, delete: () => removePicked(),
+        main: () => o.menuAction('main', { item: p[0], on: p[0]?.id === pin?.id }),
         crossfade: () => { const s = selItem(); if (s) crossfadePrev(s); },
         selectTrack: () => setPicked(st.items.filter((i) => i.track === track).map((i) => i.id)), selectAfter: () => selectFrom(st.t) };
       return openPressMenu(x, y, groups.map((gr) => gr.map((i) => ({ ...i, run: run[i.id] }))), it ? 'Clip' : 'Lane');

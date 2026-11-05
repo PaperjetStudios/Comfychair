@@ -26,6 +26,8 @@ const PATHS = {
   undo: ['M9 14L4 9l5-5', 'M4 9h10.5a5.5 5.5 0 0 1 0 11H11'],
   redo: ['M15 14l5-5-5-5', 'M20 9H9.5a5.5 5.5 0 0 0 0 11H13'],
   lock: ['M6 11h12v9H6z', 'M8 11V8a4 4 0 0 1 8 0v3'],
+  // a push pin: a frame's main source (Part F)
+  pin: ['M9 4h6', 'M10 4v5l-3 4h10l-3-4V4', 'M12 13v7'],
   unlock: ['M6 11h12v9H6z', 'M8 11V8a4 4 0 0 1 7.7-1.5'],
   fit: ['M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5'],
   canvas: ['M4 4h16v16H4z', 'M12 8v8M8 12h8'],

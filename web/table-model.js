@@ -42,6 +42,9 @@ export function migrateTable(p) {
       id: String(f.id || rid()), doc: f.doc ?? null, label: f.label ?? KIND_LABEL[f.kind],
       x: num(f.x, 0), y: num(f.y, 0), w: Math.max(MIN_SIDE, num(f.w, 512)), h: Math.max(MIN_SIDE, num(f.h, 512)) })) };
   for (const f of out.frames) { f.key = f.id; if (f.group != null) f.group = String(f.group); }
+  for (const f of out.frames) {   // (the frame's main source, main-rules.js: a layer key or an item id in its document)
+    if (f.main == null || f.main === '' || typeof f.main === 'object') delete f.main; else f.main = String(f.main);
+  }
   out.frames = normalize(out.frames, out.groups);   // (members together; a group with no frames, or a frame's lost group, goes)
   out.wires = migrateWires(p?.wires, out.frames);   // (a wire naming a frame that is gone goes)
   if (!out.story) delete out.story;

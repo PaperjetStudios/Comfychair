@@ -454,8 +454,10 @@ export function createEditor(cfg) {
   }
 
   // k: the size of the result as a multiple of the canvas (an export at 2× draws every layer twice as big: an upscaled layer's extra detail shows)
-  function composeEditor(target, clear = false, k = 1) {
-    const f = editorFrame(), vis = visibleLayers().filter((l) => !l.draft);   // (an inpaint draft is not part of the picture until kept)
+  // skip: layer names left out (a chain rerun leaves out what its last run made: main-rules.js withoutMade)
+  function composeEditor(target, clear = false, k = 1, { skip = null } = {}) {
+    const gone = skip ? new Set(skip) : null;
+    const f = editorFrame(), vis = visibleLayers().filter((l) => !l.draft && !(gone && gone.has(l.name)));   // (an inpaint draft is not part of the picture until kept)
     if (!f || !vis.length) return false;
     target.width = Math.round(f.w * k); target.height = Math.round(f.h * k);
     const ctx2 = target.getContext('2d');
@@ -466,6 +468,22 @@ export function createEditor(cfg) {
     drawStack(ctx2, vis);
     ctx2.setTransform(1, 0, 0, 1, 0, 0);   // (the caller gets a plain canvas: Inpaint's smear draws on it, and the frame's shift would paste the picture again, offset)
     return true;
+  }
+
+  // One layer drawn alone (a frame's main source: frame-source.js), on a see-through canvas the size of the box round it,
+  // with its crop, turn, opacity, adjust and mask. Shown or hidden, it is drawn. Returns that box (canvas pixels), or null.
+  function composeLayer(target, l) {
+    if (!l || !ready(l)) return null;
+    const b = bounds(l);
+    if (!(b.w > 0 && b.h > 0)) return null;
+    target.width = Math.max(1, Math.round(b.w)); target.height = Math.max(1, Math.round(b.h));
+    const c = target.getContext('2d');
+    c.imageSmoothingQuality = 'high';
+    c.scale(target.width / b.w, target.height / b.h);
+    c.translate(-b.x, -b.y);
+    drawStack(c, [{ ...l, hidden: false, group: null, clip: false, blend: 'normal' }]);
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    return { x: b.x, y: b.y, w: b.w, h: b.h };
   }
 
   // The inpaint mask layers as a greyscale picture the frame's size (white = change), or null when nothing is painted.
@@ -1371,6 +1389,7 @@ export function createEditor(cfg) {
         hint: l.broken ? 'could not load' : !r ? 'loading…'
           : `${Math.round(r.w)}×${Math.round(r.h)}${cropped ? ' · cropped' : ''}${blend}${anyKeys(l) ? ' · animated' : ''}${l.hidden ? ' · hidden' : ''}`,
         buttons: [
+          pinBtn(l),
           l.locked ? h('button', { type: 'button', class: 'icon-btn ico-btn on', 'aria-label': 'Unlock', title: 'Locked: tap to unlock',
             onclick: (e) => { e.stopPropagation(); l.locked = false; editorChanged(); } }, icon('lock')) : null,
           ...maskBtns(l),
@@ -1394,8 +1413,31 @@ export function createEditor(cfg) {
     return h('div', {}, bar, list);
   }
 
+  // The frame's main source (a table frame: cfg.main() gives { id } with the pinned layer's key, or null off the table): what
+  // Make, the Edit ops and a wire out of the frame take while it is set (frame-source.js). One per frame.
+  const pinnable = (l) => !!l && !l.mask && !l.maskOf && !l.draft && !!l.name;
+  const mainKey = () => cfg.main?.()?.id ?? null;
+  function setMainLayer(l) {
+    if (!cfg.main?.()) return;
+    if (l && !pinnable(l)) return toast('Only a picture or a painted layer can be the main source', true);
+    if (l) { l.key ||= uid(); persistEditor(); }   // (its key saved with the edit, so the pin finds it again)
+    cfg.setMain?.(l ? l.key : null);
+    renderEditor();
+  }
+  // on the pinned row (on), and on the selected one (off) to pin it
+  function pinBtn(l) {
+    if (!cfg.main?.() || !pinnable(l)) return null;
+    const on = !!l.key && l.key === mainKey();
+    if (!on && l !== E.sel) return null;
+    return h('button', { type: 'button', class: `icon-btn ico-btn${on ? ' on' : ''}`, 'aria-pressed': String(on),
+      'aria-label': on ? 'Not the main source' : 'Main source',
+      title: on ? 'The main source: Make and the Edit tools take this layer alone. Tap to unpin' : 'Make this the main source: Make and the Edit tools take this layer alone',
+      onclick: (e) => { e.stopPropagation(); setMainLayer(on ? null : l); } }, icon('pin'));
+  }
+
   // What can be done with the selected layers (web/layer-menu.js says what's offered, and in what order)
   const LAYER_ACTIONS = {
+    main: () => { const l = picked()[0]; setMainLayer(l && l.key && l.key === mainKey() ? null : l); },
     all: () => { const vis = E.layers.filter((l) => !l.mask && !l.draft && !l.maskOf); E.sel = vis[vis.length - 1] || null; E.multi = vis.slice(0, -1); renderEditor(); },
     none: () => { E.sel = null; E.multi = []; E.pickMode = false; renderEditor(); },
     several: () => { E.pickMode = !E.pickMode; renderEditor(); },
@@ -1409,7 +1451,8 @@ export function createEditor(cfg) {
     const on = picked();
     const groups = layerMenu({ layers: E.layers.filter((l) => !l.mask && !l.draft && !l.maskOf).length, selected: on.length, pictures: selectedPictures().length,
       hidden: ST.hiddenOnes(E.layers).count, clip: !!store.get(LAYER_CLIP, null), pickMode: E.pickMode, newEdit: !!cfg.newEdit,
-      mergeDown: on.length === 1 && !!ST.mergeBelow(E.layers, on[0]), mergeSet: on.length > 1 && ST.mergeSet(E.layers, on).length >= 2 });
+      mergeDown: on.length === 1 && !!ST.mergeBelow(E.layers, on[0]), mergeSet: on.length > 1 && ST.mergeSet(E.layers, on).length >= 2,
+      main: cfg.main?.() && on.length === 1 && pinnable(on[0]) ? { on: !!on[0].key && on[0].key === mainKey() } : null });
     openPressMenu(x, y, groups.map((g) => g.map((it) => ({ ...it, run: LAYER_ACTIONS[it.id] }))), 'Layers');
   }
 
@@ -2082,7 +2125,7 @@ export function createEditor(cfg) {
     poseAt(0);
   }
   const eng = {
-    E, render: renderEditor, draw: drawEditorCanvas, changed: persistEditor, load, dump: dumpEditor, compose: composeEditor,
+    E, render: renderEditor, draw: drawEditorCanvas, changed: persistEditor, load, dump: dumpEditor, compose: composeEditor, composeLayer,
     blob: editorBlob, frame: editorFrame, toFixed: toFixedSize, composeMask, drawLayer, layerPicture, bounds, layerRect, ready, loading: () => E.layers.some((l) => !l.broken && !ready(l)), addImage, pause: editorPause,
     zoom: viewZoom, get paint() { return paint; },
     // the panel's parts, for the host to lay out

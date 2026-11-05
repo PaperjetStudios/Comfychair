@@ -32,6 +32,7 @@ import { laneAbove } from './maps.js';
 import { mapsSection } from './video-maps.js';
 import { emptyVideo, videoTracks } from './empty-docs.js';
 import { isLive, liveFrame } from './live.js';
+import { dropGoneMain, liveMain, setMain } from './frame-main.js';
 export { emptyVideo };
 
 // ---------------------------------------------------------------------------
@@ -92,7 +93,10 @@ let vtp = null;   // the transport bar (playback.js)
 const ensureTabs = () => tabs.ready();
 
 // the timeline changed: save it (the tab flushes ~1 s later, or at once on Export / leaving) and make it an undo step
-function persistTimeline() { tabs?.changed(); HIST.mark(); syncUndo(); }
+function persistTimeline() { tabs?.changed(); HIST.mark(); syncUndo(); dropGoneMain('video', tabs?.active?.id, V.items.map((i) => i.id)); }   // (a deleted main source unpins)
+// the table frame's main source clip (frame-main.js): { frame, id } | null off the table
+const pinNow = () => liveMain('video', tabs?.active?.id);
+addEventListener('table:frame-field', (e) => { if (e.detail?.keys?.includes('main') && e.detail.frame?.doc && e.detail.frame.doc === tabs?.active?.id) renderTimeline(); });
 
 // ---- undo / redo: snapshots of the edit (undo-history.js), marked at persistTimeline. A step put back writes onto the
 // clips that are still there (the handles, effects and inspector hold them), then redraws and saves without a new step.
@@ -131,7 +135,7 @@ const TL = timeline(V, { el: () => VD.timeline, headW: HEAD_W, minLen: MIN_LEN, 
   canDrop: (it, tr) => (tr.kind === 'audio') === (it.kind === 'audio'), tabs: () => tabs, area: () => WA,
   fps: () => fpsNow(), tc: (t) => tc(t), undo: () => undoEdit(), redo: () => redoEdit(),
   toolChanged: (t) => VD.timeline?.setAttribute('data-tool', t), menuAction: (id, ctx) => menuAction(id, ctx),
-  lanes: (it, g) => clipLanes(it, g) });
+  main: () => pinNow(), lanes: (it, g) => clipLanes(it, g) });
 const { len: itLen, end: itEnd, seqEnd, selItem, xfades, updatePlayhead } = TL;
 const fadeGain = (it, t, audio) => TL.fadeGain(it, t, audio);   // pictures only fade in over an overlap (videoedit._overlaps)
 const trackOf = (it) => V.tracks.find((t) => t.id === it.track);
@@ -872,7 +876,7 @@ function clipEl(it) {
     title: gone ? 'This 3D scene was deleted' : null,
     style: `left:${it.at * V.pps}px;width:${Math.max(6, itLen(it) * V.pps)}px` + (bg ? `;background-image:url("${bg}")` : '') },
     it.kind === 'audio' ? h('canvas', { class: 'wave' }) : null,
-    h('span', { class: 'tl-label' }, gone ? icon('warn') : null, it.label),
+    h('span', { class: 'tl-label' }, gone ? icon('warn') : null, pinNow()?.id === it.id ? h('span', { class: 'tl-pin', title: 'The main source' }, icon('pin')) : null, it.label),
     it.fx?.busy ? h('span', { class: 'tl-fxtag' }, h('span', { class: 'spinner' }), h('span', { class: 'fx-text' }, fxStatus(it))) : null,
     fi ? h('span', { class: 'tl-fade in', style: `width:${fi * V.pps}px` }) : null,
     it.fadeOut ? h('span', { class: 'tl-fade out', style: `width:${it.fadeOut * V.pps}px` }) : null,
@@ -1693,6 +1697,11 @@ function wireOnce() {
 // Track and ruler menu items the timeline leaves to the tab (timeline.js menuAction); rename, lock, solo and markers are its own.
 function menuAction(id, ctx = {}) {
   const step = 1 / fpsNow();
+  if (id === 'main') {   // (pin this clip as the frame's main source, or unpin it)
+    const m = pinNow();
+    if (m && ctx.item) setMain(m.frame.id, ctx.on ? null : ctx.item.id).catch((e) => toast(e.message, true));
+    return;
+  }
   if (id === 'addVideo' || id === 'addAudio') { addTrack(id === 'addVideo' ? 'video' : 'audio'); return timelineChanged(); }
   if (id === 'remove' && ctx.track) {
     const tr = ctx.track;

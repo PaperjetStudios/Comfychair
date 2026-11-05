@@ -2,7 +2,8 @@
 // Groups, in the order you'd reach for them: who's selected, the clipboard, putting layers together, sending them elsewhere, and removing.
 // What doesn't apply now isn't listed; a merge that can't happen is, greyed.
 
-// s: { layers, selected, pictures (selected ones with a picture), hidden, clip, pickMode, newEdit, mergeDown, mergeSet }
+// s: { layers, selected, pictures (selected ones with a picture), hidden, clip, pickMode, newEdit, mergeDown, mergeSet,
+//      main: null (no pin here: off the table, or not one layer that can be pinned) | { on: the layer is the frame's main source } }
 export function layerMenu(s) {
   const n = s.selected, p = s.pictures;
   const groups = [
@@ -15,7 +16,8 @@ export function layerMenu(s) {
     [n > 1 ? { id: 'group', label: 'Group' } : null,
       n === 1 ? { id: 'mergeDown', label: 'Merge down', keys: 'Ctrl+E', disabled: !s.mergeDown } : null,
       n > 1 ? { id: 'mergeSelected', label: 'Merge selected', keys: 'Ctrl+E', disabled: !s.mergeSet } : null],
-    [p ? { id: 'saveEach', label: p > 1 ? 'Save each as input' : 'Save layer as input' } : null,
+    [s.main ? { id: 'main', label: s.main.on ? 'Not the main source' : 'Main source', on: !!s.main.on } : null,
+      p ? { id: 'saveEach', label: p > 1 ? 'Save each as input' : 'Save layer as input' } : null,
       p > 1 ? { id: 'saveTogether', label: 'Save as one input' } : null,
       p && s.newEdit ? { id: 'openNew', label: 'Open in a new edit' } : null,
       n && s.newEdit ? { id: 'moveNew', label: 'Move to new edit' } : null],
@@ -84,10 +86,12 @@ export function frameMenu(s) {
 }
 
 // ---- the timeline's menus (Video and Sound; tests/layer_menu.test.mjs). Same shape; what doesn't apply isn't listed. ----
-// s: { n (clips picked), canPaste, canSplit (the playhead is inside a picked clip), locked, hasKeys, kind }
+// s: { n (clips picked), canPaste, canSplit (the playhead is inside a picked clip), locked, hasKeys, kind,
+//      main: null (no pin here) | { on: the one picked clip is the frame's main source } }
 export function clipMenu(s) {
   const n = s.n || 0;
   const groups = [
+    [n === 1 && s.main ? { id: 'main', label: s.main.on ? 'Not the main source' : 'Main source', on: !!s.main.on } : null],
     [n ? { id: 'cut', label: 'Cut', keys: 'Ctrl+X', disabled: !!s.locked } : null,
       n ? { id: 'copy', label: 'Copy', keys: 'Ctrl+C' } : null,
       s.canPaste ? { id: 'paste', label: 'Paste', keys: 'Ctrl+V', disabled: !!s.locked } : null,

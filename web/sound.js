@@ -24,6 +24,7 @@ import { resultActions } from './useas.js';
 import { fullScreen } from './layout.js';
 import { emptySound, soundTracks } from './empty-docs.js';
 import { setupsRow } from './setups.js';
+import { dropGoneMain, liveMain, setMain } from './frame-main.js';
 import { SOUND_VOICE, pick as pickKeys, soundMakerKey } from './setups-rules.js';
 export { emptySound };
 
@@ -62,7 +63,10 @@ let stp = null;   // the transport bar (playback.js)
 const ensureTabs = () => tabs.ready();
 // one choke point: every edit saves through persist(), which also marks an undo step (undo-history.js). System writes
 // (a measured length, a reload of the same document) go inside HIST.hold so they make none.
-const persist = () => { HIST.mark(); tabs?.changed(); };
+const persist = () => { HIST.mark(); tabs?.changed(); dropGoneMain('sound', tabs?.active?.id, N.items.map((i) => i.id)); };   // (a deleted main source unpins)
+// the table frame's main source item (frame-main.js): { frame, id } | null off the table
+const pinNow = () => liveMain('sound', tabs?.active?.id);
+addEventListener('table:frame-field', (e) => { if (e.detail?.keys?.includes('main') && e.detail.frame?.doc && e.detail.frame.doc === tabs?.active?.id) renderTimeline(); });
 const snapDoc = () => ({ tracks: N.tracks, items: N.items, markers: N.markers, out: N.out, range: N.range });
 // write a snapshot back onto the objects we hold, by id (the stage, the inspector and the media elements keep references to them)
 function putById(list, snaps) {
@@ -99,7 +103,7 @@ const TL = timeline(N, { el: () => SD.timeline, headW: HEAD_W, minLen: MIN_LEN, 
   trackKinds: ['audio'], fps: () => 30, tc: (t) => tc(t),
   undo: () => { HIST.undo(); syncUndo(); }, redo: () => { HIST.redo(); syncUndo(); },
   toolChanged: (t) => { if (SD.timeline) SD.timeline.dataset.tool = t; },
-  menuAction: (id, ctx) => menuAction(id, ctx), lanes: (it, g) => clipLanes(it, g) });
+  menuAction: (id, ctx) => menuAction(id, ctx), main: () => pinNow(), lanes: (it, g) => clipLanes(it, g) });
 const KEYS = TL.keys();
 const { len: itLen, end: itEnd, seqEnd, selItem, xfades, fadeGain, updatePlayhead, isSel } = TL;
 // a clip's level and pan can be keyed (timeline.js clipKeys, as in the Video tab), on 1/100 s steps
@@ -319,7 +323,7 @@ function clipEl(it) {
   return h('div', { class: 'tl-clip audio' + (isSel(it) ? ' sel' : ''), 'data-id': it.id,
     style: `left:${it.at * N.pps}px;width:${Math.max(6, itLen(it) * N.pps)}px` },
     h('canvas', { class: 'wave' }),
-    h('span', { class: 'tl-label' }, it.kind === 'video' ? icon('film') : null, `${it.label}${(it.volume ?? 1) !== 1 ? ` · ${Math.round(it.volume * 100)}%` : ''}`),
+    h('span', { class: 'tl-label' }, pinNow()?.id === it.id ? h('span', { class: 'tl-pin', title: 'The main source' }, icon('pin')) : null, it.kind === 'video' ? icon('film') : null, `${it.label}${(it.volume ?? 1) !== 1 ? ` · ${Math.round(it.volume * 100)}%` : ''}`),
     fi ? h('span', { class: 'tl-fade in', style: `width:${fi * N.pps}px` }) : null,
     it.fadeOut ? h('span', { class: 'tl-fade out', style: `width:${it.fadeOut * N.pps}px` }) : null,
     K.diamonds(it, N.pps, tc),
@@ -350,6 +354,11 @@ function changed() { persist(); renderTimeline(); renderPanel(); syncMedia(); }
 function menuAction(id, ctx = {}) {
   const tr = ctx.track;
   switch (id) {
+    case 'main': {   // (pin this item as the frame's main source, or unpin it)
+      const m = pinNow();
+      if (m && ctx.item) setMain(m.frame.id, ctx.on ? null : ctx.item.id).catch((e) => toast(e.message, true));
+      return;
+    }
     case 'addAudio': addTrack(); break;
     case 'remove':
       if (!tr || N.tracks.length < 2 || N.items.some((i) => i.track === tr.id)) return toast('Only an empty track can be removed', true);

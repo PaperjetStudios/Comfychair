@@ -433,6 +433,28 @@ export function setTableWire(id, patch) {
   return wireById(id);
 }
 
+// A few of a frame's own fields set (null / undefined takes the field off), saved with the table and, unless record is false,
+// one undo step. Tells table:frame-field { frame, keys } (the frame's screen and the Make pane redraw). Returns the frame
+// (null: not on this table). Used for the frame's main source (frame.main, main-rules.js).
+export function setFrameField(frameId, patch, { record: rec = true } = {}) {
+  const f = byId(frameId);
+  if (!f || !patch || typeof patch !== 'object') return null;
+  const keys = Object.keys(patch);
+  const norm = (v) => (v === undefined || v === null ? undefined : v);
+  if (keys.every((k) => norm(f[k]) === norm(patch[k]))) return f;
+  const before = Object.fromEntries(keys.map((k) => [k, f[k]]));
+  const put = (vals) => {
+    const g = byId(frameId);
+    if (!g) return;
+    for (const k of keys) { const v = norm(vals[k]); if (v === undefined) delete g[k]; else g[k] = v; }
+    frameChanged();
+    dispatchEvent(new CustomEvent('table:frame-field', { detail: { frame: g, keys, table: T } }));
+  };
+  put(patch);
+  if (rec) record({ undo: () => put(before), redo: () => put(patch) });
+  return byId(frameId);
+}
+
 // the stills come from each document kind's list; a frame's document saving elsewhere sends a `store` message
 let stillT = 0;
 export async function refreshStills(kinds = [...new Set(T.frames.map((f) => f.kind))]) {
@@ -731,7 +753,8 @@ function tellMoved(frames) {
 // Duplicate: each copy beside its original, with a copy of its document (and its own op state, frame.ops). The Make panel's
 // pictures (make.inputs) stay the original's: the copy's settings still name them, but deleting the copy, or its slot
 // taking another picture, never deletes them.
-// A wire between two of the frames copied is copied onto their copies (wire-rules remap).
+// A wire between two of the frames copied is copied onto their copies (wire-rules remap). A main source (frame.main) stays:
+// copyDoc copies the document as it is, so the copy's layer keys and item ids are the original's.
 async function duplicateFrames(ids) {
   const made = [], ok = here(), idMap = new Map();
   const gone = (g) => { trashDoc(g).catch(() => {}); };

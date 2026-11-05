@@ -26,7 +26,7 @@
 // Each run records what it read on its frame (frame.make.ran: the stamps of its plugged sources, chain-rules.js), so the
 // table can say which frames need a rerun. The wires row has Run from here / Rerun what uses this (chain-run.js).
 import { h, api, store, toast, button, iconBtn, seg, field, hint, help, info, note, runBar, clone } from './ui.js';
-import { S, CURRENT_EDIT, setBatch } from './core.js';
+import { S, CURRENT_EDIT, setBatch, thumbUrl } from './core.js';
 import { afterQueued, fieldState, fieldTarget, fieldsBorrowed, mainPromptKey, preparePictures, renderFields, runBuilder, runValues, stop } from './generate.js';
 import { pictureForRun } from './picture-input.js';
 import { normalize } from './layer-stack.js';
@@ -47,6 +47,7 @@ import { downstream, fieldKind, isFrameWire, wireLabel } from './wire-rules.js';
 import { freshLayers, placeResults, sourceStamps, withSoundItem, withoutLayers } from './chain-rules.js';
 import { icon } from './icons.js';
 import { frameAudio, frameImage, frameSource, frameStill, frameVideo } from './frame-source.js';
+import { keepMain, mainName, mainOf } from './main-rules.js';
 
 const HELD = new Set();   // wire pictures a queued run has yet to read: settleInputs leaves them be
 const P = { fresh: [], host: null, frames: [], table: null, key: null, st: null, els: null, prog: null, batchIn: null };
@@ -232,12 +233,33 @@ function choose(kind, id) {
   draw();
 }
 
-// the frame's own picture, in place of the template's first picture slot
+// the frame's own picture, in place of the template's first picture slot; with a main source pinned (frame.main), that layer
 function framePictureEl(frame) {
   const still = stillOf(frame);
+  frame = Table.frameById(frame.id) || frame;   // (as the table has it now)
+  if (frame.main) {
+    const img = h('img', { src: still || '', alt: '' }), name = h('span', { class: 'grow' }, 'Main: …');
+    const el = field(['Picture', h('span', {}, 'the main source')],
+      h('div', {}, h('div', { class: 'make-frame-pic' }, img),
+        h('div', { class: 'make-main-row' }, icon('pin'), name,
+          iconBtn('Unpin: take the whole frame again', icon('close'), () => Table.setFrameField(frame.id, { main: null })))),
+      help('One layer of this frame is pinned as its main source: Run sends that layer alone, not the whole picture. Pin another from the layer menu, or unpin to send the frame as it looks.'));
+    fillMain(frame, img, name);
+    return el;
+  }
   return field(['Picture', h('span', {}, 'this frame')],
     h('div', { class: 'make-frame-pic' }, still ? h('img', { src: still, alt: '' }) : h('span', { class: 'hint' }, 'Empty frame')),
     help('The frame as it looks when Run is pressed.'));
+}
+// the pinned layer's name and picture, read from the open editor or the saved edit
+async function fillMain(frame, img, name) {
+  const eng = liveEng(frame);
+  const p = eng ? { layers: eng.E.layers } : (await api(docUrl('image', frame.doc), { busy: false }).catch(() => null))?.payload;
+  const l = mainOf(frame, p);
+  if (!l) { name.textContent = 'Main: its layer is gone, so the whole frame is sent'; return; }
+  name.textContent = `Main: ${mainName(frame, p)}`;
+  name.title = name.textContent;
+  if (l.name) img.src = thumbUrl(l.name, 320);
 }
 // a selected note's words, in place of the prompt: they are what is sent
 function notePromptEl() {
@@ -355,6 +377,13 @@ addEventListener('chain:state', (e) => {
   drawChain();
   const { kind, frame } = makeTarget(P.frames);
   if (frame && P.key === keyOf(kind, frame)) drawWires(kind, frame);
+});
+// the frame's main source pinned or unpinned (table.js setFrameField): its picture field says so
+addEventListener('table:frame-field', (e) => {
+  if (!e.detail?.keys?.includes('main') || !P.host || !P.st || !onTable()) return;
+  const { kind, frame } = makeTarget(P.frames);
+  if (!frame || frame.id !== e.detail.frame?.id || P.key !== keyOf(kind, frame)) return;
+  renderFields(target(kind, Table.frameById(frame.id) || frame)); tellState();
 });
 // the table's wires changed (plugged, unplugged, on or off, a frame choice): the slots draw again
 addEventListener('table:wires', () => {
@@ -474,7 +503,9 @@ async function queueOne({ kind, f, t, st, base, builder, batch, prepare, afterQ,
   try {
     const values = clone(base);
     const imgF = kind === 'image' ? frameImageField(t) : null;
-    if (imgF) { sent = await frameSource(f, { multiple: 16 }); values[imgF.key] = sent.name; }
+    // (the frame's own picture: its main source when one is pinned; else without what its last chain run made, so a rerun
+    // never reads its own last result: main-rules.js withoutMade)
+    if (imgF) { sent = await frameSource(f, { multiple: 16, without: (Table.frameById(f.id) || f).make?.ran?.made || null }); values[imgF.key] = sent.name; }
     if (f && (kind === 'image' || kind === 'video')) {   // (each frame's own size)
       const pair = sizePair(t), s = frameSize(pair, f);
       if (s) { values[pair[0].key] = s.w; values[pair[1].key] = s.h; }
@@ -586,7 +617,7 @@ async function landNow(kind, f, t, r, replace) {
     const done = await doneRuns(r.gens);
     const names = await waitLayers(f, r.before || new Set(), t.name, done.length);
     if (!names.length) throw new Error(`the result isn't in "${f.label || 'the frame'}" yet (it lands when the frame next opens; the run is in History)`);
-    if (replace) await removeLayers(f, old.filter((n) => !names.includes(n)));
+    if (replace) await removeLayers(f, keepMain(old, Table.frameById(f.id) || f, { layers: await layersOf(f) }).filter((n) => !names.includes(n)));   // (never the main source)
     await flushDoc(f);
     return names;
   }
@@ -660,7 +691,7 @@ async function landInPlace(kind, f, done, old) {
   let made = old;
   const newId = () => Math.random().toString(36).slice(2, 10);
   await editDoc(kind, f.doc, (p) => {
-    const r = placeResults(p, old, medias, { append: kind === 'video' ? withClip : withSoundItem, newId });
+    const r = placeResults(p, keepMain(old, Table.frameById(f.id) || f, p), medias, { append: kind === 'video' ? withClip : withSoundItem, newId });   // (never in place of the main source)
     made = r.made;
     Object.assign(p, r.payload);
   });

@@ -108,3 +108,17 @@ test('key menu: Ease opens the names it is given', () => {
   assert.deepEqual(m[1][0].subItems.map((i) => i.label), ['linear', 'ease-in']);
   assert.deepEqual(ids(keyMenu({ n: 0, canPaste: true, eases: ['linear'] })), [['paste']]);
 });
+
+test('the main source: offered for one pinnable layer or one clip on a table frame, its words follow the pin', () => {
+  const one = (main) => layerMenu({ ...base, selected: 1, pictures: 1, main }).flat().find((i) => i.id === 'main');
+  assert.equal(one(null), undefined, 'off the table: not offered');
+  assert.equal(one({ on: false }).label, 'Main source');
+  assert.equal(one({ on: true }).label, 'Not the main source');
+  assert.equal(one({ on: true }).on, true);
+  assert.deepEqual(ids(layerMenu({ ...base, selected: 1, pictures: 1, main: { on: false } }))[3], ['main', 'saveEach', 'openNew', 'moveNew']);
+  const clip = (s) => clipMenu({ n: 1, kind: 'video', ...s }).flat().find((i) => i.id === 'main');
+  assert.equal(clip({}), undefined);
+  assert.equal(clip({ main: { on: false } }).label, 'Main source');
+  assert.equal(clip({ main: { on: true } }).label, 'Not the main source');
+  assert.equal(clip({ n: 2, main: { on: false } }), undefined, 'one clip at a time');
+});
