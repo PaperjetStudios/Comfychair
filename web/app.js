@@ -401,6 +401,11 @@ function wireHintPanel() {
   const FOLD = 'deck.hints.folded';
   const setFold = (on) => { store.set(FOLD, on); panel.el.classList.toggle('folded', on); foldBtn.textContent = on ? '▸' : '▾'; foldBtn.title = on ? 'Show the hints' : 'Fold the hints'; foldBtn.setAttribute('aria-label', foldBtn.title); };
   const foldBtn = h('button', { type: 'button', class: 'icon-btn', onmousedown: keepFocus, onclick: () => setFold(!panel.el.classList.contains('folded')) });
+  // no prompt has the cursor: a floating panel goes; a docked one stays put (the work area would jump) and says what it's for
+  const rest = () => {
+    if (!panel?.docked()) { panel?.hide(); return; }
+    panel.body.replaceChildren(h('span', { class: 'hint' }, 'Click in a prompt box for its hints'));
+  };
   const build = () => {
     panel = floatPanel({ key: 'deck.hints', title: 'Prompt hints', cls: 'float-hints', buttons: [foldBtn] });
     panel.body.classList.add('text-pop-tags', 'wide');
@@ -413,7 +418,7 @@ function wireHintPanel() {
     if (t.tagName !== 'TEXTAREA' || t.readOnly) return;
     clearTimeout(hideT);
     const phrases = phrasesFor(t), tags = tagsFor(t);
-    if (!phrases.length && !tags.length) { src = null; panel?.hide(); return; }
+    if (!phrases.length && !tags.length) { src = null; rest(); return; }
     if (t === src && panel?.shown()) return;
     src = t;
     if (!panel) build();
@@ -425,7 +430,7 @@ function wireHintPanel() {
   document.addEventListener('focusout', (e) => {
     if (e.target !== src) return;
     clearTimeout(hideT);
-    hideT = setTimeout(() => { if (!inside && document.activeElement !== src) { src = null; panel?.hide(); } }, 200);
+    hideT = setTimeout(() => { if (!inside && document.activeElement !== src) { src = null; rest(); } }, 200);
   });
 }
 

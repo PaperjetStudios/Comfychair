@@ -49,6 +49,8 @@ const PATHS = {
   prevkey: ['M9 7l-6 5 6 5z', 'M16 7l5 5-5 5-5-5z'],
   nextkey: ['M15 7l6 5-6 5z', 'M8 7l5 5-5 5-5-5z'],
   close: ['M6 6l12 12M18 6L6 18'],
+  // a panel in a column at the side: Dock (its menu of places)
+  dock: ['M3 4h18v16H3z', 'M15 4v16'],
   trash: ['M4 7h16', 'M10 11v6M14 11v6', 'M6 7l1 13h10l1-13', 'M9 7V4h6v3'],
   save: ['M5 3h11l3 3v15H5z', 'M8 3v5h7V3', 'M8 21v-7h8v7'],
   left: ['M19 12H5', 'M11 6l-6 6 6 6'],
