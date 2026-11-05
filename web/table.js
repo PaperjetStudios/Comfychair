@@ -1072,7 +1072,11 @@ export function setOutputs(ids, { w, h: hh }) {
   const steps = list.filter((f) => { const o = M.outputOf(f); return o.w !== w || o.h !== hh; })
     .map((f) => ({ id: f.id, was: { out: M.outputOf(f), w: f.w, h: f.h }, now: { out: { w, h: hh }, ...M.tileShape(f, { w, h: hh }) } }));
   if (!steps.length) return;
+  const open = isLive() && steps.length === 1 && steps[0].id === liveFrame()?.id ? liveSig() : undefined;
   for (const s of steps) setFrameField(s.id, s.now, { record: false });
+  // the open frame's own engine took the size as a step of its history (an image frame's canvas): that step is the undo. A second one here
+  // would make Ctrl+Z bounce between the two.
+  if (open !== undefined && liveSig() !== open) { syncUndo(); return; }
   record({ undo: () => { for (const s of steps) setFrameField(s.id, s.was, { record: false }); },
     redo: () => { for (const s of steps) setFrameField(s.id, s.now, { record: false }); } });
 }
