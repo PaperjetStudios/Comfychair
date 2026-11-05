@@ -94,26 +94,43 @@ export function createEditor(cfg) {
     settleGrow();
     const g = E.grow, now = g && { crop: g.l.crop, x: g.l.x, y: g.l.y };
     if (g) Object.assign(g.l, g.was);
-    noteStack(); keyPose(); cfg.onChange?.();
+    keyPose(); noteStack(); cfg.onChange?.();   // (the key a move writes is in the same undo step as the move)
     if (g) Object.assign(g.l, now);
   }
 
   // ---- undo for the stack itself: what a change did (moved, reordered, hid, grouped...) goes on the painter's history, next to its strokes ----
-  let stackWas = null, stackAt = 0;
+  // (a step holds the canvas too, and each layer's picture: layer-stack.js stackState)
+  let stackWas = null, stackAt = 0, histDoc = null;
+  const stateNow = () => ST.stackState(E.layers, E.groups, { canvas: E, pixels: (l) => (l.img && !l.runPreview ? { img: l.img, id: l.img.deckFrom || l.img, name: l.name } : undefined) });
   function noteStack() {
-    const now = ST.stackState(E.layers, E.groups);
+    const now = stateNow();
     if (!stackWas || !paint) { stackWas = now; return; }
-    if (ST.sameState(stackWas, now)) return;
-    const t = Date.now();
-    paint.pushStack(stackWas, now, cfg.docId?.() ?? E.tab?.id, t - stackAt < 500);   // (a slider's run of changes is one step)
+    if (ST.sameState(stackWas, now)) { stackWas = now; return; }
+    const t = Date.now(), last = paint.lastStep();
+    // (a slider's run of changes is one step; a result landing, a delete or a new canvas size never joins the step before: ST.mergesWith)
+    paint.pushStack(stackWas, now, cfg.docId?.() ?? E.tab?.id, !!last?.stack && ST.mergesWith(last, now, t - stackAt));
     stackAt = t; stackWas = now;
   }
   function restoreStack(st) {
-    ST.applyState(E, st);
-    stackWas = ST.stackState(E.layers, E.groups);
+    const size = JSON.stringify(E.size || null);
+    for (const l of ST.applyState(E, st)) if (isCanvas(l)) paint.markDirty(l);   // (a painted picture put back is saved as it is again)
+    if (E.anim) { E.t = Math.min(E.t, E.anim.len); poseAt(E.t); } else editorPause();
+    if (E.itemSel >= E.items.length) E.itemSel = -1;
+    stackWas = stateNow();
     if (E.sel && !E.layers.includes(E.sel)) E.sel = null;
     cfg.onChange?.();
     renderEditor();
+    const now = JSON.stringify(E.size || null);   // (the canvas's size came back: an open frame's output size follows, frame-image.js)
+    if (now !== size) { toldSize = now; dispatchEvent(new CustomEvent('editor:size')); }
+  }
+  // A delete's toast: its Undo is Ctrl+Z's own step (so it can be redone, and nothing added since is lost), while that step is the last one
+  function stepToast(msg, after = () => {}) {
+    const step = paint.lastStep(), tid = docId();
+    undoToast(msg, () => {
+      if (docId() !== tid) return toast(cfg.elsewhere || 'Those layers were in another edit tab', true);
+      if (!step || paint.lastStep() !== step) return toast('Other changes came after it: undo them first (Ctrl+Z)', true);
+      paint.undo(); after(); renderEditor();
+    });
   }
 
   // ---- animation: layers keyed over time like After Effects, on keys.js (the engine the Video tab's clips and the 3D tab use) ----
@@ -1353,16 +1370,11 @@ export function createEditor(cfg) {
   }
 
   function removeLayer(l) {
-    const before = E.layers;
     E.layers = ST.normalize(E.layers.filter((o) => o !== l), E.groups);
     if (E.sel === l) { E.sel = null; E.cropping = false; }
     if (E.sel?.maskOf === l.key) { E.sel = null; E.cropping = false; }
     persistEditor();
-    const tid = docId();
-    undoToast('Layer removed', () => {
-      if (docId() !== tid) return toast(cfg.elsewhere || 'That layer was in another edit tab', true);
-      E.layers = before; E.sel = l; persistEditor(); renderEditor();
-    });
+    stepToast('Layer removed', () => { if (E.layers.includes(l)) E.sel = l; });
   }
 
   function renderEditor() {
@@ -1393,12 +1405,9 @@ export function createEditor(cfg) {
         onclick: paint.blankSheet }, icon('canvas')), ...more]);
   }
   function clearLayers() {
-    const before = E.layers, tid = docId();
+    const n = E.layers.length;
     E.layers = []; E.sel = null; E.multi = []; E.arrange = null; persistEditor(); renderEditor();
-    undoToast(`Cleared ${before.length} layer${before.length > 1 ? 's' : ''}`, () => {
-      if (docId() !== tid) return toast(cfg.elsewhere || 'Those layers were in another edit tab', true);
-      E.layers = before; persistEditor(); renderEditor();
-    });
+    stepToast(`Cleared ${n} layer${n > 1 ? 's' : ''}`);
   }
 
   // (a change of the canvas's size is told, so an open frame's output size follows: frame-image.js)
@@ -1725,27 +1734,21 @@ export function createEditor(cfg) {
     toast(`${n} ${n === 1 ? 'layer' : 'layers'} moved to ${made === true ? 'a new frame beside this one' : 'this new edit'}`);
   }
   function deleteSelected() {
-    const before = E.layers, was = picked(), tid = docId(), { keep, count } = ST.withoutPicked(E.layers, was);
+    const was = picked(), { keep, count } = ST.withoutPicked(E.layers, was);
     if (!count) return toast('Those layers are locked', true);
     E.layers = ST.normalize(keep, E.groups);
     E.sel = null; E.multi = []; E.cropping = false;
     persistEditor(); renderEditor();
-    undoToast(`${count} ${count === 1 ? 'layer' : 'layers'} removed`, () => {
-      if (docId() !== tid) return toast(cfg.elsewhere || 'Those layers were in another edit tab', true);
-      E.layers = before; ST.setPicked(E, was); persistEditor(); renderEditor();
-    });
+    stepToast(`${count} ${count === 1 ? 'layer' : 'layers'} removed`, () => ST.setPicked(E, was.filter((l) => E.layers.includes(l))));
   }
   function deleteHidden() {
-    const before = E.layers, tid = docId(), { count, keep } = ST.hiddenOnes(E.layers);
+    const { count, keep } = ST.hiddenOnes(E.layers);
     if (!count) return;
     E.layers = ST.normalize(keep, E.groups);
     if (E.sel && !E.layers.includes(E.sel)) E.sel = null;
     E.multi = E.multi.filter((l) => E.layers.includes(l));
     persistEditor(); renderEditor();
-    undoToast(`${count} hidden ${count === 1 ? 'layer' : 'layers'} removed`, () => {
-      if (docId() !== tid) return toast(cfg.elsewhere || 'Those layers were in another edit tab', true);
-      E.layers = before; persistEditor(); renderEditor();
-    });
+    stepToast(`${count} hidden ${count === 1 ? 'layer' : 'layers'} removed`);
   }
 
   // Grid: the selected pictures packed tight or in equal cells (web/layer-grid.js). gridCrops remembers what a grid cut, so another grid starts
@@ -1838,12 +1841,8 @@ export function createEditor(cfg) {
         button(allOn('hidden') ? 'Show all' : 'Hide all', () => { const on = !allOn('hidden'); each((l) => { l.hidden = on; }); }, { cls: 'small' }),
         button(allOn('locked') ? 'Unlock all' : 'Lock all', () => { const on = !allOn('locked'); each((l) => { l.locked = on; }); }, { cls: 'small' }),
         button(`Delete ${ls.length} layers`, () => {
-          const before = E.layers, tid = docId();
           E.layers = E.layers.filter((l) => !ls.includes(l)); E.sel = null; E.multi = []; persistEditor(); renderEditor();
-          undoToast(`${ls.length} layers removed`, () => {
-            if (docId() !== tid) return toast(cfg.elsewhere || 'Those layers were in another edit tab', true);
-            E.layers = before; persistEditor(); renderEditor();
-          });
+          stepToast(`${ls.length} layers removed`, () => ST.setPicked(E, ls.filter((l) => E.layers.includes(l))));
         }, { cls: 'small danger' })),
       help('One box goes round the selected layers on the canvas: drag inside it to move them all (Alt+drag a layer to copy them), a corner to scale them all from the opposite corner, the round handle to turn them all about its middle. In Crop (C) the box crops every picture to what lies inside it; a layer turned by other than a quarter turn is left out of that. Opacity, Blend and the buttons change every selected layer; the Image tools panel, set to Selected layers, runs on each one in turn. Select one layer to edit it alone.'));
   }
@@ -2305,13 +2304,26 @@ export function createEditor(cfg) {
   }
 
   const docId = () => cfg.docId?.() ?? E.tab?.id;
-  // another document in this host: its state, posed at the start, nothing selected
-  function load(payload) {
+  // another document in this host: its state, posed at the start, nothing selected.
+  // doc: { id, remote } from a host that keeps one history (the Editor tab, a live frame): a fresh history unless it is the same document
+  // opened again as it is on show (ST.keepsHistory), and then the layers on show stay (the steps know them). Without doc the host resets it.
+  function load(payload, doc = null) {
     editorPause();
+    const was = doc && { layers: E.layers, groups: E.groups, items: E.items, anim: E.anim, dump: JSON.stringify(dumpEditor()) };
     Object.assign(E, fromSaved(payload || {}), { sel: null, multi: [], pickMode: false, cropping: false, grow: null, aspect: null, guides: [], t: 0 });
     E.layers = ST.normalize(E.layers, E.groups);
-    stackWas = null;   // (a fresh start for this document's undo)
+    if (doc) {
+      if (ST.keepsHistory({ was: histDoc, id: doc.id, remote: doc.remote, same: JSON.stringify(dumpEditor()) === was.dump })) {
+        Object.assign(E, { layers: was.layers, groups: was.groups, items: was.items, anim: was.anim });
+        poseAt(0);
+        if (stackWas) stackWas = stateNow();
+        return;
+      }
+      histDoc = doc.id ?? null;
+      paint?.reset();
+    }
     poseAt(0);
+    stackWas = stateNow();   // (a fresh start for this document's undo: the first change after opening it is a step too)
   }
   const eng = {
     E, render: renderEditor, draw: drawEditorCanvas, changed: persistEditor, runPreview, load, dump: dumpEditor, compose: composeEditor, composeLayer,

@@ -229,10 +229,10 @@ tabs = new TabSet({ kind: 'edit-tabs', host: $('#tab-editor'), newName: (n) => `
     empty: BLANK,
     dump: () => ED.dump(),
     beforeLeave: () => ED.paint.savePaint(),   // painted layers get their files (and the tab their names) before it's left
-    load(payload, doc) {
+    load(payload, doc, { remote = false } = {}) {
       if (E.tab?.id !== doc.id) stillNow(); else clearTimeout(stillTimer);   // a tab being left gets its still now (the draw is synchronous)
       stillDue = false;
-      ED.load(payload);
+      ED.load(payload, { id: doc.id ?? null, remote });   // (another document, or this one saved elsewhere: a fresh undo history)
       E.tab = doc.id ? { id: doc.id, qs: tabs.qs } : null;   // (no id: tabs.js resetting the engine when no document is open)
       store.set(SEEDED, true);
       if (doc.id && !doc.still && E.layers.length) stillSoon();

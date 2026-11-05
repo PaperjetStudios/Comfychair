@@ -294,7 +294,7 @@ function extendSheet(eng) {
   const draw = () => box.replaceChildren(...growRows(f0, d, null, draw));
   draw();
   openSheet(h('h3', {}, 'Extend the canvas'),
-    help('Grows the canvas and marks the new part, with a little of the old edge so it blends, as the mask. Then describe the whole scene in the Inpaint panel and press Fill. Extending cannot be undone with Undo: Canvas, Fit layers brings the old frame back.'),
+    help('Grows the canvas and marks the new part, with a little of the old edge so it blends, as the mask. Then describe the whole scene in the Inpaint panel and press Fill. Undo (Ctrl+Z) puts the canvas back as it was.'),
     box,
     actions(button('Extend', () => { closeSheet(); extend(eng, f0, d); }, { cls: 'small primary' }), button('Cancel', closeSheet, { cls: 'small ghost' })));
 }
