@@ -353,11 +353,11 @@ function renderPorts(touch = null) {
     if (!kinds.length) continue;
     let el = U.outEls.get(f.id);
     if (!el) {
-      el = h('div', { class: 'frame-out', 'data-frame': f.id, title: 'Drag onto another frame to plug it in' });
+      el = h('div', { class: 'wire-out', 'data-frame': f.id, title: 'Drag onto another frame to plug it in' });
       D.ports.append(el); U.outEls.set(f.id, el);
     }
     const p = outPt(f, pg, z);
-    el.className = `frame-out k-${kinds[0]}${showOut(f.id) ? ' show' : ''}`;
+    el.className = `wire-out k-${kinds[0]}${showOut(f.id) ? ' show' : ''}`;
     el.style.left = `${p.x}px`; el.style.top = `${p.y}px`;
     seenOut.add(f.id);
   }
@@ -1013,7 +1013,7 @@ function onDown(e) {
   try { D.stage.setPointerCapture(e.pointerId); } catch { /* the pointer is gone */ }
   const base = { id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false };
   const handle = e.target.closest('.frame-handle'), f = frameAt(e);
-  const port = e.target.closest('.frame-out'), onWire = e.target.closest('[data-wire]');
+  const port = e.target.closest('.wire-out'), onWire = e.target.closest('[data-wire]');
   if (isLive() || handle || f || port || onWire || e.button !== 0 || U.space) U.lastEmpty = null;   // (only tap, tap on empty table counts)
   if (!isLive() && !onWire && U.wire && e.button === 0) pickWire(null);   // (anything else pressed lets go of the wire)
   if (isLive()) U.op = { ...base, type: 'backdrop' };   // (the table behind a live frame: a tap beside it lets go of it)
@@ -1069,7 +1069,7 @@ function startMove(e, f, base) {
 
 function onMove(e) {
   if (U.pts.has(e.pointerId)) U.pts.set(e.pointerId, local(e));
-  if (!U.op && e.pointerType !== 'touch' && !isLive()) setHover(e.target.closest?.('.frame-out')?.dataset.frame || frameAt(e)?.id || null);
+  if (!U.op && e.pointerType !== 'touch' && !isLive()) setHover(e.target.closest?.('.wire-out')?.dataset.frame || frameAt(e)?.id || null);
   const op = U.op;
   if (op?.type === 'pinch') return pinch();
   if (!op || e.pointerId !== op.id) return;
@@ -1681,7 +1681,7 @@ function wire() {
   D.stage.addEventListener('dragover', onDragOver);
   D.stage.addEventListener('dragleave', (e) => { if (!D.stage.contains(e.relatedTarget)) hoverDrop(null); });
   D.stage.addEventListener('drop', onDrop);
-  pressMenu(D.stage, stageMenu, { ok: (e) => !isLive() && !e.target.closest?.('.max-btn, .pull-tab, .frame-out') });
+  pressMenu(D.stage, stageMenu, { ok: (e) => !isLive() && !e.target.closest?.('.max-btn, .pull-tab, .wire-out') });
   document.addEventListener('keydown', onKey);
   document.addEventListener('keyup', (e) => { if (e.code === 'Space') { U.space = false; D.stage.classList.remove('panning'); } });
   addEventListener('keydown', onEsc);
