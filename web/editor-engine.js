@@ -919,6 +919,9 @@ export function createEditor(cfg) {
     const canvasMenuOk = () => !!EV && !EA.exporting && !paint.painting() && !paint.boxing() && !E.cropping && !E.itemDraw && !E.pickMode;
     // While cropping, the same press offers the crop's shape. (A hold outside the picture has finished the crop by the time it fires: no menu then.)
     const cropMenuOk = () => !!EV && !EA.exporting && !paint.painting() && E.cropping && !!E.sel && ready(E.sel);
+    // (a mouse's right click means only this, so it works with every tool; a finger's long hold is left to a tool that draws)
+    const clickMenuOk = () => !!EV && !EA.exporting && !E.cropping;
+    const byMouse = (e) => e.type === 'contextmenu' && e.pointerType !== 'touch';
     let cropPress = false;
     pressMenu(cv, (e) => {
       cancelDrag(); EVheld = false;
@@ -933,10 +936,10 @@ export function createEditor(cfg) {
       if (hit) ST.setPicked(E, pickedFor(picked(), hit));
       renderEditor();
       openLayerMenu(e.clientX, e.clientY);
-    }, { ok: () => { cropPress = cropMenuOk(); return cropPress || canvasMenuOk(); } });
+    }, { ok: (e) => { cropPress = cropMenuOk(); return cropPress || canvasMenuOk() || (byMouse(e) && clickMenuOk()); } });
     cv.addEventListener('pointerdown', (e) => {
       if (!EV || EA.exporting || e.pointerType === 'touch') return;
-      if (e.button === 2 && (canvasMenuOk() || cropMenuOk())) { e.stopImmediatePropagation(); e.preventDefault(); return; }   // (it isn't a drag: the menu comes with its contextmenu event)
+      if (e.button === 2 && (clickMenuOk() || cropMenuOk())) { e.stopImmediatePropagation(); e.preventDefault(); return; }   // (it isn't a drag: the menu comes with its contextmenu event)
       if (e.button === 1 || (e.button === 0 && spaceHeld)) { e.stopImmediatePropagation(); e.preventDefault(); startPan(e); }
     }, true);
     cv.addEventListener('pointermove', (e) => {
@@ -1013,7 +1016,7 @@ export function createEditor(cfg) {
         E.sel = hit; E.cropping = !plain(hit); E.aspect = null; renderEditor();
         return;
       }
-      if (e.shiftKey || E.pickMode) { EVheld = false; togglePick(hit); renderEditor(); return; }
+      if (e.shiftKey || e.ctrlKey || e.metaKey || E.pickMode) { EVheld = false; togglePick(hit); renderEditor(); return; }
       lastTap = { t: now, l: hit };
       const group = picked();
       drag = { l: hit, p0: p, x0: hit.x, y0: hit.y, was: { sel: E.sel, multi: E.multi }, alt: e.altKey, out: !e.altKey && canGive(hit) ? pictureDrag(cv, () => layerThumb(hit)) : null };
@@ -1388,9 +1391,9 @@ export function createEditor(cfg) {
         sel: several.includes(l), off: l.hidden || l.broken,
         // (painting the selected layer: tapping it again keeps it, so the brush always has a layer)
         onclick: (ev) => {
-          if (ev?.ctrlKey || ev?.metaKey) { paint.selectLayer(l, ev.shiftKey ? 'add' : ev.altKey ? 'sub' : 'new'); return; }   // Ctrl-tap: its pixels become the selection
+          if ((ev?.ctrlKey || ev?.metaKey) && ev.altKey) { paint.selectLayer(l, ev.shiftKey ? 'add' : 'new'); return; }   // Ctrl+Alt-tap: its pixels become the selection
           if (ev?.shiftKey && !E.pickMode && E.sel) { ST.setPicked(E, ST.rangeOf(E.layers, E.sel, l)); E.cropping = false; renderEditor(); return; }   // from the selected layer through this one
-          if (ev?.shiftKey || ev?.altKey || E.pickMode) { togglePick(l); renderEditor(); return; }
+          if (ev?.ctrlKey || ev?.metaKey || ev?.shiftKey || ev?.altKey || E.pickMode) { togglePick(l); renderEditor(); return; }
           if (l === E.sel && !E.multi.length && !paint.painting()) { E.sel = null; E.cropping = false; } else pickOnly(l);
           renderEditor();
         },
@@ -1820,7 +1823,13 @@ export function createEditor(cfg) {
       h('div', { class: 'row wrap' },
         flat ? null : button('Crop', () => { paint.setTool('move'); E.cropping = true; E.aspect = null; renderEditor(); }),
         cropped && !flat ? button('Reset crop', () => { setLayerCrop(l, { ...FULL }); editorChanged(); }) : null,
-        button('100%', () => { setScale(1); editorChanged(); })),
+        button('100%', () => {
+          const r = layerRect(l), cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+          l.scale = 1;
+          const n = layerRect(l);
+          l.x = Math.round(cx - n.w / 2); l.y = Math.round(cy - n.h / 2);
+          editorChanged();
+        })),
       flat && isCanvas(l) ? canvasSizeFields(l) : null,
       flat && !l.mask ? fillField('Background', () => l.fill || null, (c) => {
         if (c) l.fill = c; else delete l.fill;

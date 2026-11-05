@@ -1436,7 +1436,7 @@ export function createPaint(ctx) {
         h('div', { class: 'row wrap' },
           button('Select all', () => selAction('all')), button('Deselect', () => { dropSel(); X.render(); }, { disabled: !s, title: 'Ctrl+D or Esc' }),
           act('Invert', 'invert', 'Ctrl+Shift+I'), button('Reselect', () => selAction('reselect'), { disabled: !!s || !P.last, title: 'Ctrl+Shift+D' }),
-          button('Layer', () => selAction('layer'), { disabled: !E().sel, title: 'Select the picked layer\'s pixels (hold a layer on the canvas, or Ctrl-tap its row)' }),
+          button('Layer', () => selAction('layer'), { disabled: !E().sel, title: 'Select the picked layer\'s pixels (hold a layer on the canvas, or Ctrl+Alt-tap its row)' }),
           s?.float ? button('Place', () => { commitFloat(); X.render(); }, { cls: 'small primary', title: 'Put the moved pixels down (Enter)' }) : null),
         rangeField('Expand / contract by', () => P.selAmt, (v) => { P.selAmt = Math.round(v); store.set('deck.paint.selAmt', P.selAmt); }, { min: 1, max: 100, step: 1, fmt: (v) => `${Math.round(v)} px` }),
         h('div', { class: 'row wrap' }, act('Expand', 'grow'), act('Contract', 'shrink'), act('Feather', 'feather', 'Soften its edge by this much')),

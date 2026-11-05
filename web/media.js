@@ -4,7 +4,7 @@ import {
 import { fmtTime } from './playback.js';
 import { MP_STEPS, capLabel } from './mp-cap.js';
 import { cardPicture, kindTile, madeBy } from './kinds.js';
-import { S, listedRun, PICKER_SOURCES as SOURCES, inputUrl, previewUrl, switchTab } from './core.js';
+import { S, listedRun, PICKER_SOURCES as SOURCES, inputUrl, previewUrl, switchTab, templateName } from './core.js';
 import { fmtDur, runTime } from './run-state.js';
 import { fetchHistory as loadHistory } from './generation-data.js';
 import { tick, addFrame, frameIndex } from './pick-slots.js';
@@ -20,7 +20,7 @@ export async function projectOutputs(kinds) {
   return items.sort((x, y) => y.t - x.t);
 }
 // a run by its template, an imported file by its name
-export const genLabel = (g) => `#${g.id} ${(g.template === 'import' || g.template === 'saved') && g.params?.label ? g.params.label : madeBy(g) || g.template}`;
+export const genLabel = (g) => `#${g.id} ${(g.template === 'import' || g.template === 'saved') && g.params?.label ? g.params.label : madeBy(g) || templateName(g.template)}`;
 // a card's picture: a thumbnail, or a note for sound
 export const cardMedia = (o, g = null) => cardPicture(o, g);   // (kinds.js: a still, a waveform, or what the kind is)
 

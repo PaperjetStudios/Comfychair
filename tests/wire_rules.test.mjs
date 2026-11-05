@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   fieldKind, wireLabel, outKind, outKinds, renumber, migrateWires, cycle, addWire, setWire, removeWires, dropFrames, inputsFor, mapToFields, remap,
-  framePick, isFrameWire,
+  framePick, isFrameWire, replaceWire,
 } from '../web/wire-rules.js';
 
 const F = (id, kind, more = {}) => ({ id, kind, doc: `doc-${id}`, x: 0, y: 0, w: 512, h: 512, ...more });
@@ -217,4 +217,34 @@ test('remapIds: the copied wires and old -> new ids; remapWired follows them', (
   assert.equal(all.wires.length, 2);
   assert.deepEqual(remapWired({ b: 'w2' }, all.ids), { b: all.ids.get('w2') });
   assert.equal(remap(ws, { i1: 'c1', i2: 'c2' }).length, 1);
+});
+
+test('replace: a wire takes a new source and keeps its place, id and size; the old crop goes', () => {
+  const ws = [W('a', 'i1', 't', 'image', { n: 1, crop: { x: 0, y: 0, w: 1, h: 1 }, mp: 0, on: false }), W('b', 'i2', 't', 'image', { n: 2 })];
+  const r = replaceWire(ws, 'a', { from: 'c1' }, frames);
+  assert.equal(r.why, null);
+  assert.deepEqual(r.wires.map((w) => [w.id, w.from, w.n]), [['a', 'c1', 1], ['b', 'i2', 2]]);
+  assert.equal(r.wire.crop, undefined);
+  assert.equal(r.wire.mp, 0);
+  assert.equal(r.wire.on, true);
+  assert.equal(ws[0].from, 'i1');   // (what it was given is unchanged)
+});
+
+test('replace: a picture out of a video says which frame; a picture wire off a video drops it', () => {
+  const ws = [W('a', 'i1', 't', 'image', { n: 1 })];
+  assert.equal(replaceWire(ws, 'a', { from: 'v1', frame: 2.5 }, frames).wire.frame, 2.5);
+  assert.equal(replaceWire(ws, 'a', { from: 'v1' }, frames).wire.frame, 'first');
+  const fw = [W('a', 'v1', 't', 'image', { n: 1, frame: 1 })];
+  assert.equal(replaceWire(fw, 'a', { from: 'i1' }, frames).wire.frame, undefined);
+});
+
+test('replace: refused for the wrong kind, a loop, a repeat, no change, nothing to give', () => {
+  const ws = [W('a', 'i1', 't', 'image', { n: 1 }), W('b', 'i2', 't', 'image', { n: 2 }), W('c', 't', 'i2', 'image', { n: 1 })];
+  assert.equal(replaceWire(ws, 'a', { from: 's1' }, frames).why, 'wrong-kind');
+  assert.equal(replaceWire(ws, 'b', { from: 'i1' }, frames).why, 'exists');
+  assert.equal(replaceWire(ws, 'a', { from: 'i1' }, frames).why, 'same');
+  assert.equal(replaceWire(ws, 'a', { from: 'e1' }, frames).why, 'no-output');
+  assert.equal(replaceWire(ws, 'nope', { from: 'i1' }, frames).why, 'missing');
+  const loop = [W('a', 'i1', 't', 'image', { n: 1 }), W('c', 't', 'i2', 'image', { n: 1 })];
+  assert.equal(replaceWire(loop, 'a', { from: 'i2' }, frames).why, 'cycle');
 });

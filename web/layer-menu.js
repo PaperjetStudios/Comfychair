@@ -73,7 +73,7 @@ export function frameMenu(s) {
   const n = s.selected;
   if (!n) return [];
   const groups = [
-    [{ id: 'open', label: 'Open', keys: 'Enter', disabled: !s.openable }, { id: 'rename', label: 'Rename', disabled: n !== 1 }],
+    [{ id: 'open', label: 'Open', keys: 'Enter', disabled: !s.openable }, { id: 'rename', label: 'Rename', keys: 'F2', disabled: n !== 1 }],
     [{ id: 'duplicate', label: 'Duplicate', keys: 'Ctrl+J' },
       n > 1 ? { id: 'group', label: 'Group', keys: 'Ctrl+G' } : null,
       s.grouped ? { id: 'ungroup', label: 'Ungroup', keys: 'Ctrl+Shift+G' } : null],

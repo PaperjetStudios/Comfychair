@@ -1,5 +1,5 @@
 import { h, api, toast, undoToast, uid, button, iconBtn, field, section, help, chip, icon, hint, seg, layerRowsEl, openSheet, closeSheet, textArea } from './ui.js';
-import { S, thumbUrl, previewUrl, switchTab } from './core.js';
+import { S, thumbUrl, previewUrl, switchTab, templateName } from './core.js';
 import { openImagePicker } from './media.js';
 import { pictureSlot } from './picture-drop.js';
 import { EXPRESSIONS, mentioned, packPictures, VIEW_KEYS } from './cast.js';
@@ -395,7 +395,7 @@ function modelSection(c) {
     help('Each look keeps its current 3D model and rig. Old versions stay in the media, so you can go back. Make again and Rig again start from how the current one was made, and the result waits in To review; it becomes the current one only when you keep it. A layer already in a scene doesn\'t change until you tell it to.'),
     h('div', { class: `cs-part${st.model ? ' stale' : ''}` }, h('b', {}, 'Model'), choose('model', 'model', 'None'),
       st.model ? h('span', { class: 'cs-stale' }, 'The views changed after this was made.') : null,
-      model?.made?.template ? h('span', { class: 'hint' }, model.made.template) : null,
+      model?.made?.template ? h('span', { class: 'hint' }, templateName(model.made.template)) : null,
       h('div', { class: 'row wrap' },
         button(model ? 'Make again' : 'Make a 3D object', () => makeModel(c, model?.made?.settings || null), { cls: 'small', disabled: !mainPicture(c) }),
         model ? button('Place in the 3D scene', () => placeInScene(c, model), { cls: 'small' }) : null)),

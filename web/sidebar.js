@@ -43,12 +43,25 @@ function build() {
     P.labels.title = on ? 'Show the words on these tabs' : 'Show only icons on these tabs';
     P.labels.setAttribute('aria-label', P.labels.title);
   };
-  P.labels = h('button', { type: 'button', class: 'sb-labels', onclick: () => { const on = !P.strip.classList.contains('icons-only'); store.set('deck.sidebar.iconsOnly', on); iconsOnly(on); } }, icon('text'));
-  P.strip.append(P.labels);
+  P.labels = h('button', { type: 'button', class: 'sb-labels', onclick: () => { const on = !P.strip.classList.contains('icons-only'); store.set('deck.sidebar.iconsOnly', on); iconsOnly(on); P.fades(); } }, icon('text'));
   iconsOnly(store.get('deck.sidebar.iconsOnly', false));
   P.body = h('div', { class: 'sb-panes' });
   root.classList.add('sidebar');
-  root.replaceChildren(P.strip, P.body);
+  // One row of tabs: the wheel or a drag of the finger scrolls it, and an edge with more beyond it fades
+  P.fades = () => {
+    const el = P.strip, more = el.scrollWidth - el.clientWidth;
+    el.classList.toggle('more-before', el.scrollLeft > 1);
+    el.classList.toggle('more-after', el.scrollLeft < more - 1);
+  };
+  P.strip.addEventListener('scroll', P.fades, { passive: true });
+  P.strip.addEventListener('wheel', (e) => {
+    if (P.strip.scrollWidth <= P.strip.clientWidth || e.deltaX) return;
+    e.preventDefault();
+    P.strip.scrollLeft += e.deltaY;
+  }, { passive: false });
+  new ResizeObserver(P.fades).observe(P.strip);
+  // (beside the tabs: it takes no room of its own in their row)
+  root.replaceChildren(h('div', { class: 'sb-head' }, P.strip, P.labels), P.body);
   P.strip.addEventListener('keydown', (e) => {
     const tabs = [...P.strip.querySelectorAll('.sb-tab:not(.hidden)')], at = tabs.indexOf(e.target);
     const to = at < 0 ? null : { ArrowLeft: at - 1, ArrowRight: at + 1, Home: 0, End: tabs.length - 1 }[e.key];
@@ -83,7 +96,7 @@ function pane(name, { title, icon: ic, when, host } = {}) {
     const rank = (n) => { const i = ORDER.indexOf(n); return i < 0 ? 99 : i; };
     P.order.push(name); P.order.sort((a, b) => rank(a) - rank(b));
     const i = P.order.indexOf(name), next = P.panes.get(P.order[i + 1]);
-    P.strip?.insertBefore(tab, next?.tab || P.labels);
+    P.strip?.insertBefore(tab, next?.tab || null);
     P.body?.append(el);
   }
   if (title || !p.title) { p.title = title || d.title; p.tab.title = p.title; p.tab.setAttribute('aria-label', p.title); p.el.setAttribute('aria-label', p.title); }
@@ -105,6 +118,7 @@ function syncTabs() {
     try { on = p.when ? !!p.when(P.ctx) : true; } catch (e) { console.error(e); }
     p.tab.classList.toggle('hidden', !on);
   }
+  P.fades?.();
 }
 
 function show(name) {
@@ -119,6 +133,13 @@ function show(name) {
     q.tab.setAttribute('aria-selected', String(on));
     q.tab.tabIndex = on ? 0 : -1;
   }
+  // (the tab on show is in view in its row)
+  if (P.strip && !p.tab.classList.contains('hidden')) {
+    const t = p.tab.getBoundingClientRect(), r = P.strip.getBoundingClientRect(), edge = 28;
+    if (t.left < r.left + edge) P.strip.scrollLeft -= r.left + edge - t.left;
+    else if (t.right > r.right - edge) P.strip.scrollLeft += t.right - (r.right - edge);
+  }
+  P.fades?.();
   if (was !== name) for (const fn of [...P.fns]) { try { fn(name, p.el); } catch (e) { console.error(e); } }
   return true;
 }

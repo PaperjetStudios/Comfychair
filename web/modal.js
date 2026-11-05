@@ -3,11 +3,14 @@ const scopes = [];
 const baseline = new Map();
 const selector = 'button, [href], input, select, textarea, [tabindex]';
 const focusable = (el) => [...el.querySelectorAll(selector)].filter((n) => !n.disabled && n.tabIndex >= 0 && !n.closest('[inert]') && n.getClientRects().length);
+// (what stays usable over anything: a toast can always be tapped away; the prompt hints type into the box that has the cursor)
+const OVER_ALL = '#toast, .float-hints';
 function isolate() {
   const top = scopes.at(-1);
+  document.body.classList.toggle('has-modal', !!top);   // (app.css: the tool windows go behind it)
   for (const el of document.body.children) {
     if (!baseline.has(el)) baseline.set(el, el.inert);
-    el.inert = top ? !(el === top.el || el.contains(top.el) || top.exclude.includes(el)) : baseline.get(el);
+    el.inert = top ? !(el === top.el || el.contains(top.el) || top.exclude.includes(el) || el.matches(OVER_ALL)) : baseline.get(el);
   }
   if (!top) baseline.clear();
 }

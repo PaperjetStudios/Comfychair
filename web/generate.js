@@ -3,7 +3,7 @@ import {
   button, iconBtn, actions, seg, field, hint, placeholder, note, cycleBar, help, info, numSlider, withHelp,
   insertAtCursor, toggle, textArea, seedField as uiSeedField, choiceField, chips, chip,
 } from './ui.js';
-import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, previewUrl, saveSnippet, savedEntries, thumbUrl } from './core.js';
+import { ASPECT_PRESETS, S, deleteSnippet, inputUrl, loadSnippets, previewUrl, saveSnippet, savedEntries, thumbUrl, switchTab } from './core.js';
 import { clipLabel, clipUrl, soundInput } from './media.js';
 import { openSourcePicker } from './source-picker.js';
 import { pictureForRun, pictureInput } from './picture-input.js';
@@ -192,9 +192,10 @@ export function renderFields(target = null) {
   const openState = store.get('deck.groupsOpen', {});
   const groups = [];
   const order = sortedGroups(t.groups);
-  const basics = t.fields.filter((f) => isBasic(f, t.fields));
+  const shown = t.fields.filter((f) => !FT?.hide?.(f));   // (what the panel leaves to somewhere else)
+  const basics = shown.filter((f) => isBasic(f, t.fields));
   for (const g of order) {
-    const fs = t.fields.filter((f) => f.group === g.label);
+    const fs = shown.filter((f) => f.group === g.label);
     const rest = fs.filter((f) => !basics.includes(f));
     if (!rest.length) continue;   // (all of it in the pane)
     const key = `${t.id}:${g.label}`;

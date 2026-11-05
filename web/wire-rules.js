@@ -112,6 +112,24 @@ export function addWire(wires, { from, to, kind = null, id = null, frame = null 
   const out = renumber([...wires, w]);
   return { wires: out, wire: out[out.length - 1], why: null };
 }
+// A wire takes a new source, keeping its place (its number, and the field it fills): a wire let go on an input port. What was cut from the
+// old picture goes; its size stays. A picture out of a video frame carries frame (given, else 'first'). Refused (wire null, why) as addWire:
+// and 'same' when nothing would change. Returns { wires, wire, why }.
+export function replaceWire(wires, id, { from, frame = null }, frames) {
+  const w = wires.find((x) => x.id === id), src = frames.find((f) => f.id === from);
+  const no = (why) => ({ wires, wire: null, why });
+  if (!w || !src || !frames.some((f) => f.id === w.to)) return no('missing');
+  if (!outKinds(src).length) return no('no-output');
+  if (!outKinds(src).includes(w.kind)) return no('wrong-kind');
+  const others = wires.filter((x) => x.id !== id);
+  if (cycle(others, from, w.to)) return no('cycle');
+  const pick = w.kind === 'image' && src.kind === 'video' ? framePick(frame ?? 'first') : null;
+  if (w.from === from && (w.frame ?? null) === pick) return no('same');
+  if (others.some((x) => sameWire(x, from, w.to, w.kind, pick))) return no('exists');
+  const { crop, frame: wasFrame, ...kept } = w;
+  const nw = { ...kept, from, on: true, ...(pick != null && { frame: pick }) };
+  return { wires: wires.map((x) => (x.id === id ? nw : x)), wire: nw, why: null };
+}
 // One wire changed: on (true | false), frame (a picture out of a video only), n (its place among the target's inputs of
 // its kind, 1 first: the rest move up or down). An id not there: the same list back.
 export function setWire(wires, id, patch = {}) {

@@ -62,6 +62,13 @@ const rid = () => Math.random().toString(36).slice(2, 10) + Math.random().toStri
 const num = (v, d) => (Number.isFinite(+v) ? +v : d);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
+// The table's grid on screen, in pixels: the fine step (a step too fine to see is drawn coarser, so a main line stays on a main line) and the main one, every fourth
+export const GRID_MAIN = 4;
+export function gridSteps(size, z) {
+  let fine = size * z;
+  while (fine < 10) fine *= GRID_MAIN;
+  return { fine, main: fine * GRID_MAIN };
+}
 export const blankTable = () => ({ v: 1, view: { x: 0, y: 0, z: 1 }, grid: { on: true, size: 64 }, groups: [], frames: [], wires: [] });
 
 // A saved payload made whole (an older or partial one, or one from another device), so the surface can trust it

@@ -361,6 +361,8 @@ details.group:not([open]) > summary::after { transform: rotate(-90deg); }
   border-top: 1px solid var(--line); background: var(--surface); align-items: center; grid-row: 4;
 }
 #genBtn { flex: 1; font-size: 18px; min-height: 54px; }
+#runOpts { flex: none; width: 54px; min-height: 54px; display: grid; place-items: center; padding: 0; }
+#runOpts.hidden { display: none; }
 #stopBtn { min-height: 54px; }
 
 /* ---- cards (history, pickers) ---- */
@@ -450,8 +452,8 @@ details.desc summary { cursor: pointer; color: var(--muted); }
 details.desc[open] summary { margin-bottom: 6px; }
 
 .toast {
-  position: fixed; z-index: 50; left: 50%; transform: translateX(-50%); bottom: 90px;
-  display: flex; align-items: center; gap: 12px;
+  position: fixed; z-index: 200; left: 50%; transform: translateX(-50%); bottom: 90px;   /* (over everything, and a tap sends it away) */
+  display: flex; align-items: center; gap: 12px; cursor: pointer; max-height: 50dvh; overflow-y: auto;
   background: var(--surface-2); border: 1px solid var(--line); padding: 10px 16px; border-radius: var(--r-lg);
   max-width: min(600px, 92vw); white-space: pre-wrap; box-shadow: var(--shadow);
   animation: rise .18s ease-out;
@@ -835,7 +837,6 @@ svg.ico.filled path { fill: currentColor; }
 /* a sheet opened from the writing box (the prompt helper, its picture picker) and toasts show over it */
 body:has(.text-pop:not(.hidden)) .backdrop { z-index: 61; }
 body:has(.text-pop:not(.hidden)) .sheet { z-index: 62; }
-body:has(.text-pop:not(.hidden)) .toast { z-index: 63; }
 .text-pop-aid { display: flex; gap: 4px; }
 
 /* ---- prompt helper (prompthelp.js) ---- */
@@ -1368,8 +1369,9 @@ button.sheet-caret { width: 22px; }
 .panel.has-nav > * { grid-column: 2; min-width: 0; }
 .panel.has-nav > .side-nav { grid-column: 1; grid-row: 1 / span 99; }
 .section-jump {
-  position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px;
-  padding: 0 0 8px; background: var(--surface); min-width: 0;
+  /* (the panel's own padding is covered: stuck, nothing scrolls past above it) */
+  position: sticky; top: calc(-1 * var(--gap)); z-index: 5; display: flex; align-items: center; gap: 8px;
+  margin-top: calc(-1 * var(--gap)); padding: 6px 0 8px; background: var(--surface); min-width: 0;
 }
 .section-jump > span { flex: none; font-size: var(--fs-xs); color: var(--muted); }
 .section-jump > select { min-width: 0; }
@@ -1380,8 +1382,8 @@ button.sheet-caret { width: 22px; }
 .run-bar { position: sticky; bottom: calc(-1 * var(--gap)); z-index: 3; padding: 8px 0; background: inherit; border-top: 1px solid var(--line); }
 .panel-body > .run-bar { background: var(--surface); }
 .side-nav {
-  position: sticky; top: 0; align-self: start; z-index: 4; display: flex; flex-direction: column; gap: 2px; padding: 3px;
-  margin: calc(-1 * var(--gap)) 0 0 calc(-1 * var(--gap)); padding-top: calc(var(--gap) + 3px); padding-bottom: calc(var(--gap) + 3px);
+  position: sticky; top: calc(-1 * var(--gap)); align-self: start; z-index: 4; display: flex; flex-direction: column; gap: 2px; padding: 3px;
+  margin: calc(-1 * var(--gap)) 0 0 calc(-1 * var(--gap)); padding-top: 6px; padding-bottom: calc(var(--gap) + 3px);
   background: var(--bg); border-right: 1px solid var(--line); max-height: 100dvh; overflow-y: auto; scrollbar-width: none;
 }
 .side-tab {
@@ -1637,7 +1639,6 @@ body:has(#tab-generate.view-max.active.panel-out) .actionbar { right: var(--ov-w
 /* a viewer pinned over the page: sheets, pickers and toasts still come up over it */
 body:has(.stage.maxed) .backdrop { z-index: 58; }
 body:has(.stage.maxed) .sheet { z-index: 59; }
-body:has(.stage.maxed) .toast { z-index: 60; }
 
 /* ---- animated properties (keyed.js): ◀ ◆ ▶ beside a slider, diamonds on the clip ---- */
 .keyed .lbl { align-items: center; }
@@ -2165,7 +2166,11 @@ body > .undo-dock { position: fixed; z-index: 57; top: 8px; left: 50%; transform
   --z: 1; position: relative; overflow: hidden; min-height: 0; touch-action: none; user-select: none;
   background-color: var(--stage-bg); border: 1px solid var(--line); border-radius: var(--r-lg); cursor: default;
 }
-.table-stage.grid-on { background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); }
+.table-stage.grid-on {   /* (sizes: table.js applyView, main lines first) */
+  --grid-fine: color-mix(in srgb, var(--line) 35%, transparent);
+  background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px),
+    linear-gradient(var(--grid-fine) 1px, transparent 1px), linear-gradient(90deg, var(--grid-fine) 1px, transparent 1px);
+}
 .table-stage.panning { cursor: grab; }
 .table-world { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; }
 .table-world.table-anim { transition: transform .25s ease; }
@@ -2181,6 +2186,9 @@ body > .undo-dock { position: fixed; z-index: 57; top: 8px; left: 50%; transform
 .frame-label .ico { width: 1.1em; height: 1.1em; flex: none; }
 .frame.selected .frame-label { color: var(--accent); }
 .frame-name { overflow: hidden; text-overflow: ellipsis; }
+/* its name typed over on the table: as wide as it needs, whatever the tile's width */
+.frame-label:has(.frame-rename) { overflow: visible; max-width: none; z-index: 3; }
+.frame-label input.frame-rename[type] { width: calc(180px / var(--z)); height: calc(20px / var(--z)); min-height: 0; flex: none; box-sizing: border-box; padding: 0 calc(4px / var(--z)); font-size: calc(12px / var(--z)); line-height: 1; border-width: calc(1px / var(--z)); border-radius: calc(3px / var(--z)); cursor: text; }
 .frame-size { opacity: .7; font-variant-numeric: tabular-nums; }
 .frame-body { position: absolute; inset: 0; overflow: hidden; background: var(--checker); }
 .frame-still { width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none; }
@@ -2246,19 +2254,31 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
 .table-ports { position: absolute; left: 0; top: 0; }
 .wire-out {
   position: absolute; width: calc(max(18px, var(--touch-target)) / var(--z)); height: calc(max(18px, var(--touch-target)) / var(--z));
-  transform: translate(-50%, -50%); display: grid; place-items: center; z-index: 1; cursor: crosshair; visibility: hidden; --wk: var(--wire-image);
+  transform: translate(-50%, -50%); display: grid; place-items: center; z-index: 1; cursor: crosshair; opacity: .6; --wk: var(--wire-image);
 }
-.wire-out.show { visibility: visible; }
+.wire-out.show, .wire-out:hover { opacity: 1; }
 .wire-out::after { content: ""; width: calc(12px / var(--z)); height: calc(12px / var(--z)); border-radius: 50%; background: var(--surface); border: calc(2px / var(--z)) solid var(--wk); }
 .wire-out:hover::after { background: var(--wk); }
 .wire-out.k-video, .frame-in.k-video { --wk: var(--wire-video); }
 .wire-out.k-sound, .frame-in.k-sound { --wk: var(--wire-sound); }
+.frame-run {
+  position: absolute; width: calc(max(22px, var(--touch-target)) / var(--z)); height: calc(max(22px, var(--touch-target)) / var(--z)); padding: 0; z-index: 1;
+  transform: translate(-100%, -100%); display: grid; place-items: center; cursor: pointer; border: 0; border-radius: calc(4px / var(--z)); background: var(--accent); color: var(--accent-ink);
+}
+.frame-run .ico { width: calc(14px / var(--z)); height: calc(14px / var(--z)); }
+.frame-run:hover { filter: brightness(1.15); }
+.frame-run.wait { opacity: .45; }
+.frame-run.now { background: var(--warn-bg); color: var(--warn-text); }
 .frame-in {
   position: absolute; display: flex; align-items: center; gap: calc(4px / var(--z)); transform: translate(calc(-6px / var(--z)), -50%); z-index: 1;
   min-height: calc(max(18px, var(--touch-target)) / var(--z)); font-size: calc(11px / var(--z)); line-height: 1; color: var(--text); white-space: nowrap; cursor: pointer; --wk: var(--wire-image);
 }
 .frame-in-dot { flex: none; width: calc(12px / var(--z)); height: calc(12px / var(--z)); border-radius: 50%; background: var(--wk); }
 .frame-in-label { padding: calc(2px / var(--z)) calc(5px / var(--z)); border-radius: calc(3px / var(--z)); background: var(--surface); border: calc(1px / var(--z)) solid var(--line-2); }
+.frame-in.next { pointer-events: none; opacity: .75; }
+.frame-in.next .frame-in-dot { background: transparent; border: calc(2px / var(--z)) dashed var(--wk); box-sizing: border-box; }
+.frame-in.wire-swap .frame-in-label { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+.frame-in.wire-swap .frame-in-dot { box-shadow: 0 0 0 calc(3px / var(--z)) color-mix(in srgb, var(--wk) 45%, transparent); }
 .frame-in.off { opacity: .45; }
 .frame-in.off .frame-in-dot { background: transparent; border: calc(2px / var(--z)) dashed var(--wk); box-sizing: border-box; }
 .frame-in.sel .frame-in-label { border-color: var(--accent); color: var(--accent); }
@@ -2306,13 +2326,19 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
 /* ---- sidebar + live frames ---- */
 /* the table's sidebar (sidebar.js): a strip of pane tabs over one pane on show; each pane scrolls by itself */
 #tablePanel.sidebar { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
-.sb-tabs { display: flex; gap: 2px; flex: none; padding: 4px 4px 0; border-bottom: 1px solid var(--line); background: var(--bg); flex-wrap: wrap; align-items: flex-end; }
+.sb-head { display: flex; align-items: flex-start; flex: none; border-bottom: 1px solid var(--line); background: var(--bg); }
+.sb-tabs { display: flex; gap: 2px; flex: 1; min-width: 0; padding: 4px 4px 0; align-items: flex-end; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+  --fade-l: 0px; --fade-r: 0px; -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--fade-l), #000 calc(100% - var(--fade-r)), transparent); mask-image: linear-gradient(to right, transparent, #000 var(--fade-l), #000 calc(100% - var(--fade-r)), transparent); }
+.sb-tabs::-webkit-scrollbar { display: none; }
+.sb-tabs.more-before { --fade-l: 28px; }
+.sb-tabs.more-after { --fade-r: 28px; }
+.sb-tab { flex: none; }
 .sb-tab { display: flex; align-items: center; gap: 6px; min-height: max(36px, var(--touch-target)); padding: 0 12px; border: 1px solid transparent; border-bottom: 0;
   border-radius: var(--r-sm) var(--r-sm) 0 0; background: none; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; margin-bottom: -1px; }
 .sb-tab .ico { width: 18px; height: 18px; flex: none; }
 .sb-tabs.icons-only .sb-tab-label { display: none; }
 .sb-tabs.icons-only .sb-tab { padding: 0 10px; }
-.sb-labels { display: grid; place-items: center; margin-left: auto; min-width: max(36px, var(--touch-target)); min-height: max(36px, var(--touch-target)); padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer; }
+.sb-labels { display: grid; place-items: center; flex: none; margin-top: 4px; min-width: max(36px, var(--touch-target)); min-height: max(36px, var(--touch-target)); padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer; }
 .sb-labels:hover { color: var(--text); }
 .sb-labels[aria-pressed="true"] { color: var(--accent); }
 .sb-labels .ico { width: 18px; height: 18px; }
@@ -2359,6 +2385,10 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
 .float-panel { position: fixed; top: 216px; left: calc(100vw - 780px); z-index: 45; display: flex; flex-direction: column; width: 320px; height: min(420px, calc(100dvh - 300px)); min-width: 220px; min-height: 160px; max-width: 100vw; max-height: 100dvh; resize: both; overflow: hidden;
   background: var(--panel, #1b1b1f); border: 1px solid var(--line, #333); border-radius: 8px; box-shadow: 0 8px 28px rgba(0,0,0,.45); }
 .float-panel.hidden { display: none; }
+.float-hints { left: 90px; top: 216px; width: min(440px, 38vw); height: min(460px, calc(100dvh - 300px)); }
+.float-hints.folded { height: auto !important; min-height: 0; resize: none; }
+.float-hints.folded .float-body { display: none; }
+.float-body.text-pop-tags.wide { width: auto; }
 .float-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 4px 2px 10px; cursor: move; touch-action: none; border-bottom: 1px solid var(--line, #333); user-select: none; }
 .float-title { font-weight: 600; font-size: var(--fs-sm); }
 .float-body { flex: 1; min-height: 0; overflow: auto; padding: 6px; }
@@ -2511,3 +2541,18 @@ body:has(.tab.view-max.panel-out) .actionbar { right: var(--ov-w); }   /* (only 
 .make-note-text, .edit-note-text { white-space: pre-wrap; max-height: 160px; overflow: auto; padding: 6px 8px; background: var(--surface-2); border-radius: var(--r-sm); font-size: 13px; }
 .frame-out-body, .frame-seq-body { display: flex; flex-direction: column; gap: 8px; }
 .frame-out-body > .btn { align-self: flex-start; }
+
+/* the quick panel a wire opens on empty table (wire-panel.js), and choosing frames of a video (frame-pick.js) */
+.wp-head { margin: 4px 0 -2px; font-size: .85em; font-weight: 600; color: var(--muted); }
+.wp-find { width: 100%; }
+.frame-pick { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.fp-video { width: 100%; max-height: 40dvh; background: #000; border-radius: var(--r); object-fit: contain; }
+.fp-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.fp-scrub { flex: 1 1 160px; min-width: 0; }
+.fp-marks { display: flex; flex-wrap: wrap; gap: 6px; }
+.fp-marks:empty { display: none; }
+
+/* The tool windows float over the work, but a sheet or a full-screen editor is over them (modal.js sets has-modal) */
+body:has(.stage.maxed) .float-panel { z-index: 57; }
+body.has-modal .float-panel, body.has-modal .run-strip, body.has-modal .undo-dock, body.has-modal .world-map { z-index: 29 !important; }
+body.has-modal .float-hints { z-index: 62 !important; }   /* (it types into the box that has the cursor, which may be in the sheet) */

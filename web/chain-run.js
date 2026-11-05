@@ -11,6 +11,8 @@
 //   rerunUsers(frame)     everything downstream of it (not the frame itself)
 //   runChain(frameIds, { onStep })   these frames in this order; onStep({ frame, state: 'running' | 'done' | 'failed' |
 //                         'skipped', i, n }). Resolves { done: [frame], skipped: [frame], failed: { frame, error } | null, stopped }
+//   runNode(frame)        a frame's little run button: feeders that have made nothing yet, then it; pressed during a
+//                         chain, it joins the end of that chain; pressed on the step running, it stops
 //   stopChain()           stops after the step running now, and stops this device's run on the card (generate.js stop)
 //   chainState()          { running, i, n, frame, label }: the step running now
 //
@@ -19,12 +21,14 @@ import { toast } from './ui.js';
 import { stop } from './generate.js';
 import * as Table from './table.js';
 import { chainOf, downstream } from './wire-rules.js';
+import { emptyFeeders } from './node-rules.js';
+import { stillOf } from './table-frames.js';
 import { runFrame } from './make-panel.js';
 
-const R = { running: false, stop: false, step: null };
+const R = { running: false, stop: false, step: null, list: [], n: 0 };
 const hasFlow = (f) => !!f?.make?.template;
 export const chainRunning = () => R.running;
-export const chainState = () => ({ running: R.running, ...(R.step || {}) });
+export const chainState = () => ({ running: R.running, list: R.running ? [...R.list] : [], ...(R.step || {}) });
 const tell = () => dispatchEvent(new CustomEvent('chain:state', { detail: chainState() }));
 
 // the pending badge on the frame's tile while its step runs: one more than its other runs on the way (edit-run.js pendingFor)
@@ -38,25 +42,39 @@ async function pending(doc, on) {
 export const runFromHere = (frame) => frame && runChain(chainOf(Table.tableWires() || [], frame.id));
 export const rerunUsers = (frame) => frame && runChain(downstream(Table.tableWires() || [], frame.id));
 
+export function runNode(frame) {
+  if (!frame) return null;
+  if (R.running && R.step?.frame === frame.id) return stopChain();
+  const wires = Table.tableWires() || [], first = emptyFeeders(wires, Table.tableFrames(), frame.id, (f) => !stillOf(f) && !f.preview);
+  const ids = [...first, frame.id];
+  if (!R.running) return runChain(ids);
+  const more = ids.filter((id) => !R.list.includes(id));
+  R.list.push(...more);
+  R.n += more.filter((id) => hasFlow(Table.frameById(id))).length;
+  toast(`"${frame.label || 'This frame'}" runs after what's running now`);
+  tell();
+  return null;
+}
+
 export async function runChain(frameIds, { onStep = null } = {}) {
   const none = { done: [], skipped: [], failed: null, stopped: false };
   if (R.running) { toast('A chain is running already: wait for it, or Stop', true); return none; }
   const n = frameIds.map((id) => Table.frameById(id)).filter(hasFlow).length;
   if (!n) { toast('Nothing in this chain has a workflow yet: pick a template in a frame\'s Make pane first', true); return none; }
-  R.running = true; R.stop = false;
+  R.running = true; R.stop = false; R.list = [...frameIds]; R.n = n;
   const tableId = Table.activeTableId();   // (a chain is one table's: another table opened meanwhile stops it)
   const done = [], skipped = [];
   let failed = null, i = 0, stopped = false;
-  const step = (frame, state) => { try { onStep?.({ frame, state, i, n }); } catch (e) { console.warn(e); } };
+  const step = (frame, state) => { try { onStep?.({ frame, state, i, n: R.n }); } catch (e) { console.warn(e); } };
   try {
-    for (const id of frameIds) {
+    for (const id of R.list) {
       if (R.stop) break;
       if (Table.activeTableId() !== tableId) { failed = { frame: null, error: new Error('another table opened') }; toast('The chain stopped: another table was opened', true); break; }
       const f = Table.frameById(id);
       if (!f) continue;   // (deleted meanwhile)
       if (!hasFlow(f)) { skipped.push(f); step(f, 'skipped'); continue; }
       i++;
-      R.step = { i, n, frame: f.id, label: f.label || '' };
+      R.step = { i, n: R.n, frame: f.id, label: f.label || '' };
       tell(); step(f, 'running');
       pending(f.doc, true);
       try {
@@ -68,11 +86,11 @@ export async function runChain(frameIds, { onStep = null } = {}) {
         break;
       } finally { pending(f.doc, false); }
     }
-    if (R.stop) toast(done.length ? `Chain stopped after ${done.length} of ${n}` : 'Chain stopped');
-    else if (!failed) toast(n > 1 ? `Chain done: ${done.length} frames ran` : `"${done[0]?.label || 'The frame'}" ran`);
+    if (R.stop) toast(done.length ? `Chain stopped after ${done.length} of ${R.n}` : 'Chain stopped');
+    else if (!failed) toast(R.n > 1 ? `Chain done: ${done.length} frames ran` : `"${done[0]?.label || 'The frame'}" ran`);
   } finally {
     stopped = R.stop;
-    R.running = false; R.stop = false; R.step = null;
+    R.running = false; R.stop = false; R.step = null; R.list = [];
     tell();
   }
   return { done, skipped, failed, stopped };

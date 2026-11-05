@@ -67,9 +67,27 @@ def _is_api_format(data) -> bool:
     )
 
 
+# A workflow's name as people read it, from its file name: no "deck", capitals, models and terms spelt the usual way.
+# Only the name changes: the id (the file name) is what saved work, runs and code go by.
+_NAME_WORDS = {
+    "h3": "H3", "ltx": "LTX", "klein3": "Klein 3", "klein9b": "Klein 9B", "krea2": "Krea 2", "qwen21": "Qwen 2.1", "moss": "MOSS",
+    "sam3": "SAM3", "sd": "SD", "sdpose": "SDPose", "mmaudio": "MMAudio", "lama": "LaMa", "lora": "LoRA", "ace": "ACE", "3d": "3D",
+    "t2i": "T2I", "i2i": "I2I", "t2v": "T2V", "i2v": "I2V", "v2v": "V2V", "t2a": "T2A", "a2v": "A2V", "ref2v": "Ref2V", "ctrl2v": "Ctrl2V",
+    "flf2v": "FLF2V", "txt2img": "Txt2Img", "bust4": "Bust 4", "cleanplate": "Clean Plate", "objectsheet": "Object Sheet",
+    "charsheet": "Character Sheet", "faceswap": "Face Swap", "autorig": "Auto Rig", "cutout": "Cut Out",
+}
+
+
+def display_name(tid: str) -> str:
+    words = tid.replace("_", " ").replace("-", " ").split()
+    if len(words) > 1 and words[0].lower() == "deck":
+        words = words[1:]
+    return " ".join(_NAME_WORDS.get(w.lower(), w[:1].upper() + w[1:]) for w in words)
+
+
 def _load(path: Path) -> Template:
     tid = path.stem
-    t = Template(id=tid, name=tid.replace("_", " ").replace("-", " ").strip(), path=path)
+    t = Template(id=tid, name=display_name(tid), path=path)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception as e:

@@ -234,7 +234,7 @@ addEventListener('table:drop-frame', (e) => {
   const pics = from.filter((f) => f.kind === 'image' && f.doc && f.id !== onto.id);
   if (!pics.length && !sources.length) return;
   e.detail.handled = true;
-  dropInto(onto, pics, sources).catch((err) => toast(`Couldn't add the layers: ${err.message}`, true));
+  e.detail.job = dropInto(onto, pics, sources).catch((err) => toast(`Couldn't add the layers: ${err.message}`, true));   // (addToFrame waits for it)
 });
 
 // a frame's picture: its edit's still (the open edit's composite now, if that's the one: its still may be behind)
@@ -273,7 +273,13 @@ async function drawStale() {
 // sources: pictures from the Shelf, a picker or the computer (table-frames.js sourcePicture), each a layer as it is
 async function dropInto(onto, pics, sources = []) {
   const layers = [], fresh = [];   // fresh: pictures uploaded here, deleted again when the edit can't be saved with them
-  const centred = (name, label, w, hh) => ({ name, label, x: Math.round((onto.w - (w || onto.w)) / 2), y: Math.round((onto.h - (hh || onto.h)) / 2) });
+  // (centred on what the frame comes out at: where a fitted frame's layers are, or its fixed canvas)
+  const o = outputOf(onto), bx = onto.fit === true && onto.fitBox ? onto.fitBox : { x: 0, y: 0 }, sized = [];
+  const centred = (name, label, w, hh) => {
+    const l = { name, label, x: Math.round(bx.x + (o.w - (w || o.w)) / 2), y: Math.round(bx.y + (o.h - (hh || o.h)) / 2) };
+    sized.push({ x: l.x, y: l.y, w: w || o.w, h: hh || o.h });
+    return l;
+  };
   for (const f of pics) {
     let blob = null;
     try { blob = await stillBlob(f); } catch (err) { toast(err.message, true); continue; }
@@ -300,6 +306,17 @@ async function dropInto(onto, pics, sources = []) {
     try { await putLayers(onto, layers); } catch (err) { dropInput(fresh); throw err; }
     // its still is drawn by the editor: open the edit there (off screen) and draw it once the pictures are in (or later)
     try { await drawOffscreen(onto.doc); } catch (err) { console.warn(err); }
+  }
+  // a fitted frame comes out as big as its layers now, without waiting to be opened
+  if (onto.fit === true && onto.fitBox && !isLive(onto.id)) {
+    const f = frameById(onto.id) || onto, b = f.fitBox, all = [b, ...sized];
+    const x = Math.min(...all.map((r) => r.x)), y = Math.min(...all.map((r) => r.y));
+    const w = Math.max(...all.map((r) => r.x + r.w)) - x, hh = Math.max(...all.map((r) => r.y + r.h)) - y;
+    f.fitBox = { x, y, w, h: hh };
+    f.out = { w, h: hh };
+    Object.assign(f, tileShape(f, f.out));
+    frameChanged();
+    dispatchEvent(new CustomEvent('table:output', { detail: { frame: f } }));
   }
   refreshStills(['image']);
   toast(layers.length === 1 ? `Added a layer to "${onto.label}"` : `Added ${layers.length} layers to "${onto.label}"`);

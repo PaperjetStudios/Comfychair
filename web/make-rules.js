@@ -49,6 +49,13 @@ export function fitsKind(t, kind) {
   }
 }
 export const templatesFor = (templates, kind) => (templates || []).filter((t) => fitsKind(t, kind));
+// The templates a frame can be on: the kind's, and the one already on it (a node's tool template, hidden from the picker otherwise)
+const MEDIA = { image: 'image', video: 'video', sound: 'audio' };
+export function templatesForFrame(templates, kind, frame) {
+  const list = templatesFor(templates, kind), id = frame?.make?.template;
+  const own = id && !list.some((t) => t.id === id) ? (templates || []).find((t) => t.id === id && (!MEDIA[kind] || t.media === MEDIA[kind])) : null;
+  return own ? [...list, own] : list;
+}
 export const familiesOf = (list) => [...new Set(list.map((t) => t.family || 'Other'))].sort();
 
 // The template to show: the one kept for this frame (or kind) if it still fits, else the first that does
@@ -67,6 +74,20 @@ export function sizePair(t) {
   return w ? [w, fs.find((x) => x.node === w.node && x.kind === 'int' && x.input === 'height')] : null;
 }
 export const frameOutput = outputOf;
+// A template's length setting, in seconds (each is a "Length (seconds)"; null: it has none)
+export const lengthField = (t) => (t?.fields || []).find((f) => (f.kind === 'int' || f.kind === 'float') && /length|seconds|duration/i.test(f.label || '')) || null;
+// How long a frame's run comes out (its Output tab's frame.len; before one is set, what its settings say). null: its template has no length.
+export function frameLength(frame, t) {
+  const f = lengthField(t);
+  return f ? frame?.len ?? frame?.make?.overrides?.[f.key] ?? f.value ?? null : null;
+}
+// That length as the field takes it
+export const lengthValue = (f, secs) => (f.kind === 'int' ? Math.max(1, Math.round(secs)) : secs);
+// The settings a frame's Output tab owns, not its workflow: the size of an image or video frame, the length of a video or sound frame
+export function outputOwns(t, kind, f) {
+  const pair = kind === 'image' || kind === 'video' ? sizePair(t) : null;
+  return !!pair?.some((x) => x.key === f.key) || ((kind === 'video' || kind === 'sound') && lengthField(t)?.key === f.key);
+}
 // A frame's size for a template: its output's sides at 1:1, to a multiple of 16, inside the template's limits
 export function frameSize(pair, frame) {
   const o = frameOutput(frame);

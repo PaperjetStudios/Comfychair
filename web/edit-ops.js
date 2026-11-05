@@ -210,7 +210,7 @@ export function opFields(kind, id, opts, ctx = {}) {
       return [sizeChoices({ label: 'Output size', choices: [['FullHD', 'Full HD'], ['4K', '4K']], value: opts.outsize, onPick: (v) => { opts.outsize = v; redraw(); }, sizeOf: (v) => (v === '4K' ? { w: 3840, h: 2160 } : { w: 1920, h: 1080 }) }), prompt('Look', 'prompt', 'Light, film, sharpness: not the things in it')];
     case 'video:upvideo': case 'video:upvideofast':
       return [sizeChoices({ label: 'Output size', choices: [[2, '×2'], [4, '×4']], value: opts.scale, onPick: (v) => { opts.scale = v; redraw(); },
-        sizeOf: (v) => { const n = cachedNat(frame, () => ctx.redraw?.()); return n ? { w: Math.round(n[0] * v), h: Math.round(n[1] * v) } : null; },
+        sizeOf: (v) => { const n = cachedNat((ctx.frames || []).find((f) => f.kind === kind), () => ctx.redraw?.()); return n ? { w: Math.round(n[0] * v), h: Math.round(n[1] * v) } : null; },
         words: (v) => `×${v}`, custom: { label: 'Times', min: 1, max: 4, step: 0.25 } })];
     case 'video:cleanplate': return [prompt('Remove', 'prompt', 'What to take out, e.g. the people')];
     case 'video:replace': return [prompt('Find', 'target', 'What to replace, e.g. the red car'), prompt('Paint', 'prompt', 'The whole shot with the new thing in it')];

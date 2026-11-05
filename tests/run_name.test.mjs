@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelOf, runName, templateProcess } from '../web/run-name.js';
+import { resultName, modelOf, runName, templateProcess } from '../web/run-name.js';
 
 test('runName: the process, the model, the LoRAs', () => {
   assert.equal(runName('Blended', { template: 'deck-klein9b-edit', params: { '4.__loras': [{ name: 'klein/fusion2250.safetensors', strength: 1 }] } }), 'Blended · Klein 9B · fusion2250');
@@ -29,5 +29,15 @@ test('modelOf and templateProcess', () => {
   assert.equal(templateProcess('deck krea2 depth control'), 'depth control');
   assert.equal(templateProcess('deck h3 ctrl2v hold'), 'ctrl2v hold');
   assert.equal(templateProcess('deck klein3'), 'deck klein3');
+  assert.equal(templateProcess('Klein 9B Edit'), 'Edit');
+  assert.equal(templateProcess('Qwen 2.1 Edit'), 'Edit');
+  assert.equal(templateProcess('H3 Ctrl2V Hold'), 'Ctrl2V Hold');
   assert.equal(templateProcess('My own'), 'My own');
+});
+
+test('a finished run names itself from its own template', () => {
+  const templates = [{ id: 'deck-ltx-i2v', name: 'deck ltx i2v', fields: [] }];
+  assert.equal(resultName({ id: 7, template: 'deck-ltx-i2v' }, templates), 'i2v · LTX-2.5');
+  assert.equal(resultName({ id: 7, template: 'mine' }, []), 'mine');
+  assert.equal(resultName({ id: 7 }, templates), '#7');
 });
