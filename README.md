@@ -53,6 +53,18 @@ their generations (it asks first). In the gallery, **✎ Edit here** puts an ima
 old layers back). **Compare** (select two tiles) shows them full screen as a wipe (drag the line: the split shows as a
 percentage) or side by side, two clips playing in step.
 
+**Recorded actions** (the row at the top of the table's Edit pane) repeat a short set of runs on other frames or layers.
+**● Record**, then run Edit pane tools, Image tools in the Layers pane, or Make on frames: each run becomes a step with
+its prompt and settings (not the picture, the red mask or marks; moves, adjustments and masks by hand aren't recorded).
+A run that needs the open frame (a painted area, marks, Inpaint, Extend) shows "Not recorded" and recording goes on.
+**Save…** keeps the steps as a set for every project, beside the other saved setups. **▶ Play** runs the set on the
+selected frames of the kind it starts on, or, when its first step ran on selected layers, on the open picture's picked
+layers: step 1 on all of them, then each next step on what the step before made (a new frame, or the layer it landed).
+With a batch only the first result goes on; the rest stay as variations. A frame that fails drops out and the others go
+on; the toast at the end says which and why. Random seeds are new on each target, fixed ones stay, increasing ones step
+on per target. **■ Stop** stops after what is being sent. Playing on picked clips of a video or sound frame isn't there
+yet: a video or sound set plays on the selected frames (each frame's first clip).
+
 **History** lists every run with its prompt, settings and lineage. **Replay & edit** loads a run's settings into
 Generate and **Run again** re-queues it unchanged.
 

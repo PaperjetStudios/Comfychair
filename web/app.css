@@ -2564,3 +2564,13 @@ body:has(.tab.view-max.panel-out) .actionbar { right: var(--ov-w); }   /* (only 
 body:has(.stage.maxed) .float-panel { z-index: 57; }
 body.has-modal .float-panel, body.has-modal .run-strip, body.has-modal .undo-dock, body.has-modal .world-map { z-index: 29 !important; }
 body.has-modal .float-hints { z-index: 62 !important; }   /* (it types into the box that has the cursor, which may be in the sheet) */
+
+/* Recorded actions: the row at the top of the Edit pane (actions.js) */
+.actions-row { display: grid; gap: 6px; padding: 8px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); }
+.actions-bar { gap: 6px; align-items: center; }
+.actions-rec.on { border-color: var(--bad); color: var(--bad); }
+.actions-now { font-size: var(--fs-xs); }
+.actions-steps > summary { cursor: pointer; font-size: var(--fs-xs); color: var(--muted); }
+.actions-step { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: var(--fs-xs); padding: 2px 0; min-width: 0; }
+.actions-step > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.actions-step.now > span { color: var(--accent); }

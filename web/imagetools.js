@@ -342,9 +342,16 @@ async function cutCells(src) {
 
 // A result is in: with Hide the original on, its layer hides and the result takes its place in the selection
 function hideOriginal(eng, src, made) {
+  told(eng, src, made);
   if (!src.layer || !ST.hide) return;
   src.layer.hidden = true;
   Stack.handOver(eng.E, src, made);
+}
+
+// imagetools:landed { tab, from (the layer it ran on, or null), layer (the new one) }: recorded actions (actions.js) take
+// the next step from there
+function told(eng, src, made) {
+  if (typeof dispatchEvent === 'function') dispatchEvent(new CustomEvent('imagetools:landed', { detail: { tab: eng?.E?.tab?.id ?? null, from: src?.layer || null, layer: made || null } }));
 }
 
 const named = (process, g) => runName(process, g, S.templates);
@@ -371,7 +378,7 @@ async function land(eng, o, src, done, cell) {
   } else {
     const r = await api(`/api/generations/${done.id}/to-input`, { method: 'POST', body: { index: 0, frame: 'first', mp: 0, multiple: 1 } });
     const made = eng.addImage(r.name, { label: named(o.kind === 'up' ? `Upscaled ${r.width}×${r.height}` : o.kind === 'edit' ? 'Edited' : o.kind === 'blend' ? 'Blended' : o.kind === 'delight' ? (o.done || 'De-lit') : o.kind === 'detail' ? (o.model ? o.label : 'Detail') : o.kind === 'clean' ? `Cleaned (${(CLEAN[o.pick || ST.cmodel] || CLEAN.noise).label})` : o.label, done), ...placed(src, x, rect.y, rect.w, r), ...(await maskForResult(src, r)) });
-    if (KEEPS_FRAMING.has(o.kind)) hideOriginal(eng, src, made);
+    if (KEEPS_FRAMING.has(o.kind)) hideOriginal(eng, src, made); else told(eng, src, made);
     if (o.kind === 'up') eng.E.out = Math.max(eng.E.out || 1, ST.scale);   // (the layer keeps its size on the canvas; exporting at this size shows the new detail)
   }
   eng.changed(); eng.render();
@@ -422,7 +429,8 @@ function follow(eng, o, tab, src, g, nth = 0) {
   src.runs = (src.runs || 0) + 1;
   FOLLOWING.add(g.id); fly(g.id, tab); eng?.render();
   if (!eng || eng.docOnly) import('./table.js').then((m) => m.refreshStills?.(['image'])).catch(() => {});   // (the frame's tile: a run on its way)
-  waitGen(g.id).then((done) => settle(eng || engFor(tab), o, tab, src, done, nth, kept))
+  // (the editor it was sent from has another edit open now: the result goes into its saved edit, as for one not open)
+  waitGen(g.id).then((done) => settle(eng && !eng.docOnly && eng.E.tab?.id !== tab ? engFor(tab) : eng || engFor(tab), o, tab, src, done, nth, kept))
     .catch((e) => { forgetOwed(g.id); toast(`${o.label} failed${src.layer ? ` on ${layerWord(src.layer)}` : ''}: ${e.message}`, true); })
     .finally(() => {
       FOLLOWING.delete(g.id); unfly(g.id); eng?.render();
@@ -446,7 +454,9 @@ function docEng(tab) {
   const flush = () => {
     const layers = due; due = [];
     if (!layers.length) return;
-    landLayerDoc(tab, layers, { out: E.out }).catch((e) => toast(`Couldn't put the result in its frame: ${e.message}`, true));
+    const mark = {};   // (on its way until it is in the saved edit: inFlight counts it)
+    fly(mark, tab);
+    landLayerDoc(tab, layers, { out: E.out }).catch((e) => toast(`Couldn't put the result in its frame: ${e.message}`, true)).finally(() => unfly(mark));
   };
   return { E, docOnly: true, render: () => {}, changed() {}, loading: () => false, ready: () => false, picked: () => [], paint: null,
     addImage(name, opts = {}) {
@@ -545,16 +555,19 @@ export function whyNot(o, t = template(tplId(o)), { eng = null } = {}) {
   return null;
 }
 
+// edit:ran: recorded actions (actions.js) hear what ran from the Layers pane, on the open frame's picked layers or the whole picture
+const tellRan = (o, scope, values) => dispatchEvent(new CustomEvent('edit:ran', { detail: { step: { kind: 'image', op: o.id, label: o.label, values,
+  target: 'layer', scope, batch: 1 }, frames: null } }));
 async function run(eng) {
-  const o = op(), t = template(tplId(o));
+  const o = op(), t = template(tplId(o)), was = toolValues(o.id);   // (its settings as sent: a seed moves on as it runs)
   const why = whyNot(o, t, { eng });
   if (why) return toast(why, true);
   const tab = eng.E.tab?.id, b = busy('Sending the picture…');
   try {
     await eng.paint.savePaint();
-    if (o.kind === 'remove' && ST.rfrom === 'painted') return await removePainted(eng, o, t, tab);
-    if (o.kind === 'swap' && ST.swapWhere === 'painted') return await swapPainted(eng, o, tab);
-    if (o.kind === 'edit' && ST.ewhere === 'painted') return await editPainted(eng, o, t, tab);
+    if (o.kind === 'remove' && ST.rfrom === 'painted') { await removePainted(eng, o, t, tab); return tellRan(o, 'whole', was); }
+    if (o.kind === 'swap' && ST.swapWhere === 'painted') { await swapPainted(eng, o, tab); return tellRan(o, 'whole', was); }
+    if (o.kind === 'edit' && ST.ewhere === 'painted') { await editPainted(eng, o, t, tab); return tellRan(o, 'whole', was); }
     const some = ST.scope === 'selected' ? targets(eng) : [], list = some.length ? some : [null];   // (nothing selected: the whole picture)
     // (each selected layer is its own run, queued one after another; one failing to send doesn't stop the rest)
     const { failed } = await eachOne(list, async (l) => {
@@ -562,6 +575,7 @@ async function run(eng) {
       try { return await runOne(eng, o, t, tab, src); } catch (e) { if (src.copy) await dropInput(src.name); throw e; }   // (never queued: nothing will read the copy)
     });
     if (failed.length) toast(failureText(o.label, failed, (l) => l?.label || l?.name?.split('/').pop() || 'the picture'), true);
+    if (failed.length < list.length) tellRan(o, list[0] ? 'selected' : 'whole', was);
   } catch (e) { toast(e.message, true); } finally { b.done(); }
 }
 
@@ -1332,7 +1346,8 @@ async function runModel(eng, o, t, tab, src, batch = 1) {
 // Settings are the panel's (ST, shared with the Layers pane). Throws the reason it can't run (whyNot). Resolves once
 // queued (a queued tool) or done (a tool whose steps run here): { gens } (the queued runs; [] for the latter).
 // src's copy (src.copy) goes once nothing needs it.
-export async function runToolOn(id, { tab, src, eng = null, batch = 1 } = {}) {
+// layers: the open picture's layers to run on, one run each, in place of the selected ones ([]: the whole picture)
+export async function runToolOn(id, { tab, src, eng = null, batch = 1, layers = null } = {}) {
   const o = OPS.find((x) => x.id === id);
   if (!o) throw new Error(`No image tool "${id}"`);
   if (!tab) throw new Error('No edit for the result to land in');
@@ -1357,7 +1372,7 @@ export async function runToolOn(id, { tab, src, eng = null, batch = 1 } = {}) {
   if (o.kind === 'swap' && ST.swapWhere === 'painted') { await swapPainted(e, o, tab); return { gens: [] }; }
   if (o.kind === 'edit' && ST.ewhere === 'painted') { await editPainted(e, o, t, tab); return { gens: [] }; }
   await e.paint?.savePaint?.();
-  const some = ST.scope === 'selected' ? targets(e) : [], list = some.length ? some : [null];   // (nothing selected: the whole picture)
+  const some = layers ? layers.filter(usable) : ST.scope === 'selected' ? targets(e) : [], list = some.length ? some : [null];   // (nothing selected: the whole picture)
   const gens = [];
   const { failed } = await eachOne(list, async (l) => {
     const from = await sourceOf(e, l, o);

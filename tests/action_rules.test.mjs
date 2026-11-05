@@ -174,3 +174,17 @@ test('describeStep: label, quoted prompt, where it lands, batch', () => {
   assert.match(describeStep({ label: 'X', values: { prompt: 'a very long prompt that goes on and on' }, target: 'frame' }), /'a very long prompt that…'/);
   assert.equal(describeStep({ op: 'gone', values: {}, target: 'self' }), 'gone · self');
 });
+test('canPlay: a Make step runs on whole frames, so not on layers', () => {
+  const img = ok(ev('image', 'edit', {}, { target: 'layer', scope: 'selected' }));
+  const make = stepOf({ kind: 'make', template: 'deck-krea2-i2i', on: 'image', values: {}, target: 'layer' }).step;
+  assert.equal(canPlay([img, make], 'frames', 'image'), '');
+  assert.match(canPlay([img, make], 'layers', 'image'), /whole frame/);
+});
+test('Extend and Inpaint on the open frame are refused (the canvas and the red mask are that frame\'s)', () => {
+  assert.match(stepOf(ev('image', 'extend')).why, /open frame/);
+  assert.match(stepOf(ev('image', 'inpaint')).why, /painted/);
+});
+test('the real PER_SHOT list is honoured when passed in', () => {
+  const s = stepOf(ev('video', 'upscale', { prompt: 'film', mine: 1 }), { perShot: ['mine'] }).step;
+  assert.deepEqual(s.values, { prompt: 'film' });
+});

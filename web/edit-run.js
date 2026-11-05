@@ -4,17 +4,19 @@
 // timeline, a sound in its mix). Runs that land in a video or sound frame are kept on this device (deck.edit.owed) and
 // land after a reload; an image frame's go through the Image tools' own owed list.
 //
-//   runOnFrames(op, frames, opts?, { batch, target, selection })
+//   runOnFrames(op, frames, opts?, { batch, target, selection, replay, layers })
 //        op: an edit-rules.js op; frames: the frames to run on (others of other kinds are left alone); opts: the op's
 //        options (edit-ops.js optsOf); target: 'frame' | 'layer' | 'self' (null: edit-rules.js defaultTarget per frame);
-//        selection: everything selected (Grab frame looks there for an image frame to put the still in).
-//        Resolves { done: [frame], failed: [{ item: frame, error }], skipped: [{ frame, why }], results: [{ frame, into, gens }] }
+//        selection: everything selected (Grab frame looks there for an image frame to put the still in); replay: a
+//        recorded step played again (actions.js: no edit:ran); layers: an image op on the open frame runs on these.
+//        Resolves { done: [frame], failed: [{ item: frame, error }], skipped: [{ frame, why }], results: [{ frame, into, gens, job? }] }
 //   stopEdits()          stops after the frame being sent, and stops this device's run on the card
 //   editRunning()        true while runOnFrames is going
 //   stateOf(frameId)     'queueing' | 'queued' | 'failed' | null, with why: { state, why }
 //   pendingFor(doc)      runs on their way to that document (this page's and the kept ones)
 //
 // Events: edit:state { frame, state, why }, edit:queued { frame, kind, op, gens, into, target }, edit:pending { doc, n },
+// edit:ran { step: { kind, op, label, values, target, batch }, frames } once a run went (recorded actions, actions.js),
 // make:queued { frame, kind, gens, into, edit: true } (frame-story.js keeps a shot's runs by it), edit:grabbed (edit-ops.js).
 import { api, store, toast } from './ui.js';
 import { S } from './core.js';
@@ -22,7 +24,7 @@ import { isLive } from './live.js';
 import { waitGen } from './make.js';
 import { eachOne, failureText } from './tool-batch.js';
 import { defaultTarget, planRuns, resultKind, resultLabel } from './edit-rules.js';
-import { landOutput, optsOf, runOp } from './edit-ops.js';
+import { landOutput, opValues, optsOf, runOp } from './edit-ops.js';
 import { landingRecord, owedCounts, sameRun, withOwed, withoutOwed } from './owed-runs.js';
 
 const OWED = 'deck.edit.owed';
@@ -56,7 +58,7 @@ function counted(doc, p, n = 1) {
 }
 
 // ---------------------------------------------------------------------------
-export async function runOnFrames(op, frames, opts = optsOf(op.kind, op.id), { batch = 1, target = null, selection = frames } = {}) {
+export async function runOnFrames(op, frames, opts = optsOf(op.kind, op.id), { batch = 1, target = null, selection = frames, replay = false, layers = null } = {}) {
   if (R.running) { toast('An edit is still being sent: wait for it, or Stop', true); return { done: [], failed: [], skipped: [], results: [] }; }
   const { runs, skipped } = planRuns(frames, op, batch);
   if (!runs.length) {
@@ -64,13 +66,13 @@ export async function runOnFrames(op, frames, opts = optsOf(op.kind, op.id), { b
     return { done: [], failed: [], skipped, results: [] };
   }
   R.running = true; R.stop = false;
-  const results = [];
+  const results = [], ran = replay ? null : opValues(op.kind, op.id, opts, runs.map((x) => x.frame));   // (as they were sent: a seed moves on as it runs)
   for (const { frame } of runs) setState(frame, 'queueing');
   try {
     const out = await eachOne(runs, async ({ frame, batch: n }) => {
       if (R.stop) throw new Error('stopped');
       try {
-        const r = await runFrame(op, frame, opts, { batch: n, target, selection });
+        const r = await runFrame(op, frame, opts, { batch: n, target, selection, layers });
         results.push(r);
         setState(frame, 'queued');
       } catch (e) { setState(frame, 'failed', e?.message || String(e)); throw e; }
@@ -78,6 +80,7 @@ export async function runOnFrames(op, frames, opts = optsOf(op.kind, op.id), { b
     const msg = failureText(op.label, out.failed, (x) => x.frame?.label || 'a frame');
     if (msg) toast(msg, true);
     else if (out.done.length) toast(out.done.length > 1 ? `${op.label}: sent for ${out.done.length} frames` : `${op.label}: sent`);
+    if (out.done.length && ran) fire('edit:ran', { step: { kind: op.kind, op: op.id, label: op.label, values: ran, target: target || defaultTarget(op, false), batch }, frames: out.done.map((x) => x.frame) });
     return { done: out.done.map((x) => x.frame), failed: out.failed.map((f) => ({ item: f.item.frame, error: f.error })), skipped, results };
   } finally {
     R.running = false;
@@ -85,7 +88,7 @@ export async function runOnFrames(op, frames, opts = optsOf(op.kind, op.id), { b
   }
 }
 
-async function runFrame(op, frame, opts, { batch, target, selection }) {
+async function runFrame(op, frame, opts, { batch, target, selection, layers = null }) {
   const live = isLive(frame.id);
   const cross = frame.kind !== op.kind;   // (a cross-kind op, edit-rules.js takes: its result is always a new frame)
   const t = cross ? 'frame' : target || defaultTarget(op, live);
@@ -96,7 +99,7 @@ async function runFrame(op, frame, opts, { batch, target, selection }) {
     into = await tf.resultFrame(frame, { kind: resultKind(op), label: resultLabel(op, frame) });
     if (!into?.doc) throw new Error('The new frame for the result couldn\'t be made');
   }
-  const ctx = { target: t, into, tab: into.doc, batch, live, frames: selection,
+  const ctx = { target: t, into, tab: into.doc, batch, live, frames: selection, layers,
     onRun: (gens, to) => keep(gens, { ...to, op: op.id }) };
   const made = into !== frame ? into : null;   // (the empty frame made for the result: it goes again if nothing comes)
   const unmake = () => (made ? import('./table.js').then((T) => T.removeFrames([made.id])).catch(() => {}) : null);
@@ -114,7 +117,7 @@ async function runFrame(op, frame, opts, { batch, target, selection }) {
   }
   fire('edit:queued', { frame, kind: op.kind, op: op.id, gens, into, target: t });
   if (gens.length) fire('make:queued', { frame, kind: op.kind, gens, into, edit: true });
-  return { frame, into, gens };
+  return { frame, into, gens, job: res?.job || null };
 }
 
 // runs that land in a video or sound frame, kept for a reload (an image frame's are the Image tools' own)
