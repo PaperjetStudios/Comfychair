@@ -35,9 +35,11 @@ const P = { el: null, frames: [], mods: {}, loaded: false, loading: null, focus:
 // ---------------------------------------------------------------------------
 // the modules we lean on, loaded on demand (a failure leaves a note instead of a pane)
 // ---------------------------------------------------------------------------
+// (each named in full: the server versions only quoted './x.js' imports, and an unversioned one would load a second copy of the module, with its own state)
+const MODS = { 'edit-rules': () => import('./edit-rules.js'), 'edit-ops': () => import('./edit-ops.js'), 'edit-run': () => import('./edit-run.js') };
 function load() {
-  return P.loading ||= Promise.all(['edit-rules', 'edit-ops', 'edit-run'].map((n) =>
-    import(`./${n}.js`).then((m) => { P.mods[n] = m; }, (e) => { P.mods[n] = null; (P.errs ||= []).push(`${n}: ${e.message}`); })))
+  return P.loading ||= Promise.all(Object.entries(MODS).map(([n, get]) =>
+    get().then((m) => { P.mods[n] = m; }, (e) => { P.mods[n] = null; (P.errs ||= []).push(`${n}: ${e.message}`); })))
     .then(() => { P.loaded = true; draw(); tellState(); });
 }
 const rules = () => P.mods['edit-rules'];
