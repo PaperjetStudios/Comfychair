@@ -40,6 +40,9 @@ export function framePick(v) {
 }
 // Whether a wire carries one frame of a video (a picture out of a video frame)
 export const isFrameWire = (w) => w?.kind === 'image' && w.frame != null;
+// A plain picture frame started from a video's picture wire holds the picked frame itself, grabbed when it is made. A frame with a
+// template (a node) stays empty until its run draws it from the wire, and a clip wire carries no single frame.
+export const holdsStill = (src, { kind, wireKind, template = null } = {}) => !template && kind === 'image' && wireKind === 'image' && src?.kind === 'video';
 // (a wire's identity for repeats: from, to, kind, and which frame for a frame of a video)
 const sameWire = (w, from, to, kind, frame) => w.from === from && w.to === to && w.kind === kind && (w.frame ?? null) === (frame ?? null);
 

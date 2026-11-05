@@ -10,6 +10,13 @@
 //   sound:maker.<id> / sound:voice   the Sound tab's Make a sound (per maker) and Voice sections
 //   scene:<op>                 the 3D tab's prompt and render settings (scene:out)
 
+// A group's Presets bar (generate.js groupPresetBar): the kinds of field an entry keeps. Text is one of them, so a group with a prompt
+// in it (H3's Shot) saves and loads the prompt with its other settings. "Template default" puts the others back but leaves text as it
+// is: a template's own prompt is only an example, and stepping past it must not wipe what was typed.
+export const PRESET_KINDS = new Set(['int', 'float', 'choice', 'bool', 'seed', 'loras', 'text']);
+export const presetFields = (fields) => (fields || []).filter((f) => PRESET_KINDS.has(f.kind));
+export const defaultResets = (f) => f.kind !== 'text';
+
 export const tplKey = (id) => (id ? `tpl:${id}` : null);
 export const toolKey = (id) => (id ? `tool:${id}` : null);
 export const editKey = (kind, op) => (!kind || !op ? null : kind === 'image' ? toolKey(op) : `edit:${kind}.${op}`);

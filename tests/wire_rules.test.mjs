@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   fieldKind, wireLabel, outKind, outKinds, renumber, migrateWires, cycle, addWire, setWire, removeWires, dropFrames, inputsFor, mapToFields, remap,
-  framePick, isFrameWire, replaceWire,
+  framePick, isFrameWire, replaceWire, holdsStill,
 } from '../web/wire-rules.js';
 
 const F = (id, kind, more = {}) => ({ id, kind, doc: `doc-${id}`, x: 0, y: 0, w: 512, h: 512, ...more });
@@ -247,4 +247,13 @@ test('replace: refused for the wrong kind, a loop, a repeat, no change, nothing 
   assert.equal(replaceWire(ws, 'nope', { from: 'i1' }, frames).why, 'missing');
   const loop = [W('a', 'i1', 't', 'image', { n: 1 }), W('c', 't', 'i2', 'image', { n: 1 })];
   assert.equal(replaceWire(loop, 'a', { from: 'i2' }, frames).why, 'cycle');
+});
+
+test('a plain image frame from a video\'s picture wire holds the picked frame; a node or a clip wire does not', () => {
+  const video = { kind: 'video' }, image = { kind: 'image' };
+  assert.equal(holdsStill(video, { kind: 'image', wireKind: 'image' }), true);
+  assert.equal(holdsStill(video, { kind: 'image', wireKind: 'image', template: { id: 'deck-depth-image' } }), false);   // its run draws it
+  assert.equal(holdsStill(video, { kind: 'image', wireKind: 'video' }), false);   // the whole clip
+  assert.equal(holdsStill(video, { kind: 'video', wireKind: 'image' }), false);
+  assert.equal(holdsStill(image, { kind: 'image', wireKind: 'image' }), false);   // a picture's own output: a wire, as before
 });

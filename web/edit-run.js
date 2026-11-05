@@ -2,7 +2,8 @@
 // Where results land (the user's rule): from the table, a NEW frame beside the source ("<op> · <label>", made at once with
 // its own document, table-frames.js resultFrame) unless the target is 'layer' (in the frame itself: a layer, a clip on its
 // timeline, a sound in its mix). Runs that land in a video or sound frame are kept on this device (deck.edit.owed) and
-// land after a reload; an image frame's go through the Image tools' own owed list.
+// land after a reload; an image frame's go through the Image tools' own owed list. The Make pane's runs for a video or
+// sound frame are kept the same way (keepRun): a video takes minutes, and a reload meanwhile must not lose its clip.
 //
 //   runOnFrames(op, frames, opts?, { batch, target, selection, replay, layers })
 //        op: an edit-rules.js op; frames: the frames to run on (others of other kinds are left alone); opts: the op's
@@ -14,6 +15,8 @@
 //   editRunning()        true while runOnFrames is going
 //   stateOf(frameId)     'queueing' | 'queued' | 'failed' | null, with why: { state, why }
 //   pendingFor(doc)      runs on their way to that document (this page's and the kept ones)
+//   keepRun(g, to)       keeps a run this page is waiting on ({ tab, frame, kind, label }); returns settled(), to call once
+//                        it has landed or failed here
 //
 // Events: edit:state { frame, state, why }, edit:queued { frame, kind, op, gens, into, target }, edit:pending { doc, n },
 // edit:ran { step: { kind, op, label, values, target, batch }, frames } once a run went (recorded actions, actions.js),
@@ -127,6 +130,11 @@ function keep(gens, to) {
     R.mine.add(g.id);
     putOwed(landingRecord(g, { ...to, as: to.kind === 'sound' ? 'sound' : 'clip', project: S.project }));
   }
+}
+
+export function keepRun(g, to) {
+  keep([g], to);
+  return () => { dropOwed(g.id); R.mine.delete(g.id); };
 }
 
 export async function stopEdits() {

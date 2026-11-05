@@ -13,6 +13,7 @@ import { notifyPrepare, keepAwake } from './notifications.js';
 export { keepAwake } from './notifications.js';
 import { queueRun } from './make.js';
 import { sizePicker } from './size-picker.js';
+import { defaultResets, presetFields } from './setups-rules.js';
 import { modeOf } from './size-math.js';
 import { basicsPane, zoomPan } from './layout.js';
 
@@ -320,13 +321,12 @@ function shotBar() {
 }
 
 // ---------------------------------------------------------------------------
-// saved settings per group (Seed, Sampler, LoRAs, Turbo LoRA…): ◀ ▶ cycle, 💾 save over, ＋ save new.
-// The first entry is always the template's own default. A save is for this workflow, this model,
+// saved settings per group (Seed, Sampler, LoRAs, Turbo LoRA, a Shot with its prompt…): ◀ ▶ cycle, 💾 save over, ＋ save new.
+// The first entry is always the template's own default (text stays as typed: setups-rules.js). A save is for this workflow, this model,
 // or everywhere; model/everywhere entries match settings by node type + input (KSampler steps,
 // LoRA stack…) so they also work in other templates. Stored with the prompt snippets.
 // ---------------------------------------------------------------------------
 const PRESET_CATEGORY = 'Saved settings';
-const PRESET_KINDS = new Set(['int', 'float', 'choice', 'bool', 'seed', 'loras']);
 const SCOPES = [['workflow', 'This workflow'], ['model', 'This model'], ['global', 'Everywhere']];
 
 function fieldClass(f) { return (FS.tpl.groups.find((g) => g.node === f.node) || {}).class || f.node; }
@@ -361,13 +361,14 @@ function applyGroupEntry(p, fs) {
     const v = p.values[k];
     if (f.kind === 'choice' && f.options.length && !f.options.includes(v)) continue;  // model or option gone
     FS.values[f.key] = v;
+    if (isMainPrompt(f)) builderState().on = false;   // (a saved prompt is plain text: the builder would write its own over it)
     if (p.modes[k]) FS.seedMode[f.key] = p.modes[k];
     if (p.modes[`${k}#size`]) FS.sizeMode[f.key] = p.modes[`${k}#size`];
   }
 }
 
 function groupPresetBar(g, fs) {
-  fs = fs.filter((f) => PRESET_KINDS.has(f.kind));
+  fs = presetFields(fs);
   if (!fs.length) return null;
   const scopeName = (sc) => (SCOPES.find(([k]) => k === sc) || [, sc])[1].toLowerCase();
   const order = ['workflow', 'model', 'global'];
@@ -385,8 +386,8 @@ function groupPresetBar(g, fs) {
     const l = entries(), x = l[cycleIndex(Math.max(0, l.findIndex((y) => String(y.id) === curId())), d, l.length)];
     store.set(curKey, String(x.id));
     if (x.p) applyGroupEntry(x.p, fs);
-    else for (const f of fs) { FS.values[f.key] = f.value; delete FS.seedMode[f.key]; delete FS.sizeMode[f.key]; }
-    saveF(); renderFields();
+    else for (const f of fs.filter(defaultResets)) { FS.values[f.key] = f.value; delete FS.seedMode[f.key]; delete FS.sizeMode[f.key]; }
+    saveB(); saveF(); renderFields();
   };
   const saveOver = async () => {
     const x = loaded();

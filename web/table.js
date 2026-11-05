@@ -1889,7 +1889,7 @@ function buildBar() {
     button('Fit', fitSel, { title: 'Fit all, or the selected frames (Shift+F)' }),
     button('100%', () => zoomTo(1), { title: 'Zoom to 100% (0)' }),
     gridChip, gridSize, snapBar(['edges'], () => {}), newBtn, arrangeBtn, previewBtn, samplingChip, windowChip,
-    info('Sampling preview shows a run as it samples: a moving clip for video, a still for images. Off, ComfyUI makes no previews at all, which saves a little on every step. A run already going keeps what it started with. Preview window puts it in a floating window you can drag by its title and resize; it comes up with a run and goes when the run ends. Off, the preview shows inside the run\'s own frame.'),
+    info('Sampling preview shows a run as it samples: a moving clip for video, a still for images. Off, ComfyUI makes no previews at all, which saves a little on every step. A run already going keeps what it started with. Preview window puts it in a floating window you can drag and resize; it comes up with a run\'s first picture and goes when the run ends. Off, the preview shows inside the run\'s own frame, and the small step line has a button that brings the window back.'),
     h('span', { class: 'table-bar-gap' }), D.zoom);
 }
 

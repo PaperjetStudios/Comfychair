@@ -548,7 +548,7 @@ function sceneFrame(src, at, label) {
 // { media, kind?, url?, label? } (the media library) or a File. Returns null for something no frame can hold.
 export async function frameFor(src, at) {
   if (src instanceof File) return fileFrame(src, at);
-  if (src.input) return pictureFrame(src.input, at, src.width, src.height, src.label);
+  if (src.input) return { ...(await pictureFrame(src.input, at, src.width, src.height, src.label)), ...(src.fresh && { fresh: src.input }) };   // (fresh: made for this frame, so it goes if the frame can't be made)
   if (src.generation != null) {
     const index = src.index || 0, g = S.history?.get?.(src.generation) || await api(`/api/generations/${src.generation}`, { busy: false });
     const o = g?.outputs?.[index];

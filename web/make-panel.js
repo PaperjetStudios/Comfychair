@@ -615,6 +615,8 @@ const dropInput = (name) => {
 // ---------------------------------------------------------------------------
 // Run: one run per selected frame of the kind (nothing selected: one run, new frames)
 // ---------------------------------------------------------------------------
+// runs kept from before a reload land from edit-run.js (its replay), which nothing else loads until the Edit pane opens
+try { if ((store.get('deck.edit.owed', []) || []).length) import('./edit-run.js').catch(() => {}); } catch { /* no store: nothing kept */ }
 let running = false;
 // the action bar's Stop on the table: the chain going, else this device's run
 export const stopMake = () => (CHAIN.running ? stopChainNow() : stop());
@@ -910,10 +912,15 @@ async function landInPlace(kind, f, done, old) {
 
 function land(kind, frame, t, gens, sent, values, tableId = Table.activeTableId()) {
   if (kind === 'image') return landLayers(frame, t, gens, sent);
+  // a clip or a sound on its way to a frame is kept on this device until it is there (edit-run.js keepRun), so it still lands
+  // after a reload: this page's wait below is gone by then
+  const keeper = (kind === 'video' || kind === 'sound') && frame?.doc ? import('./edit-run.js').then((m) => m.keepRun, () => null) : null;
   for (const g of gens) {
+    const settled = keeper?.then((keepRun) => keepRun?.(g, { tab: frame.doc, frame: frame.id, kind, label: templateProcess(t.name) }));
     waitGen(g.id).then((done) => (kind === 'none' ? landFrames(done, values, t, tableId) : kind === 'video' ? landClips(frame, done)
       : kind === 'sound' && frame?.doc ? landSounds(frame, done) : kind === 'scene' && frame ? landScene(frame, done) : inShelf(done)))
-      .catch((e) => toast(`${t.name} failed: ${e.message}`, true));
+      .catch((e) => toast(`${t.name} failed: ${e.message}`, true))
+      .finally(() => settled?.then((fn) => fn?.()));
   }
 }
 
@@ -975,6 +982,7 @@ export async function landClip(frame, media, tell = true) {
   else {
     if (!media.dur && media.kind === 'video') media.dur = await durationOf(media.url);
     ok = await appendClip(frame, media);
+    if (ok) Table.refreshStills(['video']).catch(() => {});   // (the tile shows what its timeline holds now)
   }
   if (tell) toast(ok ? `On ${frame.label || 'the video'}'s timeline` : `Couldn't put it on ${frame.label}'s timeline`, !ok);
   return ok;

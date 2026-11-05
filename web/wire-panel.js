@@ -20,7 +20,14 @@ const payloadFor = (kind, size) => (kind === 'video' ? { ...emptyVideo(), size: 
   : kind === 'scene' ? { ...emptyScene(), width: size.w, height: size.h } : undefined);
 
 // A frame at the point with src plugged in. t: its workflow (null: an empty frame, its template picked later). times: times of a
-// video for picture wires, one frame per time, stacked down from the point.
+// video for picture wires, one frame per time, stacked down from the point. A plain image frame from a video's picture wire holds
+// that frame of the video (wire-rules.js holdsStill): grabbed now, as a picture dropped on the table would be.
+async function stillFrame(src, time, rect) {
+  const { frameStill } = await import('./frame-source.js');
+  const name = await frameStill(src, time ?? 'first');
+  const label = `${src.label || 'Video'}${typeof time === 'number' ? ` · ${time.toFixed(2)}s` : ''}`;
+  return Table.sourceFrameAt({ input: name, fresh: true, label }, { x: rect.x, y: rect.y });
+}
 async function start(src, at, { kind, t = null, label = null, wireKind, keepSize = false, times = [null] }) {
   closeSheet();
   let secs = 0;
@@ -31,11 +38,12 @@ async function start(src, at, { kind, t = null, label = null, wireKind, keepSize
   for (const time of times) {
     const id = uid();
     const make = t ? { make: nodeMake(t, id, wireKind, secs) } : {};
-    const f = await Table.newFrameAt(kind, placeAt({ x: at.x, y }, tile, Table.tableGrid()),
-      { payload: payloadFor(kind, size), extra: { out: { w: size.w, h: size.h }, ...(label && { label }), ...make } });
+    const rect = placeAt({ x: at.x, y }, tile, Table.tableGrid());
+    const f = W.holdsStill(src, { kind, wireKind, template: t }) ? await stillFrame(src, time, rect)
+      : await Table.newFrameAt(kind, rect, { payload: payloadFor(kind, size), extra: { out: { w: size.w, h: size.h }, ...(label && { label }), ...make } });
     if (!f) return;
     Table.plugWire(src, f, { id, kind: wireKind, frame: time, mp: keepSize ? 0 : null });
-    last = f; y += tile.h + GAP;
+    last = f; y += Math.max(tile.h, f.h || 0) + GAP;
   }
   if (last) Table.selectFrames([last.id]);
 }
@@ -79,7 +87,7 @@ export function openWirePanel(src, at) {
   };
   const tabs = kinds.length > 1 ? seg(kinds.map((k) => [k, k === 'image' ? 'A frame of it' : 'The whole clip']), Q.kind, (k) => { Q.kind = k; draw(); }) : null;
   openSheet(h('h3', {}, `From "${src.label || 'this frame'}"`),
-    help('Each card makes a frame here with this output plugged in. Maps and tools are ready to run: press the little run button on the frame. Choose A frame of it to plug in pictures from a video; Add this frame several times makes one frame for each.'),
+    help('Each card makes a frame here with this output plugged in. Maps and tools are ready to run: press the little run button on the frame. Choose A frame of it to plug in pictures from a video; Add this frame several times makes one frame for each. Image frame then holds that frame of the video as a picture.'),
     h('div', { class: 'quick-start wire-panel' }, tabs, body));
   draw();
 }

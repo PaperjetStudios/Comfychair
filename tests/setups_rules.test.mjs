@@ -1,7 +1,7 @@
 // node --test tests/setups_rules.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { differs, editKey, movedKey, forKey, fromPreset, omit, pick, sceneKey, sortSetups, soundMakerKey, stable, toSetup, toolKey, tplKey, tplOfKey, vfxKey, SOUND_VOICE } from '../web/setups-rules.js';
+import { differs, editKey, movedKey, forKey, fromPreset, omit, pick, sceneKey, sortSetups, soundMakerKey, stable, toSetup, toolKey, tplKey, tplOfKey, vfxKey, SOUND_VOICE, defaultResets, presetFields } from '../web/setups-rules.js';
 
 test('keys name the block', () => {
   assert.equal(tplKey('deck-qwen21-edit'), 'tpl:deck-qwen21-edit');
@@ -55,4 +55,11 @@ test('pick and omit copy', () => {
   p.a.n = 5;
   assert.equal(o.a.n, 1);
   assert.deepEqual(omit(o, ['a']), { b: 2 });
+});
+
+test('a group\'s presets keep its prompt with its settings, and Template default leaves the prompt alone', () => {
+  const shot = [{ key: '7.prompt', kind: 'text' }, { key: '7.width', kind: 'int' }, { key: '7.height', kind: 'int' }, { key: '20.image', kind: 'image' }];
+  assert.deepEqual(presetFields(shot).map((f) => f.key), ['7.prompt', '7.width', '7.height']);   // (a picture is the run's own)
+  assert.deepEqual(presetFields([{ key: '20.image', kind: 'image' }]), []);   // nothing to keep: no bar
+  assert.deepEqual(shot.filter(defaultResets).map((f) => f.key), ['7.width', '7.height', '20.image']);
 });
