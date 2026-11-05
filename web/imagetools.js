@@ -10,7 +10,7 @@ import { chosen, toggled } from './tool-models.js';
 import { editSizeFor, editSizeTo } from './edit-size.js';
 import * as G from './layer-geom.js';
 import * as Stack from './layer-stack.js';
-import { layerMask, uploadMask } from './inpaint.js';
+import { layerMask, maskButton, uploadMask } from './inpaint.js';
 import { maskAsSent, maskForResult, placed, shapeOf } from './layer-result.js';
 import { isOn } from './adjust.js';
 import { boundsOf, boxesFor, foundIn, refineEdge, separateAreas, stairOf, termsOf, worthLooking } from './matte-edge.js';
@@ -111,7 +111,7 @@ const OPS = [
   { id: 'swap', group: 'Swap', label: 'Swap a face or body from another picture', kind: 'swap',
     help: 'Pick the part, the picture to take it from and one or more models, then Swap. The area is found for you (the biggest one if there are several), or use the red mask to choose it. The model sees a close-up, and its result goes back through a soft edge: outside the area the picture stays pixel for pixel. Each ticked model lands as its own layer, to compare.' },
   { id: 'remove', group: 'Clean up', label: 'Remove: a watermark, text or what you name', tpl: 'deck-remove-lama', kind: 'remove',
-    help: 'Find by name: SAM3 marks what you name in red, for you to check and put right, since it can miss a watermark or mark other things. The red mask: you paint it (Masks panel), or check what was found, and Remove takes it out: LaMa fills it in from what is round it, with no prompt. Only that area changes: the rest stays pixel for pixel, at full size. Best on small things on a plain or even background; a very big area comes back softer. Separate words with commas for several things. A big area on a busy background is better redrawn in Inpaint.' },
+    help: 'Find by name: SAM3 marks what you name in red, for you to check and put right, since it can miss a watermark or mark other things. The red mask: you paint it (Mask panel), or check what was found, and Remove takes it out: LaMa fills it in from what is round it, with no prompt. Only that area changes: the rest stays pixel for pixel, at full size. Best on small things on a plain or even background; a very big area comes back softer. Separate words with commas for several things. A big area on a busy background is better redrawn with Inpaint.' },
   { id: 'unmark', group: 'Clean up', label: 'Remove a watermark all over the picture', kind: 'delight', promptKey: 'uprompt', fallback: UNMARK_PROMPT, done: 'Watermark removed',
     help: 'For a faint watermark repeated across the whole picture, which can\'t be marked as an area: an edit model draws the picture again without it. It runs at about 2 MP, and can change small details, so compare the result with the original.' },
   { id: 'clean', group: 'Clean up', label: 'Clean: noise, JPEG blocks or blur', tpl: 'deck-clean-image', kind: 'clean',
@@ -356,7 +356,7 @@ async function land(eng, o, src, done, cell) {
     const matte = await (ST.fine ? finerMatte(template(o.tpl), src.name, done, o.prompt ? ST.prompt.trim() : undefined, b) : matteOf(done)).finally(() => b?.done());
     if (ST.result === 'mask') {
       eng.paint.maskFromMatte(matte, rect, src.was && G.turn(src.was));
-      return toast(`${o.label}: added to the mask (Masks panel)`);
+      return toast(`${o.label}: added to the mask (Mask panel)`);
     }
     const cut = await cutOut(src.name, matte);
     const up = ST.result === 'black' ? await onBlack(cut) : await uploadImage(await pngBlob(cut), { mp: 0, source: 'editor', filename: 'cutout.png', multiple: 1, board: 'Cut out' });
@@ -668,16 +668,16 @@ const dropInput = (name) => api(`/api/inputs?name=${encodeURIComponent(name)}`, 
 // ("text" found nothing on large white letters, "watermark" other things too), so what goes is seen in red and can be put right before Run removes it.
 async function markFound(eng, o, src) {
   const [W, H] = src.px, cv = await searchFor(src.name, W, H, termsOf(ST.rprompt));
-  if (!boundsOf(redOf(cv, W, H), W, H)) return toast('SAM3 found nothing there: try other words, or paint it (Masks panel)', true);
+  if (!boundsOf(redOf(cv, W, H), W, H)) return toast('SAM3 found nothing there: try other words, or paint it (Mask panel)', true);
   eng.paint.maskFromMatte(cv, src.rect, src.was && G.turn(src.was));
   ST.rfrom = 'painted'; save(); eng.render();
-  toast('Marked in red: check it (paint more or erase in the Masks panel), then Remove');
+  toast('Marked in red: check it (paint more or erase in the Mask panel), then Remove');
 }
 
 // ...the mask as painted: on the whole picture, as a painted mask is
 async function removePainted(eng, o, t, tab) {
   const f = eng.frame(), m = eng.composeMask();
-  if (!f || !m) return toast('Paint what to remove first (Masks panel)', true);
+  if (!f || !m) return toast('Paint what to remove first (Mask panel)', true);
   if (ST.scope === 'selected') return removeOnLayers(eng, o, t, tab, f, m);
   const pic = document.createElement('canvas');
   if (!eng.compose(pic)) return toast('Add a picture first', true);
@@ -830,7 +830,7 @@ async function swapOnSource(eng, o, tab, src) {
 // ...on the red mask as painted: on the whole picture, as a painted mask is
 async function swapPainted(eng, o, tab) {
   const f = eng.frame(), m = eng.composeMask();
-  if (!f || !m) return toast('Paint the area first (Masks panel), or have it found', true);
+  if (!f || !m) return toast('Paint the area first (Mask panel), or have it found', true);
   const pic = document.createElement('canvas');
   if (!eng.compose(pic)) return toast('Add a picture first', true);
   if (pic.width !== m.canvas.width || pic.height !== m.canvas.height) return toast(`The picture (${pic.width}×${pic.height}) and mask (${m.canvas.width}×${m.canvas.height}) differ in size: try again`, true);
@@ -857,7 +857,7 @@ async function swapSend(eng) {
     let src, red;
     if (ST.swapWhere === 'painted') {
       const m = eng.composeMask(), pic = document.createElement('canvas');
-      if (!m) return toast('Paint the area first (Masks panel), or have it found', true);
+      if (!m) return toast('Paint the area first (Mask panel), or have it found', true);
       if (!eng.compose(pic)) return toast('Add a picture first', true);
       const up = await uploadImage(await pngBlob(pic), { mp: 0, source: 'editor', filename: 'swap.png', multiple: 1 });
       spare = up.name;
@@ -906,10 +906,10 @@ async function swapMark(eng) {
     if (!list.length) return toast('Select a layer first', true);
     for (const l of list) {
       const src = await sourceOf(eng, l, o), [W, H] = src.px, found = await findPart(src.name, W, H, ST.swapPart);
-      if (!found) { toast(`SAM3 found no ${SWAP_PARTS[ST.swapPart].label.toLowerCase()} there: paint it (Masks panel)`, true); continue; }
+      if (!found) { toast(`SAM3 found no ${SWAP_PARTS[ST.swapPart].label.toLowerCase()} there: paint it (Mask panel)`, true); continue; }
       eng.paint.maskFromMatte(maskCanvas(found.mask, W, H), src.rect, src.was && G.turn(src.was));
       ST.swapWhere = 'painted'; save(); eng.render();
-      toast('Marked in red: check it (paint more or erase in the Masks panel), then Swap');
+      toast('Marked in red: check it (paint more or erase in the Mask panel), then Swap');
     }
   } catch (e) { toast(e.message, true); } finally { b.done(); }
 }
@@ -1104,7 +1104,7 @@ async function editArea(eng, o, t, tab, src, red, b) {
 // ...the area as painted: on the whole picture, as a painted mask is
 async function editPainted(eng, o, t, tab) {
   const f = eng.frame(), m = eng.composeMask();
-  if (!f || !m) return toast('Paint the area first (Masks panel), or have it found', true);
+  if (!f || !m) return toast('Paint the area first (Mask panel), or have it found', true);
   if (ST.scope === 'selected') return editOnLayers(eng, o, t, tab, f, m);
   const pic = document.createElement('canvas');
   if (!eng.compose(pic)) return toast('Add a picture first', true);
@@ -1183,10 +1183,10 @@ function editFields(t, size, { redraw = () => {}, eng = null } = {}) {
     ...ST.erefs.slice(0, refsMost).map((_, i) => ref(i)),
     ST.erefs.length < refsMost ? ref(ST.erefs.length) : null,
     field('Change', seg([['all', 'Anywhere'], ['words', 'What I name'], ...(eng || ST.ewhere === 'painted' ? [['painted', 'The red mask']] : [])], ST.ewhere, (v) => { ST.ewhere = v; redo(); }),
-      help('Anywhere lands what the model made, as it made it. What I name has SAM3 find the area in each picture. The red mask uses what you painted (Masks panel), cut to each selected layer; a layer it doesn\'t touch is left out. With an area only that area changes, and the rest stays pixel for pixel at full size. SAM3 misses some words: it found no "jacket" on a man in one, but found "man" and "person".')),
+      help('Anywhere lands what the model made, as it made it. What I name has SAM3 find the area in each picture. The red mask uses what you painted (Mask panel), cut to each selected layer; a layer it doesn\'t touch is left out. With an area only that area changes, and the rest stays pixel for pixel at full size. SAM3 misses some words: it found no "jacket" on a man in one, but found "man" and "person".')),
     ST.ewhere === 'words' ? field('Find', textArea(() => ST.efind, (v) => { ST.efind = v; save(); }, { rows: 2, label: 'What to find', placeholder: 'The jacket, the sky' })) : null,
     ...(ST.ewhere === 'words' ? samFields() : []),
-    ST.ewhere === 'painted' && eng && !eng.paint.maskLayer(false) ? hint('Paint the area first (Masks panel)') : null,
+    ST.ewhere === 'painted' && eng ? maskButton(eng) : null,
     ST.ewhere !== 'all' ? toggle('Close-up', ST.eclose, (v) => { ST.eclose = v; redo(); }, { help: 'The model sees a box round the area at its full size: more detail in a small area. Off, it sees the whole picture: better when the change must match what is far from it.' }) : null,
     ST.ewhere !== 'all' ? rangeField('Grow the area', () => ST.egrow, (v) => { ST.egrow = v; save(); }, { min: 0, max: 64, step: 1, fmt: (v) => `${v} px` }) : null,
     ST.ewhere !== 'all' ? rangeField('Edge softness', () => ST.esoft, (v) => { ST.esoft = v; save(); }, { min: 0, max: 64, step: 1, fmt: (v) => `${v} px` }) : null,
@@ -1432,7 +1432,7 @@ export function toolFields(o, t, { redraw = () => {}, size = null, eng = null } 
     o.kind === 'remove' ? field('What goes', seg([['words', 'Find by name'], ...(eng || ST.rfrom === 'painted' ? [['painted', 'The red mask']] : [])], ST.rfrom, (v) => { ST.rfrom = v; save(); redraw(); })) : null,
     o.kind === 'remove' && ST.rfrom === 'words' ? h('div', { class: 'chips' }, ...LOOK_FOR.map(([v, label]) => chip(label, () => { ST.rprompt = v; save(); redraw(); }, { on: ST.rprompt.trim().toLowerCase() === v }))) : null,
     o.kind === 'remove' && ST.rfrom === 'words' ? field('Find', textArea(() => ST.rprompt, (v) => { ST.rprompt = v; save(); }, { rows: 2, label: 'What to remove', placeholder: 'Watermark, text, the red sign' })) : null,
-    o.kind === 'remove' && ST.rfrom === 'painted' && eng && !eng.paint.maskLayer(false) ? hint('Paint what to remove first (Masks panel), or find it by name') : null,
+    o.kind === 'remove' && ST.rfrom === 'painted' && eng ? maskButton(eng) : null,
     o.kind === 'swap' ? field('Swap', seg(Object.entries(SWAP_PARTS).map(([k, v]) => [k, v.label]), ST.swapPart, (v) => { ST.swapPart = v; save(); redraw(); }, { wrap: true }),
       help(SWAP_PARTS[ST.swapPart].help)) : null,
     o.kind === 'swap' ? pictureInput({ label: 'Take it from', title: 'The picture to take it from', name: ST.swapFrom, empty: false,
@@ -1442,8 +1442,8 @@ export function toolFields(o, t, { redraw = () => {}, size = null, eng = null } 
       chip(v.label, () => { ST.swapModels = ST.swapModels.includes(k) ? ST.swapModels.filter((x) => x !== k) : [...ST.swapModels, k]; save(); redraw(); }, { on: ST.swapModels.includes(k) }))),
       help(Object.values(SWAP_MODELS).map((v) => `${v.label}: ${v.help}`).join(' '))) : null,
     o.kind === 'swap' ? field('Where', seg([['find', 'Find it'], ...(eng || ST.swapWhere === 'painted' ? [['painted', 'The red mask']] : [])], ST.swapWhere, (v) => { ST.swapWhere = v; save(); redraw(); }),
-      help('Find it uses SAM3 and takes the biggest one it finds. With several people, Mark it first, erase what shouldn\'t change in the Masks panel, and Swap from the red mask.')) : null,
-    o.kind === 'swap' && ST.swapWhere === 'painted' && eng && !eng.paint.maskLayer(false) ? hint('Paint the area first (Masks panel), or Mark it') : null,
+      help('Find it uses SAM3 and takes the biggest one it finds. With several people, Mark it first, erase what shouldn\'t change in the Mask panel, and Swap from the red mask.')) : null,
+    o.kind === 'swap' && ST.swapWhere === 'painted' && eng ? maskButton(eng) : null,
     o.kind === 'swap' ? field('Also say', textArea(() => ST.swapExtra, (v) => { ST.swapExtra = v; save(); }, { rows: 2, label: 'Words added to the prompt', placeholder: 'Keep the glasses' })) : null,
     o.kind === 'clean' ? modelChips(o, 'Take out', CLEAN, redraw) : null,
     o.kind === 'sheet' ? field('Result', seg([['cutout', 'Cut out'], ['black', 'On black']], ST.result === 'black' ? 'black' : 'cutout', (v) => { ST.result = v; save(); redraw(); })) : null,

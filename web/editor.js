@@ -1,4 +1,5 @@
 import { layerListPart } from './float-layers.js';
+import { maskFloatPart } from './float-mask.js';
 import { $, h, store, api, toast, openOverlay, button, iconBtn, seg, numSlider } from './ui.js';
 import { ASPECT_PRESETS, CURRENT_EDIT, S, inputUrl, switchTab } from './core.js';
 import { registerPickerSource, uploadImage } from './media.js';
@@ -169,11 +170,13 @@ const ED = createEditor({
   main: () => liveMain('image', edTab()),
   setMain: (key) => { const m = liveMain('image', edTab()); if (m) setMain(m.frame.id, key).catch((e) => toast(e.message, true)); },
   name: () => tabs?.active?.name,
-  beforeRender: () => { if (!tabs.started) tabs.start(); if (isLive('image')) propsChanged('image'); },   // (the Properties pane follows the picked layers)
+  beforeRender: () => { if (!tabs.started) tabs.start(); if (isLive('image')) { propsChanged('image'); dispatchEvent(new CustomEvent('editor:render')); } },   // (the Properties pane follows the picked layers; the Edit pane's Inpaint, Extend and mask rows too)
   newEdit: (payload) => (isLive('image') ? newFrameFrom(payload) : tabs.createFrom(payload, 'layers')),
   panelParts: (ed) => h('div', { class: 'panel-body' }, ed.topRow(),
-    // (a mask being painted: its section first, with what to see and do; otherwise the panel order, app-wide. The list may be in its floating panel.)
-    layerListPart('image', ed.layerList()), ed.E.sel?.maskOf ? ed.layerProps() : null, ed.paintProps(), ed.masksProps(), ed.inpaintProps(), ed.E.sel?.maskOf ? null : ed.layerProps(), ed.animProps(), ed.canvasProps(), ed.exportProps()),
+    // (a mask being painted: its section first, with what to see and do; otherwise the panel order, app-wide. The list may be in its floating panel.
+    // On the table the red mask is the floating Mask panel's (float-mask.js), and Inpaint and Extend are tools of the Edit pane; the Image tab keeps them here.)
+    layerListPart('image', ed.layerList()), isLive('image') ? maskFloatPart(ed) : null, ed.E.sel?.maskOf ? ed.layerProps() : null, ed.paintProps(),
+    isLive('image') ? null : ed.masksProps(), isLive('image') ? null : ed.inpaintProps(), ed.E.sel?.maskOf ? null : ed.layerProps(), ed.animProps(), ed.canvasProps(), ed.exportProps()),
 });
 addEventListener('layers:float', () => { if (ED_EL.host !== ED_HOME) ED.render(); });
 export const { E } = ED;

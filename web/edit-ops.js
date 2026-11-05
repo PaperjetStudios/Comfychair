@@ -40,6 +40,7 @@ import { ALPHA, BLANK, CANVAS, FRAME_KEYS, KEY as KEY_SET, NOT_SETUP, REFINE, SA
   missingInput, needsOf, poseBody } from './vfx-rules.js';
 import { imageNat, imageSize, vfxFields } from './vfx-fields.js';
 import { characterById } from './characters.js';
+import * as IP from './inpaint.js';
 import { omit } from './setups-rules.js';
 
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
@@ -177,6 +178,11 @@ export function opFields(kind, id, opts, ctx = {}) {
   const set = (k) => (v) => { opts[k] = v; keep(); };
   const prompt = (label, k = 'prompt', placeholder = '') => field(label, textArea(() => opts[k] || '', set(k), { rows: 2, placeholder, label }));
   if (kind === 'image' && o.group === '3D') return [];   // (a 3D object's views and model are picked on its sheet)
+  if (kind === 'image' && o.inPlace) {   // Inpaint, Extend: on the open frame's editor (inpaint.js)
+    const eng = ctx.live && ctx.frames?.[0] ? liveEngine(ctx.frames[0]) : null;
+    if (!eng) return [hint(o.why || 'Open the frame for this')];
+    return id === 'extend' ? IP.extendRows(eng, () => ctx.redraw?.()) : IP.inpaintRows(eng, () => ctx.redraw?.());
+  }
   if (kind === 'image') {
     if (!IT) { itReady.then(() => ctx.redraw?.()); return [hint('Loading the image tools…')]; }
     // (the open frame's editor: the red mask's choices show there, as in the Layers pane)
@@ -331,6 +337,11 @@ export async function runOp(kind, id, frame, opts = optsOf(kind, id), ctx = {}) 
 }
 
 async function runImage(o, frame, ctx) {
+  if (o.inPlace) {   // Inpaint (Fill), Extend: on the open frame, its results drafts in it
+    const eng = liveEngine(frame);
+    if (!eng) throw new Error(`Open ${frame.label || 'the frame'} for ${o.label}`);
+    return { gens: await (o.id === 'extend' ? IP.runExtend(eng) : IP.fillNow(eng)) };
+  }
   const it = await itReady;
   if (!it?.runToolOn) throw new Error('The image tools aren\'t ready');
   const eng = ctx.target === 'layer' ? liveEngine(frame) : null;

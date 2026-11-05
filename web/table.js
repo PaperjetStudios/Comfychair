@@ -47,7 +47,7 @@
 // A frame with a workflow and something plugged in has a little run button at its top right (chain-run.js runNode). The target shows one input port per wire down its left edge
 // ("Image 1", "Video 1", "Sound 1"). Tap a wire or an input port to select it, Delete unplugs it, right click or a long hold
 // has the rest. Every wire change is a table undo step. For the Make pane: tableWires, wiresInto, setTableWire.
-import { $, h, api, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, info, toggle, help, layerRowsEl, iconBtn, uid } from './ui.js';
+import { $, h, api, store, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, info, toggle, help, layerRowsEl, iconBtn, uid } from './ui.js';
 import { S, onServer, onProject } from './core.js';
 import { TabSet } from './tabs.js';
 import { currentTab } from './navigation.js';
@@ -639,10 +639,15 @@ function liveBar(f, root) {
   layersBtn?.addEventListener('click', () => floatLayers(!layersFloating()));
   const unfloat = (e) => { if (!layersBtn?.isConnected) { removeEventListener('layers:float', unfloat); return; } layersBtn.classList.toggle('on', e.detail.on); };
   addEventListener('layers:float', unfloat);
+  // (an image frame's red mask in its floating panel, float-mask.js)
+  const maskBtn = f.kind !== 'image' ? null : h('button', { type: 'button', class: `icon-btn live-bar-btn live-mask${store.get('deck.mask.float', false) === true ? ' on' : ''}`, 'aria-label': 'Mask panel', title: 'Mask panel: paint the red mask' }, icon('brush'));
+  maskBtn?.addEventListener('click', () => import('./float-mask.js').then((m) => (m.maskFloating() ? m.closeMask() : m.openMask())).catch((e) => toast(e.message, true)));
+  const unmask = (e) => { if (!maskBtn?.isConnected) { removeEventListener('mask:float', unmask); return; } maskBtn.classList.toggle('on', e.detail.on); };
+  if (maskBtn) addEventListener('mask:float', unmask);
   const close = h('button', { type: 'button', class: 'icon-btn live-bar-btn live-close', 'aria-label': 'Close (Esc)', title: 'Back to the table (Esc)' }, icon('close'));
   close.addEventListener('click', () => unlive());
   const bar = h('div', { class: 'live-bar', 'data-kind': f.kind },
-    h('span', { class: 'live-bar-kind', 'aria-hidden': 'true' }, icon(KIND_ICON[f.kind])), name, h('span', { class: 'live-bar-gap' }), layersBtn, full, close);
+    h('span', { class: 'live-bar-kind', 'aria-hidden': 'true' }, icon(KIND_ICON[f.kind])), name, h('span', { class: 'live-bar-gap' }), maskBtn, layersBtn, full, close);
   for (const ev of ['pointerdown', 'dblclick', 'wheel']) bar.addEventListener(ev, (e) => e.stopPropagation());
   // a module that empties the root (frame-image, frame-scene: replaceChildren) gets the bar back on top
   const keep = new MutationObserver(() => { if (root.firstChild !== bar) root.prepend(bar); });

@@ -2385,6 +2385,8 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
 .float-panel { position: fixed; top: 216px; left: calc(100vw - 780px); z-index: 45; display: flex; flex-direction: column; width: 320px; height: min(420px, calc(100dvh - 300px)); min-width: 220px; min-height: 160px; max-width: 100vw; max-height: 100dvh; resize: both; overflow: hidden;
   background: var(--panel, #1b1b1f); border: 1px solid var(--line, #333); border-radius: 8px; box-shadow: 0 8px 28px rgba(0,0,0,.45); }
 .float-panel.hidden { display: none; }
+/* the red mask floating (float-mask.js): beside where the layer list floats */
+.float-mask { left: max(8px, calc(100vw - 760px)); top: 250px; width: 300px; height: min(520px, calc(100dvh - 340px)); }
 .float-hints { left: 90px; top: 216px; width: min(440px, 38vw); height: min(460px, calc(100dvh - 300px)); }
 .float-hints.folded { height: auto !important; min-height: 0; resize: none; }
 .float-hints.folded .float-body { display: none; }

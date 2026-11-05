@@ -137,3 +137,13 @@ test('a press on a pick surface takes the keyboard from a prompt box; a press in
   assert.equal(takesKeyboard(node('x', node('sheet', node('frame'))), box), false);
   assert.equal(takesKeyboard(node('panel'), box), false);
 });
+
+test('the Edit pane\'s Inpaint and Extend rows: Ctrl+Enter is Fill from their boxes, and from no box while they show', () => {
+  const rows = { dataset: { runKey: 'extend' } };
+  const box = { type: undefined, closest: (sel) => (sel === '[data-run-key]' ? rows : sel === 'section' ? null : sel.includes('textarea') ? box : null) };
+  assert.equal(editorRunKey({ target: box, key: 'Enter', ctrlKey: true }, () => true), 'fill');
+  assert.equal(editorRunKey({ target: box, key: 'Enter', shiftKey: true }, () => true), null, 'Shift+Enter there stays a new line');
+  const body = { closest: () => null };
+  assert.equal(editorRunKey({ target: body, key: 'Enter', ctrlKey: true }, () => true), 'fill');
+  assert.equal(editorRunKey({ target: body, key: 'Enter', ctrlKey: true }, () => false), 'tool');
+});
