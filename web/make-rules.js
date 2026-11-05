@@ -28,7 +28,7 @@ const T2X = /-(t2i|t2v)$/;
 const IMAGE_JOB = /-(t2i|i2i|edit|control|detail|face-skin|skin-whole|identity)$|face-restore|upscale-image|clean-image|cutout-image|remove-lama/;
 // (inpaint needs a painted area: the frame's own Inpaint does that. The VFX tab's jobs stay there for now.)
 const VIDEO_JOB = /^deck-(ltx|h3)-|^deck-upscale-video/;
-const VIDEO_VFX = /alpha|cleanplate|ltx-inpaint|ripple|tracks|sam3|charsheet|objectsheet/;
+const VIDEO_VFX = /alpha|cleanplate|ltx-inpaint|ripple|tracks|sam3/;   // (the character and object sheets are Make's: a clip and its sheet picture)
 const SCENE_JOB = /3d-object|splat|trellis|autorig|mocap/;
 const SOUND_JOB = /ace-music|ltx-t2a|mmaudio/;
 const own = (t) => !/^deck-/.test(t.id);
@@ -164,6 +164,30 @@ export function carryWords(from, to) {
     const a = text(from, neg), b = text(to, neg);
     if (a && b && String(from.values[a.key] || '').trim()) to.values[b.key] = from.values[a.key];
   }
+  return to;
+}
+
+// A template change with Keep on (the Generate tab's carry, gentabs.js): the words, the pictures picked by hand in order with their crops,
+// the size and a fixed seed follow you to the new template. Off, the new template starts from its own (choose in make-panel.js).
+export function carryKept(from, to) {
+  carryWords(from, to);
+  const imgs = (st) => (st.tpl.fields || []).filter((x) => x.kind === 'image');
+  const ib = imgs(to);
+  imgs(from).forEach((f, i) => {
+    const g = ib[i];
+    if (!g || !from.values[f.key]) return;
+    to.values[g.key] = clone(from.values[f.key]);
+    for (const k of ['imageCrop', 'imageMp', 'from']) if (from[k]?.[f.key] !== undefined) (to[k] ||= {})[g.key] = clone(from[k][f.key]);
+  });
+  const pair = (st) => { const w = (st.tpl.fields || []).find((x) => x.kind === 'int' && x.input === 'width'); return w && [w, st.tpl.fields.find((x) => x.node === w.node && x.input === 'height')]; };
+  const [pa, pb] = [pair(from), pair(to)];
+  if (pa?.[1] && pb?.[1]) {
+    to.values[pb[0].key] = from.values[pa[0].key]; to.values[pb[1].key] = from.values[pa[1].key];
+    if (from.sizeMode?.[pa[0].key]) (to.sizeMode ||= {})[pb[0].key] = clone(from.sizeMode[pa[0].key]); else delete to.sizeMode?.[pb[0].key];
+  }
+  const seed = (st) => (st.tpl.fields || []).find((x) => x.kind === 'seed');
+  const [sa, sb] = [seed(from), seed(to)];
+  if (sa && sb && from.seedMode?.[sa.key] === 'fixed') { to.values[sb.key] = from.values[sa.key]; (to.seedMode ||= {})[sb.key] = 'fixed'; }
   return to;
 }
 

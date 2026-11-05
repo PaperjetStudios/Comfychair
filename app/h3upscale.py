@@ -210,7 +210,9 @@ def apply_pose(wf: dict, values: dict) -> dict:
 # What a sheet's picture frames show, in order (the orbit turns to the character's left first; dev/make_bust_sheet_templates.py)
 SHEET_ANGLES = {4: ("Front", "Left", "Back", "Face front"),
                 6: ("Front", "Left", "Back", "Right", "Face front", "Face 3/4"),
-                8: ("Front", "Left", "Back", "Right", "Face front", "Face 3/4", "Face side", "Detail")}
+                8: ("Front", "Left", "Back", "Right", "Face front", "Face 3/4", "Face side", "Detail"),
+                # (deck-h3-charsheet-head: the head every 45 degrees; its four shots from above and below are Detail)
+                12: ("Front", "Front 3/4 left", "Left", "Back 3/4 left", "Back", "Back 3/4 right", "Right", "Front 3/4 right")}
 OBJECT_ANGLES = ("Front", "Left", "Back", "Right", "Detail", "Detail", "Top", "Detail")
 BODY_ANGLES = ("Front", "Left", "Back", "Right", "Chest", "Back detail", "Legs", "Feet")   # (deck-h3-charsheet-body)
 

@@ -17,7 +17,7 @@ import { addPicture, changed, characterById, characters, charBox, deleteCharacte
 // ---------------------------------------------------------------------------
 const CS = { lineup: false, filter: 'all', rigTemplate: 'deck-autorig-human', stories: null, scores: new Map(), audition: null };
 const EDIT_TEMPLATES = ['deck-krea2-edit', 'deck-klein9b-edit', 'deck-qwen21-edit', 'deck-moss-edit', 'deck-klein3-edit'];
-const SHEETS = [['deck-h3-charsheet', 'Full'], ['deck-h3-charsheet-body', 'Body'], ['deck-h3-charsheet-bust', 'Bust'], ['deck-h3-charsheet-bust4', 'Short bust']];
+const SHEETS = [['deck-h3-charsheet', 'Full'], ['deck-h3-charsheet-body', 'Body'], ['deck-h3-charsheet-bust', 'Bust'], ['deck-h3-charsheet-bust4', 'Short bust'], ['deck-h3-charsheet-head', 'Head']];
 const qs = (pid = S.project) => (pid != null ? `?project_id=${pid}` : '');
 const said = (c, what) => { changed(c); tellCharacters(); if (what) toast(what); };
 

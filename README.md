@@ -506,6 +506,10 @@ The length is fixed, so changing the shot timestamps in the prompt also means ch
 For detail on the body, `deck-h3-charsheet-body` (13 s, 8 pictures, 4 per row): the same orbit of the full figure, then close shots of the chest, back, legs and feet.
 
 Shorter sheets for a model of the upper body, same inputs and settings: `deck-h3-charsheet-bust` (8 s, 6 pictures, 3 per row: front, side, back, other side, then close-ups of the face front and three-quarter) and `deck-h3-charsheet-bust4` (5.5 s, 4 pictures: front, side, back, face front). The camera frames head to mid-waist the whole way. They come from `dev/make_bust_sheet_templates.py`; frames are untested on a GPU, so change **Sheet frames** if the orbit lands off.
+For a face from every side, `deck-h3-charsheet-head` (12 s, square, 12 pictures, 4 per row): the camera orbits the head at eye level, a
+picture every 45° (front, three-quarter, profile, back, and round the other side), then four close-ups of the face from above and from
+below, front and three-quarter. With more than one picture of the same person, name them all in the first line
+(`<Subject 1> is the person shown in <Picture 1>, <Picture 2> and <Picture 3>.`).
 `deck-h3-objectsheet` is the same for props and other objects: the close-ups are front, three-quarter,
 the top (high angle) and a small detail.
 
@@ -751,7 +755,8 @@ image being edited; each is an object with a description, or a text with its wor
 a **ReferenceMultiLatent** (Klein), a box can also carry a reference image: it's added as the next
 reference and the box's description gets "matching <ref_image_N>". MOSS ignores reference images.
 
-A LoRA group titled with "Turbo" (`@5 Turbo LoRA`) only lists speed-up LoRAs and starts off.
+A LoRA group titled with "Turbo" (`@5 Turbo LoRA`) only lists speed-up LoRAs. It starts on when the template's own
+**Steps** are 8 or fewer (every H3 template: 8 steps can't finish without it), otherwise off.
 Every LoRA row has an **i** button with its Civitai page, trigger words (tap to add to the prompt)
 and examples, looked up by file hash through rgthree-comfy.
 

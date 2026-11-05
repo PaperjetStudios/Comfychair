@@ -70,6 +70,30 @@ class Templates(unittest.TestCase):
         self.assertEqual(next(f for f in d["fields"] if f["key"] == "4.seed")["kind"], "seed")
         self.assertEqual(d["groups"][0]["label"], "Prompt")  # @1 orders it first
 
+    def test_turbo_lora_starts_on_when_the_steps_need_it(self):
+        import copy, json
+        from pathlib import Path
+        folder, seen = Path(__file__).resolve().parent.parent / "templates", 0
+        for path in sorted(folder.glob("deck-h3-*.json")):
+            wf = json.loads(path.read_text())
+            node = next((n for n in wf.values() if isinstance(n, dict) and "Turbo LoRA" in (n.get("_meta") or {}).get("title", "")), None)
+            if not node:
+                continue
+            seen += 1
+            name = node["inputs"]["lora_name"]
+            oi = {node["class_type"]: {"input": {"required": {"lora_name": [[name, "style.safetensors"]]}}}}
+            turbo = lambda w: next(f for f in tpl.describe(tpl.Template(id="t", name="t", path=None, workflow=w), oi)["fields"]
+                                   if f["kind"] == "loras" and "turbo" in f["group"].lower())
+            f = turbo(wf)
+            self.assertEqual(f["value"], [{"name": name, "strength": 1.0, "enabled": True}], path.name)   # 8 steps or fewer: on
+            self.assertEqual(f["options"], [name], path.name)
+            slow = copy.deepcopy(wf)
+            for n in slow.values():
+                if isinstance(n, dict) and isinstance(n.get("inputs", {}).get("steps"), int):
+                    n["inputs"]["steps"] = 30
+            self.assertIs(turbo(slow)["value"][0]["enabled"], False, path.name)   # a full schedule: off, as before
+        self.assertGreater(seen, 10)
+
     def test_lora_stack_expands_to_a_chain(self):
         wf = tpl.apply(wf_basic(), {"2.__loras": [{"name": "a", "strength": 0.5}, {"name": "b", "strength": 1}]})
         chain = [n for n in wf.values() if n["class_type"] == "LoraLoader"]

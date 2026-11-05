@@ -23,7 +23,7 @@ export function packFrom(results) {
   return out;
 }
 // the character and object sheets (an H3 clip with a picture cut from it)
-export const SHEET_TEMPLATES = new Set(['deck-h3-charsheet', 'deck-h3-charsheet-body', 'deck-h3-charsheet-bust', 'deck-h3-charsheet-bust4', 'deck-h3-objectsheet']);
+export const SHEET_TEMPLATES = new Set(['deck-h3-charsheet', 'deck-h3-charsheet-body', 'deck-h3-charsheet-bust', 'deck-h3-charsheet-bust4', 'deck-h3-charsheet-head', 'deck-h3-objectsheet']);
 // a sheet's run, or its upscale or regenerate (a new run that says it was made from a sheet)
 export const isSheetRun = (g) => SHEET_TEMPLATES.has(g.template) || !!g.params?.sheet;
 // which output Mark views works on, or -1: an H3 run's clip (an upscale's "h3 ..." runs too), from the clip or from the sheet picture beside it

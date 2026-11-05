@@ -12,7 +12,9 @@ into templates/. Any node whose title starts with "@" is exposed in the tablet U
                             object or a text with a description (MOSS / Flux3 layout prompts). With
                             a ReferenceMultiLatent in the graph, a box can also carry a reference image
     @Turbo LoRA             a LoRA stack whose title mentions "turbo" lists only speed-up LoRAs
-                            (turbo, lightning, distill, N-step…) and starts switched off
+                            (turbo, lightning, distill, N-step…). It starts switched on when the
+                            template's own steps are 8 or fewer (a schedule only a turbo LoRA can
+                            finish), otherwise off
     @Ref 1                  on a LoadImage node: an image picker. Left empty, the node is removed
                             and whatever it fed is unplugged (fine for optional inputs like refs).
     @Sound                  on a VHS_LoadAudio node: a sound picker (a sound file, or the sound of a
@@ -195,6 +197,16 @@ def _field(node_id, cls, name, value, ispec):
     return f
 
 
+TURBO_STEPS = 8   # a template set to this many steps or fewer can't finish without its turbo LoRA
+
+
+def few_steps(workflow: dict) -> bool:
+    """Whether the template samples in so few steps that its Turbo LoRA has to be on."""
+    steps = [n["inputs"]["steps"] for n in workflow.values()
+             if isinstance(n, dict) and isinstance(n.get("inputs", {}).get("steps"), int)]
+    return bool(steps) and min(steps) <= TURBO_STEPS
+
+
 def describe(t: Template, object_info: dict | None) -> dict:
     warnings = []
     if object_info is None:
@@ -236,12 +248,13 @@ def describe(t: Template, object_info: dict | None) -> dict:
                 _, o = _parse_spec(spec["lora_name"])
                 lora_opts = o.get("options", [])
             turbo = "turbo" in label.lower()
-            if turbo:  # a "Turbo LoRA" group lists only speed-up LoRAs and starts switched off
+            if turbo:  # a "Turbo LoRA" group lists only speed-up LoRAs; it starts on when the template's steps need it
                 lora_opts = [o for o in lora_opts if TURBO_RE.search(o)] or lora_opts
             current = node["inputs"].get("lora_name")
             default = []
             if current and current in lora_opts:
-                default = [{"name": current, "strength": node["inputs"].get("strength_model", 1.0), "enabled": not turbo}]
+                default = [{"name": current, "strength": node["inputs"].get("strength_model", 1.0),
+                            "enabled": not turbo or few_steps(t.workflow)}]
             fields.append({"key": f"{node_id}.__loras", "node": node_id, "input": "__loras", "label": label,
                            "kind": "loras", "options": lora_opts, "value": default,
                            "clip": "clip" in node["inputs"], "group": label})

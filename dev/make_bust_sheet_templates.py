@@ -65,3 +65,31 @@ d['41']['inputs']['max_images_per_row'] = 4
 for k in ('15', '42'):
     d[k]['inputs']['filename_prefix'] = 'comfydeck/h3body'
 (ROOT / 'deck-h3-charsheet-body.json').write_text(json.dumps(d, indent=1) + '\n')
+
+# The head sheet, for a face from every side: an orbit of the head at eye level (a picture every 45 degrees), then the face from above and
+# from below. 12 images, 12 s, square: orbit 6 s (the full sheet's frames, with the 45-degree ones between them) + 4 cuts of 1.5 s
+d = json.loads(json.dumps(BASE))
+d['7']['inputs']['prompt'] = (
+    "<Subject 1> is the person shown in <Picture 1>."
+    "\n[Shot 1] A close-up of <Subject 1>'s head and shoulders at eye level, head upright and level, neutral expression, mouth closed, "
+    "eyes looking straight ahead, in the centre of an empty light-grey photo studio with a seamless backdrop and flat, even softbox "
+    "lighting with no hard shadows. The camera orbits around <Subject 1>'s head at a slow, constant speed and makes exactly one full "
+    "360-degree turn: front, three-quarter view, side profile, back of the head, the other side profile, the other three-quarter view, "
+    "and front again, always at eye level and framing the whole head from the top of the hair to the shoulders. <Subject 1> stays "
+    "perfectly still, does not turn the head and does not follow the camera with the eyes."
+    "\n[Shot 2] At 00:06.000, the camera cuts to a high-angle close-up of <Subject 1>'s face from the front: the camera is above the "
+    "head and looks down at the forehead, nose and face. <Subject 1> keeps the head level and looks straight ahead."
+    "\n[Shot 3] At 00:07.500, the camera cuts to a low-angle close-up of <Subject 1>'s face from the front: the camera is below the "
+    "chin and looks up at the jaw, nostrils and face. <Subject 1> keeps the head level and looks straight ahead."
+    "\n[Shot 4] At 00:09.000, the camera cuts to a high-angle close-up of <Subject 1>'s face from a three-quarter angle, the camera "
+    "above the head looking down."
+    "\n[Shot 5] At 00:10.500, the camera cuts to a low-angle close-up of <Subject 1>'s face from the other three-quarter angle, the "
+    "camera below the chin looking up."
+    f"{TAIL}")
+d['7']['inputs']['width'] = d['7']['inputs']['height'] = 640
+d['7']['inputs']['length'] = 12 * 24 + 6
+d['40']['inputs']['indexes'] = '4,30,54,70,96,108,120,142,162,198,234,270'   # (checked on one run: the orbit ends near 315 degrees at the cut)
+d['41']['inputs']['max_images_per_row'] = 4
+for k in ('15', '42'):
+    d[k]['inputs']['filename_prefix'] = 'comfydeck/h3head'
+(ROOT / 'deck-h3-charsheet-head.json').write_text(json.dumps(d, indent=1) + '\n')

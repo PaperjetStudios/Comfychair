@@ -26,7 +26,7 @@
 // Each run records what it read on its frame (frame.make.ran: the stamps of its plugged sources, chain-rules.js), so the
 // table can say which frames need a rerun. The wires row has Run from here / Rerun what uses this (chain-run.js).
 import { resultName, templateProcess } from './run-name.js';
-import { h, api, store, toast, uid, button, iconBtn, imageInput, seg, field, hint, help, info, note, clone } from './ui.js';
+import { h, api, store, toast, uid, button, iconBtn, imageInput, seg, field, hint, toggle, help, info, note, clone } from './ui.js';
 import { ASPECT_PRESETS, S, CURRENT_EDIT, inputUrl, previewUrl, thumbUrl } from './core.js';
 import { modeOf } from './size-math.js';
 import { afterQueued, fieldState, fieldTarget, fieldsBorrowed, mainPromptKey, preparePictures, renderFields, runBuilder, runValues, stop } from './generate.js';
@@ -44,7 +44,7 @@ import { currentTab, onNavigate } from './navigation.js';
 import { editDoc, flushDoc, frameStamp, freshStamps, stillOf } from './table-frames.js';
 import { DOC_KIND, nextBeside, toStage } from './table-model.js';
 import * as Table from './table.js';
-import { LANDS, canvasRect, carryWords, familiesOf, frameImageField, frameSize, slotMode, makeFrames, makeTarget, noteText, pickTemplate, isOwnSlot, repointable, runValuesOf, seedsAfter,
+import { LANDS, canvasRect, carryKept, familiesOf, frameImageField, frameSize, slotMode, makeFrames, makeTarget, noteText, pickTemplate, isOwnSlot, repointable, runValuesOf, seedsAfter,
   addHeld, frameLength, lengthField, lengthValue, outputOwns, selfPicked, settingsFor, settingsPayload, settleHeld, sizePair, templatesFor, templatesForFrame, wireFields, withClip } from './make-rules.js';
 import { downstream, fieldKind, isFrameWire, wireLabel } from './wire-rules.js';
 import { freshLayers, layerMarks, placeResults, sourceStamps, withSoundItem, withoutLayers } from './chain-rules.js';
@@ -230,7 +230,7 @@ function drawHead(kind, frame, list) {
     shown.map((x) => h('option', { value: x.id }, x.name + (x.error ? ' (error)' : ''))));
   if (t && shown.some((x) => x.id === t.id)) sel.value = t.id;
   const famSeg = seg(fams.map((f) => [f, f]), fam, (f) => { const first = list.find((x) => (x.family || 'Other') === f); if (first) choose(kind, first.id); }, { wrap: true });
-  P.els.picker.replaceChildren(fams.length > 1 ? famSeg : null, sel,
+  P.els.picker.replaceChildren(fams.length > 1 ? famSeg : null, sel, keepToggle(),
     t ? setupsRow({ key: tplKey(t.id), get: setupValues, set: (v) => applySetup(kind, frame, v) }) : null);
   const owed = kind === 'image' && frame?.doc ? owedTo(frame.doc).length : 0;
   const n = makeFrames(P.frames).length;
@@ -240,13 +240,24 @@ function drawHead(kind, frame, list) {
 }
 const landsWord = (kind) => ({ frame: 'a new frame beside the last', layer: 'new layers in it', clip: 'clips on its timeline', mix: 'sounds in its mix', scene: 'in its scene' })[LANDS[kind]];
 
-// another template: it starts from what this frame kept for it (if anything), with the prompt carried over
+// Keep prompt, the Generate tab's own switch (gentabs.js, the same setting): on, a template change carries the prompt, pictures, size and a
+// fixed seed over; off, the new template starts from its own prompt
+const keepOn = () => store.get('deck.gen.keepOnSwitch', true);
+function keepToggle() {
+  const el = toggle('Keep the prompt and pictures when the template changes', keepOn(), (on) => store.set('deck.gen.keepOnSwitch', on),
+    { help: 'On: a new template keeps the prompt, negative prompt, pictures, size and a fixed seed. Off: it starts from the template\'s own prompt and settings.' });
+  el.classList.add('keep-toggle');
+  return el;
+}
+
+// another template: it starts from what this frame kept for it (if anything), with the prompt and pictures carried over while Keep is on
 function choose(kind, id) {
   const t = (S.templates || []).find((x) => x.id === id);
   if (!t || !P.st) return;
   const { frame } = makeTarget(P.frames);
   const kept = frame ? frame.make : store.get('deck.make.none', null);
-  P.st = withSave(carryWords(P.st, settingsFor(t, kept?.template === id ? kept : null)), kind, frame);
+  const next = settingsFor(t, kept?.template === id ? kept : null);
+  P.st = withSave(keepOn() ? carryKept(P.st, next) : next, kind, frame);
   keep(kind, frame);
   renderFields(target(kind, frame));
   fitFrame(kind, frame);

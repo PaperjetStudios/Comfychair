@@ -154,6 +154,10 @@ class Build(unittest.TestCase):
         self.assertEqual(up.sheet_marks(self.wf("deck-h3-charsheet"))[4]["label"], "Face front")   # (the face sheet stays the face sheet)
         self.assertEqual(up.sheet_marks(self.wf("deck-h3-ref2v")), [])
         self.assertEqual(up.sheet_marks({}), [])
+        head = up.sheet_marks(self.wf("deck-h3-charsheet-head"))   # the head every 45 degrees, then the face from above and below
+        self.assertEqual([x["label"] for x in head], ["Front", "Front 3/4 left", "Left", "Back 3/4 left", "Back", "Back 3/4 right", "Right",
+                                                      "Front 3/4 right"] + ["Detail"] * 4)
+        self.assertEqual(up.pose_fields(self.wf("deck-h3-charsheet-head")), [])   # (a head has no stance)
 
     def test_sheet_pose(self):
         for name in ("deck-h3-charsheet", "deck-h3-charsheet-body", "deck-h3-charsheet-bust", "deck-h3-charsheet-bust4"):
@@ -175,7 +179,8 @@ class Build(unittest.TestCase):
         self.assertTrue(text.startswith("[Shot 1] <Subject 1> stands in a T-pose"))
 
     def test_sheet_option_fields_and_follow_up(self):
-        for name in ("deck-h3-charsheet", "deck-h3-charsheet-body", "deck-h3-charsheet-bust", "deck-h3-charsheet-bust4", "deck-h3-objectsheet"):
+        for name in ("deck-h3-charsheet", "deck-h3-charsheet-body", "deck-h3-charsheet-bust", "deck-h3-charsheet-bust4", "deck-h3-charsheet-head",
+                     "deck-h3-objectsheet"):
             fs = up.sheet_fields(self.wf(name), None)
             self.assertEqual([f["key"] for f in fs], [up.UPSCALE, up.UPSCALE_STRENGTH], name)
             self.assertEqual((fs[0]["value"], fs[1]["value"]), ("Off", "Medium"))

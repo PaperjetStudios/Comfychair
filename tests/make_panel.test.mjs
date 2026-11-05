@@ -1,7 +1,7 @@
 // node --test tests/make_panel.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { slotMode, OP_TEMPLATES, canvasRect, carryWords, familiesOf, frameImageField, frameOutput, frameSize, makeFrames, makeTarget, noteText, pickTemplate, settingsFor, settingsPayload,
+import { slotMode, OP_TEMPLATES, canvasRect, carryKept, carryWords, familiesOf, frameImageField, frameOutput, frameSize, makeFrames, makeTarget, noteText, pickTemplate, settingsFor, settingsPayload,
   sizePair, templatesFor, withClip, itemSource, addHeld, settleHeld, plainFills, plainPicture, plainSound, plainVideo, renderKey, repointable, isOwnSlot, selfPicked, stableJson, wireFields } from '../web/make-rules.js';
 import { owedFor, owedRecord } from '../web/owed-runs.js';
 
@@ -34,6 +34,9 @@ test('an image frame: image jobs, not inpaint (it needs a painted area), the map
 });
 test('a video frame: video templates, not the VFX ones or an Edit op\'s (upscale); text to video stays', () => {
   assert.deepEqual(ids('video'), ['deck-ltx-t2v', 'deck-ltx-i2v', 'deck-h3-flf2v']);
+  // the character and object sheets are video Make's too (a clip and its sheet picture); the VFX tab's jobs are not
+  const sheets = ['deck-h3-charsheet', 'deck-h3-charsheet-head', 'deck-h3-objectsheet'].map((id) => T(id, 'video', 'MiniMax H3', [img]));
+  assert.deepEqual(templatesFor([...sheets, T('deck-sam3-video-mask', 'video', 'SAM3')], 'video').map((t) => t.id), sheets.map((t) => t.id));
 });
 test('3D and sound frames get their own families, less what their Edit ops run (rigging, foley)', () => {
   assert.deepEqual(ids('scene'), ['deck-3d-object', 'deck-mocap']);
@@ -67,6 +70,21 @@ test('the panel\'s own settings: the template defaults with the frame\'s changes
   assert.deepEqual(settingsFor(t, { template: 'other', overrides: { '3.text': 'no' } }).values['3.text'], '');
   const t2 = T('deck-y-t2i', 'image', 'Y', [{ ...P, key: '9.text' }]);
   assert.equal(carryWords(st, settingsFor(t2)).values['9.text'], 'hi');
+});
+test('Keep on, a template change carries the prompt, the picked pictures with their crops, the size and a fixed seed', () => {
+  const P = { key: '3.text', kind: 'text', multiline: true, node: '3', input: 'text', value: 'own words' }, S = { key: 's', kind: 'seed', node: '5', input: 'seed', value: 0 };
+  const img2 = { ...img, key: '6.image', node: '6' };
+  const a = settingsFor(T('deck-a', 'image', 'X', [P, img, img2, { ...W, value: 1024 }, { ...H, value: 1024 }, S]));
+  Object.assign(a.values, { '3.text': 'hi', '6.image': 'b.png', '2.width': 512, '2.height': 768, s: 7 });
+  a.imageCrop['6.image'] = { x: 1 }; a.from['6.image'] = 'manual'; a.seedMode.s = 'fixed'; a.sizeMode['2.width'] = { mp: 1 };
+  const tb = T('deck-b', 'image', 'X', [{ ...P, key: '9.text' }, { ...img, key: '7.image' }, { ...img, key: '8.image' },
+    { ...W, key: '4.width', node: '4', value: 640 }, { ...H, key: '4.height', node: '4', value: 640 }, { ...S, key: 'n' }]);
+  const b = carryKept(a, settingsFor(tb));
+  assert.deepEqual(b.values, { '9.text': 'hi', '7.image': undefined, '8.image': 'b.png', '4.width': 512, '4.height': 768, n: 7 });   // (an empty slot carries nothing)
+  assert.deepEqual([b.imageCrop, b.from, b.seedMode, b.sizeMode], [{ '8.image': { x: 1 } }, { '8.image': 'manual' }, { n: 'fixed' }, { '4.width': { mp: 1 } }]);
+  a.seedMode = {}; a.values['3.text'] = ' ';
+  const c = carryKept(a, settingsFor(tb));
+  assert.deepEqual([c.values['9.text'], c.values.n, c.seedMode], ['own words', 0, {}]);   // (no words, a random seed: the template's own stay)
 });
 test('families and the template shown: the kept one if it still fits, else the first', () => {
   const l = templatesFor(ALL, 'image');
