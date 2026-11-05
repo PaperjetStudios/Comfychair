@@ -1,5 +1,5 @@
 import {
-  $, h, store, uid, api, busy, toast, clamp, openSheet, closeSheet, nameSheet, button, runBar, iconBtn, linkBtn, actions, seg,
+  $, h, store, uid, api, busy, toast, clamp, openSheet, closeSheet, button, runBar, iconBtn, linkBtn, actions, seg,
   field, section, hint, help, info, note, placeholder, rangeField, propNum, mediaCard, toggle, textArea, pctFmt, colorField, sizeSelect, icon,
 } from './ui.js';
 import { S, fmtT, inputUrl, onServer, thumbUrl } from './core.js';
@@ -9,11 +9,12 @@ import { itemOf } from './source-rules.js';
 import { draggingPicture, dropKind, droppedFiles } from './drop-files.js';
 import { openGeneration } from './run.js';
 import { TabSet } from './tabs.js';
-import { clipKeyTimes, clipKeys, clipSoundFields, durationOf, keyJumps, timeline, wavePeaks } from './timeline.js';
+import { clipKeyTimes, clipKeys, clipSoundFields, durationOf, keyJumps, timeline, wavePeaks, TOOLS_HELP, LANE_EASES } from './timeline.js';
 import { fmtTime, playKeys, transport } from './playback.js';
 import { workArea } from './workarea.js';
 import { cutItems, playFrom, playSeek, setIn, setOut, snapT, tickT } from './workarea-math.js';
-import { exportTracks, renameMarker } from './timeline-rules.js';
+import { exportTracks } from './timeline-rules.js';
+import { keyLaneRows } from './key-lanes.js';
 import { keysHelp as timelineKeys } from './timeline-keys.js';
 import { history } from './undo-history.js';
 import { registerUndo, syncUndo } from './undo-dock.js';
@@ -39,7 +40,7 @@ export { emptyVideo };
 // Export sends the same timeline to the server, which renders it with ffmpeg into History.
 // ---------------------------------------------------------------------------
 const COMP_LOOKS = [['color', 'Colour'], ['clay', 'Clay'], ['depth', 'Depth'], ['pose', 'Pose']];   // how a scene clip can be drawn (scene-offscreen.js LOOKS)
-const HEAD_W = 84;    // track header column (px)
+const HEAD_W = 124;   // track header column (px; app.css .tl-head)
 const LANE_H = 52;
 const MIN_LEN = 0.1;
 const V = {
@@ -129,12 +130,15 @@ const TL = timeline(V, { el: () => VD.timeline, headW: HEAD_W, minLen: MIN_LEN, 
   selected: () => { renderVideoPanel(); requestDraw(); }, deselected: () => { renderTimeline(); renderVideoPanel(); requestDraw(); },
   canDrop: (it, tr) => (tr.kind === 'audio') === (it.kind === 'audio'), tabs: () => tabs, area: () => WA,
   fps: () => fpsNow(), tc: (t) => tc(t), undo: () => undoEdit(), redo: () => redoEdit(),
-  toolChanged: (t) => VD.timeline?.setAttribute('data-tool', t), menuAction: (id, ctx) => menuAction(id, ctx) });
+  toolChanged: (t) => VD.timeline?.setAttribute('data-tool', t), menuAction: (id, ctx) => menuAction(id, ctx),
+  lanes: (it, g) => clipLanes(it, g) });
 const { len: itLen, end: itEnd, seqEnd, selItem, xfades, updatePlayhead } = TL;
 const fadeGain = (it, t, audio) => TL.fadeGain(it, t, audio);   // pictures only fade in over an overlap (videoedit._overlaps)
 const trackOf = (it) => V.tracks.find((t) => t.id === it.track);
 const tracksOf = (kind) => V.tracks.filter((t) => t.kind === kind);   // video: V1 (bottom) first
-const trackName = (t) => `${t.kind === 'video' ? 'V' : 'A'}${tracksOf(t.kind).indexOf(t) + 1}`;
+const trackName = (t) => t.name || `${t.kind === 'video' ? 'V' : 'A'}${tracksOf(t.kind).indexOf(t) + 1}`;
+// the tracks as the preview plays them, the same as the export: solo folded into hidden / muted (timeline-rules exportTracks)
+const playTracks = () => new Map(exportTracks(V.tracks).map((t) => [t.id, t]));
 const zOf = (it) => tracksOf('video').findIndex((t) => t.id === it.track);
 const isVisual = (it) => it.kind === 'video' || it.kind === 'image' || it.kind === 'scene';
 const fpsNow = () => V.fps || 24;
@@ -177,7 +181,14 @@ function rangeClip() {
 // ---- animated properties (timeline.js clipKeys): a clip's keys are in its own source time, on the sequence's frames ----
 const PROPS = { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, volume: 1 };   // what an unset property is
 const K = clipKeys(TL, V, { fps: fpsNow, base: PROPS, pause: () => vidPause(), seek: (t) => vidSeek(t), onKeys: () => panelChanged(),
-  live: { onInput: () => panelInput(), onChange: () => panelChange() } });   // (its sliders are the inspector's: they edit every picked clip)
+  live: { onInput: () => panelInput(), onChange: () => panelChange() }, suits: (o, ch) => suits(o, ch) });
+// a clip's keyframe lanes under its track (web/key-lanes.js)
+const LANE_CHANNELS = [['x', 'X'], ['y', 'Y'], ['scale', 'Scale'], ['rotation', 'Rotation'], ['opacity', 'Opacity'], ['volume', 'Level']]
+  .map(([ch, label]) => ({ ch, label }));
+function clipLanes(it, g) {
+  return keyLaneRows(it, { pps: g.pps, fps: fpsNow(), tc, channels: LANE_CHANNELS, eases: LANE_EASES, base: PROPS,
+    seek: (t) => { vidPause(); vidSeek(t); }, changed: () => timelineChanged() });
+}   // (its sliders are the inspector's: they edit every picked clip)
 const { prop, setProp } = K;
 
 // ---- playback: one media element per clip, kept in step with the timeline clock ----
@@ -264,10 +275,11 @@ function pruneEls() {
 }
 
 function syncMedia(jump = false) {   // jump: the playhead just jumped (loop, seek), so every clip follows
+  const plays = playTracks();   // (solo, mute and hide as the export has them)
   for (const it of V.items) {
     if (it.kind === 'scene') { if (!V.els.has(it.id)) V.els.set(it.id, { el: COMP.canvasFor(it), url: null, src: null }); continue; }   // (drawn only when it's on show: drawFrame)
     if (it.kind === 'image') { mediaFor(it); continue; }
-    const el = mediaFor(it), tr = trackOf(it);
+    const el = mediaFor(it), tr = plays.get(it.track);
     if (V.t < it.at || V.t >= itEnd(it)) {
       if (!el.paused) el.pause();
       // cue up a clip that's about to start so it begins cleanly
@@ -339,7 +351,8 @@ function drawFrame() {
   if (!cv) return;   // (not mounted yet)
   const [W, H] = seqSize();
   if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; renderVideoPanel(); }   // the panel shows the size
-  const layers = tracksOf('video').filter((tr) => !tr.hidden).map((tr) =>
+  const plays = playTracks();
+  const layers = tracksOf('video').filter((tr) => !plays.get(tr.id)?.hidden).map((tr) =>
     V.items.filter((it) => it.track === tr.id && V.t >= it.at && V.t < itEnd(it)).sort((a, b) => a.at - b.at));
   // A clip that's loading or seeking has no frame to draw: keep the last picture for a moment
   // rather than flashing black (or the track underneath).
@@ -504,7 +517,8 @@ function gizmoHit(it, sx, sy, type) {
 }
 function pickAt(sx, sy) {   // the topmost visible clip under a point
   const v = gview(), [fx, fy] = unscr(v, sx, sy);
-  const live = V.items.filter((it) => isVisual(it) && inRange(it) && !trackOf(it)?.hidden).sort((a, b) => zOf(b) - zOf(a) || b.at - a.at);
+  const plays = playTracks();
+  const live = V.items.filter((it) => isVisual(it) && inRange(it) && !plays.get(it.track)?.hidden).sort((a, b) => zOf(b) - zOf(a) || b.at - a.at);
   return live.find((it) => { const g = geom(it); return g && bodyHit(g, fx, fy); }) || null;
 }
 
@@ -838,7 +852,7 @@ function drawWaves() {
     const w = it && V.waves.get(it.url);
     if (it && !w) { loadWave(it.url); return; }
     if (!w || typeof w === 'string') return;
-    const W = Math.min(8000, Math.max(1, Math.round(itLen(it) * V.pps))), H = LANE_H - 10;
+    const W = Math.min(8000, Math.max(1, Math.round(itLen(it) * V.pps))), H = (trackOf(it)?.h || LANE_H) - 10;
     c.width = W; c.height = H;
     const ctx = c.getContext('2d');
     ctx.fillStyle = '#a7e8bd';
@@ -866,17 +880,11 @@ function clipEl(it) {
     h('span', { class: 'tl-trim l' }), h('span', { class: 'tl-trim r' }));
 }
 
+// a track's head (timeline.js trackHead: hide, mute, solo, lock, rename, reorder, height) and Remove for an empty one
 function trackHead(tr) {
   const removable = tracksOf(tr.kind).length > 1 && !V.items.some((i) => i.track === tr.id);
-  const tog = (key, on, off, title) => h('button', { type: 'button', class: 'tl-tog' + (tr[key] ? ' off' : ''), title, 'aria-label': title,
-    'aria-pressed': String(!!tr[key]), onclick: () => { tr[key] = !tr[key]; timelineChanged(); } }, icon(tr[key] ? off : on));
-  return h('div', { class: 'tl-head' },
-    h('b', {}, trackName(tr)),
-    h('div', { class: 'tl-head-btns' },
-      tr.kind === 'video' ? tog('hidden', 'eye', 'eyeoff', 'Show / hide this track') : null,
-      tog('muted', 'sound', 'mute', 'Mute / unmute this track'),
-      removable ? h('button', { type: 'button', class: 'tl-tog', title: 'Remove this empty track', 'aria-label': 'Remove this empty track',
-        onclick: () => { V.tracks = V.tracks.filter((t) => t !== tr); timelineChanged(); } }, icon('close')) : null));
+  return TL.trackHead(tr, { label: trackName(tr), extra: [removable ? h('button', { type: 'button', class: 'tl-tog', title: 'Remove this empty track',
+    'aria-label': 'Remove this empty track', onclick: () => { V.tracks = V.tracks.filter((t) => t !== tr); timelineChanged(); } }, icon('close')) : null] });
 }
 
 function addTrack(kind) {
@@ -886,11 +894,12 @@ function addTrack(kind) {
 }
 
 function renderTimeline() {
+  const plays = playTracks();
   TL.render({
     corner: [h('button', { type: 'button', class: 'tl-tog', title: 'Add a video track', onclick: () => { addTrack('video'); timelineChanged(); } }, '+V'),
       h('button', { type: 'button', class: 'tl-tog', title: 'Add an audio track', onclick: () => { addTrack('audio'); timelineChanged(); } }, '+A')],
     rows: [...tracksOf('video')].reverse().concat(tracksOf('audio'))
-      .map((tr) => ({ track: tr, cls: tr.kind + (tr.hidden || tr.muted && tr.kind === 'audio' ? ' off' : ''), head: trackHead(tr) })),
+      .map((tr) => ({ track: tr, cls: tr.kind + ((tr.kind === 'video' ? plays.get(tr.id)?.hidden : plays.get(tr.id)?.muted) ? ' off' : ''), head: trackHead(tr) })),
     clipEl });
   drawWaves(); pruneEls(); preloadMedia(); updatePlayhead();
   VD.empty?.classList.toggle('hidden', V.items.length > 0);
@@ -1673,7 +1682,7 @@ function wireOnce() {
   VD.load = h('span', { class: 'hint' });
   vtp = transport({ playing: () => V.playing, play: vidPlay, pause: vidPause, seek: vidSeek, t: () => V.t, len: seqEnd },
     { step: { by: () => 1 / fpsNow(), label: 'one frame' }, fps: fpsNow, loop: { get: () => V.loop, set: (on) => { V.loop = on; store.set('deck.video.loop', on); } },
-      area: WA, keys: keyJumps(() => clipKeyTimes(TL, TL.selItem() ? [TL.selItem()] : V.items)), extra: [button('📷 Save frame', snapshotFrame, { title: 'Save this frame as an image' }), VD.load] });
+      area: WA, keys: keyJumps(() => [...clipKeyTimes(TL, TL.selItem() ? [TL.selItem()] : V.items), ...V.markers.map((m) => m.t)]), extra: [button('📷 Save frame', snapshotFrame, { title: 'Save this frame as an image' }), VD.load] });
   // Premiere-ish keys while the Video engine is on show (playback.js: Space, arrows, Home / End; the timeline's own:
   // timeline-keys.js through TL.keys, Ctrl+Z / Ctrl+Shift+Z among them)
   const tk = TL.keys();
@@ -1681,8 +1690,7 @@ function wireOnce() {
   registerUndo('video', { undo: undoEdit, redo: redoEdit, can: () => HIST.can() });
 }
 
-// Track and ruler menu items the timeline leaves to the tab (timeline.js menuAction). Rename track, lock and solo are not
-// handled here yet.
+// Track and ruler menu items the timeline leaves to the tab (timeline.js menuAction); rename, lock, solo and markers are its own.
 function menuAction(id, ctx = {}) {
   const step = 1 / fpsNow();
   if (id === 'addVideo' || id === 'addAudio') { addTrack(id === 'addVideo' ? 'video' : 'audio'); return timelineChanged(); }
@@ -1699,17 +1707,16 @@ function menuAction(id, ctx = {}) {
     return WA.set((id === 'areaStart' ? setIn : setOut)(V.range, t, len, step));
   }
   if (id === 'areaClear') return WA.set(null);
-  if (id === 'renameMarker' && ctx.marker != null) {
-    const i = ctx.marker, was = V.markers[i]?.label || '';
-    nameSheet({ title: 'Rename marker', placeholder: was || `Marker ${i + 1}`, save: (name) => { renameMarker(V, i, name || was); timelineChanged(); } });
-  }
 }
 
 // the one bar over the timeline: edits on the picked clips, snapping, zoom, and the keys behind ⓘ
 const TL_HELP = ['Drag clips to move them (onto other tracks too), drag their ends to trim, overlap two on a track to cross-fade.',
   'Shift or Ctrl / Alt picks several, a drag on an empty lane picks with a box, Alt-drag copies. Right-click or hold for more.',
+  TOOLS_HELP, 'Track heads: drag one up or down to reorder, drag its bottom edge for its height, double-click its name to rename it. '
+  + 'Drag a marker along the ruler to move it, double-click it to rename it.',
   'Keys: ' + timelineKeys().map((k) => `${k.keys} ${k.label}`).join(' · ')].join(' ');
 const timelineTools = () => [
+  TL.toolStrip(),
   iconBtn('Split at the playhead (S)', icon('cut'), () => TL.splitAtPlayhead()),
   iconBtn('Duplicate (Ctrl+J)', icon('copy'), () => TL.duplicatePicked()),
   iconBtn('Delete (Del)', icon('trash'), () => TL.removePicked()),

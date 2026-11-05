@@ -19,9 +19,17 @@
 //   runMake()                  Run (the Generate button and Ctrl+Enter call it while the table is on screen)
 //   makeState()                { label, why } for the action bar's button: what Run makes for the selection, and why
 //                              it can't (null when it can); `make:state` says when it may have changed
+//   runFrame(frame, { batch, replace })   one frame's workflow (frame.make) run as its own Run would, without it being
+//                              selected or the pane open; resolves once the result has LANDED in the frame. replace: the
+//                              result takes the place of what the frame's last chain run made (frame.make.ran.made), as
+//                              Run from here does (chain-run.js); without it, results are added as Run adds them.
+// Each run records what it read on its frame (frame.make.ran: the stamps of its plugged sources, chain-rules.js), so the
+// table can say which frames need a rerun. The wires row has Run from here / Rerun what uses this (chain-run.js).
 import { h, api, store, toast, button, iconBtn, seg, field, hint, help, info, note, runBar, clone } from './ui.js';
 import { S, CURRENT_EDIT, setBatch } from './core.js';
 import { afterQueued, fieldState, fieldTarget, fieldsBorrowed, mainPromptKey, preparePictures, renderFields, runBuilder, runValues, stop } from './generate.js';
+import { pictureForRun } from './picture-input.js';
+import { normalize } from './layer-stack.js';
 import { setupsRow } from './setups.js';
 import { tplKey } from './setups-rules.js';
 import { refused } from './tabs.js';
@@ -30,12 +38,13 @@ import { openSourcePicker } from './source-picker.js';
 import { landMade, owedTo } from './imagetools.js';
 import { isLive } from './live.js';
 import { currentTab, onNavigate } from './navigation.js';
-import { stillOf } from './table-frames.js';
+import { editDoc, flushDoc, frameStamp, freshStamps, stillOf } from './table-frames.js';
 import { DOC_KIND, nextBeside, toStage } from './table-model.js';
 import * as Table from './table.js';
-import { LANDS, canvasRect, carryWords, familiesOf, frameImageField, frameSize, makeFrames, makeTarget, noteText, pickTemplate, repointable, selfPicked, settingsFor,
-  settingsPayload, sizePair, templatesFor, wireFields, withClip } from './make-rules.js';
-import { fieldKind, isFrameWire, wireLabel } from './wire-rules.js';
+import { LANDS, canvasRect, carryWords, familiesOf, frameImageField, frameSize, makeFrames, makeTarget, noteText, pickTemplate, repointable, runValuesOf, seedsAfter,
+  selfPicked, settingsFor, settingsPayload, sizePair, templatesFor, wireFields, withClip } from './make-rules.js';
+import { downstream, fieldKind, isFrameWire, wireLabel } from './wire-rules.js';
+import { freshLayers, placeResults, sourceStamps, withSoundItem, withoutLayers } from './chain-rules.js';
 import { icon } from './icons.js';
 import { frameAudio, frameImage, frameSource, frameStill, frameVideo } from './frame-source.js';
 
@@ -82,8 +91,9 @@ function drawPanel() {
   if (P.key !== key || !host.contains(P.els?.fields) || !list.some((t) => t.id === P.st?.tpl?.id) || fieldState() !== P.st) {
     if (P.key !== key || !host.contains(P.els?.fields)) {
       P.els = { fields: h('div', { class: 'make-fields' }), notes: h('div', { class: 'make-notes' }), basics: h('div', { class: 'make-basics' }),
-        picker: h('div', { class: 'make-picker' }), head: h('div', { class: 'make-head' }), wires: h('div', { class: 'make-wires' }) };
-      host.replaceChildren(h('div', { class: 'make-panel' }, P.els.head, P.els.picker, P.els.wires, P.els.notes, P.els.basics, P.els.fields));
+        picker: h('div', { class: 'make-picker' }), head: h('div', { class: 'make-head' }), wires: h('div', { class: 'make-wires' }),
+        chain: h('div', { class: 'make-chain', role: 'status' }) };
+      host.replaceChildren(h('div', { class: 'make-panel' }, P.els.head, P.els.chain, P.els.picker, P.els.wires, P.els.notes, P.els.basics, P.els.fields));
     }
     if (P.key !== key || !list.some((t) => t.id === P.st?.tpl?.id)) {
       const settings = frame ? frame.make || null : store.get('deck.make.none', null);
@@ -96,6 +106,7 @@ function drawPanel() {
   }
   drawHead(kind, frame, list);
   drawWires(kind, frame);
+  drawChain();
 }
 const withSave = (st, kind, frame) => Object.assign(st, { save: () => keep(kind, frame) });
 
@@ -137,9 +148,11 @@ function keep(kind, frame) {
   if (!st?.tpl) return;
   store.set(`deck.make.tpl.${kind}`, st.tpl.id);
   if (!frame) { store.set('deck.make.none', settingsPayload(st)); return; }
-  frame.make = settingsPayload(st, settleInputs(frame, st));
+  frame.make = settingsPayload(st, { ...settleInputs(frame, st), ...ranOf(frame) });
   frameSaved();
 }
+// what the frame's last run read and made (frame.make.ran): kept through a change of its settings
+const ranOf = (frame) => (frame?.make?.ran ? { ran: frame.make.ran } : {});
 
 // The pictures Pick a frame copied in for this frame (frame.make.inputs, saved with it): one stays while a slot still uses it, and goes when
 // the slot takes another picture or is cleared. What is left when the frame itself is deleted goes with Settings → Projects → Clean up leftovers
@@ -198,7 +211,7 @@ function drawHead(kind, frame, list) {
   P.els.head.replaceChildren(
     runBar(button([icon('sparkle'), n > 1 ? `Run on ${n} frames` : 'Run'], () => runMake(), { cls: 'primary make-run', title: 'Run (Ctrl+Enter)' }),
       h('label', { class: 'make-batch' }, '×', batchIn),
-      iconBtn('Stop this device\'s run', icon('close'), () => stop())),
+      iconBtn('Stop this device\'s run', icon('close'), () => (CHAIN.running ? stopChainNow() : stop()))),
     h('div', { class: 'make-prog' }, P.prog.bar, P.prog.text),
     hint(n > 1 ? `For ${n} frames, one run each · ${landsWord(kind)}` : frame ? `For ${frame.label || 'the frame'} · ${landsWord(kind)}${owed ? ` · ${owed} on the way` : ''}` : `Lands as ${landsWord(kind)}`, 'make-for'));
   mirrorProgress();
@@ -292,8 +305,57 @@ function drawWires(kind, frame) {
         info(`This template has no slot of that kind (${[...new Set(spare.map((w) => wireLabel(w).replace(/ \d+$/, '').toLowerCase()))].join(', ')}), or its slots are taken by the other inputs. Pick another template, or unplug it.`)));
     }
   }
+  if (frame) rows.push(...chainRows(frame));
   el.replaceChildren(...rows);
 }
+
+// ---------------------------------------------------------------------------
+// a chain (chain-run.js): this frame's workflow and everything it feeds, rerun in order; and whether it needs a rerun
+// ---------------------------------------------------------------------------
+const CHAIN = { running: false, i: 0, n: 0, label: '' };
+const chainRun = (fn) => import('./chain-run.js').then((m) => m[fn](Table.frameById(makeTarget(P.frames).frame?.id) || makeTarget(P.frames).frame))
+  .catch((e) => toast(e.message, true));
+const stopChainNow = () => import('./chain-run.js').then((m) => m.stopChain()).catch(() => {});
+function chainRows(frame) {
+  let wires = [], stale = null;
+  try { wires = Table.tableWires() || []; stale = Table.staleReasons().get(frame.id) || null; } catch { return []; }
+  const down = downstream(wires, frame.id), flow = (f) => !!f?.make?.template;
+  const self = flow(frame) || !!P.st?.tpl, feeds = wires.some((w) => w.from === frame.id && w.on !== false);
+  const rows = [];
+  if (stale) rows.push(h('div', { class: 'make-wire-row stale' }, icon('refresh'), h('span', {}, 'Needs rerun'), info(Table.staleWords(stale))));
+  const btns = [];
+  if (self || down.some((id) => flow(Table.frameById(id)))) {
+    btns.push(button([icon('play'), 'Run from here'], () => chainRun('runFromHere'), { cls: 'small', disabled: CHAIN.running,
+      title: down.length ? `This frame, then the ${down.length} it feeds, in order` : 'This frame\'s workflow, its result in place of the last chain run\'s' }));
+  }
+  if (feeds) btns.push(button([icon('forward'), 'Rerun what uses this'], () => chainRun('rerunUsers'), { cls: 'small', disabled: CHAIN.running, title: 'Each frame this one feeds, in order' }));
+  if (btns.length) {
+    rows.push(h('div', { class: 'make-wire-row' }, ...btns,
+      info('Run from here runs this frame\'s workflow with its saved settings, waits for the result to land, then each frame it feeds, in order. A frame with no workflow passes its content through. Each result takes the place of what that frame\'s last chain run made; the old run stays in History. Run above adds as before.')));
+  }
+  return rows;
+}
+// the one status row while a chain runs
+function drawChain() {
+  const el = P.els?.chain;
+  if (!el) return;
+  if (!CHAIN.running) { el.replaceChildren(); return; }
+  el.replaceChildren(h('span', {}, `Chain: ${CHAIN.i} of ${CHAIN.n}${CHAIN.label ? `, "${CHAIN.label}"` : ''}`),
+    button([icon('close'), 'Stop'], stopChainNow, { cls: 'small', title: 'Stop the chain (and this device\'s run)' }));
+}
+// which frames need a rerun changed (table.js): the wires row says it again
+addEventListener('table:stale', () => {
+  if (!P.host || !P.st || !onTable()) return;
+  const { kind, frame } = makeTarget(P.frames);
+  if (frame && P.key === keyOf(kind, frame)) drawWires(kind, frame);
+});
+addEventListener('chain:state', (e) => {
+  Object.assign(CHAIN, { running: false, i: 0, n: 0, label: '' }, e.detail || {});
+  if (!P.host || !onTable()) return;
+  drawChain();
+  const { kind, frame } = makeTarget(P.frames);
+  if (frame && P.key === keyOf(kind, frame)) drawWires(kind, frame);
+});
 // the table's wires changed (plugged, unplugged, on or off, a frame choice): the slots draw again
 addEventListener('table:wires', () => {
   if (!P.host || !P.st || !onTable()) return;
@@ -385,35 +447,225 @@ export async function runMake() {
   let queued = 0;
   try {
     for (const f of targets) {
-      let sent = null;
-      const made = [];   // (inputs made for the wires into this frame)
+      let r = null;
       try {
-        const values = clone(base);
-        const imgF = kind === 'image' ? frameImageField(t) : null;
-        if (imgF) { sent = await frameSource(f, { multiple: 16 }); values[imgF.key] = sent.name; }
-        if (f && (kind === 'image' || kind === 'video')) {   // (each frame's own size)
-          const pair = sizePair(t), s = frameSize(pair, f);
-          if (s) { values[pair[0].key] = s.w; values[pair[1].key] = s.h; }
-        }
-        const wired = await resolveWires(kind, f, t, st, values, made);
-        if (imgF) wired.add(imgF.key);
-        await preparePictures(values, wired);
-        const batch = S.batch;
-        const gens = await queueRun({ template: t.id, values, batch, builder, timeout: 120000 });
-        afterQueued(gens, batch);
-        holdInputs(f, made.splice(0), gens);
-        await land(kind, f, t, gens, sent, values);
-        dispatchEvent(new CustomEvent('make:queued', { detail: { frame: f, kind, gens } }));
-        queued += gens.length;
+        r = await queueOne({ kind, f, t, st, base, builder, batch: S.batch, prepare: preparePictures, afterQ: afterQueued });
+        await land(kind, f, t, r.gens, r.sent, r.values);
+        if (f) ranWhenDone(f, r.gens, r.stamps);
+        dispatchEvent(new CustomEvent('make:queued', { detail: { frame: f, kind, gens: r.gens } }));
+        queued += r.gens.length;
       } catch (e) {
-        if (sent) dropInput(sent.name);
-        made.forEach(dropInput);
+        if (r?.sent) dropInput(r.sent.name);
         toast(targets.length > 1 ? `${f?.label || 'A frame'}: ${e.message}` : e.message, true);
       }
     }
     if (queued) toast(`${queued > 1 ? `Queued ${queued}` : 'Queued'}${targets.length > 1 ? ` on ${targets.length} frames` : ''}: ${landsWord(kind)}`);
     if (P.els) drawHead(kind, frame, templatesFor(S.templates, kind));
   } finally { running = false; }
+}
+
+// One frame's run queued (null: nothing selected, new frames): its own picture and size, the wires into it resolved, the
+// pictures prepared (prepare(values, skip)), afterQ(gens, batch) once queued. What a failed step made is dropped here; the
+// picture sent is the caller's to drop if landing fails. Returns { gens, sent, values, stamps (what the wires read), before
+// (an image frame's layer names before the run, when asked: chain landing) }.
+async function queueOne({ kind, f, t, st, base, builder, batch, prepare, afterQ, layersBefore = false }) {
+  let sent = null;
+  const made = [];   // (inputs made for the wires into this frame)
+  try {
+    const values = clone(base);
+    const imgF = kind === 'image' ? frameImageField(t) : null;
+    if (imgF) { sent = await frameSource(f, { multiple: 16 }); values[imgF.key] = sent.name; }
+    if (f && (kind === 'image' || kind === 'video')) {   // (each frame's own size)
+      const pair = sizePair(t), s = frameSize(pair, f);
+      if (s) { values[pair[0].key] = s.w; values[pair[1].key] = s.h; }
+    }
+    const stamps = f ? await readStamps(f) : null;
+    const wired = await resolveWires(kind, f, t, st, values, made);
+    if (imgF) wired.add(imgF.key);
+    await prepare(values, wired);
+    const before = layersBefore && kind === 'image' && f ? new Set((await layersOf(f)).map((l) => l.name)) : null;
+    const gens = await queueRun({ template: t.id, values, batch, builder, timeout: 120000 });
+    afterQ(gens, batch);
+    holdInputs(f, made.splice(0), gens);
+    return { gens, sent, values, stamps, before };
+  } catch (e) {
+    if (sent) dropInput(sent.name);
+    made.forEach(dropInput);
+    throw e;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// what a run read (frame.make.ran, chain-rules.js): the stamp of each source plugged in by an ON wire, read fresh (a source
+// open with edits not yet saved is saved first, so the stamp is of what the run reads)
+// ---------------------------------------------------------------------------
+async function readStamps(f) {
+  let ins = [];
+  try { ins = (Table.wiresInto(f.id) || []).filter((w) => w.on !== false); } catch { return {}; }
+  if (!ins.length) return {};
+  const srcs = ins.map((w) => Table.frameById(w.from)).filter(Boolean);
+  await Promise.all(srcs.map((x) => flushDoc(x)));
+  await freshStamps(srcs).catch(() => {});
+  return sourceStamps(Table.tableWires() || [], f.id, Table.tableFrames() || [], frameStamp);
+}
+// frame.make.ran set (made: what a chain run landed; undefined keeps the last chain run's), saved with the table
+function recordRan(f, sources, made = undefined) {
+  const cur = Table.frameById(f.id) || f, was = cur.make?.ran;
+  const keepMade = made !== undefined ? made : was?.made;
+  cur.make = { ...(cur.make || {}), ran: { at: Date.now(), sources: sources || {}, ...(keepMade ? { made: keepMade } : {}) } };
+  frameSaved();
+}
+// a Run from the pane: what it read is recorded once a run of it is done (its results are added; made stays the chain's)
+function ranWhenDone(f, gens, stamps) {
+  Promise.allSettled(gens.map((g) => waitGen(g.id))).then((rs) => { if (rs.some((x) => x.status === 'fulfilled')) recordRan(f, stamps); });
+}
+
+// ---------------------------------------------------------------------------
+// one frame's run, as its own Run would, without the frame being selected or the pane open (chain-run.js)
+// ---------------------------------------------------------------------------
+// the settings a frame runs with: the pane's own when it shows this frame, else its saved ones (frame.make); null: none
+function settingsOf(f) {
+  if (P.st?.tpl && P.key === keyOf(f.kind, f)) return P.st;
+  const t = templatesFor(S.templates, f.kind).find((x) => x.id === f.make?.template);
+  if (!t) return null;
+  const st = settingsFor(t, f.make);
+  st.save = () => { const cur = Table.frameById(f.id) || f; cur.make = settingsPayload(st, { ...(cur.make?.inputs ? { inputs: cur.make.inputs } : {}), ...ranOf(cur) }); frameSaved(); };
+  return st;
+}
+// pictures as their cropped copies, masks with the picture they were painted on (generate.js preparePictures, for these settings)
+async function preparePicturesOf(st, values, skip = new Set()) {
+  for (const f of st.tpl.fields) {
+    if (f.kind !== 'image' || skip.has(f.key)) continue;
+    const c = st.imageCrop?.[f.key];
+    values[f.key] = await pictureForRun(values[f.key], c && c.src === values[f.key] ? c.crop : null, st.imageMp?.[f.key] ?? 1);
+  }
+  for (const f of st.tpl.fields) {
+    const m = f.kind === 'mask' ? values[f.key] : null;
+    if (m?.name) values[f.key] = { ...m, src: values[f.image_key], crop: null };
+  }
+  return values;
+}
+
+export async function runFrame(frame, { batch = 1, replace = false } = {}) {
+  const f = Table.frameById(frame?.id) || frame, kind = f?.kind, name = f?.label || 'This frame';
+  if (!f || kind === 'note') throw new Error('A note has no workflow');
+  if (!S.templates?.length) throw new Error('The templates are still loading');
+  const st = settingsOf(f), t = st?.tpl;
+  if (!t) throw new Error(`${name} has no workflow: pick a template in its Make pane`);
+  if (t.error) throw new Error(`${t.name} has an error: pick another template for ${name}`);
+  if (DOC_KIND[kind] && !f.doc) throw new Error(`${name} has no document yet`);
+  const pk = mainPromptKey(t);
+  const builder = pk && st.pb?.on ? { parts: st.pb.parts, subjects: st.pb.subjects } : null;
+  const afterQ = (gens, n) => {
+    if (st === fieldState()) return afterQueued(gens, n);
+    Object.assign(S.lastSeed, seedsAfter(st, gens, n));
+    st.save?.();
+  };
+  const r = await queueOne({ kind, f, t, st, base: runValuesOf(st), builder, batch, prepare: (v, skip) => preparePicturesOf(st, v, skip), afterQ, layersBefore: true });
+  dispatchEvent(new CustomEvent('make:queued', { detail: { frame: f, kind, gens: r.gens } }));
+  let made;
+  try { made = await landNow(kind, f, t, r, replace); } catch (e) { if (r.sent && kind !== 'image') dropInput(r.sent.name); throw e; }
+  recordRan(f, r.stamps, replace ? made || [] : undefined);
+  if (P.host && onTable()) draw();
+  return { gens: r.gens, made };
+}
+
+// the runs done (the ones that worked); all failed: the first one's error
+async function doneRuns(gens) {
+  const rs = await Promise.allSettled(gens.map((g) => waitGen(g.id)));
+  const ok = rs.filter((x) => x.status === 'fulfilled').map((x) => x.value);
+  if (!ok.length) throw rs.find((x) => x.status === 'rejected')?.reason || new Error('The run failed');
+  return ok;
+}
+// A run's results into its frame, resolving once they are there; replace: in place of what the last chain run made
+// (frame.make.ran.made, and nothing else). Returns what landed (layer names, item ids) where that can be told, else null.
+async function landNow(kind, f, t, r, replace) {
+  const old = replace ? f.make?.ran?.made || [] : [];
+  if (kind === 'image') {
+    await landLayers(f, t, r.gens, r.sent);
+    const done = await doneRuns(r.gens);
+    const names = await waitLayers(f, r.before || new Set(), t.name, done.length);
+    if (!names.length) throw new Error(`the result isn't in "${f.label || 'the frame'}" yet (it lands when the frame next opens; the run is in History)`);
+    if (replace) await removeLayers(f, old.filter((n) => !names.includes(n)));
+    await flushDoc(f);
+    return names;
+  }
+  const done = await doneRuns(r.gens);
+  if ((kind === 'video' || kind === 'sound') && replace) return landInPlace(kind, f, done, old);
+  for (const d of done) {
+    if (kind === 'video') await landClips(f, d);
+    else if (kind === 'sound') landSounds(f, d);
+    else if (kind === 'scene') await landScene(f, d);
+    else inShelf(d);
+  }
+  return null;
+}
+
+// an image frame's layers, as they are now: the open editor's when the frame is live, else its saved edit's
+function liveEng(f) {
+  const eng = CURRENT_EDIT.eng;
+  return isLive(f.id) && eng?.E?.tab?.id === f.doc && !eng.docOnly ? eng : null;
+}
+async function layersOf(f) {
+  const eng = liveEng(f);
+  if (eng) return eng.E.layers || [];
+  return (await api(docUrl('image', f.doc), { busy: false }).catch(() => null))?.payload?.layers || [];
+}
+// the layers a run landed (imagetools.js landMade names them after the template): up to a minute for them to be there
+async function waitLayers(f, before, label, want) {
+  let names = [];
+  for (let i = 0; i < 120; i++) {
+    names = freshLayers(before, await layersOf(f), label);
+    if (names.length >= want) break;
+    await new Promise((go) => setTimeout(go, 500));
+  }
+  return names;
+}
+// the last chain run's layers out of the frame (and only those): from the open editor, else from the saved edit
+async function removeLayers(f, names) {
+  if (!names.length) return;
+  const eng = liveEng(f);
+  if (eng) {
+    const r = withoutLayers(eng.E.layers, names);
+    if (!r.removed) return;
+    eng.E.layers = normalize(r.layers, eng.E.groups || []);
+    if (eng.E.sel && !eng.E.layers.includes(eng.E.sel)) eng.E.sel = null;
+    if (Array.isArray(eng.E.multi)) eng.E.multi = eng.E.multi.filter((l) => eng.E.layers.includes(l));
+    eng.changed(); eng.render();
+    return;
+  }
+  const changed = await editDoc('image', f.doc, (p) => {
+    const r = withoutLayers(p.layers, names);
+    if (!r.removed) return false;
+    p.layers = normalize(r.layers, p.groups || []);
+  });
+  if (!changed) return;
+  try { await (await import('./frame-image.js')).drawOffscreen(f.doc); } catch (e) { console.warn(e); }
+  Table.refreshStills(['image']).catch(() => {});
+}
+// a video or sound frame: the run's outputs into its saved document, the first in place of the last chain run's item (its
+// track, place, trim start and transform kept), the rest at the end; an open timeline saves first and picks it up after
+async function landInPlace(kind, f, done, old) {
+  const medias = [];
+  for (const d of done) {
+    for (const [index, o] of (d.outputs || []).entries()) {
+      const ok = kind === 'video' ? o.kind === 'video' || o.kind === 'image' : o.kind === 'audio';
+      if (!ok) continue;
+      const dur = o.kind === 'image' ? 0 : o.duration || await durationOf(o.url);
+      medias.push({ kind: o.kind, src: { generation: d.id, index }, url: o.url, label: `#${d.id}`, dur });
+    }
+  }
+  if (!medias.length) { done.forEach(inShelf); return old; }
+  await flushDoc(f);
+  let made = old;
+  const newId = () => Math.random().toString(36).slice(2, 10);
+  await editDoc(kind, f.doc, (p) => {
+    const r = placeResults(p, old, medias, { append: kind === 'video' ? withClip : withSoundItem, newId });
+    made = r.made;
+    Object.assign(p, r.payload);
+  });
+  Table.refreshStills([kind]).catch(() => {});
+  return made;
 }
 
 function land(kind, frame, t, gens, sent, values) {

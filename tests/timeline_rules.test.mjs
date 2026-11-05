@@ -188,6 +188,23 @@ test('copy and paste at the playhead onto valid tracks', () => {
   assert.equal(copy(d, []), null);
 });
 
+test('paste inserts: an overlap on its track moves the clips at and after the playhead right by the pasted length', () => {
+  const d = doc();
+  const clip = copy(d, ['a']);   // 2 s on v1
+  const [id] = paste(d, clip, 2, o);
+  assert.deepEqual([at(d, id).track, at(d, id).at], ['v1', 2]);
+  assert.deepEqual(['a', 'b', 'c', 'd'].map((x) => at(d, x).at), [0, 4, 8, 1]);   // a ends at the playhead: stays; v2 untouched
+  const e = doc();
+  paste(e, clip, 1, o);   // a starts before the playhead: it stays (and cross-fades); b and c make room
+  assert.deepEqual(['a', 'b', 'c'].map((x) => at(e, x).at), [0, 4, 8]);
+  const f = doc();
+  paste(f, clip, 10, o);   // no overlap: nothing moves
+  assert.deepEqual(['a', 'b', 'c'].map((x) => at(f, x).at), [0, 2, 6]);
+  const g = doc();
+  paste(g, clip, 2, o, { insert: false });   // insert off: it piles on
+  assert.equal(at(g, 'b').at, 2);
+});
+
 test('nudge moves the group, not before 0', () => {
   const d = doc();
   assert.equal(nudge(d, ['b', 'c'], 0.5, o), 0.5);

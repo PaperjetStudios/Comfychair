@@ -1,10 +1,12 @@
 import { $, h, store, uid, toast, undoToast, clamp, panFmt, pctFmt, rangeField, icon } from './ui.js';
 import { keyTimes, keyedRange, setValue, value } from './keyed.js';
+import { EASES, putKey } from './keys.js';
 import * as R from './timeline-rules.js';
 import { commandFor } from './timeline-keys.js';
 import { clipMenu, trackMenu, rulerMenu, pickedFor } from './layer-menu.js';
 import { pressMenu, openPressMenu } from './press-menu.js';
 import { snap, snapOn, gzChip } from './gizmo.js';
+import { heightGrip } from './layout.js';
 
 // ---------------------------------------------------------------------------
 // The timeline the Video and Sound tabs share: clips on tracks, moved (also to another track) and
@@ -26,7 +28,13 @@ import { snap, snapOn, gzChip } from './gizmo.js';
 // Optional, beside the above: fps (number or getter: nudges and the frame grid), placed(ids) (a drag frame: light redraw
 // instead of dragged()), undo(), redo(), zoomBy(f), tc(seconds) (ruler labels), toolChanged(tool), trackKinds (the kinds
 // of track Add offers, default ['video', 'audio']), menuAction(id, ctx) (track and ruler menu items the timeline can't do
-// itself: ctx { track } or { t, marker }). o.lanes (a clip's keyframe lanes, timeline-rules.js) is reserved, not called yet.
+// itself: ctx { track } or { t, marker }).
+// Tools (TL.tool, TL.toolStrip(), keys V C B Y H, Esc back to Select): Select; Razor (a click cuts the clip under it at the
+// line it shows, Shift+click every unlocked clip there); Ripple (a trim or a move pushes the later clips on that track);
+// Slip (a drag shows another part of a clip's source, keeping its place and length); Hand (a drag pans).
+// Track heads: TL.trackHead(tr, { label, extra }) (hide, mute, solo, lock, rename in place, drag to reorder, height grip).
+// Markers (st.markers): M adds one, a drag on the ruler moves it, a double-click renames it.
+// Keyframe lanes: a clip with keys gets a twirl; open (st.open, not saved) it shows o.lanes(it, { pps }) under its track.
 //
 // An image clip (Video only) has no source time: trimming its start or splitting it changes its length.
 // ---------------------------------------------------------------------------
@@ -80,20 +88,48 @@ export function clipSoundFields(it, len, { onInput, onChange, level = true, pan 
   ];
 }
 
+// the eases a keyframe lane offers: keys.js's that app/keyexpr.py EASES also knows, so the preview and the export agree
+export const LANE_EASES = ['smooth', 'linear', 'in', 'out', 'const'].filter((e) => EASES.some(([n]) => n === e));
+
 // A clip's animated properties (keyed.js, After Effects style), the same in Video and Sound. Its keys are in the
 // clip's own source time, so moving or trimming the clip keeps the animation on the picture or the sound.
 //   const K = clipKeys(TL, st, { fps() (keys land on these steps), base: { ch: unset value }, pause, seek, onKeys, live });
 //   K.prop(it, ch, t?) the value at timeline time t (default the playhead); K.setProp(it, ch, v) a change now;
 //   K.field(it, label, ch, opts) its slider with ◀ ◆ ▶; K.diamonds(it, pps, tc) its keys on the clip
-export function clipKeys(TL, st, { fps, base, pause, seek, onKeys, live = {} }) {
+// A field's edit (a value, a key put or taken away, Reset) reaches every picked clip that suits(clip, ch): each gets the
+// primary's value at the playhead, keyed where the primary is keyed there, its keys on ch gone where the primary has none.
+export function clipKeys(TL, st, { fps, base, pause, seek, onKeys, live = {}, suits = () => true }) {
   const clipT = (it, t = st.t) => { const f = fps(); return Math.round((it.in + clamp(t - it.at, 0, TL.len(it))) * f) / f; };
   const baseOf = (it, ch) => it[ch] ?? base[ch];
+  const keyedAt = (it, ch, f) => (it.chans?.[ch] || []).some((k) => Math.abs(k.f - f) < 1e-3);
+  function spread(it, ch) {
+    const v = value(it, ch, clipT(it), baseOf(it, ch)), anim = !!it.chans?.[ch]?.length, here = anim && keyedAt(it, ch, clipT(it));
+    for (const o of TL.picked()) {
+      if (!o || o === it || !suits(o, ch)) continue;
+      const f = clipT(o);
+      if (!anim) {
+        if (o.chans?.[ch]) { delete o.chans[ch]; if (!Object.keys(o.chans).length) delete o.chans; }
+        if (it[ch] === undefined) delete o[ch]; else o[ch] = it[ch];
+        continue;
+      }
+      if (here) { o.chans ||= {}; putKey(o.chans, ch, f, v); }
+      else if (o.chans?.[ch]) {
+        o.chans[ch] = o.chans[ch].filter((k) => Math.abs(k.f - f) >= 1e-3);
+        if (!o.chans[ch].length) delete o.chans[ch];
+        if (!Object.keys(o.chans).length) delete o.chans;
+      }
+    }
+  }
   return {
+    spread,
     clipT,
     prop: (it, ch, t = st.t) => value(it, ch, clipT(it, t), baseOf(it, ch)),
     setProp: (it, ch, v) => setValue(it, ch, clipT(it), v, (x) => { it[ch] = x; }),
     field: (it, label, ch, opts) => keyedRange(label, { item: it, ch, t: () => clipT(it), base: () => baseOf(it, ch),
-      setBase: (v) => { it[ch] = v; }, seek: (ct) => { pause(); seek(it.at + ct - it.in); }, onKeys, def: base[ch], ...live, ...opts }),
+      setBase: (v) => { it[ch] = v; }, seek: (ct) => { pause(); seek(it.at + ct - it.in); }, def: base[ch], ...live, ...opts,
+      onKeys: () => { spread(it, ch); onKeys?.(); },
+      onInput: () => { spread(it, ch); (opts?.onInput || live.onInput)?.(); },
+      onChange: () => { spread(it, ch); (opts?.onChange || live.onChange)?.(); } }),
     diamonds: (it, pps, tc) => keyTimes(it).filter((f) => f >= it.in - 1e-3 && f <= it.in + TL.len(it) + 1e-3)
       .map((f) => h('span', { class: 'tl-key', style: `left:${(f - it.in) * pps}px`, title: `Key at ${tc(it.at + f - it.in)}` })),
   };
@@ -111,6 +147,13 @@ export const clipKeyTimes = (TL, items) => items.flatMap((it) => keyTimes(it).fi
 const RULER_STEPS = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
 const MOVE_PX = 5;   // a press moves this far before it counts as a drag
 const TOOLS = ['select', 'razor', 'ripple', 'slip', 'hand'];
+const TOOL_BTNS = [['select', 'select', 'Select (V)'], ['razor', 'cut', 'Razor (C)'], ['ripple', 'range', 'Ripple (B)'],
+  ['slip', 'swap', 'Slip (Y)'], ['hand', 'hand', 'Hand (H)']];
+// the tools, for the tab's ⓘ
+export const TOOLS_HELP = 'Tools: Select (V); Razor (C): click a clip to cut it at the line, Shift+click cuts every unlocked track there; '
+  + 'Ripple (B): trimming or moving a clip pushes the later clips on its track along; Slip (Y): drag a clip to show another part of its '
+  + 'source, its place and length stay; Hand (H): drag to pan. Esc goes back to Select.';
+const MIN_H = 24, MAX_H = 240;   // a track's height (px)
 let clipboard = null;   // copy / cut / paste: one for every timeline, so clips go from one tab's timeline to another's
 
 export function timeline(st, o) {
@@ -122,6 +165,7 @@ export function timeline(st, o) {
   const selItem = () => st.items.find((i) => i.id === st.sel) || null;
   const trackEnd = (track) => st.items.filter((i) => i.track === track).reduce((m, i) => Math.max(m, end(i)), 0);
   if (!Array.isArray(st.multi)) st.multi = [];
+  if (!Array.isArray(st.open)) st.open = [];   // clips whose keyframe lanes are open (not saved with the doc)
   const fpsNow = () => (typeof o.fps === 'function' ? o.fps() : o.fps) || 0;
   const ro = () => ({ minLen, fps: fpsNow() || undefined, canDrop: o.canDrop, uid });   // the rules' options
   let tool = 'select', boxOn = false, swallow = false, menuOpened = false;
@@ -203,14 +247,33 @@ export function timeline(st, o) {
     const ruler = h('div', { class: 'tl-ruler', style: `background-size:${(major * st.pps) / 5}px 100%` });
     for (let s = 0; s <= span; s += major) ruler.append(h('span', { style: `left:${s * st.pps}px` }, rulerText(s)));
     (st.markers || []).forEach((m, i) => ruler.append(h('i', { class: 'tl-marker', style: `left:${m.t * st.pps}px`, 'data-i': i,
-      title: m.label || `Marker ${i + 1}` })));
+      title: m.label || `Marker ${i + 1}` }, m.label ? h('b', { class: 'tl-marker-label' }, m.label) : null)));
     const area = o.area?.();
     if (area) ruler.append(...area.el());
     const inner = h('div', { class: 'tl-inner', style: `width:${o.headW + span * st.pps}px` },
       h('div', { class: 'tl-row tl-ruler-row' }, h('div', { class: 'tl-head tl-corner' }, ...corner), ruler));
+    st.open = st.open.filter((id) => st.items.some((i) => i.id === id && keyTimes(i).length));
+    const withTwirl = (it) => {
+      const el = clipEl(it);
+      if (o.lanes && keyTimes(it).length) {
+        const on = st.open.includes(it.id), what = on ? 'Hide its keyframes' : 'Show its keyframes';
+        el.append(h('button', { type: 'button', class: 'tl-twirl' + (on ? ' on' : ''), title: what, 'aria-label': what,
+          'aria-expanded': String(on) }, icon(on ? 'chevdown' : 'chevron')));
+      }
+      return el;
+    };
     for (const r of rows) {
-      inner.append(h('div', { class: `tl-row ${r.cls}${r.track.locked ? ' locked' : ''}` }, r.head,
-        h('div', { class: 'tl-lane', 'data-track': r.track.id }, st.items.filter((i) => i.track === r.track.id).map(clipEl))));
+      const on = st.items.filter((i) => i.track === r.track.id);
+      inner.append(h('div', { class: `tl-row ${r.cls}${r.track.locked ? ' locked' : ''}`, 'data-track': r.track.id,
+        style: r.track.h ? `height:${r.track.h}px` : null }, r.head,
+        h('div', { class: 'tl-lane', 'data-track': r.track.id }, on.map(withTwirl))));
+      if (!o.lanes) continue;
+      for (const it of on.filter((i) => st.open.includes(i.id)).sort((a, b) => a.at - b.at)) {
+        for (const row of o.lanes(it, { pps: st.pps }) || []) {   // (a row with no head of its own starts its lane after the heads)
+          if (!row.querySelector(':scope > .tl-head')) row.style.paddingLeft = `${o.headW}px`;
+          inner.append(row);
+        }
+      }
     }
     inner.append(h('div', { class: 'tl-playhead' }));
     const { scrollLeft, scrollTop } = tl;
@@ -292,7 +355,8 @@ export function timeline(st, o) {
   // a locked track's clips stay, rows change for all or none, and it snaps to clip edges, the playhead, markers, the work
   // area and the frame grid (Alt while dragging: free). it not picked: it alone first. dup: copies of the set are made
   // when the drag starts and dragged instead. pps, trackAt: as dragClip; rows(): the track ids top to bottom there.
-  function dragPicked(e, it, mode, { pps = st.pps, trackAt = laneAt, rows = () => rowTracks().map((t) => t.id), dup = false, onTap = null } = {}) {
+  // ripple: a trim pushes the later clips on the track; a move takes every clip after the moved ones on their tracks along.
+  function dragPicked(e, it, mode, { pps = st.pps, trackAt = laneAt, rows = () => rowTracks().map((t) => t.id), dup = false, ripple = false, onTap = null } = {}) {
     const x0 = e.clientX, y0 = e.clientY;
     let ids = null, g = null, vd = null, row0 = -1, dTrack = 0, points = [];
     const begin = () => {
@@ -309,6 +373,12 @@ export function timeline(st, o) {
         if (o.rendered) o.rendered(); else o.dragged();   // (new clips: a full redraw)
       }
       ids = [lead, ...set.filter((x) => x !== lead)];
+      if (ripple && mode === 'move') {   // and everything after them on their tracks
+        const from = new Map();
+        for (const x of R.editable(st, ids)) from.set(x.track, Math.min(from.get(x.track) ?? Infinity, x.at));
+        const after = st.items.filter((x) => from.has(x.track) && x.at >= from.get(x.track) - 1e-6 && !ids.includes(x.id)).map((x) => x.id);
+        ids = [...ids, ...after];
+      }
       g = R.grab(st);
       const order = rows();
       vd = viewDoc(order.map((id) => st.tracks.find((t) => t.id === id)).filter(Boolean));
@@ -322,9 +392,9 @@ export function timeline(st, o) {
       const sn = snapOn('tl', ev) ? { points, tol: 8 / pps } : { snap: false };
       if (mode === 'move') {
         const tr = trackAt(ev), r = tr != null ? vd.tracks.findIndex((t) => t.id === tr) : -1;
-        if (r >= 0 && row0 >= 0) dTrack = r - row0;
+        if (r >= 0 && row0 >= 0 && !ripple) dTrack = r - row0;
         R.moveSet(vd, ids, g, dt, { dTrack, ...sn }, ro());
-      } else R.trim(st, ids, g, mode, dt, sn, ro());
+      } else R.trim(st, ids, g, mode, dt, { ...sn, ripple }, ro());
       frame(ids);
     }, (ev) => { if (ids) o.changed(); else onTap?.(ev); });
   }
@@ -342,16 +412,184 @@ export function timeline(st, o) {
     if (!it) return;
     e.preventDefault();
     if (tool === 'hand') return startPan(e);
+    if (tool === 'razor') return razorCut(e, it);
     const mode = e.target.classList.contains('tl-trim') ? (e.target.classList.contains('l') ? 'l' : 'r') : 'move';
+    if (tool === 'slip' && mode === 'move') return startSlip(e, it);
     const ctrl = e.ctrlKey || e.metaKey, shift = e.shiftKey, alt = e.altKey && !ctrl && !shift;
     if (shift || ctrl) { pick(it, e); if (!isSel(it)) return; }
     else if (!alt && !isSel(it)) pick(it);
     const several = pickedIds().length > 1;
-    dragPicked(e, it, mode, { dup: alt, onTap: () => {
+    dragPicked(e, it, mode, { dup: alt && tool !== 'ripple', ripple: tool === 'ripple', onTap: () => {
       if (menuOpened) return;   // (a long hold opened the menu)
       if (alt) pick(it, { altKey: true });
       else if (!shift && !ctrl && several) applySel({ sel: it.id, multi: [] });
     } });
+  }
+  // ---- the tools' own gestures ----
+  const isLocked = (it) => !!st.tracks.find((t) => t.id === it.track)?.locked;
+  // a time under the pointer, snapped as a drag snaps (clip edges, the playhead, markers, the work area, else the frame grid;
+  // Alt: free). exclude: clip ids whose edges don't count; markers: the markers that do (default all)
+  function snapTime(ev, { exclude = [], markers = st.markers } = {}) {
+    const t = Math.max(0, timeAt(ev));
+    if (!snapOn('tl', ev)) return t;
+    const pts = R.snapPoints({ tracks: st.tracks, items: st.items, markers }, { exclude, t: st.t, area: areaRange() }, ro());
+    let best = null;
+    for (const p of pts) if (Math.abs(p - t) <= 8 / st.pps && (best == null || Math.abs(p - t) < Math.abs(best - t))) best = p;
+    if (best != null) return best;
+    const f = fpsNow();
+    return f ? Math.round(t * f) / f : t;
+  }
+  // the razor: the line it would cut at, over the clip under the pointer (Shift: over every track)
+  let cutLine = null;
+  const hideCut = () => { cutLine?.remove(); };
+  function showCut(e) {
+    const clip = tool === 'razor' && e.target.closest?.('.tl-clip'), it = clip && st.items.find((i) => i.id === clip.dataset.id);
+    const inner = box()?.querySelector('.tl-inner');
+    if (!it || !inner) return hideCut();
+    const t = snapTime(e), ok = t > it.at + 0.02 && t < end(it) - 0.02 && (e.shiftKey || !isLocked(it));
+    cutLine ||= h('div', { class: 'tl-cutline' });
+    const ir = inner.getBoundingClientRect(), lr = clip.parentElement.getBoundingClientRect();
+    Object.assign(cutLine.style, { left: `${o.headW + t * st.pps}px`, top: e.shiftKey ? '0px' : `${lr.top - ir.top}px`,
+      height: e.shiftKey ? `${inner.scrollHeight}px` : `${lr.height}px` });
+    cutLine.classList.toggle('no', !ok);
+    if (cutLine.parentElement !== inner) inner.append(cutLine);
+  }
+  // a razor click: cut this clip at the line (Shift: every unlocked clip under it)
+  function razorCut(e, it) {
+    swallow = true;
+    const t = snapTime(e);
+    if (!e.shiftKey) {
+      if (isLocked(it)) return toast('That clip is on a locked track', true);
+      if (!(t > it.at + 0.02 && t < end(it) - 0.02)) return;
+    }
+    const made = R.splitAt(st, e.shiftKey ? [] : [it.id], t, ro());
+    if (!made.length) return toast('Nothing to cut there', true);
+    hideCut();
+    o.changed();
+  }
+  // a slip drag: the clip keeps its place and length and shows another part of its source (the picture follows the pointer)
+  function startSlip(e, it) {
+    if (!isSel(it)) pick(it, e.shiftKey || e.ctrlKey || e.metaKey ? e : {});
+    if (isLocked(it)) return toast('That clip is on a locked track', true);
+    const still = o.still ? o.still(it) : it.kind === 'image';
+    if (still) return toast('A still has no source time to slip', true);
+    const x0 = e.clientX, g = R.grab(st);
+    let moved = false;
+    dragWindow((ev) => {
+      if (!moved && Math.abs(ev.clientX - x0) < MOVE_PX) return;
+      if (!moved) { moved = true; swallow = true; }
+      R.slip(st, it.id, g, -(ev.clientX - x0) / st.pps, ro());
+      frame([it.id]);
+    }, () => { if (moved) o.changed(); });
+  }
+  // a marker dragged along the ruler (snapping as a clip does); a tap on it puts the playhead there
+  const markerAt = (e) => (st.markers || []).findIndex((m) => Math.abs(m.t - timeAt(e)) * st.pps < 6);
+  function startMarkerDrag(e, i) {
+    e.preventDefault();
+    o.pause();
+    const x0 = e.clientX, m = st.markers[i], el = box().querySelector(`.tl-marker[data-i="${i}"]`);
+    let moved = false;
+    dragWindow((ev) => {
+      if (!moved && Math.abs(ev.clientX - x0) < MOVE_PX) return;
+      moved = true;
+      R.moveMarker(st, st.markers.indexOf(m), snapTime(ev, { markers: st.markers.filter((x) => x !== m) }));
+      if (el) el.style.left = `${m.t * st.pps}px`;
+    }, () => { if (moved) o.changed(); else o.seek(m.t); });
+  }
+  // a name edited in place: an input over el (replace: in its place) until Enter / leaving it; Esc keeps the old name
+  function inlineEdit(el, value, done, { replace = true, cls = '' } = {}) {
+    const input = h('input', { type: 'text', class: `tl-rename ${cls}`, value, maxLength: 80, 'aria-label': 'Name' });
+    let over = false;
+    const finish = (keep) => {
+      if (over) return;
+      over = true;
+      if (replace) input.replaceWith(el); else input.remove();
+      const v = input.value.trim();
+      if (keep && v !== value) done(v);
+    };
+    input.addEventListener('keydown', (ev) => {
+      ev.stopPropagation();
+      if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
+      else if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
+    for (const k of ['pointerdown', 'dblclick', 'click']) input.addEventListener(k, (ev) => ev.stopPropagation());
+    if (replace) el.replaceWith(input); else el.append(input);
+    input.focus(); input.select();
+  }
+  function renameTrack(tr) {
+    const b = box()?.querySelector(`.tl-head[data-track="${CSS.escape(String(tr.id))}"] .tl-name`);
+    if (!b) return;
+    inlineEdit(b, tr.name || b.textContent, (v) => { R.trackRename(st, tr.id, v); o.changed(); });
+  }
+  function renameMarker(i) {
+    const el = box()?.querySelector(`.tl-marker[data-i="${i}"]`), m = st.markers?.[i];
+    if (!el || !m) return;
+    inlineEdit(el, m.label || '', (v) => { R.renameMarker(st, st.markers.indexOf(m), v); o.changed(); }, { replace: false, cls: 'tl-marker-rename' });
+  }
+  // a track head dragged up or down: the track takes the place of the one of its kind it is let go over
+  function startTrackDrag(e, head) {
+    const tr = st.tracks.find((t) => t.id === head.dataset.track);
+    if (!tr) return;
+    const y0 = e.clientY, row = head.closest('.tl-row'), kind = tr.kind || 'audio';
+    let moved = false, over = null;
+    const mark = (r) => { box()?.querySelectorAll('.tl-row.tl-drop').forEach((x) => x.classList.remove('tl-drop')); r?.classList.add('tl-drop'); };
+    dragWindow((ev) => {
+      if (!moved && Math.abs(ev.clientY - y0) < MOVE_PX) return;
+      if (!moved) { moved = true; swallow = true; row?.classList.add('tl-dragging'); }
+      const r = document.elementFromPoint(ev.clientX, ev.clientY)?.closest?.('.tl-row[data-track]');
+      const t = r && box()?.contains(r) ? st.tracks.find((x) => x.id === r.dataset.track) : null;
+      over = t && (t.kind || 'audio') === kind ? t : null;
+      mark(over && over !== tr ? r : null);
+    }, () => {
+      row?.classList.remove('tl-dragging'); mark(null);
+      if (!moved || !over || over === tr) return;
+      R.trackReorder(st, tr.id, st.tracks.indexOf(over));
+      o.changed();
+    });
+  }
+  // A track's head, the same in every tab: its name (double-click renames it in place), hide (video), mute, solo and lock,
+  // the tab's own buttons (extra), a drag to reorder it and a grip on its bottom edge for its height (saved as tr.h).
+  function trackHead(tr, { label = tr.name || '', extra = [] } = {}) {
+    const flip = (key, set) => () => { set ? set() : (tr[key] = !tr[key]); o.changed(); };
+    const tog = (key, onIco, offIco, title, cls, set) => h('button', { type: 'button', class: `tl-tog${tr[key] ? ` ${cls}` : ''}`, title,
+      'aria-label': title, 'aria-pressed': String(!!tr[key]), onclick: flip(key, set) }, icon(tr[key] ? offIco : onIco));
+    const name = h('b', { class: 'tl-name' }, label);
+    name.addEventListener('dblclick', (ev) => { ev.stopPropagation(); renameTrack(tr); });
+    const grip = h('div', { class: 'tl-hgrip', role: 'separator', 'aria-orientation': 'horizontal', 'aria-label': 'Track height' });
+    let h0 = 0, resized = false;
+    const rowOf = () => grip.closest('.tl-row');
+    heightGrip(grip, {   // (it grows a pane above it; this grip is under its track, so the drag is turned round)
+      size: () => (h0 = tr.h || rowOf()?.offsetHeight || 52),
+      set: (px) => {
+        if (px == null) { if (tr.h != null) { delete tr.h; o.changed(); } return; }
+        R.trackHeight(st, tr.id, px === 0 ? MAX_H : 2 * h0 - px, { min: MIN_H, max: MAX_H });
+        const r = rowOf();
+        if (r) r.style.height = `${tr.h}px`;
+        resized = true;
+      },
+      max: () => 1e6 });
+    grip.addEventListener('pointerup', () => { if (resized) { resized = false; o.changed(); } });
+    grip.addEventListener('keyup', () => { if (resized) { resized = false; o.changed(); } });
+    return h('div', { class: `tl-head${tr.locked ? ' locked' : ''}`, 'data-track': tr.id },
+      name,
+      h('div', { class: 'tl-head-btns' },
+        (tr.kind || 'audio') === 'video' ? tog('hidden', 'eye', 'eyeoff', 'Show / hide this track', 'off') : null,
+        tog('muted', 'sound', 'mute', 'Mute / unmute this track', 'off'),
+        tog('solo', 'target', 'target', 'Solo: only the soloed tracks play', 'solo', () => R.trackSolo(st, tr.id, !tr.solo)),
+        tog('locked', 'unlock', 'lock', 'Lock / unlock this track', 'lockd', () => R.trackLock(st, tr.id, !tr.locked)),
+        ...extra),
+      grip);
+  }
+  // the tool strip (one per timeline; the tab puts it in its tool bar)
+  let strip = null;
+  function toolStrip() {
+    if (strip) return strip;
+    strip = h('div', { class: 'tl-toolstrip', role: 'toolbar', 'aria-label': 'Timeline tools' },
+      TOOL_BTNS.map(([t, ico, label]) => h('button', { type: 'button', 'data-tool': t, title: label, 'aria-label': label,
+        onclick: (e) => { e.stopPropagation(); setTool(t); } }, icon(ico))));
+    showTool();
+    return strip;
   }
   // the hand: a drag pans the timeline
   function startPan(e) {
@@ -395,6 +633,11 @@ export function timeline(st, o) {
     const tl = box();
     tl?.classList.toggle('tl-hand', tool === 'hand');
     tl?.classList.toggle('tl-boxing', boxOn);
+    tl?.setAttribute('data-tool', tool);
+    if (tool !== 'razor') hideCut();
+    strip?.querySelectorAll('button[data-tool]').forEach((b) => {
+      b.classList.toggle('on', b.dataset.tool === tool); b.setAttribute('aria-pressed', String(b.dataset.tool === tool));
+    });
   };
   function setTool(t) {
     if (!TOOLS.includes(t) || t === tool) return;
@@ -410,9 +653,19 @@ export function timeline(st, o) {
     tl.addEventListener('pointerdown', (e) => {
       swallow = false; menuOpened = false;
       if (e.button > 0) return;   // (a right click is the menu's)
+      if (e.target.closest('input, .tl-hgrip, .tl-corner')) return;
+      const twirl = e.target.closest('.tl-twirl');
+      if (twirl) {   // a clip's keyframe lanes, open or shut
+        e.preventDefault(); swallow = true;
+        const id = twirl.closest('.tl-clip')?.dataset.id;
+        st.open = st.open.includes(id) ? st.open.filter((x) => x !== id) : [...st.open, id];
+        return o.rendered ? o.rendered() : o.dragged();
+      }
+      const head = e.target.closest('.tl-head');
+      if (head) { if (!e.target.closest('button')) startTrackDrag(e, head); return; }
       const clip = e.target.closest('.tl-clip');
       if (clip) return startClipDrag(e, clip);
-      if (e.target.closest('.tl-ruler')) return startScrub(e);
+      if (e.target.closest('.tl-ruler')) { const mi = markerAt(e); return mi >= 0 ? startMarkerDrag(e, mi) : startScrub(e); }
       const lane = e.target.closest('.tl-lane');
       if (!lane) return;
       if (tool === 'hand') return startPan(e);
@@ -420,10 +673,17 @@ export function timeline(st, o) {
     });
     tl.addEventListener('click', (e) => {   // tap an empty spot: deselect and move the playhead there
       if (swallow) { swallow = false; return; }   // (the end of a box, a pan or a drag)
-      if (!e.target.classList.contains('tl-lane')) return;
+      if (!e.target.classList.contains('tl-lane') || !e.target.dataset.track) return;   // (a keyframe lane's clicks are its own)
       st.sel = null; st.multi = []; showSel();
       o.pause(); o.seek(Math.max(0, timeAt(e))); o.deselected?.();
     });
+    tl.addEventListener('dblclick', (e) => {   // a double-click on a marker renames it
+      if (!e.target.closest('.tl-ruler') || e.target.closest('input')) return;
+      const mi = markerAt(e);
+      if (mi >= 0) renameMarker(mi);
+    });
+    tl.addEventListener('pointermove', (e) => { if (tool === 'razor' && e.pointerType !== 'touch') showCut(e); else if (cutLine?.isConnected) hideCut(); });
+    tl.addEventListener('pointerleave', hideCut);
     tl.addEventListener('wheel', (e) => {   // ctrl/pinch + wheel zooms around the pointer
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
@@ -545,14 +805,15 @@ export function timeline(st, o) {
       const groups = trackMenu({ kind, locked: !!tr.locked, solo: !!tr.solo, muted: !!tr.muted, hidden: !!tr.hidden,
         empty: !st.items.some((i) => i.track === tr.id), only: st.tracks.filter((t) => (t.kind || 'audio') === kind).length < 2 });
       const own = { lock: () => R.trackLock(st, tr.id, !tr.locked), solo: () => R.trackSolo(st, tr.id, !tr.solo),
-        mute: () => { tr.muted = !tr.muted; }, hide: () => { tr.hidden = !tr.hidden; } };
+        mute: () => { tr.muted = !tr.muted; }, hide: () => { tr.hidden = !tr.hidden; }, rename: () => { setTimeout(() => renameTrack(tr)); return false; } };   // (once the menu has gone, so it keeps the focus)
       const keep = (iid) => !((iid === 'addVideo' && !kinds.includes('video')) || (iid === 'addAudio' && !kinds.includes('audio')));
       return openPressMenu(x, y, menuOf(groups, own, { track: tr }, keep), 'Track');
     }
     if (ruler) {
       const t = Math.max(0, timeAt(e)), mi = (st.markers || []).findIndex((m) => Math.abs(m.t - t) * st.pps < 6);
       const groups = rulerMenu({ marker: mi >= 0, hasRange: !!areaRange() });
-      const own = { addMarker: () => { R.addMarker(st, t); }, removeMarker: () => R.removeMarker(st, mi) };
+      const own = { addMarker: () => { R.addMarker(st, t); }, removeMarker: () => R.removeMarker(st, mi),
+        renameMarker: () => { setTimeout(() => renameMarker(mi)); return false; } };
       return openPressMenu(x, y, menuOf(groups, own, { t, marker: mi >= 0 ? mi : null }), 'Ruler');
     }
   }
@@ -564,14 +825,14 @@ export function timeline(st, o) {
       copy, cut, paste, duplicate: duplicatePicked, selectAll, delete: () => removePicked(), rippleDelete,
       nudgeLeft: (e) => nudge(e.shiftKey ? -10 : -1), nudgeRight: (e) => nudge(e.shiftKey ? 10 : 1),
       split: splitAtPlayhead, marker: () => addMarkerHere(),
-      deselect: () => (pickedIds().length > 1 ? applySel({ sel: st.sel, multi: [] }) : clearPick()),
+      deselect: () => (tool !== 'select' ? setTool('select') : pickedIds().length > 1 ? applySel({ sel: st.sel, multi: [] }) : clearPick()),
       toolSelect: () => setTool('select'), toolRazor: () => setTool('razor'), toolRipple: () => setTool('ripple'),
       toolSlip: () => setTool('slip'), toolHand: () => setTool('hand'),
       zoomIn: () => zoomBy(1.25), zoomOut: () => zoomBy(1 / 1.25),
     };
     const mapFor = (e, ctrl) => {
       const c = commandFor(e), fn = c && run[c];
-      if (!fn || !!(e.ctrlKey || e.metaKey) !== ctrl || (c === 'deselect' && !pickedIds().length)) return {};
+      if (!fn || !!(e.ctrlKey || e.metaKey) !== ctrl || (c === 'deselect' && !pickedIds().length && tool === 'select')) return {};
       return { [ctrl ? e.key.toLowerCase() : e.key]: () => fn(e) };
     };
     return { more: (e) => mapFor(e, false), combos: (e) => mapFor(e, true) };
@@ -594,7 +855,7 @@ export function timeline(st, o) {
     split: splitAtPlayhead, deleteSelected: () => removePicked(), crossfadePrev, duplicate: duplicatePicked,
     pick, picked, isSel, setPicked, selectAll, clearPick, place, dragPicked, marquee: null,
     removePicked: () => removePicked(), rippleDelete, splitAtPlayhead, duplicatePicked, copy, cut, paste, nudge, selectFrom, addMarker: addMarkerHere,
-    keys, snapChip, zoomBy,
+    keys, snapChip, zoomBy, toolStrip, trackHead, renameTrack, renameMarker,
     get tool() { return tool; }, set tool(t) { setTool(t); },
     get box() { return boxOn; }, set box(v) { boxOn = !!v; showTool(); },
   };

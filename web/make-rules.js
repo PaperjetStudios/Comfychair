@@ -111,6 +111,28 @@ export function settingsPayload(st, extra = {}) {
   return { ...extra, v: 1, template: t.id, presetId: null, overrides, wired: clone(st.wired || {}), seedMode: clone(st.seedMode), imageMp: clone(st.imageMp), imageCrop: clone(st.imageCrop),
     sizeMode: clone(st.sizeMode), loraFolder: clone(st.loraFolder), builder: st.pb ? clone(st.pb) : null };
 }
+// The values a run of these settings sends, as the Generate tab's runValues sends the shown ones: a random seed as -1, a
+// fixed or increasing one as its number. (For a frame run without its fields on show: a chain run, chain-run.js.)
+export function runValuesOf(st) {
+  const values = {};
+  for (const f of st?.tpl?.fields || []) {
+    let v = clone(st.values?.[f.key]);
+    if (f.kind === 'seed') v = (st.seedMode?.[f.key] || 'random') === 'random' ? -1 : Number(v);
+    values[f.key] = v;
+  }
+  return values;
+}
+// After such a run is queued: an increasing seed moves on by the batch (generate.js afterQueued for settings not on show).
+// Returns { [seed key]: the seed the last run used } for S.lastSeed.
+export function seedsAfter(st, gens, batch = 1) {
+  const last = gens?.[gens.length - 1], used = {};
+  for (const f of st?.tpl?.fields || []) {
+    if (f.kind !== 'seed') continue;
+    if (last?.params && f.key in last.params) used[f.key] = last.params[f.key];
+    if (st.seedMode?.[f.key] === 'increment') st.values[f.key] = Number(st.values[f.key]) + batch;
+  }
+  return used;
+}
 // A template change keeps the words: the prompt and negative prompt carry over to the new template's
 export function carryWords(from, to) {
   const text = (st, neg) => (st.tpl.fields || []).find((x) => x.kind === 'text' && x.multiline && neg === /negative/i.test(`${x.input} ${x.group}`));

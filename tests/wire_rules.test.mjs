@@ -155,3 +155,51 @@ test('setWire: on, frame, and n moves it among its kind', () => {
   out = setWire(ws, 'v', { n: 3 });
   assert.equal(out.find((w) => w.id === 'v').n, 1);
 });
+
+// ---- the wires as a one-way graph: what a chain reruns (chain-run.js) ----
+import { downstream, upstream, chainOf, runOrder, remapIds, remapWired } from '../web/wire-rules.js';
+
+test('downstream: frames fed through ON wires, each after all its sources', () => {
+  // a -> b -> d, a -> c -> d, d -> e; x -> b; an off wire c -> f
+  const ws = [W('1', 'a', 'b', 'image'), W('2', 'a', 'c', 'image'), W('3', 'c', 'd', 'image'), W('4', 'b', 'd', 'image'),
+    W('5', 'd', 'e', 'video'), W('6', 'x', 'b', 'image'), W('7', 'c', 'f', 'image', { on: false })];
+  const down = downstream(ws, 'a');
+  assert.deepEqual(new Set(down), new Set(['b', 'c', 'd', 'e']));
+  assert.ok(down.indexOf('d') > down.indexOf('b') && down.indexOf('d') > down.indexOf('c'));
+  assert.equal(down.at(-1), 'e');
+  assert.ok(!down.includes('f'), 'an off wire chains nothing');
+  assert.ok(!down.includes('x') && !down.includes('a'));
+  assert.deepEqual(chainOf(ws, 'a'), ['a', ...down]);
+  assert.deepEqual(downstream(ws, 'e'), []);
+  assert.deepEqual(chainOf(ws, 'e'), ['e']);
+  assert.deepEqual(downstream(ws, 'c'), ['d', 'e']);
+});
+
+test('upstream: what feeds a frame, near and far, in run order', () => {
+  const ws = [W('1', 'a', 'b', 'image'), W('2', 'b', 'c', 'image'), W('3', 'x', 'c', 'image'), W('4', 'y', 'x', 'image', { on: false })];
+  const up = upstream(ws, 'c');
+  assert.deepEqual(new Set(up), new Set(['a', 'b', 'x']));
+  assert.ok(up.indexOf('a') < up.indexOf('b'));
+  assert.deepEqual(upstream(ws, 'a'), []);
+});
+
+test('runOrder: ties go in wire order; a loop in a hand-edited list does not hang', () => {
+  const ws = [W('1', 'p', 'q', 'image'), W('2', 'r', 's', 'image')];
+  assert.deepEqual(runOrder(ws, ['s', 'q', 'r', 'p']), ['p', 'q', 'r', 's']);
+  const loop = [W('1', 'a', 'b', 'image'), W('2', 'b', 'a', 'image')];
+  assert.deepEqual(new Set(runOrder(loop, ['a', 'b'])), new Set(['a', 'b']));
+  assert.deepEqual(new Set(downstream(loop, 'a')), new Set(['b']));
+});
+
+test('remapIds: the copied wires and old -> new ids; remapWired follows them', () => {
+  const ws = [W('w1', 'i1', 'i2', 'image'), W('w2', 'v1', 'i2', 'image', { frame: 'last' }), W('w3', 'i2', 's1', 'image')];
+  const { wires, ids } = remapIds(ws, { i1: 'c1', i2: 'c2' });
+  assert.equal(wires.length, 1);
+  assert.equal(ids.get('w1'), wires[0].id);
+  assert.ok(!ids.has('w2') && !ids.has('w3'));
+  assert.deepEqual(remapWired({ a: 'w1', b: 'w2', c: false }, ids), { a: wires[0].id, c: false });
+  const all = remapIds(ws, { i2: 'c2' }, { inputs: true });
+  assert.equal(all.wires.length, 2);
+  assert.deepEqual(remapWired({ b: 'w2' }, all.ids), { b: all.ids.get('w2') });
+  assert.equal(remap(ws, { i1: 'c1', i2: 'c2' }).length, 1);
+});

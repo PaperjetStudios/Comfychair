@@ -169,12 +169,73 @@ export function mapToFields(fields, inputs, { skip = [], overrides = {} } = {}) 
 // Wires for copied frames (idMap: old frame id → new). A wire between two copied frames is copied onto the copies;
 // with inputs: true a wire into a copied frame from one not copied is copied too (it still comes from the original).
 // New wire ids; numbered on their own (renumber the list they join).
-export function remap(wires, idMap, { inputs = false } = {}) {
+export const remap = (wires, idMap, opts = {}) => remapIds(wires, idMap, opts).wires;
+// remap, and which new wire each copied one became: { wires, ids: Map(old wire id -> new wire id) } (a copied frame's
+// frame.make.wired names wires by id: table.js duplicateFrames points it at the copies)
+export function remapIds(wires, idMap, { inputs = false } = {}) {
   const m = idMap instanceof Map ? idMap : new Map(Object.entries(idMap || {}));
-  const out = [];
+  const out = [], ids = new Map();
   for (const w of wires) {
     if (!m.has(w.to) || (!m.has(w.from) && !inputs)) continue;
-    out.push({ ...w, id: rid(), from: m.get(w.from) ?? w.from, to: m.get(w.to) });
+    const nw = { ...w, id: rid(), from: m.get(w.from) ?? w.from, to: m.get(w.to) };
+    ids.set(w.id, nw.id);
+    out.push(nw);
   }
-  return renumber(out);
+  return { wires: renumber(out), ids };
 }
+// A copied frame's re-pointed fields ({ fieldKey: wireId | false }) on the copied wires: a wire that wasn't copied frees its field
+export function remapWired(wired, ids) {
+  const out = {};
+  for (const [k, v] of Object.entries(wired || {})) {
+    if (v === false) out[k] = false;
+    else if (ids.has(v)) out[k] = ids.get(v);
+  }
+  return out;
+}
+
+// ---- the wires as a one-way graph (the cycle guard keeps it one way): what a chain reruns (web/chain-run.js) ----
+// Only ON wires carry anything: an off wire feeds nothing, so it chains nothing.
+const onWires = (wires) => (wires || []).filter((w) => w && w.on !== false);
+// the frames reachable from id along ON wires, one way (next: from -> to; back: to -> from)
+function reach(wires, id, back) {
+  const next = new Map();
+  for (const w of onWires(wires)) {
+    const [a, b] = back ? [w.to, w.from] : [w.from, w.to];
+    next.set(a, [...(next.get(a) || []), b]);
+  }
+  const seen = new Set(), stack = [...(next.get(id) || [])];
+  while (stack.length) {
+    const f = stack.pop();
+    if (f === id || seen.has(f)) continue;
+    seen.add(f);
+    stack.push(...(next.get(f) || []));
+  }
+  return seen;
+}
+// These frames in run order: each after every one of the set that feeds it (Kahn's sort; ties in the order the frames
+// first appear in the wires). A loop can't be plugged, but one in a hand-edited list doesn't hang: what's left goes last.
+export function runOrder(wires, ids) {
+  const set = new Set(ids), ws = onWires(wires).filter((w) => set.has(w.from) && set.has(w.to));
+  const first = [];
+  for (const w of onWires(wires)) for (const f of [w.from, w.to]) if (set.has(f) && !first.includes(f)) first.push(f);
+  for (const f of set) if (!first.includes(f)) first.push(f);
+  const ins = new Map(first.map((f) => [f, 0]));
+  for (const w of ws) ins.set(w.to, ins.get(w.to) + 1);
+  const out = [], done = new Set();
+  for (let more = true; more;) {
+    more = false;
+    for (const f of first) {
+      if (done.has(f) || ins.get(f) > 0) continue;
+      out.push(f); done.add(f); more = true;
+      for (const w of ws) if (w.from === f) ins.set(w.to, ins.get(w.to) - 1);
+      break;
+    }
+  }
+  return [...out, ...first.filter((f) => !done.has(f))];
+}
+// The frames this one feeds through ON wires, near and far, in run order (not the frame itself)
+export const downstream = (wires, frameId) => runOrder(wires, reach(wires, frameId, false));
+// The frames that feed this one through ON wires, near and far, in run order (not the frame itself)
+export const upstream = (wires, frameId) => runOrder(wires, reach(wires, frameId, true));
+// A chain from this frame: it, then everything downstream, in run order
+export const chainOf = (wires, frameId) => [frameId, ...downstream(wires, frameId)];

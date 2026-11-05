@@ -17,8 +17,14 @@
 //   TL.place(ids)            restyle only these clips after a drag frame (no full render)
 //   TL.tool                  get / set: 'select' | 'razor' | 'ripple' | 'slip' | 'hand'
 //   TL.marquee               the box being drawn on the lanes: { t0, t1, tracks: id[] } | null
-//   o.lanes?.(it) → [{ ch, label, keys: [{ f, ease }] }]   a clip's keyframe lanes (web/key-lanes.js); f in source time
-//   o.lanesChanged?.(it)     a lane's keys were edited (selected, dragged, pasted, deleted, eased)
+//   TL.toolStrip() → element the tool strip (Select V, Razor C, Ripple B, Slip Y, Hand H), one per timeline, mounted in the tool bar
+//   TL.trackHead(tr, { label, extra }) → element   a track's head: hide (video), mute, solo, lock, a name renamed in place,
+//                            drag to reorder among its kind, a height grip (tr.h); extra: the engine's own buttons
+//   st.open: clip ids whose keyframe lanes are twirled open (not saved with the doc)
+//   o.lanes?.(it, { pps }) → HTMLElement[]   the open clip's keyframe rows (web/key-lanes.js keyLaneRows), put under its
+//                            track's row in .tl-inner, a row with no .tl-head of its own gets a left padding of headW. The engines pass
+//                            keyLaneRows(it, { pps, fps, tc, channels: [{ ch, label }], eases: [names], base: { ch: unset value },
+//                            seek(t), changed() }) with changed = their persist (one undo step).
 // ---------------------------------------------------------------------------
 
 import { snapT } from './workarea-math.js';
@@ -277,17 +283,27 @@ export function copy(d, ids) {
 // A track a pasted clip may go on: there, not locked, and one o.canDrop takes
 const takes = (tr, it, o) => tr && !tr.locked && (!o?.canDrop || o.canDrop(it, tr));
 // Paste the clipboard at t: each clip on its own track if it may go there, else the first track that takes it
-// (none: left out). New ids, own keys. Returns the new ids.
-export function paste(d, clip, t, o) {
-  const made = [];
+// (none: left out). New ids, own keys. insert: where a pasted clip would overlap a clip already on its track, the clips
+// at and after t on that track move right by the pasted length (to the pasted clips' end) instead of cross-fading.
+// Returns the new ids.
+export function paste(d, clip, t, o, { insert = true } = {}) {
+  const made = [], t0 = Math.max(0, t);
   for (const c of clip?.items || []) {
     const tr = takes(trackOf(d, c.track), c, o) ? trackOf(d, c.track) : d.tracks.find((x) => takes(x, c, o));
     if (!tr) continue;
-    const it = { ...cloneItem(c), id: idOf(o), track: tr.id, at: r6(Math.max(0, t + c.at)) };
-    d.items.push(it);
-    made.push(it.id);
+    made.push({ ...cloneItem(c), id: idOf(o), track: tr.id, at: r6(Math.max(0, t + c.at)) });
   }
-  return made;
+  if (insert) {
+    for (const track of new Set(made.map((x) => x.track))) {
+      const mine = made.filter((x) => x.track === track), old = d.items.filter((x) => x.track === track);
+      const hits = mine.some((p) => old.some((x) => x.at < endOf(p, o) - EPS && endOf(x, o) > p.at + EPS));
+      if (!hits) continue;
+      const room = Math.max(...mine.map((p) => endOf(p, o))) - t0;
+      for (const x of old) if (x.at >= t0 - EPS) x.at = r6(x.at + room);
+    }
+  }
+  d.items.push(...made);
+  return made.map((x) => x.id);
 }
 // Move these clips by dt (Alt+arrows), the group not before 0. Returns the applied dt.
 export function nudge(d, ids, dt, o) {

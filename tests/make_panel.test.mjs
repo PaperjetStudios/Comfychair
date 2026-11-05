@@ -189,3 +189,19 @@ test('the render key is stable, ignores project and tab, and changes with an edi
   assert.notEqual(renderKey(longer), k);
   assert.equal(stableJson({ b: 1, a: [undefined, { d: 1, c: undefined }] }), '{"a":[null,{"d":1}],"b":1}');
 });
+
+// ---- a frame's run without its fields on show (chain-run.js runFrame) ----
+import { runValuesOf, seedsAfter } from '../web/make-rules.js';
+
+test('runValuesOf / seedsAfter: seeds as Generate sends them, increment moves on', () => {
+  const t = { id: 'x', fields: [{ key: 's', kind: 'seed', value: 5 }, { key: 'u', kind: 'seed', value: 9 }, { key: 'p', kind: 'text', value: 'hi' }, { key: 'l', kind: 'loras', value: [] }] };
+  const st = settingsFor(t, { template: 'x', overrides: { p: 'a cat', s: 7 }, seedMode: { s: 'increment' } });
+  const v = runValuesOf(st);
+  assert.deepEqual(v, { s: 7, u: -1, p: 'a cat', l: [] });
+  v.l.push(1);
+  assert.deepEqual(st.values.l, [], 'a copy');
+  const used = seedsAfter(st, [{ params: { s: 7, u: 123 } }, { params: { s: 8, u: 456 } }], 2);
+  assert.deepEqual(used, { s: 8, u: 456 });
+  assert.equal(st.values.s, 9);
+  assert.equal(st.values.u, 9, 'random stays');
+});

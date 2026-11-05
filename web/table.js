@@ -37,6 +37,8 @@
 //                    (press-menu.js's shape) to groups; they go before Delete
 //   table:wires      { frames: [id], table }     wires were plugged, unplugged or changed (by hand, Undo, a delete or a
 //                    duplicate); frames: the ids of the frames at either end of the wires that changed
+//   table:stale      { frames: [id] }            which frames need a rerun changed (a source's content changed since their
+//                    last run: chain-rules.js staleInfo); the tiles show it, the Make pane says why
 //
 // Wires (web/wire-rules.js, T.wires): a frame's output plugged into another frame's Make inputs. A frame with something to
 // put out has an out port beside its right edge (on hover, and while it is selected); a drag from it to another frame plugs
@@ -61,7 +63,8 @@ import * as ST from './layer-stack.js';
 import * as W from './wire-rules.js';
 import { frameMenu as frameMenuGroups, frameArrangeMenu, pickedFor } from './layer-menu.js';
 import { filtering, foldedGroups, listRows } from './frame-list.js';
-import { KIND_ICON, copyDoc, createDoc, dropInput, editDoc, frameEl, frameFor, kindOfDoc, loadStills, owedCounts, renameDoc, restoreDoc, stillOf, syncFrame, trashDoc, pausePreviews, previewMode, setPreviewMode } from './table-frames.js';
+import { KIND_ICON, copyDoc, createDoc, dropInput, editDoc, frameEl, frameFor, frameStamp, kindOfDoc, loadStills, noteRev, owedCounts, renameDoc, restoreDoc, stillOf, syncFrame, trashDoc, pausePreviews, previewMode, setPreviewMode } from './table-frames.js';
+import { staleInfo, staleText } from './chain-rules.js';
 import { sidebar } from './sidebar.js';
 
 const ZMIN = 0.02, ZMAX = 8, DRAG_PX = 4, SNAP_PX = 8, DWELL_MS = 600, NUDGE = 1;
@@ -186,13 +189,14 @@ function renderFrames() {
   const seen = new Set(), live = liveFrame(), owed = owedCounts();
   // waiting results: the image frames' owed runs (table-frames.js), and what edit:pending says for any kind
   const waiting = (f) => Math.max(f.kind === 'image' ? owed.get(f.doc) || 0 : 0, PENDING.get(f.doc) || 0);
+  const stale = staleNow();
   if (U.liveBar && live && U.liveBar.name.isConnected) U.liveBar.name.textContent = live.label || M.KIND_LABEL[live.kind];
   T.frames.forEach((f, i) => {
     f.key = f.id;   // (what the stack rules know a frame by)
     let el = U.els.get(f.id);
     if (!el) { el = frameEl(f, { onText: (t) => { f.text = t; changed(); } }); U.els.set(f.id, el); }
     if (D.frames.children[i] !== el) D.frames.insertBefore(el, D.frames.children[i] || null);
-    syncFrame(el, f, { selected: U.sel.has(f.id), live: live?.id === f.id, owed: waiting(f) });
+    syncFrame(el, f, { selected: U.sel.has(f.id), live: live?.id === f.id, owed: waiting(f), stale: stale.get(f.id) || null });
     el.classList.toggle('frame-hidden', !!f.hidden);
     seen.add(f.id);
   });
@@ -211,6 +215,19 @@ function tellSelection() {
   dispatchEvent(new CustomEvent('table:select', { detail: { frames: selected(), table: T } }));
 }
 function renderAll() { applyView(); renderFrames(); }
+// Frames whose sources changed since their last run (chain-rules.js staleInfo on the frames' stamps): frameId -> the words
+// why. Drawn with each render, so it follows the wires (table:wires renders), the documents (a store message reads the
+// stamps again and renders) and a run landing (it records frame.make.ran through frameChanged).
+export const staleReasons = () => staleInfo(T.wires, T.frames, frameStamp);
+export const staleWords = (r) => staleText(r, { name: (id) => byId(id)?.label || 'a frame', wireName: (id) => { const w = wireById(id); return w ? W.wireLabel(w) : 'An input'; } });
+let staleSig = '';
+function staleNow() {
+  const out = new Map();
+  try { for (const [id, r] of staleReasons()) out.set(id, staleWords(r)); } catch (e) { console.warn('stale frames', e); }
+  const sig = JSON.stringify([...out]);
+  if (sig !== staleSig) { staleSig = sig; queueMicrotask(() => dispatchEvent(new CustomEvent('table:stale', { detail: { frames: [...out.keys()] } }))); }
+  return out;
+}
 
 // eight handles on the one selected frame (none while live or locked); their size holds against the zoom (app.css)
 const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
@@ -721,7 +738,7 @@ async function duplicateFrames(ids) {
   for (const f of T.frames.filter((x) => ids.has(x.id))) {
     const g = { ...structuredClone(f), id: M.newFrame(f.kind, f).id, label: `${f.label} copy`, locked: false };
     g.key = g.id;
-    if (g.make) g.make = { ...g.make, inputs: [] };
+    if (g.make) { g.make = { ...g.make, inputs: [] }; delete g.make.ran; }   // (a copy has made nothing yet: a chain run never takes the original's results)
     Object.assign(g, M.nextBeside([...T.frames, ...made], f.kind, { w: f.w, h: f.h }));
     try { g.doc = f.doc ? await copyDoc(f, g.label) : null; } catch (e) { toast(`Couldn't copy "${f.label}": ${e.message}`, true); continue; }
     delete g.vfx;   // (an old VFX document stays the original's: moveVfxDocs reads it into that frame)
@@ -731,8 +748,9 @@ async function duplicateFrames(ids) {
   if (!made.length) return;
   if (!ok()) { for (const g of made) gone(g); return; }   // (another table opened meanwhile: the copies go)
   T.frames = ST.normalize([...T.frames, ...made], T.groups);   // (a copy of a member joins its group, at its top)
-  const copied = W.remap(T.wires, idMap);
+  const { wires: copied, ids: wireIds } = W.remapIds(T.wires, idMap);
   if (copied.length) T.wires = W.renumber([...T.wires, ...copied]);
+  for (const g of made) if (g.make?.wired) g.make.wired = W.remapWired(g.make.wired, wireIds);   // (its re-pointed fields follow the copied wires)
   U.sel = new Set(made.map((f) => f.id)); U.wire = null; renderFrames(); changed();
   tellWires(copied.flatMap((w) => [w.from, w.to]));
 }
@@ -1564,6 +1582,7 @@ function wire() {
   onServer('store', (m) => {
     const kind = kindOfDoc(m.kind);
     if (!kind || !T.frames.some((f) => f.kind === kind && f.doc === m.id)) return;
+    noteRev(kind, m.id, m.rev);
     clearTimeout(stillT); stillT = setTimeout(() => refreshStills([kind]), 300);
   });
   onProject(() => unlive());   // (the TabSet loads the project's tables itself)

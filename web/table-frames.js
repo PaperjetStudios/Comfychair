@@ -180,15 +180,40 @@ export function owedCounts() {
 
 // ---- stills: each document kind's list rows carry their still ({ url }) ----
 const STILLS = new Map();   // 'kind:id' -> url
+const REVS = new Map();   // 'kind:id' -> the document's rev, from the same list rows (and store messages: noteRev)
 const PREV_EPOCH = new Map();   // kind -> how many times its stills were loaded
 export const stillOf = (f) => (f.doc ? STILLS.get(`${f.kind}:${f.doc}`) || null : null);
+// A frame's content stamp: what changes when what it puts out changes, cheap and there without opening it (its document's
+// rev, from the list loadStills reads; else its still). null: not known yet. A wire's target keeps the stamps its last run
+// read (frame.make.ran.sources): chain-rules.js staleInfo compares them.
+export function frameStamp(f) {
+  if (!f?.doc) return f?.preview ? `p:${f.preview}` : null;
+  const rev = REVS.get(`${f.kind}:${f.doc}`);
+  if (rev != null) return `r${rev}`;
+  const still = stillOf(f);
+  return still ? `s:${still}` : null;
+}
+// a store message said a document's rev: its stamp follows at once (the list is read again a moment later)
+export function noteRev(kind, id, rev) { if (kind && id && rev != null && REVS.has(`${kind}:${id}`)) REVS.set(`${kind}:${id}`, rev); }
+// the stamps of these frames read again now (before a run records what it read)
+export const freshStamps = (frames) => loadStills([...new Set((frames || []).filter(Boolean).map((f) => f.kind))]);
+// the frame's document saved now if its screen has it open with edits not yet saved (a run read or landed in it)
+export async function flushDoc(f) {
+  if (!f?.doc) return;
+  const t = await TABSET[f.kind]?.().catch(() => null);
+  if (t?.active?.id === f.doc && typeof t.flush === 'function') await t.flush().catch(() => {});
+}
 export async function loadStills(kinds) {
   await Promise.all([...new Set(kinds)].filter((k) => DOC_KIND[k]).map(async (k) => {
     let rows;
     try { rows = await api(docUrl(k), { busy: false }); } catch { return; }
     PREV_EPOCH.set(k, (PREV_EPOCH.get(k) || 0) + 1);   // (a document may have changed: its tile's clip and waveform are read again)
     for (const key of [...STILLS.keys()]) if (key.startsWith(`${k}:`)) STILLS.delete(key);
-    for (const r of rows || []) if (r.still?.url) STILLS.set(`${k}:${r.id}`, r.still.url);
+    for (const key of [...REVS.keys()]) if (key.startsWith(`${k}:`)) REVS.delete(key);
+    for (const r of rows || []) {
+      if (r.still?.url) STILLS.set(`${k}:${r.id}`, r.still.url);
+      if (r.rev != null) REVS.set(`${k}:${r.id}`, r.rev);
+    }
   }));
 }
 export const kindOfDoc = (docKind) => Object.keys(DOC_KIND).find((k) => DOC_KIND[k] === docKind) || null;
@@ -219,15 +244,17 @@ export function frameEl(f, { onText }) {
       h('div', { class: 'frame-ph' }, icon(KIND_ICON[f.kind], 40), h('span', {}, KIND_LABEL[f.kind])));
   }
   const badge = h('span', { class: 'frame-owed hidden', role: 'status' });   // (in the label bar, so a live frame's engine never covers it)
+  const stale = h('span', { class: 'frame-stale hidden', role: 'status', 'aria-label': 'Needs rerun' }, icon('refresh'));
   const el = h('div', { class: `frame frame-${f.kind}`, 'data-id': f.id, role: 'group' },
-    h('div', { class: 'frame-label' }, icon(KIND_ICON[f.kind]), name, size, badge), body);
+    h('div', { class: 'frame-label' }, icon(KIND_ICON[f.kind]), name, size, badge, stale), body);
   if (f.kind === 'video' || f.kind === 'sound') watchTile(el);
   return el;
 }
 
 // bring an element up to its frame: where it sits, its label, its still, and its state
-// owed: how many results are waiting to land in it (they land when it next goes live)
-export function syncFrame(el, f, { selected = false, live = false, owed = 0 } = {}) {
+// owed: how many results are waiting to land in it (they land when it next goes live); stale: why it needs a rerun (a source
+// changed since its last run: chain-rules.js staleText), else null
+export function syncFrame(el, f, { selected = false, live = false, owed = 0, stale = null } = {}) {
   Object.assign(el.style, { left: `${f.x}px`, top: `${f.y}px`, width: `${f.w}px`, height: `${f.h}px` });
   el.querySelector('.frame-name').textContent = f.label || KIND_LABEL[f.kind];
   el.querySelector('.frame-size').textContent = `${f.w}×${f.h}`;
@@ -240,6 +267,11 @@ export function syncFrame(el, f, { selected = false, live = false, owed = 0 } = 
     badge.classList.toggle('hidden', !owed);
     badge.textContent = owed ? `${owed} waiting` : '';
     badge.title = owed ? `${owed} result${owed > 1 ? 's' : ''} waiting: open the frame to land ${owed > 1 ? 'them' : 'it'}` : '';
+  }
+  const st = el.querySelector('.frame-stale');
+  if (st) {
+    st.classList.toggle('hidden', !stale || !!owed);
+    st.title = stale ? `Needs rerun: ${stale} Run from here on its menu reruns it.` : '';
   }
   if (f.kind === 'video' || f.kind === 'sound') syncPreview(el, f);   // (first: it reads the first clip, whose poster is the still's stand-in)
   showStill(el, f);

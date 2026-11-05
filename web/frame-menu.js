@@ -5,16 +5,21 @@
 //   Make from this note   a selected note with words: the Make pane on show (its words are the prompt: make-panel.js)
 //   Compare with…   one frame with a picture (shelf.js compareSheet)
 //   Open in …       an image frame in PhotoCraft (its picture), a video frame's edit in EffectCraft (its clips)
+//   Run from here   this frame's workflow, then everything it feeds through wires, in order (chain-run.js); shown when it
+//                   or anything downstream has a workflow. Rerun what uses this: the frames it feeds only; shown when
+//                   something is plugged out of it
 // Nothing here opens another screen: a result is a frame beside it, or a layer or clip in it.
 import { api, toast } from './ui.js';
 import { S } from './core.js';
 import { isLive } from './live.js';
 import { stillOf } from './table-frames.js';
 import { DOC_KIND } from './table-model.js';
+import { downstream } from './wire-rules.js';
 
 const R = { rules: null, source: null };
 import('./edit-rules.js').then((m) => { R.rules = m; }).catch(() => {});   // (the Edit pane's rules; no Edit ▸ without them)
 import('./frame-source.js').then((m) => { R.source = m; }).catch(() => {});
+import('./table.js').then((m) => { R.table = m; }).catch(() => {});
 
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
 const dropInput = (name) => api(`/api/inputs?name=${encodeURIComponent(name)}`, { method: 'DELETE', busy: false }).catch(() => {});
@@ -56,6 +61,20 @@ async function craftVideo(f) {
 }
 const tryIt = (fn) => async () => { try { await fn(); } catch (e) { toast(e.message, true); } };
 
+// Run from here / Rerun what uses this, for one frame (wires: the table's; byId: a frame by id)
+export function chainEntries(one, wires, byId) {
+  if (!one || one.kind === 'note') return [];
+  const flow = (f) => !!f?.make?.template, down = downstream(wires || [], one.id), out = [];
+  const chain = (fn) => tryIt(async () => (await import('./chain-run.js'))[fn](one));
+  if (flow(one) || down.some((id) => flow(byId(id)))) {
+    out.push({ label: 'Run from here', title: down.length ? 'This frame\'s workflow, then each frame it feeds, in order' : 'This frame\'s workflow, its result in place of the last chain run\'s', run: chain('runFromHere') });
+  }
+  if ((wires || []).some((w) => w.from === one.id && w.on !== false)) {
+    out.push({ label: 'Rerun what uses this', title: 'Each frame this one feeds, in order', run: chain('rerunUsers') });
+  }
+  return out;
+}
+
 export function frameExtras(frames) {
   const groups = [], one = frames.length === 1 ? frames[0] : null;
   const edit = editEntries(frames);
@@ -63,6 +82,11 @@ export function frameExtras(frames) {
   const words = frames.some((f) => f.kind === 'note' && String(f.text || '').trim());
   if (frames.some((f) => f.kind === 'note')) groups.push([{ label: 'Make from this note', disabled: !words, title: words ? 'Its words are the prompt in the Make pane' : 'This note has no words yet',
     run: tryIt(async () => (await import('./sidebar.js')).sidebar.show('make')) }]);
+  if (one && R.table) {
+    let chain = [];
+    try { chain = chainEntries(one, R.table.tableWires(), R.table.frameById); } catch (e) { console.warn('chain menu', e); }
+    if (chain.length) groups.push(chain);
+  }
   if (one && one.kind !== 'note' && one.doc) {
     const more = [];
     if (one.kind === 'image' && R.source) more.push({ label: 'Open in PhotoCraft', title: 'Its picture as a PhotoCraft document, on the computer', run: tryIt(() => craftImage(one)) });

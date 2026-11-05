@@ -8,7 +8,7 @@ import { ROLES, queueRun, template, valuesByRole } from './make.js';
 import { bareSource, clipLabel, extractSound, outputCard, soundInput, soundSource, uploadMedia } from './media.js';
 import { waitJob } from './clipimport.js';
 import { TabSet } from './tabs.js';
-import { clipKeyTimes, clipKeys, clipSoundFields, dragWindow, durationOf, keyJumps, timeline, wavePeaks } from './timeline.js';
+import { clipKeyTimes, clipKeys, clipSoundFields, dragWindow, durationOf, keyJumps, timeline, wavePeaks, TOOLS_HELP, LANE_EASES } from './timeline.js';
 import { refreshKeyed } from './keyed.js';
 import { fmtTime, playKeys, transport } from './playback.js';
 import { keysHelp } from './timeline-keys.js';
@@ -17,6 +17,7 @@ import { registerUndo, syncUndo } from './undo-dock.js';
 import { openSourcePicker } from './source-picker.js';
 import { itemOf } from './source-rules.js';
 import * as R from './timeline-rules.js';
+import { keyLaneRows } from './key-lanes.js';
 import { workArea } from './workarea.js';
 import { cutItems, playFrom, setIn as waIn, setOut as waOut, tickT } from './workarea-math.js';
 import { resultActions } from './useas.js';
@@ -32,7 +33,7 @@ export { emptySound };
 // cross-fade. Playback goes through Web Audio (level above 100 %, pan, a meter); Export sends the same
 // timeline to the server (app/audioedit.render), which mixes it with ffmpeg into the media library.
 // ---------------------------------------------------------------------------
-const HEAD_W = 112;   // track header column (px)
+const HEAD_W = 124;   // track header column (px; app.css .tl-head)
 const LANE_H = 60;
 const MIN_LEN = 0.05;
 const N = {
@@ -98,7 +99,7 @@ const TL = timeline(N, { el: () => SD.timeline, headW: HEAD_W, minLen: MIN_LEN, 
   trackKinds: ['audio'], fps: () => 30, tc: (t) => tc(t),
   undo: () => { HIST.undo(); syncUndo(); }, redo: () => { HIST.redo(); syncUndo(); },
   toolChanged: (t) => { if (SD.timeline) SD.timeline.dataset.tool = t; },
-  menuAction: (id, ctx) => menuAction(id, ctx) });
+  menuAction: (id, ctx) => menuAction(id, ctx), lanes: (it, g) => clipLanes(it, g) });
 const KEYS = TL.keys();
 const { len: itLen, end: itEnd, seqEnd, selItem, xfades, fadeGain, updatePlayhead, isSel } = TL;
 // a clip's level and pan can be keyed (timeline.js clipKeys, as in the Video tab), on 1/100 s steps
@@ -113,6 +114,12 @@ function spread() {
 }
 const K = clipKeys(TL, N, { fps: () => 100, base: { volume: 1, pan: 0 }, pause: () => sndPause(), seek: (t) => sndSeek(t),
   onKeys: () => changed(), live: { onInput: () => { spread(); syncMedia(); drawStage(); }, onChange: () => { spread(); changed(); } } });
+// a clip's keyframe lanes under its track (web/key-lanes.js)
+const LANE_CHANNELS = [{ ch: 'volume', label: 'Level' }, { ch: 'pan', label: 'Pan' }];
+function clipLanes(it, g) {
+  return keyLaneRows(it, { pps: g.pps, fps: 100, tc, channels: LANE_CHANNELS, eases: LANE_EASES, base: { volume: 1, pan: 0 },
+    seek: (t) => { sndPause(); sndSeek(t); }, changed: () => changed() });
+}
 const trackOf = (it) => N.tracks.find((t) => t.id === it.track);
 const trackName = (t) => t.name || `A${N.tracks.indexOf(t) + 1}`;
 const soloed = () => N.tracks.some((t) => t.solo);
@@ -248,7 +255,7 @@ function drawWaves(ids = null) {
     const it = N.items.find((i) => i.id === c.parentElement.dataset.id);
     const w = it && waveOf(it);
     if (!w) return;
-    const W = Math.min(16000, Math.max(1, Math.round(itLen(it) * N.pps))), H = LANE_H - 12;
+    const W = Math.min(16000, Math.max(1, Math.round(itLen(it) * N.pps))), H = (trackOf(it)?.h || LANE_H) - 12;
     c.width = W; c.height = H;
     const ctx = c.getContext('2d');
     paintWave(ctx, it, w, 0, W, H, N.pps, '#a7e8bd');
@@ -319,18 +326,11 @@ function clipEl(it) {
     h('span', { class: 'tl-trim l' }), h('span', { class: 'tl-trim r' }));
 }
 
+// a track's head (timeline.js trackHead: mute, solo, lock, rename, reorder, height) and Remove for an empty one
 function trackHead(tr) {
   const removable = N.tracks.length > 1 && !N.items.some((i) => i.track === tr.id);
-  const tog = (key, on, off, title, cls = '') => h('button', { type: 'button', class: `tl-tog ${cls}` + (tr[key] ? ' off' : ''), title,
-    onclick: () => { tr[key] = !tr[key]; changed(); } }, tr[key] ? off : on);
-  return h('div', { class: 'tl-head' },
-    h('b', { title: 'Tap a clip on this track to set the track level and pan' }, trackName(tr)),
-    h('div', { class: 'tl-head-btns' },
-      tog('muted', icon('sound'), icon('mute'), 'Mute / unmute this track'),
-      h('button', { type: 'button', class: 'tl-tog' + (tr.solo ? ' solo' : ''), title: 'Solo: hear only the soloed tracks',
-        onclick: () => { tr.solo = !tr.solo; changed(); } }, 'S'),
-      removable ? h('button', { type: 'button', class: 'tl-tog', title: 'Remove this empty track',
-        onclick: () => { N.tracks = N.tracks.filter((t) => t !== tr); changed(); } }, icon('close')) : null));
+  return TL.trackHead(tr, { label: trackName(tr), extra: [removable ? h('button', { type: 'button', class: 'tl-tog', title: 'Remove this empty track',
+    'aria-label': 'Remove this empty track', onclick: () => { N.tracks = N.tracks.filter((t) => t !== tr); changed(); } }, icon('close')) : null] });
 }
 
 function renderTimeline() {
@@ -345,7 +345,8 @@ function renderTimeline() {
 function addTrack() { const id = `a${uid()}`; N.tracks.push({ id }); return id; }
 function changed() { persist(); renderTimeline(); renderPanel(); syncMedia(); }
 
-// the track, ruler and marker menu items the timeline hands over (timeline.js openMenu); it then calls changed() for the ones that return nothing
+// the track and ruler menu items the timeline hands over (timeline.js openMenu; rename, lock, solo and markers are its own);
+// it then calls changed() for the ones that return nothing
 function menuAction(id, ctx = {}) {
   const tr = ctx.track;
   switch (id) {
@@ -353,20 +354,9 @@ function menuAction(id, ctx = {}) {
     case 'remove':
       if (!tr || N.tracks.length < 2 || N.items.some((i) => i.track === tr.id)) return toast('Only an empty track can be removed', true);
       N.tracks = N.tracks.filter((t) => t !== tr); break;
-    case 'rename': {
-      const name = tr && prompt('Track name', trackName(tr));
-      if (name == null) return;
-      R.trackRename(N, tr.id, name); break;
-    }
     case 'areaStart': WA.set(waIn(WA.stored(), ctx.t, seqEnd(), MIN_LEN)); return;
     case 'areaEnd': WA.set(waOut(WA.stored(), ctx.t, seqEnd(), MIN_LEN)); return;
     case 'areaClear': WA.clear(); return;
-    case 'renameMarker': {
-      const m = N.markers[ctx.marker];
-      const label = m && prompt('Marker name', m.label || '');
-      if (label == null) return;
-      R.renameMarker(N, ctx.marker, label); break;
-    }
     default: return;
   }
   changed();
@@ -838,7 +828,7 @@ async function toSoundFrame(m, label) {
 export async function renderMix(p, { name = 'mix', items = p.items } = {}) {
   const out = { ...N.out, ...(p.out || {}) };
   return api('/api/sound/render', { method: 'POST', timeout: 900000, busy: 'Mixing the sound…', body: {
-    tracks: p.tracks, name: out.name || name, format: out.format, gain: out.gain, normalize: out.normalize,
+    tracks: R.exportTracks(p.tracks), name: out.name || name,   // (solo folded into muted, as the preview plays it) format: out.format, gain: out.gain, normalize: out.normalize,
     items: items.map((it) => ({ track: it.track, src: it.src, at: it.at, in: it.in, out: it.out ?? it.dur ?? null,
       volume: it.volume ?? 1, pan: it.pan || 0, chans: it.chans || null, fade_in: it.fadeIn || 0, fade_out: it.fadeOut || 0 })) } });
 }
@@ -900,8 +890,8 @@ export function mountSound(els) {
   BAR.dup = iconBtn('Duplicate the picked clips (Ctrl+J)', icon('copy'), TL.duplicatePicked);
   BAR.del = iconBtn('Delete the picked clips (Delete)', icon('trash'), () => TL.removePicked());
   BAR.ripple = button([icon('trash'), 'Ripple'], () => TL.rippleDelete(), { title: 'Delete the picked clips and close the gap (Shift+Delete)', cls: 'small' });
-  SD.tools.replaceChildren(BAR.split, BAR.dup, BAR.del, BAR.ripple, TL.snapChip(),
-    h('span', { class: 'tl-tip' }, info(`Drag clips to move, drag their ends to trim, overlap two on a track to cross-fade. Drop sounds and clips from the Shelf on a track.\n\n${
+  SD.tools.replaceChildren(TL.toolStrip(), BAR.split, BAR.dup, BAR.del, BAR.ripple, TL.snapChip(),
+    h('span', { class: 'tl-tip' }, info(`Drag clips to move, drag their ends to trim, overlap two on a track to cross-fade. Drop sounds and clips from the Shelf on a track.\n\n${TOOLS_HELP}\n\nTrack heads: drag one up or down to reorder, drag its bottom edge for its height, double-click its name to rename it. Drag a marker along the ruler to move it, double-click it to rename it.\n\n${
       keysHelp().map((k) => `${k.keys}: ${k.label}`).join('\n')}`, 'Timeline keys')),
     iconBtn('Zoom out', '−', () => TL.zoomBy(1 / 1.5)),
     button([icon('fit'), 'Fit'], TL.fit),
@@ -916,7 +906,7 @@ function wireOnce() {
   stp = transport({ playing: () => N.playing, play: sndPlay, pause: sndPause, seek: sndSeek, t: () => N.t, len: seqEnd },
     { step: { by: 5, key: 0.1, back: '⏪', fwd: '⏩', label: '5 s', pause: false },
       loop: { get: () => N.loop, set: (on) => { N.loop = on; store.set('deck.sound.loop', on); } }, area: WA,
-      keys: keyJumps(() => clipKeyTimes(TL, TL.selItem() ? [TL.selItem()] : N.items)) });
+      keys: keyJumps(() => [...clipKeyTimes(TL, TL.selItem() ? [TL.selItem()] : N.items), ...N.markers.map((m) => m.t)]) });
   registerUndo('sound', { undo: () => HIST.undo(), redo: () => HIST.redo(), can: () => HIST.can() });
   onServer('deck_generation', ({ data }) => { if (N.gens.includes(data?.id) && SD.active()) setTimeout(renderPanel, 0); });
   playKeys(() => SD.active(), () => stp, (e) => ({ d: TL.duplicatePicked, f: () => SD.max?.toggle(), ...KEYS.more(e) }), (e) => KEYS.combos(e));
