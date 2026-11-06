@@ -1,4 +1,4 @@
-import { $, h, api, store, icon, seg, placeholder, toast, button, openSheet, closeSheet, section, hint, actions } from './ui.js';
+import { $, h, api, store, icon, seg, placeholder, toast, button, openSheet, closeSheet, section, hint, actions, barLabel } from './ui.js';
 import { S, listedRun, onServer, onProject, thumbUrl } from './core.js';
 import { B, FILTER_KINDS, genTime, dayKey, dayName, usedBadge, loadAttached, loadAllProjectGenerations, openGallery, togglePin } from './board.js';
 import { dropOnTable, selectedFrames, tableFrames } from './table.js';
@@ -280,7 +280,7 @@ function build(stage) {
 function addButton(bar) {
   if (SH.btn?.isConnected) return;
   SH.btn = h('button', { type: 'button', class: 'btn small shelf-toggle', 'aria-pressed': String(SH.open), title: 'Shelf: outputs, history and pictures to drag onto the table',
-    onclick: () => setOpen(!SH.open) }, icon('folder'), ' Shelf');
+    onclick: () => setOpen(!SH.open) }, icon('folder'), barLabel('Shelf'));
   SH.btn.classList.toggle('on', SH.open);
   bar.prepend(SH.btn);
 }

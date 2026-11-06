@@ -7,7 +7,7 @@ import {
   CAM, FPS, HOLD, OBJ, OFF, R, ROOM, SC, TEMP, TYPES, WP, addKey, bakeBase, camById, camsOf, cutTo, cutTrack, dropCuts, dropKeys, frames, keyAt, keyChans, keyTarget, namesFor, sample, sampleChan, selItem, setActiveCam, setKey, setMute
 } from './scene-data.js';
 import {
-  CURVES, EASES, allKeys, bounds, copy, handleOf, isScalar, kindOf, moveBy, moveHandle, paste, prune, quatDeg, reduceKeys, remove, restore, scaleAround, setBroken, setChan, setEase, snapshot, track
+  CURVES, EASES, allKeys, bounds, copy, reverse, spaceEvenly, stagger, handleOf, isScalar, kindOf, moveBy, moveHandle, paste, prune, quatDeg, reduceKeys, remove, restore, scaleAround, setBroken, setChan, setEase, snapshot, track
 } from './keys.js';
 import { SCN, changed, draw, pose, sceneStage, select } from './scene-view.js';
 import { busy, play, seek, stopPlay } from './scene-export.js';
@@ -15,6 +15,8 @@ import { newLength, setAutoKey } from './scene-ui.js';
 import { modeOf } from './scene-modes.js';
 import { workArea } from './workarea.js';
 import { keysText } from './scene-shortcuts.js';
+import { keyArrangeMenu, keyEaseMenu, sheetKeyMenu } from './layer-menu.js';
+import { openPressMenu, pressMenu } from './press-menu.js';
 
 // ---- the key sheet: a Blender-style dope sheet and a simple graph editor over the layers' keys -----
 // A row per layer (the camera, then the objects) that opens (▸) into a row per channel, a figure's pose
@@ -288,6 +290,7 @@ const keyEl = (d, ri, j, style) => h('span', { class: `key e-${easeOf(d) || 'def
 
 // ---- the graph channel's modifiers (curve-mods.js): a strip above the graph; its sliders redraw the graph as they move ----
 const ampMax = (ch) => (ch === 'fov' ? 20 : ANG.has(ch) ? 45 : 2);
+const pushMod = (item, ch, type) => ((item.mods ||= {})[ch] ||= []).push(newMod(type, +(ampMax(ch) / 20).toFixed(3), 1 + Math.floor(Math.random() * 99999)));
 function renderMods(L, sheet) {
   let el = $('#sceneMods');
   if (!L || !canModify(G.ch)) { el?.remove(); return; }
@@ -306,8 +309,7 @@ function renderMods(L, sheet) {
   const add = h('select', { 'aria-label': `Add a modifier to ${chLabel(G.ch)}`, onchange: (e) => {
     const type = e.target.value; e.target.value = '';
     if (!type) return;
-    const seed = 1 + Math.floor(Math.random() * 99999);
-    ((L.item.mods ||= {})[G.ch] ||= []).push(newMod(type, +(ampMax(G.ch) / 20).toFixed(3), seed));
+    pushMod(L.item, G.ch, type);
     gRange = null; edit();
   } }, h('option', { value: '' }, `+ Modifier on ${chLabel(G.ch)}…`), ...MOD_TYPES.map(([v, label]) => h('option', { value: v }, label)));
   const slider = (m, key, label, opts) => rangeField(label, () => +m[key] || 0, (v) => { m[key] = v; }, { ...opts, onInput: live, onChange: done });
@@ -439,6 +441,53 @@ export function duplicateKeys() {
   if (!b) return null;
   const c = copy(allTracks(), SEL);
   return pasteKeys(b[0] + (b[1] > b[0] ? b[1] - b[0] + 1 : 12), c);
+}
+
+// ---- Arrange: where the selected keys go in time (keys.js); the layers in the sheet's order, each with its own tracks ----
+const selLayers = () => shown().map(tracksOf).filter((ts) => ts.some((T) => T.keys.some((k) => SEL.has(k))));
+const selFrames = () => new Set(allKeys(allTracks()).filter((k) => SEL.has(k)).map((k) => k.f)).size;
+export function arrangeKeys(id) {
+  if (!SEL.size) return;
+  const tracks = allTracks(), b = bounds(tracks, SEL);
+  if (id === 'toPlayhead') moveBy(tracks, SEL, R.f - b[0], frames());
+  else if (id === 'lineUp') stagger(selLayers(), SEL, R.f, 0, frames());
+  else if (id.startsWith('stagger:')) stagger(selLayers(), SEL, b[0], +id.slice(8), frames());
+  else if (id === 'space') { if (!spaceEvenly(tracks, SEL, frames())) return; }
+  else if (id === 'reverse') { if (!reverse(tracks, SEL, frames())) return; }
+  else return;
+  done();
+}
+const arrangeGroups = () => keyArrangeMenu({ n: SEL.size, layers: selLayers().length, frames: selFrames() }, FPS)
+  .map((g) => g.map((it) => ({ ...it, run: () => arrangeKeys(it.id) })));
+const easeGroups = () => keyEaseMenu(EASES).map((g) => g.map((it) => ({ ...it, run: () => setKeyEase(it.id.slice(5)) })));
+function openArrange(e) { const r = e.currentTarget.getBoundingClientRect(); openPressMenu(r.left, r.bottom + 4, arrangeGroups(), 'Arrange'); }
+// the channel a modifier would go on: the channel row pressed, or the graph's
+function modTarget(row) {
+  if (UI.mode === 'graph') { const L = gLayer(); return L && canModify(G.ch) ? { L, ch: G.ch } : null; }
+  const T = row?.t === 'chan' ? row.tracks[0] : null;
+  return T && T.kind !== 'off' && T.kind !== 'cut' && canModify(T.ch) ? { L: row.L, ch: T.ch } : null;
+}
+// a modifier added from the dope sheet: the graph opens on that channel, where its settings are
+function addModFrom(m, type) {
+  pushMod(m.L.item, m.ch, type);
+  if (UI.mode !== 'graph') { if (m.L.id !== R.sel) select(m.L.other ? null : m.L.id); G.ch = m.ch; setUI('mode', 'graph'); }
+  gRange = null; changed(); renderKeys();
+}
+const spotAt = (x, y) => ({ getBoundingClientRect: () => ({ left: x, right: x, top: y, bottom: y }) });
+// the right-click / long-hold menu on the sheet: a key not selected is taken alone first, so the menu is about it
+function sheetMenu(e) {
+  if (G0) abort();   // (a long hold began a pan, box or key press: it ends here, so letting go doesn't also tap)
+  const t = e.target, keyEl2 = t.closest?.('[data-key]'), laneEl = t.closest?.('[data-track]');
+  const row = keyEl2 ? ROWS[+keyEl2.dataset.l] : laneEl ? ROWS[+laneEl.dataset.track] : null;
+  if (keyEl2) { const keys = keyOf(keyEl2); if (keys.length && !keys.every((k) => SEL.has(k))) { SEL.clear(); keys.forEach((k) => SEL.add(k)); renderKeys(); } }
+  const x = e.clientX, y = e.clientY, mod = modTarget(row);
+  const run = { copy: copyKeys, paste: () => pasteKeys(), duplicate: duplicateKeys, delete: deleteKeys,
+    stretch: () => { setUI('tool', UI.tool === 'scale' ? 'move' : 'scale'); syncTools(); },
+    reduce: () => setTimeout(() => openReduce(spotAt(x, y)), 0), selectAll, selectNone, selectInvert };
+  const subs = { ease: easeGroups, arrange: arrangeGroups, mod: () => [MOD_TYPES.map(([v, label]) => ({ id: v, label, run: () => addModFrom(mod, v) }))] };
+  const groups = sheetKeyMenu({ n: SEL.size, canPaste: !!getClip(), stretch: UI.tool === 'scale', modOn: mod ? chLabel(mod.ch) : null })
+    .map((g) => g.map((it) => (it.sub ? { ...it, sub: subs[it.sub] } : { ...it, run: run[it.id] })));
+  openPressMenu(x, y, groups, 'Keys');
 }
 
 // ---- gestures -----------------------------------------------------------------------------------
@@ -709,12 +758,9 @@ function openMenu(anchor) {
   if (menuEl) { closeMenu(); return; }
   const item = (label, fn, keep = false) => h('button', { type: 'button', class: 'btn small ghost', onclick: () => { fn(); if (!keep) closeMenu(); } }, label);
   menuEl = h('div', { class: 'key-menu', role: 'menu' },
-    item('Select all (A, Ctrl+A)', selectAll), item('Select none (Ctrl+D)', selectNone), item('Invert selection', selectInvert), item('Duplicate (Ctrl+J)', duplicateKeys),
     ...(TOUCH() ? [] : [
       item(`${UI.box ? '✓ ' : ''}Box select`, () => { setUI('box', !UI.box); syncTools(); }),
       item(`${UI.add ? '✓ ' : ''}Add to selection`, () => { setUI('add', !UI.add); syncTools(); })]),
-    item(`${UI.tool === 'scale' ? '✓ ' : ''}Stretch in time (S)`, () => { setUI('tool', UI.tool === 'scale' ? 'move' : 'scale'); syncTools(); }),
-    item('Reduce keys…', () => setTimeout(() => openReduce(anchor), 0)),
     numIn('Shift (frames)', 0, (v) => { moveKeys(v); closeMenu(); }, 'Move the selected keys by this many frames', { min: -frames(), max: frames() }),
     numIn('Scale (%)', 100, (v) => { scaleKeys(v / 100); closeMenu(); }, 'Stretch the selected keys around the playhead, in percent', { min: 5, max: 500 }),
     item(`Ruler in ${UI.unit === 's' ? 'frames' : 'seconds'}`, () => { setUI('unit', UI.unit === 's' ? 'f' : 's'); renderKeys(); }),
@@ -738,21 +784,10 @@ function toolRow() {
       tool('⬚', () => { setUI('box', !UI.box); syncTools(); }, { name: 'Box select', on: () => UI.box, title: 'drag on empty space to box-select instead of panning' }),
       tool('⊕', () => { setUI('add', !UI.add); syncTools(); }, { name: 'Add to selection', on: () => UI.add, title: 'taps and boxes add to the selection (a tap on a selected key takes it out)' }),
       sep()] : []),
-    tool('⧉', copyKeys, { name: 'Copy', needs: 'sel', title: 'Ctrl+C' }),
-    tool('📋', () => pasteKeys(), { name: 'Paste', needs: 'clip', title: 'at the playhead, onto the selected layer if it fits (Ctrl+V)' }),
-    tool('🗑', deleteKeys, { name: 'Delete selected keys', needs: 'sel', cls: 'danger', title: 'Delete' }),
-    sep(),
-    (() => {
-      const s = h('select', { class: 'kt-ease', 'aria-label': 'Ease of the selected keys', title: 'Ease · how the selected keys blend into the next one',
-        onchange: (e) => { const v = e.target.value; e.target.value = '~'; if (v !== '~') setKeyEase(v); } },
-      h('option', { value: '~' }, 'Ease…'), h('optgroup', { label: 'Between keys' }, ...EASES.map(([v, l]) => h('option', { value: v }, l))),
-      h('optgroup', { label: 'Bezier handles' }, h('option', { value: 'hb:0' }, 'Aligned'), h('option', { value: 'hb:1' }, 'Broken')));
-      tools.push([s, null, 'sel']);
-      return s;
-    })(),
+    tool('⇶', openArrange, { name: 'Arrange', needs: 'sel', title: 'the selected keys: to the playhead, layers lined up or staggered, spaced evenly, reversed' }),
     tool('🧲', () => { setUI('snap', !UI.snap); syncTools(); }, { name: 'Snap', on: () => UI.snap, title: 'dragging snaps to the playhead and to other keys' }),
     tool('⤢', () => { V.fit = true; renderKeys(); }, { name: 'Fit', title: 'show the whole clip' }),
-    tool('⋯', (e) => openMenu(e.currentTarget), { name: 'More', cls: 'kt-more', title: 'more: select all / none / invert, box select, duplicate, shift, scale, stretch in time, reduce keys, ruler' }),
+    tool('⋯', (e) => openMenu(e.currentTarget), { name: 'More', cls: 'kt-more', title: 'more: box select, shift, scale, ruler, snap. Right click a key or the sheet (hold a finger on it) for copy, paste, ease, arrange, modifiers and the rest' }),
     keyEdit(),
     h('span', { id: 'sceneKeyInfo', class: 'hint keyinfo' }));
 }
@@ -975,6 +1010,7 @@ export function renderTransport() {
   lanes.addEventListener('pointerup', up);
   lanes.addEventListener('pointercancel', cancel);
   lanes.addEventListener('wheel', wheel, { passive: false });
+  pressMenu(lanes, sheetMenu, { ok: (e) => !busy && !e.target.closest?.('.sheet-ruler') });
   G0 = null; ptrs.clear();
   SCN.transport.replaceChildren(
     h('div', { class: 'key-head' }, h('div', { class: 'row scene-keybar' },

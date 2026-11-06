@@ -4,7 +4,7 @@ import { ASPECTS, FULL, aspectCrop, cropSpan } from './crop-geometry.js';
 export { ASPECTS, FULL, aspectCrop, cropSpan } from './crop-geometry.js';
 import { store,
   h, api, clamp01, busy, toast, undoToast, sheetOpen, openSheet, closeSheet, loadingSheet, sheetStillOpen, button, iconBtn, actions,
-  seg, field, section, hint, toggle, propNum, layerRowsEl, panelTop, help, colorField, rangeField, pctFmt, clamp, uid,
+  seg, field, section, hint, toggle, propNum, layerRowsEl, panelTop, help, colorField, rangeField, pctFmt, clamp, uid, pastePictures, barLabel,
 } from './ui.js';
 import { ASPECT_PRESETS, S, inputUrl, switchTab, thumbUrl } from './core.js';
 import { openImagePicker, uploadImage } from './media.js';
@@ -782,6 +782,20 @@ export function createEditor(cfg) {
     }
     for (const q of pts) { ctx.beginPath(); ctx.arc(q.x, q.y, 9, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
   }
+  // the size readout's selection part: the selected layer at its size on the canvas, and its file's pixels when they differ;
+  // several layers: the box round them
+  function selSizeText() {
+    const sel = picked().filter(ready);
+    if (!sel.length) return '';
+    const mp = (w, h) => `${(w * h / 1e6).toFixed(2)} MP`;
+    if (sel.length > 1) {
+      const b = unionRect(sel.map(bounds)), w = Math.round(b.w), h = Math.round(b.h);
+      return `   |   ${sel.length} layers ${w}×${h} · ${mp(w, h)}`;
+    }
+    const l = sel[0], r = layerRect(l), w = Math.round(r.w), h = Math.round(r.h);
+    const fw = Math.round(l.crop.w * (l.img.naturalWidth || l.img.width)), fh = Math.round(l.crop.h * (l.img.naturalHeight || l.img.height));
+    return `   |   Selection ${w}×${h} · ${mp(w, h)}${fw !== w || fh !== h ? ` (file ${fw}×${fh})` : ''}`;
+  }
   // the screen-px box round the selected layer, for the toolbar
   const screenBox = (r) => ({ x: EV.ox + r.x * EV.s, y: EV.oy + r.y * EV.s, w: r.w * EV.s, h: r.h * EV.s });
 
@@ -791,7 +805,7 @@ export function createEditor(cfg) {
     cv.classList.toggle('hidden', !any);
     cfg.empty?.classList.toggle('hidden', any);
     const f = editorFrame();
-    if (cfg.size) cfg.size.textContent = any && f ? `${f.w}×${f.h} · ${(f.w * f.h / 1e6).toFixed(2)} MP` : '';
+    if (cfg.size) cfg.size.textContent = any && f ? `Image ${f.w}×${f.h} · ${(f.w * f.h / 1e6).toFixed(2)} MP${selSizeText()}` : '';
     const dpr = devicePixelRatio || 1, w = cv.clientWidth, hh = cv.clientHeight;
     if (!any || !w || !hh) return;
     cv.width = Math.round(w * dpr); cv.height = Math.round(hh * dpr);
@@ -1408,7 +1422,7 @@ export function createEditor(cfg) {
     for (const m of E.layers) if (m.maskOf) { const o = E.layers.find((x) => x.key === m.maskOf); if (o) ST.syncMask(m, o); }
     if (E.sel && !E.layers.includes(E.sel)) { E.sel = E.multi.find((l) => E.layers.includes(l)) || null; E.multi = E.multi.filter((l) => l !== E.sel); }
     E.multi = E.multi.filter((l) => E.layers.includes(l) && l !== E.sel);
-    if (!E.sel) { E.multi = []; E.pickMode = false; }
+    if (!E.sel) E.multi = [];   // (Select several stays on with nothing selected: it is a switch, turned off where it was turned on)
     settleGrow();
     if (!E.sel || !ready(E.sel) || (E.cropping && !canCrop())) E.cropping = false;
     if (cfg.renderPanel) cfg.renderPanel(eng);
@@ -1495,15 +1509,17 @@ export function createEditor(cfg) {
   }
   function layerList() {
     if (!E.layers.length) return h('div', {}, hint('Add images from your inputs, generations or device, then tap one on the canvas to move, resize or crop it.'),
-      store.get(LAYER_CLIP, null) ? button([icon('paste'), 'Paste layers'], pasteLayers, { cls: 'small', title: 'The layers you copied (Ctrl+V)' }) : null);
+      h('div', { class: 'row wrap' }, button([icon('paste'), 'Paste picture'], pastePictureLayers, { cls: 'small', title: 'A picture you copied, as a layer' }),
+        store.get(LAYER_CLIP, null) ? button([icon('paste'), 'Paste layers'], pasteLayers, { cls: 'small', title: 'The layers you copied (Ctrl+V)' }) : null));
     const rows = ST.rowsOf(E.layers, E.groups);
     // (the list shows the top layer first: a place in it is the same place counted from the other end)
     const reorder = (from, to) => { E.layers = ST.moveRow(E.layers, E.groups, from, to); editorChanged(); };
     const several = picked(), hiddenCount = ST.hiddenOnes(E.layers).count;
     const bar = h('div', { class: 'row wrap layer-pick' },
-      h('button', { type: 'button', class: `btn small${E.pickMode ? ' on' : ''}`, 'aria-pressed': String(!!E.pickMode),
+      // (on the table Select several is in the bar over the open frame: frame-image.js)
+      onTable() ? null : h('button', { type: 'button', class: `btn small${E.pickMode ? ' on' : ''}`, 'aria-pressed': String(!!E.pickMode),
         title: 'Taps on the list and the canvas add or drop layers from the selection. Also: Shift on the canvas, Alt in the list. Shift in the list selects a range',
-        onclick: () => { E.pickMode = !E.pickMode; renderEditor(); } }, 'Select several'),
+        'aria-label': 'Select several', onclick: () => { E.pickMode = !E.pickMode; renderEditor(); } }, icon('choose'), barLabel('Select several')),
       iconBtn('Layer actions', icon('more'), (ev) => { const r = ev.currentTarget.getBoundingClientRect(); openLayerMenu(r.left, r.bottom + 4); }),
       help('Right click a layer or the canvas, or hold a finger on it, for what you can do with the selected layers. Pressing a layer that isn\'t selected selects it alone first. Merge draws the layers into one new picture: crops, turns, opacity and masks are drawn in. It keeps the lowest layer\'s blend, for the whole picture, so layers with a blend other than Normal can look different. A hidden layer isn\'t merged. Trim crops away the see-through edges of each selected cut-out, where it shows; Reset crop brings them back. Locked or animated layers can\'t be merged. Undo brings them back. Save each as input makes every layer its own input in this project, at its file\'s full pixels, with its crop, turn and opacity and a see-through background. Save as one input makes them one input the size of their shared box, on the Background colour, at Export size and Max MP. Open in a new edit puts them in a new tab, where they stay in place and can be changed without touching this edit. A hidden layer that is selected is included.'),
       several.length > 1 ? hint(`${several.length} selected`) : null,
@@ -1571,7 +1587,7 @@ export function createEditor(cfg) {
       if (it) E.cropping = false;
       renderEditor();
       openLayerMenu(e.clientX, e.clientY);
-    }, { ok: (e) => !e.target.closest('button, .layer-grip') });
+    }, { ok: (e) => !e.target.closest('button, .layer-grip'), lift: true });
     return h('div', {}, bar, list);
   }
 
@@ -1603,7 +1619,7 @@ export function createEditor(cfg) {
     all: () => { const vis = E.layers.filter((l) => !l.mask && !l.draft && !l.maskOf); E.sel = vis[vis.length - 1] || null; E.multi = vis.slice(0, -1); renderEditor(); },
     none: () => { E.sel = null; E.multi = []; E.pickMode = false; renderEditor(); },
     several: () => { E.pickMode = !E.pickMode; renderEditor(); },
-    copy: () => copySelected(), paste: () => pasteLayers(), duplicate: () => duplicateSelected(),
+    copy: () => copySelected(), paste: () => pasteLayers(), pastePicture: () => pastePictureLayers(), duplicate: () => duplicateSelected(),
     group: () => { E.layers = ST.makeGroup(E.layers, E.groups, picked(), uid()); E.multi = []; editorChanged(); },
     mergeDown: () => mergeDown(picked()[0]), mergeSelected: () => mergeSelected(), trim: () => trimLayers(),
     saveEach: () => saveEach(), saveTogether: () => saveTogether(), openNew: () => openSelected(), moveNew: () => moveToNewEdit(),
@@ -1613,7 +1629,7 @@ export function createEditor(cfg) {
   function openLayerMenu(x, y) {
     const on = picked();
     const groups = layerMenu({ layers: E.layers.filter((l) => !l.mask && !l.draft && !l.maskOf).length, selected: on.length, pictures: selectedPictures().length, trim: trimmable().length,
-      hidden: ST.hiddenOnes(E.layers).count, clip: !!store.get(LAYER_CLIP, null), pickMode: E.pickMode, newEdit: !!cfg.newEdit, table: !!onTable(),
+      hidden: ST.hiddenOnes(E.layers).count, clip: !!store.get(LAYER_CLIP, null), pastePicture: true, pickMode: E.pickMode, newEdit: !!cfg.newEdit, table: !!onTable(),
       mergeDown: on.length === 1 && !!ST.mergeBelow(E.layers, on[0]), mergeSet: on.length > 1 && ST.mergeSet(E.layers, on).length >= 2,
       main: cfg.main?.() && on.length === 1 && pinnable(on[0]) ? { on: !!on[0].key && on[0].key === mainKey() } : null,
       red: !!composeMask() && redTargets().length > 0 });
@@ -1795,6 +1811,21 @@ export function createEditor(cfg) {
     E.sel = pics[pics.length - 1] || null; E.multi = pics.slice(0, -1); E.cropping = false;
     editorChanged();
     toast(`${pics.length} ${pics.length === 1 ? 'layer' : 'layers'} pasted`);
+  }
+  // A picture from the system clipboard (copied in another app or page) as a new layer on top: the menu's Paste picture, for a
+  // tablet that has no Ctrl+V (ui.js pastePictures: a paste box to long-press where the page can't read the clipboard)
+  function pastePictureLayers() {
+    pastePictures(async (files) => {
+      const tid = docId();
+      for (const f of files) {
+        let r;
+        try { r = await uploadImage(f); } catch (err) { return toast(`Upload failed: ${err.message}`, true); }
+        if (docId() !== tid) { api(`/api/inputs?name=${encodeURIComponent(r.name)}`, { method: 'DELETE', busy: false }).catch(() => {}); return; }   // (another edit opened meanwhile: nothing has it)
+        const l = addImage(r.name, { label: f.name.replace(/\.\w+$/, '') });
+        E.sel = l; E.multi = []; E.cropping = false;
+      }
+      renderEditor();
+    });
   }
   // The selected layers, with their masks, out of this edit into a new one, where they had been on the canvas
   async function moveToNewEdit() {

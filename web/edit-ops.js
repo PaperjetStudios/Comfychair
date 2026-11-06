@@ -26,7 +26,7 @@
 import { runName } from './run-name.js';
 import { sizeChoices } from './size-picker.js';
 import { frameOutput } from './make-rules.js';
-import { api, field, h, help, hint, rangeField, seg, store, textArea, toast, toggle } from './ui.js';
+import { api, button, field, h, help, hint, rangeField, seg, store, textArea, toast, toggle } from './ui.js';
 import { CURRENT_EDIT, S } from './core.js';
 import { bareSource, clipUrl, grabFrame, soundSource } from './media.js';
 import { adoptGenerations, queueRun, roleField, template, valuesByRole, waitGen, ROLES } from './make.js';
@@ -34,6 +34,7 @@ import { CLIP_FX, loraChoice, restyleLoras, runClipStep } from './clip-effects.j
 import { isLive } from './live.js';
 import { DOC_KIND } from './table-model.js';
 import { OPS, opById, resultLabel } from './edit-rules.js';
+import { addFrames, gridSpots, parseFrames, timeOf } from './frame-picks.js';
 import * as W from './wire-rules.js';
 import { renderTracks } from './timeline-rules.js';
 import { exportGrade } from './adjust.js';
@@ -48,6 +49,7 @@ const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
 
 export const OP_DEFAULTS = {
   'video:grab': { at: '' },
+  'video:frames': { frames: '', cols: 4 },
   'video:maps': { op: 'depth', depthModel: 'large', edgeAmount: 'normal', poser: 'dwpose' },
   'video:restyle': { lora: null, strength: 1, prompt: '' },
   'video:upscale': { prompt: '', outsize: 'FullHD' },
@@ -206,6 +208,15 @@ export function opFields(kind, id, opts, ctx = {}) {
     case 'video:grab':
       return [field('At (seconds into the clip)', h('input', { type: 'number', min: 0, step: 0.04, value: opts.at ?? '', placeholder: 'its first frame',
         onchange: (e) => { opts.at = e.target.value; keep(); } })), help('Blank: the clip\'s first frame (its in point). The still lands as a new image frame, or as a layer in an image frame that is selected too.')];
+    case 'video:frames': {
+      const clipFrame = (ctx.frames || []).find((f) => f.kind === 'video') || null;
+      return [field('Frames', h('input', { type: 'text', value: opts.frames ?? '', placeholder: 'e.g. 4, 54, 96', 'aria-label': 'Frames',
+          onchange: (e) => { opts.frames = e.target.value; keep(); } })),
+        h('div', { class: 'row wrap' }, button('Pick frames…', () => pickClipFrames(clipFrame, opts).then((ok) => { if (ok) redraw(); }, (e) => toast(e.message, true)), { disabled: !clipFrame })),
+        field('Per row', h('input', { type: 'number', min: 1, max: 16, step: 1, value: opts.cols ?? 4, 'aria-label': 'Pictures per row',
+          onchange: (e) => { opts.cols = Math.max(1, Math.min(16, Math.round(Number(e.target.value)) || 4)); keep(); } })),
+        help('Frame numbers of the clip (0 is its first), a time in seconds with an s (1.5s), or last. Pick frames… scrubs the clip and adds the ones you take. Blank on a character or object sheet\'s clip: the frames its sheet is cut from, named by angle. Each frame becomes a layer of one new image frame, side by side in rows.')];
+    }
     case 'video:maps':
       return [seg([['depth', 'Depth'], ['canny', 'Canny'], ['scribble', 'Scribble'], ['pose', 'Pose']], opts.op, (v) => { opts.op = v; redraw(); }, { wrap: true }),
         opts.op === 'depth' ? field('Detail', seg([['large', 'Fine'], ['small', 'Fast']], opts.depthModel, (v) => { opts.depthModel = v; redraw(); })) : null,
@@ -462,7 +473,7 @@ async function run3d(o, frame, ctx, label) {
     const fs = await import('./frame-source.js'), T = await import('./table.js');
     for (const w of (T.wiresInto?.(frame.id) || []).filter((x) => x.on !== false && x.kind === 'image' && x.source)) {
       if (names.length >= VIEWS.length) break;
-      const got = W.isFrameWire(w) ? { name: await fs.frameStill(w.source, w.frame) } : await fs.frameImage(w.source, { multiple: 1 }).catch(() => null);
+      const got = await fs.wireImage(w, w.source, { multiple: 1 }).catch(() => null);
       if (got?.name && !names.includes(got.name)) names.push(got.name);
     }
   } catch (e) { toast(`The wired pictures didn't come in: ${e.message}`, true); }
@@ -505,6 +516,7 @@ const STEP_OF = { restyle: (x) => ({ op: 'restyle', prompt: x.prompt, lora: x.lo
 async function runVideo(o, frame, opts, ctx, label) {
   const into = ctx.into;
   if (o.id === 'grab') return grab(frame, opts, ctx);
+  if (o.id === 'frames') return framesToLayers(frame, opts);
   if (o.id === 'foley') return foley(frame, opts, ctx, label, ['video']);
   if (o.id === 'render') return render(frame, ctx, label);
   if (o.id === 'track') {
@@ -612,7 +624,7 @@ async function fromSelection(e, st, frames, { target = null, fresh = [] } = {}) 
   if ([...need].some((n) => n.startsWith('first'))) {
     const w = plugged.find((x) => x.kind === 'image');
     const pic = w ? w.source : frames.find((f) => f.kind === 'image' && f.doc);
-    if (w && W.isFrameWire(w)) { const name = await src.frameStill(w.source, w.frame); fresh.push(name); st.first = name; }
+    if (w && (W.isFrameWire(w) || w.out)) { const got = await src.wireImage(w, w.source, { multiple: 1 }); if (got.fresh) fresh.push(got.name); st.first = got.name; }
     else if (pic) {
       const got = await src.frameImage(pic, { multiple: 1 });
       if (got.fresh) fresh.push(got.name);
@@ -739,6 +751,74 @@ async function grab(frame, opts, ctx) {
   dispatchEvent(new CustomEvent('edit:grabbed', { detail: { frame, input: name, into: into || null } }));
   if (!into) throw new Error('The frame was grabbed but couldn\'t go on the table: it is in your pictures');
   return { landed: true, into };
+}
+
+// ---- Frames to layers: frames of any clip as the layers of one new image frame, in a grid (frame-picks.js) ----
+// the clip's frame rate (a run's output says it; a file's isn't known here: 30, used both to pick a frame and to take it, so the picture is the one picked)
+async function clipFacts(src) {
+  if (src.generation == null) return { fps: 30, g: null };
+  const g = S.history.get(src.generation) || await api(`/api/generations/${src.generation}`, { busy: false });
+  return { fps: g?.outputs?.[src.index || 0]?.fps || 24, g };
+}
+// Pick frames…: scrub the clip and take frames; their numbers are added to the box. True when some were.
+async function pickClipFrames(frame, opts) {
+  if (!frame) return false;
+  const src = await needClip(frame, ['video']), { fps } = await clipFacts(src);
+  const url = src.url || clipUrl(src) || (await api(`/api/generations/${src.generation}`, { busy: false })).outputs?.[src.index || 0]?.url;
+  if (!url) throw new Error('That clip can\'t be played here');
+  const { pickFrames } = await import('./media.js');
+  const list = await pickFrames({ url, title: `Frames of ${src.label || frame.label || 'the clip'}`, fps, room: 64 });
+  if (!list?.length) return false;
+  opts.frames = addFrames(opts.frames, list.map((x) => x.frame));
+  saveOpts('video', 'frames', opts);
+  return true;
+}
+async function framesToLayers(frame, opts) {
+  const src = await needClip(frame, ['video']);
+  return layersFromClip(src, { marks: parseFrames(opts.frames), cols: opts.cols || 4, near: frame, label: resultLabel(opById('video', 'frames'), frame) });
+}
+// A sheet run that has just landed on the table (make-panel.js land): the frames its sheet is cut from, each a layer named by its
+// angle, in a new image frame beside its clip. near: the frame its clip went into, when that is known.
+export async function sheetAsLayers(g, near = null) {
+  const index = (g.outputs || []).findIndex((o) => o.kind === 'video');
+  if (index < 0) return null;
+  const Table = await import('./table.js');
+  const by = near?.kind === 'video' ? near : [...(Table.tableFrames() || [])].reverse().find((f) => f.kind === 'video') || null;
+  const marks = await api(`/api/generations/${g.id}/sheet-marks`, { busy: false }).catch(() => []);
+  if (!marks?.length) return null;   // (not a run that cuts a sheet)
+  return layersFromClip({ generation: g.id, index, url: g.outputs[index].url }, { marks, cols: 4, near: by, label: `${runName(`#${g.id}`, g, S.templates)} · layers` });
+}
+// marks: [{ frame | t, label? }] (none: a sheet's own); near: the frame the new one goes beside (none: beside the table's last frame)
+async function layersFromClip(src, { marks = [], cols = 4, near = null, label = 'Frames' } = {}) {
+  const { fps, g } = await clipFacts(src);
+  if (!marks.length && g) {   // a sheet's clip: the frames its sheet is cut from, by angle
+    try { marks = (await api(`/api/generations/${g.id}/sheet-marks`, { busy: false })) || []; } catch { marks = []; }
+  }
+  if (!marks.length) throw new Error('Say which frames: their numbers in Frames, or Pick frames…');
+  if (marks.length > 64) throw new Error('That is more than 64 frames: take fewer');
+  const pics = [];
+  const [Table, { besideSpot, dropInput }] = await Promise.all([import('./table.js'), import('./table-frames.js')]);
+  try {
+    for (const m of marks) {
+      const name = await grabFrame(src, { at: timeOf(m, fps) });
+      const info = grabFrame.last || {};
+      pics.push({ name, w: info.width || near?.w || 512, h: info.height || near?.h || 512, label: m.label || (m.t != null ? `${m.t}s` : m.frame === 'last' ? 'Last frame' : `Frame ${m.frame}`) });
+    }
+    const spots = gridSpots(pics, cols);
+    const layers = pics.map((p, i) => ({ ...p, ...spots[i] }));
+    const size = { w: Math.max(...layers.map((l) => l.x + l.w)), h: Math.max(...layers.map((l) => l.y + l.h)) };
+    const all = Table.tableFrames() || [];
+    const at = besideSpot(all, near || all[all.length - 1] || { x: -40, y: 0, w: 0, h: 0 }, size);
+    const into = await Table.sourceFrameAt({ layers, label }, at);
+    if (!into) throw new Error('The frames were taken but their image frame couldn\'t be made');
+    // its picture on the table: the editor draws it off screen (until then the tile shows the first frame)
+    import('./frame-image.js').then((m) => m.drawOffscreen(into.doc)).then(() => Table.refreshStills(['image'])).catch((e) => console.warn(e));
+    toast(`${pics.length} ${pics.length === 1 ? 'frame' : 'frames'} as layers in "${into.label}"`);
+    return { landed: true, into };
+  } catch (e) {
+    dropInput(pics.map((p) => p.name));   // (nothing holds them)
+    throw e;
+  }
 }
 
 // ROLES is re-exported for the pane's own checks (which field a template gives a role)

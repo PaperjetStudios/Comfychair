@@ -695,7 +695,7 @@ export function buildToolbar() {
       onclick: () => { togglePip(); renderToolbar(); } }, icon('image')),
     h('button', { type: 'button', class: 'ico', 'data-viewcut': '', 'aria-label': 'View cuts',
       onclick: () => { R.viewCut = !R.viewCut; store.set('deck.scene.viewcut', R.viewCut); pose(R.f); draw(); renderToolbar(); } }, 'Cut'),
-    h('button', { type: 'button', class: 'ico', 'data-overlays': '', 'aria-label': 'Overlays', title: 'Overlays: depth, reference picture, scale person',
+    h('button', { type: 'button', class: 'ico', 'data-overlays': '', 'aria-label': 'Overlays', title: 'Overlays: grid, depth, reference picture, scale person',
       onclick: (e) => overlayMenu(e.currentTarget) }, icon('contrast'))));
   wirePip({ viewer, canvas: SCN.canvas, draw, aspect: () => SC.width / SC.height });
   viewer.append(h('button', { type: 'button', class: 'max-btn hud-btn', id: 'sceneHud', onclick: () => setHud(!hudOff()) }));
@@ -708,6 +708,7 @@ export function buildToolbar() {
 // the view's overlays, in one menu
 function overlayMenu(anchor) {
   popover(anchor, h('b', {}, 'Overlays'),
+    toggle('Grid', R.grid, (on) => { R.grid = on; store.set('deck.scene.grid', on); draw(); }),
     toggle('Depth: what the render will use', R.depth, (on) => { R.depth = on; draw(); renderToolbar(); }),
     SC.ref ? toggle('Reference over the view', SC.ref.on !== false, () => { toggleRef(); }) : button('🖼 Reference picture…', () => { closePopover(); toggleRef(); }, { cls: 'small ghost' }),
     toggle('Scale person (1.8 m, only in the view)', scaleRefOn(), (on) => { setScaleRef(on); renderToolbar(); }),

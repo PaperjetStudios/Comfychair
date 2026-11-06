@@ -90,7 +90,7 @@ export const applyToLayer = (o, kind) => applyBake(o, kind, { even: EVEN.has(o.t
 
 // ---- scene data ------------------------------------------------------------
 export let SC;   // the scene (persisted per project)
-export const R = { originEdit: null, offEdit: null, modeKey: null, free: false, f: 0, sel: null, joint: null, figTab: 'pose', poseCat: 'stand', mask: 'all', sym: false, speed: 1, inPlace: false, renders: {}, promptOff: new Set(), promptNames: false, shotOff: new Set(), shotFmt: 'h3', viewCut: true, mode: 'translate', playing: false, real: false, depth: false, autoKey: true, record: false, meshes: new Map(), room: [], applying: false, lastRender: null };
+export const R = { originEdit: null, offEdit: null, modeKey: null, free: false, f: 0, sel: null, joint: null, figTab: 'pose', poseCat: 'stand', mask: 'all', sym: false, speed: 1, inPlace: false, renders: {}, promptOff: new Set(), promptNames: false, shotOff: new Set(), shotFmt: 'h3', viewCut: true, grid: true, mode: 'translate', playing: false, real: false, depth: false, autoKey: true, record: false, meshes: new Map(), room: [], applying: false, lastRender: null };
 
 export const newRoom = () => ({ w: 8, d: 8, h: 2.8, walls: true, ceiling: true, hidden: false });
 export { defaultScene };   // (empty-docs.js: the same blank scene a table frame starts with)

@@ -168,7 +168,7 @@ export async function renderDepthVideo(part = null, { objectsOnly = false } = {}
       if (stopAsked) { rt.dispose(); checkStop(); }
     }
     rt.dispose();
-    await sendVideo(form, 'depth', SC.blur, { quiet: !!part || objectsOnly, label: part ? `Shot ${part.i} · ${part.cam.name}` : '' });
+    await sendVideo(form, 'depth', SC.blur, { quiet: !!part || objectsOnly, label: part ? `Shot ${part.i} · ${part.cam.name}` : '', shot: part?.i ?? null });
     return true;
   } catch (e) {
     if (e instanceof Cancelled) cancelled(); else { setStatus(''); toast(e.message, true); }
@@ -208,7 +208,7 @@ async function depthFromPicture(part = null) {
       geo = R.lastRender === prev ? null : R.lastRender;
       if (geo) done = await api('/api/scene/depth-combine', { method: 'POST', body: { picture: done.id, geometry: geo.id } });
     }
-    R.lastRender = R.renders.depth = done;
+    R.lastRender = R.renders.depth = markOut(done, 'depth', part?.i);
     // (what this render made is the depth video: the colour video and the objects' depth were steps to it)
     if (RENDERED.list) RENDERED.list = RENDERED.list.filter((x) => x !== color && x !== geo).concat(done);
     setStatus(`Depth video #${done.id} is in History`);
@@ -251,7 +251,7 @@ export async function renderColorVideo(part = null) {
       checkStop();
     }
     phase = 'encoding';
-    await sendVideo(form, 'color', 0, { quiet: !!part, label: part ? `Shot ${part.i} · ${part.cam.name}` : '' });
+    await sendVideo(form, 'color', 0, { quiet: !!part, label: part ? `Shot ${part.i} · ${part.cam.name}` : '', shot: part?.i ?? null });
     return true;
   } catch (e) {
     if (e instanceof Cancelled) cancelled(); else { setStatus(''); console.error(e); toast(`Colour render failed while ${phase}: ${e.message}`, true); }
@@ -282,7 +282,9 @@ async function renderEach(fn) {
   toast(`${made.length} shot${made.length === 1 ? '' : 's'} saved`);
   return true;
 }
-async function sendVideo(form, kind, blur, { quiet = false, label = '' } = {}) {
+// (each run made is marked with what it is, g.sceneOut { kind, shot }: a 3D frame keeps it as a take of its pin, frame-outs.js)
+const markOut = (g, kind, shot) => { if (g) g.sceneOut = { kind: kind === 'color' ? 'colour' : kind, shot: shot ?? null }; return g; };
+async function sendVideo(form, kind, blur, { quiet = false, label = '', shot = null } = {}) {
   form.append('fps', FPS); form.append('blur', blur); form.append('kind', kind); form.append('scene', JSON.stringify(SC));
   if (C.S.project != null) form.append('project_id', C.S.project);
   checkStop();
@@ -294,7 +296,7 @@ async function sendVideo(form, kind, blur, { quiet = false, label = '' } = {}) {
   }
   const what = label || (kind === 'pose' ? 'Pose video' : kind === 'color' ? 'Colour video' : 'Depth video');
   setStatus(`${what} #${g.id} is in History`);
-  R.lastRender = g;
+  R.lastRender = markOut(g, kind, shot);
   if (kind !== 'color') R.renders[kind] = R.lastRender;
   RENDERED.list?.push(g);
   if (!quiet) toast(`${what} saved`);
@@ -327,7 +329,7 @@ export async function renderPoseVideo(part = null) {
       bar.set(null, (k + 1) / count);
       checkStop();
     }
-    await sendVideo(form, 'pose', 0, { quiet: !!part, label: part ? `Shot ${part.i} · ${part.cam.name}` : '' });
+    await sendVideo(form, 'pose', 0, { quiet: !!part, label: part ? `Shot ${part.i} · ${part.cam.name}` : '', shot: part?.i ?? null });
     return true;
   } catch (e) {
     if (e instanceof Cancelled) cancelled(); else { setStatus(''); toast(e.message, true); }

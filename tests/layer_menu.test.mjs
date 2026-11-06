@@ -26,6 +26,11 @@ test('Trim is there for pictures that can be cropped, with the words for several
 test('with nothing selected, only what needs no selection is there, and no group is left empty', () => {
   assert.deepEqual(ids(layerMenu({ ...base, clip: true })), [['all', 'several'], ['paste'], ['clear']]);
 });
+test('Paste picture comes beside Paste layers, and alone with nothing copied or no layers', () => {
+  assert.deepEqual(ids(layerMenu({ ...base, clip: true, pastePicture: true }))[1], ['paste', 'pastePicture']);
+  assert.equal(layerMenu({ ...base, clip: true, pastePicture: true }).flat().find((i) => i.id === 'paste').label, 'Paste layers');
+  assert.deepEqual(ids(layerMenu({ ...base, layers: 0, pastePicture: true })), [['pastePicture']]);
+});
 test('with no layers, only Paste, and only with something copied', () => {
   assert.deepEqual(ids(layerMenu({ ...base, layers: 0, clip: true })), [['paste']]);
   assert.deepEqual(layerMenu({ ...base, layers: 0 }), []);
@@ -158,4 +163,20 @@ test('a painted red mask with layers for it: Mask with the red (keep or hide) an
   assert.deepEqual(ids(m.flat().find((i) => i.id === 'redMask').sub), [['redKeep', 'redHide']]);
   assert.equal(ids(m)[4][0], 'trim');
   assert.equal(layerMenu({ ...base, selected: 1, pictures: 1 }).flat().some((i) => i.id.startsWith('red')), false);
+});
+
+test('key sheet menu: clipboard, ease / arrange / modifier submenus, select', async () => {
+  const { sheetKeyMenu, keyArrangeMenu, keyEaseMenu } = await import('../web/layer-menu.js');
+  const ids = (m) => m.map((g) => g.map((i) => i.id));
+  assert.deepEqual(ids(sheetKeyMenu({ n: 0 })), [['stretch', 'reduce'], ['selectAll', 'selectInvert']]);
+  const m = sheetKeyMenu({ n: 2, canPaste: true, modOn: 'Up' });
+  assert.deepEqual(ids(m), [['copy', 'paste', 'duplicate', 'delete'], ['ease', 'arrange', 'stretch', 'reduce'], ['addMod'], ['selectAll', 'selectNone', 'selectInvert']]);
+  assert.equal(m[0][3].label, 'Delete 2');
+  assert.equal(m[2][0].label, 'Add modifier to Up ▸');
+  const a = keyArrangeMenu({ n: 3, layers: 1, frames: 2 }).flat();
+  assert.equal(a.find((i) => i.id === 'lineUp').disabled, true);
+  assert.equal(a.find((i) => i.id === 'space').disabled, true);
+  assert.equal(a.find((i) => i.id === 'reverse').disabled, false);
+  assert.equal(a.find((i) => i.id === 'stagger:12').label, 'Stagger layers 0.5 s apart');
+  assert.deepEqual(ids(keyEaseMenu([['', 'Default'], ['linear', 'Linear']])), [['ease:', 'ease:linear'], ['ease:hb:0', 'ease:hb:1']]);
 });

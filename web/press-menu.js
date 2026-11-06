@@ -105,11 +105,21 @@ export function openPressMenu(x, y, groups, label = 'Actions') {
 // el's own menu: open(e) is given the press, with its clientX and clientY. ok(e): whether this press is one for the menu at all.
 // A text box keeps the browser's menu, for pasting and spelling. A finger that moves is scrolling or dragging, so the hold ends there.
 // The click that ends a hold is dropped, or it would also tap what's under the finger.
-export function pressMenu(el, open, { ok = () => true } = {}) {
+// lift: a finger's hold opens the menu when the finger lifts, not under it (a list where a held row and a tap of
+// another finger select several: ui.js layerRowsEl). The held row is marked (`holding`) once the hold counts; another
+// finger coming down calls the menu off.
+export function pressMenu(el, open, { ok = () => true, lift = false } = {}) {
   const fieldHere = (e) => e.target.closest?.('input, textarea, select, [contenteditable]');
-  let timer = 0, start = null, fingers = 0, held = false;
-  const stop = () => { clearTimeout(timer); timer = 0; start = null; };
+  let timer = 0, start = null, fingers = 0, held = false, armed = null;
+  const disarm = () => { armed?.row?.classList.remove('holding'); armed = null; };
+  const stop = () => { clearTimeout(timer); timer = 0; start = null; disarm(); };
   const fire = (e) => { stop(); held = true; try { navigator.vibrate?.(20); } catch { /* not supported */ } open(e); };
+  const arm = (at) => {
+    timer = 0;
+    armed = { at, row: at.target.closest?.('.layer-row') || null };
+    armed.row?.classList.add('holding');
+    try { navigator.vibrate?.(20); } catch { /* not supported */ }
+  };
   el.addEventListener('pointerdown', (e) => {
     held = false;
     if (e.pointerType !== 'touch') return;
@@ -117,15 +127,20 @@ export function pressMenu(el, open, { ok = () => true } = {}) {
     if (fingers > 1 || fieldHere(e) || !ok(e)) return stop();
     start = { x: e.clientX, y: e.clientY };
     const at = { clientX: e.clientX, clientY: e.clientY, target: e.target };
-    timer = setTimeout(() => fire(at), HOLD_MS);
+    timer = setTimeout(() => (lift ? arm(at) : fire(at)), HOLD_MS);
   }, true);
   el.addEventListener('pointermove', (e) => { if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > SLIP_PX) stop(); }, true);
-  for (const type of ['pointerup', 'pointercancel']) el.addEventListener(type, (e) => { if (e.pointerType === 'touch') fingers = Math.max(0, fingers - 1); stop(); }, true);
+  for (const type of ['pointerup', 'pointercancel']) el.addEventListener(type, (e) => {
+    if (e.pointerType === 'touch') fingers = Math.max(0, fingers - 1);
+    const at = type === 'pointerup' && armed?.at;
+    if (at && at.target.isConnected) fire(at); else stop();
+  }, true);
   el.addEventListener('click', (e) => { if (held) { held = false; e.stopPropagation(); e.preventDefault(); } }, true);
   el.addEventListener('contextmenu', (e) => {
     if (fieldHere(e)) return;
     e.preventDefault();
     if (held || !ok(e)) return;   // (Android sends this for a long hold too)
+    if (lift && (start || armed || fingers > 0)) return;   // (a finger's hold: the menu waits for the lift)
     fire(e);
     if (!e.pointerType || e.pointerType === 'mouse') held = false;   // (no click follows a right click, so don't wait for one)
   });

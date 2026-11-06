@@ -56,7 +56,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }   /* Android Ch
 body {
   background: var(--bg); color: var(--text);
   font: 15px/1.4 var(--font);
-  display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; grid-template-columns: auto minmax(0, 1fr) auto; height: 100dvh; overflow: hidden;
+  display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto auto; grid-template-columns: auto minmax(0, 1fr) auto; height: 100dvh; overflow: hidden;   /* top bar, documents, docked row, main, docked row, Generate bar */
   -webkit-tap-highlight-color: transparent;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
   scrollbar-color: var(--line-2) transparent;
@@ -226,7 +226,7 @@ body:has(#tool-generate.active) #runChip { display: none; }   /* (on Classic ▾
   .tabs .table-tab:not(.active) svg { display: none; }
 }
 /* the top tabs are the project's tables (table-nav.js), then ＋, then Classic ▾ with the screens from before tables */
-.table-tabs { display: flex; gap: 2px; min-width: 0; }
+.table-tabs { display: flex; gap: 2px; flex: none; }   /* (never narrower than its tabs: the row scrolls, the ＋ stays clear) */
 .tabs .table-tab { max-width: 220px; }
 .tabs .table-tab .tab-label { overflow: hidden; text-overflow: ellipsis; }
 .tabs .table-tab.lift { z-index: 2; background: var(--surface-3); box-shadow: var(--shadow); }
@@ -251,7 +251,7 @@ body:has(#tool-generate.active) #runChip { display: none; }   /* (on Classic ▾
 
 /* ---- layout: a stage (preview) and a settings panel, with a splitter between ---- */
 body > * { grid-column: 1 / -1; }   /* (the docked panels' columns sit either side of main: float-panel.js) */
-body > main { grid-row: 3; grid-column: 2; min-height: 0; position: relative; }
+body > main { grid-row: 4; grid-column: 2; min-height: 0; position: relative; }
 .tab { display: none; height: 100%; min-height: 0; }
 .tab.active { display: grid; }
 #tab-table, #tab-generate, #tab-editor, #tab-video, #tab-sound, #tab-vfx, #tab-scene, #tab-story { grid-template-columns: minmax(0, 1fr) 16px var(--panel-w); }
@@ -363,7 +363,7 @@ details.group:not([open]) > summary::after { transform: rotate(-90deg); }
 /* ---- action bar ---- */
 .actionbar {
   display: flex; gap: 10px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
-  border-top: 1px solid var(--line); background: var(--surface); align-items: center; grid-row: 4;
+  border-top: 1px solid var(--line); background: var(--surface); align-items: center; grid-row: 6;
 }
 #genBtn { flex: 1; font-size: 18px; min-height: 54px; }
 #runOpts { flex: none; width: 54px; min-height: 54px; display: grid; place-items: center; padding: 0; }
@@ -530,6 +530,7 @@ details.desc[open] summary { margin-bottom: 6px; }
 .layer-row { user-select: none; display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: center; padding: 6px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg); cursor: pointer; transition: border-color .15s, background .15s; }
 @media (hover: hover) { .layer-row:hover:not(.sel) { border-color: var(--line-2); } }
 .layer-row .thumb { width: 44px; height: 44px; }
+.layer-row.holding { border-color: var(--accent); border-style: dashed; }   /* a finger's hold has counted: lift for the menu, or tap other rows */
 .layer-row.sel { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
 .layer-row.off .thumb, .layer-row.off .layer-name { opacity: .5; }
 .layer-name { display: grid; min-width: 0; font-size: 14px; }
@@ -1237,6 +1238,11 @@ body:has(.text-pop:not(.hidden)) .sheet { z-index: 62; }
 .press-label { flex: 1; white-space: nowrap; }
 .press-keys { margin-left: 16px; color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; }
 @media (pointer: coarse) { .press-item { min-height: 42px; } }
+.paste-box { position: fixed; z-index: 95; left: 50%; top: 20%; transform: translateX(-50%); width: min(360px, calc(100vw - 32px)); padding: 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); box-shadow: 0 8px 24px #0008; }
+.paste-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.paste-spot { min-height: 120px; display: flex; align-items: center; justify-content: center; border: 2px dashed var(--line); border-radius: var(--r); color: var(--muted); font-size: var(--fs-sm); outline: none; caret-color: transparent; -webkit-user-select: text; user-select: text; overflow: hidden; }
+.paste-spot:focus { border-color: var(--accent, #6af); }
+.paste-spot:empty::before { content: attr(data-hint); pointer-events: none; }
 .layer-row .thumb img { -webkit-touch-callout: none; }
 .rd-menu { width: min(300px, calc(100vw - 8px)); }
 .rd-menu .seg { flex-wrap: wrap; }
@@ -2283,6 +2289,10 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
   transform: translate(-50%, -50%); display: grid; place-items: center; z-index: 1; cursor: crosshair; opacity: .6; --wk: var(--wire-image);
 }
 .wire-out.show, .wire-out:hover { opacity: 1; }
+/* a 3D frame's render pins: the dot, its name to the right of it */
+.wire-out-label { position: absolute; left: 100%; top: 50%; transform: translateY(-50%); white-space: nowrap; pointer-events: none;
+  font-size: calc(11px / var(--z)); padding: calc(1px / var(--z)) calc(5px / var(--z)); border-radius: calc(3px / var(--z));
+  background: var(--surface); border: calc(1px / var(--z)) solid var(--line-2); color: var(--muted); }
 .wire-out::after { content: ""; width: calc(12px / var(--z)); height: calc(12px / var(--z)); border-radius: 50%; background: var(--surface); border: calc(2px / var(--z)) solid var(--wk); }
 .wire-out:hover::after { background: var(--wk); }
 .wire-out.k-video, .frame-in.k-video { --wk: var(--wire-video); }
@@ -2424,8 +2434,8 @@ body:has(.tab.view-max.panel-out) .live-layer .stage.maxed .max-btn:not(.basics-
    right of the sidebar, its panels sharing its height. Over a full-screen view they float, as the ones left of the sidebar do with no sidebar beside them (.flat). */
 .float-btns { display: inline-flex; align-items: center; gap: 2px; }
 .float-dock { position: relative; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; background: var(--surface); }
-.float-dock.left { grid-row: 3; grid-column: 1; border-right: 1px solid var(--line); }
-.float-dock.right { grid-row: 3; grid-column: 3; border-left: 1px solid var(--line); }
+.float-dock.left { grid-row: 3 / 6; grid-column: 1; border-right: 1px solid var(--line); }
+.float-dock.right { grid-row: 3 / 6; grid-column: 3; border-left: 1px solid var(--line); }
 .float-dock.mid { border-left: 1px solid var(--line); }
 body:not(:has(.stage.maxed)) main > .tab:is(#tab-table, #tab-generate, #tab-editor, #tab-video, #tab-sound, #tab-vfx, #tab-scene, #tab-story):has(> .float-dock.mid > .float-panel.docked:not(.hidden):not(.float-preview)),
 body:not(:has(.stage.maxed)) main > #tab-table:has(> .float-dock.mid > .float-panel.docked:not(.hidden)) { grid-template-columns: minmax(0, 1fr) auto 16px var(--panel-w); }
@@ -2626,3 +2636,55 @@ body.has-modal .float-hints { z-index: 62 !important; }   /* (it types into the 
 .job-batch { display: flex; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid var(--line-2); border-radius: var(--r); }
 .job-batch-head { display: flex; align-items: center; gap: 8px; padding: 2px 4px; }
 .job-batch-head .hint { flex: 1; margin: 0; }
+/* the Frame pane's Renders (frame-scene.js): a 3D frame's render pins and their takes */
+.frame-renders { display: grid; gap: 8px; }
+.frame-render { display: grid; gap: 2px; }
+.frame-take { gap: 6px; align-items: center; }
+.frame-take.on > .btn { color: var(--accent); }
+.take-thumb { width: 32px; height: 32px; object-fit: cover; border-radius: 3px; flex: none; }
+
+/* ---- A tablet (pointer: coarse): less on screen. Icons stand for their buttons (ui.js barLabel), and what repeats something
+   else on screen is left out. A desktop keeps the words. ---- */
+.gz-w { margin-left: .35em; }
+.gz-chip > svg.ico { width: 16px; height: 16px; vertical-align: -3px; }
+.gz-chip > svg.ico + .bar-label { margin-left: .35em; }
+@media (pointer: coarse) {
+  .bar-label, .fine-only { display: none !important; }
+  .btn:has(> .bar-label) { padding-inline: 0; min-width: var(--touch-target, 44px); justify-content: center; }
+  .gz-chip:has(> .bar-label) { padding-inline: 0; min-width: var(--touch-target, 44px); }
+  .gz-chip:has(> .bar-label) > .gz-g { font-size: 17px; line-height: 1; }
+  .help-note > span { display: none; }                      /* ⓘ alone */
+  .has-nav > .section-jump { display: none; }               /* the icon strip beside it already jumps to each section */
+  .sb-tabs.icons-only .sb-tab.on .sb-tab-label { display: inline; }   /* the open tab says its name */
+  .table-bar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: 4px; }   /* one row */
+  .table-bar > * { flex: none; }
+  .table-bar.live .table-only { display: none; }            /* a frame is open: the table's own controls wait */
+  .layer-pick > .btn:has(> .bar-label) { flex: none; }      /* the layers' buttons and snaps on one row */
+  .layer-pick .gz-bar { flex-basis: auto; }
+  .layer-pick > .hint { display: none; }                    /* ("3 selected" would wrap the row and move the list under a finger holding a layer) */
+  .press-keys { display: none; }                            /* no keyboard: no shortcut hints in the menus */
+  .brand { display: none; }
+  .actionbar { padding-block: 6px calc(6px + env(safe-area-inset-bottom)); }
+  #genBtn, #stopBtn, #runOpts { min-height: 46px; }
+  #runOpts { width: 46px; }
+}
+@media (pointer: coarse) and (max-width: 900px) { #classicBtn .tab-label { display: none; } }   /* upright: room for the tables' tabs and ＋ */
+/* A sheet that isn't the whole screen comes down from the top on a touch screen: in reach, and clear of the on-screen keyboard.
+   (The full-screen pickers and the centred boxes stay as they are.) */
+@media (pointer: coarse) {
+  #sheet:not(.picker-full) { top: 0; bottom: auto; border-top: 0; border-bottom: 1px solid var(--line); border-radius: 0 0 var(--r-lg) var(--r-lg);
+    padding: calc(16px + env(safe-area-inset-top)) 16px 16px; }
+  .paste-box { top: calc(12px + env(safe-area-inset-top)); }
+}
+/* Docked rows (float-panel.js): above and below the work area, between the side columns, their panels side by side */
+.float-dock.row { flex-direction: row; grid-column: 2; align-items: stretch; }
+.float-dock.top { grid-row: 3; border-bottom: 1px solid var(--line); }
+.float-dock.bottom { grid-row: 5; border-top: 1px solid var(--line); }
+.float-dock.row > .float-dock-grip { left: 0; right: 0; top: auto; bottom: auto; width: auto; height: 6px; cursor: row-resize; }
+.float-dock.top > .float-dock-grip { bottom: 0; }
+.float-dock.bottom > .float-dock-grip { top: 0; }
+@media (pointer: coarse) { .float-dock.row > .float-dock-grip { width: auto; height: 14px; } }
+body:not(:has(.stage.maxed)) .float-dock.row > .float-panel.docked { min-height: 0; min-width: 160px; border-width: 0 1px 0 0; }
+/* The Properties pane with an image frame open: its layer list above the numbers, the editor's own panel under them (editor.js) */
+.props-pane > .panel { overflow: visible; padding: 0; background: none; display: block; min-height: 0; }
+.props-pane > .panel > .side-nav, .props-pane > .panel > .section-jump { display: none; }

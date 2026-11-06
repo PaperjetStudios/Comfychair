@@ -50,7 +50,7 @@ export function pickerSheet(title, bar, load) {
   return draw;
 }
 
-export const uploadMedia = (file) => { const form = new FormData(); form.append('file', file); return api('/api/media', { method: 'POST', form }); };
+export const uploadMedia = (file) => { const form = new FormData(); form.append('file', file); return api('/api/media', { method: 'POST', form, timeout: 3600000 }); };   // (an hour: a long clip over Wi-Fi)
 
 // The pickers are source-picker.js openSourcePicker; these keep their old signatures (it is loaded when one opens: it imports this file).
 const viaPicker = (opts) => import('./source-picker.js').then((m) => m.openSourcePicker(opts));
@@ -294,12 +294,13 @@ export function pickFrames({ url, title = 'Pick a frame', fps = 24, frames = 0, 
       return out;
     };
     const lastFrame = async () => {
-      if (!many) return finish([{ frame: 'last', t: 0, thumb: null }]);
+      if (!many && !wantBlob) return finish([{ frame: 'last', t: 0, thumb: null }]);
       if (!v.duration) return toast('The video is still loading', true);
       seek(v.duration);
       await new Promise((r) => { if (v.seeking) v.addEventListener('seeked', r, { once: true }); else r(); });
       const f = await grabNow();
       if (!f) return;
+      if (!many) return finish([{ ...f, frame: 'last' }]);   // (the picture itself was asked for: the end, as shown)
       if (!addFrame(list, { ...f, frame: 'last' }, room)) return toast(`There's room for ${room} here: take one out first`, true);
       draw();
     };

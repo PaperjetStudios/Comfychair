@@ -3,7 +3,9 @@
 // transform, opacity, times and level). web/props-rules.js says which rows a selection gets; the engines build them.
 //
 //   registerProps(kind, { picked(ctx) → [what is picked, the primary first], rows(ctx, ids) → rows, title?(ctx), when?(ctx), extra?(ctx) → element })
-//     extra: a live frame's own section under the rows, whatever is picked (an image frame's Canvas).
+//     extra: a live frame's own part under the rows, whatever is picked. head: its own part above them (an image frame's
+//     layer list above, the picked layers' other settings below). Both are the engine's own elements, kept from one
+//     draw to the next: the pane puts them in place and never rebuilds them.
 //     kind: 'frames' (the table's frames) or a live frame's kind ('image', 'video', 'sound'). ctx: sidebar.context().
 //     A row: { id, label, el, group? } (the engine's own field, edits going through its own code), or
 //     { id, label, get, set, min?, max?, step?, digits?, unit?, type?: 'num' | 'text' | 'toggle', disabled?, group? }:
@@ -84,16 +86,27 @@ function choose(ctx) {
   return picked.length ? { kind: 'frames', prov: fr, picked } : null;
 }
 
+// The pane's children: head, the rows' sections, extra. head and extra stay where they are when they are already there (the
+// engine draws inside them itself: taking one out and putting it back would end a drag going on in it).
+function fill(head, mid, extra) {
+  const keep = new Set([head, extra].filter(Boolean));
+  for (const c of [...P.el.children]) if (!keep.has(c)) c.remove();
+  if (head && P.el.firstChild !== head) P.el.prepend(head);
+  if (extra && P.el.lastChild !== extra) P.el.append(extra);
+  if (extra) extra.before(...mid); else P.el.append(...mid);
+}
+
 function draw(force) {
   if (!P.el) return;
   if (sidebar.current() !== 'props') { P.dirty = true; return; }
   if (!force && typing()) { P.dirty = true; return; }
   P.dirty = false;
   const ctx = sidebar.context(), got = choose(ctx);
-  let extra = null;
+  let extra = null, head = null;
   try { extra = ctx.live ? P.prov.get(ctx.live.kind)?.extra?.(ctx) || null : null; } catch (e) { console.error(e); }
+  try { head = ctx.live ? P.prov.get(ctx.live.kind)?.head?.(ctx) || null : null; } catch (e) { console.error(e); }
   if (!got) {
-    P.el.replaceChildren(section('Properties', null, hint(ctx.live ? 'Pick a layer, clip or sound to see its properties.' : 'Select a frame.')), ...(extra ? [extra] : []));
+    fill(head, head ? [] : [section('Properties', null, hint(ctx.live ? 'Pick a layer, clip or sound to see its properties.' : 'Select a frame.'))], extra);
     return;
   }
   const ids = rowsFor({ kind: got.kind, live: got.kind !== 'frames', picked: got.picked });
@@ -112,8 +125,8 @@ function draw(force) {
   }
   const top = P.el.scrollTop;
   // (what is shown, named over the first group)
-  P.el.replaceChildren(...(groups.length ? groups.map((g, i) => section(g.name, null, i === 0 && g.name !== title ? hint(title, 'props-title') : null, g.els))
-    : [section(title, null, hint('Nothing to set here.'))]), ...(extra ? [extra] : []));
+  fill(head, groups.length ? groups.map((g, i) => section(g.name, null, i === 0 && g.name !== title ? hint(title, 'props-title') : null, g.els))
+    : head ? [] : [section(title, null, hint('Nothing to set here.'))], extra);
   P.el.scrollTop = top;
   sidebar.refresh();
 }

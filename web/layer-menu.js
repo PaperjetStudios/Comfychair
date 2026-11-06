@@ -3,6 +3,7 @@
 // What doesn't apply now isn't listed; a merge that can't happen is, greyed.
 
 // s: { layers, selected, pictures (selected ones with a picture), hidden, clip, pickMode, newEdit, mergeDown, mergeSet,
+//      pastePicture (a picture from the system clipboard can come in as a layer: ui.js pastePictures),
 //      table (an open frame on the table: a new edit is a frame beside it, so "send to the table"),
 //      red: the red mask is painted and there are layers for it (the selected pictures, or the one under it),
 //      main: null (no pin here: off the table, or not one layer that can be pinned) | { on: the layer is the frame's main source } }
@@ -13,7 +14,8 @@ export function layerMenu(s) {
       n ? { id: 'none', label: 'Select none' } : null,
       s.layers ? { id: 'several', label: 'Select several', on: !!s.pickMode } : null],
     [n ? { id: 'copy', label: 'Copy', keys: 'Ctrl+C' } : null,
-      s.clip ? { id: 'paste', label: 'Paste', keys: 'Ctrl+V' } : null,
+      s.clip ? { id: 'paste', label: s.pastePicture ? 'Paste layers' : 'Paste', keys: 'Ctrl+V' } : null,
+      s.pastePicture ? { id: 'pastePicture', label: 'Paste picture' } : null,
       n ? { id: 'duplicate', label: 'Duplicate', keys: 'Ctrl+J' } : null],
     [n > 1 ? { id: 'group', label: 'Group' } : null,
       n === 1 ? { id: 'mergeDown', label: 'Merge down', keys: 'Ctrl+E', disabled: !s.mergeDown } : null,
@@ -153,4 +155,42 @@ export function keyMenu(s) {
     [n && eases.length ? { id: 'ease', label: 'Ease ▸', sub: 'ease', subItems: eases.map((e) => ({ id: `ease:${e}`, label: e })) } : null],
   ];
   return groups.map((g) => g.filter(Boolean)).filter((g) => g.length);
+}
+
+// The 3D key sheet's right-click / long-hold menu (scene-keys.js).
+// s: { n (keys selected), canPaste, layers (layers with selected keys), frames (distinct frames selected), stretch (Stretch in time on),
+//      modOn (the label of the channel under the press, when a modifier can go on it) }.
+// Ease ▸, Arrange ▸ and Add modifier ▸ open keyEaseMenu, keyArrangeMenu and the modifier kinds.
+export function sheetKeyMenu(s) {
+  const n = s.n || 0;
+  const groups = [
+    [n ? { id: 'copy', label: 'Copy', keys: 'Ctrl+C' } : null,
+      s.canPaste ? { id: 'paste', label: 'Paste at the playhead', keys: 'Ctrl+V' } : null,
+      n ? { id: 'duplicate', label: 'Duplicate', keys: 'Ctrl+J' } : null,
+      n ? { id: 'delete', label: n > 1 ? `Delete ${n}` : 'Delete', keys: 'Delete', danger: true } : null],
+    [n ? { id: 'ease', label: 'Ease ▸', sub: 'ease' } : null,
+      n ? { id: 'arrange', label: 'Arrange ▸', sub: 'arrange' } : null,
+      { id: 'stretch', label: 'Stretch in time', keys: 'S', on: !!s.stretch, disabled: !n },
+      { id: 'reduce', label: 'Reduce keys…' }],
+    [s.modOn ? { id: 'addMod', label: `Add modifier to ${s.modOn} ▸`, sub: 'mod' } : null],
+    [{ id: 'selectAll', label: 'Select all', keys: 'A' }, n ? { id: 'selectNone', label: 'Select none', keys: 'Ctrl+D' } : null,
+      { id: 'selectInvert', label: 'Invert selection' }],
+  ];
+  return groups.map((g) => g.filter(Boolean)).filter((g) => g.length);
+}
+// Arrange for the selected keys: where they go in time. Stagger steps are in frames (fps: their labels in seconds).
+export function keyArrangeMenu(s, fps = 24) {
+  const n = s.n || 0, many = (s.layers || 0) > 1, sec = (f) => `${+(f / fps).toFixed(2)} s`;
+  return [
+    [{ id: 'toPlayhead', label: 'Start at the playhead', disabled: !n },
+      { id: 'lineUp', label: 'Each layer starts at the playhead', disabled: !many }],
+    [6, 12, 24].map((f) => ({ id: `stagger:${f}`, label: `Stagger layers ${sec(f)} apart`, disabled: !many })),
+    [{ id: 'space', label: 'Space evenly', disabled: (s.frames || 0) < 3 },
+      { id: 'reverse', label: 'Reverse', disabled: (s.frames || 0) < 2 }],
+  ];
+}
+// Ease for the selected keys: how each blends into the next one, then the Bezier handles (eases: [[id, label]])
+export function keyEaseMenu(eases) {
+  return [eases.map(([id, label]) => ({ id: `ease:${id}`, label })),
+    [{ id: 'ease:hb:0', label: 'Handles aligned' }, { id: 'ease:hb:1', label: 'Handles broken' }]];
 }

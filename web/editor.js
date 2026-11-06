@@ -160,6 +160,7 @@ registerUndo('editor', { undo: () => ED.paint?.undo(), redo: () => ED.paint?.red
 const ED_EL = { host: $('#tab-editor'), canvas: $('#editorCanvas'), empty: $('#editorEmpty'), size: $('#editorSize'), anim: $('#editorAnim'), panel: $('#editorPanel'),
   stage: $('#tab-editor .editor-stage'), active: null };
 const ED_HOME = ED_EL.host;
+const ED_LIST = h('div', { class: 'panel-body props-layers' });   // the layer list, in the Properties pane while an image frame is open
 const edTab = () => { try { return ED.E.tab?.id ?? null; } catch { return null; } };   // (null while createEditor is still running)
 const ED = createEditor({
   canvas: ED_EL.canvas, empty: ED_EL.empty, size: ED_EL.size, anim: ED_EL.anim, panel: ED_EL.panel,
@@ -172,12 +173,20 @@ const ED = createEditor({
   name: () => tabs?.active?.name,
   beforeRender: () => { if (!tabs.started) tabs.start(); if (isLive('image')) { propsChanged('image'); dispatchEvent(new CustomEvent('editor:render')); } },   // (the Properties pane follows the picked layers; the Edit pane's Inpaint, Extend and mask rows too)
   newEdit: (payload) => (isLive('image') ? newFrameFrom(payload) : tabs.createFrom(payload, 'layers')),
-  panelParts: (ed) => h('div', { class: 'panel-body' }, ed.topRow(),
+  // On the table the panel is in two parts, both in the sidebar's Properties pane (registerProps below): the layer list (ED_LIST) above
+  // the picked layers' numbers, and the rest (the panel itself) under them.
+  panelParts: (ed) => (isLive('image') ? tableParts(ed) : h('div', { class: 'panel-body' }, ed.topRow(),
     // (a mask being painted: its section first, with what to see and do; otherwise the panel order, app-wide. The list may be in its floating panel.
     // On the table the red mask is the floating Mask panel's (float-mask.js), Inpaint and Extend are tools of the Edit pane, and the canvas is in the Properties pane; the Image tab keeps them here.)
     layerListPart('image', ed.layerList()), isLive('image') ? maskFloatPart(ed) : null, ed.E.sel?.maskOf ? ed.layerProps() : null, ed.paintProps(),
-    isLive('image') ? null : ed.masksProps(), isLive('image') ? null : ed.inpaintProps(), ed.E.sel?.maskOf ? null : ed.layerProps(), ed.animProps(), isLive('image') ? null : ed.canvasProps(), ed.exportProps()),
+    isLive('image') ? null : ed.masksProps(), isLive('image') ? null : ed.inpaintProps(), ed.E.sel?.maskOf ? null : ed.layerProps(), ed.animProps(), isLive('image') ? null : ed.canvasProps(), ed.exportProps())),
 });
+// (the red mask is the floating Mask panel's, Inpaint and Extend are tools of the Edit pane)
+function tableParts(ed) {
+  ED_LIST.replaceChildren(...[ed.topRow(), layerListPart('image', ed.layerList()), maskFloatPart(ed)].filter(Boolean));
+  return h('div', { class: 'panel-body' }, ed.E.sel?.maskOf ? ed.layerProps() : null, ed.paintProps(), ed.E.sel?.maskOf ? null : ed.layerProps(),
+    ed.animProps(), ed.canvasProps(), ed.exportProps());
+}
 addEventListener('layers:float', () => { if (ED_EL.host !== ED_HOME) ED.render(); });
 export const { E } = ED;
 // On the table, the picked layers' X, Y, Scale, Rotation and Opacity are the sidebar's Properties pane's (web/props-panel.js)
@@ -186,7 +195,8 @@ registerProps('image', {
   picked: () => ED.picked().filter((l) => !l.maskOf && ED.ready(l)).map((l) => ({ flat: ED.plain(l), layer: l })),
   title: (ctx, list) => (list.length > 1 ? `${list.length} layers` : list[0].layer.label || list[0].layer.name?.split('/').pop() || 'Canvas'),
   rows: () => ED.propRows(),
-  extra: () => (ED.onTable() ? ED.canvasProps() : null),   // (the edit's canvas, whatever is picked)
+  head: () => (ED.onTable() ? ED_LIST : null),         // the layer list first
+  extra: () => (ED.onTable() ? ED_EL.panel : null),    // then, under the picked layers' numbers, their other settings, Animation, Canvas and Export
 });
 // a pin set or cleared elsewhere (the Make pane's unpin, the table's undo): the layer rows show it
 addEventListener('table:frame-field', (e) => { if (e.detail?.keys?.includes('main') && e.detail.frame?.doc === E.tab?.id) ED.render(); });

@@ -1,6 +1,6 @@
 // The table's sidebar: tabbed panes, Photoshop style, in #tablePanel. A strip of icon tabs at the top, one pane on show
 // below it. Modules make their pane on demand and render into it; which one shows follows the selection on the table:
-// nothing selected → Make, a frame selected → Frame, a live image frame → Layers. The pane picked by hand for a kind
+// nothing selected → Make, a frame selected → Frame, a live image frame → Properties (its layers are there). The pane picked by hand for a kind
 // of selection is remembered on this device (deck.sidebar.<kind>: none, image, video…, live-image, live-video…).
 //
 //   const el = sidebar.pane('make', { title: 'Make', icon: 'sparkle', when?: (ctx) => bool })   the pane's element
@@ -27,7 +27,8 @@ const DEFAULTS = { make: { title: 'Make', icon: 'sparkle' }, output: { title: 'O
 const ORDER = ['make', 'edit', 'output', 'props', 'layers', 'frame', 'story', 'shelf'];
 // when the sidebar's own panes show, from its context (a `when` passed for these is ignored: several modules share them)
 const ENGINE_KINDS = ['image', 'video', 'sound', 'scene'];
-const WHEN = { layers: (c) => ENGINE_KINDS.includes(c.live?.kind),
+// (an image frame has no Layers pane: its layer list and their settings are the Properties pane's, props-panel.js head / extra)
+const WHEN = { layers: (c) => ENGINE_KINDS.includes(c.live?.kind) && c.live.kind !== 'image',
   output: (c) => (c.live ? [c.live] : c.frames || []).some((f) => ['image', 'video', 'scene'].includes(f.kind)) };
 
 function build() {
@@ -44,7 +45,7 @@ function build() {
     P.labels.setAttribute('aria-label', P.labels.title);
   };
   P.labels = h('button', { type: 'button', class: 'sb-labels', onclick: () => { const on = !P.strip.classList.contains('icons-only'); store.set('deck.sidebar.iconsOnly', on); iconsOnly(on); P.fades(); } }, icon('text'));
-  iconsOnly(store.get('deck.sidebar.iconsOnly', false));
+  iconsOnly(store.get('deck.sidebar.iconsOnly', matchMedia('(pointer: coarse)').matches));   // (a tablet starts with icons: the open tab keeps its word)
   P.body = h('div', { class: 'sb-panes' });
   root.classList.add('sidebar');
   // One row of tabs: the wheel or a drag of the finger scrolls it, and an edge with more beyond it fades
@@ -80,7 +81,7 @@ function ctxKind() {
   if (frames.length === 1) return frames[0].kind;
   return frames.length ? 'many' : 'none';
 }
-const defaultFor = (kind) => (kind === 'none' ? 'make' : kind === 'live-image' ? 'layers' : kind.startsWith('live-') ? 'make' : 'frame');
+const defaultFor = (kind) => (kind === 'none' ? 'make' : kind === 'live-image' ? 'props' : kind.startsWith('live-') ? 'make' : 'frame');
 const usable = (name) => { const p = P.panes.get(name); return !!p && !p.tab.classList.contains('hidden'); };
 
 function pane(name, { title, icon: ic, when, host } = {}) {

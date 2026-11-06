@@ -83,7 +83,13 @@ const aimMark = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.Me
 aimMark.renderOrder = 12; aimMark.visible = false; aimMark.raycast = () => {};
 const aimOn = () => SC.camera?.aim !== false;
 const placeAim = () => { const c = current(SC.camera, CAM); aimMark.position.set(c.tx, c.ty, c.tz); aimMark.quaternion.identity(); aimMark.updateMatrixWorld(); };
-function aimChanged() { write(SC.camera, CAM, { tx: aimMark.position.x, ty: aimMark.position.y, tz: aimMark.position.z }); putCamera(current(SC.camera, CAM)); }
+// while the aim point is dragged through the camera's own view, the view stays put (it would turn under the
+// pointer and drag the point with it): the aim is written, and the camera turns to it on release
+function aimChanged() {
+  write(SC.camera, CAM, { tx: aimMark.position.x, ty: aimMark.position.y, tz: aimMark.position.z });
+  if (gizmo?.dragging && !R.free) return;
+  putCamera(current(SC.camera, CAM));
+}
 // Move the aim point: on, the gizmo holds the active camera's aim point (with no layer selected)
 export function setAimEdit(on) { R.aimEdit = !!on && aimOn(); refresh(); }
 boxMark.raycast = () => {}; boxMark.children[0].raycast = () => {};
@@ -149,6 +155,7 @@ export function setup() {
   scene.add(ikTarget, pivot, camProxy, originDot, axesMark, boxMark, aimMark);
   R.orient = orientOf(store.get('deck.scene.orient', 'world'));   // the gizmo's axes (this device's choice)
   R.viewCut = store.get('deck.scene.viewcut', true) !== false;   // the picture follows the cuts, unless you are editing a camera
+  R.grid = store.get('deck.scene.grid', true) !== false;   // the floor grid in the view (Overlays menu)
   R.shotFmt = store.get('deck.scene.shotfmt', 'h3') === 'ltx' ? 'ltx' : 'h3';
 
   controls = new OrbitControls(camera, canvas);
@@ -190,7 +197,10 @@ export function setup() {
   gizmo.addEventListener('change', () => { if (!R.applying) draw(); });
   // controls off while a handle is held (the free view has its own); the drag is smoothed and snapped
   // (gizmo.js), then saved once after it settles
-  gizmo.addEventListener('dragging-changed', (e) => { (R.free ? viewControls : controls).enabled = !e.value; });
+  gizmo.addEventListener('dragging-changed', (e) => {
+    (R.free ? viewControls : controls).enabled = !e.value;
+    if (!e.value && gizmo.object === aimMark) { putCamera(current(SC.camera, CAM)); draw(); }   // (the camera turns to the aim it was held off during the drag)
+  });
   smooth = smoothGizmo(gizmo, {
     canvas, fix: fixTarget, redraw: () => draw(),
     apply: (o) => { if (gizmo.object === o) { applyChange(); draw(); } },
@@ -921,8 +931,9 @@ export function draw(forRender = false) {
   scene.overrideMaterial = depth ? depthMat : null;
   scene.background.set(depth ? 0x000000 : 0x24272e);
   const live = !R.playing;   // (while it plays, the While-playing settings say what shows: WP)
-  grid.visible = !forRender && !depth && !snap3.grid && (live || WP.grid);
-  snapGrid.visible = !forRender && !depth && snap3.grid && (live || WP.grid);
+  const showGrid = !forRender && !depth && R.grid && (live || WP.grid);
+  grid.visible = showGrid && !snap3.grid;
+  snapGrid.visible = showGrid && snap3.grid;
   for (const f of passHooks) f(depth || forRender === 'range' ? 'depth' : 'color', forRender);
   boxMark.visible = !forRender && !depth && gizmo.object === boxMark;
   aimMark.visible = !forRender && !depth && gizmo.object === aimMark;

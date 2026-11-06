@@ -341,6 +341,10 @@ export function popover(anchor, ...content) {
 export const iconBtn = (label, text, fn, extra = {}) => h('button', { type: 'button', class: 'icon-btn', 'aria-label': label, title: label,
   ...extra, onclick: (e) => { e.stopPropagation(); fn(e); } }, iconize(text));
 
+// The words beside a button's icon: left out on a tablet (pointer: coarse), where the icon alone stands for the button.
+// Only for a button that has an icon, and a title or aria-label that says what it does.
+export const barLabel = (text) => h('span', { class: 'bar-label' }, text);
+
 // A link that looks like a button (downloads, the workflow JSON)
 export const linkBtn = (text, href, attrs = {}) => h('a', { class: 'btn small', href, ...attrs }, iconize(text));
 
@@ -388,14 +392,65 @@ export function fileButton(text, onFiles, { accept, multiple = false, capture = 
   PASTES = PASTES.filter((p) => p.ref.deref());
   PASTES.push({ ref: new WeakRef(wrap), give });
   if (!pasteOn) { pasteOn = true; addEventListener('paste', onPaste); }
-  if (navigator.clipboard?.read) wrap.append(button('Paste', async () => {
-    try {
-      const blobs = [];
-      for (const it of await navigator.clipboard.read()) { const t = it.types.find((x) => x.startsWith('image/')); if (t) blobs.push(await it.getType(t)); }
-      if (!give(blobs)) toast('No picture on the clipboard', true);
-    } catch { toast('Can\'t read the clipboard here: press Ctrl+V instead', true); }
-  }, { cls, title: 'Use a picture from the clipboard' }));
+  wrap.append(button('Paste', () => pastePictures((fs) => { if (!give(fs)) toast('No picture on the clipboard', true); }, { multiple }),
+    { cls, title: 'Use a picture from the clipboard' }));
   return wrap;
+}
+
+// Pictures from the clipboard, for a tap (a menu's Paste, a Paste button): read straight away where the browser lets a page
+// read it (HTTPS or this PC, after a yes), otherwise a paste box to long-press and choose Paste in (a tablet over plain
+// HTTP: only the system's own Paste reaches a page there). onFiles gets image Files, never an empty list.
+export async function pastePictures(onFiles, { multiple = false } = {}) {
+  if (navigator.clipboard?.read && window.isSecureContext) {
+    try {
+      const fs = [];
+      for (const it of await navigator.clipboard.read()) {
+        const t = it.types.find((x) => x.startsWith('image/'));
+        if (t) fs.push(pastedFile(await it.getType(t), fs.length));
+      }
+      if (fs.length) return onFiles(multiple ? fs : fs.slice(0, 1));
+      return toast('No picture on the clipboard: copy one first', true);
+    } catch { /* not allowed: the paste box */ }
+  }
+  pasteBox(onFiles, { multiple });
+}
+export const pastedFile = (b, i = 0) => (b.name && b.name !== 'image.png' ? b
+  : new File([b], `Pasted${i ? ` ${i + 1}` : ''}.${(b.type.split('/')[1] || 'png').replace('jpeg', 'jpg')}`, { type: b.type }));
+
+// The paste box: a spot to long-press (or Ctrl+V) with the system's Paste, over everything; gone after a paste, Cancel or Esc.
+// (inputmode none: no keyboard pops up over the picture; the long-press Paste still comes.)
+let PASTE_BOX = null;
+export function pasteBox(onFiles, { multiple = false } = {}) {
+  PASTE_BOX?.close();
+  const spot = h('div', { class: 'paste-spot', contenteditable: 'true', inputmode: 'none', role: 'textbox', 'aria-label': 'Paste here',
+    'data-hint': 'Long-press here, then Paste' });
+  const close = () => { box.remove(); removeEventListener('keydown', onKey, true); if (PASTE_BOX?.box === box) PASTE_BOX = null; };
+  const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); close(); } };
+  const box = h('div', { class: 'paste-box', role: 'dialog', 'aria-label': 'Paste a picture' },
+    h('div', { class: 'paste-head' }, h('b', {}, 'Paste a picture'), button('Cancel', close, { cls: 'small' })), spot);
+  spot.addEventListener('paste', async (e) => {
+    e.preventDefault(); e.stopPropagation();
+    let fs = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/')).map(pastedFile);
+    if (!fs.length) {   // (a picture copied as part of a page comes as html only: its address, read from here if the site lets it be)
+      const src = /<img[^>]+src="([^"]+)"/i.exec(e.clipboardData?.getData('text/html') || '')?.[1]
+        || (/^(https?:|data:image\/)\S+$/.exec((e.clipboardData?.getData('text/plain') || '').trim()) || [])[0];
+      if (src) {
+        try {
+          const r = await fetch(src.replace(/&amp;/g, '&'));
+          const b = r.ok ? await r.blob() : null;
+          if (b?.type.startsWith('image/')) fs = [pastedFile(b)];
+        } catch { /* the site won't let it be read */ }
+      }
+    }
+    if (!fs.length) { spot.textContent = ''; return toast('That wasn\'t a picture: copy the picture itself (Copy image), then Paste here', true); }
+    close();
+    onFiles(multiple ? fs : fs.slice(0, 1));
+  });
+  spot.addEventListener('input', () => { spot.textContent = ''; });   // (typed or dropped text: nothing to keep)
+  document.body.append(box);
+  addEventListener('keydown', onKey, true);
+  PASTE_BOX = { box, close };
+  spot.focus();
 }
 
 // Segmented control. options: [[value, label, title?]]. The tapped one lights up (el.set(v) does
@@ -657,8 +712,54 @@ export const cycleBar = ({ title, what, prev, next, buttons = [], pos, cls = '' 
 // rows: [{ thumb (element), name, hint, sel, off, onclick, buttons: [elements] }]. onReorder(from, to): the rows (in the order
 // given) get a grip to drag by, and a row dropped on another's place calls it with both positions.
 // dragOut(i, list): a row can also be dragged out to something else: { move(x, y) (true: over a target, so not a reorder), end(x, y) (true: it took the row; no x: called off) }, or null.
+// Hold one row with a finger and tap others with another finger: each tap adds that row to the selection, or drops it, as
+// an Alt-tap does (the row's own onclick, told Alt was down). The held row is selected first if it wasn't. A list is
+// redrawn at every change, so the hold is kept here and not on the list: { id: the holding finger, i: its row, used: a tap came }.
+let ROW_HOLD = null, rowClicksOff = 0;
+const ROW_TAPS = new Map(), ROW_SLIP = 12;
+const rowUnder = (el) => {
+  const row = el?.closest?.('.layer-row'), list = row?.parentElement;
+  return list?._rows && !el.closest('button, input, select, a, .layer-grip') ? { list, row, i: [...list.children].indexOf(row) } : null;
+};
+const rowTapEvent = (el, alt) => ({ altKey: alt, ctrlKey: false, metaKey: false, shiftKey: false, target: el, currentTarget: el, stopPropagation() {}, preventDefault() {} });
+addEventListener('pointerdown', (e) => {
+  if (e.pointerType !== 'touch') return;
+  const at = rowUnder(e.target);
+  if (!at) return;
+  if (!ROW_HOLD) ROW_HOLD = { id: e.pointerId, i: at.i, x: e.clientX, y: e.clientY, used: false };
+  else if (e.pointerId !== ROW_HOLD.id) ROW_TAPS.set(e.pointerId, { x: e.clientX, y: e.clientY });
+}, true);
+addEventListener('pointermove', (e) => {   // (a finger that moves is scrolling the list or dragging, not holding a row)
+  if (ROW_HOLD?.id === e.pointerId && !ROW_HOLD.used && Math.hypot(e.clientX - ROW_HOLD.x, e.clientY - ROW_HOLD.y) > ROW_SLIP) { ROW_HOLD = null; ROW_TAPS.clear(); }
+}, true);
+const rowFingerUp = (e) => {
+  if (ROW_HOLD?.id === e.pointerId) {
+    if (ROW_HOLD.used) rowClicksOff = performance.now() + 500;   // (letting go isn't a tap on the held row)
+    ROW_HOLD = null; ROW_TAPS.clear();
+    return;
+  }
+  const tap = ROW_TAPS.get(e.pointerId);
+  ROW_TAPS.delete(e.pointerId);
+  if (!tap || !ROW_HOLD || e.type !== 'pointerup' || Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > ROW_SLIP) return;
+  const at = rowUnder(document.elementFromPoint(e.clientX, e.clientY));   // (the list as it is now: an earlier tap redrew it)
+  if (!at || at.i === ROW_HOLD.i) return;
+  const held = at.list.children[ROW_HOLD.i];
+  if (!held) return;
+  const rows = at.list._rows;
+  ROW_HOLD.used = true;
+  try { navigator.vibrate?.(10); } catch { /* not supported */ }
+  if (!held.classList.contains('sel')) rows[ROW_HOLD.i]?.onclick?.(rowTapEvent(held, false));
+  rows[at.i]?.onclick?.(rowTapEvent(at.row, true));
+};
+addEventListener('pointerup', rowFingerUp, true);
+addEventListener('pointercancel', rowFingerUp, true);
+addEventListener('click', (e) => {   // (a browser that sends a click for either finger: the taps above have done it)
+  if ((ROW_HOLD?.used || performance.now() < rowClicksOff) && e.target.closest?.('.layers')) { e.stopPropagation(); e.preventDefault(); }
+}, true);
+
 export function layerRowsEl(rows, { onReorder = null, dragOut = null } = {}) {
   const list = h('div', { class: 'layers' });
+  list._rows = rows;   // (for the hold-and-tap above)
   const grip = (i) => {
     const g = h('span', { class: 'layer-grip', title: 'Drag to reorder', 'aria-label': 'Drag to reorder', role: 'button' }, icon('grip'));
     g.addEventListener('click', (e) => e.stopPropagation());

@@ -13,7 +13,7 @@
 //
 // table.js's events (detail.handled = true when taken here): table:live, table:unlive, table:frame-field, table:drop-frame.
 import { setOutputs } from './table.js';
-import { api, field, h, help, hint, rangeField, section, store, toast, toggle } from './ui.js';
+import { api, button, field, h, help, hint, iconBtn, rangeField, section, store, toast, toggle } from './ui.js';
 import { isLive } from './live.js';
 import { uploadImage } from './media.js';
 import { sceneModule } from './run.js';
@@ -22,9 +22,10 @@ import { besideSpot, editDoc, putStill, sourcePicture, stillOf } from './table-f
 import { nextBeside, outputOf } from './table-model.js';
 import { dropKind } from './drop-files.js';
 import { kindOf } from './kinds.js';
-import { S } from './core.js';
-import { frameChanged, refreshStills, selectedFrames } from './table.js';
+import { S, thumbUrl } from './core.js';
+import { frameById, frameChanged, refreshStills, selectedFrames, setFrameOuts, takeName } from './table.js';
 import { openPressMenu } from './press-menu.js';
+import { dropPin, dropTakes, keepOuts, outLabel, outsOf, takesFor, useTake } from './frame-outs.js';
 
 const F = { seq: 0, mounted: null, m: null, size: null };   // mounted: the frame the engine is in; size: the scene's when it went live
 
@@ -347,6 +348,23 @@ export function sceneStillSoon(frame) {
 // frame / depth / pose picture (kind 'frame' | 'depth' | 'pose'). Returns a function that stops it.
 const OUTS = new Set();
 export function onSceneOut(fn) { OUTS.add(fn); return () => OUTS.delete(fn); }
+// What Render and Save frame made, kept on the frame as takes of its render pins (frame-outs.js): the frame on the open table, saved
+function keepTakes(frame, { gens, picture, kind }) {
+  const T = frameById(frame.id);
+  if (!T) return;
+  let outs = T.outs;
+  if (gens?.length) {
+    const by = new Map();
+    for (const g of gens) { const k = g.sceneOut?.kind; if (k) by.set(k, [...(by.get(k) || []), { gen: g.id, shot: g.sceneOut.shot }]); }
+    for (const [k, made] of by) outs = keepOuts(outs, k, 'video', made);
+  }
+  if (picture?.name && kind) outs = keepOuts(outs, kind, 'image', [{ input: picture.name }]);
+  if (outs === T.outs) return;
+  T.outs = outs;
+  frameChanged();
+  dispatchEvent(new CustomEvent('table:outs', { detail: { frame: frame.id } }));
+}
+onSceneOut(keepTakes);
 function tell(frame, out) {
   for (const fn of OUTS) { try { fn(frame, out); } catch (err) { console.error(err); } }
 }
@@ -381,6 +399,33 @@ async function fillSceneSection(f, body) {
     field('Render makes', h('div', { class: 'row wrap' }, ...ui.RENDER_KINDS.map(([id, label]) => toggle(label, kinds.has(id), (on) => {
       if (on) kinds.add(id); else kinds.delete(id);
       ui.setRenderKinds([...kinds]);
-    }))), help('The videos Render… makes of the scene, one after another: depth, pose (the posable people) and colour.')));
+    }))), help('The videos Render… makes of the scene, one after another: depth, pose (the posable people) and colour.')),
+    field('Renders', rendersEl(f.id), help('What this frame\'s Render… and Save frame / depth / pose made. Each kind is an out pin on the frame, to plug into another frame like its own; it carries the take ticked here (a new render takes over). ✕ takes one off the list: it stays in History or the pictures. Right click a pin (or hold it) for the same choices.')));
+}
+
+// ---- the Frame pane's Renders: each render pin's takes, the one it carries ticked (frame-outs.js) ----
+function rendersEl(fid) {
+  const el = h('div', { class: 'frame-renders' });
+  const outs = () => frameById(fid)?.outs;
+  const draw = () => {
+    const f = frameById(fid), pins = f ? outsOf(f) : [];
+    if (!pins.length) return el.replaceChildren(hint('Nothing rendered yet'));
+    el.replaceChildren(...pins.map((p) => h('div', { class: 'frame-render' },
+      h('div', { class: 'row' }, h('b', {}, outLabel(p)), h('span', { class: 'grow' }),
+        button('Take all off', () => setFrameOuts(fid, dropPin(outs(), p.id), `${outLabel(p)} taken off: its takes are still in History and the pictures`), { cls: 'small ghost' })),
+      ...takesFor(f, p.id).map((t) => h('div', { class: `row frame-take${t.on ? ' on' : ''}` },
+        t.input ? h('img', { src: thumbUrl(t.input, 96), alt: '', class: 'take-thumb' }) : null,
+        button(`${t.on ? '● ' : '○ '}${takeName(t)}`, () => setFrameOuts(fid, useTake(outs(), t.id)),
+          { cls: 'small ghost', 'aria-pressed': t.on, title: t.on ? 'The pin carries this one' : 'The pin carries this one instead' }),
+        h('span', { class: 'grow' }),
+        iconBtn('Take this one off', '✕', () => setFrameOuts(fid, dropTakes(outs(), [t.id]), `${takeName(t)} taken off: it is still in ${t.gen != null ? 'History' : 'the pictures'}`)))))));
+  };
+  const on = (e) => {
+    if (!el.isConnected) return removeEventListener('table:outs', on);
+    if (e.detail?.frame === fid) draw();
+  };
+  addEventListener('table:outs', on);
+  draw();
+  return el;
 }
 

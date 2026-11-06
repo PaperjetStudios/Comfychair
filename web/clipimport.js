@@ -124,16 +124,19 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
   };
   // run(signal, alive): the save; Save turns into Stop while it runs, which cancels it wherever it is (the cutter in
   // this browser, the upload, or the server's job) and leaves nothing behind
-  const saveBtn = (run) => {
-    const b = button('Save clip', async () => {
+  // (label: the button's words; a sheet with two of them runs one at a time: the other waits)
+  let running = null;
+  const saveBtn = (run, label = 'Save clip', cls = 'primary') => {
+    const b = button(label, async () => {
       if (busy) {
+        if (running !== b) return toast('Wait for the other one to finish, or stop it', true);
         if (stopper && !stopper.signal.aborted) { stopper.abort(); b.disabled = true; b.textContent = 'Stopping…'; }
         return;
       }
-      busy = true;
+      busy = true; running = b;
       stopper = new AbortController();
       const { signal } = stopper;
-      b.textContent = 'Stop'; b.classList.replace('primary', 'danger');
+      b.textContent = 'Stop'; b.classList.add('danger'); b.classList.remove('primary');
       try {
         const entry = await run(signal, () => !signal.aborted);
         let project = null;
@@ -148,10 +151,10 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
         if (signal.aborted) toast('Stopped: nothing was saved'); else toast(e.message, true);
         bar.classList.add('hidden');
       } finally {
-        busy = false; stopper = null; b.disabled = false;
-        b.textContent = 'Save clip'; b.classList.replace('danger', 'primary');
+        busy = false; stopper = null; running = null; b.disabled = false;
+        b.textContent = label; b.classList.remove('danger'); if (cls === 'primary') b.classList.add('primary');
       }
-    }, { cls: 'primary' });
+    }, { cls });
     return b;
   };
 
@@ -286,6 +289,14 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
       fileButton('Choose a video…', ([fl]) => openDeviceFile(fl, out), { accept: 'video/*', cls: 'small primary' }),
       hint('Only the piece you choose is sent, however big the file is.'), out);
   };
+  // The file as it is, all of it: no cutter, no trim, crop or resize, and no second encode on the PC (the media library's
+  // own upload). An hour for it: a long clip over Wi-Fi takes a while. Stop ends the upload; nothing is kept.
+  const wholeBtn = (fl, name) => saveBtn((signal) => {
+    bar.classList.add('hidden');
+    const ext = (fl.name.match(/\.[^.]+$/) || [''])[0], form = new FormData();
+    form.append('file', fl, `${name.value.trim().replace(/\.[^.]+$/, '') || fl.name.replace(/\.[^.]+$/, '')}${ext}`);
+    return api('/api/media', { method: 'POST', form, signal, timeout: 3600000, busy: `Sending ${fmtSize(fl.size)}` });
+  }, 'Send the whole file', '');
   const openDeviceFile = (fl, out) => {
     if (objUrl) URL.revokeObjectURL(objUrl);
     objUrl = URL.createObjectURL(fl);
@@ -301,7 +312,7 @@ export function openClipImport({ onSaved = null, title = 'Import a clip', sound 
       h('p', { class: 'hint' }, `${fl.name} · ${fmtSize(fl.size)}`),
       withSide(editor({ url: objUrl, info: meta, duration: 0, onError: () => cant.classList.remove('hidden') }),
       sizeField(), field('Name', name), bar,
-      h('div', { class: 'actions' }, saveBtn(async (signal, alive) => {
+      h('div', { class: 'actions' }, wholeBtn(fl, name), saveBtn(async (signal, alive) => {
         await meta;
         const { start, end } = span(dur);
         progress(0, ffmpegP ? 'Cutting' : 'Loading the cutter (31 MB, once)');

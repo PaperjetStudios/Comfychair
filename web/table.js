@@ -47,7 +47,7 @@
 // A frame with a workflow and something plugged in has a little run button at its top right (chain-run.js runNode). The target shows one input port per wire down its left edge
 // ("Image 1", "Video 1", "Sound 1"). Tap a wire or an input port to select it, Delete unplugs it, right click or a long hold
 // has the rest. Every wire change is a table undo step. For the Make pane: tableWires, wiresInto, setTableWire.
-import { $, h, api, store, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, info, toggle, help, layerRowsEl, iconBtn, uid } from './ui.js';
+import { $, h, api, store, toast, undoToast, openSheet, closeSheet, button, field, section, sheetOpen, actions, icon, hint, info, toggle, help, layerRowsEl, iconBtn, uid, pastePictures, barLabel } from './ui.js';
 import { CURRENT_EDIT, S, onServer, onProject } from './core.js';
 import { TabSet } from './tabs.js';
 import { currentTab } from './navigation.js';
@@ -65,6 +65,7 @@ import { isLive, liveFrame, liveRoot, setLive } from './live.js';
 import * as M from './table-model.js';
 import * as ST from './layer-stack.js';
 import * as W from './wire-rules.js';
+import * as O from './frame-outs.js';
 import { frameMenu as frameMenuGroups, frameArrangeMenu, pickedFor } from './layer-menu.js';
 import { filtering, foldedGroups, listRows } from './frame-list.js';
 import { KIND_ICON, copyDoc, createDoc, dropInput, editDoc, frameEl, frameFor, frameStamp, kindOfDoc, loadStills, noteRev, owedCounts, renameDoc, restoreDoc, stillOf, syncFrame, trashDoc, pausePreviews, previewMode, setPreviewMode } from './table-frames.js';
@@ -326,6 +327,13 @@ function svgEl(tag, attrs = {}) {
 const portGeom = () => (matchMedia('(pointer: coarse)').matches ? { gap: 48, top: 60, step: 48 } : { gap: 20, top: 34, step: 26 });
 const outPt = (f, pg, z) => ({ x: f.x + f.w + pg.gap / z, y: f.y + f.h / 2 });
 const inPt = (f, i, pg, z) => ({ x: f.x, y: f.y + (pg.top + i * pg.step) / z });
+// a 3D frame's render pins (wire-rules outPins): under its own port, one step apart
+const pinPt = (f, i, pg, z) => ({ x: f.x + f.w + pg.gap / z, y: f.y + f.h / 2 + ((i + 1) * pg.step) / z });
+// where a wire leaves its frame: the render pin it comes from (w.out), else the frame's port
+function srcPt(f, out, pg, z) {
+  const i = out ? W.outPins(f).findIndex((p) => p.id === out) : -1;
+  return i < 0 ? outPt(f, pg, z) : pinPt(f, i, pg, z);
+}
 function curve(a, b, z) {
   const dx = Math.max(Math.abs(b.x - a.x) / 2, 60 / z);
   return `M${a.x} ${a.y}C${a.x + dx} ${a.y} ${b.x - dx} ${b.y} ${b.x} ${b.y}`;
@@ -360,7 +368,7 @@ function renderWires(touch = null) {
       g.append(svgEl('path', { class: 'wire-hit' }), svgEl('path', { class: 'wire-line' }));
       D.wires.append(g); U.wireEls.set(w.id, g);
     }
-    const d = curve(outPt(ends[0], pg, z), inPt(ends[1], slot.get(w.id), pg, z), z);
+    const d = curve(srcPt(ends[0], w.out, pg, z), inPt(ends[1], slot.get(w.id), pg, z), z);
     g.firstChild.setAttribute('d', d);
     g.lastChild.setAttribute('d', d);
     g.lastChild.setAttribute('class', `wire-line k-${w.kind}${w.on === false ? ' off' : ''}`);
@@ -390,6 +398,21 @@ function renderPorts(touch = null) {
     el.className = `wire-out k-${kinds[0]}${showOut(f.id) ? ' show' : ''}`;
     el.style.left = `${p.x}px`; el.style.top = `${p.y}px`;
     seenOut.add(f.id);
+    W.outPins(f).forEach((pin, i) => {   // (a 3D frame's renders: each a pin of its own, labelled)
+      const key = `${f.id}|${pin.id}`;
+      let pe = U.outEls.get(key);
+      if (!pe) {
+        pe = h('div', { class: 'wire-out pin', 'data-frame': f.id, 'data-out': pin.id }, h('span', { class: 'wire-out-label' }));
+        pressMenu(pe, (ev) => pinMenu(f.id, pin.id, ev.clientX, ev.clientY));
+        D.ports.append(pe); U.outEls.set(key, pe);
+      }
+      const q = pinPt(f, i, pg, z);
+      pe.className = `wire-out pin show k-${pin.kind}`;
+      pe.style.left = `${q.x}px`; pe.style.top = `${q.y}px`;
+      pe.firstChild.textContent = pin.label;
+      pe.title = `${pin.label}: drag onto another frame to plug it in. Right click (or hold) for its takes`;
+      seenOut.add(key);
+    });
   }
   const slot = inputSlots();
   for (const w of T.wires) {
@@ -401,7 +424,7 @@ function renderPorts(touch = null) {
       el = h('div', { class: 'frame-in', 'data-wire': w.id }, h('span', { class: 'frame-in-dot' }), h('span', { class: 'frame-in-label' }));
       D.ports.append(el); U.inEls.set(w.id, el);
     }
-    const p = inPt(ends[1], slot.get(w.id), pg, z), pick = W.isFrameWire(w) ? FRAME_PICK_LABEL[w.frame] || `${(+w.frame).toFixed(2)} s` : '';
+    const p = inPt(ends[1], slot.get(w.id), pg, z), pick = W.isFrameWire(w) ? FRAME_PICK_LABEL[w.frame] || `${(+w.frame).toFixed(2)} s` : W.pinLabelOf(w, ends[0]);
     el.className = `frame-in k-${w.kind}${w.on === false ? ' off' : ''}${U.wire === w.id ? ' sel' : ''}`;
     el.style.left = `${p.x}px`; el.style.top = `${p.y}px`;
     el.lastChild.textContent = pick ? `${W.wireLabel(w)} · ${pick}` : W.wireLabel(w);
@@ -469,6 +492,40 @@ function wireStep(next) {
   putWires(next, touched);
   return true;
 }
+// ---- a 3D frame's render pins (frame-outs.js): which take each carries, takes and pins taken off. One undo step each; a pin
+// that goes unplugs its wires. Their runs stay in History, their pictures in the project. ----
+export function setFrameOuts(id, next, say = '') {
+  const f = byId(id);
+  if (!f || next === f.outs) return false;
+  const pins = new Set(W.outPins({ ...f, outs: next }).map((p) => p.id));
+  const before = { outs: f.outs, wires: T.wires }, after = { outs: next, wires: T.wires.filter((w) => !(w.from === id && w.out && !pins.has(w.out))) };
+  const put = (st) => {
+    const g = byId(id);
+    if (!g) return;
+    if (st.outs === undefined) delete g.outs; else g.outs = st.outs;
+    putWires(st.wires, [...before.wires, ...after.wires].filter((w) => w.from === id).map((w) => w.to));
+    dispatchEvent(new CustomEvent('table:outs', { detail: { frame: id } }));
+  };
+  record({ undo: () => put(before), redo: () => put(after) });
+  put(after);
+  if (say) toast(say);
+  return true;
+}
+const takeWhen = (t) => new Date(t.at || 0).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+export const takeName = (t) => `${t.gen != null ? `#${t.gen}` : String(t.input).split('/').pop()} · ${takeWhen(t)}`;
+// a render pin's menu: its takes (the one it carries ticked), then taking it off
+function pinMenu(fid, pid, x, y) {
+  const f = byId(fid), takes = f ? O.takesFor(f, pid) : [];
+  if (!takes.length) return;
+  const on = takes.find((t) => t.on), label = O.outLabel(on);
+  openPressMenu(x, y, [
+    takes.slice(0, 12).map((t) => ({ label: takeName(t), on: t.on, run: () => setFrameOuts(fid, O.useTake(byId(fid).outs, t.id)) })),
+    [{ label: takes.length > 1 ? 'Take this one off' : 'Take it off', run: () => setFrameOuts(fid, O.dropTakes(byId(fid).outs, [on.id]),
+      `${label} ${takeName(on)} taken off: it is still in ${on.gen != null ? 'History' : 'the pictures'}`) },
+    takes.length > 1 ? { label: `Take all ${takes.length} off`, danger: true, run: () => setFrameOuts(fid, O.dropPin(byId(fid).outs, pid), `${label} taken off: its takes are still in History and the pictures`) } : null,
+    ].filter(Boolean),
+  ], label);
+}
 const WHY = {
   missing: () => 'That frame is gone',
   'no-output': (s) => `"${s.label}" has nothing to plug in yet`,
@@ -478,15 +535,16 @@ const WHY = {
   same: () => null,
 };
 // src's output into dst, as kind (a video frame: its clip, 'video', or a frame of it, 'image')
-function plug(src, dst, kind) {
+function plug(src, dst, kind, out = null) {
   if (byId(src.id) !== src || byId(dst.id) !== dst) return toast('That frame is gone');
-  const r = W.addWire(T.wires, { from: src.id, to: dst.id, kind }, T.frames);
+  const r = W.addWire(T.wires, { from: src.id, to: dst.id, kind, out }, T.frames);
   if (r.why) return toast((WHY[r.why] || (() => 'That can\'t be plugged in there'))(src, dst));
   wireStep(r.wires);
 }
 // let go over dst: a source with more than one thing to put out asks which
-function plugAt(src, dst, x, y) {
+function plugAt(src, dst, x, y, out = null) {
   if (dst.kind === 'note') return toast('A note takes nothing in');
+  if (out) return plug(src, dst, null, out);
   const kinds = W.outKinds(src);
   if (kinds.length < 2) return plug(src, dst, kinds[0]);
   const framesOf = () => import('./frame-pick.js').then((m) => m.openFramePick(src, { title: `Frames of "${src.label}" for "${dst.label}"`,
@@ -495,16 +553,16 @@ function plugAt(src, dst, x, y) {
 }
 // src in the place of an input (a wire let go on its port), as one undo step: the same number, and the field it fills. A video going in as a
 // picture asks which frame.
-function replaceAt(src, id) {
+function replaceAt(src, id, out = null) {
   const w = wireById(id), dst = w && byId(w.to);
   if (!w || !dst) return toast('That input is gone');
   const put = (frame) => {
-    const r = W.replaceWire(T.wires, id, { from: src.id, frame }, T.frames);
+    const r = W.replaceWire(T.wires, id, { from: src.id, frame, out }, T.frames);
     if (r.why === 'wrong-kind') return toast(`${W.wireLabel(w)} takes ${w.kind === 'image' ? 'a picture' : w.kind === 'video' ? 'a clip' : 'a sound'}: "${src.label}" can't go there`, true);
     if (r.why) { const say = (WHY[r.why] || (() => 'That can\'t be plugged in there'))(src, dst); if (say) toast(say); return null; }
     return wireStep(r.wires);
   };
-  if (w.kind === 'image' && src.kind === 'video') {
+  if (!out && w.kind === 'image' && src.kind === 'video') {
     return import('./frame-pick.js').then((m) => m.openFramePick(src, { title: `Frame of "${src.label}" for ${W.wireLabel(w)}`, multi: false, onPick: ([t]) => put(t) }));
   }
   return put(null);
@@ -605,9 +663,9 @@ function newAtCentre(kind) {
   return makeFrame(kind, { x: c.x - s.w / 2, y: c.y - s.h / 2, ...s });
 }
 // more(): the quick-start sheet for the same place (quick-start.js)
-function kindMenu(x, y, make, label = 'New frame', more = null) {
+function kindMenu(x, y, make, label = 'New frame', more = null, paste = null) {
   openPressMenu(x, y, [NEW_KINDS.map((k) => ({ label: M.KIND_LABEL[k], run: () => make(k) })),
-    more ? [{ label: 'Quick start…', run: more }] : []].filter((g) => g.length), label);
+    [more ? { label: 'Quick start…', run: more } : null, paste ? { label: 'Paste picture', run: paste } : null].filter(Boolean)].filter((g) => g.length), label);
 }
 // The quick-start sheet (quick-start.js) for a table point: { x, y, rect?, kind?, centre? }
 export function quickStart(at) {
@@ -701,7 +759,7 @@ export function goLive(f) {
   D.live.append(root);
   if (!setLive(f, root)) { root.remove(); U.before = null; return; }
   U.liveBar = liveBar(f, root);
-  D.stage.classList.add('table-live');
+  D.stage.classList.add('table-live'); D.bar?.classList.add('live');
   placeLive();
   renderFrames();
   dispatchEvent(new CustomEvent('table:live', { detail: { frame: f, root, table: T, handled: false } }));
@@ -718,7 +776,7 @@ export function unlive() {
   U.leaving = Promise.allSettled([U.leaving, ...detail.wait]).then(() => {});
   setLive(null); ORDER.clear();   // (the table's steps made meanwhile stay on its list, in their order)
   root?.remove();
-  D.stage?.classList.remove('table-live');
+  D.stage?.classList.remove('table-live'); D.bar?.classList.remove('live');
   if (U.before) { setView(U.before, { save: false }); U.before = null; }
   renderFrames();
   refreshStills([f.kind]);   // (its still may have changed while it was open)
@@ -1191,7 +1249,8 @@ function stageMenu(e) {
   if (f) return frameMenu(e.clientX, e.clientY, f);
   const r = D.stage.getBoundingClientRect(), p = M.toTable(T.view, e.clientX - r.left, e.clientY - r.top);
   const at = (k) => (k === 'sound' ? { w: 1024, h: 256 } : k === 'note' ? { w: 480, h: 320 } : M.sizeForMp(1, 1, 1));
-  kindMenu(e.clientX, e.clientY, (k) => makeFrame(k, { ...p, ...at(k) }), 'New frame here', () => quickStart({ ...p }));
+  kindMenu(e.clientX, e.clientY, (k) => makeFrame(k, { ...p, ...at(k) }), 'New frame here', () => quickStart({ ...p }),
+    () => pastePictures((files) => dropOnTable(files, e.clientX, e.clientY)));   // (a tablet's paste: ui.js pastePictures)
 }
 
 // ---------------------------------------------------------------------------
@@ -1229,7 +1288,7 @@ function onDown(e) {
   if (isLive()) U.op = { ...base, type: 'backdrop' };   // (the table behind a live frame: a tap beside it lets go of it)
   else if (e.button === 1 || (e.button === 0 && U.space)) U.op = { ...base, type: 'pan', v0: { ...T.view } };
   else if (runBtn) U.op = { ...base, type: 'runtap', frame: runBtn.dataset.frame };
-  else if (port) startWire(byId(port.dataset.frame), base);
+  else if (port) startWire(byId(port.dataset.frame), base, port.dataset.out || null);
   else if (onWire) { pickWire(onWire.dataset.wire); U.op = { ...base, type: 'wiretap' }; }
   else if (handle) {
     const r = byId([...U.sel][0]);
@@ -1238,9 +1297,9 @@ function onDown(e) {
   else U.op = { ...base, type: 'marquee', p0: tablePt(e), base: adds(e) ? new Set(U.sel) : new Set(), shift: adds(e) };
 }
 // a drag from an out port: a wire follows the pointer; let go over another frame to plug it in there
-function startWire(src, base) {
+function startWire(src, base, out = null) {
   if (!src) return;
-  U.op = { ...base, type: 'wire', src, over: null, pin: null };
+  U.op = { ...base, type: 'wire', src, out, over: null, pin: null };
   setHover(src.id);
 }
 function dragWire(e, op) {
@@ -1258,17 +1317,17 @@ function dragWire(e, op) {
     U.els.get(op.over?.id)?.classList.remove('wire-over');
     op.over = under;
     if (under && under.kind !== 'note') U.els.get(under.id)?.classList.add('wire-over');
-    showNextInput(op.src, under);
+    showNextInput(op.src, under, op.out);
   }
-  D.wireDraft.setAttribute('d', curve(outPt(op.src, portGeom(), z), p, z));
-  D.wireDraft.setAttribute('class', `wire-draft k-${W.outKind(op.src) || 'image'}`);
+  D.wireDraft.setAttribute('d', curve(srcPt(op.src, op.out, portGeom(), z), p, z));
+  D.wireDraft.setAttribute('class', `wire-draft k-${(op.out && W.outPin(op.src, op.out)?.kind) || W.outKind(op.src) || 'image'}`);
   D.wireDraft.style.display = '';
 }
 // While a wire is held over a frame: where it would go in, under the inputs it has
-function showNextInput(src, dst) {
+function showNextInput(src, dst, out = null) {
   U.nextIn?.remove(); U.nextIn = null;
   if (!dst || dst.kind === 'note') return;
-  const kinds = W.outKinds(src), have = T.wires.filter((w) => w.to === dst.id), pg = portGeom(), z = T.view.z, p = inPt(dst, have.length, pg, z);
+  const pin = out ? W.outPin(src, out) : null, kinds = pin ? [pin.kind] : W.outKinds(src), have = T.wires.filter((w) => w.to === dst.id), pg = portGeom(), z = T.view.z, p = inPt(dst, have.length, pg, z);
   const word = kinds.length > 1 ? 'Add' : `${W.WIRE_LABEL[kinds[0]]} ${have.filter((w) => w.kind === kinds[0]).length + 1}`;
   U.nextIn = h('div', { class: `frame-in next k-${kinds[0]}` }, h('span', { class: 'frame-in-dot' }), h('span', { class: 'frame-in-label' }, word));
   U.nextIn.style.left = `${p.x}px`; U.nextIn.style.top = `${p.y}px`;
@@ -1284,9 +1343,10 @@ function endWire(e, op) {
   endWireDraft(op);
   setHover(null);
   if (!op.moved) { U.sel = new Set([op.src.id]); renderFrames(); return; }   // (a tap on the port picks its frame)
-  if (op.pin) return replaceAt(op.src, op.pin.dataset.wire);
-  if (op.over) return plugAt(op.src, op.over, e.clientX, e.clientY);
+  if (op.pin) return replaceAt(op.src, op.pin.dataset.wire, op.out);
+  if (op.over) return plugAt(op.src, op.over, e.clientX, e.clientY, op.out);
   renderPorts();
+  if (op.out) return;   // (a render pin let go on empty table: nothing to start from it here)
   // (let go on empty table: what to start from it. Let go back on its own frame: nothing)
   const p = tablePt(e);
   if (!M.hitFrame(M.shown(T.frames), p)) import('./wire-panel.js').then((m) => m.openWirePanel(op.src, p)).catch((err) => toast(`Couldn't open the panel: ${err.message}`, true));
@@ -1939,14 +1999,14 @@ function buildBar() {
   const gridSize = h('select', { 'aria-label': 'Grid size', onchange: () => { T.grid.size = +gridSize.value; applyView(); changed(); } },
     [16, 32, 64, 128, 256].map((v) => h('option', { value: v }, `${v} px`)));
   D.syncBar = () => { gridChip.classList.toggle('on', !!T.grid.on); gridSize.value = String(T.grid.size); };
-  const newBtn = button('＋ New frame ▾', () => {
+  const newBtn = button([icon('plus'), barLabel('New frame ▾')], () => {
     const r = newBtn.getBoundingClientRect(), { w, h: hh } = stageSize();
     kindMenu(r.left, r.bottom + 4, newAtCentre, 'New frame', () => quickStart({ ...M.toTable(T.view, w / 2, hh / 2), centre: true }));
   });
-  const arrangeBtn = button([icon('rows'), 'Arrange ▾'], () => {
+  const arrangeBtn = button([icon('rows'), barLabel('Arrange ▾')], () => {
     const r = arrangeBtn.getBoundingClientRect();
     arrangeMenu(r.left, r.bottom + 4);
-  }, { title: 'Align, spread, size or tidy the selected frames (two or more)' });
+  }, { title: 'Align, spread, size or tidy the selected frames (two or more)', 'aria-label': 'Arrange' });
   D.syncArrange = () => {
     const eng = layerArranger();
     arrangeBtn.disabled = eng ? eng.arrangeable() < 1 : selected().filter((f) => !f.hidden).length < 2 || isLive();
@@ -1955,19 +2015,24 @@ function buildBar() {
   addEventListener('editor:render', () => D.syncArrange?.());   // (the open image frame's layer selection changed)
   addEventListener('table:unlive', () => queueMicrotask(() => D.syncArrange?.()));
   const PREVIEW = [['hover', 'On hover'], ['always', 'Always'], ['off', 'Off']];
-  const previewBtn = button('Previews ▾', () => {
+  const previewBtn = button([icon('play'), barLabel('Previews ▾')], () => {
     const r = previewBtn.getBoundingClientRect(), now = previewMode();
     openPressMenu(r.left, r.bottom + 4, [PREVIEW.map(([m, label]) => ({ label, on: m === now, run: () => setPreviewMode(m) }))], 'Previews');
-  }, { title: 'When video and sound frames play their preview on the table' });
+  }, { title: 'When video and sound frames play their preview on the table', 'aria-label': 'Previews' });
   const samplingChip = gzChip('Sampling preview', () => setSamplerPreview(!samplerPreview()), { on: samplerPreview(), title: 'Show a run as it samples' });
+  samplingChip.replaceChildren(icon('eye'), barLabel('Sampling preview')); samplingChip.setAttribute('aria-label', 'Sampling preview');
   onSamplerPreview((on) => samplingChip.classList.toggle('on', on));
   const windowChip = gzChip('Preview window', () => setPreviewWindow(!previewWindow()), { on: previewWindow(), title: 'Show the sampling preview in a floating window, not in its frame' });
+  windowChip.replaceChildren(icon('dock'), barLabel('Preview window')); windowChip.setAttribute('aria-label', 'Preview window');
   onPreviewWindow((on) => windowChip.classList.toggle('on', on));
   D.zoom = h('button', { type: 'button', class: 'btn small ghost table-zoom', title: 'Zoom: tap for 100%', onclick: () => zoomTo(1) }, '100%');
-  D.bar = h('div', { class: 'table-bar' },
-    button('Fit', fitSel, { title: 'Fit all, or the selected frames (Shift+F)' }),
-    button('100%', () => zoomTo(1), { title: 'Zoom to 100% (0)' }),
-    gridChip, gridSize, snapBar(['edges'], () => {}), newBtn, arrangeBtn, previewBtn, samplingChip, windowChip,
+  // (on a tablet: icons alone, the 100% button left to the zoom readout, and while a frame is open only what works in it)
+  const edges = snapBar(['edges'], () => {});
+  const fitBtn = button([icon('fit'), barLabel('Fit')], fitSel, { title: 'Fit all, or the selected frames (Shift+F)', 'aria-label': 'Fit' });
+  const fullBtn = button('100%', () => zoomTo(1), { title: 'Zoom to 100% (0)', cls: 'small fine-only' });
+  for (const el of [fitBtn, fullBtn, gridChip, gridSize, edges, newBtn, previewBtn, D.zoom]) el.classList.add('table-only');
+  D.bar = h('div', { class: 'table-bar' }, fitBtn, fullBtn,
+    gridChip, gridSize, edges, newBtn, arrangeBtn, previewBtn, samplingChip, windowChip,
     info('Sampling preview shows a run as it samples: a moving clip for video, a still for images. Off, ComfyUI makes no previews at all, which saves a little on every step. A run already going keeps what it started with. Preview window puts it in a floating window you can drag and resize; it comes up with a run\'s first picture and goes when the run ends. Off, the preview shows inside the run\'s own frame, and the small step line has a button that brings the window back.'),
     h('span', { class: 'table-bar-gap' }), D.zoom);
 }

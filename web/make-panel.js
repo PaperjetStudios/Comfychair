@@ -31,6 +31,7 @@
 // table can say which frames need a rerun. The wires row has Run from here / Rerun what uses this (chain-run.js).
 import { resultName, templateProcess } from './run-name.js';
 import { h, api, store, toast, uid, button, iconBtn, imageInput, seg, field, hint, toggle, help, info, note, clone } from './ui.js';
+import { isSheetRun } from './markview-math.js';
 import { ASPECT_PRESETS, S, CURRENT_EDIT, inputUrl, previewUrl, thumbUrl } from './core.js';
 import { modeOf } from './size-math.js';
 import { afterQueued, fieldState, fieldTarget, fieldsBorrowed, mainPromptKey, preparePictures, renderFields, runBuilder, runValues, stop } from './generate.js';
@@ -50,11 +51,11 @@ import { DOC_KIND, nextBeside, toStage } from './table-model.js';
 import * as Table from './table.js';
 import { LANDS, canvasRect, carryKept, familiesOf, frameImageField, frameSize, slotMode, makeFrames, makeTarget, noteText, pickTemplate, isOwnSlot, repointable, runValuesOf, seedsAfter,
   addHeld, frameLength, lengthField, lengthValue, outputOwns, selfPicked, settingsFor, settingsPayload, settleHeld, sizePair, templatesFor, templatesForFrame, wireFields, withClip } from './make-rules.js';
-import { downstream, fieldKind, isFrameWire, wireLabel } from './wire-rules.js';
+import { downstream, fieldKind, isFrameWire, pinLabelOf, wireLabel } from './wire-rules.js';
 import { freshLayers, layerMarks, placeResults, sourceStamps, withSoundItem, withoutLayers } from './chain-rules.js';
 import { icon } from './icons.js';
 import { mountRunStrip } from './run-strip.js';
-import { frameAudio, frameImage, frameSource, frameStill, frameVideo } from './frame-source.js';
+import { frameAudio, frameImage, frameSource, frameStill, frameVideo, outThumb, wireImage, wireVideo } from './frame-source.js';
 import { keepMain } from './main-rules.js';
 
 const P = { fresh: [], host: null, frames: [], table: null, key: null, st: null, els: null };
@@ -159,6 +160,7 @@ function target(kind, frame) {
       if (mode === 'manual') return undefined;
       if (mode === 'layers') return P.layerUrl?.[f.key] || stillOf(cur) || cur.preview || null;
       const w = wireState(kind, frame).use[f.key], src = w && (Table.frameById(w.from) || w.source);
+      if (w?.out) return src ? outThumb(src, w.out) : null;
       return src ? stillOf(src) || (src.preview ? (src.kind === 'video' ? previewUrl(src.preview, 1024) : src.preview) : null) : null;
     } : null,
     // (a frame's size and length are its Output tab's)
@@ -290,7 +292,7 @@ function wireState(kind, frame) {
 // an image frame's own picture, as far as the panel can tell without opening it (its still, or its preview)
 const hasPicture = (kind, frame) => kind !== 'image' || !frame || !!(stillOf(frame) || frame.preview);
 const sourceName = (w) => w.source?.label || 'a frame';
-const wireWords = (w) => `${wireLabel(w)}${isFrameWire(w) ? ` (${w.frame} frame)` : ''} from ${sourceName(w)}`;
+const wireWords = (w) => `${wireLabel(w)}${isFrameWire(w) ? ` (${w.frame} frame)` : w.out ? ` (${pinLabelOf(w, Table.frameById(w.from) || w.source)})` : ''} from ${sourceName(w)}`;
 const setWired = (kind, frame, key, v) => {
   P.st.wired ||= {};
   if (v === undefined) delete P.st.wired[key]; else P.st.wired[key] = v;
@@ -384,7 +386,7 @@ function wiredEl(kind, frame, f) {
 function wiredPictureEl(kind, frame, f, w, menu) {
   const isImage = fieldKind(f) === 'image', own = () => setFrom(kind, frame, f, 'manual');
   const src = Table.frameById(w.from) || w.source;
-  const url = !src ? null : stillOf(src) || (src.preview ? (src.kind === 'video' ? previewUrl(src.preview, 256) : src.preview) : null);
+  const url = !src ? null : w.out ? outThumb(src, w.out) : stillOf(src) || (src.preview ? (src.kind === 'video' ? previewUrl(src.preview, 256) : src.preview) : null);
   const words = wireWords(w);
   const pick = !isImage ? own : () => openSourcePicker({ kinds: ['image'], want: 'picture', title: f.label, onPick: (name) => {
     P.st.values[f.key] = name;
@@ -522,7 +524,7 @@ async function resolveWires(kind, frame, t, st, values, made) {
     if (!src) throw new Error(`${wireLabel(w)} has no frame to come from`);
     const k = fieldKind(f);
     if (k === 'image') {
-      const got = isFrameWire(w) ? { name: await frameStill(src, w.frame), fresh: true } : await frameImage(src, { multiple: 16 });
+      const got = await wireImage(w, src, { multiple: 16 });
       if (got.fresh) made.push(got.name);
       // (the crop and size asked for. A copy of a picture made for this run goes with it; one of a kept picture stays with that picture, as any slot's does)
       const cut = await pictureForRun(got.name, w.crop || null, w.mp ?? f.mp ?? 1);
@@ -530,7 +532,7 @@ async function resolveWires(kind, frame, t, st, values, made) {
       values[f.key] = cut;
       done.add(f.key);
     } else {
-      const { label, ...clip } = await (k === 'video' ? frameVideo(src) : frameAudio(src));
+      const { label, ...clip } = await (k === 'video' ? wireVideo(w, src) : frameAudio(src));
       values[f.key] = clip;
     }
   }
@@ -919,8 +921,14 @@ function land(kind, frame, t, gens, sent, values, tableId = Table.activeTableId(
   const keeper = (kind === 'video' || kind === 'sound') && frame?.doc ? import('./edit-run.js').then((m) => m.keepRun, () => null) : null;
   for (const g of gens) {
     const settled = keeper?.then((keepRun) => keepRun?.(g, { tab: frame.doc, frame: frame.id, kind, label: templateProcess(t.name) }));
-    waitGen(g.id).then((done) => (kind === 'none' ? landFrames(done, values, t, tableId) : kind === 'video' ? landClips(frame, done)
-      : kind === 'sound' && frame?.doc ? landSounds(frame, done) : kind === 'scene' && frame ? landScene(frame, done) : inShelf(done)))
+    waitGen(g.id).then(async (done) => {
+      await (kind === 'none' ? landFrames(done, values, t, tableId) : kind === 'video' ? landClips(frame, done)
+        : kind === 'sound' && frame?.doc ? landSounds(frame, done) : kind === 'scene' && frame ? landScene(frame, done) : inShelf(done));
+      // a character or object sheet: the frames its sheet is cut from, as the layers of an image frame beside its clip (edit-ops.js)
+      if ((kind === 'none' || kind === 'video') && isSheetRun(done) && tableId === Table.activeTableId()) {
+        import('./edit-ops.js').then((m) => m.sheetAsLayers(done, frame)).catch((e) => toast(`The sheet's frames as layers: ${e.message}`, true));
+      }
+    })
       .catch((e) => toast(`${t.name} failed: ${e.message}`, true))
       .finally(() => settled?.then((fn) => fn?.()));
   }

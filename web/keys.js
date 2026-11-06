@@ -169,6 +169,48 @@ export function moveBy(tracks, sel, dt, n) {
   if (dt) relocate(tracks, sel, (f) => f + dt, n);
   return dt;
 }
+// ---- Arrange (the key sheet's Arrange menu) ----
+// each layer's selected keys moved as a block so the layers start one after another: the first at frame t, the next
+// step frames later, and so on (groups: the layers in order, each its list of tracks). Step 0 lines their starts up at t.
+// A block stops at the ends of the clip. Returns how many layers had keys in the selection.
+export function stagger(groups, sel, t, step, n) {
+  let i = 0;
+  for (const tracks of groups) {
+    const b = bounds(tracks, sel);
+    if (!b) continue;
+    const dt = Math.max(-b[0], Math.min(n - 1 - b[1], Math.round(num(t) + i * num(step) - b[0])));
+    if (dt) relocate(tracks, sel, (f) => f + dt, n);
+    i++;
+  }
+  return i;
+}
+// the selection's frames spaced evenly between its first and last (keys on one frame stay together); false with under 3 frames
+export function spaceEvenly(tracks, sel, n) {
+  const fs = [...new Set(tracks.flatMap((T) => T.keys.filter((k) => sel.has(k)).map((k) => k.f)))].sort((a, b) => a - b);
+  if (fs.length < 3) return false;
+  const lo = fs[0], step = (fs[fs.length - 1] - lo) / (fs.length - 1), at = new Map(fs.map((f, i) => [f, lo + i * step]));
+  relocate(tracks, sel, (f) => at.get(f), n);
+  return true;
+}
+// the selection played backwards in its own span (its first and last frames swap): Bezier handles turn round, and each
+// stretch between two keys keeps its ease (an ease sits on the key a stretch starts from, so it moves to the other end)
+export function reverse(tracks, sel, n) {
+  const b = bounds(tracks, sel);
+  if (!b || b[0] === b[1]) return false;
+  for (const T of tracks) {
+    const mine = T.keys.filter((k) => sel.has(k)).sort(byF);
+    const eases = mine.map((k) => ('ease' in k ? k.ease : undefined));
+    mine.forEach((k, i) => {
+      const e = eases[(i - 1 + mine.length) % mine.length];
+      if (e === undefined) delete k.ease; else k.ease = e;
+      const { ti, to } = k;
+      if (to) k.ti = [-to[0], to[1]]; else delete k.ti;
+      if (ti) k.to = [-ti[0], ti[1]]; else delete k.to;
+    });
+  }
+  relocate(tracks, sel, (f) => b[0] + b[1] - f, n);
+  return true;
+}
 // stretch the selection in time around frame t0 (Blender's S in the dope sheet)
 export function scaleAround(tracks, sel, t0, s, n) {
   s = Math.max(0.05, Math.min(20, num(s, 1)));

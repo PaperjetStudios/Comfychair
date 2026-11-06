@@ -12,8 +12,16 @@ const saveSnap = () => store.set('deck.snap', snap);
 export const snapOn = (key, ev) => !!snap[key] && !ev?.altKey;
 
 // A button on a viewer's gizmo bar (snapping, the hand tools): on shows it picked; an icon-only one is named by its title
-export const gzChip = (label, onclick, { on = false, title = null } = {}) =>
-  h('button', { type: 'button', class: 'gz-chip' + (on ? ' on' : ''), title, 'aria-label': label.length <= 2 ? title : null, onclick }, label);
+export const gzChip = (label, onclick, { on = false, title = null } = {}) => {
+  const words = chipWords(label);
+  return h('button', { type: 'button', class: 'gz-chip' + (on ? ' on' : ''), title, 'aria-label': label.length <= 2 ? title : words.name, onclick }, words.kids);
+};
+// A chip's label as its symbol and its words ('▦ Grid'): with brief, a tablet shows the symbol alone (ui.js barLabel's rule)
+export function chipWords(label, brief = true) {
+  const m = /^(\S{1,2}) (.+)$/u.exec(label);
+  if (!m) return { kids: [label], name: null };
+  return { kids: [h('span', { class: 'gz-g' }, m[1]), h('span', { class: `gz-w${brief ? ' bar-label' : ''}` }, m[2])], name: m[2] };
+}
 export { snapStep, snapNearest };   // (web/snap-math.js: no DOM, so the table's model uses it too)
 export const normDeg = (d) => ((((d + 180) % 360) + 360) % 360) - 180;
 
@@ -168,7 +176,7 @@ export const snapBar = (parts, onChange) => chipBar(S2, parts, onChange);
 function chipBar(S, parts, onChange) {
   const chips = {};
   const show = () => parts.forEach((p) => {   // the step shows while it's on
-    chips[p].textContent = S.snap[p] ? S.text[p]() : S.off[p];
+    chips[p].replaceChildren(...chipWords(S.snap[p] ? S.text[p]() : S.off[p], !(S.snap[p] && /\d/.test(S.text[p]()))).kids);   // (on: its step stays on a tablet too)
     chips[p].classList.toggle('on', !!S.snap[p]); chips[p].setAttribute('aria-pressed', String(!!S.snap[p]));
   });
   const chip = (p) => (chips[p] = gzChip('', () => { S.snap[p] = !S.snap[p]; S.save(); show(); onChange?.(); }, { title: S.title[p] }));

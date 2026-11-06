@@ -654,10 +654,23 @@ export function openSourcePicker(opts) {
   const accept = [...new Set(kinds.map((k) => (k === 'audio' ? 'audio/*' : k === 'video' ? 'video/*' : 'image/*')))].join(',');
   const linkClip = () => import('./clipimport.js').then((m) => m.openClipImport({ title: want === 'sound' ? 'Import a sound' : 'Import a clip', sound: want === 'sound',
     onSaved: (e) => { media = null; fromMedia({ name: e.name, kind: e.kind || (want === 'sound' ? 'audio' : 'video'), label: e.label }); } }));
+  // Frames off a video on this device, as pictures: the browser reads the file in place, so the clip itself is never sent
+  const framesFromFile = async ([fl]) => {
+    const room = multi ? roomLeft() : 1;
+    if (room < 1) return full();
+    const url = URL.createObjectURL(fl), stem = fl.name.replace(/\.[^.]+$/, '');
+    try {
+      const list = await pickFrames({ url, title: fl.name, fps: 30, room, wantBlob: true });
+      if (!list) return reopen();
+      await onFiles(list.filter((x) => x.blob).map((x) => new File([x.blob], `${stem} frame ${x.frame}.png`, { type: 'image/png' })));
+      if (multi) reopen();
+    } finally { URL.revokeObjectURL(url); }
+  };
   const seq = openSheet(h('h3', {}, title), h('div', { class: 'picker-bar' }, [tabs, kindRow, h('span', { class: 'picker-break' }),
     isPic && currentEditReady() ? button('Current edit', useCurrentEdit, { cls: 'small primary', title: 'Export the picture open in the Image tab right now and use it' }) : null,
     fileButton('Upload…', onFiles, { accept, multiple: multi, cls: 'small primary' }),
     isPic ? (desktop() ? webcam : fileButton([icon('camera'), 'Camera'], (fs) => onFiles(fs, 'camera'), { accept: 'image/*', capture: 'environment' })) : null,
+    isPic ? fileButton('Frames from a video file…', framesFromFile, { accept: 'video/*', cls: 'small', paste: false }) : null,
     isPic ? button('From a video link…', () => import('./clipimport.js').then((m) => m.openLinkStill({ back: reopen,
       onFrame: async (blob) => { await onFiles([new File([blob], 'link.png', { type: 'image/png' })], 'link'); if (multi) reopen(); } })),
     { cls: 'small', title: 'A frame from a YouTube (or other) video' }) : null,

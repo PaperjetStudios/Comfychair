@@ -13,6 +13,8 @@
 // Every function returns new data; none changes what it is given.
 // ---------------------------------------------------------------------------
 
+import { outLabel, outsOf } from './frame-outs.js';
+
 export const WIRE_KINDS = ['image', 'video', 'sound'];
 export const WIRE_LABEL = { image: 'Image', video: 'Video', sound: 'Sound' };
 const rid = () => Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 6);
@@ -31,6 +33,11 @@ export function outKinds(frame) {
   return [...(OUT[frame.kind] || [])];
 }
 export const outKind = (frame) => outKinds(frame)[0] || null;
+// A 3D frame's render pins beside its own port (frame-outs.js): [{ id, kind (the wire kind it plugs as), label }]
+export const outPins = (frame) => outsOf(frame).map((o) => ({ id: o.id, kind: o.type, label: outLabel(o) }));
+export const outPin = (frame, id) => (id ? outPins(frame).find((p) => p.id === id) || null : null);
+// What a wire carries, in words, beside its number: the render pin it comes from
+export const pinLabelOf = (w, frame) => (w?.out ? outPin(frame, w.out)?.label || 'a render that is gone' : '');
 
 // A frame-of-a-video choice made whole: 'first' | 'last' | 'playhead' | seconds (≥ 0); anything else is 'first'
 export const FRAME_PICKS = ['first', 'last', 'playhead'];
@@ -39,12 +46,13 @@ export function framePick(v) {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 'first';
 }
 // Whether a wire carries one frame of a video (a picture out of a video frame)
-export const isFrameWire = (w) => w?.kind === 'image' && w.frame != null;
+export const isFrameWire = (w) => w?.kind === 'image' && w.frame != null && !w.out;
 // A plain picture frame started from a video's picture wire holds the picked frame itself, grabbed when it is made. A frame with a
 // template (a node) stays empty until its run draws it from the wire, and a clip wire carries no single frame.
 export const holdsStill = (src, { kind, wireKind, template = null } = {}) => !template && kind === 'image' && wireKind === 'image' && src?.kind === 'video';
-// (a wire's identity for repeats: from, to, kind, and which frame for a frame of a video)
-const sameWire = (w, from, to, kind, frame) => w.from === from && w.to === to && w.kind === kind && (w.frame ?? null) === (frame ?? null);
+// (a wire's identity for repeats: from, to, kind, which frame for a frame of a video, and which render pin)
+const sameWire = (w, from, to, kind, frame, out = null) => w.from === from && w.to === to && w.kind === kind && (w.frame ?? null) === (frame ?? null)
+  && (w.out ?? null) === (out ?? null);
 
 // n per target and kind, in the order the wires were plugged (their order in the list)
 export function renumber(wires) {
@@ -60,21 +68,23 @@ export function renumber(wires) {
 // (frames given), no repeat of the same from → to of a kind (and frame); on defaults to true. A picture wire from a video
 // frame (frames given) always says which frame; a frame field on any other wire goes.
 export function migrateWires(wires, frames = null) {
-  const byId = frames ? new Map(frames.map((f) => [String(f.id), f])) : null, seen = new Set(), out = [];
+  const byId = frames ? new Map(frames.map((f) => [String(f.id), f])) : null, seen = new Set(), list = [];
   for (const w of Array.isArray(wires) ? wires : []) {
     if (!w || w.from == null || w.to == null || !WIRE_KINDS.includes(w.kind)) continue;
     const from = String(w.from), to = String(w.to);
     if (from === to || (byId && (!byId.has(from) || !byId.has(to)))) continue;
     const fromVideo = byId ? byId.get(from).kind === 'video' : w.frame != null;
     const frame = w.kind === 'image' && fromVideo ? framePick(w.frame) : null;
-    const k = `${from}\u0000${to}\u0000${w.kind}\u0000${frame ?? ''}`;
+    const out = typeof w.out === 'string' && w.out ? w.out : null;
+    const k = `${from}\u0000${to}\u0000${w.kind}\u0000${frame ?? ''}\u0000${out ?? ''}`;
     if (seen.has(k)) continue;
     seen.add(k);
     const nw = { ...w, id: String(w.id || rid()), from, to, on: w.on !== false };
     if (frame != null) nw.frame = frame; else delete nw.frame;
-    out.push(nw);
+    if (out) nw.out = out; else delete nw.out;
+    list.push(nw);
   }
-  return renumber(out);
+  return renumber(list);
 }
 
 // Whether a wire from → to would close a loop (or is a frame to itself): to already feeds from
@@ -96,15 +106,23 @@ export function cycle(wires, from, to) {
 // Plug from → to. kind: the source frame's outKind unless given, and one of its outKinds. A picture out of a video
 // frame carries frame (given, else 'first', or 'last' when the first is plugged there already). Refused (wire null, why)
 // when a frame is missing, the source puts nothing out ('no-output'; a kind it doesn't put out: 'wrong-kind'), it would
-// loop, or the same wire is there. Returns { wires, wire, why }.
-export function addWire(wires, { from, to, kind = null, id = null, frame = null }, frames) {
+// loop, or the same wire is there. out: a 3D frame's render pin (outPins) it comes from instead: the pin's kind.
+// Returns { wires, wire, why }.
+export function addWire(wires, { from, to, kind = null, id = null, frame = null, out = null }, frames) {
   const src = frames.find((f) => f.id === from), dst = frames.find((f) => f.id === to);
   const no = (why) => ({ wires, wire: null, why });
   if (!src || !dst) return no('missing');
-  const kinds = outKinds(src), k = kind || kinds[0];
+  const pin = out ? outPin(src, out) : null;
+  if (out && !pin) return no('no-output');
+  const kinds = pin ? [pin.kind] : outKinds(src), k = kind || kinds[0];
   if (!k || !kinds.length) return no('no-output');
   if (!kinds.includes(k)) return no('wrong-kind');
   if (cycle(wires, from, to)) return no('cycle');
+  if (pin) {
+    if (wires.some((w) => sameWire(w, from, to, k, null, out))) return no('exists');
+    const out2 = renumber([...wires, { id: id || rid(), from, to, kind: k, n: 0, on: true, out }]);
+    return { wires: out2, wire: out2[out2.length - 1], why: null };
+  }
   let pick = null;
   if (k === 'image' && src.kind === 'video') {
     pick = frame != null ? framePick(frame) : ['first', 'last'].find((p) => !wires.some((w) => sameWire(w, from, to, k, p))) || 'first';
@@ -112,25 +130,28 @@ export function addWire(wires, { from, to, kind = null, id = null, frame = null 
   if (wires.some((w) => sameWire(w, from, to, k, pick))) return no('exists');
   const w = { id: id || rid(), from, to, kind: k, n: 0, on: true };
   if (pick != null) w.frame = pick;
-  const out = renumber([...wires, w]);
-  return { wires: out, wire: out[out.length - 1], why: null };
+  const list = renumber([...wires, w]);
+  return { wires: list, wire: list[list.length - 1], why: null };
 }
 // A wire takes a new source, keeping its place (its number, and the field it fills): a wire let go on an input port. What was cut from the
 // old picture goes; its size stays. A picture out of a video frame carries frame (given, else 'first'). Refused (wire null, why) as addWire:
 // and 'same' when nothing would change. Returns { wires, wire, why }.
-export function replaceWire(wires, id, { from, frame = null }, frames) {
+export function replaceWire(wires, id, { from, frame = null, out = null }, frames) {
   const w = wires.find((x) => x.id === id), src = frames.find((f) => f.id === from);
   const no = (why) => ({ wires, wire: null, why });
   if (!w || !src || !frames.some((f) => f.id === w.to)) return no('missing');
-  if (!outKinds(src).length) return no('no-output');
-  if (!outKinds(src).includes(w.kind)) return no('wrong-kind');
+  const pin = out ? outPin(src, out) : null;
+  if (out && !pin) return no('no-output');
+  const kinds = pin ? [pin.kind] : outKinds(src);
+  if (!kinds.length) return no('no-output');
+  if (!kinds.includes(w.kind)) return no('wrong-kind');
   const others = wires.filter((x) => x.id !== id);
   if (cycle(others, from, w.to)) return no('cycle');
-  const pick = w.kind === 'image' && src.kind === 'video' ? framePick(frame ?? 'first') : null;
-  if (w.from === from && (w.frame ?? null) === pick) return no('same');
-  if (others.some((x) => sameWire(x, from, w.to, w.kind, pick))) return no('exists');
-  const { crop, frame: wasFrame, ...kept } = w;
-  const nw = { ...kept, from, on: true, ...(pick != null && { frame: pick }) };
+  const pick = !pin && w.kind === 'image' && src.kind === 'video' ? framePick(frame ?? 'first') : null;
+  if (w.from === from && (w.frame ?? null) === pick && (w.out ?? null) === (out ?? null)) return no('same');
+  if (others.some((x) => sameWire(x, from, w.to, w.kind, pick, out))) return no('exists');
+  const { crop, frame: wasFrame, out: wasOut, ...kept } = w;
+  const nw = { ...kept, from, on: true, ...(pick != null && { frame: pick }), ...(out && { out }) };
   return { wires: wires.map((x) => (x.id === id ? nw : x)), wire: nw, why: null };
 }
 // One wire changed: on (true | false), frame (a picture out of a video only), n (its place among the target's inputs of

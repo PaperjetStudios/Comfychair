@@ -14,6 +14,10 @@
 //   frameVideo(frame)                     → a video frame as a clip source { generation, index } | { media } (+ trim): one plain
 //       clip passes through with its trim; any other edit is rendered (POST /api/video/render) and kept as frame.render
 //   frameAudio(frame)                     → a sound (or video) frame's sound as a source + trim; a mix is rendered and kept
+//   outImage(frame, pin) / outVideo(frame, pin)  → a 3D frame's render pin (frame-outs.js): the take it carries. A picture
+//       is the project's own (fresh: false); a picture out of a video take is its first frame grabbed (fresh: true)
+//   wireImage(w, src) / wireVideo(w, src)  → what a wire carries, whichever of the above it is (a pin, a frame of a video, a frame)
+//   outThumb(frame, pin)                  → a url to show a pin's take by (a picture's own; a video's, null)
 //   frameClip(frame)                      → a video (or sound) frame's first clip, by its place on the timeline:
 //       { kind, src, url, label, dur, item, trim: { start, len? } }, or null when it has none
 //
@@ -34,6 +38,8 @@ import { DOC_KIND } from './table-model.js';
 import { canvasRect, itemSource, plainFills, plainPicture, plainSound, plainVideo, renderKey } from './make-rules.js';
 import { mainOf, plainLayer, withoutMade } from './main-rules.js';
 import { bounds as layerBounds } from './layer-geom.js';
+import { outLabel, outOf } from './frame-outs.js';
+import { isFrameWire } from './wire-rules.js';
 
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
 const docUrl = (kind, id) => `/api/store/${DOC_KIND[kind]}/${id}${qs()}`;
@@ -332,3 +338,35 @@ function durationOf(url) {
     v.src = url;
   });
 }
+
+// ---------------------------------------------------------------------------
+// a 3D frame's render pins (frame-outs.js): wire.out names one, and it carries the take it has chosen
+// ---------------------------------------------------------------------------
+function pinOf(frame, id) {
+  const o = outOf(frame, id);
+  if (!o) throw new Error(`${frame?.label || 'That frame'} has no such render any more: render it again, or plug in another`);
+  return o;
+}
+export async function outImage(frame, id) {
+  const o = pinOf(frame, id);
+  if (o.input) return { name: o.input, fresh: false };
+  if (!await generationThere(o.gen)) throw new Error(`${outLabel(o)} of ${frame.label || 'that frame'} is gone from History`);
+  const { grabFrame } = await import('./media.js');
+  return { name: await grabFrame({ generation: o.gen, index: 0 }, { at: 0 }), fresh: true };
+}
+export async function outVideo(frame, id) {
+  const o = pinOf(frame, id);
+  if (o.type !== 'video') throw new Error(`${outLabel(o)} is a picture, not a clip`);
+  if (!await generationThere(o.gen)) throw new Error(`${outLabel(o)} of ${frame.label || 'that frame'} is gone from History`);
+  return { generation: o.gen, index: 0, label: `${frame.label || '3D'} · ${outLabel(o)}` };
+}
+export function outThumb(frame, id) {
+  const o = outOf(frame, id);
+  return o?.input ? inputUrl(o.input) : null;
+}
+export async function wireImage(w, src, { multiple = 16 } = {}) {
+  if (w.out) return outImage(src, w.out);
+  if (isFrameWire(w)) return { name: await frameStill(src, w.frame), fresh: true };
+  return frameImage(src, { multiple });
+}
+export const wireVideo = (w, src) => (w.out ? outVideo(src, w.out) : frameVideo(src));

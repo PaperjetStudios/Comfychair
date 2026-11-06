@@ -303,7 +303,7 @@
    "max_images_per_row": 4,
    "max_rows": 0,
    "match_image_size": true,
-   "spacing_width": 8,
+   "spacing_width": 0,
    "spacing_color": "white"
   },
   "_meta": {

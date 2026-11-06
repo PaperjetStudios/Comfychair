@@ -150,7 +150,7 @@ export function initScale() {
     const live = !forRender && pass === 'color' && modeOf().stage !== 'empty';   // (not on Create object's empty stage)
     helpers.visible = live;
     if (!live) return;
-    labels.visible = !R.playing || WP.grid;
+    labels.visible = R.grid && (!R.playing || WP.grid);
     refFig.visible = refOn();
     if (refFig.visible) placeRef();
   });

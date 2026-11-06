@@ -518,6 +518,16 @@ async function pictureFrame(name, at, w, h, label) {
   const layer = { name, crop: { x: 0, y: 0, w: 1, h: 1 }, x: 0, y: 0, scale: 1, opacity: 1, hidden: false, blend: 'normal', locked: false };
   return { frame, payload: { ...BLANK(), size: fit ? null : { w: s.w, h: s.h }, layers: [layer] } };
 }
+// Several pictures as the layers of one image frame, each where it says ([{ name, x, y, w, h, label }], the edit's own pixels):
+// the frame fits them. The pictures were made for it (fresh: they go if the frame can't be made).
+function layersFrame(list, at, label) {
+  const w = Math.max(...list.map((l) => l.x + l.w)), hh = Math.max(...list.map((l) => l.y + l.h)), s = sized(w, hh);
+  const frame = newFrame('image', { ...at, ...s }, { label: label || 'Frames', preview: thumbUrl(list[0].name, 1024), fit: true, fitBox: { x: 0, y: 0, w: s.w, h: s.h } });
+  // (the first one on top of the list: the list shows the last layer first)
+  const layers = [...list].reverse().map((l) => ({ name: l.name, label: l.label || null, crop: { x: 0, y: 0, w: 1, h: 1 }, x: l.x, y: l.y, scale: 1, opacity: 1,
+    hidden: false, blend: 'normal', locked: false, key: uid() }));
+  return { frame, payload: { ...BLANK(), size: null, layers }, fresh: list.map((l) => l.name) };
+}
 // A video frame with one clip on V1, or a sound frame with one sound on A1 (the items' shapes are video.js and sound.js newItem's)
 async function clipFrame(kind, src, url, label, at) {
   const info = await mediaInfo(url, kind === 'audio' ? 'audio' : 'video'), dur = info.dur || 0;
@@ -548,6 +558,7 @@ function sceneFrame(src, at, label) {
 // { media, kind?, url?, label? } (the media library) or a File. Returns null for something no frame can hold.
 export async function frameFor(src, at) {
   if (src instanceof File) return fileFrame(src, at);
+  if (src.layers) return layersFrame(src.layers, at, src.label);
   if (src.input) return { ...(await pictureFrame(src.input, at, src.width, src.height, src.label)), ...(src.fresh && { fresh: src.input }) };   // (fresh: made for this frame, so it goes if the frame can't be made)
   if (src.generation != null) {
     const index = src.index || 0, g = S.history?.get?.(src.generation) || await api(`/api/generations/${src.generation}`, { busy: false });

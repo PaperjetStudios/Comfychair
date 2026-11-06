@@ -1,6 +1,6 @@
 // A floating panel over the screen: a head to drag it by, and a body. It can be resized; its place and size are kept on this device.
-// Every one can also dock, in a column the work area makes room for, at one of three places (dock-rules.js): left of the work area,
-// left of the sidebar (between the canvas and the sidebar) or right of the sidebar. Drag its head to one of those (or onto a column) to
+// Every one can also dock, in a column or a row the work area makes room for, at one of five places (dock-rules.js): left of the work area,
+// left of the sidebar (between the canvas and the sidebar), right of the sidebar, or in a row above or below the work area (side by side there). Drag its head to one of those (or onto a column) to
 // dock it there, drag a docked one's head away to float it again, or pick a place from its Dock button (or a right-click / long hold
 // on its head). Docked panels share their column's height; the column's inner edge drags its width. Over a full-screen view the
 // docked ones float at their floating place until it closes (the full-screen view covers the columns), as the ones left of the sidebar
@@ -11,11 +11,11 @@
 import { h, store } from './ui.js';
 import { icon } from './icons.js';
 import { openPressMenu, pressMenu } from './press-menu.js';
-import { DOCK_SIDES, DOCK_NAMES, dockZones, dockSide, dockIndex, dockWidth } from './dock-rules.js';
+import { DOCK_SIDES, DOCK_NAMES, dockZones, dockSide, dockIndex, dockWidth, dockHeight, isRow } from './dock-rules.js';
 
 // ---- the dock columns, made when first wanted: left and right beside main, mid inside the open screen before its splitter ----
 const COLS = {};
-const colKey = (side) => `deck.dock.${side}.w`;
+const colKey = (side) => `deck.dock.${side}.${isRow(side) ? 'h' : 'w'}`;   // (a row keeps its height)
 const portrait = () => matchMedia('(max-width: 900px), (orientation: portrait)').matches;
 const maxed = () => !!document.querySelector('.stage.maxed');
 const shownIn = (col) => !!col && !col.classList.contains('flat') && [...col.children].some((c) => c.matches('.float-panel.docked:not(.hidden)') && c.offsetParent !== null);
@@ -32,11 +32,17 @@ function placeMid() {
 }
 function dockCol(side) {
   if (COLS[side]?.isConnected) return COLS[side];
-  const col = h('div', { class: `float-dock ${side}`, 'data-side': side, role: 'complementary', 'aria-label': `Docked panels, ${DOCK_NAMES[side].toLowerCase()}` });
-  const grip = h('div', { class: 'float-dock-grip', role: 'separator', 'aria-orientation': 'vertical', tabIndex: 0, title: 'Drag to resize the docked panels (double-tap: back to the usual width)' });
-  const setW = (w) => { const px = w == null ? null : dockWidth(w, innerWidth); store.set(colKey(side), px); col.style.width = `${px ?? 300}px`; };
+  const row = isRow(side);   // (a row: its panels side by side, its grip along its inner edge, dragged for its height)
+  const col = h('div', { class: `float-dock ${side}${row ? ' row' : ''}`, 'data-side': side, role: 'complementary', 'aria-label': `Docked panels, ${DOCK_NAMES[side].toLowerCase()}` });
+  const grip = h('div', { class: 'float-dock-grip', role: 'separator', 'aria-orientation': row ? 'horizontal' : 'vertical', tabIndex: 0, title: `Drag to resize the docked panels (double-tap: back to the usual ${row ? 'height' : 'width'})` });
+  const setW = (w) => {
+    const px = w == null ? null : row ? dockHeight(w, innerHeight) : dockWidth(w, innerWidth);
+    store.set(colKey(side), px);
+    if (row) col.style.height = `${px ?? 220}px`; else col.style.width = `${px ?? 300}px`;
+    if (row) dispatchEvent(new Event('resize'));   // (the work area changed height)
+  };
   setW(store.get(colKey(side), null));
-  const fromLeft = side === 'left';   // (its grip is on its right; the others' on their left)
+  const fromLeft = side === 'left' || side === 'top';   // (its grip is on its right, or under it; the others' on their left, or over them)
   let lastTap = 0;
   grip.addEventListener('pointerdown', (e) => {
     if (e.button > 0) return;
@@ -46,15 +52,15 @@ function dockCol(side) {
     try { grip.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
     grip.classList.add('dragging');
     const r = col.getBoundingClientRect();
-    const move = (ev) => setW(fromLeft ? ev.clientX - r.left : r.right - ev.clientX);
+    const move = (ev) => setW(row ? (fromLeft ? ev.clientY - r.top : r.bottom - ev.clientY) : fromLeft ? ev.clientX - r.left : r.right - ev.clientX);
     const up = () => { grip.classList.remove('dragging'); grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', up); };
     grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);
   });
   grip.addEventListener('keydown', (e) => {
-    const d = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
+    const d = (row ? { ArrowUp: -1, ArrowDown: 1 } : { ArrowLeft: -1, ArrowRight: 1 })[e.key];
     if (!d) return;
     e.preventDefault();
-    setW(col.offsetWidth + (fromLeft ? d : -d) * 24);
+    setW((row ? col.offsetHeight : col.offsetWidth) + (fromLeft ? d : -d) * 24);
   });
   col.append(grip);
   document.body.append(col);
@@ -75,18 +81,24 @@ function showHint(side) {
   const col = COLS[side], m = document.querySelector('main')?.getBoundingClientRect(), sp = splitNow()?.getBoundingClientRect();
   if (!m) return;
   const r = shownIn(col) ? col.getBoundingClientRect() : null;
-  const w = r ? r.width : dockWidth(store.get(colKey(side), null), innerWidth);
-  const left = r ? r.left : side === 'left' ? m.left : side === 'mid' ? (sp?.left ?? m.right) - w : m.right - w;
-  Object.assign(HINT.style, { top: `${m.top}px`, height: `${m.height}px`, width: `${w}px`, left: `${left}px` });
+  if (isRow(side)) {
+    const hgt = r ? r.height : dockHeight(store.get(colKey(side), null), innerHeight);
+    const top = r ? r.top : side === 'top' ? m.top : m.bottom - hgt;
+    Object.assign(HINT.style, { top: `${top}px`, height: `${hgt}px`, width: `${m.width}px`, left: `${m.left}px` });
+  } else {
+    const w = r ? r.width : dockWidth(store.get(colKey(side), null), innerWidth);
+    const left = r ? r.left : side === 'left' ? m.left : side === 'mid' ? (sp?.left ?? m.right) - w : m.right - w;
+    Object.assign(HINT.style, { top: `${m.top}px`, height: `${m.height}px`, width: `${w}px`, left: `${left}px` });
+  }
   HINT.classList.remove('hidden');
 }
-function sideAt(x) {
+function sideAt(x, y) {
   const m = document.querySelector('main')?.getBoundingClientRect();
   if (!m || maxed()) return null;   // (a full-screen view covers the columns)
   const cols = {};
-  for (const s of DOCK_SIDES) if (shownIn(COLS[s])) { const r = COLS[s].getBoundingClientRect(); cols[s] = { left: r.left, right: r.right }; }
+  for (const s of DOCK_SIDES) if (shownIn(COLS[s])) { const r = COLS[s].getBoundingClientRect(); cols[s] = { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; }
   const sp = splitNow()?.getBoundingClientRect();
-  return dockSide(x, dockZones({ left: m.left, right: m.right }, sp?.width ? { left: sp.left, right: sp.right } : null, cols));
+  return dockSide(x, dockZones({ left: m.left, right: m.right, top: m.top, bottom: m.bottom }, sp?.width ? { left: sp.left, right: sp.right } : null, cols), y);
 }
 
 export function floatPanel({ key, title = '', cls = '', buttons = [], inside = false }) {
@@ -122,7 +134,7 @@ export function floatPanel({ key, title = '', cls = '', buttons = [], inside = f
     store.set(`${key}.at`, { x: r.left, y: r.top, w: r.width, h: el.classList.contains('folded') ? (store.get(`${key}.at`, null)?.h ?? null) : r.height });
   };
   const label = () => {
-    const t = side ? `Docked ${DOCK_NAMES[side].toLowerCase()}: move it or float it` : 'Dock it (or drag its title to a side, or beside the sidebar)';
+    const t = side ? `Docked ${DOCK_NAMES[side].toLowerCase()}: move it or float it` : 'Dock it (or drag its title to a side of the work area, its top or bottom, or beside the sidebar)';
     dockBtn.replaceChildren(icon('dock'));
     dockBtn.title = t; dockBtn.setAttribute('aria-label', t);
     el.classList.toggle('docked', !!side);
@@ -158,9 +170,9 @@ export function floatPanel({ key, title = '', cls = '', buttons = [], inside = f
         lifted = true;
       }
       el.style.left = `${ev.clientX - dx}px`; el.style.top = `${ev.clientY - dy}px`; keep();
-      drop = sideAt(ev.clientX);
+      drop = sideAt(ev.clientX, ev.clientY);
       showHint(drop);
-      drop &&= { side: drop, y: ev.clientY };
+      drop &&= { side: drop, x: ev.clientX, y: ev.clientY };
     };
     const up = () => {
       grip.removeEventListener('pointermove', move); grip.removeEventListener('pointerup', up); grip.removeEventListener('pointercancel', up);
@@ -169,8 +181,9 @@ export function floatPanel({ key, title = '', cls = '', buttons = [], inside = f
       saveAt();
       if (drop) {
         const col = COLS[drop.side];
-        const mids = col ? [...col.querySelectorAll(':scope > .float-panel:not(.hidden)')].filter((p) => p !== el).map((p) => { const b = p.getBoundingClientRect(); return b.top + b.height / 2; }) : [];
-        dock(drop.side, { at: dockIndex(drop.y, mids) });
+        const across = isRow(drop.side);   // (a row's panels are side by side: its place among them goes by x)
+        const mids = col ? [...col.querySelectorAll(':scope > .float-panel:not(.hidden)')].filter((p) => p !== el).map((p) => { const b = p.getBoundingClientRect(); return across ? b.left + b.width / 2 : b.top + b.height / 2; }) : [];
+        dock(drop.side, { at: dockIndex(across ? drop.x : drop.y, mids) });
       }
     };
     grip.addEventListener('pointermove', move); grip.addEventListener('pointerup', up); grip.addEventListener('pointercancel', up);

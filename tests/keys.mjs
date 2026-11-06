@@ -470,3 +470,29 @@ console.log('reduce ok');
   assert.ok(!D.setActiveCam(b)); assert.deepEqual(D.camsOf(), [b, a]);
 }
 console.log('cameras ok');
+
+{ // Arrange: stagger / line up layers, space evenly, reverse (eases and handles turn round)
+  const A = lay(mk([10, 20]), 'a'), B = lay(mk([40, 50]), 'b');
+  let sel = new Set([...A.keys, ...B.keys]);
+  assert.equal(K.stagger([[A], [B]], sel, 5, 0, N), 2);           // step 0: both start at 5
+  assert.deepEqual([fs(A), fs(B)], [[5, 15], [5, 15]]);
+  K.stagger([[A], [B]], sel, 0, 30, N);
+  assert.deepEqual([fs(A), fs(B)], [[0, 10], [30, 40]]);
+  K.stagger([[A], [B]], sel, 0, 95, N);                             // stops at the end as a block
+  assert.deepEqual(fs(B), [89, 99]);
+  const C = lay(mk([0, 2, 10, 30])); sel = new Set(C.keys);
+  assert.ok(K.spaceEvenly([C], sel, N));
+  assert.deepEqual(fs(C), [0, 10, 20, 30]);
+  assert.equal(K.spaceEvenly([C], new Set(C.keys.slice(0, 2)), N), false);
+  const E = lay(mk([0, 10, 30])); E.keys[0].ease = 'linear'; E.keys[1].ease = 'const'; E.keys[1].to = [3, 5]; E.keys[1].ti = [-2, -1];
+  sel = new Set(E.keys);
+  assert.ok(K.reverse([E], sel, N));
+  assert.deepEqual(fs(E), [0, 20, 30]);
+  assert.deepEqual(E.keys.map((k) => k.v), [300, 100, 0]);
+  assert.equal(E.keys[1].ease, 'linear');                           // the stretch 0-10 (linear) is now 20-30, starting at the old 10
+  assert.equal(E.keys[2].ease, undefined);
+  assert.equal(E.keys[0].ease, 'const');
+  assert.deepEqual([E.keys[1].ti, E.keys[1].to], [[-3, 5], [2, -1]]);
+  assert.equal(K.reverse([E], new Set([E.keys[0]]), N), false);
+}
+console.log('arrange ok');

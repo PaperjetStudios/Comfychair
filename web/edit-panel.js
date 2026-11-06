@@ -161,7 +161,7 @@ function sectionFor(kind) {
       kids.push(hint(why, 'edit-why'),
         button([icon('fit'), 'Open the frame'], () => {
           if (kind === 'image') optsFor(kind, op.id).op = op.id;   // (the Layers pane's tool: the Image tools' settings are shared)
-          Table.goLive(frames[0]); if (kind === 'image' && !op.inPlace) sidebar.show('layers');   // (Inpaint and Extend stay here: their rows are this pane's)
+          Table.goLive(frames[0]); if (kind === 'image' && !op.inPlace) sidebar.show('props');   // (Inpaint and Extend stay here: their rows are this pane's)
         }, { cls: 'small edit-open' }));
     }
     // the options (shown greyed or not: an option can be what makes it need the open frame)

@@ -11,7 +11,8 @@
 // Choosing Fit layers in the open editor fits the frame on coming back; a size set on the table (the handles, Size and
 // MP, the MP box, undo) makes it fixed; the Frame pane's Fit layers / Fixed size sets it either way.
 import { outputOf, tileShape } from './table-model.js';
-import { $, h, api, toast, field, help, seg } from './ui.js';
+import { $, h, api, toast, field, help, seg, icon } from './ui.js';
+import { propsChanged } from './props-panel.js';
 import { CURRENT_EDIT, S } from './core.js';
 import { E, editTabs, editorFrame, editorStill, editorStillBlob, editorToFixed, mountEditor, persistEditor, renderEditor, unmountEditor } from './editor.js';
 import { uploadImage } from './media.js';
@@ -35,6 +36,23 @@ addEventListener('table:live', (e) => {
   live(frame, root);
 });
 
+// Select several, in the bar over the open frame: while it is on, taps on the canvas and in the layer list add layers to
+// the selection or drop them. It stays on until it is tapped again.
+function selectSeveralBtn(root) {
+  const bar = root.querySelector(':scope > .live-bar');
+  if (!bar || bar.querySelector('.live-several')) return;
+  const b = h('button', { type: 'button', class: 'icon-btn live-bar-btn live-several', 'aria-label': 'Select several', 'aria-pressed': String(!!E.pickMode),
+    title: 'Select several: taps on the canvas and the layer list add layers to the selection, or drop them' }, icon('choose'));
+  const sync = () => {
+    if (!b.isConnected) { removeEventListener('editor:render', sync); return; }
+    b.classList.toggle('on', !!E.pickMode); b.setAttribute('aria-pressed', String(!!E.pickMode));
+  };
+  b.addEventListener('click', () => { E.pickMode = !E.pickMode; renderEditor(); sync(); });
+  addEventListener('editor:render', sync);
+  (bar.querySelector('.live-mask, .live-layers, .live-full') || bar.lastChild).before(b);
+  sync();
+}
+
 async function live(frame, root) {
   const seq = ++F.seq;
   root.replaceChildren(h('div', { class: 'frame-loading', role: 'status' }, 'Opening…'));
@@ -51,7 +69,9 @@ async function live(frame, root) {
   wireDrop(root, frame);
   mountEditor({ host: root, active: () => isLive(frame.id) });
   F.mounted = frame.id;
-  sidebar.pane('layers', { title: 'Layers', icon: 'rows', host: true }).append($('#editorPanel'));   // (mountEditor put the panel beside the stage; it belongs in the sidebar)
+  $('#editorPanel').remove();   // (mountEditor put the panel beside the stage: on the table it is the Properties pane's, which takes it when it draws)
+  propsChanged('image');
+  queueMicrotask(() => selectSeveralBtn(root));   // (once the table has put its bar back on top of the root it found emptied)
   applySize(frame);
   sidebar.refresh();
 }

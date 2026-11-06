@@ -78,6 +78,8 @@ const IMAGE = [
 const VIDEO = [
   { id: 'grab', group: 'Quick', label: 'Grab frame', icon: 'camera', quick: 'Grab', lands: 'image', once: true, selfLands: true,
     help: 'A still of the clip at a time you choose: a new image frame, or a layer in the selected image frame.' },
+  { id: 'frames', group: 'Quick', label: 'Frames to layers', icon: 'rows', quick: 'Frames', lands: 'image', once: true, newFrame: true, selfLands: true,
+    help: 'The frames you name, each as a layer of one new image frame, laid out in a grid. Any clip, at any time; a sheet run offers its own frames.' },
   { id: 'delogo', group: 'Quick', label: 'Remove watermark', icon: 'eraser', quick: 'Remove', vfx: 'delogo', tools: ['boxes'],
     help: 'Boxes drawn over the mark on the open frame are filled in (ProPainter); with none, Find looks for a mark that stays put while the picture moves.' },
   { id: 'maps', group: 'Quick', label: 'Control map', icon: 'grid', quick: 'Maps', help: 'A depth, edge, scribble or pose map of the clip.' },
