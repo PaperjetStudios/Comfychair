@@ -5,6 +5,9 @@
 // web/cast.js and the other tabs read a character the same whichever look is showing; c.withLook(id) is a read-only
 // copy on another look, for a shot that names one.
 // A slot says where a run's result goes: view:<key>, expr:<key>, edit, sheet, model, splat, rig, clip.
+// An element (a backpack, a hand, a helmet: a part that is a thing in its own right) is a character of its own with
+// partOf = { character: <parent id>, look?: <the parent's look it belongs to, or null for every look> }, so it gets the
+// same references, views and sheets through the same code; its parent's table shows it as a row (web/char-rows.js).
 // ---------------------------------------------------------------------------
 export const MEDIA_ROLES = [['face', 'Face'], ['body', 'Body'], ['ref', 'Reference'], ['edit', 'Edit'], ['expression', 'Expression'], ['sheet', 'Sheet'],
   ['model', 'Model'], ['rig', 'Rig'], ['splat', 'Splat'], ['clip', 'Clip']];
@@ -21,7 +24,7 @@ export function blankLook(o = {}) {
 export class Character {
   constructor(o = {}) {
     Object.assign(this, { id: '', rev: 0, name: '', role: '', height_cm: null, desc: '', bio: '', notes: '', voice: null, relations: [], arcs: {},
-      looks: [blankLook()], active: 'main', media: [], vpending: [], cands: [] }, o);
+      looks: [blankLook()], active: 'main', media: [], vpending: [], cands: [], partOf: null }, o);
   }
   get lookNow() { return this.looks.find((l) => l.id === this.active) || this.looks[0]; }
   get look() { return this.lookNow.text; }
@@ -67,10 +70,19 @@ export function fromDoc(d = {}) {
     desc: str(p.desc), bio: str(p.bio), notes: str(p.notes), voice: p.voice || null, relations: arr(p.relations).filter((r) => r && r.to), arcs: strs(p.arcs),
     looks, active: looks.some((l) => l.id === p.active) ? p.active : first, media,
     vpending: arr(p.vpending).filter((x) => x && x.gen).map(pend).filter((x) => x.slot),
-    cands: arr(p.cands).filter((x) => x && x.id).map(pend).filter((x) => x.slot) });
+    cands: arr(p.cands).filter((x) => x && x.id).map(pend).filter((x) => x.slot),
+    partOf: cleanPartOf(p.partOf) });
 }
+const cleanPartOf = (v) => (v && typeof v === 'object' && str(v.character) ? { character: str(v.character), look: str(v.look) || null } : null);
 export const payloadOf = (c) => ({ role: c.role, height_cm: c.height_cm, desc: c.desc, bio: c.bio, notes: c.notes, voice: c.voice, relations: c.relations, arcs: c.arcs,
-  looks: c.looks, active: c.active, media: c.media, vpending: c.vpending, cands: c.cands });
+  looks: c.looks, active: c.active, media: c.media, vpending: c.vpending, cands: c.cands, ...(c.partOf ? { partOf: c.partOf } : {}) });
+
+// ---- elements ----
+export const isElement = (c) => !!c?.partOf?.character;
+// a character's elements, for one of its looks (an element with no look belongs to every look), in the list's order
+export const elementsOf = (list, c, look = null) => (list || []).filter((e) => e?.partOf?.character === c?.id && (!look || !e.partOf.look || e.partOf.look === look));
+// the characters of a story: the ones that aren't someone's part
+export const topLevel = (list) => (list || []).filter((c) => !isElement(c));
 
 // ---- media ----
 export function addImage(c, name, { role = 'ref', look = null, id = `m${Date.now().toString(36)}${c.media.length}`, made = null } = {}) {

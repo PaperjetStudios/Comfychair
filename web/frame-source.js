@@ -39,6 +39,7 @@ import { canvasRect, itemSource, plainFills, plainPicture, plainSound, plainVide
 import { mainOf, plainLayer, withoutMade } from './main-rules.js';
 import { bounds as layerBounds } from './layer-geom.js';
 import { outLabel, outOf } from './frame-outs.js';
+import { charPin } from './char-outs.js';
 import { isFrameWire } from './wire-rules.js';
 
 const qs = () => (S.project != null ? `?project_id=${S.project}` : '');
@@ -340,9 +341,15 @@ function durationOf(url) {
 }
 
 // ---------------------------------------------------------------------------
-// a 3D frame's render pins (frame-outs.js): wire.out names one, and it carries the take it has chosen
+// a frame's pins: a 3D frame's renders (frame-outs.js; wire.out names one, and it carries the take it has chosen) or a
+// character frame's pictures (char-outs.js: the pin carries an input of the project)
 // ---------------------------------------------------------------------------
 function pinOf(frame, id) {
+  if (frame?.kind === 'character') {
+    const p = charPin(frame, id);
+    if (!p) throw new Error(`${frame?.label || 'That character'} no longer has that picture: make it again, or plug in another`);
+    return { ...p, type: 'image' };
+  }
   const o = outOf(frame, id);
   if (!o) throw new Error(`${frame?.label || 'That frame'} has no such render any more: render it again, or plug in another`);
   return o;
@@ -356,12 +363,12 @@ export async function outImage(frame, id) {
 }
 export async function outVideo(frame, id) {
   const o = pinOf(frame, id);
-  if (o.type !== 'video') throw new Error(`${outLabel(o)} is a picture, not a clip`);
+  if (o.type !== 'video') throw new Error(`${o.label || outLabel(o)} is a picture, not a clip`);
   if (!await generationThere(o.gen)) throw new Error(`${outLabel(o)} of ${frame.label || 'that frame'} is gone from History`);
   return { generation: o.gen, index: 0, label: `${frame.label || '3D'} · ${outLabel(o)}` };
 }
 export function outThumb(frame, id) {
-  const o = outOf(frame, id);
+  const o = frame?.kind === 'character' ? charPin(frame, id) : outOf(frame, id);
   return o?.input ? inputUrl(o.input) : null;
 }
 export async function wireImage(w, src, { multiple = 16 } = {}) {

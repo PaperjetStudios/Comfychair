@@ -14,6 +14,7 @@
 // ---------------------------------------------------------------------------
 
 import { outLabel, outsOf } from './frame-outs.js';
+import { charPins } from './char-outs.js';
 
 export const WIRE_KINDS = ['image', 'video', 'sound'];
 export const WIRE_LABEL = { image: 'Image', video: 'Video', sound: 'Sound' };
@@ -25,19 +26,23 @@ export const fieldKind = (f) => { const k = f?.kind === 'audio' ? 'sound' : f?.k
 export const wireLabel = (w) => `${WIRE_LABEL[w.kind] || w.kind} ${w.n}`;
 
 // What a frame puts out, first the kind its port plugs by default ([]: no out port): a note nothing; a frame with
-// nothing in it yet neither. A 3D frame puts out its still (a picture); a video frame its clip, or one frame of it.
-const OUT = { image: ['image'], video: ['video', 'image'], sound: ['sound'], scene: ['image'] };
+// nothing in it yet neither. A 3D frame puts out its still (a picture); a video frame its clip, or one frame of it. A
+// character frame puts out its pictures (web/char-outs.js): with none yet it has no port.
+const OUT = { image: ['image'], video: ['video', 'image'], sound: ['sound'], scene: ['image'], character: ['image'] };
 export function outKinds(frame) {
   if (!frame || frame.kind === 'note') return [];
+  if (frame.kind === 'character') return charPins(frame).length ? [...OUT.character] : [];
   if (!frame.doc && !frame.preview) return [];
   return [...(OUT[frame.kind] || [])];
 }
 export const outKind = (frame) => outKinds(frame)[0] || null;
-// A 3D frame's render pins beside its own port (frame-outs.js): [{ id, kind (the wire kind it plugs as), label }]
-export const outPins = (frame) => outsOf(frame).map((o) => ({ id: o.id, kind: o.type, label: outLabel(o) }));
+// A frame's pins beside its own port: a 3D frame's renders (frame-outs.js), a character frame's pictures (char-outs.js).
+// [{ id, kind (the wire kind it plugs as), label }]
+export const outPins = (frame) => (frame?.kind === 'character' ? charPins(frame).map((p) => ({ id: p.id, kind: p.kind, label: p.label }))
+  : outsOf(frame).map((o) => ({ id: o.id, kind: o.type, label: outLabel(o) })));
 export const outPin = (frame, id) => (id ? outPins(frame).find((p) => p.id === id) || null : null);
-// What a wire carries, in words, beside its number: the render pin it comes from
-export const pinLabelOf = (w, frame) => (w?.out ? outPin(frame, w.out)?.label || 'a render that is gone' : '');
+// What a wire carries, in words, beside its number: the pin it comes from
+export const pinLabelOf = (w, frame) => (w?.out ? outPin(frame, w.out)?.label || (frame?.kind === 'character' ? 'a picture that is gone' : 'a render that is gone') : '');
 
 // A frame-of-a-video choice made whole: 'first' | 'last' | 'playhead' | seconds (≥ 0); anything else is 'first'
 export const FRAME_PICKS = ['first', 'last', 'playhead'];

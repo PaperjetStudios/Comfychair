@@ -561,3 +561,19 @@ The tabs that did the same job twice now share it:
 - A tap on an attached picture selects it (`object-rules.js` `tapView`; `PANEL.sel`, kept beside the draft): for Pixal3D in or out of the run, for one-picture models the one it reads. The pencil changes a picture.
 - `objectTarget` lands in the one selected 3D frame even when closed. `fitOf` asks "About how tall is it?" only for imported files (`o.gen == null`): a run's result no longer waits on it.
 
+
+### Character creator, phase 1 groundwork (2026-11-08; branch `character-creator`, plan in `PLAN-character-creator.md`)
+- **Character frames** (`table-model.js` `KINDS` has `'character'`): a frame whose `doc` is a character's id, standing for it. It is
+  **not** in `DOC_KIND` on purpose: the generic frame code (delete → trash, rename, stills, the server's `_owned_docs`) must never treat
+  the character as the frame's own document. `CHAR_DOC = 'characters'` names the store kind for the code that reads it.
+- **Pins** (`web/char-outs.js`, pure): `pinsOf(c, look)` lists the pictures a character's look has (main, views, sheets, expressions,
+  details) as image pins; the frame keeps a copy in `frame.pins` (`mirrorPins`, to be called by the coming `frame-character.js` when the
+  character changes), which `wire-rules.js` (`outKinds`, `outPins`, `outPin`, `pinLabelOf`) and `frame-source.js` (`outImage`, `outThumb`)
+  read, so a wire from a pin works like a wire from a 3D frame's render pin. Media with no `look` belongs to every look (as `pics` says).
+- **Character tables** (`web/char-rows.js`, pure): a table whose payload says `character: <id>`; one row per stage (`STAGES`), a note
+  first; `wanted` / `planReconcile` / `stageFrame` / `stageNote` / `charLayout`, in the shape of `shot-rows.js`. Frames carry
+  `frame.char = { stage, slot, look, item?, input?, auto }`.
+- **Elements** (`char-model.js` `partOf`, `isElement`, `elementsOf`, `topLevel`): a part of a character (a backpack, a hand) is a
+  character of its own with `partOf = { character, look? }`, shown on its parent's table as a character frame on the Elements row.
+- Tests: `tests/char_outs.test.mjs`, `tests/char_rows.test.mjs`, `tests/char_model.test.mjs`. No DOM code yet: the next step is
+  `frame-character.js` (the table side), the tile in `table.js`, and the Character pane (phase 1.2 of the plan).

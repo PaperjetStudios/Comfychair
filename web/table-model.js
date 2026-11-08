@@ -16,9 +16,13 @@ import { snapNearest, snapStep } from './snap-math.js';
 import { normalize } from './layer-stack.js';
 import { migrateWires } from './wire-rules.js';
 
-export const KINDS = ['image', 'video', 'scene', 'sound', 'note'];
-// the saved document kind each frame kind owns (a note has none: its text is on the frame)
+export const KINDS = ['image', 'video', 'scene', 'sound', 'note', 'character'];
+// the saved document kind each frame kind owns (a note has none: its text is on the frame). A character frame is not here on
+// purpose: its doc is the id of one of the project's characters (store kind CHAR_DOC), which it stands for and never owns, so
+// deleting the frame, renaming it or trashing the table leaves the character alone (web/char-outs.js for its pins; a table whose
+// payload says character: <id> is that character's own table, web/char-rows.js).
 export const DOC_KIND = { image: 'edit-tabs', video: 'video-tabs', scene: 'scene-tabs', sound: 'sound-tabs' };
+export const CHAR_DOC = 'characters';
 // The frames whose documents the server says another table owns (a refused save's 409 names them: { docs: [[kind, id]] },
 // kind a store kind). Their ids: the open table drops exactly these from its copy (never their documents) and saves again.
 export function foreignFrames(frames, docs) {
@@ -36,7 +40,7 @@ export function docsOwnedElsewhere(tables, exceptId) {
   }
   return out;
 }
-export const KIND_LABEL = { image: 'Image', video: 'Video', scene: '3D', sound: 'Sound', note: 'Note' };
+export const KIND_LABEL = { image: 'Image', video: 'Video', scene: '3D', sound: 'Sound', note: 'Note', character: 'Character' };
 // On a version-2 project the work lives on tables and these engines' documents belong to a frame: their TabSets (tabs.js) make no blank
 // "Edit 1" / "Mix 1" / "main" of their own and may sit with no open document. Version 1 keeps the old behaviour.
 export const ENGINE_KINDS = new Set(['edit-tabs', 'video-tabs', 'sound-tabs', 'scene-tabs', 'vfx-tabs', 'gen-tabs']);
